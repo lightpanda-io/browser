@@ -32,10 +32,9 @@ pub fn main() !void {
     const apis = jsruntime.compile(DOM.Interfaces);
 
     // document
-    var base_doc = DOM.Document.init();
-    defer base_doc.deinit();
-    try base_doc.parse(html);
-    doc = DOM.HTMLDocument{ .proto = base_doc };
+    doc = DOM.HTMLDocument.init();
+    defer doc.deinit();
+    try doc.parse(html);
 
     // create JS vm
     const vm = jsruntime.VM.init();
@@ -44,8 +43,9 @@ pub fn main() !void {
     // alloc
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
 
     // launch shell
-    try jsruntime.shell(alloc, false, apis, execJS, .{ .app_name = "browsercore" });
+    try jsruntime.shell(&arena, apis, execJS, .{ .app_name = "browsercore" });
 }
