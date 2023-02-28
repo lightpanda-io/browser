@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const c = @cImport({
-    @cInclude("../../lexbor/source/lexbor/html/html.h");
+    @cInclude("lexbor/html/html.h");
 });
 
 // Public API
