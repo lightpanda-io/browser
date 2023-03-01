@@ -58,8 +58,6 @@ pub fn main() !void {
     defer doc.deinit();
     try doc.parse(html);
 
-    std.debug.print("ok\n", .{});
-
     // remove socket file of internal server
     // reuse_address (SO_REUSEADDR flag) does not seems to work on unix socket
     // see: https://gavv.net/articles/unix-socket-reuse/
@@ -72,7 +70,7 @@ pub fn main() !void {
 
     // alloc
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer _ = arena.deinit();
+    defer arena.deinit();
 
     // server
     var addr = try std.net.Address.initUnix(socket_path);

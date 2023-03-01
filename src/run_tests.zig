@@ -40,7 +40,9 @@ test {
     const vm = jsruntime.VM.init();
     defer vm.deinit();
 
-    var alloc = jsruntime.bench_allocator(std.testing.allocator);
+    var bench_alloc = jsruntime.bench_allocator(std.testing.allocator);
+    var arena_alloc = std.heap.ArenaAllocator.init(bench_alloc.allocator());
+    defer arena_alloc.deinit();
 
-    try jsruntime.loadEnv(alloc.allocator(), false, testsExecFn, apis);
+    try jsruntime.loadEnv(&arena_alloc, testsExecFn, apis);
 }
