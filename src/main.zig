@@ -4,7 +4,7 @@ const jsruntime = @import("jsruntime");
 
 const DOM = @import("dom.zig");
 
-const html = @import("html.zig").html;
+const html = @import("html_test.zig").html;
 
 const socket_path = "/tmp/browsercore-server.sock";
 
