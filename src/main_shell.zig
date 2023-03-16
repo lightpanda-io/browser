@@ -5,7 +5,7 @@ const Console = @import("jsruntime").Console;
 
 const DOM = @import("dom.zig");
 
-const html = @import("html.zig").html;
+const html = @import("html_test.zig").html;
 
 var doc: DOM.HTMLDocument = undefined;
 

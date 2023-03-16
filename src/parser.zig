@@ -32,22 +32,22 @@ pub const NodeType = enum(u4) {
     last_entry,
 };
 
-pub fn nodeEventTarget(node: *Node) *EventTarget {
+pub inline fn nodeEventTarget(node: *Node) *EventTarget {
     return c.lxb_dom_interface_event_target(node);
 }
 
 pub const nodeWalker = (fn (node: ?*Node, _: ?*anyopaque) callconv(.C) Action);
 
-pub fn nodeName(node: *Node) [*c]const u8 {
+pub inline fn nodeName(node: *Node) [*c]const u8 {
     var s: usize = undefined;
     return c.lxb_dom_node_name(node, &s);
 }
 
-pub fn nodeType(node: *Node) NodeType {
+pub inline fn nodeType(node: *Node) NodeType {
     return @intToEnum(NodeType, node.*.type);
 }
 
-pub fn nodeWalk(node: *Node, comptime walker: nodeWalker) !void {
+pub inline fn nodeWalk(node: *Node, comptime walker: nodeWalker) !void {
     c.lxb_dom_node_simple_walk(node, walker, null);
 }
 
@@ -55,16 +55,17 @@ pub fn nodeWalk(node: *Node, comptime walker: nodeWalker) !void {
 
 pub const Element = c.lxb_dom_element_t;
 
-pub fn elementNode(element: *Element) *Node {
+pub inline fn elementNode(element: *Element) *Node {
     return c.lxb_dom_interface_node(element);
 }
 
-pub fn elementLocalName(element: *Element) []const u8 {
-    const local_name = c.lxb_dom_element_local_name(element, null);
+pub inline fn elementLocalName(element: *Element) []const u8 {
+    var size: usize = undefined;
+    const local_name = c.lxb_dom_element_local_name(element, &size);
     return std.mem.sliceTo(local_name, 0);
 }
 
-pub fn elementsByAttr(
+pub inline fn elementsByAttr(
     element: *Element,
     collection: *Collection,
     attr: []const u8,
@@ -89,30 +90,30 @@ pub fn elementsByAttr(
 
 pub const DocumentHTML = c.lxb_html_document_t;
 
-pub fn documentHTMLInit() *DocumentHTML {
+pub inline fn documentHTMLInit() *DocumentHTML {
     return c.lxb_html_document_create();
 }
 
-pub fn documentHTMLDeinit(document_html: *DocumentHTML) void {
+pub inline fn documentHTMLDeinit(document_html: *DocumentHTML) void {
     _ = c.lxb_html_document_destroy(document_html);
 }
 
-pub fn documentHTMLParse(document_html: *DocumentHTML, html: []const u8) !void {
+pub inline fn documentHTMLParse(document_html: *DocumentHTML, html: []const u8) !void {
     const status = c.lxb_html_document_parse(document_html, html.ptr, html.len - 1);
     if (status != 0) {
         return error.DocumentHTMLParse;
     }
 }
 
-pub fn documentHTMLToNode(document_html: *DocumentHTML) *Node {
+pub inline fn documentHTMLToNode(document_html: *DocumentHTML) *Node {
     return c.lxb_dom_interface_node(document_html);
 }
 
-pub fn documentHTMLToDocument(document_html: *DocumentHTML) *Document {
+pub inline fn documentHTMLToDocument(document_html: *DocumentHTML) *Document {
     return &document_html.dom_document;
 }
 
-pub fn documentHTMLBody(document_html: *DocumentHTML) *Element {
+pub inline fn documentHTMLBody(document_html: *DocumentHTML) *Element {
     return c.lxb_dom_interface_element(document_html.body);
 }
 
@@ -120,19 +121,23 @@ pub fn documentHTMLBody(document_html: *DocumentHTML) *Element {
 
 pub const Document = c.lxb_dom_document_t;
 
+pub inline fn documentCreateElement(document: *Document, tag_name: []const u8) *Element {
+    return c.lxb_dom_document_create_element(document, tag_name.ptr, tag_name.len, null);
+}
+
 // Collection
 
 pub const Collection = c.lxb_dom_collection_t;
 
-pub fn collectionInit(document: *Document, size: usize) *Collection {
+pub inline fn collectionInit(document: *Document, size: usize) *Collection {
     return c.lxb_dom_collection_make(document, size);
 }
 
-pub fn collectionDeinit(collection: *Collection) void {
+pub inline fn collectionDeinit(collection: *Collection) void {
     _ = c.lxb_dom_collection_destroy(collection, true);
 }
 
-pub fn collectionElement(collection: *Collection, index: usize) *Element {
+pub inline fn collectionElement(collection: *Collection, index: usize) *Element {
     return c.lxb_dom_collection_element(collection, index);
 }
 

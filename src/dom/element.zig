@@ -1,13 +1,8 @@
 const std = @import("std");
 
-const jsruntime = @import("jsruntime");
-const Case = jsruntime.test_utils.Case;
-const checkCases = jsruntime.test_utils.checkCases;
-
 const parser = @import("../parser.zig");
 
-const DOM = @import("../dom.zig");
-const Node = DOM.Node;
+const Node = @import("node.zig").Node;
 
 pub const Element = struct {
     proto: Node,
@@ -27,28 +22,5 @@ pub const Element = struct {
 
     pub fn get_localName(self: Element) []const u8 {
         return parser.elementLocalName(self.base);
-    }
-};
-
-// HTML elements
-// -------------
-
-pub const HTMLElement = struct {
-    proto: Element,
-
-    pub const prototype = *Element;
-
-    pub fn init(elem_base: *parser.Element) HTMLElement {
-        return .{ .proto = Element.init(elem_base) };
-    }
-};
-
-pub const HTMLBodyElement = struct {
-    proto: HTMLElement,
-
-    pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLBodyElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
     }
 };

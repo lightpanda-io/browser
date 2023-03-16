@@ -3,15 +3,14 @@ const std = @import("std");
 const jsruntime = @import("jsruntime");
 
 const DOM = @import("dom.zig");
-const document = @import("dom/document.zig");
-const element = @import("dom/element.zig");
+const testExecFn = @import("html/document.zig").testExecFn;
 
-const html = @import("html.zig").html;
+const html_test = @import("html_test.zig").html;
 
 var doc: DOM.HTMLDocument = undefined;
 
 fn testsExecFn(
-    _: std.mem.Allocator,
+    alloc: std.mem.Allocator,
     js_env: *jsruntime.Env,
     comptime apis: []jsruntime.API,
 ) !void {
@@ -24,7 +23,7 @@ fn testsExecFn(
     try js_env.addObject(apis, doc, "document");
 
     // run tests
-    try document.testExecFn(js_env, apis);
+    try testExecFn(alloc, js_env, apis);
 }
 
 test {
@@ -34,7 +33,7 @@ test {
     // document
     doc = DOM.HTMLDocument.init();
     defer doc.deinit();
-    try doc.parse(html);
+    try doc.parse(html_test);
 
     // create JS vm
     const vm = jsruntime.VM.init();
