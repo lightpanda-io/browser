@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const jsruntime = @import("jsruntime");
+const generate = @import("generate.zig");
 
 const DOM = @import("dom.zig");
 const testExecFn = @import("html/document.zig").testExecFn;
@@ -27,6 +28,11 @@ fn testsExecFn(
 }
 
 test {
+    std.debug.print("\n", .{});
+
+    // generate tests
+    try generate.tests();
+
     // generate APIs
     const apis = jsruntime.compile(DOM.Interfaces);
 
