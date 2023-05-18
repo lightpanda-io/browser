@@ -7,6 +7,149 @@ const c = @cImport({
 // Public API
 // ----------
 
+// Tag
+
+pub const Tag = enum(u8) {
+    a = c.LXB_TAG_A,
+    area = c.LXB_TAG_AREA,
+    audio = c.LXB_TAG_AUDIO,
+    br = c.LXB_TAG_BR,
+    base = c.LXB_TAG_BASE,
+    body = c.LXB_TAG_BODY,
+    button = c.LXB_TAG_BUTTON,
+    canvas = c.LXB_TAG_CANVAS,
+    dl = c.LXB_TAG_DL,
+    dialog = c.LXB_TAG_DIALOG,
+    data = c.LXB_TAG_DATA,
+    div = c.LXB_TAG_DIV,
+    embed = c.LXB_TAG_EMBED,
+    fieldset = c.LXB_TAG_FIELDSET,
+    form = c.LXB_TAG_FORM,
+    frameset = c.LXB_TAG_FRAMESET,
+    hr = c.LXB_TAG_HR,
+    head = c.LXB_TAG_HEAD,
+    h1 = c.LXB_TAG_H1,
+    h2 = c.LXB_TAG_H2,
+    h3 = c.LXB_TAG_H3,
+    h4 = c.LXB_TAG_H4,
+    h5 = c.LXB_TAG_H5,
+    h6 = c.LXB_TAG_H6,
+    html = c.LXB_TAG_HTML,
+    iframe = c.LXB_TAG_IFRAME,
+    img = c.LXB_TAG_IMG,
+    input = c.LXB_TAG_INPUT,
+    li = c.LXB_TAG_LI,
+    label = c.LXB_TAG_LABEL,
+    legend = c.LXB_TAG_LEGEND,
+    link = c.LXB_TAG_LINK,
+    map = c.LXB_TAG_MAP,
+    meta = c.LXB_TAG_META,
+    meter = c.LXB_TAG_METER,
+    ins = c.LXB_TAG_INS,
+    del = c.LXB_TAG_DEL,
+    ol = c.LXB_TAG_OL,
+    object = c.LXB_TAG_OBJECT,
+    optgroup = c.LXB_TAG_OPTGROUP,
+    option = c.LXB_TAG_OPTION,
+    output = c.LXB_TAG_OUTPUT,
+    p = c.LXB_TAG_P,
+    picture = c.LXB_TAG_PICTURE,
+    pre = c.LXB_TAG_PRE,
+    progress = c.LXB_TAG_PROGRESS,
+    blockquote = c.LXB_TAG_BLOCKQUOTE,
+    q = c.LXB_TAG_Q,
+    script = c.LXB_TAG_SCRIPT,
+    select = c.LXB_TAG_SELECT,
+    source = c.LXB_TAG_SOURCE,
+    span = c.LXB_TAG_SPAN,
+    style = c.LXB_TAG_STYLE,
+    table = c.LXB_TAG_TABLE,
+    caption = c.LXB_TAG_CAPTION,
+    th = c.LXB_TAG_TH,
+    td = c.LXB_TAG_TD,
+    col = c.LXB_TAG_COL,
+    tr = c.LXB_TAG_TR,
+    thead = c.LXB_TAG_THEAD,
+    tbody = c.LXB_TAG_TBODY,
+    tfoot = c.LXB_TAG_TFOOT,
+    template = c.LXB_TAG_TEMPLATE,
+    textarea = c.LXB_TAG_TEXTAREA,
+    time = c.LXB_TAG_TIME,
+    title = c.LXB_TAG_TITLE,
+    track = c.LXB_TAG_TRACK,
+    ul = c.LXB_TAG_UL,
+    video = c.LXB_TAG_VIDEO,
+    undef = c.LXB_TAG__UNDEF,
+
+    pub fn all() []Tag {
+        comptime {
+            const info = @typeInfo(Tag).Enum;
+            comptime var l: [info.fields.len]Tag = undefined;
+            inline for (info.fields) |field, i| {
+                l[i] = @intToEnum(Tag, field.value);
+            }
+            return &l;
+        }
+    }
+
+    pub fn allElements() [][]const u8 {
+        comptime {
+            const tags = all();
+            var names: [tags.len][]const u8 = undefined;
+            inline for (tags) |tag, i| {
+                names[i] = tag.elementName();
+            }
+            return &names;
+        }
+    }
+
+    fn upperName(comptime name: []const u8) []const u8 {
+        comptime {
+            var upper_name: [name.len]u8 = undefined;
+            for (name) |char, i| {
+                var to_upper = false;
+                if (i == 0) {
+                    to_upper = true;
+                } else if (i == 1 and name.len == 2) {
+                    to_upper = true;
+                }
+                if (to_upper) {
+                    upper_name[i] = std.ascii.toUpper(char);
+                } else {
+                    upper_name[i] = char;
+                }
+            }
+            return &upper_name;
+        }
+    }
+
+    fn elementName(comptime tag: Tag) []const u8 {
+        return switch (tag) {
+            .area, .audio, .base, .body, .button, .br, .canvas, .dialog, .data, .div, .embed, .form, .head, .html, .hr, .input, .label, .li, .legend, .link, .map, .meta, .meter, .object, .option, .output, .picture, .pre, .progress, .script, .select, .source, .span, .style, .table, .template, .time, .title, .track, .video => upperName(@tagName(tag)),
+            .a => "Anchor",
+            .dl => "DList",
+            .fieldset => "FieldSet",
+            .frameset => "FrameSet",
+            .h1, .h2, .h3, .h4, .h5, .h6 => "Heading",
+            .iframe => "IFrame",
+            .img => "Image",
+            .ins, .del => "Mod",
+            .ol => "OList",
+            .optgroup => "OptGroup",
+            .p => "Paragraph",
+            .blockquote, .q => "Quote",
+            .caption => "TableCaption",
+            .th, .td => "TableCell",
+            .col => "TableCol",
+            .tr => "TableRow",
+            .thead, .tbody, .tfoot => "TableSection",
+            .textarea => "TextArea",
+            .ul => "UList",
+            .undef => "Unknown",
+        };
+    }
+};
+
 // EventTarget
 
 pub const EventTarget = c.lxb_dom_event_target_t;
@@ -34,6 +177,10 @@ pub const NodeType = enum(u4) {
 
 pub inline fn nodeEventTarget(node: *Node) *EventTarget {
     return c.lxb_dom_interface_event_target(node);
+}
+
+pub inline fn nodeTag(node: *Node) Tag {
+    return @intToEnum(Tag, c.lxb_dom_node_tag_id(node));
 }
 
 pub const nodeWalker = (fn (node: ?*Node, _: ?*anyopaque) callconv(.C) Action);
