@@ -16,7 +16,7 @@ pub const HTMLElement = struct {
     }
 };
 
-const HTMLElementsTypes = .{
+pub const HTMLElementsTypes = .{
     HTMLUnknownElement,
     HTMLAnchorElement,
     HTMLAreaElement,
@@ -78,10 +78,7 @@ const HTMLElementsTypes = .{
     HTMLUListElement,
     HTMLVideoElement,
 };
-fn generateElements() generate.Union {
-    return generate.Union.compile(HTMLElementsTypes);
-}
-const HTMLElementsGenerated = generateElements();
+const HTMLElementsGenerated = generate.Union.compile(HTMLElementsTypes);
 pub const HTMLElements = HTMLElementsGenerated._union;
 pub const HTMLElementsTags = HTMLElementsGenerated._enum;
 
