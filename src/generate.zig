@@ -13,9 +13,7 @@ pub const Union = struct {
     _union: type,
 
     pub fn compile(comptime tuple: anytype) Union {
-        comptime {
-            return private_compile(tuple) catch @compileError("CompileUnion error");
-        }
+        return private_compile(tuple) catch |err| @compileError(@errorName(err));
     }
 
     fn private_compile(comptime tuple: anytype) !Union {
@@ -31,8 +29,8 @@ pub const Union = struct {
         const tuple_members = tuple_info.Struct.fields;
 
         // first iteration to get the total number of members
-        comptime var members_nb = 0;
-        inline for (tuple_members) |member| {
+        var members_nb = 0;
+        for (tuple_members) |member| {
             const member_T = @field(tuple, member.name);
             const member_info = @typeInfo(member_T);
             if (member_info == .Union) {
@@ -46,7 +44,7 @@ pub const Union = struct {
         }
 
         // define the tag type regarding the members nb
-        comptime var tag_type: type = undefined;
+        var tag_type: type = undefined;
         if (members_nb < 3) {
             tag_type = u1;
         } else if (members_nb < 4) {
@@ -70,14 +68,14 @@ pub const Union = struct {
         }
 
         // second iteration to generate tags
-        comptime var enum_fields: [members_nb]std.builtin.Type.EnumField = undefined;
-        comptime var done = 0;
-        inline for (tuple_members) |member| {
+        var enum_fields: [members_nb]std.builtin.Type.EnumField = undefined;
+        var done = 0;
+        for (tuple_members) |member| {
             const member_T = @field(tuple, member.name);
             const member_info = @typeInfo(member_T);
             if (member_info == .Union) {
                 const member_union = member_info.Union;
-                inline for (member_union.fields) |field| {
+                for (member_union.fields) |field| {
                     enum_fields[done] = .{
                         .name = fmtName(field.field_type),
                         .value = done,
@@ -103,14 +101,14 @@ pub const Union = struct {
         const enum_T = @Type(std.builtin.Type{ .Enum = enum_info });
 
         // third iteration to generate union type
-        comptime var union_fields: [members_nb]std.builtin.Type.UnionField = undefined;
+        var union_fields: [members_nb]std.builtin.Type.UnionField = undefined;
         done = 0;
-        inline for (tuple_members) |member, i| {
+        for (tuple_members) |member, i| {
             const member_T = @field(tuple, member.name);
             const member_info = @typeInfo(member_T);
             if (member_info == .Union) {
                 const member_union = member_info.Union;
-                inline for (member_union.fields) |field| {
+                for (member_union.fields) |field| {
                     union_fields[done] = .{
                         .name = fmtName(field.field_type),
                         .field_type = field.field_type,
@@ -144,18 +142,16 @@ pub const Union = struct {
 };
 
 fn itoa(comptime i: u8) ![]u8 {
-    comptime {
-        var len: usize = undefined;
-        if (i < 10) {
-            len = 1;
-        } else if (i < 100) {
-            len = 2;
-        } else {
-            return error.GenerateTooMuchMembers;
-        }
-        var buf: [len]u8 = undefined;
-        return try std.fmt.bufPrint(buf[0..], "{d}", .{i});
+    var len: usize = undefined;
+    if (i < 10) {
+        len = 1;
+    } else if (i < 100) {
+        len = 2;
+    } else {
+        return error.GenerateTooMuchMembers;
     }
+    var buf: [len]u8 = undefined;
+    return try std.fmt.bufPrint(buf[0..], "{d}", .{i});
 }
 
 // Generate a flatten tuple type from various structs and tuple of structs.
@@ -172,7 +168,7 @@ pub fn TupleT(comptime tuple: anytype) type {
     const tuple_members = tuple_info.Struct.fields;
 
     // first iteration to get the total number of members
-    comptime var members_nb = 0;
+    var members_nb = 0;
     for (tuple_members) |member| {
         const member_T = @field(tuple, member.name);
         if (@TypeOf(member_T) == type) {
