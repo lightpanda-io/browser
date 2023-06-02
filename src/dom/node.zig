@@ -18,19 +18,11 @@ pub fn create_tree(node: ?*parser.Node, _: ?*anyopaque) callconv(.C) parser.Acti
 }
 
 pub const Node = struct {
-    proto: EventTarget,
-    base: ?*parser.Node = null,
-
+    pub const Self = parser.Node;
     pub const prototype = *EventTarget;
+    pub const mem_guarantied = true;
 
-    pub fn init(base: ?*parser.Node) Node {
-        return .{ .proto = EventTarget.init(null), .base = base };
-    }
-
-    pub fn make_tree(self: Node) !void {
-        if (self.base) |node| {
-            try parser.nodeWalk(node, create_tree);
-        }
-        return error.NodeParserNull;
+    pub fn make_tree(self: *parser.Node) !void {
+        try parser.nodeWalk(self, create_tree);
     }
 };

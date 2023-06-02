@@ -3,12 +3,13 @@ const std = @import("std");
 const jsruntime = @import("jsruntime");
 const generate = @import("generate.zig");
 
+const parser = @import("parser.zig");
 const DOM = @import("dom.zig");
 const testExecFn = @import("html/document.zig").testExecFn;
 
 const html_test = @import("html_test.zig").html;
 
-var doc: DOM.HTMLDocument = undefined;
+var doc: *parser.DocumentHTML = undefined;
 
 fn testsExecFn(
     alloc: std.mem.Allocator,
@@ -37,9 +38,9 @@ test {
     const apis = jsruntime.compile(DOM.Interfaces);
 
     // document
-    doc = DOM.HTMLDocument.init();
-    defer doc.deinit();
-    try doc.parse(html_test);
+    doc = parser.documentHTMLInit();
+    defer parser.documentHTMLDeinit(doc);
+    try parser.documentHTMLParse(doc, html_test);
 
     // create JS vm
     const vm = jsruntime.VM.init();

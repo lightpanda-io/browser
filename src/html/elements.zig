@@ -7,13 +7,9 @@ const Element = @import("../dom/element.zig").Element;
 // --------------
 
 pub const HTMLElement = struct {
-    proto: Element,
-
+    pub const Self = parser.HTMLElement;
     pub const prototype = *Element;
-
-    pub fn init(elem_base: *parser.Element) HTMLElement {
-        return .{ .proto = Element.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLElementsTypes = .{
@@ -27,8 +23,8 @@ pub const HTMLElementsTypes = .{
     HTMLButtonElement,
     HTMLCanvasElement,
     HTMLDListElement,
-    HTMLDialogElement,
     HTMLDataElement,
+    HTMLDialogElement,
     HTMLDivElement,
     HTMLEmbedElement,
     HTMLFieldSetElement,
@@ -90,680 +86,436 @@ pub const HTMLElementsTags = HTMLElementsGenerated._enum;
 // --------------------
 
 pub const HTMLMediaElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.MediaElement;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLMediaElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 // HTML elements
 // -------------
 
 pub const HTMLUnknownElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Unknown;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLUnknownElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLAnchorElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Anchor;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLAnchorElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLAreaElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Area;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLAreaElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLAudioElement = struct {
-    proto: HTMLMediaElement,
-
+    pub const Self = parser.Audio;
     pub const prototype = *HTMLMediaElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLAudioElement {
-        return .{ .proto = HTMLMediaElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLBRElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.BR;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLBRElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLBaseElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Base;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLBaseElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLBodyElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Body;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLBodyElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLButtonElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Button;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLButtonElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLCanvasElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Canvas;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLCanvasElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLDListElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.DList;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLDListElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
-};
-
-pub const HTMLDialogElement = struct {
-    proto: HTMLElement,
-
-    pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLDialogElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLDataElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Data;
     pub const prototype = *HTMLElement;
+    pub const mem_guarantied = true;
+};
 
-    pub fn init(elem_base: *parser.Element) HTMLDataElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+pub const HTMLDialogElement = struct {
+    pub const Self = parser.Dialog;
+    pub const prototype = *HTMLElement;
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLDivElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Div;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLDivElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLEmbedElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Embed;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLEmbedElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLFieldSetElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.FieldSet;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLFieldSetElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLFormElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Form;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLFormElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLFrameSetElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.FrameSet;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLFrameSetElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLHRElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.HR;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLHRElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLHeadElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Head;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLHeadElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLHeadingElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Heading;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLHeadingElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLHtmlElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Html;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLHtmlElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLIFrameElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.IFrame;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLIFrameElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLImageElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Image;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLImageElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLInputElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Input;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLInputElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLLIElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.LI;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLLIElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLLabelElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Label;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLLabelElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLLegendElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Legend;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLLegendElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLLinkElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Link;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLLinkElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLMapElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Map;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLMapElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLMetaElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Meta;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLMetaElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLMeterElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Meter;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLMeterElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLModElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Mod;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLModElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLOListElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.OList;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLOListElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLObjectElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Object;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLObjectElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLOptGroupElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.OptGroup;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLOptGroupElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLOptionElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Option;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLOptionElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLOutputElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Output;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLOutputElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLParagraphElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Paragraph;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLParagraphElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLPictureElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Picture;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLPictureElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLPreElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Pre;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLPreElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLProgressElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Progress;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLProgressElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLQuoteElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Quote;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLQuoteElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLScriptElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Script;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLScriptElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLSelectElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Select;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLSelectElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLSourceElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Source;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLSourceElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLSpanElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Span;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLSpanElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLStyleElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Style;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLStyleElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLTableElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Table;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLTableElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLTableCaptionElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.TableCaption;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLTableCaptionElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLTableCellElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.TableCell;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLTableCellElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLTableColElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.TableCol;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLTableColElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLTableRowElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.TableRow;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLTableRowElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLTableSectionElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.TableSection;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLTableSectionElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLTemplateElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Template;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLTemplateElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLTextAreaElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.TextArea;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLTextAreaElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLTimeElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Time;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLTimeElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLTitleElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Title;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLTitleElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLTrackElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.Track;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLTrackElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLUListElement = struct {
-    proto: HTMLElement,
-
+    pub const Self = parser.UList;
     pub const prototype = *HTMLElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLUListElement {
-        return .{ .proto = HTMLElement.init(elem_base) };
-    }
+    pub const mem_guarantied = true;
 };
 
 pub const HTMLVideoElement = struct {
-    proto: HTMLMediaElement,
-
-    pub const prototype = *HTMLMediaElement;
-
-    pub fn init(elem_base: *parser.Element) HTMLVideoElement {
-        return .{ .proto = HTMLMediaElement.init(elem_base) };
-    }
+    pub const Self = parser.Video;
+    pub const prototype = *HTMLElement;
+    pub const mem_guarantied = true;
 };
 
-pub fn ElementToHTMLElementInterface(base: *parser.Element) HTMLElements {
-    const tag = parser.nodeTag(parser.elementNode(base));
+pub fn ElementToHTMLElementInterface(elem: *parser.Element) HTMLElements {
+    const tag = parser.nodeTag(parser.elementNode(elem));
     return switch (tag) {
-        .a => .{ .HTMLAnchorElement = HTMLAnchorElement.init(base) },
-        .area => .{ .HTMLAreaElement = HTMLAreaElement.init(base) },
-        .audio => .{ .HTMLAudioElement = HTMLAudioElement.init(base) },
-        .br => .{ .HTMLBRElement = HTMLBRElement.init(base) },
-        .base => .{ .HTMLBaseElement = HTMLBaseElement.init(base) },
-        .body => .{ .HTMLBodyElement = HTMLBodyElement.init(base) },
-        .button => .{ .HTMLButtonElement = HTMLButtonElement.init(base) },
-        .canvas => .{ .HTMLCanvasElement = HTMLCanvasElement.init(base) },
-        .dl => .{ .HTMLDListElement = HTMLDListElement.init(base) },
-        .dialog => .{ .HTMLDialogElement = HTMLDialogElement.init(base) },
-        .data => .{ .HTMLDataElement = HTMLDataElement.init(base) },
-        .div => .{ .HTMLDivElement = HTMLDivElement.init(base) },
-        .embed => .{ .HTMLEmbedElement = HTMLEmbedElement.init(base) },
-        .fieldset => .{ .HTMLFieldSetElement = HTMLFieldSetElement.init(base) },
-        .form => .{ .HTMLFormElement = HTMLFormElement.init(base) },
-        .frameset => .{ .HTMLFrameSetElement = HTMLFrameSetElement.init(base) },
-        .hr => .{ .HTMLHRElement = HTMLHRElement.init(base) },
-        .head => .{ .HTMLHeadElement = HTMLHeadElement.init(base) },
-        .h1, .h2, .h3, .h4, .h5, .h6 => .{ .HTMLHeadingElement = HTMLHeadingElement.init(base) },
-        .html => .{ .HTMLHtmlElement = HTMLHtmlElement.init(base) },
-        .iframe => .{ .HTMLIFrameElement = HTMLIFrameElement.init(base) },
-        .img => .{ .HTMLImageElement = HTMLImageElement.init(base) },
-        .input => .{ .HTMLInputElement = HTMLInputElement.init(base) },
-        .li => .{ .HTMLLIElement = HTMLLIElement.init(base) },
-        .label => .{ .HTMLLabelElement = HTMLLabelElement.init(base) },
-        .legend => .{ .HTMLLegendElement = HTMLLegendElement.init(base) },
-        .link => .{ .HTMLLinkElement = HTMLLinkElement.init(base) },
-        .map => .{ .HTMLMapElement = HTMLMapElement.init(base) },
-        .meta => .{ .HTMLMetaElement = HTMLMetaElement.init(base) },
-        .meter => .{ .HTMLMeterElement = HTMLMeterElement.init(base) },
-        .ins, .del => .{ .HTMLModElement = HTMLModElement.init(base) },
-        .ol => .{ .HTMLOListElement = HTMLOListElement.init(base) },
-        .object => .{ .HTMLObjectElement = HTMLObjectElement.init(base) },
-        .optgroup => .{ .HTMLOptGroupElement = HTMLOptGroupElement.init(base) },
-        .option => .{ .HTMLOptionElement = HTMLOptionElement.init(base) },
-        .output => .{ .HTMLOutputElement = HTMLOutputElement.init(base) },
-        .p => .{ .HTMLParagraphElement = HTMLParagraphElement.init(base) },
-        .picture => .{ .HTMLPictureElement = HTMLPictureElement.init(base) },
-        .pre => .{ .HTMLPreElement = HTMLPreElement.init(base) },
-        .progress => .{ .HTMLProgressElement = HTMLProgressElement.init(base) },
-        .blockquote, .q => .{ .HTMLQuoteElement = HTMLQuoteElement.init(base) },
-        .script => .{ .HTMLScriptElement = HTMLScriptElement.init(base) },
-        .select => .{ .HTMLSelectElement = HTMLSelectElement.init(base) },
-        .source => .{ .HTMLSourceElement = HTMLSourceElement.init(base) },
-        .span => .{ .HTMLSpanElement = HTMLSpanElement.init(base) },
-        .style => .{ .HTMLStyleElement = HTMLStyleElement.init(base) },
-        .table => .{ .HTMLTableElement = HTMLTableElement.init(base) },
-        .caption => .{ .HTMLTableCaptionElement = HTMLTableCaptionElement.init(base) },
-        .th, .td => .{ .HTMLTableCellElement = HTMLTableCellElement.init(base) },
-        .col => .{ .HTMLTableColElement = HTMLTableColElement.init(base) },
-        .tr => .{ .HTMLTableRowElement = HTMLTableRowElement.init(base) },
-        .thead, .tbody, .tfoot => .{ .HTMLTableSectionElement = HTMLTableSectionElement.init(base) },
-        .template => .{ .HTMLTemplateElement = HTMLTemplateElement.init(base) },
-        .textarea => .{ .HTMLTextAreaElement = HTMLTextAreaElement.init(base) },
-        .time => .{ .HTMLTimeElement = HTMLTimeElement.init(base) },
-        .title => .{ .HTMLTitleElement = HTMLTitleElement.init(base) },
-        .track => .{ .HTMLTrackElement = HTMLTrackElement.init(base) },
-        .ul => .{ .HTMLUListElement = HTMLUListElement.init(base) },
-        .video => .{ .HTMLVideoElement = HTMLVideoElement.init(base) },
-        .undef => .{ .HTMLUnknownElement = HTMLUnknownElement.init(base) },
+        .a => .{ .HTMLAnchorElement = @ptrCast(*parser.Anchor, elem) },
+        .area => .{ .HTMLAreaElement = @ptrCast(*parser.Area, elem) },
+        .audio => .{ .HTMLAudioElement = @ptrCast(*parser.Audio, elem) },
+        .br => .{ .HTMLBRElement = @ptrCast(*parser.BR, elem) },
+        .base => .{ .HTMLBaseElement = @ptrCast(*parser.Base, elem) },
+        .body => .{ .HTMLBodyElement = @ptrCast(*parser.Body, elem) },
+        .button => .{ .HTMLButtonElement = @ptrCast(*parser.Button, elem) },
+        .canvas => .{ .HTMLCanvasElement = @ptrCast(*parser.Canvas, elem) },
+        .dl => .{ .HTMLDListElement = @ptrCast(*parser.DList, elem) },
+        .data => .{ .HTMLDataElement = @ptrCast(*parser.Data, elem) },
+        .dialog => .{ .HTMLDialogElement = @ptrCast(*parser.Dialog, elem) },
+        .div => .{ .HTMLDivElement = @ptrCast(*parser.Div, elem) },
+        .embed => .{ .HTMLEmbedElement = @ptrCast(*parser.Embed, elem) },
+        .fieldset => .{ .HTMLFieldSetElement = @ptrCast(*parser.FieldSet, elem) },
+        .form => .{ .HTMLFormElement = @ptrCast(*parser.Form, elem) },
+        .frameset => .{ .HTMLFrameSetElement = @ptrCast(*parser.FrameSet, elem) },
+        .hr => .{ .HTMLHRElement = @ptrCast(*parser.HR, elem) },
+        .head => .{ .HTMLHeadElement = @ptrCast(*parser.Head, elem) },
+        .h1, .h2, .h3, .h4, .h5, .h6 => .{ .HTMLHeadingElement = @ptrCast(*parser.Heading, elem) },
+        .html => .{ .HTMLHtmlElement = @ptrCast(*parser.Html, elem) },
+        .iframe => .{ .HTMLIFrameElement = @ptrCast(*parser.IFrame, elem) },
+        .img => .{ .HTMLImageElement = @ptrCast(*parser.Image, elem) },
+        .input => .{ .HTMLInputElement = @ptrCast(*parser.Input, elem) },
+        .li => .{ .HTMLLIElement = @ptrCast(*parser.LI, elem) },
+        .label => .{ .HTMLLabelElement = @ptrCast(*parser.Label, elem) },
+        .legend => .{ .HTMLLegendElement = @ptrCast(*parser.Legend, elem) },
+        .link => .{ .HTMLLinkElement = @ptrCast(*parser.Link, elem) },
+        .map => .{ .HTMLMapElement = @ptrCast(*parser.Map, elem) },
+        .meta => .{ .HTMLMetaElement = @ptrCast(*parser.Meta, elem) },
+        .meter => .{ .HTMLMeterElement = @ptrCast(*parser.Meter, elem) },
+        .ins, .del => .{ .HTMLModElement = @ptrCast(*parser.Mod, elem) },
+        .ol => .{ .HTMLOListElement = @ptrCast(*parser.OList, elem) },
+        .object => .{ .HTMLObjectElement = @ptrCast(*parser.Object, elem) },
+        .optgroup => .{ .HTMLOptGroupElement = @ptrCast(*parser.OptGroup, elem) },
+        .option => .{ .HTMLOptionElement = @ptrCast(*parser.Option, elem) },
+        .output => .{ .HTMLOutputElement = @ptrCast(*parser.Output, elem) },
+        .p => .{ .HTMLParagraphElement = @ptrCast(*parser.Paragraph, elem) },
+        .picture => .{ .HTMLPictureElement = @ptrCast(*parser.Picture, elem) },
+        .pre => .{ .HTMLPreElement = @ptrCast(*parser.Pre, elem) },
+        .progress => .{ .HTMLProgressElement = @ptrCast(*parser.Progress, elem) },
+        .blockquote, .q => .{ .HTMLQuoteElement = @ptrCast(*parser.Quote, elem) },
+        .script => .{ .HTMLScriptElement = @ptrCast(*parser.Script, elem) },
+        .select => .{ .HTMLSelectElement = @ptrCast(*parser.Select, elem) },
+        .source => .{ .HTMLSourceElement = @ptrCast(*parser.Source, elem) },
+        .span => .{ .HTMLSpanElement = @ptrCast(*parser.Span, elem) },
+        .style => .{ .HTMLStyleElement = @ptrCast(*parser.Style, elem) },
+        .table => .{ .HTMLTableElement = @ptrCast(*parser.Table, elem) },
+        .caption => .{ .HTMLTableCaptionElement = @ptrCast(*parser.TableCaption, elem) },
+        .th, .td => .{ .HTMLTableCellElement = @ptrCast(*parser.TableCell, elem) },
+        .col => .{ .HTMLTableColElement = @ptrCast(*parser.TableCol, elem) },
+        .tr => .{ .HTMLTableRowElement = @ptrCast(*parser.TableRow, elem) },
+        .thead, .tbody, .tfoot => .{ .HTMLTableSectionElement = @ptrCast(*parser.TableSection, elem) },
+        .template => .{ .HTMLTemplateElement = @ptrCast(*parser.Template, elem) },
+        .textarea => .{ .HTMLTextAreaElement = @ptrCast(*parser.TextArea, elem) },
+        .time => .{ .HTMLTimeElement = @ptrCast(*parser.Time, elem) },
+        .title => .{ .HTMLTitleElement = @ptrCast(*parser.Title, elem) },
+        .track => .{ .HTMLTrackElement = @ptrCast(*parser.Track, elem) },
+        .ul => .{ .HTMLUListElement = @ptrCast(*parser.UList, elem) },
+        .video => .{ .HTMLVideoElement = @ptrCast(*parser.Video, elem) },
+        .undef => .{ .HTMLUnknownElement = @ptrCast(*parser.Unknown, elem) },
     };
 }

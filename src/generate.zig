@@ -54,7 +54,7 @@ pub const Union = struct {
         } else if (members_nb < 16) {
             tag_type = u4;
         } else if (members_nb < 32) {
-            tag_type = u4;
+            tag_type = u5;
         } else if (members_nb < 64) {
             tag_type = u6;
         } else if (members_nb < 128) {
@@ -109,19 +109,31 @@ pub const Union = struct {
             if (member_info == .Union) {
                 const member_union = member_info.Union;
                 for (member_union.fields) |field| {
+                    var T: type = undefined;
+                    if (@hasDecl(field.field_type, "Self")) {
+                        T = @field(field.field_type, "Self");
+                        T = *T;
+                    } else {
+                        T = field.field_type;
+                    }
                     union_fields[done] = .{
                         .name = fmtName(field.field_type),
-                        .field_type = field.field_type,
-                        .alignment = field.alignment,
+                        .field_type = T,
+                        .alignment = @alignOf(T),
                     };
                     done += 1;
                 }
             } else if (member_info == .Struct) {
-                const alignment = tuple_info.Struct.fields[i].alignment;
+                const member_name = try itoa(i);
+                var T = @field(tuple, member_name);
+                if (@hasDecl(T, "Self")) {
+                    T = @field(T, "Self");
+                    T = *T;
+                }
                 union_fields[done] = .{
                     .name = fmtName(member_T),
-                    .field_type = member_T,
-                    .alignment = alignment,
+                    .field_type = T,
+                    .alignment = @alignOf(T),
                 };
                 done += 1;
             }

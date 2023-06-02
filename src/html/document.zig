@@ -11,45 +11,28 @@ const Document = @import("../dom/document.zig").Document;
 const E = @import("elements.zig");
 
 pub const HTMLDocument = struct {
-    proto: Document,
-    base: *parser.DocumentHTML,
-
+    pub const Self = parser.DocumentHTML;
     pub const prototype = *Document;
-
-    pub fn init() HTMLDocument {
-        return .{
-            .proto = Document.init(null),
-            .base = parser.documentHTMLInit(),
-        };
-    }
-
-    pub fn deinit(self: HTMLDocument) void {
-        parser.documentHTMLDeinit(self.base);
-    }
-
-    pub fn parse(self: *HTMLDocument, html: []const u8) !void {
-        try parser.documentHTMLParse(self.base, html);
-        self.proto.base = parser.documentHTMLToDocument(self.base);
-    }
+    pub const mem_guarantied = true;
 
     // JS funcs
     // --------
 
-    pub fn get_body(self: HTMLDocument) ?E.HTMLBodyElement {
-        const body_dom = parser.documentHTMLBody(self.base);
-        return E.HTMLBodyElement.init(body_dom);
+    pub fn get_body(self: *parser.DocumentHTML) ?*parser.Body {
+        return parser.documentHTMLBody(self);
     }
 
-    pub fn _getElementById(self: HTMLDocument, id: []u8) ?E.HTMLElement {
-        const body_dom = parser.documentHTMLBody(self.base);
-        if (self.proto.getElementById(body_dom, id)) |elem| {
-            return E.HTMLElement.init(elem.base);
-        }
-        return null;
+    pub fn _getElementById(self: *parser.DocumentHTML, id: []u8) ?*parser.HTMLElement {
+        const body_html = parser.documentHTMLBody(self);
+        const body_dom = @ptrCast(*parser.Element, body_html);
+        const doc_dom = @ptrCast(*parser.Document, self);
+        const elem_dom = Document.getElementById(doc_dom, body_dom, id);
+        return @ptrCast(*parser.HTMLElement, elem_dom);
     }
 
-    pub fn _createElement(self: HTMLDocument, tag_name: []const u8) E.HTMLElements {
-        const base = parser.documentCreateElement(self.proto.base.?, tag_name);
+    pub fn _createElement(self: *parser.DocumentHTML, tag_name: []const u8) E.HTMLElements {
+        const doc_dom = parser.documentHTMLToDocument(self);
+        const base = parser.documentCreateElement(doc_dom, tag_name);
         return E.ElementToHTMLElementInterface(base);
     }
 };

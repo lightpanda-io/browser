@@ -6,30 +6,20 @@ const Node = @import("node.zig").Node;
 const Element = @import("element.zig").Element;
 
 pub const Document = struct {
-    proto: Node,
-    base: ?*parser.Document,
-
+    pub const Self = parser.Document;
     pub const prototype = *Node;
+    pub const mem_guarantied = true;
 
-    pub fn init(base: ?*parser.Document) Document {
-        return .{
-            .proto = Node.init(null),
-            .base = base,
-        };
-    }
+    // pub fn constructor() *parser.Document {
+    //     // TODO
+    //     return .{};
+    // }
 
-    pub fn constructor() Document {
-        return Document.init(null);
-    }
-
-    pub fn getElementById(self: Document, elem_dom: *parser.Element, id: []const u8) ?Element {
-        if (self.base == null) {
-            return null;
-        }
-        const collection = parser.collectionInit(self.base.?, 1);
+    pub fn getElementById(self: *parser.Document, elem: *parser.Element, id: []const u8) ?*parser.Element {
+        const collection = parser.collectionInit(self, 1);
         defer parser.collectionDeinit(collection);
         const case_sensitve = true;
-        parser.elementsByAttr(elem_dom, collection, "id", id, case_sensitve) catch |err| {
+        parser.elementsByAttr(elem, collection, "id", id, case_sensitve) catch |err| {
             std.debug.print("getElementById error: {s}\n", .{@errorName(err)});
             return null;
         };
@@ -37,19 +27,18 @@ pub const Document = struct {
             // no results
             return null;
         }
-        const element_base = parser.collectionElement(collection, 0);
-        return Element.init(element_base);
+        return parser.collectionElement(collection, 0);
     }
 
     // JS funcs
     // --------
 
-    pub fn get_body(_: Document) ?void {
+    pub fn get_body(_: *parser.Document) ?*parser.Body {
         // TODO
         return null;
     }
 
-    pub fn _getElementById(_: Document, _: []u8) ?Element {
+    pub fn _getElementById(_: *parser.Document, _: []u8) ?*parser.Element {
         // TODO
         return null;
     }

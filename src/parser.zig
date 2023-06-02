@@ -125,7 +125,6 @@ pub const Tag = enum(u8) {
 
     fn elementName(comptime tag: Tag) []const u8 {
         return switch (tag) {
-            .area, .audio, .base, .body, .button, .br, .canvas, .dialog, .data, .div, .embed, .form, .head, .html, .hr, .input, .label, .li, .legend, .link, .map, .meta, .meter, .object, .option, .output, .picture, .pre, .progress, .script, .select, .source, .span, .style, .table, .template, .time, .title, .track, .video => upperName(@tagName(tag)),
             .a => "Anchor",
             .dl => "DList",
             .fieldset => "FieldSet",
@@ -146,6 +145,7 @@ pub const Tag = enum(u8) {
             .textarea => "TextArea",
             .ul => "UList",
             .undef => "Unknown",
+            else => upperName(@tagName(tag)),
         };
     }
 };
@@ -260,8 +260,8 @@ pub inline fn documentHTMLToDocument(document_html: *DocumentHTML) *Document {
     return &document_html.dom_document;
 }
 
-pub inline fn documentHTMLBody(document_html: *DocumentHTML) *Element {
-    return c.lxb_dom_interface_element(document_html.body);
+pub inline fn documentHTMLBody(document_html: *DocumentHTML) *Body {
+    return document_html.body;
 }
 
 // Document
@@ -287,6 +287,72 @@ pub inline fn collectionDeinit(collection: *Collection) void {
 pub inline fn collectionElement(collection: *Collection, index: usize) *Element {
     return c.lxb_dom_collection_element(collection, index);
 }
+
+// HTML Elements
+
+pub const HTMLElement = c.lxb_html_element_t;
+pub const MediaElement = c.lxb_html_media_element_t;
+
+pub const Unknown = c.lxb_html_unknown_element_t;
+pub const Anchor = c.lxb_html_anchor_element_t;
+pub const Area = c.lxb_html_area_element_t;
+pub const Audio = c.lxb_html_audio_element_t;
+pub const BR = c.lxb_html_br_element_t;
+pub const Base = c.lxb_html_base_element_t;
+pub const Body = c.lxb_html_body_element_t;
+pub const Button = c.lxb_html_button_element_t;
+pub const Canvas = c.lxb_html_canvas_element_t;
+pub const DList = c.lxb_html_d_list_element_t;
+pub const Data = c.lxb_html_data_element_t;
+pub const Dialog = c.lxb_html_dialog_element_t;
+pub const Div = c.lxb_html_div_element_t;
+pub const Embed = c.lxb_html_embed_element_t;
+pub const FieldSet = c.lxb_html_field_set_element_t;
+pub const Form = c.lxb_html_form_element_t;
+pub const FrameSet = c.lxb_html_frame_set_element_t;
+pub const HR = c.lxb_html_hr_element_t;
+pub const Head = c.lxb_html_head_element_t;
+pub const Heading = c.lxb_html_heading_element_t;
+pub const Html = c.lxb_html_html_element_t;
+pub const IFrame = c.lxb_html_iframe_element_t;
+pub const Image = c.lxb_html_image_element_t;
+pub const Input = c.lxb_html_input_element_t;
+pub const LI = c.lxb_html_li_element_t;
+pub const Label = c.lxb_html_label_element_t;
+pub const Legend = c.lxb_html_legend_element_t;
+pub const Link = c.lxb_html_link_element_t;
+pub const Map = c.lxb_html_map_element_t;
+pub const Meta = c.lxb_html_meta_element_t;
+pub const Meter = c.lxb_html_meter_element_t;
+pub const Mod = c.lxb_html_mod_element_t;
+pub const OList = c.lxb_html_o_list_element_t;
+pub const Object = c.lxb_html_object_element_t;
+pub const OptGroup = c.lxb_html_opt_group_element_t;
+pub const Option = c.lxb_html_option_element_t;
+pub const Output = c.lxb_html_output_element_t;
+pub const Paragraph = c.lxb_html_paragraph_element_t;
+pub const Picture = c.lxb_html_picture_element_t;
+pub const Pre = c.lxb_html_pre_element_t;
+pub const Progress = c.lxb_html_progress_element_t;
+pub const Quote = c.lxb_html_quote_element_t;
+pub const Script = c.lxb_html_script_element_t;
+pub const Select = c.lxb_html_select_element_t;
+pub const Source = c.lxb_html_source_element_t;
+pub const Span = c.lxb_html_span_element_t;
+pub const Style = c.lxb_html_style_element_t;
+pub const Table = c.lxb_html_table_element_t;
+pub const TableCaption = c.lxb_html_table_caption_element_t;
+pub const TableCell = c.lxb_html_table_cell_element_t;
+pub const TableCol = c.lxb_html_table_col_element_t;
+pub const TableRow = c.lxb_html_table_row_element_t;
+pub const TableSection = c.lxb_html_table_section_element_t;
+pub const Template = c.lxb_html_template_element_t;
+pub const TextArea = c.lxb_html_text_area_element_t;
+pub const Time = c.lxb_html_time_element_t;
+pub const Title = c.lxb_html_title_element_t;
+pub const Track = c.lxb_html_track_element_t;
+pub const UList = c.lxb_html_u_list_element_t;
+pub const Video = c.lxb_html_video_element_t;
 
 // Base
 
