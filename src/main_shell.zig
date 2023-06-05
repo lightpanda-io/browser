@@ -3,11 +3,12 @@ const std = @import("std");
 const jsruntime = @import("jsruntime");
 const Console = @import("jsruntime").Console;
 
+const parser = @import("parser.zig");
 const DOM = @import("dom.zig");
 
-const html = @import("html_test.zig").html;
+const html_test = @import("html_test.zig").html;
 
-var doc: DOM.HTMLDocument = undefined;
+var doc: *parser.DocumentHTML = undefined;
 
 fn execJS(
     alloc: std.mem.Allocator,
@@ -32,9 +33,9 @@ pub fn main() !void {
     const apis = jsruntime.compile(DOM.Interfaces);
 
     // document
-    doc = DOM.HTMLDocument.init();
-    defer doc.deinit();
-    try doc.parse(html);
+    doc = parser.documentHTMLInit();
+    defer parser.documentHTMLDeinit(doc);
+    try parser.documentHTMLParse(doc, html_test);
 
     // create JS vm
     const vm = jsruntime.VM.init();

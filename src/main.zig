@@ -2,13 +2,14 @@ const std = @import("std");
 
 const jsruntime = @import("jsruntime");
 
+const parser = @import("parser.zig");
 const DOM = @import("dom.zig");
 
-const html = @import("html_test.zig").html;
+const html_test = @import("html_test.zig").html;
 
 const socket_path = "/tmp/browsercore-server.sock";
 
-var doc: DOM.HTMLDocument = undefined;
+var doc: *parser.DocumentHTML = undefined;
 var server: std.net.StreamServer = undefined;
 
 fn execJS(
@@ -54,9 +55,9 @@ pub fn main() !void {
     defer vm.deinit();
 
     // document
-    doc = DOM.HTMLDocument.init();
-    defer doc.deinit();
-    try doc.parse(html);
+    doc = parser.documentHTMLInit();
+    defer parser.documentHTMLDeinit(doc);
+    try parser.documentHTMLParse(doc, html_test);
 
     // remove socket file of internal server
     // reuse_address (SO_REUSEADDR flag) does not seems to work on unix socket
