@@ -18,7 +18,7 @@ fn testsExecFn(
 ) !void {
 
     // start JS env
-    js_env.start();
+    js_env.start(apis);
     defer js_env.stop();
 
     // add document object

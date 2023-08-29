@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const jsruntime = @import("jsruntime");
-const Console = @import("jsruntime").Console;
 
 const parser = @import("parser.zig");
 const DOM = @import("dom.zig");

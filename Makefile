@@ -22,12 +22,12 @@ help:
 ## Build in debug mode
 build:
 	@printf "\e[36mBuilding (debug)...\e[0m\n"
-	@zig build || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+	@zig build -Dengine=v8 || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 	@printf "\e[33mBuild OK\e[0m\n"
 
 build-release:
 	@printf "\e[36mBuilding (release safe)...\e[0m\n"
-	@zig build -Drelease-safe || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+	@zig build -Drelease-safe -Dengine=v8 || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 	@printf "\e[33mBuild OK\e[0m\n"
 
 ## Run the server
@@ -38,10 +38,10 @@ run: build
 ## Run a JS shell in release-safe mode
 shell:
 	@printf "\e[36mBuilding shell...\e[0m\n"
-	@zig build shell || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+	@zig build shell -Dengine=v8 || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 
 ## Test
 test:
 	@printf "\e[36mTesting...\e[0m\n"
-	@zig build test || (printf "\e[33mTest ERROR\e[0m\n"; exit 1;)
+	@zig build test -Dengine=v8 || (printf "\e[33mTest ERROR\e[0m\n"; exit 1;)
 	@printf "\e[33mTest OK\e[0m\n"

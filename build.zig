@@ -1,18 +1,21 @@
 const std = @import("std");
 
-const jsruntime_path: []const u8 = "vendor/jsruntime-lib/";
-const jsruntime_pkgs = @import("vendor/jsruntime-lib/build.zig").packages(jsruntime_path);
+const jsruntime_path = "vendor/jsruntime-lib/";
+const jsruntime = @import("vendor/jsruntime-lib/build.zig");
+const jsruntime_pkgs = jsruntime.packages(jsruntime_path);
 
 pub fn build(b: *std.build.Builder) !void {
     const target = b.standardTargetOptions(.{});
     const mode = b.standardReleaseOptions();
+
+    const options = try jsruntime.buildOptions(b);
 
     // browser
     // -------
 
     // compile and install
     const exe = b.addExecutable("browsercore", "src/main.zig");
-    try common(exe, mode, target);
+    try common(exe, mode, target, options);
     exe.install();
 
     // run
@@ -31,7 +34,7 @@ pub fn build(b: *std.build.Builder) !void {
 
     // compile and install
     const shell = b.addExecutable("browsercore-shell", "src/main_shell.zig");
-    try common(shell, mode, target);
+    try common(shell, mode, target, options);
     try jsruntime_pkgs.add_shell(shell, mode);
     // do not install shell binary
     shell.install();
@@ -52,7 +55,7 @@ pub fn build(b: *std.build.Builder) !void {
 
     // compile
     const exe_tests = b.addTest("src/run_tests.zig");
-    try common(exe_tests, mode, target);
+    try common(exe_tests, mode, target, options);
 
     // step
     const test_step = b.step("test", "Run unit tests");
@@ -63,10 +66,11 @@ fn common(
     step: *std.build.LibExeObjStep,
     mode: std.builtin.Mode,
     target: std.zig.CrossTarget,
+    options: jsruntime.Options,
 ) !void {
     step.setTarget(target);
     step.setBuildMode(mode);
-    try jsruntime_pkgs.add(step, mode);
+    try jsruntime_pkgs.add(step, mode, options);
     linkLexbor(step);
 }
 
