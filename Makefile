@@ -5,14 +5,14 @@
 ## Display this help screen
 help:
 	@printf "\e[36m%-35s %s\e[0m\n" "Command" "Usage"
-	@sed -n '/^## /{\
-		s/## //g;\
-		h;\
-		n;\
-		s/:.*//g;\
-		G;\
-		s/\n/ /g;\
-		p;}' Makefile | awk '{printf "\033[33m%-35s\033[0m%s\n", $$1, substr($$0,length($$1)+1)}'
+	@sed -n -e '/^## /{'\
+		-e 's/## //g;'\
+		-e 'h;'\
+		-e 'n;'\
+		-e 's/:.*//g;'\
+		-e 'G;'\
+		-e 's/\n/ /g;'\
+		-e 'p;}' Makefile | awk '{printf "\033[33m%-35s\033[0m%s\n", $$1, substr($$0,length($$1)+1)}'
 
 
 # Zig commands
