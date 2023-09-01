@@ -1,0 +1,6 @@
+[submodule "vendor/jsruntime-lib"]
+	path = vendor/jsruntime-lib
+	url = https://github.com/francisbouvier/jsruntime-lib
+[submodule "vendor/lexbor-src"]
+	path = vendor/lexbor-src
+	url = https://github.com/lexbor/lexbor
