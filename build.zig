@@ -78,5 +78,5 @@ fn linkLexbor(step: *std.build.LibExeObjStep) void {
     // cmake . -DLEXBOR_BUILD_SHARED=OFF
     const lib_path = "vendor/lexbor/liblexbor_static.a";
     step.addObjectFile(lib_path);
-    step.addIncludePath("vendor/lexbor/source");
+    step.addIncludePath("vendor/lexbor-src/source");
 }

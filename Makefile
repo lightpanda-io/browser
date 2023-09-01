@@ -60,8 +60,9 @@ install-dev: install-submodule install-lexbor install-jsruntime-dev
 
 ## Install and build v8 engine for dev
 install-lexbor:
+	@mkdir -p vendor/lexbor
 	@cd vendor/lexbor && \
-	cmake . -DLEXBOR_BUILD_SHARED=OFF -DLEXBOR_BUILD_STATIC=ON -DLEXBOR_BUILD_TESTS_CPP=OFF -DLEXBOR_INSTALL_HEADERS=OFF && \
+	cmake ../lexbor-src -DLEXBOR_BUILD_SHARED=OFF -DLEXBOR_BUILD_STATIC=ON -DLEXBOR_BUILD_TESTS_CPP=OFF -DLEXBOR_INSTALL_HEADERS=ON && \
 	make
 
 install-jsruntime-dev:
