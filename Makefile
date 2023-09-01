@@ -45,3 +45,34 @@ test:
 	@printf "\e[36mTesting...\e[0m\n"
 	@zig build test -Dengine=v8 || (printf "\e[33mTest ERROR\e[0m\n"; exit 1;)
 	@printf "\e[33mTest OK\e[0m\n"
+
+# Install and build required dependencies commands
+# ------------
+.PHONY: install-submodule
+.PHONY: install-lexbor install-jsruntime install-jsruntime-dev
+.PHONY: install-dev install
+
+## Install and build dependencies for release
+install: install-submodule install-lexbor install-jsruntime
+
+## Install and build dependencies for dev
+install-dev: install-submodule install-lexbor install-jsruntime-dev
+
+## Install and build v8 engine for dev
+install-lexbor:
+	@cd vendor/lexbor && \
+	cmake . -DLEXBOR_BUILD_TESTS=ON -DLEXBOR_BUILD_EXAMPLES=ON && \
+	make
+
+install-jsruntime-dev:
+	@cd vendor/jsruntime-lib && \
+	make install-dev
+
+install-jsruntime:
+	@cd vendor/jsruntime-lib && \
+	make install
+
+## Init and update git submodule
+install-submodule:
+	@git submodule init && \
+	git submodule update
