@@ -62,7 +62,7 @@ install-dev: install-submodule install-lexbor install-jsruntime-dev
 install-lexbor:
 	@mkdir -p vendor/lexbor
 	@cd vendor/lexbor && \
-	cmake ../lexbor-src -DLEXBOR_BUILD_SHARED=OFF -DLEXBOR_BUILD_STATIC=ON -DLEXBOR_BUILD_TESTS_CPP=OFF -DLEXBOR_INSTALL_HEADERS=ON && \
+	cmake ../lexbor-src -DLEXBOR_BUILD_SHARED=OFF && \
 	make
 
 install-jsruntime-dev:
