@@ -1,0 +1,3 @@
+[submodule "vendor/lexbor"]
+	path = vendor/lexbor
+	url = https://github.com/lexbor/lexbor
