@@ -180,7 +180,15 @@ pub inline fn nodeEventTarget(node: *Node) *EventTarget {
 }
 
 pub inline fn nodeTag(node: *Node) Tag {
-    return @intToEnum(Tag, c.lxb_dom_node_tag_id(node));
+    // FIXME: lxb_dom_node_tag_id returns a big number if element is unknwon
+    // while it should return 0 (value of enum LXB_TAG__UNDEF).
+    // This fix the problem by assuming that a value greater than an u8 (the basis
+    // of Tag enum) is 0.
+    var val = c.lxb_dom_node_tag_id(node);
+    if (val > 256) {
+        val = 0;
+    }
+    return @intToEnum(Tag, val);
 }
 
 pub const nodeWalker = (fn (node: ?*Node, _: ?*anyopaque) callconv(.C) Action);
