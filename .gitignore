@@ -1,3 +1,4 @@
 zig-cache
 zig-out
 /vendor/lexbor/
+/vendor/netsurf/build/
