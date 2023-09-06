@@ -4,3 +4,18 @@
 [submodule "vendor/lexbor-src"]
 	path = vendor/lexbor-src
 	url = https://github.com/lexbor/lexbor
+[submodule "vendor/netsurf/libwapcaplet"]
+	path = vendor/netsurf/libwapcaplet
+	url = https://source.netsurf-browser.org/libwapcaplet.git
+[submodule "vendor/netsurf/libparserutils"]
+	path = vendor/netsurf/libparserutils
+	url = https://source.netsurf-browser.org/libparserutils.git
+[submodule "vendor/netsurf/libdom"]
+	path = vendor/netsurf/libdom
+	url = https://source.netsurf-browser.org/libdom.git
+[submodule "vendor/netsurf/share/netsurf-buildsystem"]
+	path = vendor/netsurf/share/netsurf-buildsystem
+	url = https://source.netsurf-browser.org/buildsystem.git
+[submodule "vendor/netsurf/libhubbub"]
+	path = vendor/netsurf/libhubbub
+	url = https://source.netsurf-browser.org/libhubbub.git

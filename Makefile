@@ -75,9 +75,7 @@ endif
 install-netsurf:
 	@printf "\e[36mInstalling NetSurf...\e[0m\n" && \
 	ls $(ICONV) 1> /dev/null || (printf "\e[33mERROR: you need to install libiconv in your system (on MacOS on with Homebrew)\e[0m\n"; exit 1;) && \
-	mkdir -p vendor/netfurf && \
 	mkdir -p vendor/netfurf/build && \
-	mkdir -p vendor/netfurf/netsurf-buildsystem && \
 	export PREFIX=$(BC_NS) && \
 	export LDFLAGS="-L$(ICONV)/lib" && \
 	export CFLAGS="-I/$(ICONV)/include -I$(BC_NS)/libparserutils/include -I$(BC_NS)/libhubbub/include -I$(BC_NS)/libwapcaplet/include" && \
@@ -95,7 +93,7 @@ install-netsurf:
 	BUILDDIR=$(BC_NS)/build/libdom make 2> /dev/null && \
 	printf "\e[33mRunning libdom example...\e[0m\n" && \
 	cd include/dom && \
-	rm bindings && \
+	rm -f bindings || true && \
 	ln -s ../../bindings bindings && \
 	cd ../../examples && \
 	rm -f a.out || true && \
