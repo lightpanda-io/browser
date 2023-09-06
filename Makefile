@@ -2,6 +2,7 @@
 # ---------
 
 ZIG := zig
+BC := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 # Infos
 # -----
@@ -63,7 +64,62 @@ install: install-submodule install-lexbor install-jsruntime
 ## Install and build dependencies for dev
 install-dev: install-submodule install-lexbor install-jsruntime-dev
 
-## Install and build v8 engine for dev
+BC_NS := $(BC)vendor/netsurf
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S), Darwin)
+	ICONV := /opt/homebrew/opt/libiconv
+endif
+# TODO: add Linux iconv path (I guess it depends on the distro)
+# TODO: this way of linking libiconv is not ideal. We should have a more generic way
+# and stick to a specif version. Maybe build from source. Anyway not now.
+install-netsurf:
+	@printf "\e[36mInstalling NetSurf...\e[0m\n" && \
+	ls $(ICONV) 1> /dev/null || (printf "\e[33mERROR: you need to install libiconv in your system (on MacOS on with Homebrew)\e[0m\n"; exit 1;) && \
+	mkdir -p vendor/netfurf && \
+	mkdir -p vendor/netfurf/build && \
+	mkdir -p vendor/netfurf/netsurf-buildsystem && \
+	export PREFIX=$(BC_NS) && \
+	export LDFLAGS="-L$(ICONV)/lib" && \
+	export CFLAGS="-I/$(ICONV)/include -I$(BC_NS)/libparserutils/include -I$(BC_NS)/libhubbub/include -I$(BC_NS)/libwapcaplet/include" && \
+	printf "\e[33mInstalling libwapcaplet...\e[0m\n" && \
+	cd vendor/netsurf/libwapcaplet && \
+	BUILDDIR=$(BC_NS)/build/libwapcaplet make 2> /dev/null && \
+	cd ../libparserutils && \
+	printf "\e[33mInstalling libparserutils...\e[0m\n" && \
+	BUILDDIR=$(BC_NS)/build/libparserutils make 2> /dev/null && \
+	cd ../libhubbub && \
+	printf "\e[33mInstalling libhubbub...\e[0m\n" && \
+	BUILDDIR=$(BC_NS)/build/libhubbub make 2> /dev/null && \
+	cd ../libdom && \
+	printf "\e[33mInstalling libdom...\e[0m\n" && \
+	BUILDDIR=$(BC_NS)/build/libdom make 2> /dev/null && \
+	printf "\e[33mRunning libdom example...\e[0m\n" && \
+	cd include/dom && \
+	rm bindings && \
+	ln -s ../../bindings bindings && \
+	cd ../../examples && \
+	rm -f a.out || true && \
+	clang \
+	-I$(ICONV)/include \
+	-I$(BC_NS)/libdom/include \
+	-I$(BC_NS)/libparserutils/include \
+	-I$(BC_NS)/libhubbub/include \
+	-I$(BC_NS)/libwapcaplet/include \
+	-L$(ICONV)/lib \
+	-L$(BC_NS)/build/libdom \
+	-L$(BC_NS)/build/libparserutils \
+	-L$(BC_NS)/build/libhubbub \
+	-L$(BC_NS)/build/libwapcaplet \
+	-liconv \
+	-ldom \
+	-lhubbub \
+	-lparserutils \
+	-lwapcaplet \
+	dom-structure-dump.c && \
+	./a.out > /dev/null && \
+	printf "\e[36mDone NetSurf $(OS)\e[0m\n"
+
+
 install-lexbor:
 	@mkdir -p vendor/lexbor
 	@cd vendor/lexbor && \
