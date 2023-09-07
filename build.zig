@@ -78,6 +78,7 @@ fn common(
 ) !void {
     try jsruntime_pkgs.add(step, options);
     linkLexbor(step);
+    linkNetSurf(step);
 }
 
 fn linkLexbor(step: *std.build.LibExeObjStep) void {
@@ -85,4 +86,33 @@ fn linkLexbor(step: *std.build.LibExeObjStep) void {
     const lib_path = "vendor/lexbor/liblexbor_static.a";
     step.addObjectFile(.{ .path = lib_path });
     step.addIncludePath(.{ .path = "vendor/lexbor-src/source" });
+}
+
+fn linkNetSurf(step: *std.build.LibExeObjStep) void {
+
+    // iconv
+    var iconv_lib: []const u8 = undefined;
+    var iconv_include: []const u8 = undefined;
+    const os = step.target.getOsTag();
+    if (os == .macos) {
+        iconv_lib = "/opt/homebrew/opt/libiconv/lib/libiconv.a";
+        iconv_include = "/opt/homebrew/opt/libiconv/include";
+    } else if (os == .linux) {
+        @panic("you need to modify build.zig to specify libiconv paths");
+    }
+    step.addObjectFile(iconv_lib);
+    step.addIncludePath(iconv_include);
+
+    // netsurf libs
+    const ns = "vendor/netsurf/";
+    const libs: [4][]const u8 = .{
+        "libdom",
+        "libhubbub",
+        "libparserutils",
+        "libwapcaplet",
+    };
+    inline for (libs) |lib| {
+        step.addObjectFile(ns ++ "/build/" ++ lib ++ "/" ++ lib ++ ".a");
+        step.addIncludePath(ns ++ lib ++ "/include");
+    }
 }

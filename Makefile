@@ -75,7 +75,6 @@ endif
 install-netsurf:
 	@printf "\e[36mInstalling NetSurf...\e[0m\n" && \
 	ls $(ICONV) 1> /dev/null || (printf "\e[33mERROR: you need to install libiconv in your system (on MacOS on with Homebrew)\e[0m\n"; exit 1;) && \
-	mkdir -p vendor/netfurf/build && \
 	export PREFIX=$(BC_NS) && \
 	export LDFLAGS="-L$(ICONV)/lib" && \
 	export CFLAGS="-I/$(ICONV)/include -I$(BC_NS)/libparserutils/include -I$(BC_NS)/libhubbub/include -I$(BC_NS)/libwapcaplet/include" && \
