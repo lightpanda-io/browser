@@ -6,7 +6,7 @@ const jsruntime_pkgs = jsruntime.packages(jsruntime_path);
 
 pub fn build(b: *std.build.Builder) !void {
     const target = b.standardTargetOptions(.{});
-    const mode = b.standardReleaseOptions();
+    const mode = b.standardOptimizeOption(.{});
 
     const options = try jsruntime.buildOptions(b);
 
