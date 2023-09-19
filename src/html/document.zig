@@ -24,10 +24,10 @@ pub const HTMLDocument = struct {
 
     pub fn _getElementById(self: *parser.DocumentHTML, id: []u8) ?*parser.HTMLElement {
         const body_html = parser.documentHTMLBody(self);
-        const body_dom = @ptrCast(*parser.Element, body_html);
-        const doc_dom = @ptrCast(*parser.Document, self);
+        const body_dom = @as(*parser.Element, @ptrCast(body_html));
+        const doc_dom = @as(*parser.Document, @ptrCast(self));
         const elem_dom = Document.getElementById(doc_dom, body_dom, id);
-        return @ptrCast(*parser.HTMLElement, elem_dom);
+        return @as(*parser.HTMLElement, @ptrCast(elem_dom));
     }
 
     pub fn _createElement(self: *parser.DocumentHTML, tag_name: []const u8) E.HTMLElements {
@@ -63,7 +63,7 @@ pub fn testExecFn(
     const tags = comptime parser.Tag.all();
     const elements = comptime parser.Tag.allElements();
     var createElements: [(tags.len - 1) * 3]Case = undefined;
-    inline for (tags) |tag, i| {
+    inline for (tags, 0..) |tag, i| {
         if (tag == .undef) {
             continue;
         }

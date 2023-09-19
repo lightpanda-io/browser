@@ -85,8 +85,8 @@ pub const Tag = enum(u8) {
         comptime {
             const info = @typeInfo(Tag).Enum;
             comptime var l: [info.fields.len]Tag = undefined;
-            inline for (info.fields) |field, i| {
-                l[i] = @intToEnum(Tag, field.value);
+            inline for (info.fields, 0..) |field, i| {
+                l[i] = @as(Tag, @enumFromInt(field.value));
             }
             return &l;
         }
@@ -96,7 +96,7 @@ pub const Tag = enum(u8) {
         comptime {
             const tags = all();
             var names: [tags.len][]const u8 = undefined;
-            inline for (tags) |tag, i| {
+            inline for (tags, 0..) |tag, i| {
                 names[i] = tag.elementName();
             }
             return &names;
@@ -106,7 +106,7 @@ pub const Tag = enum(u8) {
     fn upperName(comptime name: []const u8) []const u8 {
         comptime {
             var upper_name: [name.len]u8 = undefined;
-            for (name) |char, i| {
+            for (name, 0..) |char, i| {
                 var to_upper = false;
                 if (i == 0) {
                     to_upper = true;
@@ -188,7 +188,7 @@ pub inline fn nodeTag(node: *Node) Tag {
     if (val > 256) {
         val = 0;
     }
-    return @intToEnum(Tag, val);
+    return @as(Tag, @enumFromInt(val));
 }
 
 pub const nodeWalker = (fn (node: ?*Node, _: ?*anyopaque) callconv(.C) Action);
@@ -199,7 +199,7 @@ pub inline fn nodeName(node: *Node) [*c]const u8 {
 }
 
 pub inline fn nodeType(node: *Node) NodeType {
-    return @intToEnum(NodeType, node.*.type);
+    return @as(NodeType, @enumFromInt(node.*.type));
 }
 
 pub inline fn nodeWalk(node: *Node, comptime walker: nodeWalker) !void {

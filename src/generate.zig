@@ -103,7 +103,7 @@ pub const Union = struct {
         // third iteration to generate union type
         var union_fields: [members_nb]std.builtin.Type.UnionField = undefined;
         done = 0;
-        for (tuple_members) |member, i| {
+        for (tuple_members, 0..) |member, i| {
             const member_T = @field(tuple, member.name);
             const member_info = @typeInfo(member_T);
             if (member_info == .Union) {
