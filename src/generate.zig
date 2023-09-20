@@ -77,7 +77,7 @@ pub const Union = struct {
                 const member_union = member_info.Union;
                 for (member_union.fields) |field| {
                     enum_fields[done] = .{
-                        .name = fmtName(field.field_type),
+                        .name = fmtName(field.type),
                         .value = done,
                     };
                     done += 1;
@@ -92,7 +92,6 @@ pub const Union = struct {
         }
         const decls: [0]std.builtin.Type.Declaration = undefined;
         const enum_info = std.builtin.Type.Enum{
-            .layout = .Auto,
             .tag_type = tag_type,
             .fields = &enum_fields,
             .decls = &decls,
@@ -103,22 +102,22 @@ pub const Union = struct {
         // third iteration to generate union type
         var union_fields: [members_nb]std.builtin.Type.UnionField = undefined;
         done = 0;
-        for (tuple_members) |member, i| {
+        for (tuple_members, 0..) |member, i| {
             const member_T = @field(tuple, member.name);
             const member_info = @typeInfo(member_T);
             if (member_info == .Union) {
                 const member_union = member_info.Union;
                 for (member_union.fields) |field| {
                     var T: type = undefined;
-                    if (@hasDecl(field.field_type, "Self")) {
-                        T = @field(field.field_type, "Self");
+                    if (@hasDecl(field.type, "Self")) {
+                        T = @field(field.type, "Self");
                         T = *T;
                     } else {
-                        T = field.field_type;
+                        T = field.type;
                     }
                     union_fields[done] = .{
-                        .name = fmtName(field.field_type),
-                        .field_type = T,
+                        .name = fmtName(field.type),
+                        .type = T,
                         .alignment = @alignOf(T),
                     };
                     done += 1;
@@ -132,7 +131,7 @@ pub const Union = struct {
                 }
                 union_fields[done] = .{
                     .name = fmtName(member_T),
-                    .field_type = T,
+                    .type = T,
                     .alignment = @alignOf(T),
                 };
                 done += 1;
@@ -205,7 +204,7 @@ pub fn TupleT(comptime tuple: anytype) type {
     while (done < members_nb) {
         fields[done] = .{
             .name = try itoa(done),
-            .field_type = type,
+            .type = type,
             .default_value = null,
             .is_comptime = false,
             .alignment = @alignOf(type),
@@ -299,7 +298,7 @@ pub fn tests() !void {
     try std.testing.expect(from_structs_union == .Union);
     try std.testing.expect(from_structs_union.Union.tag_type == FromStructs._enum);
     try std.testing.expect(from_structs_union.Union.fields.len == 3);
-    try std.testing.expect(from_structs_union.Union.fields[0].field_type == Astruct);
+    try std.testing.expect(from_structs_union.Union.fields[0].type == Astruct);
     try std.testing.expectEqualStrings(from_structs_union.Union.fields[0].name, "Astruct");
 
     // Union from union and structs
@@ -316,7 +315,7 @@ pub fn tests() !void {
     try std.testing.expect(from_mix_union == .Union);
     try std.testing.expect(from_mix_union.Union.tag_type == FromMix._enum);
     try std.testing.expect(from_mix_union.Union.fields.len == 4);
-    try std.testing.expect(from_mix_union.Union.fields[3].field_type == Dstruct);
+    try std.testing.expect(from_mix_union.Union.fields[3].type == Dstruct);
     try std.testing.expectEqualStrings(from_mix_union.Union.fields[3].name, "Dstruct");
 
     std.debug.print("Generate Union: OK\n", .{});
