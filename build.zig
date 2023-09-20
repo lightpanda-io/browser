@@ -115,4 +115,10 @@ fn linkNetSurf(step: *std.build.LibExeObjStep) void {
         step.addObjectFile(.{ .path = ns ++ "/lib/" ++ lib ++ ".a" });
     }
     step.addIncludePath(.{ .path = ns ++ "/include" });
+
+    // wrapper
+    const flags = [_][]const u8{};
+    const files: [1][]const u8 = .{ns ++ "wrapper/wrapper.c"};
+    step.addCSourceFiles(&files, &flags);
+    step.addIncludePath(.{ .path = ns ++ "wrapper" });
 }
