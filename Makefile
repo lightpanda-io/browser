@@ -56,6 +56,7 @@ test:
 # ------------
 .PHONY: install-submodule
 .PHONY: install-lexbor install-jsruntime install-jsruntime-dev
+.PHONY: install-netsurf clean-netsurf test-netsurf
 .PHONY: install-dev install
 
 ## Install and build dependencies for release
@@ -107,6 +108,21 @@ install-netsurf:
 	./a.out > /dev/null && \
 	rm a.out && \
 	printf "\e[36mDone NetSurf $(OS)\e[0m\n"
+
+clean-netsurf:
+	@printf "\e[36mCleaning NetSurf build...\e[0m\n" && \
+	cd vendor/netsurf && \
+	rm -R build && \
+	rm -R lib && \
+	rm -R include
+
+test-netsurf:
+	@printf "\e[36mTesting NetSurf...\e[0m\n" && \
+	export PREFIX=$(BC_NS) && \
+	export LDFLAGS="-L$(ICONV)/lib -L$(BC_NS)/lib" && \
+	export CFLAGS="-I$(ICONV)/include -I$(BC_NS)/include" && \
+	cd vendor/netsurf/libdom && \
+	BUILDDIR=$(BC_NS)/build/libdom make test
 
 
 install-lexbor:
