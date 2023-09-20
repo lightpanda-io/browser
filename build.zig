@@ -100,8 +100,8 @@ fn linkNetSurf(step: *std.build.LibExeObjStep) void {
     } else if (os == .linux) {
         @panic("you need to modify build.zig to specify libiconv paths");
     }
-    step.addObjectFile(iconv_lib);
-    step.addIncludePath(iconv_include);
+    step.addObjectFile(.{ .path = iconv_lib });
+    step.addIncludePath(.{ .path = iconv_include });
 
     // netsurf libs
     const ns = "vendor/netsurf/";
@@ -112,7 +112,7 @@ fn linkNetSurf(step: *std.build.LibExeObjStep) void {
         "libwapcaplet",
     };
     inline for (libs) |lib| {
-        step.addObjectFile(ns ++ "/build/" ++ lib ++ "/" ++ lib ++ ".a");
-        step.addIncludePath(ns ++ lib ++ "/include");
+        step.addObjectFile(.{ .path = ns ++ "/lib/" ++ lib ++ ".a" });
     }
+    step.addIncludePath(.{ .path = ns ++ "/include" });
 }
