@@ -2,7 +2,7 @@ const std = @import("std");
 
 const jsruntime = @import("jsruntime");
 
-const parser = @import("parser.zig");
+const parser = @import("netsurf.zig");
 const DOM = @import("dom.zig");
 
 const html_test = @import("html_test.zig").html;
@@ -32,9 +32,9 @@ pub fn main() !void {
     const apis = jsruntime.compile(DOM.Interfaces);
 
     // document
-    doc = parser.documentHTMLInit();
-    defer parser.documentHTMLDeinit(doc);
-    try parser.documentHTMLParse(doc, html_test);
+    var f = "test.html".*;
+    doc = parser.documentHTMLParse(&f);
+    // TODO: defer doc?
 
     // create JS vm
     const vm = jsruntime.VM.init();

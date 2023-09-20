@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const parser = @import("../parser.zig");
+const parser = @import("../netsurf.zig");
 
 const jsruntime = @import("jsruntime");
 const Case = jsruntime.test_utils.Case;
@@ -22,12 +22,13 @@ pub const HTMLDocument = struct {
         return parser.documentHTMLBody(self);
     }
 
-    pub fn _getElementById(self: *parser.DocumentHTML, id: []u8) ?*parser.HTMLElement {
-        const body_html = parser.documentHTMLBody(self);
-        const body_dom = @as(*parser.Element, @ptrCast(body_html));
-        const doc_dom = @as(*parser.Document, @ptrCast(self));
-        const elem_dom = Document.getElementById(doc_dom, body_dom, id);
-        return @as(*parser.HTMLElement, @ptrCast(elem_dom));
+    pub fn _getElementById(self: *parser.DocumentHTML, id: []u8) ?*parser.ElementHTML {
+        const doc = parser.documentHTMLToDocument(self);
+        const elem = parser.documentGetElementById(doc, id);
+        if (elem) |value| {
+            return @as(*parser.ElementHTML, @ptrCast(value));
+        }
+        return null;
     }
 
     pub fn _createElement(self: *parser.DocumentHTML, tag_name: []const u8) E.HTMLElements {

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const parser = @import("../parser.zig");
+const parser = @import("../netsurf.zig");
 
 const Node = @import("node.zig").Node;
 const Element = @import("element.zig").Element;
@@ -15,19 +15,8 @@ pub const Document = struct {
     //     return .{};
     // }
 
-    pub fn getElementById(self: *parser.Document, elem: *parser.Element, id: []const u8) ?*parser.Element {
-        const collection = parser.collectionInit(self, 1);
-        defer parser.collectionDeinit(collection);
-        const case_sensitve = true;
-        parser.elementsByAttr(elem, collection, "id", id, case_sensitve) catch |err| {
-            std.debug.print("getElementById error: {s}\n", .{@errorName(err)});
-            return null;
-        };
-        if (collection.array.length == 0) {
-            // no results
-            return null;
-        }
-        return parser.collectionElement(collection, 0);
+    pub fn getElementById(self: *parser.Document, id: []const u8) ?*parser.Element {
+        return parser.documentGetElementById(self, id);
     }
 
     // JS funcs
