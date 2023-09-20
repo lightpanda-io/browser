@@ -3,11 +3,9 @@ const std = @import("std");
 const jsruntime = @import("jsruntime");
 const generate = @import("generate.zig");
 
-const parser = @import("parser.zig");
+const parser = @import("netsurf.zig");
 const DOM = @import("dom.zig");
 const testExecFn = @import("html/document.zig").testExecFn;
-
-const html_test = @import("html_test.zig").html;
 
 var doc: *parser.DocumentHTML = undefined;
 
@@ -38,9 +36,8 @@ test {
     const apis = jsruntime.compile(DOM.Interfaces);
 
     // document
-    doc = parser.documentHTMLInit();
-    defer parser.documentHTMLDeinit(doc);
-    try parser.documentHTMLParse(doc, html_test);
+    var f = "test.html".*;
+    doc = parser.documentHTMLParse(&f);
 
     // create JS vm
     const vm = jsruntime.VM.init();

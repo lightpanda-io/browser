@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const parser = @import("../parser.zig");
+const parser = @import("../netsurf.zig");
 
 const EventTarget = @import("event_target.zig").EventTarget;
 

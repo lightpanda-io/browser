@@ -1,4 +1,4 @@
-const parser = @import("../parser.zig");
+const parser = @import("../netsurf.zig");
 const generate = @import("../generate.zig");
 
 const Element = @import("../dom/element.zig").Element;
@@ -7,7 +7,7 @@ const Element = @import("../dom/element.zig").Element;
 // --------------
 
 pub const HTMLElement = struct {
-    pub const Self = parser.HTMLElement;
+    pub const Self = parser.ElementHTML;
     pub const prototype = *Element;
     pub const mem_guarantied = true;
 };
@@ -455,7 +455,7 @@ pub const HTMLVideoElement = struct {
 };
 
 pub fn ElementToHTMLElementInterface(elem: *parser.Element) HTMLElements {
-    const tag = parser.nodeTag(parser.elementNode(elem));
+    const tag = parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(elem)));
     return switch (tag) {
         .a => .{ .HTMLAnchorElement = @as(*parser.Anchor, @ptrCast(elem)) },
         .area => .{ .HTMLAreaElement = @as(*parser.Area, @ptrCast(elem)) },
