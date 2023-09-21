@@ -21,6 +21,7 @@ const c = @cImport({
     @cInclude("html/html_dlist_element.h");
     @cInclude("html/html_div_element.h");
     @cInclude("html/html_fieldset_element.h");
+    @cInclude("html/html_form_element.h");
     @cInclude("html/html_frameset_element.h");
     @cInclude("html/html_hr_element.h");
     @cInclude("html/html_head_element.h");
@@ -47,8 +48,11 @@ const c = @cImport({
     @cInclude("html/html_select_element.h");
     @cInclude("html/html_style_element.h");
     @cInclude("html/html_table_element.h");
+    @cInclude("html/html_tablecaption_element.h");
     @cInclude("html/html_tablecell_element.h");
     @cInclude("html/html_tablecol_element.h");
+    @cInclude("html/html_tablerow_element.h");
+    @cInclude("html/html_tablesection_element.h");
     @cInclude("html/html_text_area_element.h");
     @cInclude("html/html_title_element.h");
     @cInclude("html/html_ulist_element.h");
