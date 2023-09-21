@@ -7,8 +7,7 @@ const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 
 const Document = @import("../dom/document.zig").Document;
-
-const E = @import("elements.zig");
+const HTMLElem = @import("elements.zig");
 
 pub const HTMLDocument = struct {
     pub const Self = parser.DocumentHTML;
@@ -22,19 +21,19 @@ pub const HTMLDocument = struct {
         return parser.documentHTMLBody(self);
     }
 
-    pub fn _getElementById(self: *parser.DocumentHTML, id: []u8) ?*parser.ElementHTML {
+    pub fn _getElementById(self: *parser.DocumentHTML, id: []u8) ?HTMLElem.Union {
         const doc = parser.documentHTMLToDocument(self);
-        const elem = parser.documentGetElementById(doc, id);
-        if (elem) |value| {
-            return @as(*parser.ElementHTML, @ptrCast(value));
+        const elem_dom = parser.documentGetElementById(doc, id);
+        if (elem_dom) |elem| {
+            return HTMLElem.toInterface(HTMLElem.Union, elem);
         }
         return null;
     }
 
-    pub fn _createElement(self: *parser.DocumentHTML, tag_name: []const u8) E.HTMLElements {
+    pub fn _createElement(self: *parser.DocumentHTML, tag_name: []const u8) HTMLElem.Union {
         const doc_dom = parser.documentHTMLToDocument(self);
         const base = parser.documentCreateElement(doc_dom, tag_name);
-        return E.ElementToHTMLElementInterface(base);
+        return HTMLElem.toInterface(HTMLElem.Union, base);
     }
 };
 
@@ -51,13 +50,14 @@ pub fn testExecFn(
         .{ .src = "document.__proto__.__proto__.constructor.name", .ex = "Document" },
         .{ .src = "document.__proto__.__proto__.__proto__.constructor.name", .ex = "Node" },
         .{ .src = "document.__proto__.__proto__.__proto__.__proto__.constructor.name", .ex = "EventTarget" },
+        .{ .src = "document.body.localName === 'body'", .ex = "true" },
     };
     try checkCases(js_env, &constructor);
 
     var getElementById = [_]Case{
         .{ .src = "let getElementById = document.getElementById('content')", .ex = "undefined" },
-        .{ .src = "getElementById.constructor.name", .ex = "HTMLElement" },
-        .{ .src = "getElementById.localName", .ex = "main" },
+        .{ .src = "getElementById.constructor.name", .ex = "HTMLDivElement" },
+        .{ .src = "getElementById.localName", .ex = "div" },
     };
     try checkCases(js_env, &getElementById);
 
