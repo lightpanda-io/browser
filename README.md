@@ -18,7 +18,8 @@ For Debian/Ubuntu based Linux:
 sudo apt install xz-utils \
     python3 ca-certificates git \
     pkg-config libglib2.0-dev \
-    cmake
+    libexpat1-dev \
+    cmake clang
 ```
 
 For MacOS, you only need Python 3 and cmake.
@@ -33,6 +34,13 @@ directory.
 
 ```
 make install-submodule
+```
+
+### Build netsurf
+
+The command `make install-netsurf` will build netsurf libs used by browsercore.
+```
+make install-netsurf
 ```
 
 ### Build lexbor
