@@ -4,3 +4,4 @@ zig-out
 /vendor/netsurf/build/
 /vendor/netsurf/lib/
 /vendor/netsurf/include/
+/vendor/libiconv/

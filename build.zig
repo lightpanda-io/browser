@@ -91,17 +91,8 @@ fn linkLexbor(step: *std.build.LibExeObjStep) void {
 fn linkNetSurf(step: *std.build.LibExeObjStep) void {
 
     // iconv
-    var iconv_lib: []const u8 = undefined;
-    var iconv_include: []const u8 = undefined;
-    const os = step.target.getOsTag();
-    if (os == .macos) {
-        iconv_lib = "/opt/homebrew/opt/libiconv/lib/libiconv.a";
-        iconv_include = "/opt/homebrew/opt/libiconv/include";
-    } else if (os == .linux) {
-        @panic("you need to modify build.zig to specify libiconv paths");
-    }
-    step.addObjectFile(.{ .path = iconv_lib });
-    step.addIncludePath(.{ .path = iconv_include });
+    step.addObjectFile(.{ .path = "vendor/libiconv/lib/libiconv.a" });
+    step.addIncludePath(.{ .path = "vendor/libiconv/include" });
 
     // netsurf libs
     const ns = "vendor/netsurf/";

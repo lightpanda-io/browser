@@ -55,30 +55,28 @@ test:
 # Install and build required dependencies commands
 # ------------
 .PHONY: install-submodule
-.PHONY: install-lexbor install-jsruntime install-jsruntime-dev
+.PHONY: install-lexbor install-jsruntime install-jsruntime-dev install-libiconv
 .PHONY: install-netsurf clean-netsurf test-netsurf
 .PHONY: install-dev install
 
 ## Install and build dependencies for release
-install: install-submodule install-lexbor install-jsruntime
+install: install-submodule install-lexbor install-jsruntime install-netsurf
 
 ## Install and build dependencies for dev
-install-dev: install-submodule install-lexbor install-jsruntime-dev
+install-dev: install-submodule install-lexbor install-jsruntime-dev install-netsurf
 
 BC_NS := $(BC)vendor/netsurf
 UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S), Darwin)
-	ICONV := /opt/homebrew/opt/libiconv
-endif
+ICONV := $(BC)vendor/libiconv
 # TODO: add Linux iconv path (I guess it depends on the distro)
 # TODO: this way of linking libiconv is not ideal. We should have a more generic way
 # and stick to a specif version. Maybe build from source. Anyway not now.
-install-netsurf:
+install-netsurf: install-libiconv
 	@printf "\e[36mInstalling NetSurf...\e[0m\n" && \
 	ls $(ICONV) 1> /dev/null || (printf "\e[33mERROR: you need to install libiconv in your system (on MacOS on with Homebrew)\e[0m\n"; exit 1;) && \
 	export PREFIX=$(BC_NS) && \
-	export LDFLAGS="-L$(ICONV)/lib" && \
-	export CFLAGS="-I$(ICONV)/include" && \
+	export OPTLDFLAGS="-L$(ICONV)/lib" && \
+	export OPTCFLAGS="-I$(ICONV)/include" && \
 	printf "\e[33mInstalling libwapcaplet...\e[0m\n" && \
 	cd vendor/netsurf/libwapcaplet && \
 	BUILDDIR=$(BC_NS)/build/libwapcaplet make install && \
@@ -124,6 +122,15 @@ test-netsurf:
 	cd vendor/netsurf/libdom && \
 	BUILDDIR=$(BC_NS)/build/libdom make test
 
+install-libiconv:
+ifeq ("$(wildcard vendor/libiconv/lib/libiconv.a)","")
+	@mkdir -p vendor/libiconv
+	@cd vendor/libiconv && \
+	curl https://ftp.gnu.org/pub/gnu/libiconv/libiconv-1.17.tar.gz | tar -xvzf -
+	@cd vendor/libiconv/libiconv-1.17 && \
+	./configure --prefix=$(BC)vendor/libiconv --enable-static && \
+	make && make install
+endif
 
 install-lexbor:
 	@mkdir -p vendor/lexbor
