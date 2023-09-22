@@ -18,7 +18,7 @@ For Debian/Ubuntu based Linux:
 sudo apt install xz-utils \
     python3 ca-certificates git \
     pkg-config libglib2.0-dev \
-    libexpat1-dev \
+    gperf libexpat1-dev \
     cmake clang
 ```
 
