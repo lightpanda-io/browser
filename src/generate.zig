@@ -1,13 +1,33 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+// Utils
+// -----
+
+fn itoa(comptime i: u8) ![]const u8 {
+    var len: usize = undefined;
+    if (i < 10) {
+        len = 1;
+    } else if (i < 100) {
+        len = 2;
+    } else {
+        return error.GenerateTooMuchMembers;
+    }
+    var buf: [len]u8 = undefined;
+    return try std.fmt.bufPrint(buf[0..], "{d}", .{i});
+}
+
 fn fmtName(comptime T: type) []const u8 {
     var it = std.mem.splitBackwards(u8, @typeName(T), ".");
     return it.first();
 }
 
+// Union
+// -----
+
 // Generate a flatten tagged Union from various structs and union of structs
 // TODO: make this function more generic
+// TODO: dedup
 pub const Union = struct {
     _enum: type,
     _union: type,
@@ -152,38 +172,15 @@ pub const Union = struct {
     }
 };
 
-fn itoa(comptime i: u8) ![]u8 {
-    var len: usize = undefined;
-    if (i < 10) {
-        len = 1;
-    } else if (i < 100) {
-        len = 2;
-    } else {
-        return error.GenerateTooMuchMembers;
-    }
-    var buf: [len]u8 = undefined;
-    return try std.fmt.bufPrint(buf[0..], "{d}", .{i});
-}
+// Tuple
+// -----
 
-// Generate a flatten tuple type from various structs and tuple of structs.
-// TODO: make this function more generic
-pub fn TupleT(comptime tuple: anytype) type {
-
-    // check types provided
-    const tuple_T = @TypeOf(tuple);
-    const tuple_info = @typeInfo(tuple_T);
-    if (tuple_info != .Struct or !tuple_info.Struct.is_tuple) {
-        @compileError("GenerateArgNotTuple");
-    }
-
-    const tuple_members = tuple_info.Struct.fields;
-
-    // first iteration to get the total number of members
-    var members_nb = 0;
-    for (tuple_members) |member| {
+fn tupleNb(comptime tuple: anytype) usize {
+    var nb = 0;
+    for (@typeInfo(@TypeOf(tuple)).Struct.fields) |member| {
         const member_T = @field(tuple, member.name);
         if (@TypeOf(member_T) == type) {
-            members_nb += 1;
+            nb += 1;
         } else {
             const member_info = @typeInfo(@TypeOf(member_T));
             if (member_info != .Struct and !member_info.Struct.is_tuple) {
@@ -194,14 +191,82 @@ pub fn TupleT(comptime tuple: anytype) type {
                     @compileError("GenerateMemberTupleChildNotType");
                 }
             }
-            members_nb += member_info.Struct.fields.len;
+            nb += member_info.Struct.fields.len;
         }
     }
+    return nb;
+}
 
-    // second iteration to generate the tuple type
-    var fields: [members_nb]std.builtin.Type.StructField = undefined;
+fn tupleTypes(comptime nb: usize, comptime tuple: anytype) [nb]type {
+    var types: [nb]type = undefined;
     var done = 0;
-    while (done < members_nb) {
+    for (@typeInfo(@TypeOf(tuple)).Struct.fields) |member| {
+        const T = @field(tuple, member.name);
+        if (@TypeOf(T) == type) {
+            types[done] = T;
+            done += 1;
+        } else {
+            const info = @typeInfo(@TypeOf(T));
+            for (info.Struct.fields) |field| {
+                types[done] = @field(T, field.name);
+                done += 1;
+            }
+        }
+    }
+    return types;
+}
+
+fn isDup(comptime nb: usize, comptime list: [nb]type, comptime T: type, comptime i: usize) bool {
+    for (list, 0..) |item, index| {
+        if (i >= index) {
+            // check sequentially
+            continue;
+        }
+        if (T == item) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn dedupIndexes(comptime nb: usize, comptime types: [nb]type) [nb]i32 {
+    var dedup_indexes: [nb]i32 = undefined;
+    for (types, 0..) |T, i| {
+        if (isDup(nb, types, T, i)) {
+            dedup_indexes[i] = -1;
+        } else {
+            dedup_indexes[i] = i;
+        }
+    }
+    return dedup_indexes;
+}
+
+fn dedupNb(comptime nb: usize, comptime dedup_indexes: [nb]i32) usize {
+    var dedup_nb = 0;
+    for (dedup_indexes) |index| {
+        if (index != -1) {
+            dedup_nb += 1;
+        }
+    }
+    return dedup_nb;
+}
+
+fn TupleT(comptime tuple: anytype) type {
+    @setEvalBranchQuota(100000);
+
+    // logic
+    const nb = tupleNb(tuple);
+    const types = tupleTypes(nb, tuple);
+    const dedup_indexes = dedupIndexes(nb, types);
+    const dedup_nb = dedupNb(nb, dedup_indexes);
+
+    // generate the tuple type
+    var fields: [dedup_nb]std.builtin.Type.StructField = undefined;
+    var done = 0;
+    for (dedup_indexes) |index| {
+        if (index == -1) {
+            continue;
+        }
         fields[done] = .{
             .name = try itoa(done),
             .type = type,
@@ -221,39 +286,36 @@ pub fn TupleT(comptime tuple: anytype) type {
     return @Type(std.builtin.Type{ .Struct = info });
 }
 
-// Instantiate a flatten tuple from various structs and tuple of structs
-// You need to call first TupleT to generate the according type
+// Create a flatten tuple from various structs and tuple of structs
+// Duplicates will be removed.
 // TODO: make this function more generic
-pub fn TupleInst(comptime T: type, comptime tuple: anytype) T {
+pub fn Tuple(comptime tuple: anytype) TupleT(tuple) {
 
     // check types provided
     const tuple_T = @TypeOf(tuple);
     const tuple_info = @typeInfo(tuple_T);
-    const tuple_members = tuple_info.Struct.fields;
+    if (tuple_info != .Struct or !tuple_info.Struct.is_tuple) {
+        @compileError("GenerateArgNotTuple");
+    }
+
+    // generate the type
+    const T = TupleT(tuple);
+
+    // logic
+    const nb = tupleNb(tuple);
+    const types = tupleTypes(nb, tuple);
+    const dedup_indexes = dedupIndexes(nb, types);
 
     // instantiate the tuple
     var t: T = undefined;
     var done = 0;
-    for (tuple_members) |member| {
-        const member_T = @field(tuple, member.name);
-        var member_info: std.builtin.Type = undefined;
-        if (@TypeOf(member_T) == type) {
-            member_info = @typeInfo(member_T);
-        } else {
-            member_info = @typeInfo(@TypeOf(member_T));
+    for (dedup_indexes) |index| {
+        if (index == -1) {
+            continue;
         }
-        var member_detail = member_info.Struct;
-        if (member_detail.is_tuple) {
-            for (member_detail.fields) |field| {
-                const name = try itoa(done);
-                @field(t, name) = @field(member_T, field.name);
-                done += 1;
-            }
-        } else {
-            const name = try itoa(done);
-            @field(t, name) = @field(tuple, member.name);
-            done += 1;
-        }
+        const name = try itoa(done);
+        @field(t, name) = types[index];
+        done += 1;
     }
     return t;
 }
@@ -322,7 +384,7 @@ pub fn tests() !void {
 
     // Tuple from structs
     const tuple_structs = .{ Astruct, Bstruct };
-    const tFromStructs = TupleInst(TupleT(tuple_structs), tuple_structs);
+    const tFromStructs = Tuple(tuple_structs);
     const t_from_structs = @typeInfo(@TypeOf(tFromStructs));
     try std.testing.expect(t_from_structs == .Struct);
     try std.testing.expect(t_from_structs.Struct.is_tuple);
@@ -332,7 +394,7 @@ pub fn tests() !void {
 
     // Tuple from tuple and structs
     const tuple_mix = .{ tFromStructs, Cstruct };
-    const tFromMix = TupleInst(TupleT(tuple_mix), tuple_mix);
+    const tFromMix = Tuple(tuple_mix);
     const t_from_mix = @typeInfo(@TypeOf(tFromMix));
     try std.testing.expect(t_from_mix == .Struct);
     try std.testing.expect(t_from_mix.Struct.is_tuple);
@@ -340,6 +402,17 @@ pub fn tests() !void {
     try std.testing.expect(@field(tFromMix, "0") == Astruct);
     try std.testing.expect(@field(tFromMix, "1") == Bstruct);
     try std.testing.expect(@field(tFromMix, "2") == Cstruct);
+
+    // Tuple with dedup
+    const tuple_dedup = .{ Cstruct, Astruct, tFromStructs, Bstruct };
+    const tFromDedup = Tuple(tuple_dedup);
+    const t_from_dedup = @typeInfo(@TypeOf(tFromDedup));
+    try std.testing.expect(t_from_dedup == .Struct);
+    try std.testing.expect(t_from_dedup.Struct.is_tuple);
+    try std.testing.expect(t_from_dedup.Struct.fields.len == 3);
+    try std.testing.expect(@field(tFromDedup, "0") == Cstruct);
+    try std.testing.expect(@field(tFromDedup, "1") == Astruct);
+    try std.testing.expect(@field(tFromDedup, "2") == Bstruct);
 
     std.debug.print("Generate Tuple: OK\n", .{});
 }

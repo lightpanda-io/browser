@@ -2,7 +2,7 @@ const std = @import("std");
 
 const jsruntime = @import("jsruntime");
 
-const parser = @import("parser.zig");
+const parser = @import("netsurf.zig");
 const DOM = @import("dom.zig");
 
 const html_test = @import("html_test.zig").html;
@@ -55,9 +55,6 @@ pub fn main() !void {
     defer vm.deinit();
 
     // document
-    doc = parser.documentHTMLInit();
-    defer parser.documentHTMLDeinit(doc);
-    try parser.documentHTMLParse(doc, html_test);
 
     // remove socket file of internal server
     // reuse_address (SO_REUSEADDR flag) does not seems to work on unix socket
@@ -68,6 +65,9 @@ pub fn main() !void {
             return err;
         }
     };
+    var f = "test.html".*;
+    doc = parser.documentHTMLParse(&f);
+    // TODO: defer doc?
 
     // alloc
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);

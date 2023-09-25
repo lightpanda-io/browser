@@ -78,6 +78,7 @@ fn common(
 ) !void {
     try jsruntime_pkgs.add(step, options);
     linkLexbor(step);
+    linkNetSurf(step);
 }
 
 fn linkLexbor(step: *std.build.LibExeObjStep) void {
@@ -85,4 +86,31 @@ fn linkLexbor(step: *std.build.LibExeObjStep) void {
     const lib_path = "vendor/lexbor/liblexbor_static.a";
     step.addObjectFile(.{ .path = lib_path });
     step.addIncludePath(.{ .path = "vendor/lexbor-src/source" });
+}
+
+fn linkNetSurf(step: *std.build.LibExeObjStep) void {
+
+    // iconv
+    step.addObjectFile(.{ .path = "vendor/libiconv/lib/libiconv.a" });
+    step.addIncludePath(.{ .path = "vendor/libiconv/include" });
+
+    // netsurf libs
+    const ns = "vendor/netsurf/";
+    const libs: [4][]const u8 = .{
+        "libdom",
+        "libhubbub",
+        "libparserutils",
+        "libwapcaplet",
+    };
+    inline for (libs) |lib| {
+        step.addObjectFile(.{ .path = ns ++ "/lib/" ++ lib ++ ".a" });
+        step.addIncludePath(.{ .path = ns ++ lib ++ "/src" });
+    }
+    step.addIncludePath(.{ .path = ns ++ "/include" });
+
+    // wrapper
+    const flags = [_][]const u8{};
+    const files: [1][]const u8 = .{ns ++ "wrapper/wrapper.c"};
+    step.addCSourceFiles(&files, &flags);
+    step.addIncludePath(.{ .path = ns ++ "wrapper" });
 }

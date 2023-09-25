@@ -1,3 +1,7 @@
 zig-cache
 zig-out
 /vendor/lexbor/
+/vendor/netsurf/build/
+/vendor/netsurf/lib/
+/vendor/netsurf/include/
+/vendor/libiconv/
