@@ -92,7 +92,7 @@ install-netsurf: install-libiconv
 	BUILDDIR=$(BC_NS)/build/libdom make install && \
 	printf "\e[33mRunning libdom example...\e[0m\n" && \
 	cd examples && \
-	clang \
+	zig cc \
 	-I$(ICONV)/include \
 	-I$(BC_NS)/include \
 	-L$(ICONV)/lib \
@@ -102,7 +102,9 @@ install-netsurf: install-libiconv
 	-lhubbub \
 	-lparserutils \
 	-lwapcaplet \
-	dom-structure-dump.c && \
+	-o a.out \
+	dom-structure-dump.c \
+	$(ICONV)/lib/libiconv.a && \
 	./a.out > /dev/null && \
 	rm a.out && \
 	printf "\e[36mDone NetSurf $(OS)\e[0m\n"
