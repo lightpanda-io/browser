@@ -312,13 +312,13 @@ pub const Video = struct { base: c.dom_html_element };
 pub const Document = c.dom_document;
 
 pub inline fn documentGetElementById(doc: *Document, id: []const u8) ?*Element {
-    var elem: ?*Element = null;
+    var elem: ?*Element = undefined;
     _ = c._dom_document_get_element_by_id(doc, stringFromData(id), &elem);
     return elem;
 }
 
 pub inline fn documentCreateElement(doc: *Document, tag_name: []const u8) *Element {
-    var elem: ?*Element = null;
+    var elem: ?*Element = undefined;
     _ = c._dom_html_document_create_element(doc, stringFromData(tag_name), &elem);
     return elem.?;
 }
@@ -340,34 +340,10 @@ pub inline fn documentHTMLToDocument(doc_html: *DocumentHTML) *Document {
 }
 
 pub inline fn documentHTMLBody(doc_html: *DocumentHTML) ?*Body {
-    var body: ?*ElementHTML = null;
+    var body: ?*ElementHTML = undefined;
     _ = c._dom_html_document_get_body(doc_html, &body);
     if (body) |value| {
         return @as(*Body, @ptrCast(value));
     }
     return null;
-}
-
-// TODO: Old
-
-pub fn create_dom(filename: []u8) !void {
-    const doc = c.wr_create_doc_dom_from_file(filename.ptr);
-    if (doc == null) {
-        @panic("error parser");
-    }
-    std.debug.print("doc: {any}\n", .{doc});
-    const doc_html = @as(*DocumentHTML, @ptrCast(doc.?));
-
-    var root: ?*Element = null;
-    var exc = c.dom_document_get_document_element(doc, &root);
-    if (exc != c.DOM_NO_ERR) {
-        @panic("Exception raised for get_html_document_element");
-    }
-    if (root == null) {
-        @panic("error root");
-    }
-    std.debug.print("root: {any}\n", .{root});
-
-    const body = documentHTMLBody(doc_html);
-    std.debug.print("body: {any}\n", .{body});
 }
