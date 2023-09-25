@@ -4,7 +4,7 @@ const builtin = @import("builtin");
 // Utils
 // -----
 
-fn itoa(comptime i: u8) ![]u8 {
+fn itoa(comptime i: u8) ![]const u8 {
     var len: usize = undefined;
     if (i < 10) {
         len = 1;
