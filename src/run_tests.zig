@@ -5,7 +5,8 @@ const generate = @import("generate.zig");
 
 const parser = @import("netsurf.zig");
 const DOM = @import("dom.zig");
-const testExecFn = @import("html/document.zig").testExecFn;
+const docTestExecFn = @import("html/document.zig").testExecFn;
+const nodeTestExecFn = @import("html/document.zig").testExecFn;
 
 var doc: *parser.DocumentHTML = undefined;
 
@@ -23,7 +24,8 @@ fn testsExecFn(
     try js_env.addObject(apis, doc, "document");
 
     // run tests
-    try testExecFn(alloc, js_env, apis);
+    try docTestExecFn(alloc, js_env, apis);
+    try nodeTestExecFn(alloc, js_env, apis);
 }
 
 test {

@@ -41,7 +41,7 @@ pub const HTMLDocument = struct {
 // -----
 
 pub fn testExecFn(
-    alloc: std.mem.Allocator,
+    _: std.mem.Allocator,
     js_env: *jsruntime.Env,
     comptime _: []jsruntime.API,
 ) !void {
@@ -50,7 +50,7 @@ pub fn testExecFn(
         .{ .src = "document.__proto__.__proto__.constructor.name", .ex = "Document" },
         .{ .src = "document.__proto__.__proto__.__proto__.constructor.name", .ex = "Node" },
         .{ .src = "document.__proto__.__proto__.__proto__.__proto__.constructor.name", .ex = "EventTarget" },
-        .{ .src = "document.body.localName === 'body'", .ex = "true" },
+        .{ .src = "document.body.localName == 'body'", .ex = "true" },
     };
     try checkCases(js_env, &constructor);
 
@@ -63,31 +63,24 @@ pub fn testExecFn(
 
     const tags = comptime parser.Tag.all();
     const elements = comptime parser.Tag.allElements();
-    var createElements: [(tags.len - 1) * 3]Case = undefined;
-    inline for (tags, 0..) |tag, i| {
-        if (tag == .undef) {
-            continue;
-        }
+    comptime var createElements: [(tags.len) * 3]Case = undefined;
+    inline for (tags, elements, 0..) |tag, element_name, i| {
+        // if (tag == .undef) {
+        //     continue;
+        // }
         const tag_name = @tagName(tag);
-        const element_name = elements[i];
         createElements[i * 3] = Case{
-            .src = try std.fmt.allocPrint(alloc, "var {s}Elem = document.createElement('{s}')", .{ tag_name, tag_name }),
+            .src = "var " ++ tag_name ++ "Elem = document.createElement('" ++ tag_name ++ "')",
             .ex = "undefined",
         };
         createElements[(i * 3) + 1] = Case{
-            .src = try std.fmt.allocPrint(alloc, "{s}Elem.constructor.name", .{tag_name}),
-            .ex = try std.fmt.allocPrint(alloc, "HTML{s}Element", .{element_name}),
+            .src = tag_name ++ "Elem.constructor.name",
+            .ex = "HTML" ++ element_name ++ "Element",
         };
         createElements[(i * 3) + 2] = Case{
-            .src = try std.fmt.allocPrint(alloc, "{s}Elem.localName", .{tag_name}),
+            .src = tag_name ++ "Elem.localName",
             .ex = tag_name,
         };
     }
     try checkCases(js_env, &createElements);
-
-    var unknown = [_]Case{
-        .{ .src = "let unknown = document.createElement('unknown')", .ex = "undefined" },
-        .{ .src = "unknown.constructor.name", .ex = "HTMLUnknownElement" },
-    };
-    try checkCases(js_env, &unknown);
 }
