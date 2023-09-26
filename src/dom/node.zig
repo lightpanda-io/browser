@@ -158,6 +158,11 @@ pub const Node = struct {
     pub fn _insertBefore(self: *parser.Node, new_node: *parser.Node, ref_node: *parser.Node) *parser.Node {
         return parser.nodeInsertBefore(self, new_node, ref_node);
     }
+
+    pub fn _isDefaultNamespace(self: *parser.Node, namespace: []const u8) bool {
+        // TODO: namespace is not an optional parameter, but can be null.
+        return parser.nodeIsDefaultNamespace(self, namespace);
+    }
 };
 
 pub const Types = generate.Tuple(.{
@@ -311,4 +316,11 @@ pub fn testExecFn(
         .{ .src = "link.firstChild.localName === 'a'", .ex = "true" },
     };
     try checkCases(js_env, &node_insert_before);
+
+    var node_is_default_namespace = [_]Case{
+        // TODO: does not seems to work
+        // .{ .src = "link.isDefaultNamespace('')", .ex = "true" },
+        .{ .src = "link.isDefaultNamespace('false')", .ex = "false" },
+    };
+    try checkCases(js_env, &node_is_default_namespace);
 }

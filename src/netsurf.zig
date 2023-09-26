@@ -364,6 +364,13 @@ pub fn nodeInsertBefore(node: *Node, new_node: *Node, ref_node: *Node) *Node {
     return res.?;
 }
 
+pub fn nodeIsDefaultNamespace(node: *Node, namespace: []const u8) bool {
+    const s = stringFromData(namespace);
+    var res: bool = undefined;
+    _ = nodeVtable(node).dom_node_is_default_namespace.?(node, s, &res);
+    return res;
+}
+
 // CharacterData
 pub const CharacterData = c.dom_characterdata;
 
