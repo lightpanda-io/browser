@@ -346,6 +346,12 @@ pub fn nodeCloneNode(node: *Node, is_deep: bool) *Node {
     return res.?;
 }
 
+pub fn nodeContains(node: *Node, other: *Node) bool {
+    var res: bool = undefined;
+    _ = c._dom_node_contains(node, other, &res);
+    return res;
+}
+
 // CharacterData
 pub const CharacterData = c.dom_characterdata;
 

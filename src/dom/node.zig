@@ -141,6 +141,10 @@ pub const Node = struct {
         _ = self;
         @panic("Not implemented node.compareDocumentPosition()");
     }
+
+    pub fn _contains(self: *parser.Node, other: *parser.Node) bool {
+        return parser.nodeContains(self, other);
+    }
 };
 
 pub const Types = generate.Tuple(.{
@@ -275,4 +279,10 @@ pub fn testExecFn(
         .{ .src = "clone_deep.firstChild.nodeName === '#text'", .ex = "true" },
     };
     try checkCases(js_env, &node_clone);
+
+    var node_contains = [_]Case{
+        .{ .src = "link.contains(text)", .ex = "true" },
+        .{ .src = "text.contains(link)", .ex = "false" },
+    };
+    try checkCases(js_env, &node_contains);
 }
