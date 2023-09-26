@@ -135,6 +135,12 @@ pub const Node = struct {
         const clone = parser.nodeCloneNode(self, is_deep);
         return Node.toInterface(clone);
     }
+
+    pub fn _compareDocumentPosition(self: *parser.Node, other: *parser.Node) void {
+        _ = other;
+        _ = self;
+        @panic("Not implemented node.compareDocumentPosition()");
+    }
 };
 
 pub const Types = generate.Tuple(.{
