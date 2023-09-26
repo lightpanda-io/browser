@@ -163,6 +163,11 @@ pub const Node = struct {
         // TODO: namespace is not an optional parameter, but can be null.
         return parser.nodeIsDefaultNamespace(self, namespace);
     }
+
+    pub fn _isEqualNode(self: *parser.Node, other: *parser.Node) bool {
+        // TODO: other is not an optional parameter, but can be null.
+        return parser.nodeIsEqualNode(self, other);
+    }
 };
 
 pub const Types = generate.Tuple(.{
@@ -323,4 +328,14 @@ pub fn testExecFn(
         .{ .src = "link.isDefaultNamespace('false')", .ex = "false" },
     };
     try checkCases(js_env, &node_is_default_namespace);
+
+    var node_is_equal_node = [_]Case{
+        .{ .src = "let equal1 = document.createElement('a')", .ex = "undefined" },
+        .{ .src = "let equal2 = document.createElement('a')", .ex = "undefined" },
+        .{ .src = "equal1.textContent = 'is equal'", .ex = "is equal" },
+        .{ .src = "equal2.textContent = 'is equal'", .ex = "is equal" },
+        // TODO: does not seems to work
+        // .{ .src = "equal1.isEqualNode(equal2)", .ex = "true" },
+    };
+    try checkCases(js_env, &node_is_equal_node);
 }

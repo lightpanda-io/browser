@@ -371,6 +371,12 @@ pub fn nodeIsDefaultNamespace(node: *Node, namespace: []const u8) bool {
     return res;
 }
 
+pub fn nodeIsEqualNode(node: *Node, other: *Node) bool {
+    var res: bool = undefined;
+    _ = nodeVtable(node).dom_node_is_equal.?(node, other, &res);
+    return res;
+}
+
 // CharacterData
 pub const CharacterData = c.dom_characterdata;
 
