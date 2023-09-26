@@ -150,6 +150,10 @@ pub const Node = struct {
         _ = self;
         @panic("Not implemented node.getRootNode()");
     }
+
+    pub fn _hasChildNodes(self: *parser.Node) bool {
+        return parser.nodeHasChildNodes(self);
+    }
 };
 
 pub const Types = generate.Tuple(.{
@@ -290,4 +294,10 @@ pub fn testExecFn(
         .{ .src = "text.contains(link)", .ex = "false" },
     };
     try checkCases(js_env, &node_contains);
+
+    var node_has_child_nodes = [_]Case{
+        .{ .src = "link.hasChildNodes()", .ex = "true" },
+        .{ .src = "text.hasChildNodes()", .ex = "false" },
+    };
+    try checkCases(js_env, &node_has_child_nodes);
 }

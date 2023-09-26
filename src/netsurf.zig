@@ -352,6 +352,12 @@ pub fn nodeContains(node: *Node, other: *Node) bool {
     return res;
 }
 
+pub fn nodeHasChildNodes(node: *Node) bool {
+    var res: bool = undefined;
+    _ = nodeVtable(node).dom_node_has_child_nodes.?(node, &res);
+    return res;
+}
+
 // CharacterData
 pub const CharacterData = c.dom_characterdata;
 
