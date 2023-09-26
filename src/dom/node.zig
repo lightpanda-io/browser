@@ -129,6 +129,12 @@ pub const Node = struct {
         const res = parser.nodeAppendChild(self, child);
         return Node.toInterface(res);
     }
+
+    pub fn _cloneNode(self: *parser.Node, deep: ?bool) Union {
+        const is_deep = if (deep) |deep_set| deep_set else false;
+        const clone = parser.nodeCloneNode(self, is_deep);
+        return Node.toInterface(clone);
+    }
 };
 
 pub const Types = generate.Tuple(.{
@@ -253,4 +259,14 @@ pub fn testExecFn(
         .{ .src = "content.appendChild(link).toString()", .ex = "[object HTMLAnchorElement]" },
     };
     try checkCases(js_env, &node_append_child);
+
+    var node_clone = [_]Case{
+        .{ .src = "let clone = link.cloneNode()", .ex = "undefined" },
+        .{ .src = "clone.toString()", .ex = "[object HTMLAnchorElement]" },
+        .{ .src = "clone.parentNode === null", .ex = "true" },
+        .{ .src = "clone.firstChild === null", .ex = "true" },
+        .{ .src = "let clone_deep = link.cloneNode(true)", .ex = "undefined" },
+        .{ .src = "clone_deep.firstChild.nodeName === '#text'", .ex = "true" },
+    };
+    try checkCases(js_env, &node_clone);
 }

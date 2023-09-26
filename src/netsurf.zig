@@ -340,6 +340,12 @@ pub fn nodeAppendChild(node: *Node, child: *Node) *Node {
     return res.?;
 }
 
+pub fn nodeCloneNode(node: *Node, is_deep: bool) *Node {
+    var res: ?*Node = undefined;
+    _ = nodeVtable(node).dom_node_clone_node.?(node, is_deep, &res);
+    return res.?;
+}
+
 // CharacterData
 pub const CharacterData = c.dom_characterdata;
 
