@@ -145,6 +145,11 @@ pub const Node = struct {
     pub fn _contains(self: *parser.Node, other: *parser.Node) bool {
         return parser.nodeContains(self, other);
     }
+
+    pub fn _getRootNode(self: *parser.Node) void {
+        _ = self;
+        @panic("Not implemented node.getRootNode()");
+    }
 };
 
 pub const Types = generate.Tuple(.{
