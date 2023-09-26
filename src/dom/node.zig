@@ -154,6 +154,10 @@ pub const Node = struct {
     pub fn _hasChildNodes(self: *parser.Node) bool {
         return parser.nodeHasChildNodes(self);
     }
+
+    pub fn _insertBefore(self: *parser.Node, new_node: *parser.Node, ref_node: *parser.Node) *parser.Node {
+        return parser.nodeInsertBefore(self, new_node, ref_node);
+    }
 };
 
 pub const Types = generate.Tuple(.{
@@ -300,4 +304,11 @@ pub fn testExecFn(
         .{ .src = "text.hasChildNodes()", .ex = "false" },
     };
     try checkCases(js_env, &node_has_child_nodes);
+
+    var node_insert_before = [_]Case{
+        .{ .src = "let insertBefore = document.createElement('a')", .ex = "undefined" },
+        .{ .src = "link.insertBefore(insertBefore, text) !== undefined", .ex = "true" },
+        .{ .src = "link.firstChild.localName === 'a'", .ex = "true" },
+    };
+    try checkCases(js_env, &node_insert_before);
 }

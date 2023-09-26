@@ -358,6 +358,12 @@ pub fn nodeHasChildNodes(node: *Node) bool {
     return res;
 }
 
+pub fn nodeInsertBefore(node: *Node, new_node: *Node, ref_node: *Node) *Node {
+    var res: ?*Node = undefined;
+    _ = nodeVtable(node).dom_node_insert_before.?(node, new_node, ref_node, &res);
+    return res.?;
+}
+
 // CharacterData
 pub const CharacterData = c.dom_characterdata;
 
