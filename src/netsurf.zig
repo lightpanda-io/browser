@@ -377,6 +377,12 @@ pub fn nodeIsEqualNode(node: *Node, other: *Node) bool {
     return res;
 }
 
+pub fn nodeRemoveChild(node: *Node, child: *Node) *Node {
+    var res: ?*Node = undefined;
+    _ = nodeVtable(node).dom_node_remove_child.?(node, child, &res);
+    return res.?;
+}
+
 // CharacterData
 pub const CharacterData = c.dom_characterdata;
 

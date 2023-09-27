@@ -168,6 +168,11 @@ pub const Node = struct {
         // TODO: other is not an optional parameter, but can be null.
         return parser.nodeIsEqualNode(self, other);
     }
+
+    pub fn _removeChild(self: *parser.Node, child: *parser.Node) Union {
+        const res = parser.nodeRemoveChild(self, child);
+        return Node.toInterface(res);
+    }
 };
 
 pub const Types = generate.Tuple(.{
@@ -338,4 +343,10 @@ pub fn testExecFn(
         // .{ .src = "equal1.isEqualNode(equal2)", .ex = "true" },
     };
     try checkCases(js_env, &node_is_equal_node);
+
+    var node_remove_child = [_]Case{
+        .{ .src = "content.removeChild(append) !== undefined", .ex = "true" },
+        .{ .src = "content.lastChild.__proto__.constructor.name !== 'HTMLHeadingElement'", .ex = "true" },
+    };
+    try checkCases(js_env, &node_remove_child);
 }
