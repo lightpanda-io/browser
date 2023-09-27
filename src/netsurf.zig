@@ -1,62 +1,55 @@
 const std = @import("std");
 
-const cp = @cImport({
+const c = @cImport({
     @cInclude("wrapper.h");
 });
 
-const c = @cImport({
-    @cInclude("core/node.h");
-    @cInclude("core/document.h");
-    @cInclude("core/element.h");
+// Vtable
+// ------
 
-    @cInclude("html/html_document.h");
-    @cInclude("html/html_element.h");
-    @cInclude("html/html_anchor_element.h");
-    @cInclude("html/html_area_element.h");
-    @cInclude("html/html_br_element.h");
-    @cInclude("html/html_base_element.h");
-    @cInclude("html/html_body_element.h");
-    @cInclude("html/html_button_element.h");
-    @cInclude("html/html_canvas_element.h");
-    @cInclude("html/html_dlist_element.h");
-    @cInclude("html/html_div_element.h");
-    @cInclude("html/html_fieldset_element.h");
-    @cInclude("html/html_form_element.h");
-    @cInclude("html/html_frameset_element.h");
-    @cInclude("html/html_hr_element.h");
-    @cInclude("html/html_head_element.h");
-    @cInclude("html/html_heading_element.h");
-    @cInclude("html/html_html_element.h");
-    @cInclude("html/html_iframe_element.h");
-    @cInclude("html/html_image_element.h");
-    @cInclude("html/html_input_element.h");
-    @cInclude("html/html_li_element.h");
-    @cInclude("html/html_label_element.h");
-    @cInclude("html/html_legend_element.h");
-    @cInclude("html/html_link_element.h");
-    @cInclude("html/html_map_element.h");
-    @cInclude("html/html_meta_element.h");
-    @cInclude("html/html_mod_element.h");
-    @cInclude("html/html_olist_element.h");
-    @cInclude("html/html_object_element.h");
-    @cInclude("html/html_opt_group_element.h");
-    @cInclude("html/html_option_element.h");
-    @cInclude("html/html_paragraph_element.h");
-    @cInclude("html/html_pre_element.h");
-    @cInclude("html/html_quote_element.h");
-    @cInclude("html/html_script_element.h");
-    @cInclude("html/html_select_element.h");
-    @cInclude("html/html_style_element.h");
-    @cInclude("html/html_table_element.h");
-    @cInclude("html/html_tablecaption_element.h");
-    @cInclude("html/html_tablecell_element.h");
-    @cInclude("html/html_tablecol_element.h");
-    @cInclude("html/html_tablerow_element.h");
-    @cInclude("html/html_tablesection_element.h");
-    @cInclude("html/html_text_area_element.h");
-    @cInclude("html/html_title_element.h");
-    @cInclude("html/html_ulist_element.h");
-});
+// netsurf libdom is using a vtable mechanism to handle the DOM tree heritage.
+// The vtable allow to select, from a parent, the right implementation of a
+// function for the child.
+
+// For example let's consider the following implementations of Node:
+// - Node <- CharacterData <- Text
+// - Node <- Element <- HTMLElement <- HTMLDivElement
+// If we take the `textContent` getter function on Node, the W3C standard says
+// that the result depends on the interface the Node implements, so
+// Node.textContent will be different depending if Node implements a Text or an
+// HTMLDivElement.
+// To handle that libdom provides a function on the child interface that
+// "override" the default parent function.
+// In this case there is a function dom_characterdata_get_text_content who
+// "override" parent function dom_node_get_text_content.
+// Like in an object-oriented language with heritage.
+// A vtable is attached to each "object" to retrieve the corresponding function.
+
+// NOTE: we can't use the high-level functions of libdom public API to get the
+// vtable as the public API defines only empty structs for each DOM interface,
+// which are translated by Zig as *const anyopaque with unknown alignement
+// (ie. 1), which leads to a compile error as the underling type is bigger.
+
+// So we need to use this obscure function to retrieve the vtable, making the
+// appropriate alignCast to ensure alignment.
+// This function is meant to be used by each DOM interface (Node, Document, etc)
+// Parameters:
+// - VtableT: the type of the vtable (dom_node_vtable, dom_element_vtable, etc)
+// - NodeT: the type of the node interface (dom_element, dom_document, etc)
+// - node: the node interface instance
+inline fn getVtable(comptime VtableT: type, comptime NodeT: type, node: anytype) VtableT {
+    // first align correctly the node interface
+    const node_aligned: *align(@alignOf([*c]c.dom_node)) NodeT = @alignCast(node);
+    // then convert the node interface to a base node
+    const node_base = @as([*c]c.dom_node, @ptrCast(node_aligned));
+
+    // retrieve the vtable on the base node
+    const vtable = node_base.*.vtable.?;
+    // align correctly the vtable
+    const vtable_aligned: *align(@alignOf([*c]VtableT)) const anyopaque = @alignCast(vtable);
+    // convert the vtable to it's actual type and return it
+    return @as([*c]const VtableT, @ptrCast(vtable_aligned)).*;
+}
 
 // Utils
 const String = c.dom_string;
@@ -67,7 +60,7 @@ inline fn stringToData(s: *String) []const u8 {
 }
 
 inline fn stringFromData(data: []const u8) *String {
-    var s: ?*String = null;
+    var s: ?*String = undefined;
     _ = c.dom_string_create(data.ptr, data.len, &s);
     return s.?;
 }
@@ -218,49 +211,187 @@ pub const Tag = enum(u8) {
 // EventTarget
 pub const EventTarget = c.dom_event_target;
 
+// NodeType
+
+pub const NodeType = enum(u4) {
+    element = c.DOM_ELEMENT_NODE,
+    attribute = c.DOM_ATTRIBUTE_NODE,
+    text = c.DOM_TEXT_NODE,
+    cdata_section = c.DOM_CDATA_SECTION_NODE,
+    entity_reference = c.DOM_ENTITY_REFERENCE_NODE, // historical
+    entity = c.DOM_ENTITY_NODE, // historical
+    processing_instruction = c.DOM_PROCESSING_INSTRUCTION_NODE,
+    comment = c.DOM_COMMENT_NODE,
+    document = c.DOM_DOCUMENT_NODE,
+    document_type = c.DOM_DOCUMENT_TYPE_NODE,
+    document_fragment = c.DOM_DOCUMENT_FRAGMENT_NODE,
+    notation = c.DOM_NOTATION_NODE, // historical
+};
+
 // Node
 pub const Node = c.dom_node_internal;
+
+fn nodeVtable(node: *Node) c.dom_node_vtable {
+    return getVtable(c.dom_node_vtable, Node, node);
+}
+
+pub fn nodeLocalName(node: *Node) []const u8 {
+    var s: ?*String = undefined;
+    _ = nodeVtable(node).dom_node_get_local_name.?(node, &s);
+    var s_lower: ?*String = undefined;
+    _ = c.dom_string_tolower(s, true, &s_lower);
+    return stringToData(s_lower.?);
+}
+
+pub fn nodeType(node: *Node) NodeType {
+    var node_type: c.dom_node_type = undefined;
+    _ = nodeVtable(node).dom_node_get_node_type.?(node, &node_type);
+    return @as(NodeType, @enumFromInt(node_type));
+}
+
+pub fn nodeFirstChild(node: *Node) ?*Node {
+    var res: ?*Node = undefined;
+    _ = nodeVtable(node).dom_node_get_first_child.?(node, &res);
+    return res;
+}
+
+pub fn nodeLastChild(node: *Node) ?*Node {
+    var res: ?*Node = undefined;
+    _ = nodeVtable(node).dom_node_get_last_child.?(node, &res);
+    return res;
+}
+
+pub fn nodeNextSibling(node: *Node) ?*Node {
+    var res: ?*Node = undefined;
+    _ = nodeVtable(node).dom_node_get_next_sibling.?(node, &res);
+    return res;
+}
+
+pub fn nodePreviousSibling(node: *Node) ?*Node {
+    var res: ?*Node = undefined;
+    _ = nodeVtable(node).dom_node_get_previous_sibling.?(node, &res);
+    return res;
+}
+
+pub fn nodeParentNode(node: *Node) ?*Node {
+    var res: ?*Node = undefined;
+    _ = nodeVtable(node).dom_node_get_parent_node.?(node, &res);
+    return res;
+}
+
+pub fn nodeParentElement(node: *Node) ?*Element {
+    const res = nodeParentNode(node);
+    if (res) |value| {
+        if (nodeType(value) == .element) {
+            return @as(*Element, @ptrCast(value));
+        }
+    }
+    return null;
+}
+
+pub fn nodeName(node: *Node) []const u8 {
+    var s: ?*String = undefined;
+    _ = nodeVtable(node).dom_node_get_node_name.?(node, &s);
+    return stringToData(s.?);
+}
+
+pub fn nodeOwnerDocument(node: *Node) ?*Document {
+    var doc: ?*Document = undefined;
+    _ = nodeVtable(node).dom_node_get_owner_document.?(node, &doc);
+    return doc;
+}
+
+pub fn nodeValue(node: *Node) ?[]const u8 {
+    var s: ?*String = undefined;
+    _ = nodeVtable(node).dom_node_get_node_value.?(node, &s);
+    if (s == null) {
+        return null;
+    }
+    return stringToData(s.?);
+}
+
+pub fn nodeSetValue(node: *Node, value: []const u8) void {
+    const s = stringFromData(value);
+    _ = nodeVtable(node).dom_node_set_node_value.?(node, s);
+}
+
+pub fn nodeTextContent(node: *Node) ?[]const u8 {
+    var s: ?*String = undefined;
+    _ = nodeVtable(node).dom_node_get_text_content.?(node, &s);
+    if (s == null) {
+        // NOTE: it seems that there is a bug in netsurf implem
+        // an empty Element should return an empty string and not null
+        if (nodeType(node) == .element) {
+            return "";
+        }
+        return null;
+    }
+    return stringToData(s.?);
+}
+
+pub fn nodeSetTextContent(node: *Node, value: []const u8) void {
+    const s = stringFromData(value);
+    _ = nodeVtable(node).dom_node_set_text_content.?(node, s);
+}
+
+pub fn nodeAppendChild(node: *Node, child: *Node) *Node {
+    var res: ?*Node = undefined;
+    _ = nodeVtable(node).dom_node_append_child.?(node, child, &res);
+    return res.?;
+}
+
+// CharacterData
+pub const CharacterData = c.dom_characterdata;
+
+// Text
+pub const Text = c.dom_text;
+
+// Comment
+pub const Comment = c.dom_comment;
 
 // Element
 pub const Element = c.dom_element;
 
+fn elementVtable(elem: *Element) c.dom_element_vtable {
+    return getVtable(c.dom_element_vtable, Element, elem);
+}
+
 pub fn elementLocalName(elem: *Element) []const u8 {
-    const elem_aligned: *align(8) Element = @alignCast(elem);
-    const node = @as(*Node, @ptrCast(elem_aligned));
-    var s: ?*String = null;
-    _ = c._dom_node_get_local_name(node, &s);
-    var s_lower: ?*String = null;
-    _ = c.dom_string_tolower(s, true, &s_lower);
-    return stringToData(s_lower.?);
+    const node = @as(*Node, @ptrCast(elem));
+    return nodeLocalName(node);
 }
 
 // ElementHTML
 pub const ElementHTML = c.dom_html_element;
 
+fn elementHTMLVtable(elem_html: *ElementHTML) c.dom_html_element_vtable {
+    return getVtable(c.dom_html_element_vtable, ElementHTML, elem_html);
+}
+
 pub fn elementHTMLGetTagType(elem_html: *ElementHTML) Tag {
     var tag_type: c.dom_html_element_type = undefined;
-    _ = c._dom_html_element_get_tag_type(elem_html, &tag_type);
+    _ = elementHTMLVtable(elem_html).dom_html_element_get_tag_type.?(elem_html, &tag_type);
     return @as(Tag, @enumFromInt(tag_type));
 }
 
 // ElementsHTML
 
-pub const MediaElement = struct { base: c.dom_html_element };
+pub const MediaElement = struct { base: *c.dom_html_element };
 
-pub const Unknown = struct { base: c.dom_html_element };
+pub const Unknown = struct { base: *c.dom_html_element };
 pub const Anchor = c.dom_html_anchor_element;
 pub const Area = c.dom_html_area_element;
-pub const Audio = struct { base: c.dom_html_element };
+pub const Audio = struct { base: *c.dom_html_element };
 pub const BR = c.dom_html_br_element;
 pub const Base = c.dom_html_base_element;
 pub const Body = c.dom_html_body_element;
 pub const Button = c.dom_html_button_element;
 pub const Canvas = c.dom_html_canvas_element;
 pub const DList = c.dom_html_dlist_element;
-pub const Data = struct { base: c.dom_html_element };
-pub const Dialog = struct { base: c.dom_html_element };
+pub const Data = struct { base: *c.dom_html_element };
+pub const Dialog = struct { base: *c.dom_html_element };
 pub const Div = c.dom_html_div_element;
-pub const Embed = struct { base: c.dom_html_element };
+pub const Embed = struct { base: *c.dom_html_element };
 pub const FieldSet = c.dom_html_field_set_element;
 pub const Form = c.dom_html_form_element;
 pub const FrameSet = c.dom_html_frame_set_element;
@@ -277,22 +408,22 @@ pub const Legend = c.dom_html_legend_element;
 pub const Link = c.dom_html_link_element;
 pub const Map = c.dom_html_map_element;
 pub const Meta = c.dom_html_meta_element;
-pub const Meter = struct { base: c.dom_html_element };
+pub const Meter = struct { base: *c.dom_html_element };
 pub const Mod = c.dom_html_mod_element;
 pub const OList = c.dom_html_olist_element;
 pub const Object = c.dom_html_object_element;
 pub const OptGroup = c.dom_html_opt_group_element;
 pub const Option = c.dom_html_option_element;
-pub const Output = struct { base: c.dom_html_element };
+pub const Output = struct { base: *c.dom_html_element };
 pub const Paragraph = c.dom_html_paragraph_element;
-pub const Picture = struct { base: c.dom_html_element };
+pub const Picture = struct { base: *c.dom_html_element };
 pub const Pre = c.dom_html_pre_element;
-pub const Progress = struct { base: c.dom_html_element };
+pub const Progress = struct { base: *c.dom_html_element };
 pub const Quote = c.dom_html_quote_element;
 pub const Script = c.dom_html_script_element;
 pub const Select = c.dom_html_select_element;
-pub const Source = struct { base: c.dom_html_element };
-pub const Span = struct { base: c.dom_html_element };
+pub const Source = struct { base: *c.dom_html_element };
+pub const Span = struct { base: *c.dom_html_element };
 pub const Style = c.dom_html_style_element;
 pub const Table = c.dom_html_table_element;
 pub const TableCaption = c.dom_html_table_caption_element;
@@ -300,39 +431,57 @@ pub const TableCell = c.dom_html_table_cell_element;
 pub const TableCol = c.dom_html_table_col_element;
 pub const TableRow = c.dom_html_table_row_element;
 pub const TableSection = c.dom_html_table_section_element;
-pub const Template = struct { base: c.dom_html_element };
+pub const Template = struct { base: *c.dom_html_element };
 pub const TextArea = c.dom_html_text_area_element;
-pub const Time = struct { base: c.dom_html_element };
+pub const Time = struct { base: *c.dom_html_element };
 pub const Title = c.dom_html_title_element;
-pub const Track = struct { base: c.dom_html_element };
+pub const Track = struct { base: *c.dom_html_element };
 pub const UList = c.dom_html_u_list_element;
-pub const Video = struct { base: c.dom_html_element };
+pub const Video = struct { base: *c.dom_html_element };
+
+// Document Position
+
+pub const DocumentPosition = enum(u2) {
+    disconnected = c.DOM_DOCUMENT_POSITION_DISCONNECTED,
+    preceding = c.DOM_DOCUMENT_POSITION_PRECEDING,
+    following = c.DOM_DOCUMENT_POSITION_FOLLOWING,
+    contains = c.DOM_DOCUMENT_POSITION_CONTAINS,
+    contained_by = c.DOM_DOCUMENT_POSITION_CONTAINED_BY,
+    implementation_specific = c.DOM_DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC,
+};
 
 // Document
 pub const Document = c.dom_document;
 
+fn documentVtable(doc: *Document) c.dom_document_vtable {
+    return getVtable(c.dom_document_vtable, Document, doc);
+}
+
 pub inline fn documentGetElementById(doc: *Document, id: []const u8) ?*Element {
     var elem: ?*Element = undefined;
-    _ = c._dom_document_get_element_by_id(doc, stringFromData(id), &elem);
+    _ = documentVtable(doc).dom_document_get_element_by_id.?(doc, stringFromData(id), &elem);
     return elem;
 }
 
 pub inline fn documentCreateElement(doc: *Document, tag_name: []const u8) *Element {
     var elem: ?*Element = undefined;
-    _ = c._dom_html_document_create_element(doc, stringFromData(tag_name), &elem);
+    _ = documentVtable(doc).dom_document_create_element.?(doc, stringFromData(tag_name), &elem);
     return elem.?;
 }
 
 // DocumentHTML
 pub const DocumentHTML = c.dom_html_document;
 
+fn documentHTMLVtable(doc_html: *DocumentHTML) c.dom_html_document_vtable {
+    return getVtable(c.dom_html_document_vtable, DocumentHTML, doc_html);
+}
+
 pub fn documentHTMLParse(filename: []u8) *DocumentHTML {
-    const doc = cp.wr_create_doc_dom_from_file(filename.ptr);
+    const doc = c.wr_create_doc_dom_from_file(filename.ptr);
     if (doc == null) {
         @panic("error parser");
     }
-    const doc_aligned: *align(@alignOf((DocumentHTML))) cp.dom_document = @alignCast(doc.?);
-    return @as(*DocumentHTML, @ptrCast(doc_aligned));
+    return @as(*DocumentHTML, @ptrCast(doc.?));
 }
 
 pub inline fn documentHTMLToDocument(doc_html: *DocumentHTML) *Document {
@@ -341,9 +490,9 @@ pub inline fn documentHTMLToDocument(doc_html: *DocumentHTML) *Document {
 
 pub inline fn documentHTMLBody(doc_html: *DocumentHTML) ?*Body {
     var body: ?*ElementHTML = undefined;
-    _ = c._dom_html_document_get_body(doc_html, &body);
-    if (body) |value| {
-        return @as(*Body, @ptrCast(value));
+    _ = documentHTMLVtable(doc_html).get_body.?(doc_html, &body);
+    if (body == null) {
+        return null;
     }
-    return null;
+    return @as(*Body, @ptrCast(body.?));
 }
