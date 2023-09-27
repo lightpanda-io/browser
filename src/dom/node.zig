@@ -173,6 +173,11 @@ pub const Node = struct {
         const res = parser.nodeRemoveChild(self, child);
         return Node.toInterface(res);
     }
+
+    pub fn _replaceChild(self: *parser.Node, new_child: *parser.Node, old_child: *parser.Node) Union {
+        const res = parser.nodeReplaceChild(self, new_child, old_child);
+        return Node.toInterface(res);
+    }
 };
 
 pub const Types = generate.Tuple(.{
@@ -349,4 +354,10 @@ pub fn testExecFn(
         .{ .src = "content.lastChild.__proto__.constructor.name !== 'HTMLHeadingElement'", .ex = "true" },
     };
     try checkCases(js_env, &node_remove_child);
+
+    var node_replace_child = [_]Case{
+        .{ .src = "let replace = document.createElement('div')", .ex = "undefined" },
+        .{ .src = "link.replaceChild(replace, insertBefore) !== undefined", .ex = "true" },
+    };
+    try checkCases(js_env, &node_replace_child);
 }

@@ -383,6 +383,12 @@ pub fn nodeRemoveChild(node: *Node, child: *Node) *Node {
     return res.?;
 }
 
+pub fn nodeReplaceChild(node: *Node, new_child: *Node, old_child: *Node) *Node {
+    var res: ?*Node = undefined;
+    _ = nodeVtable(node).dom_node_replace_child.?(node, new_child, old_child, &res);
+    return res.?;
+}
+
 // CharacterData
 pub const CharacterData = c.dom_characterdata;
 
