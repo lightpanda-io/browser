@@ -169,6 +169,10 @@ pub const Node = struct {
         return parser.nodeIsEqualNode(self, other);
     }
 
+    pub fn _normalize(self: *parser.Node) void {
+        return parser.nodeNormalize(self);
+    }
+
     pub fn _removeChild(self: *parser.Node, child: *parser.Node) Union {
         const res = parser.nodeRemoveChild(self, child);
         return Node.toInterface(res);
@@ -348,6 +352,12 @@ pub fn testExecFn(
         // .{ .src = "equal1.isEqualNode(equal2)", .ex = "true" },
     };
     try checkCases(js_env, &node_is_equal_node);
+
+    var node_normalize = [_]Case{
+        // TODO: no test
+        .{ .src = "link.normalize()", .ex = "undefined" },
+    };
+    try checkCases(js_env, &node_normalize);
 
     var node_remove_child = [_]Case{
         .{ .src = "content.removeChild(append) !== undefined", .ex = "true" },

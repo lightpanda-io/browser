@@ -377,6 +377,10 @@ pub fn nodeIsEqualNode(node: *Node, other: *Node) bool {
     return res;
 }
 
+pub fn nodeNormalize(node: *Node) void {
+    _ = nodeVtable(node).dom_node_normalize.?(node);
+}
+
 pub fn nodeRemoveChild(node: *Node, child: *Node) *Node {
     var res: ?*Node = undefined;
     _ = nodeVtable(node).dom_node_remove_child.?(node, child, &res);
