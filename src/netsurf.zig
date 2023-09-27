@@ -4,12 +4,50 @@ const c = @cImport({
     @cInclude("wrapper.h");
 });
 
-// Internal
+// Vtable
+// ------
 
+// netsurf libdom is using a vtable mechanism to handle the DOM tree heritage.
+// The vtable allow to select, from a parent, the right implementation of a
+// function for the child.
+
+// For example let's consider the following implementations of Node:
+// - Node <- CharacterData <- Text
+// - Node <- Element <- HTMLElement <- HTMLDivElement
+// If we take the `textContent` getter function on Node, the W3C standard says
+// that the result depends on the interface the Node implements, so
+// Node.textContent will be different depending if Node implements a Text or an
+// HTMLDivElement.
+// To handle that libdom provides a function on the child interface that
+// "override" the default parent function.
+// In this case there is a function dom_characterdata_get_text_content who
+// "override" parent function dom_node_get_text_content.
+// Like in an object-oriented language with heritage.
+// A vtable is attached to each "object" to retrieve the corresponding function.
+
+// NOTE: we can't use the high-level functions of libdom public API to get the
+// vtable as the public API defines only empty structs for each DOM interface,
+// which are translated by Zig as *const anyopaque with unknown alignement
+// (ie. 1), which leads to a compile error as the underling type is bigger.
+
+// So we need to use this obscure function to retrieve the vtable, making the
+// appropriate alignCast to ensure alignment.
+// This function is meant to be used by each DOM interface (Node, Document, etc)
+// Parameters:
+// - VtableT: the type of the vtable (dom_node_vtable, dom_element_vtable, etc)
+// - NodeT: the type of the node interface (dom_element, dom_document, etc)
+// - node: the node interface instance
 inline fn getVtable(comptime VtableT: type, comptime NodeT: type, node: anytype) VtableT {
-    const node_algined: *align(@alignOf([*c]c.dom_node)) NodeT = @alignCast(node);
-    const base = @as([*c]c.dom_node, @ptrCast(node_algined));
-    const vtable_aligned: *align(@alignOf([*c]VtableT)) const anyopaque = @alignCast(base.*.vtable.?);
+    // first align correctly the node interface
+    const node_aligned: *align(@alignOf([*c]c.dom_node)) NodeT = @alignCast(node);
+    // then convert the node interface to a base node
+    const node_base = @as([*c]c.dom_node, @ptrCast(node_aligned));
+
+    // retrieve the vtable on the base node
+    const vtable = node_base.*.vtable.?;
+    // align correctly the vtable
+    const vtable_aligned: *align(@alignOf([*c]VtableT)) const anyopaque = @alignCast(vtable);
+    // convert the vtable to it's actual type and return it
     return @as([*c]const VtableT, @ptrCast(vtable_aligned)).*;
 }
 
