@@ -420,6 +420,21 @@ pub fn nodeReplaceChild(node: *Node, new_child: *Node, old_child: *Node) *Node {
 // CharacterData
 pub const CharacterData = c.dom_characterdata;
 
+fn characterDataVtable(data: *CharacterData) c.dom_characterdata_vtable {
+    return getVtable(c.dom_characterdata_vtable, CharacterData, data);
+}
+
+pub fn characterDataData(cdata: *CharacterData) []const u8 {
+    var s: ?*String = undefined;
+    _ = characterDataVtable(cdata).dom_characterdata_get_data.?(cdata, &s);
+    return stringToData(s.?);
+}
+
+pub fn characterDataSetData(cdata: *CharacterData, data: []const u8) void {
+    const s = stringFromData(data);
+    _ = characterDataVtable(cdata).dom_characterdata_set_data.?(cdata, s);
+}
+
 // Text
 pub const Text = c.dom_text;
 

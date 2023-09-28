@@ -5,8 +5,10 @@ const generate = @import("generate.zig");
 
 const parser = @import("netsurf.zig");
 const DOM = @import("dom.zig");
+
 const docTestExecFn = @import("html/document.zig").testExecFn;
 const nodeTestExecFn = @import("dom/node.zig").testExecFn;
+const characterDataTestExecFn = @import("dom/character_data.zig").testExecFn;
 
 var doc: *parser.DocumentHTML = undefined;
 
@@ -26,6 +28,7 @@ fn testsExecFn(
     // run tests
     try docTestExecFn(alloc, js_env, apis);
     try nodeTestExecFn(alloc, js_env, apis);
+    try characterDataTestExecFn(alloc, js_env, apis);
 }
 
 test {
