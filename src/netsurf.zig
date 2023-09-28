@@ -377,6 +377,12 @@ pub fn nodeIsEqualNode(node: *Node, other: *Node) bool {
     return res;
 }
 
+pub fn nodeIsSameNode(node: *Node, other: *Node) bool {
+    var res: bool = undefined;
+    _ = nodeVtable(node).dom_node_is_same.?(node, other, &res);
+    return res;
+}
+
 pub fn nodeNormalize(node: *Node) void {
     _ = nodeVtable(node).dom_node_normalize.?(node);
 }

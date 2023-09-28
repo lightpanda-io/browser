@@ -169,6 +169,12 @@ pub const Node = struct {
         return parser.nodeIsEqualNode(self, other);
     }
 
+    pub fn _isSameNode(self: *parser.Node, other: *parser.Node) bool {
+        // TODO: other is not an optional parameter, but can be null.
+        // NOTE: there is no need to use isSameNode(); instead use the === strict equality operator
+        return parser.nodeIsSameNode(self, other);
+    }
+
     pub fn _normalize(self: *parser.Node) void {
         return parser.nodeNormalize(self);
     }
@@ -352,6 +358,11 @@ pub fn testExecFn(
         // .{ .src = "equal1.isEqualNode(equal2)", .ex = "true" },
     };
     try checkCases(js_env, &node_is_equal_node);
+
+    var node_is_same_node = [_]Case{
+        .{ .src = "document.body.isSameNode(document.body)", .ex = "true" },
+    };
+    try checkCases(js_env, &node_is_same_node);
 
     var node_normalize = [_]Case{
         // TODO: no test
