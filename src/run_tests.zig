@@ -6,7 +6,7 @@ const generate = @import("generate.zig");
 const parser = @import("netsurf.zig");
 const DOM = @import("dom.zig");
 const docTestExecFn = @import("html/document.zig").testExecFn;
-const nodeTestExecFn = @import("html/document.zig").testExecFn;
+const nodeTestExecFn = @import("dom/node.zig").testExecFn;
 
 var doc: *parser.DocumentHTML = undefined;
 
@@ -29,7 +29,7 @@ fn testsExecFn(
 }
 
 test {
-    std.debug.print("\n", .{});
+    std.debug.print("\n \n", .{});
 
     // generate tests
     try generate.tests();
