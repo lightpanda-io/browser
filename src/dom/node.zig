@@ -180,6 +180,11 @@ pub const Node = struct {
         return parser.nodeLookupPrefix(self, namespace);
     }
 
+    pub fn _lookupNamespaceURI(self: *parser.Node, prefix: ?[]const u8) ?[]const u8 {
+        // TODO: other is not an optional parameter, but can be null.
+        return parser.nodeLookupNamespaceURI(self, prefix);
+    }
+
     pub fn _normalize(self: *parser.Node) void {
         return parser.nodeNormalize(self);
     }

@@ -398,6 +398,15 @@ pub fn nodeLookupPrefix(node: *Node, namespace: ?[]const u8) ?[]const u8 {
     return stringToData(s.?);
 }
 
+pub fn nodeLookupNamespaceURI(node: *Node, prefix: ?[]const u8) ?[]const u8 {
+    var s: ?*String = undefined;
+    _ = nodeVtable(node).dom_node_lookup_namespace.?(node, stringFromData(prefix.?), &s);
+    if (s == null) {
+        return null;
+    }
+    return stringToData(s.?);
+}
+
 pub fn nodeNormalize(node: *Node) void {
     _ = nodeVtable(node).dom_node_normalize.?(node);
 }
