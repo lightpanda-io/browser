@@ -19,6 +19,12 @@ pub const CharacterData = struct {
     // JS funcs
     // --------
 
+    // Read attributes
+
+    pub fn get_length(self: *parser.CharacterData) u32 {
+        return parser.characterDataLength(self);
+    }
+
     // Read/Write attributes
 
     pub fn get_data(self: *parser.CharacterData) []const u8 {
@@ -58,4 +64,9 @@ pub fn testExecFn(
         .{ .src = "cdata_t.data = 'OK'", .ex = "OK" },
     };
     try checkCases(js_env, &set_data);
+
+    var get_length = [_]Case{
+        .{ .src = "cdata_t.length === 2", .ex = "true" },
+    };
+    try checkCases(js_env, &get_length);
 }

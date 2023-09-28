@@ -435,6 +435,12 @@ pub fn characterDataSetData(cdata: *CharacterData, data: []const u8) void {
     _ = characterDataVtable(cdata).dom_characterdata_set_data.?(cdata, s);
 }
 
+pub fn characterDataLength(cdata: *CharacterData) u32 {
+    var n: u32 = undefined;
+    _ = characterDataVtable(cdata).dom_characterdata_get_length.?(cdata, &n);
+    return n;
+}
+
 // Text
 pub const Text = c.dom_text;
 
