@@ -137,9 +137,10 @@ pub const Node = struct {
     }
 
     pub fn _compareDocumentPosition(self: *parser.Node, other: *parser.Node) void {
+        // TODO
         _ = other;
         _ = self;
-        @panic("Not implemented node.compareDocumentPosition()");
+        std.log.err("Not implemented {s}", .{"node.compareDocumentPosition()"});
     }
 
     pub fn _contains(self: *parser.Node, other: *parser.Node) bool {
@@ -147,8 +148,9 @@ pub const Node = struct {
     }
 
     pub fn _getRootNode(self: *parser.Node) void {
+        // TODO
         _ = self;
-        @panic("Not implemented node.getRootNode()");
+        std.log.err("Not implemented {s}", .{"node.getRootNode()"});
     }
 
     pub fn _hasChildNodes(self: *parser.Node) bool {
