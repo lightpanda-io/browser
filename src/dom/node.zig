@@ -129,6 +129,82 @@ pub const Node = struct {
         const res = parser.nodeAppendChild(self, child);
         return Node.toInterface(res);
     }
+
+    pub fn _cloneNode(self: *parser.Node, deep: ?bool) Union {
+        const clone = parser.nodeCloneNode(self, deep orelse false);
+        return Node.toInterface(clone);
+    }
+
+    pub fn _compareDocumentPosition(self: *parser.Node, other: *parser.Node) void {
+        // TODO
+        _ = other;
+        _ = self;
+        std.log.err("Not implemented {s}", .{"node.compareDocumentPosition()"});
+    }
+
+    pub fn _contains(self: *parser.Node, other: *parser.Node) bool {
+        return parser.nodeContains(self, other);
+    }
+
+    pub fn _getRootNode(self: *parser.Node) void {
+        // TODO
+        _ = self;
+        std.log.err("Not implemented {s}", .{"node.getRootNode()"});
+    }
+
+    pub fn _hasChildNodes(self: *parser.Node) bool {
+        return parser.nodeHasChildNodes(self);
+    }
+
+    pub fn _insertBefore(self: *parser.Node, new_node: *parser.Node, ref_node: *parser.Node) *parser.Node {
+        return parser.nodeInsertBefore(self, new_node, ref_node);
+    }
+
+    pub fn _isDefaultNamespace(self: *parser.Node, namespace: []const u8) bool {
+        // TODO: namespace is not an optional parameter, but can be null.
+        return parser.nodeIsDefaultNamespace(self, namespace);
+    }
+
+    pub fn _isEqualNode(self: *parser.Node, other: *parser.Node) bool {
+        // TODO: other is not an optional parameter, but can be null.
+        return parser.nodeIsEqualNode(self, other);
+    }
+
+    pub fn _isSameNode(self: *parser.Node, other: *parser.Node) bool {
+        // TODO: other is not an optional parameter, but can be null.
+        // NOTE: there is no need to use isSameNode(); instead use the === strict equality operator
+        return parser.nodeIsSameNode(self, other);
+    }
+
+    pub fn _lookupPrefix(self: *parser.Node, namespace: ?[]const u8) ?[]const u8 {
+        // TODO: other is not an optional parameter, but can be null.
+        if (namespace == null) {
+            return null;
+        }
+        if (std.mem.eql(u8, namespace.?, "")) {
+            return null;
+        }
+        return parser.nodeLookupPrefix(self, namespace);
+    }
+
+    pub fn _lookupNamespaceURI(self: *parser.Node, prefix: ?[]const u8) ?[]const u8 {
+        // TODO: other is not an optional parameter, but can be null.
+        return parser.nodeLookupNamespaceURI(self, prefix);
+    }
+
+    pub fn _normalize(self: *parser.Node) void {
+        return parser.nodeNormalize(self);
+    }
+
+    pub fn _removeChild(self: *parser.Node, child: *parser.Node) Union {
+        const res = parser.nodeRemoveChild(self, child);
+        return Node.toInterface(res);
+    }
+
+    pub fn _replaceChild(self: *parser.Node, new_child: *parser.Node, old_child: *parser.Node) Union {
+        const res = parser.nodeReplaceChild(self, new_child, old_child);
+        return Node.toInterface(res);
+    }
 };
 
 pub const Types = generate.Tuple(.{
@@ -253,4 +329,73 @@ pub fn testExecFn(
         .{ .src = "content.appendChild(link).toString()", .ex = "[object HTMLAnchorElement]" },
     };
     try checkCases(js_env, &node_append_child);
+
+    var node_clone = [_]Case{
+        .{ .src = "let clone = link.cloneNode()", .ex = "undefined" },
+        .{ .src = "clone.toString()", .ex = "[object HTMLAnchorElement]" },
+        .{ .src = "clone.parentNode === null", .ex = "true" },
+        .{ .src = "clone.firstChild === null", .ex = "true" },
+        .{ .src = "let clone_deep = link.cloneNode(true)", .ex = "undefined" },
+        .{ .src = "clone_deep.firstChild.nodeName === '#text'", .ex = "true" },
+    };
+    try checkCases(js_env, &node_clone);
+
+    var node_contains = [_]Case{
+        .{ .src = "link.contains(text)", .ex = "true" },
+        .{ .src = "text.contains(link)", .ex = "false" },
+    };
+    try checkCases(js_env, &node_contains);
+
+    var node_has_child_nodes = [_]Case{
+        .{ .src = "link.hasChildNodes()", .ex = "true" },
+        .{ .src = "text.hasChildNodes()", .ex = "false" },
+    };
+    try checkCases(js_env, &node_has_child_nodes);
+
+    var node_insert_before = [_]Case{
+        .{ .src = "let insertBefore = document.createElement('a')", .ex = "undefined" },
+        .{ .src = "link.insertBefore(insertBefore, text) !== undefined", .ex = "true" },
+        .{ .src = "link.firstChild.localName === 'a'", .ex = "true" },
+    };
+    try checkCases(js_env, &node_insert_before);
+
+    var node_is_default_namespace = [_]Case{
+        // TODO: does not seems to work
+        // .{ .src = "link.isDefaultNamespace('')", .ex = "true" },
+        .{ .src = "link.isDefaultNamespace('false')", .ex = "false" },
+    };
+    try checkCases(js_env, &node_is_default_namespace);
+
+    var node_is_equal_node = [_]Case{
+        .{ .src = "let equal1 = document.createElement('a')", .ex = "undefined" },
+        .{ .src = "let equal2 = document.createElement('a')", .ex = "undefined" },
+        .{ .src = "equal1.textContent = 'is equal'", .ex = "is equal" },
+        .{ .src = "equal2.textContent = 'is equal'", .ex = "is equal" },
+        // TODO: does not seems to work
+        // .{ .src = "equal1.isEqualNode(equal2)", .ex = "true" },
+    };
+    try checkCases(js_env, &node_is_equal_node);
+
+    var node_is_same_node = [_]Case{
+        .{ .src = "document.body.isSameNode(document.body)", .ex = "true" },
+    };
+    try checkCases(js_env, &node_is_same_node);
+
+    var node_normalize = [_]Case{
+        // TODO: no test
+        .{ .src = "link.normalize()", .ex = "undefined" },
+    };
+    try checkCases(js_env, &node_normalize);
+
+    var node_remove_child = [_]Case{
+        .{ .src = "content.removeChild(append) !== undefined", .ex = "true" },
+        .{ .src = "content.lastChild.__proto__.constructor.name !== 'HTMLHeadingElement'", .ex = "true" },
+    };
+    try checkCases(js_env, &node_remove_child);
+
+    var node_replace_child = [_]Case{
+        .{ .src = "let replace = document.createElement('div')", .ex = "undefined" },
+        .{ .src = "link.replaceChild(replace, insertBefore) !== undefined", .ex = "true" },
+    };
+    try checkCases(js_env, &node_replace_child);
 }

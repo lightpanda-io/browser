@@ -340,6 +340,83 @@ pub fn nodeAppendChild(node: *Node, child: *Node) *Node {
     return res.?;
 }
 
+pub fn nodeCloneNode(node: *Node, is_deep: bool) *Node {
+    var res: ?*Node = undefined;
+    _ = nodeVtable(node).dom_node_clone_node.?(node, is_deep, &res);
+    return res.?;
+}
+
+pub fn nodeContains(node: *Node, other: *Node) bool {
+    var res: bool = undefined;
+    _ = c._dom_node_contains(node, other, &res);
+    return res;
+}
+
+pub fn nodeHasChildNodes(node: *Node) bool {
+    var res: bool = undefined;
+    _ = nodeVtable(node).dom_node_has_child_nodes.?(node, &res);
+    return res;
+}
+
+pub fn nodeInsertBefore(node: *Node, new_node: *Node, ref_node: *Node) *Node {
+    var res: ?*Node = undefined;
+    _ = nodeVtable(node).dom_node_insert_before.?(node, new_node, ref_node, &res);
+    return res.?;
+}
+
+pub fn nodeIsDefaultNamespace(node: *Node, namespace: []const u8) bool {
+    const s = stringFromData(namespace);
+    var res: bool = undefined;
+    _ = nodeVtable(node).dom_node_is_default_namespace.?(node, s, &res);
+    return res;
+}
+
+pub fn nodeIsEqualNode(node: *Node, other: *Node) bool {
+    var res: bool = undefined;
+    _ = nodeVtable(node).dom_node_is_equal.?(node, other, &res);
+    return res;
+}
+
+pub fn nodeIsSameNode(node: *Node, other: *Node) bool {
+    var res: bool = undefined;
+    _ = nodeVtable(node).dom_node_is_same.?(node, other, &res);
+    return res;
+}
+
+pub fn nodeLookupPrefix(node: *Node, namespace: []const u8) ?[]const u8 {
+    var s: ?*String = undefined;
+    _ = nodeVtable(node).dom_node_lookup_prefix.?(node, stringFromData(namespace), &s);
+    if (s == null) {
+        return null;
+    }
+    return stringToData(s.?);
+}
+
+pub fn nodeLookupNamespaceURI(node: *Node, prefix: ?[]const u8) ?[]const u8 {
+    var s: ?*String = undefined;
+    _ = nodeVtable(node).dom_node_lookup_namespace.?(node, stringFromData(prefix.?), &s);
+    if (s == null) {
+        return null;
+    }
+    return stringToData(s.?);
+}
+
+pub fn nodeNormalize(node: *Node) void {
+    _ = nodeVtable(node).dom_node_normalize.?(node);
+}
+
+pub fn nodeRemoveChild(node: *Node, child: *Node) *Node {
+    var res: ?*Node = undefined;
+    _ = nodeVtable(node).dom_node_remove_child.?(node, child, &res);
+    return res.?;
+}
+
+pub fn nodeReplaceChild(node: *Node, new_child: *Node, old_child: *Node) *Node {
+    var res: ?*Node = undefined;
+    _ = nodeVtable(node).dom_node_replace_child.?(node, new_child, old_child, &res);
+    return res.?;
+}
+
 // CharacterData
 pub const CharacterData = c.dom_characterdata;
 
