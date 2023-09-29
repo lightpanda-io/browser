@@ -131,8 +131,7 @@ pub const Node = struct {
     }
 
     pub fn _cloneNode(self: *parser.Node, deep: ?bool) Union {
-        const is_deep = if (deep) |deep_set| deep_set else false;
-        const clone = parser.nodeCloneNode(self, is_deep);
+        const clone = parser.nodeCloneNode(self, deep orelse false);
         return Node.toInterface(clone);
     }
 
