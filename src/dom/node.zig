@@ -178,6 +178,12 @@ pub const Node = struct {
 
     pub fn _lookupPrefix(self: *parser.Node, namespace: ?[]const u8) ?[]const u8 {
         // TODO: other is not an optional parameter, but can be null.
+        if (namespace == null) {
+            return null;
+        }
+        if (std.mem.eql(u8, namespace.?, "")) {
+            return null;
+        }
         return parser.nodeLookupPrefix(self, namespace);
     }
 

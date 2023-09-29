@@ -383,15 +383,9 @@ pub fn nodeIsSameNode(node: *Node, other: *Node) bool {
     return res;
 }
 
-pub fn nodeLookupPrefix(node: *Node, namespace: ?[]const u8) ?[]const u8 {
-    if (namespace == null) {
-        return null;
-    }
-    if (std.mem.eql(u8, namespace.?, "")) {
-        return null;
-    }
+pub fn nodeLookupPrefix(node: *Node, namespace: []const u8) ?[]const u8 {
     var s: ?*String = undefined;
-    _ = nodeVtable(node).dom_node_lookup_prefix.?(node, stringFromData(namespace.?), &s);
+    _ = nodeVtable(node).dom_node_lookup_prefix.?(node, stringFromData(namespace), &s);
     if (s == null) {
         return null;
     }
