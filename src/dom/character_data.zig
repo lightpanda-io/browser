@@ -34,6 +34,14 @@ pub const CharacterData = struct {
         return HTMLElem.toInterface(HTMLElem.Union, res.?);
     }
 
+    pub fn get_previousElementSibling(self: *parser.CharacterData) ?HTMLElem.Union {
+        const res = parser.nodePreviousElementSibling(parser.characterDataToNode(self));
+        if (res == null) {
+            return null;
+        }
+        return HTMLElem.toInterface(HTMLElem.Union, res.?);
+    }
+
     // Read/Write attributes
 
     pub fn get_data(self: *parser.CharacterData) []const u8 {
@@ -88,4 +96,13 @@ pub fn testExecFn(
         .{ .src = "cdata.nextElementSibling.localName === 'a' ", .ex = "true" },
     };
     try checkCases(js_env, &get_next_elem_sibling);
+
+    var get_prev_elem_sibling = [_]Case{
+        .{ .src = "cdata.previousElementSibling === null", .ex = "true" },
+        // create a prev element
+        .{ .src = "let prev = document.createElement('div')", .ex = "undefined" },
+        .{ .src = "link.insertBefore(prev, cdata) !== undefined", .ex = "true" },
+        .{ .src = "cdata.previousElementSibling.localName === 'div' ", .ex = "true" },
+    };
+    try checkCases(js_env, &get_prev_elem_sibling);
 }

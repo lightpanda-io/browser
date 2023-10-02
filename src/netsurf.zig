@@ -270,14 +270,14 @@ pub fn nodeNextSibling(node: *Node) ?*Node {
 pub fn nodeNextElementSibling(node: *Node) ?*Element {
     var n = node;
     while (true) {
-        const next = nodeNextSibling(n);
-        if (next == null) {
+        const res = nodeNextSibling(n);
+        if (res == null) {
             return null;
         }
-        if (nodeType(next.?) == .element) {
-            return @as(*Element, @ptrCast(next.?));
+        if (nodeType(res.?) == .element) {
+            return @as(*Element, @ptrCast(res.?));
         }
-        n = next.?;
+        n = res.?;
     }
     return null;
 }
@@ -286,6 +286,21 @@ pub fn nodePreviousSibling(node: *Node) ?*Node {
     var res: ?*Node = undefined;
     _ = nodeVtable(node).dom_node_get_previous_sibling.?(node, &res);
     return res;
+}
+
+pub fn nodePreviousElementSibling(node: *Node) ?*Element {
+    var n = node;
+    while (true) {
+        const res = nodePreviousSibling(n);
+        if (res == null) {
+            return null;
+        }
+        if (nodeType(res.?) == .element) {
+            return @as(*Element, @ptrCast(res.?));
+        }
+        n = res.?;
+    }
+    return null;
 }
 
 pub fn nodeParentNode(node: *Node) ?*Node {
