@@ -228,6 +228,29 @@ pub const NodeType = enum(u4) {
     notation = c.DOM_NOTATION_NODE, // historical
 };
 
+// NodeList
+pub const NodeList = c.struct_dom_nodelist;
+
+pub fn nodeListLength(nodeList: *NodeList) u32 {
+    var ln: u32 = undefined;
+    _ = c.dom_nodelist_get_length(nodeList, &ln);
+    return ln;
+}
+
+pub fn nodeListItem(nodeList: *NodeList, index: u32) ?*Node {
+    var n: [*c]c.struct_dom_node = undefined;
+    _ = c._dom_nodelist_item(nodeList, index, &n);
+
+    if (n == null) {
+        return null;
+    }
+
+    // cast [*c]c.struct_dom_node into *Node
+    const res: *Node = @ptrCast(n);
+
+    return res;
+}
+
 // Node
 pub const Node = c.dom_node_internal;
 
