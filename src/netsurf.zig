@@ -267,6 +267,21 @@ pub fn nodeNextSibling(node: *Node) ?*Node {
     return res;
 }
 
+pub fn nodeNextElementSibling(node: *Node) ?*Element {
+    var n = node;
+    while (true) {
+        const next = nodeNextSibling(n);
+        if (next == null) {
+            return null;
+        }
+        if (nodeType(next.?) == .element) {
+            return @as(*Element, @ptrCast(next.?));
+        }
+        n = next.?;
+    }
+    return null;
+}
+
 pub fn nodePreviousSibling(node: *Node) ?*Node {
     var res: ?*Node = undefined;
     _ = nodeVtable(node).dom_node_get_previous_sibling.?(node, &res);
@@ -422,6 +437,10 @@ pub const CharacterData = c.dom_characterdata;
 
 fn characterDataVtable(data: *CharacterData) c.dom_characterdata_vtable {
     return getVtable(c.dom_characterdata_vtable, CharacterData, data);
+}
+
+pub inline fn characterDataToNode(cdata: *CharacterData) *Node {
+    return @as(*Node, @ptrCast(cdata));
 }
 
 pub fn characterDataData(cdata: *CharacterData) []const u8 {

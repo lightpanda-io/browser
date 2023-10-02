@@ -10,6 +10,7 @@ const parser = @import("../netsurf.zig");
 const Node = @import("node.zig").Node;
 const Comment = @import("comment.zig").Comment;
 const Text = @import("text.zig").Text;
+const HTMLElem = @import("../html/elements.zig");
 
 pub const CharacterData = struct {
     pub const Self = parser.CharacterData;
@@ -23,6 +24,14 @@ pub const CharacterData = struct {
 
     pub fn get_length(self: *parser.CharacterData) u32 {
         return parser.characterDataLength(self);
+    }
+
+    pub fn get_nextElementSibling(self: *parser.CharacterData) ?HTMLElem.Union {
+        const res = parser.nodeNextElementSibling(parser.characterDataToNode(self));
+        if (res == null) {
+            return null;
+        }
+        return HTMLElem.toInterface(HTMLElem.Union, res.?);
     }
 
     // Read/Write attributes
@@ -53,20 +62,30 @@ pub fn testExecFn(
     comptime _: []jsruntime.API,
 ) !void {
     var get_data = [_]Case{
-        .{ .src = "let cdata_t = document.getElementById('link').firstChild", .ex = "undefined" },
-        .{ .src = "cdata_t.data", .ex = "OK" },
+        .{ .src = "let link = document.getElementById('link')", .ex = "undefined" },
+        .{ .src = "let cdata = link.firstChild", .ex = "undefined" },
+        .{ .src = "cdata.data", .ex = "OK" },
     };
     try checkCases(js_env, &get_data);
 
     var set_data = [_]Case{
-        .{ .src = "cdata_t.data = 'OK modified'", .ex = "OK modified" },
-        .{ .src = "cdata_t.data === 'OK modified'", .ex = "true" },
-        .{ .src = "cdata_t.data = 'OK'", .ex = "OK" },
+        .{ .src = "cdata.data = 'OK modified'", .ex = "OK modified" },
+        .{ .src = "cdata.data === 'OK modified'", .ex = "true" },
+        .{ .src = "cdata.data = 'OK'", .ex = "OK" },
     };
     try checkCases(js_env, &set_data);
 
     var get_length = [_]Case{
-        .{ .src = "cdata_t.length === 2", .ex = "true" },
+        .{ .src = "cdata.length === 2", .ex = "true" },
     };
     try checkCases(js_env, &get_length);
+
+    var get_next_elem_sibling = [_]Case{
+        .{ .src = "cdata.nextElementSibling === null", .ex = "true" },
+        // create a next element
+        .{ .src = "let next = document.createElement('a')", .ex = "undefined" },
+        .{ .src = "link.appendChild(next, cdata) !== undefined", .ex = "true" },
+        .{ .src = "cdata.nextElementSibling.localName === 'a' ", .ex = "true" },
+    };
+    try checkCases(js_env, &get_next_elem_sibling);
 }
