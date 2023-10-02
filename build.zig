@@ -72,6 +72,19 @@ pub fn build(b: *std.build.Builder) !void {
     // step
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
+
+    // wpt tests
+    // -----
+
+    // compile
+    const wpt = b.addTest(.{ .root_source_file = .{ .path = "src/run_wpt.zig" } });
+    try common(wpt, options);
+    wpt.single_threaded = true;
+    const run_wpt = b.addRunArtifact(wpt);
+
+    // step
+    const wpt_step = b.step("wpt", "Run Web Platform Tests");
+    wpt_step.dependOn(&run_wpt.step);
 }
 
 fn common(
