@@ -184,7 +184,7 @@ pub const Node = struct {
         if (std.mem.eql(u8, namespace.?, "")) {
             return null;
         }
-        return parser.nodeLookupPrefix(self, namespace);
+        return parser.nodeLookupPrefix(self, namespace.?);
     }
 
     pub fn _lookupNamespaceURI(self: *parser.Node, prefix: ?[]const u8) ?[]const u8 {
