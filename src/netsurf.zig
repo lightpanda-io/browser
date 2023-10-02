@@ -659,6 +659,12 @@ pub inline fn documentGetElementById(doc: *Document, id: []const u8) ?*Element {
     return elem;
 }
 
+pub inline fn documentGetElementsByTagName(doc: *Document, tagname: []const u8) *NodeList {
+    var nlist: ?*NodeList = undefined;
+    _ = documentVtable(doc).dom_document_get_elements_by_tag_name.?(doc, stringFromData(tagname), &nlist);
+    return nlist.?;
+}
+
 pub inline fn documentCreateElement(doc: *Document, tag_name: []const u8) *Element {
     var elem: ?*Element = undefined;
     _ = documentVtable(doc).dom_document_create_element.?(doc, stringFromData(tag_name), &elem);
