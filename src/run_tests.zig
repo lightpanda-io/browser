@@ -38,8 +38,7 @@ test {
     const apis = jsruntime.compile(DOM.Interfaces);
 
     // document
-    var f = "test.html".*;
-    doc = parser.documentHTMLParse(&f);
+    doc = parser.documentHTMLParse("test.html");
 
     // create JS vm
     const vm = jsruntime.VM.init();

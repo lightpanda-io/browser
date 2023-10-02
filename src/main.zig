@@ -53,8 +53,7 @@ pub fn main() !void {
     defer vm.deinit();
 
     // document
-    var f = "test.html".*;
-    doc = parser.documentHTMLParse(&f);
+    doc = parser.documentHTMLParse("test.html");
     // TODO: defer doc?
 
     // remove socket file of internal server

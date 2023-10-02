@@ -553,8 +553,9 @@ fn documentHTMLVtable(doc_html: *DocumentHTML) c.dom_html_document_vtable {
     return getVtable(c.dom_html_document_vtable, DocumentHTML, doc_html);
 }
 
-pub fn documentHTMLParse(filename: []u8) *DocumentHTML {
-    const doc = c.wr_create_doc_dom_from_file(filename.ptr);
+pub fn documentHTMLParse(filename: []const u8) *DocumentHTML {
+    var f: []u8 = @constCast(filename);
+    const doc = c.wr_create_doc_dom_from_file(f.ptr);
     if (doc == null) {
         @panic("error parser");
     }
