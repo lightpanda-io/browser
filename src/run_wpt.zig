@@ -64,20 +64,18 @@ test {
 
         // TODO I don't use testing.expect here b/c I want to execute all the
         // tests. And testing.expect stops running test in the first failure.
-        std.debug.print("{s}\t\t", .{tc});
-
         const res = runWPT(&arena, tc, libs[0..]) catch |err| {
-            std.debug.print("ERR\n\t> {any}\n", .{err});
+            std.debug.print("ERR\t{s}\n\t> {any}\n", .{ tc, err });
             failures += 1;
             continue;
         };
 
         if (!res.success) {
-            std.debug.print("ERR\n\t> {s}\n", .{res.result});
+            std.debug.print("ERR\t{s}\n\t> {s}\n", .{ tc, res.result });
             failures += 1;
             continue;
         }
-        std.debug.print("OK\n", .{});
+        std.debug.print("OK\t{s}\n\t> {s}\n", .{ tc, res.result });
     }
 
     if (failures > 0) {
