@@ -92,8 +92,7 @@ fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, libs: [][]const u8) !j
     const alloc = arena.allocator();
 
     // document
-    var ff: []u8 = @constCast(f);
-    const htmldoc = parser.documentHTMLParse(ff);
+    const htmldoc = parser.documentHTMLParse(f);
     const doc = parser.documentHTMLToDocument(htmldoc);
 
     // create JS env
