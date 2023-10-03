@@ -12,6 +12,8 @@ const Loop = public.Loop;
 const DOM = @import("dom.zig");
 const HTMLElem = @import("html/elements.zig");
 
+const wpt_dir = "tests/wpt";
+
 fn readFile(allocator: std.mem.Allocator, filename: []const u8) ![]const u8 {
     var file = try std.fs.cwd().openFile(filename, .{});
     defer file.close();
@@ -48,12 +50,9 @@ test {
     libs[1] = try readFile(alloc, "tests/wpt/resources/testharnessreport.js");
     defer alloc.free(libs[1]);
 
-    // TODO browse the dir to get the tests dynamically.
-    const testcases = [_][]const u8{
-        "tests/wpt/dom/nodes/ChildNode-after.html",
-        "tests/wpt/dom/nodes/Document-createElement.html",
-        "tests/wpt/dom/nodes/append-on-Document.html",
-    };
+    // browse the dir to get the tests dynamically.
+    const testcases = try findWPTTests(alloc, wpt_dir);
+    defer alloc.free(testcases);
 
     var failures: usize = 0;
     for (testcases) |tc| {
@@ -66,17 +65,17 @@ test {
         std.debug.print("{s}\t\t", .{tc});
 
         const res = runWPT(&arena, tc, libs[0..]) catch |err| {
-            std.debug.print("[ ERR ]\n\t> {any}\n", .{err});
+            std.debug.print("ERR\n\t> {any}\n", .{err});
             failures += 1;
             continue;
         };
 
         if (!res.success) {
-            std.debug.print("[ ERR ]\n\t> {s}\n", .{res.result});
+            std.debug.print("ERR\n\t> {s}\n", .{res.result});
             failures += 1;
             continue;
         }
-        std.debug.print("[ OK  ]\n", .{});
+        std.debug.print("OK\n", .{});
     }
 
     if (failures > 0) {
@@ -88,7 +87,7 @@ test {
 // runWPT parses the given HTML file, starts a js env and run the first script
 // tags containing javascript sources.
 // It loads first the js libs files.
-fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, libs: [][]const u8) !jsruntime.JSResult {
+fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, libs: []const []const u8) !jsruntime.JSResult {
     const alloc = arena.allocator();
 
     // document
@@ -139,4 +138,28 @@ fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, libs: [][]const u8) !j
     }
 
     return error.EmptyTest;
+}
+
+// browse the path to find the tests list.
+fn findWPTTests(allocator: std.mem.Allocator, path: []const u8) ![]const []const u8 {
+    var dir = try std.fs.cwd().openIterableDir(path, .{ .no_follow = true });
+    defer dir.close();
+
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+
+    var tc = std.ArrayList([]const u8).init(allocator);
+
+    while (try walker.next()) |entry| {
+        if (entry.kind != .file) {
+            continue;
+        }
+        if (!std.mem.endsWith(u8, entry.basename, ".html")) {
+            continue;
+        }
+
+        try tc.append(try std.fs.path.join(allocator, &.{ path, entry.path }));
+    }
+
+    return tc.items;
 }
