@@ -51,8 +51,10 @@ test {
     defer alloc.free(libs[1]);
 
     // browse the dir to get the tests dynamically.
-    const testcases = try findWPTTests(alloc, wpt_dir);
-    defer alloc.free(testcases);
+    const list = try findWPTTests(alloc, wpt_dir);
+    defer list.deinit();
+
+    const testcases: [][]const u8 = list.items;
 
     var failures: usize = 0;
     for (testcases) |tc| {
@@ -91,7 +93,7 @@ fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, libs: []const []const 
     const alloc = arena.allocator();
 
     // document
-    const htmldoc = parser.documentHTMLParse(f);
+    const htmldoc = try parser.documentHTMLParse(alloc, f);
     const doc = parser.documentHTMLToDocument(htmldoc);
 
     // create JS env
@@ -141,7 +143,7 @@ fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, libs: []const []const 
 }
 
 // browse the path to find the tests list.
-fn findWPTTests(allocator: std.mem.Allocator, path: []const u8) ![]const []const u8 {
+fn findWPTTests(allocator: std.mem.Allocator, path: []const u8) !*std.ArrayList([]const u8) {
     var dir = try std.fs.cwd().openIterableDir(path, .{ .no_follow = true });
     defer dir.close();
 
@@ -161,5 +163,5 @@ fn findWPTTests(allocator: std.mem.Allocator, path: []const u8) ![]const []const
         try tc.append(try std.fs.path.join(allocator, &.{ path, entry.path }));
     }
 
-    return tc.items;
+    return &tc;
 }
