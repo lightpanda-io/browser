@@ -32,8 +32,7 @@ pub fn main() !void {
     const apis = jsruntime.compile(DOM.Interfaces);
 
     // document
-    var f = "test.html".*;
-    doc = parser.documentHTMLParse(&f);
+    doc = parser.documentHTMLParse("test.html");
     // TODO: defer doc?
 
     // create JS vm
