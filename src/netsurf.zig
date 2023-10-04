@@ -553,7 +553,7 @@ fn documentHTMLVtable(doc_html: *DocumentHTML) c.dom_html_document_vtable {
     return getVtable(c.dom_html_document_vtable, DocumentHTML, doc_html);
 }
 
-pub fn documentHTMLParse(allocator: std.mem.Allocator, filename: []const u8) !*DocumentHTML {
+pub fn documentHTMLParseFromFile(allocator: std.mem.Allocator, filename: []const u8) !*DocumentHTML {
     var file = try std.fs.cwd().openFile(filename, .{});
     defer file.close();
 
@@ -561,7 +561,11 @@ pub fn documentHTMLParse(allocator: std.mem.Allocator, filename: []const u8) !*D
     const html = try file.readToEndAlloc(allocator, file_size);
     defer allocator.free(html);
 
-    const doc = c.wr_create_doc_dom_from_string(html.ptr);
+    return documentHTMLParseFromString(html);
+}
+
+pub fn documentHTMLParseFromString(s: []const u8) !*DocumentHTML {
+    const doc = c.wr_create_doc_dom_from_string(s.ptr);
     if (doc == null) {
         return error.ParserError;
     }

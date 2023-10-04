@@ -31,19 +31,19 @@ pub fn main() !void {
     // generate APIs
     const apis = jsruntime.compile(DOM.Interfaces);
 
+    // allocator
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
     // document
-    doc = parser.documentHTMLParse("test.html");
+    doc = try parser.documentHTMLParseFromFile(arena.allocator(), "test.html");
     defer parser.documentHTMLClose(doc);
 
     // create JS vm
     const vm = jsruntime.VM.init();
     defer vm.deinit();
-
-    // alloc
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-    defer arena.deinit();
 
     // launch shell
     try jsruntime.shell(&arena, apis, execJS, .{ .app_name = "browsercore" });
