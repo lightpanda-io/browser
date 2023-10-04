@@ -562,6 +562,11 @@ pub fn documentHTMLParse(filename: []const u8) *DocumentHTML {
     return @as(*DocumentHTML, @ptrCast(doc.?));
 }
 
+// documentHTMLClose closes the document.
+pub fn documentHTMLClose(doc: *DocumentHTML) void {
+    _ = documentHTMLVtable(doc).close.?(doc);
+}
+
 pub inline fn documentHTMLToDocument(doc_html: *DocumentHTML) *Document {
     return @as(*Document, @ptrCast(doc_html));
 }

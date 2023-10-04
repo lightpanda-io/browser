@@ -33,7 +33,7 @@ pub fn main() !void {
 
     // document
     doc = parser.documentHTMLParse("test.html");
-    // TODO: defer doc?
+    defer parser.documentHTMLClose(doc);
 
     // create JS vm
     const vm = jsruntime.VM.init();

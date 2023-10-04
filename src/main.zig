@@ -54,7 +54,7 @@ pub fn main() !void {
 
     // document
     doc = parser.documentHTMLParse("test.html");
-    // TODO: defer doc?
+    defer parser.documentHTMLClose(doc);
 
     // remove socket file of internal server
     // reuse_address (SO_REUSEADDR flag) does not seems to work on unix socket
