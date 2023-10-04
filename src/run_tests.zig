@@ -39,6 +39,8 @@ test {
 
     // document
     doc = parser.documentHTMLParse("test.html");
+    defer parser.documentHTMLClose(doc);
+
 
     // create JS vm
     const vm = jsruntime.VM.init();
