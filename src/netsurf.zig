@@ -4,6 +4,11 @@ const c = @cImport({
     @cInclude("wrapper.h");
 });
 
+// max html file size read and loaded in memory for parsing.
+// use the same as zig for reference.
+// see https://github.com/ziglang/zig/blob/9f0d2f94175a131d965e86a6396f5ac508b27bf8/src/main.zig#L71C8-L71C8
+pub const max_html_size = std.math.maxInt(u32); // 4GB
+
 // Vtable
 // ------
 
@@ -553,19 +558,39 @@ fn documentHTMLVtable(doc_html: *DocumentHTML) c.dom_html_document_vtable {
     return getVtable(c.dom_html_document_vtable, DocumentHTML, doc_html);
 }
 
+// documentHTMLParseFromFile reads the full document, loads the content in a
+// buffer and parse the buffer content.
+// The buffer is freed by the function.
+// The caller is responsible for closing the document.
 pub fn documentHTMLParseFromFile(allocator: std.mem.Allocator, filename: []const u8) !*DocumentHTML {
     var file = try std.fs.cwd().openFile(filename, .{});
     defer file.close();
 
     const file_size = try file.getEndPos();
-    const html = try file.readToEndAlloc(allocator, file_size);
-    defer allocator.free(html);
 
-    return documentHTMLParseFromString(html);
+    // read the file and return the result in a null terminted c string.
+    const cstr = try file.readToEndAllocOptions(allocator, max_html_size, file_size + 1, @alignOf(u8), 0);
+    defer allocator.free(cstr);
+
+    return documentHTMLParseFromCStr(cstr);
 }
 
-pub fn documentHTMLParseFromString(s: []const u8) !*DocumentHTML {
-    const doc = c.wr_create_doc_dom_from_string(s.ptr);
+// documentHTMLParseFromCStrparses the given string.
+// The allocator is required to create a null terminated string.
+// The c string allocated is freed by the function.
+// The caller is responsible for closing the document.
+pub fn documentHTMLParseFromStr(allocator: std.mem.Allocator, str: [:0]const u8) !*DocumentHTML {
+    // create a null terminated c string.
+    const cstr = std.cstr.addNullByte(allocator, str);
+    defer allocator.free(cstr);
+
+    return documentHTMLParseFromCStr(cstr);
+}
+
+// documentHTMLParseFromCStrparses the given c string (ie. with 0 sentinel).
+// The caller is responsible for closing the document.
+pub fn documentHTMLParseFromCStr(cstr: [:0]const u8) !*DocumentHTML {
+    const doc = c.wr_create_doc_dom_from_string(cstr.ptr);
     if (doc == null) {
         return error.ParserError;
     }
