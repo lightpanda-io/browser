@@ -553,7 +553,7 @@ fn documentHTMLVtable(doc_html: *DocumentHTML) c.dom_html_document_vtable {
     return getVtable(c.dom_html_document_vtable, DocumentHTML, doc_html);
 }
 
-// documentHTMLParseFromFileAlloc reads the full document, loads the content in a
+// documentHTMLParseFromFileAlloc parses the file.
 // The allocator is required to create a null terminated string from filename.
 // The buffer is freed by the function.
 // The caller is responsible for closing the document.
