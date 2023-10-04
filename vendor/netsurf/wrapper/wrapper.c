@@ -59,7 +59,7 @@ dom_document *wr_create_doc_dom_from_string(const char *html)
  * \param file  The file path
  * \return  pointer to DOM document, or NULL on error
  */
-dom_document *wr_create_doc_dom_from_file(char *filename)
+dom_document *wr_create_doc_dom_from_file(const char *filename)
 {
 	size_t buffer_size = 1024;
 	dom_hubbub_parser *parser = NULL;

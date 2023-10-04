@@ -4,11 +4,6 @@ const c = @cImport({
     @cInclude("wrapper.h");
 });
 
-// max html file size read and loaded in memory for parsing.
-// use the same as zig for reference.
-// see https://github.com/ziglang/zig/blob/9f0d2f94175a131d965e86a6396f5ac508b27bf8/src/main.zig#L71C8-L71C8
-pub const max_html_size = std.math.maxInt(u32); // 4GB
-
 // Vtable
 // ------
 
@@ -559,20 +554,19 @@ fn documentHTMLVtable(doc_html: *DocumentHTML) c.dom_html_document_vtable {
 }
 
 // documentHTMLParseFromFile reads the full document, loads the content in a
-// buffer and parse the buffer content.
+// The allocator is required to create a null terminated string from filename.
 // The buffer is freed by the function.
 // The caller is responsible for closing the document.
 pub fn documentHTMLParseFromFile(allocator: std.mem.Allocator, filename: []const u8) !*DocumentHTML {
-    var file = try std.fs.cwd().openFile(filename, .{});
-    defer file.close();
-
-    const file_size = try file.getEndPos();
-
-    // read the file and return the result in a null terminted c string.
-    const cstr = try file.readToEndAllocOptions(allocator, max_html_size, file_size + 1, @alignOf(u8), 0);
+    // create a null terminated c string.
+    const cstr = try allocator.dupeZ(u8, filename);
     defer allocator.free(cstr);
 
-    return documentHTMLParseFromCStr(cstr);
+    const doc = c.wr_create_doc_dom_from_file(cstr.ptr);
+    if (doc == null) {
+        return error.ParserError;
+    }
+    return @as(*DocumentHTML, @ptrCast(doc.?));
 }
 
 // documentHTMLParseFromCStrparses the given string.
@@ -581,7 +575,7 @@ pub fn documentHTMLParseFromFile(allocator: std.mem.Allocator, filename: []const
 // The caller is responsible for closing the document.
 pub fn documentHTMLParseFromStr(allocator: std.mem.Allocator, str: [:0]const u8) !*DocumentHTML {
     // create a null terminated c string.
-    const cstr = std.cstr.addNullByte(allocator, str);
+    const cstr = try allocator.dupeZ(u8, str);
     defer allocator.free(cstr);
 
     return documentHTMLParseFromCStr(cstr);
