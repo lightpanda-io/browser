@@ -38,7 +38,7 @@ pub fn main() !void {
     defer arena.deinit();
 
     // document
-    doc = try parser.documentHTMLParseFromFile(arena.allocator(), "test.html");
+    doc = try parser.documentHTMLParseFromFileAlloc(arena.allocator(), "test.html");
     defer parser.documentHTMLClose(doc);
 
     // create JS vm
