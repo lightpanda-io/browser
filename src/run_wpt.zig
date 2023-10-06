@@ -25,61 +25,107 @@ fn readFile(allocator: std.mem.Allocator, filename: []const u8) ![]const u8 {
 // generate APIs
 const apis = jsruntime.compile(DOM.Interfaces);
 
+// FileLoader loads files content from the filesystem.
+const FileLoader = struct {
+    files: std.StringHashMap([]const u8) = undefined,
+    path: []const u8,
+    alloc: std.mem.Allocator,
+
+    const Self = @This();
+
+    fn new(alloc: std.mem.Allocator, path: []const u8) Self {
+        return Self{
+            .path = path,
+            .alloc = alloc,
+            .files = std.StringHashMap([]const u8).init(alloc),
+        };
+    }
+    fn get(self: *Self, name: []const u8) ![]const u8 {
+        if (!self.files.contains(name)) {
+            try self.load(name);
+        }
+        return self.files.get(name).?;
+    }
+    fn load(self: *Self, name: []const u8) !void {
+        const filename = try std.mem.concat(self.alloc, u8, &.{ self.path, name });
+        defer self.alloc.free(filename);
+        var file = try std.fs.cwd().openFile(filename, .{});
+        defer file.close();
+
+        const file_size = try file.getEndPos();
+        const content = try file.readToEndAlloc(self.alloc, file_size);
+        const namedup = try self.alloc.dupe(u8, name);
+        try self.files.put(namedup, content);
+    }
+    fn deinit(self: *Self) void {
+        var iter = self.files.iterator();
+        while (iter.next()) |entry| {
+            self.alloc.free(entry.key_ptr.*);
+            self.alloc.free(entry.value_ptr.*);
+        }
+        self.files.deinit();
+    }
+};
+
 // TODO For now the WPT tests run is specific to WPT.
 // It manually load js framwork libs, and run the first script w/ js content in
 // the HTML page.
 // Once browsercore will have the html loader, it would be useful to refacto
 // this test to use it.
-test {
+test "WPT tests suite" {
     std.debug.print("Running WPT test suite\n", .{});
 
-    var bench_alloc = jsruntime.bench_allocator(std.testing.allocator);
-    const alloc = bench_alloc.allocator();
+    const alloc = std.testing.allocator;
+    var bench_alloc = jsruntime.bench_allocator(alloc);
 
     // initialize VM JS lib.
     const vm = jsruntime.VM.init();
     defer vm.deinit();
 
     // prepare libraries to load on each test case.
-    var libs: [2][]const u8 = undefined;
-    // read testharness.js content
-    libs[0] = try readFile(alloc, "tests/wpt/resources/testharness.js");
-    defer alloc.free(libs[0]);
-
-    // read testharnessreport.js content
-    libs[1] = try readFile(alloc, "tests/wpt/resources/testharnessreport.js");
-    defer alloc.free(libs[1]);
+    var loader = FileLoader.new(alloc, "tests/wpt");
+    defer loader.deinit();
 
     // browse the dir to get the tests dynamically.
-    const list = try findWPTTests(alloc, wpt_dir);
-    defer list.deinit();
+    var list = std.ArrayList([]const u8).init(alloc);
+    try findWPTTests(alloc, wpt_dir, &list);
+    defer {
+        for (list.items) |tc| {
+            alloc.free(tc);
+        }
+        list.deinit();
+    }
 
     const testcases: [][]const u8 = list.items;
 
+    var run: usize = 0;
     var failures: usize = 0;
     for (testcases) |tc| {
+        run += 1;
+
         // create an arena and deinit it for each test case.
-        var arena = std.heap.ArenaAllocator.init(alloc);
+        var arena = std.heap.ArenaAllocator.init(bench_alloc.allocator());
         defer arena.deinit();
 
         // TODO I don't use testing.expect here b/c I want to execute all the
         // tests. And testing.expect stops running test in the first failure.
-        const res = runWPT(&arena, tc, libs[0..]) catch |err| {
-            std.debug.print("ERR\t{s}\n\t> {any}\n", .{ tc, err });
+        const res = runWPT(&arena, tc, &loader) catch |err| {
+            std.debug.print("ERR\t{s}\n{any}\n", .{ tc, err });
             failures += 1;
             continue;
         };
+        // no need to call res.deinit() thanks to the arena allocator.
 
         if (!res.success) {
-            std.debug.print("ERR\t{s}\n\t> {s}\n", .{ tc, res.result });
+            std.debug.print("ERR\t{s}\n{s}\n", .{ tc, res.stack orelse res.result });
             failures += 1;
             continue;
         }
-        std.debug.print("OK\t{s}\n\t> {s}\n", .{ tc, res.result });
+        std.debug.print("OK\t{s}\n{s}\n", .{ tc, res.result });
     }
 
     if (failures > 0) {
-        std.debug.print("{d}/{d} tests failures\n", .{ failures, testcases.len });
+        std.debug.print("{d}/{d} tests failures\n", .{ failures, run });
     }
     try std.testing.expect(failures == 0);
 }
@@ -87,12 +133,12 @@ test {
 // runWPT parses the given HTML file, starts a js env and run the first script
 // tags containing javascript sources.
 // It loads first the js libs files.
-fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, libs: []const []const u8) !jsruntime.JSResult {
+fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, loader: *FileLoader) !jsruntime.JSResult {
     const alloc = arena.allocator();
 
     // document
     const htmldoc = try parser.documentHTMLParse(alloc, f);
-    const doc = parser.documentHTMLToDocument(htmldoc);
+    var doc = parser.documentHTMLToDocument(htmldoc);
 
     // create JS env
     var loop = try Loop.init(alloc);
@@ -118,9 +164,27 @@ fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, libs: []const []const 
         .result = "undefined",
     };
 
-    // execute libs
-    for (libs) |lib| {
-        try js_env.run(alloc, lib, "", &res, &cbk_res);
+    const init =
+        \\var window = {};
+        \\window.document = document;
+        \\window.self = window;
+        \\window.addEventListener = function () {};
+        \\const self = window.self;
+    ;
+    try js_env.run(alloc, init, "", &res, &cbk_res);
+    if (!res.success) {
+        return res;
+    }
+
+    // TODO load <script src> attributes instead of the static list.
+    try js_env.run(alloc, try loader.get("/resources/testharness.js"), "testharness.js", &res, &cbk_res);
+    if (!res.success) {
+        return res;
+    }
+
+    try js_env.run(alloc, try loader.get("/resources/testharnessreport.js"), "testharnessreport.js", &res, &cbk_res);
+    if (!res.success) {
+        return res;
     }
 
     // loop hover the scripts.
@@ -128,27 +192,30 @@ fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, libs: []const []const 
     const slen = parser.nodeListLength(scripts);
     for (0..slen) |i| {
         const s = parser.nodeListItem(scripts, @intCast(i)).?;
+
         // search only script tag containing text a child.
         const text = parser.nodeFirstChild(s) orelse continue;
 
         const src = parser.nodeTextContent(text).?;
         try js_env.run(alloc, src, "", &res, &cbk_res);
 
-        return res;
+        // return the first failure.
+        if (!res.success) {
+            return res;
+        }
     }
 
-    return error.EmptyTest;
+    //return the final result.
+    return res;
 }
 
 // browse the path to find the tests list.
-fn findWPTTests(allocator: std.mem.Allocator, path: []const u8) !*std.ArrayList([]const u8) {
+fn findWPTTests(allocator: std.mem.Allocator, path: []const u8, list: *std.ArrayList([]const u8)) !void {
     var dir = try std.fs.cwd().openIterableDir(path, .{ .no_follow = true });
     defer dir.close();
 
     var walker = try dir.walk(allocator);
     defer walker.deinit();
-
-    var tc = std.ArrayList([]const u8).init(allocator);
 
     while (try walker.next()) |entry| {
         if (entry.kind != .file) {
@@ -158,8 +225,6 @@ fn findWPTTests(allocator: std.mem.Allocator, path: []const u8) !*std.ArrayList(
             continue;
         }
 
-        try tc.append(try std.fs.path.join(allocator, &.{ path, entry.path }));
+        try list.append(try std.fs.path.join(allocator, &.{ path, entry.path }));
     }
-
-    return &tc;
 }
