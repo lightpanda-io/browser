@@ -267,10 +267,40 @@ pub fn nodeNextSibling(node: *Node) ?*Node {
     return res;
 }
 
+pub fn nodeNextElementSibling(node: *Node) ?*Element {
+    var n = node;
+    while (true) {
+        const res = nodeNextSibling(n);
+        if (res == null) {
+            return null;
+        }
+        if (nodeType(res.?) == .element) {
+            return @as(*Element, @ptrCast(res.?));
+        }
+        n = res.?;
+    }
+    return null;
+}
+
 pub fn nodePreviousSibling(node: *Node) ?*Node {
     var res: ?*Node = undefined;
     _ = nodeVtable(node).dom_node_get_previous_sibling.?(node, &res);
     return res;
+}
+
+pub fn nodePreviousElementSibling(node: *Node) ?*Element {
+    var n = node;
+    while (true) {
+        const res = nodePreviousSibling(n);
+        if (res == null) {
+            return null;
+        }
+        if (nodeType(res.?) == .element) {
+            return @as(*Element, @ptrCast(res.?));
+        }
+        n = res.?;
+    }
+    return null;
 }
 
 pub fn nodeParentNode(node: *Node) ?*Node {
@@ -419,6 +449,56 @@ pub fn nodeReplaceChild(node: *Node, new_child: *Node, old_child: *Node) *Node {
 
 // CharacterData
 pub const CharacterData = c.dom_characterdata;
+
+fn characterDataVtable(data: *CharacterData) c.dom_characterdata_vtable {
+    return getVtable(c.dom_characterdata_vtable, CharacterData, data);
+}
+
+pub inline fn characterDataToNode(cdata: *CharacterData) *Node {
+    return @as(*Node, @ptrCast(cdata));
+}
+
+pub fn characterDataData(cdata: *CharacterData) []const u8 {
+    var s: ?*String = undefined;
+    _ = characterDataVtable(cdata).dom_characterdata_get_data.?(cdata, &s);
+    return stringToData(s.?);
+}
+
+pub fn characterDataSetData(cdata: *CharacterData, data: []const u8) void {
+    const s = stringFromData(data);
+    _ = characterDataVtable(cdata).dom_characterdata_set_data.?(cdata, s);
+}
+
+pub fn characterDataLength(cdata: *CharacterData) u32 {
+    var n: u32 = undefined;
+    _ = characterDataVtable(cdata).dom_characterdata_get_length.?(cdata, &n);
+    return n;
+}
+
+pub fn characterDataAppendData(cdata: *CharacterData, data: []const u8) void {
+    const s = stringFromData(data);
+    _ = characterDataVtable(cdata).dom_characterdata_append_data.?(cdata, s);
+}
+
+pub fn characterDataDeleteData(cdata: *CharacterData, offset: u32, count: u32) void {
+    _ = characterDataVtable(cdata).dom_characterdata_delete_data.?(cdata, offset, count);
+}
+
+pub fn characterDataInsertData(cdata: *CharacterData, offset: u32, data: []const u8) void {
+    const s = stringFromData(data);
+    _ = characterDataVtable(cdata).dom_characterdata_insert_data.?(cdata, offset, s);
+}
+
+pub fn characterDataReplaceData(cdata: *CharacterData, offset: u32, count: u32, data: []const u8) void {
+    const s = stringFromData(data);
+    _ = characterDataVtable(cdata).dom_characterdata_replace_data.?(cdata, offset, count, s);
+}
+
+pub fn characterDataSubstringData(cdata: *CharacterData, offset: u32, count: u32) []const u8 {
+    var s: ?*String = undefined;
+    _ = characterDataVtable(cdata).dom_characterdata_substring_data.?(cdata, offset, count, &s);
+    return stringToData(s.?);
+}
 
 // Text
 pub const Text = c.dom_text;
