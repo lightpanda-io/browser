@@ -480,6 +480,10 @@ pub fn characterDataAppendData(cdata: *CharacterData, data: []const u8) void {
     _ = characterDataVtable(cdata).dom_characterdata_append_data.?(cdata, s);
 }
 
+pub fn characterDataDeleteData(cdata: *CharacterData, offset: u32, count: u32) void {
+    _ = characterDataVtable(cdata).dom_characterdata_delete_data.?(cdata, offset, count);
+}
+
 // Text
 pub const Text = c.dom_text;
 

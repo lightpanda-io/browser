@@ -58,6 +58,10 @@ pub const CharacterData = struct {
     pub fn _appendData(self: *parser.CharacterData, data: []const u8) void {
         return parser.characterDataAppendData(self, data);
     }
+
+    pub fn _deleteData(self: *parser.CharacterData, offset: u32, count: u32) void {
+        return parser.characterDataDeleteData(self, offset, count);
+    }
 };
 
 pub const Types = generate.Tuple(.{
@@ -118,4 +122,10 @@ pub fn testExecFn(
         .{ .src = "cdata.data === 'OK modified' ", .ex = "true" },
     };
     try checkCases(js_env, &append_data);
+
+    var delete_data = [_]Case{
+        .{ .src = "cdata.deleteData('OK'.length, ' modified'.length)", .ex = "undefined" },
+        .{ .src = "cdata.data", .ex = "OK" },
+    };
+    try checkCases(js_env, &delete_data);
 }
