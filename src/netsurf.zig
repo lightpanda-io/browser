@@ -513,6 +513,12 @@ pub fn textWholdeText(text: *Text) []const u8 {
     return stringToData(s.?);
 }
 
+pub fn textSplitText(text: *Text, offset: u32) *Text {
+    var res: ?*Text = undefined;
+    _ = textVtable(text).dom_text_split_text.?(text, offset, &res);
+    return res.?;
+}
+
 // Comment
 pub const Comment = c.dom_comment;
 
