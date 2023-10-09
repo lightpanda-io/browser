@@ -51,6 +51,13 @@ pub const CharacterData = struct {
     pub fn set_data(self: *parser.CharacterData, data: []const u8) void {
         return parser.characterDataSetData(self, data);
     }
+
+    // JS methods
+    // ----------
+
+    pub fn _appendData(self: *parser.CharacterData, data: []const u8) void {
+        return parser.characterDataAppendData(self, data);
+    }
 };
 
 pub const Types = generate.Tuple(.{
@@ -105,4 +112,10 @@ pub fn testExecFn(
         .{ .src = "cdata.previousElementSibling.localName === 'div' ", .ex = "true" },
     };
     try checkCases(js_env, &get_prev_elem_sibling);
+
+    var append_data = [_]Case{
+        .{ .src = "cdata.appendData(' modified')", .ex = "undefined" },
+        .{ .src = "cdata.data === 'OK modified' ", .ex = "true" },
+    };
+    try checkCases(js_env, &append_data);
 }

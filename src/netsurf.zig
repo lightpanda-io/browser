@@ -475,6 +475,11 @@ pub fn characterDataLength(cdata: *CharacterData) u32 {
     return n;
 }
 
+pub fn characterDataAppendData(cdata: *CharacterData, data: []const u8) void {
+    const s = stringFromData(data);
+    _ = characterDataVtable(cdata).dom_characterdata_append_data.?(cdata, s);
+}
+
 // Text
 pub const Text = c.dom_text;
 
