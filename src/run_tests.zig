@@ -38,9 +38,8 @@ test {
     const apis = jsruntime.compile(DOM.Interfaces);
 
     // document
-    doc = parser.documentHTMLParse("test.html");
+    doc = try parser.documentHTMLParseFromFileAlloc(std.testing.allocator, "test.html");
     defer parser.documentHTMLClose(doc);
-
 
     // create JS vm
     const vm = jsruntime.VM.init();

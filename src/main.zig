@@ -52,8 +52,12 @@ pub fn main() !void {
     const vm = jsruntime.VM.init();
     defer vm.deinit();
 
+    // alloc
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
     // document
-    doc = parser.documentHTMLParse("test.html");
+    doc = try parser.documentHTMLParseFromFileAlloc(arena.allocator(), "test.html");
     defer parser.documentHTMLClose(doc);
 
     // remove socket file of internal server
@@ -65,10 +69,6 @@ pub fn main() !void {
             return err;
         }
     };
-
-    // alloc
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
 
     // server
     var addr = try std.net.Address.initUnix(socket_path);

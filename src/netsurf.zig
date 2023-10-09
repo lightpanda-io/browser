@@ -553,11 +553,46 @@ fn documentHTMLVtable(doc_html: *DocumentHTML) c.dom_html_document_vtable {
     return getVtable(c.dom_html_document_vtable, DocumentHTML, doc_html);
 }
 
-pub fn documentHTMLParse(filename: []const u8) *DocumentHTML {
-    var f: []u8 = @constCast(filename);
-    const doc = c.wr_create_doc_dom_from_file(f.ptr);
+// documentHTMLParseFromFileAlloc parses the file.
+// The allocator is required to create a null terminated string from filename.
+// The buffer is freed by the function.
+// The caller is responsible for closing the document.
+pub fn documentHTMLParseFromFileAlloc(allocator: std.mem.Allocator, filename: []const u8) !*DocumentHTML {
+    const cstr = try allocator.dupeZ(u8, filename);
+    defer allocator.free(cstr);
+
+    return documentHTMLParseFromFile(cstr);
+}
+
+// documentHTMLParseFromFile parses the given filename c string (ie. with 0 sentinel).
+// The caller is responsible for closing the document.
+pub fn documentHTMLParseFromFile(filename: [:0]const u8) !*DocumentHTML {
+    // create a null terminated c string.
+    const doc = c.wr_create_doc_dom_from_file(filename.ptr);
     if (doc == null) {
-        @panic("error parser");
+        return error.ParserError;
+    }
+    return @as(*DocumentHTML, @ptrCast(doc.?));
+}
+
+// documentHTMLParseFromStrAlloc the given string.
+// The allocator is required to create a null terminated string.
+// The c string allocated is freed by the function.
+// The caller is responsible for closing the document.
+pub fn documentHTMLParseFromStrAlloc(allocator: std.mem.Allocator, str: [:0]const u8) !*DocumentHTML {
+    // create a null terminated c string.
+    const cstr = try allocator.dupeZ(u8, str);
+    defer allocator.free(cstr);
+
+    return documentHTMLParseFromStr(cstr);
+}
+
+// documentHTMLParseFromStr parses the given c string (ie. with 0 sentinel).
+// The caller is responsible for closing the document.
+pub fn documentHTMLParseFromStr(cstr: [:0]const u8) !*DocumentHTML {
+    const doc = c.wr_create_doc_dom_from_string(cstr.ptr);
+    if (doc == null) {
+        return error.ParserError;
     }
     return @as(*DocumentHTML, @ptrCast(doc.?));
 }
