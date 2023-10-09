@@ -484,6 +484,11 @@ pub fn characterDataDeleteData(cdata: *CharacterData, offset: u32, count: u32) v
     _ = characterDataVtable(cdata).dom_characterdata_delete_data.?(cdata, offset, count);
 }
 
+pub fn characterDataInsertData(cdata: *CharacterData, offset: u32, data: []const u8) void {
+    const s = stringFromData(data);
+    _ = characterDataVtable(cdata).dom_characterdata_insert_data.?(cdata, offset, s);
+}
+
 // Text
 pub const Text = c.dom_text;
 
