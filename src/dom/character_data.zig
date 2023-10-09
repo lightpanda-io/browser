@@ -66,6 +66,10 @@ pub const CharacterData = struct {
     pub fn _insertData(self: *parser.CharacterData, offset: u32, data: []const u8) void {
         return parser.characterDataInsertData(self, offset, data);
     }
+
+    pub fn _replaceData(self: *parser.CharacterData, offset: u32, count: u32, data: []const u8) void {
+        return parser.characterDataReplaceData(self, offset, count, data);
+    }
 };
 
 pub const Types = generate.Tuple(.{
@@ -138,4 +142,10 @@ pub fn testExecFn(
         .{ .src = "cdata.data == 'OmodifiedK'", .ex = "true" },
     };
     try checkCases(js_env, &insert_data);
+
+    var replace_data = [_]Case{
+        .{ .src = "cdata.replaceData('OK'.length-1, 'modified'.length, 'replaced')", .ex = "undefined" },
+        .{ .src = "cdata.data == 'OreplacedK'", .ex = "true" },
+    };
+    try checkCases(js_env, &replace_data);
 }
