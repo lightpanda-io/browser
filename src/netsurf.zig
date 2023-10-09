@@ -503,6 +503,16 @@ pub fn characterDataSubstringData(cdata: *CharacterData, offset: u32, count: u32
 // Text
 pub const Text = c.dom_text;
 
+fn textVtable(text: *Text) c.dom_text_vtable {
+    return getVtable(c.dom_text_vtable, Text, text);
+}
+
+pub fn textWholdeText(text: *Text) []const u8 {
+    var s: ?*String = undefined;
+    _ = textVtable(text).dom_text_get_whole_text.?(text, &s);
+    return stringToData(s.?);
+}
+
 // Comment
 pub const Comment = c.dom_comment;
 
