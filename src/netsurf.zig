@@ -494,6 +494,12 @@ pub fn characterDataReplaceData(cdata: *CharacterData, offset: u32, count: u32, 
     _ = characterDataVtable(cdata).dom_characterdata_replace_data.?(cdata, offset, count, s);
 }
 
+pub fn characterDataSubstringData(cdata: *CharacterData, offset: u32, count: u32) []const u8 {
+    var s: ?*String = undefined;
+    _ = characterDataVtable(cdata).dom_characterdata_substring_data.?(cdata, offset, count, &s);
+    return stringToData(s.?);
+}
+
 // Text
 pub const Text = c.dom_text;
 
