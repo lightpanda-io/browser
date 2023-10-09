@@ -3,16 +3,8 @@ const generate = @import("../generate.zig");
 
 const Element = @import("../dom/element.zig").Element;
 
-// Abstract class
-// --------------
-
-pub const HTMLElement = struct {
-    pub const Self = parser.ElementHTML;
-    pub const prototype = *Element;
-    pub const mem_guarantied = true;
-};
-
-pub const Types = .{
+// HTMLElement interfaces
+pub const Interfaces = .{
     HTMLUnknownElement,
     HTMLAnchorElement,
     HTMLAreaElement,
@@ -74,9 +66,18 @@ pub const Types = .{
     HTMLUListElement,
     HTMLVideoElement,
 };
-const Generated = generate.Union.compile(Types);
+const Generated = generate.Union.compile(Interfaces);
 pub const Union = Generated._union;
 pub const Tags = Generated._enum;
+
+// Abstract class
+// --------------
+
+pub const HTMLElement = struct {
+    pub const Self = parser.ElementHTML;
+    pub const prototype = *Element;
+    pub const mem_guarantied = true;
+};
 
 // Deprecated HTMLElements in Chrome (2023/03/15)
 // HTMLContentelement
