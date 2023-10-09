@@ -12,6 +12,13 @@ const Comment = @import("comment.zig").Comment;
 const Text = @import("text.zig").Text;
 const HTMLElem = @import("../html/elements.zig");
 
+// CharacterData interfaces
+pub const Interfaces = generate.Tuple(.{
+    Comment,
+    Text,
+});
+
+// CharacterData implementation
 pub const CharacterData = struct {
     pub const Self = parser.CharacterData;
     pub const prototype = *Node;
@@ -75,14 +82,6 @@ pub const CharacterData = struct {
         return parser.characterDataSubstringData(self, offset, count);
     }
 };
-
-pub const Types = generate.Tuple(.{
-    Comment,
-    Text,
-});
-const Generated = generate.Union.compile(Types);
-pub const Union = Generated._union;
-pub const Tags = Generated._enum;
 
 // Tests
 // -----

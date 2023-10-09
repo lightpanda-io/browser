@@ -8,10 +8,30 @@ const generate = @import("../generate.zig");
 const parser = @import("../netsurf.zig");
 
 const EventTarget = @import("event_target.zig").EventTarget;
+
+// DOM
 const CData = @import("character_data.zig");
-const HTMLDocument = @import("../html/document.zig").HTMLDocument;
+const Element = @import("element.zig").Element;
+const Document = @import("document.zig").Document;
+
+// HTML
+const HTML = @import("../html/html.zig");
 const HTMLElem = @import("../html/elements.zig");
 
+// Node interfaces
+pub const Interfaces = generate.Tuple(.{
+    CData.CharacterData,
+    CData.Interfaces,
+    Element,
+    Document,
+
+    HTML.Interfaces,
+});
+const Generated = generate.Union.compile(Interfaces);
+pub const Union = Generated._union;
+pub const Tags = Generated._enum;
+
+// Node implementation
 pub const Node = struct {
     pub const Self = parser.Node;
     pub const prototype = *EventTarget;
@@ -206,15 +226,6 @@ pub const Node = struct {
         return Node.toInterface(res);
     }
 };
-
-pub const Types = generate.Tuple(.{
-    CData.Types,
-    HTMLElem.Types,
-    HTMLDocument,
-});
-const Generated = generate.Union.compile(Types);
-pub const Union = Generated._union;
-pub const Tags = Generated._enum;
 
 // Tests
 // -----
