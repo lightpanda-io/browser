@@ -63,10 +63,12 @@ const FileLoader = struct {
 // the HTML page.
 // Once browsercore will have the html loader, it would be useful to refacto
 // this test to use it.
-test "WPT tests suite" {
+pub fn main() !void {
     std.debug.print("Running WPT test suite\n", .{});
 
-    const alloc = std.testing.allocator;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const alloc = gpa.allocator();
 
     // initialize VM JS lib.
     const vm = jsruntime.VM.init();
@@ -92,7 +94,7 @@ test "WPT tests suite" {
         run += 1;
 
         // create an arena and deinit it for each test case.
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        var arena = std.heap.ArenaAllocator.init(alloc);
         defer arena.deinit();
 
         // TODO I don't use testing.expect here b/c I want to execute all the
@@ -120,8 +122,8 @@ test "WPT tests suite" {
 
     if (failures > 0) {
         std.debug.print("{d}/{d} tests failures\n", .{ failures, run });
+        std.os.exit(1);
     }
-    try std.testing.expect(failures == 0);
 }
 
 // runWPT parses the given HTML file, starts a js env and run the first script
