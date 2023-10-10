@@ -79,7 +79,7 @@ pub fn build(b: *std.build.Builder) !void {
     // compile and install
     const wpt = b.addExecutable(.{
         .name = "browsercore-wpt",
-        .root_source_file = .{ .path = "src/run_wpt.zig" },
+        .root_source_file = .{ .path = "src/main_wpt.zig" },
         .target = target,
         .optimize = mode,
     });
