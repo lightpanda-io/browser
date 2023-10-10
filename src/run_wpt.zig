@@ -14,14 +14,6 @@ const HTMLElem = @import("html/elements.zig");
 
 const wpt_dir = "tests/wpt";
 
-fn readFile(allocator: std.mem.Allocator, filename: []const u8) ![]const u8 {
-    var file = try std.fs.cwd().openFile(filename, .{});
-    defer file.close();
-
-    const file_size = try file.getEndPos();
-    return file.readToEndAlloc(allocator, file_size);
-}
-
 // generate APIs
 const apis = jsruntime.compile(DOM.Interfaces);
 
