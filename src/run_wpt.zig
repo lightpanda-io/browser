@@ -68,7 +68,6 @@ test "WPT tests suite" {
     std.debug.print("Running WPT test suite\n", .{});
 
     const alloc = std.testing.allocator;
-    var bench_alloc = jsruntime.bench_allocator(alloc);
 
     // initialize VM JS lib.
     const vm = jsruntime.VM.init();
@@ -88,32 +87,36 @@ test "WPT tests suite" {
         list.deinit();
     }
 
-    const testcases: [][]const u8 = list.items;
-
     var run: usize = 0;
     var failures: usize = 0;
-    for (testcases) |tc| {
+    for (list.items) |tc| {
         run += 1;
 
         // create an arena and deinit it for each test case.
-        var arena = std.heap.ArenaAllocator.init(bench_alloc.allocator());
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
 
         // TODO I don't use testing.expect here b/c I want to execute all the
         // tests. And testing.expect stops running test in the first failure.
         const res = runWPT(&arena, tc, &loader) catch |err| {
-            std.debug.print("ERR\t{s}\n{any}\n", .{ tc, err });
+            std.debug.print("FAIL\t{s}\n{any}\n", .{ tc, err });
             failures += 1;
             continue;
         };
         // no need to call res.deinit() thanks to the arena allocator.
 
         if (!res.success) {
-            std.debug.print("ERR\t{s}\n{s}\n", .{ tc, res.stack orelse res.result });
+            std.debug.print("FAIL\t{s}\n{s}\n", .{ tc, res.stack orelse res.result });
             failures += 1;
             continue;
         }
-        std.debug.print("OK\t{s}\n{s}\n", .{ tc, res.result });
+        if (!std.mem.eql(u8, res.result, "Pass")) {
+            std.debug.print("FAIL\t{s}\n{s}\n", .{ tc, res.stack orelse res.result });
+            failures += 1;
+            continue;
+        }
+
+        std.debug.print("PASS\t{s}\n", .{tc});
     }
 
     if (failures > 0) {
@@ -157,13 +160,26 @@ fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, loader: *FileLoader) !
     };
 
     const init =
-        \\var window = {};
+        \\var window = this;
+        \\window.listeners = [];
         \\window.document = document;
         \\window.self = window;
-        \\window.addEventListener = function () {};
-        \\const self = window.self;
+        \\window.parent = window;
+        \\window.addEventListener = function (type, listener, options) {
+        \\  window.listeners.push({type: type, listener: listener, options: options});
+        \\};
+        \\window.dispatchEvent = function (event) {
+        \\  len = window.listeners.length;
+        \\  for (var i = 0; i < len; i++) {
+        \\      if (window.listeners[i].type == event.target) {
+        \\          window.listeners[i].listener(event);
+        \\      }
+        \\  }
+        \\  return true;
+        \\};
+        \\window.removeEventListener = function () {};
     ;
-    try js_env.run(alloc, init, "", &res, &cbk_res);
+    try js_env.run(alloc, init, "init", &res, &cbk_res);
     if (!res.success) {
         return res;
     }
@@ -173,7 +189,6 @@ fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, loader: *FileLoader) !
     if (!res.success) {
         return res;
     }
-
     try js_env.run(alloc, try loader.get("/resources/testharnessreport.js"), "testharnessreport.js", &res, &cbk_res);
     if (!res.success) {
         return res;
@@ -197,7 +212,24 @@ fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, loader: *FileLoader) !
         }
     }
 
-    //return the final result.
+    // Mark tests as ready to run.
+    try js_env.run(alloc, "window.dispatchEvent({target: 'load'});", "ready", &res, &cbk_res);
+    if (!res.success) {
+        return res;
+    }
+
+    // Check the final test status.
+    try js_env.run(alloc, "report.status;", "teststatus", &res, &cbk_res);
+    if (!res.success) {
+        return res;
+    }
+
+    // If the test failed, return detailed logs intead of the simple status.
+    if (!std.mem.eql(u8, res.result, "Pass")) {
+        try js_env.run(alloc, "report.log", "teststatus", &res, &cbk_res);
+    }
+
+    // return the final result.
     return res;
 }
 
