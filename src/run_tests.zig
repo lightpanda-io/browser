@@ -24,6 +24,10 @@ fn testExecFn(
     js_env.start(apis);
     defer js_env.stop();
 
+    // alias global as self and window
+    try js_env.attachObject(try js_env.getGlobal(), "self", null);
+    try js_env.attachObject(try js_env.getGlobal(), "window", null);
+
     // document
     doc = try parser.documentHTMLParseFromFileAlloc(std.testing.allocator, "test.html");
     defer parser.documentHTMLClose(doc);
