@@ -180,9 +180,9 @@
             this_obj.output_handler.show_status();
         });
 
-        add_completion_callback(function (tests, harness_status, asserts_run) {
-            this_obj.output_handler.show_results(tests, harness_status, asserts_run);
-        });
+        // add_completion_callback(function (tests, harness_status, asserts_run) {
+            // this_obj.output_handler.show_results(tests, harness_status, asserts_run);
+        // });
         this.setup_messages(settings.message_events);
     };
 
@@ -218,15 +218,15 @@
     };
 
     WindowTestEnvironment.prototype.test_timeout = function() {
-        var metas = document.getElementsByTagName("meta");
-        for (var i = 0; i < metas.length; i++) {
-            if (metas[i].name == "timeout") {
-                if (metas[i].content == "long") {
-                    return settings.harness_timeout.long;
-                }
-                break;
-            }
-        }
+        // var metas = document.getElementsByTagName("meta");
+        // for (var i = 0; i < metas.length; i++) {
+        //     if (metas[i].name == "timeout") {
+        //         if (metas[i].content == "long") {
+        //             return settings.harness_timeout.long;
+        //         }
+        //         break;
+        //     }
+        // }
         return settings.harness_timeout.normal;
     };
 
@@ -4096,7 +4096,7 @@
         if (!this.enabled || this.phase === this.COMPLETE) {
             return;
         }
-        this.resolve_log();
+        //this.resolve_log();
         if (this.phase < this.HAVE_RESULTS) {
             this.phase = this.HAVE_RESULTS;
         }
@@ -4120,7 +4120,7 @@
             return;
         }
         if (!this.output_node) {
-            this.resolve_log();
+            //this.resolve_log();
         }
         this.phase = this.COMPLETE;
 
@@ -4136,10 +4136,10 @@
 
         var stylesheet = output_document.createElementNS(xhtml_ns, "style");
         stylesheet.textContent = stylesheetContent;
-        var heads = output_document.getElementsByTagName("head");
-        if (heads.length) {
-            heads[0].appendChild(stylesheet);
-        }
+        // var heads = output_document.getElementsByTagName("head");
+        // if (heads.length) {
+        //     heads[0].appendChild(stylesheet);
+        // }
 
         var status_number = {};
         forEach(tests,
@@ -4735,21 +4735,21 @@
             return undefined;
         }
 
-        var scripts = document.getElementsByTagName("script");
-        for (var i = 0; i < scripts.length; i++) {
-            var src;
-            if (scripts[i].src) {
-                src = scripts[i].src;
-            } else if (scripts[i].href) {
-                //SVG case
-                src = scripts[i].href.baseVal;
-            }
+        //var scripts = document.getElementsByTagName("script");
+        //for (var i = 0; i < scripts.length; i++) {
+        //    var src;
+        //    if (scripts[i].src) {
+        //        src = scripts[i].src;
+        //    } else if (scripts[i].href) {
+        //        //SVG case
+        //        src = scripts[i].href.baseVal;
+        //    }
 
-            var matches = src && src.match(/^(.*\/|)testharness\.js$/);
-            if (matches) {
-                return src;
-            }
-        }
+        //    var matches = src && src.match(/^(.*\/|)testharness\.js$/);
+        //    if (matches) {
+        //        return src;
+        //    }
+        //}
         return undefined;
     }
 
@@ -4757,11 +4757,11 @@
     function get_title()
     {
         if ('document' in global_scope) {
-            //Don't use document.title to work around an Opera/Presto bug in XHTML documents
-            var title = document.getElementsByTagName("title")[0];
-            if (title && title.firstChild && title.firstChild.data) {
-                return title.firstChild.data;
-            }
+            ////Don't use document.title to work around an Opera/Presto bug in XHTML documents
+            //var title = document.getElementsByTagName("title")[0];
+            //if (title && title.firstChild && title.firstChild.data) {
+            //    return title.firstChild.data;
+            //}
         }
         if ('META_TITLE' in global_scope && META_TITLE) {
             return META_TITLE;
