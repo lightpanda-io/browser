@@ -4,7 +4,6 @@ const parser = @import("netsurf.zig");
 const jsruntime = @import("jsruntime");
 
 const public = @import("jsruntime");
-const API = public.API;
 const TPL = public.TPL;
 const Env = public.Env;
 const Loop = public.Loop;
@@ -152,6 +151,10 @@ fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, loader: *FileLoader) !
     // add document object
     try js_env.addObject(apis, doc, "document");
 
+    // alias global as self and window
+    try js_env.attachObject(try js_env.getGlobal(), "self", null);
+    try js_env.attachObject(try js_env.getGlobal(), "window", null);
+
     var res = jsruntime.JSResult{};
     var cbk_res = jsruntime.JSResult{
         .success = true,
@@ -160,10 +163,8 @@ fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, loader: *FileLoader) !
     };
 
     const init =
-        \\var window = this;
         \\window.listeners = [];
         \\window.document = document;
-        \\window.self = window;
         \\window.parent = window;
         \\window.addEventListener = function (type, listener, options) {
         \\  window.listeners.push({type: type, listener: listener, options: options});
