@@ -76,7 +76,7 @@ install-netsurf: install-libiconv
 	ls $(ICONV) 1> /dev/null || (printf "\e[33mERROR: you need to install libiconv in your system (on MacOS on with Homebrew)\e[0m\n"; exit 1;) && \
 	export PREFIX=$(BC_NS) && \
 	export OPTLDFLAGS="-L$(ICONV)/lib" && \
-	export OPTCFLAGS="-I$(ICONV)/include" && \
+	export OPTCFLAGS="-DNDEBUG -I$(ICONV)/include" && \
 	printf "\e[33mInstalling libwapcaplet...\e[0m\n" && \
 	cd vendor/netsurf/libwapcaplet && \
 	BUILDDIR=$(BC_NS)/build/libwapcaplet make install && \
