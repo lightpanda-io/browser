@@ -5,6 +5,7 @@ const Element = @import("../dom/element.zig").Element;
 
 // HTMLElement interfaces
 pub const Interfaces = .{
+    HTMLElement,
     HTMLUnknownElement,
     HTMLAnchorElement,
     HTMLAreaElement,
@@ -16,11 +17,15 @@ pub const Interfaces = .{
     HTMLCanvasElement,
     HTMLDListElement,
     HTMLDataElement,
+    HTMLDataListElement,
     HTMLDialogElement,
+    HTMLDirectoryElement,
     HTMLDivElement,
     HTMLEmbedElement,
     HTMLFieldSetElement,
+    HTMLFontElement,
     HTMLFormElement,
+    HTMLFrameElement,
     HTMLFrameSetElement,
     HTMLHRElement,
     HTMLHeadElement,
@@ -43,6 +48,7 @@ pub const Interfaces = .{
     HTMLOptionElement,
     HTMLOutputElement,
     HTMLParagraphElement,
+    HTMLParamElement,
     HTMLPictureElement,
     HTMLPreElement,
     HTMLProgressElement,
@@ -161,8 +167,20 @@ pub const HTMLDataElement = struct {
     pub const mem_guarantied = true;
 };
 
+pub const HTMLDataListElement = struct {
+    pub const Self = parser.DataList;
+    pub const prototype = *HTMLElement;
+    pub const mem_guarantied = true;
+};
+
 pub const HTMLDialogElement = struct {
     pub const Self = parser.Dialog;
+    pub const prototype = *HTMLElement;
+    pub const mem_guarantied = true;
+};
+
+pub const HTMLDirectoryElement = struct {
+    pub const Self = parser.Directory;
     pub const prototype = *HTMLElement;
     pub const mem_guarantied = true;
 };
@@ -185,8 +203,20 @@ pub const HTMLFieldSetElement = struct {
     pub const mem_guarantied = true;
 };
 
+pub const HTMLFontElement = struct {
+    pub const Self = parser.Font;
+    pub const prototype = *HTMLElement;
+    pub const mem_guarantied = true;
+};
+
 pub const HTMLFormElement = struct {
     pub const Self = parser.Form;
+    pub const prototype = *HTMLElement;
+    pub const mem_guarantied = true;
+};
+
+pub const HTMLFrameElement = struct {
+    pub const Self = parser.Frame;
     pub const prototype = *HTMLElement;
     pub const mem_guarantied = true;
 };
@@ -319,6 +349,12 @@ pub const HTMLOutputElement = struct {
 
 pub const HTMLParagraphElement = struct {
     pub const Self = parser.Paragraph;
+    pub const prototype = *HTMLElement;
+    pub const mem_guarantied = true;
+};
+
+pub const HTMLParamElement = struct {
+    pub const Self = parser.Param;
     pub const prototype = *HTMLElement;
     pub const mem_guarantied = true;
 };
@@ -459,21 +495,26 @@ pub fn toInterface(comptime T: type, e: *parser.Element) T {
     const elem: *align(@alignOf(*parser.Element)) parser.Element = @alignCast(e);
     const tag = parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(elem)));
     return switch (tag) {
+        .abbr, .acronym, .address, .article, .aside, .b, .bdi, .bdo, .bgsound, .big, .center, .cite, .code, .dd, .details, .dfn, .dt, .figcaption, .figure, .footer, .header, .hgroup, .i, .isindex, .kbd, .main, .mark, .marquee, .nav, .nobr, .noframes, .noscript, .rp, .rt, .ruby, .s, .samp, .section, .small, .spacer, .strike, .sub, .summary, .sup, .tt, .u, .wbr, ._var => .{ .HTMLElement = @as(*parser.ElementHTML, @ptrCast(elem)) },
         .a => .{ .HTMLAnchorElement = @as(*parser.Anchor, @ptrCast(elem)) },
         .area => .{ .HTMLAreaElement = @as(*parser.Area, @ptrCast(elem)) },
         .audio => .{ .HTMLAudioElement = @as(*parser.Audio, @ptrCast(elem)) },
-        .br => .{ .HTMLBRElement = @as(*parser.BR, @ptrCast(elem)) },
         .base => .{ .HTMLBaseElement = @as(*parser.Base, @ptrCast(elem)) },
         .body => .{ .HTMLBodyElement = @as(*parser.Body, @ptrCast(elem)) },
+        .br => .{ .HTMLBRElement = @as(*parser.BR, @ptrCast(elem)) },
         .button => .{ .HTMLButtonElement = @as(*parser.Button, @ptrCast(elem)) },
         .canvas => .{ .HTMLCanvasElement = @as(*parser.Canvas, @ptrCast(elem)) },
         .dl => .{ .HTMLDListElement = @as(*parser.DList, @ptrCast(elem)) },
         .data => .{ .HTMLDataElement = @as(*parser.Data, @ptrCast(elem)) },
+        .datalist => .{ .HTMLDataListElement = @as(*parser.DataList, @ptrCast(elem)) },
         .dialog => .{ .HTMLDialogElement = @as(*parser.Dialog, @ptrCast(elem)) },
+        .dir => .{ .HTMLDirectoryElement = @as(*parser.Directory, @ptrCast(elem)) },
         .div => .{ .HTMLDivElement = @as(*parser.Div, @ptrCast(elem)) },
         .embed => .{ .HTMLEmbedElement = @as(*parser.Embed, @ptrCast(elem)) },
         .fieldset => .{ .HTMLFieldSetElement = @as(*parser.FieldSet, @ptrCast(elem)) },
+        .font => .{ .HTMLFontElement = @as(*parser.Font, @ptrCast(elem)) },
         .form => .{ .HTMLFormElement = @as(*parser.Form, @ptrCast(elem)) },
+        .frame => .{ .HTMLFrameElement = @as(*parser.Frame, @ptrCast(elem)) },
         .frameset => .{ .HTMLFrameSetElement = @as(*parser.FrameSet, @ptrCast(elem)) },
         .hr => .{ .HTMLHRElement = @as(*parser.HR, @ptrCast(elem)) },
         .head => .{ .HTMLHeadElement = @as(*parser.Head, @ptrCast(elem)) },
@@ -496,6 +537,7 @@ pub fn toInterface(comptime T: type, e: *parser.Element) T {
         .option => .{ .HTMLOptionElement = @as(*parser.Option, @ptrCast(elem)) },
         .output => .{ .HTMLOutputElement = @as(*parser.Output, @ptrCast(elem)) },
         .p => .{ .HTMLParagraphElement = @as(*parser.Paragraph, @ptrCast(elem)) },
+        .param => .{ .HTMLParamElement = @as(*parser.Param, @ptrCast(elem)) },
         .picture => .{ .HTMLPictureElement = @as(*parser.Picture, @ptrCast(elem)) },
         .pre => .{ .HTMLPreElement = @as(*parser.Pre, @ptrCast(elem)) },
         .progress => .{ .HTMLProgressElement = @as(*parser.Progress, @ptrCast(elem)) },
@@ -508,7 +550,7 @@ pub fn toInterface(comptime T: type, e: *parser.Element) T {
         .table => .{ .HTMLTableElement = @as(*parser.Table, @ptrCast(elem)) },
         .caption => .{ .HTMLTableCaptionElement = @as(*parser.TableCaption, @ptrCast(elem)) },
         .th, .td => .{ .HTMLTableCellElement = @as(*parser.TableCell, @ptrCast(elem)) },
-        .col => .{ .HTMLTableColElement = @as(*parser.TableCol, @ptrCast(elem)) },
+        .col, .colgroup => .{ .HTMLTableColElement = @as(*parser.TableCol, @ptrCast(elem)) },
         .tr => .{ .HTMLTableRowElement = @as(*parser.TableRow, @ptrCast(elem)) },
         .thead, .tbody, .tfoot => .{ .HTMLTableSectionElement = @as(*parser.TableSection, @ptrCast(elem)) },
         .template => .{ .HTMLTemplateElement = @as(*parser.Template, @ptrCast(elem)) },
