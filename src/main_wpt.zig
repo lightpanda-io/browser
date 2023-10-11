@@ -70,6 +70,11 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
+    const args = try std.process.argsAlloc(alloc);
+    defer std.process.argsFree(alloc, args);
+
+    const filter = args[1..];
+
     // initialize VM JS lib.
     const vm = jsruntime.VM.init();
     defer vm.deinit();
@@ -91,6 +96,23 @@ pub fn main() !void {
     var run: usize = 0;
     var failures: usize = 0;
     for (list.items) |tc| {
+        if (filter.len > 0) {
+            var match = false;
+            for (filter) |f| {
+                if (std.mem.startsWith(u8, tc, f)) {
+                    match = true;
+                    break;
+                }
+                if (std.mem.endsWith(u8, tc, f)) {
+                    match = true;
+                    break;
+                }
+            }
+            if (!match) {
+                continue;
+            }
+        }
+
         run += 1;
 
         // create an arena and deinit it for each test case.
