@@ -225,10 +225,7 @@ fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, loader: *FileLoader) !
     for (0..slen) |i| {
         const s = parser.nodeListItem(scripts, @intCast(i)).?;
 
-        // search only script tag containing text a child.
-        const text = parser.nodeFirstChild(s) orelse continue;
-
-        const src = parser.nodeTextContent(text).?;
+        const src = parser.nodeTextContent(s).?;
         try js_env.run(alloc, src, "", &res, &cbk_res);
 
         // return the first failure.
