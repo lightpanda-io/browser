@@ -3,6 +3,7 @@ const std = @import("std");
 const jsruntime = @import("jsruntime");
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
+const runScript = jsruntime.test_utils.runScript;
 const generate = @import("../generate.zig");
 
 const parser = @import("../netsurf.zig");
@@ -231,38 +232,51 @@ pub const Node = struct {
 // -----
 
 pub fn testExecFn(
-    _: std.mem.Allocator,
+    alloc: std.mem.Allocator,
     js_env: *jsruntime.Env,
     comptime _: []jsruntime.API,
 ) !void {
+
+    // helper functions
+    const trim_and_replace =
+        \\function trimAndReplace(str) {
+        \\str = str.replace(/(\r\n|\n|\r)/gm,'');
+        \\str = str.replace(/\s+/g, ' ');
+        \\str = str.trim();
+        \\return str;
+        \\}
+    ;
+    try runScript(js_env, alloc, trim_and_replace, "proto_test");
+
     var first_child = [_]Case{
         // for next test cases
         .{ .src = "let content = document.getElementById('content')", .ex = "undefined" },
         .{ .src = "let link = document.getElementById('link')", .ex = "undefined" },
+        .{ .src = "let first_child = content.firstChild.nextSibling", .ex = "undefined" }, // nextSibling because of line return \n
 
-        .{ .src = "let first_child = document.body.firstChild", .ex = "undefined" },
-        .{ .src = "first_child.localName", .ex = "div" },
-        .{ .src = "first_child.__proto__.constructor.name", .ex = "HTMLDivElement" },
+        .{ .src = "let body_first_child = document.body.firstChild", .ex = "undefined" },
+        .{ .src = "body_first_child.localName", .ex = "div" },
+        .{ .src = "body_first_child.__proto__.constructor.name", .ex = "HTMLDivElement" },
         .{ .src = "document.getElementById('para-empty').firstChild.firstChild", .ex = "null" },
     };
     try checkCases(js_env, &first_child);
 
     var last_child = [_]Case{
-        .{ .src = "let last_child = content.lastChild", .ex = "undefined" },
+        .{ .src = "let last_child = content.lastChild.previousSibling", .ex = "undefined" }, // previousSibling because of line return \n
         .{ .src = "last_child.__proto__.constructor.name", .ex = "Comment" },
     };
     try checkCases(js_env, &last_child);
 
     var next_sibling = [_]Case{
-        .{ .src = "let next_sibling = link.nextSibling", .ex = "undefined" },
+        .{ .src = "let next_sibling = link.nextSibling.nextSibling", .ex = "undefined" },
         .{ .src = "next_sibling.localName", .ex = "p" },
         .{ .src = "next_sibling.__proto__.constructor.name", .ex = "HTMLParagraphElement" },
-        .{ .src = "content.nextSibling", .ex = "null" },
+        .{ .src = "content.nextSibling.nextSibling", .ex = "null" },
     };
     try checkCases(js_env, &next_sibling);
 
     var prev_sibling = [_]Case{
-        .{ .src = "let prev_sibling = document.getElementById('para-empty').previousSibling", .ex = "undefined" },
+        .{ .src = "let prev_sibling = document.getElementById('para-empty').previousSibling.previousSibling", .ex = "undefined" },
         .{ .src = "prev_sibling.localName", .ex = "a" },
         .{ .src = "prev_sibling.__proto__.constructor.name", .ex = "HTMLAnchorElement" },
         .{ .src = "content.previousSibling", .ex = "null" },
@@ -280,17 +294,17 @@ pub fn testExecFn(
     try checkCases(js_env, &parent);
 
     var node_name = [_]Case{
-        .{ .src = "content.firstChild.nodeName === 'A'", .ex = "true" },
+        .{ .src = "first_child.nodeName === 'A'", .ex = "true" },
         .{ .src = "link.firstChild.nodeName === '#text'", .ex = "true" },
-        .{ .src = "content.lastChild.nodeName === '#comment'", .ex = "true" },
+        .{ .src = "last_child.nodeName === '#comment'", .ex = "true" },
         .{ .src = "document.nodeName === '#document'", .ex = "true" },
     };
     try checkCases(js_env, &node_name);
 
     var node_type = [_]Case{
-        .{ .src = "content.firstChild.nodeType === 1", .ex = "true" },
+        .{ .src = "first_child.nodeType === 1", .ex = "true" },
         .{ .src = "link.firstChild.nodeType === 3", .ex = "true" },
-        .{ .src = "content.lastChild.nodeType === 8", .ex = "true" },
+        .{ .src = "last_child.nodeType === 8", .ex = "true" },
         .{ .src = "document.nodeType === 9", .ex = "true" },
     };
     try checkCases(js_env, &node_type);
@@ -312,7 +326,7 @@ pub fn testExecFn(
     try checkCases(js_env, &connected);
 
     var node_value = [_]Case{
-        .{ .src = "content.lastChild.nodeValue === 'comment'", .ex = "true" },
+        .{ .src = "last_child.nodeValue === 'comment'", .ex = "true" },
         .{ .src = "link.nodeValue === null", .ex = "true" },
         .{ .src = "let text = link.firstChild", .ex = "undefined" },
         .{ .src = "text.nodeValue === 'OK'", .ex = "true" },
@@ -324,10 +338,10 @@ pub fn testExecFn(
 
     var node_text_content = [_]Case{
         .{ .src = "text.textContent === 'OK modified'", .ex = "true" },
-        .{ .src = "content.textContent === 'OK modified And'", .ex = "true" },
+        .{ .src = "trimAndReplace(content.textContent) === 'OK modified And'", .ex = "true" },
         .{ .src = "text.textContent = 'OK'", .ex = "OK" },
         .{ .src = "text.textContent", .ex = "OK" },
-        .{ .src = "document.getElementById('para-empty').textContent", .ex = "" },
+        .{ .src = "trimAndReplace(document.getElementById('para-empty').textContent)", .ex = "" },
         .{ .src = "document.getElementById('para-empty').textContent = 'OK'", .ex = "OK" },
         .{ .src = "document.getElementById('para-empty').firstChild.nodeName === '#text'", .ex = "true" },
     };
@@ -400,7 +414,7 @@ pub fn testExecFn(
 
     var node_remove_child = [_]Case{
         .{ .src = "content.removeChild(append) !== undefined", .ex = "true" },
-        .{ .src = "content.lastChild.__proto__.constructor.name !== 'HTMLHeadingElement'", .ex = "true" },
+        .{ .src = "last_child.__proto__.constructor.name !== 'HTMLHeadingElement'", .ex = "true" },
     };
     try checkCases(js_env, &node_remove_child);
 
