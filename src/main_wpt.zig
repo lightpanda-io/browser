@@ -3,10 +3,9 @@ const std = @import("std");
 const parser = @import("netsurf.zig");
 const jsruntime = @import("jsruntime");
 
-const public = @import("jsruntime");
-const TPL = public.TPL;
-const Env = public.Env;
-const Loop = public.Loop;
+const TPL = jsruntime.TPL;
+const Env = jsruntime.Env;
+const Loop = jsruntime.Loop;
 
 const DOM = @import("dom.zig");
 const HTMLElem = @import("html/elements.zig");
