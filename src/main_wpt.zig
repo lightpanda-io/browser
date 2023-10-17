@@ -17,7 +17,7 @@ const apis = jsruntime.compile(DOM.Interfaces);
 
 // FileLoader loads files content from the filesystem.
 const FileLoader = struct {
-    files: std.StringHashMap([]const u8) = undefined,
+    files: std.StringHashMap([]const u8),
     path: []const u8,
     alloc: std.mem.Allocator,
 
