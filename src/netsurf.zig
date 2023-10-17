@@ -246,9 +246,7 @@ pub fn nodeListItem(nodeList: *NodeList, index: u32) ?*Node {
     }
 
     // cast [*c]c.struct_dom_node into *Node
-    const res: *Node = @ptrCast(n);
-
-    return res;
+    return @as(*Node, @ptrCast(n));
 }
 
 // Node
