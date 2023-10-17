@@ -25,10 +25,12 @@ const FileLoader = struct {
     const Self = @This();
 
     fn new(alloc: std.mem.Allocator, path: []const u8) Self {
+        const files = std.StringHashMap([]const u8).init(alloc);
+
         return Self{
             .path = path,
             .alloc = alloc,
-            .files = std.StringHashMap([]const u8).init(alloc),
+            .files = files,
         };
     }
     fn get(self: *Self, name: []const u8) ![]const u8 {
