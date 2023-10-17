@@ -670,9 +670,9 @@ pub inline fn documentCreateElement(doc: *Document, tag_name: []const u8) *Eleme
 }
 
 pub inline fn documentBody(doc: *Document) ?*Body {
-    const dochtml = @as(*DocumentHTML, @ptrCast(doc));
+    const doc_html = @as(*DocumentHTML, @ptrCast(doc));
     var body: ?*ElementHTML = undefined;
-    _ = documentHTMLVtable(dochtml).get_body.?(dochtml, &body);
+    _ = documentHTMLVtable(doc_html).get_body.?(doc_html, &body);
     if (body == null) {
         return null;
     }
