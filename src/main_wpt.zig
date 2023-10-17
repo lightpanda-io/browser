@@ -22,24 +22,22 @@ const FileLoader = struct {
     path: []const u8,
     alloc: std.mem.Allocator,
 
-    const Self = @This();
-
-    fn init(alloc: std.mem.Allocator, path: []const u8) Self {
+    fn init(alloc: std.mem.Allocator, path: []const u8) FileLoader {
         const files = std.StringHashMap([]const u8).init(alloc);
 
-        return Self{
+        return FileLoader{
             .path = path,
             .alloc = alloc,
             .files = files,
         };
     }
-    fn get(self: *Self, name: []const u8) ![]const u8 {
+    fn get(self: *FileLoader, name: []const u8) ![]const u8 {
         if (!self.files.contains(name)) {
             try self.load(name);
         }
         return self.files.get(name).?;
     }
-    fn load(self: *Self, name: []const u8) !void {
+    fn load(self: *FileLoader, name: []const u8) !void {
         const filename = try std.mem.concat(self.alloc, u8, &.{ self.path, name });
         defer self.alloc.free(filename);
         var file = try std.fs.cwd().openFile(filename, .{});
@@ -50,7 +48,7 @@ const FileLoader = struct {
         const namedup = try self.alloc.dupe(u8, name);
         try self.files.put(namedup, content);
     }
-    fn deinit(self: *Self) void {
+    fn deinit(self: *FileLoader) void {
         var iter = self.files.iterator();
         while (iter.next()) |entry| {
             self.alloc.free(entry.key_ptr.*);
