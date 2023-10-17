@@ -178,7 +178,8 @@ fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, loader: *FileLoader) !
     try js_env.attachObject(try js_env.getGlobal(), "self", null);
     try js_env.attachObject(try js_env.getGlobal(), "window", null);
 
-    var res = jsruntime.JSResult{};
+    // thanks to the arena, we don't need to deinit res.
+    var res: jsruntime.JSResult = undefined;
 
     const init =
         \\window.listeners = [];
@@ -198,17 +199,17 @@ fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, loader: *FileLoader) !
         \\};
         \\window.removeEventListener = function () {};
     ;
-    try js_env.run(alloc, init, "init", &res, null);
+    res = try evalJS(js_env, alloc, init, "init");
     if (!res.success) {
         return res;
     }
 
     // TODO load <script src> attributes instead of the static list.
-    try js_env.run(alloc, try loader.get("/resources/testharness.js"), "testharness.js", &res, null);
+    res = try evalJS(js_env, alloc, try loader.get("/resources/testharness.js"), "testharness.js");
     if (!res.success) {
         return res;
     }
-    try js_env.run(alloc, try loader.get("/resources/testharnessreport.js"), "testharnessreport.js", &res, null);
+    res = try evalJS(js_env, alloc, try loader.get("/resources/testharnessreport.js"), "testharnessreport.js");
     if (!res.success) {
         return res;
     }
@@ -220,7 +221,7 @@ fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, loader: *FileLoader) !
         const s = parser.nodeListItem(scripts, @intCast(i)).?;
 
         const src = parser.nodeTextContent(s).?;
-        try js_env.run(alloc, src, "", &res, null);
+        res = try evalJS(js_env, alloc, src, "");
 
         // return the first failure.
         if (!res.success) {
@@ -229,23 +230,29 @@ fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, loader: *FileLoader) !
     }
 
     // Mark tests as ready to run.
-    try js_env.run(alloc, "window.dispatchEvent({target: 'load'});", "ready", &res, null);
+    res = try evalJS(js_env, alloc, "window.dispatchEvent({target: 'load'});", "ready");
     if (!res.success) {
         return res;
     }
 
     // Check the final test status.
-    try js_env.run(alloc, "report.status;", "teststatus", &res, null);
+    res = try evalJS(js_env, alloc, "report.status;", "teststatus");
     if (!res.success) {
         return res;
     }
 
     // If the test failed, return detailed logs intead of the simple status.
     if (!std.mem.eql(u8, res.result, "Pass")) {
-        try js_env.run(alloc, "report.log", "teststatus", &res, null);
+        return try evalJS(js_env, alloc, "report.log", "teststatus");
     }
 
     // return the final result.
+    return res;
+}
+
+fn evalJS(env: jsruntime.Env, alloc: std.mem.Allocator, script: []const u8, name: ?[]const u8) !jsruntime.JSResult {
+    var res = jsruntime.JSResult{};
+    try env.run(alloc, script, name, &res, null);
     return res;
 }
 
