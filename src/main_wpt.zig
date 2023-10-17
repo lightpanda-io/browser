@@ -154,8 +154,8 @@ fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, loader: *FileLoader) !
     const alloc = arena.allocator();
 
     // document
-    const htmldoc = try parser.documentHTMLParseFromFileAlloc(alloc, f);
-    var doc = parser.documentHTMLToDocument(htmldoc);
+    const html_doc = try parser.documentHTMLParseFromFileAlloc(alloc, f);
+    const doc = parser.documentHTMLToDocument(html_doc);
 
     // create JS env
     var loop = try Loop.init(alloc);
@@ -172,7 +172,7 @@ fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, loader: *FileLoader) !
     defer js_env.stop();
 
     // add document object
-    try js_env.addObject(apis, doc, "document");
+    try js_env.addObject(apis, html_doc, "document");
 
     // alias global as self and window
     try js_env.attachObject(try js_env.getGlobal(), "self", null);

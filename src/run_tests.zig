@@ -6,7 +6,8 @@ const generate = @import("generate.zig");
 const parser = @import("netsurf.zig");
 const DOM = @import("dom.zig");
 
-const docTestExecFn = @import("html/document.zig").testExecFn;
+const documentTestExecFn = @import("dom/document.zig").testExecFn;
+const HTMLDocumentTestExecFn = @import("html/document.zig").testExecFn;
 const nodeTestExecFn = @import("dom/node.zig").testExecFn;
 const characterDataTestExecFn = @import("dom/character_data.zig").testExecFn;
 const textTestExecFn = @import("dom/text.zig").testExecFn;
@@ -45,7 +46,8 @@ fn testsAllExecFn(
     comptime apis: []jsruntime.API,
 ) !void {
     const testFns = [_]jsruntime.ContextExecFn{
-        docTestExecFn,
+        documentTestExecFn,
+        HTMLDocumentTestExecFn,
         nodeTestExecFn,
         characterDataTestExecFn,
         textTestExecFn,

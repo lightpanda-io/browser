@@ -9,6 +9,7 @@ const checkCases = jsruntime.test_utils.checkCases;
 const Document = @import("../dom/document.zig").Document;
 const HTMLElem = @import("elements.zig");
 
+// WEB IDL https://html.spec.whatwg.org/#the-document-object
 pub const HTMLDocument = struct {
     pub const Self = parser.DocumentHTML;
     pub const prototype = *Document;
@@ -19,21 +20,6 @@ pub const HTMLDocument = struct {
 
     pub fn get_body(self: *parser.DocumentHTML) ?*parser.Body {
         return parser.documentHTMLBody(self);
-    }
-
-    pub fn _getElementById(self: *parser.DocumentHTML, id: []u8) ?HTMLElem.Union {
-        const doc = parser.documentHTMLToDocument(self);
-        const elem_dom = parser.documentGetElementById(doc, id);
-        if (elem_dom) |elem| {
-            return HTMLElem.toInterface(HTMLElem.Union, elem);
-        }
-        return null;
-    }
-
-    pub fn _createElement(self: *parser.DocumentHTML, tag_name: []const u8) HTMLElem.Union {
-        const doc_dom = parser.documentHTMLToDocument(self);
-        const base = parser.documentCreateElement(doc_dom, tag_name);
-        return HTMLElem.toInterface(HTMLElem.Union, base);
     }
 };
 
