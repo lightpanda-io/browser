@@ -24,7 +24,7 @@ const FileLoader = struct {
 
     const Self = @This();
 
-    fn new(alloc: std.mem.Allocator, path: []const u8) Self {
+    fn init(alloc: std.mem.Allocator, path: []const u8) Self {
         const files = std.StringHashMap([]const u8).init(alloc);
 
         return Self{
@@ -82,7 +82,7 @@ pub fn main() !void {
     defer vm.deinit();
 
     // prepare libraries to load on each test case.
-    var loader = FileLoader.new(alloc, "tests/wpt");
+    var loader = FileLoader.init(alloc, "tests/wpt");
     defer loader.deinit();
 
     // browse the dir to get the tests dynamically.
