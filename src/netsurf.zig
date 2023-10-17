@@ -229,7 +229,7 @@ pub const NodeType = enum(u4) {
 };
 
 // NodeList
-pub const NodeList = c.struct_dom_nodelist;
+pub const NodeList = c.dom_nodelist;
 
 pub fn nodeListLength(nodeList: *NodeList) u32 {
     var ln: u32 = undefined;
@@ -238,14 +238,14 @@ pub fn nodeListLength(nodeList: *NodeList) u32 {
 }
 
 pub fn nodeListItem(nodeList: *NodeList, index: u32) ?*Node {
-    var n: [*c]c.struct_dom_node = undefined;
+    var n: [*c]c.dom_node = undefined;
     _ = c._dom_nodelist_item(nodeList, index, &n);
 
     if (n == null) {
         return null;
     }
 
-    // cast [*c]c.struct_dom_node into *Node
+    // cast [*c]c.dom_node into *Node
     return @as(*Node, @ptrCast(n));
 }
 
