@@ -20,9 +20,8 @@ pub const Document = struct {
     // JS funcs
     // --------
 
-    pub fn get_body(self: *parser.Document) ?*HTMLBodyElement {
-        const b = parser.documentBody(self) orelse null;
-        return @as(*HTMLBodyElement, @ptrCast(b));
+    pub fn get_body(self: *parser.Document) ?*parser.Body {
+        return parser.documentBody(self);
     }
 
     pub fn _getElementById(self: *parser.Document, id: []const u8) ?NodeUnion {
