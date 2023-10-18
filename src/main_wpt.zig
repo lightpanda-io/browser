@@ -17,12 +17,14 @@ const apis = jsruntime.compile(DOM.Interfaces);
 
 // FileLoader loads files content from the filesystem.
 const FileLoader = struct {
-    files: std.StringHashMap([]const u8),
+    const FilesMap = std.StringHashMap([]const u8);
+
+    files: FilesMap,
     path: []const u8,
     alloc: std.mem.Allocator,
 
     fn init(alloc: std.mem.Allocator, path: []const u8) FileLoader {
-        const files = std.StringHashMap([]const u8).init(alloc);
+        const files = FilesMap.init(alloc);
 
         return FileLoader{
             .path = path,
