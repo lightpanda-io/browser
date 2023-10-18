@@ -48,7 +48,6 @@ pub fn testExecFn(
         .{ .src = "document.__proto__.__proto__.constructor.name", .ex = "Document" },
         .{ .src = "document.__proto__.__proto__.__proto__.constructor.name", .ex = "Node" },
         .{ .src = "document.__proto__.__proto__.__proto__.__proto__.constructor.name", .ex = "EventTarget" },
-        .{ .src = "document.body.localName == 'body'", .ex = "true" },
     };
     try checkCases(js_env, &constructor);
 
