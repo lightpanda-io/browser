@@ -68,16 +68,15 @@ inline fn stringFromData(data: []const u8) *String {
 // Tag
 
 pub const Tag = enum(u8) {
-    acronym = 123, // TODO c.DOM_HTML_ELEMENT_TYPE_ACRONYM,
-    bgsound = 124, // TODO c.DOM_HTML_ELEMENT_TYPE_BGSOUND,
-    big = 125, // TODO c.DOM_HTML_ELEMENT_TYPE_BIG,
-    marquee = 127, // TODO c.DOM_HTML_ELEMENT_TYPE_MARQUEE,
-    nobr = 128, // TODO c.DOM_HTML_ELEMENT_TYPE_NOBR,
-    noframes = 129, // TODO c.DOM_HTML_ELEMENT_TYPE_NOFRAMES,
-    spacer = 130, // TODO c.DOM_HTML_ELEMENT_TYPE_SPACER,
-    strike = 131, // TODO c.DOM_HTML_ELEMENT_TYPE_STRIKE,
-    tt = 132, // TODO c.DOM_HTML_ELEMENT_TYPE_TT,
-
+    acronym = c.DOM_HTML_ELEMENT_TYPE_ACRONYM,
+    bgsound = c.DOM_HTML_ELEMENT_TYPE_BGSOUND,
+    big = c.DOM_HTML_ELEMENT_TYPE_BIG,
+    marquee = c.DOM_HTML_ELEMENT_TYPE_MARQUEE,
+    nobr = c.DOM_HTML_ELEMENT_TYPE_NOBR,
+    noframes = c.DOM_HTML_ELEMENT_TYPE_NOFRAMES,
+    spacer = c.DOM_HTML_ELEMENT_TYPE_SPACER,
+    strike = c.DOM_HTML_ELEMENT_TYPE_STRIKE,
+    tt = c.DOM_HTML_ELEMENT_TYPE_TT,
     a = c.DOM_HTML_ELEMENT_TYPE_A,
     abbr = c.DOM_HTML_ELEMENT_TYPE_ABBR,
     address = c.DOM_HTML_ELEMENT_TYPE_ADDRESS,
