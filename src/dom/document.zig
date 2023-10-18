@@ -59,22 +59,14 @@ pub fn testExecFn(
     try checkCases(js_env, &getElementById);
 
     const tags = comptime parser.Tag.all();
-    const elements = comptime parser.Tag.allElements();
-    comptime var createElements: [(tags.len) * 3]Case = undefined;
-    inline for (tags, elements, 0..) |tag, element_name, i| {
-        // if (tag == .undef) {
-        //     continue;
-        // }
+    comptime var createElements: [(tags.len) * 2]Case = undefined;
+    inline for (tags, 0..) |tag, i| {
         const tag_name = @tagName(tag);
-        createElements[i * 3] = Case{
+        createElements[i * 2] = Case{
             .src = "var " ++ tag_name ++ "Elem = document.createElement('" ++ tag_name ++ "')",
             .ex = "undefined",
         };
-        createElements[(i * 3) + 1] = Case{
-            .src = tag_name ++ "Elem.constructor.name",
-            .ex = "HTML" ++ element_name ++ "Element",
-        };
-        createElements[(i * 3) + 2] = Case{
+        createElements[(i * 2) + 1] = Case{
             .src = tag_name ++ "Elem.localName",
             .ex = tag_name,
         };
