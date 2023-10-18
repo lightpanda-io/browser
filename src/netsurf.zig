@@ -228,6 +228,27 @@ pub const NodeType = enum(u4) {
     notation = c.DOM_NOTATION_NODE, // historical
 };
 
+// NodeList
+pub const NodeList = c.dom_nodelist;
+
+pub fn nodeListLength(nodeList: *NodeList) u32 {
+    var ln: u32 = undefined;
+    _ = c.dom_nodelist_get_length(nodeList, &ln);
+    return ln;
+}
+
+pub fn nodeListItem(nodeList: *NodeList, index: u32) ?*Node {
+    var n: [*c]c.dom_node = undefined;
+    _ = c._dom_nodelist_item(nodeList, index, &n);
+
+    if (n == null) {
+        return null;
+    }
+
+    // cast [*c]c.dom_node into *Node
+    return @as(*Node, @ptrCast(n));
+}
+
 // Node
 pub const Node = c.dom_node_internal;
 
@@ -634,6 +655,12 @@ pub inline fn documentGetElementById(doc: *Document, id: []const u8) ?*Element {
     var elem: ?*Element = undefined;
     _ = documentVtable(doc).dom_document_get_element_by_id.?(doc, stringFromData(id), &elem);
     return elem;
+}
+
+pub inline fn documentGetElementsByTagName(doc: *Document, tagname: []const u8) *NodeList {
+    var nlist: ?*NodeList = undefined;
+    _ = documentVtable(doc).dom_document_get_elements_by_tag_name.?(doc, stringFromData(tagname), &nlist);
+    return nlist.?;
 }
 
 pub inline fn documentCreateElement(doc: *Document, tag_name: []const u8) *Element {

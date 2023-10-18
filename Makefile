@@ -46,6 +46,11 @@ shell:
 	@printf "\e[36mBuilding shell...\e[0m\n"
 	@$(ZIG) build shell -Dengine=v8 || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 
+## Run WPT tests
+wpt:
+	@printf "\e[36mBuilding wpt...\e[0m\n"
+	@$(ZIG) build wpt -Dengine=v8 -- $(filter-out $@,$(MAKECMDGOALS)) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+
 ## Test
 test:
 	@printf "\e[36mTesting...\e[0m\n"

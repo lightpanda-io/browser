@@ -72,6 +72,29 @@ pub fn build(b: *std.build.Builder) !void {
     // step
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
+
+    // wpt
+    // -----
+
+    // compile and install
+    const wpt = b.addExecutable(.{
+        .name = "browsercore-wpt",
+        .root_source_file = .{ .path = "src/main_wpt.zig" },
+        .target = target,
+        .optimize = mode,
+    });
+    try common(wpt, options);
+    b.installArtifact(wpt);
+
+    // run
+    const wpt_cmd = b.addRunArtifact(wpt);
+    wpt_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        wpt_cmd.addArgs(args);
+    }
+    // step
+    const wpt_step = b.step("wpt", "WPT tests");
+    wpt_step.dependOn(&wpt_cmd.step);
 }
 
 fn common(
