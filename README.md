@@ -74,4 +74,40 @@ You can run `make intall` and `make install-dev` to install deps all in one.
 
 ## Test
 
+### Unit Tests
+
 You can test browsercore by running `make test`.
+
+### Web Platform Tests
+
+Browsercore is tested against the standardized [Web Platform
+Tests](https://web-platform-tests.org/).
+
+The relevant tests cases for Browsercore are commit with the project.
+All the tests cases executed are located in `tests/wpt` dir.
+
+For reference, you can easily execute a WPT test case with your browser via
+[wpt.live](https://wpt.live).
+
+*Run WPT test suite*
+
+You can run all the test.
+The runner execute all the tests ending with `.html`.
+```
+make wpt
+```
+
+Or one specific test by using a suffix.
+```
+make wpt Node-childNodes.html
+```
+
+*Add a new WPT test case*
+
+We add new tests cases files with implemented changes in Browsercore.
+
+Copy the test case you want to add from the [WPT
+repo](https://github.com/web-platform-tests/wpt) into `test/wpt` dir and commit
+the files.
+
+:warning: Please keep the original directory tree structure into `test/wpt`.
