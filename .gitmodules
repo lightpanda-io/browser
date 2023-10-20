@@ -12,7 +12,7 @@
 	url = https://source.netsurf-browser.org/libparserutils.git
 [submodule "vendor/netsurf/libdom"]
 	path = vendor/netsurf/libdom
-	url = https://source.netsurf-browser.org/libdom.git
+	url = git@github.com:Browsercore/libdom.git
 [submodule "vendor/netsurf/share/netsurf-buildsystem"]
 	path = vendor/netsurf/share/netsurf-buildsystem
 	url = https://source.netsurf-browser.org/buildsystem.git
