@@ -33,7 +33,7 @@ fn execJS(
 pub fn main() !void {
 
     // generate APIs
-    const apis = jsruntime.compile(DOM.Interfaces);
+    const apis = try jsruntime.compile(DOM.Interfaces);
 
     // allocator
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

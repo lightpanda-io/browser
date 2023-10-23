@@ -50,7 +50,7 @@ fn execJS(
 pub fn main() !void {
 
     // generate APIs
-    const apis = jsruntime.compile(DOM.Interfaces);
+    const apis = try jsruntime.compile(DOM.Interfaces);
 
     // create v8 vm
     const vm = jsruntime.VM.init();

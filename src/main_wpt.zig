@@ -12,9 +12,6 @@ const HTMLElem = @import("html/elements.zig");
 
 const wpt_dir = "tests/wpt";
 
-// generate APIs
-const apis = jsruntime.compile(DOM.Interfaces);
-
 // FileLoader loads files content from the filesystem.
 const FileLoader = struct {
     const FilesMap = std.StringHashMap([]const u8);
@@ -65,6 +62,10 @@ const FileLoader = struct {
 // Once browsercore will have the html loader, it would be useful to refacto
 // this test to use it.
 pub fn main() !void {
+
+    // generate APIs
+    const apis = comptime try jsruntime.compile(DOM.Interfaces);
+
     std.debug.print("Running WPT test suite\n", .{});
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -122,7 +123,7 @@ pub fn main() !void {
 
         // TODO I don't use testing.expect here b/c I want to execute all the
         // tests. And testing.expect stops running test in the first failure.
-        const res = runWPT(&arena, tc, &loader) catch |err| {
+        const res = runWPT(&arena, apis, tc, &loader) catch |err| {
             std.debug.print("FAIL\t{s}\n{any}\n", .{ tc, err });
             failures += 1;
             continue;
@@ -152,7 +153,7 @@ pub fn main() !void {
 // runWPT parses the given HTML file, starts a js env and run the first script
 // tags containing javascript sources.
 // It loads first the js libs files.
-fn runWPT(arena: *std.heap.ArenaAllocator, f: []const u8, loader: *FileLoader) !jsruntime.JSResult {
+fn runWPT(arena: *std.heap.ArenaAllocator, comptime apis: []jsruntime.API, f: []const u8, loader: *FileLoader) !jsruntime.JSResult {
     const alloc = arena.allocator();
 
     // document
