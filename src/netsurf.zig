@@ -597,6 +597,9 @@ pub fn textSplitText(text: *Text, offset: u32) *Text {
 // Comment
 pub const Comment = c.dom_comment;
 
+// Attribute
+pub const Attribute = c.dom_attr;
+
 // Element
 pub const Element = c.dom_element;
 

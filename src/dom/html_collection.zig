@@ -128,8 +128,67 @@ pub const HTMLCollection = struct {
     }
 
     pub fn _namedItem(self: *HTMLCollection, name: []const u8) ?*parser.Element {
-        _ = name;
-        _ = self;
+        if (name.len == 0) {
+            return null;
+        }
+
+        var node: ?*parser.Node = self.root;
+        var ntype: parser.NodeType = undefined;
+
+        var is_wildcard = std.mem.eql(u8, self.match, "*");
+
+        var buffer: [128]u8 = undefined;
+        const imatch = std.ascii.upperString(&buffer, self.match);
+
+        while (node != null) {
+            ntype = parser.nodeType(node.?);
+            if (ntype == .element) {
+                if (is_wildcard or std.mem.eql(u8, imatch, parser.nodeName(node.?))) {
+                    const elem = @as(*parser.Element, @ptrCast(node));
+
+                    var attr = parser.elementGetAttribute(elem, "id");
+                    // check if the node id corresponds to the name argument.
+                    if (attr != null and std.mem.eql(u8, name, attr.?)) {
+                        return elem;
+                    }
+
+                    attr = parser.elementGetAttribute(elem, "name");
+                    // check if the node id corresponds to the name argument.
+                    if (attr != null and std.mem.eql(u8, name, attr.?)) {
+                        return elem;
+                    }
+                }
+            }
+
+            // Iterate hover the DOM tree.
+            var next = parser.nodeFirstChild(node.?);
+            if (next != null) {
+                node = next;
+                continue;
+            }
+
+            next = parser.nodeNextSibling(node.?);
+            if (next != null) {
+                node = next;
+                continue;
+            }
+
+            var parent = parser.nodeParentNode(node.?);
+            var lastchild = parser.nodeLastChild(parent.?);
+            while (node.? != self.root and node.? == lastchild) {
+                node = parent;
+                parent = parser.nodeParentNode(node.?);
+                lastchild = parser.nodeLastChild(parent.?);
+            }
+
+            if (node.? == self.root) {
+                node = null;
+                continue;
+            }
+
+            node = parser.nodeNextSibling(node.?);
+        }
+
         return null;
     }
 };
