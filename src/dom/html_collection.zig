@@ -4,6 +4,7 @@ const parser = @import("../netsurf.zig");
 
 const jsruntime = @import("jsruntime");
 
+const utils = @import("utils.z");
 const Element = @import("element.zig").Element;
 
 // WEB IDL https://dom.spec.whatwg.org/#htmlcollection
@@ -15,7 +16,7 @@ pub const HTMLCollection = struct {
 
     root: *parser.Node,
     // match is used to select node against their name.
-    // match comparison is case sensitive.
+    // match comparison is case insensitive.
     match: []const u8,
 
     /// _get_length computes the collection's length dynamically according to
@@ -26,12 +27,15 @@ pub const HTMLCollection = struct {
         var node: ?*parser.Node = self.root;
         var ntype: parser.NodeType = undefined;
 
+        var buffer: [128]u8 = undefined;
+        const imatch = std.ascii.upperString(&buffer, self.match);
+
         var is_wildcard = std.mem.eql(u8, self.match, "*");
 
         while (node != null) {
             ntype = parser.nodeType(node.?);
             if (ntype == .element) {
-                if (is_wildcard or std.mem.eql(u8, self.match, parser.nodeName(node.?))) {
+                if (is_wildcard or std.mem.eql(u8, imatch, parser.nodeName(node.?))) {
                     len += 1;
                 }
             }
@@ -75,10 +79,13 @@ pub const HTMLCollection = struct {
 
         var is_wildcard = std.mem.eql(u8, self.match, "*");
 
+        var buffer: [128]u8 = undefined;
+        const imatch = std.ascii.upperString(&buffer, self.match);
+
         while (node != null) {
             ntype = parser.nodeType(node.?);
             if (ntype == .element) {
-                if (is_wildcard or std.mem.eql(u8, self.match, parser.nodeName(node.?))) {
+                if (is_wildcard or std.mem.eql(u8, imatch, parser.nodeName(node.?))) {
                     len += 1;
 
                     // check if we found the searched element.

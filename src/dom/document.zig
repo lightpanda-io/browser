@@ -48,7 +48,6 @@ pub const Document = struct {
         const root = parser.documentGetDocumentNode(self);
         return HTMLCollection{
             .root = root,
-            // TODO handle case insensitive comparison.
             .match = tag_name,
         };
     }
@@ -77,7 +76,7 @@ pub fn testExecFn(
     try checkCases(js_env, &getElementById);
 
     var getElementsByTagName = [_]Case{
-        .{ .src = "let getElementsByTagName = document.getElementsByTagName('P')", .ex = "undefined" },
+        .{ .src = "let getElementsByTagName = document.getElementsByTagName('p')", .ex = "undefined" },
         .{ .src = "getElementsByTagName.length", .ex = "2" },
         .{ .src = "getElementsByTagName.item(0).localName", .ex = "p" },
         .{ .src = "getElementsByTagName.item(1).localName", .ex = "p" },
