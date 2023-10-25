@@ -765,6 +765,18 @@ pub inline fn documentGetElementsByTagName(doc: *Document, tagname: []const u8) 
     return nlist.?;
 }
 
+// documentGetDocumentElement returns the root document element.
+pub inline fn documentGetDocumentElement(doc: *Document) *Element {
+    var elem: ?*Element = undefined;
+    _ = documentVtable(doc).dom_document_get_document_element.?(doc, &elem);
+    return elem.?;
+}
+
+pub inline fn documentGetDocumentNode(doc: *Document) *Node {
+    const res = documentGetDocumentElement(doc);
+    return @as(*Node, @ptrCast(res));
+}
+
 pub inline fn documentCreateElement(doc: *Document, tag_name: []const u8) *Element {
     var elem: ?*Element = undefined;
     _ = documentVtable(doc).dom_document_create_element.?(doc, stringFromData(tag_name), &elem);

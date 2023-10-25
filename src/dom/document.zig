@@ -7,6 +7,7 @@ const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 
 const Node = @import("node.zig").Node;
+const HTMLCollection = @import("html_collection.zig").HTMLCollection;
 
 const Element = @import("element.zig").Element;
 const ElementUnion = @import("element.zig").Union;
@@ -34,6 +35,23 @@ pub const Document = struct {
         const e = parser.documentCreateElement(self, tag_name);
         return Element.toInterface(e);
     }
+
+    // We can't simply use libdom dom_document_get_elements_by_tag_name here.
+    // Indeed, netsurf implemented a previous dom spec when
+    // getElementsByTagName returned a NodeList.
+    // But since
+    // https://github.com/whatwg/dom/commit/190700b7c12ecfd3b5ebdb359ab1d6ea9cbf7749
+    // the spec changed to return an HTMLCollection instead.
+    // That's why we reimplemented getElementsByTagName by using an
+    // HTMLCollection in zig here.
+    pub fn _getElementsByTagName(self: *parser.Document, tag_name: []const u8) HTMLCollection {
+        const root = parser.documentGetDocumentNode(self);
+        return HTMLCollection{
+            .root = root,
+            // TODO handle case insensitive comparison.
+            .match = tag_name,
+        };
+    }
 };
 
 // Tests
@@ -57,6 +75,19 @@ pub fn testExecFn(
         .{ .src = "getElementById.localName", .ex = "div" },
     };
     try checkCases(js_env, &getElementById);
+
+    var getElementsByTagName = [_]Case{
+        .{ .src = "let getElementsByTagName = document.getElementsByTagName('P')", .ex = "undefined" },
+        .{ .src = "getElementsByTagName.length", .ex = "2" },
+        .{ .src = "getElementsByTagName.item(0).localName", .ex = "p" },
+        .{ .src = "getElementsByTagName.item(1).localName", .ex = "p" },
+        .{ .src = "let getElementsByTagNameAll = document.getElementsByTagName('*')", .ex = "undefined" },
+        .{ .src = "getElementsByTagNameAll.length", .ex = "8" },
+        .{ .src = "getElementsByTagNameAll.item(0).localName", .ex = "html" },
+        .{ .src = "getElementsByTagNameAll.item(1).localName", .ex = "head" },
+        .{ .src = "getElementsByTagNameAll.item(2).localName", .ex = "body" },
+    };
+    try checkCases(js_env, &getElementsByTagName);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;
