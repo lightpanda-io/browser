@@ -9,6 +9,34 @@ const checkCases = jsruntime.test_utils.checkCases;
 const utils = @import("utils.z");
 const Element = @import("element.zig").Element;
 
+pub const HTMLCollectionIterator = struct {
+    pub const mem_guarantied = true;
+
+    coll: *HTMLCollection,
+    index: u32 = 0,
+
+    pub const Return = struct {
+        value: ?*parser.Element,
+        done: bool,
+    };
+
+    pub fn _next(self: *HTMLCollectionIterator, allocator: std.mem.Allocator) !Return {
+        const e = try self.coll._item(allocator, self.index);
+        if (e == null) {
+            return Return{
+                .value = null,
+                .done = true,
+            };
+        }
+
+        self.index += 1;
+        return Return{
+            .value = e,
+            .done = false,
+        };
+    }
+};
+
 // WEB IDL https://dom.spec.whatwg.org/#htmlcollection
 // HTMLCollection is re implemented in zig here because libdom
 // dom_html_collection expects a comparison function callback as arguement.
@@ -58,6 +86,12 @@ pub const HTMLCollection = struct {
         }
 
         return parser.nodeNextSibling(prev);
+    }
+
+    pub fn _symbol_iterator(self: *HTMLCollection) HTMLCollectionIterator {
+        return HTMLCollectionIterator{
+            .coll = self,
+        };
     }
 
     /// _get_length computes the collection's length dynamically according to

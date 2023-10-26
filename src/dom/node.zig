@@ -15,6 +15,7 @@ const CData = @import("character_data.zig");
 const Element = @import("element.zig").Element;
 const Document = @import("document.zig").Document;
 const HTMLCollection = @import("html_collection.zig").HTMLCollection;
+const HTMLCollectionIterator = @import("html_collection.zig").HTMLCollectionIterator;
 
 // HTML
 const HTML = @import("../html/html.zig");
@@ -27,6 +28,7 @@ pub const Interfaces = generate.Tuple(.{
     Element,
     Document,
     HTMLCollection,
+    HTMLCollectionIterator,
 
     HTML.Interfaces,
 });
