@@ -27,6 +27,11 @@ pub const HTMLCollection = struct {
         var node: ?*parser.Node = self.root;
         var ntype: parser.NodeType = undefined;
 
+        // FIXME using a fixed length buffer here avoid the need of an allocator
+        // to get an upper case match value. But if the match value (a tag
+        // name) is greater than 128 chars, the code will panic.
+        // ascii.upperString asserts the buffer size is greater or equals than
+        // the given string.
         var buffer: [128]u8 = undefined;
         const imatch = std.ascii.upperString(&buffer, self.match);
 
@@ -79,6 +84,11 @@ pub const HTMLCollection = struct {
 
         var is_wildcard = std.mem.eql(u8, self.match, "*");
 
+        // FIXME using a fixed length buffer here avoid the need of an allocator
+        // to get an upper case match value. But if the match value (a tag
+        // name) is greater than 128 chars, the code will panic.
+        // ascii.upperString asserts the buffer size is greater or equals than
+        // the given string.
         var buffer: [128]u8 = undefined;
         const imatch = std.ascii.upperString(&buffer, self.match);
 
@@ -137,6 +147,11 @@ pub const HTMLCollection = struct {
 
         var is_wildcard = std.mem.eql(u8, self.match, "*");
 
+        // FIXME using a fixed length buffer here avoid the need of an allocator
+        // to get an upper case match value. But if the match value (a tag
+        // name) is greater than 128 chars, the code will panic.
+        // ascii.upperString asserts the buffer size is greater or equals than
+        // the given string.
         var buffer: [128]u8 = undefined;
         const imatch = std.ascii.upperString(&buffer, self.match);
 
