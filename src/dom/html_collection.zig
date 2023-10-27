@@ -27,7 +27,7 @@ pub const HTMLCollection = struct {
 
     // next iterates hover the DOM tree to return the next following node or
     // null at the end.
-    fn _next(root: *parser.Node, cur: *parser.Node) ?*parser.Node {
+    fn get_next(root: *parser.Node, cur: *parser.Node) ?*parser.Node {
         // TODO deinit next
         var next = parser.nodeFirstChild(cur);
         if (next != null) {
@@ -86,7 +86,7 @@ pub const HTMLCollection = struct {
                 }
             }
 
-            node = _next(self.root, node) orelse break;
+            node = get_next(self.root, node) orelse break;
         }
 
         return len;
@@ -130,7 +130,7 @@ pub const HTMLCollection = struct {
                 }
             }
 
-            node = _next(self.root, node) orelse break;
+            node = get_next(self.root, node) orelse break;
         }
 
         return null;
@@ -174,7 +174,7 @@ pub const HTMLCollection = struct {
                 }
             }
 
-            node = _next(self.root, node) orelse break;
+            node = get_next(self.root, node) orelse break;
         }
 
         return null;
