@@ -19,6 +19,41 @@ pub const HTMLCollection = struct {
     // match comparison is case insensitive.
     match: []const u8,
 
+    // next iterates hover the DOM tree to return the next following node or
+    // null at the end.
+    fn _next(root: *parser.Node, cur: *parser.Node) ?*parser.Node {
+        // TODO deinit next
+        var next = parser.nodeFirstChild(cur);
+        if (next != null) {
+            return next;
+        }
+
+        // TODO deinit next
+        next = parser.nodeNextSibling(cur);
+        if (next != null) {
+            return next;
+        }
+
+        // TODO deinit parent
+        var parent = parser.nodeParentNode(cur) orelse unreachable;
+        // TODO deinit lastchild
+        var lastchild = parser.nodeLastChild(parent);
+        var prev = cur;
+        while (prev != root and prev == lastchild) {
+            prev = parent;
+            // TODO deinit parent
+            parent = parser.nodeParentNode(cur) orelse unreachable;
+            // TODO deinit lastchild
+            lastchild = parser.nodeLastChild(parent);
+        }
+
+        if (prev == root) {
+            return null;
+        }
+
+        return parser.nodeNextSibling(prev);
+    }
+
     /// _get_length computes the collection's length dynamically according to
     /// the current root structure.
     // TODO: nodes retrieved must be de-referenced.
@@ -45,33 +80,7 @@ pub const HTMLCollection = struct {
                 }
             }
 
-            // Iterate hover the DOM tree.
-            var next = parser.nodeFirstChild(node.?);
-            if (next != null) {
-                node = next;
-                continue;
-            }
-
-            next = parser.nodeNextSibling(node.?);
-            if (next != null) {
-                node = next;
-                continue;
-            }
-
-            var parent = parser.nodeParentNode(node.?);
-            var lastchild = parser.nodeLastChild(parent.?);
-            while (node.? != self.root and node.? == lastchild) {
-                node = parent;
-                parent = parser.nodeParentNode(node.?);
-                lastchild = parser.nodeLastChild(parent.?);
-            }
-
-            if (node.? == self.root) {
-                node = null;
-                continue;
-            }
-
-            node = parser.nodeNextSibling(node.?);
+            node = _next(self.root, node.?);
         }
 
         return len;
@@ -105,33 +114,7 @@ pub const HTMLCollection = struct {
                 }
             }
 
-            // Iterate hover the DOM tree.
-            var next = parser.nodeFirstChild(node.?);
-            if (next != null) {
-                node = next;
-                continue;
-            }
-
-            next = parser.nodeNextSibling(node.?);
-            if (next != null) {
-                node = next;
-                continue;
-            }
-
-            var parent = parser.nodeParentNode(node.?);
-            var lastchild = parser.nodeLastChild(parent.?);
-            while (node.? != self.root and node.? == lastchild) {
-                node = parent;
-                parent = parser.nodeParentNode(node.?);
-                lastchild = parser.nodeLastChild(parent.?);
-            }
-
-            if (node.? == self.root) {
-                node = null;
-                continue;
-            }
-
-            node = parser.nodeNextSibling(node.?);
+            node = _next(self.root, node.?);
         }
 
         return null;
@@ -175,33 +158,7 @@ pub const HTMLCollection = struct {
                 }
             }
 
-            // Iterate hover the DOM tree.
-            var next = parser.nodeFirstChild(node.?);
-            if (next != null) {
-                node = next;
-                continue;
-            }
-
-            next = parser.nodeNextSibling(node.?);
-            if (next != null) {
-                node = next;
-                continue;
-            }
-
-            var parent = parser.nodeParentNode(node.?);
-            var lastchild = parser.nodeLastChild(parent.?);
-            while (node.? != self.root and node.? == lastchild) {
-                node = parent;
-                parent = parser.nodeParentNode(node.?);
-                lastchild = parser.nodeLastChild(parent.?);
-            }
-
-            if (node.? == self.root) {
-                node = null;
-                continue;
-            }
-
-            node = parser.nodeNextSibling(node.?);
+            node = _next(self.root, node.?);
         }
 
         return null;
