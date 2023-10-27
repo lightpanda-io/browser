@@ -10,6 +10,8 @@ const Loop = jsruntime.Loop;
 const DOM = @import("dom.zig");
 const HTMLElem = @import("html/elements.zig");
 
+const fspath = std.fs.path;
+
 const wpt_dir = "tests/wpt";
 
 // FileLoader loads files content from the filesystem.
@@ -36,7 +38,7 @@ const FileLoader = struct {
         return self.files.get(name).?;
     }
     fn load(self: *FileLoader, name: []const u8) !void {
-        const filename = try std.mem.concat(self.alloc, u8, &.{ self.path, name });
+        const filename = try fspath.join(self.alloc, &.{ self.path, name });
         defer self.alloc.free(filename);
         var file = try std.fs.cwd().openFile(filename, .{});
         defer file.close();
@@ -160,7 +162,7 @@ fn runWPT(arena: *std.heap.ArenaAllocator, comptime apis: []jsruntime.API, f: []
     const html_doc = try parser.documentHTMLParseFromFileAlloc(alloc, f);
     const doc = parser.documentHTMLToDocument(html_doc);
 
-    const dirname = std.fs.path.dirname(f[wpt_dir.len..]) orelse unreachable;
+    const dirname = fspath.dirname(f[wpt_dir.len..]) orelse unreachable;
 
     // create JS env
     var loop = try Loop.init(alloc);
@@ -220,7 +222,7 @@ fn runWPT(arena: *std.heap.ArenaAllocator, comptime apis: []jsruntime.API, f: []
             var path = src;
             if (!std.mem.startsWith(u8, src, "/")) {
                 // no need to free path, thanks to the arena.
-                path = try std.fs.path.join(alloc, &.{ "/", dirname, path });
+                path = try fspath.join(alloc, &.{ "/", dirname, path });
             }
 
             res = try evalJS(js_env, alloc, try loader.get(path), src);
@@ -282,6 +284,6 @@ fn findWPTTests(allocator: std.mem.Allocator, path: []const u8, list: *std.Array
             continue;
         }
 
-        try list.append(try std.fs.path.join(allocator, &.{ path, entry.path }));
+        try list.append(try fspath.join(allocator, &.{ path, entry.path }));
     }
 }
