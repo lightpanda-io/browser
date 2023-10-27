@@ -59,7 +59,7 @@ pub const HTMLCollection = struct {
     // TODO: nodes retrieved must be de-referenced.
     pub fn get_length(self: *HTMLCollection) u32 {
         var len: u32 = 0;
-        var node: ?*parser.Node = self.root;
+        var node: *parser.Node = self.root;
         var ntype: parser.NodeType = undefined;
 
         // FIXME using a fixed length buffer here avoid the need of an allocator
@@ -72,15 +72,15 @@ pub const HTMLCollection = struct {
 
         var is_wildcard = std.mem.eql(u8, self.match, "*");
 
-        while (node != null) {
-            ntype = parser.nodeType(node.?);
+        while (true) {
+            ntype = parser.nodeType(node);
             if (ntype == .element) {
-                if (is_wildcard or std.mem.eql(u8, imatch, parser.nodeName(node.?))) {
+                if (is_wildcard or std.mem.eql(u8, imatch, parser.nodeName(node))) {
                     len += 1;
                 }
             }
 
-            node = _next(self.root, node.?);
+            node = _next(self.root, node) orelse break;
         }
 
         return len;
@@ -88,7 +88,7 @@ pub const HTMLCollection = struct {
 
     pub fn _item(self: *HTMLCollection, index: u32) ?*parser.Element {
         var len: u32 = 0;
-        var node: ?*parser.Node = self.root;
+        var node: *parser.Node = self.root;
         var ntype: parser.NodeType = undefined;
 
         var is_wildcard = std.mem.eql(u8, self.match, "*");
@@ -101,10 +101,10 @@ pub const HTMLCollection = struct {
         var buffer: [128]u8 = undefined;
         const imatch = std.ascii.upperString(&buffer, self.match);
 
-        while (node != null) {
-            ntype = parser.nodeType(node.?);
+        while (true) {
+            ntype = parser.nodeType(node);
             if (ntype == .element) {
-                if (is_wildcard or std.mem.eql(u8, imatch, parser.nodeName(node.?))) {
+                if (is_wildcard or std.mem.eql(u8, imatch, parser.nodeName(node))) {
                     len += 1;
 
                     // check if we found the searched element.
@@ -114,7 +114,7 @@ pub const HTMLCollection = struct {
                 }
             }
 
-            node = _next(self.root, node.?);
+            node = _next(self.root, node) orelse break;
         }
 
         return null;
@@ -125,7 +125,7 @@ pub const HTMLCollection = struct {
             return null;
         }
 
-        var node: ?*parser.Node = self.root;
+        var node: *parser.Node = self.root;
         var ntype: parser.NodeType = undefined;
 
         var is_wildcard = std.mem.eql(u8, self.match, "*");
@@ -138,10 +138,10 @@ pub const HTMLCollection = struct {
         var buffer: [128]u8 = undefined;
         const imatch = std.ascii.upperString(&buffer, self.match);
 
-        while (node != null) {
-            ntype = parser.nodeType(node.?);
+        while (true) {
+            ntype = parser.nodeType(node);
             if (ntype == .element) {
-                if (is_wildcard or std.mem.eql(u8, imatch, parser.nodeName(node.?))) {
+                if (is_wildcard or std.mem.eql(u8, imatch, parser.nodeName(node))) {
                     const elem = @as(*parser.Element, @ptrCast(node));
 
                     var attr = parser.elementGetAttribute(elem, "id");
@@ -158,7 +158,7 @@ pub const HTMLCollection = struct {
                 }
             }
 
-            node = _next(self.root, node.?);
+            node = _next(self.root, node) orelse break;
         }
 
         return null;
