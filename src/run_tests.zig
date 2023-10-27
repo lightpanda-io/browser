@@ -11,6 +11,7 @@ const HTMLDocumentTestExecFn = @import("html/document.zig").testExecFn;
 const nodeTestExecFn = @import("dom/node.zig").testExecFn;
 const characterDataTestExecFn = @import("dom/character_data.zig").testExecFn;
 const textTestExecFn = @import("dom/text.zig").testExecFn;
+const HTMLCollectionTestExecFn = @import("dom/html_collection.zig").testExecFn;
 
 var doc: *parser.DocumentHTML = undefined;
 
@@ -51,6 +52,7 @@ fn testsAllExecFn(
         nodeTestExecFn,
         characterDataTestExecFn,
         textTestExecFn,
+        HTMLCollectionTestExecFn,
     };
 
     inline for (testFns) |testFn| {

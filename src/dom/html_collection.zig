@@ -3,6 +3,8 @@ const std = @import("std");
 const parser = @import("../netsurf.zig");
 
 const jsruntime = @import("jsruntime");
+const Case = jsruntime.test_utils.Case;
+const checkCases = jsruntime.test_utils.checkCases;
 
 const utils = @import("utils.z");
 const Element = @import("element.zig").Element;
@@ -178,3 +180,30 @@ pub const HTMLCollection = struct {
         return null;
     }
 };
+
+// Tests
+// -----
+
+pub fn testExecFn(
+    _: std.mem.Allocator,
+    js_env: *jsruntime.Env,
+    comptime _: []jsruntime.API,
+) !void {
+    var getElementsByTagName = [_]Case{
+        .{ .src = "let getElementsByTagName = document.getElementsByTagName('p')", .ex = "undefined" },
+        .{ .src = "getElementsByTagName.length", .ex = "2" },
+        .{ .src = "getElementsByTagName.item(0).localName", .ex = "p" },
+        .{ .src = "getElementsByTagName.item(1).localName", .ex = "p" },
+        .{ .src = "let getElementsByTagNameAll = document.getElementsByTagName('*')", .ex = "undefined" },
+        .{ .src = "getElementsByTagNameAll.length", .ex = "8" },
+        .{ .src = "getElementsByTagNameAll.item(0).localName", .ex = "html" },
+        .{ .src = "getElementsByTagNameAll.item(0).localName", .ex = "html" },
+        .{ .src = "getElementsByTagNameAll.item(1).localName", .ex = "head" },
+        .{ .src = "getElementsByTagNameAll.item(0).localName", .ex = "html" },
+        .{ .src = "getElementsByTagNameAll.item(2).localName", .ex = "body" },
+        .{ .src = "getElementsByTagNameAll.item(3).localName", .ex = "div" },
+        .{ .src = "getElementsByTagNameAll.item(7).localName", .ex = "p" },
+        .{ .src = "getElementsByTagNameAll.namedItem('para-empty-child').localName", .ex = "span" },
+    };
+    try checkCases(js_env, &getElementsByTagName);
+}
