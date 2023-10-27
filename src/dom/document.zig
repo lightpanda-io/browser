@@ -83,8 +83,12 @@ pub fn testExecFn(
         .{ .src = "let getElementsByTagNameAll = document.getElementsByTagName('*')", .ex = "undefined" },
         .{ .src = "getElementsByTagNameAll.length", .ex = "8" },
         .{ .src = "getElementsByTagNameAll.item(0).localName", .ex = "html" },
+        .{ .src = "getElementsByTagNameAll.item(0).localName", .ex = "html" },
         .{ .src = "getElementsByTagNameAll.item(1).localName", .ex = "head" },
+        .{ .src = "getElementsByTagNameAll.item(0).localName", .ex = "html" },
         .{ .src = "getElementsByTagNameAll.item(2).localName", .ex = "body" },
+        .{ .src = "getElementsByTagNameAll.item(3).localName", .ex = "div" },
+        .{ .src = "getElementsByTagNameAll.item(7).localName", .ex = "p" },
         .{ .src = "getElementsByTagNameAll.namedItem('para-empty-child').localName", .ex = "span" },
     };
     try checkCases(js_env, &getElementsByTagName);

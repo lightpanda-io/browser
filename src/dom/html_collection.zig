@@ -19,6 +19,10 @@ pub const HTMLCollection = struct {
     // match comparison is case insensitive.
     match: []const u8,
 
+    // save a state for the collection to improve the _item speed.
+    cur_idx: u32 = undefined,
+    cur_node: *parser.Node = undefined,
+
     // next iterates hover the DOM tree to return the next following node or
     // null at the end.
     fn _next(root: *parser.Node, cur: *parser.Node) ?*parser.Node {
@@ -87,11 +91,17 @@ pub const HTMLCollection = struct {
     }
 
     pub fn _item(self: *HTMLCollection, index: u32) ?*parser.Element {
-        var len: u32 = 0;
+        var i: u32 = 0;
         var node: *parser.Node = self.root;
         var ntype: parser.NodeType = undefined;
 
         var is_wildcard = std.mem.eql(u8, self.match, "*");
+
+        // Use the current state to improve speed if possible.
+        if (self.cur_idx != undefined and index >= self.cur_idx) {
+            i = self.cur_idx;
+            node = self.cur_node;
+        }
 
         // FIXME using a fixed length buffer here avoid the need of an allocator
         // to get an upper case match value. But if the match value (a tag
@@ -105,12 +115,16 @@ pub const HTMLCollection = struct {
             ntype = parser.nodeType(node);
             if (ntype == .element) {
                 if (is_wildcard or std.mem.eql(u8, imatch, parser.nodeName(node))) {
-                    len += 1;
-
                     // check if we found the searched element.
-                    if (len == index + 1) {
+                    if (i == index) {
+                        // save the current state
+                        self.cur_node = node;
+                        self.cur_idx = i;
+
                         return @as(*parser.Element, @ptrCast(node));
                     }
+
+                    i += 1;
                 }
             }
 
