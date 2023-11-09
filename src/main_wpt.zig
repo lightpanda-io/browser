@@ -10,6 +10,8 @@ const Loop = jsruntime.Loop;
 const DOM = @import("dom.zig");
 const HTMLElem = @import("html/elements.zig");
 
+const fspath = std.fs.path;
+
 const wpt_dir = "tests/wpt";
 
 // FileLoader loads files content from the filesystem.
@@ -36,7 +38,7 @@ const FileLoader = struct {
         return self.files.get(name).?;
     }
     fn load(self: *FileLoader, name: []const u8) !void {
-        const filename = try std.mem.concat(self.alloc, u8, &.{ self.path, name });
+        const filename = try fspath.join(self.alloc, &.{ self.path, name });
         defer self.alloc.free(filename);
         var file = try std.fs.cwd().openFile(filename, .{});
         defer file.close();
@@ -82,7 +84,7 @@ pub fn main() !void {
     defer vm.deinit();
 
     // prepare libraries to load on each test case.
-    var loader = FileLoader.init(alloc, "tests/wpt");
+    var loader = FileLoader.init(alloc, wpt_dir);
     defer loader.deinit();
 
     // browse the dir to get the tests dynamically.
@@ -160,6 +162,8 @@ fn runWPT(arena: *std.heap.ArenaAllocator, comptime apis: []jsruntime.API, f: []
     const html_doc = try parser.documentHTMLParseFromFileAlloc(alloc, f);
     const doc = parser.documentHTMLToDocument(html_doc);
 
+    const dirname = fspath.dirname(f[wpt_dir.len..]) orelse unreachable;
+
     // create JS env
     var loop = try Loop.init(alloc);
     defer loop.deinit();
@@ -207,23 +211,28 @@ fn runWPT(arena: *std.heap.ArenaAllocator, comptime apis: []jsruntime.API, f: []
         return res;
     }
 
-    // TODO load <script src> attributes instead of the static list.
-    res = try evalJS(js_env, alloc, try loader.get("/resources/testharness.js"), "testharness.js");
-    if (!res.success) {
-        return res;
-    }
-    res = try evalJS(js_env, alloc, try loader.get("/resources/testharnessreport.js"), "testharnessreport.js");
-    if (!res.success) {
-        return res;
-    }
-
     // loop hover the scripts.
     const scripts = parser.documentGetElementsByTagName(doc, "script");
     const slen = parser.nodeListLength(scripts);
     for (0..slen) |i| {
         const s = parser.nodeListItem(scripts, @intCast(i)).?;
 
-        const src = parser.nodeTextContent(s).?;
+        // If the script contains an src attribute, load it.
+        if (parser.elementGetAttribute(@as(*parser.Element, @ptrCast(s)), "src")) |src| {
+            var path = src;
+            if (!std.mem.startsWith(u8, src, "/")) {
+                // no need to free path, thanks to the arena.
+                path = try fspath.join(alloc, &.{ "/", dirname, path });
+            }
+
+            res = try evalJS(js_env, alloc, try loader.get(path), src);
+            if (!res.success) {
+                return res;
+            }
+        }
+
+        // If the script as a source text, execute it.
+        const src = parser.nodeTextContent(s) orelse continue;
         res = try evalJS(js_env, alloc, src, "");
 
         // return the first failure.
@@ -275,6 +284,6 @@ fn findWPTTests(allocator: std.mem.Allocator, path: []const u8, list: *std.Array
             continue;
         }
 
-        try list.append(try std.fs.path.join(allocator, &.{ path, entry.path }));
+        try list.append(try fspath.join(allocator, &.{ path, entry.path }));
     }
 }

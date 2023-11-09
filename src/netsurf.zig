@@ -609,6 +609,15 @@ pub fn elementLocalName(elem: *Element) []const u8 {
     return nodeLocalName(node);
 }
 
+pub fn elementGetAttribute(elem: *Element, name: []const u8) ?[]const u8 {
+    var s: ?*String = undefined;
+    _ = elementVtable(elem).dom_element_get_attribute.?(elem, stringFromData(name), &s);
+    if (s == null) {
+        return null;
+    }
+    return stringToData(s.?);
+}
+
 // ElementHTML
 pub const ElementHTML = c.dom_html_element;
 
