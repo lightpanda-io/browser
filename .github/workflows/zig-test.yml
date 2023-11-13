@@ -1,0 +1,47 @@
+name: zig-test
+
+env:
+  ARCH: x86_64-linux
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**/*.zig"
+      - "src/*.zig"
+  pull_request:
+    branches:
+      - main
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  zig-test:
+    name: zig test
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/browsercore/zig-v8:0.11.0
+      credentials:
+       username: ${{ github.actor }}
+       password: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_CI_PAT }}
+          submodules: true
+
+      - name: install v8
+        run: |
+          mkdir -p vendor/v8/${{env.ARCH}}/debug
+          ln -s /usr/local/lib/libc_v8.a vendor/v8/${{env.ARCH}}/debug/libc_v8.a
+
+          mkdir -p vendor/v8/${{env.ARCH}}/release
+          ln -s /usr/local/lib/libc_v8.a vendor/v8/${{env.ARCH}}/release/libc_v8.a
+
+      - run: make install-lexbor
+      - run: make install-netsurf
+
+      - run: zig build test -Dengine=v8

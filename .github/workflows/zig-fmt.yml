@@ -1,0 +1,47 @@
+name: zig-fmt
+
+on:
+  pull_request:
+    branches:
+      - main
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  zig-fmt:
+    name: zig fmt
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/browsercore/zig:0.11.0
+      credentials:
+       username: ${{ github.actor }}
+       password: ${{ secrets.GITHUB_TOKEN }}
+    outputs:
+      zig_fmt_errs: ${{ steps.fmt.outputs.zig_fmt_errs }}
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Run zig fmt
+        id: fmt
+        run: |
+          zig fmt --check ./*.zig ./**/*.zig 2> zig-fmt.err > zig-fmt.err2 || echo "Failed"
+          delimiter="$(openssl rand -hex 8)"
+          echo "zig_fmt_errs<<${delimiter}" >> "${GITHUB_OUTPUT}"
+
+          if [ -s zig-fmt.err ]; then
+            echo "// The following errors occurred:" >> "${GITHUB_OUTPUT}"
+            cat zig-fmt.err >> "${GITHUB_OUTPUT}"
+          fi
+
+          if [ -s zig-fmt.err2 ]; then
+            echo "// The following files were not formatted:" >> "${GITHUB_OUTPUT}"
+            cat zig-fmt.err2 >> "${GITHUB_OUTPUT}"
+          fi
+
+          echo "${delimiter}" >> "${GITHUB_OUTPUT}"
+      - name: Fail the job
+        if: steps.fmt.outputs.zig_fmt_errs != ''
+        run: exit 1
