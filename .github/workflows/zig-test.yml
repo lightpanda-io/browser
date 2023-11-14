@@ -21,7 +21,7 @@ jobs:
     name: zig test
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/browsercore/zig-v8:0.11.0
+      image: ghcr.io/browsercore/zig-browsercore:0.11.0
       credentials:
        username: ${{ github.actor }}
        password: ${{ secrets.GITHUB_TOKEN }}
@@ -36,13 +36,20 @@ jobs:
 
       - name: install v8
         run: |
-          mkdir -p vendor/v8/${{env.ARCH}}/debug
-          ln -s /usr/local/lib/libc_v8.a vendor/v8/${{env.ARCH}}/debug/libc_v8.a
+          mkdir -p vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/debug
+          ln -s /usr/local/lib/libc_v8.a vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/debug/libc_v8.a
 
-          mkdir -p vendor/v8/${{env.ARCH}}/release
-          ln -s /usr/local/lib/libc_v8.a vendor/v8/${{env.ARCH}}/release/libc_v8.a
+          mkdir -p vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/release
+          ln -s /usr/local/lib/libc_v8.a vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/release/libc_v8.a
 
-      - run: make install-lexbor
-      - run: make install-netsurf
+      - name: install deps
+        run: |
+          ln -s /usr/local/lib/lexbor vendor/lexbor
+
+          ln -s /usr/local/lib/libiconv vendor/libiconv
+
+          ln -s /usr/local/lib/netsurf/build vendor/netsurf/build
+          ln -s /usr/local/lib/netsurf/lib vendor/netsurf/lib
+          ln -s /usr/local/lib/netsurf/include vendor/netsurf/include
 
       - run: zig build test -Dengine=v8
