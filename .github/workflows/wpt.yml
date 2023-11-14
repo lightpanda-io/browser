@@ -32,7 +32,8 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_CI_PAT }}
-          submodules: true
+          # fetch submodules recusively, to get jsruntime-lib submodules also.
+          submodules: recursive
 
       - name: install v8
         run: |
