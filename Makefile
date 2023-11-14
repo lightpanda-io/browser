@@ -71,7 +71,6 @@ install: install-submodule install-lexbor install-jsruntime install-netsurf
 install-dev: install-submodule install-lexbor install-jsruntime-dev install-netsurf
 
 BC_NS := $(BC)vendor/netsurf
-UNAME_S := $(shell uname -s)
 ICONV := $(BC)vendor/libiconv
 # TODO: add Linux iconv path (I guess it depends on the distro)
 # TODO: this way of linking libiconv is not ideal. We should have a more generic way
