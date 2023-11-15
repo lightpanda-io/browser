@@ -10,9 +10,14 @@ on:
     paths:
       - "src/**/*.zig"
       - "src/*.zig"
+      - "test/wpt/**"
   pull_request:
     branches:
       - main
+    paths:
+      - "src/**/*.zig"
+      - "src/*.zig"
+      - "test/wpt/**"
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
