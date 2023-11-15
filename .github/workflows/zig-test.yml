@@ -52,8 +52,11 @@ jobs:
           ln -s /usr/local/lib/netsurf/lib vendor/netsurf/lib
           ln -s /usr/local/lib/netsurf/include vendor/netsurf/include
 
-      - name: zig build release
-        run: zig build -Doptimize=ReleaseSafe -Dengine=v8
+      - name: zig build debug
+        run: zig build -Dengine=v8
 
       - name: zig build test
         run: zig build test -Dengine=v8
+
+      - name: zig build release
+        run: zig build -Doptimize=ReleaseSafe -Dengine=v8
