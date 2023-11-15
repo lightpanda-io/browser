@@ -8,6 +8,7 @@ const checkCases = jsruntime.test_utils.checkCases;
 
 const utils = @import("utils.z");
 const Element = @import("element.zig").Element;
+const Union = @import("element.zig").Union;
 
 // WEB IDL https://dom.spec.whatwg.org/#htmlcollection
 // HTMLCollection is re implemented in zig here because libdom
@@ -87,7 +88,7 @@ pub const HTMLCollection = struct {
         return len;
     }
 
-    pub fn _item(self: *HTMLCollection, allocator: std.mem.Allocator, index: u32) !?*parser.Element {
+    pub fn _item(self: *HTMLCollection, allocator: std.mem.Allocator, index: u32) !?Union {
         var i: u32 = 0;
         var node: *parser.Node = self.root;
         var ntype: parser.NodeType = undefined;
@@ -113,7 +114,8 @@ pub const HTMLCollection = struct {
                         self.cur_node = node;
                         self.cur_idx = i;
 
-                        return @as(*parser.Element, @ptrCast(node));
+                        const e = @as(*parser.Element, @ptrCast(node));
+                        return Element.toInterface(e);
                     }
 
                     i += 1;
@@ -126,7 +128,7 @@ pub const HTMLCollection = struct {
         return null;
     }
 
-    pub fn _namedItem(self: *HTMLCollection, allocator: std.mem.Allocator, name: []const u8) !?*parser.Element {
+    pub fn _namedItem(self: *HTMLCollection, allocator: std.mem.Allocator, name: []const u8) !?Union {
         if (name.len == 0) {
             return null;
         }
@@ -148,13 +150,13 @@ pub const HTMLCollection = struct {
                     var attr = parser.elementGetAttribute(elem, "id");
                     // check if the node id corresponds to the name argument.
                     if (attr != null and std.mem.eql(u8, name, attr.?)) {
-                        return elem;
+                        return Element.toInterface(elem);
                     }
 
                     attr = parser.elementGetAttribute(elem, "name");
                     // check if the node id corresponds to the name argument.
                     if (attr != null and std.mem.eql(u8, name, attr.?)) {
-                        return elem;
+                        return Element.toInterface(elem);
                     }
                 }
             }
