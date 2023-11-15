@@ -1,0 +1,62 @@
+name: zig-fmt
+
+on:
+  pull_request:
+
+    # By default GH trigger on types opened, synchronize and reopened.
+    # see https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#pull_request
+    # Since we skip the job when the PR is in draft state, we want to force CI
+    # running when the PR is marked ready_for_review w/o other change.
+    # see https://github.com/orgs/community/discussions/25722#discussioncomment-3248917
+    types: [opened, synchronize, reopened, ready_for_review]
+
+    branches:
+      - main
+    paths:
+      - "src/**/*.zig"
+      - "src/*.zig"
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  zig-fmt:
+    name: zig fmt
+
+    # Don't run the CI with draft PR.
+    if: github.event.pull_request.draft == false
+
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/browsercore/zig:0.11.0
+      credentials:
+       username: ${{ github.actor }}
+       password: ${{ secrets.GITHUB_TOKEN }}
+    outputs:
+      zig_fmt_errs: ${{ steps.fmt.outputs.zig_fmt_errs }}
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Run zig fmt
+        id: fmt
+        run: |
+          zig fmt --check ./*.zig ./**/*.zig 2> zig-fmt.err > zig-fmt.err2 || echo "Failed"
+          delimiter="$(openssl rand -hex 8)"
+          echo "zig_fmt_errs<<${delimiter}" >> "${GITHUB_OUTPUT}"
+
+          if [ -s zig-fmt.err ]; then
+            echo "// The following errors occurred:" >> "${GITHUB_OUTPUT}"
+            cat zig-fmt.err >> "${GITHUB_OUTPUT}"
+          fi
+
+          if [ -s zig-fmt.err2 ]; then
+            echo "// The following files were not formatted:" >> "${GITHUB_OUTPUT}"
+            cat zig-fmt.err2 >> "${GITHUB_OUTPUT}"
+          fi
+
+          echo "${delimiter}" >> "${GITHUB_OUTPUT}"
+      - name: Fail the job
+        if: steps.fmt.outputs.zig_fmt_errs != ''
+        run: exit 1

@@ -1,0 +1,77 @@
+name: wpt
+
+env:
+  ARCH: x86_64-linux
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**/*.zig"
+      - "src/*.zig"
+      - "test/wpt/**"
+  pull_request:
+
+    # By default GH trigger on types opened, synchronize and reopened.
+    # see https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#pull_request
+    # Since we skip the job when the PR is in draft state, we want to force CI
+    # running when the PR is marked ready_for_review w/o other change.
+    # see https://github.com/orgs/community/discussions/25722#discussioncomment-3248917
+    types: [opened, synchronize, reopened, ready_for_review]
+
+    branches:
+      - main
+    paths:
+      - "src/**/*.zig"
+      - "src/*.zig"
+      - "test/wpt/**"
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  wpt:
+    name: web platform tests
+
+    # Don't run the CI with draft PR.
+    if: github.event.pull_request.draft == false
+
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/browsercore/zig-browsercore:0.11.0
+      credentials:
+       username: ${{ github.actor }}
+       password: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_CI_PAT }}
+          # fetch submodules recusively, to get jsruntime-lib submodules also.
+          submodules: recursive
+
+      - name: install v8
+        run: |
+          mkdir -p vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/debug
+          ln -s /usr/local/lib/libc_v8.a vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/debug/libc_v8.a
+
+          mkdir -p vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/release
+          ln -s /usr/local/lib/libc_v8.a vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/release/libc_v8.a
+
+      - name: install deps
+        run: |
+          ln -s /usr/local/lib/lexbor vendor/lexbor
+
+          ln -s /usr/local/lib/libiconv vendor/libiconv
+
+          ln -s /usr/local/lib/netsurf/build vendor/netsurf/build
+          ln -s /usr/local/lib/netsurf/lib vendor/netsurf/lib
+          ln -s /usr/local/lib/netsurf/include vendor/netsurf/include
+
+      - run: zig build wpt -Dengine=v8
+
+        # For now WPT tests doesn't pass at all.
+        # We accept then to continue the job on failure.
+        # TODO remove the continue-on-error when tests will pass.
+        continue-on-error: true
