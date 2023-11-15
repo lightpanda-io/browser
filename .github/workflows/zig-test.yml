@@ -11,6 +11,14 @@ on:
       - "src/**/*.zig"
       - "src/*.zig"
   pull_request:
+
+    # By default GH trigger on types opened, synchronize and reopened.
+    # see https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#pull_request
+    # Since we skip the job when the PR is in draft state, we want to force CI
+    # running when the PR is marked ready_for_review w/o other change.
+    # see https://github.com/orgs/community/discussions/25722#discussioncomment-3248917
+    types: [opened, synchronize, reopened, ready_for_review]
+
     branches:
       - main
     paths:
@@ -22,6 +30,10 @@ on:
 jobs:
   zig-test:
     name: zig test
+
+    # Don't run the CI with draft PR.
+    if: github.event.pull_request.draft == false
+
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/browsercore/zig-browsercore:0.11.0
