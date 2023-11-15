@@ -1,0 +1,34 @@
+# This dockerfile is used to build browsercore vendor dependencies except
+# jsruntime-lib v8.
+# jsruntime-lib v8 is built via zig-v8-fork/Dockerfile.
+ARG ZIG_VERSION=0.11.0
+FROM ghcr.io/browsercore/zig:${ZIG_VERSION} as build
+
+# Install required dependencies
+RUN apt update && \
+    apt install -y git curl bash xz-utils python3 ca-certificates pkg-config \
+    libglib2.0-dev gperf libexpat1-dev cmake build-essential
+
+COPY ./Makefile /src/
+WORKDIR /src
+
+# build lexbor
+ADD ./vendor/lexbor-src /src/vendor/lexbor-src
+RUN make install-lexbor
+
+# build libiconv
+RUN make install-libiconv
+
+# build netsurf
+ADD ./vendor/netsurf /src/vendor/netsurf
+RUN make install-netsurf
+
+FROM scratch as artifact
+
+COPY --from=build /src/vendor/libiconv /usr/local/lib/libiconv
+
+COPY --from=build /src/vendor/lexbor /usr/local/lib/lexbor
+
+COPY --from=build /src/vendor/netsurf/build /usr/local/lib/netsurf/build
+COPY --from=build /src/vendor/netsurf/lib /usr/local/lib/netsurf/lib
+COPY --from=build /src/vendor/netsurf/include /usr/local/lib/netsurf/include
