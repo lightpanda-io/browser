@@ -63,18 +63,13 @@ pub const HTMLCollection = struct {
     /// _get_length computes the collection's length dynamically according to
     /// the current root structure.
     // TODO: nodes retrieved must be de-referenced.
-    pub fn get_length(self: *HTMLCollection) u32 {
+    pub fn get_length(self: *HTMLCollection, allocator: std.mem.Allocator) !u32 {
         var len: u32 = 0;
         var node: *parser.Node = self.root;
         var ntype: parser.NodeType = undefined;
 
-        // FIXME using a fixed length buffer here avoid the need of an allocator
-        // to get an upper case match value. But if the match value (a tag
-        // name) is greater than 128 chars, the code will panic.
-        // ascii.upperString asserts the buffer size is greater or equals than
-        // the given string.
-        var buffer: [128]u8 = undefined;
-        const imatch = std.ascii.upperString(&buffer, self.match);
+        const imatch = try std.ascii.allocUpperString(allocator, self.match);
+        defer allocator.free(imatch);
 
         var is_wildcard = std.mem.eql(u8, self.match, "*");
 
@@ -92,7 +87,7 @@ pub const HTMLCollection = struct {
         return len;
     }
 
-    pub fn _item(self: *HTMLCollection, index: u32) ?*parser.Element {
+    pub fn _item(self: *HTMLCollection, allocator: std.mem.Allocator, index: u32) !?*parser.Element {
         var i: u32 = 0;
         var node: *parser.Node = self.root;
         var ntype: parser.NodeType = undefined;
@@ -105,13 +100,8 @@ pub const HTMLCollection = struct {
             node = self.cur_node;
         }
 
-        // FIXME using a fixed length buffer here avoid the need of an allocator
-        // to get an upper case match value. But if the match value (a tag
-        // name) is greater than 128 chars, the code will panic.
-        // ascii.upperString asserts the buffer size is greater or equals than
-        // the given string.
-        var buffer: [128]u8 = undefined;
-        const imatch = std.ascii.upperString(&buffer, self.match);
+        const imatch = try std.ascii.allocUpperString(allocator, self.match);
+        defer allocator.free(imatch);
 
         while (true) {
             ntype = parser.nodeType(node);
@@ -136,7 +126,7 @@ pub const HTMLCollection = struct {
         return null;
     }
 
-    pub fn _namedItem(self: *HTMLCollection, name: []const u8) ?*parser.Element {
+    pub fn _namedItem(self: *HTMLCollection, allocator: std.mem.Allocator, name: []const u8) !?*parser.Element {
         if (name.len == 0) {
             return null;
         }
@@ -146,13 +136,8 @@ pub const HTMLCollection = struct {
 
         var is_wildcard = std.mem.eql(u8, self.match, "*");
 
-        // FIXME using a fixed length buffer here avoid the need of an allocator
-        // to get an upper case match value. But if the match value (a tag
-        // name) is greater than 128 chars, the code will panic.
-        // ascii.upperString asserts the buffer size is greater or equals than
-        // the given string.
-        var buffer: [128]u8 = undefined;
-        const imatch = std.ascii.upperString(&buffer, self.match);
+        const imatch = try std.ascii.allocUpperString(allocator, self.match);
+        defer allocator.free(imatch);
 
         while (true) {
             ntype = parser.nodeType(node);
@@ -192,6 +177,8 @@ pub fn testExecFn(
     var getElementsByTagName = [_]Case{
         .{ .src = "let getElementsByTagName = document.getElementsByTagName('p')", .ex = "undefined" },
         .{ .src = "getElementsByTagName.length", .ex = "2" },
+        .{ .src = "let getElementsByTagNameCI = document.getElementsByTagName('P')", .ex = "undefined" },
+        .{ .src = "getElementsByTagNameCI.length", .ex = "2" },
         .{ .src = "getElementsByTagName.item(0).localName", .ex = "p" },
         .{ .src = "getElementsByTagName.item(1).localName", .ex = "p" },
         .{ .src = "let getElementsByTagNameAll = document.getElementsByTagName('*')", .ex = "undefined" },
