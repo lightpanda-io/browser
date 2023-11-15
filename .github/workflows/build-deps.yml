@@ -3,7 +3,7 @@ name: build-deps
 on:
   push:
     branches:
-      - "master"
+      - "main"
     paths:
       - 'vendor/lexbor-src/**'
       - 'vendor/netsurf/**'
