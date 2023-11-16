@@ -26,8 +26,15 @@ pub const HTMLCollection = struct {
     cur_idx: ?u32 = undefined,
     cur_node: ?*parser.Node = undefined,
 
-    // next iterates hover the DOM tree to return the next following node or
+    // get_next iterates over the DOM tree to return the next following node or
     // null at the end.
+    //
+    // This implementation is a zig version of Netsurf code.
+    // http://source.netsurf-browser.org/libdom.git/tree/src/html/html_collection.c#n177
+    //
+    // The iteration is a depth first as required by the specification.
+    // https://dom.spec.whatwg.org/#htmlcollection
+    // https://dom.spec.whatwg.org/#concept-tree-order
     fn get_next(root: *parser.Node, cur: *parser.Node) ?*parser.Node {
         // TODO deinit next
         var next = parser.nodeFirstChild(cur);
@@ -61,7 +68,7 @@ pub const HTMLCollection = struct {
         return parser.nodeNextSibling(prev);
     }
 
-    /// _get_length computes the collection's length dynamically according to
+    /// get_length computes the collection's length dynamically according to
     /// the current root structure.
     // TODO: nodes retrieved must be de-referenced.
     pub fn get_length(self: *HTMLCollection, allocator: std.mem.Allocator) !u32 {
