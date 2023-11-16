@@ -37,14 +37,12 @@ pub const HTMLCollection = struct {
     // https://dom.spec.whatwg.org/#concept-tree-order
     fn get_next(root: *parser.Node, cur: *parser.Node) ?*parser.Node {
         // TODO deinit next
-        var next = parser.nodeFirstChild(cur);
-        if (next != null) {
+        if (parser.nodeFirstChild(cur)) |next| {
             return next;
         }
 
         // TODO deinit next
-        next = parser.nodeNextSibling(cur);
-        if (next != null) {
+        if (parser.nodeNextSibling(cur)) |next| {
             return next;
         }
 
