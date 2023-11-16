@@ -60,7 +60,7 @@ pub const HTMLCollection = struct {
             // TODO deinit parent
             // Back to the prev's parent.
             // If prev has no parent, then the loop must stop.
-            parent = parser.nodeParentNode(cur) orelse break;
+            parent = parser.nodeParentNode(prev) orelse break;
 
             // TODO deinit lastchild
             lastchild = parser.nodeLastChild(parent);
