@@ -621,40 +621,6 @@ pub fn elementGetAttribute(elem: *Element, name: []const u8) ?[]const u8 {
     return stringToData(s.?);
 }
 
-// HTMLCollection
-
-pub const HTMLCollection = c.dom_html_collection;
-
-pub fn HTMLCollectionLength(collection: *HTMLCollection) u32 {
-    var ln: u32 = undefined;
-    _ = c.dom_html_collection_get_length(collection, &ln);
-    return ln;
-}
-
-pub fn HTMLCollectionItem(collection: *HTMLCollection, index: u32) ?*Element {
-    var n: [*c]c.dom_node = undefined;
-    _ = c.dom_html_collection_item(collection, index, &n);
-
-    if (n == null) {
-        return null;
-    }
-
-    // cast [*c]c.dom_node into *Element
-    return @as(*Element, @ptrCast(n));
-}
-
-pub fn HTMLCollectionNamedItem(collection: *HTMLCollection, name: []const u8) ?*Element {
-    var n: [*c]c.dom_node = undefined;
-    _ = c.dom_html_collection_named_item(collection, stringFromData(name), &n);
-
-    if (n == null) {
-        return null;
-    }
-
-    // cast [*c]c.dom_node into *Element
-    return @as(*Element, @ptrCast(n));
-}
-
 // ElementHTML
 pub const ElementHTML = c.dom_html_element;
 
