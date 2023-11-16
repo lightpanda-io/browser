@@ -205,6 +205,11 @@ fn runWPT(arena: *std.heap.ArenaAllocator, comptime apis: []jsruntime.API, f: []
         \\  return true;
         \\};
         \\window.removeEventListener = function () {};
+        \\
+        \\console = [];
+        \\console.log = function () {
+        \\  console.push(...arguments);
+        \\};
     ;
     res = try evalJS(js_env, alloc, init, "init");
     if (!res.success) {
@@ -245,6 +250,12 @@ fn runWPT(arena: *std.heap.ArenaAllocator, comptime apis: []jsruntime.API, f: []
     res = try evalJS(js_env, alloc, "window.dispatchEvent({target: 'load'});", "ready");
     if (!res.success) {
         return res;
+    }
+
+    // display console logs
+    res = try evalJS(js_env, alloc, "console.join(', ');", "console");
+    if (res.result.len > 0) {
+        std.debug.print("-- CONSOLE LOG\n{s}\n--\n", .{res.result});
     }
 
     // Check the final test status.
