@@ -47,14 +47,21 @@ pub const HTMLCollection = struct {
         }
 
         // TODO deinit parent
-        var parent = parser.nodeParentNode(cur) orelse unreachable;
+        // Back to the parent of cur.
+        // If cur has no parent, then the iteration is over.
+        var parent = parser.nodeParentNode(cur) orelse return null;
+
         // TODO deinit lastchild
         var lastchild = parser.nodeLastChild(parent);
         var prev = cur;
         while (prev != root and prev == lastchild) {
             prev = parent;
+
             // TODO deinit parent
-            parent = parser.nodeParentNode(cur) orelse unreachable;
+            // Back to the prev's parent.
+            // If prev has no parent, then the loop must stop.
+            parent = parser.nodeParentNode(cur) orelse break;
+
             // TODO deinit lastchild
             lastchild = parser.nodeLastChild(parent);
         }
