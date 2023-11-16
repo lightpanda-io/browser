@@ -23,8 +23,8 @@ pub const HTMLCollection = struct {
     match: []const u8,
 
     // save a state for the collection to improve the _item speed.
-    cur_idx: u32 = undefined,
-    cur_node: *parser.Node = undefined,
+    cur_idx: ?u32 = undefined,
+    cur_node: ?*parser.Node = undefined,
 
     // next iterates hover the DOM tree to return the next following node or
     // null at the end.
@@ -96,9 +96,9 @@ pub const HTMLCollection = struct {
         var is_wildcard = std.mem.eql(u8, self.match, "*");
 
         // Use the current state to improve speed if possible.
-        if (self.cur_idx != undefined and index >= self.cur_idx) {
-            i = self.cur_idx;
-            node = self.cur_node;
+        if (self.cur_idx != null and index >= self.cur_idx.?) {
+            i = self.cur_idx.?;
+            node = self.cur_node.?;
         }
 
         const imatch = try std.ascii.allocUpperString(allocator, self.match);
