@@ -752,6 +752,12 @@ pub inline fn documentCreateElement(doc: *Document, tag_name: []const u8) *Eleme
     return elem.?;
 }
 
+pub inline fn documentCreateElementNS(doc: *Document, ns: []const u8, tag_name: []const u8) *Element {
+    var elem: ?*Element = undefined;
+    _ = documentVtable(doc).dom_document_create_element_ns.?(doc, stringFromData(ns), stringFromData(tag_name), &elem);
+    return elem.?;
+}
+
 // DocumentHTML
 pub const DocumentHTML = c.dom_html_document;
 

@@ -36,6 +36,11 @@ pub const Document = struct {
         return Element.toInterface(e);
     }
 
+    pub fn _createElementNS(self: *parser.Document, ns: []const u8, tag_name: []const u8) ElementUnion {
+        const e = parser.documentCreateElementNS(self, ns, tag_name);
+        return Element.toInterface(e);
+    }
+
     // We can't simply use libdom dom_document_get_elements_by_tag_name here.
     // Indeed, netsurf implemented a previous dom spec when
     // getElementsByTagName returned a NodeList.
@@ -49,6 +54,16 @@ pub const Document = struct {
         return HTMLCollection{
             .root = root,
             .match = tag_name,
+        };
+    }
+
+    // TODO implement the filter by namespace
+    pub fn _getElementsByTagNameNS(self: *parser.Document, namespace: []const u8, localname: []const u8) HTMLCollection {
+        _ = namespace;
+        const root = parser.documentGetDocumentNode(self);
+        return HTMLCollection{
+            .root = root,
+            .match = localname,
         };
     }
 };
@@ -87,6 +102,14 @@ pub fn testExecFn(
         .{ .src = "getElementsByTagNameAll.namedItem('para-empty-child').localName", .ex = "span" },
     };
     try checkCases(js_env, &getElementsByTagName);
+
+    var getElementsByTagNameNS = [_]Case{
+        .{ .src = "let a = document.getElementsByTagNameNS('', 'p')", .ex = "undefined" },
+        .{ .src = "a.length", .ex = "2" },
+        .{ .src = "let b = document.getElementsByTagNameNS(null, 'p')", .ex = "undefined" },
+        .{ .src = "b.length", .ex = "2" },
+    };
+    try checkCases(js_env, &getElementsByTagNameNS);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;
