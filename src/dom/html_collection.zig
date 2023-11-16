@@ -72,7 +72,7 @@ pub const HTMLCollection = struct {
         const imatch = try std.ascii.allocUpperString(allocator, self.match);
         defer allocator.free(imatch);
 
-        var is_wildcard = std.mem.eql(u8, self.match, "*");
+        const is_wildcard = std.mem.eql(u8, self.match, "*");
 
         while (true) {
             ntype = parser.nodeType(node);
@@ -93,7 +93,7 @@ pub const HTMLCollection = struct {
         var node: *parser.Node = self.root;
         var ntype: parser.NodeType = undefined;
 
-        var is_wildcard = std.mem.eql(u8, self.match, "*");
+        const is_wildcard = std.mem.eql(u8, self.match, "*");
 
         // Use the current state to improve speed if possible.
         if (self.cur_idx != null and index >= self.cur_idx.?) {
@@ -136,7 +136,7 @@ pub const HTMLCollection = struct {
         var node: *parser.Node = self.root;
         var ntype: parser.NodeType = undefined;
 
-        var is_wildcard = std.mem.eql(u8, self.match, "*");
+        const is_wildcard = std.mem.eql(u8, self.match, "*");
 
         const imatch = try std.ascii.allocUpperString(allocator, self.match);
         defer allocator.free(imatch);
