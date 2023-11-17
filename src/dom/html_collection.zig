@@ -21,8 +21,9 @@ const Match = union(enum) {
     }
 
     pub fn deinit(self: Match, allocator: std.mem.Allocator) void {
+        _ = allocator;
         switch (self) {
-            inline else => |case| case.deinit(allocator),
+            inline else => return,
         }
     }
 };
@@ -33,27 +34,23 @@ pub const MatchByTagName = struct {
     tag: []const u8,
     is_wildcard: bool,
 
-    fn init(allocator: std.mem.Allocator, tag_name: []const u8) !MatchByTagName {
+    fn init(tag_name: []const u8) !MatchByTagName {
         return MatchByTagName{
-            .tag = try std.ascii.allocUpperString(allocator, tag_name),
+            .tag = tag_name,
             .is_wildcard = std.mem.eql(u8, tag_name, "*"),
         };
     }
 
-    fn deinit(self: *MatchByTagName, allocator: std.mem.Allocator) void {
-        allocator.free(self.tag);
-    }
-
     pub fn match(self: MatchByTagName, node: *parser.Node) bool {
-        return self.is_wildcard or std.mem.eql(u8, self.tag, parser.nodeName(node));
+        return self.is_wildcard or std.ascii.eqlIgnoreCase(self.tag, parser.nodeName(node));
     }
 };
 
-pub fn HTMLCollectionByTagName(allocator: std.mem.Allocator, root: *parser.Node, tag_name: []const u8) !HTMLCollection {
+pub fn HTMLCollectionByTagName(root: *parser.Node, tag_name: []const u8) !HTMLCollection {
     return HTMLCollection{
         .root = root,
         .match = Match{
-            .matchByTagName = try MatchByTagName.init(allocator, tag_name),
+            .matchByTagName = try MatchByTagName.init(tag_name),
         },
     };
 }
