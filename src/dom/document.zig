@@ -7,7 +7,8 @@ const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 
 const Node = @import("node.zig").Node;
-const HTMLCollection = @import("html_collection.zig").HTMLCollection;
+
+const collection = @import("html_collection.zig");
 
 const Element = @import("element.zig").Element;
 const ElementUnion = @import("element.zig").Union;
@@ -49,12 +50,9 @@ pub const Document = struct {
     // the spec changed to return an HTMLCollection instead.
     // That's why we reimplemented getElementsByTagName by using an
     // HTMLCollection in zig here.
-    pub fn _getElementsByTagName(self: *parser.Document, tag_name: []const u8) HTMLCollection {
+    pub fn _getElementsByTagName(self: *parser.Document, allocator: std.mem.Allocator, tag_name: []const u8) !collection.HTMLCollection {
         const root = parser.documentGetDocumentElement(self);
-        return HTMLCollection{
-            .root = parser.elementToNode(root),
-            .match = tag_name,
-        };
+        return collection.HTMLCollectionByTagName(allocator, parser.elementToNode(root), tag_name);
     }
 };
 
