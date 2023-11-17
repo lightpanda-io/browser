@@ -14,6 +14,7 @@ const EventTarget = @import("event_target.zig").EventTarget;
 const CData = @import("character_data.zig");
 const Element = @import("element.zig").Element;
 const Document = @import("document.zig").Document;
+const HTMLCollection = @import("html_collection.zig").HTMLCollection;
 
 // HTML
 const HTML = @import("../html/html.zig");
@@ -25,6 +26,7 @@ pub const Interfaces = generate.Tuple(.{
     CData.Interfaces,
     Element,
     Document,
+    HTMLCollection,
 
     HTML.Interfaces,
 });

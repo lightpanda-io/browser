@@ -597,6 +597,9 @@ pub fn textSplitText(text: *Text, offset: u32) *Text {
 // Comment
 pub const Comment = c.dom_comment;
 
+// Attribute
+pub const Attribute = c.dom_attr;
+
 // Element
 pub const Element = c.dom_element;
 
@@ -616,6 +619,11 @@ pub fn elementGetAttribute(elem: *Element, name: []const u8) ?[]const u8 {
         return null;
     }
     return stringToData(s.?);
+}
+
+// elementToNode is an helper to convert an element to a node.
+pub inline fn elementToNode(e: *Element) *Node {
+    return @as(*Node, @ptrCast(e));
 }
 
 // ElementHTML
@@ -729,6 +737,13 @@ pub inline fn documentGetElementsByTagName(doc: *Document, tagname: []const u8) 
     var nlist: ?*NodeList = undefined;
     _ = documentVtable(doc).dom_document_get_elements_by_tag_name.?(doc, stringFromData(tagname), &nlist);
     return nlist.?;
+}
+
+// documentGetDocumentElement returns the root document element.
+pub inline fn documentGetDocumentElement(doc: *Document) *Element {
+    var elem: ?*Element = undefined;
+    _ = documentVtable(doc).dom_document_get_document_element.?(doc, &elem);
+    return elem.?;
 }
 
 pub inline fn documentCreateElement(doc: *Document, tag_name: []const u8) *Element {
