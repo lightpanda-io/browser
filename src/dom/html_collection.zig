@@ -73,6 +73,10 @@ pub const HTMLCollection = struct {
     cur_idx: ?u32 = undefined,
     cur_node: ?*parser.Node = undefined,
 
+    pub fn deinit(self: *HTMLCollection, allocator: std.mem.Allocator) void {
+        self.match.deinit(allocator);
+    }
+
     // get_next iterates over the DOM tree to return the next following node or
     // null at the end.
     //
