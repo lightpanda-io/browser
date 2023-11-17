@@ -54,6 +54,11 @@ pub const Document = struct {
         const root = parser.documentGetDocumentElement(self);
         return collection.HTMLCollectionByTagName(parser.elementToNode(root), tag_name);
     }
+
+    pub fn _getElementsByClassName(self: *parser.Document, classNames: []const u8) !collection.HTMLCollection {
+        const root = parser.documentGetDocumentElement(self);
+        return collection.HTMLCollectionByClassName(parser.elementToNode(root), classNames);
+    }
 };
 
 // Tests

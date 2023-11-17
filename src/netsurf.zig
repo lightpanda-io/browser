@@ -522,6 +522,11 @@ pub fn nodeReplaceChild(node: *Node, new_child: *Node, old_child: *Node) *Node {
     return res.?;
 }
 
+// nodeToElement is an helper to convert a node to an element.
+pub inline fn nodeToElement(node: *Node) *Element {
+    return @as(*Element, @ptrCast(node));
+}
+
 // CharacterData
 pub const CharacterData = c.dom_characterdata;
 
@@ -619,6 +624,12 @@ pub fn elementGetAttribute(elem: *Element, name: []const u8) ?[]const u8 {
         return null;
     }
     return stringToData(s.?);
+}
+
+pub fn elementHasClass(elem: *Element, class: []const u8) bool {
+    var res: bool = undefined;
+    _ = elementVtable(elem).dom_element_has_class.?(elem, stringFromData(class), &res);
+    return res;
 }
 
 // elementToNode is an helper to convert an element to a node.

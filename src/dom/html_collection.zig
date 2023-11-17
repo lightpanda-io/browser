@@ -13,6 +13,7 @@ const Union = @import("element.zig").Union;
 
 const Match = union(enum) {
     matchByTagName: MatchByTagName,
+    matchByClassName: MatchByClassName,
 
     pub fn match(self: Match, node: *parser.Node) bool {
         switch (self) {
@@ -51,6 +52,37 @@ pub fn HTMLCollectionByTagName(root: *parser.Node, tag_name: []const u8) !HTMLCo
         .root = root,
         .match = Match{
             .matchByTagName = try MatchByTagName.init(tag_name),
+        },
+    };
+}
+
+pub const MatchByClassName = struct {
+    classNames: []const u8,
+
+    fn init(classNames: []const u8) !MatchByClassName {
+        return MatchByClassName{
+            .classNames = classNames,
+        };
+    }
+
+    pub fn match(self: MatchByClassName, node: *parser.Node) bool {
+        var it = std.mem.splitAny(u8, self.classNames, " ");
+        const e = parser.nodeToElement(node);
+        while (it.next()) |c| {
+            if (!parser.elementHasClass(e, c)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+};
+
+pub fn HTMLCollectionByClassName(root: *parser.Node, classNames: []const u8) !HTMLCollection {
+    return HTMLCollection{
+        .root = root,
+        .match = Match{
+            .matchByClassName = try MatchByClassName.init(classNames),
         },
     };
 }
