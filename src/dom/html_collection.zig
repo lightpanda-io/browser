@@ -20,13 +20,6 @@ const Match = union(enum) {
             inline else => |case| return case.match(node),
         }
     }
-
-    pub fn deinit(self: Match, allocator: std.mem.Allocator) void {
-        _ = allocator;
-        switch (self) {
-            inline else => return,
-        }
-    }
 };
 
 pub const MatchByTagName = struct {
@@ -101,10 +94,6 @@ pub const HTMLCollection = struct {
     // save a state for the collection to improve the _item speed.
     cur_idx: ?u32 = undefined,
     cur_node: ?*parser.Node = undefined,
-
-    pub fn deinit(self: *HTMLCollection, allocator: std.mem.Allocator) void {
-        self.match.deinit(allocator);
-    }
 
     // get_next iterates over the DOM tree to return the next following node or
     // null at the end.
