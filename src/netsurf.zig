@@ -621,6 +621,11 @@ pub fn elementGetAttribute(elem: *Element, name: []const u8) ?[]const u8 {
     return stringToData(s.?);
 }
 
+// elementToNode is an helper to convert an element to a node.
+pub inline fn elementToNode(e: *Element) *Node {
+    return @as(*Node, @ptrCast(e));
+}
+
 // ElementHTML
 pub const ElementHTML = c.dom_html_element;
 
@@ -739,11 +744,6 @@ pub inline fn documentGetDocumentElement(doc: *Document) *Element {
     var elem: ?*Element = undefined;
     _ = documentVtable(doc).dom_document_get_document_element.?(doc, &elem);
     return elem.?;
-}
-
-pub inline fn documentGetDocumentNode(doc: *Document) *Node {
-    const res = documentGetDocumentElement(doc);
-    return @as(*Node, @ptrCast(res));
 }
 
 pub inline fn documentCreateElement(doc: *Document, tag_name: []const u8) *Element {

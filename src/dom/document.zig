@@ -45,9 +45,9 @@ pub const Document = struct {
     // That's why we reimplemented getElementsByTagName by using an
     // HTMLCollection in zig here.
     pub fn _getElementsByTagName(self: *parser.Document, tag_name: []const u8) HTMLCollection {
-        const root = parser.documentGetDocumentNode(self);
+        const root = parser.documentGetDocumentElement(self);
         return HTMLCollection{
-            .root = root,
+            .root = parser.elementToNode(root),
             .match = tag_name,
         };
     }
