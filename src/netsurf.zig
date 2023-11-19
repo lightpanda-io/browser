@@ -65,6 +65,18 @@ inline fn stringFromData(data: []const u8) *String {
     return s.?;
 }
 
+const LWCString = c.lwc_string;
+
+// TODO implement lwcStringToData
+// inline fn lwcStringToData(s: *LWCString) []const u8 {
+// }
+
+inline fn lwcStringFromData(data: []const u8) *LWCString {
+    var s: ?*LWCString = undefined;
+    _ = c.lwc_intern_string(data.ptr, data.len, &s);
+    return s.?;
+}
+
 // Tag
 
 pub const Tag = enum(u8) {
@@ -628,7 +640,7 @@ pub fn elementGetAttribute(elem: *Element, name: []const u8) ?[]const u8 {
 
 pub fn elementHasClass(elem: *Element, class: []const u8) bool {
     var res: bool = undefined;
-    _ = elementVtable(elem).dom_element_has_class.?(elem, stringFromData(class), &res);
+    _ = elementVtable(elem).dom_element_has_class.?(elem, lwcStringFromData(class), &res);
     return res;
 }
 

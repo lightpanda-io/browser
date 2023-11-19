@@ -96,6 +96,16 @@ pub fn testExecFn(
     };
     try checkCases(js_env, &getElementsByTagName);
 
+    var getElementsByClassName = [_]Case{
+        .{ .src = "let ok = document.getElementsByClassName('ok')", .ex = "undefined" },
+        .{ .src = "ok.length", .ex = "2" },
+        .{ .src = "let empty = document.getElementsByClassName('empty')", .ex = "undefined" },
+        .{ .src = "empty.length", .ex = "1" },
+        .{ .src = "let emptyok = document.getElementsByClassName('empty ok')", .ex = "undefined" },
+        .{ .src = "emptyok.length", .ex = "1" },
+    };
+    try checkCases(js_env, &getElementsByClassName);
+
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;
     inline for (tags, 0..) |tag, i| {
