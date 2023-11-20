@@ -720,6 +720,31 @@ pub const DocumentPosition = enum(u2) {
     implementation_specific = c.DOM_DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC,
 };
 
+// DocumentType
+pub const DocumentType = c.dom_document_type;
+
+fn documentTypeVtable(dt: *DocumentType) c.dom_document_type_vtable {
+    return getVtable(c.dom_document_type_vtable, DocumentType, dt);
+}
+
+pub inline fn documentTypeGetName(dt: *DocumentType) []const u8 {
+    var s: ?*String = undefined;
+    _ = documentTypeVtable(dt).dom_document_type_get_name.?(dt, &s);
+    return stringToData(s.?);
+}
+
+pub inline fn documentTypeGetPublicId(dt: *DocumentType) []const u8 {
+    var s: ?*String = undefined;
+    _ = documentTypeVtable(dt).dom_document_type_get_public_id.?(dt, &s);
+    return stringToData(s.?);
+}
+
+pub inline fn documentTypeGetSystemId(dt: *DocumentType) []const u8 {
+    var s: ?*String = undefined;
+    _ = documentTypeVtable(dt).dom_document_type_get_system_id.?(dt, &s);
+    return stringToData(s.?);
+}
+
 // Document
 pub const Document = c.dom_document;
 

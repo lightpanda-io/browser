@@ -14,6 +14,7 @@ const EventTarget = @import("event_target.zig").EventTarget;
 const CData = @import("character_data.zig");
 const Element = @import("element.zig").Element;
 const Document = @import("document.zig").Document;
+const DocumentType = @import("document_type.zig").DocumentType;
 const HTMLCollection = @import("html_collection.zig").HTMLCollection;
 
 // HTML
@@ -26,6 +27,7 @@ pub const Interfaces = generate.Tuple(.{
     CData.Interfaces,
     Element,
     Document,
+    DocumentType,
     HTMLCollection,
 
     HTML.Interfaces,
@@ -46,6 +48,7 @@ pub const Node = struct {
             .comment => .{ .Comment = @as(*parser.Comment, @ptrCast(node)) },
             .text => .{ .Text = @as(*parser.Text, @ptrCast(node)) },
             .document => .{ .HTMLDocument = @as(*parser.DocumentHTML, @ptrCast(node)) },
+            .document_type => .{ .DocumentType = @as(*parser.DocumentType, @ptrCast(node)) },
             else => @panic("node type not handled"), // TODO
         };
     }
