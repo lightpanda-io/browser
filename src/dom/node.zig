@@ -19,6 +19,7 @@ const Document = @import("document.zig").Document;
 const DocumentType = @import("document_type.zig").DocumentType;
 const DocumentFragment = @import("document_fragment.zig").DocumentFragment;
 const HTMLCollection = @import("html_collection.zig").HTMLCollection;
+const HTMLCollectionIterator = @import("html_collection.zig").HTMLCollectionIterator;
 
 // HTML
 const HTML = @import("../html/html.zig");
@@ -34,6 +35,7 @@ pub const Interfaces = generate.Tuple(.{
     DocumentType,
     DocumentFragment,
     HTMLCollection,
+    HTMLCollectionIterator,
 
     HTML.Interfaces,
 });
