@@ -11,11 +11,11 @@ const utils = @import("utils.z");
 const Element = @import("element.zig").Element;
 const Union = @import("element.zig").Union;
 
-const Match = union(enum) {
+const Matcher = union(enum) {
     matchByTagName: MatchByTagName,
     matchByClassName: MatchByClassName,
 
-    pub fn match(self: Match, node: *parser.Node) bool {
+    pub fn match(self: Matcher, node: *parser.Node) bool {
         switch (self) {
             inline else => |case| return case.match(node),
         }
@@ -43,7 +43,7 @@ pub const MatchByTagName = struct {
 pub fn HTMLCollectionByTagName(root: *parser.Node, tag_name: []const u8) HTMLCollection {
     return HTMLCollection{
         .root = root,
-        .match = Match{
+        .matcher = Matcher{
             .matchByTagName = MatchByTagName.init(tag_name),
         },
     };
@@ -74,7 +74,7 @@ pub const MatchByClassName = struct {
 pub fn HTMLCollectionByClassName(root: *parser.Node, classNames: []const u8) HTMLCollection {
     return HTMLCollection{
         .root = root,
-        .match = Match{
+        .matcher = Matcher{
             .matchByClassName = MatchByClassName.init(classNames),
         },
     };
@@ -87,7 +87,7 @@ pub fn HTMLCollectionByClassName(root: *parser.Node, classNames: []const u8) HTM
 pub const HTMLCollection = struct {
     pub const mem_guarantied = true;
 
-    match: Match,
+    matcher: Matcher,
 
     root: *parser.Node,
 
@@ -153,7 +153,7 @@ pub const HTMLCollection = struct {
         while (true) {
             ntype = parser.nodeType(node);
             if (ntype == .element) {
-                if (self.match.match(node)) {
+                if (self.matcher.match(node)) {
                     len += 1;
                 }
             }
@@ -178,7 +178,7 @@ pub const HTMLCollection = struct {
         while (true) {
             ntype = parser.nodeType(node);
             if (ntype == .element) {
-                if (self.match.match(node)) {
+                if (self.matcher.match(node)) {
                     // check if we found the searched element.
                     if (i == index) {
                         // save the current state
@@ -210,7 +210,7 @@ pub const HTMLCollection = struct {
         while (true) {
             ntype = parser.nodeType(node);
             if (ntype == .element) {
-                if (self.match.match(node)) {
+                if (self.matcher.match(node)) {
                     const elem = @as(*parser.Element, @ptrCast(node));
 
                     var attr = parser.elementGetAttribute(elem, "id");
