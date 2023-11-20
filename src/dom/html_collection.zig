@@ -5,10 +5,80 @@ const parser = @import("../netsurf.zig");
 const jsruntime = @import("jsruntime");
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
+const generate = @import("../generate.zig");
 
 const utils = @import("utils.z");
 const Element = @import("element.zig").Element;
 const Union = @import("element.zig").Union;
+
+const Matcher = union(enum) {
+    matchByTagName: MatchByTagName,
+    matchByClassName: MatchByClassName,
+
+    pub fn match(self: Matcher, node: *parser.Node) bool {
+        switch (self) {
+            inline else => |case| return case.match(node),
+        }
+    }
+};
+
+pub const MatchByTagName = struct {
+    // tag is used to select node against their name.
+    // tag comparison is case insensitive.
+    tag: []const u8,
+    is_wildcard: bool,
+
+    fn init(tag_name: []const u8) MatchByTagName {
+        return MatchByTagName{
+            .tag = tag_name,
+            .is_wildcard = std.mem.eql(u8, tag_name, "*"),
+        };
+    }
+
+    pub fn match(self: MatchByTagName, node: *parser.Node) bool {
+        return self.is_wildcard or std.ascii.eqlIgnoreCase(self.tag, parser.nodeName(node));
+    }
+};
+
+pub fn HTMLCollectionByTagName(root: *parser.Node, tag_name: []const u8) HTMLCollection {
+    return HTMLCollection{
+        .root = root,
+        .matcher = Matcher{
+            .matchByTagName = MatchByTagName.init(tag_name),
+        },
+    };
+}
+
+pub const MatchByClassName = struct {
+    classNames: []const u8,
+
+    fn init(classNames: []const u8) MatchByClassName {
+        return MatchByClassName{
+            .classNames = classNames,
+        };
+    }
+
+    pub fn match(self: MatchByClassName, node: *parser.Node) bool {
+        var it = std.mem.splitAny(u8, self.classNames, " ");
+        const e = parser.nodeToElement(node);
+        while (it.next()) |c| {
+            if (!parser.elementHasClass(e, c)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+};
+
+pub fn HTMLCollectionByClassName(root: *parser.Node, classNames: []const u8) HTMLCollection {
+    return HTMLCollection{
+        .root = root,
+        .matcher = Matcher{
+            .matchByClassName = MatchByClassName.init(classNames),
+        },
+    };
+}
 
 // WEB IDL https://dom.spec.whatwg.org/#htmlcollection
 // HTMLCollection is re implemented in zig here because libdom
@@ -17,10 +87,9 @@ const Union = @import("element.zig").Union;
 pub const HTMLCollection = struct {
     pub const mem_guarantied = true;
 
+    matcher: Matcher,
+
     root: *parser.Node,
-    // match is used to select node against their name.
-    // match comparison is case insensitive.
-    match: []const u8,
 
     // save a state for the collection to improve the _item speed.
     cur_idx: ?u32 = undefined,
@@ -76,20 +145,15 @@ pub const HTMLCollection = struct {
     /// get_length computes the collection's length dynamically according to
     /// the current root structure.
     // TODO: nodes retrieved must be de-referenced.
-    pub fn get_length(self: *HTMLCollection, allocator: std.mem.Allocator) !u32 {
+    pub fn get_length(self: *HTMLCollection) u32 {
         var len: u32 = 0;
         var node: *parser.Node = self.root;
         var ntype: parser.NodeType = undefined;
 
-        const imatch = try std.ascii.allocUpperString(allocator, self.match);
-        defer allocator.free(imatch);
-
-        const is_wildcard = std.mem.eql(u8, self.match, "*");
-
         while (true) {
             ntype = parser.nodeType(node);
             if (ntype == .element) {
-                if (is_wildcard or std.mem.eql(u8, imatch, parser.nodeName(node))) {
+                if (self.matcher.match(node)) {
                     len += 1;
                 }
             }
@@ -100,12 +164,10 @@ pub const HTMLCollection = struct {
         return len;
     }
 
-    pub fn _item(self: *HTMLCollection, allocator: std.mem.Allocator, index: u32) !?Union {
+    pub fn _item(self: *HTMLCollection, index: u32) ?Union {
         var i: u32 = 0;
         var node: *parser.Node = self.root;
         var ntype: parser.NodeType = undefined;
-
-        const is_wildcard = std.mem.eql(u8, self.match, "*");
 
         // Use the current state to improve speed if possible.
         if (self.cur_idx != null and index >= self.cur_idx.?) {
@@ -113,13 +175,10 @@ pub const HTMLCollection = struct {
             node = self.cur_node.?;
         }
 
-        const imatch = try std.ascii.allocUpperString(allocator, self.match);
-        defer allocator.free(imatch);
-
         while (true) {
             ntype = parser.nodeType(node);
             if (ntype == .element) {
-                if (is_wildcard or std.mem.eql(u8, imatch, parser.nodeName(node))) {
+                if (self.matcher.match(node)) {
                     // check if we found the searched element.
                     if (i == index) {
                         // save the current state
@@ -140,7 +199,7 @@ pub const HTMLCollection = struct {
         return null;
     }
 
-    pub fn _namedItem(self: *HTMLCollection, allocator: std.mem.Allocator, name: []const u8) !?Union {
+    pub fn _namedItem(self: *HTMLCollection, name: []const u8) ?Union {
         if (name.len == 0) {
             return null;
         }
@@ -148,15 +207,10 @@ pub const HTMLCollection = struct {
         var node: *parser.Node = self.root;
         var ntype: parser.NodeType = undefined;
 
-        const is_wildcard = std.mem.eql(u8, self.match, "*");
-
-        const imatch = try std.ascii.allocUpperString(allocator, self.match);
-        defer allocator.free(imatch);
-
         while (true) {
             ntype = parser.nodeType(node);
             if (ntype == .element) {
-                if (is_wildcard or std.mem.eql(u8, imatch, parser.nodeName(node))) {
+                if (self.matcher.match(node)) {
                     const elem = @as(*parser.Element, @ptrCast(node));
 
                     var attr = parser.elementGetAttribute(elem, "id");

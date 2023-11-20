@@ -7,7 +7,8 @@ const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 
 const Node = @import("node.zig").Node;
-const HTMLCollection = @import("html_collection.zig").HTMLCollection;
+
+const collection = @import("html_collection.zig");
 
 const Element = @import("element.zig").Element;
 const ElementUnion = @import("element.zig").Union;
@@ -49,12 +50,14 @@ pub const Document = struct {
     // the spec changed to return an HTMLCollection instead.
     // That's why we reimplemented getElementsByTagName by using an
     // HTMLCollection in zig here.
-    pub fn _getElementsByTagName(self: *parser.Document, tag_name: []const u8) HTMLCollection {
+    pub fn _getElementsByTagName(self: *parser.Document, tag_name: []const u8) collection.HTMLCollection {
         const root = parser.documentGetDocumentElement(self);
-        return HTMLCollection{
-            .root = parser.elementToNode(root),
-            .match = tag_name,
-        };
+        return collection.HTMLCollectionByTagName(parser.elementToNode(root), tag_name);
+    }
+
+    pub fn _getElementsByClassName(self: *parser.Document, classNames: []const u8) collection.HTMLCollection {
+        const root = parser.documentGetDocumentElement(self);
+        return collection.HTMLCollectionByClassName(parser.elementToNode(root), classNames);
     }
 };
 
@@ -92,6 +95,16 @@ pub fn testExecFn(
         .{ .src = "getElementsByTagNameAll.namedItem('para-empty-child').localName", .ex = "span" },
     };
     try checkCases(js_env, &getElementsByTagName);
+
+    var getElementsByClassName = [_]Case{
+        .{ .src = "let ok = document.getElementsByClassName('ok')", .ex = "undefined" },
+        .{ .src = "ok.length", .ex = "2" },
+        .{ .src = "let empty = document.getElementsByClassName('empty')", .ex = "undefined" },
+        .{ .src = "empty.length", .ex = "1" },
+        .{ .src = "let emptyok = document.getElementsByClassName('empty ok')", .ex = "undefined" },
+        .{ .src = "emptyok.length", .ex = "1" },
+    };
+    try checkCases(js_env, &getElementsByClassName);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;
