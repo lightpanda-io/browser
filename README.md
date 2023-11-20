@@ -107,7 +107,7 @@ make wpt Node-childNodes.html
 We add new tests cases files with implemented changes in Browsercore.
 
 Copy the test case you want to add from the [WPT
-repo](https://github.com/web-platform-tests/wpt) into `test/wpt` dir and commit
+repo](https://github.com/web-platform-tests/wpt) into `tests/wpt` dir and commit
 the files.
 
-:warning: Please keep the original directory tree structure into `test/wpt`.
+:warning: Please keep the original directory tree structure into `tests/wpt`.
