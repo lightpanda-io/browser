@@ -36,6 +36,11 @@ pub const Document = struct {
         return Element.toInterface(e);
     }
 
+    pub fn _createElementNS(self: *parser.Document, ns: []const u8, tag_name: []const u8) ElementUnion {
+        const e = parser.documentCreateElementNS(self, ns, tag_name);
+        return Element.toInterface(e);
+    }
+
     // We can't simply use libdom dom_document_get_elements_by_tag_name here.
     // Indeed, netsurf implemented a previous dom spec when
     // getElementsByTagName returned a NodeList.
