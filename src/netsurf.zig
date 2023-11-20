@@ -783,6 +783,12 @@ pub inline fn documentCreateElementNS(doc: *Document, ns: []const u8, tag_name: 
     return elem.?;
 }
 
+pub inline fn documentGetDoctype(doc: *Document) ?*DocumentType {
+    var dt: ?*DocumentType = undefined;
+    _ = documentVtable(doc).dom_document_get_doctype.?(doc, &dt);
+    return dt;
+}
+
 // DocumentHTML
 pub const DocumentHTML = c.dom_html_document;
 
