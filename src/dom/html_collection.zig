@@ -28,7 +28,7 @@ pub const MatchByTagName = struct {
     tag: []const u8,
     is_wildcard: bool,
 
-    fn init(tag_name: []const u8) !MatchByTagName {
+    fn init(tag_name: []const u8) MatchByTagName {
         return MatchByTagName{
             .tag = tag_name,
             .is_wildcard = std.mem.eql(u8, tag_name, "*"),
@@ -40,11 +40,11 @@ pub const MatchByTagName = struct {
     }
 };
 
-pub fn HTMLCollectionByTagName(root: *parser.Node, tag_name: []const u8) !HTMLCollection {
+pub fn HTMLCollectionByTagName(root: *parser.Node, tag_name: []const u8) HTMLCollection {
     return HTMLCollection{
         .root = root,
         .match = Match{
-            .matchByTagName = try MatchByTagName.init(tag_name),
+            .matchByTagName = MatchByTagName.init(tag_name),
         },
     };
 }
@@ -52,7 +52,7 @@ pub fn HTMLCollectionByTagName(root: *parser.Node, tag_name: []const u8) !HTMLCo
 pub const MatchByClassName = struct {
     classNames: []const u8,
 
-    fn init(classNames: []const u8) !MatchByClassName {
+    fn init(classNames: []const u8) MatchByClassName {
         return MatchByClassName{
             .classNames = classNames,
         };
@@ -71,11 +71,11 @@ pub const MatchByClassName = struct {
     }
 };
 
-pub fn HTMLCollectionByClassName(root: *parser.Node, classNames: []const u8) !HTMLCollection {
+pub fn HTMLCollectionByClassName(root: *parser.Node, classNames: []const u8) HTMLCollection {
     return HTMLCollection{
         .root = root,
         .match = Match{
-            .matchByClassName = try MatchByClassName.init(classNames),
+            .matchByClassName = MatchByClassName.init(classNames),
         },
     };
 }
