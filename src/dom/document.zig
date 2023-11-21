@@ -34,6 +34,22 @@ pub const Document = struct {
         return Element.toInterface(e);
     }
 
+    // TODO implement characterSet
+    pub fn get_characterSet(self: *parser.Document) []const u8 {
+        _ = self;
+        return "UTF-8";
+    }
+
+    // alias of get_characterSet
+    pub fn get_charset(self: *parser.Document) []const u8 {
+        return get_characterSet(self);
+    }
+
+    // alias of get_characterSet
+    pub fn get_inputEncoding(self: *parser.Document) []const u8 {
+        return get_characterSet(self);
+    }
+
     pub fn get_doctype(self: *parser.Document) ?*parser.DocumentType {
         return parser.documentGetDoctype(self);
     }
@@ -122,6 +138,13 @@ pub fn testExecFn(
         .{ .src = "e.localName", .ex = "html" },
     };
     try checkCases(js_env, &getDocumentElement);
+
+    var getCharacterSet = [_]Case{
+        .{ .src = "document.characterSet", .ex = "UTF-8" },
+        .{ .src = "document.charset", .ex = "UTF-8" },
+        .{ .src = "document.inputEncoding", .ex = "UTF-8" },
+    };
+    try checkCases(js_env, &getCharacterSet);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;
