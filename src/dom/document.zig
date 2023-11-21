@@ -34,6 +34,15 @@ pub const Document = struct {
         return Element.toInterface(e);
     }
 
+    pub fn get_documentURI(self: *parser.Document) []const u8 {
+        return parser.documentGetDocumentURI(self);
+    }
+
+    // TODO should be get_URL but in this case, document.URL is indefined.
+    pub fn get_url(self: *parser.Document) []const u8 {
+        return get_documentURI(self);
+    }
+
     // TODO implement contentType
     pub fn get_contentType(self: *parser.Document) []const u8 {
         _ = self;
@@ -167,6 +176,13 @@ pub fn testExecFn(
         .{ .src = "document.contentType", .ex = "text/html" },
     };
     try checkCases(js_env, &getContentType);
+
+    var getDocumentURI = [_]Case{
+        .{ .src = "document.documentURI", .ex = "about:blank" },
+        // TODO should be document.URL
+        .{ .src = "document.url", .ex = "about:blank" },
+    };
+    try checkCases(js_env, &getDocumentURI);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;
