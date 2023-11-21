@@ -67,7 +67,7 @@ test {
     try generate.tests();
 
     // generate APIs
-    const apis = try jsruntime.compile(DOM.Interfaces);
+    const apis = comptime jsruntime.compile(DOM.Interfaces);
 
     // create JS vm
     const vm = jsruntime.VM.init();
