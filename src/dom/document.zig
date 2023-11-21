@@ -29,6 +29,11 @@ pub const Document = struct {
     // JS funcs
     // --------
     //
+    pub fn get_documentElement(self: *parser.Document) ElementUnion {
+        const e = parser.documentGetDocumentElement(self);
+        return Element.toInterface(e);
+    }
+
     pub fn get_doctype(self: *parser.Document) ?*parser.DocumentType {
         return parser.documentGetDoctype(self);
     }
@@ -111,6 +116,12 @@ pub fn testExecFn(
         .{ .src = "emptyok.length", .ex = "1" },
     };
     try checkCases(js_env, &getElementsByClassName);
+
+    var getDocumentElement = [_]Case{
+        .{ .src = "let e = document.documentElement", .ex = "undefined" },
+        .{ .src = "e.localName", .ex = "html" },
+    };
+    try checkCases(js_env, &getDocumentElement);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;
