@@ -66,7 +66,7 @@ const FileLoader = struct {
 pub fn main() !void {
 
     // generate APIs
-    const apis = comptime try jsruntime.compile(DOM.Interfaces);
+    const apis = comptime jsruntime.compile(DOM.Interfaces);
 
     std.debug.print("Running WPT test suite\n", .{});
 
