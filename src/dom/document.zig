@@ -34,6 +34,12 @@ pub const Document = struct {
         return Element.toInterface(e);
     }
 
+    // TODO implement compactMode
+    pub fn get_compatMode(self: *parser.Document) []const u8 {
+        _ = self;
+        return "CSS1Compat";
+    }
+
     // TODO implement characterSet
     pub fn get_characterSet(self: *parser.Document) []const u8 {
         _ = self;
@@ -145,6 +151,11 @@ pub fn testExecFn(
         .{ .src = "document.inputEncoding", .ex = "UTF-8" },
     };
     try checkCases(js_env, &getCharacterSet);
+
+    var getCompatMode = [_]Case{
+        .{ .src = "document.compatMode", .ex = "CSS1Compat" },
+    };
+    try checkCases(js_env, &getCompatMode);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;
