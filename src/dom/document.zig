@@ -54,10 +54,8 @@ pub const Document = struct {
         return "CSS1Compat";
     }
 
-    // TODO implement characterSet
     pub fn get_characterSet(self: *parser.Document) []const u8 {
-        _ = self;
-        return "UTF-8";
+        return parser.documentGetInputEncoding(self);
     }
 
     // alias of get_characterSet

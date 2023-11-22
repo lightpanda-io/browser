@@ -800,6 +800,12 @@ pub inline fn documentGetDocumentURI(doc: *Document) []const u8 {
     return stringToData(s.?);
 }
 
+pub inline fn documentGetInputEncoding(doc: *Document) []const u8 {
+    var s: ?*String = undefined;
+    _ = documentVtable(doc).dom_document_get_input_encoding.?(doc, &s);
+    return stringToData(s.?);
+}
+
 pub inline fn documentCreateElement(doc: *Document, tag_name: []const u8) *Element {
     var elem: ?*Element = undefined;
     _ = documentVtable(doc).dom_document_create_element.?(doc, stringFromData(tag_name), &elem);
