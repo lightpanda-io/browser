@@ -61,26 +61,32 @@ test:
 # ------------
 .PHONY: install-submodule
 .PHONY: install-lexbor install-jsruntime install-jsruntime-dev install-libiconv
-.PHONY: install-netsurf clean-netsurf test-netsurf
+.PHONY: _install-netsurf install-netsurf clean-netsurf test-netsurf install-netsurf-dev
 .PHONY: install-dev install
 
 ## Install and build dependencies for release
 install: install-submodule install-lexbor install-jsruntime install-netsurf
 
 ## Install and build dependencies for dev
-install-dev: install-submodule install-lexbor install-jsruntime-dev install-netsurf
+install-dev: install-submodule install-lexbor install-jsruntime-dev install-netsurf-dev
+
+install-netsurf-dev: _install-netsurf
+install-netsurf-dev: OPTCFLAGS := -O0 -g -DNDEBUG
+
+install-netsurf: _install-netsurf
+install-netsurf: OPTCFLAGS := -DNDEBUG
 
 BC_NS := $(BC)vendor/netsurf
 ICONV := $(BC)vendor/libiconv
 # TODO: add Linux iconv path (I guess it depends on the distro)
 # TODO: this way of linking libiconv is not ideal. We should have a more generic way
 # and stick to a specif version. Maybe build from source. Anyway not now.
-install-netsurf: install-libiconv
+_install-netsurf: install-libiconv
 	@printf "\e[36mInstalling NetSurf...\e[0m\n" && \
 	ls $(ICONV) 1> /dev/null || (printf "\e[33mERROR: you need to install libiconv in your system (on MacOS on with Homebrew)\e[0m\n"; exit 1;) && \
 	export PREFIX=$(BC_NS) && \
 	export OPTLDFLAGS="-L$(ICONV)/lib" && \
-	export OPTCFLAGS="-DNDEBUG -I$(ICONV)/include" && \
+	export OPTCFLAGS="$(OPTCFLAGS) -I$(ICONV)/include" && \
 	printf "\e[33mInstalling libwapcaplet...\e[0m\n" && \
 	cd vendor/netsurf/libwapcaplet && \
 	BUILDDIR=$(BC_NS)/build/libwapcaplet make install && \
