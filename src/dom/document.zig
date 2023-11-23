@@ -13,6 +13,8 @@ const collection = @import("html_collection.zig");
 const Element = @import("element.zig").Element;
 const ElementUnion = @import("element.zig").Union;
 
+const DocumentType = @import("document_type.zig").DocumentType;
+
 // WEB IDL https://dom.spec.whatwg.org/#document
 pub const Document = struct {
     pub const Self = parser.Document;
@@ -26,6 +28,10 @@ pub const Document = struct {
 
     // JS funcs
     // --------
+    //
+    pub fn get_doctype(self: *parser.Document) ?*parser.DocumentType {
+        return parser.documentGetDoctype(self);
+    }
 
     pub fn _getElementById(self: *parser.Document, id: []const u8) ?ElementUnion {
         const e = parser.documentGetElementById(self, id) orelse return null;

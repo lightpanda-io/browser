@@ -743,6 +743,31 @@ pub const DocumentPosition = enum(u2) {
     implementation_specific = c.DOM_DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC,
 };
 
+// DocumentType
+pub const DocumentType = c.dom_document_type;
+
+fn documentTypeVtable(dt: *DocumentType) c.dom_document_type_vtable {
+    return getVtable(c.dom_document_type_vtable, DocumentType, dt);
+}
+
+pub inline fn documentTypeGetName(dt: *DocumentType) []const u8 {
+    var s: ?*String = undefined;
+    _ = documentTypeVtable(dt).dom_document_type_get_name.?(dt, &s);
+    return stringToData(s.?);
+}
+
+pub inline fn documentTypeGetPublicId(dt: *DocumentType) []const u8 {
+    var s: ?*String = undefined;
+    _ = documentTypeVtable(dt).dom_document_type_get_public_id.?(dt, &s);
+    return stringToData(s.?);
+}
+
+pub inline fn documentTypeGetSystemId(dt: *DocumentType) []const u8 {
+    var s: ?*String = undefined;
+    _ = documentTypeVtable(dt).dom_document_type_get_system_id.?(dt, &s);
+    return stringToData(s.?);
+}
+
 // Document
 pub const Document = c.dom_document;
 
@@ -779,6 +804,12 @@ pub inline fn documentCreateElementNS(doc: *Document, ns: []const u8, tag_name: 
     var elem: ?*Element = undefined;
     _ = documentVtable(doc).dom_document_create_element_ns.?(doc, stringFromData(ns), stringFromData(tag_name), &elem);
     return elem.?;
+}
+
+pub inline fn documentGetDoctype(doc: *Document) ?*DocumentType {
+    var dt: ?*DocumentType = undefined;
+    _ = documentVtable(doc).dom_document_get_doctype.?(doc, &dt);
+    return dt;
 }
 
 // DocumentHTML
