@@ -29,6 +29,48 @@ pub const Document = struct {
     // JS funcs
     // --------
     //
+    pub fn get_documentElement(self: *parser.Document) ElementUnion {
+        const e = parser.documentGetDocumentElement(self);
+        return Element.toInterface(e);
+    }
+
+    pub fn get_documentURI(self: *parser.Document) []const u8 {
+        return parser.documentGetDocumentURI(self);
+    }
+
+    // TODO should be get_URL but in this case, document.URL is indefined.
+    pub fn get_url(self: *parser.Document) []const u8 {
+        return get_documentURI(self);
+    }
+
+    // TODO implement contentType
+    pub fn get_contentType(self: *parser.Document) []const u8 {
+        _ = self;
+        return "text/html";
+    }
+
+    // TODO implement compactMode
+    pub fn get_compatMode(self: *parser.Document) []const u8 {
+        _ = self;
+        return "CSS1Compat";
+    }
+
+    // TODO implement characterSet
+    pub fn get_characterSet(self: *parser.Document) []const u8 {
+        _ = self;
+        return "UTF-8";
+    }
+
+    // alias of get_characterSet
+    pub fn get_charset(self: *parser.Document) []const u8 {
+        return get_characterSet(self);
+    }
+
+    // alias of get_characterSet
+    pub fn get_inputEncoding(self: *parser.Document) []const u8 {
+        return get_characterSet(self);
+    }
+
     pub fn get_doctype(self: *parser.Document) ?*parser.DocumentType {
         return parser.documentGetDoctype(self);
     }
@@ -111,6 +153,36 @@ pub fn testExecFn(
         .{ .src = "emptyok.length", .ex = "1" },
     };
     try checkCases(js_env, &getElementsByClassName);
+
+    var getDocumentElement = [_]Case{
+        .{ .src = "let e = document.documentElement", .ex = "undefined" },
+        .{ .src = "e.localName", .ex = "html" },
+    };
+    try checkCases(js_env, &getDocumentElement);
+
+    var getCharacterSet = [_]Case{
+        .{ .src = "document.characterSet", .ex = "UTF-8" },
+        .{ .src = "document.charset", .ex = "UTF-8" },
+        .{ .src = "document.inputEncoding", .ex = "UTF-8" },
+    };
+    try checkCases(js_env, &getCharacterSet);
+
+    var getCompatMode = [_]Case{
+        .{ .src = "document.compatMode", .ex = "CSS1Compat" },
+    };
+    try checkCases(js_env, &getCompatMode);
+
+    var getContentType = [_]Case{
+        .{ .src = "document.contentType", .ex = "text/html" },
+    };
+    try checkCases(js_env, &getContentType);
+
+    var getDocumentURI = [_]Case{
+        .{ .src = "document.documentURI", .ex = "about:blank" },
+        // TODO should be document.URL
+        .{ .src = "document.url", .ex = "about:blank" },
+    };
+    try checkCases(js_env, &getDocumentURI);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;
