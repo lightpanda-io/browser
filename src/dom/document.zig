@@ -38,8 +38,7 @@ pub const Document = struct {
         return parser.documentGetDocumentURI(self);
     }
 
-    // TODO should be get_URL but in this case, document.URL is indefined.
-    pub fn get_url(self: *parser.Document) []const u8 {
+    pub fn get_URL(self: *parser.Document) []const u8 {
         return get_documentURI(self);
     }
 
@@ -179,8 +178,7 @@ pub fn testExecFn(
 
     var getDocumentURI = [_]Case{
         .{ .src = "document.documentURI", .ex = "about:blank" },
-        // TODO should be document.URL
-        .{ .src = "document.url", .ex = "about:blank" },
+        .{ .src = "document.URL", .ex = "about:blank" },
     };
     try checkCases(js_env, &getDocumentURI);
 
