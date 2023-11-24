@@ -175,7 +175,7 @@ fn runWPT(arena: *std.heap.ArenaAllocator, comptime apis: []jsruntime.API, f: []
     try js_env.load(apis, &tpls);
 
     // start JS env
-    js_env.start(apis);
+    try js_env.start(alloc, apis);
     defer js_env.stop();
 
     // add document object
