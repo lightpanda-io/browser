@@ -299,8 +299,9 @@ pub const DOMError = error{
 
 const DOMException = c.dom_exception;
 
-fn DOMExceptionError(except: DOMException) DOMError {
+fn DOMErr(except: DOMException) DOMError!void {
     return switch (except) {
+        c.DOM_NO_ERR => return,
         c.DOM_INDEX_SIZE_ERR => DOMError.IndexSize,
         c.DOM_DOMSTRING_SIZE_ERR => DOMError.StringSize,
         c.DOM_HIERARCHY_REQUEST_ERR => DOMError.HierarchyRequest,
@@ -318,7 +319,7 @@ fn DOMExceptionError(except: DOMException) DOMError {
         c.DOM_INVALID_ACCESS_ERR => DOMError.InvalidAccess,
         c.DOM_VALIDATION_ERR => DOMError.Validation,
         c.DOM_TYPE_MISMATCH_ERR => DOMError.TypeMismatch,
-        else => DOMError.NoError,
+        else => unreachable,
     };
 }
 
@@ -502,7 +503,7 @@ pub fn nodeSetTextContent(node: *Node, value: []const u8) void {
 pub fn nodeAppendChild(node: *Node, child: *Node) DOMError!*Node {
     var res: ?*Node = undefined;
     const err = nodeVtable(node).dom_node_append_child.?(node, child, &res);
-    if (err != 0) return DOMExceptionError(err);
+    try DOMErr(err);
     return res.?;
 }
 

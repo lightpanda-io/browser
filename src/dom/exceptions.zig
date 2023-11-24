@@ -7,6 +7,7 @@ const checkCases = jsruntime.test_utils.checkCases;
 
 const parser = @import("../netsurf.zig");
 
+// https://webidl.spec.whatwg.org/#idl-DOMException
 pub const DOMException = struct {
     err: parser.DOMError,
     str: []const u8,
