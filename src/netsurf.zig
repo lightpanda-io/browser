@@ -295,6 +295,14 @@ pub const DOMError = error{
     InvalidAccess,
     Validation,
     TypeMismatch,
+    Security,
+    Network,
+    Abort,
+    URLismatch,
+    QuotaExceeded,
+    Timeout,
+    InvalidNodeType,
+    DataClone,
 };
 
 const DOMException = c.dom_exception;

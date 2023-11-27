@@ -34,6 +34,14 @@ pub const DOMException = struct {
     pub const _INVALID_ACCESS_ERR = 15;
     pub const _VALIDATION_ERR = 16;
     pub const _TYPE_MISMATCH_ERR = 17;
+    pub const _SECURITY_ERR = 18;
+    pub const _NETWORK_ERR = 19;
+    pub const _ABORT_ERR = 20;
+    pub const _URL_MISMATCH_ERR = 21;
+    pub const _QUOTA_EXCEEDED_ERR = 22;
+    pub const _TIMEOUT_ERR = 23;
+    pub const _INVALID_NODE_TYPE_ERR = 24;
+    pub const _DATA_CLONE_ERR = 25;
 
     // TODO: deinit
     pub fn init(alloc: std.mem.Allocator, err: parser.DOMError, callerName: []const u8) anyerror!DOMException {
@@ -69,6 +77,14 @@ pub const DOMException = struct {
             error.InvalidAccess => "InvalidAccessError",
             error.Validation => "ValidationError",
             error.TypeMismatch => "TypeMismatchError",
+            error.Security => "SecurityError",
+            error.Network => "NetworkError",
+            error.Abort => "AbortError",
+            error.URLismatch => "URLismatchError",
+            error.QuotaExceeded => "QuotaExceededError",
+            error.Timeout => "TimeoutError",
+            error.InvalidNodeType => "InvalidNodeTypeError",
+            error.DataClone => "DataCloneError",
             error.NoError => unreachable,
         };
     }
@@ -94,6 +110,14 @@ pub const DOMException = struct {
             error.InvalidAccess => 15,
             error.Validation => 16,
             error.TypeMismatch => 17,
+            error.Security => 18,
+            error.Network => 19,
+            error.Abort => 20,
+            error.URLismatch => 21,
+            error.QuotaExceeded => 22,
+            error.Timeout => 23,
+            error.InvalidNodeType => 24,
+            error.DataClone => 25,
             error.NoError => unreachable,
         };
     }
