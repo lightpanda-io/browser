@@ -14,7 +14,7 @@ pub const DOMImplementation = struct {
     pub const mem_guarantied = true;
 
     pub fn _createDocumentType(
-        self: *DOMImplementation,
+       _: *DOMImplementation,
         allocator: std.mem.Allocator,
         qname: []const u8,
         publicId: []const u8,
@@ -35,7 +35,7 @@ pub const DOMImplementation = struct {
     }
 
     pub fn _createDocument(
-        self: *DOMImplementation,
+       _: *DOMImplementation,
         allocator: std.mem.Allocator,
         namespace: ?[]const u8,
         qname: ?[]const u8,
