@@ -10,6 +10,7 @@ on:
     paths:
       - "src/**/*.zig"
       - "src/*.zig"
+      - 'vendor/jsruntime-lib/**'
   pull_request:
 
     # By default GH trigger on types opened, synchronize and reopened.
