@@ -22,10 +22,9 @@ pub const Document = struct {
     pub const prototype = *Node;
     pub const mem_guarantied = true;
 
-    // pub fn constructor() *parser.Document {
-    //     // TODO
-    //     return .{};
-    // }
+    pub fn constructor() *parser.Document {
+        return parser.domImplementationCreateHTMLDocument(null);
+    }
 
     // JS funcs
     // --------
@@ -207,6 +206,16 @@ pub fn testExecFn(
         .{ .src = "let impl = document.implementation", .ex = "undefined" },
     };
     try checkCases(js_env, &getImplementation);
+
+    var new = [_]Case{
+        .{ .src = "let d = new Document()", .ex = "undefined" },
+        .{ .src = "d.characterSet", .ex = "UTF-8" },
+        .{ .src = "d.URL", .ex = "about:blank" },
+        .{ .src = "d.documentURI", .ex = "about:blank" },
+        .{ .src = "d.compatMode", .ex = "CSS1Compat" },
+        .{ .src = "d.contentType", .ex = "text/html" },
+    };
+    try checkCases(js_env, &new);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;
