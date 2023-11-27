@@ -30,8 +30,7 @@ pub const DOMImplementation = struct {
         const csystemId = try allocator.dupeZ(u8, systemId);
         defer allocator.free(csystemId);
 
-        const dt = parser.domImplementationCreateDocumentType(cqname, cpublicId, csystemId);
-        return dt;
+        return parser.domImplementationCreateDocumentType(cqname, cpublicId, csystemId);
     }
 
     pub fn _createDocument(
@@ -54,13 +53,11 @@ pub const DOMImplementation = struct {
             defer allocator.free(cqname.?);
         }
 
-        const doc = parser.domImplementationCreateDocument(cnamespace, cqname, doctype);
-        return doc;
+        return parser.domImplementationCreateDocument(cnamespace, cqname, doctype);
     }
 
     pub fn _createHTMLDocument(_: *DOMImplementation, title: ?[]const u8) *parser.Document {
-        const doc = parser.domImplementationCreateHTMLDocument(title);
-        return doc;
+        return parser.domImplementationCreateHTMLDocument(title);
     }
 
     pub fn _hasFeature(_: *DOMImplementation) bool {
