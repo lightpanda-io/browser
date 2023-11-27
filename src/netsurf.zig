@@ -274,6 +274,63 @@ pub const Tag = enum(u8) {
     }
 };
 
+// DOMException
+
+pub const DOMError = error{
+    NoError,
+    IndexSize,
+    StringSize,
+    HierarchyRequest,
+    WrongDocument,
+    InvalidCharacter,
+    NoDataAllowed,
+    NoModificationAllowed,
+    NotFound,
+    NotSupported,
+    InuseAttribute,
+    InvalidState,
+    Syntax,
+    InvalidModification,
+    Namespace,
+    InvalidAccess,
+    Validation,
+    TypeMismatch,
+    Security,
+    Network,
+    Abort,
+    URLismatch,
+    QuotaExceeded,
+    Timeout,
+    InvalidNodeType,
+    DataClone,
+};
+
+const DOMException = c.dom_exception;
+
+fn DOMErr(except: DOMException) DOMError!void {
+    return switch (except) {
+        c.DOM_NO_ERR => return,
+        c.DOM_INDEX_SIZE_ERR => DOMError.IndexSize,
+        c.DOM_DOMSTRING_SIZE_ERR => DOMError.StringSize,
+        c.DOM_HIERARCHY_REQUEST_ERR => DOMError.HierarchyRequest,
+        c.DOM_WRONG_DOCUMENT_ERR => DOMError.WrongDocument,
+        c.DOM_INVALID_CHARACTER_ERR => DOMError.InvalidCharacter,
+        c.DOM_NO_DATA_ALLOWED_ERR => DOMError.NoDataAllowed,
+        c.DOM_NO_MODIFICATION_ALLOWED_ERR => DOMError.NoModificationAllowed,
+        c.DOM_NOT_FOUND_ERR => DOMError.NotFound,
+        c.DOM_NOT_SUPPORTED_ERR => DOMError.NotSupported,
+        c.DOM_INUSE_ATTRIBUTE_ERR => DOMError.InuseAttribute,
+        c.DOM_INVALID_STATE_ERR => DOMError.InvalidState,
+        c.DOM_SYNTAX_ERR => DOMError.Syntax,
+        c.DOM_INVALID_MODIFICATION_ERR => DOMError.InvalidModification,
+        c.DOM_NAMESPACE_ERR => DOMError.Namespace,
+        c.DOM_INVALID_ACCESS_ERR => DOMError.InvalidAccess,
+        c.DOM_VALIDATION_ERR => DOMError.Validation,
+        c.DOM_TYPE_MISMATCH_ERR => DOMError.TypeMismatch,
+        else => unreachable,
+    };
+}
+
 // EventTarget
 pub const EventTarget = c.dom_event_target;
 
@@ -451,9 +508,10 @@ pub fn nodeSetTextContent(node: *Node, value: []const u8) void {
     _ = nodeVtable(node).dom_node_set_text_content.?(node, s);
 }
 
-pub fn nodeAppendChild(node: *Node, child: *Node) *Node {
+pub fn nodeAppendChild(node: *Node, child: *Node) DOMError!*Node {
     var res: ?*Node = undefined;
-    _ = nodeVtable(node).dom_node_append_child.?(node, child, &res);
+    const err = nodeVtable(node).dom_node_append_child.?(node, child, &res);
+    try DOMErr(err);
     return res.?;
 }
 

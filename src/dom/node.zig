@@ -150,9 +150,9 @@ pub const Node = struct {
 
     // Methods
 
-    pub fn _appendChild(self: *parser.Node, child: *parser.Node) Union {
+    pub fn _appendChild(self: *parser.Node, child: *parser.Node) !Union {
         // TODO: DocumentFragment special case
-        const res = parser.nodeAppendChild(self, child);
+        const res = try parser.nodeAppendChild(self, child);
         return Node.toInterface(res);
     }
 
