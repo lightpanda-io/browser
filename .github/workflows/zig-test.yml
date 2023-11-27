@@ -10,7 +10,7 @@ on:
     paths:
       - "src/**/*.zig"
       - "src/*.zig"
-      - 'vendor/jsruntime-lib/**'
+      - "vendor/jsruntime-lib/**"
   pull_request:
 
     # By default GH trigger on types opened, synchronize and reopened.
@@ -25,6 +25,7 @@ on:
     paths:
       - "src/**/*.zig"
       - "src/*.zig"
+      - "vendor/jsruntime-lib/**"
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
