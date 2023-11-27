@@ -859,7 +859,6 @@ pub inline fn domImplementationCreateDocumentType(qname: [:0]const u8, publicId:
 }
 
 pub inline fn domImplementationCreateHTMLDocument(title: ?[]const u8) *Document {
-    _ = title;
     var doc: ?*Document = undefined;
     _ = c.dom_implementation_create_document(
         c.DOM_IMPLEMENTATION_HTML,
@@ -871,6 +870,7 @@ pub inline fn domImplementationCreateHTMLDocument(title: ?[]const u8) *Document 
         &doc,
     );
     // TODO set title
+    _ = title;
     return doc.?;
 }
 
