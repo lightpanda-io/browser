@@ -831,13 +831,13 @@ pub inline fn domImplementationCreateDocument(namespace: ?[:0]const u8, qname: ?
     var doc: ?*Document = undefined;
 
     var ptrnamespace: [*c]const u8 = null;
-    if (namespace != null) {
-        ptrnamespace = namespace.?.ptr;
+    if (namespace) |ns| {
+        ptrnamespace = ns.ptr;
     }
 
     var ptrqname: [*c]const u8 = null;
-    if (qname != null) {
-        ptrqname = qname.?.ptr;
+    if (qname) |qn| {
+        ptrqname = qn.ptr;
     }
 
     _ = c.dom_implementation_create_document(

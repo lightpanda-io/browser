@@ -42,14 +42,14 @@ pub const DOMImplementation = struct {
     ) !*parser.Document {
         _ = self;
         var cnamespace: ?[:0]const u8 = null;
-        if (namespace != null) {
-            cnamespace = try allocator.dupeZ(u8, namespace.?);
+        if (namespace) |ns| {
+            cnamespace = try allocator.dupeZ(u8, ns);
             defer allocator.free(cnamespace.?);
         }
 
         var cqname: ?[:0]const u8 = null;
-        if (qname != null) {
-            cqname = try allocator.dupeZ(u8, qname.?);
+        if (qname) |qn| {
+            cqname = try allocator.dupeZ(u8, qn);
             defer allocator.free(cqname.?);
         }
 
