@@ -14,6 +14,7 @@ const Element = @import("element.zig").Element;
 const ElementUnion = @import("element.zig").Union;
 
 const DocumentType = @import("document_type.zig").DocumentType;
+const DOMImplementation = @import("implementation.zig").DOMImplementation;
 
 // WEB IDL https://dom.spec.whatwg.org/#document
 pub const Document = struct {
@@ -28,7 +29,11 @@ pub const Document = struct {
 
     // JS funcs
     // --------
-    //
+
+    pub fn get_implementation(_: *parser.Document) DOMImplementation {
+        return DOMImplementation{};
+    }
+
     pub fn get_documentElement(self: *parser.Document) ElementUnion {
         const e = parser.documentGetDocumentElement(self);
         return Element.toInterface(e);
@@ -197,6 +202,11 @@ pub fn testExecFn(
         .{ .src = "document.URL", .ex = "about:blank" },
     };
     try checkCases(js_env, &getDocumentURI);
+
+    var getImplementation = [_]Case{
+        .{ .src = "let impl = document.implementation", .ex = "undefined" },
+    };
+    try checkCases(js_env, &getImplementation);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;
