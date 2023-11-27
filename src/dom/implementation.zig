@@ -62,6 +62,8 @@ pub const DOMImplementation = struct {
         const doc = parser.domImplementationCreateHTMLDocument(title);
         return doc;
     }
+
+    pub fn deinit(_: *DOMImplementation, _: std.mem.Allocator) void {}
 };
 
 // Tests
