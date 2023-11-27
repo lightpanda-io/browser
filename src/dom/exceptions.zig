@@ -44,9 +44,10 @@ pub const DOMException = struct {
     pub const _DATA_CLONE_ERR = 25;
 
     // TODO: deinit
-    pub fn init(alloc: std.mem.Allocator, err: parser.DOMError, callerName: []const u8) anyerror!DOMException {
-        const errName = DOMException.name(err);
-        const str = switch (err) {
+    pub fn init(alloc: std.mem.Allocator, err: anyerror, callerName: []const u8) anyerror!DOMException {
+        const errCast = @as(parser.DOMError, @errSetCast(err));
+        const errName = DOMException.name(errCast);
+        const str = switch (errCast) {
             error.HierarchyRequest => try allocPrint(
                 alloc,
                 "{s}: Failed to execute '{s}' on 'Node': The new child element contains the parent.",
@@ -55,7 +56,7 @@ pub const DOMException = struct {
             error.NoError => unreachable,
             else => "", // TODO: implement other messages
         };
-        return .{ .err = err, .str = str };
+        return .{ .err = errCast, .str = str };
     }
 
     fn name(err: parser.DOMError) []const u8 {
