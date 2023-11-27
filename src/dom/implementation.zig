@@ -14,43 +14,41 @@ pub const DOMImplementation = struct {
     pub const mem_guarantied = true;
 
     pub fn _createDocumentType(
-       _: *DOMImplementation,
-        allocator: std.mem.Allocator,
+        _: *DOMImplementation,
+        alloc: std.mem.Allocator,
         qname: []const u8,
         publicId: []const u8,
         systemId: []const u8,
     ) !*parser.DocumentType {
-        _ = self;
-        const cqname = try allocator.dupeZ(u8, qname);
-        defer allocator.free(cqname);
+        const cqname = try alloc.dupeZ(u8, qname);
+        defer alloc.free(cqname);
 
-        const cpublicId = try allocator.dupeZ(u8, publicId);
-        defer allocator.free(cpublicId);
+        const cpublicId = try alloc.dupeZ(u8, publicId);
+        defer alloc.free(cpublicId);
 
-        const csystemId = try allocator.dupeZ(u8, systemId);
-        defer allocator.free(csystemId);
+        const csystemId = try alloc.dupeZ(u8, systemId);
+        defer alloc.free(csystemId);
 
         return parser.domImplementationCreateDocumentType(cqname, cpublicId, csystemId);
     }
 
     pub fn _createDocument(
-       _: *DOMImplementation,
-        allocator: std.mem.Allocator,
+        _: *DOMImplementation,
+        alloc: std.mem.Allocator,
         namespace: ?[]const u8,
         qname: ?[]const u8,
         doctype: ?*parser.DocumentType,
     ) !*parser.Document {
-        _ = self;
         var cnamespace: ?[:0]const u8 = null;
         if (namespace) |ns| {
-            cnamespace = try allocator.dupeZ(u8, ns);
-            defer allocator.free(cnamespace.?);
+            cnamespace = try alloc.dupeZ(u8, ns);
+            defer alloc.free(cnamespace.?);
         }
 
         var cqname: ?[:0]const u8 = null;
         if (qname) |qn| {
-            cqname = try allocator.dupeZ(u8, qn);
-            defer allocator.free(cqname.?);
+            cqname = try alloc.dupeZ(u8, qn);
+            defer alloc.free(cqname.?);
         }
 
         return parser.domImplementationCreateDocument(cnamespace, cqname, doctype);
