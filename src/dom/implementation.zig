@@ -63,6 +63,10 @@ pub const DOMImplementation = struct {
         return doc;
     }
 
+    pub fn _hasFeature(_: *DOMImplementation) bool {
+        return true;
+    }
+
     pub fn deinit(_: *DOMImplementation, _: std.mem.Allocator) void {}
 };
 
@@ -78,7 +82,8 @@ pub fn testExecFn(
         .{ .src = "let impl = document.implementation", .ex = "undefined" },
         .{ .src = "impl.createHTMLDocument();", .ex = "[object Document]" },
         .{ .src = "impl.createDocument(null, 'foo');", .ex = "[object Document]" },
-        .{ .src = "impl.createDocumentType('foo', 'bar', 'baz');", .ex = "[object DocumentType]" },
+        .{ .src = "impl.createDocumentType('foo', 'bar', 'baz')", .ex = "[object DocumentType]" },
+        .{ .src = "impl.hasFeature()", .ex = "true" },
     };
     try checkCases(js_env, &getImplementation);
 }
