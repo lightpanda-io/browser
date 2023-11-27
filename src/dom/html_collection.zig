@@ -20,6 +20,12 @@ const Matcher = union(enum) {
             inline else => |case| return case.match(node),
         }
     }
+
+    pub fn deinit(self: Matcher, alloc: std.mem.Allocator) void {
+        switch (self) {
+            inline else => |case| return case.deinit(alloc),
+        }
+    }
 };
 
 pub const MatchByTagName = struct {
@@ -28,9 +34,11 @@ pub const MatchByTagName = struct {
     tag: []const u8,
     is_wildcard: bool,
 
-    fn init(tag_name: []const u8) MatchByTagName {
+    fn init(alloc: std.mem.Allocator, tag_name: []const u8) !MatchByTagName {
+        const tag_name_alloc = try alloc.alloc(u8, tag_name.len);
+        @memcpy(tag_name_alloc, tag_name);
         return MatchByTagName{
-            .tag = tag_name,
+            .tag = tag_name_alloc,
             .is_wildcard = std.mem.eql(u8, tag_name, "*"),
         };
     }
@@ -38,13 +46,21 @@ pub const MatchByTagName = struct {
     pub fn match(self: MatchByTagName, node: *parser.Node) bool {
         return self.is_wildcard or std.ascii.eqlIgnoreCase(self.tag, parser.nodeName(node));
     }
+
+    fn deinit(self: MatchByTagName, alloc: std.mem.Allocator) void {
+        alloc.free(self.tag);
+    }
 };
 
-pub fn HTMLCollectionByTagName(root: *parser.Node, tag_name: []const u8) HTMLCollection {
+pub fn HTMLCollectionByTagName(
+    alloc: std.mem.Allocator,
+    root: *parser.Node,
+    tag_name: []const u8,
+) !HTMLCollection {
     return HTMLCollection{
         .root = root,
         .matcher = Matcher{
-            .matchByTagName = MatchByTagName.init(tag_name),
+            .matchByTagName = try MatchByTagName.init(alloc, tag_name),
         },
     };
 }
@@ -52,9 +68,11 @@ pub fn HTMLCollectionByTagName(root: *parser.Node, tag_name: []const u8) HTMLCol
 pub const MatchByClassName = struct {
     classNames: []const u8,
 
-    fn init(classNames: []const u8) MatchByClassName {
+    fn init(alloc: std.mem.Allocator, classNames: []const u8) !MatchByClassName {
+        const class_names_alloc = try alloc.alloc(u8, classNames.len);
+        @memcpy(class_names_alloc, classNames);
         return MatchByClassName{
-            .classNames = classNames,
+            .classNames = class_names_alloc,
         };
     }
 
@@ -69,13 +87,21 @@ pub const MatchByClassName = struct {
 
         return true;
     }
+
+    fn deinit(self: MatchByClassName, alloc: std.mem.Allocator) void {
+        alloc.free(self.classNames);
+    }
 };
 
-pub fn HTMLCollectionByClassName(root: *parser.Node, classNames: []const u8) HTMLCollection {
+pub fn HTMLCollectionByClassName(
+    alloc: std.mem.Allocator,
+    root: *parser.Node,
+    classNames: []const u8,
+) !HTMLCollection {
     return HTMLCollection{
         .root = root,
         .matcher = Matcher{
-            .matchByClassName = MatchByClassName.init(classNames),
+            .matchByClassName = try MatchByClassName.init(alloc, classNames),
         },
     };
 }
@@ -231,6 +257,10 @@ pub const HTMLCollection = struct {
         }
 
         return null;
+    }
+
+    pub fn deinit(self: *HTMLCollection, alloc: std.mem.Allocator) void {
+        self.matcher.deinit(alloc);
     }
 };
 
