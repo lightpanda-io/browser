@@ -14,6 +14,7 @@ const Element = @import("element.zig").Element;
 const ElementUnion = @import("element.zig").Union;
 
 const DocumentType = @import("document_type.zig").DocumentType;
+const DOMImplementation = @import("implementation.zig").DOMImplementation;
 
 // WEB IDL https://dom.spec.whatwg.org/#document
 pub const Document = struct {
@@ -21,14 +22,17 @@ pub const Document = struct {
     pub const prototype = *Node;
     pub const mem_guarantied = true;
 
-    // pub fn constructor() *parser.Document {
-    //     // TODO
-    //     return .{};
-    // }
+    pub fn constructor() *parser.Document {
+        return parser.domImplementationCreateHTMLDocument(null);
+    }
 
     // JS funcs
     // --------
-    //
+
+    pub fn get_implementation(_: *parser.Document) DOMImplementation {
+        return DOMImplementation{};
+    }
+
     pub fn get_documentElement(self: *parser.Document) ElementUnion {
         const e = parser.documentGetDocumentElement(self);
         return Element.toInterface(e);
@@ -197,6 +201,21 @@ pub fn testExecFn(
         .{ .src = "document.URL", .ex = "about:blank" },
     };
     try checkCases(js_env, &getDocumentURI);
+
+    var getImplementation = [_]Case{
+        .{ .src = "let impl = document.implementation", .ex = "undefined" },
+    };
+    try checkCases(js_env, &getImplementation);
+
+    var new = [_]Case{
+        .{ .src = "let d = new Document()", .ex = "undefined" },
+        .{ .src = "d.characterSet", .ex = "UTF-8" },
+        .{ .src = "d.URL", .ex = "about:blank" },
+        .{ .src = "d.documentURI", .ex = "about:blank" },
+        .{ .src = "d.compatMode", .ex = "CSS1Compat" },
+        .{ .src = "d.contentType", .ex = "text/html" },
+    };
+    try checkCases(js_env, &new);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;

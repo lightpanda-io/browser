@@ -826,6 +826,54 @@ pub inline fn documentTypeGetSystemId(dt: *DocumentType) []const u8 {
     return stringToData(s.?);
 }
 
+// DOMImplementation
+pub inline fn domImplementationCreateDocument(namespace: ?[:0]const u8, qname: ?[:0]const u8, doctype: ?*DocumentType) *Document {
+    var doc: ?*Document = undefined;
+
+    var ptrnamespace: [*c]const u8 = null;
+    if (namespace) |ns| {
+        ptrnamespace = ns.ptr;
+    }
+
+    var ptrqname: [*c]const u8 = null;
+    if (qname) |qn| {
+        ptrqname = qn.ptr;
+    }
+
+    _ = c.dom_implementation_create_document(
+        c.DOM_IMPLEMENTATION_XML,
+        ptrnamespace,
+        ptrqname,
+        doctype,
+        null,
+        null,
+        &doc,
+    );
+    return doc.?;
+}
+
+pub inline fn domImplementationCreateDocumentType(qname: [:0]const u8, publicId: [:0]const u8, systemId: [:0]const u8) *DocumentType {
+    var dt: ?*DocumentType = undefined;
+    _ = c.dom_implementation_create_document_type(qname.ptr, publicId.ptr, systemId.ptr, &dt);
+    return dt.?;
+}
+
+pub inline fn domImplementationCreateHTMLDocument(title: ?[]const u8) *Document {
+    var doc: ?*Document = undefined;
+    _ = c.dom_implementation_create_document(
+        c.DOM_IMPLEMENTATION_HTML,
+        null,
+        null,
+        null,
+        null,
+        null,
+        &doc,
+    );
+    // TODO set title
+    _ = title;
+    return doc.?;
+}
+
 // Document
 pub const Document = c.dom_document;
 
@@ -915,7 +963,7 @@ pub fn documentHTMLParseFromFile(filename: [:0]const u8) !*DocumentHTML {
 // The allocator is required to create a null terminated string.
 // The c string allocated is freed by the function.
 // The caller is responsible for closing the document.
-pub fn documentHTMLParseFromStrAlloc(allocator: std.mem.Allocator, str: [:0]const u8) !*DocumentHTML {
+pub fn documentHTMLParseFromStrAlloc(allocator: std.mem.Allocator, str: []const u8) !*DocumentHTML {
     // create a null terminated c string.
     const cstr = try allocator.dupeZ(u8, str);
     defer allocator.free(cstr);
