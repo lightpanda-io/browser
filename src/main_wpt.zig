@@ -58,6 +58,15 @@ const FileLoader = struct {
     }
 };
 
+const usage =
+    \\usage: {s} [options] [test filter]
+    \\  Run the Web Test Platform.
+    \\
+    \\  -h, --help       Print this help message and exit.
+    \\  --json           result is formatted in JSON.
+    \\
+;
+
 // TODO For now the WPT tests run is specific to WPT.
 // It manually load js framwork libs, and run the first script w/ js content in
 // the HTML page.
@@ -74,10 +83,28 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
-    const args = try std.process.argsAlloc(alloc);
-    defer std.process.argsFree(alloc, args);
+    var args = try std.process.argsWithAllocator(alloc);
+    defer args.deinit();
 
-    const filter = args[1..];
+    // get the exec name.
+    const execname = args.next().?;
+
+    var json = false;
+
+    var filter = std.ArrayList([]const u8).init(alloc);
+    defer filter.deinit();
+
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, "-h", arg) or std.mem.eql(u8, "--help", arg)) {
+            try std.io.getStdErr().writer().print(usage, .{execname});
+            std.os.exit(0);
+        }
+        if (std.mem.eql(u8, "--json", arg)) {
+            json = true;
+            continue;
+        }
+        try filter.append(arg[0..]);
+    }
 
     // initialize VM JS lib.
     const vm = jsruntime.VM.init();
@@ -100,9 +127,9 @@ pub fn main() !void {
     var run: usize = 0;
     var failures: usize = 0;
     for (list.items) |tc| {
-        if (filter.len > 0) {
+        if (filter.items.len > 0) {
             var match = false;
-            for (filter) |f| {
+            for (filter.items) |f| {
                 if (std.mem.startsWith(u8, tc, f)) {
                     match = true;
                     break;
