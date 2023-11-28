@@ -18,9 +18,9 @@ add_completion_callback(function (tests, status) {
   var log = "";
   for (var i = 0; i < tests.length; i++) {
     const test = tests[i];
-    log += test.name+"\t"+test.format_status()+"\t";
+    log += test.name+"|"+test.format_status();
     if (test.message != null) {
-      log +=  test.message;
+      log +=  "|"+test.message;
     }
     log += "\n";
 

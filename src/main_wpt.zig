@@ -2,6 +2,7 @@ const std = @import("std");
 
 const parser = @import("netsurf.zig");
 const jsruntime = @import("jsruntime");
+const wpt = @import("wpt/testcase.zig");
 
 const TPL = jsruntime.TPL;
 const Env = jsruntime.Env;
@@ -159,22 +160,26 @@ pub fn main() !void {
         };
         // no need to call res.deinit() thanks to the arena allocator.
 
-        if (!res.success) {
-            std.debug.print("FAIL\t{s}\n{s}\n", .{ tc, res.stack orelse res.result });
+        const suite = try wpt.Suite.init(arena.allocator(), tc, res.success, res.result, res.stack);
+        defer suite.deinit();
+
+        if (!suite.pass) {
+            std.debug.print("Fail\t{s}\n{s}\n", .{ suite.name, suite.fmtMessage() });
             failures += 1;
-            continue;
-        }
-        if (!std.mem.eql(u8, res.result, "Pass")) {
-            std.debug.print("FAIL\t{s}\n{s}\n", .{ tc, res.stack orelse res.result });
-            failures += 1;
-            continue;
+        } else {
+            std.debug.print("Pass\t{s}\n", .{suite.name});
         }
 
-        std.debug.print("PASS\t{s}\n", .{tc});
+        // display details
+        if (suite.cases) |cases| {
+            for (cases) |case| {
+                std.debug.print("\t{s}\t{s}\t{s}\n", .{ case.fmtStatus(), case.name, case.fmtMessage() });
+            }
+        }
     }
 
     if (failures > 0) {
-        std.debug.print("{d}/{d} tests failures\n", .{ failures, run });
+        std.debug.print("{d}/{d} tests suites failures\n", .{ failures, run });
         std.os.exit(1);
     }
 }
