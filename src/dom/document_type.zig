@@ -10,15 +10,15 @@ pub const DocumentType = struct {
     pub const prototype = *Node;
     pub const mem_guarantied = true;
 
-    pub fn get_name(self: *parser.DocumentType) []const u8 {
-        return parser.documentTypeGetName(self);
+    pub fn get_name(self: *parser.DocumentType) ![]const u8 {
+        return try parser.documentTypeGetName(self);
     }
 
-    pub fn get_publicId(self: *parser.DocumentType) []const u8 {
-        return parser.documentTypeGetPublicId(self);
+    pub fn get_publicId(self: *parser.DocumentType) ![]const u8 {
+        return try parser.documentTypeGetPublicId(self);
     }
 
-    pub fn get_systemId(self: *parser.DocumentType) []const u8 {
-        return parser.documentTypeGetSystemId(self);
+    pub fn get_systemId(self: *parser.DocumentType) ![]const u8 {
+        return try parser.documentTypeGetSystemId(self);
     }
 };

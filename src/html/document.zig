@@ -18,8 +18,8 @@ pub const HTMLDocument = struct {
     // JS funcs
     // --------
 
-    pub fn get_body(self: *parser.DocumentHTML) ?*parser.Body {
-        return parser.documentHTMLBody(self);
+    pub fn get_body(self: *parser.DocumentHTML) !?*parser.Body {
+        return try parser.documentHTMLBody(self);
     }
 };
 

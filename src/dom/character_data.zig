@@ -29,57 +29,57 @@ pub const CharacterData = struct {
 
     // Read attributes
 
-    pub fn get_length(self: *parser.CharacterData) u32 {
-        return parser.characterDataLength(self);
+    pub fn get_length(self: *parser.CharacterData) !u32 {
+        return try parser.characterDataLength(self);
     }
 
-    pub fn get_nextElementSibling(self: *parser.CharacterData) ?HTMLElem.Union {
-        const res = parser.nodeNextElementSibling(parser.characterDataToNode(self));
+    pub fn get_nextElementSibling(self: *parser.CharacterData) !?HTMLElem.Union {
+        const res = try parser.nodeNextElementSibling(parser.characterDataToNode(self));
         if (res == null) {
             return null;
         }
-        return HTMLElem.toInterface(HTMLElem.Union, res.?);
+        return try HTMLElem.toInterface(HTMLElem.Union, res.?);
     }
 
-    pub fn get_previousElementSibling(self: *parser.CharacterData) ?HTMLElem.Union {
-        const res = parser.nodePreviousElementSibling(parser.characterDataToNode(self));
+    pub fn get_previousElementSibling(self: *parser.CharacterData) !?HTMLElem.Union {
+        const res = try parser.nodePreviousElementSibling(parser.characterDataToNode(self));
         if (res == null) {
             return null;
         }
-        return HTMLElem.toInterface(HTMLElem.Union, res.?);
+        return try HTMLElem.toInterface(HTMLElem.Union, res.?);
     }
 
     // Read/Write attributes
 
-    pub fn get_data(self: *parser.CharacterData) []const u8 {
-        return parser.characterDataData(self);
+    pub fn get_data(self: *parser.CharacterData) ![]const u8 {
+        return try parser.characterDataData(self);
     }
 
-    pub fn set_data(self: *parser.CharacterData, data: []const u8) void {
-        return parser.characterDataSetData(self, data);
+    pub fn set_data(self: *parser.CharacterData, data: []const u8) !void {
+        return try parser.characterDataSetData(self, data);
     }
 
     // JS methods
     // ----------
 
-    pub fn _appendData(self: *parser.CharacterData, data: []const u8) void {
-        return parser.characterDataAppendData(self, data);
+    pub fn _appendData(self: *parser.CharacterData, data: []const u8) !void {
+        return try parser.characterDataAppendData(self, data);
     }
 
-    pub fn _deleteData(self: *parser.CharacterData, offset: u32, count: u32) void {
-        return parser.characterDataDeleteData(self, offset, count);
+    pub fn _deleteData(self: *parser.CharacterData, offset: u32, count: u32) !void {
+        return try parser.characterDataDeleteData(self, offset, count);
     }
 
-    pub fn _insertData(self: *parser.CharacterData, offset: u32, data: []const u8) void {
-        return parser.characterDataInsertData(self, offset, data);
+    pub fn _insertData(self: *parser.CharacterData, offset: u32, data: []const u8) !void {
+        return try parser.characterDataInsertData(self, offset, data);
     }
 
-    pub fn _replaceData(self: *parser.CharacterData, offset: u32, count: u32, data: []const u8) void {
-        return parser.characterDataReplaceData(self, offset, count, data);
+    pub fn _replaceData(self: *parser.CharacterData, offset: u32, count: u32, data: []const u8) !void {
+        return try parser.characterDataReplaceData(self, offset, count, data);
     }
 
-    pub fn _substringData(self: *parser.CharacterData, offset: u32, count: u32) []const u8 {
-        return parser.characterDataSubstringData(self, offset, count);
+    pub fn _substringData(self: *parser.CharacterData, offset: u32, count: u32) ![]const u8 {
+        return try parser.characterDataSubstringData(self, offset, count);
     }
 };
 

@@ -28,22 +28,21 @@ pub const Document = struct {
 
     // JS funcs
     // --------
-
     pub fn get_implementation(_: *parser.Document) DOMImplementation {
         return DOMImplementation{};
     }
 
-    pub fn get_documentElement(self: *parser.Document) ElementUnion {
-        const e = parser.documentGetDocumentElement(self);
-        return Element.toInterface(e);
+    pub fn get_documentElement(self: *parser.Document) !ElementUnion {
+        const e = try parser.documentGetDocumentElement(self);
+        return try Element.toInterface(e);
     }
 
-    pub fn get_documentURI(self: *parser.Document) []const u8 {
-        return parser.documentGetDocumentURI(self);
+    pub fn get_documentURI(self: *parser.Document) ![]const u8 {
+        return try parser.documentGetDocumentURI(self);
     }
 
-    pub fn get_URL(self: *parser.Document) []const u8 {
-        return get_documentURI(self);
+    pub fn get_URL(self: *parser.Document) ![]const u8 {
+        return try get_documentURI(self);
     }
 
     // TODO implement contentType
@@ -58,37 +57,37 @@ pub const Document = struct {
         return "CSS1Compat";
     }
 
-    pub fn get_characterSet(self: *parser.Document) []const u8 {
-        return parser.documentGetInputEncoding(self);
+    pub fn get_characterSet(self: *parser.Document) ![]const u8 {
+        return try parser.documentGetInputEncoding(self);
     }
 
     // alias of get_characterSet
-    pub fn get_charset(self: *parser.Document) []const u8 {
-        return get_characterSet(self);
+    pub fn get_charset(self: *parser.Document) ![]const u8 {
+        return try get_characterSet(self);
     }
 
     // alias of get_characterSet
-    pub fn get_inputEncoding(self: *parser.Document) []const u8 {
-        return get_characterSet(self);
+    pub fn get_inputEncoding(self: *parser.Document) ![]const u8 {
+        return try get_characterSet(self);
     }
 
-    pub fn get_doctype(self: *parser.Document) ?*parser.DocumentType {
-        return parser.documentGetDoctype(self);
+    pub fn get_doctype(self: *parser.Document) !?*parser.DocumentType {
+        return try parser.documentGetDoctype(self);
     }
 
-    pub fn _getElementById(self: *parser.Document, id: []const u8) ?ElementUnion {
-        const e = parser.documentGetElementById(self, id) orelse return null;
-        return Element.toInterface(e);
+    pub fn _getElementById(self: *parser.Document, id: []const u8) !?ElementUnion {
+        const e = try parser.documentGetElementById(self, id) orelse return null;
+        return try Element.toInterface(e);
     }
 
-    pub fn _createElement(self: *parser.Document, tag_name: []const u8) ElementUnion {
-        const e = parser.documentCreateElement(self, tag_name);
-        return Element.toInterface(e);
+    pub fn _createElement(self: *parser.Document, tag_name: []const u8) !ElementUnion {
+        const e = try parser.documentCreateElement(self, tag_name);
+        return try Element.toInterface(e);
     }
 
-    pub fn _createElementNS(self: *parser.Document, ns: []const u8, tag_name: []const u8) ElementUnion {
-        const e = parser.documentCreateElementNS(self, ns, tag_name);
-        return Element.toInterface(e);
+    pub fn _createElementNS(self: *parser.Document, ns: []const u8, tag_name: []const u8) !ElementUnion {
+        const e = try parser.documentCreateElementNS(self, ns, tag_name);
+        return try Element.toInterface(e);
     }
 
     // We can't simply use libdom dom_document_get_elements_by_tag_name here.
@@ -104,7 +103,7 @@ pub const Document = struct {
         alloc: std.mem.Allocator,
         tag_name: []const u8,
     ) !collection.HTMLCollection {
-        const root = parser.documentGetDocumentElement(self);
+        const root = try parser.documentGetDocumentElement(self);
         return try collection.HTMLCollectionByTagName(
             alloc,
             parser.elementToNode(root),
@@ -117,7 +116,7 @@ pub const Document = struct {
         alloc: std.mem.Allocator,
         classNames: []const u8,
     ) !collection.HTMLCollection {
-        const root = parser.documentGetDocumentElement(self);
+        const root = try parser.documentGetDocumentElement(self);
         return try collection.HTMLCollectionByClassName(
             alloc,
             parser.elementToNode(root),

@@ -62,7 +62,9 @@ pub fn main() !void {
 
     // document
     doc = try parser.documentHTMLParseFromFileAlloc(arena.allocator(), "test.html");
-    defer parser.documentHTMLClose(doc);
+    defer parser.documentHTMLClose(doc) catch |err| {
+        std.debug.print("documentHTMLClose error: {s}\n", .{@errorName(err)});
+    };
 
     // remove socket file of internal server
     // reuse_address (SO_REUSEADDR flag) does not seems to work on unix socket

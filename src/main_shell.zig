@@ -43,7 +43,9 @@ pub fn main() !void {
 
     // document
     doc = try parser.documentHTMLParseFromFileAlloc(arena.allocator(), "test.html");
-    defer parser.documentHTMLClose(doc);
+    defer parser.documentHTMLClose(doc) catch |err| {
+        std.debug.print("documentHTMLClose error: {s}\n", .{@errorName(err)});
+    };
 
     // create JS vm
     const vm = jsruntime.VM.init();

@@ -18,15 +18,15 @@ pub const Text = struct {
 
     // Read attributes
 
-    pub fn get_wholeText(self: *parser.Text) []const u8 {
-        return parser.textWholdeText(self);
+    pub fn get_wholeText(self: *parser.Text) ![]const u8 {
+        return try parser.textWholdeText(self);
     }
 
     // JS methods
     // ----------
 
-    pub fn _splitText(self: *parser.Text, offset: u32) *parser.Text {
-        return parser.textSplitText(self, offset);
+    pub fn _splitText(self: *parser.Text, offset: u32) !*parser.Text {
+        return try parser.textSplitText(self, offset);
     }
 };
 

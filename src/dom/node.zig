@@ -42,9 +42,12 @@ pub const Node = struct {
     pub const prototype = *EventTarget;
     pub const mem_guarantied = true;
 
-    pub fn toInterface(node: *parser.Node) Union {
-        return switch (parser.nodeType(node)) {
-            .element => HTMLElem.toInterface(Union, @as(*parser.Element, @ptrCast(node))),
+    pub fn toInterface(node: *parser.Node) !Union {
+        return switch (try parser.nodeType(node)) {
+            .element => try HTMLElem.toInterface(
+                Union,
+                @as(*parser.Element, @ptrCast(node)),
+            ),
             .comment => .{ .Comment = @as(*parser.Comment, @ptrCast(node)) },
             .text => .{ .Text = @as(*parser.Text, @ptrCast(node)) },
             .document => .{ .HTMLDocument = @as(*parser.DocumentHTML, @ptrCast(node)) },
@@ -58,94 +61,94 @@ pub const Node = struct {
 
     // Read-only attributes
 
-    pub fn get_firstChild(self: *parser.Node) ?Union {
-        const res = parser.nodeFirstChild(self);
+    pub fn get_firstChild(self: *parser.Node) !?Union {
+        const res = try parser.nodeFirstChild(self);
         if (res == null) {
             return null;
         }
-        return Node.toInterface(res.?);
+        return try Node.toInterface(res.?);
     }
 
-    pub fn get_lastChild(self: *parser.Node) ?Union {
-        const res = parser.nodeLastChild(self);
+    pub fn get_lastChild(self: *parser.Node) !?Union {
+        const res = try parser.nodeLastChild(self);
         if (res == null) {
             return null;
         }
-        return Node.toInterface(res.?);
+        return try Node.toInterface(res.?);
     }
 
-    pub fn get_nextSibling(self: *parser.Node) ?Union {
-        const res = parser.nodeNextSibling(self);
+    pub fn get_nextSibling(self: *parser.Node) !?Union {
+        const res = try parser.nodeNextSibling(self);
         if (res == null) {
             return null;
         }
-        return Node.toInterface(res.?);
+        return try Node.toInterface(res.?);
     }
 
-    pub fn get_previousSibling(self: *parser.Node) ?Union {
-        const res = parser.nodePreviousSibling(self);
+    pub fn get_previousSibling(self: *parser.Node) !?Union {
+        const res = try parser.nodePreviousSibling(self);
         if (res == null) {
             return null;
         }
-        return Node.toInterface(res.?);
+        return try Node.toInterface(res.?);
     }
 
-    pub fn get_parentNode(self: *parser.Node) ?Union {
-        const res = parser.nodeParentNode(self);
+    pub fn get_parentNode(self: *parser.Node) !?Union {
+        const res = try parser.nodeParentNode(self);
         if (res == null) {
             return null;
         }
-        return Node.toInterface(res.?);
+        return try Node.toInterface(res.?);
     }
 
-    pub fn get_parentElement(self: *parser.Node) ?HTMLElem.Union {
-        const res = parser.nodeParentElement(self);
+    pub fn get_parentElement(self: *parser.Node) !?HTMLElem.Union {
+        const res = try parser.nodeParentElement(self);
         if (res == null) {
             return null;
         }
-        return HTMLElem.toInterface(HTMLElem.Union, @as(*parser.Element, @ptrCast(res.?)));
+        return try HTMLElem.toInterface(HTMLElem.Union, @as(*parser.Element, @ptrCast(res.?)));
     }
 
-    pub fn get_nodeName(self: *parser.Node) []const u8 {
-        return parser.nodeName(self);
+    pub fn get_nodeName(self: *parser.Node) ![]const u8 {
+        return try parser.nodeName(self);
     }
 
-    pub fn get_nodeType(self: *parser.Node) u8 {
-        return @intFromEnum(parser.nodeType(self));
+    pub fn get_nodeType(self: *parser.Node) !u8 {
+        return @intFromEnum(try parser.nodeType(self));
     }
 
-    pub fn get_ownerDocument(self: *parser.Node) ?*parser.DocumentHTML {
-        const res = parser.nodeOwnerDocument(self);
+    pub fn get_ownerDocument(self: *parser.Node) !?*parser.DocumentHTML {
+        const res = try parser.nodeOwnerDocument(self);
         if (res == null) {
             return null;
         }
         return @as(*parser.DocumentHTML, @ptrCast(res.?));
     }
 
-    pub fn get_isConnected(self: *parser.Node) bool {
+    pub fn get_isConnected(self: *parser.Node) !bool {
         // TODO: handle Shadow DOM
-        if (parser.nodeType(self) == .document) {
+        if (try parser.nodeType(self) == .document) {
             return true;
         }
-        return Node.get_parentNode(self) != null;
+        return try Node.get_parentNode(self) != null;
     }
 
     // Read/Write attributes
 
-    pub fn get_nodeValue(self: *parser.Node) ?[]const u8 {
-        return parser.nodeValue(self);
+    pub fn get_nodeValue(self: *parser.Node) !?[]const u8 {
+        return try parser.nodeValue(self);
     }
 
-    pub fn set_nodeValue(self: *parser.Node, data: []u8) void {
-        parser.nodeSetValue(self, data);
+    pub fn set_nodeValue(self: *parser.Node, data: []u8) !void {
+        try parser.nodeSetValue(self, data);
     }
 
-    pub fn get_textContent(self: *parser.Node) ?[]const u8 {
-        return parser.nodeTextContent(self);
+    pub fn get_textContent(self: *parser.Node) !?[]const u8 {
+        return try parser.nodeTextContent(self);
     }
 
-    pub fn set_textContent(self: *parser.Node, data: []u8) void {
-        return parser.nodeSetTextContent(self, data);
+    pub fn set_textContent(self: *parser.Node, data: []u8) !void {
+        return try parser.nodeSetTextContent(self, data);
     }
 
     // Methods
@@ -153,12 +156,12 @@ pub const Node = struct {
     pub fn _appendChild(self: *parser.Node, child: *parser.Node) !Union {
         // TODO: DocumentFragment special case
         const res = try parser.nodeAppendChild(self, child);
-        return Node.toInterface(res);
+        return try Node.toInterface(res);
     }
 
-    pub fn _cloneNode(self: *parser.Node, deep: ?bool) Union {
-        const clone = parser.nodeCloneNode(self, deep orelse false);
-        return Node.toInterface(clone);
+    pub fn _cloneNode(self: *parser.Node, deep: ?bool) !Union {
+        const clone = try parser.nodeCloneNode(self, deep orelse false);
+        return try Node.toInterface(clone);
     }
 
     pub fn _compareDocumentPosition(self: *parser.Node, other: *parser.Node) void {
@@ -168,8 +171,8 @@ pub const Node = struct {
         std.log.err("Not implemented {s}", .{"node.compareDocumentPosition()"});
     }
 
-    pub fn _contains(self: *parser.Node, other: *parser.Node) bool {
-        return parser.nodeContains(self, other);
+    pub fn _contains(self: *parser.Node, other: *parser.Node) !bool {
+        return try parser.nodeContains(self, other);
     }
 
     pub fn _getRootNode(self: *parser.Node) void {
@@ -178,31 +181,31 @@ pub const Node = struct {
         std.log.err("Not implemented {s}", .{"node.getRootNode()"});
     }
 
-    pub fn _hasChildNodes(self: *parser.Node) bool {
-        return parser.nodeHasChildNodes(self);
+    pub fn _hasChildNodes(self: *parser.Node) !bool {
+        return try parser.nodeHasChildNodes(self);
     }
 
-    pub fn _insertBefore(self: *parser.Node, new_node: *parser.Node, ref_node: *parser.Node) *parser.Node {
-        return parser.nodeInsertBefore(self, new_node, ref_node);
+    pub fn _insertBefore(self: *parser.Node, new_node: *parser.Node, ref_node: *parser.Node) !*parser.Node {
+        return try parser.nodeInsertBefore(self, new_node, ref_node);
     }
 
-    pub fn _isDefaultNamespace(self: *parser.Node, namespace: []const u8) bool {
+    pub fn _isDefaultNamespace(self: *parser.Node, namespace: []const u8) !bool {
         // TODO: namespace is not an optional parameter, but can be null.
-        return parser.nodeIsDefaultNamespace(self, namespace);
+        return try parser.nodeIsDefaultNamespace(self, namespace);
     }
 
-    pub fn _isEqualNode(self: *parser.Node, other: *parser.Node) bool {
+    pub fn _isEqualNode(self: *parser.Node, other: *parser.Node) !bool {
         // TODO: other is not an optional parameter, but can be null.
-        return parser.nodeIsEqualNode(self, other);
+        return try parser.nodeIsEqualNode(self, other);
     }
 
-    pub fn _isSameNode(self: *parser.Node, other: *parser.Node) bool {
+    pub fn _isSameNode(self: *parser.Node, other: *parser.Node) !bool {
         // TODO: other is not an optional parameter, but can be null.
         // NOTE: there is no need to use isSameNode(); instead use the === strict equality operator
-        return parser.nodeIsSameNode(self, other);
+        return try parser.nodeIsSameNode(self, other);
     }
 
-    pub fn _lookupPrefix(self: *parser.Node, namespace: ?[]const u8) ?[]const u8 {
+    pub fn _lookupPrefix(self: *parser.Node, namespace: ?[]const u8) !?[]const u8 {
         // TODO: other is not an optional parameter, but can be null.
         if (namespace == null) {
             return null;
@@ -210,26 +213,26 @@ pub const Node = struct {
         if (std.mem.eql(u8, namespace.?, "")) {
             return null;
         }
-        return parser.nodeLookupPrefix(self, namespace.?);
+        return try parser.nodeLookupPrefix(self, namespace.?);
     }
 
-    pub fn _lookupNamespaceURI(self: *parser.Node, prefix: ?[]const u8) ?[]const u8 {
+    pub fn _lookupNamespaceURI(self: *parser.Node, prefix: ?[]const u8) !?[]const u8 {
         // TODO: other is not an optional parameter, but can be null.
-        return parser.nodeLookupNamespaceURI(self, prefix);
+        return try parser.nodeLookupNamespaceURI(self, prefix);
     }
 
-    pub fn _normalize(self: *parser.Node) void {
-        return parser.nodeNormalize(self);
+    pub fn _normalize(self: *parser.Node) !void {
+        return try parser.nodeNormalize(self);
     }
 
-    pub fn _removeChild(self: *parser.Node, child: *parser.Node) Union {
-        const res = parser.nodeRemoveChild(self, child);
-        return Node.toInterface(res);
+    pub fn _removeChild(self: *parser.Node, child: *parser.Node) !Union {
+        const res = try parser.nodeRemoveChild(self, child);
+        return try Node.toInterface(res);
     }
 
-    pub fn _replaceChild(self: *parser.Node, new_child: *parser.Node, old_child: *parser.Node) Union {
-        const res = parser.nodeReplaceChild(self, new_child, old_child);
-        return Node.toInterface(res);
+    pub fn _replaceChild(self: *parser.Node, new_child: *parser.Node, old_child: *parser.Node) !Union {
+        const res = try parser.nodeReplaceChild(self, new_child, old_child);
+        return try Node.toInterface(res);
     }
 };
 
