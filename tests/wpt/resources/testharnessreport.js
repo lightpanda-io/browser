@@ -10,7 +10,7 @@ var report = {
 add_completion_callback(function (tests, status) {
   // report the tests global status.
   // TODO the status.status is always OK even if a test fail.
-  // I ingore the global status for now, but I build one with the tests results.
+  // I ignore the global status for now, but I build one with the tests results.
   //report.status = status.status;
 
   var status = "Pass";
@@ -18,9 +18,9 @@ add_completion_callback(function (tests, status) {
   var log = "";
   for (var i = 0; i < tests.length; i++) {
     const test = tests[i];
-    log += test.name+": "+test.format_status();
+    log += test.name+"\t"+test.format_status()+"\t";
     if (test.message != null) {
-      log += " " + test.message;
+      log +=  test.message;
     }
     log += "\n";
 
