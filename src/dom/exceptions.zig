@@ -54,7 +54,11 @@ pub const DOMException = struct {
                 .{ errName, callerName },
             ),
             error.NoError => unreachable,
-            else => "", // TODO: implement other messages
+            else => try allocPrint(
+                alloc,
+                "{s}: TODO message", // TODO: implement other messages
+                .{DOMException.name(errCast)},
+            ),
         };
         return .{ .err = errCast, .str = str };
     }
@@ -154,6 +158,8 @@ pub fn testExecFn(
         .{ .src = "HierarchyRequestError.code", .ex = "3" },
         .{ .src = "HierarchyRequestError.message", .ex = err },
         .{ .src = "HierarchyRequestError.toString()", .ex = "HierarchyRequestError: " ++ err },
+        .{ .src = "HierarchyRequestError instanceof DOMException", .ex = "true" },
+        .{ .src = "HierarchyRequestError instanceof Error", .ex = "true" },
     };
     try checkCases(js_env, &cases);
 }

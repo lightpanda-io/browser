@@ -8,10 +8,13 @@ const checkCases = jsruntime.test_utils.checkCases;
 
 const Document = @import("document.zig").Document;
 const DocumentType = @import("document_type.zig").DocumentType;
+const DOMException = @import("exceptions.zig").DOMException;
 
 // WEB IDL https://dom.spec.whatwg.org/#domimplementation
 pub const DOMImplementation = struct {
     pub const mem_guarantied = true;
+
+    pub const Exception = DOMException;
 
     pub fn _createDocumentType(
         _: *DOMImplementation,
@@ -29,7 +32,7 @@ pub const DOMImplementation = struct {
         const csystemId = try alloc.dupeZ(u8, systemId);
         defer alloc.free(csystemId);
 
-        return parser.domImplementationCreateDocumentType(cqname, cpublicId, csystemId);
+        return try parser.domImplementationCreateDocumentType(cqname, cpublicId, csystemId);
     }
 
     pub fn _createDocument(
@@ -51,11 +54,11 @@ pub const DOMImplementation = struct {
             defer alloc.free(cqname.?);
         }
 
-        return parser.domImplementationCreateDocument(cnamespace, cqname, doctype);
+        return try parser.domImplementationCreateDocument(cnamespace, cqname, doctype);
     }
 
-    pub fn _createHTMLDocument(_: *DOMImplementation, title: ?[]const u8) *parser.Document {
-        return parser.domImplementationCreateHTMLDocument(title);
+    pub fn _createHTMLDocument(_: *DOMImplementation, title: ?[]const u8) !*parser.Document {
+        return try parser.domImplementationCreateHTMLDocument(title);
     }
 
     pub fn _hasFeature(_: *DOMImplementation) bool {

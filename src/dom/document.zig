@@ -22,8 +22,8 @@ pub const Document = struct {
     pub const prototype = *Node;
     pub const mem_guarantied = true;
 
-    pub fn constructor() *parser.Document {
-        return parser.domImplementationCreateHTMLDocument(null);
+    pub fn constructor() !*parser.Document {
+        return try parser.domImplementationCreateHTMLDocument(null);
     }
 
     // JS funcs
