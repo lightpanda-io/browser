@@ -20,7 +20,7 @@ add_completion_callback(function (tests, status) {
     const test = tests[i];
     log += test.name+"|"+test.format_status();
     if (test.message != null) {
-      log +=  "|"+test.message;
+      log +=  "|"+test.message.replaceAll("\n"," ");
     }
     log += "\n";
 
