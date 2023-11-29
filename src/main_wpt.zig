@@ -1,63 +1,15 @@
 const std = @import("std");
 
-const parser = @import("netsurf.zig");
 const jsruntime = @import("jsruntime");
-const wpt = @import("wpt/testcase.zig");
 
-const TPL = jsruntime.TPL;
-const Env = jsruntime.Env;
-const Loop = jsruntime.Loop;
+const Suite = @import("wpt/testcase.zig").Suite;
+const FileLoader = @import("wpt/fileloader.zig").FileLoader;
+const wpt = @import("wpt/run.zig");
 
 const DOM = @import("dom.zig");
 const HTMLElem = @import("html/elements.zig");
 
-const fspath = std.fs.path;
-
 const wpt_dir = "tests/wpt";
-
-// FileLoader loads files content from the filesystem.
-const FileLoader = struct {
-    const FilesMap = std.StringHashMap([]const u8);
-
-    files: FilesMap,
-    path: []const u8,
-    alloc: std.mem.Allocator,
-
-    fn init(alloc: std.mem.Allocator, path: []const u8) FileLoader {
-        const files = FilesMap.init(alloc);
-
-        return FileLoader{
-            .path = path,
-            .alloc = alloc,
-            .files = files,
-        };
-    }
-    fn get(self: *FileLoader, name: []const u8) ![]const u8 {
-        if (!self.files.contains(name)) {
-            try self.load(name);
-        }
-        return self.files.get(name).?;
-    }
-    fn load(self: *FileLoader, name: []const u8) !void {
-        const filename = try fspath.join(self.alloc, &.{ self.path, name });
-        defer self.alloc.free(filename);
-        var file = try std.fs.cwd().openFile(filename, .{});
-        defer file.close();
-
-        const file_size = try file.getEndPos();
-        const content = try file.readToEndAlloc(self.alloc, file_size);
-        const namedup = try self.alloc.dupe(u8, name);
-        try self.files.put(namedup, content);
-    }
-    fn deinit(self: *FileLoader) void {
-        var iter = self.files.iterator();
-        while (iter.next()) |entry| {
-            self.alloc.free(entry.key_ptr.*);
-            self.alloc.free(entry.value_ptr.*);
-        }
-        self.files.deinit();
-    }
-};
 
 const usage =
     \\usage: {s} [options] [test filter]
@@ -117,7 +69,7 @@ pub fn main() !void {
 
     // browse the dir to get the tests dynamically.
     var list = std.ArrayList([]const u8).init(alloc);
-    try findWPTTests(alloc, wpt_dir, &list);
+    try wpt.find(alloc, wpt_dir, &list);
     defer {
         for (list.items) |tc| {
             alloc.free(tc);
@@ -153,14 +105,14 @@ pub fn main() !void {
 
         // TODO I don't use testing.expect here b/c I want to execute all the
         // tests. And testing.expect stops running test in the first failure.
-        const res = runWPT(&arena, apis, tc, &loader) catch |err| {
+        const res = wpt.run(&arena, apis, wpt_dir, tc, &loader) catch |err| {
             std.debug.print("FAIL\t{s}\n{any}\n", .{ tc, err });
             failures += 1;
             continue;
         };
         // no need to call res.deinit() thanks to the arena allocator.
 
-        const suite = try wpt.Suite.init(arena.allocator(), tc, res.success, res.result, res.stack);
+        const suite = try Suite.init(arena.allocator(), tc, res.success, res.result, res.stack);
         defer suite.deinit();
 
         if (!suite.pass) {
@@ -181,152 +133,5 @@ pub fn main() !void {
     if (failures > 0) {
         std.debug.print("{d}/{d} tests suites failures\n", .{ failures, run });
         std.os.exit(1);
-    }
-}
-
-// runWPT parses the given HTML file, starts a js env and run the first script
-// tags containing javascript sources.
-// It loads first the js libs files.
-fn runWPT(arena: *std.heap.ArenaAllocator, comptime apis: []jsruntime.API, f: []const u8, loader: *FileLoader) !jsruntime.JSResult {
-    const alloc = arena.allocator();
-
-    // document
-    const html_doc = try parser.documentHTMLParseFromFileAlloc(alloc, f);
-    const doc = parser.documentHTMLToDocument(html_doc);
-
-    const dirname = fspath.dirname(f[wpt_dir.len..]) orelse unreachable;
-
-    // create JS env
-    var loop = try Loop.init(alloc);
-    defer loop.deinit();
-    var js_env = try Env.init(arena, &loop);
-    defer js_env.deinit();
-
-    // load APIs in JS env
-    var tpls: [apis.len]TPL = undefined;
-    try js_env.load(apis, &tpls);
-
-    // start JS env
-    try js_env.start(alloc, apis);
-    defer js_env.stop();
-
-    // add document object
-    try js_env.addObject(apis, html_doc, "document");
-
-    // alias global as self and window
-    try js_env.attachObject(try js_env.getGlobal(), "self", null);
-    try js_env.attachObject(try js_env.getGlobal(), "window", null);
-
-    // thanks to the arena, we don't need to deinit res.
-    var res: jsruntime.JSResult = undefined;
-
-    const init =
-        \\window.listeners = [];
-        \\window.document = document;
-        \\window.parent = window;
-        \\window.addEventListener = function (type, listener, options) {
-        \\  window.listeners.push({type: type, listener: listener, options: options});
-        \\};
-        \\window.dispatchEvent = function (event) {
-        \\  len = window.listeners.length;
-        \\  for (var i = 0; i < len; i++) {
-        \\      if (window.listeners[i].type == event.target) {
-        \\          window.listeners[i].listener(event);
-        \\      }
-        \\  }
-        \\  return true;
-        \\};
-        \\window.removeEventListener = function () {};
-        \\
-        \\console = [];
-        \\console.log = function () {
-        \\  console.push(...arguments);
-        \\};
-    ;
-    res = try evalJS(js_env, alloc, init, "init");
-    if (!res.success) {
-        return res;
-    }
-
-    // loop hover the scripts.
-    const scripts = try parser.documentGetElementsByTagName(doc, "script");
-    const slen = try parser.nodeListLength(scripts);
-    for (0..slen) |i| {
-        const s = (try parser.nodeListItem(scripts, @intCast(i))).?;
-
-        // If the script contains an src attribute, load it.
-        if (try parser.elementGetAttribute(@as(*parser.Element, @ptrCast(s)), "src")) |src| {
-            var path = src;
-            if (!std.mem.startsWith(u8, src, "/")) {
-                // no need to free path, thanks to the arena.
-                path = try fspath.join(alloc, &.{ "/", dirname, path });
-            }
-
-            res = try evalJS(js_env, alloc, try loader.get(path), src);
-            if (!res.success) {
-                return res;
-            }
-        }
-
-        // If the script as a source text, execute it.
-        const src = try parser.nodeTextContent(s) orelse continue;
-        res = try evalJS(js_env, alloc, src, "");
-
-        // return the first failure.
-        if (!res.success) {
-            return res;
-        }
-    }
-
-    // Mark tests as ready to run.
-    res = try evalJS(js_env, alloc, "window.dispatchEvent({target: 'load'});", "ready");
-    if (!res.success) {
-        return res;
-    }
-
-    // display console logs
-    res = try evalJS(js_env, alloc, "console.join(', ');", "console");
-    if (res.result.len > 0) {
-        std.debug.print("-- CONSOLE LOG\n{s}\n--\n", .{res.result});
-    }
-
-    // Check the final test status.
-    res = try evalJS(js_env, alloc, "report.status;", "teststatus");
-    if (!res.success) {
-        return res;
-    }
-
-    // If the test failed, return detailed logs intead of the simple status.
-    if (!std.mem.eql(u8, res.result, "Pass")) {
-        return try evalJS(js_env, alloc, "report.log", "teststatus");
-    }
-
-    // return the final result.
-    return res;
-}
-
-fn evalJS(env: jsruntime.Env, alloc: std.mem.Allocator, script: []const u8, name: ?[]const u8) !jsruntime.JSResult {
-    var res = jsruntime.JSResult{};
-    try env.run(alloc, script, name, &res, null);
-    return res;
-}
-
-// browse the path to find the tests list.
-fn findWPTTests(allocator: std.mem.Allocator, path: []const u8, list: *std.ArrayList([]const u8)) !void {
-    var dir = try std.fs.cwd().openIterableDir(path, .{ .no_follow = true });
-    defer dir.close();
-
-    var walker = try dir.walk(allocator);
-    defer walker.deinit();
-
-    while (try walker.next()) |entry| {
-        if (entry.kind != .file) {
-            continue;
-        }
-        if (!std.mem.endsWith(u8, entry.basename, ".html")) {
-            continue;
-        }
-
-        try list.append(try fspath.join(allocator, &.{ path, entry.path }));
     }
 }
