@@ -77,6 +77,14 @@ pub fn main() !void {
         list.deinit();
     }
 
+    var results = std.ArrayList(Suite).init(alloc);
+    defer {
+        for (results.items) |suite| {
+            suite.deinit();
+        }
+        results.deinit();
+    }
+
     var run: usize = 0;
     var failures: usize = 0;
     for (list.items) |tc| {
@@ -104,14 +112,23 @@ pub fn main() !void {
         defer arena.deinit();
 
         const res = wpt.run(&arena, apis, wpt_dir, tc, &loader) catch |err| {
-            std.debug.print("FAIL\t{s}\n{any}\n", .{ tc, err });
+            const suite = try Suite.init(alloc, tc, false, @errorName(err), null);
+            try results.append(suite);
+
+            if (!json) {
+                std.debug.print("FAIL\t{s}\t{}\n", .{ tc, err });
+            }
             failures += 1;
             continue;
         };
         // no need to call res.deinit() thanks to the arena allocator.
 
         const suite = try Suite.init(alloc, tc, res.success, res.result, res.stack);
-        defer suite.deinit();
+        try results.append(suite);
+
+        if (json) {
+            continue;
+        }
 
         if (!suite.pass) {
             std.debug.print("Fail\t{s}\n{s}\n", .{ suite.name, suite.fmtMessage() });
@@ -128,7 +145,61 @@ pub fn main() !void {
         }
     }
 
-    if (failures > 0) {
+    if (json) {
+        const Case = struct {
+            pass: bool,
+            name: []const u8,
+            message: ?[]const u8,
+        };
+        const Test = struct {
+            pass: bool,
+            crash: bool = false, // TODO
+            name: []const u8,
+            cases: []Case,
+        };
+
+        var output = std.ArrayList(Test).init(alloc);
+        defer output.deinit();
+
+        for (results.items) |suite| {
+            var cases = std.ArrayList(Case).init(alloc);
+            defer cases.deinit();
+
+            if (suite.cases) |scases| {
+                for (scases) |case| {
+                    try cases.append(Case{
+                        .pass = case.pass,
+                        .name = case.name,
+                        .message = case.message,
+                    });
+                }
+            } else {
+                // no cases, generate a fake one
+                try cases.append(Case{
+                    .pass = suite.pass,
+                    .name = suite.name,
+                    .message = suite.stack orelse suite.message,
+                });
+            }
+
+            try output.append(Test{
+                .pass = suite.pass,
+                .name = suite.name,
+                .cases = try cases.toOwnedSlice(),
+            });
+        }
+
+        defer {
+            for (output.items) |suite| {
+                alloc.free(suite.cases);
+            }
+        }
+
+        try std.json.stringify(output.items, .{ .whitespace = .indent_2 }, std.io.getStdOut().writer());
+        std.os.exit(0);
+    }
+
+    if (!json and failures > 0) {
         std.debug.print("{d}/{d} tests suites failures\n", .{ failures, run });
         std.os.exit(1);
     }
