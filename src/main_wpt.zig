@@ -30,8 +30,6 @@ pub fn main() !void {
     // generate APIs
     const apis = comptime jsruntime.compile(DOM.Interfaces);
 
-    std.debug.print("Running WPT test suite\n", .{});
-
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
