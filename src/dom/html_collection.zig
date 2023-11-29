@@ -289,6 +289,18 @@ pub fn testExecFn(
         .{ .src = "getElementsByTagNameAll.item(3).localName", .ex = "div" },
         .{ .src = "getElementsByTagNameAll.item(7).localName", .ex = "p" },
         .{ .src = "getElementsByTagNameAll.namedItem('para-empty-child').localName", .ex = "span" },
+
+        // check liveness
+        .{ .src = "let content = document.getElementById('content')", .ex = "undefined" },
+        .{ .src = "let pe = document.getElementById('para-empty')", .ex = "undefined" },
+        .{ .src = "let p = document.createElement('p')", .ex = "undefined" },
+        .{ .src = "p.textContent = 'OK live'", .ex = "OK live" },
+        .{ .src = "getElementsByTagName.item(1).textContent", .ex = " And" },
+        .{ .src = "content.appendChild(p) != undefined", .ex = "true" },
+        .{ .src = "getElementsByTagName.length", .ex = "3" },
+        .{ .src = "getElementsByTagName.item(2).textContent", .ex = "OK live" },
+        .{ .src = "content.insertBefore(p, pe) != undefined", .ex = "true" },
+        .{ .src = "getElementsByTagName.item(0).textContent", .ex = "OK live" },
     };
     try checkCases(js_env, &getElementsByTagName);
 }
