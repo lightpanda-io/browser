@@ -103,8 +103,6 @@ pub fn main() !void {
         var arena = std.heap.ArenaAllocator.init(alloc);
         defer arena.deinit();
 
-        // TODO I don't use testing.expect here b/c I want to execute all the
-        // tests. And testing.expect stops running test in the first failure.
         const res = wpt.run(&arena, apis, wpt_dir, tc, &loader) catch |err| {
             std.debug.print("FAIL\t{s}\n{any}\n", .{ tc, err });
             failures += 1;
@@ -112,7 +110,7 @@ pub fn main() !void {
         };
         // no need to call res.deinit() thanks to the arena allocator.
 
-        const suite = try Suite.init(arena.allocator(), tc, res.success, res.result, res.stack);
+        const suite = try Suite.init(alloc, tc, res.success, res.result, res.stack);
         defer suite.deinit();
 
         if (!suite.pass) {
