@@ -22,6 +22,13 @@ const usage =
     \\
 ;
 
+// Out list all the ouputs handled by WPT.
+const Out = enum {
+    json,
+    summary,
+    text,
+};
+
 // TODO For now the WPT tests run is specific to WPT.
 // It manually load js framwork libs, and run the first script w/ js content in
 // the HTML page.
@@ -151,18 +158,6 @@ pub fn main() !void {
     }
 
     if (out == .json) {
-        const Case = struct {
-            pass: bool,
-            name: []const u8,
-            message: ?[]const u8,
-        };
-        const Test = struct {
-            pass: bool,
-            crash: bool = false, // TODO
-            name: []const u8,
-            cases: []Case,
-        };
-
         var output = std.ArrayList(Test).init(alloc);
         defer output.deinit();
 
@@ -210,6 +205,20 @@ pub fn main() !void {
     }
 }
 
+// struct used for JSON output.
+const Case = struct {
+    pass: bool,
+    name: []const u8,
+    message: ?[]const u8,
+};
+const Test = struct {
+    pass: bool,
+    crash: bool = false,
+    name: []const u8,
+    cases: []Case,
+};
+
+// shouldRun return true if the test should be run accroding to the given filters.
 fn shouldRun(filter: [][]const u8, tc: []const u8) bool {
     if (filter.len == 0) {
         return true;
@@ -226,42 +235,50 @@ fn shouldRun(filter: [][]const u8, tc: []const u8) bool {
     return false;
 }
 
-const Out = enum {
-    json,
-    summary,
-    text,
-};
-
+// runSafe rune each test cae in a separate child process to detect crashes.
 fn runSafe(
-    alloc: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     execname: []const u8,
     out: Out,
     testcases: [][]const u8,
     filter: [][]const u8,
 ) !void {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const alloc = arena.allocator();
+
     const Result = enum {
         pass,
         fail,
         crash,
     };
 
+    var argv = try std.ArrayList([]const u8).initCapacity(alloc, 3);
+    defer argv.deinit();
+    argv.appendAssumeCapacity(execname);
+    if (out == .json) {
+        argv.appendAssumeCapacity("--json");
+    }
+
+    var output = std.ArrayList(Test).init(alloc);
+
     for (testcases) |tc| {
         if (!shouldRun(filter, tc)) {
             continue;
         }
 
+        argv.appendAssumeCapacity(tc);
+        defer _ = argv.pop();
+
         // TODO use std.ChildProcess.run after next zig upgrade.
-        var child = std.ChildProcess.init(&.{ execname, tc }, alloc);
+        var child = std.ChildProcess.init(argv.items, alloc);
         child.stdin_behavior = .Ignore;
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Pipe;
 
         var stdout = std.ArrayList(u8).init(alloc);
         var stderr = std.ArrayList(u8).init(alloc);
-        defer {
-            stdout.deinit();
-            stderr.deinit();
-        }
 
         try child.spawn();
         try child.collectOutput(&stdout, &stderr, 1024 * 1024);
@@ -291,6 +308,31 @@ fn runSafe(
             continue;
         }
 
+        if (out == .json) {
+            if (result == .crash) {
+                var cases = [_]Case{.{
+                    .pass = false,
+                    .name = "crash",
+                    .message = stderr.items,
+                }};
+                try output.append(Test{
+                    .pass = false,
+                    .crash = true,
+                    .name = tc,
+                    .cases = cases[0..1],
+                });
+                continue;
+            }
+
+            const jp = try std.json.parseFromSlice([]Test, alloc, stdout.items, .{});
+            try output.appendSlice(jp.value);
+            continue;
+        }
+
         std.debug.print("{s}\n", .{stderr.items});
+    }
+
+    if (out == .json) {
+        try std.json.stringify(output.items, .{ .whitespace = .indent_2 }, std.io.getStdOut().writer());
     }
 }
