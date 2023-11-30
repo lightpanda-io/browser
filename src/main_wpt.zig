@@ -42,9 +42,8 @@ pub fn main() !void {
     // get the exec name.
     const execname = args.next().?;
 
-    var json = false;
+    var out: Out = .text;
     var safe = false;
-    var summary = false;
 
     var filter = std.ArrayList([]const u8).init(alloc);
     defer filter.deinit();
@@ -55,7 +54,7 @@ pub fn main() !void {
             std.os.exit(0);
         }
         if (std.mem.eql(u8, "--json", arg)) {
-            json = true;
+            out = .json;
             continue;
         }
         if (std.mem.eql(u8, "--safe", arg)) {
@@ -63,19 +62,14 @@ pub fn main() !void {
             continue;
         }
         if (std.mem.eql(u8, "--summary", arg)) {
-            summary = true;
+            out = .summary;
             continue;
         }
         try filter.append(arg[0..]);
     }
 
-    // both json and summary are incompatible.
-    if (summary and json) {
-        try std.io.getStdErr().writer().print("--json and --summary are incompatible\n", .{});
-        std.os.exit(1);
-    }
     // summary is available in safe mode only.
-    if (summary) {
+    if (out == .summary) {
         safe = true;
     }
 
@@ -90,7 +84,7 @@ pub fn main() !void {
     }
 
     if (safe) {
-        return try runSafe(alloc, execname, summary, list.items, filter.items);
+        return try runSafe(alloc, execname, out, list.items, filter.items);
     }
 
     var results = std.ArrayList(Suite).init(alloc);
@@ -126,7 +120,7 @@ pub fn main() !void {
             const suite = try Suite.init(alloc, tc, false, @errorName(err), null);
             try results.append(suite);
 
-            if (!json) {
+            if (out == .text) {
                 std.debug.print("FAIL\t{s}\t{}\n", .{ tc, err });
             }
             failures += 1;
@@ -137,7 +131,7 @@ pub fn main() !void {
         const suite = try Suite.init(alloc, tc, res.success, res.result, res.stack);
         try results.append(suite);
 
-        if (json) {
+        if (out == .json) {
             continue;
         }
 
@@ -156,7 +150,7 @@ pub fn main() !void {
         }
     }
 
-    if (json) {
+    if (out == .json) {
         const Case = struct {
             pass: bool,
             name: []const u8,
@@ -210,7 +204,7 @@ pub fn main() !void {
         std.os.exit(0);
     }
 
-    if (!json and failures > 0) {
+    if (out == .text and failures > 0) {
         std.debug.print("{d}/{d} tests suites failures\n", .{ failures, run });
         std.os.exit(1);
     }
@@ -232,10 +226,16 @@ fn shouldRun(filter: [][]const u8, tc: []const u8) bool {
     return false;
 }
 
+const Out = enum {
+    json,
+    summary,
+    text,
+};
+
 fn runSafe(
     alloc: std.mem.Allocator,
     execname: []const u8,
-    summary: bool,
+    out: Out,
     testcases: [][]const u8,
     filter: [][]const u8,
 ) !void {
@@ -281,7 +281,7 @@ fn runSafe(
             .Unknown => result = .crash,
         }
 
-        if (summary) {
+        if (out == .summary) {
             switch (result) {
                 .pass => std.debug.print("Pass", .{}),
                 .fail => std.debug.print("Fail", .{}),
