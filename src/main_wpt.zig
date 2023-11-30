@@ -90,62 +90,7 @@ pub fn main() !void {
     }
 
     if (safe) {
-        for (list.items) |tc| {
-            if (!shouldRun(filter.items, tc)) {
-                continue;
-            }
-
-            // TODO use std.ChildProcess.run after next zig upgrade.
-            var child = std.ChildProcess.init(&.{ execname, tc }, alloc);
-            child.stdin_behavior = .Ignore;
-            child.stdout_behavior = .Pipe;
-            child.stderr_behavior = .Pipe;
-
-            var stdout = std.ArrayList(u8).init(alloc);
-            var stderr = std.ArrayList(u8).init(alloc);
-            defer {
-                stdout.deinit();
-                stderr.deinit();
-            }
-
-            try child.spawn();
-            try child.collectOutput(&stdout, &stderr, 1024 * 1024);
-            const term = try child.wait();
-
-            const Result = enum {
-                pass,
-                fail,
-                crash,
-            };
-
-            var result: Result = undefined;
-            switch (term) {
-                .Exited => |v| {
-                    if (v == 0) {
-                        result = .pass;
-                    } else {
-                        result = .fail;
-                    }
-                },
-                .Signal => result = .crash,
-                .Stopped => result = .crash,
-                .Unknown => result = .crash,
-            }
-
-            if (summary) {
-                switch (result) {
-                    .pass => std.debug.print("Pass", .{}),
-                    .fail => std.debug.print("Fail", .{}),
-                    .crash => std.debug.print("Crash", .{}),
-                }
-                std.debug.print("\t{s}\n", .{tc});
-                continue;
-            }
-
-            std.debug.print("{s}\n", .{stderr.items});
-        }
-
-        return;
+        return try runSafe(alloc, execname, summary, list.items, filter.items);
     }
 
     var results = std.ArrayList(Suite).init(alloc);
@@ -285,4 +230,67 @@ fn shouldRun(filter: [][]const u8, tc: []const u8) bool {
         }
     }
     return false;
+}
+
+fn runSafe(
+    alloc: std.mem.Allocator,
+    execname: []const u8,
+    summary: bool,
+    testcases: [][]const u8,
+    filter: [][]const u8,
+) !void {
+    const Result = enum {
+        pass,
+        fail,
+        crash,
+    };
+
+    for (testcases) |tc| {
+        if (!shouldRun(filter, tc)) {
+            continue;
+        }
+
+        // TODO use std.ChildProcess.run after next zig upgrade.
+        var child = std.ChildProcess.init(&.{ execname, tc }, alloc);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Pipe;
+
+        var stdout = std.ArrayList(u8).init(alloc);
+        var stderr = std.ArrayList(u8).init(alloc);
+        defer {
+            stdout.deinit();
+            stderr.deinit();
+        }
+
+        try child.spawn();
+        try child.collectOutput(&stdout, &stderr, 1024 * 1024);
+        const term = try child.wait();
+
+        var result: Result = undefined;
+        switch (term) {
+            .Exited => |v| {
+                if (v == 0) {
+                    result = .pass;
+                } else {
+                    result = .fail;
+                }
+            },
+            .Signal => result = .crash,
+            .Stopped => result = .crash,
+            .Unknown => result = .crash,
+        }
+
+        if (summary) {
+            switch (result) {
+                .pass => std.debug.print("Pass", .{}),
+                .fail => std.debug.print("Fail", .{}),
+                .crash => std.debug.print("Crash", .{}),
+            }
+            std.debug.print("\t{s}\n", .{tc});
+            continue;
+        }
+
+        std.debug.print("{s}\n", .{stderr.items});
+    }
 }
