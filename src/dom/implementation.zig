@@ -45,14 +45,14 @@ pub const DOMImplementation = struct {
         var cnamespace: ?[:0]const u8 = null;
         if (namespace) |ns| {
             cnamespace = try alloc.dupeZ(u8, ns);
-            defer alloc.free(cnamespace.?);
         }
+        defer if (cnamespace) |v| alloc.free(v);
 
         var cqname: ?[:0]const u8 = null;
         if (qname) |qn| {
             cqname = try alloc.dupeZ(u8, qn);
-            defer alloc.free(cqname.?);
         }
+        defer if (cqname) |v| alloc.free(v);
 
         return try parser.domImplementationCreateDocument(cnamespace, cqname, doctype);
     }
