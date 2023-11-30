@@ -91,6 +91,10 @@ pub fn main() !void {
 
     if (safe) {
         for (list.items) |tc| {
+            if (!shouldRun(filter.items, tc)) {
+                continue;
+            }
+
             // TODO use std.ChildProcess.run after next zig upgrade.
             var child = std.ChildProcess.init(&.{ execname, tc }, alloc);
             child.stdin_behavior = .Ignore;
@@ -138,7 +142,7 @@ pub fn main() !void {
                 continue;
             }
 
-            // std.debug.print("{s}\n", .{stderr.items});
+            std.debug.print("{s}\n", .{stderr.items});
         }
 
         return;
@@ -163,21 +167,8 @@ pub fn main() !void {
     var run: usize = 0;
     var failures: usize = 0;
     for (list.items) |tc| {
-        if (filter.items.len > 0) {
-            var match = false;
-            for (filter.items) |f| {
-                if (std.mem.startsWith(u8, tc, f)) {
-                    match = true;
-                    break;
-                }
-                if (std.mem.endsWith(u8, tc, f)) {
-                    match = true;
-                    break;
-                }
-            }
-            if (!match) {
-                continue;
-            }
+        if (!shouldRun(filter.items, tc)) {
+            continue;
         }
 
         run += 1;
@@ -278,4 +269,20 @@ pub fn main() !void {
         std.debug.print("{d}/{d} tests suites failures\n", .{ failures, run });
         std.os.exit(1);
     }
+}
+
+fn shouldRun(filter: [][]const u8, tc: []const u8) bool {
+    if (filter.len == 0) {
+        return true;
+    }
+
+    for (filter) |f| {
+        if (std.mem.startsWith(u8, tc, f)) {
+            return true;
+        }
+        if (std.mem.endsWith(u8, tc, f)) {
+            return true;
+        }
+    }
+    return false;
 }
