@@ -17,6 +17,8 @@ const usage =
     \\
     \\  -h, --help       Print this help message and exit.
     \\  --json           result is formatted in JSON.
+    \\  --safe           each test is run in a separate process.
+    \\  --summary        print a summary result. Incompatible w/ --json
     \\
 ;
 
@@ -41,6 +43,8 @@ pub fn main() !void {
     const execname = args.next().?;
 
     var json = false;
+    var safe = false;
+    var summary = false;
 
     var filter = std.ArrayList([]const u8).init(alloc);
     defer filter.deinit();
@@ -54,16 +58,26 @@ pub fn main() !void {
             json = true;
             continue;
         }
+        if (std.mem.eql(u8, "--safe", arg)) {
+            safe = true;
+            continue;
+        }
+        if (std.mem.eql(u8, "--summary", arg)) {
+            summary = true;
+            continue;
+        }
         try filter.append(arg[0..]);
     }
 
-    // initialize VM JS lib.
-    const vm = jsruntime.VM.init();
-    defer vm.deinit();
-
-    // prepare libraries to load on each test case.
-    var loader = FileLoader.init(alloc, wpt_dir);
-    defer loader.deinit();
+    // both json and summary are incompatible.
+    if (summary and json) {
+        try std.io.getStdErr().writer().print("--json and --summary are incompatible\n", .{});
+        std.os.exit(1);
+    }
+    // summary is available in safe mode only.
+    if (summary) {
+        safe = true;
+    }
 
     // browse the dir to get the tests dynamically.
     var list = std.ArrayList([]const u8).init(alloc);
@@ -75,6 +89,61 @@ pub fn main() !void {
         list.deinit();
     }
 
+    if (safe) {
+        for (list.items) |tc| {
+            // TODO use std.ChildProcess.run after next zig upgrade.
+            var child = std.ChildProcess.init(&.{ execname, tc }, alloc);
+            child.stdin_behavior = .Ignore;
+            child.stdout_behavior = .Pipe;
+            child.stderr_behavior = .Pipe;
+
+            var stdout = std.ArrayList(u8).init(alloc);
+            var stderr = std.ArrayList(u8).init(alloc);
+            defer {
+                stdout.deinit();
+                stderr.deinit();
+            }
+
+            try child.spawn();
+            try child.collectOutput(&stdout, &stderr, 1024 * 1024);
+            const term = try child.wait();
+
+            const Result = enum {
+                pass,
+                fail,
+                crash,
+            };
+
+            var result: Result = undefined;
+            switch (term) {
+                .Exited => |v| {
+                    if (v == 0) {
+                        result = .pass;
+                    } else {
+                        result = .fail;
+                    }
+                },
+                .Signal => result = .crash,
+                .Stopped => result = .crash,
+                .Unknown => result = .crash,
+            }
+
+            if (summary) {
+                switch (result) {
+                    .pass => std.debug.print("Pass", .{}),
+                    .fail => std.debug.print("Fail", .{}),
+                    .crash => std.debug.print("Crash", .{}),
+                }
+                std.debug.print("\t{s}\n", .{tc});
+                continue;
+            }
+
+            // std.debug.print("{s}\n", .{stderr.items});
+        }
+
+        return;
+    }
+
     var results = std.ArrayList(Suite).init(alloc);
     defer {
         for (results.items) |suite| {
@@ -82,6 +151,14 @@ pub fn main() !void {
         }
         results.deinit();
     }
+
+    // initialize VM JS lib.
+    const vm = jsruntime.VM.init();
+    defer vm.deinit();
+
+    // prepare libraries to load on each test case.
+    var loader = FileLoader.init(alloc, wpt_dir);
+    defer loader.deinit();
 
     var run: usize = 0;
     var failures: usize = 0;
