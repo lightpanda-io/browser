@@ -217,13 +217,13 @@ fn runWPT(arena: *std.heap.ArenaAllocator, comptime apis: []jsruntime.API, f: []
     }
 
     // loop hover the scripts.
-    const scripts = parser.documentGetElementsByTagName(doc, "script");
-    const slen = parser.nodeListLength(scripts);
+    const scripts = try parser.documentGetElementsByTagName(doc, "script");
+    const slen = try parser.nodeListLength(scripts);
     for (0..slen) |i| {
-        const s = parser.nodeListItem(scripts, @intCast(i)).?;
+        const s = (try parser.nodeListItem(scripts, @intCast(i))).?;
 
         // If the script contains an src attribute, load it.
-        if (parser.elementGetAttribute(@as(*parser.Element, @ptrCast(s)), "src")) |src| {
+        if (try parser.elementGetAttribute(@as(*parser.Element, @ptrCast(s)), "src")) |src| {
             var path = src;
             if (!std.mem.startsWith(u8, src, "/")) {
                 // no need to free path, thanks to the arena.
@@ -237,7 +237,7 @@ fn runWPT(arena: *std.heap.ArenaAllocator, comptime apis: []jsruntime.API, f: []
         }
 
         // If the script as a source text, execute it.
-        const src = parser.nodeTextContent(s) orelse continue;
+        const src = try parser.nodeTextContent(s) orelse continue;
         res = try evalJS(js_env, alloc, src, "");
 
         // return the first failure.

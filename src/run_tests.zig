@@ -34,7 +34,9 @@ fn testExecFn(
 
     // document
     doc = try parser.documentHTMLParseFromFileAlloc(std.testing.allocator, "test.html");
-    defer parser.documentHTMLClose(doc);
+    defer parser.documentHTMLClose(doc) catch |err| {
+        std.debug.print("documentHTMLClose error: {s}\n", .{@errorName(err)});
+    };
 
     // add document object
     try js_env.addObject(apis, doc, "document");

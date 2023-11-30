@@ -12,14 +12,14 @@ pub const Element = struct {
     pub const prototype = *Node;
     pub const mem_guarantied = true;
 
-    pub fn toInterface(e: *parser.Element) Union {
-        return HTMLElem.toInterface(Union, e);
+    pub fn toInterface(e: *parser.Element) !Union {
+        return try HTMLElem.toInterface(Union, e);
     }
 
     // JS funcs
     // --------
 
-    pub fn get_localName(self: *parser.Element) []const u8 {
-        return parser.elementLocalName(self);
+    pub fn get_localName(self: *parser.Element) ![]const u8 {
+        return try parser.elementLocalName(self);
     }
 };

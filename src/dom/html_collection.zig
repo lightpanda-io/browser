@@ -15,7 +15,7 @@ const Matcher = union(enum) {
     matchByTagName: MatchByTagName,
     matchByClassName: MatchByClassName,
 
-    pub fn match(self: Matcher, node: *parser.Node) bool {
+    pub fn match(self: Matcher, node: *parser.Node) !bool {
         switch (self) {
             inline else => |case| return case.match(node),
         }
@@ -43,8 +43,8 @@ pub const MatchByTagName = struct {
         };
     }
 
-    pub fn match(self: MatchByTagName, node: *parser.Node) bool {
-        return self.is_wildcard or std.ascii.eqlIgnoreCase(self.tag, parser.nodeName(node));
+    pub fn match(self: MatchByTagName, node: *parser.Node) !bool {
+        return self.is_wildcard or std.ascii.eqlIgnoreCase(self.tag, try parser.nodeName(node));
     }
 
     fn deinit(self: MatchByTagName, alloc: std.mem.Allocator) void {
@@ -76,11 +76,11 @@ pub const MatchByClassName = struct {
         };
     }
 
-    pub fn match(self: MatchByClassName, node: *parser.Node) bool {
+    pub fn match(self: MatchByClassName, node: *parser.Node) !bool {
         var it = std.mem.splitAny(u8, self.classNames, " ");
         const e = parser.nodeToElement(node);
         while (it.next()) |c| {
-            if (!parser.elementHasClass(e, c)) {
+            if (!try parser.elementHasClass(e, c)) {
                 return false;
             }
         }
@@ -130,24 +130,24 @@ pub const HTMLCollection = struct {
     // The iteration is a depth first as required by the specification.
     // https://dom.spec.whatwg.org/#htmlcollection
     // https://dom.spec.whatwg.org/#concept-tree-order
-    fn get_next(root: *parser.Node, cur: *parser.Node) ?*parser.Node {
+    fn get_next(root: *parser.Node, cur: *parser.Node) !?*parser.Node {
         // TODO deinit next
-        if (parser.nodeFirstChild(cur)) |next| {
+        if (try parser.nodeFirstChild(cur)) |next| {
             return next;
         }
 
         // TODO deinit next
-        if (parser.nodeNextSibling(cur)) |next| {
+        if (try parser.nodeNextSibling(cur)) |next| {
             return next;
         }
 
         // TODO deinit parent
         // Back to the parent of cur.
         // If cur has no parent, then the iteration is over.
-        var parent = parser.nodeParentNode(cur) orelse return null;
+        var parent = try parser.nodeParentNode(cur) orelse return null;
 
         // TODO deinit lastchild
-        var lastchild = parser.nodeLastChild(parent);
+        var lastchild = try parser.nodeLastChild(parent);
         var prev = cur;
         while (prev != root and prev == lastchild) {
             prev = parent;
@@ -155,42 +155,42 @@ pub const HTMLCollection = struct {
             // TODO deinit parent
             // Back to the prev's parent.
             // If prev has no parent, then the loop must stop.
-            parent = parser.nodeParentNode(prev) orelse break;
+            parent = try parser.nodeParentNode(prev) orelse break;
 
             // TODO deinit lastchild
-            lastchild = parser.nodeLastChild(parent);
+            lastchild = try parser.nodeLastChild(parent);
         }
 
         if (prev == root) {
             return null;
         }
 
-        return parser.nodeNextSibling(prev);
+        return try parser.nodeNextSibling(prev);
     }
 
     /// get_length computes the collection's length dynamically according to
     /// the current root structure.
     // TODO: nodes retrieved must be de-referenced.
-    pub fn get_length(self: *HTMLCollection) u32 {
+    pub fn get_length(self: *HTMLCollection) !u32 {
         var len: u32 = 0;
         var node: *parser.Node = self.root;
         var ntype: parser.NodeType = undefined;
 
         while (true) {
-            ntype = parser.nodeType(node);
+            ntype = try parser.nodeType(node);
             if (ntype == .element) {
-                if (self.matcher.match(node)) {
+                if (try self.matcher.match(node)) {
                     len += 1;
                 }
             }
 
-            node = get_next(self.root, node) orelse break;
+            node = try get_next(self.root, node) orelse break;
         }
 
         return len;
     }
 
-    pub fn _item(self: *HTMLCollection, index: u32) ?Union {
+    pub fn _item(self: *HTMLCollection, index: u32) !?Union {
         var i: u32 = 0;
         var node: *parser.Node = self.root;
         var ntype: parser.NodeType = undefined;
@@ -202,9 +202,9 @@ pub const HTMLCollection = struct {
         }
 
         while (true) {
-            ntype = parser.nodeType(node);
+            ntype = try parser.nodeType(node);
             if (ntype == .element) {
-                if (self.matcher.match(node)) {
+                if (try self.matcher.match(node)) {
                     // check if we found the searched element.
                     if (i == index) {
                         // save the current state
@@ -212,20 +212,20 @@ pub const HTMLCollection = struct {
                         self.cur_idx = i;
 
                         const e = @as(*parser.Element, @ptrCast(node));
-                        return Element.toInterface(e);
+                        return try Element.toInterface(e);
                     }
 
                     i += 1;
                 }
             }
 
-            node = get_next(self.root, node) orelse break;
+            node = try get_next(self.root, node) orelse break;
         }
 
         return null;
     }
 
-    pub fn _namedItem(self: *HTMLCollection, name: []const u8) ?Union {
+    pub fn _namedItem(self: *HTMLCollection, name: []const u8) !?Union {
         if (name.len == 0) {
             return null;
         }
@@ -234,26 +234,26 @@ pub const HTMLCollection = struct {
         var ntype: parser.NodeType = undefined;
 
         while (true) {
-            ntype = parser.nodeType(node);
+            ntype = try parser.nodeType(node);
             if (ntype == .element) {
-                if (self.matcher.match(node)) {
+                if (try self.matcher.match(node)) {
                     const elem = @as(*parser.Element, @ptrCast(node));
 
-                    var attr = parser.elementGetAttribute(elem, "id");
+                    var attr = try parser.elementGetAttribute(elem, "id");
                     // check if the node id corresponds to the name argument.
                     if (attr != null and std.mem.eql(u8, name, attr.?)) {
-                        return Element.toInterface(elem);
+                        return try Element.toInterface(elem);
                     }
 
-                    attr = parser.elementGetAttribute(elem, "name");
+                    attr = try parser.elementGetAttribute(elem, "name");
                     // check if the node id corresponds to the name argument.
                     if (attr != null and std.mem.eql(u8, name, attr.?)) {
-                        return Element.toInterface(elem);
+                        return try Element.toInterface(elem);
                     }
                 }
             }
 
-            node = get_next(self.root, node) orelse break;
+            node = try get_next(self.root, node) orelse break;
         }
 
         return null;
