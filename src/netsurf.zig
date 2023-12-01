@@ -630,6 +630,13 @@ pub fn nodeReplaceChild(node: *Node, new_child: *Node, old_child: *Node) !*Node 
     return res.?;
 }
 
+pub fn nodeHasAttributes(node: *Node) !bool {
+    var res: bool = undefined;
+    const err = nodeVtable(node).dom_node_has_attributes.?(node, &res);
+    try DOMErr(err);
+    return res;
+}
+
 // nodeToElement is an helper to convert a node to an element.
 pub inline fn nodeToElement(node: *Node) *Element {
     return @as(*Element, @ptrCast(node));

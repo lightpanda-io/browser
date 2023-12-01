@@ -27,6 +27,10 @@ pub const Element = struct {
         return try parser.elementLocalName(self);
     }
 
+    pub fn _hasAttributes(self: *parser.Element) !bool {
+        return try parser.nodeHasAttributes(parser.elementToNode(self));
+    }
+
     pub fn _getAttribute(self: *parser.Element, qname: []const u8) !?[]const u8 {
         return try parser.elementGetAttribute(self, qname);
     }
@@ -84,6 +88,7 @@ pub fn testExecFn(
 ) !void {
     var attribute = [_]Case{
         .{ .src = "let a = document.getElementById('content')", .ex = "undefined" },
+        .{ .src = "a.hasAttributes()", .ex = "true" },
         .{ .src = "a.getAttribute('id')", .ex = "content" },
 
         .{ .src = "a.hasAttribute('foo')", .ex = "false" },
