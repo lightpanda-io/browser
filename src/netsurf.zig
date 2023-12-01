@@ -749,6 +749,34 @@ pub fn elementGetAttribute(elem: *Element, name: []const u8) !?[]const u8 {
     return stringToData(s.?);
 }
 
+pub fn elementSetAttribute(elem: *Element, qname: []const u8, value: []const u8) !void {
+    const err = elementVtable(elem).dom_element_set_attribute.?(
+        elem,
+        try stringFromData(qname),
+        try stringFromData(value),
+    );
+    try DOMErr(err);
+}
+
+pub fn elementRemoveAttribute(elem: *Element, qname: []const u8) !void {
+    const err = elementVtable(elem).dom_element_remove_attribute.?(
+        elem,
+        try stringFromData(qname),
+    );
+    try DOMErr(err);
+}
+
+pub fn elementHasAttribute(elem: *Element, qname: []const u8) !bool {
+    var res: bool = undefined;
+    const err = elementVtable(elem).dom_element_has_attribute.?(
+        elem,
+        try stringFromData(qname),
+        &res,
+    );
+    try DOMErr(err);
+    return res;
+}
+
 pub fn elementHasClass(elem: *Element, class: []const u8) !bool {
     var res: bool = undefined;
     const err = elementVtable(elem).dom_element_has_class.?(
