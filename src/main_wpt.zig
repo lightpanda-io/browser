@@ -1,61 +1,32 @@
 const std = @import("std");
 
-const parser = @import("netsurf.zig");
 const jsruntime = @import("jsruntime");
 
-const TPL = jsruntime.TPL;
-const Env = jsruntime.Env;
-const Loop = jsruntime.Loop;
+const Suite = @import("wpt/testcase.zig").Suite;
+const FileLoader = @import("wpt/fileloader.zig").FileLoader;
+const wpt = @import("wpt/run.zig");
 
 const DOM = @import("dom.zig");
 const HTMLElem = @import("html/elements.zig");
 
-const fspath = std.fs.path;
-
 const wpt_dir = "tests/wpt";
 
-// FileLoader loads files content from the filesystem.
-const FileLoader = struct {
-    const FilesMap = std.StringHashMap([]const u8);
+const usage =
+    \\usage: {s} [options] [test filter]
+    \\  Run the Web Test Platform.
+    \\
+    \\  -h, --help       Print this help message and exit.
+    \\  --json           result is formatted in JSON.
+    \\  --safe           each test is run in a separate process.
+    \\  --summary        print a summary result. Incompatible w/ --json
+    \\
+;
 
-    files: FilesMap,
-    path: []const u8,
-    alloc: std.mem.Allocator,
-
-    fn init(alloc: std.mem.Allocator, path: []const u8) FileLoader {
-        const files = FilesMap.init(alloc);
-
-        return FileLoader{
-            .path = path,
-            .alloc = alloc,
-            .files = files,
-        };
-    }
-    fn get(self: *FileLoader, name: []const u8) ![]const u8 {
-        if (!self.files.contains(name)) {
-            try self.load(name);
-        }
-        return self.files.get(name).?;
-    }
-    fn load(self: *FileLoader, name: []const u8) !void {
-        const filename = try fspath.join(self.alloc, &.{ self.path, name });
-        defer self.alloc.free(filename);
-        var file = try std.fs.cwd().openFile(filename, .{});
-        defer file.close();
-
-        const file_size = try file.getEndPos();
-        const content = try file.readToEndAlloc(self.alloc, file_size);
-        const namedup = try self.alloc.dupe(u8, name);
-        try self.files.put(namedup, content);
-    }
-    fn deinit(self: *FileLoader) void {
-        var iter = self.files.iterator();
-        while (iter.next()) |entry| {
-            self.alloc.free(entry.key_ptr.*);
-            self.alloc.free(entry.value_ptr.*);
-        }
-        self.files.deinit();
-    }
+// Out list all the ouputs handled by WPT.
+const Out = enum {
+    json,
+    summary,
+    text,
 };
 
 // TODO For now the WPT tests run is specific to WPT.
@@ -68,16 +39,68 @@ pub fn main() !void {
     // generate APIs
     const apis = comptime jsruntime.compile(DOM.Interfaces);
 
-    std.debug.print("Running WPT test suite\n", .{});
-
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
-    const args = try std.process.argsAlloc(alloc);
-    defer std.process.argsFree(alloc, args);
+    var args = try std.process.argsWithAllocator(alloc);
+    defer args.deinit();
 
-    const filter = args[1..];
+    // get the exec name.
+    const execname = args.next().?;
+
+    var out: Out = .text;
+    var safe = false;
+
+    var filter = std.ArrayList([]const u8).init(alloc);
+    defer filter.deinit();
+
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, "-h", arg) or std.mem.eql(u8, "--help", arg)) {
+            try std.io.getStdErr().writer().print(usage, .{execname});
+            std.os.exit(0);
+        }
+        if (std.mem.eql(u8, "--json", arg)) {
+            out = .json;
+            continue;
+        }
+        if (std.mem.eql(u8, "--safe", arg)) {
+            safe = true;
+            continue;
+        }
+        if (std.mem.eql(u8, "--summary", arg)) {
+            out = .summary;
+            continue;
+        }
+        try filter.append(arg[0..]);
+    }
+
+    // summary is available in safe mode only.
+    if (out == .summary) {
+        safe = true;
+    }
+
+    // browse the dir to get the tests dynamically.
+    var list = std.ArrayList([]const u8).init(alloc);
+    try wpt.find(alloc, wpt_dir, &list);
+    defer {
+        for (list.items) |tc| {
+            alloc.free(tc);
+        }
+        list.deinit();
+    }
+
+    if (safe) {
+        return try runSafe(alloc, execname, out, list.items, filter.items);
+    }
+
+    var results = std.ArrayList(Suite).init(alloc);
+    defer {
+        for (results.items) |suite| {
+            suite.deinit();
+        }
+        results.deinit();
+    }
 
     // initialize VM JS lib.
     const vm = jsruntime.VM.init();
@@ -87,34 +110,11 @@ pub fn main() !void {
     var loader = FileLoader.init(alloc, wpt_dir);
     defer loader.deinit();
 
-    // browse the dir to get the tests dynamically.
-    var list = std.ArrayList([]const u8).init(alloc);
-    try findWPTTests(alloc, wpt_dir, &list);
-    defer {
-        for (list.items) |tc| {
-            alloc.free(tc);
-        }
-        list.deinit();
-    }
-
     var run: usize = 0;
     var failures: usize = 0;
     for (list.items) |tc| {
-        if (filter.len > 0) {
-            var match = false;
-            for (filter) |f| {
-                if (std.mem.startsWith(u8, tc, f)) {
-                    match = true;
-                    break;
-                }
-                if (std.mem.endsWith(u8, tc, f)) {
-                    match = true;
-                    break;
-                }
-            }
-            if (!match) {
-                continue;
-            }
+        if (!shouldRun(filter.items, tc)) {
+            continue;
         }
 
         run += 1;
@@ -123,178 +123,216 @@ pub fn main() !void {
         var arena = std.heap.ArenaAllocator.init(alloc);
         defer arena.deinit();
 
-        // TODO I don't use testing.expect here b/c I want to execute all the
-        // tests. And testing.expect stops running test in the first failure.
-        const res = runWPT(&arena, apis, tc, &loader) catch |err| {
-            std.debug.print("FAIL\t{s}\n{any}\n", .{ tc, err });
+        const res = wpt.run(&arena, apis, wpt_dir, tc, &loader) catch |err| {
+            const suite = try Suite.init(alloc, tc, false, @errorName(err), null);
+            try results.append(suite);
+
+            if (out == .text) {
+                std.debug.print("FAIL\t{s}\t{}\n", .{ tc, err });
+            }
             failures += 1;
             continue;
         };
         // no need to call res.deinit() thanks to the arena allocator.
 
-        if (!res.success) {
-            std.debug.print("FAIL\t{s}\n{s}\n", .{ tc, res.stack orelse res.result });
-            failures += 1;
-            continue;
-        }
-        if (!std.mem.eql(u8, res.result, "Pass")) {
-            std.debug.print("FAIL\t{s}\n{s}\n", .{ tc, res.stack orelse res.result });
-            failures += 1;
+        const suite = try Suite.init(alloc, tc, res.success, res.result, res.stack);
+        try results.append(suite);
+
+        if (out == .json) {
             continue;
         }
 
-        std.debug.print("PASS\t{s}\n", .{tc});
+        if (!suite.pass) {
+            std.debug.print("Fail\t{s}\n{s}\n", .{ suite.name, suite.fmtMessage() });
+            failures += 1;
+        } else {
+            std.debug.print("Pass\t{s}\n", .{suite.name});
+        }
+
+        // display details
+        if (suite.cases) |cases| {
+            for (cases) |case| {
+                std.debug.print("\t{s}\t{s}\t{s}\n", .{ case.fmtStatus(), case.name, case.fmtMessage() });
+            }
+        }
     }
 
-    if (failures > 0) {
-        std.debug.print("{d}/{d} tests failures\n", .{ failures, run });
+    if (out == .json) {
+        var output = std.ArrayList(Test).init(alloc);
+        defer output.deinit();
+
+        for (results.items) |suite| {
+            var cases = std.ArrayList(Case).init(alloc);
+            defer cases.deinit();
+
+            if (suite.cases) |scases| {
+                for (scases) |case| {
+                    try cases.append(Case{
+                        .pass = case.pass,
+                        .name = case.name,
+                        .message = case.message,
+                    });
+                }
+            } else {
+                // no cases, generate a fake one
+                try cases.append(Case{
+                    .pass = suite.pass,
+                    .name = suite.name,
+                    .message = suite.stack orelse suite.message,
+                });
+            }
+
+            try output.append(Test{
+                .pass = suite.pass,
+                .name = suite.name,
+                .cases = try cases.toOwnedSlice(),
+            });
+        }
+
+        defer {
+            for (output.items) |suite| {
+                alloc.free(suite.cases);
+            }
+        }
+
+        try std.json.stringify(output.items, .{ .whitespace = .indent_2 }, std.io.getStdOut().writer());
+        std.os.exit(0);
+    }
+
+    if (out == .text and failures > 0) {
+        std.debug.print("{d}/{d} tests suites failures\n", .{ failures, run });
         std.os.exit(1);
     }
 }
 
-// runWPT parses the given HTML file, starts a js env and run the first script
-// tags containing javascript sources.
-// It loads first the js libs files.
-fn runWPT(arena: *std.heap.ArenaAllocator, comptime apis: []jsruntime.API, f: []const u8, loader: *FileLoader) !jsruntime.JSResult {
+// struct used for JSON output.
+const Case = struct {
+    pass: bool,
+    name: []const u8,
+    message: ?[]const u8,
+};
+const Test = struct {
+    pass: bool,
+    crash: bool = false,
+    name: []const u8,
+    cases: []Case,
+};
+
+// shouldRun return true if the test should be run accroding to the given filters.
+fn shouldRun(filter: [][]const u8, tc: []const u8) bool {
+    if (filter.len == 0) {
+        return true;
+    }
+
+    for (filter) |f| {
+        if (std.mem.startsWith(u8, tc, f)) {
+            return true;
+        }
+        if (std.mem.endsWith(u8, tc, f)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// runSafe rune each test cae in a separate child process to detect crashes.
+fn runSafe(
+    allocator: std.mem.Allocator,
+    execname: []const u8,
+    out: Out,
+    testcases: [][]const u8,
+    filter: [][]const u8,
+) !void {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
     const alloc = arena.allocator();
 
-    // document
-    const html_doc = try parser.documentHTMLParseFromFileAlloc(alloc, f);
-    const doc = parser.documentHTMLToDocument(html_doc);
+    const Result = enum {
+        pass,
+        fail,
+        crash,
+    };
 
-    const dirname = fspath.dirname(f[wpt_dir.len..]) orelse unreachable;
-
-    // create JS env
-    var loop = try Loop.init(alloc);
-    defer loop.deinit();
-    var js_env = try Env.init(arena, &loop);
-    defer js_env.deinit();
-
-    // load APIs in JS env
-    var tpls: [apis.len]TPL = undefined;
-    try js_env.load(apis, &tpls);
-
-    // start JS env
-    try js_env.start(alloc, apis);
-    defer js_env.stop();
-
-    // add document object
-    try js_env.addObject(apis, html_doc, "document");
-
-    // alias global as self and window
-    try js_env.attachObject(try js_env.getGlobal(), "self", null);
-    try js_env.attachObject(try js_env.getGlobal(), "window", null);
-
-    // thanks to the arena, we don't need to deinit res.
-    var res: jsruntime.JSResult = undefined;
-
-    const init =
-        \\window.listeners = [];
-        \\window.document = document;
-        \\window.parent = window;
-        \\window.addEventListener = function (type, listener, options) {
-        \\  window.listeners.push({type: type, listener: listener, options: options});
-        \\};
-        \\window.dispatchEvent = function (event) {
-        \\  len = window.listeners.length;
-        \\  for (var i = 0; i < len; i++) {
-        \\      if (window.listeners[i].type == event.target) {
-        \\          window.listeners[i].listener(event);
-        \\      }
-        \\  }
-        \\  return true;
-        \\};
-        \\window.removeEventListener = function () {};
-        \\
-        \\console = [];
-        \\console.log = function () {
-        \\  console.push(...arguments);
-        \\};
-    ;
-    res = try evalJS(js_env, alloc, init, "init");
-    if (!res.success) {
-        return res;
+    var argv = try std.ArrayList([]const u8).initCapacity(alloc, 3);
+    defer argv.deinit();
+    argv.appendAssumeCapacity(execname);
+    if (out == .json) {
+        argv.appendAssumeCapacity("--json");
     }
 
-    // loop hover the scripts.
-    const scripts = try parser.documentGetElementsByTagName(doc, "script");
-    const slen = try parser.nodeListLength(scripts);
-    for (0..slen) |i| {
-        const s = (try parser.nodeListItem(scripts, @intCast(i))).?;
+    var output = std.ArrayList(Test).init(alloc);
 
-        // If the script contains an src attribute, load it.
-        if (try parser.elementGetAttribute(@as(*parser.Element, @ptrCast(s)), "src")) |src| {
-            var path = src;
-            if (!std.mem.startsWith(u8, src, "/")) {
-                // no need to free path, thanks to the arena.
-                path = try fspath.join(alloc, &.{ "/", dirname, path });
-            }
-
-            res = try evalJS(js_env, alloc, try loader.get(path), src);
-            if (!res.success) {
-                return res;
-            }
-        }
-
-        // If the script as a source text, execute it.
-        const src = try parser.nodeTextContent(s) orelse continue;
-        res = try evalJS(js_env, alloc, src, "");
-
-        // return the first failure.
-        if (!res.success) {
-            return res;
-        }
-    }
-
-    // Mark tests as ready to run.
-    res = try evalJS(js_env, alloc, "window.dispatchEvent({target: 'load'});", "ready");
-    if (!res.success) {
-        return res;
-    }
-
-    // display console logs
-    res = try evalJS(js_env, alloc, "console.join(', ');", "console");
-    if (res.result.len > 0) {
-        std.debug.print("-- CONSOLE LOG\n{s}\n--\n", .{res.result});
-    }
-
-    // Check the final test status.
-    res = try evalJS(js_env, alloc, "report.status;", "teststatus");
-    if (!res.success) {
-        return res;
-    }
-
-    // If the test failed, return detailed logs intead of the simple status.
-    if (!std.mem.eql(u8, res.result, "Pass")) {
-        return try evalJS(js_env, alloc, "report.log", "teststatus");
-    }
-
-    // return the final result.
-    return res;
-}
-
-fn evalJS(env: jsruntime.Env, alloc: std.mem.Allocator, script: []const u8, name: ?[]const u8) !jsruntime.JSResult {
-    var res = jsruntime.JSResult{};
-    try env.run(alloc, script, name, &res, null);
-    return res;
-}
-
-// browse the path to find the tests list.
-fn findWPTTests(allocator: std.mem.Allocator, path: []const u8, list: *std.ArrayList([]const u8)) !void {
-    var dir = try std.fs.cwd().openIterableDir(path, .{ .no_follow = true });
-    defer dir.close();
-
-    var walker = try dir.walk(allocator);
-    defer walker.deinit();
-
-    while (try walker.next()) |entry| {
-        if (entry.kind != .file) {
-            continue;
-        }
-        if (!std.mem.endsWith(u8, entry.basename, ".html")) {
+    for (testcases) |tc| {
+        if (!shouldRun(filter, tc)) {
             continue;
         }
 
-        try list.append(try fspath.join(allocator, &.{ path, entry.path }));
+        argv.appendAssumeCapacity(tc);
+        defer _ = argv.pop();
+
+        // TODO use std.ChildProcess.run after next zig upgrade.
+        var child = std.ChildProcess.init(argv.items, alloc);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Pipe;
+
+        var stdout = std.ArrayList(u8).init(alloc);
+        var stderr = std.ArrayList(u8).init(alloc);
+
+        try child.spawn();
+        try child.collectOutput(&stdout, &stderr, 1024 * 1024);
+        const term = try child.wait();
+
+        var result: Result = undefined;
+        switch (term) {
+            .Exited => |v| {
+                if (v == 0) {
+                    result = .pass;
+                } else {
+                    result = .fail;
+                }
+            },
+            .Signal => result = .crash,
+            .Stopped => result = .crash,
+            .Unknown => result = .crash,
+        }
+
+        if (out == .summary) {
+            switch (result) {
+                .pass => std.debug.print("Pass", .{}),
+                .fail => std.debug.print("Fail", .{}),
+                .crash => std.debug.print("Crash", .{}),
+            }
+            std.debug.print("\t{s}\n", .{tc});
+            continue;
+        }
+
+        if (out == .json) {
+            if (result == .crash) {
+                var cases = [_]Case{.{
+                    .pass = false,
+                    .name = "crash",
+                    .message = stderr.items,
+                }};
+                try output.append(Test{
+                    .pass = false,
+                    .crash = true,
+                    .name = tc,
+                    .cases = cases[0..1],
+                });
+                continue;
+            }
+
+            const jp = try std.json.parseFromSlice([]Test, alloc, stdout.items, .{});
+            try output.appendSlice(jp.value);
+            continue;
+        }
+
+        std.debug.print("{s}\n", .{stderr.items});
+    }
+
+    if (out == .json) {
+        try std.json.stringify(output.items, .{ .whitespace = .indent_2 }, std.io.getStdOut().writer());
     }
 }

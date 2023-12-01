@@ -71,7 +71,7 @@ jobs:
           ln -s /usr/local/lib/netsurf/lib vendor/netsurf/lib
           ln -s /usr/local/lib/netsurf/include vendor/netsurf/include
 
-      - run: zig build wpt -Dengine=v8
+      - run: zig build wpt -Dengine=v8 -- --safe --summary
 
         # For now WPT tests doesn't pass at all.
         # We accept then to continue the job on failure.
