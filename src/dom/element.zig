@@ -42,6 +42,36 @@ pub const Element = struct {
     pub fn _hasAttribute(self: *parser.Element, qname: []const u8) !bool {
         return try parser.elementHasAttribute(self, qname);
     }
+
+    // https://dom.spec.whatwg.org/#dom-element-toggleattribute
+    pub fn _toggleAttribute(self: *parser.Element, qname: []const u8, force: ?bool) !bool {
+        const exists = try parser.elementHasAttribute(self, qname);
+
+        // If attribute is null, then:
+        if (!exists) {
+            // If force is not given or is true, create an attribute whose
+            // local name is qualifiedName, value is the empty string and node
+            // document is this’s node document, then append this attribute to
+            // this, and then return true.
+            if (force == null or force.?) {
+                try parser.elementSetAttribute(self, qname, "");
+                return true;
+            }
+
+            // Return false.
+            return false;
+        }
+
+        // Otherwise, if force is not given or is false, remove an attribute
+        // given qualifiedName and this, and then return false.
+        if (force == null or !force.?) {
+            try parser.elementRemoveAttribute(self, qname);
+            return false;
+        }
+
+        // Return true.
+        return true;
+    }
 };
 
 // Tests
@@ -53,23 +83,34 @@ pub fn testExecFn(
     comptime _: []jsruntime.API,
 ) !void {
     var attribute = [_]Case{
-        .{ .src = "let div = document.getElementById('content')", .ex = "undefined" },
-        .{ .src = "div.getAttribute('id')", .ex = "content" },
+        .{ .src = "let a = document.getElementById('content')", .ex = "undefined" },
+        .{ .src = "a.getAttribute('id')", .ex = "content" },
 
-        .{ .src = "div.hasAttribute('foo')", .ex = "false" },
-        .{ .src = "div.getAttribute('foo')", .ex = "null" },
+        .{ .src = "a.hasAttribute('foo')", .ex = "false" },
+        .{ .src = "a.getAttribute('foo')", .ex = "null" },
 
-        .{ .src = "div.setAttribute('foo', 'bar')", .ex = "undefined" },
-        .{ .src = "div.hasAttribute('foo')", .ex = "true" },
-        .{ .src = "div.getAttribute('foo')", .ex = "bar" },
+        .{ .src = "a.setAttribute('foo', 'bar')", .ex = "undefined" },
+        .{ .src = "a.hasAttribute('foo')", .ex = "true" },
+        .{ .src = "a.getAttribute('foo')", .ex = "bar" },
 
-        .{ .src = "div.setAttribute('foo', 'baz')", .ex = "undefined" },
-        .{ .src = "div.hasAttribute('foo')", .ex = "true" },
-        .{ .src = "div.getAttribute('foo')", .ex = "baz" },
+        .{ .src = "a.setAttribute('foo', 'baz')", .ex = "undefined" },
+        .{ .src = "a.hasAttribute('foo')", .ex = "true" },
+        .{ .src = "a.getAttribute('foo')", .ex = "baz" },
 
-        .{ .src = "div.removeAttribute('foo')", .ex = "undefined" },
-        .{ .src = "div.hasAttribute('foo')", .ex = "false" },
-        .{ .src = "div.getAttribute('foo')", .ex = "null" },
+        .{ .src = "a.removeAttribute('foo')", .ex = "undefined" },
+        .{ .src = "a.hasAttribute('foo')", .ex = "false" },
+        .{ .src = "a.getAttribute('foo')", .ex = "null" },
     };
     try checkCases(js_env, &attribute);
+
+    var toggleAttr = [_]Case{
+        .{ .src = "let b = document.getElementById('content')", .ex = "undefined" },
+        .{ .src = "b.toggleAttribute('foo')", .ex = "true" },
+        .{ .src = "b.hasAttribute('foo')", .ex = "true" },
+        .{ .src = "b.getAttribute('foo')", .ex = "" },
+
+        .{ .src = "b.toggleAttribute('foo')", .ex = "false" },
+        .{ .src = "b.hasAttribute('foo')", .ex = "false" },
+    };
+    try checkCases(js_env, &toggleAttr);
 }
