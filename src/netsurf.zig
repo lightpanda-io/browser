@@ -998,6 +998,9 @@ pub const Track = struct { base: *c.dom_html_element };
 pub const UList = c.dom_html_u_list_element;
 pub const Video = struct { base: *c.dom_html_element };
 
+// Document Fragment
+pub const DocumentFragment = c.dom_document_fragment;
+
 // Document Position
 
 pub const DocumentPosition = enum(u2) {
@@ -1175,6 +1178,13 @@ pub inline fn documentGetDoctype(doc: *Document) !?*DocumentType {
     const err = documentVtable(doc).dom_document_get_doctype.?(doc, &dt);
     try DOMErr(err);
     return dt;
+}
+
+pub inline fn documentCreateDocumentFragment(doc: *Document) !*DocumentFragment {
+    var df: ?*DocumentFragment = undefined;
+    const err = documentVtable(doc).dom_document_create_document_fragment.?(doc, &df);
+    try DOMErr(err);
+    return df.?;
 }
 
 // DocumentHTML
