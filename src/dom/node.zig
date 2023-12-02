@@ -11,6 +11,7 @@ const parser = @import("../netsurf.zig");
 const EventTarget = @import("event_target.zig").EventTarget;
 
 // DOM
+const Attr = @import("attribute.zig").Attr;
 const CData = @import("character_data.zig");
 const Element = @import("element.zig").Element;
 const Document = @import("document.zig").Document;
@@ -23,6 +24,7 @@ const HTMLElem = @import("../html/elements.zig");
 
 // Node interfaces
 pub const Interfaces = generate.Tuple(.{
+    Attr,
     CData.CharacterData,
     CData.Interfaces,
     Element,
@@ -52,6 +54,7 @@ pub const Node = struct {
             .text => .{ .Text = @as(*parser.Text, @ptrCast(node)) },
             .document => .{ .HTMLDocument = @as(*parser.DocumentHTML, @ptrCast(node)) },
             .document_type => .{ .DocumentType = @as(*parser.DocumentType, @ptrCast(node)) },
+            .attribute => .{ .Attr = @as(*parser.Attribute, @ptrCast(node)) },
             else => @panic("node type not handled"), // TODO
         };
     }

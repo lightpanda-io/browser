@@ -336,6 +336,131 @@ fn DOMErr(except: DOMException) DOMError!void {
 // EventTarget
 pub const EventTarget = c.dom_event_target;
 
+// NamedNodeMap
+pub const NamedNodeMap = c.dom_namednodemap;
+
+pub fn namedNodeMapGetLength(nnm: *NamedNodeMap) !u32 {
+    var ln: u32 = undefined;
+    const err = c.dom_namednodemap_get_length(nnm, &ln);
+    try DOMErr(err);
+    return ln;
+}
+
+pub fn namedNodeMapItem(nnm: *NamedNodeMap, index: u32) !?*Attribute {
+    var n: [*c]c.dom_node = undefined;
+    const err = c._dom_namednodemap_item(nnm, index, &n);
+    try DOMErr(err);
+
+    if (n == null) {
+        return null;
+    }
+
+    // cast [*c]c.dom_node into *Attribute
+    return @as(*Attribute, @ptrCast(n));
+}
+
+pub fn namedNodeMapGetNamedItem(nnm: *NamedNodeMap, qname: []const u8) !?*Attribute {
+    var n: [*c]c.dom_node = undefined;
+    const err = c._dom_namednodemap_get_named_item(nnm, try stringFromData(qname), &n);
+    try DOMErr(err);
+
+    if (n == null) {
+        return null;
+    }
+
+    // cast [*c]c.dom_node into *Attribute
+    return @as(*Attribute, @ptrCast(n));
+}
+
+pub fn namedNodeMapGetNamedItemNS(
+    nnm: *NamedNodeMap,
+    namespace: []const u8,
+    localname: []const u8,
+) !?*Attribute {
+    var n: [*c]c.dom_node = undefined;
+    const err = c._dom_namednodemap_get_named_item_ns(
+        nnm,
+        try stringFromData(namespace),
+        try stringFromData(localname),
+        &n,
+    );
+    try DOMErr(err);
+
+    if (n == null) {
+        return null;
+    }
+
+    // cast [*c]c.dom_node into *Attribute
+    return @as(*Attribute, @ptrCast(n));
+}
+
+// Convert a parser pointer to a public dom_node pointer.
+fn toDOMNode(comptime T: type, v: *T) [*c]c.dom_node {
+    const v_aligned: *align(@alignOf([*c]c.dom_node)) T = @alignCast(v);
+    return @ptrCast(v_aligned);
+}
+
+pub fn namedNodeMapSetNamedItem(nnm: *NamedNodeMap, attr: *Attribute) !?*Attribute {
+    var n: [*c]c.dom_node = undefined;
+    const err = c._dom_namednodemap_set_named_item(
+        nnm,
+        toDOMNode(Attribute, attr),
+        &n,
+    );
+    try DOMErr(err);
+
+    if (n == null) {
+        return null;
+    }
+
+    // cast [*c]c.dom_node into *Attribute
+    return @as(*Attribute, @ptrCast(n));
+}
+
+pub fn namedNodeMapSetNamedItemNS(nnm: *NamedNodeMap, attr: *Attribute) !?*Attribute {
+    var n: [*c]c.dom_node = undefined;
+    const err = c._dom_namednodemap_set_named_item_ns(
+        nnm,
+        toDOMNode(Attribute, attr),
+        &n,
+    );
+    try DOMErr(err);
+
+    if (n == null) {
+        return null;
+    }
+
+    // cast [*c]c.dom_node into *Attribute
+    return @as(*Attribute, @ptrCast(n));
+}
+
+pub fn namedNodeMapRemoveNamedItem(nnm: *NamedNodeMap, qname: []const u8) !*Attribute {
+    var n: [*c]c.dom_node = undefined;
+    const err = c._dom_namednodemap_remove_named_item(nnm, try stringFromData(qname), &n);
+    try DOMErr(err);
+
+    // cast [*c]c.dom_node into *Attribute
+    return @as(*Attribute, @ptrCast(n));
+}
+
+pub fn namedNodeMapRemoveNamedItemNS(
+    nnm: *NamedNodeMap,
+    namespace: []const u8,
+    localname: []const u8,
+) !*Attribute {
+    var n: [*c]c.dom_node = undefined;
+    const err = c._dom_namednodemap_remove_named_item_ns(
+        nnm,
+        try stringFromData(namespace),
+        try stringFromData(localname),
+        &n,
+    );
+    try DOMErr(err);
+
+    // cast [*c]c.dom_node into *Attribute
+    return @as(*Attribute, @ptrCast(n));
+}
+
 // NodeType
 
 pub const NodeType = enum(u4) {
@@ -635,6 +760,13 @@ pub fn nodeHasAttributes(node: *Node) !bool {
     const err = nodeVtable(node).dom_node_has_attributes.?(node, &res);
     try DOMErr(err);
     return res;
+}
+
+pub fn nodeGetAttributes(node: *Node) !*NamedNodeMap {
+    var res: ?*NamedNodeMap = undefined;
+    const err = nodeVtable(node).dom_node_get_attributes.?(node, &res);
+    try DOMErr(err);
+    return res.?;
 }
 
 // nodeToElement is an helper to convert a node to an element.

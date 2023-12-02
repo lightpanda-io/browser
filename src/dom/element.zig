@@ -10,11 +10,15 @@ const Node = @import("node.zig").Node;
 const HTMLElem = @import("../html/elements.zig");
 pub const Union = @import("../html/elements.zig").Union;
 
+const DOMException = @import("exceptions.zig").DOMException;
+
 // WEB IDL https://dom.spec.whatwg.org/#element
 pub const Element = struct {
     pub const Self = parser.Element;
     pub const prototype = *Node;
     pub const mem_guarantied = true;
+
+    pub const Exception = DOMException;
 
     pub fn toInterface(e: *parser.Element) !Union {
         return try HTMLElem.toInterface(Union, e);
@@ -25,6 +29,10 @@ pub const Element = struct {
 
     pub fn get_localName(self: *parser.Element) ![]const u8 {
         return try parser.elementLocalName(self);
+    }
+
+    pub fn get_attributes(self: *parser.Element) !*parser.NamedNodeMap {
+        return try parser.nodeGetAttributes(parser.elementToNode(self));
     }
 
     pub fn _hasAttributes(self: *parser.Element) !bool {
@@ -89,6 +97,8 @@ pub fn testExecFn(
     var attribute = [_]Case{
         .{ .src = "let a = document.getElementById('content')", .ex = "undefined" },
         .{ .src = "a.hasAttributes()", .ex = "true" },
+        .{ .src = "a.attributes.length", .ex = "1" },
+
         .{ .src = "a.getAttribute('id')", .ex = "content" },
 
         .{ .src = "a.hasAttribute('foo')", .ex = "false" },
