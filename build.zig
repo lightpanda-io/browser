@@ -6,14 +6,12 @@ const jsruntime_path = "vendor/jsruntime-lib/";
 const jsruntime = @import("vendor/jsruntime-lib/build.zig");
 const jsruntime_pkgs = jsruntime.packages(jsruntime_path);
 
-const zig_version = builtin.zig_version;
-
 /// Do not rename this constant. It is scanned by some scripts to determine
 /// which zig version to install.
 const recommended_zig_version = jsruntime.recommended_zig_version;
 
 pub fn build(b: *std.build.Builder) !void {
-    switch (comptime zig_version.order(std.SemanticVersion.parse(recommended_zig_version) catch unreachable)) {
+    switch (comptime builtin.zig_version.order(std.SemanticVersion.parse(recommended_zig_version) catch unreachable)) {
         .eq => {},
         .lt => {
             @compileError("The minimum version of Zig required to compile is '" ++ recommended_zig_version ++ "', found '" ++ builtin.zig_version_string ++ "'.");
