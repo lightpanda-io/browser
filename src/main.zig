@@ -77,7 +77,7 @@ pub fn main() !void {
     };
 
     // server
-    var addr = try std.net.Address.initUnix(socket_path);
+    const addr = try std.net.Address.initUnix(socket_path);
     server = std.net.StreamServer.init(.{});
     defer server.deinit();
     try server.listen(addr);
