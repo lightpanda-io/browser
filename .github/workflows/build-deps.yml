@@ -13,7 +13,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: browsercore/browsercore-deps
-  ZIG_VERSION: 0.11.0
+  ZIG_DOCKER_VERSION: 0.12.0-dev.1773-8a8fd47d2
 
 jobs:
   build-deps:
@@ -56,5 +56,5 @@ jobs:
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            ZIG_VERSION=${{ env.ZIG_VERSION }}
+            ZIG_DOCKER_VERSION=${{ env.ZIG_DOCKER_VERSION }}
           platforms: ${{matrix.os}}/${{matrix.build_arch}}
