@@ -23,7 +23,36 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-release run run-release shell test bench
+.PHONY: build build-release run run-release shell test bench download-zig
+
+zig_version = $(shell grep 'recommended_zig_version = "' "vendor/jsruntime-lib/build.zig" | cut -d'"' -f2)
+kernel = $(shell uname -ms)
+
+## Download the zig recommended version
+download-zig:
+ifeq ($(kernel), Darwin x86_64)
+	$(eval target="macos")
+	$(eval arch="x86_64")
+else ifeq ($(kernel), Darwin arm64)
+	$(eval target="macos")
+	$(eval arch="aarch64")
+else ifeq ($(kernel), Linux aarch64)
+	$(eval target="linux")
+	$(eval arch="aarch64")
+else ifeq ($(kernel), Linux arm64)
+	$(eval target="linux")
+	$(eval arch="aarch64")
+else ifeq ($(kernel), Linux x86_64)
+	$(eval target="linux")
+	$(eval arch="x86_64")
+else
+	$(error "Unhandled kernel: $(kernel)")
+endif
+	$(eval url = "https://ziglang.org/builds/zig-$(target)-$(arch)-$(zig_version).tar.xz")
+	$(eval dest = "/tmp/zig-$(target)-$(arch)-$(zig_version).tar.xz")
+	@printf "\e[36mDownload zig version $(zig_version)...\e[0m\n"
+	@curl -o "$(dest)" -L "$(url)" || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+	@printf "\e[33mDownloaded $(dest)\e[0m\n"
 
 ## Build in debug mode
 build:
