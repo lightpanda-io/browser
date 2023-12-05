@@ -18,8 +18,6 @@ pub const Element = struct {
     pub const prototype = *Node;
     pub const mem_guarantied = true;
 
-    pub const Exception = DOMException;
-
     pub fn toInterface(e: *parser.Element) !Union {
         return try HTMLElem.toInterface(Union, e);
     }

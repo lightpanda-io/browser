@@ -10,6 +10,4 @@ pub const Attr = struct {
     pub const Self = parser.Attribute;
     pub const prototype = *Node;
     pub const mem_guarantied = true;
-
-    pub const Exception = DOMException;
 };
