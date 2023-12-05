@@ -139,7 +139,7 @@ fn evalJS(env: jsruntime.Env, alloc: std.mem.Allocator, script: []const u8, name
 
 // browse the path to find the tests list.
 pub fn find(allocator: std.mem.Allocator, comptime path: []const u8, list: *std.ArrayList([]const u8)) !void {
-    var dir = try std.fs.cwd().openIterableDir(path, .{ .no_follow = true });
+    var dir = try std.fs.cwd().openDir(path, .{ .iterate = true, .no_follow = true });
     defer dir.close();
 
     var walker = try dir.walk(allocator);

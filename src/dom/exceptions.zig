@@ -45,7 +45,7 @@ pub const DOMException = struct {
 
     // TODO: deinit
     pub fn init(alloc: std.mem.Allocator, err: anyerror, callerName: []const u8) anyerror!DOMException {
-        const errCast = @as(parser.DOMError, @errSetCast(err));
+        const errCast = @as(parser.DOMError, @errorCast(err));
         const errName = DOMException.name(errCast);
         const str = switch (errCast) {
             error.HierarchyRequest => try allocPrint(
