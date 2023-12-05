@@ -54,12 +54,12 @@ inline fn getVtable(comptime VtableT: type, comptime NodeT: type, node: anytype)
 // Utils
 const String = c.dom_string;
 
-inline fn stringToData(s: *String) []const u8 {
+inline fn strToData(s: *String) []const u8 {
     const data = c.dom_string_data(s);
     return data[0..c.dom_string_byte_length(s)];
 }
 
-inline fn stringFromData(data: []const u8) !*String {
+inline fn strFromData(data: []const u8) !*String {
     var s: ?*String = undefined;
     const err = c.dom_string_create(data.ptr, data.len, &s);
     try DOMErr(err);
@@ -359,7 +359,7 @@ pub fn namedNodeMapItem(nnm: *NamedNodeMap, index: u32) !?*Attribute {
 
 pub fn namedNodeMapGetNamedItem(nnm: *NamedNodeMap, qname: []const u8) !?*Attribute {
     var n: [*c]c.dom_node = undefined;
-    const err = c._dom_namednodemap_get_named_item(nnm, try stringFromData(qname), &n);
+    const err = c._dom_namednodemap_get_named_item(nnm, try strFromData(qname), &n);
     try DOMErr(err);
 
     if (n == null) return null;
@@ -376,8 +376,8 @@ pub fn namedNodeMapGetNamedItemNS(
     var n: [*c]c.dom_node = undefined;
     const err = c._dom_namednodemap_get_named_item_ns(
         nnm,
-        try stringFromData(namespace),
-        try stringFromData(localname),
+        try strFromData(namespace),
+        try strFromData(localname),
         &n,
     );
     try DOMErr(err);
@@ -426,7 +426,7 @@ pub fn namedNodeMapSetNamedItemNS(nnm: *NamedNodeMap, attr: *Attribute) !?*Attri
 
 pub fn namedNodeMapRemoveNamedItem(nnm: *NamedNodeMap, qname: []const u8) !*Attribute {
     var n: [*c]c.dom_node = undefined;
-    const err = c._dom_namednodemap_remove_named_item(nnm, try stringFromData(qname), &n);
+    const err = c._dom_namednodemap_remove_named_item(nnm, try strFromData(qname), &n);
     try DOMErr(err);
 
     // cast [*c]c.dom_node into *Attribute
@@ -441,8 +441,8 @@ pub fn namedNodeMapRemoveNamedItemNS(
     var n: [*c]c.dom_node = undefined;
     const err = c._dom_namednodemap_remove_named_item_ns(
         nnm,
-        try stringFromData(namespace),
-        try stringFromData(localname),
+        try strFromData(namespace),
+        try strFromData(localname),
         &n,
     );
     try DOMErr(err);
@@ -503,7 +503,7 @@ pub fn nodeLocalName(node: *Node) ![]const u8 {
     var s_lower: ?*String = undefined;
     const errStr = c.dom_string_tolower(s, true, &s_lower);
     try DOMErr(errStr);
-    return stringToData(s_lower.?);
+    return strToData(s_lower.?);
 }
 
 pub fn nodeType(node: *Node) !NodeType {
@@ -590,7 +590,7 @@ pub fn nodeName(node: *Node) ![]const u8 {
     var s: ?*String = undefined;
     const err = nodeVtable(node).dom_node_get_node_name.?(node, &s);
     try DOMErr(err);
-    return stringToData(s.?);
+    return strToData(s.?);
 }
 
 pub fn nodeOwnerDocument(node: *Node) !?*Document {
@@ -606,11 +606,11 @@ pub fn nodeValue(node: *Node) !?[]const u8 {
     try DOMErr(err);
     if (s == null) return null;
 
-    return stringToData(s.?);
+    return strToData(s.?);
 }
 
 pub fn nodeSetValue(node: *Node, value: []const u8) !void {
-    const s = try stringFromData(value);
+    const s = try strFromData(value);
     const err = nodeVtable(node).dom_node_set_node_value.?(node, s);
     try DOMErr(err);
 }
@@ -627,11 +627,11 @@ pub fn nodeTextContent(node: *Node) !?[]const u8 {
         }
         return null;
     }
-    return stringToData(s.?);
+    return strToData(s.?);
 }
 
 pub fn nodeSetTextContent(node: *Node, value: []const u8) !void {
-    const s = try stringFromData(value);
+    const s = try strFromData(value);
     const err = nodeVtable(node).dom_node_set_text_content.?(node, s);
     try DOMErr(err);
 }
@@ -672,7 +672,7 @@ pub fn nodeInsertBefore(node: *Node, new_node: *Node, ref_node: *Node) !*Node {
 }
 
 pub fn nodeIsDefaultNamespace(node: *Node, namespace: []const u8) !bool {
-    const s = try stringFromData(namespace);
+    const s = try strFromData(namespace);
     var res: bool = undefined;
     const err = nodeVtable(node).dom_node_is_default_namespace.?(node, s, &res);
     try DOMErr(err);
@@ -695,28 +695,20 @@ pub fn nodeIsSameNode(node: *Node, other: *Node) !bool {
 
 pub fn nodeLookupPrefix(node: *Node, namespace: []const u8) !?[]const u8 {
     var s: ?*String = undefined;
-    const err = nodeVtable(node).dom_node_lookup_prefix.?(
-        node,
-        try stringFromData(namespace),
-        &s,
-    );
+    const err = nodeVtable(node).dom_node_lookup_prefix.?(node, try strFromData(namespace), &s);
     try DOMErr(err);
     if (s == null) return null;
 
-    return stringToData(s.?);
+    return strToData(s.?);
 }
 
 pub fn nodeLookupNamespaceURI(node: *Node, prefix: ?[]const u8) !?[]const u8 {
     var s: ?*String = undefined;
-    const err = nodeVtable(node).dom_node_lookup_namespace.?(
-        node,
-        try stringFromData(prefix.?),
-        &s,
-    );
+    const err = nodeVtable(node).dom_node_lookup_namespace.?(node, try strFromData(prefix.?), &s);
     try DOMErr(err);
     if (s == null) return null;
 
-    return stringToData(s.?);
+    return strToData(s.?);
 }
 
 pub fn nodeNormalize(node: *Node) !void {
@@ -772,11 +764,11 @@ pub fn characterDataData(cdata: *CharacterData) ![]const u8 {
     var s: ?*String = undefined;
     const err = characterDataVtable(cdata).dom_characterdata_get_data.?(cdata, &s);
     try DOMErr(err);
-    return stringToData(s.?);
+    return strToData(s.?);
 }
 
 pub fn characterDataSetData(cdata: *CharacterData, data: []const u8) !void {
-    const s = try stringFromData(data);
+    const s = try strFromData(data);
     const err = characterDataVtable(cdata).dom_characterdata_set_data.?(cdata, s);
     try DOMErr(err);
 }
@@ -789,7 +781,7 @@ pub fn characterDataLength(cdata: *CharacterData) !u32 {
 }
 
 pub fn characterDataAppendData(cdata: *CharacterData, data: []const u8) !void {
-    const s = try stringFromData(data);
+    const s = try strFromData(data);
     const err = characterDataVtable(cdata).dom_characterdata_append_data.?(cdata, s);
     try DOMErr(err);
 }
@@ -800,13 +792,13 @@ pub fn characterDataDeleteData(cdata: *CharacterData, offset: u32, count: u32) !
 }
 
 pub fn characterDataInsertData(cdata: *CharacterData, offset: u32, data: []const u8) !void {
-    const s = try stringFromData(data);
+    const s = try strFromData(data);
     const err = characterDataVtable(cdata).dom_characterdata_insert_data.?(cdata, offset, s);
     try DOMErr(err);
 }
 
 pub fn characterDataReplaceData(cdata: *CharacterData, offset: u32, count: u32, data: []const u8) !void {
-    const s = try stringFromData(data);
+    const s = try strFromData(data);
     const err = characterDataVtable(cdata).dom_characterdata_replace_data.?(cdata, offset, count, s);
     try DOMErr(err);
 }
@@ -815,7 +807,7 @@ pub fn characterDataSubstringData(cdata: *CharacterData, offset: u32, count: u32
     var s: ?*String = undefined;
     const err = characterDataVtable(cdata).dom_characterdata_substring_data.?(cdata, offset, count, &s);
     try DOMErr(err);
-    return stringToData(s.?);
+    return strToData(s.?);
 }
 
 // Text
@@ -829,7 +821,7 @@ pub fn textWholdeText(text: *Text) ![]const u8 {
     var s: ?*String = undefined;
     const err = textVtable(text).dom_text_get_whole_text.?(text, &s);
     try DOMErr(err);
-    return stringToData(s.?);
+    return strToData(s.?);
 }
 
 pub fn textSplitText(text: *Text, offset: u32) !*Text {
@@ -859,41 +851,30 @@ pub fn elementLocalName(elem: *Element) ![]const u8 {
 
 pub fn elementGetAttribute(elem: *Element, name: []const u8) !?[]const u8 {
     var s: ?*String = undefined;
-    const err = elementVtable(elem).dom_element_get_attribute.?(
-        elem,
-        try stringFromData(name),
-        &s,
-    );
+    const err = elementVtable(elem).dom_element_get_attribute.?(elem, try strFromData(name), &s);
     try DOMErr(err);
     if (s == null) return null;
 
-    return stringToData(s.?);
+    return strToData(s.?);
 }
 
 pub fn elementSetAttribute(elem: *Element, qname: []const u8, value: []const u8) !void {
     const err = elementVtable(elem).dom_element_set_attribute.?(
         elem,
-        try stringFromData(qname),
-        try stringFromData(value),
+        try strFromData(qname),
+        try strFromData(value),
     );
     try DOMErr(err);
 }
 
 pub fn elementRemoveAttribute(elem: *Element, qname: []const u8) !void {
-    const err = elementVtable(elem).dom_element_remove_attribute.?(
-        elem,
-        try stringFromData(qname),
-    );
+    const err = elementVtable(elem).dom_element_remove_attribute.?(elem, try strFromData(qname));
     try DOMErr(err);
 }
 
 pub fn elementHasAttribute(elem: *Element, qname: []const u8) !bool {
     var res: bool = undefined;
-    const err = elementVtable(elem).dom_element_has_attribute.?(
-        elem,
-        try stringFromData(qname),
-        &res,
-    );
+    const err = elementVtable(elem).dom_element_has_attribute.?(elem, try strFromData(qname), &res);
     try DOMErr(err);
     return res;
 }
@@ -1023,21 +1004,21 @@ pub inline fn documentTypeGetName(dt: *DocumentType) ![]const u8 {
     var s: ?*String = undefined;
     const err = documentTypeVtable(dt).dom_document_type_get_name.?(dt, &s);
     try DOMErr(err);
-    return stringToData(s.?);
+    return strToData(s.?);
 }
 
 pub inline fn documentTypeGetPublicId(dt: *DocumentType) ![]const u8 {
     var s: ?*String = undefined;
     const err = documentTypeVtable(dt).dom_document_type_get_public_id.?(dt, &s);
     try DOMErr(err);
-    return stringToData(s.?);
+    return strToData(s.?);
 }
 
 pub inline fn documentTypeGetSystemId(dt: *DocumentType) ![]const u8 {
     var s: ?*String = undefined;
     const err = documentTypeVtable(dt).dom_document_type_get_system_id.?(dt, &s);
     try DOMErr(err);
-    return stringToData(s.?);
+    return strToData(s.?);
 }
 
 // DOMImplementation
@@ -1108,22 +1089,14 @@ fn documentVtable(doc: *Document) c.dom_document_vtable {
 
 pub inline fn documentGetElementById(doc: *Document, id: []const u8) !?*Element {
     var elem: ?*Element = undefined;
-    const err = documentVtable(doc).dom_document_get_element_by_id.?(
-        doc,
-        try stringFromData(id),
-        &elem,
-    );
+    const err = documentVtable(doc).dom_document_get_element_by_id.?(doc, try strFromData(id), &elem);
     try DOMErr(err);
     return elem;
 }
 
 pub inline fn documentGetElementsByTagName(doc: *Document, tagname: []const u8) !*NodeList {
     var nlist: ?*NodeList = undefined;
-    const err = documentVtable(doc).dom_document_get_elements_by_tag_name.?(
-        doc,
-        try stringFromData(tagname),
-        &nlist,
-    );
+    const err = documentVtable(doc).dom_document_get_elements_by_tag_name.?(doc, try strFromData(tagname), &nlist);
     try DOMErr(err);
     return nlist.?;
 }
@@ -1140,23 +1113,19 @@ pub inline fn documentGetDocumentURI(doc: *Document) ![]const u8 {
     var s: ?*String = undefined;
     const err = documentVtable(doc).dom_document_get_uri.?(doc, &s);
     try DOMErr(err);
-    return stringToData(s.?);
+    return strToData(s.?);
 }
 
 pub inline fn documentGetInputEncoding(doc: *Document) ![]const u8 {
     var s: ?*String = undefined;
     const err = documentVtable(doc).dom_document_get_input_encoding.?(doc, &s);
     try DOMErr(err);
-    return stringToData(s.?);
+    return strToData(s.?);
 }
 
 pub inline fn documentCreateElement(doc: *Document, tag_name: []const u8) !*Element {
     var elem: ?*Element = undefined;
-    const err = documentVtable(doc).dom_document_create_element.?(
-        doc,
-        try stringFromData(tag_name),
-        &elem,
-    );
+    const err = documentVtable(doc).dom_document_create_element.?(doc, try strFromData(tag_name), &elem);
     try DOMErr(err);
     return elem.?;
 }
@@ -1165,8 +1134,8 @@ pub inline fn documentCreateElementNS(doc: *Document, ns: []const u8, tag_name: 
     var elem: ?*Element = undefined;
     const err = documentVtable(doc).dom_document_create_element_ns.?(
         doc,
-        try stringFromData(ns),
-        try stringFromData(tag_name),
+        try strFromData(ns),
+        try strFromData(tag_name),
         &elem,
     );
     try DOMErr(err);
