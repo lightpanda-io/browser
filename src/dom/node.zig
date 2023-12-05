@@ -16,6 +16,7 @@ const CData = @import("character_data.zig");
 const Element = @import("element.zig").Element;
 const Document = @import("document.zig").Document;
 const DocumentType = @import("document_type.zig").DocumentType;
+const DocumentFragment = @import("document_fragment.zig").DocumentFragment;
 const HTMLCollection = @import("html_collection.zig").HTMLCollection;
 
 // HTML
@@ -30,6 +31,7 @@ pub const Interfaces = generate.Tuple(.{
     Element,
     Document,
     DocumentType,
+    DocumentFragment,
     HTMLCollection,
 
     HTML.Interfaces,
@@ -55,6 +57,7 @@ pub const Node = struct {
             .document => .{ .HTMLDocument = @as(*parser.DocumentHTML, @ptrCast(node)) },
             .document_type => .{ .DocumentType = @as(*parser.DocumentType, @ptrCast(node)) },
             .attribute => .{ .Attr = @as(*parser.Attribute, @ptrCast(node)) },
+            .document_fragment => .{ .DocumentFragment = @as(*parser.DocumentFragment, @ptrCast(node)) },
             else => @panic("node type not handled"), // TODO
         };
     }

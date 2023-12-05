@@ -14,6 +14,7 @@ const Element = @import("element.zig").Element;
 const ElementUnion = @import("element.zig").Union;
 
 const DocumentType = @import("document_type.zig").DocumentType;
+const DocumentFragment = @import("document_fragment.zig").DocumentFragment;
 const DOMImplementation = @import("implementation.zig").DOMImplementation;
 
 // WEB IDL https://dom.spec.whatwg.org/#document
@@ -124,6 +125,10 @@ pub const Document = struct {
         );
     }
 
+    pub fn _createDocumentFragment(self: *parser.Document) !*parser.DocumentFragment {
+        return try parser.documentCreateDocumentFragment(self);
+    }
+
     pub fn deinit(_: *parser.Document, _: std.mem.Allocator) void {}
 };
 
@@ -215,6 +220,11 @@ pub fn testExecFn(
         .{ .src = "d.contentType", .ex = "text/html" },
     };
     try checkCases(js_env, &new);
+
+    var createDocumentFragment = [_]Case{
+        .{ .src = "document.createDocumentFragment()", .ex = "[object DocumentFragment]" },
+    };
+    try checkCases(js_env, &createDocumentFragment);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;
