@@ -351,9 +351,7 @@ pub fn namedNodeMapItem(nnm: *NamedNodeMap, index: u32) !?*Attribute {
     const err = c._dom_namednodemap_item(nnm, index, &n);
     try DOMErr(err);
 
-    if (n == null) {
-        return null;
-    }
+    if (n == null) return null;
 
     // cast [*c]c.dom_node into *Attribute
     return @as(*Attribute, @ptrCast(n));
@@ -364,9 +362,7 @@ pub fn namedNodeMapGetNamedItem(nnm: *NamedNodeMap, qname: []const u8) !?*Attrib
     const err = c._dom_namednodemap_get_named_item(nnm, try stringFromData(qname), &n);
     try DOMErr(err);
 
-    if (n == null) {
-        return null;
-    }
+    if (n == null) return null;
 
     // cast [*c]c.dom_node into *Attribute
     return @as(*Attribute, @ptrCast(n));
@@ -386,9 +382,7 @@ pub fn namedNodeMapGetNamedItemNS(
     );
     try DOMErr(err);
 
-    if (n == null) {
-        return null;
-    }
+    if (n == null) return null;
 
     // cast [*c]c.dom_node into *Attribute
     return @as(*Attribute, @ptrCast(n));
@@ -409,9 +403,7 @@ pub fn namedNodeMapSetNamedItem(nnm: *NamedNodeMap, attr: *Attribute) !?*Attribu
     );
     try DOMErr(err);
 
-    if (n == null) {
-        return null;
-    }
+    if (n == null) return null;
 
     // cast [*c]c.dom_node into *Attribute
     return @as(*Attribute, @ptrCast(n));
@@ -426,9 +418,7 @@ pub fn namedNodeMapSetNamedItemNS(nnm: *NamedNodeMap, attr: *Attribute) !?*Attri
     );
     try DOMErr(err);
 
-    if (n == null) {
-        return null;
-    }
+    if (n == null) return null;
 
     // cast [*c]c.dom_node into *Attribute
     return @as(*Attribute, @ptrCast(n));
@@ -493,9 +483,7 @@ pub fn nodeListItem(nodeList: *NodeList, index: u32) !?*Node {
     const err = c._dom_nodelist_item(nodeList, index, &n);
     try DOMErr(err);
 
-    if (n == null) {
-        return null;
-    }
+    if (n == null) return null;
 
     // cast [*c]c.dom_node into *Node
     return @as(*Node, @ptrCast(n));
@@ -550,9 +538,8 @@ pub fn nodeNextElementSibling(node: *Node) !?*Element {
     var n = node;
     while (true) {
         const res = try nodeNextSibling(n);
-        if (res == null) {
-            return null;
-        }
+        if (res == null) return null;
+
         if (try nodeType(res.?) == .element) {
             return @as(*Element, @ptrCast(res.?));
         }
@@ -572,9 +559,8 @@ pub fn nodePreviousElementSibling(node: *Node) !?*Element {
     var n = node;
     while (true) {
         const res = try nodePreviousSibling(n);
-        if (res == null) {
-            return null;
-        }
+        if (res == null) return null;
+
         if (try nodeType(res.?) == .element) {
             return @as(*Element, @ptrCast(res.?));
         }
@@ -618,9 +604,8 @@ pub fn nodeValue(node: *Node) !?[]const u8 {
     var s: ?*String = undefined;
     const err = nodeVtable(node).dom_node_get_node_value.?(node, &s);
     try DOMErr(err);
-    if (s == null) {
-        return null;
-    }
+    if (s == null) return null;
+
     return stringToData(s.?);
 }
 
@@ -716,9 +701,8 @@ pub fn nodeLookupPrefix(node: *Node, namespace: []const u8) !?[]const u8 {
         &s,
     );
     try DOMErr(err);
-    if (s == null) {
-        return null;
-    }
+    if (s == null) return null;
+
     return stringToData(s.?);
 }
 
@@ -730,9 +714,8 @@ pub fn nodeLookupNamespaceURI(node: *Node, prefix: ?[]const u8) !?[]const u8 {
         &s,
     );
     try DOMErr(err);
-    if (s == null) {
-        return null;
-    }
+    if (s == null) return null;
+
     return stringToData(s.?);
 }
 
@@ -882,9 +865,8 @@ pub fn elementGetAttribute(elem: *Element, name: []const u8) !?[]const u8 {
         &s,
     );
     try DOMErr(err);
-    if (s == null) {
-        return null;
-    }
+    if (s == null) return null;
+
     return stringToData(s.?);
 }
 
@@ -1218,9 +1200,8 @@ pub fn documentHTMLParseFromFileAlloc(allocator: std.mem.Allocator, filename: []
 pub fn documentHTMLParseFromFile(filename: [:0]const u8) !*DocumentHTML {
     // create a null terminated c string.
     const doc = c.wr_create_doc_dom_from_file(filename.ptr);
-    if (doc == null) {
-        return error.ParserError;
-    }
+    if (doc == null) return error.ParserError;
+
     return @as(*DocumentHTML, @ptrCast(doc.?));
 }
 
@@ -1240,9 +1221,8 @@ pub fn documentHTMLParseFromStrAlloc(allocator: std.mem.Allocator, str: []const 
 // The caller is responsible for closing the document.
 pub fn documentHTMLParseFromStr(cstr: [:0]const u8) !*DocumentHTML {
     const doc = c.wr_create_doc_dom_from_string(cstr.ptr);
-    if (doc == null) {
-        return error.ParserError;
-    }
+    if (doc == null) return error.ParserError;
+
     return @as(*DocumentHTML, @ptrCast(doc.?));
 }
 
@@ -1260,8 +1240,7 @@ pub inline fn documentHTMLBody(doc_html: *DocumentHTML) !?*Body {
     var body: ?*ElementHTML = undefined;
     const err = documentHTMLVtable(doc_html).get_body.?(doc_html, &body);
     try DOMErr(err);
-    if (body == null) {
-        return null;
-    }
+    if (body == null) return null;
+
     return @as(*Body, @ptrCast(body.?));
 }
