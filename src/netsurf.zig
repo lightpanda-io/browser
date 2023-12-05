@@ -336,6 +336,121 @@ fn DOMErr(except: DOMException) DOMError!void {
 // EventTarget
 pub const EventTarget = c.dom_event_target;
 
+// NamedNodeMap
+pub const NamedNodeMap = c.dom_namednodemap;
+
+pub fn namedNodeMapGetLength(nnm: *NamedNodeMap) !u32 {
+    var ln: u32 = undefined;
+    const err = c.dom_namednodemap_get_length(nnm, &ln);
+    try DOMErr(err);
+    return ln;
+}
+
+pub fn namedNodeMapItem(nnm: *NamedNodeMap, index: u32) !?*Attribute {
+    var n: [*c]c.dom_node = undefined;
+    const err = c._dom_namednodemap_item(nnm, index, &n);
+    try DOMErr(err);
+
+    if (n == null) return null;
+
+    // cast [*c]c.dom_node into *Attribute
+    return @as(*Attribute, @ptrCast(n));
+}
+
+pub fn namedNodeMapGetNamedItem(nnm: *NamedNodeMap, qname: []const u8) !?*Attribute {
+    var n: [*c]c.dom_node = undefined;
+    const err = c._dom_namednodemap_get_named_item(nnm, try stringFromData(qname), &n);
+    try DOMErr(err);
+
+    if (n == null) return null;
+
+    // cast [*c]c.dom_node into *Attribute
+    return @as(*Attribute, @ptrCast(n));
+}
+
+pub fn namedNodeMapGetNamedItemNS(
+    nnm: *NamedNodeMap,
+    namespace: []const u8,
+    localname: []const u8,
+) !?*Attribute {
+    var n: [*c]c.dom_node = undefined;
+    const err = c._dom_namednodemap_get_named_item_ns(
+        nnm,
+        try stringFromData(namespace),
+        try stringFromData(localname),
+        &n,
+    );
+    try DOMErr(err);
+
+    if (n == null) return null;
+
+    // cast [*c]c.dom_node into *Attribute
+    return @as(*Attribute, @ptrCast(n));
+}
+
+// Convert a parser pointer to a public dom_node pointer.
+fn toDOMNode(comptime T: type, v: *T) [*c]c.dom_node {
+    const v_aligned: *align(@alignOf([*c]c.dom_node)) T = @alignCast(v);
+    return @ptrCast(v_aligned);
+}
+
+pub fn namedNodeMapSetNamedItem(nnm: *NamedNodeMap, attr: *Attribute) !?*Attribute {
+    var n: [*c]c.dom_node = undefined;
+    const err = c._dom_namednodemap_set_named_item(
+        nnm,
+        toDOMNode(Attribute, attr),
+        &n,
+    );
+    try DOMErr(err);
+
+    if (n == null) return null;
+
+    // cast [*c]c.dom_node into *Attribute
+    return @as(*Attribute, @ptrCast(n));
+}
+
+pub fn namedNodeMapSetNamedItemNS(nnm: *NamedNodeMap, attr: *Attribute) !?*Attribute {
+    var n: [*c]c.dom_node = undefined;
+    const err = c._dom_namednodemap_set_named_item_ns(
+        nnm,
+        toDOMNode(Attribute, attr),
+        &n,
+    );
+    try DOMErr(err);
+
+    if (n == null) return null;
+
+    // cast [*c]c.dom_node into *Attribute
+    return @as(*Attribute, @ptrCast(n));
+}
+
+pub fn namedNodeMapRemoveNamedItem(nnm: *NamedNodeMap, qname: []const u8) !*Attribute {
+    var n: [*c]c.dom_node = undefined;
+    const err = c._dom_namednodemap_remove_named_item(nnm, try stringFromData(qname), &n);
+    try DOMErr(err);
+
+    // cast [*c]c.dom_node into *Attribute
+    return @as(*Attribute, @ptrCast(n));
+}
+
+pub fn namedNodeMapRemoveNamedItemNS(
+    nnm: *NamedNodeMap,
+    namespace: []const u8,
+    localname: []const u8,
+) !*Attribute {
+    var n: [*c]c.dom_node = undefined;
+    const err = c._dom_namednodemap_remove_named_item_ns(
+        nnm,
+        try stringFromData(namespace),
+        try stringFromData(localname),
+        &n,
+    );
+    try DOMErr(err);
+
+    // cast [*c]c.dom_node into *Attribute
+    return @as(*Attribute, @ptrCast(n));
+}
+
 // NodeType
 
 pub const NodeType = enum(u4) {
@@ -368,9 +483,7 @@ pub fn nodeListItem(nodeList: *NodeList, index: u32) !?*Node {
     const err = c._dom_nodelist_item(nodeList, index, &n);
     try DOMErr(err);
 
-    if (n == null) {
-        return null;
-    }
+    if (n == null) return null;
 
     // cast [*c]c.dom_node into *Node
     return @as(*Node, @ptrCast(n));
@@ -425,9 +538,8 @@ pub fn nodeNextElementSibling(node: *Node) !?*Element {
     var n = node;
     while (true) {
         const res = try nodeNextSibling(n);
-        if (res == null) {
-            return null;
-        }
+        if (res == null) return null;
+
         if (try nodeType(res.?) == .element) {
             return @as(*Element, @ptrCast(res.?));
         }
@@ -447,9 +559,8 @@ pub fn nodePreviousElementSibling(node: *Node) !?*Element {
     var n = node;
     while (true) {
         const res = try nodePreviousSibling(n);
-        if (res == null) {
-            return null;
-        }
+        if (res == null) return null;
+
         if (try nodeType(res.?) == .element) {
             return @as(*Element, @ptrCast(res.?));
         }
@@ -493,9 +604,8 @@ pub fn nodeValue(node: *Node) !?[]const u8 {
     var s: ?*String = undefined;
     const err = nodeVtable(node).dom_node_get_node_value.?(node, &s);
     try DOMErr(err);
-    if (s == null) {
-        return null;
-    }
+    if (s == null) return null;
+
     return stringToData(s.?);
 }
 
@@ -591,9 +701,8 @@ pub fn nodeLookupPrefix(node: *Node, namespace: []const u8) !?[]const u8 {
         &s,
     );
     try DOMErr(err);
-    if (s == null) {
-        return null;
-    }
+    if (s == null) return null;
+
     return stringToData(s.?);
 }
 
@@ -605,9 +714,8 @@ pub fn nodeLookupNamespaceURI(node: *Node, prefix: ?[]const u8) !?[]const u8 {
         &s,
     );
     try DOMErr(err);
-    if (s == null) {
-        return null;
-    }
+    if (s == null) return null;
+
     return stringToData(s.?);
 }
 
@@ -626,6 +734,20 @@ pub fn nodeRemoveChild(node: *Node, child: *Node) !*Node {
 pub fn nodeReplaceChild(node: *Node, new_child: *Node, old_child: *Node) !*Node {
     var res: ?*Node = undefined;
     const err = nodeVtable(node).dom_node_replace_child.?(node, new_child, old_child, &res);
+    try DOMErr(err);
+    return res.?;
+}
+
+pub fn nodeHasAttributes(node: *Node) !bool {
+    var res: bool = undefined;
+    const err = nodeVtable(node).dom_node_has_attributes.?(node, &res);
+    try DOMErr(err);
+    return res;
+}
+
+pub fn nodeGetAttributes(node: *Node) !*NamedNodeMap {
+    var res: ?*NamedNodeMap = undefined;
+    const err = nodeVtable(node).dom_node_get_attributes.?(node, &res);
     try DOMErr(err);
     return res.?;
 }
@@ -743,10 +865,37 @@ pub fn elementGetAttribute(elem: *Element, name: []const u8) !?[]const u8 {
         &s,
     );
     try DOMErr(err);
-    if (s == null) {
-        return null;
-    }
+    if (s == null) return null;
+
     return stringToData(s.?);
+}
+
+pub fn elementSetAttribute(elem: *Element, qname: []const u8, value: []const u8) !void {
+    const err = elementVtable(elem).dom_element_set_attribute.?(
+        elem,
+        try stringFromData(qname),
+        try stringFromData(value),
+    );
+    try DOMErr(err);
+}
+
+pub fn elementRemoveAttribute(elem: *Element, qname: []const u8) !void {
+    const err = elementVtable(elem).dom_element_remove_attribute.?(
+        elem,
+        try stringFromData(qname),
+    );
+    try DOMErr(err);
+}
+
+pub fn elementHasAttribute(elem: *Element, qname: []const u8) !bool {
+    var res: bool = undefined;
+    const err = elementVtable(elem).dom_element_has_attribute.?(
+        elem,
+        try stringFromData(qname),
+        &res,
+    );
+    try DOMErr(err);
+    return res;
 }
 
 pub fn elementHasClass(elem: *Element, class: []const u8) !bool {
@@ -1051,9 +1200,8 @@ pub fn documentHTMLParseFromFileAlloc(allocator: std.mem.Allocator, filename: []
 pub fn documentHTMLParseFromFile(filename: [:0]const u8) !*DocumentHTML {
     // create a null terminated c string.
     const doc = c.wr_create_doc_dom_from_file(filename.ptr);
-    if (doc == null) {
-        return error.ParserError;
-    }
+    if (doc == null) return error.ParserError;
+
     return @as(*DocumentHTML, @ptrCast(doc.?));
 }
 
@@ -1073,9 +1221,8 @@ pub fn documentHTMLParseFromStrAlloc(allocator: std.mem.Allocator, str: []const 
 // The caller is responsible for closing the document.
 pub fn documentHTMLParseFromStr(cstr: [:0]const u8) !*DocumentHTML {
     const doc = c.wr_create_doc_dom_from_string(cstr.ptr);
-    if (doc == null) {
-        return error.ParserError;
-    }
+    if (doc == null) return error.ParserError;
+
     return @as(*DocumentHTML, @ptrCast(doc.?));
 }
 
@@ -1093,8 +1240,7 @@ pub inline fn documentHTMLBody(doc_html: *DocumentHTML) !?*Body {
     var body: ?*ElementHTML = undefined;
     const err = documentHTMLVtable(doc_html).get_body.?(doc_html, &body);
     try DOMErr(err);
-    if (body == null) {
-        return null;
-    }
+    if (body == null) return null;
+
     return @as(*Body, @ptrCast(body.?));
 }
