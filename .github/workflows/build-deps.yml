@@ -53,7 +53,7 @@ jobs:
           context: .
           file: Dockerfile.deps
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{env.ZIG_DOCKER_VERSION}}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             ZIG_DOCKER_VERSION=${{ env.ZIG_DOCKER_VERSION }}
