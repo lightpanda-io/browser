@@ -350,7 +350,6 @@ pub fn namedNodeMapItem(nnm: *NamedNodeMap, index: u32) !?*Attribute {
     var n: NodeExternal = undefined;
     const err = c._dom_namednodemap_item(nnm, index, &n);
     try DOMErr(err);
-
     if (n == null) return null;
 
     return @as(*Attribute, @ptrCast(n));
@@ -360,9 +359,7 @@ pub fn namedNodeMapGetNamedItem(nnm: *NamedNodeMap, qname: []const u8) !?*Attrib
     var n: NodeExternal = undefined;
     const err = c._dom_namednodemap_get_named_item(nnm, try strFromData(qname), &n);
     try DOMErr(err);
-
     if (n == null) return null;
-
     return @as(*Attribute, @ptrCast(n));
 }
 
@@ -379,9 +376,7 @@ pub fn namedNodeMapGetNamedItemNS(
         &n,
     );
     try DOMErr(err);
-
     if (n == null) return null;
-
     return @as(*Attribute, @ptrCast(n));
 }
 
@@ -393,9 +388,7 @@ pub fn namedNodeMapSetNamedItem(nnm: *NamedNodeMap, attr: *Attribute) !?*Attribu
         &n,
     );
     try DOMErr(err);
-
     if (n == null) return null;
-
     return @as(*Attribute, @ptrCast(n));
 }
 
@@ -407,9 +400,7 @@ pub fn namedNodeMapSetNamedItemNS(nnm: *NamedNodeMap, attr: *Attribute) !?*Attri
         &n,
     );
     try DOMErr(err);
-
     if (n == null) return null;
-
     return @as(*Attribute, @ptrCast(n));
 }
 
@@ -417,7 +408,6 @@ pub fn namedNodeMapRemoveNamedItem(nnm: *NamedNodeMap, qname: []const u8) !*Attr
     var n: NodeExternal = undefined;
     const err = c._dom_namednodemap_remove_named_item(nnm, try strFromData(qname), &n);
     try DOMErr(err);
-
     return @as(*Attribute, @ptrCast(n));
 }
 
@@ -434,7 +424,6 @@ pub fn namedNodeMapRemoveNamedItemNS(
         &n,
     );
     try DOMErr(err);
-
     return @as(*Attribute, @ptrCast(n));
 }
 
@@ -469,9 +458,7 @@ pub fn nodeListItem(nodeList: *NodeList, index: u32) !?*Node {
     var n: NodeExternal = undefined;
     const err = c._dom_nodelist_item(nodeList, index, &n);
     try DOMErr(err);
-
     if (n == null) return null;
-
     return @as(*Node, @ptrCast(n));
 }
 
@@ -602,7 +589,6 @@ pub fn nodeValue(node: *Node) !?[]const u8 {
     const err = nodeVtable(node).dom_node_get_node_value.?(node, &s);
     try DOMErr(err);
     if (s == null) return null;
-
     return strToData(s.?);
 }
 
@@ -695,7 +681,6 @@ pub fn nodeLookupPrefix(node: *Node, namespace: []const u8) !?[]const u8 {
     const err = nodeVtable(node).dom_node_lookup_prefix.?(node, try strFromData(namespace), &s);
     try DOMErr(err);
     if (s == null) return null;
-
     return strToData(s.?);
 }
 
@@ -704,7 +689,6 @@ pub fn nodeLookupNamespaceURI(node: *Node, prefix: ?[]const u8) !?[]const u8 {
     const err = nodeVtable(node).dom_node_lookup_namespace.?(node, try strFromData(prefix.?), &s);
     try DOMErr(err);
     if (s == null) return null;
-
     return strToData(s.?);
 }
 
@@ -1177,7 +1161,6 @@ pub fn documentHTMLParseFromFile(filename: [:0]const u8) !*DocumentHTML {
     // create a null terminated c string.
     const doc = c.wr_create_doc_dom_from_file(filename.ptr);
     if (doc == null) return error.ParserError;
-
     return @as(*DocumentHTML, @ptrCast(doc.?));
 }
 
@@ -1189,7 +1172,6 @@ pub fn documentHTMLParseFromStrAlloc(allocator: std.mem.Allocator, str: []const 
     // create a null terminated c string.
     const cstr = try allocator.dupeZ(u8, str);
     defer allocator.free(cstr);
-
     return documentHTMLParseFromStr(cstr);
 }
 
@@ -1198,7 +1180,6 @@ pub fn documentHTMLParseFromStrAlloc(allocator: std.mem.Allocator, str: []const 
 pub fn documentHTMLParseFromStr(cstr: [:0]const u8) !*DocumentHTML {
     const doc = c.wr_create_doc_dom_from_string(cstr.ptr);
     if (doc == null) return error.ParserError;
-
     return @as(*DocumentHTML, @ptrCast(doc.?));
 }
 
@@ -1217,6 +1198,5 @@ pub inline fn documentHTMLBody(doc_html: *DocumentHTML) !?*Body {
     const err = documentHTMLVtable(doc_html).get_body.?(doc_html, &body);
     try DOMErr(err);
     if (body == null) return null;
-
     return @as(*Body, @ptrCast(body.?));
 }
