@@ -336,6 +336,52 @@ fn DOMErr(except: DOMException) DOMError!void {
 // EventTarget
 pub const EventTarget = c.dom_event_target;
 
+// NodeType
+
+pub const NodeType = enum(u4) {
+    element = c.DOM_ELEMENT_NODE,
+    attribute = c.DOM_ATTRIBUTE_NODE,
+    text = c.DOM_TEXT_NODE,
+    cdata_section = c.DOM_CDATA_SECTION_NODE,
+    entity_reference = c.DOM_ENTITY_REFERENCE_NODE, // historical
+    entity = c.DOM_ENTITY_NODE, // historical
+    processing_instruction = c.DOM_PROCESSING_INSTRUCTION_NODE,
+    comment = c.DOM_COMMENT_NODE,
+    document = c.DOM_DOCUMENT_NODE,
+    document_type = c.DOM_DOCUMENT_TYPE_NODE,
+    document_fragment = c.DOM_DOCUMENT_FRAGMENT_NODE,
+    notation = c.DOM_NOTATION_NODE, // historical
+};
+
+// NodeList
+pub const NodeList = c.dom_nodelist;
+
+pub fn nodeListLength(nodeList: *NodeList) !u32 {
+    var ln: u32 = undefined;
+    const err = c.dom_nodelist_get_length(nodeList, &ln);
+    try DOMErr(err);
+    return ln;
+}
+
+pub fn nodeListItem(nodeList: *NodeList, index: u32) !?*Node {
+    var n: NodeExternal = undefined;
+    const err = c._dom_nodelist_item(nodeList, index, &n);
+    try DOMErr(err);
+    if (n == null) return null;
+    return @as(*Node, @ptrCast(n));
+}
+
+// NodeExternal is the libdom public representation of a Node.
+// Since we use the internal representation (dom_node_internal), we declare
+// here a private version useful for some netsurf function call.
+const NodeExternal = [*c]c.dom_node;
+
+// Convert a parser pointer to a NodeExternal pointer.
+fn toNodeExternal(comptime T: type, v: *T) NodeExternal {
+    const v_aligned: *align(@alignOf(NodeExternal)) T = @alignCast(v);
+    return @ptrCast(v_aligned);
+}
+
 // NamedNodeMap
 pub const NamedNodeMap = c.dom_namednodemap;
 
@@ -425,52 +471,6 @@ pub fn namedNodeMapRemoveNamedItemNS(
     );
     try DOMErr(err);
     return @as(*Attribute, @ptrCast(n));
-}
-
-// NodeType
-
-pub const NodeType = enum(u4) {
-    element = c.DOM_ELEMENT_NODE,
-    attribute = c.DOM_ATTRIBUTE_NODE,
-    text = c.DOM_TEXT_NODE,
-    cdata_section = c.DOM_CDATA_SECTION_NODE,
-    entity_reference = c.DOM_ENTITY_REFERENCE_NODE, // historical
-    entity = c.DOM_ENTITY_NODE, // historical
-    processing_instruction = c.DOM_PROCESSING_INSTRUCTION_NODE,
-    comment = c.DOM_COMMENT_NODE,
-    document = c.DOM_DOCUMENT_NODE,
-    document_type = c.DOM_DOCUMENT_TYPE_NODE,
-    document_fragment = c.DOM_DOCUMENT_FRAGMENT_NODE,
-    notation = c.DOM_NOTATION_NODE, // historical
-};
-
-// NodeList
-pub const NodeList = c.dom_nodelist;
-
-pub fn nodeListLength(nodeList: *NodeList) !u32 {
-    var ln: u32 = undefined;
-    const err = c.dom_nodelist_get_length(nodeList, &ln);
-    try DOMErr(err);
-    return ln;
-}
-
-pub fn nodeListItem(nodeList: *NodeList, index: u32) !?*Node {
-    var n: NodeExternal = undefined;
-    const err = c._dom_nodelist_item(nodeList, index, &n);
-    try DOMErr(err);
-    if (n == null) return null;
-    return @as(*Node, @ptrCast(n));
-}
-
-// NodeExternal is the libdom public representation of a Node.
-// Since we use the internal representation (dom_node_internal), we declare
-// here a private version useful for some netsurf function call.
-const NodeExternal = [*c]c.dom_node;
-
-// Convert a parser pointer to a NodeExternal pointer.
-fn toNodeExternal(comptime T: type, v: *T) NodeExternal {
-    const v_aligned: *align(@alignOf(NodeExternal)) T = @alignCast(v);
-    return @ptrCast(v_aligned);
 }
 
 // Node
