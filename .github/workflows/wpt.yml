@@ -116,7 +116,7 @@ jobs:
       - name: download artifact
         uses: actions/download-artifact@v3
         with:
-          name: benchmark-results
+          name: wpt-results
 
       - name: format and send json result
         run: /perf-fmt wpt ${{ github.sha }} wpt.json
