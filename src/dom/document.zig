@@ -133,6 +133,10 @@ pub const Document = struct {
         return try parser.documentCreateTextNode(self, data);
     }
 
+    pub fn _createCDATASection(self: *parser.Document, data: []const u8) !*parser.CDATASection {
+        return try parser.documentCreateCDATASection(self, data);
+    }
+
     pub fn deinit(_: *parser.Document, _: std.mem.Allocator) void {}
 };
 
@@ -234,6 +238,11 @@ pub fn testExecFn(
         .{ .src = "document.createTextNode('foo')", .ex = "[object Text]" },
     };
     try checkCases(js_env, &createTextNode);
+
+    var createCDATASection = [_]Case{
+        .{ .src = "document.createCDATASection('foo')", .ex = "[object CDATASection]" },
+    };
+    try checkCases(js_env, &createCDATASection);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;

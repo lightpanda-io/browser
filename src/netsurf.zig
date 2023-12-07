@@ -791,6 +791,9 @@ pub fn characterDataSubstringData(cdata: *CharacterData, offset: u32, count: u32
     return strToData(s.?);
 }
 
+// CDATASection
+pub const CDATASection = c.dom_cdata_section;
+
 // Text
 pub const Text = c.dom_text;
 
@@ -1142,6 +1145,13 @@ pub inline fn documentCreateTextNode(doc: *Document, s: []const u8) !*Text {
     const err = documentVtable(doc).dom_document_create_text_node.?(doc, try strFromData(s), &txt);
     try DOMErr(err);
     return txt.?;
+}
+
+pub inline fn documentCreateCDATASection(doc: *Document, s: []const u8) !*CDATASection {
+    var cdata: ?*CDATASection = undefined;
+    const err = documentVtable(doc).dom_document_create_cdata_section.?(doc, try strFromData(s), &cdata);
+    try DOMErr(err);
+    return cdata.?;
 }
 
 // DocumentHTML
