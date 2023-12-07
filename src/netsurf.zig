@@ -39,9 +39,9 @@ const c = @cImport({
 // - node: the node interface instance
 inline fn getVtable(comptime VtableT: type, comptime NodeT: type, node: anytype) VtableT {
     // first align correctly the node interface
-    const node_aligned: *align(@alignOf([*c]c.dom_node)) NodeT = @alignCast(node);
+    const node_aligned: *align(@alignOf(NodeExternal)) NodeT = @alignCast(node);
     // then convert the node interface to a base node
-    const node_base = @as([*c]c.dom_node, @ptrCast(node_aligned));
+    const node_base = @as(NodeExternal, @ptrCast(node_aligned));
 
     // retrieve the vtable on the base node
     const vtable = node_base.*.vtable.?;
@@ -336,121 +336,6 @@ fn DOMErr(except: DOMException) DOMError!void {
 // EventTarget
 pub const EventTarget = c.dom_event_target;
 
-// NamedNodeMap
-pub const NamedNodeMap = c.dom_namednodemap;
-
-pub fn namedNodeMapGetLength(nnm: *NamedNodeMap) !u32 {
-    var ln: u32 = undefined;
-    const err = c.dom_namednodemap_get_length(nnm, &ln);
-    try DOMErr(err);
-    return ln;
-}
-
-pub fn namedNodeMapItem(nnm: *NamedNodeMap, index: u32) !?*Attribute {
-    var n: [*c]c.dom_node = undefined;
-    const err = c._dom_namednodemap_item(nnm, index, &n);
-    try DOMErr(err);
-
-    if (n == null) return null;
-
-    // cast [*c]c.dom_node into *Attribute
-    return @as(*Attribute, @ptrCast(n));
-}
-
-pub fn namedNodeMapGetNamedItem(nnm: *NamedNodeMap, qname: []const u8) !?*Attribute {
-    var n: [*c]c.dom_node = undefined;
-    const err = c._dom_namednodemap_get_named_item(nnm, try strFromData(qname), &n);
-    try DOMErr(err);
-
-    if (n == null) return null;
-
-    // cast [*c]c.dom_node into *Attribute
-    return @as(*Attribute, @ptrCast(n));
-}
-
-pub fn namedNodeMapGetNamedItemNS(
-    nnm: *NamedNodeMap,
-    namespace: []const u8,
-    localname: []const u8,
-) !?*Attribute {
-    var n: [*c]c.dom_node = undefined;
-    const err = c._dom_namednodemap_get_named_item_ns(
-        nnm,
-        try strFromData(namespace),
-        try strFromData(localname),
-        &n,
-    );
-    try DOMErr(err);
-
-    if (n == null) return null;
-
-    // cast [*c]c.dom_node into *Attribute
-    return @as(*Attribute, @ptrCast(n));
-}
-
-// Convert a parser pointer to a public dom_node pointer.
-fn toDOMNode(comptime T: type, v: *T) [*c]c.dom_node {
-    const v_aligned: *align(@alignOf([*c]c.dom_node)) T = @alignCast(v);
-    return @ptrCast(v_aligned);
-}
-
-pub fn namedNodeMapSetNamedItem(nnm: *NamedNodeMap, attr: *Attribute) !?*Attribute {
-    var n: [*c]c.dom_node = undefined;
-    const err = c._dom_namednodemap_set_named_item(
-        nnm,
-        toDOMNode(Attribute, attr),
-        &n,
-    );
-    try DOMErr(err);
-
-    if (n == null) return null;
-
-    // cast [*c]c.dom_node into *Attribute
-    return @as(*Attribute, @ptrCast(n));
-}
-
-pub fn namedNodeMapSetNamedItemNS(nnm: *NamedNodeMap, attr: *Attribute) !?*Attribute {
-    var n: [*c]c.dom_node = undefined;
-    const err = c._dom_namednodemap_set_named_item_ns(
-        nnm,
-        toDOMNode(Attribute, attr),
-        &n,
-    );
-    try DOMErr(err);
-
-    if (n == null) return null;
-
-    // cast [*c]c.dom_node into *Attribute
-    return @as(*Attribute, @ptrCast(n));
-}
-
-pub fn namedNodeMapRemoveNamedItem(nnm: *NamedNodeMap, qname: []const u8) !*Attribute {
-    var n: [*c]c.dom_node = undefined;
-    const err = c._dom_namednodemap_remove_named_item(nnm, try strFromData(qname), &n);
-    try DOMErr(err);
-
-    // cast [*c]c.dom_node into *Attribute
-    return @as(*Attribute, @ptrCast(n));
-}
-
-pub fn namedNodeMapRemoveNamedItemNS(
-    nnm: *NamedNodeMap,
-    namespace: []const u8,
-    localname: []const u8,
-) !*Attribute {
-    var n: [*c]c.dom_node = undefined;
-    const err = c._dom_namednodemap_remove_named_item_ns(
-        nnm,
-        try strFromData(namespace),
-        try strFromData(localname),
-        &n,
-    );
-    try DOMErr(err);
-
-    // cast [*c]c.dom_node into *Attribute
-    return @as(*Attribute, @ptrCast(n));
-}
-
 // NodeType
 
 pub const NodeType = enum(u4) {
@@ -479,14 +364,113 @@ pub fn nodeListLength(nodeList: *NodeList) !u32 {
 }
 
 pub fn nodeListItem(nodeList: *NodeList, index: u32) !?*Node {
-    var n: [*c]c.dom_node = undefined;
+    var n: NodeExternal = undefined;
     const err = c._dom_nodelist_item(nodeList, index, &n);
     try DOMErr(err);
+    if (n == null) return null;
+    return @as(*Node, @ptrCast(n));
+}
 
+// NodeExternal is the libdom public representation of a Node.
+// Since we use the internal representation (dom_node_internal), we declare
+// here a private version useful for some netsurf function call.
+const NodeExternal = [*c]c.dom_node;
+
+// Convert a parser pointer to a NodeExternal pointer.
+fn toNodeExternal(comptime T: type, v: *T) NodeExternal {
+    const v_aligned: *align(@alignOf(NodeExternal)) T = @alignCast(v);
+    return @ptrCast(v_aligned);
+}
+
+// NamedNodeMap
+pub const NamedNodeMap = c.dom_namednodemap;
+
+pub fn namedNodeMapGetLength(nnm: *NamedNodeMap) !u32 {
+    var ln: u32 = undefined;
+    const err = c.dom_namednodemap_get_length(nnm, &ln);
+    try DOMErr(err);
+    return ln;
+}
+
+pub fn namedNodeMapItem(nnm: *NamedNodeMap, index: u32) !?*Attribute {
+    var n: NodeExternal = undefined;
+    const err = c._dom_namednodemap_item(nnm, index, &n);
+    try DOMErr(err);
     if (n == null) return null;
 
-    // cast [*c]c.dom_node into *Node
-    return @as(*Node, @ptrCast(n));
+    return @as(*Attribute, @ptrCast(n));
+}
+
+pub fn namedNodeMapGetNamedItem(nnm: *NamedNodeMap, qname: []const u8) !?*Attribute {
+    var n: NodeExternal = undefined;
+    const err = c._dom_namednodemap_get_named_item(nnm, try strFromData(qname), &n);
+    try DOMErr(err);
+    if (n == null) return null;
+    return @as(*Attribute, @ptrCast(n));
+}
+
+pub fn namedNodeMapGetNamedItemNS(
+    nnm: *NamedNodeMap,
+    namespace: []const u8,
+    localname: []const u8,
+) !?*Attribute {
+    var n: NodeExternal = undefined;
+    const err = c._dom_namednodemap_get_named_item_ns(
+        nnm,
+        try strFromData(namespace),
+        try strFromData(localname),
+        &n,
+    );
+    try DOMErr(err);
+    if (n == null) return null;
+    return @as(*Attribute, @ptrCast(n));
+}
+
+pub fn namedNodeMapSetNamedItem(nnm: *NamedNodeMap, attr: *Attribute) !?*Attribute {
+    var n: NodeExternal = undefined;
+    const err = c._dom_namednodemap_set_named_item(
+        nnm,
+        toNodeExternal(Attribute, attr),
+        &n,
+    );
+    try DOMErr(err);
+    if (n == null) return null;
+    return @as(*Attribute, @ptrCast(n));
+}
+
+pub fn namedNodeMapSetNamedItemNS(nnm: *NamedNodeMap, attr: *Attribute) !?*Attribute {
+    var n: NodeExternal = undefined;
+    const err = c._dom_namednodemap_set_named_item_ns(
+        nnm,
+        toNodeExternal(Attribute, attr),
+        &n,
+    );
+    try DOMErr(err);
+    if (n == null) return null;
+    return @as(*Attribute, @ptrCast(n));
+}
+
+pub fn namedNodeMapRemoveNamedItem(nnm: *NamedNodeMap, qname: []const u8) !*Attribute {
+    var n: NodeExternal = undefined;
+    const err = c._dom_namednodemap_remove_named_item(nnm, try strFromData(qname), &n);
+    try DOMErr(err);
+    return @as(*Attribute, @ptrCast(n));
+}
+
+pub fn namedNodeMapRemoveNamedItemNS(
+    nnm: *NamedNodeMap,
+    namespace: []const u8,
+    localname: []const u8,
+) !*Attribute {
+    var n: NodeExternal = undefined;
+    const err = c._dom_namednodemap_remove_named_item_ns(
+        nnm,
+        try strFromData(namespace),
+        try strFromData(localname),
+        &n,
+    );
+    try DOMErr(err);
+    return @as(*Attribute, @ptrCast(n));
 }
 
 // Node
@@ -605,7 +589,6 @@ pub fn nodeValue(node: *Node) !?[]const u8 {
     const err = nodeVtable(node).dom_node_get_node_value.?(node, &s);
     try DOMErr(err);
     if (s == null) return null;
-
     return strToData(s.?);
 }
 
@@ -698,7 +681,6 @@ pub fn nodeLookupPrefix(node: *Node, namespace: []const u8) !?[]const u8 {
     const err = nodeVtable(node).dom_node_lookup_prefix.?(node, try strFromData(namespace), &s);
     try DOMErr(err);
     if (s == null) return null;
-
     return strToData(s.?);
 }
 
@@ -707,7 +689,6 @@ pub fn nodeLookupNamespaceURI(node: *Node, prefix: ?[]const u8) !?[]const u8 {
     const err = nodeVtable(node).dom_node_lookup_namespace.?(node, try strFromData(prefix.?), &s);
     try DOMErr(err);
     if (s == null) return null;
-
     return strToData(s.?);
 }
 
@@ -1180,7 +1161,6 @@ pub fn documentHTMLParseFromFile(filename: [:0]const u8) !*DocumentHTML {
     // create a null terminated c string.
     const doc = c.wr_create_doc_dom_from_file(filename.ptr);
     if (doc == null) return error.ParserError;
-
     return @as(*DocumentHTML, @ptrCast(doc.?));
 }
 
@@ -1192,7 +1172,6 @@ pub fn documentHTMLParseFromStrAlloc(allocator: std.mem.Allocator, str: []const 
     // create a null terminated c string.
     const cstr = try allocator.dupeZ(u8, str);
     defer allocator.free(cstr);
-
     return documentHTMLParseFromStr(cstr);
 }
 
@@ -1201,7 +1180,6 @@ pub fn documentHTMLParseFromStrAlloc(allocator: std.mem.Allocator, str: []const 
 pub fn documentHTMLParseFromStr(cstr: [:0]const u8) !*DocumentHTML {
     const doc = c.wr_create_doc_dom_from_string(cstr.ptr);
     if (doc == null) return error.ParserError;
-
     return @as(*DocumentHTML, @ptrCast(doc.?));
 }
 
@@ -1220,6 +1198,5 @@ pub inline fn documentHTMLBody(doc_html: *DocumentHTML) !?*Body {
     const err = documentHTMLVtable(doc_html).get_body.?(doc_html, &body);
     try DOMErr(err);
     if (body == null) return null;
-
     return @as(*Body, @ptrCast(body.?));
 }
