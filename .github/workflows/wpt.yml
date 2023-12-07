@@ -100,7 +100,7 @@ jobs:
 
   perf-fmt:
     name: perf-fmt
-    needs: benchmark
+    needs: wpt
 
     # Don't execute on PR
     if: github.event_name != 'pull_request'
