@@ -1154,6 +1154,13 @@ pub inline fn documentCreateCDATASection(doc: *Document, s: []const u8) !*CDATAS
     return cdata.?;
 }
 
+pub inline fn documentCreateComment(doc: *Document, s: []const u8) !*Comment {
+    var com: ?*Comment = undefined;
+    const err = documentVtable(doc).dom_document_create_comment.?(doc, try strFromData(s), &com);
+    try DOMErr(err);
+    return com.?;
+}
+
 // DocumentHTML
 pub const DocumentHTML = c.dom_html_document;
 

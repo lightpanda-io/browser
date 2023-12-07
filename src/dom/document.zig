@@ -137,6 +137,10 @@ pub const Document = struct {
         return try parser.documentCreateCDATASection(self, data);
     }
 
+    pub fn _createComment(self: *parser.Document, data: []const u8) !*parser.Comment {
+        return try parser.documentCreateComment(self, data);
+    }
+
     pub fn deinit(_: *parser.Document, _: std.mem.Allocator) void {}
 };
 
@@ -243,6 +247,11 @@ pub fn testExecFn(
         .{ .src = "document.createCDATASection('foo')", .ex = "[object CDATASection]" },
     };
     try checkCases(js_env, &createCDATASection);
+
+    var createComment = [_]Case{
+        .{ .src = "document.createComment('foo')", .ex = "[object Comment]" },
+    };
+    try checkCases(js_env, &createComment);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;
