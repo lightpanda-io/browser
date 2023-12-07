@@ -149,6 +149,10 @@ pub const Document = struct {
         return try parser.documentImportNode(self, node, deep orelse false);
     }
 
+    pub fn _adoptNode(self: *parser.Document, node: *parser.Node) !*parser.Node {
+        return try parser.documentAdoptNode(self, node);
+    }
+
     pub fn deinit(_: *parser.Document, _: std.mem.Allocator) void {}
 };
 
@@ -272,6 +276,12 @@ pub fn testExecFn(
         .{ .src = "document.importNode(nimp)", .ex = "[object Node]" },
     };
     try checkCases(js_env, &importNode);
+
+    var adoptNode = [_]Case{
+        .{ .src = "let nadop = document.getElementById('content')", .ex = "undefined" },
+        .{ .src = "document.adoptNode(nadop)", .ex = "[object Node]" },
+    };
+    try checkCases(js_env, &adoptNode);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;

@@ -1184,6 +1184,14 @@ pub inline fn documentImportNode(doc: *Document, node: *Node, deep: bool) !*Node
     return @as(*Node, @ptrCast(res));
 }
 
+pub inline fn documentAdoptNode(doc: *Document, node: *Node) !*Node {
+    var res: NodeExternal = undefined;
+    const nodeext = toNodeExternal(Node, node);
+    const err = documentVtable(doc).dom_document_adopt_node.?(doc, nodeext, &res);
+    try DOMErr(err);
+    return @as(*Node, @ptrCast(res));
+}
+
 // DocumentHTML
 pub const DocumentHTML = c.dom_html_document;
 
