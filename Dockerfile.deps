@@ -2,7 +2,7 @@
 # jsruntime-lib v8.
 # jsruntime-lib v8 is built via zig-v8-fork/Dockerfile.
 ARG ZIG_DOCKER_VERSION=0.11.0
-FROM ghcr.io/browsercore/zig:${ZIG_DOCKER_VERSION} as build
+FROM ghcr.io/lightpanda-io/zig:${ZIG_DOCKER_VERSION} as build
 
 # Install required dependencies
 RUN apt update && \
