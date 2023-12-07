@@ -7,6 +7,7 @@ const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 
 const Node = @import("node.zig").Node;
+const NodeUnion = @import("node.zig").Union;
 
 const collection = @import("html_collection.zig");
 
@@ -145,12 +146,14 @@ pub const Document = struct {
         return try parser.documentCreateProcessingInstruction(self, target, data);
     }
 
-    pub fn _importNode(self: *parser.Document, node: *parser.Node, deep: ?bool) !*parser.Node {
-        return try parser.documentImportNode(self, node, deep orelse false);
+    pub fn _importNode(self: *parser.Document, node: *parser.Node, deep: ?bool) !NodeUnion {
+        const n = try parser.documentImportNode(self, node, deep orelse false);
+        return try Node.toInterface(n);
     }
 
-    pub fn _adoptNode(self: *parser.Document, node: *parser.Node) !*parser.Node {
-        return try parser.documentAdoptNode(self, node);
+    pub fn _adoptNode(self: *parser.Document, node: *parser.Node) !NodeUnion {
+        const n = try parser.documentAdoptNode(self, node);
+        return try Node.toInterface(n);
     }
 
     pub fn _createAttribute(self: *parser.Document, name: []const u8) !*parser.Attribute {
@@ -281,13 +284,13 @@ pub fn testExecFn(
 
     var importNode = [_]Case{
         .{ .src = "let nimp = document.getElementById('content')", .ex = "undefined" },
-        .{ .src = "document.importNode(nimp)", .ex = "[object Node]" },
+        .{ .src = "document.importNode(nimp)", .ex = "[object HTMLDivElement]" },
     };
     try checkCases(js_env, &importNode);
 
     var adoptNode = [_]Case{
         .{ .src = "let nadop = document.getElementById('content')", .ex = "undefined" },
-        .{ .src = "document.adoptNode(nadop)", .ex = "[object Node]" },
+        .{ .src = "document.adoptNode(nadop)", .ex = "[object HTMLDivElement]" },
     };
     try checkCases(js_env, &adoptNode);
 
