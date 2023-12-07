@@ -258,7 +258,8 @@ pub fn testExecFn(
     try checkCases(js_env, &createComment);
 
     var createProcessingInstruction = [_]Case{
-        .{ .src = "document.createProcessingInstruction('foo', 'bar')", .ex = "[object ProcessingInstruction]" },
+        .{ .src = "let pi = document.createProcessingInstruction('foo', 'bar')", .ex = "undefined" },
+        .{ .src = "pi.target", .ex = "foo" },
     };
     try checkCases(js_env, &createProcessingInstruction);
 

@@ -10,5 +10,8 @@ pub const ProcessingInstruction = struct {
     pub const prototype = *CharacterData;
     pub const mem_guarantied = true;
 
-    // TODO implement get_target
+    pub fn get_target(self: *parser.ProcessingInstruction) ![]const u8 {
+        // libdom stores the ProcessingInstruction target in the node's name.
+        return try parser.nodeName(@as(*parser.Node, @ptrCast(self)));
+    }
 };
