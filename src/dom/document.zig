@@ -129,6 +129,10 @@ pub const Document = struct {
         return try parser.documentCreateDocumentFragment(self);
     }
 
+    pub fn _createTextNode(self: *parser.Document, data: []const u8) !*parser.Text {
+        return try parser.documentCreateTextNode(self, data);
+    }
+
     pub fn deinit(_: *parser.Document, _: std.mem.Allocator) void {}
 };
 
@@ -225,6 +229,11 @@ pub fn testExecFn(
         .{ .src = "document.createDocumentFragment()", .ex = "[object DocumentFragment]" },
     };
     try checkCases(js_env, &createDocumentFragment);
+
+    var createTextNode = [_]Case{
+        .{ .src = "document.createTextNode('foo')", .ex = "[object Text]" },
+    };
+    try checkCases(js_env, &createTextNode);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;

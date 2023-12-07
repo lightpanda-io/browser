@@ -1137,6 +1137,13 @@ pub inline fn documentCreateDocumentFragment(doc: *Document) !*DocumentFragment 
     return df.?;
 }
 
+pub inline fn documentCreateTextNode(doc: *Document, s: []const u8) !*Text {
+    var txt: ?*Text = undefined;
+    const err = documentVtable(doc).dom_document_create_text_node.?(doc, try strFromData(s), &txt);
+    try DOMErr(err);
+    return txt.?;
+}
+
 // DocumentHTML
 pub const DocumentHTML = c.dom_html_document;
 
