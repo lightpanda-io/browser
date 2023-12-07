@@ -1192,6 +1192,13 @@ pub inline fn documentAdoptNode(doc: *Document, node: *Node) !*Node {
     return @as(*Node, @ptrCast(res));
 }
 
+pub inline fn documentCreateAttribute(doc: *Document, name: []const u8) !*Attribute {
+    var attr: ?*Attribute = undefined;
+    const err = documentVtable(doc).dom_document_create_attribute.?(doc, try strFromData(name), &attr);
+    try DOMErr(err);
+    return attr.?;
+}
+
 // DocumentHTML
 pub const DocumentHTML = c.dom_html_document;
 

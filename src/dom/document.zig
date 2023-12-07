@@ -153,6 +153,10 @@ pub const Document = struct {
         return try parser.documentAdoptNode(self, node);
     }
 
+    pub fn _createAttribute(self: *parser.Document, name: []const u8) !*parser.Attribute {
+        return try parser.documentCreateAttribute(self, name);
+    }
+
     pub fn deinit(_: *parser.Document, _: std.mem.Allocator) void {}
 };
 
@@ -282,6 +286,11 @@ pub fn testExecFn(
         .{ .src = "document.adoptNode(nadop)", .ex = "[object Node]" },
     };
     try checkCases(js_env, &adoptNode);
+
+    var createAttr = [_]Case{
+        .{ .src = "document.createAttribute('foo')", .ex = "[object Attr]" },
+    };
+    try checkCases(js_env, &createAttr);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;
