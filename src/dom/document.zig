@@ -145,6 +145,10 @@ pub const Document = struct {
         return try parser.documentCreateProcessingInstruction(self, target, data);
     }
 
+    pub fn _importNode(self: *parser.Document, node: *parser.Node, deep: ?bool) !*parser.Node {
+        return try parser.documentImportNode(self, node, deep orelse false);
+    }
+
     pub fn deinit(_: *parser.Document, _: std.mem.Allocator) void {}
 };
 
@@ -262,6 +266,12 @@ pub fn testExecFn(
         .{ .src = "pi.target", .ex = "foo" },
     };
     try checkCases(js_env, &createProcessingInstruction);
+
+    var importNode = [_]Case{
+        .{ .src = "let nimp = document.getElementById('content')", .ex = "undefined" },
+        .{ .src = "document.importNode(nimp)", .ex = "[object Node]" },
+    };
+    try checkCases(js_env, &importNode);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;

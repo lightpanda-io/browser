@@ -1176,6 +1176,14 @@ pub inline fn documentCreateProcessingInstruction(doc: *Document, target: []cons
     return pi.?;
 }
 
+pub inline fn documentImportNode(doc: *Document, node: *Node, deep: bool) !*Node {
+    var res: NodeExternal = undefined;
+    const nodeext = toNodeExternal(Node, node);
+    const err = documentVtable(doc).dom_document_import_node.?(doc, nodeext, deep, &res);
+    try DOMErr(err);
+    return @as(*Node, @ptrCast(res));
+}
+
 // DocumentHTML
 pub const DocumentHTML = c.dom_html_document;
 
