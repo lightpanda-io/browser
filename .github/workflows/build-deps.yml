@@ -12,7 +12,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: browsercore/browsercore-deps
+  IMAGE_NAME: lightpanda-io/browsercore-deps
   ZIG_DOCKER_VERSION: 0.12.0-dev.1773-8a8fd47d2
 
 jobs:
