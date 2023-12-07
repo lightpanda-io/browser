@@ -157,6 +157,10 @@ pub const Document = struct {
         return try parser.documentCreateAttribute(self, name);
     }
 
+    pub fn _createAttributeNS(self: *parser.Document, ns: []const u8, qname: []const u8) !*parser.Attribute {
+        return try parser.documentCreateAttributeNS(self, ns, qname);
+    }
+
     pub fn deinit(_: *parser.Document, _: std.mem.Allocator) void {}
 };
 

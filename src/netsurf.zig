@@ -1199,6 +1199,18 @@ pub inline fn documentCreateAttribute(doc: *Document, name: []const u8) !*Attrib
     return attr.?;
 }
 
+pub inline fn documentCreateAttributeNS(doc: *Document, ns: []const u8, qname: []const u8) !*Attribute {
+    var attr: ?*Attribute = undefined;
+    const err = documentVtable(doc).dom_document_create_attribute_ns.?(
+        doc,
+        try strFromData(ns),
+        try strFromData(qname),
+        &attr,
+    );
+    try DOMErr(err);
+    return attr.?;
+}
+
 // DocumentHTML
 pub const DocumentHTML = c.dom_html_document;
 
