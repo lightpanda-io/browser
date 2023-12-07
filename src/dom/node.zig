@@ -55,6 +55,7 @@ pub const Node = struct {
             .comment => .{ .Comment = @as(*parser.Comment, @ptrCast(node)) },
             .text => .{ .Text = @as(*parser.Text, @ptrCast(node)) },
             .cdata_section => .{ .CDATASection = @as(*parser.CDATASection, @ptrCast(node)) },
+            .processing_instruction => .{ .ProcessingInstruction = @as(*parser.ProcessingInstruction, @ptrCast(node)) },
             .document => .{ .HTMLDocument = @as(*parser.DocumentHTML, @ptrCast(node)) },
             .document_type => .{ .DocumentType = @as(*parser.DocumentType, @ptrCast(node)) },
             .attribute => .{ .Attr = @as(*parser.Attribute, @ptrCast(node)) },

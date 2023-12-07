@@ -818,6 +818,9 @@ pub fn textSplitText(text: *Text, offset: u32) !*Text {
 // Comment
 pub const Comment = c.dom_comment;
 
+// ProcessingInstruction
+pub const ProcessingInstruction = c.dom_processing_instruction;
+
 // Attribute
 pub const Attribute = c.dom_attr;
 
@@ -1159,6 +1162,18 @@ pub inline fn documentCreateComment(doc: *Document, s: []const u8) !*Comment {
     const err = documentVtable(doc).dom_document_create_comment.?(doc, try strFromData(s), &com);
     try DOMErr(err);
     return com.?;
+}
+
+pub inline fn documentCreateProcessingInstruction(doc: *Document, target: []const u8, data: []const u8) !*ProcessingInstruction {
+    var pi: ?*ProcessingInstruction = undefined;
+    const err = documentVtable(doc).dom_document_create_processing_instruction.?(
+        doc,
+        try strFromData(target),
+        try strFromData(data),
+        &pi,
+    );
+    try DOMErr(err);
+    return pi.?;
 }
 
 // DocumentHTML

@@ -141,6 +141,10 @@ pub const Document = struct {
         return try parser.documentCreateComment(self, data);
     }
 
+    pub fn _createProcessingInstruction(self: *parser.Document, target: []const u8, data: []const u8) !*parser.ProcessingInstruction {
+        return try parser.documentCreateProcessingInstruction(self, target, data);
+    }
+
     pub fn deinit(_: *parser.Document, _: std.mem.Allocator) void {}
 };
 
@@ -252,6 +256,11 @@ pub fn testExecFn(
         .{ .src = "document.createComment('foo')", .ex = "[object Comment]" },
     };
     try checkCases(js_env, &createComment);
+
+    var createProcessingInstruction = [_]Case{
+        .{ .src = "document.createProcessingInstruction('foo', 'bar')", .ex = "[object ProcessingInstruction]" },
+    };
+    try checkCases(js_env, &createProcessingInstruction);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;
