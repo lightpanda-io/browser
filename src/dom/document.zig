@@ -7,6 +7,7 @@ const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 
 const Node = @import("node.zig").Node;
+const NodeUnion = @import("node.zig").Union;
 
 const collection = @import("html_collection.zig");
 
@@ -129,6 +130,40 @@ pub const Document = struct {
         return try parser.documentCreateDocumentFragment(self);
     }
 
+    pub fn _createTextNode(self: *parser.Document, data: []const u8) !*parser.Text {
+        return try parser.documentCreateTextNode(self, data);
+    }
+
+    pub fn _createCDATASection(self: *parser.Document, data: []const u8) !*parser.CDATASection {
+        return try parser.documentCreateCDATASection(self, data);
+    }
+
+    pub fn _createComment(self: *parser.Document, data: []const u8) !*parser.Comment {
+        return try parser.documentCreateComment(self, data);
+    }
+
+    pub fn _createProcessingInstruction(self: *parser.Document, target: []const u8, data: []const u8) !*parser.ProcessingInstruction {
+        return try parser.documentCreateProcessingInstruction(self, target, data);
+    }
+
+    pub fn _importNode(self: *parser.Document, node: *parser.Node, deep: ?bool) !NodeUnion {
+        const n = try parser.documentImportNode(self, node, deep orelse false);
+        return try Node.toInterface(n);
+    }
+
+    pub fn _adoptNode(self: *parser.Document, node: *parser.Node) !NodeUnion {
+        const n = try parser.documentAdoptNode(self, node);
+        return try Node.toInterface(n);
+    }
+
+    pub fn _createAttribute(self: *parser.Document, name: []const u8) !*parser.Attribute {
+        return try parser.documentCreateAttribute(self, name);
+    }
+
+    pub fn _createAttributeNS(self: *parser.Document, ns: []const u8, qname: []const u8) !*parser.Attribute {
+        return try parser.documentCreateAttributeNS(self, ns, qname);
+    }
+
     pub fn deinit(_: *parser.Document, _: std.mem.Allocator) void {}
 };
 
@@ -222,9 +257,54 @@ pub fn testExecFn(
     try checkCases(js_env, &new);
 
     var createDocumentFragment = [_]Case{
-        .{ .src = "document.createDocumentFragment()", .ex = "[object DocumentFragment]" },
+        .{ .src = "var v = document.createDocumentFragment()", .ex = "undefined" },
+        .{ .src = "v.nodeName", .ex = "#document-fragment" },
     };
     try checkCases(js_env, &createDocumentFragment);
+
+    var createTextNode = [_]Case{
+        .{ .src = "var v = document.createTextNode('foo')", .ex = "undefined" },
+        .{ .src = "v.nodeName", .ex = "#text" },
+    };
+    try checkCases(js_env, &createTextNode);
+
+    var createCDATASection = [_]Case{
+        .{ .src = "var v = document.createCDATASection('foo')", .ex = "undefined" },
+        .{ .src = "v.nodeName", .ex = "#cdata-section" },
+    };
+    try checkCases(js_env, &createCDATASection);
+
+    var createComment = [_]Case{
+        .{ .src = "var v = document.createComment('foo')", .ex = "undefined" },
+        .{ .src = "v.nodeName", .ex = "#comment" },
+    };
+    try checkCases(js_env, &createComment);
+
+    var createProcessingInstruction = [_]Case{
+        .{ .src = "let pi = document.createProcessingInstruction('foo', 'bar')", .ex = "undefined" },
+        .{ .src = "pi.target", .ex = "foo" },
+    };
+    try checkCases(js_env, &createProcessingInstruction);
+
+    var importNode = [_]Case{
+        .{ .src = "let nimp = document.getElementById('content')", .ex = "undefined" },
+        .{ .src = "var v = document.importNode(nimp)", .ex = "undefined" },
+        .{ .src = "v.nodeName", .ex = "DIV" },
+    };
+    try checkCases(js_env, &importNode);
+
+    var adoptNode = [_]Case{
+        .{ .src = "let nadop = document.getElementById('content')", .ex = "undefined" },
+        .{ .src = "var v = document.adoptNode(nadop)", .ex = "undefined" },
+        .{ .src = "v.nodeName", .ex = "DIV" },
+    };
+    try checkCases(js_env, &adoptNode);
+
+    var createAttr = [_]Case{
+        .{ .src = "var v = document.createAttribute('foo')", .ex = "undefined" },
+        .{ .src = "v.nodeName", .ex = "foo" },
+    };
+    try checkCases(js_env, &createAttr);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;

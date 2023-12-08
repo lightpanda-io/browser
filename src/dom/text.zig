@@ -3,10 +3,17 @@ const std = @import("std");
 const jsruntime = @import("jsruntime");
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
+const generate = @import("../generate.zig");
 
 const parser = @import("../netsurf.zig");
 
 const CharacterData = @import("character_data.zig").CharacterData;
+const CDATASection = @import("cdata_section.zig").CDATASection;
+
+// Text interfaces
+pub const Interfaces = generate.Tuple(.{
+    CDATASection,
+});
 
 pub const Text = struct {
     pub const Self = parser.Text;

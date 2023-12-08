@@ -791,6 +791,9 @@ pub fn characterDataSubstringData(cdata: *CharacterData, offset: u32, count: u32
     return strToData(s.?);
 }
 
+// CDATASection
+pub const CDATASection = c.dom_cdata_section;
+
 // Text
 pub const Text = c.dom_text;
 
@@ -814,6 +817,9 @@ pub fn textSplitText(text: *Text, offset: u32) !*Text {
 
 // Comment
 pub const Comment = c.dom_comment;
+
+// ProcessingInstruction
+pub const ProcessingInstruction = c.dom_processing_instruction;
 
 // Attribute
 pub const Attribute = c.dom_attr;
@@ -1135,6 +1141,74 @@ pub inline fn documentCreateDocumentFragment(doc: *Document) !*DocumentFragment 
     const err = documentVtable(doc).dom_document_create_document_fragment.?(doc, &df);
     try DOMErr(err);
     return df.?;
+}
+
+pub inline fn documentCreateTextNode(doc: *Document, s: []const u8) !*Text {
+    var txt: ?*Text = undefined;
+    const err = documentVtable(doc).dom_document_create_text_node.?(doc, try strFromData(s), &txt);
+    try DOMErr(err);
+    return txt.?;
+}
+
+pub inline fn documentCreateCDATASection(doc: *Document, s: []const u8) !*CDATASection {
+    var cdata: ?*CDATASection = undefined;
+    const err = documentVtable(doc).dom_document_create_cdata_section.?(doc, try strFromData(s), &cdata);
+    try DOMErr(err);
+    return cdata.?;
+}
+
+pub inline fn documentCreateComment(doc: *Document, s: []const u8) !*Comment {
+    var com: ?*Comment = undefined;
+    const err = documentVtable(doc).dom_document_create_comment.?(doc, try strFromData(s), &com);
+    try DOMErr(err);
+    return com.?;
+}
+
+pub inline fn documentCreateProcessingInstruction(doc: *Document, target: []const u8, data: []const u8) !*ProcessingInstruction {
+    var pi: ?*ProcessingInstruction = undefined;
+    const err = documentVtable(doc).dom_document_create_processing_instruction.?(
+        doc,
+        try strFromData(target),
+        try strFromData(data),
+        &pi,
+    );
+    try DOMErr(err);
+    return pi.?;
+}
+
+pub inline fn documentImportNode(doc: *Document, node: *Node, deep: bool) !*Node {
+    var res: NodeExternal = undefined;
+    const nodeext = toNodeExternal(Node, node);
+    const err = documentVtable(doc).dom_document_import_node.?(doc, nodeext, deep, &res);
+    try DOMErr(err);
+    return @as(*Node, @ptrCast(res));
+}
+
+pub inline fn documentAdoptNode(doc: *Document, node: *Node) !*Node {
+    var res: NodeExternal = undefined;
+    const nodeext = toNodeExternal(Node, node);
+    const err = documentVtable(doc).dom_document_adopt_node.?(doc, nodeext, &res);
+    try DOMErr(err);
+    return @as(*Node, @ptrCast(res));
+}
+
+pub inline fn documentCreateAttribute(doc: *Document, name: []const u8) !*Attribute {
+    var attr: ?*Attribute = undefined;
+    const err = documentVtable(doc).dom_document_create_attribute.?(doc, try strFromData(name), &attr);
+    try DOMErr(err);
+    return attr.?;
+}
+
+pub inline fn documentCreateAttributeNS(doc: *Document, ns: []const u8, qname: []const u8) !*Attribute {
+    var attr: ?*Attribute = undefined;
+    const err = documentVtable(doc).dom_document_create_attribute_ns.?(
+        doc,
+        try strFromData(ns),
+        try strFromData(qname),
+        &attr,
+    );
+    try DOMErr(err);
+    return attr.?;
 }
 
 // DocumentHTML
