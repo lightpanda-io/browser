@@ -9,16 +9,15 @@ const parser = @import("../netsurf.zig");
 
 const Node = @import("node.zig").Node;
 const Comment = @import("comment.zig").Comment;
-const Text = @import("text.zig").Text;
-const CDATASection = @import("cdata_section.zig").CDATASection;
+const Text = @import("text.zig");
 const ProcessingInstruction = @import("processing_instruction.zig").ProcessingInstruction;
 const HTMLElem = @import("../html/elements.zig");
 
 // CharacterData interfaces
 pub const Interfaces = generate.Tuple(.{
     Comment,
-    Text,
-    CDATASection,
+    Text.Text,
+    Text.Interfaces,
     ProcessingInstruction,
 });
 
