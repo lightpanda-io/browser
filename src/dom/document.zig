@@ -257,22 +257,26 @@ pub fn testExecFn(
     try checkCases(js_env, &new);
 
     var createDocumentFragment = [_]Case{
-        .{ .src = "document.createDocumentFragment()", .ex = "[object DocumentFragment]" },
+        .{ .src = "var v = document.createDocumentFragment()", .ex = "undefined" },
+        .{ .src = "v.nodeName", .ex = "#document-fragment" },
     };
     try checkCases(js_env, &createDocumentFragment);
 
     var createTextNode = [_]Case{
-        .{ .src = "document.createTextNode('foo')", .ex = "[object Text]" },
+        .{ .src = "var v = document.createTextNode('foo')", .ex = "undefined" },
+        .{ .src = "v.nodeName", .ex = "#text" },
     };
     try checkCases(js_env, &createTextNode);
 
     var createCDATASection = [_]Case{
-        .{ .src = "document.createCDATASection('foo')", .ex = "[object CDATASection]" },
+        .{ .src = "var v = document.createCDATASection('foo')", .ex = "undefined" },
+        .{ .src = "v.nodeName", .ex = "#cdata-section" },
     };
     try checkCases(js_env, &createCDATASection);
 
     var createComment = [_]Case{
-        .{ .src = "document.createComment('foo')", .ex = "[object Comment]" },
+        .{ .src = "var v = document.createComment('foo')", .ex = "undefined" },
+        .{ .src = "v.nodeName", .ex = "#comment" },
     };
     try checkCases(js_env, &createComment);
 
@@ -284,18 +288,21 @@ pub fn testExecFn(
 
     var importNode = [_]Case{
         .{ .src = "let nimp = document.getElementById('content')", .ex = "undefined" },
-        .{ .src = "document.importNode(nimp)", .ex = "[object HTMLDivElement]" },
+        .{ .src = "var v = document.importNode(nimp)", .ex = "undefined" },
+        .{ .src = "v.nodeName", .ex = "DIV" },
     };
     try checkCases(js_env, &importNode);
 
     var adoptNode = [_]Case{
         .{ .src = "let nadop = document.getElementById('content')", .ex = "undefined" },
-        .{ .src = "document.adoptNode(nadop)", .ex = "[object HTMLDivElement]" },
+        .{ .src = "var v = document.adoptNode(nadop)", .ex = "undefined" },
+        .{ .src = "v.nodeName", .ex = "DIV" },
     };
     try checkCases(js_env, &adoptNode);
 
     var createAttr = [_]Case{
-        .{ .src = "document.createAttribute('foo')", .ex = "[object Attr]" },
+        .{ .src = "var v = document.createAttribute('foo')", .ex = "undefined" },
+        .{ .src = "v.nodeName", .ex = "foo" },
     };
     try checkCases(js_env, &createAttr);
 
