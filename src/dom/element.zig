@@ -25,8 +25,20 @@ pub const Element = struct {
     // JS funcs
     // --------
 
+    pub fn get_namespaceURI(self: *parser.Element) !?[]const u8 {
+        return try parser.nodeGetNamespace(parser.elementToNode(self));
+    }
+
+    pub fn get_prefix(self: *parser.Element) !?[]const u8 {
+        return try parser.nodeGetPrefix(parser.elementToNode(self));
+    }
+
     pub fn get_localName(self: *parser.Element) ![]const u8 {
-        return try parser.elementLocalName(self);
+        return try parser.nodeLocalName(parser.elementToNode(self));
+    }
+
+    pub fn get_tagName(self: *parser.Element) ![]const u8 {
+        return try parser.nodeName(parser.elementToNode(self));
     }
 
     pub fn get_attributes(self: *parser.Element) !*parser.NamedNodeMap {
@@ -92,6 +104,15 @@ pub fn testExecFn(
     js_env: *jsruntime.Env,
     comptime _: []jsruntime.API,
 ) !void {
+    var getters = [_]Case{
+        .{ .src = "let g = document.getElementById('content')", .ex = "undefined" },
+        .{ .src = "g.namespaceURI", .ex = "http://www.w3.org/1999/xhtml" },
+        .{ .src = "g.prefix", .ex = "null" },
+        .{ .src = "g.localName", .ex = "div" },
+        .{ .src = "g.tagName", .ex = "DIV" },
+    };
+    try checkCases(js_env, &getters);
+
     var attribute = [_]Case{
         .{ .src = "let a = document.getElementById('content')", .ex = "undefined" },
         .{ .src = "a.hasAttributes()", .ex = "true" },

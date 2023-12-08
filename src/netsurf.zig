@@ -725,6 +725,22 @@ pub fn nodeGetAttributes(node: *Node) !*NamedNodeMap {
     return res.?;
 }
 
+pub fn nodeGetNamespace(node: *Node) !?[]const u8 {
+    var s: ?*String = undefined;
+    const err = nodeVtable(node).dom_node_get_namespace.?(node, &s);
+    try DOMErr(err);
+    if (s == null) return null;
+    return strToData(s.?);
+}
+
+pub fn nodeGetPrefix(node: *Node) !?[]const u8 {
+    var s: ?*String = undefined;
+    const err = nodeVtable(node).dom_node_get_prefix.?(node, &s);
+    try DOMErr(err);
+    if (s == null) return null;
+    return strToData(s.?);
+}
+
 // nodeToElement is an helper to convert a node to an element.
 pub inline fn nodeToElement(node: *Node) *Element {
     return @as(*Element, @ptrCast(node));
@@ -829,11 +845,6 @@ pub const Element = c.dom_element;
 
 fn elementVtable(elem: *Element) c.dom_element_vtable {
     return getVtable(c.dom_element_vtable, Element, elem);
-}
-
-pub fn elementLocalName(elem: *Element) ![]const u8 {
-    const node = @as(*Node, @ptrCast(elem));
-    return try nodeLocalName(node);
 }
 
 pub fn elementGetAttribute(elem: *Element, name: []const u8) !?[]const u8 {
