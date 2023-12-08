@@ -49,6 +49,14 @@ pub const Element = struct {
         return try parser.elementSetAttribute(self, "id", id);
     }
 
+    pub fn get_className(self: *parser.Element) ![]const u8 {
+        return try parser.elementGetAttribute(self, "class") orelse "";
+    }
+
+    pub fn set_className(self: *parser.Element, class: []const u8) !void {
+        return try parser.elementSetAttribute(self, "class", class);
+    }
+
     pub fn get_attributes(self: *parser.Element) !*parser.NamedNodeMap {
         return try parser.nodeGetAttributes(parser.elementToNode(self));
     }
@@ -127,6 +135,12 @@ pub fn testExecFn(
         .{ .src = "gs.id = 'foo'", .ex = "foo" },
         .{ .src = "gs.id", .ex = "foo" },
         .{ .src = "gs.id = 'content'", .ex = "content" },
+        .{ .src = "gs.className", .ex = "" },
+        .{ .src = "let gs2 = document.getElementById('para-empty')", .ex = "undefined" },
+        .{ .src = "gs2.className", .ex = "ok empty" },
+        .{ .src = "gs2.className = 'foo bar baz'", .ex = "foo bar baz" },
+        .{ .src = "gs2.className", .ex = "foo bar baz" },
+        .{ .src = "gs2.className = 'ok empty'", .ex = "ok empty" },
     };
     try checkCases(js_env, &gettersetters);
 
