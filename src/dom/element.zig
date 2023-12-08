@@ -41,6 +41,14 @@ pub const Element = struct {
         return try parser.nodeName(parser.elementToNode(self));
     }
 
+    pub fn get_id(self: *parser.Element) ![]const u8 {
+        return try parser.elementGetAttribute(self, "id") orelse "";
+    }
+
+    pub fn set_id(self: *parser.Element, id: []const u8) !void {
+        return try parser.elementSetAttribute(self, "id", id);
+    }
+
     pub fn get_attributes(self: *parser.Element) !*parser.NamedNodeMap {
         return try parser.nodeGetAttributes(parser.elementToNode(self));
     }
@@ -112,6 +120,15 @@ pub fn testExecFn(
         .{ .src = "g.tagName", .ex = "DIV" },
     };
     try checkCases(js_env, &getters);
+
+    var gettersetters = [_]Case{
+        .{ .src = "let gs = document.getElementById('content')", .ex = "undefined" },
+        .{ .src = "gs.id", .ex = "content" },
+        .{ .src = "gs.id = 'foo'", .ex = "foo" },
+        .{ .src = "gs.id", .ex = "foo" },
+        .{ .src = "gs.id = 'content'", .ex = "content" },
+    };
+    try checkCases(js_env, &gettersetters);
 
     var attribute = [_]Case{
         .{ .src = "let a = document.getElementById('content')", .ex = "undefined" },
