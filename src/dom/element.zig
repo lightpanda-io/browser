@@ -57,6 +57,14 @@ pub const Element = struct {
         return try parser.elementSetAttribute(self, "class", class);
     }
 
+    pub fn get_slot(self: *parser.Element) ![]const u8 {
+        return try parser.elementGetAttribute(self, "slot") orelse "";
+    }
+
+    pub fn set_slot(self: *parser.Element, slot: []const u8) !void {
+        return try parser.elementSetAttribute(self, "slot", slot);
+    }
+
     pub fn get_attributes(self: *parser.Element) !*parser.NamedNodeMap {
         return try parser.nodeGetAttributes(parser.elementToNode(self));
     }
