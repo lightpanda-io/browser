@@ -893,6 +893,56 @@ pub inline fn elementToNode(e: *Element) *Node {
     return @as(*Node, @ptrCast(e));
 }
 
+// TokenList
+pub const TokenList = c.dom_tokenlist;
+
+pub fn tokenListCreate(elt: *Element, attr: []const u8) !*TokenList {
+    var list: ?*TokenList = undefined;
+    const err = c.dom_tokenlist_create(elt, try strFromData(attr), &list);
+    try DOMErr(err);
+    return list.?;
+}
+
+pub fn tokenListGetLength(l: *TokenList) !u32 {
+    var res: u32 = undefined;
+    const err = c.dom_tokenlist_get_length(l, &res);
+    try DOMErr(err);
+    return res;
+}
+
+pub fn tokenListItem(l: *TokenList, index: u32) !?[]const u8 {
+    var res: ?*String = undefined;
+    const err = c._dom_tokenlist_item(l, index, &res);
+    try DOMErr(err);
+    if (res == null) return null;
+    return strToData(res.?);
+}
+
+pub fn tokenListContains(l: *TokenList, token: []const u8) !bool {
+    var res: bool = undefined;
+    const err = c.dom_tokenlist_contains(l, try strFromData(token), &res);
+    try DOMErr(err);
+    return res;
+}
+
+pub fn tokenListAdd(l: *TokenList, token: []const u8) !void {
+    const err = c.dom_tokenlist_add(l, try strFromData(token));
+    try DOMErr(err);
+}
+
+pub fn tokenListRemove(l: *TokenList, token: []const u8) !void {
+    const err = c.dom_tokenlist_remove(l, try strFromData(token));
+    try DOMErr(err);
+}
+
+pub fn tokenListGetValue(l: *TokenList) !?[]const u8 {
+    var res: ?*String = undefined;
+    const err = c.dom_tokenlist_get_value(l, &res);
+    try DOMErr(err);
+    if (res == null) return null;
+    return strToData(res.?);
+}
+
 // ElementHTML
 pub const ElementHTML = c.dom_html_element;
 

@@ -16,6 +16,7 @@ const HTMLCollectionTestExecFn = @import("dom/html_collection.zig").testExecFn;
 const DOMExceptionTestExecFn = @import("dom/exceptions.zig").testExecFn;
 const DOMImplementationExecFn = @import("dom/implementation.zig").testExecFn;
 const NamedNodeMapExecFn = @import("dom/namednodemap.zig").testExecFn;
+const DOMTokenListExecFn = @import("dom/token_list.zig").testExecFn;
 
 var doc: *parser.DocumentHTML = undefined;
 
@@ -63,6 +64,7 @@ fn testsAllExecFn(
         DOMExceptionTestExecFn,
         DOMImplementationExecFn,
         NamedNodeMapExecFn,
+        DOMTokenListExecFn,
     };
 
     inline for (testFns) |testFn| {

@@ -65,6 +65,10 @@ pub const Element = struct {
         return try parser.elementSetAttribute(self, "slot", slot);
     }
 
+    pub fn get_classList(self: *parser.Element) !*parser.TokenList {
+        return try parser.tokenListCreate(self, "class");
+    }
+
     pub fn get_attributes(self: *parser.Element) !*parser.NamedNodeMap {
         return try parser.nodeGetAttributes(parser.elementToNode(self));
     }
@@ -149,6 +153,8 @@ pub fn testExecFn(
         .{ .src = "gs2.className = 'foo bar baz'", .ex = "foo bar baz" },
         .{ .src = "gs2.className", .ex = "foo bar baz" },
         .{ .src = "gs2.className = 'ok empty'", .ex = "ok empty" },
+        .{ .src = "let cl = gs2.classList", .ex = "undefined" },
+        .{ .src = "cl.length", .ex = "2" },
     };
     try checkCases(js_env, &gettersetters);
 
