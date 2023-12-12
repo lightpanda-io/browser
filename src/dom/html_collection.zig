@@ -465,6 +465,35 @@ pub const HTMLCollection = struct {
         return null;
     }
 
+    fn item_name(n: Union) !?[]const u8 {
+        const elem = @as(*parser.Element, @ptrCast(n));
+        if (try parser.elementGetAttribute(elem, "id")) |v| {
+            return v;
+        }
+        if (try parser.elementGetAttribute(elem, "name")) |v| {
+            return v;
+        }
+
+        return null;
+    }
+
+    pub fn postAttach(self: *HTMLCollection, alloc: std.mem.Allocator, js_obj: jsruntime.JSObject) !void {
+        const ln = try self.get_length();
+        var i: u32 = 0;
+        while (i < ln) {
+            defer i += 1;
+
+            const v = try self._item(i);
+            // TODO k must be deinit
+            const k = try std.fmt.allocPrint(alloc, "{d}", .{i});
+            try js_obj.set(k, v);
+
+            if (try item_name(v)) |name| {
+                try js_obj.set(name, v);
+            }
+        }
+    }
+
     pub fn deinit(self: *HTMLCollection, alloc: std.mem.Allocator) void {
         self.matcher.deinit(alloc);
     }
@@ -494,6 +523,9 @@ pub fn testExecFn(
         .{ .src = "getElementsByTagNameAll.item(3).localName", .ex = "div" },
         .{ .src = "getElementsByTagNameAll.item(7).localName", .ex = "p" },
         .{ .src = "getElementsByTagNameAll.namedItem('para-empty-child').localName", .ex = "span" },
+
+        // array like
+        .{ .src = "getElementsByTagNameAll[0].localName", .ex = "html" },
 
         .{ .src = "document.getElementById('content').getElementsByTagName('*').length", .ex = "4" },
         .{ .src = "document.getElementById('content').getElementsByTagName('p').length", .ex = "2" },
