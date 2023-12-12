@@ -15,7 +15,7 @@ on:
       - "src/**/*.zig"
       - "src/*.zig"
       - "test/wpt/**"
-      - "vendor/jsruntime-lib"
+      - "vendor/*"
   pull_request:
 
     # By default GH trigger on types opened, synchronize and reopened.
