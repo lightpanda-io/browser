@@ -110,6 +110,7 @@ pub const Document = struct {
             alloc,
             parser.elementToNode(root),
             tag_name,
+            true,
         );
     }
 
@@ -123,6 +124,7 @@ pub const Document = struct {
             alloc,
             parser.elementToNode(root),
             classNames,
+            true,
         );
     }
 

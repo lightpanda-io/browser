@@ -14,15 +14,18 @@ const Union = @import("element.zig").Union;
 const Matcher = union(enum) {
     matchByTagName: MatchByTagName,
     matchByClassName: MatchByClassName,
+    matchTrue: struct {},
 
     pub fn match(self: Matcher, node: *parser.Node) !bool {
         switch (self) {
+            inline .matchTrue => return true,
             inline else => |case| return case.match(node),
         }
     }
 
     pub fn deinit(self: Matcher, alloc: std.mem.Allocator) void {
         switch (self) {
+            .matchTrue => return,
             inline else => |case| return case.deinit(alloc),
         }
     }
@@ -56,12 +59,15 @@ pub fn HTMLCollectionByTagName(
     alloc: std.mem.Allocator,
     root: *parser.Node,
     tag_name: []const u8,
+    include_root: bool,
 ) !HTMLCollection {
     return HTMLCollection{
         .root = root,
+        .walker = Walker{ .walkerDepthFirst = .{} },
         .matcher = Matcher{
             .matchByTagName = try MatchByTagName.init(alloc, tag_name),
         },
+        .include_root = include_root,
     };
 }
 
@@ -97,14 +103,77 @@ pub fn HTMLCollectionByClassName(
     alloc: std.mem.Allocator,
     root: *parser.Node,
     classNames: []const u8,
+    include_root: bool,
 ) !HTMLCollection {
     return HTMLCollection{
         .root = root,
+        .walker = Walker{ .walkerDepthFirst = .{} },
         .matcher = Matcher{
             .matchByClassName = try MatchByClassName.init(alloc, classNames),
         },
+        .include_root = include_root,
     };
 }
+
+const Walker = union(enum) {
+    walkerDepthFirst: WalkerDepthFirst,
+
+    pub fn get_next(self: Walker, root: *parser.Node, cur: ?*parser.Node) !?*parser.Node {
+        switch (self) {
+            inline else => |case| return case.get_next(root, cur),
+        }
+    }
+};
+
+// WalkerDepthFirst iterates over the DOM tree to return the next following
+// node or null at the end.
+//
+// This implementation is a zig version of Netsurf code.
+// http://source.netsurf-browser.org/libdom.git/tree/src/html/html_collection.c#n177
+//
+// The iteration is a depth first as required by the specification.
+// https://dom.spec.whatwg.org/#htmlcollection
+// https://dom.spec.whatwg.org/#concept-tree-order
+pub const WalkerDepthFirst = struct {
+    pub fn get_next(_: WalkerDepthFirst, root: *parser.Node, cur: ?*parser.Node) !?*parser.Node {
+        var n = cur orelse root;
+
+        // TODO deinit next
+        if (try parser.nodeFirstChild(n)) |next| {
+            return next;
+        }
+
+        // TODO deinit next
+        if (try parser.nodeNextSibling(n)) |next| {
+            return next;
+        }
+
+        // TODO deinit parent
+        // Back to the parent of cur.
+        // If cur has no parent, then the iteration is over.
+        var parent = try parser.nodeParentNode(n) orelse return null;
+
+        // TODO deinit lastchild
+        var lastchild = try parser.nodeLastChild(parent);
+        while (n != root and n == lastchild) {
+            n = parent;
+
+            // TODO deinit parent
+            // Back to the prev's parent.
+            // If prev has no parent, then the loop must stop.
+            parent = try parser.nodeParentNode(n) orelse break;
+
+            // TODO deinit lastchild
+            lastchild = try parser.nodeLastChild(parent);
+        }
+
+        if (n == root) {
+            return null;
+        }
+
+        return try parser.nodeNextSibling(n);
+    }
+};
 
 // WEB IDL https://dom.spec.whatwg.org/#htmlcollection
 // HTMLCollection is re implemented in zig here because libdom
@@ -114,58 +183,26 @@ pub const HTMLCollection = struct {
     pub const mem_guarantied = true;
 
     matcher: Matcher,
+    walker: Walker,
 
     root: *parser.Node,
+
+    // By default the HTMLCollection walk on the root's descendant only.
+    // But on somes cases, like for dom document, we want to walk over the root
+    // itself.
+    include_root: bool = false,
 
     // save a state for the collection to improve the _item speed.
     cur_idx: ?u32 = undefined,
     cur_node: ?*parser.Node = undefined,
 
-    // get_next iterates over the DOM tree to return the next following node or
-    // null at the end.
-    //
-    // This implementation is a zig version of Netsurf code.
-    // http://source.netsurf-browser.org/libdom.git/tree/src/html/html_collection.c#n177
-    //
-    // The iteration is a depth first as required by the specification.
-    // https://dom.spec.whatwg.org/#htmlcollection
-    // https://dom.spec.whatwg.org/#concept-tree-order
-    fn get_next(root: *parser.Node, cur: *parser.Node) !?*parser.Node {
-        // TODO deinit next
-        if (try parser.nodeFirstChild(cur)) |next| {
-            return next;
+    // start returns the first node to walk on.
+    fn start(self: HTMLCollection) !?*parser.Node {
+        if (self.include_root) {
+            return self.root;
         }
 
-        // TODO deinit next
-        if (try parser.nodeNextSibling(cur)) |next| {
-            return next;
-        }
-
-        // TODO deinit parent
-        // Back to the parent of cur.
-        // If cur has no parent, then the iteration is over.
-        var parent = try parser.nodeParentNode(cur) orelse return null;
-
-        // TODO deinit lastchild
-        var lastchild = try parser.nodeLastChild(parent);
-        var prev = cur;
-        while (prev != root and prev == lastchild) {
-            prev = parent;
-
-            // TODO deinit parent
-            // Back to the prev's parent.
-            // If prev has no parent, then the loop must stop.
-            parent = try parser.nodeParentNode(prev) orelse break;
-
-            // TODO deinit lastchild
-            lastchild = try parser.nodeLastChild(parent);
-        }
-
-        if (prev == root) {
-            return null;
-        }
-
-        return try parser.nodeNextSibling(prev);
+        return try self.walker.get_next(self.root, null);
     }
 
     /// get_length computes the collection's length dynamically according to
@@ -173,18 +210,16 @@ pub const HTMLCollection = struct {
     // TODO: nodes retrieved must be de-referenced.
     pub fn get_length(self: *HTMLCollection) !u32 {
         var len: u32 = 0;
-        var node: *parser.Node = self.root;
-        var ntype: parser.NodeType = undefined;
+        var node = try self.start() orelse return 0;
 
         while (true) {
-            ntype = try parser.nodeType(node);
-            if (ntype == .element) {
+            if (try parser.nodeType(node) == .element) {
                 if (try self.matcher.match(node)) {
                     len += 1;
                 }
             }
 
-            node = try get_next(self.root, node) orelse break;
+            node = try self.walker.get_next(self.root, node) orelse break;
         }
 
         return len;
@@ -192,18 +227,18 @@ pub const HTMLCollection = struct {
 
     pub fn _item(self: *HTMLCollection, index: u32) !?Union {
         var i: u32 = 0;
-        var node: *parser.Node = self.root;
-        var ntype: parser.NodeType = undefined;
+        var node: *parser.Node = undefined;
 
         // Use the current state to improve speed if possible.
         if (self.cur_idx != null and index >= self.cur_idx.?) {
             i = self.cur_idx.?;
             node = self.cur_node.?;
+        } else {
+            node = try self.start() orelse return null;
         }
 
         while (true) {
-            ntype = try parser.nodeType(node);
-            if (ntype == .element) {
+            if (try parser.nodeType(node) == .element) {
                 if (try self.matcher.match(node)) {
                     // check if we found the searched element.
                     if (i == index) {
@@ -219,7 +254,7 @@ pub const HTMLCollection = struct {
                 }
             }
 
-            node = try get_next(self.root, node) orelse break;
+            node = try self.walker.get_next(self.root, node) orelse break;
         }
 
         return null;
@@ -230,12 +265,10 @@ pub const HTMLCollection = struct {
             return null;
         }
 
-        var node: *parser.Node = self.root;
-        var ntype: parser.NodeType = undefined;
+        var node = try self.start() orelse return null;
 
         while (true) {
-            ntype = try parser.nodeType(node);
-            if (ntype == .element) {
+            if (try parser.nodeType(node) == .element) {
                 if (try self.matcher.match(node)) {
                     const elem = @as(*parser.Element, @ptrCast(node));
 
@@ -253,7 +286,7 @@ pub const HTMLCollection = struct {
                 }
             }
 
-            node = try get_next(self.root, node) orelse break;
+            node = try self.walker.get_next(self.root, node) orelse break;
         }
 
         return null;
