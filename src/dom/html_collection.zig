@@ -115,8 +115,21 @@ pub fn HTMLCollectionByClassName(
     };
 }
 
+pub fn HTMLCollectionChildren(
+    root: *parser.Node,
+    include_root: bool,
+) !HTMLCollection {
+    return HTMLCollection{
+        .root = root,
+        .walker = Walker{ .walkerChildren = .{} },
+        .matcher = Matcher{ .matchTrue = .{} },
+        .include_root = include_root,
+    };
+}
+
 const Walker = union(enum) {
     walkerDepthFirst: WalkerDepthFirst,
+    walkerChildren: WalkerChildren,
 
     pub fn get_next(self: Walker, root: *parser.Node, cur: ?*parser.Node) !?*parser.Node {
         switch (self) {
@@ -172,6 +185,27 @@ pub const WalkerDepthFirst = struct {
         }
 
         return try parser.nodeNextSibling(n);
+    }
+};
+
+// WalkerChildren iterates over the root's children only.
+pub const WalkerChildren = struct {
+    pub fn get_next(_: WalkerChildren, root: *parser.Node, cur: ?*parser.Node) !?*parser.Node {
+        // On wlak start, we return the first root's child.
+        if (cur == null) return try parser.nodeFirstChild(root);
+
+        // If cur is root, then return null.
+        // This is a special case, if the root is included in the walk, we
+        // don't want to go further to find children.
+        if (root == cur.?) return null;
+
+        // TODO deinit last.
+        const last = try parser.nodeLastChild(root);
+        if (last == cur.?) {
+            return null;
+        }
+
+        return try parser.nodeNextSibling(cur.?);
     }
 };
 
@@ -322,6 +356,8 @@ pub fn testExecFn(
         .{ .src = "getElementsByTagNameAll.item(3).localName", .ex = "div" },
         .{ .src = "getElementsByTagNameAll.item(7).localName", .ex = "p" },
         .{ .src = "getElementsByTagNameAll.namedItem('para-empty-child').localName", .ex = "span" },
+
+        .{ .src = "document.children.length", .ex = "1" },
 
         // check liveness
         .{ .src = "let content = document.getElementById('content')", .ex = "undefined" },

@@ -166,6 +166,13 @@ pub const Document = struct {
         return try parser.documentCreateAttributeNS(self, ns, qname);
     }
 
+    // ParentNode
+    // https://dom.spec.whatwg.org/#parentnode
+    pub fn get_children(self: *parser.Document) !collection.HTMLCollection {
+        const root = try parser.documentGetDocumentElement(self);
+        return try collection.HTMLCollectionChildren(parser.elementToNode(root), true);
+    }
+
     pub fn deinit(_: *parser.Document, _: std.mem.Allocator) void {}
 };
 
