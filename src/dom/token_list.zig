@@ -49,7 +49,7 @@ pub const DOMTokenList = struct {
             return parser.DOMError.Syntax;
         }
         for (token) |c| {
-            if (std.ascii.isWhitespace(c)) return error.InvalidCharacter;
+            if (std.ascii.isWhitespace(c)) return parser.DOMError.InvalidCharacter;
         }
     }
 
