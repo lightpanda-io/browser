@@ -1,6 +1,6 @@
 [submodule "vendor/jsruntime-lib"]
 	path = vendor/jsruntime-lib
-	url = git@github.com:Browsercore/jsruntime-lib.git
+	url = git@github.com:lightpanda-io/jsruntime-lib.git
 [submodule "vendor/lexbor-src"]
 	path = vendor/lexbor-src
 	url = https://github.com/lexbor/lexbor
@@ -12,7 +12,7 @@
 	url = https://source.netsurf-browser.org/libparserutils.git
 [submodule "vendor/netsurf/libdom"]
 	path = vendor/netsurf/libdom
-	url = git@github.com:Browsercore/libdom.git
+	url = git@github.com:lightpanda-io/libdom.git
 [submodule "vendor/netsurf/share/netsurf-buildsystem"]
 	path = vendor/netsurf/share/netsurf-buildsystem
 	url = https://source.netsurf-browser.org/buildsystem.git
