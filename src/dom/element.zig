@@ -6,6 +6,8 @@ const jsruntime = @import("jsruntime");
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 
+const collection = @import("html_collection.zig");
+
 const Node = @import("node.zig").Node;
 const HTMLElem = @import("../html/elements.zig");
 pub const Union = @import("../html/elements.zig").Union;
@@ -122,6 +124,40 @@ pub const Element = struct {
         // Return true.
         return true;
     }
+
+    pub fn _getElementsByTagName(
+        self: *parser.Element,
+        alloc: std.mem.Allocator,
+        tag_name: []const u8,
+    ) !collection.HTMLCollection {
+        return try collection.HTMLCollectionByTagName(
+            alloc,
+            parser.elementToNode(self),
+            tag_name,
+            false,
+        );
+    }
+
+    pub fn _getElementsByClassName(
+        self: *parser.Element,
+        alloc: std.mem.Allocator,
+        classNames: []const u8,
+    ) !collection.HTMLCollection {
+        return try collection.HTMLCollectionByClassName(
+            alloc,
+            parser.elementToNode(self),
+            classNames,
+            false,
+        );
+    }
+
+    // ParentNode
+    // https://dom.spec.whatwg.org/#parentnode
+    pub fn get_children(self: *parser.Element) !collection.HTMLCollection {
+        return try collection.HTMLCollectionChildren(parser.elementToNode(self), false);
+    }
+
+    pub fn deinit(_: *parser.Element, _: std.mem.Allocator) void {}
 };
 
 // Tests

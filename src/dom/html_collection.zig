@@ -357,7 +357,12 @@ pub fn testExecFn(
         .{ .src = "getElementsByTagNameAll.item(7).localName", .ex = "p" },
         .{ .src = "getElementsByTagNameAll.namedItem('para-empty-child').localName", .ex = "span" },
 
+        .{ .src = "document.getElementById('content').getElementsByTagName('*').length", .ex = "4" },
+        .{ .src = "document.getElementById('content').getElementsByTagName('p').length", .ex = "2" },
+        .{ .src = "document.getElementById('content').getElementsByTagName('div').length", .ex = "0" },
+
         .{ .src = "document.children.length", .ex = "1" },
+        .{ .src = "document.getElementById('content').children.length", .ex = "3" },
 
         // check liveness
         .{ .src = "let content = document.getElementById('content')", .ex = "undefined" },
