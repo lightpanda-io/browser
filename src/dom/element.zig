@@ -177,6 +177,24 @@ pub const Element = struct {
         return try children.get_length();
     }
 
+    // NonDocumentTypeChildNode
+    // https://dom.spec.whatwg.org/#interface-nondocumenttypechildnode
+    pub fn get_previousElementSibling(self: *parser.Element) !?Union {
+        const res = try parser.nodePreviousElementSibling(parser.elementToNode(self));
+        if (res == null) {
+            return null;
+        }
+        return try HTMLElem.toInterface(HTMLElem.Union, res.?);
+    }
+
+    pub fn get_nextElementSibling(self: *parser.Element) !?Union {
+        const res = try parser.nodeNextElementSibling(parser.elementToNode(self));
+        if (res == null) {
+            return null;
+        }
+        return try HTMLElem.toInterface(HTMLElem.Union, res.?);
+    }
+
     pub fn deinit(_: *parser.Element, _: std.mem.Allocator) void {}
 };
 
@@ -257,4 +275,11 @@ pub fn testExecFn(
         .{ .src = "c.childElementCount", .ex = "3" },
     };
     try checkCases(js_env, &parentNode);
+
+    var elementSibling = [_]Case{
+        .{ .src = "let d = document.getElementById('para')", .ex = "undefined" },
+        .{ .src = "d.previousElementSibling.nodeName", .ex = "P" },
+        .{ .src = "d.nextElementSibling", .ex = "null" },
+    };
+    try checkCases(js_env, &elementSibling);
 }
