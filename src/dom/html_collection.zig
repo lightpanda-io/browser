@@ -199,12 +199,6 @@ pub const WalkerChildren = struct {
         // don't want to go further to find children.
         if (root == cur.?) return null;
 
-        // TODO deinit last.
-        const last = try parser.nodeLastChild(root);
-        if (last == cur.?) {
-            return null;
-        }
-
         return try parser.nodeNextSibling(cur.?);
     }
 };
