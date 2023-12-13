@@ -175,6 +175,21 @@ pub const Document = struct {
         return try collection.HTMLCollectionChildren(elt, true);
     }
 
+    pub fn get_firstElementChild(self: *parser.Document) !?ElementUnion {
+        const elt = try parser.documentGetDocumentElement(self) orelse return null;
+        return try Element.toInterface(elt);
+    }
+
+    pub fn get_lastElementChild(self: *parser.Document) !?ElementUnion {
+        const elt = try parser.documentGetDocumentElement(self) orelse return null;
+        return try Element.toInterface(elt);
+    }
+
+    pub fn get_childElementCount(self: *parser.Document) !u32 {
+        _ = try parser.documentGetDocumentElement(self) orelse return 0;
+        return 1;
+    }
+
     pub fn deinit(_: *parser.Document, _: std.mem.Allocator) void {}
 };
 
@@ -322,6 +337,22 @@ pub fn testExecFn(
         .{ .src = "v.nodeName", .ex = "foo" },
     };
     try checkCases(js_env, &createAttr);
+
+    var parentNode = [_]Case{
+        .{ .src = "document.children.length", .ex = "1" },
+        .{ .src = "document.children.item(0).nodeName", .ex = "HTML" },
+        .{ .src = "document.firstElementChild.nodeName", .ex = "HTML" },
+        .{ .src = "document.lastElementChild.nodeName", .ex = "HTML" },
+        .{ .src = "document.childElementCount", .ex = "1" },
+
+        .{ .src = "let nd = new Document()", .ex = "undefined" },
+        .{ .src = "nd.children.length", .ex = "0" },
+        .{ .src = "nd.children.item(0)", .ex = "null" },
+        .{ .src = "nd.firstElementChild", .ex = "null" },
+        .{ .src = "nd.lastElementChild", .ex = "null" },
+        .{ .src = "nd.childElementCount", .ex = "0" },
+    };
+    try checkCases(js_env, &parentNode);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;
