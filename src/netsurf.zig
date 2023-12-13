@@ -620,6 +620,13 @@ pub fn nodeSetTextContent(node: *Node, value: []const u8) !void {
     try DOMErr(err);
 }
 
+pub fn nodeGetChildNodes(node: *Node) !*NodeList {
+    var nlist: ?*NodeList = undefined;
+    const err = nodeVtable(node).dom_node_get_child_nodes.?(node, &nlist);
+    try DOMErr(err);
+    return nlist.?;
+}
+
 pub fn nodeAppendChild(node: *Node, child: *Node) !*Node {
     var res: ?*Node = undefined;
     const err = nodeVtable(node).dom_node_append_child.?(node, child, &res);

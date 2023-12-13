@@ -315,6 +315,33 @@ pub const Element = struct {
         }
     }
 
+    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
+    // function must accept either node or string.
+    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
+    pub fn _replaceChildren(self: *parser.Element, nodes: ?Variadic(*parser.Node)) !void {
+        // if (nodes == null) return;
+        // if (nodes.?.slice.len == 0) return;
+
+        const nself = parser.elementToNode(self);
+
+        // remove existing children
+        if (try parser.nodeHasChildNodes(nself)) {
+            const children = try parser.nodeGetChildNodes(nself);
+            const ln = try parser.nodeListLength(children);
+            var i: u32 = 0;
+            while (i < ln) {
+                defer i += 1;
+                const child = try parser.nodeListItem(children, i) orelse continue;
+                _ = try parser.nodeRemoveChild(nself, child);
+            }
+        }
+
+        // add new children
+        for (nodes.?.slice) |node| {
+            _ = try parser.nodeAppendChild(nself, node);
+        }
+    }
+
     pub fn deinit(_: *parser.Element, _: std.mem.Allocator) void {}
 };
 
