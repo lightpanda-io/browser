@@ -299,7 +299,7 @@ pub const Element = struct {
         }
 
         for (nodes.?.slice) |node| {
-            _ = try parser.nodeInsertBefore(nself, first.?, node);
+            _ = try parser.nodeInsertBefore(nself, node, first.?);
         }
     }
 
@@ -319,8 +319,8 @@ pub const Element = struct {
     // function must accept either node or string.
     // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
     pub fn _replaceChildren(self: *parser.Element, nodes: ?Variadic(*parser.Node)) !void {
-        // if (nodes == null) return;
-        // if (nodes.?.slice.len == 0) return;
+        if (nodes == null) return;
+        if (nodes.?.slice.len == 0) return;
 
         const nself = parser.elementToNode(self);
 

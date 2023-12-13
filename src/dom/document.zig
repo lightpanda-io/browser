@@ -5,6 +5,7 @@ const parser = @import("../netsurf.zig");
 const jsruntime = @import("jsruntime");
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
+const Variadic = jsruntime.Variadic;
 
 const Node = @import("node.zig").Node;
 const NodeList = @import("nodelist.zig").NodeList;
@@ -226,6 +227,28 @@ pub const Document = struct {
         try list.append(alloc, parser.elementToNode(e));
 
         return list;
+    }
+
+    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
+    // function must accept either node or string.
+    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
+    pub fn _prepend(_: *parser.Document, _: ?Variadic(*parser.Node)) !void {
+        return parser.DOMError.HierarchyRequest;
+    }
+
+    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
+    // function must accept either node or string.
+    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
+    pub fn _append(_: *parser.Document, _: ?Variadic(*parser.Node)) !void {
+        return parser.DOMError.HierarchyRequest;
+    }
+
+    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
+    // function must accept either node or string.
+    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
+    pub fn _replaceChildren(_: *parser.Document, _: ?Variadic(*parser.Node)) !void {
+        // TODO implement function correctly
+        return parser.DOMError.HierarchyRequest;
     }
 
     pub fn deinit(_: *parser.Document, _: std.mem.Allocator) void {}
