@@ -34,9 +34,10 @@ pub const Document = struct {
         return DOMImplementation{};
     }
 
-    pub fn get_documentElement(self: *parser.Document) !ElementUnion {
+    pub fn get_documentElement(self: *parser.Document) !?ElementUnion {
         const e = try parser.documentGetDocumentElement(self);
-        return try Element.toInterface(e);
+        if (e == null) return null;
+        return try Element.toInterface(e.?);
     }
 
     pub fn get_documentURI(self: *parser.Document) ![]const u8 {
@@ -105,13 +106,12 @@ pub const Document = struct {
         alloc: std.mem.Allocator,
         tag_name: []const u8,
     ) !collection.HTMLCollection {
-        const root = try parser.documentGetDocumentElement(self);
-        return try collection.HTMLCollectionByTagName(
-            alloc,
-            parser.elementToNode(root),
-            tag_name,
-            true,
-        );
+        var elt: ?*parser.Node = null;
+        if (try parser.documentGetDocumentElement(self)) |root| {
+            elt = parser.elementToNode(root);
+        }
+
+        return try collection.HTMLCollectionByTagName(alloc, elt, tag_name, true);
     }
 
     pub fn _getElementsByClassName(
@@ -119,13 +119,12 @@ pub const Document = struct {
         alloc: std.mem.Allocator,
         classNames: []const u8,
     ) !collection.HTMLCollection {
-        const root = try parser.documentGetDocumentElement(self);
-        return try collection.HTMLCollectionByClassName(
-            alloc,
-            parser.elementToNode(root),
-            classNames,
-            true,
-        );
+        var elt: ?*parser.Node = null;
+        if (try parser.documentGetDocumentElement(self)) |root| {
+            elt = parser.elementToNode(root);
+        }
+
+        return try collection.HTMLCollectionByClassName(alloc, elt, classNames, true);
     }
 
     pub fn _createDocumentFragment(self: *parser.Document) !*parser.DocumentFragment {
@@ -169,8 +168,11 @@ pub const Document = struct {
     // ParentNode
     // https://dom.spec.whatwg.org/#parentnode
     pub fn get_children(self: *parser.Document) !collection.HTMLCollection {
-        const root = try parser.documentGetDocumentElement(self);
-        return try collection.HTMLCollectionChildren(parser.elementToNode(root), true);
+        var elt: ?*parser.Node = null;
+        if (try parser.documentGetDocumentElement(self)) |root| {
+            elt = parser.elementToNode(root);
+        }
+        return try collection.HTMLCollectionChildren(elt, true);
     }
 
     pub fn deinit(_: *parser.Document, _: std.mem.Allocator) void {}
@@ -188,6 +190,12 @@ pub fn testExecFn(
         .{ .src = "document.__proto__.__proto__.constructor.name", .ex = "Document" },
         .{ .src = "document.__proto__.__proto__.__proto__.constructor.name", .ex = "Node" },
         .{ .src = "document.__proto__.__proto__.__proto__.__proto__.constructor.name", .ex = "EventTarget" },
+
+        .{ .src = "let newdoc = new Document()", .ex = "undefined" },
+        .{ .src = "newdoc.documentElement", .ex = "null" },
+        .{ .src = "newdoc.children.length", .ex = "0" },
+        .{ .src = "newdoc.getElementsByTagName('*').length", .ex = "0" },
+        .{ .src = "newdoc.getElementsByTagName('*').item(0)", .ex = "null" },
     };
     try checkCases(js_env, &constructor);
 

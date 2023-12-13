@@ -57,7 +57,7 @@ pub const MatchByTagName = struct {
 
 pub fn HTMLCollectionByTagName(
     alloc: std.mem.Allocator,
-    root: *parser.Node,
+    root: ?*parser.Node,
     tag_name: []const u8,
     include_root: bool,
 ) !HTMLCollection {
@@ -101,7 +101,7 @@ pub const MatchByClassName = struct {
 
 pub fn HTMLCollectionByClassName(
     alloc: std.mem.Allocator,
-    root: *parser.Node,
+    root: ?*parser.Node,
     classNames: []const u8,
     include_root: bool,
 ) !HTMLCollection {
@@ -116,7 +116,7 @@ pub fn HTMLCollectionByClassName(
 }
 
 pub fn HTMLCollectionChildren(
-    root: *parser.Node,
+    root: ?*parser.Node,
     include_root: bool,
 ) !HTMLCollection {
     return HTMLCollection{
@@ -219,7 +219,7 @@ pub const HTMLCollection = struct {
     matcher: Matcher,
     walker: Walker,
 
-    root: *parser.Node,
+    root: ?*parser.Node,
 
     // By default the HTMLCollection walk on the root's descendant only.
     // But on somes cases, like for dom document, we want to walk over the root
@@ -232,17 +232,21 @@ pub const HTMLCollection = struct {
 
     // start returns the first node to walk on.
     fn start(self: HTMLCollection) !?*parser.Node {
+        if (self.root == null) return null;
+
         if (self.include_root) {
-            return self.root;
+            return self.root.?;
         }
 
-        return try self.walker.get_next(self.root, null);
+        return try self.walker.get_next(self.root.?, null);
     }
 
     /// get_length computes the collection's length dynamically according to
     /// the current root structure.
     // TODO: nodes retrieved must be de-referenced.
     pub fn get_length(self: *HTMLCollection) !u32 {
+        if (self.root == null) return 0;
+
         var len: u32 = 0;
         var node = try self.start() orelse return 0;
 
@@ -253,13 +257,15 @@ pub const HTMLCollection = struct {
                 }
             }
 
-            node = try self.walker.get_next(self.root, node) orelse break;
+            node = try self.walker.get_next(self.root.?, node) orelse break;
         }
 
         return len;
     }
 
     pub fn _item(self: *HTMLCollection, index: u32) !?Union {
+        if (self.root == null) return null;
+
         var i: u32 = 0;
         var node: *parser.Node = undefined;
 
@@ -288,16 +294,15 @@ pub const HTMLCollection = struct {
                 }
             }
 
-            node = try self.walker.get_next(self.root, node) orelse break;
+            node = try self.walker.get_next(self.root.?, node) orelse break;
         }
 
         return null;
     }
 
     pub fn _namedItem(self: *HTMLCollection, name: []const u8) !?Union {
-        if (name.len == 0) {
-            return null;
-        }
+        if (self.root == null) return null;
+        if (name.len == 0) return null;
 
         var node = try self.start() orelse return null;
 
@@ -320,7 +325,7 @@ pub const HTMLCollection = struct {
                 }
             }
 
-            node = try self.walker.get_next(self.root, node) orelse break;
+            node = try self.walker.get_next(self.root.?, node) orelse break;
         }
 
         return null;
