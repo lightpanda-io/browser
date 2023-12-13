@@ -25,7 +25,7 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime apis: []jsruntime.API, comp
     // create JS env
     var loop = try Loop.init(alloc);
     defer loop.deinit();
-    var js_env = try Env.init(arena, &loop);
+    var js_env = try Env.init(alloc, &loop);
     defer js_env.deinit();
 
     // load APIs in JS env
