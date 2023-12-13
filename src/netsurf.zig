@@ -725,6 +725,22 @@ pub fn nodeGetAttributes(node: *Node) !*NamedNodeMap {
     return res.?;
 }
 
+pub fn nodeGetNamespace(node: *Node) !?[]const u8 {
+    var s: ?*String = undefined;
+    const err = nodeVtable(node).dom_node_get_namespace.?(node, &s);
+    try DOMErr(err);
+    if (s == null) return null;
+    return strToData(s.?);
+}
+
+pub fn nodeGetPrefix(node: *Node) !?[]const u8 {
+    var s: ?*String = undefined;
+    const err = nodeVtable(node).dom_node_get_prefix.?(node, &s);
+    try DOMErr(err);
+    if (s == null) return null;
+    return strToData(s.?);
+}
+
 // nodeToElement is an helper to convert a node to an element.
 pub inline fn nodeToElement(node: *Node) *Element {
     return @as(*Element, @ptrCast(node));
@@ -831,11 +847,6 @@ fn elementVtable(elem: *Element) c.dom_element_vtable {
     return getVtable(c.dom_element_vtable, Element, elem);
 }
 
-pub fn elementLocalName(elem: *Element) ![]const u8 {
-    const node = @as(*Node, @ptrCast(elem));
-    return try nodeLocalName(node);
-}
-
 pub fn elementGetAttribute(elem: *Element, name: []const u8) !?[]const u8 {
     var s: ?*String = undefined;
     const err = elementVtable(elem).dom_element_get_attribute.?(elem, try strFromData(name), &s);
@@ -880,6 +891,56 @@ pub fn elementHasClass(elem: *Element, class: []const u8) !bool {
 // elementToNode is an helper to convert an element to a node.
 pub inline fn elementToNode(e: *Element) *Node {
     return @as(*Node, @ptrCast(e));
+}
+
+// TokenList
+pub const TokenList = c.dom_tokenlist;
+
+pub fn tokenListCreate(elt: *Element, attr: []const u8) !*TokenList {
+    var list: ?*TokenList = undefined;
+    const err = c.dom_tokenlist_create(elt, try strFromData(attr), &list);
+    try DOMErr(err);
+    return list.?;
+}
+
+pub fn tokenListGetLength(l: *TokenList) !u32 {
+    var res: u32 = undefined;
+    const err = c.dom_tokenlist_get_length(l, &res);
+    try DOMErr(err);
+    return res;
+}
+
+pub fn tokenListItem(l: *TokenList, index: u32) !?[]const u8 {
+    var res: ?*String = undefined;
+    const err = c._dom_tokenlist_item(l, index, &res);
+    try DOMErr(err);
+    if (res == null) return null;
+    return strToData(res.?);
+}
+
+pub fn tokenListContains(l: *TokenList, token: []const u8) !bool {
+    var res: bool = undefined;
+    const err = c.dom_tokenlist_contains(l, try strFromData(token), &res);
+    try DOMErr(err);
+    return res;
+}
+
+pub fn tokenListAdd(l: *TokenList, token: []const u8) !void {
+    const err = c.dom_tokenlist_add(l, try strFromData(token));
+    try DOMErr(err);
+}
+
+pub fn tokenListRemove(l: *TokenList, token: []const u8) !void {
+    const err = c.dom_tokenlist_remove(l, try strFromData(token));
+    try DOMErr(err);
+}
+
+pub fn tokenListGetValue(l: *TokenList) !?[]const u8 {
+    var res: ?*String = undefined;
+    const err = c.dom_tokenlist_get_value(l, &res);
+    try DOMErr(err);
+    if (res == null) return null;
+    return strToData(res.?);
 }
 
 // ElementHTML

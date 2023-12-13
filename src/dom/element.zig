@@ -25,8 +25,48 @@ pub const Element = struct {
     // JS funcs
     // --------
 
+    pub fn get_namespaceURI(self: *parser.Element) !?[]const u8 {
+        return try parser.nodeGetNamespace(parser.elementToNode(self));
+    }
+
+    pub fn get_prefix(self: *parser.Element) !?[]const u8 {
+        return try parser.nodeGetPrefix(parser.elementToNode(self));
+    }
+
     pub fn get_localName(self: *parser.Element) ![]const u8 {
-        return try parser.elementLocalName(self);
+        return try parser.nodeLocalName(parser.elementToNode(self));
+    }
+
+    pub fn get_tagName(self: *parser.Element) ![]const u8 {
+        return try parser.nodeName(parser.elementToNode(self));
+    }
+
+    pub fn get_id(self: *parser.Element) ![]const u8 {
+        return try parser.elementGetAttribute(self, "id") orelse "";
+    }
+
+    pub fn set_id(self: *parser.Element, id: []const u8) !void {
+        return try parser.elementSetAttribute(self, "id", id);
+    }
+
+    pub fn get_className(self: *parser.Element) ![]const u8 {
+        return try parser.elementGetAttribute(self, "class") orelse "";
+    }
+
+    pub fn set_className(self: *parser.Element, class: []const u8) !void {
+        return try parser.elementSetAttribute(self, "class", class);
+    }
+
+    pub fn get_slot(self: *parser.Element) ![]const u8 {
+        return try parser.elementGetAttribute(self, "slot") orelse "";
+    }
+
+    pub fn set_slot(self: *parser.Element, slot: []const u8) !void {
+        return try parser.elementSetAttribute(self, "slot", slot);
+    }
+
+    pub fn get_classList(self: *parser.Element) !*parser.TokenList {
+        return try parser.tokenListCreate(self, "class");
     }
 
     pub fn get_attributes(self: *parser.Element) !*parser.NamedNodeMap {
@@ -92,6 +132,32 @@ pub fn testExecFn(
     js_env: *jsruntime.Env,
     comptime _: []jsruntime.API,
 ) !void {
+    var getters = [_]Case{
+        .{ .src = "let g = document.getElementById('content')", .ex = "undefined" },
+        .{ .src = "g.namespaceURI", .ex = "http://www.w3.org/1999/xhtml" },
+        .{ .src = "g.prefix", .ex = "null" },
+        .{ .src = "g.localName", .ex = "div" },
+        .{ .src = "g.tagName", .ex = "DIV" },
+    };
+    try checkCases(js_env, &getters);
+
+    var gettersetters = [_]Case{
+        .{ .src = "let gs = document.getElementById('content')", .ex = "undefined" },
+        .{ .src = "gs.id", .ex = "content" },
+        .{ .src = "gs.id = 'foo'", .ex = "foo" },
+        .{ .src = "gs.id", .ex = "foo" },
+        .{ .src = "gs.id = 'content'", .ex = "content" },
+        .{ .src = "gs.className", .ex = "" },
+        .{ .src = "let gs2 = document.getElementById('para-empty')", .ex = "undefined" },
+        .{ .src = "gs2.className", .ex = "ok empty" },
+        .{ .src = "gs2.className = 'foo bar baz'", .ex = "foo bar baz" },
+        .{ .src = "gs2.className", .ex = "foo bar baz" },
+        .{ .src = "gs2.className = 'ok empty'", .ex = "ok empty" },
+        .{ .src = "let cl = gs2.classList", .ex = "undefined" },
+        .{ .src = "cl.length", .ex = "2" },
+    };
+    try checkCases(js_env, &gettersetters);
+
     var attribute = [_]Case{
         .{ .src = "let a = document.getElementById('content')", .ex = "undefined" },
         .{ .src = "a.hasAttributes()", .ex = "true" },
