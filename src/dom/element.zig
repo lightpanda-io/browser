@@ -157,6 +157,26 @@ pub const Element = struct {
         return try collection.HTMLCollectionChildren(parser.elementToNode(self), false);
     }
 
+    pub fn get_firstElementChild(self: *parser.Element) !?Union {
+        var children = try get_children(self);
+        return try children._item(0);
+    }
+
+    pub fn get_lastElementChild(self: *parser.Element) !?Union {
+        // TODO we could check the last child node first, if it's an element,
+        // we can return it directly instead of looping twice over the
+        // children.
+        var children = try get_children(self);
+        const ln = try children.get_length();
+        if (ln == 0) return null;
+        return try children._item(ln - 1);
+    }
+
+    pub fn get_childElementCount(self: *parser.Element) !u32 {
+        var children = try get_children(self);
+        return try children.get_length();
+    }
+
     pub fn deinit(_: *parser.Element, _: std.mem.Allocator) void {}
 };
 
@@ -228,4 +248,13 @@ pub fn testExecFn(
         .{ .src = "b.hasAttribute('foo')", .ex = "false" },
     };
     try checkCases(js_env, &toggleAttr);
+
+    var parentNode = [_]Case{
+        .{ .src = "let c = document.getElementById('content')", .ex = "undefined" },
+        .{ .src = "c.children.length", .ex = "3" },
+        .{ .src = "c.firstElementChild.nodeName", .ex = "A" },
+        .{ .src = "c.lastElementChild.nodeName", .ex = "P" },
+        .{ .src = "c.childElementCount", .ex = "3" },
+    };
+    try checkCases(js_env, &parentNode);
 }
