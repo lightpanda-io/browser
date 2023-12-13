@@ -5,6 +5,7 @@ const parser = @import("../netsurf.zig");
 const jsruntime = @import("jsruntime");
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
+const Variadic = jsruntime.Variadic;
 
 const collection = @import("html_collection.zig");
 
@@ -281,6 +282,39 @@ pub const Element = struct {
         return list;
     }
 
+    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
+    // function must accept either node or string.
+    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
+    pub fn _prepend(self: *parser.Element, nodes: ?Variadic(*parser.Node)) !void {
+        if (nodes == null) return;
+        if (nodes.?.slice.len == 0) return;
+        const nself = parser.elementToNode(self);
+        const first = try parser.nodeFirstChild(nself);
+
+        if (first == null) {
+            for (nodes.?.slice) |node| {
+                _ = try parser.nodeAppendChild(nself, node);
+            }
+            return;
+        }
+
+        for (nodes.?.slice) |node| {
+            _ = try parser.nodeInsertBefore(nself, first.?, node);
+        }
+    }
+
+    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
+    // function must accept either node or string.
+    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
+    pub fn _append(self: *parser.Element, nodes: ?Variadic(*parser.Node)) !void {
+        if (nodes == null) return;
+        if (nodes.?.slice.len == 0) return;
+        const nself = parser.elementToNode(self);
+        for (nodes.?.slice) |node| {
+            _ = try parser.nodeAppendChild(nself, node);
+        }
+    }
+
     pub fn deinit(_: *parser.Element, _: std.mem.Allocator) void {}
 };
 
@@ -358,6 +392,9 @@ pub fn testExecFn(
         .{ .src = "c.firstElementChild.nodeName", .ex = "A" },
         .{ .src = "c.lastElementChild.nodeName", .ex = "P" },
         .{ .src = "c.childElementCount", .ex = "3" },
+
+        .{ .src = "c.prepend(document.createTextNode('foo'))", .ex = "undefined" },
+        .{ .src = "c.append(document.createTextNode('bar'))", .ex = "undefined" },
     };
     try checkCases(js_env, &parentNode);
 
