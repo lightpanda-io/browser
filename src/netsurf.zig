@@ -647,6 +647,13 @@ pub fn nodeHasChildNodes(node: *Node) !bool {
     return res;
 }
 
+pub fn nodeGetChildNodes(node: *Node) !*NodeList {
+    var res: ?*NodeList = undefined;
+    const err = nodeVtable(node).dom_node_get_child_nodes.?(node, &res);
+    try DOMErr(err);
+    return res.?;
+}
+
 pub fn nodeInsertBefore(node: *Node, new_node: *Node, ref_node: *Node) !*Node {
     var res: ?*Node = undefined;
     const err = nodeVtable(node).dom_node_insert_before.?(node, new_node, ref_node, &res);
