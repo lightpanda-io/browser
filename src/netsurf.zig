@@ -356,6 +356,30 @@ pub const NodeType = enum(u4) {
 // NodeList
 pub const NodeList = c.dom_nodelist;
 
+pub const NodeListType = enum(c_uint) {
+    query = 5,
+};
+
+// create reference to external libdom private function manually instead of
+// using cimport.
+// zig translate-c is unable to generate this declaration, idk why.
+pub extern fn _dom_nodelist_create(
+    document: ?*Document,
+    nltype: c_uint,
+    owner: ?*Node,
+    tagname: [*c]String,
+    ns: [*c]String,
+    localname: [*c]String,
+    list: [*c]?*NodeList,
+) DOMException;
+
+pub fn nodeListCreate(doc: ?*Document, nltype: NodeListType, root: *Node) !*NodeList {
+    var res: ?*NodeList = undefined;
+    const err = _dom_nodelist_create(doc, @intFromEnum(nltype), root, null, null, null, &res);
+    try DOMErr(err);
+    return res.?;
+}
+
 pub fn nodeListLength(nodeList: *NodeList) !u32 {
     var ln: u32 = undefined;
     const err = c.dom_nodelist_get_length(nodeList, &ln);
