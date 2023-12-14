@@ -9,6 +9,7 @@ const checkCases = jsruntime.test_utils.checkCases;
 const collection = @import("html_collection.zig");
 
 const Node = @import("node.zig").Node;
+const NodeList = @import("nodelist.zig").NodeList;
 const HTMLElem = @import("../html/elements.zig");
 pub const Union = @import("../html/elements.zig").Union;
 
