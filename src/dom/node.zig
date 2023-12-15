@@ -200,7 +200,7 @@ pub const Node = struct {
 
         var n = try parser.nodeFirstChild(self) orelse return list;
         while (true) {
-            try list.append(n);
+            try list.append(alloc, n);
             n = try parser.nodeNextSibling(n) orelse return list;
         }
     }

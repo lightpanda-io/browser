@@ -247,7 +247,7 @@ pub const Element = struct {
                 if (try parser.nodeType(next.?) != .element) {
                     continue;
                 }
-                try list.append(next.?);
+                try list.append(alloc, next.?);
             }
         }
 
@@ -256,7 +256,7 @@ pub const Element = struct {
 
         // walk over the node tree fo find the node by id.
         const n = try getElementById(self, selectors[1..]) orelse return list;
-        try list.append(n);
+        try list.append(alloc, n);
 
         return list;
     }

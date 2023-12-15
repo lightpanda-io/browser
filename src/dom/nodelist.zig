@@ -18,14 +18,14 @@ pub const NodeList = struct {
     pub const mem_guarantied = true;
     pub const Exception = DOMException;
 
-    const NodesArrayList = std.ArrayList(*parser.Node);
+    const NodesArrayList = std.ArrayListUnmanaged(*parser.Node);
 
     nodes: NodesArrayList,
 
     pub fn init(alloc: std.mem.Allocator) !*NodeList {
         const list = try alloc.create(NodeList);
         list.* = NodeList{
-            .nodes = NodesArrayList.init(alloc),
+            .nodes = NodesArrayList{},
         };
 
         return list;
@@ -33,12 +33,12 @@ pub const NodeList = struct {
 
     pub fn deinit(self: *NodeList, alloc: std.mem.Allocator) void {
         // TODO unref all nodes
-        self.nodes.deinit();
+        self.nodes.deinit(alloc);
         alloc.destroy(self);
     }
 
-    pub fn append(self: *NodeList, node: *parser.Node) !void {
-        try self.nodes.append(node);
+    pub fn append(self: *NodeList, alloc: std.mem.Allocator, node: *parser.Node) !void {
+        try self.nodes.append(alloc, node);
     }
 
     pub fn get_length(self: *NodeList) u32 {
