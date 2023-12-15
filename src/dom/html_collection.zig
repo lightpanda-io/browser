@@ -19,14 +19,16 @@ const Matcher = union(enum) {
     pub fn match(self: Matcher, node: *parser.Node) !bool {
         switch (self) {
             inline .matchTrue => return true,
-            inline else => |case| return case.match(node),
+            inline .matchByTagName => |case| return case.match(node),
+            inline .matchByClassName => |case| return case.match(node),
         }
     }
 
     pub fn deinit(self: Matcher, alloc: std.mem.Allocator) void {
         switch (self) {
-            .matchTrue => return,
-            inline else => |case| return case.deinit(alloc),
+            inline .matchTrue => return,
+            inline .matchByTagName => |case| return case.deinit(alloc),
+            inline .matchByClassName => |case| return case.deinit(alloc),
         }
     }
 };
