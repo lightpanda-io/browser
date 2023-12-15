@@ -268,24 +268,17 @@ fn runSafe(
             continue;
         }
 
+        // append the test case to argv and pop it before next loop.
         argv.appendAssumeCapacity(tc);
         defer _ = argv.pop();
 
-        // TODO use std.ChildProcess.run after next zig upgrade.
-        var child = std.ChildProcess.init(argv.items, alloc);
-        child.stdin_behavior = .Ignore;
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Pipe;
-
-        var stdout = std.ArrayList(u8).init(alloc);
-        var stderr = std.ArrayList(u8).init(alloc);
-
-        try child.spawn();
-        try child.collectOutput(&stdout, &stderr, 1024 * 1024);
-        const term = try child.wait();
+        const run = try std.ChildProcess.run(.{
+            .allocator = alloc,
+            .argv = argv.items,
+        });
 
         var result: Result = undefined;
-        switch (term) {
+        switch (run.term) {
             .Exited => |v| {
                 if (v == 0) {
                     result = .pass;
@@ -313,7 +306,7 @@ fn runSafe(
                 var cases = [_]Case{.{
                     .pass = false,
                     .name = "crash",
-                    .message = stderr.items,
+                    .message = run.stderr,
                 }};
                 try output.append(Test{
                     .pass = false,
@@ -324,12 +317,12 @@ fn runSafe(
                 continue;
             }
 
-            const jp = try std.json.parseFromSlice([]Test, alloc, stdout.items, .{});
+            const jp = try std.json.parseFromSlice([]Test, alloc, run.stdout, .{});
             try output.appendSlice(jp.value);
             continue;
         }
 
-        std.debug.print("{s}\n", .{stderr.items});
+        std.debug.print("{s}\n", .{run.stderr});
     }
 
     if (out == .json) {
