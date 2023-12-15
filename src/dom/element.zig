@@ -181,17 +181,13 @@ pub const Element = struct {
     // https://dom.spec.whatwg.org/#interface-nondocumenttypechildnode
     pub fn get_previousElementSibling(self: *parser.Element) !?Union {
         const res = try parser.nodePreviousElementSibling(parser.elementToNode(self));
-        if (res == null) {
-            return null;
-        }
+        if (res == null) return null;
         return try HTMLElem.toInterface(HTMLElem.Union, res.?);
     }
 
     pub fn get_nextElementSibling(self: *parser.Element) !?Union {
         const res = try parser.nodeNextElementSibling(parser.elementToNode(self));
-        if (res == null) {
-            return null;
-        }
+        if (res == null) return null;
         return try HTMLElem.toInterface(HTMLElem.Union, res.?);
     }
 
