@@ -5,7 +5,7 @@ const jsruntime = @import("jsruntime");
 const generate = @import("generate.zig");
 
 const parser = @import("netsurf.zig");
-const DOM = @import("dom.zig");
+const apiweb = @import("apiweb.zig");
 
 const documentTestExecFn = @import("dom/document.zig").testExecFn;
 const HTMLDocumentTestExecFn = @import("html/document.zig").testExecFn;
@@ -21,7 +21,7 @@ const DOMTokenListExecFn = @import("dom/token_list.zig").testExecFn;
 const NodeListTestExecFn = @import("dom/nodelist.zig").testExecFn;
 const AttrTestExecFn = @import("dom/attribute.zig").testExecFn;
 
-pub const Types = jsruntime.reflect(DOM.Interfaces);
+pub const Types = jsruntime.reflect(apiweb.Interfaces);
 
 var doc: *parser.DocumentHTML = undefined;
 

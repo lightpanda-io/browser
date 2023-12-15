@@ -3,11 +3,11 @@ const std = @import("std");
 const jsruntime = @import("jsruntime");
 
 const parser = @import("netsurf.zig");
-const DOM = @import("dom.zig");
+const apiweb = @import("apiweb.zig");
 
 const html_test = @import("html_test.zig").html;
 
-pub const Types = jsruntime.reflect(DOM.Interfaces);
+pub const Types = jsruntime.reflect(apiweb.Interfaces);
 
 var doc: *parser.DocumentHTML = undefined;
 

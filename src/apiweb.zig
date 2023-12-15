@@ -4,6 +4,7 @@ const Console = @import("jsruntime").Console;
 
 const DOM = @import("dom/dom.zig");
 const HTML = @import("html/html.zig");
+const nav = @import("nav/nav.zig");
 
 pub const HTMLDocument = @import("html/document.zig").HTMLDocument;
 
@@ -12,4 +13,5 @@ pub const Interfaces = generate.Tuple(.{
     Console,
     DOM.Interfaces,
     HTML.Interfaces,
+    nav.Interfaces,
 });
