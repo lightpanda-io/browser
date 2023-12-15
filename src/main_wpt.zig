@@ -249,17 +249,15 @@ fn runSafe(
     const alloc = arena.allocator();
 
     const Result = enum {
-        pass,
-        fail,
+        success,
         crash,
     };
 
     var argv = try std.ArrayList([]const u8).initCapacity(alloc, 3);
     defer argv.deinit();
     argv.appendAssumeCapacity(execname);
-    if (out == .json) {
-        argv.appendAssumeCapacity("--json");
-    }
+    // always require json output to count test cases results
+    argv.appendAssumeCapacity("--json");
 
     var output = std.ArrayList(Test).init(alloc);
 
@@ -275,29 +273,40 @@ fn runSafe(
         const run = try std.ChildProcess.run(.{
             .allocator = alloc,
             .argv = argv.items,
+            .max_output_bytes = 1024 * 1024,
         });
 
-        var result: Result = undefined;
-        switch (run.term) {
-            .Exited => |v| {
-                if (v == 0) {
-                    result = .pass;
-                } else {
-                    result = .fail;
-                }
-            },
-            .Signal => result = .crash,
-            .Stopped => result = .crash,
-            .Unknown => result = .crash,
+        const result: Result = switch (run.term) {
+            .Exited => .success,
+            else => .crash,
+        };
+
+        // read the JSON result from stdout
+        var tests: []Test = undefined;
+        if (result != .crash) {
+            const parsed = try std.json.parseFromSlice([]Test, alloc, run.stdout, .{});
+            tests = parsed.value;
         }
 
         if (out == .summary) {
-            switch (result) {
-                .pass => std.debug.print("Pass", .{}),
-                .fail => std.debug.print("Fail", .{}),
-                .crash => std.debug.print("Crash", .{}),
+            defer std.debug.print("\t{s}\n", .{tc});
+            if (result == .crash) {
+                std.debug.print("Crash\t", .{});
+                continue;
             }
-            std.debug.print("\t{s}\n", .{tc});
+
+            // count results
+            var pass: u32 = 0;
+            var all: u32 = 0;
+            for (tests) |ttc| {
+                for (ttc.cases) |c| {
+                    all += 1;
+                    if (c.pass) pass += 1;
+                }
+            }
+            const status = if (pass == all) "Pass" else "Fail";
+            std.debug.print("{s} {d}/{d}", .{ status, pass, all });
+
             continue;
         }
 
@@ -317,8 +326,7 @@ fn runSafe(
                 continue;
             }
 
-            const jp = try std.json.parseFromSlice([]Test, alloc, run.stdout, .{});
-            try output.appendSlice(jp.value);
+            try output.appendSlice(tests);
             continue;
         }
 
