@@ -34,9 +34,10 @@ pub const Document = struct {
         return DOMImplementation{};
     }
 
-    pub fn get_documentElement(self: *parser.Document) !ElementUnion {
+    pub fn get_documentElement(self: *parser.Document) !?ElementUnion {
         const e = try parser.documentGetDocumentElement(self);
-        return try Element.toInterface(e);
+        if (e == null) return null;
+        return try Element.toInterface(e.?);
     }
 
     pub fn get_documentURI(self: *parser.Document) ![]const u8 {
@@ -105,12 +106,12 @@ pub const Document = struct {
         alloc: std.mem.Allocator,
         tag_name: []const u8,
     ) !collection.HTMLCollection {
-        const root = try parser.documentGetDocumentElement(self);
-        return try collection.HTMLCollectionByTagName(
-            alloc,
-            parser.elementToNode(root),
-            tag_name,
-        );
+        var elt: ?*parser.Node = null;
+        if (try parser.documentGetDocumentElement(self)) |root| {
+            elt = parser.elementToNode(root);
+        }
+
+        return try collection.HTMLCollectionByTagName(alloc, elt, tag_name, true);
     }
 
     pub fn _getElementsByClassName(
@@ -118,12 +119,12 @@ pub const Document = struct {
         alloc: std.mem.Allocator,
         classNames: []const u8,
     ) !collection.HTMLCollection {
-        const root = try parser.documentGetDocumentElement(self);
-        return try collection.HTMLCollectionByClassName(
-            alloc,
-            parser.elementToNode(root),
-            classNames,
-        );
+        var elt: ?*parser.Node = null;
+        if (try parser.documentGetDocumentElement(self)) |root| {
+            elt = parser.elementToNode(root);
+        }
+
+        return try collection.HTMLCollectionByClassName(alloc, elt, classNames, true);
     }
 
     pub fn _createDocumentFragment(self: *parser.Document) !*parser.DocumentFragment {
@@ -164,6 +165,31 @@ pub const Document = struct {
         return try parser.documentCreateAttributeNS(self, ns, qname);
     }
 
+    // ParentNode
+    // https://dom.spec.whatwg.org/#parentnode
+    pub fn get_children(self: *parser.Document) !collection.HTMLCollection {
+        var elt: ?*parser.Node = null;
+        if (try parser.documentGetDocumentElement(self)) |root| {
+            elt = parser.elementToNode(root);
+        }
+        return try collection.HTMLCollectionChildren(elt, true);
+    }
+
+    pub fn get_firstElementChild(self: *parser.Document) !?ElementUnion {
+        const elt = try parser.documentGetDocumentElement(self) orelse return null;
+        return try Element.toInterface(elt);
+    }
+
+    pub fn get_lastElementChild(self: *parser.Document) !?ElementUnion {
+        const elt = try parser.documentGetDocumentElement(self) orelse return null;
+        return try Element.toInterface(elt);
+    }
+
+    pub fn get_childElementCount(self: *parser.Document) !u32 {
+        _ = try parser.documentGetDocumentElement(self) orelse return 0;
+        return 1;
+    }
+
     pub fn deinit(_: *parser.Document, _: std.mem.Allocator) void {}
 };
 
@@ -179,6 +205,12 @@ pub fn testExecFn(
         .{ .src = "document.__proto__.__proto__.constructor.name", .ex = "Document" },
         .{ .src = "document.__proto__.__proto__.__proto__.constructor.name", .ex = "Node" },
         .{ .src = "document.__proto__.__proto__.__proto__.__proto__.constructor.name", .ex = "EventTarget" },
+
+        .{ .src = "let newdoc = new Document()", .ex = "undefined" },
+        .{ .src = "newdoc.documentElement", .ex = "null" },
+        .{ .src = "newdoc.children.length", .ex = "0" },
+        .{ .src = "newdoc.getElementsByTagName('*').length", .ex = "0" },
+        .{ .src = "newdoc.getElementsByTagName('*').item(0)", .ex = "null" },
     };
     try checkCases(js_env, &constructor);
 
@@ -305,6 +337,22 @@ pub fn testExecFn(
         .{ .src = "v.nodeName", .ex = "foo" },
     };
     try checkCases(js_env, &createAttr);
+
+    var parentNode = [_]Case{
+        .{ .src = "document.children.length", .ex = "1" },
+        .{ .src = "document.children.item(0).nodeName", .ex = "HTML" },
+        .{ .src = "document.firstElementChild.nodeName", .ex = "HTML" },
+        .{ .src = "document.lastElementChild.nodeName", .ex = "HTML" },
+        .{ .src = "document.childElementCount", .ex = "1" },
+
+        .{ .src = "let nd = new Document()", .ex = "undefined" },
+        .{ .src = "nd.children.length", .ex = "0" },
+        .{ .src = "nd.children.item(0)", .ex = "null" },
+        .{ .src = "nd.firstElementChild", .ex = "null" },
+        .{ .src = "nd.lastElementChild", .ex = "null" },
+        .{ .src = "nd.childElementCount", .ex = "0" },
+    };
+    try checkCases(js_env, &parentNode);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;

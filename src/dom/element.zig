@@ -6,6 +6,8 @@ const jsruntime = @import("jsruntime");
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 
+const collection = @import("html_collection.zig");
+
 const Node = @import("node.zig").Node;
 const HTMLElem = @import("../html/elements.zig");
 pub const Union = @import("../html/elements.zig").Union;
@@ -122,6 +124,60 @@ pub const Element = struct {
         // Return true.
         return true;
     }
+
+    pub fn _getElementsByTagName(
+        self: *parser.Element,
+        alloc: std.mem.Allocator,
+        tag_name: []const u8,
+    ) !collection.HTMLCollection {
+        return try collection.HTMLCollectionByTagName(
+            alloc,
+            parser.elementToNode(self),
+            tag_name,
+            false,
+        );
+    }
+
+    pub fn _getElementsByClassName(
+        self: *parser.Element,
+        alloc: std.mem.Allocator,
+        classNames: []const u8,
+    ) !collection.HTMLCollection {
+        return try collection.HTMLCollectionByClassName(
+            alloc,
+            parser.elementToNode(self),
+            classNames,
+            false,
+        );
+    }
+
+    // ParentNode
+    // https://dom.spec.whatwg.org/#parentnode
+    pub fn get_children(self: *parser.Element) !collection.HTMLCollection {
+        return try collection.HTMLCollectionChildren(parser.elementToNode(self), false);
+    }
+
+    pub fn get_firstElementChild(self: *parser.Element) !?Union {
+        var children = try get_children(self);
+        return try children._item(0);
+    }
+
+    pub fn get_lastElementChild(self: *parser.Element) !?Union {
+        // TODO we could check the last child node first, if it's an element,
+        // we can return it directly instead of looping twice over the
+        // children.
+        var children = try get_children(self);
+        const ln = try children.get_length();
+        if (ln == 0) return null;
+        return try children._item(ln - 1);
+    }
+
+    pub fn get_childElementCount(self: *parser.Element) !u32 {
+        var children = try get_children(self);
+        return try children.get_length();
+    }
+
+    pub fn deinit(_: *parser.Element, _: std.mem.Allocator) void {}
 };
 
 // Tests
@@ -192,4 +248,13 @@ pub fn testExecFn(
         .{ .src = "b.hasAttribute('foo')", .ex = "false" },
     };
     try checkCases(js_env, &toggleAttr);
+
+    var parentNode = [_]Case{
+        .{ .src = "let c = document.getElementById('content')", .ex = "undefined" },
+        .{ .src = "c.children.length", .ex = "3" },
+        .{ .src = "c.firstElementChild.nodeName", .ex = "A" },
+        .{ .src = "c.lastElementChild.nodeName", .ex = "P" },
+        .{ .src = "c.childElementCount", .ex = "3" },
+    };
+    try checkCases(js_env, &parentNode);
 }

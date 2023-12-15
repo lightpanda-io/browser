@@ -1150,10 +1150,11 @@ pub inline fn documentGetElementsByTagName(doc: *Document, tagname: []const u8) 
 }
 
 // documentGetDocumentElement returns the root document element.
-pub inline fn documentGetDocumentElement(doc: *Document) !*Element {
+pub inline fn documentGetDocumentElement(doc: *Document) !?*Element {
     var elem: ?*Element = undefined;
     const err = documentVtable(doc).dom_document_get_document_element.?(doc, &elem);
     try DOMErr(err);
+    if (elem == null) return null;
     return elem.?;
 }
 
