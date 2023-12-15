@@ -25,8 +25,6 @@ on:
     # see https://github.com/orgs/community/discussions/25722#discussioncomment-3248917
     types: [opened, synchronize, reopened, ready_for_review]
 
-    branches:
-      - main
     paths:
       - "src/**/*.zig"
       - "src/*.zig"
