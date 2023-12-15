@@ -191,7 +191,7 @@ pub const WalkerDepthFirst = struct {
 // WalkerChildren iterates over the root's children only.
 pub const WalkerChildren = struct {
     pub fn get_next(_: WalkerChildren, root: *parser.Node, cur: ?*parser.Node) !?*parser.Node {
-        // On wlak start, we return the first root's child.
+        // On walk start, we return the first root's child.
         if (cur == null) return try parser.nodeFirstChild(root);
 
         // If cur is root, then return null.
