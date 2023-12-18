@@ -194,7 +194,7 @@ pub const Document = struct {
 
     // TODO netsurf doesn't handle query selectors. We have to implement a
     // solution by ourselves.
-    // We handle only * and single id selector like `#foo`.
+    // For now we handle only * and single id selector like `#foo`.
     pub fn _querySelector(self: *parser.Document, selectors: []const u8) !?ElementUnion {
         if (selectors.len == 0) return null;
 
