@@ -356,10 +356,6 @@ pub const NodeType = enum(u4) {
 // NodeList
 pub const NodeList = c.dom_nodelist;
 
-pub const NodeListType = enum(c_uint) {
-    query = 5,
-};
-
 pub fn nodeListLength(nodeList: *NodeList) !u32 {
     var ln: u32 = undefined;
     const err = c.dom_nodelist_get_length(nodeList, &ln);
