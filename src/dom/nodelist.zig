@@ -22,19 +22,15 @@ pub const NodeList = struct {
 
     nodes: NodesArrayList,
 
-    pub fn init(alloc: std.mem.Allocator) !*NodeList {
-        const list = try alloc.create(NodeList);
-        list.* = NodeList{
+    pub fn init() !NodeList {
+        return NodeList{
             .nodes = NodesArrayList{},
         };
-
-        return list;
     }
 
     pub fn deinit(self: *NodeList, alloc: std.mem.Allocator) void {
         // TODO unref all nodes
         self.nodes.deinit(alloc);
-        alloc.destroy(self);
     }
 
     pub fn append(self: *NodeList, alloc: std.mem.Allocator, node: *parser.Node) !void {

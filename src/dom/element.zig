@@ -229,8 +229,8 @@ pub const Element = struct {
     // TODO netsurf doesn't handle query selectors. We have to implement a
     // solution by ourselves.
     // We handle only * and single id selector like `#foo`.
-    pub fn _querySelectorAll(self: *parser.Element, alloc: std.mem.Allocator, selectors: []const u8) !*NodeList {
-        const list = try NodeList.init(alloc);
+    pub fn _querySelectorAll(self: *parser.Element, alloc: std.mem.Allocator, selectors: []const u8) !NodeList {
+        var list = try NodeList.init();
         errdefer list.deinit(alloc);
 
         if (selectors.len == 0) return list;

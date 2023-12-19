@@ -194,8 +194,8 @@ pub const Node = struct {
         return try parser.nodeHasChildNodes(self);
     }
 
-    pub fn get_childNodes(self: *parser.Node, alloc: std.mem.Allocator) !*NodeList {
-        const list = try NodeList.init(alloc);
+    pub fn get_childNodes(self: *parser.Node, alloc: std.mem.Allocator) !NodeList {
+        var list = try NodeList.init();
         errdefer list.deinit(alloc);
 
         var n = try parser.nodeFirstChild(self) orelse return list;
