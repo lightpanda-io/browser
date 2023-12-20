@@ -50,11 +50,10 @@ pub fn main() !void {
     Browser.initVM();
     defer Browser.deinitVM();
 
-    var browser = Browser.init(allocator);
+    var browser = try Browser.init(allocator);
     defer browser.deinit();
 
     var page = try browser.currentSession().createPage();
-    defer page.deinit();
-
+    defer page.end();
     try page.navigate(url);
 }

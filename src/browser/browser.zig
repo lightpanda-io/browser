@@ -15,9 +15,13 @@ const Window = @import("../nav/window.zig").Window;
 
 const log = std.log.scoped(.lpd_browser);
 
+// Browser is an instance of the browser.
+// You can create multiple browser instances.
+// It contains only one session but initVM() and deinitVM() must be called only
+// once per main.
 pub const Browser = struct {
     allocator: std.mem.Allocator,
-    session: Session = undefined,
+    session: *Session = undefined,
 
     var vm: jsruntime.VM = undefined;
     pub fn initVM() void {
@@ -27,74 +31,93 @@ pub const Browser = struct {
         vm.deinit();
     }
 
-    pub fn init(allocator: std.mem.Allocator) Browser {
-        var b = Browser{ .allocator = allocator };
-        b.session = try b.createSession(null);
-
-        return b;
+    pub fn init(allocator: std.mem.Allocator) !Browser {
+        return Browser{
+            .allocator = allocator,
+            .session = try Session.init(allocator, "about:blank"),
+        };
     }
 
     pub fn deinit(self: *Browser) void {
-        var session = self.session;
-        session.deinit();
+        self.session.deinit();
+        self.allocator.destroy(self.session);
     }
 
     pub fn currentSession(self: *Browser) *Session {
-        return &self.session;
-    }
-
-    fn createSession(self: *Browser, uri: ?[]const u8) !Session {
-        return Session.init(self.allocator, uri orelse "about:blank");
+        return self.session;
     }
 };
 
+// Session is like a browser's tab.
+// It owns the js env and the loader and an allocator arena for all the pages
+// of the session.
+// You can create successively multiple pages for a session, but you must
+// deinit a page before running another one.
 pub const Session = struct {
-    allocator: std.mem.Allocator,
+    arena: std.heap.ArenaAllocator,
     uri: []const u8,
-    // TODO handle proxy
-    loader: Loader,
+    tpls: [apis.len]TPL = undefined,
 
-    fn init(allocator: std.mem.Allocator, uri: []const u8) Session {
-        return Session{
-            .allocator = allocator,
+    // TODO handle proxy
+    loader: Loader = undefined,
+    env: Env = undefined,
+    loop: Loop = undefined,
+
+    fn init(allocator: std.mem.Allocator, uri: []const u8) !*Session {
+        var self = try allocator.create(Session);
+        self.* = Session{
             .uri = uri,
-            .loader = Loader.init(allocator),
+            .arena = std.heap.ArenaAllocator.init(allocator),
         };
+
+        const aallocator = self.arena.allocator();
+
+        self.loader = Loader.init(aallocator);
+        self.loop = try Loop.init(aallocator);
+        self.env = try Env.init(aallocator, &self.loop);
+
+        try self.env.load(apis, &self.tpls);
+
+        return self;
     }
 
     fn deinit(self: *Session) void {
         self.loader.deinit();
-    }
-
-    pub fn createPage(self: *Session) !Page {
-        return Page.init(self);
-    }
-};
-
-pub const Page = struct {
-    arena: std.heap.ArenaAllocator,
-    session: *Session,
-    env: Env,
-
-    fn init(session: *Session) Page {
-        return Page{
-            .session = session,
-            .arena = std.heap.ArenaAllocator.init(session.allocator),
-            .env = undefined,
-        };
-    }
-
-    pub fn deinit(self: *Page) void {
+        self.loop.deinit();
+        self.env.deinit();
         self.arena.deinit();
     }
 
-    pub fn navigate(self: *Page, uri: []const u8) !void {
-        const allocator = self.arena.allocator();
+    pub fn createPage(self: *Session) !Page {
+        return Page.init(self.arena.allocator(), &self.loader, &self.env);
+    }
+};
 
+// Page navigates to an url.
+// You can navigates multiple urls with the same page, but you have to call
+// end() to stop the previous navigation before starting a new one.
+pub const Page = struct {
+    allocator: std.mem.Allocator,
+    loader: *Loader,
+    env: *Env,
+
+    fn init(allocator: std.mem.Allocator, loader: *Loader, env: *Env) Page {
+        return Page{
+            .allocator = allocator,
+            .loader = loader,
+            .env = env,
+        };
+    }
+
+    pub fn end(self: *Page) void {
+        self.env.stop();
+    }
+
+    pub fn navigate(self: *Page, uri: []const u8) !void {
         log.debug("starting GET {s}", .{uri});
 
         // load the data
-        var result = try self.session.loader.fetch(allocator, uri);
+        var result = try self.loader.fetch(self.allocator, uri);
         defer result.deinit();
 
         log.info("GET {s} {d}", .{ uri, result.status });
@@ -110,27 +133,12 @@ pub const Page = struct {
 
         // document
         log.debug("parse html", .{});
-        const html_doc = try parser.documentHTMLParseFromStrAlloc(allocator, result.body.?);
+        const html_doc = try parser.documentHTMLParseFromStrAlloc(self.allocator, result.body.?);
         const doc = parser.documentHTMLToDocument(html_doc);
-
-        log.debug("init loop", .{});
-        var loop = try Loop.init(allocator);
-        defer loop.deinit();
-
-        // create JS env
-        log.debug("init js env", .{});
-        self.env = try Env.init(allocator, &loop);
-        defer self.env.deinit();
-
-        // load APIs in JS env
-        log.debug("load js apis", .{});
-        var tpls: [apis.len]TPL = undefined;
-        try self.env.load(apis, &tpls);
 
         // start JS env
         log.debug("start js env", .{});
-        try self.env.start(allocator, apis);
-        defer self.env.stop();
+        try self.env.start(self.allocator, apis);
 
         // add global objects
         log.debug("setup global env", .{});
@@ -142,12 +150,3 @@ pub const Page = struct {
         try self.env.addObject(apis, doc, "document");
     }
 };
-
-test "create page" {
-    const allocator = std.testing.allocator;
-    var browser = Browser.init(allocator);
-    defer browser.deinit();
-
-    var page = try browser.currentSession().createPage();
-    defer page.deinit();
-}
