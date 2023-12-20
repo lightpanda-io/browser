@@ -19,6 +19,14 @@ pub const Browser = struct {
     allocator: std.mem.Allocator,
     session: Session = undefined,
 
+    var vm: jsruntime.VM = undefined;
+    pub fn initVM() void {
+        vm = jsruntime.VM.init();
+    }
+    pub fn deinitVM() void {
+        vm.deinit();
+    }
+
     pub fn init(allocator: std.mem.Allocator) Browser {
         var b = Browser{ .allocator = allocator };
         b.session = try b.createSession(null);

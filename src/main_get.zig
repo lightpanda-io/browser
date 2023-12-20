@@ -1,5 +1,5 @@
 const std = @import("std");
-const b = @import("browser/browser.zig");
+const Browser = @import("browser/browser.zig").Browser;
 
 pub const std_options = struct {
     pub const log_level = .debug;
@@ -47,7 +47,10 @@ pub fn main() !void {
         std.os.exit(1);
     }
 
-    var browser = b.Browser.init(allocator);
+    Browser.initVM();
+    defer Browser.deinitVM();
+
+    var browser = Browser.init(allocator);
     defer browser.deinit();
 
     var page = try browser.currentSession().createPage();
