@@ -63,11 +63,14 @@ pub const Session = struct {
     env: Env = undefined,
     loop: Loop = undefined,
 
+    window: Window,
+
     fn init(allocator: std.mem.Allocator, uri: []const u8) !*Session {
         var self = try allocator.create(Session);
         self.* = Session{
             .uri = uri,
             .arena = std.heap.ArenaAllocator.init(allocator),
+            .window = Window.create(null),
         };
 
         const aallocator = self.arena.allocator();
@@ -89,7 +92,12 @@ pub const Session = struct {
     }
 
     pub fn createPage(self: *Session) !Page {
-        return Page.init(self.arena.allocator(), &self.loader, &self.env);
+        return Page.init(
+            self.arena.allocator(),
+            &self.loader,
+            &self.env,
+            &self.window,
+        );
     }
 };
 
@@ -100,12 +108,19 @@ pub const Page = struct {
     allocator: std.mem.Allocator,
     loader: *Loader,
     env: *Env,
+    window: *Window,
 
-    fn init(allocator: std.mem.Allocator, loader: *Loader, env: *Env) Page {
+    fn init(
+        allocator: std.mem.Allocator,
+        loader: *Loader,
+        env: *Env,
+        window: *Window,
+    ) Page {
         return Page{
             .allocator = allocator,
             .loader = loader,
             .env = env,
+            .window = window,
         };
     }
 
@@ -135,8 +150,11 @@ pub const Page = struct {
 
         // document
         log.debug("parse html", .{});
+        // TODO inject the URL to the document.
         const html_doc = try parser.documentHTMLParseFromStrAlloc(self.allocator, result.body.?);
         const doc = parser.documentHTMLToDocument(html_doc);
+
+        self.window.replaceDocument(doc);
 
         // start JS env
         log.debug("start js env", .{});
@@ -144,18 +162,8 @@ pub const Page = struct {
 
         // add global objects
         log.debug("setup global env", .{});
-        const window = Window.create(doc, null);
-
-        // TODO we must share the same pointer between window and self.
-        // once https://github.com/lightpanda-io/jsruntime-lib/issues/171 is
-        // done, replace the 2 lines with:
-        //
-        // const obj = try js_env.addObject(apis, window, "window");
-        // try js_env.attachObject(try js_env.getGlobal(), "self", obj);
-        //
-        try self.env.addObject(apis, window, "window");
-        try self.env.addObject(apis, window, "self");
-
+        try self.env.addObject(apis, self.window, "window");
+        try self.env.addObject(apis, self.window, "self");
         try self.env.addObject(apis, doc, "document");
     }
 };
