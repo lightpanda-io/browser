@@ -12,6 +12,7 @@ const apiweb = @import("../apiweb.zig");
 const apis = jsruntime.compile(apiweb.Interfaces);
 
 const Window = @import("../nav/window.zig").Window;
+const Walker = @import("../dom/html_collection.zig").WalkerDepthFirst;
 
 const FetchResult = std.http.Client.FetchResult;
 
@@ -164,7 +165,7 @@ pub const Page = struct {
         // TODO set document.readyState to interactive
         // https://html.spec.whatwg.org/#reporting-document-loading-status
 
-        // TODO inject the URL to the document.
+        // TODO inject the URL to the document including the fragment.
         // TODO set the referrer to the document.
 
         self.window.replaceDocument(doc);
@@ -181,13 +182,154 @@ pub const Page = struct {
         try self.env.addObject(apis, self.window, "self");
         try self.env.addObject(apis, doc, "document");
 
-        // https://html.spec.whatwg.org/#process-link-headers
+        // browse the DOM tree to retrieve scripts
+        var sasync = std.ArrayList(*parser.Element).init(self.allocator);
+        defer sasync.deinit();
+
+        const root = try parser.documentGetDocumentElement(doc) orelse return; // TODO send loaded event in this case?
+        const walker = Walker{};
+        var next: ?*parser.Node = null;
+        while (true) {
+            next = try walker.get_next(parser.elementToNode(root), next) orelse break;
+
+            // ignore non-elements nodes.
+            if (try parser.nodeType(next.?) != .element) {
+                continue;
+            }
+
+            const e = parser.nodeToElement(next.?);
+            const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(e)));
+            switch (tag) {
+                .script => {
+                    // ignore non-js script.
+                    // > type
+                    // > Attribute is not set (default), an empty string, or a JavaScript MIME
+                    // > type indicates that the script is a "classic script", containing
+                    // > JavaScript code.
+                    // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#attribute_is_not_set_default_an_empty_string_or_a_javascript_mime_type
+                    const stype = try parser.elementGetAttribute(e, "type");
+                    if (!isJS(stype)) {
+                        continue;
+                    }
+
+                    // Ignore the defer attribute b/c we analyze all script
+                    // after the document has been parsed.
+                    // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#defer
+
+                    // TODO use fetchpriority
+                    // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#fetchpriority
+
+                    // > async
+                    // > For classic scripts, if the async attribute is present,
+                    // > then the classic script will be fetched in parallel to
+                    // > parsing and evaluated as soon as it is available.
+                    // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#async
+                    if (try parser.elementGetAttribute(e, "async") != null) {
+                        try sasync.append(e);
+                        continue;
+                    }
+
+                    // TODO handle for attribute
+                    // TODO handle event attribute
+
+                    // TODO defer
+                    // > This Boolean attribute is set to indicate to a browser
+                    // > that the script is meant to be executed after the
+                    // > document has been parsed, but before firing
+                    // > DOMContentLoaded.
+                    // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#defer
+                    // defer allow us to load a script w/o blocking the rest of
+                    // evaluations.
+
+                    // > Scripts without async, defer or type="module"
+                    // > attributes, as well as inline scripts without the
+                    // > type="module" attribute, are fetched and executed
+                    // > immediately before the browser continues to parse the
+                    // > page.
+                    // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#notes
+                    try self.evalScript(e);
+                },
+                else => continue,
+            }
+        }
+
+        // TODO wait for deferred scripts
 
         // TODO dispatch DOMContentLoaded before the transition to "complete",
         // at the point where all subresources apart from async script elements
         // have loaded.
         // https://html.spec.whatwg.org/#reporting-document-loading-status
 
+        // eval async scripts.
+        for (sasync.items) |e| {
+            try self.evalScript(e);
+        }
+
+        // TODO wait for async scripts
+
         // TODO set document.readyState to complete
+    }
+
+    // evalScript evaluates the src in priority.
+    // if no src is present, we evaluate the text source.
+    // https://html.spec.whatwg.org/multipage/scripting.html#script-processing-model
+    fn evalScript(self: *Page, e: *parser.Element) !void {
+        // https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-classic-script
+        const opt_src = try parser.elementGetAttribute(e, "src");
+        if (opt_src) |src| {
+            // TODO resolve the url.
+            log.info("starting GET {s}", .{src});
+            var fetchres = try self.loader.fetch(self.allocator, src);
+            defer fetchres.deinit();
+
+            log.info("GET {s}: {d}", .{ src, fetchres.status });
+
+            if (fetchres.status != .ok) {
+                return error.BadStatusCode;
+            }
+
+            // TODO check content-type
+
+            // check no body
+            // TODO If el's result is null, then fire an event named error at
+            // el, and return.
+            if (fetchres.body == null) return;
+
+            var res = jsruntime.JSResult{};
+            try self.env.run(self.allocator, fetchres.body.?, src, &res, null);
+            defer res.deinit(self.allocator);
+
+            log.debug("eval script {s}: {s}", .{ src, res.result });
+
+            // TODO If el's from an external file is true, then fire an event
+            // named load at el.
+
+            return;
+        }
+
+        const opt_text = try parser.nodeTextContent(parser.elementToNode(e));
+        if (opt_text) |text| {
+            // TODO handle charset attribute
+            var res = jsruntime.JSResult{};
+            try self.env.run(self.allocator, text, "", &res, null);
+            defer res.deinit(self.allocator);
+
+            log.debug("eval script: {s}", .{res.result});
+
+            return;
+        }
+
+        // nothing has been loaded.
+        // TODO If el's result is null, then fire an event named error at
+        // el, and return.
+    }
+
+    // > type
+    // > Attribute is not set (default), an empty string, or a JavaScript MIME
+    // > type indicates that the script is a "classic script", containing
+    // > JavaScript code.
+    // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#attribute_is_not_set_default_an_empty_string_or_a_javascript_mime_type
+    fn isJS(stype: ?[]const u8) bool {
+        return stype == null or stype.?.len == 0 or std.mem.eql(u8, stype.?, "application/javascript") or !std.mem.eql(u8, stype.?, "module");
     }
 };
