@@ -13,6 +13,8 @@ const apis = jsruntime.compile(apiweb.Interfaces);
 
 const Window = @import("../nav/window.zig").Window;
 
+const FetchResult = std.http.Client.FetchResult;
+
 const log = std.log.scoped(.lpd_browser);
 
 // Browser is an instance of the browser.
@@ -126,8 +128,10 @@ pub const Page = struct {
 
     pub fn end(self: *Page) void {
         self.env.stop();
+        // TODO unload document: https://html.spec.whatwg.org/#unloading-documents
     }
 
+    // spec reference: https://html.spec.whatwg.org/#document-lifecycle
     pub fn navigate(self: *Page, uri: []const u8) !void {
         log.debug("starting GET {s}", .{uri});
 
@@ -144,17 +148,28 @@ pub const Page = struct {
 
         if (result.body == null) return error.NoBody;
 
-        // TODO check content-type
-
         // TODO handle charset
+        // https://html.spec.whatwg.org/#content-type
 
-        // document
+        // TODO check content-type
+        try self.loadHTMLDoc(&result);
+    }
+
+    // https://html.spec.whatwg.org/#read-html
+    fn loadHTMLDoc(self: *Page, result: *FetchResult) !void {
         log.debug("parse html", .{});
-        // TODO inject the URL to the document.
         const html_doc = try parser.documentHTMLParseFromStrAlloc(self.allocator, result.body.?);
         const doc = parser.documentHTMLToDocument(html_doc);
 
+        // TODO set document.readyState to interactive
+        // https://html.spec.whatwg.org/#reporting-document-loading-status
+
+        // TODO inject the URL to the document.
+        // TODO set the referrer to the document.
+
         self.window.replaceDocument(doc);
+
+        // https://html.spec.whatwg.org/#read-html
 
         // start JS env
         log.debug("start js env", .{});
@@ -165,5 +180,14 @@ pub const Page = struct {
         try self.env.addObject(apis, self.window, "window");
         try self.env.addObject(apis, self.window, "self");
         try self.env.addObject(apis, doc, "document");
+
+        // https://html.spec.whatwg.org/#process-link-headers
+
+        // TODO dispatch DOMContentLoaded before the transition to "complete",
+        // at the point where all subresources apart from async script elements
+        // have loaded.
+        // https://html.spec.whatwg.org/#reporting-document-loading-status
+
+        // TODO set document.readyState to complete
     }
 };
