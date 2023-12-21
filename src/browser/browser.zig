@@ -116,6 +116,8 @@ pub const Page = struct {
     pub fn navigate(self: *Page, uri: []const u8) !void {
         log.debug("starting GET {s}", .{uri});
 
+        // TODO handle fragment in url.
+
         // load the data
         var result = try self.loader.fetch(self.allocator, uri);
         defer result.deinit();
