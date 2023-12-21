@@ -17,15 +17,15 @@ pub const Window = struct {
         };
     }
 
-    pub fn get_window(self: *Window) *parser.Document {
+    pub fn get_window(self: *Window) *Window {
         return self;
     }
 
-    pub fn get_self(self: *Window) *parser.Document {
+    pub fn get_self(self: *Window) *Window {
         return self;
     }
 
-    pub fn get_parent(self: *Window) *parser.Document {
+    pub fn get_parent(self: *Window) *Window {
         return self;
     }
 

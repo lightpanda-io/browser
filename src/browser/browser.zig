@@ -143,10 +143,9 @@ pub const Page = struct {
         // add global objects
         log.debug("setup global env", .{});
         const window = Window.create(doc, null);
-        _ = window;
         // TODO should'nt we share the same pointer between instances of window?
-        // try js_env.addObject(apis, window, "self");
-        // try js_env.addObject(apis, window, "window");
+        try self.env.addObject(apis, window, "self");
+        try self.env.addObject(apis, window, "window");
         try self.env.addObject(apis, doc, "document");
     }
 };
