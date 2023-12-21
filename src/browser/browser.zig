@@ -143,9 +143,17 @@ pub const Page = struct {
         // add global objects
         log.debug("setup global env", .{});
         const window = Window.create(doc, null);
-        // TODO should'nt we share the same pointer between instances of window?
-        try self.env.addObject(apis, window, "self");
+
+        // TODO we must share the same pointer between window and self.
+        // once https://github.com/lightpanda-io/jsruntime-lib/issues/171 is
+        // done, replace the 2 lines with:
+        //
+        // const obj = try js_env.addObject(apis, window, "window");
+        // try js_env.attachObject(try js_env.getGlobal(), "self", obj);
+        //
         try self.env.addObject(apis, window, "window");
+        try self.env.addObject(apis, window, "self");
+
         try self.env.addObject(apis, doc, "document");
     }
 };
