@@ -262,7 +262,7 @@ pub const Page = struct {
                     // > immediately before the browser continues to parse the
                     // > page.
                     // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#notes
-                    try self.evalScript(e);
+                    self.evalScript(e) catch |err| log.warn("evaljs: {any}", .{err});
                 },
                 else => continue,
             }
@@ -277,7 +277,7 @@ pub const Page = struct {
 
         // eval async scripts.
         for (sasync.items) |e| {
-            try self.evalScript(e);
+            self.evalScript(e) catch |err| log.warn("evaljs: {any}", .{err});
         }
 
         // TODO wait for async scripts
