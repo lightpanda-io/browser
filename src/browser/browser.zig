@@ -2,6 +2,7 @@ const std = @import("std");
 
 const parser = @import("../netsurf.zig");
 const Loader = @import("loader.zig").Loader;
+const Mime = @import("mime.zig");
 
 const jsruntime = @import("jsruntime");
 const Loop = jsruntime.Loop;
@@ -166,9 +167,19 @@ pub const Page = struct {
 
         // TODO handle charset
         // https://html.spec.whatwg.org/#content-type
-
-        // TODO check content-type
-        try self.loadHTMLDoc(&result);
+        const ct = result.headers.getFirstValue("Content-Type") orelse {
+            // no content type in HTTP headers.
+            // TODO try to sniff mime type from the body.
+            log.info("no content-type HTTP header", .{});
+            return;
+        };
+        const mime = try Mime.parse(ct);
+        if (mime.eql(Mime.HTML)) {
+            // TODO check content-type
+            try self.loadHTMLDoc(&result);
+        } else {
+            log.info("none HTML document: {s}", .{ct});
+        }
     }
 
     // https://html.spec.whatwg.org/#read-html

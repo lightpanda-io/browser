@@ -14,6 +14,9 @@ mtype: []const u8,
 msubtype: []const u8,
 params: []const u8,
 
+pub const HTML = Self{ .mtype = "text", .msubtype = "html", .params = "" };
+pub const Javascript = Self{ .mtype = "application", .msubtype = "javascript", .params = "" };
+
 const reader = struct {
     s: []const u8,
     i: usize = 0,
@@ -125,12 +128,7 @@ pub fn parse(s: []const u8) Self.MimeError!Self {
     // limit input size
     if (ln > 255) return MimeError.TooBig;
 
-    var res = Self{
-        .mtype = "",
-        .msubtype = "",
-        .params = "",
-    };
-
+    var res = Self{ .mtype = "", .msubtype = "", .params = "" };
     var r = reader{ .s = s };
 
     res.mtype = trim(r.until('/'));
@@ -184,4 +182,10 @@ test "parse invalid" {
         _ = Self.parse(tc) catch continue;
         try testing.expect(false);
     }
+}
+
+// Compare type and subtype.
+pub fn eql(self: Self, b: Self) bool {
+    if (!std.mem.eql(u8, self.mtype, b.mtype)) return false;
+    return std.mem.eql(u8, self.msubtype, b.msubtype);
 }
