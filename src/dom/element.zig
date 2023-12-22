@@ -9,6 +9,8 @@ const checkCases = jsruntime.test_utils.checkCases;
 const collection = @import("html_collection.zig");
 
 const Node = @import("node.zig").Node;
+const Walker = @import("html_collection.zig").WalkerDepthFirst;
+const NodeList = @import("nodelist.zig").NodeList;
 const HTMLElem = @import("../html/elements.zig");
 pub const Union = @import("../html/elements.zig").Union;
 
@@ -191,6 +193,74 @@ pub const Element = struct {
         return try HTMLElem.toInterface(HTMLElem.Union, res.?);
     }
 
+    fn getElementById(self: *parser.Element, id: []const u8) !?*parser.Node {
+        // walk over the node tree fo find the node by id.
+        const root = parser.elementToNode(self);
+        const walker = Walker{};
+        var next: ?*parser.Node = null;
+        while (true) {
+            next = try walker.get_next(root, next) orelse return null;
+            // ignore non-element nodes.
+            if (try parser.nodeType(next.?) != .element) {
+                continue;
+            }
+            const e = parser.nodeToElement(next.?);
+            if (std.mem.eql(u8, id, try get_id(e))) return next;
+        }
+    }
+
+    // TODO netsurf doesn't handle query selectors. We have to implement a
+    // solution by ourselves.
+    // We handle only * and single id selector like `#foo`.
+    pub fn _querySelector(self: *parser.Element, selectors: []const u8) !?Union {
+        if (selectors.len == 0) return null;
+
+        // catch-all, return the firstElementChild
+        if (selectors[0] == '*') return try get_firstElementChild(self);
+
+        // support only simple id selector.
+        if (selectors[0] != '#' or std.mem.indexOf(u8, selectors, " ") != null) return null;
+
+        // walk over the node tree fo find the node by id.
+        const n = try getElementById(self, selectors[1..]) orelse return null;
+        return try toInterface(parser.nodeToElement(n));
+    }
+
+    // TODO netsurf doesn't handle query selectors. We have to implement a
+    // solution by ourselves.
+    // We handle only * and single id selector like `#foo`.
+    pub fn _querySelectorAll(self: *parser.Element, alloc: std.mem.Allocator, selectors: []const u8) !NodeList {
+        var list = try NodeList.init();
+        errdefer list.deinit(alloc);
+
+        if (selectors.len == 0) return list;
+
+        // catch-all, return all elements
+        if (selectors[0] == '*') {
+            // walk over the node tree fo find the node by id.
+            const root = parser.elementToNode(self);
+            const walker = Walker{};
+            var next: ?*parser.Node = null;
+            while (true) {
+                next = try walker.get_next(root, next) orelse return list;
+                // ignore non-element nodes.
+                if (try parser.nodeType(next.?) != .element) {
+                    continue;
+                }
+                try list.append(alloc, next.?);
+            }
+        }
+
+        // support only simple id selector.
+        if (selectors[0] != '#' or std.mem.indexOf(u8, selectors, " ") != null) return list;
+
+        // walk over the node tree fo find the node by id.
+        const n = try getElementById(self, selectors[1..]) orelse return list;
+        try list.append(alloc, n);
+
+        return list;
+    }
+
     pub fn deinit(_: *parser.Element, _: std.mem.Allocator) void {}
 };
 
@@ -278,4 +348,22 @@ pub fn testExecFn(
         .{ .src = "d.nextElementSibling", .ex = "null" },
     };
     try checkCases(js_env, &elementSibling);
+
+    var querySelector = [_]Case{
+        .{ .src = "let e = document.getElementById('content')", .ex = "undefined" },
+        .{ .src = "e.querySelector('foo')", .ex = "null" },
+        .{ .src = "e.querySelector('#foo')", .ex = "null" },
+        .{ .src = "e.querySelector('#link').id", .ex = "link" },
+        .{ .src = "e.querySelector('#para').id", .ex = "para" },
+        .{ .src = "e.querySelector('*').id", .ex = "link" },
+
+        .{ .src = "e.querySelectorAll('foo').length", .ex = "0" },
+        .{ .src = "e.querySelectorAll('#foo').length", .ex = "0" },
+        .{ .src = "e.querySelectorAll('#link').length", .ex = "1" },
+        .{ .src = "e.querySelectorAll('#link').item(0).id", .ex = "link" },
+        .{ .src = "e.querySelectorAll('#para').length", .ex = "1" },
+        .{ .src = "e.querySelectorAll('#para').item(0).id", .ex = "para" },
+        .{ .src = "e.querySelectorAll('*').length", .ex = "4" },
+    };
+    try checkCases(js_env, &querySelector);
 }

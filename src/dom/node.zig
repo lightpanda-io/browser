@@ -14,6 +14,7 @@ const EventTarget = @import("event_target.zig").EventTarget;
 const Attr = @import("attribute.zig").Attr;
 const CData = @import("character_data.zig");
 const Element = @import("element.zig").Element;
+const NodeList = @import("nodelist.zig").NodeList;
 const Document = @import("document.zig").Document;
 const DocumentType = @import("document_type.zig").DocumentType;
 const DocumentFragment = @import("document_fragment.zig").DocumentFragment;
@@ -193,6 +194,17 @@ pub const Node = struct {
         return try parser.nodeHasChildNodes(self);
     }
 
+    pub fn get_childNodes(self: *parser.Node, alloc: std.mem.Allocator) !NodeList {
+        var list = try NodeList.init();
+        errdefer list.deinit(alloc);
+
+        var n = try parser.nodeFirstChild(self) orelse return list;
+        while (true) {
+            try list.append(alloc, n);
+            n = try parser.nodeNextSibling(n) orelse return list;
+        }
+    }
+
     pub fn _insertBefore(self: *parser.Node, new_node: *parser.Node, ref_node: *parser.Node) !*parser.Node {
         return try parser.nodeInsertBefore(self, new_node, ref_node);
     }
@@ -242,6 +254,8 @@ pub const Node = struct {
         const res = try parser.nodeReplaceChild(self, new_child, old_child);
         return try Node.toInterface(res);
     }
+
+    pub fn deinit(_: *parser.Node, _: std.mem.Allocator) void {}
 };
 
 // Tests
@@ -392,6 +406,12 @@ pub fn testExecFn(
         .{ .src = "text.hasChildNodes()", .ex = "false" },
     };
     try checkCases(js_env, &node_has_child_nodes);
+
+    var node_child_nodes = [_]Case{
+        .{ .src = "link.childNodes.length", .ex = "1" },
+        .{ .src = "text.childNodes.length", .ex = "0" },
+    };
+    try checkCases(js_env, &node_child_nodes);
 
     var node_insert_before = [_]Case{
         .{ .src = "let insertBefore = document.createElement('a')", .ex = "undefined" },

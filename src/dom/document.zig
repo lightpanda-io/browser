@@ -7,8 +7,10 @@ const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 
 const Node = @import("node.zig").Node;
+const NodeList = @import("nodelist.zig").NodeList;
 const NodeUnion = @import("node.zig").Union;
 
+const Walker = @import("html_collection.zig").WalkerDepthFirst;
 const collection = @import("html_collection.zig");
 
 const Element = @import("element.zig").Element;
@@ -190,6 +192,56 @@ pub const Document = struct {
         return 1;
     }
 
+    // TODO netsurf doesn't handle query selectors. We have to implement a
+    // solution by ourselves.
+    // For now we handle only * and single id selector like `#foo`.
+    pub fn _querySelector(self: *parser.Document, selectors: []const u8) !?ElementUnion {
+        if (selectors.len == 0) return null;
+
+        // catch-all, return the firstElementChild
+        if (selectors[0] == '*') return try get_firstElementChild(self);
+
+        // support only simple id selector.
+        if (selectors[0] != '#' or std.mem.indexOf(u8, selectors, " ") != null) return null;
+
+        return try _getElementById(self, selectors[1..]);
+    }
+
+    // TODO netsurf doesn't handle query selectors. We have to implement a
+    // solution by ourselves.
+    // We handle only * and single id selector like `#foo`.
+    pub fn _querySelectorAll(self: *parser.Document, alloc: std.mem.Allocator, selectors: []const u8) !NodeList {
+        var list = try NodeList.init();
+        errdefer list.deinit(alloc);
+
+        if (selectors.len == 0) return list;
+
+        // catch-all, return all elements
+        if (selectors[0] == '*') {
+            // walk over the node tree fo find the node by id.
+            const root = parser.elementToNode(try parser.documentGetDocumentElement(self) orelse return list);
+            const walker = Walker{};
+            var next: ?*parser.Node = null;
+            while (true) {
+                next = try walker.get_next(root, next) orelse return list;
+                // ignore non-element nodes.
+                if (try parser.nodeType(next.?) != .element) {
+                    continue;
+                }
+                try list.append(alloc, next.?);
+            }
+        }
+
+        // support only simple id selector.
+        if (selectors[0] != '#' or std.mem.indexOf(u8, selectors, " ") != null) return list;
+
+        // walk over the node tree fo find the node by id.
+        const e = try parser.documentGetElementById(self, selectors[1..]) orelse return list;
+        try list.append(alloc, parser.elementToNode(e));
+
+        return list;
+    }
+
     pub fn deinit(_: *parser.Document, _: std.mem.Allocator) void {}
 };
 
@@ -325,13 +377,6 @@ pub fn testExecFn(
     };
     try checkCases(js_env, &importNode);
 
-    var adoptNode = [_]Case{
-        .{ .src = "let nadop = document.getElementById('content')", .ex = "undefined" },
-        .{ .src = "var v = document.adoptNode(nadop)", .ex = "undefined" },
-        .{ .src = "v.nodeName", .ex = "DIV" },
-    };
-    try checkCases(js_env, &adoptNode);
-
     var createAttr = [_]Case{
         .{ .src = "var v = document.createAttribute('foo')", .ex = "undefined" },
         .{ .src = "v.nodeName", .ex = "foo" },
@@ -353,6 +398,23 @@ pub fn testExecFn(
         .{ .src = "nd.childElementCount", .ex = "0" },
     };
     try checkCases(js_env, &parentNode);
+
+    var querySelector = [_]Case{
+        .{ .src = "document.querySelector('')", .ex = "null" },
+        .{ .src = "document.querySelector('*').nodeName", .ex = "HTML" },
+        .{ .src = "document.querySelector('#content').id", .ex = "content" },
+        .{ .src = "document.querySelector('#para').id", .ex = "para" },
+    };
+    try checkCases(js_env, &querySelector);
+
+    // this test breaks the doc structure, keep it at the end of the test
+    // suite.
+    var adoptNode = [_]Case{
+        .{ .src = "let nadop = document.getElementById('content')", .ex = "undefined" },
+        .{ .src = "var v = document.adoptNode(nadop)", .ex = "undefined" },
+        .{ .src = "v.nodeName", .ex = "DIV" },
+    };
+    try checkCases(js_env, &adoptNode);
 
     const tags = comptime parser.Tag.all();
     comptime var createElements: [(tags.len) * 2]Case = undefined;
