@@ -16,7 +16,7 @@ const Walker = @import("../dom/html_collection.zig").WalkerDepthFirst;
 
 const FetchResult = std.http.Client.FetchResult;
 
-const log = std.log.scoped(.lpd_browser);
+const log = std.log.scoped(.browser);
 
 // Browser is an instance of the browser.
 // You can create multiple browser instances.
