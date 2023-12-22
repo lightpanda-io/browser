@@ -317,7 +317,11 @@ pub const Page = struct {
             try self.env.run(self.allocator, fetchres.body.?, src, &res, null);
             defer res.deinit(self.allocator);
 
-            log.debug("eval remote {s}: {s}", .{ src, res.result });
+            if (res.success) {
+                log.debug("eval remote {s}: {s}", .{ src, res.result });
+            } else {
+                log.info("eval remote {s}: {s}", .{ src, res.result });
+            }
 
             // TODO If el's from an external file is true, then fire an event
             // named load at el.
@@ -332,7 +336,11 @@ pub const Page = struct {
             try self.env.run(self.allocator, text, "", &res, null);
             defer res.deinit(self.allocator);
 
-            log.debug("eval inline: {s}", .{res.result});
+            if (res.success) {
+                log.debug("eval inline: {s}", .{res.result});
+            } else {
+                log.info("eval inline: {s}", .{res.result});
+            }
 
             return;
         }
