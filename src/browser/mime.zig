@@ -6,13 +6,98 @@ const Self = @This();
 const MimeError = error{
     Empty,
     TooBig,
-    InvalidChar,
     Invalid,
+    InvalidChar,
 };
 
 mtype: []const u8,
 msubtype: []const u8,
 params: []const u8,
+
+const reader = struct {
+    s: []const u8,
+    i: usize = 0,
+
+    fn until(self: *reader, c: u8) []const u8 {
+        const ln = self.s.len;
+        const start = self.i;
+        while (self.i < ln) {
+            if (c == self.s[self.i]) return self.s[start..self.i];
+            self.i += 1;
+        }
+
+        return self.s[start..self.i];
+    }
+
+    fn tail(self: *reader) []const u8 {
+        if (self.i > self.s.len) return "";
+        defer self.i = self.s.len;
+        return self.s[self.i..];
+    }
+
+    fn skip(self: *reader) bool {
+        if (self.i >= self.s.len) return false;
+        self.i += 1;
+        return true;
+    }
+};
+
+test "reader.skip" {
+    var r = reader{ .s = "foo" };
+    try testing.expect(r.skip());
+    try testing.expect(r.skip());
+    try testing.expect(r.skip());
+    try testing.expect(!r.skip());
+    try testing.expect(!r.skip());
+}
+
+test "reader.tail" {
+    var r = reader{ .s = "foo" };
+    try testing.expectEqualStrings("foo", r.tail());
+    try testing.expectEqualStrings("", r.tail());
+}
+
+test "reader.until" {
+    var r = reader{ .s = "foo.bar.baz" };
+    try testing.expectEqualStrings("foo", r.until('.'));
+    _ = r.skip();
+    try testing.expectEqualStrings("bar", r.until('.'));
+    _ = r.skip();
+    try testing.expectEqualStrings("baz", r.until('.'));
+
+    r = reader{ .s = "foo" };
+    try testing.expectEqualStrings("foo", r.until('.'));
+
+    r = reader{ .s = "" };
+    try testing.expectEqualStrings("", r.until('.'));
+}
+
+fn trim(s: []const u8) []const u8 {
+    const ln = s.len;
+    if (ln == 0) {
+        return "";
+    }
+    var start: usize = 0;
+    while (start < ln) {
+        if (!std.ascii.isWhitespace(s[start])) break;
+        start += 1;
+    }
+
+    var end: usize = ln;
+    while (end > 0) {
+        if (!std.ascii.isWhitespace(s[end - 1])) break;
+        end -= 1;
+    }
+
+    return s[start..end];
+}
+
+test "trim" {
+    try testing.expectEqualStrings("", trim(""));
+    try testing.expectEqualStrings("foo", trim("foo"));
+    try testing.expectEqualStrings("foo", trim(" \n\tfoo"));
+    try testing.expectEqualStrings("foo", trim("foo \n\t"));
+}
 
 // https://mimesniff.spec.whatwg.org/#http-token-code-point
 fn isHTTPCodePoint(c: u8) bool {
@@ -23,16 +108,22 @@ fn isHTTPCodePoint(c: u8) bool {
     };
 }
 
+fn valid(s: []const u8) bool {
+    const ln = s.len;
+    var i: usize = 0;
+    while (i < ln) {
+        if (!isHTTPCodePoint(s[i])) return false;
+        i += 1;
+    }
+    return true;
+}
+
 // https://mimesniff.spec.whatwg.org/#parsing-a-mime-type
-// The parser disallows trailing spaces.
 pub fn parse(s: []const u8) Self.MimeError!Self {
     const ln = s.len;
     if (ln == 0) return MimeError.Empty;
     // limit input size
     if (ln > 255) return MimeError.TooBig;
-
-    const states = enum { startmtype, mtype, startmsubtype, msubtype, startparams, params };
-    var state: states = .startmtype;
 
     var res = Self{
         .mtype = "",
@@ -40,66 +131,20 @@ pub fn parse(s: []const u8) Self.MimeError!Self {
         .params = "",
     };
 
-    var i: usize = 0;
-    var start: usize = 0;
-    while (i < ln) {
-        defer i += 1;
-        const c = s[i];
-        switch (state) {
-            .startmtype => {
-                // ignore leading spaces
-                if (std.ascii.isWhitespace(c)) continue;
-                if (!isHTTPCodePoint(c)) return MimeError.InvalidChar;
-                state = .mtype;
-                start = i;
-            },
-            .mtype => {
-                if (c == '/') {
-                    if (start == i - 1) return MimeError.Empty;
-                    res.mtype = s[start..i];
-                    state = .startmsubtype;
-                    continue;
-                }
-                if (!isHTTPCodePoint(c)) return MimeError.InvalidChar;
-            },
-            .startmsubtype => {
-                // ignore leading spaces
-                if (std.ascii.isWhitespace(c)) continue;
-                if (!isHTTPCodePoint(c)) return MimeError.InvalidChar;
-                state = .msubtype;
-                start = i;
-            },
-            .msubtype => {
-                if (c == ';') {
-                    if (start == i - 1) return MimeError.Empty;
-                    res.msubtype = s[start..i];
-                    state = .startparams;
-                    continue;
-                }
-            },
-            .startparams => {
-                // ignore leading spaces
-                if (std.ascii.isWhitespace(c)) continue;
-                if (!isHTTPCodePoint(c)) return MimeError.InvalidChar;
-                state = .msubtype;
-                start = i;
-            },
-            .params => {
-                if (start == i - 1) return MimeError.Empty;
-                //TODO parse params
-                res.params = s[i..];
-            },
-        }
-    }
+    var r = reader{ .s = s };
 
-    if (state != .msubtype and state != .params) {
-        return MimeError.Invalid;
-    }
+    res.mtype = trim(r.until('/'));
+    if (res.mtype.len == 0) return MimeError.Invalid;
+    if (!valid(res.mtype)) return MimeError.InvalidChar;
 
-    if (state == .msubtype) {
-        if (start == i - 1) return MimeError.Invalid;
-        res.msubtype = s[start..i];
-    }
+    if (!r.skip()) return MimeError.Invalid;
+    res.msubtype = trim(r.until(';'));
+    if (res.msubtype.len == 0) return MimeError.Invalid;
+    if (!valid(res.msubtype)) return MimeError.InvalidChar;
+
+    if (!r.skip()) return res;
+    res.params = trim(r.tail());
+    if (res.params.len == 0) return MimeError.Invalid;
 
     return res;
 }
@@ -107,25 +152,35 @@ pub fn parse(s: []const u8) Self.MimeError!Self {
 test "parse valid" {
     for ([_][]const u8{
         "text/html",
-        "text/javascript1.1",
-        "text/plain; charset=UTF-8",
         " \ttext/html",
+        "text \t/html",
         "text/ \thtml",
+        "text/html \t",
     }) |tc| {
-        std.debug.print("case {s}\n", .{tc});
         const m = try Self.parse(tc);
-        std.debug.print("res: {s}/{s}\n", .{ m.mtype, m.msubtype });
+        try testing.expectEqualStrings("text", m.mtype);
+        try testing.expectEqualStrings("html", m.msubtype);
     }
+    const m2 = try Self.parse("text/javascript1.5");
+    try testing.expectEqualStrings("text", m2.mtype);
+    try testing.expectEqualStrings("javascript1.5", m2.msubtype);
+
+    const m3 = try Self.parse("text/html; charset=UTF-8");
+    try testing.expectEqualStrings("text", m3.mtype);
+    try testing.expectEqualStrings("html", m3.msubtype);
+    try testing.expectEqualStrings("charset=UTF-8", m3.params);
 }
 
 test "parse invalid" {
     for ([_][]const u8{
         "",
+        "te xt/html;",
+        "te@xt/html;",
+        "text/ht@ml;",
         "text/html;",
         "/text/html",
         "/html",
     }) |tc| {
-        std.debug.print("case {s}\n", .{tc});
         _ = Self.parse(tc) catch continue;
         try testing.expect(false);
     }
