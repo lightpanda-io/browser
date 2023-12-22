@@ -26,7 +26,7 @@ pub const Loader = struct {
     }
 
     // the caller must deinit the FetchResult.
-    pub fn fetch(self: *Loader, allocator: std.mem.Allocator, uri: []const u8) !std.http.Client.FetchResult {
+    pub fn fetch(self: *Loader, allocator: std.mem.Allocator, uri: std.Uri) !std.http.Client.FetchResult {
         var headers = try std.http.Headers.initList(allocator, &[_]std.http.Field{
             .{ .name = "User-Agent", .value = user_agent },
             .{ .name = "Accept", .value = "*/*" },
@@ -35,7 +35,7 @@ pub const Loader = struct {
         defer headers.deinit();
 
         return try self.client.fetch(allocator, .{
-            .location = .{ .url = uri },
+            .location = .{ .uri = uri },
             .headers = headers,
             .payload = .none,
         });

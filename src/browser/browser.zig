@@ -113,6 +113,10 @@ pub const Page = struct {
     env: *Env,
     window: *Window,
 
+    // handle url
+    rawuri: ?[]const u8 = null,
+    uri: std.Uri = undefined,
+
     fn init(
         allocator: std.mem.Allocator,
         loader: *Loader,
@@ -132,17 +136,28 @@ pub const Page = struct {
         // TODO unload document: https://html.spec.whatwg.org/#unloading-documents
     }
 
+    pub fn deinit(self: *Page) void {
+        if (self.url != null) {
+            self.allocator.free(self.url);
+        }
+    }
+
     // spec reference: https://html.spec.whatwg.org/#document-lifecycle
     pub fn navigate(self: *Page, uri: []const u8) !void {
         log.debug("starting GET {s}", .{uri});
 
+        // own the url
+        if (self.rawuri) |prev| self.allocator.free(prev);
+        self.rawuri = try self.allocator.dupe(u8, uri);
+        self.uri = std.Uri.parse(self.rawuri.?) catch try std.Uri.parseWithoutScheme(self.rawuri.?);
+
         // TODO handle fragment in url.
 
         // load the data
-        var result = try self.loader.fetch(self.allocator, uri);
+        var result = try self.loader.fetch(self.allocator, self.uri);
         defer result.deinit();
 
-        log.info("GET {s} {d}", .{ uri, result.status });
+        log.info("GET {any} {d}", .{ self.uri, result.status });
 
         // TODO handle redirection
         if (result.status != .ok) return error.BadStatusCode;
@@ -277,12 +292,15 @@ pub const Page = struct {
         // https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-classic-script
         const opt_src = try parser.elementGetAttribute(e, "src");
         if (opt_src) |src| {
-            // TODO resolve the url.
-            log.info("starting GET {s}", .{src});
-            var fetchres = try self.loader.fetch(self.allocator, src);
+            log.debug("starting GET {s}", .{src});
+
+            const u = std.Uri.parse(src) catch try std.Uri.parseWithoutScheme(src);
+            const ru = try std.Uri.resolve(self.uri, u, false, self.allocator);
+
+            var fetchres = try self.loader.fetch(self.allocator, ru);
             defer fetchres.deinit();
 
-            log.info("GET {s}: {d}", .{ src, fetchres.status });
+            log.info("GET {any}: {d}", .{ ru, fetchres.status });
 
             if (fetchres.status != .ok) {
                 return error.BadStatusCode;
@@ -299,7 +317,7 @@ pub const Page = struct {
             try self.env.run(self.allocator, fetchres.body.?, src, &res, null);
             defer res.deinit(self.allocator);
 
-            log.debug("eval script {s}: {s}", .{ src, res.result });
+            log.debug("eval remote {s}: {s}", .{ src, res.result });
 
             // TODO If el's from an external file is true, then fire an event
             // named load at el.
@@ -314,7 +332,7 @@ pub const Page = struct {
             try self.env.run(self.allocator, text, "", &res, null);
             defer res.deinit(self.allocator);
 
-            log.debug("eval script: {s}", .{res.result});
+            log.debug("eval inline: {s}", .{res.result});
 
             return;
         }
