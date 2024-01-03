@@ -47,6 +47,15 @@ pub const HTMLDocument = struct {
     pub fn set_cookie(_: *parser.DocumentHTML, _: []const u8) ![]const u8 {
         return parser.DOMError.NotSupported;
     }
+
+    pub fn get_title(self: *parser.DocumentHTML) ![]const u8 {
+        return try parser.documentHTMLGetTitle(self);
+    }
+
+    pub fn set_title(self: *parser.DocumentHTML, v: []const u8) ![]const u8 {
+        try parser.documentHTMLSetTitle(self, v);
+        return v;
+    }
 };
 
 // Tests
@@ -67,6 +76,14 @@ pub fn testExecFn(
     var getters = [_]Case{
         .{ .src = "document.domain", .ex = "" },
         .{ .src = "document.referrer", .ex = "" },
+        .{ .src = "document.title", .ex = "" },
     };
     try checkCases(js_env, &getters);
+
+    var titles = [_]Case{
+        .{ .src = "document.title = 'foo'", .ex = "foo" },
+        .{ .src = "document.title", .ex = "foo" },
+        .{ .src = "document.title = ''", .ex = "" },
+    };
+    try checkCases(js_env, &titles);
 }

@@ -1466,3 +1466,16 @@ pub fn documentHTMLGetReferrer(doc: *DocumentHTML) ![]const u8 {
     if (s == null) return "";
     return strToData(s.?);
 }
+
+pub fn documentHTMLGetTitle(doc: *DocumentHTML) ![]const u8 {
+    var s: ?*String = undefined;
+    const err = documentHTMLVtable(doc).get_title.?(doc, &s);
+    try DOMErr(err);
+    if (s == null) return "";
+    return strToData(s.?);
+}
+
+pub fn documentHTMLSetTitle(doc: *DocumentHTML, v: []const u8) !void {
+    const err = documentHTMLVtable(doc).set_title.?(doc, try strFromData(v));
+    try DOMErr(err);
+}
