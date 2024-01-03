@@ -19,3 +19,6 @@
 [submodule "vendor/netsurf/libhubbub"]
 	path = vendor/netsurf/libhubbub
 	url = https://source.netsurf-browser.org/libhubbub.git
+[submodule "tests/wpt"]
+	path = tests/wpt
+	url = https://github.com/lightpanda-io/wpt
