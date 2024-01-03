@@ -23,7 +23,7 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-release run run-release shell test bench download-zig
+.PHONY: build build-release run run-release shell test bench download-zig wpt
 
 zig_version = $(shell grep 'recommended_zig_version = "' "vendor/jsruntime-lib/build.zig" | cut -d'"' -f2)
 kernel = $(shell uname -ms)
@@ -79,6 +79,10 @@ shell:
 wpt:
 	@printf "\e[36mBuilding wpt...\e[0m\n"
 	@$(ZIG) build wpt -Dengine=v8 -- --safe $(filter-out $@,$(MAKECMDGOALS)) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+
+wpt-summary:
+	@printf "\e[36mBuilding wpt...\e[0m\n"
+	@$(ZIG) build wpt -Dengine=v8 -- --safe --summary $(filter-out $@,$(MAKECMDGOALS)) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 
 ## Test
 test:

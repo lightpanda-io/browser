@@ -288,6 +288,7 @@ fn runSafe(
             tests = parsed.value;
         }
 
+        // summary display
         if (out == .summary) {
             defer std.debug.print("\t{s}\n", .{tc});
             if (result == .crash) {
@@ -310,6 +311,7 @@ fn runSafe(
             continue;
         }
 
+        // json display
         if (out == .json) {
             if (result == .crash) {
                 var cases = [_]Case{.{
@@ -330,7 +332,23 @@ fn runSafe(
             continue;
         }
 
-        std.debug.print("{s}\n", .{run.stderr});
+        // normal display
+        std.debug.print("{s}\n", .{tc});
+        if (result == .crash) {
+            std.debug.print("Crash\n{s}", .{run.stderr});
+            continue;
+        }
+        var pass: u32 = 0;
+        var all: u32 = 0;
+        for (tests) |ttc| {
+            for (ttc.cases) |c| {
+                const status = if (c.pass) "Pass" else "Fail";
+                std.debug.print("{s}\t{s}\n", .{ status, c.name });
+                all += 1;
+                if (c.pass) pass += 1;
+            }
+        }
+        std.debug.print("{d}/{d}\n\n", .{ pass, all });
     }
 
     if (out == .json) {
