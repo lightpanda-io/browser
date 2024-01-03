@@ -127,6 +127,10 @@ pub const Element = struct {
         return true;
     }
 
+    pub fn _getAttributeNode(self: *parser.Element, name: []const u8) !?*parser.Attribute {
+        return try parser.elementGetAttributeNode(self, name);
+    }
+
     pub fn _getElementsByTagName(
         self: *parser.Element,
         alloc: std.mem.Allocator,

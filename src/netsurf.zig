@@ -840,6 +840,46 @@ pub const ProcessingInstruction = c.dom_processing_instruction;
 // Attribute
 pub const Attribute = c.dom_attr;
 
+fn attributeVtable(a: *Attribute) c.dom_attr_vtable {
+    return getVtable(c.dom_attr_vtable, Attribute, a);
+}
+
+pub fn attributeGetName(a: *Attribute) ![]const u8 {
+    var s: ?*String = undefined;
+    const err = attributeVtable(a).dom_attr_get_name.?(a, &s);
+    try DOMErr(err);
+
+    return strToData(s.?);
+}
+
+pub fn attributeGetValue(a: *Attribute) !?[]const u8 {
+    var s: ?*String = undefined;
+    const err = attributeVtable(a).dom_attr_get_value.?(a, &s);
+    try DOMErr(err);
+    if (s == null) return null;
+
+    return strToData(s.?);
+}
+
+pub fn attributeSetValue(a: *Attribute, v: []const u8) !void {
+    const err = attributeVtable(a).dom_attr_set_value.?(a, try strFromData(v));
+    try DOMErr(err);
+}
+
+pub fn attributeGetOwnerElement(a: *Attribute) !?*Element {
+    var elt: ?*Element = undefined;
+    const err = attributeVtable(a).dom_attr_get_owner_element.?(a, &elt);
+    try DOMErr(err);
+    if (elt == null) return null;
+
+    return elt.?;
+}
+
+// attributeToNode is an helper to convert an attribute to a node.
+pub inline fn attributeToNode(a: *Attribute) *Node {
+    return @as(*Node, @ptrCast(a));
+}
+
 // Element
 pub const Element = c.dom_element;
 
@@ -875,6 +915,13 @@ pub fn elementHasAttribute(elem: *Element, qname: []const u8) !bool {
     const err = elementVtable(elem).dom_element_has_attribute.?(elem, try strFromData(qname), &res);
     try DOMErr(err);
     return res;
+}
+
+pub fn elementGetAttributeNode(elem: *Element, name: []const u8) !?*Attribute {
+    var a: ?*Attribute = undefined;
+    const err = elementVtable(elem).dom_element_get_attribute_node.?(elem, try strFromData(name), &a);
+    try DOMErr(err);
+    return a;
 }
 
 pub fn elementHasClass(elem: *Element, class: []const u8) !bool {
