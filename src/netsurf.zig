@@ -924,6 +924,39 @@ pub fn elementGetAttributeNode(elem: *Element, name: []const u8) !?*Attribute {
     return a;
 }
 
+pub fn elementGetAttributeNodeNS(elem: *Element, ns: []const u8, name: []const u8) !?*Attribute {
+    var a: ?*Attribute = undefined;
+    const err = elementVtable(elem).dom_element_get_attribute_node_ns.?(
+        elem,
+        try strFromData(ns),
+        try strFromData(name),
+        &a,
+    );
+    try DOMErr(err);
+    return a;
+}
+
+pub fn elementSetAttributeNode(elem: *Element, attr: *Attribute) !?*Attribute {
+    var a: ?*Attribute = undefined;
+    const err = elementVtable(elem).dom_element_set_attribute_node.?(elem, attr, &a);
+    try DOMErr(err);
+    return a;
+}
+
+pub fn elementSetAttributeNodeNS(elem: *Element, attr: *Attribute) !?*Attribute {
+    var a: ?*Attribute = undefined;
+    const err = elementVtable(elem).dom_element_set_attribute_node_ns.?(elem, attr, &a);
+    try DOMErr(err);
+    return a;
+}
+
+pub fn elementRemoveAttributeNode(elem: *Element, attr: *Attribute) !*Attribute {
+    var a: ?*Attribute = undefined;
+    const err = elementVtable(elem).dom_element_remove_attribute_node.?(elem, attr, &a);
+    try DOMErr(err);
+    return a.?;
+}
+
 pub fn elementHasClass(elem: *Element, class: []const u8) !bool {
     var res: bool = undefined;
     const err = elementVtable(elem).dom_element_has_class.?(
