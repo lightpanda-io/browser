@@ -84,7 +84,8 @@ Browsercore is tested against the standardized [Web Platform
 Tests](https://web-platform-tests.org/).
 
 The relevant tests cases for Browsercore are commit with the project.
-All the tests cases executed are located in `tests/wpt` dir.
+All the tests cases executed are located in `tests/wpt` dir and come from an
+external repository: https://github.com/lightpanda-io/wpt
 
 For reference, you can easily execute a WPT test case with your browser via
 [wpt.live](https://wpt.live).
@@ -107,7 +108,8 @@ make wpt Node-childNodes.html
 We add new tests cases files with implemented changes in Browsercore.
 
 Copy the test case you want to add from the [WPT
-repo](https://github.com/web-platform-tests/wpt) into `tests/wpt` dir and commit
-the files.
+repo](https://github.com/web-platform-tests/wpt) into `tests/wpt` dir, commit
+the files in the https://github.com/lightpanda-io/wpt repository and update the
+git submodule in browsercore.
 
 :warning: Please keep the original directory tree structure into `tests/wpt`.
