@@ -14,7 +14,7 @@ on:
     paths:
       - "src/**/*.zig"
       - "src/*.zig"
-      - "test/wpt/**"
+      - "tests/wpt/**"
       - "vendor/**"
   pull_request:
 
@@ -28,7 +28,7 @@ on:
     paths:
       - "src/**/*.zig"
       - "src/*.zig"
-      - "test/wpt/**"
+      - "tests/wpt/**"
       - "vendor/**"
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
