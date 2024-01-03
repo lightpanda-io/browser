@@ -18,8 +18,34 @@ pub const HTMLDocument = struct {
     // JS funcs
     // --------
 
+    pub fn get_domain(self: *parser.DocumentHTML) ![]const u8 {
+        return try parser.documentHTMLGetDomain(self);
+    }
+
+    pub fn set_domain(_: *parser.DocumentHTML, _: []const u8) ![]const u8 {
+        return parser.DOMError.NotSupported;
+    }
+
+    pub fn get_referrer(self: *parser.DocumentHTML) ![]const u8 {
+        return try parser.documentHTMLGetReferrer(self);
+    }
+
+    pub fn set_referrer(_: *parser.DocumentHTML, _: []const u8) ![]const u8 {
+        return parser.DOMError.NotSupported;
+    }
+
     pub fn get_body(self: *parser.DocumentHTML) !?*parser.Body {
         return try parser.documentHTMLBody(self);
+    }
+
+    // TODO: not implemented by libdom
+    pub fn get_cookie(_: *parser.DocumentHTML) ![]const u8 {
+        return error.NotImplemented;
+    }
+
+    // TODO: not implemented by libdom
+    pub fn set_cookie(_: *parser.DocumentHTML, _: []const u8) ![]const u8 {
+        return parser.DOMError.NotSupported;
     }
 };
 
@@ -37,4 +63,10 @@ pub fn testExecFn(
         .{ .src = "document.body.localName == 'body'", .ex = "true" },
     };
     try checkCases(js_env, &constructor);
+
+    var getters = [_]Case{
+        .{ .src = "document.domain", .ex = "" },
+        .{ .src = "document.referrer", .ex = "" },
+    };
+    try checkCases(js_env, &getters);
 }

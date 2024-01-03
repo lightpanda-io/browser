@@ -1450,3 +1450,19 @@ pub inline fn documentHTMLBody(doc_html: *DocumentHTML) !?*Body {
     if (body == null) return null;
     return @as(*Body, @ptrCast(body.?));
 }
+
+pub fn documentHTMLGetDomain(doc: *DocumentHTML) ![]const u8 {
+    var s: ?*String = undefined;
+    const err = documentHTMLVtable(doc).get_domain.?(doc, &s);
+    try DOMErr(err);
+    if (s == null) return "";
+    return strToData(s.?);
+}
+
+pub fn documentHTMLGetReferrer(doc: *DocumentHTML) ![]const u8 {
+    var s: ?*String = undefined;
+    const err = documentHTMLVtable(doc).get_referrer.?(doc, &s);
+    try DOMErr(err);
+    if (s == null) return "";
+    return strToData(s.?);
+}
