@@ -1,1 +1,0 @@
-<!DOCTYPE foo [ <!ELEMENT foo (#PCDATA)> ]><foo/>
