@@ -16,6 +16,7 @@ const Matcher = union(enum) {
     matchByTagName: MatchByTagName,
     matchByClassName: MatchByClassName,
     matchByLinks: MatchByLinks,
+    matchByAnchors: MatchByAnchors,
     matchTrue: struct {},
     matchFalse: struct {},
 
@@ -27,6 +28,7 @@ const Matcher = union(enum) {
             inline .matchByClassName => |case| return case.match(node),
             inline .matchByName => |case| return case.match(node),
             inline .matchByLinks => return MatchByLinks.match(node),
+            inline .matchByAnchors => return MatchByAnchors.match(node),
         }
     }
 
@@ -38,6 +40,7 @@ const Matcher = union(enum) {
             inline .matchByClassName => |case| return case.deinit(alloc),
             inline .matchByName => |case| return case.deinit(alloc),
             inline .matchByLinks => return,
+            inline .matchByAnchors => return,
         }
     }
 };
@@ -208,6 +211,33 @@ pub fn HTMLCollectionByLinks(
         .walker = Walker{ .walkerDepthFirst = .{} },
         .matcher = Matcher{
             .matchByLinks = MatchByLinks{},
+        },
+        .include_root = include_root,
+    };
+}
+
+// MatchByAnchors matches the a elements in the Document that have name
+// attributes.
+// https://html.spec.whatwg.org/#dom-document-anchors
+pub const MatchByAnchors = struct {
+    pub fn match(node: *parser.Node) !bool {
+        const tag = try parser.nodeName(node);
+        if (!std.ascii.eqlIgnoreCase(tag, "a")) return false;
+
+        const elem = @as(*parser.Element, @ptrCast(node));
+        return parser.elementHasAttribute(elem, "name");
+    }
+};
+
+pub fn HTMLCollectionByAnchors(
+    root: ?*parser.Node,
+    include_root: bool,
+) !HTMLCollection {
+    return HTMLCollection{
+        .root = root,
+        .walker = Walker{ .walkerDepthFirst = .{} },
+        .matcher = Matcher{
+            .matchByAnchors = MatchByAnchors{},
         },
         .include_root = include_root,
     };

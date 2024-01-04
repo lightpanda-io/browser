@@ -134,6 +134,10 @@ pub const HTMLDocument = struct {
         return try collection.HTMLCollectionByLinks(try rootNode(self), false);
     }
 
+    pub fn get_anchors(self: *parser.DocumentHTML) !collection.HTMLCollection {
+        return try collection.HTMLCollectionByAnchors(try rootNode(self), false);
+    }
+
     pub fn get_currentScript(_: *parser.DocumentHTML) !?*parser.Element {
         return null;
     }
@@ -177,6 +181,7 @@ pub fn testExecFn(
         .{ .src = "document.forms.length", .ex = "0" },
         .{ .src = "document.links.length", .ex = "1" },
         .{ .src = "document.applets.length", .ex = "0" },
+        .{ .src = "document.anchors.length", .ex = "0" },
         .{ .src = "document.currentScript", .ex = "null" },
     };
     try checkCases(js_env, &getters);
