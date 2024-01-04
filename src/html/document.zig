@@ -40,6 +40,11 @@ pub const HTMLDocument = struct {
         return try parser.documentHTMLBody(self);
     }
 
+    pub fn set_body(self: *parser.DocumentHTML, elt: ?*parser.ElementHTML) !?*parser.Body {
+        try parser.documentHTMLSetBody(self, elt);
+        return try get_body(self);
+    }
+
     // TODO: not implemented by libdom
     pub fn get_cookie(_: *parser.DocumentHTML) ![]const u8 {
         return error.NotImplemented;
