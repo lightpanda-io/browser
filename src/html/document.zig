@@ -126,6 +126,10 @@ pub const HTMLDocument = struct {
         return try collection.HTMLCollectionByTagName(alloc, try rootNode(self), "script", false);
     }
 
+    pub fn get_applets(_: *parser.DocumentHTML) !collection.HTMLCollection {
+        return try collection.HTMLCollectionEmpty();
+    }
+
     pub fn get_links(self: *parser.DocumentHTML) !collection.HTMLCollection {
         return try collection.HTMLCollectionByLinks(try rootNode(self), false);
     }
@@ -164,6 +168,7 @@ pub fn testExecFn(
         .{ .src = "document.scripts.length", .ex = "0" },
         .{ .src = "document.forms.length", .ex = "0" },
         .{ .src = "document.links.length", .ex = "1" },
+        .{ .src = "document.applets.length", .ex = "0" },
         .{ .src = "document.currentScript", .ex = "null" },
     };
     try checkCases(js_env, &getters);

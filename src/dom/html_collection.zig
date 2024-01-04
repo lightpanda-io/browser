@@ -17,10 +17,12 @@ const Matcher = union(enum) {
     matchByClassName: MatchByClassName,
     matchByLinks: MatchByLinks,
     matchTrue: struct {},
+    matchFalse: struct {},
 
     pub fn match(self: Matcher, node: *parser.Node) !bool {
         switch (self) {
             inline .matchTrue => return true,
+            inline .matchFalse => return false,
             inline .matchByTagName => |case| return case.match(node),
             inline .matchByClassName => |case| return case.match(node),
             inline .matchByName => |case| return case.match(node),
@@ -31,6 +33,7 @@ const Matcher = union(enum) {
     pub fn deinit(self: Matcher, alloc: std.mem.Allocator) void {
         switch (self) {
             inline .matchTrue => return,
+            inline .matchFalse => return,
             inline .matchByTagName => |case| return case.deinit(alloc),
             inline .matchByClassName => |case| return case.deinit(alloc),
             inline .matchByName => |case| return case.deinit(alloc),
@@ -173,6 +176,15 @@ pub fn HTMLCollectionChildren(
     };
 }
 
+pub fn HTMLCollectionEmpty() !HTMLCollection {
+    return HTMLCollection{
+        .root = null,
+        .walker = Walker{ .walkerNone = .{} },
+        .matcher = Matcher{ .matchFalse = .{} },
+        .include_root = false,
+    };
+}
+
 // MatchByLinks matches the a and area elements in the Document that have href
 // attributes.
 // https://html.spec.whatwg.org/#dom-document-links
@@ -204,6 +216,7 @@ pub fn HTMLCollectionByLinks(
 const Walker = union(enum) {
     walkerDepthFirst: WalkerDepthFirst,
     walkerChildren: WalkerChildren,
+    walkerNone: WalkerNone,
 
     pub fn get_next(self: Walker, root: *parser.Node, cur: ?*parser.Node) !?*parser.Node {
         switch (self) {
@@ -274,6 +287,12 @@ pub const WalkerChildren = struct {
         if (root == cur.?) return null;
 
         return try parser.nodeNextSibling(cur.?);
+    }
+};
+
+pub const WalkerNone = struct {
+    pub fn get_next(_: WalkerNone, _: *parser.Node, _: ?*parser.Node) !?*parser.Node {
+        return null;
     }
 };
 
