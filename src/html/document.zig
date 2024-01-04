@@ -130,6 +130,10 @@ pub const HTMLDocument = struct {
         return try collection.HTMLCollectionByLinks(try rootNode(self), false);
     }
 
+    pub fn get_currentScript(_: *parser.DocumentHTML) !?*parser.Element {
+        return null;
+    }
+
     pub fn deinit(_: *parser.DocumentHTML, _: std.mem.Allocator) void {}
 };
 
@@ -160,6 +164,7 @@ pub fn testExecFn(
         .{ .src = "document.scripts.length", .ex = "0" },
         .{ .src = "document.forms.length", .ex = "0" },
         .{ .src = "document.links.length", .ex = "1" },
+        .{ .src = "document.currentScript", .ex = "null" },
     };
     try checkCases(js_env, &getters);
 
