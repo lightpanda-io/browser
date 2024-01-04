@@ -14,6 +14,10 @@ const DOMException = @import("exceptions.zig").DOMException;
 // Nodelist is implemented in pure Zig b/c libdom's NodeList doesn't allow to
 // append nodes.
 // WEB IDL https://dom.spec.whatwg.org/#nodelist
+//
+// TODO: a Nodelist can be either static or live. But the current
+// implementation allows only static nodelist.
+// see https://dom.spec.whatwg.org/#old-style-collections
 pub const NodeList = struct {
     pub const mem_guarantied = true;
     pub const Exception = DOMException;
