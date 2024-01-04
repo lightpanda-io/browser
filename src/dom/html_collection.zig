@@ -12,6 +12,7 @@ const Element = @import("element.zig").Element;
 const Union = @import("element.zig").Union;
 
 const Matcher = union(enum) {
+    matchByName: MatchByName,
     matchByTagName: MatchByTagName,
     matchByClassName: MatchByClassName,
     matchTrue: struct {},
@@ -21,6 +22,7 @@ const Matcher = union(enum) {
             inline .matchTrue => return true,
             inline .matchByTagName => |case| return case.match(node),
             inline .matchByClassName => |case| return case.match(node),
+            inline .matchByName => |case| return case.match(node),
         }
     }
 
@@ -29,6 +31,7 @@ const Matcher = union(enum) {
             inline .matchTrue => return,
             inline .matchByTagName => |case| return case.deinit(alloc),
             inline .matchByClassName => |case| return case.deinit(alloc),
+            inline .matchByName => |case| return case.deinit(alloc),
         }
     }
 };
@@ -112,6 +115,44 @@ pub fn HTMLCollectionByClassName(
         .walker = Walker{ .walkerDepthFirst = .{} },
         .matcher = Matcher{
             .matchByClassName = try MatchByClassName.init(alloc, classNames),
+        },
+        .include_root = include_root,
+    };
+}
+
+pub const MatchByName = struct {
+    name: []const u8,
+
+    fn init(alloc: std.mem.Allocator, name: []const u8) !MatchByName {
+        const names_alloc = try alloc.alloc(u8, name.len);
+        @memcpy(names_alloc, name);
+        return MatchByName{
+            .name = names_alloc,
+        };
+    }
+
+    pub fn match(self: MatchByName, node: *parser.Node) !bool {
+        const e = parser.nodeToElement(node);
+        const nname = try parser.elementGetAttribute(e, "name") orelse return false;
+        return std.mem.eql(u8, self.name, nname);
+    }
+
+    fn deinit(self: MatchByName, alloc: std.mem.Allocator) void {
+        alloc.free(self.name);
+    }
+};
+
+pub fn HTMLCollectionByName(
+    alloc: std.mem.Allocator,
+    root: ?*parser.Node,
+    name: []const u8,
+    include_root: bool,
+) !HTMLCollection {
+    return HTMLCollection{
+        .root = root,
+        .walker = Walker{ .walkerDepthFirst = .{} },
+        .matcher = Matcher{
+            .matchByName = try MatchByName.init(alloc, name),
         },
         .include_root = include_root,
     };
@@ -259,7 +300,7 @@ pub const HTMLCollection = struct {
         return len;
     }
 
-    pub fn _item(self: *HTMLCollection, index: u32) !?Union {
+    pub fn item(self: *HTMLCollection, index: u32) !?*parser.Node {
         if (self.root == null) return null;
 
         var i: u32 = 0;
@@ -282,8 +323,7 @@ pub const HTMLCollection = struct {
                         self.cur_node = node;
                         self.cur_idx = i;
 
-                        const e = @as(*parser.Element, @ptrCast(node));
-                        return try Element.toInterface(e);
+                        return node;
                     }
 
                     i += 1;
@@ -294,6 +334,12 @@ pub const HTMLCollection = struct {
         }
 
         return null;
+    }
+
+    pub fn _item(self: *HTMLCollection, index: u32) !?Union {
+        const node = try self.item(index) orelse return null;
+        const e = @as(*parser.Element, @ptrCast(node));
+        return try Element.toInterface(e);
     }
 
     pub fn _namedItem(self: *HTMLCollection, name: []const u8) !?Union {
