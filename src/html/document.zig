@@ -7,7 +7,9 @@ const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 
 const Document = @import("../dom/document.zig").Document;
+const NodeList = @import("../dom/nodelist.zig").NodeList;
 const HTMLElem = @import("elements.zig");
+const collection = @import("../dom/html_collection.zig");
 
 // WEB IDL https://html.spec.whatwg.org/#the-document-object
 pub const HTMLDocument = struct {
@@ -56,6 +58,35 @@ pub const HTMLDocument = struct {
         try parser.documentHTMLSetTitle(self, v);
         return v;
     }
+
+    pub fn _getElementsByName(self: *parser.DocumentHTML, alloc: std.mem.Allocator, name: []const u8) !NodeList {
+        var list = try NodeList.init();
+        errdefer list.deinit(alloc);
+
+        if (name.len == 0) return list;
+
+        const root = try rootNode(self) orelse return list;
+
+        var c = try collection.HTMLCollectionByName(alloc, root, name, false);
+
+        const ln = try c.get_length();
+        var i: u32 = 0;
+        while (i < ln) {
+            const n = try c.item(i) orelse break;
+            try list.append(alloc, n);
+            i += 1;
+        }
+
+        return list;
+    }
+
+    inline fn rootNode(self: *parser.DocumentHTML) !?*parser.Node {
+        const doc = parser.documentHTMLToDocument(self);
+        const elt = try parser.documentGetDocumentElement(doc) orelse return null;
+        return parser.elementToNode(elt);
+    }
+
+    pub fn deinit(_: *parser.DocumentHTML, _: std.mem.Allocator) void {}
 };
 
 // Tests
@@ -86,4 +117,11 @@ pub fn testExecFn(
         .{ .src = "document.title = ''", .ex = "" },
     };
     try checkCases(js_env, &titles);
+
+    var getElementsByName = [_]Case{
+        .{ .src = "document.getElementById('link').setAttribute('name', 'foo')", .ex = "undefined" },
+        .{ .src = "let list = document.getElementsByName('foo')", .ex = "undefined" },
+        .{ .src = "list.length", .ex = "1" },
+    };
+    try checkCases(js_env, &getElementsByName);
 }
