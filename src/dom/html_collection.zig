@@ -15,6 +15,7 @@ const Matcher = union(enum) {
     matchByName: MatchByName,
     matchByTagName: MatchByTagName,
     matchByClassName: MatchByClassName,
+    matchByLinks: MatchByLinks,
     matchTrue: struct {},
 
     pub fn match(self: Matcher, node: *parser.Node) !bool {
@@ -23,6 +24,7 @@ const Matcher = union(enum) {
             inline .matchByTagName => |case| return case.match(node),
             inline .matchByClassName => |case| return case.match(node),
             inline .matchByName => |case| return case.match(node),
+            inline .matchByLinks => return MatchByLinks.match(node),
         }
     }
 
@@ -32,6 +34,7 @@ const Matcher = union(enum) {
             inline .matchByTagName => |case| return case.deinit(alloc),
             inline .matchByClassName => |case| return case.deinit(alloc),
             inline .matchByName => |case| return case.deinit(alloc),
+            inline .matchByLinks => return,
         }
     }
 };
@@ -166,6 +169,34 @@ pub fn HTMLCollectionChildren(
         .root = root,
         .walker = Walker{ .walkerChildren = .{} },
         .matcher = Matcher{ .matchTrue = .{} },
+        .include_root = include_root,
+    };
+}
+
+// MatchByLinks matches the a and area elements in the Document that have href
+// attributes.
+// https://html.spec.whatwg.org/#dom-document-links
+pub const MatchByLinks = struct {
+    pub fn match(node: *parser.Node) !bool {
+        const tag = try parser.nodeName(node);
+        if (!std.ascii.eqlIgnoreCase(tag, "a") and !std.ascii.eqlIgnoreCase(tag, "area")) {
+            return false;
+        }
+        const elem = @as(*parser.Element, @ptrCast(node));
+        return parser.elementHasAttribute(elem, "href");
+    }
+};
+
+pub fn HTMLCollectionByLinks(
+    root: ?*parser.Node,
+    include_root: bool,
+) !HTMLCollection {
+    return HTMLCollection{
+        .root = root,
+        .walker = Walker{ .walkerDepthFirst = .{} },
+        .matcher = Matcher{
+            .matchByLinks = MatchByLinks{},
+        },
         .include_root = include_root,
     };
 }
