@@ -138,6 +138,14 @@ pub const HTMLDocument = struct {
         return null;
     }
 
+    pub fn get_designMode(_: *parser.DocumentHTML) []const u8 {
+        return "off";
+    }
+
+    pub fn set_designMode(_: *parser.DocumentHTML, _: []const u8) []const u8 {
+        return "off";
+    }
+
     pub fn deinit(_: *parser.DocumentHTML, _: std.mem.Allocator) void {}
 };
 
