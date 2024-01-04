@@ -6,10 +6,13 @@ const jsruntime = @import("jsruntime");
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 
+const Node = @import("../dom/node.zig").Node;
 const Document = @import("../dom/document.zig").Document;
 const NodeList = @import("../dom/nodelist.zig").NodeList;
 const HTMLElem = @import("elements.zig");
+
 const collection = @import("../dom/html_collection.zig");
+const Walker = collection.WalkerDepthFirst;
 
 // WEB IDL https://html.spec.whatwg.org/#the-document-object
 pub const HTMLDocument = struct {
@@ -43,6 +46,18 @@ pub const HTMLDocument = struct {
     pub fn set_body(self: *parser.DocumentHTML, elt: ?*parser.ElementHTML) !?*parser.Body {
         try parser.documentHTMLSetBody(self, elt);
         return try get_body(self);
+    }
+
+    pub fn get_head(self: *parser.DocumentHTML) !?*parser.Head {
+        const root = try rootNode(self) orelse return null;
+        const walker = Walker{};
+        var next: ?*parser.Node = null;
+        while (true) {
+            next = try walker.get_next(root, next) orelse return null;
+            if (std.ascii.eqlIgnoreCase("head", try parser.nodeName(next.?))) {
+                return @as(*parser.Head, @ptrCast(next.?));
+            }
+        }
     }
 
     // TODO: not implemented by libdom
@@ -137,7 +152,8 @@ pub fn testExecFn(
         .{ .src = "document.domain", .ex = "" },
         .{ .src = "document.referrer", .ex = "" },
         .{ .src = "document.title", .ex = "" },
-        .{ .src = "document.body.tagName", .ex = "BODY" },
+        .{ .src = "document.body.localName", .ex = "body" },
+        .{ .src = "document.head.localName", .ex = "head" },
         .{ .src = "document.images.length", .ex = "0" },
         .{ .src = "document.embeds.length", .ex = "0" },
         .{ .src = "document.plugins.length", .ex = "0" },
