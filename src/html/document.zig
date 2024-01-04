@@ -86,6 +86,30 @@ pub const HTMLDocument = struct {
         return parser.elementToNode(elt);
     }
 
+    pub fn get_images(self: *parser.DocumentHTML, alloc: std.mem.Allocator) !collection.HTMLCollection {
+        return try collection.HTMLCollectionByTagName(alloc, try rootNode(self), "img", false);
+    }
+
+    pub fn get_embeds(self: *parser.DocumentHTML, alloc: std.mem.Allocator) !collection.HTMLCollection {
+        return try collection.HTMLCollectionByTagName(alloc, try rootNode(self), "embed", false);
+    }
+
+    pub fn get_plugins(self: *parser.DocumentHTML, alloc: std.mem.Allocator) !collection.HTMLCollection {
+        return get_embeds(self, alloc);
+    }
+
+    pub fn get_forms(self: *parser.DocumentHTML, alloc: std.mem.Allocator) !collection.HTMLCollection {
+        return try collection.HTMLCollectionByTagName(alloc, try rootNode(self), "form", false);
+    }
+
+    pub fn get_scripts(self: *parser.DocumentHTML, alloc: std.mem.Allocator) !collection.HTMLCollection {
+        return try collection.HTMLCollectionByTagName(alloc, try rootNode(self), "script", false);
+    }
+
+    pub fn get_links(self: *parser.DocumentHTML) !collection.HTMLCollection {
+        return try collection.HTMLCollectionByLinks(try rootNode(self), false);
+    }
+
     pub fn deinit(_: *parser.DocumentHTML, _: std.mem.Allocator) void {}
 };
 
@@ -108,6 +132,13 @@ pub fn testExecFn(
         .{ .src = "document.domain", .ex = "" },
         .{ .src = "document.referrer", .ex = "" },
         .{ .src = "document.title", .ex = "" },
+        .{ .src = "document.body.tagName", .ex = "BODY" },
+        .{ .src = "document.images.length", .ex = "0" },
+        .{ .src = "document.embeds.length", .ex = "0" },
+        .{ .src = "document.plugins.length", .ex = "0" },
+        .{ .src = "document.scripts.length", .ex = "0" },
+        .{ .src = "document.forms.length", .ex = "0" },
+        .{ .src = "document.links.length", .ex = "1" },
     };
     try checkCases(js_env, &getters);
 
