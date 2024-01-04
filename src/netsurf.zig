@@ -1451,7 +1451,12 @@ pub inline fn documentHTMLBody(doc_html: *DocumentHTML) !?*Body {
     return @as(*Body, @ptrCast(body.?));
 }
 
-pub fn documentHTMLGetDomain(doc: *DocumentHTML) ![]const u8 {
+pub inline fn documentHTMLSetBody(doc_html: *DocumentHTML, elt: ?*ElementHTML) !void {
+    const err = documentHTMLVtable(doc_html).set_body.?(doc_html, elt);
+    try DOMErr(err);
+}
+
+pub inline fn documentHTMLGetDomain(doc: *DocumentHTML) ![]const u8 {
     var s: ?*String = undefined;
     const err = documentHTMLVtable(doc).get_domain.?(doc, &s);
     try DOMErr(err);
@@ -1459,7 +1464,7 @@ pub fn documentHTMLGetDomain(doc: *DocumentHTML) ![]const u8 {
     return strToData(s.?);
 }
 
-pub fn documentHTMLGetReferrer(doc: *DocumentHTML) ![]const u8 {
+pub inline fn documentHTMLGetReferrer(doc: *DocumentHTML) ![]const u8 {
     var s: ?*String = undefined;
     const err = documentHTMLVtable(doc).get_referrer.?(doc, &s);
     try DOMErr(err);
@@ -1467,7 +1472,7 @@ pub fn documentHTMLGetReferrer(doc: *DocumentHTML) ![]const u8 {
     return strToData(s.?);
 }
 
-pub fn documentHTMLGetTitle(doc: *DocumentHTML) ![]const u8 {
+pub inline fn documentHTMLGetTitle(doc: *DocumentHTML) ![]const u8 {
     var s: ?*String = undefined;
     const err = documentHTMLVtable(doc).get_title.?(doc, &s);
     try DOMErr(err);
@@ -1475,7 +1480,7 @@ pub fn documentHTMLGetTitle(doc: *DocumentHTML) ![]const u8 {
     return strToData(s.?);
 }
 
-pub fn documentHTMLSetTitle(doc: *DocumentHTML, v: []const u8) !void {
+pub inline fn documentHTMLSetTitle(doc: *DocumentHTML, v: []const u8) !void {
     const err = documentHTMLVtable(doc).set_title.?(doc, try strFromData(v));
     try DOMErr(err);
 }
