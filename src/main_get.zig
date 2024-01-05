@@ -56,4 +56,5 @@ pub fn main() !void {
     var page = try browser.currentSession().createPage();
     defer page.end();
     try page.navigate(url);
+    try page.dump(std.io.getStdOut());
 }

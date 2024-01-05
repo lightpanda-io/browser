@@ -2,6 +2,7 @@ const std = @import("std");
 
 const parser = @import("../netsurf.zig");
 const Loader = @import("loader.zig").Loader;
+const Dump = @import("dump.zig");
 const Mime = @import("mime.zig");
 
 const jsruntime = @import("jsruntime");
@@ -113,10 +114,13 @@ pub const Page = struct {
     loader: *Loader,
     env: *Env,
     window: *Window,
+    doc: ?*parser.Document = null,
 
     // handle url
     rawuri: ?[]const u8 = null,
     uri: std.Uri = undefined,
+
+    raw_data: ?[]const u8 = null,
 
     fn init(
         allocator: std.mem.Allocator,
@@ -138,9 +142,25 @@ pub const Page = struct {
     }
 
     pub fn deinit(self: *Page) void {
-        if (self.url != null) {
-            self.allocator.free(self.url);
+        if (self.raw_data) |s| {
+            self.allocator.free(s);
         }
+        if (self.raw_data) |s| {
+            self.allocator.free(s);
+        }
+    }
+
+    // dump writes the page content into the given file.
+    pub fn dump(self: *Page, out: std.fs.File) !void {
+        // no data loaded, nothin to do.
+        if (self.raw_data == null) return;
+
+        // if no HTML document pointer available, dump the data content only.
+        if (self.doc == null) return try out.writeAll(self.raw_data.?);
+
+        // if the page has a pointer to a document, dumps the HTML.
+        const root = try parser.documentGetDocumentElement(self.doc.?) orelse return;
+        try Dump.htmlFile(root, out);
     }
 
     // spec reference: https://html.spec.whatwg.org/#document-lifecycle
@@ -165,6 +185,9 @@ pub const Page = struct {
 
         if (result.body == null) return error.NoBody;
 
+        // save the body into the page.
+        self.raw_data = try self.allocator.dupe(u8, result.body.?);
+
         // TODO handle charset
         // https://html.spec.whatwg.org/#content-type
         const ct = result.headers.getFirstValue("Content-Type") orelse {
@@ -187,6 +210,9 @@ pub const Page = struct {
         log.debug("parse html", .{});
         const html_doc = try parser.documentHTMLParseFromStrAlloc(self.allocator, result.body.?);
         const doc = parser.documentHTMLToDocument(html_doc);
+
+        // save a document's pointer in the page.
+        self.doc = doc;
 
         // TODO set document.readyState to interactive
         // https://html.spec.whatwg.org/#reporting-document-loading-status

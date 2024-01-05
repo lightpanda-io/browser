@@ -31,7 +31,7 @@ fn nodeFile(root: *parser.Element, out: File) !void {
                     try out.writeAll(" ");
                     try out.writeAll(try parser.attributeGetName(attr));
                     try out.writeAll("=\"");
-                    try out.writeAll(try parser.attributeGetValue(attr));
+                    try out.writeAll(try parser.attributeGetValue(attr) orelse "");
                     try out.writeAll("\"");
                     i += 1;
                 }
