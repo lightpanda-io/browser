@@ -178,7 +178,7 @@ pub const Page = struct {
             // TODO check content-type
             try self.loadHTMLDoc(&result);
         } else {
-            log.info("none HTML document: {s}", .{ct});
+            log.info("non-HTML document: {s}", .{ct});
         }
     }
 
