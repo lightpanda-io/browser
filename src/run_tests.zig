@@ -122,3 +122,12 @@ test "bug document html parsing #4" {
     doc = try parser.documentHTMLParse(file.reader(), "UTF-8");
     parser.documentHTMLClose(doc) catch {};
 }
+
+const dump = @import("browser/dump.zig");
+test "run browser tests" {
+    // const out = std.io.getStdOut();
+    const out = try std.fs.openFileAbsolute("/dev/null", .{ .mode = .write_only });
+    defer out.close();
+
+    try dump.HTMLFileTestFn(out);
+}
