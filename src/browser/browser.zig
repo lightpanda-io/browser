@@ -206,7 +206,7 @@ pub const Page = struct {
         log.debug("setup global env", .{});
         try self.env.addObject(apis, self.window, "window");
         try self.env.addObject(apis, self.window, "self");
-        try self.env.addObject(apis, doc, "document");
+        try self.env.addObject(apis, html_doc, "document");
 
         // browse the DOM tree to retrieve scripts
         var sasync = std.ArrayList(*parser.Element).init(self.allocator);
