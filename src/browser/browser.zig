@@ -12,7 +12,7 @@ const TPL = jsruntime.TPL;
 const apiweb = @import("../apiweb.zig");
 const apis = jsruntime.compile(apiweb.Interfaces);
 
-const Window = @import("../nav/window.zig").Window;
+const Window = @import("../html/window.zig").Window;
 const Walker = @import("../dom/html_collection.zig").WalkerDepthFirst;
 
 const FetchResult = std.http.Client.FetchResult;

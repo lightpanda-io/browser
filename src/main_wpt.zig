@@ -7,7 +7,6 @@ const FileLoader = @import("wpt/fileloader.zig").FileLoader;
 const wpt = @import("wpt/run.zig");
 
 const apiweb = @import("apiweb.zig");
-const nav = @import("nav/nav.zig");
 const HTMLElem = @import("html/elements.zig");
 
 const wpt_dir = "tests/wpt";
