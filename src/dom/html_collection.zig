@@ -167,6 +167,18 @@ pub fn HTMLCollectionByName(
     };
 }
 
+pub fn HTMLCollectionAll(
+    root: ?*parser.Node,
+    include_root: bool,
+) !HTMLCollection {
+    return HTMLCollection{
+        .root = root,
+        .walker = Walker{ .walkerDepthFirst = .{} },
+        .matcher = Matcher{ .matchTrue = .{} },
+        .include_root = include_root,
+    };
+}
+
 pub fn HTMLCollectionChildren(
     root: ?*parser.Node,
     include_root: bool,
