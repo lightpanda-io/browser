@@ -225,58 +225,57 @@ pub const Page = struct {
 
             const e = parser.nodeToElement(next.?);
             const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(e)));
-            switch (tag) {
-                .script => {
-                    // ignore non-js script.
-                    // > type
-                    // > Attribute is not set (default), an empty string, or a JavaScript MIME
-                    // > type indicates that the script is a "classic script", containing
-                    // > JavaScript code.
-                    // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#attribute_is_not_set_default_an_empty_string_or_a_javascript_mime_type
-                    const stype = try parser.elementGetAttribute(e, "type");
-                    if (!isJS(stype)) {
-                        continue;
-                    }
 
-                    // Ignore the defer attribute b/c we analyze all script
-                    // after the document has been parsed.
-                    // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#defer
+            // ignore non-script tags
+            if (tag != .script) continue;
 
-                    // TODO use fetchpriority
-                    // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#fetchpriority
-
-                    // > async
-                    // > For classic scripts, if the async attribute is present,
-                    // > then the classic script will be fetched in parallel to
-                    // > parsing and evaluated as soon as it is available.
-                    // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#async
-                    if (try parser.elementGetAttribute(e, "async") != null) {
-                        try sasync.append(e);
-                        continue;
-                    }
-
-                    // TODO handle for attribute
-                    // TODO handle event attribute
-
-                    // TODO defer
-                    // > This Boolean attribute is set to indicate to a browser
-                    // > that the script is meant to be executed after the
-                    // > document has been parsed, but before firing
-                    // > DOMContentLoaded.
-                    // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#defer
-                    // defer allow us to load a script w/o blocking the rest of
-                    // evaluations.
-
-                    // > Scripts without async, defer or type="module"
-                    // > attributes, as well as inline scripts without the
-                    // > type="module" attribute, are fetched and executed
-                    // > immediately before the browser continues to parse the
-                    // > page.
-                    // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#notes
-                    self.evalScript(e) catch |err| log.warn("evaljs: {any}", .{err});
-                },
-                else => continue,
+            // ignore non-js script.
+            // > type
+            // > Attribute is not set (default), an empty string, or a JavaScript MIME
+            // > type indicates that the script is a "classic script", containing
+            // > JavaScript code.
+            // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#attribute_is_not_set_default_an_empty_string_or_a_javascript_mime_type
+            const stype = try parser.elementGetAttribute(e, "type");
+            if (!isJS(stype)) {
+                continue;
             }
+
+            // Ignore the defer attribute b/c we analyze all script
+            // after the document has been parsed.
+            // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#defer
+
+            // TODO use fetchpriority
+            // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#fetchpriority
+
+            // > async
+            // > For classic scripts, if the async attribute is present,
+            // > then the classic script will be fetched in parallel to
+            // > parsing and evaluated as soon as it is available.
+            // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#async
+            if (try parser.elementGetAttribute(e, "async") != null) {
+                try sasync.append(e);
+                continue;
+            }
+
+            // TODO handle for attribute
+            // TODO handle event attribute
+
+            // TODO defer
+            // > This Boolean attribute is set to indicate to a browser
+            // > that the script is meant to be executed after the
+            // > document has been parsed, but before firing
+            // > DOMContentLoaded.
+            // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#defer
+            // defer allow us to load a script w/o blocking the rest of
+            // evaluations.
+
+            // > Scripts without async, defer or type="module"
+            // > attributes, as well as inline scripts without the
+            // > type="module" attribute, are fetched and executed
+            // > immediately before the browser continues to parse the
+            // > page.
+            // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#notes
+            self.evalScript(e) catch |err| log.warn("evaljs: {any}", .{err});
         }
 
         // TODO wait for deferred scripts
