@@ -150,6 +150,43 @@ pub const HTMLDocument = struct {
         return "off";
     }
 
+    // noop legacy functions
+    // https://html.spec.whatwg.org/#Document-partial
+    pub fn _clear(_: *parser.DocumentHTML) void {}
+    pub fn _captureEvents(_: *parser.DocumentHTML) void {}
+    pub fn _releaseEvents(_: *parser.DocumentHTML) void {}
+
+    pub fn get_fgColor(_: *parser.DocumentHTML) []const u8 {
+        return "";
+    }
+    pub fn set_fgColor(_: *parser.DocumentHTML, _: []const u8) []const u8 {
+        return "";
+    }
+    pub fn get_linkColor(_: *parser.DocumentHTML) []const u8 {
+        return "";
+    }
+    pub fn set_linkColor(_: *parser.DocumentHTML, _: []const u8) []const u8 {
+        return "";
+    }
+    pub fn get_vlinkColor(_: *parser.DocumentHTML) []const u8 {
+        return "";
+    }
+    pub fn set_vlinkColor(_: *parser.DocumentHTML, _: []const u8) []const u8 {
+        return "";
+    }
+    pub fn get_alinkColor(_: *parser.DocumentHTML) []const u8 {
+        return "";
+    }
+    pub fn set_alinkColor(_: *parser.DocumentHTML, _: []const u8) []const u8 {
+        return "";
+    }
+    pub fn get_bgColor(_: *parser.DocumentHTML) []const u8 {
+        return "";
+    }
+    pub fn set_bgColor(_: *parser.DocumentHTML, _: []const u8) []const u8 {
+        return "";
+    }
+
     pub fn deinit(_: *parser.DocumentHTML, _: std.mem.Allocator) void {}
 };
 
