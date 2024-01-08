@@ -9,7 +9,8 @@ const usage =
     \\usage: {s} [options] <url>
     \\  request the url with the browser
     \\
-    \\  -h, --help       Print this help message and exit.
+    \\  -h, --help      Print this help message and exit.
+    \\  --dump          Dump document in stdout
     \\
 ;
 
@@ -28,11 +29,16 @@ pub fn main() !void {
 
     const execname = args.next().?;
     var url: []const u8 = "";
+    var dump: bool = false;
 
     while (args.next()) |arg| {
         if (std.mem.eql(u8, "-h", arg) or std.mem.eql(u8, "--help", arg)) {
             try std.io.getStdErr().writer().print(usage, .{execname});
             std.os.exit(0);
+        }
+        if (std.mem.eql(u8, "--dump", arg)) {
+            dump = true;
+            continue;
         }
         // allow only one url
         if (url.len != 0) {
@@ -56,5 +62,8 @@ pub fn main() !void {
     var page = try browser.currentSession().createPage();
     defer page.end();
     try page.navigate(url);
-    try page.dump(std.io.getStdOut());
+
+    if (dump) {
+        try page.dump(std.io.getStdOut());
+    }
 }
