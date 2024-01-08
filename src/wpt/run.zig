@@ -17,7 +17,10 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime apis: []jsruntime.API, comp
     const alloc = arena.allocator();
 
     // document
-    const html_doc = try parser.documentHTMLParseFromFileAlloc(alloc, f);
+    const file = try std.fs.cwd().openFile(f, .{});
+    defer file.close();
+
+    const html_doc = try parser.documentHTMLParseFromFile(file);
     const doc = parser.documentHTMLToDocument(html_doc);
 
     const dirname = fspath.dirname(f[dir.len..]) orelse unreachable;
