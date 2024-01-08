@@ -61,7 +61,10 @@ pub fn main() !void {
     defer arena.deinit();
 
     // document
-    doc = try parser.documentHTMLParseFromFileAlloc(arena.allocator(), "test.html");
+    const file = try std.fs.cwd().openFile("test.html", .{});
+    defer file.close();
+
+    doc = try parser.documentHTMLParseFromFile(file);
     defer parser.documentHTMLClose(doc) catch |err| {
         std.debug.print("documentHTMLClose error: {s}\n", .{@errorName(err)});
     };

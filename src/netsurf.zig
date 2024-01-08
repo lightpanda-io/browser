@@ -1281,21 +1281,9 @@ fn documentHTMLVtable(doc_html: *DocumentHTML) c.dom_html_document_vtable {
     return getVtable(c.dom_html_document_vtable, DocumentHTML, doc_html);
 }
 
-// documentHTMLParseFromFileAlloc parses the file.
-// The allocator is required to create a null terminated string from filename.
-// The buffer is freed by the function.
-// The caller is responsible for closing the document.
-// DEPRECATED
-pub fn documentHTMLParseFromFileAlloc(_: std.mem.Allocator, filename: []const u8) !*DocumentHTML {
-    return documentHTMLParseFromFile(filename);
-}
-
 // documentHTMLParseFromFile parses the given HTML file.
 // The caller is responsible for closing the document.
-pub fn documentHTMLParseFromFile(filename: []const u8) !*DocumentHTML {
-    const file = try std.fs.openFileAbsolute(filename, .{});
-    defer file.close();
-
+pub fn documentHTMLParseFromFile(file: std.fs.File) !*DocumentHTML {
     var parser: ?*c.dom_hubbub_parser = undefined;
     var doc: ?*c.dom_document = undefined;
     var err: c.hubbub_error = undefined;
@@ -1332,15 +1320,6 @@ pub fn documentHTMLParseFromFile(filename: []const u8) !*DocumentHTML {
     }
 
     return @as(*DocumentHTML, @ptrCast(doc.?));
-}
-
-// documentHTMLParseFromStrAlloc the given string.
-// The allocator is required to create a null terminated string.
-// The c string allocated is freed by the function.
-// The caller is responsible for closing the document.
-// DEPRECATED
-pub fn documentHTMLParseFromStrAlloc(_: std.mem.Allocator, str: []const u8) !*DocumentHTML {
-    return documentHTMLParseFromStr(str);
 }
 
 // documentHTMLParseFromStr parses the given HTML string.
