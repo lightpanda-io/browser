@@ -127,6 +127,26 @@ pub const Element = struct {
         return true;
     }
 
+    pub fn _getAttributeNode(self: *parser.Element, name: []const u8) !?*parser.Attribute {
+        return try parser.elementGetAttributeNode(self, name);
+    }
+
+    pub fn _getAttributeNodeNS(self: *parser.Element, ns: []const u8, name: []const u8) !?*parser.Attribute {
+        return try parser.elementGetAttributeNodeNS(self, ns, name);
+    }
+
+    pub fn _setAttributeNode(self: *parser.Element, attr: *parser.Attribute) !?*parser.Attribute {
+        return try parser.elementSetAttributeNode(self, attr);
+    }
+
+    pub fn _setAttributeNodeNS(self: *parser.Element, attr: *parser.Attribute) !?*parser.Attribute {
+        return try parser.elementSetAttributeNodeNS(self, attr);
+    }
+
+    pub fn _removeAttributeNode(self: *parser.Element, attr: *parser.Attribute) !*parser.Attribute {
+        return try parser.elementRemoveAttributeNode(self, attr);
+    }
+
     pub fn _getElementsByTagName(
         self: *parser.Element,
         alloc: std.mem.Allocator,
@@ -366,4 +386,14 @@ pub fn testExecFn(
         .{ .src = "e.querySelectorAll('*').length", .ex = "4" },
     };
     try checkCases(js_env, &querySelector);
+
+    var attrNode = [_]Case{
+        .{ .src = "let f = document.getElementById('content')", .ex = "undefined" },
+        .{ .src = "let ff = document.createAttribute('foo')", .ex = "undefined" },
+        .{ .src = "f.setAttributeNode(ff)", .ex = "null" },
+        .{ .src = "f.getAttributeNode('foo').name", .ex = "foo" },
+        .{ .src = "f.removeAttributeNode(ff).name", .ex = "foo" },
+        .{ .src = "f.getAttributeNode('bar')", .ex = "null" },
+    };
+    try checkCases(js_env, &attrNode);
 }
