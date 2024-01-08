@@ -1,7 +1,8 @@
 const std = @import("std");
 
 const c = @cImport({
-    @cInclude("wrapper.h");
+    @cInclude("dom/dom.h");
+    @cInclude("dom/bindings/hubbub/parser.h");
 });
 
 // Vtable
@@ -1284,19 +1285,52 @@ fn documentHTMLVtable(doc_html: *DocumentHTML) c.dom_html_document_vtable {
 // The allocator is required to create a null terminated string from filename.
 // The buffer is freed by the function.
 // The caller is responsible for closing the document.
-pub fn documentHTMLParseFromFileAlloc(allocator: std.mem.Allocator, filename: []const u8) !*DocumentHTML {
-    const cstr = try allocator.dupeZ(u8, filename);
-    defer allocator.free(cstr);
-
-    return documentHTMLParseFromFile(cstr);
+// DEPRECATED
+pub fn documentHTMLParseFromFileAlloc(_: std.mem.Allocator, filename: []const u8) !*DocumentHTML {
+    return documentHTMLParseFromFile(filename);
 }
 
-// documentHTMLParseFromFile parses the given filename c string (ie. with 0 sentinel).
+// documentHTMLParseFromFile parses the given HTML file.
 // The caller is responsible for closing the document.
-pub fn documentHTMLParseFromFile(filename: [:0]const u8) !*DocumentHTML {
-    // create a null terminated c string.
-    const doc = c.wr_create_doc_dom_from_file(filename.ptr);
-    if (doc == null) return error.ParserError;
+pub fn documentHTMLParseFromFile(filename: []const u8) !*DocumentHTML {
+    const file = try std.fs.openFileAbsolute(filename, .{});
+    defer file.close();
+
+    var parser: ?*c.dom_hubbub_parser = undefined;
+    var doc: ?*c.dom_document = undefined;
+    var err: c.hubbub_error = undefined;
+
+    var params = c.dom_hubbub_parser_params{
+        .enc = null,
+        .fix_enc = true,
+        .msg = null,
+        .script = null,
+        .enable_script = false,
+        .ctx = null,
+        .daf = null,
+    };
+
+    err = c.dom_hubbub_parser_create(&params, &parser, &doc);
+    if (err != c.DOM_HUBBUB_OK) {
+        return error.ParserError;
+    }
+    defer c.dom_hubbub_parser_destroy(parser);
+
+    var buffer: [1024 * 4]u8 = undefined;
+    var ln = buffer.len;
+    while (ln == buffer.len) {
+        ln = try file.readAll(&buffer);
+        err = c.dom_hubbub_parser_parse_chunk(parser, &buffer, ln);
+        if (err != c.DOM_HUBBUB_OK) {
+            return error.ParserError;
+        }
+    }
+
+    err = c.dom_hubbub_parser_completed(parser);
+    if (err != c.DOM_HUBBUB_OK) {
+        return error.ParserError;
+    }
+
     return @as(*DocumentHTML, @ptrCast(doc.?));
 }
 
@@ -1304,18 +1338,44 @@ pub fn documentHTMLParseFromFile(filename: [:0]const u8) !*DocumentHTML {
 // The allocator is required to create a null terminated string.
 // The c string allocated is freed by the function.
 // The caller is responsible for closing the document.
-pub fn documentHTMLParseFromStrAlloc(allocator: std.mem.Allocator, str: []const u8) !*DocumentHTML {
-    // create a null terminated c string.
-    const cstr = try allocator.dupeZ(u8, str);
-    defer allocator.free(cstr);
-    return documentHTMLParseFromStr(cstr);
+// DEPRECATED
+pub fn documentHTMLParseFromStrAlloc(_: std.mem.Allocator, str: []const u8) !*DocumentHTML {
+    return documentHTMLParseFromStr(str);
 }
 
-// documentHTMLParseFromStr parses the given c string (ie. with 0 sentinel).
+// documentHTMLParseFromStr parses the given HTML string.
 // The caller is responsible for closing the document.
-pub fn documentHTMLParseFromStr(cstr: [:0]const u8) !*DocumentHTML {
-    const doc = c.wr_create_doc_dom_from_string(cstr.ptr);
-    if (doc == null) return error.ParserError;
+pub fn documentHTMLParseFromStr(str: []const u8) !*DocumentHTML {
+    var parser: ?*c.dom_hubbub_parser = undefined;
+    var doc: ?*c.dom_document = undefined;
+    var err: c.hubbub_error = undefined;
+
+    var params = c.dom_hubbub_parser_params{
+        .enc = null,
+        .fix_enc = true,
+        .msg = null,
+        .script = null,
+        .enable_script = false,
+        .ctx = null,
+        .daf = null,
+    };
+
+    err = c.dom_hubbub_parser_create(&params, &parser, &doc);
+    if (err != c.DOM_HUBBUB_OK) {
+        return error.ParserError;
+    }
+    defer c.dom_hubbub_parser_destroy(parser);
+
+    err = c.dom_hubbub_parser_parse_chunk(parser, str, str.len);
+    if (err != c.DOM_HUBBUB_OK) {
+        return error.ParserError;
+    }
+
+    err = c.dom_hubbub_parser_completed(parser);
+    if (err != c.DOM_HUBBUB_OK) {
+        return error.ParserError;
+    }
+
     return @as(*DocumentHTML, @ptrCast(doc.?));
 }
 
