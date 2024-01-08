@@ -1334,7 +1334,7 @@ pub fn documentHTMLParseFromFile(file: std.fs.File) !*DocumentHTML {
     try parserErr(err);
     defer c.dom_hubbub_parser_destroy(parser);
 
-    var buffer: [1024 * 4]u8 = undefined;
+    var buffer: [1024]u8 = undefined;
     var ln = buffer.len;
     while (ln == buffer.len) {
         ln = try file.readAll(&buffer);
