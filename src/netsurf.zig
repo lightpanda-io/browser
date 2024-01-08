@@ -1281,6 +1281,38 @@ fn documentHTMLVtable(doc_html: *DocumentHTML) c.dom_html_document_vtable {
     return getVtable(c.dom_html_document_vtable, DocumentHTML, doc_html);
 }
 
+const ParserError = error{
+    Reprocess,
+    EncodingChange,
+    Paused,
+    NoMemory,
+    BadParameter,
+    BadEncoding,
+    Invalid,
+    FileNotFound,
+    NeedData,
+    Unknown,
+};
+
+const HubbubErr = c.hubbub_error;
+
+fn parserErr(err: HubbubErr) ParserError!void {
+    return switch (err) {
+        c.HUBBUB_OK => {},
+        c.HUBBUB_REPROCESS => ParserError.Reprocess,
+        c.HUBBUB_ENCODINGCHANGE => ParserError.EncodingChange,
+        c.HUBBUB_PAUSED => ParserError.Paused,
+        c.HUBBUB_NOMEM => ParserError.NoMemory,
+        c.HUBBUB_BADPARM => ParserError.BadParameter,
+        c.HUBBUB_BADENCODING => ParserError.BadEncoding,
+        c.HUBBUB_INVALID => ParserError.Invalid,
+        c.HUBBUB_FILENOTFOUND => ParserError.FileNotFound,
+        c.HUBBUB_NEEDDATA => ParserError.NeedData,
+        c.HUBBUB_UNKNOWN => ParserError.Unknown,
+        else => unreachable,
+    };
+}
+
 // documentHTMLParseFromFile parses the given HTML file.
 // The caller is responsible for closing the document.
 pub fn documentHTMLParseFromFile(file: std.fs.File) !*DocumentHTML {
@@ -1299,9 +1331,7 @@ pub fn documentHTMLParseFromFile(file: std.fs.File) !*DocumentHTML {
     };
 
     err = c.dom_hubbub_parser_create(&params, &parser, &doc);
-    if (err != c.DOM_HUBBUB_OK) {
-        return error.ParserError;
-    }
+    try parserErr(err);
     defer c.dom_hubbub_parser_destroy(parser);
 
     var buffer: [1024 * 4]u8 = undefined;
@@ -1309,22 +1339,18 @@ pub fn documentHTMLParseFromFile(file: std.fs.File) !*DocumentHTML {
     while (ln == buffer.len) {
         ln = try file.readAll(&buffer);
         err = c.dom_hubbub_parser_parse_chunk(parser, &buffer, ln);
-        if (err != c.DOM_HUBBUB_OK) {
-            return error.ParserError;
-        }
+        try parserErr(err);
     }
 
     err = c.dom_hubbub_parser_completed(parser);
-    if (err != c.DOM_HUBBUB_OK) {
-        return error.ParserError;
-    }
+    try parserErr(err);
 
     return @as(*DocumentHTML, @ptrCast(doc.?));
 }
 
 // documentHTMLParseFromStr parses the given HTML string.
 // The caller is responsible for closing the document.
-pub fn documentHTMLParseFromStr(str: []const u8) !*DocumentHTML {
+pub fn documentHTMLParseFromStr(str: []const u8) ParserError!*DocumentHTML {
     var parser: ?*c.dom_hubbub_parser = undefined;
     var doc: ?*c.dom_document = undefined;
     var err: c.hubbub_error = undefined;
@@ -1340,20 +1366,14 @@ pub fn documentHTMLParseFromStr(str: []const u8) !*DocumentHTML {
     };
 
     err = c.dom_hubbub_parser_create(&params, &parser, &doc);
-    if (err != c.DOM_HUBBUB_OK) {
-        return error.ParserError;
-    }
+    try parserErr(err);
     defer c.dom_hubbub_parser_destroy(parser);
 
     err = c.dom_hubbub_parser_parse_chunk(parser, str, str.len);
-    if (err != c.DOM_HUBBUB_OK) {
-        return error.ParserError;
-    }
+    try parserErr(err);
 
     err = c.dom_hubbub_parser_completed(parser);
-    if (err != c.DOM_HUBBUB_OK) {
-        return error.ParserError;
-    }
+    try parserErr(err);
 
     return @as(*DocumentHTML, @ptrCast(doc.?));
 }
