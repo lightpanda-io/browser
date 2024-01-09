@@ -1396,6 +1396,17 @@ fn parserErr(err: HubbubErr) ParserError!void {
 // documentHTMLParseFromFile parses the given HTML file.
 // The caller is responsible for closing the document.
 pub fn documentHTMLParseFromFile(file: std.fs.File) !*DocumentHTML {
+    return try documentHTMLParse(file.reader());
+}
+
+// documentHTMLParseFromStr parses the given HTML string.
+// The caller is responsible for closing the document.
+pub fn documentHTMLParseFromStr(str: []const u8) !*DocumentHTML {
+    var fbs = std.io.fixedBufferStream(str);
+    return try documentHTMLParse(fbs.reader());
+}
+
+pub fn documentHTMLParse(reader: anytype) !*DocumentHTML {
     var parser: ?*c.dom_hubbub_parser = undefined;
     var doc: ?*c.dom_document = undefined;
     var err: c.hubbub_error = undefined;
@@ -1417,40 +1428,10 @@ pub fn documentHTMLParseFromFile(file: std.fs.File) !*DocumentHTML {
     var buffer: [1024]u8 = undefined;
     var ln = buffer.len;
     while (ln == buffer.len) {
-        ln = try file.readAll(&buffer);
+        ln = try reader.read(&buffer);
         err = c.dom_hubbub_parser_parse_chunk(parser, &buffer, ln);
         try parserErr(err);
     }
-
-    err = c.dom_hubbub_parser_completed(parser);
-    try parserErr(err);
-
-    return @as(*DocumentHTML, @ptrCast(doc.?));
-}
-
-// documentHTMLParseFromStr parses the given HTML string.
-// The caller is responsible for closing the document.
-pub fn documentHTMLParseFromStr(str: []const u8) ParserError!*DocumentHTML {
-    var parser: ?*c.dom_hubbub_parser = undefined;
-    var doc: ?*c.dom_document = undefined;
-    var err: c.hubbub_error = undefined;
-
-    var params = c.dom_hubbub_parser_params{
-        .enc = null,
-        .fix_enc = true,
-        .msg = null,
-        .script = null,
-        .enable_script = false,
-        .ctx = null,
-        .daf = null,
-    };
-
-    err = c.dom_hubbub_parser_create(&params, &parser, &doc);
-    try parserErr(err);
-    defer c.dom_hubbub_parser_destroy(parser);
-
-    err = c.dom_hubbub_parser_parse_chunk(parser, str, str.len);
-    try parserErr(err);
 
     err = c.dom_hubbub_parser_completed(parser);
     try parserErr(err);

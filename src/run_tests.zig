@@ -98,3 +98,14 @@ test {
 
     try jsruntime.loadEnv(&arena_alloc, testsAllExecFn, apis);
 }
+
+test "DocumentHTMLParseFromStr" {
+    const file = try std.fs.cwd().openFile("test.html", .{});
+    defer file.close();
+
+    const str = try file.readToEndAlloc(std.testing.allocator, std.math.maxInt(u32));
+    defer std.testing.allocator.free(str);
+
+    doc = try parser.documentHTMLParseFromStr(str);
+    parser.documentHTMLClose(doc) catch {};
+}
