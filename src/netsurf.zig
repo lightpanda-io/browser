@@ -1357,6 +1357,11 @@ pub inline fn documentCreateAttributeNS(doc: *Document, ns: []const u8, qname: [
 // DocumentHTML
 pub const DocumentHTML = c.dom_html_document;
 
+// documentHTMLToNode is an helper to convert a documentHTML to an node.
+pub inline fn documentHTMLToNode(doc: *DocumentHTML) *Node {
+    return @as(*Node, @ptrCast(doc));
+}
+
 fn documentHTMLVtable(doc_html: *DocumentHTML) c.dom_html_document_vtable {
     return getVtable(c.dom_html_document_vtable, DocumentHTML, doc_html);
 }

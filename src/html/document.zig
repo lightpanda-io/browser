@@ -49,7 +49,7 @@ pub const HTMLDocument = struct {
     }
 
     pub fn get_head(self: *parser.DocumentHTML) !?*parser.Head {
-        const root = try rootNode(self) orelse return null;
+        const root = parser.documentHTMLToNode(self);
         const walker = Walker{};
         var next: ?*parser.Node = null;
         while (true) {
@@ -85,8 +85,7 @@ pub const HTMLDocument = struct {
 
         if (name.len == 0) return list;
 
-        const root = try rootNode(self) orelse return list;
-
+        const root = parser.documentHTMLToNode(self);
         var c = try collection.HTMLCollectionByName(alloc, root, name, false);
 
         const ln = try c.get_length();
@@ -100,18 +99,12 @@ pub const HTMLDocument = struct {
         return list;
     }
 
-    inline fn rootNode(self: *parser.DocumentHTML) !?*parser.Node {
-        const doc = parser.documentHTMLToDocument(self);
-        const elt = try parser.documentGetDocumentElement(doc) orelse return null;
-        return parser.elementToNode(elt);
-    }
-
     pub fn get_images(self: *parser.DocumentHTML, alloc: std.mem.Allocator) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(alloc, try rootNode(self), "img", false);
+        return try collection.HTMLCollectionByTagName(alloc, parser.documentHTMLToNode(self), "img", false);
     }
 
     pub fn get_embeds(self: *parser.DocumentHTML, alloc: std.mem.Allocator) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(alloc, try rootNode(self), "embed", false);
+        return try collection.HTMLCollectionByTagName(alloc, parser.documentHTMLToNode(self), "embed", false);
     }
 
     pub fn get_plugins(self: *parser.DocumentHTML, alloc: std.mem.Allocator) !collection.HTMLCollection {
@@ -119,11 +112,11 @@ pub const HTMLDocument = struct {
     }
 
     pub fn get_forms(self: *parser.DocumentHTML, alloc: std.mem.Allocator) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(alloc, try rootNode(self), "form", false);
+        return try collection.HTMLCollectionByTagName(alloc, parser.documentHTMLToNode(self), "form", false);
     }
 
     pub fn get_scripts(self: *parser.DocumentHTML, alloc: std.mem.Allocator) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(alloc, try rootNode(self), "script", false);
+        return try collection.HTMLCollectionByTagName(alloc, parser.documentHTMLToNode(self), "script", false);
     }
 
     pub fn get_applets(_: *parser.DocumentHTML) !collection.HTMLCollection {
@@ -131,15 +124,15 @@ pub const HTMLDocument = struct {
     }
 
     pub fn get_links(self: *parser.DocumentHTML) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByLinks(try rootNode(self), false);
+        return try collection.HTMLCollectionByLinks(parser.documentHTMLToNode(self), false);
     }
 
     pub fn get_anchors(self: *parser.DocumentHTML) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByAnchors(try rootNode(self), false);
+        return try collection.HTMLCollectionByAnchors(parser.documentHTMLToNode(self), false);
     }
 
     pub fn get_all(self: *parser.DocumentHTML) !collection.HTMLCollection {
-        return try collection.HTMLCollectionAll(try rootNode(self), true);
+        return try collection.HTMLCollectionAll(parser.documentHTMLToNode(self), true);
     }
 
     pub fn get_currentScript(_: *parser.DocumentHTML) !?*parser.Element {
