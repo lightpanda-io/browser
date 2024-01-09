@@ -83,7 +83,10 @@ fn nodeFile(root: *parser.Element, out: File) !void {
 
 // HTMLFileTestFn is run by run_tests.zig
 pub fn HTMLFileTestFn(out: File) !void {
-    const doc_html = try parser.documentHTMLParseFromFileAlloc(std.testing.allocator, "test.html");
+    const file = try std.fs.cwd().openFile("test.html", .{});
+    defer file.close();
+
+    const doc_html = try parser.documentHTMLParse(file.reader());
     // ignore close error
     defer parser.documentHTMLClose(doc_html) catch {};
 

@@ -208,7 +208,7 @@ pub const Page = struct {
     // https://html.spec.whatwg.org/#read-html
     fn loadHTMLDoc(self: *Page, result: *FetchResult) !void {
         log.debug("parse html", .{});
-        const html_doc = try parser.documentHTMLParseFromStrAlloc(self.allocator, result.body.?);
+        const html_doc = try parser.documentHTMLParseFromStr(result.body.?);
         const doc = parser.documentHTMLToDocument(html_doc);
 
         // save a document's pointer in the page.
