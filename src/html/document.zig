@@ -28,7 +28,7 @@ pub const HTMLDocument = struct {
     }
 
     pub fn set_domain(_: *parser.DocumentHTML, _: []const u8) ![]const u8 {
-        return parser.DOMError.NotSupported;
+        return error.NotImplemented;
     }
 
     pub fn get_referrer(self: *parser.DocumentHTML) ![]const u8 {
@@ -36,7 +36,7 @@ pub const HTMLDocument = struct {
     }
 
     pub fn set_referrer(_: *parser.DocumentHTML, _: []const u8) ![]const u8 {
-        return parser.DOMError.NotSupported;
+        return error.NotImplemented;
     }
 
     pub fn get_body(self: *parser.DocumentHTML) !?*parser.Body {
@@ -67,7 +67,7 @@ pub const HTMLDocument = struct {
 
     // TODO: not implemented by libdom
     pub fn set_cookie(_: *parser.DocumentHTML, _: []const u8) ![]const u8 {
-        return parser.DOMError.NotSupported;
+        return error.NotImplemented;
     }
 
     pub fn get_title(self: *parser.DocumentHTML) ![]const u8 {
