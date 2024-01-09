@@ -64,7 +64,7 @@ pub fn main() !void {
     const file = try std.fs.cwd().openFile("test.html", .{});
     defer file.close();
 
-    doc = try parser.documentHTMLParseFromFile(file);
+    doc = try parser.documentHTMLParse(file.reader());
     defer parser.documentHTMLClose(doc) catch |err| {
         std.debug.print("documentHTMLClose error: {s}\n", .{@errorName(err)});
     };

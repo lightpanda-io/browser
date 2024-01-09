@@ -41,7 +41,7 @@ fn testExecFn(
     const file = try std.fs.cwd().openFile("test.html", .{});
     defer file.close();
 
-    doc = try parser.documentHTMLParseFromFile(file);
+    doc = try parser.documentHTMLParse(file.reader());
     defer parser.documentHTMLClose(doc) catch |err| {
         std.debug.print("documentHTMLClose error: {s}\n", .{@errorName(err)});
     };
@@ -97,4 +97,15 @@ test {
     defer arena_alloc.deinit();
 
     try jsruntime.loadEnv(&arena_alloc, testsAllExecFn, apis);
+}
+
+test "DocumentHTMLParseFromStr" {
+    const file = try std.fs.cwd().openFile("test.html", .{});
+    defer file.close();
+
+    const str = try file.readToEndAlloc(std.testing.allocator, std.math.maxInt(u32));
+    defer std.testing.allocator.free(str);
+
+    doc = try parser.documentHTMLParseFromStr(str);
+    parser.documentHTMLClose(doc) catch {};
 }
