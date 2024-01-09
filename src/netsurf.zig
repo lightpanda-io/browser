@@ -1216,6 +1216,10 @@ fn documentVtable(doc: *Document) c.dom_document_vtable {
     return getVtable(c.dom_document_vtable, Document, doc);
 }
 
+pub inline fn documentToNode(doc: *Document) *Node {
+    return @as(*Node, @ptrCast(doc));
+}
+
 pub inline fn documentGetElementById(doc: *Document, id: []const u8) !?*Element {
     var elem: ?*Element = undefined;
     const err = documentVtable(doc).dom_document_get_element_by_id.?(doc, try strFromData(id), &elem);
