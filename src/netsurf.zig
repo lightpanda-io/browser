@@ -1393,12 +1393,6 @@ fn parserErr(err: HubbubErr) ParserError!void {
     };
 }
 
-// documentHTMLParseFromFile parses the given HTML file.
-// The caller is responsible for closing the document.
-pub fn documentHTMLParseFromFile(file: std.fs.File) !*DocumentHTML {
-    return try documentHTMLParse(file.reader());
-}
-
 // documentHTMLParseFromStr parses the given HTML string.
 // The caller is responsible for closing the document.
 pub fn documentHTMLParseFromStr(str: []const u8) !*DocumentHTML {
