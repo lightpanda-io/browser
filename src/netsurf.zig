@@ -863,6 +863,11 @@ pub fn attributeGetValue(a: *Attribute) !?[]const u8 {
 }
 
 pub fn attributeSetValue(a: *Attribute, v: []const u8) !void {
+    // if the attribute has no owner/parent, the function crashes.
+    if (try attributeGetOwnerElement(a) == null) {
+        return DOMError.NotSupported;
+    }
+
     const err = attributeVtable(a).dom_attr_set_value.?(a, try strFromData(v));
     try DOMErr(err);
 }
