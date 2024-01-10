@@ -108,12 +108,7 @@ pub const Document = struct {
         alloc: std.mem.Allocator,
         tag_name: []const u8,
     ) !collection.HTMLCollection {
-        var elt: ?*parser.Node = null;
-        if (try parser.documentGetDocumentElement(self)) |root| {
-            elt = parser.elementToNode(root);
-        }
-
-        return try collection.HTMLCollectionByTagName(alloc, elt, tag_name, true);
+        return try collection.HTMLCollectionByTagName(alloc, parser.documentToNode(self), tag_name, true);
     }
 
     pub fn _getElementsByClassName(
@@ -121,12 +116,7 @@ pub const Document = struct {
         alloc: std.mem.Allocator,
         classNames: []const u8,
     ) !collection.HTMLCollection {
-        var elt: ?*parser.Node = null;
-        if (try parser.documentGetDocumentElement(self)) |root| {
-            elt = parser.elementToNode(root);
-        }
-
-        return try collection.HTMLCollectionByClassName(alloc, elt, classNames, true);
+        return try collection.HTMLCollectionByClassName(alloc, parser.documentToNode(self), classNames, true);
     }
 
     pub fn _createDocumentFragment(self: *parser.Document) !*parser.DocumentFragment {
@@ -170,11 +160,7 @@ pub const Document = struct {
     // ParentNode
     // https://dom.spec.whatwg.org/#parentnode
     pub fn get_children(self: *parser.Document) !collection.HTMLCollection {
-        var elt: ?*parser.Node = null;
-        if (try parser.documentGetDocumentElement(self)) |root| {
-            elt = parser.elementToNode(root);
-        }
-        return try collection.HTMLCollectionChildren(elt, true);
+        return try collection.HTMLCollectionChildren(parser.documentToNode(self), false);
     }
 
     pub fn get_firstElementChild(self: *parser.Document) !?ElementUnion {
@@ -219,7 +205,7 @@ pub const Document = struct {
         // catch-all, return all elements
         if (selectors[0] == '*') {
             // walk over the node tree fo find the node by id.
-            const root = parser.elementToNode(try parser.documentGetDocumentElement(self) orelse return list);
+            const root = parser.documentToNode(self);
             const walker = Walker{};
             var next: ?*parser.Node = null;
             while (true) {

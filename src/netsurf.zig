@@ -1216,6 +1216,10 @@ fn documentVtable(doc: *Document) c.dom_document_vtable {
     return getVtable(c.dom_document_vtable, Document, doc);
 }
 
+pub inline fn documentToNode(doc: *Document) *Node {
+    return @as(*Node, @ptrCast(doc));
+}
+
 pub inline fn documentGetElementById(doc: *Document, id: []const u8) !?*Element {
     var elem: ?*Element = undefined;
     const err = documentVtable(doc).dom_document_get_element_by_id.?(doc, try strFromData(id), &elem);
@@ -1357,6 +1361,11 @@ pub inline fn documentCreateAttributeNS(doc: *Document, ns: []const u8, qname: [
 // DocumentHTML
 pub const DocumentHTML = c.dom_html_document;
 
+// documentHTMLToNode is an helper to convert a documentHTML to an node.
+pub inline fn documentHTMLToNode(doc: *DocumentHTML) *Node {
+    return @as(*Node, @ptrCast(doc));
+}
+
 fn documentHTMLVtable(doc_html: *DocumentHTML) c.dom_html_document_vtable {
     return getVtable(c.dom_html_document_vtable, DocumentHTML, doc_html);
 }
@@ -1449,4 +1458,38 @@ pub inline fn documentHTMLBody(doc_html: *DocumentHTML) !?*Body {
     try DOMErr(err);
     if (body == null) return null;
     return @as(*Body, @ptrCast(body.?));
+}
+
+pub inline fn documentHTMLSetBody(doc_html: *DocumentHTML, elt: ?*ElementHTML) !void {
+    const err = documentHTMLVtable(doc_html).set_body.?(doc_html, elt);
+    try DOMErr(err);
+}
+
+pub inline fn documentHTMLGetDomain(doc: *DocumentHTML) ![]const u8 {
+    var s: ?*String = undefined;
+    const err = documentHTMLVtable(doc).get_domain.?(doc, &s);
+    try DOMErr(err);
+    if (s == null) return "";
+    return strToData(s.?);
+}
+
+pub inline fn documentHTMLGetReferrer(doc: *DocumentHTML) ![]const u8 {
+    var s: ?*String = undefined;
+    const err = documentHTMLVtable(doc).get_referrer.?(doc, &s);
+    try DOMErr(err);
+    if (s == null) return "";
+    return strToData(s.?);
+}
+
+pub inline fn documentHTMLGetTitle(doc: *DocumentHTML) ![]const u8 {
+    var s: ?*String = undefined;
+    const err = documentHTMLVtable(doc).get_title.?(doc, &s);
+    try DOMErr(err);
+    if (s == null) return "";
+    return strToData(s.?);
+}
+
+pub inline fn documentHTMLSetTitle(doc: *DocumentHTML, v: []const u8) !void {
+    const err = documentHTMLVtable(doc).set_title.?(doc, try strFromData(v));
+    try DOMErr(err);
 }

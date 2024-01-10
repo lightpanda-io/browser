@@ -12,23 +12,35 @@ const Element = @import("element.zig").Element;
 const Union = @import("element.zig").Union;
 
 const Matcher = union(enum) {
+    matchByName: MatchByName,
     matchByTagName: MatchByTagName,
     matchByClassName: MatchByClassName,
+    matchByLinks: MatchByLinks,
+    matchByAnchors: MatchByAnchors,
     matchTrue: struct {},
+    matchFalse: struct {},
 
     pub fn match(self: Matcher, node: *parser.Node) !bool {
         switch (self) {
             inline .matchTrue => return true,
+            inline .matchFalse => return false,
             inline .matchByTagName => |case| return case.match(node),
             inline .matchByClassName => |case| return case.match(node),
+            inline .matchByName => |case| return case.match(node),
+            inline .matchByLinks => return MatchByLinks.match(node),
+            inline .matchByAnchors => return MatchByAnchors.match(node),
         }
     }
 
     pub fn deinit(self: Matcher, alloc: std.mem.Allocator) void {
         switch (self) {
             inline .matchTrue => return,
+            inline .matchFalse => return,
             inline .matchByTagName => |case| return case.deinit(alloc),
             inline .matchByClassName => |case| return case.deinit(alloc),
+            inline .matchByName => |case| return case.deinit(alloc),
+            inline .matchByLinks => return,
+            inline .matchByAnchors => return,
         }
     }
 };
@@ -117,6 +129,56 @@ pub fn HTMLCollectionByClassName(
     };
 }
 
+pub const MatchByName = struct {
+    name: []const u8,
+
+    fn init(alloc: std.mem.Allocator, name: []const u8) !MatchByName {
+        const names_alloc = try alloc.alloc(u8, name.len);
+        @memcpy(names_alloc, name);
+        return MatchByName{
+            .name = names_alloc,
+        };
+    }
+
+    pub fn match(self: MatchByName, node: *parser.Node) !bool {
+        const e = parser.nodeToElement(node);
+        const nname = try parser.elementGetAttribute(e, "name") orelse return false;
+        return std.mem.eql(u8, self.name, nname);
+    }
+
+    fn deinit(self: MatchByName, alloc: std.mem.Allocator) void {
+        alloc.free(self.name);
+    }
+};
+
+pub fn HTMLCollectionByName(
+    alloc: std.mem.Allocator,
+    root: ?*parser.Node,
+    name: []const u8,
+    include_root: bool,
+) !HTMLCollection {
+    return HTMLCollection{
+        .root = root,
+        .walker = Walker{ .walkerDepthFirst = .{} },
+        .matcher = Matcher{
+            .matchByName = try MatchByName.init(alloc, name),
+        },
+        .include_root = include_root,
+    };
+}
+
+pub fn HTMLCollectionAll(
+    root: ?*parser.Node,
+    include_root: bool,
+) !HTMLCollection {
+    return HTMLCollection{
+        .root = root,
+        .walker = Walker{ .walkerDepthFirst = .{} },
+        .matcher = Matcher{ .matchTrue = .{} },
+        .include_root = include_root,
+    };
+}
+
 pub fn HTMLCollectionChildren(
     root: ?*parser.Node,
     include_root: bool,
@@ -129,9 +191,74 @@ pub fn HTMLCollectionChildren(
     };
 }
 
+pub fn HTMLCollectionEmpty() !HTMLCollection {
+    return HTMLCollection{
+        .root = null,
+        .walker = Walker{ .walkerNone = .{} },
+        .matcher = Matcher{ .matchFalse = .{} },
+        .include_root = false,
+    };
+}
+
+// MatchByLinks matches the a and area elements in the Document that have href
+// attributes.
+// https://html.spec.whatwg.org/#dom-document-links
+pub const MatchByLinks = struct {
+    pub fn match(node: *parser.Node) !bool {
+        const tag = try parser.nodeName(node);
+        if (!std.ascii.eqlIgnoreCase(tag, "a") and !std.ascii.eqlIgnoreCase(tag, "area")) {
+            return false;
+        }
+        const elem = @as(*parser.Element, @ptrCast(node));
+        return parser.elementHasAttribute(elem, "href");
+    }
+};
+
+pub fn HTMLCollectionByLinks(
+    root: ?*parser.Node,
+    include_root: bool,
+) !HTMLCollection {
+    return HTMLCollection{
+        .root = root,
+        .walker = Walker{ .walkerDepthFirst = .{} },
+        .matcher = Matcher{
+            .matchByLinks = MatchByLinks{},
+        },
+        .include_root = include_root,
+    };
+}
+
+// MatchByAnchors matches the a elements in the Document that have name
+// attributes.
+// https://html.spec.whatwg.org/#dom-document-anchors
+pub const MatchByAnchors = struct {
+    pub fn match(node: *parser.Node) !bool {
+        const tag = try parser.nodeName(node);
+        if (!std.ascii.eqlIgnoreCase(tag, "a")) return false;
+
+        const elem = @as(*parser.Element, @ptrCast(node));
+        return parser.elementHasAttribute(elem, "name");
+    }
+};
+
+pub fn HTMLCollectionByAnchors(
+    root: ?*parser.Node,
+    include_root: bool,
+) !HTMLCollection {
+    return HTMLCollection{
+        .root = root,
+        .walker = Walker{ .walkerDepthFirst = .{} },
+        .matcher = Matcher{
+            .matchByAnchors = MatchByAnchors{},
+        },
+        .include_root = include_root,
+    };
+}
+
 const Walker = union(enum) {
     walkerDepthFirst: WalkerDepthFirst,
     walkerChildren: WalkerChildren,
+    walkerNone: WalkerNone,
 
     pub fn get_next(self: Walker, root: *parser.Node, cur: ?*parser.Node) !?*parser.Node {
         switch (self) {
@@ -205,6 +332,12 @@ pub const WalkerChildren = struct {
     }
 };
 
+pub const WalkerNone = struct {
+    pub fn get_next(_: WalkerNone, _: *parser.Node, _: ?*parser.Node) !?*parser.Node {
+        return null;
+    }
+};
+
 // WEB IDL https://dom.spec.whatwg.org/#htmlcollection
 // HTMLCollection is re implemented in zig here because libdom
 // dom_html_collection expects a comparison function callback as arguement.
@@ -259,7 +392,7 @@ pub const HTMLCollection = struct {
         return len;
     }
 
-    pub fn _item(self: *HTMLCollection, index: u32) !?Union {
+    pub fn item(self: *HTMLCollection, index: u32) !?*parser.Node {
         if (self.root == null) return null;
 
         var i: u32 = 0;
@@ -282,8 +415,7 @@ pub const HTMLCollection = struct {
                         self.cur_node = node;
                         self.cur_idx = i;
 
-                        const e = @as(*parser.Element, @ptrCast(node));
-                        return try Element.toInterface(e);
+                        return node;
                     }
 
                     i += 1;
@@ -294,6 +426,12 @@ pub const HTMLCollection = struct {
         }
 
         return null;
+    }
+
+    pub fn _item(self: *HTMLCollection, index: u32) !?Union {
+        const node = try self.item(index) orelse return null;
+        const e = @as(*parser.Element, @ptrCast(node));
+        return try Element.toInterface(e);
     }
 
     pub fn _namedItem(self: *HTMLCollection, name: []const u8) !?Union {
