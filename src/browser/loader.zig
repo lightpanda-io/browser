@@ -6,10 +6,12 @@ pub const Loader = struct {
     client: std.http.Client,
 
     pub const Response = struct {
-        req: std.http.Request,
+        allocator: std.mem.Allocator,
+        req: *std.http.Client.Request,
 
         pub fn deinit(self: *Response) void {
             self.req.deinit();
+            self.allocator.destroy(self.req);
         }
     };
 
@@ -39,6 +41,36 @@ pub const Loader = struct {
             .headers = headers,
             .payload = .none,
         });
+    }
+
+    // see
+    // https://ziglang.org/documentation/master/std/#A;std:http.Client.fetch
+    // for reference.
+    // The caller is responsible for calling `deinit()` on the `Response`.
+    pub fn get(self: *Loader, allocator: std.mem.Allocator, uri: std.Uri) !Response {
+        var headers = try std.http.Headers.initList(allocator, &[_]std.http.Field{
+            .{ .name = "User-Agent", .value = user_agent },
+            .{ .name = "Accept", .value = "*/*" },
+            .{ .name = "Accept-Language", .value = "en-US,en;q=0.5" },
+        });
+        defer headers.deinit();
+
+        var resp = Response{
+            .allocator = allocator,
+            .req = try allocator.create(std.http.Client.Request),
+        };
+        errdefer allocator.destroy(resp.req);
+
+        resp.req.* = try self.client.open(.GET, uri, headers, .{
+            .handle_redirects = true, // TODO handle redirects manually
+        });
+        errdefer resp.req.deinit();
+
+        try resp.req.send(.{});
+        try resp.req.finish();
+        try resp.req.wait();
+
+        return resp;
     }
 };
 

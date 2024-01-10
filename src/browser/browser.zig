@@ -152,11 +152,13 @@ pub const Page = struct {
 
     // dump writes the page content into the given file.
     pub fn dump(self: *Page, out: std.fs.File) !void {
-        // no data loaded, nothin to do.
-        if (self.raw_data == null) return;
 
         // if no HTML document pointer available, dump the data content only.
-        if (self.doc == null) return try out.writeAll(self.raw_data.?);
+        if (self.doc == null) {
+            // no data loaded, nothing to do.
+            if (self.raw_data == null) return;
+            return try out.writeAll(self.raw_data.?);
+        }
 
         // if the page has a pointer to a document, dumps the HTML.
         const root = try parser.documentGetDocumentElement(self.doc.?) orelse return;
@@ -175,22 +177,19 @@ pub const Page = struct {
         // TODO handle fragment in url.
 
         // load the data
-        var result = try self.loader.fetch(self.allocator, self.uri);
-        defer result.deinit();
+        var resp = try self.loader.get(self.allocator, self.uri);
+        defer resp.deinit();
 
-        log.info("GET {any} {d}", .{ self.uri, result.status });
+        const req = resp.req;
+
+        log.info("GET {any} {d}", .{ self.uri, req.response.status });
 
         // TODO handle redirection
-        if (result.status != .ok) return error.BadStatusCode;
-
-        if (result.body == null) return error.NoBody;
-
-        // save the body into the page.
-        self.raw_data = try self.allocator.dupe(u8, result.body.?);
+        if (req.response.status != .ok) return error.BadStatusCode;
 
         // TODO handle charset
         // https://html.spec.whatwg.org/#content-type
-        const ct = result.headers.getFirstValue("Content-Type") orelse {
+        const ct = req.response.headers.getFirstValue("Content-Type") orelse {
             // no content type in HTTP headers.
             // TODO try to sniff mime type from the body.
             log.info("no content-type HTTP header", .{});
@@ -199,16 +198,19 @@ pub const Page = struct {
         const mime = try Mime.parse(ct);
         if (mime.eql(Mime.HTML)) {
             // TODO check content-type
-            try self.loadHTMLDoc(&result);
+            try self.loadHTMLDoc(req.reader());
         } else {
             log.info("non-HTML document: {s}", .{ct});
+
+            // save the body into the page.
+            self.raw_data = try req.reader().readAllAlloc(self.allocator, 16 * 1024 * 1024);
         }
     }
 
     // https://html.spec.whatwg.org/#read-html
-    fn loadHTMLDoc(self: *Page, result: *FetchResult) !void {
+    fn loadHTMLDoc(self: *Page, reader: anytype) !void {
         log.debug("parse html", .{});
-        const html_doc = try parser.documentHTMLParseFromStr(result.body.?);
+        const html_doc = try parser.documentHTMLParse(reader);
         const doc = parser.documentHTMLToDocument(html_doc);
 
         // save a document's pointer in the page.
