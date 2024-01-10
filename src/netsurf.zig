@@ -1421,7 +1421,7 @@ pub fn documentHTMLParse(reader: anytype) !*DocumentHTML {
 
     var buffer: [1024]u8 = undefined;
     var ln = buffer.len;
-    while (ln == buffer.len) {
+    while (ln > 0) {
         ln = try reader.read(&buffer);
         err = c.dom_hubbub_parser_parse_chunk(parser, &buffer, ln);
         try parserErr(err);
