@@ -147,8 +147,7 @@ pub const DOMException = struct {
 pub fn testExecFn(
     _: std.mem.Allocator,
     js_env: *jsruntime.Env,
-    comptime _: []jsruntime.API,
-) !void {
+) anyerror!void {
     const err = "Failed to execute 'appendChild' on 'Node': The new child element contains the parent.";
     var cases = [_]Case{
         .{ .src = "let content = document.getElementById('content')", .ex = "undefined" },

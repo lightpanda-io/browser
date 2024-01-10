@@ -8,12 +8,13 @@ const parser = @import("../netsurf.zig");
 const jsruntime = @import("jsruntime");
 const Loop = jsruntime.Loop;
 const Env = jsruntime.Env;
-const TPL = jsruntime.TPL;
+
+const Types = @import("../main_wpt.zig").Types;
 
 // runWPT parses the given HTML file, starts a js env and run the first script
 // tags containing javascript sources.
 // It loads first the js libs files.
-pub fn run(arena: *std.heap.ArenaAllocator, comptime apis: []jsruntime.API, comptime dir: []const u8, f: []const u8, loader: *FileLoader) !jsruntime.JSResult {
+pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const u8, loader: *FileLoader) !jsruntime.JSResult {
     const alloc = arena.allocator();
 
     // document
@@ -31,16 +32,16 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime apis: []jsruntime.API, comp
     var js_env = try Env.init(alloc, &loop);
     defer js_env.deinit();
 
-    // load APIs in JS env
-    var tpls: [apis.len]TPL = undefined;
-    try js_env.load(apis, &tpls);
+    // load user-defined types in JS env
+    var js_types: [Types.len]usize = undefined;
+    try js_env.load(&js_types);
 
     // start JS env
-    try js_env.start(alloc, apis);
+    try js_env.start(alloc);
     defer js_env.stop();
 
     // add document object
-    try js_env.addObject(apis, html_doc, "document");
+    try js_env.addObject(html_doc, "document");
 
     // alias global as self and window
     try js_env.attachObject(try js_env.getGlobal(), "self", null);

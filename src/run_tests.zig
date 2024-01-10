@@ -20,17 +20,18 @@ const DOMTokenListExecFn = @import("dom/token_list.zig").testExecFn;
 const NodeListTestExecFn = @import("dom/nodelist.zig").testExecFn;
 const AttrTestExecFn = @import("dom/attribute.zig").testExecFn;
 
+pub const Types = jsruntime.reflect(DOM.Interfaces);
+
 var doc: *parser.DocumentHTML = undefined;
 
 fn testExecFn(
     alloc: std.mem.Allocator,
     js_env: *jsruntime.Env,
-    comptime apis: []jsruntime.API,
     comptime execFn: jsruntime.ContextExecFn,
-) !void {
+) anyerror!void {
 
     // start JS env
-    try js_env.start(alloc, apis);
+    try js_env.start(alloc);
     defer js_env.stop();
 
     // alias global as self and window
@@ -47,17 +48,16 @@ fn testExecFn(
     };
 
     // add document object
-    try js_env.addObject(apis, doc, "document");
+    try js_env.addObject(doc, "document");
 
     // run test
-    try execFn(alloc, js_env, apis);
+    try execFn(alloc, js_env);
 }
 
 fn testsAllExecFn(
     alloc: std.mem.Allocator,
     js_env: *jsruntime.Env,
-    comptime apis: []jsruntime.API,
-) !void {
+) anyerror!void {
     const testFns = [_]jsruntime.ContextExecFn{
         documentTestExecFn,
         HTMLDocumentTestExecFn,
@@ -75,18 +75,15 @@ fn testsAllExecFn(
     };
 
     inline for (testFns) |testFn| {
-        try testExecFn(alloc, js_env, apis, testFn);
+        try testExecFn(alloc, js_env, testFn);
     }
 }
 
-test {
+pub fn main() !void {
     std.debug.print("\n \n", .{});
 
     // generate tests
     try generate.tests();
-
-    // generate APIs
-    const apis = comptime jsruntime.compile(DOM.Interfaces);
 
     // create JS vm
     const vm = jsruntime.VM.init();
@@ -96,7 +93,7 @@ test {
     var arena_alloc = std.heap.ArenaAllocator.init(bench_alloc.allocator());
     defer arena_alloc.deinit();
 
-    try jsruntime.loadEnv(&arena_alloc, testsAllExecFn, apis);
+    try jsruntime.loadEnv(&arena_alloc, testsAllExecFn);
 }
 
 test "DocumentHTMLParseFromStr" {

@@ -5,6 +5,8 @@ const jsruntime = @import("jsruntime");
 const parser = @import("netsurf.zig");
 const DOM = @import("dom.zig");
 
+pub const Types = jsruntime.reflect(DOM.Interfaces);
+
 const socket_path = "/tmp/browsercore-server.sock";
 
 var doc: *parser.DocumentHTML = undefined;
@@ -13,11 +15,10 @@ var server: std.net.StreamServer = undefined;
 fn execJS(
     alloc: std.mem.Allocator,
     js_env: *jsruntime.Env,
-    comptime apis: []jsruntime.API,
-) !void {
+) anyerror!void {
 
     // start JS env
-    try js_env.start(alloc, apis);
+    try js_env.start(alloc);
     defer js_env.stop();
 
     // alias global as self and window
@@ -25,7 +26,7 @@ fn execJS(
     try js_env.attachObject(try js_env.getGlobal(), "window", null);
 
     // add document object
-    try js_env.addObject(apis, doc, "document");
+    try js_env.addObject(doc, "document");
 
     while (true) {
 
@@ -48,9 +49,6 @@ fn execJS(
 }
 
 pub fn main() !void {
-
-    // generate APIs
-    const apis = comptime jsruntime.compile(DOM.Interfaces);
 
     // create v8 vm
     const vm = jsruntime.VM.init();
@@ -86,5 +84,5 @@ pub fn main() !void {
     try server.listen(addr);
     std.debug.print("Listening on: {s}...\n", .{socket_path});
 
-    try jsruntime.loadEnv(&arena, execJS, apis);
+    try jsruntime.loadEnv(&arena, execJS);
 }

@@ -264,8 +264,7 @@ pub const Node = struct {
 pub fn testExecFn(
     alloc: std.mem.Allocator,
     js_env: *jsruntime.Env,
-    comptime _: []jsruntime.API,
-) !void {
+) anyerror!void {
 
     // helper functions
     const trim_and_replace =

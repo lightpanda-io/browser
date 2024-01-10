@@ -29,16 +29,14 @@ const Out = enum {
     text,
 };
 
+pub const Types = jsruntime.reflect(DOM.Interfaces);
+
 // TODO For now the WPT tests run is specific to WPT.
 // It manually load js framwork libs, and run the first script w/ js content in
 // the HTML page.
 // Once browsercore will have the html loader, it would be useful to refacto
 // this test to use it.
 pub fn main() !void {
-
-    // generate APIs
-    const apis = comptime jsruntime.compile(DOM.Interfaces);
-
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
@@ -123,7 +121,7 @@ pub fn main() !void {
         var arena = std.heap.ArenaAllocator.init(alloc);
         defer arena.deinit();
 
-        const res = wpt.run(&arena, apis, wpt_dir, tc, &loader) catch |err| {
+        const res = wpt.run(&arena, wpt_dir, tc, &loader) catch |err| {
             const suite = try Suite.init(alloc, tc, false, @errorName(err), null);
             try results.append(suite);
 

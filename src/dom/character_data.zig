@@ -92,8 +92,7 @@ pub const CharacterData = struct {
 pub fn testExecFn(
     _: std.mem.Allocator,
     js_env: *jsruntime.Env,
-    comptime _: []jsruntime.API,
-) !void {
+) anyerror!void {
     var get_data = [_]Case{
         .{ .src = "let link = document.getElementById('link')", .ex = "undefined" },
         .{ .src = "let cdata = link.firstChild", .ex = "undefined" },

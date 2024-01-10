@@ -338,8 +338,7 @@ pub const HTMLCollection = struct {
 pub fn testExecFn(
     _: std.mem.Allocator,
     js_env: *jsruntime.Env,
-    comptime _: []jsruntime.API,
-) !void {
+) anyerror!void {
     var getElementsByTagName = [_]Case{
         .{ .src = "let getElementsByTagName = document.getElementsByTagName('p')", .ex = "undefined" },
         .{ .src = "getElementsByTagName.length", .ex = "2" },

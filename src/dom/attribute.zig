@@ -55,8 +55,7 @@ pub const Attr = struct {
 pub fn testExecFn(
     _: std.mem.Allocator,
     js_env: *jsruntime.Env,
-    comptime _: []jsruntime.API,
-) !void {
+) anyerror!void {
     var getters = [_]Case{
         .{ .src = "let a = document.createAttributeNS('foo', 'bar')", .ex = "undefined" },
         .{ .src = "a.namespaceURI", .ex = "foo" },

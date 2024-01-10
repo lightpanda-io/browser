@@ -43,8 +43,7 @@ pub const Text = struct {
 pub fn testExecFn(
     _: std.mem.Allocator,
     js_env: *jsruntime.Env,
-    comptime _: []jsruntime.API,
-) !void {
+) anyerror!void {
     var get_whole_text = [_]Case{
         .{ .src = "let text = document.getElementById('link').firstChild", .ex = "undefined" },
         .{ .src = "text.wholeText === 'OK'", .ex = "true" },

@@ -86,6 +86,7 @@ pub fn build(b: *std.build.Builder) !void {
     const tests = b.addTest(.{ .root_source_file = .{ .path = "src/run_tests.zig" } });
     try common(tests, options);
     tests.single_threaded = true;
+    tests.test_runner = "src/test_runner.zig";
     const run_tests = b.addRunArtifact(tests);
 
     // step
