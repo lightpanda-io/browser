@@ -29,8 +29,7 @@ pub const HTMLDocument = struct {
 pub fn testExecFn(
     _: std.mem.Allocator,
     js_env: *jsruntime.Env,
-    comptime _: []jsruntime.API,
-) !void {
+) anyerror!void {
     var constructor = [_]Case{
         .{ .src = "document.__proto__.constructor.name", .ex = "HTMLDocument" },
         .{ .src = "document.__proto__.__proto__.constructor.name", .ex = "Document" },

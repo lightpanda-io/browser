@@ -98,8 +98,7 @@ pub const DOMTokenList = struct {
 pub fn testExecFn(
     _: std.mem.Allocator,
     js_env: *jsruntime.Env,
-    comptime _: []jsruntime.API,
-) !void {
+) anyerror!void {
     var dynamiclist = [_]Case{
         .{ .src = "let gs = document.getElementById('para-empty')", .ex = "undefined" },
         .{ .src = "let cl = gs.classList", .ex = "undefined" },

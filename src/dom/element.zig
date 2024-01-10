@@ -290,8 +290,7 @@ pub const Element = struct {
 pub fn testExecFn(
     _: std.mem.Allocator,
     js_env: *jsruntime.Env,
-    comptime _: []jsruntime.API,
-) !void {
+) anyerror!void {
     var getters = [_]Case{
         .{ .src = "let g = document.getElementById('content')", .ex = "undefined" },
         .{ .src = "g.namespaceURI", .ex = "http://www.w3.org/1999/xhtml" },

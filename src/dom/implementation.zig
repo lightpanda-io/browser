@@ -74,8 +74,7 @@ pub const DOMImplementation = struct {
 pub fn testExecFn(
     _: std.mem.Allocator,
     js_env: *jsruntime.Env,
-    comptime _: []jsruntime.API,
-) !void {
+) anyerror!void {
     var getImplementation = [_]Case{
         .{ .src = "let impl = document.implementation", .ex = "undefined" },
         .{ .src = "impl.createHTMLDocument();", .ex = "[object Document]" },

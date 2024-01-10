@@ -65,8 +65,7 @@ pub const NamedNodeMap = struct {
 pub fn testExecFn(
     _: std.mem.Allocator,
     js_env: *jsruntime.Env,
-    comptime _: []jsruntime.API,
-) !void {
+) anyerror!void {
     var setItem = [_]Case{
         .{ .src = "let a = document.getElementById('content').attributes", .ex = "undefined" },
         .{ .src = "a.length", .ex = "1" },

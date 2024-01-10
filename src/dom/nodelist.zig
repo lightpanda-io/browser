@@ -61,8 +61,7 @@ pub const NodeList = struct {
 pub fn testExecFn(
     _: std.mem.Allocator,
     js_env: *jsruntime.Env,
-    comptime _: []jsruntime.API,
-) !void {
+) anyerror!void {
     var childnodes = [_]Case{
         .{ .src = "let list = document.getElementById('content').childNodes", .ex = "undefined" },
         .{ .src = "list.length", .ex = "9" },
