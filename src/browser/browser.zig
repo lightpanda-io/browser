@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const Types = @import("root").Types;
+
 const parser = @import("../netsurf.zig");
 const Loader = @import("loader.zig").Loader;
 const Dump = @import("dump.zig");
@@ -8,10 +10,8 @@ const Mime = @import("mime.zig");
 const jsruntime = @import("jsruntime");
 const Loop = jsruntime.Loop;
 const Env = jsruntime.Env;
-const TPL = jsruntime.TPL;
 
 const apiweb = @import("../apiweb.zig");
-const apis = jsruntime.compile(apiweb.Interfaces);
 
 const Window = @import("../html/window.zig").Window;
 const Walker = @import("../dom/html_collection.zig").WalkerDepthFirst;
@@ -61,12 +61,12 @@ pub const Browser = struct {
 pub const Session = struct {
     arena: std.heap.ArenaAllocator,
     uri: []const u8,
-    tpls: [apis.len]TPL = undefined,
 
     // TODO handle proxy
     loader: Loader = undefined,
     env: Env = undefined,
     loop: Loop = undefined,
+    jstypes: [Types.len]usize = undefined,
 
     window: Window,
 
@@ -84,7 +84,7 @@ pub const Session = struct {
         self.loop = try Loop.init(aallocator);
         self.env = try Env.init(aallocator, &self.loop);
 
-        try self.env.load(apis, &self.tpls);
+        try self.env.load(&self.jstypes);
 
         return self;
     }
@@ -226,13 +226,13 @@ pub const Page = struct {
 
         // start JS env
         log.debug("start js env", .{});
-        try self.env.start(self.allocator, apis);
+        try self.env.start(self.allocator);
 
         // add global objects
         log.debug("setup global env", .{});
-        try self.env.addObject(apis, self.window, "window");
-        try self.env.addObject(apis, self.window, "self");
-        try self.env.addObject(apis, html_doc, "document");
+        try self.env.addObject(self.window, "window");
+        try self.env.addObject(self.window, "self");
+        try self.env.addObject(html_doc, "document");
 
         // browse the DOM tree to retrieve scripts
         var sasync = std.ArrayList(*parser.Element).init(self.allocator);

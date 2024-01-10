@@ -1,6 +1,10 @@
 const std = @import("std");
 const Browser = @import("browser/browser.zig").Browser;
 
+const jsruntime = @import("jsruntime");
+const apiweb = @import("apiweb.zig");
+pub const Types = jsruntime.reflect(apiweb.Interfaces);
+
 pub const std_options = struct {
     pub const log_level = .debug;
 };
