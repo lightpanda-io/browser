@@ -237,6 +237,10 @@ pub const Page = struct {
         try self.env.addObject(html_doc, "document");
 
         // browse the DOM tree to retrieve scripts
+
+        // sasync stores scripts which can be run asynchronously.
+        // for now they are just run after the non-async one in order to
+        // dispatch DOMContentLoaded the sooner as possible.
         var sasync = std.ArrayList(*parser.Element).init(self.allocator);
         defer sasync.deinit();
 
