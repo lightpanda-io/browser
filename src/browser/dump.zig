@@ -4,17 +4,17 @@ const File = std.fs.File;
 const parser = @import("../netsurf.zig");
 const Walker = @import("../dom/html_collection.zig").WalkerChildren;
 
-pub fn htmlFile(root: *parser.Element, out: File) !void {
-    try out.writeAll("<!DOCTYPE html>\n<html>");
-    try nodeFile(root, out);
-    try out.writeAll("</html>\n");
+pub fn htmlFile(doc: *parser.Document, out: File) !void {
+    try out.writeAll("<!DOCTYPE html>\n");
+    try nodeFile(parser.documentToNode(doc), out);
+    try out.writeAll("\n");
 }
 
-fn nodeFile(root: *parser.Element, out: File) !void {
+fn nodeFile(root: *parser.Node, out: File) !void {
     const walker = Walker{};
     var next: ?*parser.Node = null;
     while (true) {
-        next = try walker.get_next(parser.elementToNode(root), next) orelse break;
+        next = try walker.get_next(root, next) orelse break;
         switch (try parser.nodeType(next.?)) {
             .element => {
                 // open the tag
@@ -40,7 +40,7 @@ fn nodeFile(root: *parser.Element, out: File) !void {
 
                 // write the children
                 // TODO avoid recursion
-                try nodeFile(parser.nodeToElement(next.?), out);
+                try nodeFile(next.?, out);
 
                 // close the tag
                 try out.writeAll("</");
@@ -91,7 +91,6 @@ pub fn HTMLFileTestFn(out: File) !void {
     defer parser.documentHTMLClose(doc_html) catch {};
 
     const doc = parser.documentHTMLToDocument(doc_html);
-    const root = try parser.documentGetDocumentElement(doc) orelse return error.DocumentNullRoot;
 
-    try htmlFile(root, out);
+    try htmlFile(doc, out);
 }

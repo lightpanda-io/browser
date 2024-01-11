@@ -161,8 +161,7 @@ pub const Page = struct {
         }
 
         // if the page has a pointer to a document, dumps the HTML.
-        const root = try parser.documentGetDocumentElement(self.doc.?) orelse return;
-        try Dump.htmlFile(root, out);
+        try Dump.htmlFile(self.doc.?, out);
     }
 
     // spec reference: https://html.spec.whatwg.org/#document-lifecycle
@@ -244,11 +243,11 @@ pub const Page = struct {
         var sasync = std.ArrayList(*parser.Element).init(self.allocator);
         defer sasync.deinit();
 
-        const root = try parser.documentGetDocumentElement(doc) orelse return; // TODO send loaded event in this case?
+        const root = parser.documentToNode(doc);
         const walker = Walker{};
         var next: ?*parser.Node = null;
         while (true) {
-            next = try walker.get_next(parser.elementToNode(root), next) orelse break;
+            next = try walker.get_next(root, next) orelse break;
 
             // ignore non-elements nodes.
             if (try parser.nodeType(next.?) != .element) {
