@@ -113,3 +113,12 @@ test "DocumentHTMLParseFromStr" {
     doc = try parser.documentHTMLParseFromStr(str);
     parser.documentHTMLClose(doc) catch {};
 }
+
+// https://github.com/lightpanda-io/libdom/issues/4
+test "bug document html parsing #4" {
+    const file = try std.fs.cwd().openFile("tests/html/bug-html-parsing-4.html", .{});
+    defer file.close();
+
+    doc = try parser.documentHTMLParse(file.reader());
+    parser.documentHTMLClose(doc) catch {};
+}
