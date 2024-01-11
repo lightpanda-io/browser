@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const jsruntime = @import("jsruntime");
 const generate = @import("generate.zig");
@@ -80,8 +81,14 @@ fn testsAllExecFn(
 }
 
 pub fn main() !void {
-    std.debug.print("\n \n", .{});
+    std.debug.print("\n", .{});
+    for (builtin.test_functions) |test_fn| {
+        try test_fn.func();
+        std.debug.print("{s}\tOK\n", .{test_fn.name});
+    }
+}
 
+test "jsruntime" {
     // generate tests
     try generate.tests();
 
