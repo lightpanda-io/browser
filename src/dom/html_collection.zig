@@ -359,6 +359,10 @@ pub const HTMLCollection = struct {
     cur_idx: ?u32 = undefined,
     cur_node: ?*parser.Node = undefined,
 
+    // array_like_keys is used to keep reference to array like interface implementation.
+    // the collection generates keys string which must be free on deinit.
+    array_like_keys: std.ArrayListUnmanaged([]u8) = .{},
+
     // start returns the first node to walk on.
     fn start(self: HTMLCollection) !?*parser.Node {
         if (self.root == null) return null;
@@ -488,6 +492,8 @@ pub const HTMLCollection = struct {
             const k = try std.fmt.allocPrint(alloc, "{d}", .{i});
             try js_obj.set(k, v);
 
+            self.array_like_keys.append(alloc, k);
+
             if (try item_name(v)) |name| {
                 try js_obj.set(name, v);
             }
@@ -495,6 +501,8 @@ pub const HTMLCollection = struct {
     }
 
     pub fn deinit(self: *HTMLCollection, alloc: std.mem.Allocator) void {
+        for (self.array_like_keys_) |k| alloc.free(k);
+        self.array_like_keys.deinit(alloc);
         self.matcher.deinit(alloc);
     }
 };
