@@ -43,7 +43,7 @@ fn testExecFn(
     const file = try std.fs.cwd().openFile("test.html", .{});
     defer file.close();
 
-    doc = try parser.documentHTMLParse(file.reader());
+    doc = try parser.documentHTMLParse(file.reader(), "UTF-8");
     defer parser.documentHTMLClose(doc) catch |err| {
         std.debug.print("documentHTMLClose error: {s}\n", .{@errorName(err)});
     };
@@ -119,6 +119,6 @@ test "bug document html parsing #4" {
     const file = try std.fs.cwd().openFile("tests/html/bug-html-parsing-4.html", .{});
     defer file.close();
 
-    doc = try parser.documentHTMLParse(file.reader());
+    doc = try parser.documentHTMLParse(file.reader(), null);
     parser.documentHTMLClose(doc) catch {};
 }

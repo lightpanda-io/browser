@@ -21,7 +21,7 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     const file = try std.fs.cwd().openFile(f, .{});
     defer file.close();
 
-    const html_doc = try parser.documentHTMLParse(file.reader());
+    const html_doc = try parser.documentHTMLParse(file.reader(), "UTF-8");
     const doc = parser.documentHTMLToDocument(html_doc);
 
     const dirname = fspath.dirname(f[dir.len..]) orelse unreachable;

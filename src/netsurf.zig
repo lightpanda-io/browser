@@ -1411,10 +1411,10 @@ fn parserErr(err: HubbubErr) ParserError!void {
 // The caller is responsible for closing the document.
 pub fn documentHTMLParseFromStr(str: []const u8) !*DocumentHTML {
     var fbs = std.io.fixedBufferStream(str);
-    return try documentHTMLParse(fbs.reader());
+    return try documentHTMLParse(fbs.reader(), "UTF-8");
 }
 
-pub fn documentHTMLParse(reader: anytype) !*DocumentHTML {
+pub fn documentHTMLParse(reader: anytype, enc: ?[:0]const u8) !*DocumentHTML {
     var parser: ?*c.dom_hubbub_parser = undefined;
     var doc: ?*c.dom_document = undefined;
     var err: c.hubbub_error = undefined;
@@ -1428,6 +1428,8 @@ pub fn documentHTMLParse(reader: anytype) !*DocumentHTML {
         .ctx = null,
         .daf = null,
     };
+
+    if (enc) |e| params.enc = e;
 
     err = c.dom_hubbub_parser_create(&params, &parser, &doc);
     try parserErr(err);
