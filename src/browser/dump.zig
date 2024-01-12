@@ -86,7 +86,7 @@ pub fn HTMLFileTestFn(out: File) !void {
     const file = try std.fs.cwd().openFile("test.html", .{});
     defer file.close();
 
-    const doc_html = try parser.documentHTMLParse(file.reader());
+    const doc_html = try parser.documentHTMLParse(file.reader(), "UTF-8");
     // ignore close error
     defer parser.documentHTMLClose(doc_html) catch {};
 

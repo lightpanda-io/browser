@@ -209,7 +209,8 @@ pub const Page = struct {
     // https://html.spec.whatwg.org/#read-html
     fn loadHTMLDoc(self: *Page, reader: anytype) !void {
         log.debug("parse html", .{});
-        const html_doc = try parser.documentHTMLParse(reader);
+        // TODO pass an encoding detected from HTTP headers.
+        const html_doc = try parser.documentHTMLParse(reader, "UTF-8");
         const doc = parser.documentHTMLToDocument(html_doc);
 
         // save a document's pointer in the page.
