@@ -119,6 +119,6 @@ test "bug document html parsing #4" {
     const file = try std.fs.cwd().openFile("tests/html/bug-html-parsing-4.html", .{});
     defer file.close();
 
-    doc = try parser.documentHTMLParse(file.reader(), null);
+    doc = try parser.documentHTMLParse(file.reader(), "UTF-8");
     parser.documentHTMLClose(doc) catch {};
 }

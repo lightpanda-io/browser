@@ -1445,6 +1445,13 @@ pub fn documentHTMLParse(reader: anytype, enc: ?[:0]const u8) !*DocumentHTML {
     while (ln > 0) {
         ln = try reader.read(&buffer);
         err = c.dom_hubbub_parser_parse_chunk(parser, &buffer, ln);
+        // TODO handle encoding change error return.
+        // When the HTML contains a META tag with a different encoding than the
+        // original one, a c.DOM_HUBBUB_HUBBUB_ERR_ENCODINGCHANGE error is
+        // returned.
+        // In this case, we must restart the parsing with the new detected
+        // encoding. The detected encoding is stored in the document and we can
+        // get it with documentGetInputEncoding().
         try parserErr(err);
     }
 
