@@ -43,7 +43,7 @@ fn testExecFn(
     const file = try std.fs.cwd().openFile("test.html", .{});
     defer file.close();
 
-    doc = try parser.documentHTMLParse(file.reader());
+    doc = try parser.documentHTMLParse(file.reader(), "UTF-8");
     defer parser.documentHTMLClose(doc) catch |err| {
         std.debug.print("documentHTMLClose error: {s}\n", .{@errorName(err)});
     };
@@ -111,5 +111,14 @@ test "DocumentHTMLParseFromStr" {
     defer std.testing.allocator.free(str);
 
     doc = try parser.documentHTMLParseFromStr(str);
+    parser.documentHTMLClose(doc) catch {};
+}
+
+// https://github.com/lightpanda-io/libdom/issues/4
+test "bug document html parsing #4" {
+    const file = try std.fs.cwd().openFile("tests/html/bug-html-parsing-4.html", .{});
+    defer file.close();
+
+    doc = try parser.documentHTMLParse(file.reader(), "UTF-8");
     parser.documentHTMLClose(doc) catch {};
 }

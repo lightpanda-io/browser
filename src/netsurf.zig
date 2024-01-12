@@ -1380,6 +1380,8 @@ const ParserError = error{
     EncodingChange,
     Paused,
     NoMemory,
+    Dom,
+    Hubbub,
     BadParameter,
     BadEncoding,
     Invalid,
@@ -1392,17 +1394,20 @@ const HubbubErr = c.hubbub_error;
 
 fn parserErr(err: HubbubErr) ParserError!void {
     return switch (err) {
-        c.HUBBUB_OK => {},
-        c.HUBBUB_REPROCESS => ParserError.Reprocess,
-        c.HUBBUB_ENCODINGCHANGE => ParserError.EncodingChange,
-        c.HUBBUB_PAUSED => ParserError.Paused,
-        c.HUBBUB_NOMEM => ParserError.NoMemory,
-        c.HUBBUB_BADPARM => ParserError.BadParameter,
-        c.HUBBUB_BADENCODING => ParserError.BadEncoding,
-        c.HUBBUB_INVALID => ParserError.Invalid,
-        c.HUBBUB_FILENOTFOUND => ParserError.FileNotFound,
-        c.HUBBUB_NEEDDATA => ParserError.NeedData,
-        c.HUBBUB_UNKNOWN => ParserError.Unknown,
+        c.DOM_HUBBUB_OK => {},
+        c.DOM_HUBBUB_NOMEM => ParserError.NoMemory,
+        c.DOM_HUBBUB_BADPARM => ParserError.BadParameter,
+        c.DOM_HUBBUB_DOM => ParserError.Dom,
+        c.DOM_HUBBUB_HUBBUB_ERR => ParserError.Hubbub,
+        c.DOM_HUBBUB_HUBBUB_ERR_PAUSED => ParserError.Paused,
+        c.DOM_HUBBUB_HUBBUB_ERR_ENCODINGCHANGE => ParserError.EncodingChange,
+        c.DOM_HUBBUB_HUBBUB_ERR_NOMEM => ParserError.NoMemory,
+        c.DOM_HUBBUB_HUBBUB_ERR_BADPARM => ParserError.BadParameter,
+        c.DOM_HUBBUB_HUBBUB_ERR_INVALID => ParserError.Invalid,
+        c.DOM_HUBBUB_HUBBUB_ERR_FILENOTFOUND => ParserError.FileNotFound,
+        c.DOM_HUBBUB_HUBBUB_ERR_NEEDDATA => ParserError.NeedData,
+        c.DOM_HUBBUB_HUBBUB_ERR_BADENCODING => ParserError.BadEncoding,
+        c.DOM_HUBBUB_HUBBUB_ERR_UNKNOWN => ParserError.Unknown,
         else => unreachable,
     };
 }
@@ -1411,10 +1416,10 @@ fn parserErr(err: HubbubErr) ParserError!void {
 // The caller is responsible for closing the document.
 pub fn documentHTMLParseFromStr(str: []const u8) !*DocumentHTML {
     var fbs = std.io.fixedBufferStream(str);
-    return try documentHTMLParse(fbs.reader());
+    return try documentHTMLParse(fbs.reader(), "UTF-8");
 }
 
-pub fn documentHTMLParse(reader: anytype) !*DocumentHTML {
+pub fn documentHTMLParse(reader: anytype, enc: ?[:0]const u8) !*DocumentHTML {
     var parser: ?*c.dom_hubbub_parser = undefined;
     var doc: ?*c.dom_document = undefined;
     var err: c.hubbub_error = undefined;
@@ -1429,6 +1434,8 @@ pub fn documentHTMLParse(reader: anytype) !*DocumentHTML {
         .daf = null,
     };
 
+    if (enc) |e| params.enc = e;
+
     err = c.dom_hubbub_parser_create(&params, &parser, &doc);
     try parserErr(err);
     defer c.dom_hubbub_parser_destroy(parser);
@@ -1438,6 +1445,13 @@ pub fn documentHTMLParse(reader: anytype) !*DocumentHTML {
     while (ln > 0) {
         ln = try reader.read(&buffer);
         err = c.dom_hubbub_parser_parse_chunk(parser, &buffer, ln);
+        // TODO handle encoding change error return.
+        // When the HTML contains a META tag with a different encoding than the
+        // original one, a c.DOM_HUBBUB_HUBBUB_ERR_ENCODINGCHANGE error is
+        // returned.
+        // In this case, we must restart the parsing with the new detected
+        // encoding. The detected encoding is stored in the document and we can
+        // get it with documentGetInputEncoding().
         try parserErr(err);
     }
 

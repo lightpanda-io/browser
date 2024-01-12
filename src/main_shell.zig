@@ -43,7 +43,7 @@ pub fn main() !void {
     const file = try std.fs.cwd().openFile("test.html", .{});
     defer file.close();
 
-    doc = try parser.documentHTMLParse(file.reader());
+    doc = try parser.documentHTMLParse(file.reader(), "UTF-8");
     defer parser.documentHTMLClose(doc) catch |err| {
         std.debug.print("documentHTMLClose error: {s}\n", .{@errorName(err)});
     };
