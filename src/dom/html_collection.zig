@@ -349,8 +349,8 @@ pub const HTMLCollectionIterator = struct {
         done: bool,
     };
 
-    pub fn _next(self: *HTMLCollectionIterator, allocator: std.mem.Allocator) !Return {
-        const e = try self.coll._item(allocator, self.index);
+    pub fn _next(self: *HTMLCollectionIterator) !Return {
+        const e = try self.coll._item(self.index);
         if (e == null) {
             return Return{
                 .value = null,
