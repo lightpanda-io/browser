@@ -332,34 +332,18 @@ pub const Page = struct {
         if (opt_src) |src| {
             log.debug("starting GET {s}", .{src});
 
-            const u = std.Uri.parse(src) catch try std.Uri.parseWithoutScheme(src);
-            const ru = try std.Uri.resolve(self.uri, u, false, self.alloc);
+            self.fetchScript(src) catch |err| {
+                switch (err) {
+                    FetchError.BadStatusCode => return err,
 
-            var fetchres = try self.loader.fetch(self.alloc, ru);
-            defer fetchres.deinit();
+                    // TODO If el's result is null, then fire an event named error at
+                    // el, and return.
+                    FetchError.NoBody => return,
 
-            log.info("GET {any}: {d}", .{ ru, fetchres.status });
-
-            if (fetchres.status != .ok) {
-                return error.BadStatusCode;
-            }
-
-            // TODO check content-type
-
-            // check no body
-            // TODO If el's result is null, then fire an event named error at
-            // el, and return.
-            if (fetchres.body == null) return;
-
-            var res = jsruntime.JSResult{};
-            try self.env.run(self.alloc, fetchres.body.?, src, &res, null);
-            defer res.deinit(self.alloc);
-
-            if (res.success) {
-                log.debug("eval remote {s}: {s}", .{ src, res.result });
-            } else {
-                log.info("eval remote {s}: {s}", .{ src, res.result });
-            }
+                    FetchError.JsErr => {}, // nothing to do here.
+                    else => return err,
+                }
+            };
 
             // TODO If el's from an external file is true, then fire an event
             // named load at el.
@@ -386,6 +370,44 @@ pub const Page = struct {
         // nothing has been loaded.
         // TODO If el's result is null, then fire an event named error at
         // el, and return.
+    }
+
+    const FetchError = error{
+        BadStatusCode,
+        NoBody,
+        JsErr,
+    };
+
+    // fetchScript senf a GET request to the src and execute the script
+    // received.
+    fn fetchScript(self: *Page, src: []const u8) !void {
+        log.debug("starting fetch script {s}", .{src});
+
+        const u = std.Uri.parse(src) catch try std.Uri.parseWithoutScheme(src);
+        const ru = try std.Uri.resolve(self.uri, u, false, self.alloc);
+
+        var fetchres = try self.loader.fetch(self.alloc, ru);
+        defer fetchres.deinit();
+
+        log.info("fech script {any}: {d}", .{ ru, fetchres.status });
+
+        if (fetchres.status != .ok) return FetchError.BadStatusCode;
+
+        // TODO check content-type
+
+        // check no body
+        if (fetchres.body == null) return FetchError.NoBody;
+
+        var res = jsruntime.JSResult{};
+        try self.env.run(self.alloc, fetchres.body.?, src, &res, null);
+        defer res.deinit(self.alloc);
+
+        if (res.success) {
+            log.debug("eval remote {s}: {s}", .{ src, res.result });
+        } else {
+            log.info("eval remote {s}: {s}", .{ src, res.result });
+            return FetchError.JsErr;
+        }
     }
 
     // > type
