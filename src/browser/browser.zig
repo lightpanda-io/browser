@@ -416,6 +416,10 @@ pub const Page = struct {
     // > JavaScript code.
     // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#attribute_is_not_set_default_an_empty_string_or_a_javascript_mime_type
     fn isJS(stype: ?[]const u8) bool {
-        return stype == null or stype.?.len == 0 or std.mem.eql(u8, stype.?, "application/javascript") or !std.mem.eql(u8, stype.?, "module");
+        if (stype == null or stype.?.len == 0) return true;
+        if (std.mem.eql(u8, stype.?, "application/javascript")) return true;
+        if (!std.mem.eql(u8, stype.?, "module")) return true;
+
+        return false;
     }
 };
