@@ -25,7 +25,7 @@ const log = std.log.scoped(.browser);
 // A browser contains only one session.
 // TODO allow multiple sessions per browser.
 pub const Browser = struct {
-    session: *Session = undefined,
+    session: *Session,
 
     pub fn init(alloc: std.mem.Allocator, vm: jsruntime.VM) !Browser {
         // We want to ensure the caller initialised a VM, but the browser
