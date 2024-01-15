@@ -469,12 +469,11 @@ pub const HTMLCollection = struct {
         return null;
     }
 
-    fn item_name(n: Union) !?[]const u8 {
-        const elem = @as(*parser.Element, @ptrCast(n));
-        if (try parser.elementGetAttribute(elem, "id")) |v| {
+    fn item_name(elt: *parser.Element) !?[]const u8 {
+        if (try parser.elementGetAttribute(elt, "id")) |v| {
             return v;
         }
-        if (try parser.elementGetAttribute(elem, "name")) |v| {
+        if (try parser.elementGetAttribute(elt, "name")) |v| {
             return v;
         }
 
@@ -486,16 +485,15 @@ pub const HTMLCollection = struct {
         var i: u32 = 0;
         while (i < ln) {
             defer i += 1;
-
-            const v = try self._item(i);
-            // TODO k must be deinit
             const k = try std.fmt.allocPrint(alloc, "{d}", .{i});
-            try js_obj.set(k, v);
+            try self.array_like_keys.append(alloc, k);
 
-            self.array_like_keys.append(alloc, k);
+            const node = try self.item(i) orelse unreachable;
+            const e = @as(*parser.Element, @ptrCast(node));
+            try js_obj.set(k, e);
 
-            if (try item_name(v)) |name| {
-                try js_obj.set(name, v);
+            if (try item_name(e)) |name| {
+                try js_obj.set(name, e);
             }
         }
     }
@@ -534,6 +532,10 @@ pub fn testExecFn(
 
         // array like
         .{ .src = "getElementsByTagNameAll[0].localName", .ex = "html" },
+        .{ .src = "getElementsByTagNameAll[7].localName", .ex = "p" },
+        .{ .src = "getElementsByTagNameAll[8]", .ex = "undefined" },
+        .{ .src = "getElementsByTagNameAll['para-empty-child'].localName", .ex = "span" },
+        .{ .src = "getElementsByTagNameAll['foo']", .ex = "undefined" },
 
         .{ .src = "document.getElementById('content').getElementsByTagName('*').length", .ex = "4" },
         .{ .src = "document.getElementById('content').getElementsByTagName('p').length", .ex = "2" },
