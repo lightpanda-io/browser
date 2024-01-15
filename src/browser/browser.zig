@@ -223,6 +223,7 @@ pub const Page = struct {
         // https://html.spec.whatwg.org/#read-html
 
         // start JS env
+        // TODO load the js env concurrently with the HTML parsing.
         log.debug("start js env", .{});
         try self.env.start(self.alloc);
 
@@ -233,6 +234,9 @@ pub const Page = struct {
         try self.env.addObject(html_doc, "document");
 
         // browse the DOM tree to retrieve scripts
+        // TODO execute the synchronous scripts during the HTL parsing.
+        // TODO fetch the script resources concurrently but execute them in the
+        // declaration order for synchronous ones.
 
         // sasync stores scripts which can be run asynchronously.
         // for now they are just run after the non-async one in order to
