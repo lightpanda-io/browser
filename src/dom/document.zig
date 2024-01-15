@@ -232,23 +232,61 @@ pub const Document = struct {
     // TODO according with https://dom.spec.whatwg.org/#parentnode, the
     // function must accept either node or string.
     // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
-    pub fn _prepend(_: *parser.Document, _: ?Variadic(*parser.Node)) !void {
-        return parser.DOMError.HierarchyRequest;
+    pub fn _prepend(self: *parser.Document, nodes: ?Variadic(*parser.Node)) !void {
+        if (nodes == null) return;
+        if (nodes.?.slice.len == 0) return;
+        const nself = parser.documentToNode(self);
+        const first = try parser.nodeFirstChild(nself);
+
+        if (first == null) {
+            for (nodes.?.slice) |node| {
+                _ = try parser.nodeAppendChild(nself, node);
+            }
+            return;
+        }
+
+        for (nodes.?.slice) |node| {
+            _ = try parser.nodeInsertBefore(nself, node, first.?);
+        }
     }
 
     // TODO according with https://dom.spec.whatwg.org/#parentnode, the
     // function must accept either node or string.
     // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
-    pub fn _append(_: *parser.Document, _: ?Variadic(*parser.Node)) !void {
-        return parser.DOMError.HierarchyRequest;
+    pub fn _append(self: *parser.Document, nodes: ?Variadic(*parser.Node)) !void {
+        if (nodes == null) return;
+        if (nodes.?.slice.len == 0) return;
+        const nself = parser.documentToNode(self);
+        for (nodes.?.slice) |node| {
+            _ = try parser.nodeAppendChild(nself, node);
+        }
     }
 
     // TODO according with https://dom.spec.whatwg.org/#parentnode, the
     // function must accept either node or string.
     // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
-    pub fn _replaceChildren(_: *parser.Document, _: ?Variadic(*parser.Node)) !void {
-        // TODO implement function correctly
-        return parser.DOMError.HierarchyRequest;
+    pub fn _replaceChildren(self: *parser.Document, nodes: ?Variadic(*parser.Node)) !void {
+        if (nodes == null) return;
+        if (nodes.?.slice.len == 0) return;
+
+        const nself = parser.documentToNode(self);
+
+        // remove existing children
+        if (try parser.nodeHasChildNodes(nself)) {
+            const children = try parser.nodeGetChildNodes(nself);
+            const ln = try parser.nodeListLength(children);
+            var i: u32 = 0;
+            while (i < ln) {
+                defer i += 1;
+                const child = try parser.nodeListItem(children, i) orelse continue;
+                _ = try parser.nodeRemoveChild(nself, child);
+            }
+        }
+
+        // add new children
+        for (nodes.?.slice) |node| {
+            _ = try parser.nodeAppendChild(nself, node);
+        }
     }
 
     pub fn deinit(_: *parser.Document, _: std.mem.Allocator) void {}
@@ -404,6 +442,12 @@ pub fn testExecFn(
         .{ .src = "nd.firstElementChild", .ex = "null" },
         .{ .src = "nd.lastElementChild", .ex = "null" },
         .{ .src = "nd.childElementCount", .ex = "0" },
+
+        .{ .src = "let emptydoc = document.createElement('html')", .ex = "undefined" },
+        .{ .src = "emptydoc.prepend(document.createElement('html'))", .ex = "undefined" },
+
+        .{ .src = "let emptydoc2 = document.createElement('html')", .ex = "undefined" },
+        .{ .src = "emptydoc2.append(document.createElement('html'))", .ex = "undefined" },
     };
     try checkCases(js_env, &parentNode);
 
