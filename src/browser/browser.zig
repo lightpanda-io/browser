@@ -25,7 +25,6 @@ const log = std.log.scoped(.browser);
 // A browser contains only one session.
 // TODO allow multiple sessions per browser.
 pub const Browser = struct {
-    alloc: std.mem.Allocator,
     session: *Session = undefined,
 
     pub fn init(alloc: std.mem.Allocator, vm: jsruntime.VM) !Browser {
@@ -34,7 +33,6 @@ pub const Browser = struct {
         _ = vm;
 
         return Browser{
-            .alloc = alloc,
             .session = try Session.init(alloc, "about:blank"),
         };
     }
