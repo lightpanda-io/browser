@@ -41,7 +41,6 @@ pub const Browser = struct {
 
     pub fn deinit(self: *Browser) void {
         self.session.deinit();
-        self.alloc.destroy(self.session);
     }
 
     pub fn currentSession(self: *Browser) *Session {
@@ -55,6 +54,7 @@ pub const Browser = struct {
 // You can create successively multiple pages for a session, but you must
 // deinit a page before running another one.
 pub const Session = struct {
+    alloc: std.mem.Allocator,
     arena: std.heap.ArenaAllocator,
     uri: []const u8,
 
@@ -70,6 +70,7 @@ pub const Session = struct {
         var self = try alloc.create(Session);
         self.* = Session{
             .uri = uri,
+            .alloc = alloc,
             .arena = std.heap.ArenaAllocator.init(alloc),
             .window = Window.create(null),
         };
@@ -90,6 +91,7 @@ pub const Session = struct {
         self.loop.deinit();
         self.env.deinit();
         self.arena.deinit();
+        self.alloc.destroy(self);
     }
 
     pub fn createPage(self: *Session) !Page {
