@@ -25,23 +25,23 @@ const log = std.log.scoped(.browser);
 // A browser contains only one session.
 // TODO allow multiple sessions per browser.
 pub const Browser = struct {
-    allocator: std.mem.Allocator,
+    alloc: std.mem.Allocator,
     session: *Session = undefined,
 
-    pub fn init(allocator: std.mem.Allocator, vm: jsruntime.VM) !Browser {
+    pub fn init(alloc: std.mem.Allocator, vm: jsruntime.VM) !Browser {
         // We want to ensure the caller initialised a VM, but the browser
         // doesn't use it directly...
         _ = vm;
 
         return Browser{
-            .allocator = allocator,
-            .session = try Session.init(allocator, "about:blank"),
+            .alloc = alloc,
+            .session = try Session.init(alloc, "about:blank"),
         };
     }
 
     pub fn deinit(self: *Browser) void {
         self.session.deinit();
-        self.allocator.destroy(self.session);
+        self.alloc.destroy(self.session);
     }
 
     pub fn currentSession(self: *Browser) *Session {
@@ -66,11 +66,11 @@ pub const Session = struct {
 
     window: Window,
 
-    fn init(allocator: std.mem.Allocator, uri: []const u8) !*Session {
-        var self = try allocator.create(Session);
+    fn init(alloc: std.mem.Allocator, uri: []const u8) !*Session {
+        var self = try alloc.create(Session);
         self.* = Session{
             .uri = uri,
-            .arena = std.heap.ArenaAllocator.init(allocator),
+            .arena = std.heap.ArenaAllocator.init(alloc),
             .window = Window.create(null),
         };
 
@@ -106,7 +106,7 @@ pub const Session = struct {
 // You can navigates multiple urls with the same page, but you have to call
 // end() to stop the previous navigation before starting a new one.
 pub const Page = struct {
-    allocator: std.mem.Allocator,
+    alloc: std.mem.Allocator,
     loader: *Loader,
     env: *Env,
     window: *Window,
@@ -119,13 +119,13 @@ pub const Page = struct {
     raw_data: ?[]const u8 = null,
 
     fn init(
-        allocator: std.mem.Allocator,
+        alloc: std.mem.Allocator,
         loader: *Loader,
         env: *Env,
         window: *Window,
     ) Page {
         return Page{
-            .allocator = allocator,
+            .alloc = alloc,
             .loader = loader,
             .env = env,
             .window = window,
@@ -139,10 +139,10 @@ pub const Page = struct {
 
     pub fn deinit(self: *Page) void {
         if (self.raw_data) |s| {
-            self.allocator.free(s);
+            self.alloc.free(s);
         }
         if (self.raw_data) |s| {
-            self.allocator.free(s);
+            self.alloc.free(s);
         }
     }
 
@@ -165,14 +165,14 @@ pub const Page = struct {
         log.debug("starting GET {s}", .{uri});
 
         // own the url
-        if (self.rawuri) |prev| self.allocator.free(prev);
-        self.rawuri = try self.allocator.dupe(u8, uri);
+        if (self.rawuri) |prev| self.alloc.free(prev);
+        self.rawuri = try self.alloc.dupe(u8, uri);
         self.uri = std.Uri.parse(self.rawuri.?) catch try std.Uri.parseWithoutScheme(self.rawuri.?);
 
         // TODO handle fragment in url.
 
         // load the data
-        var resp = try self.loader.get(self.allocator, self.uri);
+        var resp = try self.loader.get(self.alloc, self.uri);
         defer resp.deinit();
 
         const req = resp.req;
@@ -198,7 +198,7 @@ pub const Page = struct {
             log.info("non-HTML document: {s}", .{ct});
 
             // save the body into the page.
-            self.raw_data = try req.reader().readAllAlloc(self.allocator, 16 * 1024 * 1024);
+            self.raw_data = try req.reader().readAllAlloc(self.alloc, 16 * 1024 * 1024);
         }
     }
 
@@ -224,7 +224,7 @@ pub const Page = struct {
 
         // start JS env
         log.debug("start js env", .{});
-        try self.env.start(self.allocator);
+        try self.env.start(self.alloc);
 
         // add global objects
         log.debug("setup global env", .{});
@@ -237,7 +237,7 @@ pub const Page = struct {
         // sasync stores scripts which can be run asynchronously.
         // for now they are just run after the non-async one in order to
         // dispatch DOMContentLoaded the sooner as possible.
-        var sasync = std.ArrayList(*parser.Element).init(self.allocator);
+        var sasync = std.ArrayList(*parser.Element).init(self.alloc);
         defer sasync.deinit();
 
         const root = parser.documentToNode(doc);
@@ -333,9 +333,9 @@ pub const Page = struct {
             log.debug("starting GET {s}", .{src});
 
             const u = std.Uri.parse(src) catch try std.Uri.parseWithoutScheme(src);
-            const ru = try std.Uri.resolve(self.uri, u, false, self.allocator);
+            const ru = try std.Uri.resolve(self.uri, u, false, self.alloc);
 
-            var fetchres = try self.loader.fetch(self.allocator, ru);
+            var fetchres = try self.loader.fetch(self.alloc, ru);
             defer fetchres.deinit();
 
             log.info("GET {any}: {d}", .{ ru, fetchres.status });
@@ -352,8 +352,8 @@ pub const Page = struct {
             if (fetchres.body == null) return;
 
             var res = jsruntime.JSResult{};
-            try self.env.run(self.allocator, fetchres.body.?, src, &res, null);
-            defer res.deinit(self.allocator);
+            try self.env.run(self.alloc, fetchres.body.?, src, &res, null);
+            defer res.deinit(self.alloc);
 
             if (res.success) {
                 log.debug("eval remote {s}: {s}", .{ src, res.result });
@@ -371,8 +371,8 @@ pub const Page = struct {
         if (opt_text) |text| {
             // TODO handle charset attribute
             var res = jsruntime.JSResult{};
-            try self.env.run(self.allocator, text, "", &res, null);
-            defer res.deinit(self.allocator);
+            try self.env.run(self.alloc, text, "", &res, null);
+            defer res.deinit(self.alloc);
 
             if (res.success) {
                 log.debug("eval inline: {s}", .{res.result});

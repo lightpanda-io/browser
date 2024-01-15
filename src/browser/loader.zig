@@ -6,19 +6,19 @@ pub const Loader = struct {
     client: std.http.Client,
 
     pub const Response = struct {
-        allocator: std.mem.Allocator,
+        alloc: std.mem.Allocator,
         req: *std.http.Client.Request,
 
         pub fn deinit(self: *Response) void {
             self.req.deinit();
-            self.allocator.destroy(self.req);
+            self.alloc.destroy(self.req);
         }
     };
 
-    pub fn init(allocator: std.mem.Allocator) Loader {
+    pub fn init(alloc: std.mem.Allocator) Loader {
         return Loader{
             .client = std.http.Client{
-                .allocator = allocator,
+                .allocator = alloc,
             },
         };
     }
@@ -28,15 +28,15 @@ pub const Loader = struct {
     }
 
     // the caller must deinit the FetchResult.
-    pub fn fetch(self: *Loader, allocator: std.mem.Allocator, uri: std.Uri) !std.http.Client.FetchResult {
-        var headers = try std.http.Headers.initList(allocator, &[_]std.http.Field{
+    pub fn fetch(self: *Loader, alloc: std.mem.Allocator, uri: std.Uri) !std.http.Client.FetchResult {
+        var headers = try std.http.Headers.initList(alloc, &[_]std.http.Field{
             .{ .name = "User-Agent", .value = user_agent },
             .{ .name = "Accept", .value = "*/*" },
             .{ .name = "Accept-Language", .value = "en-US,en;q=0.5" },
         });
         defer headers.deinit();
 
-        return try self.client.fetch(allocator, .{
+        return try self.client.fetch(alloc, .{
             .location = .{ .uri = uri },
             .headers = headers,
             .payload = .none,
@@ -47,8 +47,8 @@ pub const Loader = struct {
     // https://ziglang.org/documentation/master/std/#A;std:http.Client.fetch
     // for reference.
     // The caller is responsible for calling `deinit()` on the `Response`.
-    pub fn get(self: *Loader, allocator: std.mem.Allocator, uri: std.Uri) !Response {
-        var headers = try std.http.Headers.initList(allocator, &[_]std.http.Field{
+    pub fn get(self: *Loader, alloc: std.mem.Allocator, uri: std.Uri) !Response {
+        var headers = try std.http.Headers.initList(alloc, &[_]std.http.Field{
             .{ .name = "User-Agent", .value = user_agent },
             .{ .name = "Accept", .value = "*/*" },
             .{ .name = "Accept-Language", .value = "en-US,en;q=0.5" },
@@ -56,10 +56,10 @@ pub const Loader = struct {
         defer headers.deinit();
 
         var resp = Response{
-            .allocator = allocator,
-            .req = try allocator.create(std.http.Client.Request),
+            .alloc = alloc,
+            .req = try alloc.create(std.http.Client.Request),
         };
-        errdefer allocator.destroy(resp.req);
+        errdefer alloc.destroy(resp.req);
 
         resp.req.* = try self.client.open(.GET, uri, headers, .{
             .handle_redirects = true, // TODO handle redirects manually
