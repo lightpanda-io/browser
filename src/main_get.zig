@@ -57,10 +57,10 @@ pub fn main() !void {
         std.os.exit(1);
     }
 
-    Browser.initVM();
-    defer Browser.deinitVM();
+    const vm = jsruntime.VM.init();
+    defer vm.deinit();
 
-    var browser = try Browser.init(allocator);
+    var browser = try Browser.init(allocator, vm);
     defer browser.deinit();
 
     var page = try browser.currentSession().createPage();

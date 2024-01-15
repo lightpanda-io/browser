@@ -22,21 +22,17 @@ const log = std.log.scoped(.browser);
 
 // Browser is an instance of the browser.
 // You can create multiple browser instances.
-// It contains only one session but initVM() and deinitVM() must be called only
-// once per main.
+// A browser contains only one session.
+// TODO allow multiple sessions per browser.
 pub const Browser = struct {
     allocator: std.mem.Allocator,
     session: *Session = undefined,
 
-    var vm: jsruntime.VM = undefined;
-    pub fn initVM() void {
-        vm = jsruntime.VM.init();
-    }
-    pub fn deinitVM() void {
-        vm.deinit();
-    }
+    pub fn init(allocator: std.mem.Allocator, vm: jsruntime.VM) !Browser {
+        // We want to ensure the caller initialised a VM, but the browser
+        // doesn't use it directly...
+        _ = vm;
 
-    pub fn init(allocator: std.mem.Allocator) !Browser {
         return Browser{
             .allocator = allocator,
             .session = try Session.init(allocator, "about:blank"),
