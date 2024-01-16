@@ -182,10 +182,10 @@ pub const Page = struct {
             log.info("no content-type HTTP header", .{});
             return;
         };
+        log.debug("header content-type: {s}", .{ct});
         const mime = try Mime.parse(ct);
         if (mime.eql(Mime.HTML)) {
-            // TODO check content-type
-            try self.loadHTMLDoc(req.reader());
+            try self.loadHTMLDoc(req.reader(), mime.charset orelse "utf-8");
         } else {
             log.info("non-HTML document: {s}", .{ct});
 
@@ -195,10 +195,13 @@ pub const Page = struct {
     }
 
     // https://html.spec.whatwg.org/#read-html
-    fn loadHTMLDoc(self: *Page, reader: anytype) !void {
-        log.debug("parse html", .{});
-        // TODO pass an encoding detected from HTTP headers.
-        const html_doc = try parser.documentHTMLParse(reader, "UTF-8");
+    fn loadHTMLDoc(self: *Page, reader: anytype, charset: []const u8) !void {
+        log.debug("parse html with charset {s}", .{charset});
+
+        const ccharset = try self.alloc.dupeZ(u8, charset);
+        defer self.alloc.free(ccharset);
+
+        const html_doc = try parser.documentHTMLParse(reader, ccharset);
         const doc = parser.documentHTMLToDocument(html_doc);
 
         // save a document's pointer in the page.
