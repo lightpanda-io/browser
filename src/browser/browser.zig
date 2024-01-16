@@ -47,22 +47,29 @@ pub const Browser = struct {
 };
 
 // Session is like a browser's tab.
-// It owns the js env and the loader and an allocator arena for all the pages
-// of the session.
+// It owns the js env and the loader for all the pages of the session.
 // You can create successively multiple pages for a session, but you must
 // deinit a page before running another one.
 pub const Session = struct {
+    // allocator used to init the arena.
     alloc: std.mem.Allocator,
+
+    // The arena is used only to bound the js env init b/c it leaks memory.
+    // see https://github.com/lightpanda-io/jsruntime-lib/issues/181
+    //
+    // The arena is initialised with self.alloc allocator.
+    // all others Session deps use directly self.alloc and not the arena.
     arena: std.heap.ArenaAllocator,
+
     uri: []const u8,
 
     // TODO handle proxy
-    loader: Loader = undefined,
+    loader: Loader,
     env: Env = undefined,
-    loop: Loop = undefined,
-    jstypes: [Types.len]usize = undefined,
-
+    loop: Loop,
     window: Window,
+
+    jstypes: [Types.len]usize = undefined,
 
     fn init(alloc: std.mem.Allocator, uri: []const u8) !*Session {
         var self = try alloc.create(Session);
@@ -71,40 +78,37 @@ pub const Session = struct {
             .alloc = alloc,
             .arena = std.heap.ArenaAllocator.init(alloc),
             .window = Window.create(null),
+            .loader = Loader.init(alloc),
+            .loop = try Loop.init(alloc),
         };
 
-        const aallocator = self.arena.allocator();
-
-        self.loader = Loader.init(aallocator);
-        self.loop = try Loop.init(aallocator);
-        self.env = try Env.init(aallocator, &self.loop);
-
+        self.env = try Env.init(self.arena.allocator(), &self.loop);
         try self.env.load(&self.jstypes);
 
         return self;
     }
 
     fn deinit(self: *Session) void {
-        self.loader.deinit();
-        self.loop.deinit();
         self.env.deinit();
         self.arena.deinit();
+
+        self.loader.deinit();
+        self.loop.deinit();
         self.alloc.destroy(self);
     }
 
     pub fn createPage(self: *Session) !Page {
-        return Page.init(
-            self.arena.allocator(),
-            self,
-        );
+        return Page.init(self.alloc, self);
     }
 };
 
 // Page navigates to an url.
 // You can navigates multiple urls with the same page, but you have to call
 // end() to stop the previous navigation before starting a new one.
+// The page handle all its memory in an arena allocator. The arena is reseted
+// when end() is called.
 pub const Page = struct {
-    alloc: std.mem.Allocator,
+    arena: std.heap.ArenaAllocator,
     session: *Session,
     doc: ?*parser.Document = null,
 
@@ -119,23 +123,21 @@ pub const Page = struct {
         session: *Session,
     ) Page {
         return Page{
-            .alloc = alloc,
+            .arena = std.heap.ArenaAllocator.init(alloc),
             .session = session,
         };
     }
 
+    // reset js env and mem arena.
     pub fn end(self: *Page) void {
         self.session.env.stop();
         // TODO unload document: https://html.spec.whatwg.org/#unloading-documents
+
+        _ = self.arena.reset(.free_all);
     }
 
     pub fn deinit(self: *Page) void {
-        if (self.raw_data) |s| {
-            self.alloc.free(s);
-        }
-        if (self.raw_data) |s| {
-            self.alloc.free(s);
-        }
+        self.arena.deinit();
     }
 
     // dump writes the page content into the given file.
@@ -154,17 +156,19 @@ pub const Page = struct {
 
     // spec reference: https://html.spec.whatwg.org/#document-lifecycle
     pub fn navigate(self: *Page, uri: []const u8) !void {
+        const alloc = self.arena.allocator();
+
         log.debug("starting GET {s}", .{uri});
 
         // own the url
-        if (self.rawuri) |prev| self.alloc.free(prev);
-        self.rawuri = try self.alloc.dupe(u8, uri);
+        if (self.rawuri) |prev| alloc.free(prev);
+        self.rawuri = try alloc.dupe(u8, uri);
         self.uri = std.Uri.parse(self.rawuri.?) catch try std.Uri.parseWithoutScheme(self.rawuri.?);
 
         // TODO handle fragment in url.
 
         // load the data
-        var resp = try self.session.loader.get(self.alloc, self.uri);
+        var resp = try self.session.loader.get(alloc, self.uri);
         defer resp.deinit();
 
         const req = resp.req;
@@ -190,16 +194,18 @@ pub const Page = struct {
             log.info("non-HTML document: {s}", .{ct});
 
             // save the body into the page.
-            self.raw_data = try req.reader().readAllAlloc(self.alloc, 16 * 1024 * 1024);
+            self.raw_data = try req.reader().readAllAlloc(alloc, 16 * 1024 * 1024);
         }
     }
 
     // https://html.spec.whatwg.org/#read-html
     fn loadHTMLDoc(self: *Page, reader: anytype, charset: []const u8) !void {
+        const alloc = self.arena.allocator();
+
         log.debug("parse html with charset {s}", .{charset});
 
-        const ccharset = try self.alloc.dupeZ(u8, charset);
-        defer self.alloc.free(ccharset);
+        const ccharset = try alloc.dupeZ(u8, charset);
+        defer alloc.free(ccharset);
 
         const html_doc = try parser.documentHTMLParse(reader, ccharset);
         const doc = parser.documentHTMLToDocument(html_doc);
@@ -220,7 +226,7 @@ pub const Page = struct {
         // start JS env
         // TODO load the js env concurrently with the HTML parsing.
         log.debug("start js env", .{});
-        try self.session.env.start(self.alloc);
+        try self.session.env.start(alloc);
 
         // add global objects
         log.debug("setup global env", .{});
@@ -236,7 +242,7 @@ pub const Page = struct {
         // sasync stores scripts which can be run asynchronously.
         // for now they are just run after the non-async one in order to
         // dispatch DOMContentLoaded the sooner as possible.
-        var sasync = std.ArrayList(*parser.Element).init(self.alloc);
+        var sasync = std.ArrayList(*parser.Element).init(alloc);
         defer sasync.deinit();
 
         const root = parser.documentToNode(doc);
@@ -326,6 +332,8 @@ pub const Page = struct {
     // if no src is present, we evaluate the text source.
     // https://html.spec.whatwg.org/multipage/scripting.html#script-processing-model
     fn evalScript(self: *Page, e: *parser.Element) !void {
+        const alloc = self.arena.allocator();
+
         // https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-classic-script
         const opt_src = try parser.elementGetAttribute(e, "src");
         if (opt_src) |src| {
@@ -354,8 +362,8 @@ pub const Page = struct {
         if (opt_text) |text| {
             // TODO handle charset attribute
             var res = jsruntime.JSResult{};
-            try self.session.env.run(self.alloc, text, "", &res, null);
-            defer res.deinit(self.alloc);
+            try self.session.env.run(alloc, text, "", &res, null);
+            defer res.deinit(alloc);
 
             if (res.success) {
                 log.debug("eval inline: {s}", .{res.result});
@@ -380,12 +388,14 @@ pub const Page = struct {
     // fetchScript senf a GET request to the src and execute the script
     // received.
     fn fetchScript(self: *Page, src: []const u8) !void {
+        const alloc = self.arena.allocator();
+
         log.debug("starting fetch script {s}", .{src});
 
         const u = std.Uri.parse(src) catch try std.Uri.parseWithoutScheme(src);
-        const ru = try std.Uri.resolve(self.uri, u, false, self.alloc);
+        const ru = try std.Uri.resolve(self.uri, u, false, alloc);
 
-        var fetchres = try self.session.loader.fetch(self.alloc, ru);
+        var fetchres = try self.session.loader.fetch(alloc, ru);
         defer fetchres.deinit();
 
         log.info("fech script {any}: {d}", .{ ru, fetchres.status });
@@ -398,8 +408,8 @@ pub const Page = struct {
         if (fetchres.body == null) return FetchError.NoBody;
 
         var res = jsruntime.JSResult{};
-        try self.session.env.run(self.alloc, fetchres.body.?, src, &res, null);
-        defer res.deinit(self.alloc);
+        try self.session.env.run(alloc, fetchres.body.?, src, &res, null);
+        defer res.deinit(alloc);
 
         if (res.success) {
             log.debug("eval remote {s}: {s}", .{ src, res.result });
