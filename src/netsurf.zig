@@ -341,8 +341,50 @@ fn DOMErr(except: DOMException) DOMError!void {
     };
 }
 
+// Event
+pub const Event = c.dom_event;
+pub const EventHandler = fn (?*Event, ?*anyopaque) callconv(.C) void;
+
+pub fn eventCreate() !*Event {
+    var evt: ?*Event = undefined;
+    const err = c._dom_event_create(&evt);
+    try DOMErr(err);
+    return evt.?;
+}
+
+pub fn eventInit(evt: *Event, eventType: []const u8) !void {
+    const s = try strFromData(eventType);
+    const err = c._dom_event_init(evt, s, false, false);
+    try DOMErr(err);
+}
+
 // EventTarget
 pub const EventTarget = c.dom_event_target;
+
+fn eventTargetVtable(et: *EventTarget) c.dom_event_target_vtable {
+    return getVtable(c.dom_event_target_vtable, EventTarget, et);
+}
+
+pub fn eventTargetAddEventListener(
+    et: *EventTarget,
+    eventType: []const u8,
+    data: ?*anyopaque,
+    comptime handler: EventHandler,
+) !void {
+    const s = try strFromData(eventType);
+    var listener: ?*c.dom_event_listener = undefined;
+    const errLst = c.dom_event_listener_create(handler, data, &listener);
+    try DOMErr(errLst);
+    const err = eventTargetVtable(et).add_event_listener.?(et, s, listener, true);
+    try DOMErr(err);
+}
+
+pub fn eventTargetDispatchEvent(et: *EventTarget, event: *Event) !bool {
+    var res: bool = undefined;
+    const err = eventTargetVtable(et).dispatch_event.?(et, event, &res);
+    try DOMErr(err);
+    return res;
+}
 
 // NodeType
 
