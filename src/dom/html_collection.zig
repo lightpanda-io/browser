@@ -387,6 +387,10 @@ pub const HTMLCollection = struct {
     cur_idx: ?u32 = undefined,
     cur_node: ?*parser.Node = undefined,
 
+    // array_like_keys is used to keep reference to array like interface implementation.
+    // the collection generates keys string which must be free on deinit.
+    array_like_keys: std.ArrayListUnmanaged([]u8) = .{},
+
     // start returns the first node to walk on.
     fn start(self: HTMLCollection) !?*parser.Node {
         if (self.root == null) return null;
@@ -499,7 +503,38 @@ pub const HTMLCollection = struct {
         return null;
     }
 
+    fn item_name(elt: *parser.Element) !?[]const u8 {
+        if (try parser.elementGetAttribute(elt, "id")) |v| {
+            return v;
+        }
+        if (try parser.elementGetAttribute(elt, "name")) |v| {
+            return v;
+        }
+
+        return null;
+    }
+
+    pub fn postAttach(self: *HTMLCollection, alloc: std.mem.Allocator, js_obj: jsruntime.JSObject) !void {
+        const ln = try self.get_length();
+        var i: u32 = 0;
+        while (i < ln) {
+            defer i += 1;
+            const k = try std.fmt.allocPrint(alloc, "{d}", .{i});
+            try self.array_like_keys.append(alloc, k);
+
+            const node = try self.item(i) orelse unreachable;
+            const e = @as(*parser.Element, @ptrCast(node));
+            try js_obj.set(k, e);
+
+            if (try item_name(e)) |name| {
+                try js_obj.set(name, e);
+            }
+        }
+    }
+
     pub fn deinit(self: *HTMLCollection, alloc: std.mem.Allocator) void {
+        for (self.array_like_keys_) |k| alloc.free(k);
+        self.array_like_keys.deinit(alloc);
         self.matcher.deinit(alloc);
     }
 };
@@ -528,6 +563,13 @@ pub fn testExecFn(
         .{ .src = "getElementsByTagNameAll.item(3).localName", .ex = "div" },
         .{ .src = "getElementsByTagNameAll.item(7).localName", .ex = "p" },
         .{ .src = "getElementsByTagNameAll.namedItem('para-empty-child').localName", .ex = "span" },
+
+        // array like
+        .{ .src = "getElementsByTagNameAll[0].localName", .ex = "html" },
+        .{ .src = "getElementsByTagNameAll[7].localName", .ex = "p" },
+        .{ .src = "getElementsByTagNameAll[8]", .ex = "undefined" },
+        .{ .src = "getElementsByTagNameAll['para-empty-child'].localName", .ex = "span" },
+        .{ .src = "getElementsByTagNameAll['foo']", .ex = "undefined" },
 
         .{ .src = "document.getElementById('content').getElementsByTagName('*').length", .ex = "4" },
         .{ .src = "document.getElementById('content').getElementsByTagName('p').length", .ex = "2" },
