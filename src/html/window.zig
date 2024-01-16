@@ -2,9 +2,12 @@ const std = @import("std");
 
 const parser = @import("../netsurf.zig");
 
+const EventTarget = @import("../dom/event_target.zig").EventTarget;
+
 // https://dom.spec.whatwg.org/#interface-window-extensions
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#window
 pub const Window = struct {
+    pub const prototype = *EventTarget;
     pub const mem_guarantied = true;
 
     document: ?*parser.Document = null,
