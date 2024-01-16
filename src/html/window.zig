@@ -7,7 +7,7 @@ const parser = @import("../netsurf.zig");
 pub const Window = struct {
     pub const mem_guarantied = true;
 
-    document: *parser.Document = undefined,
+    document: ?*parser.Document = null,
     target: []const u8,
 
     pub fn create(target: ?[]const u8) Window {
@@ -32,7 +32,7 @@ pub const Window = struct {
         return self;
     }
 
-    pub fn get_document(self: *Window) *parser.Document {
+    pub fn get_document(self: *Window) ?*parser.Document {
         return self.document;
     }
 
