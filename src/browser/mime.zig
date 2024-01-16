@@ -12,10 +12,13 @@ const MimeError = error{
 
 mtype: []const u8,
 msubtype: []const u8,
-params: []const u8,
+params: []const u8 = "",
 
-pub const HTML = Self{ .mtype = "text", .msubtype = "html", .params = "" };
-pub const Javascript = Self{ .mtype = "application", .msubtype = "javascript", .params = "" };
+charset: ?[]const u8 = null,
+boundary: ?[]const u8 = null,
+
+pub const HTML = Self{ .mtype = "text", .msubtype = "html" };
+pub const Javascript = Self{ .mtype = "application", .msubtype = "javascript" };
 
 const reader = struct {
     s: []const u8,
@@ -128,7 +131,7 @@ pub fn parse(s: []const u8) Self.MimeError!Self {
     // limit input size
     if (ln > 255) return MimeError.TooBig;
 
-    var res = Self{ .mtype = "", .msubtype = "", .params = "" };
+    var res = Self{ .mtype = "", .msubtype = "" };
     var r = reader{ .s = s };
 
     res.mtype = trim(r.until('/'));
@@ -143,6 +146,24 @@ pub fn parse(s: []const u8) Self.MimeError!Self {
     if (!r.skip()) return res;
     res.params = trim(r.tail());
     if (res.params.len == 0) return MimeError.Invalid;
+
+    // parse well known parameters.
+    // don't check invalid parameter format.
+    var rp = reader{ .s = res.params };
+    while (true) {
+        const name = trim(rp.until('='));
+        if (!rp.skip()) return res;
+        const value = trim(rp.until(';'));
+
+        if (std.ascii.eqlIgnoreCase(name, "charset")) {
+            res.charset = value;
+        }
+        if (std.ascii.eqlIgnoreCase(name, "boundary")) {
+            res.boundary = value;
+        }
+
+        if (!rp.skip()) return res;
+    }
 
     return res;
 }
@@ -163,10 +184,17 @@ test "parse valid" {
     try testing.expectEqualStrings("text", m2.mtype);
     try testing.expectEqualStrings("javascript1.5", m2.msubtype);
 
-    const m3 = try Self.parse("text/html; charset=UTF-8");
+    const m3 = try Self.parse("text/html; charset=utf-8");
     try testing.expectEqualStrings("text", m3.mtype);
     try testing.expectEqualStrings("html", m3.msubtype);
-    try testing.expectEqualStrings("charset=UTF-8", m3.params);
+    try testing.expectEqualStrings("charset=utf-8", m3.params);
+    try testing.expectEqualStrings("utf-8", m3.charset.?);
+
+    const m4 = try Self.parse("text/html; boundary=----");
+    try testing.expectEqualStrings("text", m4.mtype);
+    try testing.expectEqualStrings("html", m4.msubtype);
+    try testing.expectEqualStrings("boundary=----", m4.params);
+    try testing.expectEqualStrings("----", m4.boundary.?);
 }
 
 test "parse invalid" {
