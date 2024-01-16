@@ -2,7 +2,7 @@ const std = @import("std");
 const File = std.fs.File;
 
 const parser = @import("../netsurf.zig");
-const Walker = @import("../dom/html_collection.zig").WalkerChildren;
+const Walker = @import("../dom/walker.zig").WalkerChildren;
 
 pub fn htmlFile(doc: *parser.Document, out: File) !void {
     try out.writeAll("<!DOCTYPE html>\n");

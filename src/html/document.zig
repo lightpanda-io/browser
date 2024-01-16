@@ -12,7 +12,7 @@ const NodeList = @import("../dom/nodelist.zig").NodeList;
 const HTMLElem = @import("elements.zig");
 
 const collection = @import("../dom/html_collection.zig");
-const Walker = collection.WalkerDepthFirst;
+const Walker = @import("../dom/walker.zig").WalkerDepthFirst;
 
 // WEB IDL https://html.spec.whatwg.org/#the-document-object
 pub const HTMLDocument = struct {

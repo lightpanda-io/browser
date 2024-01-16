@@ -14,7 +14,7 @@ const Env = jsruntime.Env;
 const apiweb = @import("../apiweb.zig");
 
 const Window = @import("../html/window.zig").Window;
-const Walker = @import("../dom/html_collection.zig").WalkerDepthFirst;
+const Walker = @import("../dom/walker.zig").WalkerDepthFirst;
 
 const FetchResult = std.http.Client.FetchResult;
 
