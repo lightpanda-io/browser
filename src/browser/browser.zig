@@ -95,9 +95,7 @@ pub const Session = struct {
     pub fn createPage(self: *Session) !Page {
         return Page.init(
             self.arena.allocator(),
-            &self.loader,
-            &self.env,
-            &self.window,
+            self,
         );
     }
 };
@@ -107,9 +105,7 @@ pub const Session = struct {
 // end() to stop the previous navigation before starting a new one.
 pub const Page = struct {
     alloc: std.mem.Allocator,
-    loader: *Loader,
-    env: *Env,
-    window: *Window,
+    session: *Session,
     doc: ?*parser.Document = null,
 
     // handle url
@@ -120,20 +116,16 @@ pub const Page = struct {
 
     fn init(
         alloc: std.mem.Allocator,
-        loader: *Loader,
-        env: *Env,
-        window: *Window,
+        session: *Session,
     ) Page {
         return Page{
             .alloc = alloc,
-            .loader = loader,
-            .env = env,
-            .window = window,
+            .session = session,
         };
     }
 
     pub fn end(self: *Page) void {
-        self.env.stop();
+        self.session.env.stop();
         // TODO unload document: https://html.spec.whatwg.org/#unloading-documents
     }
 
@@ -172,7 +164,7 @@ pub const Page = struct {
         // TODO handle fragment in url.
 
         // load the data
-        var resp = try self.loader.get(self.alloc, self.uri);
+        var resp = try self.session.loader.get(self.alloc, self.uri);
         defer resp.deinit();
 
         const req = resp.req;
@@ -218,20 +210,20 @@ pub const Page = struct {
         // TODO inject the URL to the document including the fragment.
         // TODO set the referrer to the document.
 
-        self.window.replaceDocument(doc);
+        self.session.window.replaceDocument(doc);
 
         // https://html.spec.whatwg.org/#read-html
 
         // start JS env
         // TODO load the js env concurrently with the HTML parsing.
         log.debug("start js env", .{});
-        try self.env.start(self.alloc);
+        try self.session.env.start(self.alloc);
 
         // add global objects
         log.debug("setup global env", .{});
-        try self.env.addObject(self.window, "window");
-        try self.env.addObject(self.window, "self");
-        try self.env.addObject(html_doc, "document");
+        try self.session.env.addObject(self.session.window, "window");
+        try self.session.env.addObject(self.session.window, "self");
+        try self.session.env.addObject(html_doc, "document");
 
         // browse the DOM tree to retrieve scripts
         // TODO execute the synchronous scripts during the HTL parsing.
@@ -359,7 +351,7 @@ pub const Page = struct {
         if (opt_text) |text| {
             // TODO handle charset attribute
             var res = jsruntime.JSResult{};
-            try self.env.run(self.alloc, text, "", &res, null);
+            try self.session.env.run(self.alloc, text, "", &res, null);
             defer res.deinit(self.alloc);
 
             if (res.success) {
@@ -390,7 +382,7 @@ pub const Page = struct {
         const u = std.Uri.parse(src) catch try std.Uri.parseWithoutScheme(src);
         const ru = try std.Uri.resolve(self.uri, u, false, self.alloc);
 
-        var fetchres = try self.loader.fetch(self.alloc, ru);
+        var fetchres = try self.session.loader.fetch(self.alloc, ru);
         defer fetchres.deinit();
 
         log.info("fech script {any}: {d}", .{ ru, fetchres.status });
@@ -403,7 +395,7 @@ pub const Page = struct {
         if (fetchres.body == null) return FetchError.NoBody;
 
         var res = jsruntime.JSResult{};
-        try self.env.run(self.alloc, fetchres.body.?, src, &res, null);
+        try self.session.env.run(self.alloc, fetchres.body.?, src, &res, null);
         defer res.deinit(self.alloc);
 
         if (res.success) {
