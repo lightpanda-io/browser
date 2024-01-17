@@ -23,6 +23,7 @@ const NodeListTestExecFn = @import("dom/nodelist.zig").testExecFn;
 const AttrTestExecFn = @import("dom/attribute.zig").testExecFn;
 const EventTargetTestExecFn = @import("dom/event_target.zig").testExecFn;
 const EventTestExecFn = @import("events/event.zig").testExecFn;
+const xhr = @import("xhr/xhr.zig");
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 
@@ -145,4 +146,21 @@ test "Window is a libdom event target" {
 
     const et = @as(*parser.EventTarget, @ptrCast(&window));
     _ = try parser.eventTargetDispatchEvent(et, event);
+}
+
+test "XMLHttpRequest.validMethod" {
+    // valid methods
+    for ([_][]const u8{ "get", "GET", "head", "HEAD" }) |tc| {
+        try xhr.XMLHttpRequest.validMethod(tc);
+    }
+
+    // forbidden
+    for ([_][]const u8{ "connect", "CONNECT" }) |tc| {
+        try std.testing.expectError(parser.DOMError.Security, xhr.XMLHttpRequest.validMethod(tc));
+    }
+
+    // syntax
+    for ([_][]const u8{ "foo", "BAR" }) |tc| {
+        try std.testing.expectError(parser.DOMError.Syntax, xhr.XMLHttpRequest.validMethod(tc));
+    }
 }

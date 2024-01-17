@@ -3,6 +3,8 @@ const std = @import("std");
 const generate = @import("../generate.zig");
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 
+const DOMError = @import("../netsurf.zig").DOMError;
+
 // XHR interfaces
 // https://xhr.spec.whatwg.org/#interface-xmlhttprequest
 pub const Interfaces = generate.Tuple(.{
@@ -49,10 +51,35 @@ pub const XMLHttpRequest = struct {
         password: ?[]const u8,
     ) !void {
         _ = self;
-        _ = method;
         _ = url;
         _ = asyn;
         _ = username;
         _ = password;
+
+        // TODO If this’s relevant global object is a Window object and its
+        // associated Document is not fully active, then throw an
+        // "InvalidStateError" DOMException.
+
+        try validMethod(method);
+    }
+
+    const methods = [_][]const u8{ "DELETE", "GET", "HEAD", "OPTIONS", "POST", "PUT" };
+    const methods_forbidden = [_][]const u8{ "CONNECT", "TRACE", "TRACK" };
+
+    pub fn validMethod(m: []const u8) DOMError!void {
+        for (methods) |method| {
+            if (std.ascii.eqlIgnoreCase(method, m)) {
+                return;
+            }
+        }
+        // If method is a forbidden method, then throw a "SecurityError" DOMException.
+        for (methods_forbidden) |method| {
+            if (std.ascii.eqlIgnoreCase(method, m)) {
+                return DOMError.Security;
+            }
+        }
+
+        // If method is not a method, then throw a "SyntaxError" DOMException.
+        return DOMError.Syntax;
     }
 };
