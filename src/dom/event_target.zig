@@ -17,18 +17,6 @@ pub const EventTarget = struct {
     // JS funcs
     // --------
 
-    const js_handler = struct {
-        fn handle(event: ?*parser.Event, data: ?*anyopaque) callconv(.C) void {
-            const ptr: *align(@alignOf(*Callback)) anyopaque = @alignCast(data.?);
-            const func = @as(*Callback, @ptrCast(ptr));
-            func.call(.{event}) catch unreachable;
-            // NOTE: we can not call func.deinit here
-            // b/c the handler can be called several times
-            // as the event goes through the ancestors
-            // TODO: check the event phase to call func.deinit and free func
-        }
-    }.handle;
-
     pub fn _addEventListener(
         self: *parser.EventTarget,
         alloc: std.mem.Allocator,
@@ -38,8 +26,7 @@ pub const EventTarget = struct {
         // TODO: when can we free this allocation?
         const cbk_ptr = try alloc.create(Callback);
         cbk_ptr.* = cbk;
-        const func = @as(*anyopaque, @ptrCast(cbk_ptr));
-        try parser.eventTargetAddEventListener(self, eventType, func, js_handler);
+        try parser.eventTargetAddEventListener(self, eventType, cbk_ptr);
     }
 
     pub fn _dispatchEvent(self: *parser.EventTarget, event: *parser.Event) !bool {

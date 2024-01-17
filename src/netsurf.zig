@@ -5,6 +5,8 @@ const c = @cImport({
     @cInclude("dom/bindings/hubbub/parser.h");
 });
 
+const Callback = @import("jsruntime").Callback;
+
 // Vtable
 // ------
 
@@ -343,7 +345,6 @@ fn DOMErr(except: DOMException) DOMError!void {
 
 // Event
 pub const Event = c.dom_event;
-pub const EventHandler = fn (?*Event, ?*anyopaque) callconv(.C) void;
 
 pub fn eventCreate() !*Event {
     var evt: ?*Event = undefined;
@@ -358,6 +359,21 @@ pub fn eventInit(evt: *Event, eventType: []const u8) !void {
     try DOMErr(err);
 }
 
+// EventHandler
+pub const EventHandler = fn (?*Event, ?*anyopaque) callconv(.C) void;
+
+const event_handler = struct {
+    fn handle(event: ?*Event, data: ?*anyopaque) callconv(.C) void {
+        const ptr: *align(@alignOf(*Callback)) anyopaque = @alignCast(data.?);
+        const func = @as(*Callback, @ptrCast(ptr));
+        func.call(.{event}) catch unreachable;
+        // NOTE: we can not call func.deinit here
+        // b/c the handler can be called several times
+        // as the event goes through the ancestors
+        // TODO: check the event phase to call func.deinit and free func
+    }
+}.handle;
+
 // EventTarget
 pub const EventTarget = c.dom_event_target;
 
@@ -368,12 +384,12 @@ fn eventTargetVtable(et: *EventTarget) c.dom_event_target_vtable {
 pub fn eventTargetAddEventListener(
     et: *EventTarget,
     eventType: []const u8,
-    data: ?*anyopaque,
-    comptime handler: EventHandler,
+    cbk_ptr: *Callback,
 ) !void {
     const s = try strFromData(eventType);
+    const ctx = @as(*anyopaque, @ptrCast(cbk_ptr));
     var listener: ?*c.dom_event_listener = undefined;
-    const errLst = c.dom_event_listener_create(handler, data, &listener);
+    const errLst = c.dom_event_listener_create(event_handler, ctx, &listener);
     try DOMErr(errLst);
     const err = eventTargetVtable(et).add_event_listener.?(et, s, listener, true);
     try DOMErr(err);
