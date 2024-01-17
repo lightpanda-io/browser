@@ -1,6 +1,9 @@
 const std = @import("std");
 
 const parser = @import("../netsurf.zig");
+const c = @cImport({
+    @cInclude("events/event_target.h");
+});
 
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 
@@ -9,6 +12,9 @@ const EventTarget = @import("../dom/event_target.zig").EventTarget;
 pub const Window = struct {
     pub const prototype = *EventTarget;
     pub const mem_guarantied = true;
+
+    // Extend libdom event target for pure zig struct.
+    base: parser.EventTargetTBase = parser.EventTargetTBase{},
 
     document: ?*parser.Document = null,
     target: []const u8,
@@ -42,6 +48,4 @@ pub const Window = struct {
     pub fn get_name(self: *Window) []const u8 {
         return self.target;
     }
-
-    // TODO we need to re-implement EventTarget interface.
 };

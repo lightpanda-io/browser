@@ -6,6 +6,7 @@ const generate = @import("generate.zig");
 
 const parser = @import("netsurf.zig");
 const apiweb = @import("apiweb.zig");
+const Window = @import("html/window.zig").Window;
 
 const documentTestExecFn = @import("dom/document.zig").testExecFn;
 const HTMLDocumentTestExecFn = @import("html/document.zig").testExecFn;
@@ -134,4 +135,14 @@ test "run browser tests" {
     defer out.close();
 
     try dump.HTMLFileTestFn(out);
+}
+
+test "Window is a libdom event target" {
+    var window = Window.create(null);
+
+    const event = try parser.eventCreate();
+    try parser.eventInit(event, "foo", .{});
+
+    const et = @as(*parser.EventTarget, @ptrCast(&window));
+    _ = try parser.eventTargetDispatchEvent(et, event);
 }
