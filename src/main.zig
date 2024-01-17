@@ -3,9 +3,9 @@ const std = @import("std");
 const jsruntime = @import("jsruntime");
 
 const parser = @import("netsurf.zig");
-const DOM = @import("dom.zig");
+const apiweb = @import("apiweb.zig");
 
-pub const Types = jsruntime.reflect(DOM.Interfaces);
+pub const Types = jsruntime.reflect(apiweb.Interfaces);
 
 const socket_path = "/tmp/browsercore-server.sock";
 

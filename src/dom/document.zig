@@ -10,7 +10,7 @@ const Node = @import("node.zig").Node;
 const NodeList = @import("nodelist.zig").NodeList;
 const NodeUnion = @import("node.zig").Union;
 
-const Walker = @import("html_collection.zig").WalkerDepthFirst;
+const Walker = @import("walker.zig").WalkerDepthFirst;
 const collection = @import("html_collection.zig");
 
 const Element = @import("element.zig").Element;

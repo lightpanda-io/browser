@@ -6,7 +6,7 @@ const Suite = @import("wpt/testcase.zig").Suite;
 const FileLoader = @import("wpt/fileloader.zig").FileLoader;
 const wpt = @import("wpt/run.zig");
 
-const DOM = @import("dom.zig");
+const apiweb = @import("apiweb.zig");
 const HTMLElem = @import("html/elements.zig");
 
 const wpt_dir = "tests/wpt";
@@ -29,7 +29,7 @@ const Out = enum {
     text,
 };
 
-pub const Types = jsruntime.reflect(DOM.Interfaces);
+pub const Types = jsruntime.reflect(apiweb.Interfaces);
 
 // TODO For now the WPT tests run is specific to WPT.
 // It manually load js framwork libs, and run the first script w/ js content in
