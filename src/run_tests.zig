@@ -6,6 +6,7 @@ const generate = @import("generate.zig");
 
 const parser = @import("netsurf.zig");
 const apiweb = @import("apiweb.zig");
+const Window = @import("html/window.zig").Window;
 
 const documentTestExecFn = @import("dom/document.zig").testExecFn;
 const HTMLDocumentTestExecFn = @import("html/document.zig").testExecFn;
@@ -159,4 +160,14 @@ test "XMLHttpRequest.validMethod" {
     for ([_][]const u8{ "foo", "BAR" }) |tc| {
         try std.testing.expectError(parser.DOMError.Syntax, xhr.XMLHttpRequest.validMethod(tc));
     }
+}
+
+test "Window is a libdom event target" {
+    var window = Window.create(null);
+
+    const event = try parser.eventCreate();
+    try parser.eventInit(event, "foo", .{});
+
+    const et = @as(*parser.EventTarget, @ptrCast(&window));
+    _ = try parser.eventTargetDispatchEvent(et, event);
 }
