@@ -353,9 +353,93 @@ pub fn eventCreate() !*Event {
     return evt.?;
 }
 
-pub fn eventInit(evt: *Event, eventType: []const u8) !void {
-    const s = try strFromData(eventType);
-    const err = c._dom_event_init(evt, s, false, false);
+pub const EventInit = struct {
+    bubbles: bool = false,
+    cancelable: bool = false,
+    composed: bool = false,
+};
+
+pub fn eventInit(evt: *Event, typ: []const u8, opts: EventInit) !void {
+    const s = try strFromData(typ);
+    const err = c._dom_event_init(evt, s, opts.bubbles, opts.cancelable);
+    try DOMErr(err);
+}
+
+pub fn eventType(evt: *Event) ![]const u8 {
+    var s: ?*String = undefined;
+    const err = c._dom_event_get_type(evt, &s);
+    try DOMErr(err);
+    return strToData(s.?);
+}
+
+pub fn eventTarget(evt: *Event) !?*EventTarget {
+    var et: ?*EventTarget = undefined;
+    const err = c._dom_event_get_target(evt, &et);
+    try DOMErr(err);
+    return et;
+}
+
+pub fn eventCurrentTarget(evt: *Event) !?*EventTarget {
+    var et: ?*EventTarget = undefined;
+    const err = c._dom_event_get_current_target(evt, &et);
+    try DOMErr(err);
+    return et;
+}
+
+pub fn eventPhase(evt: *Event) !u8 {
+    var phase: c.dom_event_flow_phase = undefined;
+    const err = c._dom_event_get_event_phase(evt, &phase);
+    try DOMErr(err);
+    return @as(u8, @intCast(phase));
+}
+
+pub fn eventBubbles(evt: *Event) !bool {
+    var res: bool = undefined;
+    const err = c._dom_event_get_bubbles(evt, &res);
+    try DOMErr(err);
+    return res;
+}
+
+pub fn eventCancelable(evt: *Event) !bool {
+    var res: bool = undefined;
+    const err = c._dom_event_get_cancelable(evt, &res);
+    try DOMErr(err);
+    return res;
+}
+
+pub fn eventDefaultPrevented(evt: *Event) !bool {
+    var res: bool = undefined;
+    const err = c._dom_event_is_default_prevented(evt, &res);
+    try DOMErr(err);
+    return res;
+}
+
+pub fn eventIsTrusted(evt: *Event) !bool {
+    var res: bool = undefined;
+    const err = c._dom_event_get_is_trusted(evt, &res);
+    try DOMErr(err);
+    return res;
+}
+
+pub fn eventTimestamp(evt: *Event) !u32 {
+    var ts: c_uint = undefined;
+    const err = c._dom_event_get_timestamp(evt, &ts);
+    try DOMErr(err);
+    return @as(u32, @intCast(ts));
+}
+
+pub fn eventStopPropagation(evt: *Event) !void {
+    const err = c._dom_event_stop_propagation(evt);
+    try DOMErr(err);
+}
+
+pub fn eventStopImmediatePropagation(evt: *Event) !void {
+    const err = c._dom_event_stop_immediate_propagation(evt);
+    try DOMErr(err);
+}
+
+pub fn eventPreventDefault(evt: *Event) !void {
+    const err = c._dom_event_prevent_default(evt);
     try DOMErr(err);
 }
 
@@ -383,20 +467,22 @@ fn eventTargetVtable(et: *EventTarget) c.dom_event_target_vtable {
 
 pub fn eventTargetAddEventListener(
     et: *EventTarget,
-    eventType: []const u8,
+    typ: []const u8,
     cbk_ptr: *Callback,
+    capture: bool,
 ) !void {
-    const s = try strFromData(eventType);
+    const s = try strFromData(typ);
     const ctx = @as(*anyopaque, @ptrCast(cbk_ptr));
     var listener: ?*c.dom_event_listener = undefined;
     const errLst = c.dom_event_listener_create(event_handler, ctx, &listener);
     try DOMErr(errLst);
-    const err = eventTargetVtable(et).add_event_listener.?(et, s, listener, true);
+    const err = eventTargetVtable(et).add_event_listener.?(et, s, listener, capture);
     try DOMErr(err);
 }
 
 pub fn eventTargetDispatchEvent(et: *EventTarget, event: *Event) !bool {
     var res: bool = undefined;
+    // const err = c.dom_event_target_dispatch_event(et, event, &res);
     const err = eventTargetVtable(et).dispatch_event.?(et, event, &res);
     try DOMErr(err);
     return res;
