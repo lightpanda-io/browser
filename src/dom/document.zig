@@ -5,6 +5,7 @@ const parser = @import("../netsurf.zig");
 const jsruntime = @import("jsruntime");
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
+const Variadic = jsruntime.Variadic;
 
 const Node = @import("node.zig").Node;
 const NodeList = @import("nodelist.zig").NodeList;
@@ -228,6 +229,27 @@ pub const Document = struct {
         return list;
     }
 
+    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
+    // function must accept either node or string.
+    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
+    pub fn _prepend(self: *parser.Document, nodes: ?Variadic(*parser.Node)) !void {
+        return Node.prepend(parser.documentToNode(self), nodes);
+    }
+
+    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
+    // function must accept either node or string.
+    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
+    pub fn _append(self: *parser.Document, nodes: ?Variadic(*parser.Node)) !void {
+        return Node.append(parser.documentToNode(self), nodes);
+    }
+
+    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
+    // function must accept either node or string.
+    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
+    pub fn _replaceChildren(self: *parser.Document, nodes: ?Variadic(*parser.Node)) !void {
+        return Node.replaceChildren(parser.documentToNode(self), nodes);
+    }
+
     pub fn deinit(_: *parser.Document, _: std.mem.Allocator) void {}
 };
 
@@ -381,6 +403,12 @@ pub fn testExecFn(
         .{ .src = "nd.firstElementChild", .ex = "null" },
         .{ .src = "nd.lastElementChild", .ex = "null" },
         .{ .src = "nd.childElementCount", .ex = "0" },
+
+        .{ .src = "let emptydoc = document.createElement('html')", .ex = "undefined" },
+        .{ .src = "emptydoc.prepend(document.createElement('html'))", .ex = "undefined" },
+
+        .{ .src = "let emptydoc2 = document.createElement('html')", .ex = "undefined" },
+        .{ .src = "emptydoc2.append(document.createElement('html'))", .ex = "undefined" },
     };
     try checkCases(js_env, &parentNode);
 

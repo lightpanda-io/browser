@@ -4,6 +4,8 @@ const jsruntime = @import("jsruntime");
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 const runScript = jsruntime.test_utils.runScript;
+const Variadic = jsruntime.Variadic;
+
 const generate = @import("../generate.zig");
 
 const parser = @import("../netsurf.zig");
@@ -255,6 +257,62 @@ pub const Node = struct {
     pub fn _replaceChild(self: *parser.Node, new_child: *parser.Node, old_child: *parser.Node) !Union {
         const res = try parser.nodeReplaceChild(self, new_child, old_child);
         return try Node.toInterface(res);
+    }
+
+    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
+    // function must accept either node or string.
+    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
+    pub fn prepend(self: *parser.Node, nodes: ?Variadic(*parser.Node)) !void {
+        if (nodes == null) return;
+        if (nodes.?.slice.len == 0) return;
+        const first = try parser.nodeFirstChild(self);
+
+        if (first == null) {
+            for (nodes.?.slice) |node| {
+                _ = try parser.nodeAppendChild(self, node);
+            }
+            return;
+        }
+
+        for (nodes.?.slice) |node| {
+            _ = try parser.nodeInsertBefore(self, node, first.?);
+        }
+    }
+
+    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
+    // function must accept either node or string.
+    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
+    pub fn append(self: *parser.Node, nodes: ?Variadic(*parser.Node)) !void {
+        if (nodes == null) return;
+        if (nodes.?.slice.len == 0) return;
+        for (nodes.?.slice) |node| {
+            _ = try parser.nodeAppendChild(self, node);
+        }
+    }
+
+    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
+    // function must accept either node or string.
+    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
+    pub fn replaceChildren(self: *parser.Node, nodes: ?Variadic(*parser.Node)) !void {
+        if (nodes == null) return;
+        if (nodes.?.slice.len == 0) return;
+
+        // remove existing children
+        if (try parser.nodeHasChildNodes(self)) {
+            const children = try parser.nodeGetChildNodes(self);
+            const ln = try parser.nodeListLength(children);
+            var i: u32 = 0;
+            while (i < ln) {
+                defer i += 1;
+                const child = try parser.nodeListItem(children, i) orelse continue;
+                _ = try parser.nodeRemoveChild(self, child);
+            }
+        }
+
+        // add new children
+        for (nodes.?.slice) |node| {
+            _ = try parser.nodeAppendChild(self, node);
+        }
     }
 
     pub fn deinit(_: *parser.Node, _: std.mem.Allocator) void {}
