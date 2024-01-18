@@ -286,60 +286,21 @@ pub const Element = struct {
     // function must accept either node or string.
     // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
     pub fn _prepend(self: *parser.Element, nodes: ?Variadic(*parser.Node)) !void {
-        if (nodes == null) return;
-        if (nodes.?.slice.len == 0) return;
-        const nself = parser.elementToNode(self);
-        const first = try parser.nodeFirstChild(nself);
-
-        if (first == null) {
-            for (nodes.?.slice) |node| {
-                _ = try parser.nodeAppendChild(nself, node);
-            }
-            return;
-        }
-
-        for (nodes.?.slice) |node| {
-            _ = try parser.nodeInsertBefore(nself, node, first.?);
-        }
+        return Node.prepend(parser.elementToNode(self), nodes);
     }
 
     // TODO according with https://dom.spec.whatwg.org/#parentnode, the
     // function must accept either node or string.
     // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
     pub fn _append(self: *parser.Element, nodes: ?Variadic(*parser.Node)) !void {
-        if (nodes == null) return;
-        if (nodes.?.slice.len == 0) return;
-        const nself = parser.elementToNode(self);
-        for (nodes.?.slice) |node| {
-            _ = try parser.nodeAppendChild(nself, node);
-        }
+        return Node.append(parser.elementToNode(self), nodes);
     }
 
     // TODO according with https://dom.spec.whatwg.org/#parentnode, the
     // function must accept either node or string.
     // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
     pub fn _replaceChildren(self: *parser.Element, nodes: ?Variadic(*parser.Node)) !void {
-        if (nodes == null) return;
-        if (nodes.?.slice.len == 0) return;
-
-        const nself = parser.elementToNode(self);
-
-        // remove existing children
-        if (try parser.nodeHasChildNodes(nself)) {
-            const children = try parser.nodeGetChildNodes(nself);
-            const ln = try parser.nodeListLength(children);
-            var i: u32 = 0;
-            while (i < ln) {
-                defer i += 1;
-                const child = try parser.nodeListItem(children, i) orelse continue;
-                _ = try parser.nodeRemoveChild(nself, child);
-            }
-        }
-
-        // add new children
-        for (nodes.?.slice) |node| {
-            _ = try parser.nodeAppendChild(nself, node);
-        }
+        return Node.replaceChildren(parser.elementToNode(self), nodes);
     }
 
     pub fn deinit(_: *parser.Element, _: std.mem.Allocator) void {}
