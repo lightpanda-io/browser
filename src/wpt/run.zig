@@ -126,13 +126,8 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
         return res;
     }
 
-    // If the test failed, return detailed logs intead of the simple status.
-    if (!std.mem.eql(u8, res.result, "Pass")) {
-        return try evalJS(js_env, alloc, "report.log", "teststatus");
-    }
-
-    // return the final result.
-    return res;
+    // return the detailed result.
+    return try evalJS(js_env, alloc, "report.log", "teststatus");
 }
 
 fn evalJS(env: jsruntime.Env, alloc: std.mem.Allocator, script: []const u8, name: ?[]const u8) !jsruntime.JSResult {
