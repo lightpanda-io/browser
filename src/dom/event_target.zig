@@ -57,28 +57,83 @@ pub fn testExecFn(
     _: std.mem.Allocator,
     js_env: *jsruntime.Env,
 ) anyerror!void {
-    var basic = [_]Case{
-        .{ .src = "let event = new Event('myEvent')", .ex = "undefined" },
+    var common = [_]Case{
         .{ .src = "let content = document.getElementById('content')", .ex = "undefined" },
+        .{ .src = "let para = document.getElementById('para')", .ex = "undefined" },
         .{ .src = 
-        \\var nb = 0;
-        \\var evt = undefined;
-        \\var phase = undefined;
-        \\var cur = undefined;
-        \\content.addEventListener('myEvent',
-        \\function(event) {
+        \\var nb = 0; var evt; var phase; var cur;
+        \\function cbk(event) {
         \\evt = event;
         \\phase = event.eventPhase;
         \\cur = event.currentTarget;
         \\nb ++;
-        \\})
+        \\}
         , .ex = "undefined" },
-        .{ .src = "content.dispatchEvent(event)", .ex = "true" },
+    };
+    try checkCases(js_env, &common);
+
+    var basic = [_]Case{
+        .{ .src = "content.addEventListener('basic', cbk)", .ex = "undefined" },
+        .{ .src = "content.dispatchEvent(new Event('basic'))", .ex = "true" },
         .{ .src = "nb", .ex = "1" },
         .{ .src = "evt instanceof Event", .ex = "true" },
-        .{ .src = "evt.type", .ex = "myEvent" },
+        .{ .src = "evt.type", .ex = "basic" },
         .{ .src = "phase", .ex = "2" },
-        .{ .src = "cur.localName", .ex = "div" },
+        .{ .src = "cur.getAttribute('id')", .ex = "content" },
     };
     try checkCases(js_env, &basic);
+
+    var basic_child = [_]Case{
+        .{ .src = "nb = 0; evt = undefined; phase = undefined; cur = undefined", .ex = "undefined" },
+        .{ .src = "para.dispatchEvent(new Event('basic'))", .ex = "true" },
+        .{ .src = "nb", .ex = "0" }, // handler is not called, no capture, not the target, no bubbling
+        .{ .src = "evt === undefined", .ex = "true" },
+    };
+    try checkCases(js_env, &basic_child);
+
+    var capture = [_]Case{
+        .{ .src = "nb = 0; evt = undefined; phase = undefined; cur = undefined", .ex = "undefined" },
+        .{ .src = "content.addEventListener('capture', cbk, true)", .ex = "undefined" },
+        .{ .src = "content.dispatchEvent(new Event('capture'))", .ex = "true" },
+        .{ .src = "nb", .ex = "1" },
+        .{ .src = "evt instanceof Event", .ex = "true" },
+        .{ .src = "evt.type", .ex = "capture" },
+        .{ .src = "phase", .ex = "2" },
+        .{ .src = "cur.getAttribute('id')", .ex = "content" },
+    };
+    try checkCases(js_env, &capture);
+
+    var capture_child = [_]Case{
+        .{ .src = "nb = 0; evt = undefined; phase = undefined; cur = undefined", .ex = "undefined" },
+        .{ .src = "para.dispatchEvent(new Event('capture'))", .ex = "true" },
+        .{ .src = "nb", .ex = "1" },
+        .{ .src = "evt instanceof Event", .ex = "true" },
+        .{ .src = "evt.type", .ex = "capture" },
+        .{ .src = "phase", .ex = "1" },
+        .{ .src = "cur.getAttribute('id')", .ex = "content" },
+    };
+    try checkCases(js_env, &capture_child);
+
+    var bubbles = [_]Case{
+        .{ .src = "nb = 0; evt = undefined; phase = undefined; cur = undefined", .ex = "undefined" },
+        .{ .src = "content.addEventListener('bubbles', cbk)", .ex = "undefined" },
+        .{ .src = "content.dispatchEvent(new Event('bubbles', {bubbles: true}))", .ex = "true" },
+        .{ .src = "nb", .ex = "1" },
+        .{ .src = "evt instanceof Event", .ex = "true" },
+        .{ .src = "evt.type", .ex = "bubbles" },
+        .{ .src = "phase", .ex = "2" },
+        .{ .src = "cur.getAttribute('id')", .ex = "content" },
+    };
+    try checkCases(js_env, &bubbles);
+
+    var bubbles_child = [_]Case{
+        .{ .src = "nb = 0; evt = undefined; phase = undefined; cur = undefined", .ex = "undefined" },
+        .{ .src = "para.dispatchEvent(new Event('bubbles', {bubbles: true}))", .ex = "true" },
+        .{ .src = "nb", .ex = "1" },
+        .{ .src = "evt instanceof Event", .ex = "true" },
+        .{ .src = "evt.type", .ex = "bubbles" },
+        .{ .src = "phase", .ex = "3" },
+        .{ .src = "cur.getAttribute('id')", .ex = "content" },
+    };
+    try checkCases(js_env, &bubbles_child);
 }
