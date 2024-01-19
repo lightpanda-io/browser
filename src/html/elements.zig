@@ -495,7 +495,7 @@ pub fn toInterface(comptime T: type, e: *parser.Element) !T {
     const elem: *align(@alignOf(*parser.Element)) parser.Element = @alignCast(e);
     const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(elem)));
     return switch (tag) {
-        .abbr, .acronym, .address, .article, .aside, .b, .bdi, .bdo, .bgsound, .big, .center, .cite, .code, .dd, .details, .dfn, .dt, .figcaption, .figure, .footer, .header, .hgroup, .i, .isindex, .kbd, .main, .mark, .marquee, .nav, .nobr, .noframes, .noscript, .rp, .rt, .ruby, .s, .samp, .section, .small, .spacer, .strike, .sub, .summary, .sup, .tt, .u, .wbr, ._var => .{ .HTMLElement = @as(*parser.ElementHTML, @ptrCast(elem)) },
+        .abbr, .acronym, .address, .article, .aside, .b, .bdi, .bdo, .bgsound, .big, .center, .cite, .code, .dd, .details, .dfn, .dt, .em, .figcaption, .figure, .footer, .header, .hgroup, .i, .isindex, .kbd, .main, .mark, .marquee, .nav, .nobr, .noframes, .noscript, .rp, .rt, .ruby, .s, .samp, .section, .small, .spacer, .strike, .sub, .summary, .sup, .tt, .u, .wbr, ._var => .{ .HTMLElement = @as(*parser.ElementHTML, @ptrCast(elem)) },
         .a => .{ .HTMLAnchorElement = @as(*parser.Anchor, @ptrCast(elem)) },
         .area => .{ .HTMLAreaElement = @as(*parser.Area, @ptrCast(elem)) },
         .audio => .{ .HTMLAudioElement = @as(*parser.Audio, @ptrCast(elem)) },

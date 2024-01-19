@@ -120,6 +120,7 @@ pub const Tag = enum(u8) {
     datalist = c.DOM_HTML_ELEMENT_TYPE_DATALIST,
     dir = c.DOM_HTML_ELEMENT_TYPE_DIR,
     div = c.DOM_HTML_ELEMENT_TYPE_DIV,
+    em = c.DOM_HTML_ELEMENT_TYPE_EM,
     embed = c.DOM_HTML_ELEMENT_TYPE_EMBED,
     figcaption = c.DOM_HTML_ELEMENT_TYPE_FIGCAPTION,
     figure = c.DOM_HTML_ELEMENT_TYPE_FIGURE,
