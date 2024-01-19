@@ -187,6 +187,7 @@ pub const Tag = enum(u8) {
     source = c.DOM_HTML_ELEMENT_TYPE_SOURCE,
     span = c.DOM_HTML_ELEMENT_TYPE_SPAN,
     style = c.DOM_HTML_ELEMENT_TYPE_STYLE,
+    strong = c.DOM_HTML_ELEMENT_TYPE_STRONG,
     table = c.DOM_HTML_ELEMENT_TYPE_TABLE,
     caption = c.DOM_HTML_ELEMENT_TYPE_CAPTION,
     th = c.DOM_HTML_ELEMENT_TYPE_TH,
