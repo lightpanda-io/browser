@@ -2,6 +2,11 @@ const std = @import("std");
 
 const generate = @import("../generate.zig");
 
+const jsruntime = @import("jsruntime");
+const Callback = jsruntime.Callback;
+const Case = jsruntime.test_utils.Case;
+const checkCases = jsruntime.test_utils.checkCases;
+
 const parser = @import("../netsurf.zig");
 
 const DOMException = @import("../dom/exceptions.zig").DOMException;
@@ -73,15 +78,15 @@ pub const Event = struct {
 
     // Methods
 
-    pub fn get_stopPropagation(self: *parser.Event) !void {
+    pub fn _stopPropagation(self: *parser.Event) !void {
         return try parser.eventStopPropagation(self);
     }
 
-    pub fn get_stopImmediatePropagation(self: *parser.Event) !void {
+    pub fn _stopImmediatePropagation(self: *parser.Event) !void {
         return try parser.eventStopImmediatePropagation(self);
     }
 
-    pub fn get_preventDefault(self: *parser.Event) !void {
+    pub fn _preventDefault(self: *parser.Event) !void {
         return try parser.eventPreventDefault(self);
     }
 };
@@ -92,3 +97,77 @@ pub const Interfaces = generate.Tuple(.{
 });
 const Generated = generate.Union.compile(Interfaces);
 pub const Union = Generated._union;
+
+pub fn testExecFn(
+    _: std.mem.Allocator,
+    js_env: *jsruntime.Env,
+) anyerror!void {
+    var common = [_]Case{
+        .{ .src = "let content = document.getElementById('content')", .ex = "undefined" },
+        .{ .src = "let para = document.getElementById('para')", .ex = "undefined" },
+        .{ .src = "var nb = 0; var evt", .ex = "undefined" },
+    };
+    try checkCases(js_env, &common);
+
+    var basic = [_]Case{
+        .{ .src = 
+        \\content.addEventListener('target',
+        \\function(e) {
+        \\evt = e; nb = nb + 1;
+        \\e.preventDefault();
+        \\})
+        , .ex = "undefined" },
+        .{ .src = "content.dispatchEvent(new Event('target', {bubbles: true, cancelable: true}))", .ex = "false" },
+        .{ .src = "nb", .ex = "1" },
+        .{ .src = "evt.target === content", .ex = "true" },
+        .{ .src = "evt.bubbles", .ex = "true" },
+        .{ .src = "evt.cancelable", .ex = "true" },
+        .{ .src = "evt.defaultPrevented", .ex = "true" },
+        .{ .src = "evt.isTrusted", .ex = "true" },
+        .{ .src = "evt.timestamp > 1704063600", .ex = "true" }, // 2024/01/01 00:00
+        // event.type, event.currentTarget, event.phase checked in EventTarget
+    };
+    try checkCases(js_env, &basic);
+
+    var stop = [_]Case{
+        .{ .src = "nb = 0", .ex = "0" },
+        .{ .src = 
+        \\content.addEventListener('stop',
+        \\function(e) {
+        \\e.stopPropagation();
+        \\nb = nb + 1;
+        \\}, true)
+        , .ex = "undefined" },
+        // the following event listener will not be invoked
+        .{ .src = 
+        \\para.addEventListener('stop',
+        \\function(e) {
+        \\nb = nb + 1;
+        \\})
+        , .ex = "undefined" },
+        .{ .src = "para.dispatchEvent(new Event('stop'))", .ex = "true" },
+        .{ .src = "nb", .ex = "1" }, // will be 2 if event was not stopped at content event listener
+    };
+    try checkCases(js_env, &stop);
+
+    var stop_immediate = [_]Case{
+        .{ .src = "nb = 0", .ex = "0" },
+        .{ .src = 
+        \\content.addEventListener('immediate',
+        \\function(e) {
+        \\e.stopImmediatePropagation();
+        \\nb = nb + 1;
+        \\})
+        , .ex = "undefined" },
+        // the following event listener will not be invoked
+        .{ .src = 
+        \\content.addEventListener('immediate',
+        \\function(e) {
+        \\nb = nb + 1;
+        \\})
+        , .ex = "undefined" },
+        .{ .src = "content.dispatchEvent(new Event('immediate'))", .ex = "true" },
+        .{ .src = "nb", .ex = "1" }, // will be 2 if event was not stopped at first content event listener
+    };
+    try checkCases(js_env, &stop_immediate);
+}

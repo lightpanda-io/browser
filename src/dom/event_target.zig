@@ -60,6 +60,8 @@ pub fn testExecFn(
     var common = [_]Case{
         .{ .src = "let content = document.getElementById('content')", .ex = "undefined" },
         .{ .src = "let para = document.getElementById('para')", .ex = "undefined" },
+        // NOTE: as some event properties will change during the event dispatching phases
+        // we need to copy thoses values in order to check them afterwards
         .{ .src = 
         \\var nb = 0; var evt; var phase; var cur;
         \\function cbk(event) {
@@ -121,6 +123,7 @@ pub fn testExecFn(
         .{ .src = "nb", .ex = "1" },
         .{ .src = "evt instanceof Event", .ex = "true" },
         .{ .src = "evt.type", .ex = "bubbles" },
+        .{ .src = "evt.bubbles", .ex = "true" },
         .{ .src = "phase", .ex = "2" },
         .{ .src = "cur.getAttribute('id')", .ex = "content" },
     };
