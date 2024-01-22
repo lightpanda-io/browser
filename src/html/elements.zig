@@ -10,6 +10,7 @@ pub const Interfaces = .{
     HTMLAnchorElement,
     HTMLAreaElement,
     HTMLAudioElement,
+    HTMLAppletElement,
     HTMLBRElement,
     HTMLBaseElement,
     HTMLBodyElement,
@@ -109,6 +110,12 @@ pub const HTMLUnknownElement = struct {
 
 pub const HTMLAnchorElement = struct {
     pub const Self = parser.Anchor;
+    pub const prototype = *HTMLElement;
+    pub const mem_guarantied = true;
+};
+
+pub const HTMLAppletElement = struct {
+    pub const Self = parser.Applet;
     pub const prototype = *HTMLElement;
     pub const mem_guarantied = true;
 };
@@ -495,8 +502,9 @@ pub fn toInterface(comptime T: type, e: *parser.Element) !T {
     const elem: *align(@alignOf(*parser.Element)) parser.Element = @alignCast(e);
     const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(elem)));
     return switch (tag) {
-        .abbr, .acronym, .address, .article, .aside, .b, .bdi, .bdo, .bgsound, .big, .center, .cite, .code, .dd, .details, .dfn, .dt, .figcaption, .figure, .footer, .header, .hgroup, .i, .isindex, .kbd, .main, .mark, .marquee, .nav, .nobr, .noframes, .noscript, .rp, .rt, .ruby, .s, .samp, .section, .small, .spacer, .strike, .sub, .summary, .sup, .tt, .u, .wbr, ._var => .{ .HTMLElement = @as(*parser.ElementHTML, @ptrCast(elem)) },
+        .abbr, .acronym, .address, .article, .aside, .b, .basefont, .bdi, .bdo, .bgsound, .big, .center, .cite, .code, .dd, .details, .dfn, .dt, .em, .figcaption, .figure, .footer, .header, .hgroup, .i, .isindex, .keygen, .kbd, .main, .mark, .marquee, .menu, .menuitem, .nav, .nobr, .noframes, .noscript, .rp, .rt, .ruby, .s, .samp, .section, .small, .spacer, .strike, .strong, .sub, .summary, .sup, .tt, .u, .wbr, ._var => .{ .HTMLElement = @as(*parser.ElementHTML, @ptrCast(elem)) },
         .a => .{ .HTMLAnchorElement = @as(*parser.Anchor, @ptrCast(elem)) },
+        .applet => .{ .HTMLAppletElement = @as(*parser.Applet, @ptrCast(elem)) },
         .area => .{ .HTMLAreaElement = @as(*parser.Area, @ptrCast(elem)) },
         .audio => .{ .HTMLAudioElement = @as(*parser.Audio, @ptrCast(elem)) },
         .base => .{ .HTMLBaseElement = @as(*parser.Base, @ptrCast(elem)) },
