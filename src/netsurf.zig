@@ -84,6 +84,7 @@ inline fn lwcStringFromData(data: []const u8) !*LWCString {
 
 pub const Tag = enum(u8) {
     acronym = c.DOM_HTML_ELEMENT_TYPE_ACRONYM,
+    applet = c.DOM_HTML_ELEMENT_TYPE_APPLET,
     bgsound = c.DOM_HTML_ELEMENT_TYPE_BGSOUND,
     big = c.DOM_HTML_ELEMENT_TYPE_BIG,
     marquee = c.DOM_HTML_ELEMENT_TYPE_MARQUEE,
@@ -100,10 +101,11 @@ pub const Tag = enum(u8) {
     area = c.DOM_HTML_ELEMENT_TYPE_AREA,
     audio = c.DOM_HTML_ELEMENT_TYPE_AUDIO,
     b = c.DOM_HTML_ELEMENT_TYPE_B,
+    base = c.DOM_HTML_ELEMENT_TYPE_BASE,
+    basefont = c.DOM_HTML_ELEMENT_TYPE_BASEFONT,
     bdi = c.DOM_HTML_ELEMENT_TYPE_BDI,
     bdo = c.DOM_HTML_ELEMENT_TYPE_BDO,
     br = c.DOM_HTML_ELEMENT_TYPE_BR,
-    base = c.DOM_HTML_ELEMENT_TYPE_BASE,
     body = c.DOM_HTML_ELEMENT_TYPE_BODY,
     button = c.DOM_HTML_ELEMENT_TYPE_BUTTON,
     canvas = c.DOM_HTML_ELEMENT_TYPE_CANVAS,
@@ -147,6 +149,7 @@ pub const Tag = enum(u8) {
     img = c.DOM_HTML_ELEMENT_TYPE_IMG,
     input = c.DOM_HTML_ELEMENT_TYPE_INPUT,
     kbd = c.DOM_HTML_ELEMENT_TYPE_KBD,
+    keygen = c.DOM_HTML_ELEMENT_TYPE_KEYGEN,
     li = c.DOM_HTML_ELEMENT_TYPE_LI,
     label = c.DOM_HTML_ELEMENT_TYPE_LABEL,
     legend = c.DOM_HTML_ELEMENT_TYPE_LEGEND,
@@ -1060,6 +1063,7 @@ pub const MediaElement = struct { base: *c.dom_html_element };
 
 pub const Unknown = struct { base: *c.dom_html_element };
 pub const Anchor = c.dom_html_anchor_element;
+pub const Applet = c.dom_html_applet_element;
 pub const Area = c.dom_html_area_element;
 pub const Audio = struct { base: *c.dom_html_element };
 pub const BR = c.dom_html_br_element;
