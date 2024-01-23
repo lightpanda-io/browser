@@ -458,11 +458,56 @@ const event_handler = struct {
     }
 }.handle;
 
+// EventListener
+pub const EventListener = c.dom_event_listener;
+
+pub fn eventListenerGetData(lst: *EventListener) ?*anyopaque {
+    return c.dom_event_listener_get_data(lst);
+}
+
 // EventTarget
 pub const EventTarget = c.dom_event_target;
 
 fn eventTargetVtable(et: *EventTarget) c.dom_event_target_vtable {
     return getVtable(c.dom_event_target_vtable, EventTarget, et);
+}
+
+pub fn eventTargetHasListener(et: *EventTarget, typ: []const u8, cbk_id: usize) !?*EventListener {
+    const str = try strFromData(typ);
+
+    const EventListenerEntry = c.listener_entry;
+    var current: ?*EventListenerEntry = null;
+    var next: ?*EventListenerEntry = undefined;
+    var lst: ?*EventListener = undefined;
+
+    // iterate over the EventTarget's listeners
+    while (true) {
+        const err = eventTargetVtable(et).iter_event_listener.?(et, str, current, &next, &lst);
+        try DOMErr(err);
+
+        if (lst) |listener| {
+            // the EventTarget has a listener for this event type,
+            // let's check if the callback is the same
+            defer c.dom_event_listener_unref(listener);
+            const data = eventListenerGetData(listener);
+            if (data) |d| {
+                const ptr: *align(@alignOf(*Callback)) anyopaque = @alignCast(d);
+                const cbk = @as(*Callback, @ptrCast(ptr));
+                if (cbk_id == cbk.id())
+                    return lst;
+            }
+        }
+
+        if (next == null) {
+            // no more listeners, end of the iteration
+            break;
+        }
+
+        // next iteration
+        current = next;
+    }
+
+    return null;
 }
 
 pub fn eventTargetAddEventListener(
@@ -473,7 +518,7 @@ pub fn eventTargetAddEventListener(
 ) !void {
     const s = try strFromData(typ);
     const ctx = @as(*anyopaque, @ptrCast(cbk_ptr));
-    var listener: ?*c.dom_event_listener = undefined;
+    var listener: ?*EventListener = undefined;
     const errLst = c.dom_event_listener_create(event_handler, ctx, &listener);
     try DOMErr(errLst);
     const err = eventTargetVtable(et).add_event_listener.?(et, s, listener, capture);

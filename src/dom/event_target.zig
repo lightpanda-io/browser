@@ -37,6 +37,13 @@ pub const EventTarget = struct {
         // TODO: hanle EventListenerOptions
         // see #https://github.com/lightpanda-io/jsruntime-lib/issues/114
     ) !void {
+
+        // check if event target has already this listener
+        const lst = try parser.eventTargetHasListener(self, eventType, cbk.id());
+        if (lst != null) {
+            return;
+        }
+
         // TODO: when can we free this allocation?
         const cbk_ptr = try alloc.create(Callback);
         cbk_ptr.* = cbk;
@@ -84,6 +91,14 @@ pub fn testExecFn(
         .{ .src = "cur.getAttribute('id')", .ex = "content" },
     };
     try checkCases(js_env, &basic);
+
+    var basic_twice = [_]Case{
+        .{ .src = "nb  = 0", .ex = "0" },
+        .{ .src = "content.addEventListener('basic', cbk)", .ex = "undefined" },
+        .{ .src = "content.dispatchEvent(new Event('basic'))", .ex = "true" },
+        .{ .src = "nb", .ex = "1" },
+    };
+    try checkCases(js_env, &basic_twice);
 
     var basic_child = [_]Case{
         .{ .src = "nb = 0; evt = undefined; phase = undefined; cur = undefined", .ex = "undefined" },
