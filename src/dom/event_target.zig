@@ -2,6 +2,7 @@ const std = @import("std");
 
 const jsruntime = @import("jsruntime");
 const Callback = jsruntime.Callback;
+const JSObjectID = jsruntime.JSObjectID;
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 
@@ -39,22 +40,71 @@ pub const EventTarget = struct {
     ) !void {
 
         // check if event target has already this listener
-        const lst = try parser.eventTargetHasListener(self, eventType, cbk.id());
+        const lst = try parser.eventTargetHasListener(
+            self,
+            eventType,
+            capture orelse false,
+            cbk.id(),
+        );
         if (lst != null) {
             return;
         }
 
-        // TODO: when can we free this allocation?
+        // NOTE: this allocation will be removed either if removeEventListener
+        // or at EventTarget deinit
         const cbk_ptr = try alloc.create(Callback);
         cbk_ptr.* = cbk;
-        try parser.eventTargetAddEventListener(self, eventType, cbk_ptr, capture orelse false);
+        try parser.eventTargetAddEventListener(
+            self,
+            eventType,
+            cbk_ptr,
+            capture orelse false,
+        );
+    }
+
+    pub fn _removeEventListener(
+        self: *parser.EventTarget,
+        alloc: std.mem.Allocator,
+        eventType: []const u8,
+        cbk_id: JSObjectID,
+        capture: ?bool,
+        // TODO: hanle EventListenerOptions
+        // see #https://github.com/lightpanda-io/jsruntime-lib/issues/114
+    ) !void {
+
+        // check if event target has already this listener
+        const lst = try parser.eventTargetHasListener(
+            self,
+            eventType,
+            capture orelse false,
+            cbk_id.get(),
+        );
+        if (lst == null) {
+            return;
+        }
+
+        // remove listener
+        const cbk_handler = try parser.eventTargetRemoveEventListener(
+            self,
+            eventType,
+            lst.?,
+            capture orelse false,
+        );
+        if (cbk_handler) |cbk_ptr| {
+            cbk_ptr.deinit(alloc);
+            alloc.destroy(cbk_ptr);
+        }
     }
 
     pub fn _dispatchEvent(self: *parser.EventTarget, event: *parser.Event) !bool {
         return try parser.eventTargetDispatchEvent(self, event);
     }
 
-    pub fn deinit(_: *parser.EventTarget, _: std.mem.Allocator) void {}
+    pub fn deinit(_: *parser.EventTarget, _: std.mem.Allocator) void {
+        // TODO:
+        // - deinit and destroy all cbk_handler
+        // - remove all listeners
+    }
 };
 
 // Tests
@@ -92,6 +142,14 @@ pub fn testExecFn(
     };
     try checkCases(js_env, &basic);
 
+    var basic_child = [_]Case{
+        .{ .src = "nb = 0; evt = undefined; phase = undefined; cur = undefined", .ex = "undefined" },
+        .{ .src = "para.dispatchEvent(new Event('basic'))", .ex = "true" },
+        .{ .src = "nb", .ex = "0" }, // handler is not called, no capture, not the target, no bubbling
+        .{ .src = "evt === undefined", .ex = "true" },
+    };
+    try checkCases(js_env, &basic_child);
+
     var basic_twice = [_]Case{
         .{ .src = "nb  = 0", .ex = "0" },
         .{ .src = "content.addEventListener('basic', cbk)", .ex = "undefined" },
@@ -100,13 +158,29 @@ pub fn testExecFn(
     };
     try checkCases(js_env, &basic_twice);
 
-    var basic_child = [_]Case{
-        .{ .src = "nb = 0; evt = undefined; phase = undefined; cur = undefined", .ex = "undefined" },
-        .{ .src = "para.dispatchEvent(new Event('basic'))", .ex = "true" },
-        .{ .src = "nb", .ex = "0" }, // handler is not called, no capture, not the target, no bubbling
-        .{ .src = "evt === undefined", .ex = "true" },
+    var basic_twice_capture = [_]Case{
+        .{ .src = "nb  = 0", .ex = "0" },
+        .{ .src = "content.addEventListener('basic', cbk, true)", .ex = "undefined" },
+        .{ .src = "content.dispatchEvent(new Event('basic'))", .ex = "true" },
+        .{ .src = "nb", .ex = "2" },
     };
-    try checkCases(js_env, &basic_child);
+    try checkCases(js_env, &basic_twice_capture);
+
+    var basic_remove = [_]Case{
+        .{ .src = "nb  = 0", .ex = "0" },
+        .{ .src = "content.removeEventListener('basic', cbk)", .ex = "undefined" },
+        .{ .src = "content.dispatchEvent(new Event('basic'))", .ex = "true" },
+        .{ .src = "nb", .ex = "1" },
+    };
+    try checkCases(js_env, &basic_remove);
+
+    var basic_capture_remove = [_]Case{
+        .{ .src = "nb  = 0", .ex = "0" },
+        .{ .src = "content.removeEventListener('basic', cbk, true)", .ex = "undefined" },
+        .{ .src = "content.dispatchEvent(new Event('basic'))", .ex = "true" },
+        .{ .src = "nb", .ex = "0" },
+    };
+    try checkCases(js_env, &basic_capture_remove);
 
     var capture = [_]Case{
         .{ .src = "nb = 0; evt = undefined; phase = undefined; cur = undefined", .ex = "undefined" },

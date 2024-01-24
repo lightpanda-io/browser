@@ -446,15 +446,21 @@ pub fn eventPreventDefault(evt: *Event) !void {
 // EventHandler
 pub const EventHandler = fn (?*Event, ?*anyopaque) callconv(.C) void;
 
+fn event_handler_cbk(data: *anyopaque) *Callback {
+    const ptr: *align(@alignOf(*Callback)) anyopaque = @alignCast(data);
+    return @as(*Callback, @ptrCast(ptr));
+}
+
 const event_handler = struct {
     fn handle(event: ?*Event, data: ?*anyopaque) callconv(.C) void {
-        const ptr: *align(@alignOf(*Callback)) anyopaque = @alignCast(data.?);
-        const func = @as(*Callback, @ptrCast(ptr));
-        func.call(.{event}) catch unreachable;
-        // NOTE: we can not call func.deinit here
-        // b/c the handler can be called several times
-        // as the event goes through the ancestors
-        // TODO: check the event phase to call func.deinit and free func
+        if (data) |d| {
+            const func = event_handler_cbk(d);
+            func.call(.{event}) catch unreachable;
+            // NOTE: we can not call func.deinit here
+            // b/c the handler can be called several times
+            // as the event goes through the ancestors
+            // TODO: check the event phase to call func.deinit and free func
+        }
     }
 }.handle;
 
@@ -472,7 +478,12 @@ fn eventTargetVtable(et: *EventTarget) c.dom_event_target_vtable {
     return getVtable(c.dom_event_target_vtable, EventTarget, et);
 }
 
-pub fn eventTargetHasListener(et: *EventTarget, typ: []const u8, cbk_id: usize) !?*EventListener {
+pub fn eventTargetHasListener(
+    et: *EventTarget,
+    typ: []const u8,
+    capture: bool,
+    cbk_id: usize,
+) !?*EventListener {
     const str = try strFromData(typ);
 
     const EventListenerEntry = c.listener_entry;
@@ -482,7 +493,14 @@ pub fn eventTargetHasListener(et: *EventTarget, typ: []const u8, cbk_id: usize) 
 
     // iterate over the EventTarget's listeners
     while (true) {
-        const err = eventTargetVtable(et).iter_event_listener.?(et, str, current, &next, &lst);
+        const err = eventTargetVtable(et).iter_event_listener.?(
+            et,
+            str,
+            capture,
+            current,
+            &next,
+            &lst,
+        );
         try DOMErr(err);
 
         if (lst) |listener| {
@@ -491,8 +509,7 @@ pub fn eventTargetHasListener(et: *EventTarget, typ: []const u8, cbk_id: usize) 
             defer c.dom_event_listener_unref(listener);
             const data = eventListenerGetData(listener);
             if (data) |d| {
-                const ptr: *align(@alignOf(*Callback)) anyopaque = @alignCast(d);
-                const cbk = @as(*Callback, @ptrCast(ptr));
+                const cbk = event_handler_cbk(d);
                 if (cbk_id == cbk.id())
                     return lst;
             }
@@ -525,9 +542,25 @@ pub fn eventTargetAddEventListener(
     try DOMErr(err);
 }
 
+pub fn eventTargetRemoveEventListener(
+    et: *EventTarget,
+    typ: []const u8,
+    lst: *EventListener,
+    capture: bool,
+) !?*Callback {
+    const data = eventListenerGetData(lst);
+    var cbk_ptr: ?*Callback = null;
+    if (data) |d| {
+        cbk_ptr = event_handler_cbk(d);
+    }
+    const s = try strFromData(typ);
+    const err = eventTargetVtable(et).remove_event_listener.?(et, s, lst, capture);
+    try DOMErr(err);
+    return cbk_ptr;
+}
+
 pub fn eventTargetDispatchEvent(et: *EventTarget, event: *Event) !bool {
     var res: bool = undefined;
-    // const err = c.dom_event_target_dispatch_event(et, event, &res);
     const err = eventTargetVtable(et).dispatch_event.?(et, event, &res);
     try DOMErr(err);
     return res;
