@@ -78,6 +78,19 @@ pub const Event = struct {
 
     // Methods
 
+    pub fn _initEvent(
+        self: *parser.Event,
+        eventType: []const u8,
+        bubbles: ?bool,
+        cancelable: ?bool,
+    ) !void {
+        const opts = EventInit{
+            .bubbles = bubbles orelse false,
+            .cancelable = cancelable orelse false,
+        };
+        return try parser.eventInit(self, eventType, opts);
+    }
+
     pub fn _stopPropagation(self: *parser.Event) !void {
         return try parser.eventStopPropagation(self);
     }
@@ -170,4 +183,19 @@ pub fn testExecFn(
         .{ .src = "nb", .ex = "1" }, // will be 2 if event was not stopped at first content event listener
     };
     try checkCases(js_env, &stop_immediate);
+
+    var legacy = [_]Case{
+        .{ .src = "nb = 0", .ex = "0" },
+        .{ .src = 
+        \\content.addEventListener('legacy',
+        \\function(e) {
+        \\evt = e; nb = nb + 1;
+        \\})
+        , .ex = "undefined" },
+        .{ .src = "let evtLegacy = document.createEvent('Event')", .ex = "undefined" },
+        .{ .src = "evtLegacy.initEvent('legacy')", .ex = "undefined" },
+        .{ .src = "content.dispatchEvent(evtLegacy)", .ex = "true" },
+        .{ .src = "nb", .ex = "1" },
+    };
+    try checkCases(js_env, &legacy);
 }
