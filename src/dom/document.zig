@@ -81,6 +81,15 @@ pub const Document = struct {
         return try parser.documentGetDoctype(self);
     }
 
+    pub fn _createEvent(_: *parser.Document, eventCstr: []const u8) !*parser.Event {
+        // TODO: for now only "Event" constructor is supported
+        // see table on https://dom.spec.whatwg.org/#dom-document-createevent $2
+        if (std.ascii.eqlIgnoreCase(eventCstr, "Event") or std.ascii.eqlIgnoreCase(eventCstr, "Events")) {
+            return try parser.eventCreate();
+        }
+        return parser.DOMError.NotSupported;
+    }
+
     pub fn _getElementById(self: *parser.Document, id: []const u8) !?ElementUnion {
         const e = try parser.documentGetElementById(self, id) orelse return null;
         return try Element.toInterface(e);
