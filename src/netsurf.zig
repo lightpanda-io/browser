@@ -444,8 +444,6 @@ pub fn eventPreventDefault(evt: *Event) !void {
 }
 
 // EventHandler
-pub const EventHandler = fn (?*Event, ?*anyopaque) callconv(.C) void;
-
 fn event_handler_cbk(data: *anyopaque) *Callback {
     const ptr: *align(@alignOf(*Callback)) anyopaque = @alignCast(data);
     return @as(*Callback, @ptrCast(ptr));
@@ -458,16 +456,16 @@ const event_handler = struct {
             func.call(.{event}) catch unreachable;
             // NOTE: we can not call func.deinit here
             // b/c the handler can be called several times
-            // as the event goes through the ancestors
-            // TODO: check the event phase to call func.deinit and free func
+            // either on this dispatch event or in anoter one
         }
     }
 }.handle;
 
 // EventListener
 pub const EventListener = c.dom_event_listener;
+const EventListenerEntry = c.listener_entry;
 
-pub fn eventListenerGetData(lst: *EventListener) ?*anyopaque {
+fn eventListenerGetData(lst: *EventListener) ?*anyopaque {
     return c.dom_event_listener_get_data(lst);
 }
 
@@ -486,7 +484,6 @@ pub fn eventTargetHasListener(
 ) !?*EventListener {
     const str = try strFromData(typ);
 
-    const EventListenerEntry = c.listener_entry;
     var current: ?*EventListenerEntry = null;
     var next: ?*EventListenerEntry = undefined;
     var lst: ?*EventListener = undefined;
@@ -504,14 +501,16 @@ pub fn eventTargetHasListener(
         try DOMErr(err);
 
         if (lst) |listener| {
-            // the EventTarget has a listener for this event type,
-            // let's check if the callback is the same
+            // the EventTarget has a listener for this event type
+            // and capture property,
+            // let's check if the callback handler is the same
             defer c.dom_event_listener_unref(listener);
             const data = eventListenerGetData(listener);
             if (data) |d| {
                 const cbk = event_handler_cbk(d);
-                if (cbk_id == cbk.id())
+                if (cbk_id == cbk.id()) {
                     return lst;
+                }
             }
         }
 
@@ -529,34 +528,91 @@ pub fn eventTargetHasListener(
 
 pub fn eventTargetAddEventListener(
     et: *EventTarget,
+    alloc: std.mem.Allocator,
     typ: []const u8,
-    cbk_ptr: *Callback,
+    cbk: Callback,
     capture: bool,
 ) !void {
-    const s = try strFromData(typ);
+    // this allocation will be removed either on
+    // eventTargetRemoveEventListener or eventTargetRemoveAllEventListeners
+    const cbk_ptr = try alloc.create(Callback);
+    cbk_ptr.* = cbk;
+
     const ctx = @as(*anyopaque, @ptrCast(cbk_ptr));
     var listener: ?*EventListener = undefined;
     const errLst = c.dom_event_listener_create(event_handler, ctx, &listener);
     try DOMErr(errLst);
+    defer c.dom_event_listener_unref(listener);
+
+    const s = try strFromData(typ);
     const err = eventTargetVtable(et).add_event_listener.?(et, s, listener, capture);
     try DOMErr(err);
 }
 
 pub fn eventTargetRemoveEventListener(
     et: *EventTarget,
+    alloc: std.mem.Allocator,
     typ: []const u8,
     lst: *EventListener,
     capture: bool,
-) !?*Callback {
+) !void {
     const data = eventListenerGetData(lst);
-    var cbk_ptr: ?*Callback = null;
+    // free cbk allocation made on eventTargetAddEventListener
     if (data) |d| {
-        cbk_ptr = event_handler_cbk(d);
+        const cbk_ptr = event_handler_cbk(d);
+        cbk_ptr.deinit(alloc);
+        alloc.destroy(cbk_ptr);
     }
+
     const s = try strFromData(typ);
     const err = eventTargetVtable(et).remove_event_listener.?(et, s, lst, capture);
     try DOMErr(err);
-    return cbk_ptr;
+}
+
+pub fn eventTargetRemoveAllEventListeners(
+    et: *EventTarget,
+    alloc: std.mem.Allocator,
+) !void {
+    var next: ?*EventListenerEntry = undefined;
+    var lst: ?*EventListener = undefined;
+
+    // iterate over the EventTarget's listeners
+    while (true) {
+        const errIter = eventTargetVtable(et).iter_event_listener.?(
+            et,
+            null,
+            false,
+            null,
+            &next,
+            &lst,
+        );
+        try DOMErr(errIter);
+
+        if (lst) |listener| {
+            defer c.dom_event_listener_unref(listener);
+            const data = eventListenerGetData(listener);
+            if (data) |d| {
+                // free cbk allocation made on eventTargetAddEventListener
+                const cbk = event_handler_cbk(d);
+                cbk.deinit(alloc);
+                alloc.destroy(cbk);
+            }
+            const err = eventTargetVtable(et).remove_event_listener.?(
+                et,
+                null,
+                lst,
+                false,
+            );
+            try DOMErr(err);
+        }
+
+        if (next == null) {
+            // no more listeners, end of the iteration
+            break;
+        }
+
+        // next iteration
+    }
 }
 
 pub fn eventTargetDispatchEvent(et: *EventTarget, event: *Event) !bool {

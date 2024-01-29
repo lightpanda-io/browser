@@ -50,14 +50,11 @@ pub const EventTarget = struct {
             return;
         }
 
-        // NOTE: this allocation will be removed either if removeEventListener
-        // or at EventTarget deinit
-        const cbk_ptr = try alloc.create(Callback);
-        cbk_ptr.* = cbk;
         try parser.eventTargetAddEventListener(
             self,
+            alloc,
             eventType,
-            cbk_ptr,
+            cbk,
             capture orelse false,
         );
     }
@@ -84,26 +81,21 @@ pub const EventTarget = struct {
         }
 
         // remove listener
-        const cbk_handler = try parser.eventTargetRemoveEventListener(
+        try parser.eventTargetRemoveEventListener(
             self,
+            alloc,
             eventType,
             lst.?,
             capture orelse false,
         );
-        if (cbk_handler) |cbk_ptr| {
-            cbk_ptr.deinit(alloc);
-            alloc.destroy(cbk_ptr);
-        }
     }
 
     pub fn _dispatchEvent(self: *parser.EventTarget, event: *parser.Event) !bool {
         return try parser.eventTargetDispatchEvent(self, event);
     }
 
-    pub fn deinit(_: *parser.EventTarget, _: std.mem.Allocator) void {
-        // TODO:
-        // - deinit and destroy all cbk_handler
-        // - remove all listeners
+    pub fn deinit(self: *parser.EventTarget, alloc: std.mem.Allocator) void {
+        parser.eventTargetRemoveAllEventListeners(self, alloc) catch unreachable;
     }
 };
 
