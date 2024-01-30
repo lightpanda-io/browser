@@ -3,9 +3,13 @@
 //! Connections are opened in a thread-safe manner, but individual Requests are not.
 //!
 //! TLS support may be disabled via `std.options.http_disable_tls`.
+//!
+//! This file is a copy of the original std.http.Client with little changes to
+//! handle non-blocking I/O with the jsruntime.Loop.
 
-const std = @import("../std.zig");
+const std = @import("std");
 const builtin = @import("builtin");
+const Stream = @import("stream.zig").Stream;
 const testing = std.testing;
 const http = std.http;
 const mem = std.mem;
@@ -16,7 +20,10 @@ const assert = std.debug.assert;
 const use_vectors = builtin.zig_backend != .stage2_x86_64;
 
 const Client = @This();
-const proto = @import("protocol.zig");
+const proto = http.protocol;
+
+const Loop = @import("jsruntime").Loop;
+const tcp = @import("tcp.zig");
 
 pub const disable_tls = std.options.http_disable_tls;
 
@@ -24,6 +31,9 @@ pub const disable_tls = std.options.http_disable_tls;
 ///
 /// This allocator must be thread-safe.
 allocator: Allocator,
+
+// std.net.Stream implementation using jsruntime Loop
+loop: *Loop,
 
 ca_bundle: if (disable_tls) void else std.crypto.Certificate.Bundle = if (disable_tls) {} else .{},
 ca_bundle_mutex: std.Thread.Mutex = .{},
@@ -194,7 +204,7 @@ pub const Connection = struct {
 
     pub const Protocol = enum { plain, tls };
 
-    stream: net.Stream,
+    stream: Stream,
     /// undefined unless protocol is tls.
     tls_client: if (!disable_tls) *std.crypto.tls.Client else void,
 
@@ -1210,7 +1220,7 @@ pub fn connectTcp(client: *Client, host: []const u8, port: u16, protocol: Connec
     errdefer client.allocator.destroy(conn);
     conn.* = .{ .data = undefined };
 
-    const stream = net.tcpConnectToHost(client.allocator, host, port) catch |err| switch (err) {
+    const stream = tcp.tcpConnectToHost(client.allocator, client.loop, host, port) catch |err| switch (err) {
         error.ConnectionRefused => return error.ConnectionRefused,
         error.NetworkUnreachable => return error.NetworkUnreachable,
         error.ConnectionTimedOut => return error.ConnectionTimedOut,
@@ -1244,43 +1254,6 @@ pub fn connectTcp(client: *Client, host: []const u8, port: u16, protocol: Connec
         // the content length which is used to detect truncation attacks.
         conn.data.tls_client.allow_truncation_attacks = true;
     }
-
-    client.connection_pool.addUsed(conn);
-
-    return &conn.data;
-}
-
-pub const ConnectUnixError = Allocator.Error || std.os.SocketError || error{ NameTooLong, Unsupported } || std.os.ConnectError;
-
-/// Connect to `path` as a unix domain socket. This will reuse a connection if one is already open.
-///
-/// This function is threadsafe.
-pub fn connectUnix(client: *Client, path: []const u8) ConnectUnixError!*Connection {
-    if (!net.has_unix_sockets) return error.Unsupported;
-
-    if (client.connection_pool.findConnection(.{
-        .host = path,
-        .port = 0,
-        .protocol = .plain,
-    })) |node|
-        return node;
-
-    const conn = try client.allocator.create(ConnectionPool.Node);
-    errdefer client.allocator.destroy(conn);
-    conn.* = .{ .data = undefined };
-
-    const stream = try std.net.connectUnixSocket(path);
-    errdefer stream.close();
-
-    conn.data = .{
-        .stream = stream,
-        .tls_client = undefined,
-        .protocol = .plain,
-
-        .host = try client.allocator.dupe(u8, path),
-        .port = 0,
-    };
-    errdefer client.allocator.free(conn.data.host);
 
     client.connection_pool.addUsed(conn);
 
