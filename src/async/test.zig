@@ -1,7 +1,8 @@
 const std = @import("std");
 const http = std.http;
 const StdClient = @import("Client.zig");
-// const hasync = @import("http.zig");
+const AsyncClient = @import("http.zig").Client;
+const AsyncRequest = @import("http.zig").Request;
 
 pub const Loop = @import("jsruntime").Loop;
 
@@ -57,4 +58,25 @@ test "blocking mode open/send/wait API" {
     try req.wait();
 
     try std.testing.expect(req.response.status == .ok);
+}
+
+test "non blocking mode API" {
+    const alloc = std.testing.allocator;
+
+    var loop = try Loop.init(alloc);
+    defer loop.deinit();
+
+    var client = AsyncClient.init(alloc, &loop);
+    defer client.deinit();
+
+    var reqs: [10]AsyncRequest = undefined;
+    for (0..reqs.len) |i| {
+        reqs[i] = client.create(try std.Uri.parse(url));
+        try reqs[i].fetch();
+    }
+
+    for (0..reqs.len) |i| {
+        try reqs[i].wait();
+        reqs[i].deinit();
+    }
 }
