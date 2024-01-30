@@ -94,6 +94,11 @@ pub fn main() !void {
     }
 }
 
+test {
+    const TestAsync = @import("async/test.zig");
+    std.testing.refAllDecls(TestAsync);
+}
+
 test "jsruntime" {
     // generate tests
     try generate.tests();
