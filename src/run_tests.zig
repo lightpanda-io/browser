@@ -22,6 +22,7 @@ const NodeListTestExecFn = @import("dom/nodelist.zig").testExecFn;
 const AttrTestExecFn = @import("dom/attribute.zig").testExecFn;
 const EventTargetTestExecFn = @import("dom/event_target.zig").testExecFn;
 const EventTestExecFn = @import("events/event.zig").testExecFn;
+const XHRTestExecFn = @import("xhr/xhr.zig").testExecFn;
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 
@@ -77,6 +78,7 @@ fn testsAllExecFn(
         AttrTestExecFn,
         EventTargetTestExecFn,
         EventTestExecFn,
+        XHRTestExecFn,
     };
 
     inline for (testFns) |testFn| {
