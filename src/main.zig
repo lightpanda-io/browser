@@ -7,10 +7,8 @@ const apiweb = @import("apiweb.zig");
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 
-const socket_path = "/tmp/browsercore-server.sock";
-
 var doc: *parser.DocumentHTML = undefined;
-var server: std.net.StreamServer = undefined;
+var server: std.http.Server = undefined;
 
 fn execJS(
     alloc: std.mem.Allocator,
@@ -28,23 +26,49 @@ fn execJS(
     // add document object
     try js_env.addObject(doc, "document");
 
+    // TODO: should we do that for each incoming connection
+    // ie. in the infinite loop?
+    const opts = std.http.Server.AcceptOptions{ .allocator = alloc };
+
+    var resp: std.http.Server.Response = undefined;
+    defer resp.deinit();
+
     while (true) {
 
-        // read cmd
-        const conn = try server.accept();
-        var buf: [100]u8 = undefined;
-        const read = try conn.stream.read(&buf);
+        // connection
+        resp = try server.accept(opts);
+        defer _ = resp.reset();
+        try resp.wait();
+
+        // request cmd
+        var buf: [128]u8 = undefined;
+        const read = try resp.readAll(&buf);
         const cmd = buf[0..read];
         std.debug.print("<- {s}\n", .{cmd});
+
+        // response prepare
+        try resp.headers.append("Content-Type", "text/plain");
+        try resp.headers.append("Connection", "Keep-Alive");
+
+        // exit case
         if (std.mem.eql(u8, cmd, "exit")) {
+            resp.transfer_encoding = .{ .content_length = 0 };
+            try resp.send();
+            try resp.finish();
             break;
         }
 
-        const res = try js_env.execTryCatch(alloc, cmd, "cdp");
-        if (res.success) {
-            std.debug.print("-> {s}\n", .{res.result});
+        // JS exec
+        const js_res = try js_env.execTryCatch(alloc, cmd, "cdp");
+        if (js_res.success) {
+            std.debug.print("-> {s}\n", .{js_res.result});
         }
-        _ = try conn.stream.write(res.result);
+
+        // response result
+        resp.transfer_encoding = .{ .content_length = js_res.result.len };
+        try resp.send();
+        _ = try resp.writer().writeAll(js_res.result);
+        try resp.finish();
     }
 }
 
@@ -67,22 +91,16 @@ pub fn main() !void {
         std.debug.print("documentHTMLClose error: {s}\n", .{@errorName(err)});
     };
 
-    // remove socket file of internal server
-    // reuse_address (SO_REUSEADDR flag) does not seems to work on unix socket
-    // see: https://gavv.net/articles/unix-socket-reuse/
-    // TODO: use a lock file instead
-    std.os.unlink(socket_path) catch |err| {
-        if (err != error.FileNotFound) {
-            return err;
-        }
-    };
-
     // server
-    const addr = try std.net.Address.initUnix(socket_path);
-    server = std.net.StreamServer.init(.{});
+    const addr = try std.net.Address.parseIp4("127.0.0.1", 8080);
+    const opts = std.net.StreamServer.Options{
+        .reuse_address = true,
+        .reuse_port = true,
+    };
+    server = std.http.Server.init(arena.allocator(), opts);
     defer server.deinit();
     try server.listen(addr);
-    std.debug.print("Listening on: {s}...\n", .{socket_path});
+    std.debug.print("Listening on: {any}...\n", .{addr});
 
     try jsruntime.loadEnv(&arena, execJS);
 }
