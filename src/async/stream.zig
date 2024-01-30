@@ -4,65 +4,17 @@ const os = std.os;
 const io = std.io;
 const assert = std.debug.assert;
 
-const Loop = @import("jsruntime").Loop;
-
-const WriteCmd = struct {
-    const Self = @This();
-
-    stream: Stream,
-    done: bool = false,
-    res: usize = undefined,
-    err: ?anyerror = null,
-
-    fn run(self: *Self, buffer: []const u8) void {
-        self.stream.loop.send(*Self, self, callback, self.stream.handle, buffer);
-    }
-
-    fn callback(self: *Self, err: ?anyerror, res: usize) void {
-        self.res = res;
-        self.err = err;
-        self.done = true;
-    }
-
-    fn wait(self: *Self) !usize {
-        while (!self.done) try self.stream.loop.tick();
-        if (self.err) |err| return err;
-        return self.res;
-    }
-};
-
-const ReadCmd = struct {
-    const Self = @This();
-
-    stream: Stream,
-    done: bool = false,
-    res: usize = undefined,
-    err: ?anyerror = null,
-
-    fn run(self: *Self, buffer: []u8) void {
-        self.stream.loop.receive(*Self, self, callback, self.stream.handle, buffer);
-    }
-
-    fn callback(self: *Self, _: []const u8, err: ?anyerror, res: usize) void {
-        self.res = res;
-        self.err = err;
-        self.done = true;
-    }
-
-    fn wait(self: *Self) !usize {
-        while (!self.done) try self.stream.loop.tick();
-        if (self.err) |err| return err;
-        return self.res;
-    }
-};
+const tcp = @import("tcp.zig");
 
 pub const Stream = struct {
-    loop: *Loop,
+    alloc: std.mem.Allocator,
+    conn: *tcp.Conn,
 
     handle: std.os.socket_t,
 
     pub fn close(self: Stream) void {
         os.closeSocket(self.handle);
+        self.alloc.destroy(self.conn);
     }
 
     pub const ReadError = os.ReadError;
@@ -80,9 +32,7 @@ pub const Stream = struct {
     }
 
     pub fn read(self: Stream, buffer: []u8) ReadError!usize {
-        var cmd = ReadCmd{ .stream = self };
-        cmd.run(buffer);
-        return cmd.wait() catch |err| switch (err) {
+        return self.conn.receive(self.handle, buffer) catch |err| switch (err) {
             else => return error.Unexpected,
         };
     }
@@ -118,10 +68,7 @@ pub const Stream = struct {
     /// file system thread instead of non-blocking. It needs to be reworked to properly
     /// use non-blocking I/O.
     pub fn write(self: Stream, buffer: []const u8) WriteError!usize {
-        var cmd = WriteCmd{ .stream = self };
-        cmd.run(buffer);
-
-        return cmd.wait() catch |err| switch (err) {
+        return self.conn.send(self.handle, buffer) catch |err| switch (err) {
             error.AccessDenied => error.AccessDenied,
             error.WouldBlock => error.WouldBlock,
             error.ConnectionResetByPeer => error.ConnectionResetByPeer,
