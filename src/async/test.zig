@@ -6,7 +6,9 @@ const AsyncRequest = @import("http.zig").Request;
 
 pub const Loop = @import("jsruntime").Loop;
 
-const url = "https://www.w3.org/";
+const TCPClient = @import("tcp.zig").Client;
+
+const url = "https://w3.org";
 
 test "blocking mode fetch API" {
     const alloc = std.testing.allocator;
@@ -69,10 +71,10 @@ test "non blocking mode API" {
     var client = AsyncClient.init(alloc, &loop);
     defer client.deinit();
 
-    var reqs: [10]AsyncRequest = undefined;
+    var reqs: [10]*AsyncRequest = undefined;
     for (0..reqs.len) |i| {
-        reqs[i] = client.create(try std.Uri.parse(url));
-        try reqs[i].fetch();
+        reqs[i] = try client.create(try std.Uri.parse(url));
+        reqs[i].fetch();
     }
 
     for (0..reqs.len) |i| {
