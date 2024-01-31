@@ -32,6 +32,10 @@ pub const XMLHttpRequestEventTarget = struct {
     ontimeout_cbk: ?Callback = null,
     onloadend_cbk: ?Callback = null,
 
+    pub fn constructor() !XMLHttpRequestEventTarget {
+        return .{};
+    }
+
     pub fn set_onloadstart(self: *XMLHttpRequestEventTarget, handler: Callback) void {
         self.onloadstart_cbk = handler;
     }
@@ -55,6 +59,8 @@ pub const XMLHttpRequestEventTarget = struct {
 pub const XMLHttpRequestUpload = struct {
     pub const prototype = *XMLHttpRequestEventTarget;
     pub const mem_guarantied = true;
+
+    proto: XMLHttpRequestEventTarget,
 };
 
 pub const XMLHttpRequest = struct {
@@ -67,6 +73,7 @@ pub const XMLHttpRequest = struct {
     pub const LOADING: u16 = 3;
     pub const DONE: u16 = 4;
 
+    proto: XMLHttpRequestEventTarget,
     cli: Client,
     impl: YieldImpl,
 
@@ -79,6 +86,7 @@ pub const XMLHttpRequest = struct {
     pub fn constructor(alloc: std.mem.Allocator, loop: *Loop) !*XMLHttpRequest {
         var req = try alloc.create(XMLHttpRequest);
         req.* = XMLHttpRequest{
+            .proto = try XMLHttpRequestEventTarget.constructor(),
             .headers = .{ .allocator = alloc, .owned = false },
             .impl = undefined,
             .uri = undefined,
