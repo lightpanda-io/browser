@@ -98,6 +98,7 @@ pub const XMLHttpRequest = struct {
     };
 
     proto: XMLHttpRequestEventTarget,
+    alloc: std.mem.Allocator,
     cli: Client,
     impl: YieldImpl,
 
@@ -120,6 +121,7 @@ pub const XMLHttpRequest = struct {
 
     pub fn constructor(alloc: std.mem.Allocator, loop: *Loop) !XMLHttpRequest {
         return .{
+            .alloc = alloc,
             .proto = try XMLHttpRequestEventTarget.constructor(),
             .headers = .{ .allocator = alloc, .owned = true },
             .response_headers = .{ .allocator = alloc, .owned = true },
@@ -270,6 +272,23 @@ pub const XMLHttpRequest = struct {
 
         self.state = LOADING;
 
+        var buf: std.ArrayListUnmanaged(u8) = .{};
+
+        const reader = req.reader();
+        var buffer: [1024]u8 = undefined;
+        var ln = buffer.len;
+        while (ln > 0) {
+            ln = reader.read(&buffer) catch |e| {
+                buf.deinit(self.alloc);
+                return self.onerr(e);
+            };
+            buf.appendSlice(self.alloc, buffer[0..ln]) catch |e| {
+                buf.deinit(self.alloc);
+                return self.onerr(e);
+            };
+        }
+        self.response_bytes = buf.items;
+
         self.state = DONE;
 
         // TODO use events instead
@@ -289,14 +308,20 @@ pub const XMLHttpRequest = struct {
     pub fn get_responseText(self: *XMLHttpRequest) ![]const u8 {
         if (self.state != LOADING and self.state != DONE) return DOMError.InvalidState;
         if (self.response_type != .Empty and self.response_type != .Text) return DOMError.InvalidState;
+
         return if (self.response_bytes) |v| v else "";
     }
 
-    // the caller owns the string.
+    // The caller owns the string returned.
+    // TODO change the return type to express the string ownership and let
+    // jsruntime free the string once copied to v8.
+    // see https://github.com/lightpanda-io/jsruntime-lib/issues/195
     pub fn _getAllResponseHeaders(self: *XMLHttpRequest, alloc: std.mem.Allocator) ![]const u8 {
         self.response_headers.sort();
 
         var buf: std.ArrayListUnmanaged(u8) = .{};
+        errdefer buf.deinit(alloc);
+
         const w = buf.writer(alloc);
 
         for (self.response_headers.list.items) |entry| {
@@ -331,7 +356,8 @@ pub fn testExecFn(
         // Each case executed waits for all loop callaback calls.
         // So the url has been retrieved.
         .{ .src = "nb", .ex = "1" },
-        .{ .src = "req.getAllResponseHeaders()", .ex = "undefined" },
+        .{ .src = "req.getAllResponseHeaders().length > 1024", .ex = "true" },
+        .{ .src = "req.responseText.length > 1024", .ex = "true" },
     };
     try checkCases(js_env, &send);
 }
