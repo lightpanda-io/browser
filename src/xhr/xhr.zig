@@ -98,23 +98,17 @@ pub const XMLHttpRequest = struct {
     asyn: bool = true,
     err: ?anyerror = null,
 
-    pub fn constructor(alloc: std.mem.Allocator, loop: *Loop) !*XMLHttpRequest {
-        var req = try alloc.create(XMLHttpRequest);
-        req.* = XMLHttpRequest{
+    pub fn constructor(alloc: std.mem.Allocator, loop: *Loop) !XMLHttpRequest {
+        return .{
             .proto = try XMLHttpRequestEventTarget.constructor(),
             .headers = .{ .allocator = alloc, .owned = false },
-            .impl = undefined,
+            .impl = YieldImpl.init(loop),
             .url = null,
             .uri = undefined,
             .readyState = UNSENT,
             // TODO retrieve the HTTP client globally to reuse existing connections.
-            .cli = .{
-                .allocator = alloc,
-                .loop = loop,
-            },
+            .cli = .{ .allocator = alloc, .loop = loop },
         };
-        req.impl = YieldImpl.init(loop, req);
-        return req;
     }
 
     pub fn deinit(self: *XMLHttpRequest, alloc: std.mem.Allocator) void {
@@ -123,7 +117,6 @@ pub const XMLHttpRequest = struct {
         if (self.url) |url| alloc.free(url);
         // TODO the client must be shared between requests.
         self.cli.deinit();
-        alloc.destroy(self);
     }
 
     pub fn get_readyState(self: *XMLHttpRequest) u16 {
@@ -176,7 +169,7 @@ pub const XMLHttpRequest = struct {
     }
 
     pub fn _send(self: *XMLHttpRequest) void {
-        self.impl.yield();
+        self.impl.yield(self);
     }
 
     fn onerr(self: *XMLHttpRequest, err: anyerror) void {

@@ -77,11 +77,10 @@ const AsyncClient = struct {
 
         pub fn deinit(self: *AsyncRequest) void {
             self.headers.deinit();
-            self.cli.allocator.destroy(self);
         }
 
         pub fn fetch(self: *AsyncRequest) void {
-            return self.impl.yield();
+            return self.impl.yield(self);
         }
 
         fn onerr(self: *AsyncRequest, err: anyerror) void {
@@ -118,16 +117,13 @@ const AsyncClient = struct {
         self.cli.deinit();
     }
 
-    pub fn create(self: *AsyncClient, uri: std.Uri) !*AsyncRequest {
-        var req = try self.cli.allocator.create(AsyncRequest);
-        req.* = AsyncRequest{
-            .impl = undefined,
+    pub fn create(self: *AsyncClient, uri: std.Uri) !AsyncRequest {
+        return .{
+            .impl = YieldImpl.init(self.cli.loop),
             .cli = &self.cli,
             .uri = uri,
             .headers = .{ .allocator = self.cli.allocator, .owned = false },
         };
-        req.impl = YieldImpl.init(self.cli.loop, req);
-        return req;
     }
 };
 
@@ -140,7 +136,7 @@ test "non blocking client" {
     var client = AsyncClient.init(alloc, &loop);
     defer client.deinit();
 
-    var reqs: [10]*AsyncClient.AsyncRequest = undefined;
+    var reqs: [10]AsyncClient.AsyncRequest = undefined;
     for (0..reqs.len) |i| {
         reqs[i] = try client.create(try std.Uri.parse(url));
         reqs[i].fetch();
