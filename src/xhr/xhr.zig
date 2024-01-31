@@ -91,21 +91,30 @@ pub const XMLHttpRequest = struct {
     cli: Client,
     impl: YieldImpl,
 
-    readyState: u16,
+    method: std.http.Method,
+    state: u16,
     url: ?[]const u8,
     uri: std.Uri,
     headers: std.http.Headers,
-    asyn: bool = true,
+    sync: bool = true,
     err: ?anyerror = null,
+
+    upload: ?XMLHttpRequestUpload = null,
+    timeout: u32 = 0,
+    withCredentials: bool = false,
+    // TODO: response readonly attribute any response;
+    response_bytes: ?[]const u8 = null,
+    send_flag: bool = false,
 
     pub fn constructor(alloc: std.mem.Allocator, loop: *Loop) !XMLHttpRequest {
         return .{
             .proto = try XMLHttpRequestEventTarget.constructor(),
-            .headers = .{ .allocator = alloc, .owned = false },
+            .headers = .{ .allocator = alloc, .owned = true },
             .impl = YieldImpl.init(loop),
+            .method = undefined,
             .url = null,
             .uri = undefined,
-            .readyState = UNSENT,
+            .state = UNSENT,
             // TODO retrieve the HTTP client globally to reuse existing connections.
             .cli = .{ .allocator = alloc, .loop = loop },
         };
@@ -114,13 +123,37 @@ pub const XMLHttpRequest = struct {
     pub fn deinit(self: *XMLHttpRequest, alloc: std.mem.Allocator) void {
         self.proto.deinit(alloc);
         self.headers.deinit();
-        if (self.url) |url| alloc.free(url);
+        if (self.url) |v| alloc.free(v);
+        if (self.response_bytes) |v| alloc.free(v);
         // TODO the client must be shared between requests.
         self.cli.deinit();
     }
 
     pub fn get_readyState(self: *XMLHttpRequest) u16 {
-        return self.readyState;
+        return self.state;
+    }
+
+    pub fn get_timeout(self: *XMLHttpRequest) u32 {
+        return self.timeout;
+    }
+
+    pub fn set_timeout(self: *XMLHttpRequest, timeout: u32) !void {
+        // TODO If the current global object is a Window object and this’s
+        // synchronous flag is set, then throw an "InvalidAccessError"
+        // DOMException.
+        // https://xhr.spec.whatwg.org/#dom-xmlhttprequest-timeout
+        self.timeout = timeout;
+    }
+
+    pub fn get_withCredentials(self: *XMLHttpRequest) bool {
+        return self.withCredentials;
+    }
+
+    pub fn set_withCredentials(self: *XMLHttpRequest, withCredentials: bool) !void {
+        if (self.state != OPENED and self.state != UNSENT) return DOMError.InvalidState;
+        if (self.send_flag) return DOMError.InvalidState;
+
+        self.withCredentials = withCredentials;
     }
 
     pub fn _open(
@@ -139,22 +172,35 @@ pub const XMLHttpRequest = struct {
         // associated Document is not fully active, then throw an
         // "InvalidStateError" DOMException.
 
-        try validMethod(method);
+        self.method = try validMethod(method);
 
         self.url = try alloc.dupe(u8, url);
-        self.uri = try std.Uri.parse(self.url.?);
-        self.asyn = if (asyn) |b| b else true;
+        self.uri = std.Uri.parse(self.url.?) catch return DOMError.Syntax;
+        self.sync = if (asyn) |b| !b else false;
+        self.send_flag = false;
 
-        self.readyState = OPENED;
+        if (self.response_bytes) |v| alloc.free(v);
+
+        self.state = OPENED;
     }
 
-    const methods = [_][]const u8{ "DELETE", "GET", "HEAD", "OPTIONS", "POST", "PUT" };
+    const methods = [_]struct {
+        tag: std.http.Method,
+        name: []const u8,
+    }{
+        .{ .tag = .DELETE, .name = "DELETE" },
+        .{ .tag = .GET, .name = "GET" },
+        .{ .tag = .HEAD, .name = "HEAD" },
+        .{ .tag = .OPTIONS, .name = "OPTIONS" },
+        .{ .tag = .POST, .name = "POST" },
+        .{ .tag = .PUT, .name = "PUT" },
+    };
     const methods_forbidden = [_][]const u8{ "CONNECT", "TRACE", "TRACK" };
 
-    pub fn validMethod(m: []const u8) DOMError!void {
+    pub fn validMethod(m: []const u8) DOMError!std.http.Method {
         for (methods) |method| {
-            if (std.ascii.eqlIgnoreCase(method, m)) {
-                return;
+            if (std.ascii.eqlIgnoreCase(method.name, m)) {
+                return method.tag;
             }
         }
         // If method is a forbidden method, then throw a "SecurityError" DOMException.
@@ -168,30 +214,45 @@ pub const XMLHttpRequest = struct {
         return DOMError.Syntax;
     }
 
-    pub fn _send(self: *XMLHttpRequest) void {
+    pub fn _setRequestHeader(self: *XMLHttpRequest, name: []const u8, value: []const u8) !void {
+        return try self.headers.append(name, value);
+    }
+
+    // TODO body can be either a string or a document
+    pub fn _send(self: *XMLHttpRequest, body: ?[]const u8) !void {
+        if (self.state != OPENED) return DOMError.InvalidState;
+        if (self.send_flag) return DOMError.InvalidState;
+
+        //  The body argument provides the request body, if any, and is ignored
+        //  if the request method is GET or HEAD.
+        //  https://xhr.spec.whatwg.org/#the-send()-method
+        _ = body;
+        // TODO set Content-Type header according to the given body.
+
+        self.send_flag = true;
         self.impl.yield(self);
     }
 
     fn onerr(self: *XMLHttpRequest, err: anyerror) void {
         self.err = err;
-        self.readyState = DONE;
+        self.state = DONE;
     }
 
     pub fn onYield(self: *XMLHttpRequest, err: ?anyerror) void {
         if (err) |e| return self.onerr(e);
-        var req = self.cli.open(.GET, self.uri, self.headers, .{}) catch |e| return self.onerr(e);
+        var req = self.cli.open(self.method, self.uri, self.headers, .{}) catch |e| return self.onerr(e);
         defer req.deinit();
 
         req.send(.{}) catch |e| return self.onerr(e);
         req.finish() catch |e| return self.onerr(e);
         req.wait() catch |e| return self.onerr(e);
 
-        self.readyState = HEADERS_RECEIVED;
+        self.state = HEADERS_RECEIVED;
 
         // TODO read response body
 
-        self.readyState = LOADING;
-        self.readyState = DONE;
+        self.state = LOADING;
+        self.state = DONE;
 
         // TODO use events instead
         if (self.proto.onload_cbk) |cbk| {
@@ -210,6 +271,7 @@ pub fn testExecFn(
     var send = [_]Case{
         .{ .src = "var nb = 0; function cbk(event) { nb ++; }", .ex = "undefined" },
         .{ .src = "const req = new XMLHttpRequest()", .ex = "undefined" },
+        .{ .src = "req.setRequestHeader('User-Agent', 'lightpanda/1.0')", .ex = "undefined" },
 
         // TODO remove-me, test func du to an issue w/ the setter.
         // see https://lightpanda.slack.com/archives/C05TRU6RBM1/p1706708213838989

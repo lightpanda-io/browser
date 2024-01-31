@@ -158,7 +158,7 @@ test "Window is a libdom event target" {
 test "XMLHttpRequest.validMethod" {
     // valid methods
     for ([_][]const u8{ "get", "GET", "head", "HEAD" }) |tc| {
-        try xhr.XMLHttpRequest.validMethod(tc);
+        _ = try xhr.XMLHttpRequest.validMethod(tc);
     }
 
     // forbidden
