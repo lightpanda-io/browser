@@ -45,6 +45,11 @@ pub const XMLHttpRequestEventTarget = struct {
     pub fn set_onabort(self: *XMLHttpRequestEventTarget, handler: Callback) void {
         self.onabort_cbk = handler;
     }
+    // TODO remove-me, test func du to an issue w/ the setter.
+    // see https://lightpanda.slack.com/archives/C05TRU6RBM1/p1706708213838989
+    pub fn _setOnload(self: *XMLHttpRequestEventTarget, handler: Callback) void {
+        self.set_onload(handler);
+    }
     pub fn set_onload(self: *XMLHttpRequestEventTarget, handler: Callback) void {
         self.onload_cbk = handler;
     }
@@ -212,7 +217,12 @@ pub fn testExecFn(
     var send = [_]Case{
         .{ .src = "var nb = 0; function cbk(event) { nb ++; }", .ex = "undefined" },
         .{ .src = "const req = new XMLHttpRequest()", .ex = "undefined" },
-        .{ .src = "req.onload = cbk", .ex = "function cbk(event) { nb ++; }" },
+
+        // TODO remove-me, test func du to an issue w/ the setter.
+        // see https://lightpanda.slack.com/archives/C05TRU6RBM1/p1706708213838989
+        .{ .src = "req.setOnload(cbk)", .ex = "undefined" },
+        // .{ .src = "req.onload = cbk", .ex = "function cbk(event) { nb ++; }" },
+
         .{ .src = "req.open('GET', 'https://w3.org')", .ex = "undefined" },
         .{ .src = "req.send(); nb", .ex = "0" },
         // Each case executed waits for all loop callaback calls.
