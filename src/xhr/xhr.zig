@@ -87,6 +87,16 @@ pub const XMLHttpRequest = struct {
     pub const LOADING: u16 = 3;
     pub const DONE: u16 = 4;
 
+    // https://xhr.spec.whatwg.org/#response-type
+    const ResponseType = enum {
+        Empty,
+        Text,
+        ArrayBuffer,
+        Blob,
+        Document,
+        JSON,
+    };
+
     proto: XMLHttpRequestEventTarget,
     cli: Client,
     impl: YieldImpl,
@@ -104,12 +114,15 @@ pub const XMLHttpRequest = struct {
     withCredentials: bool = false,
     // TODO: response readonly attribute any response;
     response_bytes: ?[]const u8 = null,
+    response_type: ResponseType = .Empty,
+    response_headers: std.http.Headers,
     send_flag: bool = false,
 
     pub fn constructor(alloc: std.mem.Allocator, loop: *Loop) !XMLHttpRequest {
         return .{
             .proto = try XMLHttpRequestEventTarget.constructor(),
             .headers = .{ .allocator = alloc, .owned = true },
+            .response_headers = .{ .allocator = alloc, .owned = true },
             .impl = YieldImpl.init(loop),
             .method = undefined,
             .url = null,
@@ -123,8 +136,10 @@ pub const XMLHttpRequest = struct {
     pub fn deinit(self: *XMLHttpRequest, alloc: std.mem.Allocator) void {
         self.proto.deinit(alloc);
         self.headers.deinit();
+        self.response_headers.deinit();
         if (self.url) |v| alloc.free(v);
         if (self.response_bytes) |v| alloc.free(v);
+        if (self.response_headers) |v| alloc.free(v);
         // TODO the client must be shared between requests.
         self.cli.deinit();
     }
@@ -179,6 +194,11 @@ pub const XMLHttpRequest = struct {
         self.sync = if (asyn) |b| !b else false;
         self.send_flag = false;
 
+        // TODO should we clearRetainingCapacity instead?
+        self.headers.clearAndFree();
+        self.response_headers.clearAndFree();
+
+        self.response_type = .Empty;
         if (self.response_bytes) |v| alloc.free(v);
 
         self.state = OPENED;
@@ -215,6 +235,8 @@ pub const XMLHttpRequest = struct {
     }
 
     pub fn _setRequestHeader(self: *XMLHttpRequest, name: []const u8, value: []const u8) !void {
+        if (self.state != OPENED) return DOMError.InvalidState;
+        if (self.send_flag) return DOMError.InvalidState;
         return try self.headers.append(name, value);
     }
 
@@ -233,11 +255,6 @@ pub const XMLHttpRequest = struct {
         self.impl.yield(self);
     }
 
-    fn onerr(self: *XMLHttpRequest, err: anyerror) void {
-        self.err = err;
-        self.state = DONE;
-    }
-
     pub fn onYield(self: *XMLHttpRequest, err: ?anyerror) void {
         if (err) |e| return self.onerr(e);
         var req = self.cli.open(self.method, self.uri, self.headers, .{}) catch |e| return self.onerr(e);
@@ -247,11 +264,12 @@ pub const XMLHttpRequest = struct {
         req.finish() catch |e| return self.onerr(e);
         req.wait() catch |e| return self.onerr(e);
 
+        self.response_headers = req.response.headers.clone(self.response_headers.allocator) catch |e| return self.onerr(e);
+
         self.state = HEADERS_RECEIVED;
 
-        // TODO read response body
-
         self.state = LOADING;
+
         self.state = DONE;
 
         // TODO use events instead
@@ -262,6 +280,36 @@ pub const XMLHttpRequest = struct {
             }; // TODO handle error
         }
     }
+
+    fn onerr(self: *XMLHttpRequest, err: anyerror) void {
+        self.err = err;
+        self.state = DONE;
+    }
+
+    pub fn get_responseText(self: *XMLHttpRequest) ![]const u8 {
+        if (self.state != LOADING and self.state != DONE) return DOMError.InvalidState;
+        if (self.response_type != .Empty and self.response_type != .Text) return DOMError.InvalidState;
+        return if (self.response_bytes) |v| v else "";
+    }
+
+    // the caller owns the string.
+    pub fn _getAllResponseHeaders(self: *XMLHttpRequest, alloc: std.mem.Allocator) ![]const u8 {
+        self.response_headers.sort();
+
+        var buf: std.ArrayListUnmanaged(u8) = .{};
+        const w = buf.writer(alloc);
+
+        for (self.response_headers.list.items) |entry| {
+            if (entry.value.len == 0) continue;
+
+            try w.writeAll(entry.name);
+            try w.writeAll(": ");
+            try w.writeAll(entry.value);
+            try w.writeAll("\r\n");
+        }
+
+        return buf.items;
+    }
 };
 
 pub fn testExecFn(
@@ -271,7 +319,6 @@ pub fn testExecFn(
     var send = [_]Case{
         .{ .src = "var nb = 0; function cbk(event) { nb ++; }", .ex = "undefined" },
         .{ .src = "const req = new XMLHttpRequest()", .ex = "undefined" },
-        .{ .src = "req.setRequestHeader('User-Agent', 'lightpanda/1.0')", .ex = "undefined" },
 
         // TODO remove-me, test func du to an issue w/ the setter.
         // see https://lightpanda.slack.com/archives/C05TRU6RBM1/p1706708213838989
@@ -279,10 +326,12 @@ pub fn testExecFn(
         // .{ .src = "req.onload = cbk", .ex = "function cbk(event) { nb ++; }" },
 
         .{ .src = "req.open('GET', 'https://w3.org')", .ex = "undefined" },
+        .{ .src = "req.setRequestHeader('User-Agent', 'lightpanda/1.0')", .ex = "undefined" },
         .{ .src = "req.send(); nb", .ex = "0" },
         // Each case executed waits for all loop callaback calls.
         // So the url has been retrieved.
         .{ .src = "nb", .ex = "1" },
+        .{ .src = "req.getAllResponseHeaders()", .ex = "undefined" },
     };
     try checkCases(js_env, &send);
 }
