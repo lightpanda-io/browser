@@ -43,16 +43,25 @@ pub const XMLHttpRequestEventTarget = struct {
         self.onprogress_cbk = handler;
     }
     pub fn set_onabort(self: *XMLHttpRequestEventTarget, handler: Callback) void {
-        self.onabort = handler;
+        self.onabort_cbk = handler;
     }
     pub fn set_onload(self: *XMLHttpRequestEventTarget, handler: Callback) void {
-        self.onload = handler;
+        self.onload_cbk = handler;
     }
     pub fn set_ontimeout(self: *XMLHttpRequestEventTarget, handler: Callback) void {
-        self.ontimeout = handler;
+        self.ontimeout_cbk = handler;
     }
     pub fn set_onloadend(self: *XMLHttpRequestEventTarget, handler: Callback) void {
-        self.onloadend = handler;
+        self.onloadend_cbk = handler;
+    }
+
+    pub fn deinit(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator) void {
+        if (self.onloadstart_cbk) |cbk| cbk.deinit(alloc);
+        if (self.onprogress_cbk) |cbk| cbk.deinit(alloc);
+        if (self.onabort_cbk) |cbk| cbk.deinit(alloc);
+        if (self.onload_cbk) |cbk| cbk.deinit(alloc);
+        if (self.ontimeout_cbk) |cbk| cbk.deinit(alloc);
+        if (self.onloadend_cbk) |cbk| cbk.deinit(alloc);
     }
 };
 
@@ -77,7 +86,8 @@ pub const XMLHttpRequest = struct {
     cli: Client,
     impl: YieldImpl,
 
-    readyState: u16 = UNSENT,
+    readyState: u16,
+    url: ?[]const u8,
     uri: std.Uri,
     headers: std.http.Headers,
     asyn: bool = true,
@@ -89,7 +99,9 @@ pub const XMLHttpRequest = struct {
             .proto = try XMLHttpRequestEventTarget.constructor(),
             .headers = .{ .allocator = alloc, .owned = false },
             .impl = undefined,
+            .url = null,
             .uri = undefined,
+            .readyState = UNSENT,
             // TODO retrieve the HTTP client globally to reuse existing connections.
             .cli = .{
                 .allocator = alloc,
@@ -101,7 +113,9 @@ pub const XMLHttpRequest = struct {
     }
 
     pub fn deinit(self: *XMLHttpRequest, alloc: std.mem.Allocator) void {
+        self.proto.deinit(alloc);
         self.headers.deinit();
+        if (self.url) |url| alloc.free(url);
         // TODO the client must be shared between requests.
         self.cli.deinit();
         alloc.destroy(self);
@@ -113,6 +127,7 @@ pub const XMLHttpRequest = struct {
 
     pub fn _open(
         self: *XMLHttpRequest,
+        alloc: std.mem.Allocator,
         method: []const u8,
         url: []const u8,
         asyn: ?bool,
@@ -128,8 +143,11 @@ pub const XMLHttpRequest = struct {
 
         try validMethod(method);
 
-        self.uri = try std.Uri.parse(url);
+        self.url = try alloc.dupe(u8, url);
+        self.uri = try std.Uri.parse(self.url.?);
         self.asyn = if (asyn) |b| b else true;
+
+        self.readyState = OPENED;
     }
 
     const methods = [_][]const u8{ "DELETE", "GET", "HEAD", "OPTIONS", "POST", "PUT" };
@@ -166,14 +184,24 @@ pub const XMLHttpRequest = struct {
         var req = self.cli.open(.GET, self.uri, self.headers, .{}) catch |e| return self.onerr(e);
         defer req.deinit();
 
-        self.readyState = OPENED;
-
         req.send(.{}) catch |e| return self.onerr(e);
         req.finish() catch |e| return self.onerr(e);
         req.wait() catch |e| return self.onerr(e);
+
         self.readyState = HEADERS_RECEIVED;
+
+        // TODO read response body
+
         self.readyState = LOADING;
         self.readyState = DONE;
+
+        // TODO use events instead
+        if (self.proto.onload_cbk) |cbk| {
+            // TODO pass an EventProgress
+            cbk.call(null) catch |e| {
+                std.debug.print("--- CALLBACK ERROR: {any}\n", .{e});
+            }; // TODO handle error
+        }
     }
 };
 
@@ -182,17 +210,14 @@ pub fn testExecFn(
     js_env: *jsruntime.Env,
 ) anyerror!void {
     var send = [_]Case{
-        .{ .src = 
-        \\var nb = 0; var evt;
-        \\function cbk(event) {
-        \\  evt = event;
-        \\  nb ++;
-        \\}
-        , .ex = "undefined" },
-        .{ .src = "const req = new XMLHttpRequest();", .ex = "undefined" },
-        .{ .src = "req.onload = cbk; true;", .ex = "true" },
-        .{ .src = "req.open('GET', 'https://w3.org');", .ex = "undefined" },
-        .{ .src = "req.send();", .ex = "undefined" },
+        .{ .src = "var nb = 0; function cbk(event) { nb ++; }", .ex = "undefined" },
+        .{ .src = "const req = new XMLHttpRequest()", .ex = "undefined" },
+        .{ .src = "req.onload = cbk", .ex = "function cbk(event) { nb ++; }" },
+        .{ .src = "req.open('GET', 'https://w3.org')", .ex = "undefined" },
+        .{ .src = "req.send(); nb", .ex = "0" },
+        // Each case executed waits for all loop callaback calls.
+        // So the url has been retrieved.
+        .{ .src = "nb", .ex = "1" },
     };
     try checkCases(js_env, &send);
 }
