@@ -117,6 +117,7 @@ pub const XMLHttpRequest = struct {
     response_bytes: ?[]const u8 = null,
     response_type: ResponseType = .Empty,
     response_headers: std.http.Headers,
+    response_status: u10 = 0,
     send_flag: bool = false,
 
     pub fn constructor(alloc: std.mem.Allocator, loop: *Loop) !XMLHttpRequest {
@@ -199,6 +200,7 @@ pub const XMLHttpRequest = struct {
         // TODO should we clearRetainingCapacity instead?
         self.headers.clearAndFree();
         self.response_headers.clearAndFree();
+        self.response_status = 0;
 
         self.response_type = .Empty;
         if (self.response_bytes) |v| alloc.free(v);
@@ -270,6 +272,8 @@ pub const XMLHttpRequest = struct {
 
         self.state = HEADERS_RECEIVED;
 
+        self.response_status = @intFromEnum(req.response.status);
+
         self.state = LOADING;
 
         var buf: std.ArrayListUnmanaged(u8) = .{};
@@ -306,7 +310,6 @@ pub const XMLHttpRequest = struct {
     }
 
     pub fn get_responseText(self: *XMLHttpRequest) ![]const u8 {
-        if (self.state != LOADING and self.state != DONE) return DOMError.InvalidState;
         if (self.response_type != .Empty and self.response_type != .Text) return DOMError.InvalidState;
 
         return if (self.response_bytes) |v| v else "";
@@ -317,6 +320,7 @@ pub const XMLHttpRequest = struct {
     // jsruntime free the string once copied to v8.
     // see https://github.com/lightpanda-io/jsruntime-lib/issues/195
     pub fn _getAllResponseHeaders(self: *XMLHttpRequest, alloc: std.mem.Allocator) ![]const u8 {
+        if (self.response_headers.list.items.len == 0) return "";
         self.response_headers.sort();
 
         var buf: std.ArrayListUnmanaged(u8) = .{};
@@ -335,6 +339,16 @@ pub const XMLHttpRequest = struct {
 
         return buf.items;
     }
+
+    pub fn get_status(self: *XMLHttpRequest) u16 {
+        return self.response_status;
+    }
+
+    pub fn get_statusText(self: *XMLHttpRequest) []const u8 {
+        if (self.response_status == 0) return "";
+
+        return std.http.Status.phrase(@enumFromInt(self.response_status)) orelse "";
+    }
 };
 
 pub fn testExecFn(
@@ -352,10 +366,20 @@ pub fn testExecFn(
 
         .{ .src = "req.open('GET', 'https://w3.org')", .ex = "undefined" },
         .{ .src = "req.setRequestHeader('User-Agent', 'lightpanda/1.0')", .ex = "undefined" },
+
+        // ensure open resets values
+        .{ .src = "req.status", .ex = "0" },
+        .{ .src = "req.statusText", .ex = "" },
+        .{ .src = "req.getAllResponseHeaders()", .ex = "" },
+        .{ .src = "req.responseText", .ex = "" },
+
         .{ .src = "req.send(); nb", .ex = "0" },
+
         // Each case executed waits for all loop callaback calls.
         // So the url has been retrieved.
         .{ .src = "nb", .ex = "1" },
+        .{ .src = "req.status", .ex = "200" },
+        .{ .src = "req.statusText", .ex = "OK" },
         .{ .src = "req.getAllResponseHeaders().length > 1024", .ex = "true" },
         .{ .src = "req.responseText.length > 1024", .ex = "true" },
     };
