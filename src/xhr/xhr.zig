@@ -315,6 +315,10 @@ pub const XMLHttpRequest = struct {
         return if (self.response_bytes) |v| v else "";
     }
 
+    pub fn _getResponseHeader(self: *XMLHttpRequest, name: []const u8) ?[]const u8 {
+        return self.response_headers.getFirstValue(name);
+    }
+
     // The caller owns the string returned.
     // TODO change the return type to express the string ownership and let
     // jsruntime free the string once copied to v8.
@@ -371,6 +375,7 @@ pub fn testExecFn(
         .{ .src = "req.status", .ex = "0" },
         .{ .src = "req.statusText", .ex = "" },
         .{ .src = "req.getAllResponseHeaders()", .ex = "" },
+        .{ .src = "req.getResponseHeader('Content-Type')", .ex = "null" },
         .{ .src = "req.responseText", .ex = "" },
 
         .{ .src = "req.send(); nb", .ex = "0" },
@@ -380,6 +385,7 @@ pub fn testExecFn(
         .{ .src = "nb", .ex = "1" },
         .{ .src = "req.status", .ex = "200" },
         .{ .src = "req.statusText", .ex = "OK" },
+        .{ .src = "req.getResponseHeader('Content-Type')", .ex = "text/html; charset=UTF-8" },
         .{ .src = "req.getAllResponseHeaders().length > 1024", .ex = "true" },
         .{ .src = "req.responseText.length > 1024", .ex = "true" },
     };
