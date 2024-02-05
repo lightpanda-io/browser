@@ -477,6 +477,11 @@ fn eventTargetVtable(et: *EventTarget) c.dom_event_target_vtable {
     return getVtable(c.dom_event_target_vtable, EventTarget, et);
 }
 
+pub inline fn toEventTarget(comptime T: type, v: *T) *EventTarget {
+    const node_aligned: *align(@alignOf(NodeExternal)) T = @alignCast(v);
+    return @as(*EventTarget, @ptrCast(node_aligned));
+}
+
 pub fn eventTargetHasListener(
     et: *EventTarget,
     typ: []const u8,
