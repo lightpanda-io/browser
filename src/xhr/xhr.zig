@@ -97,10 +97,15 @@ pub const XMLHttpRequest = struct {
         JSON,
     };
 
+    const PrivState = enum { new, open, send, finish, wait, done };
+
     proto: XMLHttpRequestEventTarget,
     alloc: std.mem.Allocator,
     cli: Client,
     impl: YieldImpl,
+
+    priv_state: PrivState = .new,
+    req: ?Client.Request = null,
 
     method: std.http.Method,
     state: u16,
@@ -143,6 +148,8 @@ pub const XMLHttpRequest = struct {
         if (self.url) |v| alloc.free(v);
         if (self.response_bytes) |v| alloc.free(v);
         if (self.response_headers) |v| alloc.free(v);
+
+        if (self.req) |*r| r.deinit();
         // TODO the client must be shared between requests.
         self.cli.deinit();
     }
@@ -206,6 +213,11 @@ pub const XMLHttpRequest = struct {
         if (self.response_bytes) |v| alloc.free(v);
 
         self.state = OPENED;
+        self.priv_state = .new;
+        if (self.req) |*r| {
+            r.deinit();
+            self.req = null;
+        }
     }
 
     const methods = [_]struct {
@@ -259,54 +271,89 @@ pub const XMLHttpRequest = struct {
         self.impl.yield(self);
     }
 
+    // onYield is a callback called between each request's steps.
+    // Between each step, the code is blocking.
+    // Yielding allows pseudo-async and gives a chance to other async process
+    // to be called.
     pub fn onYield(self: *XMLHttpRequest, err: ?anyerror) void {
         if (err) |e| return self.onerr(e);
-        var req = self.cli.open(self.method, self.uri, self.headers, .{}) catch |e| return self.onerr(e);
-        defer req.deinit();
 
-        req.send(.{}) catch |e| return self.onerr(e);
-        req.finish() catch |e| return self.onerr(e);
-        req.wait() catch |e| return self.onerr(e);
+        switch (self.priv_state) {
+            .new => {
+                self.priv_state = .open;
+                self.req = self.cli.open(self.method, self.uri, self.headers, .{}) catch |e| return self.onerr(e);
+            },
+            .open => {
+                self.priv_state = .send;
+                self.req.?.send(.{}) catch |e| return self.onerr(e);
+            },
+            .send => {
+                self.priv_state = .finish;
+                self.req.?.finish() catch |e| return self.onerr(e);
+            },
+            .finish => {
+                self.priv_state = .wait;
+                self.req.?.wait() catch |e| return self.onerr(e);
+            },
+            .wait => {
+                self.priv_state = .done;
+                self.response_headers = self.req.?.response.headers.clone(self.response_headers.allocator) catch |e| return self.onerr(e);
 
-        self.response_headers = req.response.headers.clone(self.response_headers.allocator) catch |e| return self.onerr(e);
+                self.state = HEADERS_RECEIVED;
 
-        self.state = HEADERS_RECEIVED;
+                self.response_status = @intFromEnum(self.req.?.response.status);
 
-        self.response_status = @intFromEnum(req.response.status);
+                self.state = LOADING;
 
-        self.state = LOADING;
+                var buf: std.ArrayListUnmanaged(u8) = .{};
 
-        var buf: std.ArrayListUnmanaged(u8) = .{};
+                const reader = self.req.?.reader();
+                var buffer: [1024]u8 = undefined;
+                var ln = buffer.len;
+                while (ln > 0) {
+                    ln = reader.read(&buffer) catch |e| {
+                        buf.deinit(self.alloc);
+                        return self.onerr(e);
+                    };
+                    buf.appendSlice(self.alloc, buffer[0..ln]) catch |e| {
+                        buf.deinit(self.alloc);
+                        return self.onerr(e);
+                    };
+                }
+                self.response_bytes = buf.items;
 
-        const reader = req.reader();
-        var buffer: [1024]u8 = undefined;
-        var ln = buffer.len;
-        while (ln > 0) {
-            ln = reader.read(&buffer) catch |e| {
-                buf.deinit(self.alloc);
-                return self.onerr(e);
-            };
-            buf.appendSlice(self.alloc, buffer[0..ln]) catch |e| {
-                buf.deinit(self.alloc);
-                return self.onerr(e);
-            };
+                self.state = DONE;
+            },
+            .done => {
+                if (self.req) |*r| {
+                    r.deinit();
+                    self.req = null;
+                }
+
+                // TODO use events instead
+                if (self.proto.onload_cbk) |cbk| {
+                    // TODO pass an EventProgress
+                    cbk.call(null) catch |e| {
+                        std.debug.print("--- CALLBACK ERROR: {any}\n", .{e});
+                    }; // TODO handle error
+                }
+
+                // finalize fetch process.
+                return;
+            },
         }
-        self.response_bytes = buf.items;
 
-        self.state = DONE;
-
-        // TODO use events instead
-        if (self.proto.onload_cbk) |cbk| {
-            // TODO pass an EventProgress
-            cbk.call(null) catch |e| {
-                std.debug.print("--- CALLBACK ERROR: {any}\n", .{e});
-            }; // TODO handle error
-        }
+        self.impl.yield(self);
     }
 
     fn onerr(self: *XMLHttpRequest, err: anyerror) void {
         self.err = err;
         self.state = DONE;
+        self.priv_state = .done;
+        if (self.req) |*r| {
+            r.deinit();
+            self.req = null;
+        }
     }
 
     pub fn get_responseText(self: *XMLHttpRequest) ![]const u8 {
