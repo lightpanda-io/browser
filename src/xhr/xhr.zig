@@ -13,6 +13,13 @@ const Loop = jsruntime.Loop;
 const YieldImpl = Loop.Yield(XMLHttpRequest);
 const Client = @import("../async/Client.zig");
 
+const parser = @import("../netsurf.zig");
+const c = @cImport({
+    @cInclude("events/event_target.h");
+});
+
+const log = std.log.scoped(.xhr);
+
 // XHR interfaces
 // https://xhr.spec.whatwg.org/#interface-xmlhttprequest
 pub const Interfaces = generate.Tuple(.{
@@ -25,48 +32,42 @@ pub const XMLHttpRequestEventTarget = struct {
     pub const prototype = *EventTarget;
     pub const mem_guarantied = true;
 
-    onloadstart_cbk: ?Callback = null,
-    onprogress_cbk: ?Callback = null,
-    onabort_cbk: ?Callback = null,
-    onload_cbk: ?Callback = null,
-    ontimeout_cbk: ?Callback = null,
-    onloadend_cbk: ?Callback = null,
+    // Extend libdom event target for pure zig struct.
+    base: parser.EventTargetTBase = parser.EventTargetTBase{},
 
-    pub fn constructor() !XMLHttpRequestEventTarget {
-        return .{};
+    fn register(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator, typ: []const u8, cbk: Callback) !void {
+        try parser.eventTargetAddEventListener(@as(*parser.EventTarget, @ptrCast(self)), alloc, typ, cbk, false);
     }
 
-    pub fn set_onloadstart(self: *XMLHttpRequestEventTarget, handler: Callback) void {
-        self.onloadstart_cbk = handler;
+    pub fn set_onloadstart(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator, handler: Callback) !void {
+        try self.register(alloc, "loadstart", handler);
     }
-    pub fn set_onprogress(self: *XMLHttpRequestEventTarget, handler: Callback) void {
-        self.onprogress_cbk = handler;
+    pub fn set_onprogress(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator, handler: Callback) !void {
+        try self.register(alloc, "progress", handler);
     }
-    pub fn set_onabort(self: *XMLHttpRequestEventTarget, handler: Callback) void {
-        self.onabort_cbk = handler;
+    pub fn set_onabort(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator, handler: Callback) !void {
+        try self.register(alloc, "abort", handler);
     }
     // TODO remove-me, test func du to an issue w/ the setter.
     // see https://lightpanda.slack.com/archives/C05TRU6RBM1/p1706708213838989
-    pub fn _setOnload(self: *XMLHttpRequestEventTarget, handler: Callback) void {
-        self.set_onload(handler);
+    pub fn _setOnload(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator, handler: Callback) !void {
+        try self.set_onload(alloc, handler);
     }
-    pub fn set_onload(self: *XMLHttpRequestEventTarget, handler: Callback) void {
-        self.onload_cbk = handler;
+
+    pub fn set_onload(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator, handler: Callback) !void {
+        try self.register(alloc, "load", handler);
     }
-    pub fn set_ontimeout(self: *XMLHttpRequestEventTarget, handler: Callback) void {
-        self.ontimeout_cbk = handler;
+    pub fn set_ontimeout(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator, handler: Callback) !void {
+        try self.register(alloc, "timeout", handler);
     }
-    pub fn set_onloadend(self: *XMLHttpRequestEventTarget, handler: Callback) void {
-        self.onloadend_cbk = handler;
+    pub fn set_onloadend(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator, handler: Callback) !void {
+        try self.register(alloc, "loadend", handler);
     }
 
     pub fn deinit(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator) void {
-        if (self.onloadstart_cbk) |cbk| cbk.deinit(alloc);
-        if (self.onprogress_cbk) |cbk| cbk.deinit(alloc);
-        if (self.onabort_cbk) |cbk| cbk.deinit(alloc);
-        if (self.onload_cbk) |cbk| cbk.deinit(alloc);
-        if (self.ontimeout_cbk) |cbk| cbk.deinit(alloc);
-        if (self.onloadend_cbk) |cbk| cbk.deinit(alloc);
+        parser.eventTargetRemoveAllEventListeners(@as(*parser.EventTarget, @ptrCast(self)), alloc) catch |e| {
+            log.err("remove all listeners: {any}", .{e});
+        };
     }
 };
 
@@ -74,7 +75,7 @@ pub const XMLHttpRequestUpload = struct {
     pub const prototype = *XMLHttpRequestEventTarget;
     pub const mem_guarantied = true;
 
-    proto: XMLHttpRequestEventTarget,
+    proto: XMLHttpRequestEventTarget = XMLHttpRequestEventTarget{},
 };
 
 pub const XMLHttpRequest = struct {
@@ -99,7 +100,7 @@ pub const XMLHttpRequest = struct {
 
     const PrivState = enum { new, open, send, finish, wait, done };
 
-    proto: XMLHttpRequestEventTarget,
+    proto: XMLHttpRequestEventTarget = XMLHttpRequestEventTarget{},
     alloc: std.mem.Allocator,
     cli: Client,
     impl: YieldImpl,
@@ -128,7 +129,6 @@ pub const XMLHttpRequest = struct {
     pub fn constructor(alloc: std.mem.Allocator, loop: *Loop) !XMLHttpRequest {
         return .{
             .alloc = alloc,
-            .proto = try XMLHttpRequestEventTarget.constructor(),
             .headers = .{ .allocator = alloc, .owned = true },
             .response_headers = .{ .allocator = alloc, .owned = true },
             .impl = YieldImpl.init(loop),
@@ -218,6 +218,22 @@ pub const XMLHttpRequest = struct {
             r.deinit();
             self.req = null;
         }
+
+        self.dispatchEvt("readystatechange");
+    }
+
+    // dispatch request event.
+    // errors are logged only.
+    fn dispatchEvt(self: *XMLHttpRequest, typ: []const u8) void {
+        const evt = parser.eventCreate() catch |e| {
+            return log.err("dispatch event create: {any}", .{e});
+        };
+        parser.eventInit(evt, typ, .{ .bubbles = true, .cancelable = true }) catch |e| {
+            return log.err("dispatch event init: {any}", .{e});
+        };
+        _ = parser.eventTargetDispatchEvent(@as(*parser.EventTarget, @ptrCast(self)), evt) catch |e| {
+            return log.err("dispatch event: {any}", .{e});
+        };
     }
 
     const methods = [_]struct {
@@ -300,12 +316,13 @@ pub const XMLHttpRequest = struct {
                 self.response_headers = self.req.?.response.headers.clone(self.response_headers.allocator) catch |e| return self.onerr(e);
 
                 self.state = HEADERS_RECEIVED;
+                self.dispatchEvt("readystatechange");
 
                 self.response_status = @intFromEnum(self.req.?.response.status);
 
-                self.state = LOADING;
-
                 var buf: std.ArrayListUnmanaged(u8) = .{};
+
+                // TODO dispatch a progress event loadstart.
 
                 const reader = self.req.?.reader();
                 var buffer: [1024]u8 = undefined;
@@ -319,23 +336,30 @@ pub const XMLHttpRequest = struct {
                         buf.deinit(self.alloc);
                         return self.onerr(e);
                     };
+
+                    // TODO dispatch only if 50ms have passed.
+
+                    self.state = LOADING;
+                    self.dispatchEvt("readystatechange");
+
+                    // TODO dispatch a progress event progress.
+                    self.dispatchEvt("progress");
                 }
                 self.response_bytes = buf.items;
+                self.send_flag = false;
 
                 self.state = DONE;
+                self.dispatchEvt("readystatechange");
+
+                // TODO dispatch a progress event load.
+                self.dispatchEvt("load");
+                // TODO dispatch a progress event loadend.
+                self.dispatchEvt("loadend");
             },
             .done => {
                 if (self.req) |*r| {
                     r.deinit();
                     self.req = null;
-                }
-
-                // TODO use events instead
-                if (self.proto.onload_cbk) |cbk| {
-                    // TODO pass an EventProgress
-                    cbk.call(null) catch |e| {
-                        std.debug.print("--- CALLBACK ERROR: {any}\n", .{e});
-                    }; // TODO handle error
                 }
 
                 // finalize fetch process.
@@ -347,13 +371,17 @@ pub const XMLHttpRequest = struct {
     }
 
     fn onerr(self: *XMLHttpRequest, err: anyerror) void {
-        self.err = err;
-        self.state = DONE;
         self.priv_state = .done;
         if (self.req) |*r| {
             r.deinit();
             self.req = null;
         }
+
+        self.err = err;
+        self.state = DONE;
+        self.send_flag = false;
+        self.dispatchEvt("readystatechange");
+        self.dispatchEvt("error");
     }
 
     pub fn get_responseText(self: *XMLHttpRequest) ![]const u8 {
