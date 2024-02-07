@@ -4,6 +4,7 @@ const c = @cImport({
     @cInclude("dom/dom.h");
     @cInclude("dom/bindings/hubbub/parser.h");
     @cInclude("events/event_target.h");
+    @cInclude("events/event.h");
 });
 
 const Callback = @import("jsruntime").Callback;
@@ -359,6 +360,10 @@ pub const EventInit = struct {
     cancelable: bool = false,
     composed: bool = false,
 };
+
+pub fn eventDestroy(evt: *Event) void {
+    c._dom_event_destroy(evt);
+}
 
 pub fn eventInit(evt: *Event, typ: []const u8, opts: EventInit) !void {
     const s = try strFromData(typ);

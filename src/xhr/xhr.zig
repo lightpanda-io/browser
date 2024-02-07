@@ -6,8 +6,10 @@ const checkCases = jsruntime.test_utils.checkCases;
 const generate = @import("../generate.zig");
 
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
+const Event = @import("../events/event.zig").Event;
 const Callback = jsruntime.Callback;
 const DOMError = @import("../netsurf.zig").DOMError;
+const DOMException = @import("../dom/exceptions.zig").DOMException;
 
 const Loop = jsruntime.Loop;
 const YieldImpl = Loop.Yield(XMLHttpRequest);
@@ -26,6 +28,8 @@ pub const Interfaces = generate.Tuple(.{
     XMLHttpRequestEventTarget,
     XMLHttpRequestUpload,
     XMLHttpRequest,
+    ProgressEvent,
+    ProgressEventInit,
 });
 
 pub const XMLHttpRequestEventTarget = struct {
@@ -113,6 +117,50 @@ pub const XMLHttpRequestUpload = struct {
     pub const mem_guarantied = true;
 
     proto: XMLHttpRequestEventTarget = XMLHttpRequestEventTarget{},
+};
+
+pub const ProgressEventInit = struct {
+    pub const mem_guarantied = true;
+
+    lengthComputable: bool = false,
+    loaded: u64 = 0,
+    total: u64 = 0,
+};
+
+pub const ProgressEvent = struct {
+    pub const prototype = *Event;
+    pub const Exception = DOMException;
+    pub const mem_guarantied = true;
+
+    proto: parser.Event,
+    lengthComputable: bool,
+    loaded: u64 = 0,
+    total: u64 = 0,
+
+    pub fn constructor(eventType: []const u8, opts: ProgressEventInit) !ProgressEvent {
+        const event = try parser.eventCreate();
+        defer parser.eventDestroy(event);
+        try parser.eventInit(event, eventType, .{});
+
+        return .{
+            .proto = event.*,
+            .lengthComputable = opts.lengthComputable,
+            .loaded = opts.loaded,
+            .total = opts.total,
+        };
+    }
+
+    pub fn get_lengthComputable(self: ProgressEvent) bool {
+        return self.lengthComputable;
+    }
+
+    pub fn get_loaded(self: ProgressEvent) u64 {
+        return self.loaded;
+    }
+
+    pub fn get_total(self: ProgressEvent) u64 {
+        return self.total;
+    }
 };
 
 pub const XMLHttpRequest = struct {
@@ -273,6 +321,31 @@ pub const XMLHttpRequest = struct {
         };
     }
 
+    fn dispatchProgressEvent(
+        self: *XMLHttpRequest,
+        typ: []const u8,
+        opts: ProgressEventInit,
+    ) void {
+        // TODO destroy struct
+        const evt = self.alloc.create(ProgressEvent) catch |e| {
+            return log.err("allocate progress event: {any}", .{e});
+        };
+        evt.* = ProgressEvent.constructor(typ, .{
+            // https://xhr.spec.whatwg.org/#firing-events-using-the-progressevent-interface
+            .lengthComputable = opts.total > 0,
+            .total = opts.total,
+            .loaded = opts.loaded,
+        }) catch |e| {
+            return log.err("construct progress event: {any}", .{e});
+        };
+        _ = parser.eventTargetDispatchEvent(
+            @as(*parser.EventTarget, @ptrCast(self)),
+            @as(*parser.Event, @ptrCast(evt)),
+        ) catch |e| {
+            return log.err("dispatch progress event: {any}", .{e});
+        };
+    }
+
     const methods = [_]struct {
         tag: std.http.Method,
         name: []const u8,
@@ -359,7 +432,12 @@ pub const XMLHttpRequest = struct {
 
                 var buf: std.ArrayListUnmanaged(u8) = .{};
 
-                // TODO dispatch a progress event loadstart.
+                // TODO set correct length
+                const total = 0;
+                var loaded: u64 = 0;
+
+                // dispatch a progress event loadstart.
+                self.dispatchProgressEvent("loadstart", .{ .loaded = loaded, .total = total });
 
                 const reader = self.req.?.reader();
                 var buffer: [1024]u8 = undefined;
@@ -373,14 +451,18 @@ pub const XMLHttpRequest = struct {
                         buf.deinit(self.alloc);
                         return self.onerr(e);
                     };
+                    loaded = loaded + ln;
 
                     // TODO dispatch only if 50ms have passed.
 
                     self.state = LOADING;
                     self.dispatchEvt("readystatechange");
 
-                    // TODO dispatch a progress event progress.
-                    self.dispatchEvt("progress");
+                    // dispatch a progress event progress.
+                    self.dispatchProgressEvent("progress", .{
+                        .loaded = loaded,
+                        .total = total,
+                    });
                 }
                 self.response_bytes = buf.items;
                 self.send_flag = false;
@@ -388,10 +470,11 @@ pub const XMLHttpRequest = struct {
                 self.state = DONE;
                 self.dispatchEvt("readystatechange");
 
-                // TODO dispatch a progress event load.
+                // dispatch a progress event load.
                 self.dispatchEvt("load");
-                // TODO dispatch a progress event loadend.
-                self.dispatchEvt("loadend");
+                self.dispatchProgressEvent("load", .{ .loaded = loaded, .total = total });
+                // dispatch a progress event loadend.
+                self.dispatchProgressEvent("loadend", .{ .loaded = loaded, .total = total });
             },
             .done => {
                 if (self.req) |*r| {
@@ -418,7 +501,8 @@ pub const XMLHttpRequest = struct {
         self.state = DONE;
         self.send_flag = false;
         self.dispatchEvt("readystatechange");
-        self.dispatchEvt("error");
+        self.dispatchProgressEvent("error", .{});
+        self.dispatchProgressEvent("loadend", .{});
     }
 
     pub fn get_responseText(self: *XMLHttpRequest) ![]const u8 {
