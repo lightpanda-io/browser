@@ -636,6 +636,7 @@ pub const EventTargetTBase = struct {
         .dispatch_event = dispatch_event,
         .remove_event_listener = remove_event_listener,
         .add_event_listener = add_event_listener,
+        .iter_event_listener = iter_event_listener,
     },
     eti: c.dom_event_target_internal = c.dom_event_target_internal{ .listeners = null },
 
@@ -652,6 +653,18 @@ pub const EventTargetTBase = struct {
     pub fn remove_event_listener(et: [*c]c.dom_event_target, t: [*c]c.dom_string, l: ?*c.struct_dom_event_listener, capture: bool) callconv(.C) c.dom_exception {
         const self = @as(*Self, @ptrCast(et));
         return c._dom_event_target_add_event_listener(&self.eti, t, l, capture);
+    }
+
+    pub fn iter_event_listener(
+        et: [*c]c.dom_event_target,
+        t: [*c]c.dom_string,
+        capture: bool,
+        cur: [*c]c.struct_listener_entry,
+        next: [*c][*c]c.struct_listener_entry,
+        l: [*c]?*c.struct_dom_event_listener,
+    ) callconv(.C) c.dom_exception {
+        const self = @as(*Self, @ptrCast(et));
+        return c._dom_event_target_iter_event_listener(self.eti, t, capture, cur, next, l);
     }
 };
 

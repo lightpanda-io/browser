@@ -83,26 +83,32 @@ pub const XMLHttpRequestEventTarget = struct {
     pub fn set_onloadstart(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator, handler: Callback) !void {
         if (self.onloadstart_cbk) |cbk| try self.unregister(alloc, "loadstart", cbk);
         try self.register(alloc, "loadstart", handler);
+        self.onloadstart_cbk = handler;
     }
     pub fn set_onprogress(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator, handler: Callback) !void {
         if (self.onprogress_cbk) |cbk| try self.unregister(alloc, "progress", cbk);
         try self.register(alloc, "progress", handler);
+        self.onprogress_cbk = handler;
     }
     pub fn set_onabort(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator, handler: Callback) !void {
         if (self.onabort_cbk) |cbk| try self.unregister(alloc, "abort", cbk);
         try self.register(alloc, "abort", handler);
+        self.onabort_cbk = handler;
     }
     pub fn set_onload(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator, handler: Callback) !void {
         if (self.onload_cbk) |cbk| try self.unregister(alloc, "load", cbk);
         try self.register(alloc, "load", handler);
+        self.onload_cbk = handler;
     }
     pub fn set_ontimeout(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator, handler: Callback) !void {
         if (self.ontimeout_cbk) |cbk| try self.unregister(alloc, "timeout", cbk);
         try self.register(alloc, "timeout", handler);
+        self.ontimeout_cbk = handler;
     }
     pub fn set_onloadend(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator, handler: Callback) !void {
         if (self.onloadend_cbk) |cbk| try self.unregister(alloc, "loadend", cbk);
         try self.register(alloc, "loadend", handler);
+        self.onloadend_cbk = handler;
     }
 
     pub fn deinit(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator) void {
@@ -561,7 +567,7 @@ pub fn testExecFn(
 
         .{ .src = "req.onload = cbk", .ex = "function cbk(event) { nb ++; }" },
         // .{ .src = "req.onload", .ex = "function cbk(event) { nb ++; }" },
-        // .{ .src = "req.onload = cbk", .ex = "function cbk(event) { nb ++; }" },
+        .{ .src = "req.onload = cbk", .ex = "function cbk(event) { nb ++; }" },
 
         .{ .src = "req.open('GET', 'https://w3.org')", .ex = "undefined" },
         .{ .src = "req.setRequestHeader('User-Agent', 'lightpanda/1.0')", .ex = "undefined" },
