@@ -198,4 +198,13 @@ pub fn testExecFn(
         .{ .src = "nb", .ex = "1" },
     };
     try checkCases(js_env, &legacy);
+
+    var remove = [_]Case{
+        .{ .src = "var nb = 0; function cbk(event) { nb ++; }", .ex = "undefined" },
+        .{ .src = "document.addEventListener('count', cbk)", .ex = "undefined" },
+        .{ .src = "document.removeEventListener('count', cbk)", .ex = "undefined" },
+        .{ .src = "document.dispatchEvent(new Event('count'))", .ex = "true" },
+        .{ .src = "nb", .ex = "0" },
+    };
+    try checkCases(js_env, &remove);
 }
