@@ -471,10 +471,26 @@ pub fn uiEventInit(evt: *UIEvent, typ: []const u8, opts: UIEventInit) !void {
         try strFromData(typ),
         opts.bubbles,
         opts.cancelable,
+        // TODO pass the Window as view.
+        // opts.view
         null,
         opts.detail,
     );
     try DOMErr(err);
+}
+
+pub fn uiEventDetail(evt: *UIEvent) !i32 {
+    var res: i32 = undefined;
+    const err = c._dom_ui_event_get_detail(evt, &res);
+    try DOMErr(err);
+    return res;
+}
+
+pub fn uiEventView(_: *UIEvent) !?Window {
+    // TODO retrieve the Window as view.
+    // const err = c._dom_ui_event_get_view(evt, &res);
+    // try DOMErr(err);
+    return null;
 }
 
 // EventHandler

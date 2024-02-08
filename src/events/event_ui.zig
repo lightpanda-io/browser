@@ -24,13 +24,13 @@ pub const UIEvent = struct {
         return evt;
     }
 
-    // pub fn get_detail(self: parser.EventUI) !u32 {
-    //     return try parser.eventUIDetail(self);
-    // }
+    pub fn get_detail(self: *parser.UIEvent) !i32 {
+        return try parser.uiEventDetail(self);
+    }
 
-    // pub fn get_view(self: parser.Event) !?Window {
-    //     return try parser.eventUIView(self);
-    // }
+    pub fn get_view(self: *parser.UIEvent) !?Window {
+        return try parser.uiEventView(self);
+    }
 };
 
 pub fn testExecFn(
@@ -43,6 +43,9 @@ pub fn testExecFn(
         .{ .src = "content.addEventListener('evt', function(e) {evt = e})", .ex = "undefined" },
         .{ .src = "content.dispatchEvent(new UIEvent('evt'))", .ex = "true" },
         .{ .src = "evt instanceof UIEvent", .ex = "true" },
+        .{ .src = "evt.__proto__.constructor.name", .ex = "UIEvent" },
+        .{ .src = "evt.detail", .ex = "0" },
+        .{ .src = "evt.view", .ex = "null" },
     };
     try checkCases(js_env, &ui_event);
 }
