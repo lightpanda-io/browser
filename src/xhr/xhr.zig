@@ -143,16 +143,18 @@ pub const ProgressEvent = struct {
     loaded: u64 = 0,
     total: u64 = 0,
 
-    pub fn constructor(eventType: []const u8, opts: ProgressEventInit) !ProgressEvent {
+    pub fn constructor(eventType: []const u8, opts: ?ProgressEventInit) !ProgressEvent {
         const event = try parser.eventCreate();
         defer parser.eventDestroy(event);
         try parser.eventInit(event, eventType, .{});
 
+        const o = opts orelse ProgressEventInit{};
+
         return .{
             .proto = event.*,
-            .lengthComputable = opts.lengthComputable,
-            .loaded = opts.loaded,
-            .total = opts.total,
+            .lengthComputable = o.lengthComputable,
+            .loaded = o.loaded,
+            .total = o.total,
         };
     }
 
@@ -562,12 +564,12 @@ pub fn testExecFn(
     js_env: *jsruntime.Env,
 ) anyerror!void {
     var send = [_]Case{
-        .{ .src = "var nb = 0; function cbk(event) { nb ++; }", .ex = "undefined" },
+        .{ .src = "var nb = 0; var evt = null; function cbk(event) { nb ++; evt = event; }", .ex = "undefined" },
         .{ .src = "const req = new XMLHttpRequest()", .ex = "undefined" },
 
-        .{ .src = "req.onload = cbk", .ex = "function cbk(event) { nb ++; }" },
-        // .{ .src = "req.onload", .ex = "function cbk(event) { nb ++; }" },
-        .{ .src = "req.onload = cbk", .ex = "function cbk(event) { nb ++; }" },
+        .{ .src = "req.onload = cbk", .ex = "function cbk(event) { nb ++; evt = event; }" },
+        // .{ .src = "req.onload", .ex = "function cbk(event) { nb ++; evt = event; }" },
+        //.{ .src = "req.onload = cbk", .ex = "function cbk(event) { nb ++; evt = event; }" },
 
         .{ .src = "req.open('GET', 'https://w3.org')", .ex = "undefined" },
         .{ .src = "req.setRequestHeader('User-Agent', 'lightpanda/1.0')", .ex = "undefined" },
@@ -584,6 +586,7 @@ pub fn testExecFn(
         // Each case executed waits for all loop callaback calls.
         // So the url has been retrieved.
         .{ .src = "nb", .ex = "1" },
+        // .{ .src = "evt.__proto__.constructor.name", .ex = "ProgressEvent" },
         .{ .src = "req.status", .ex = "200" },
         .{ .src = "req.statusText", .ex = "OK" },
         .{ .src = "req.getResponseHeader('Content-Type')", .ex = "text/html; charset=UTF-8" },
@@ -591,4 +594,11 @@ pub fn testExecFn(
         .{ .src = "req.responseText.length > 1024", .ex = "true" },
     };
     try checkCases(js_env, &send);
+
+    var progress_event = [_]Case{
+        .{ .src = "let pevt = new ProgressEvent('foo');", .ex = "undefined" },
+        .{ .src = "pevt.loaded", .ex = "0" },
+        .{ .src = "pevt.__proto__.constructor.name", .ex = "ProgressEvent" },
+    };
+    try checkCases(js_env, &progress_event);
 }
