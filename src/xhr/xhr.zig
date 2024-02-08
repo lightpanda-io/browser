@@ -410,28 +410,28 @@ pub const XMLHttpRequest = struct {
     // Yielding allows pseudo-async and gives a chance to other async process
     // to be called.
     pub fn onYield(self: *XMLHttpRequest, err: ?anyerror) void {
-        if (err) |e| return self.onerr(e);
+        if (err) |e| return self.onErr(e);
 
         switch (self.priv_state) {
             .new => {
                 self.priv_state = .open;
-                self.req = self.cli.open(self.method, self.uri, self.headers, .{}) catch |e| return self.onerr(e);
+                self.req = self.cli.open(self.method, self.uri, self.headers, .{}) catch |e| return self.onErr(e);
             },
             .open => {
                 self.priv_state = .send;
-                self.req.?.send(.{}) catch |e| return self.onerr(e);
+                self.req.?.send(.{}) catch |e| return self.onErr(e);
             },
             .send => {
                 self.priv_state = .finish;
-                self.req.?.finish() catch |e| return self.onerr(e);
+                self.req.?.finish() catch |e| return self.onErr(e);
             },
             .finish => {
                 self.priv_state = .wait;
-                self.req.?.wait() catch |e| return self.onerr(e);
+                self.req.?.wait() catch |e| return self.onErr(e);
             },
             .wait => {
                 self.priv_state = .done;
-                self.response_headers = self.req.?.response.headers.clone(self.response_headers.allocator) catch |e| return self.onerr(e);
+                self.response_headers = self.req.?.response.headers.clone(self.response_headers.allocator) catch |e| return self.onErr(e);
 
                 self.state = HEADERS_RECEIVED;
                 self.dispatchEvt("readystatechange");
@@ -453,11 +453,11 @@ pub const XMLHttpRequest = struct {
                 while (ln > 0) {
                     ln = reader.read(&buffer) catch |e| {
                         buf.deinit(self.alloc);
-                        return self.onerr(e);
+                        return self.onErr(e);
                     };
                     buf.appendSlice(self.alloc, buffer[0..ln]) catch |e| {
                         buf.deinit(self.alloc);
-                        return self.onerr(e);
+                        return self.onErr(e);
                     };
                     loaded = loaded + ln;
 
@@ -498,7 +498,7 @@ pub const XMLHttpRequest = struct {
         self.impl.yield(self);
     }
 
-    fn onerr(self: *XMLHttpRequest, err: anyerror) void {
+    fn onErr(self: *XMLHttpRequest, err: anyerror) void {
         self.priv_state = .done;
         if (self.req) |*r| {
             r.deinit();
