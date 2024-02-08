@@ -571,7 +571,7 @@ pub fn testExecFn(
         // Getter returning a callback crashes.
         // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/200
         // .{ .src = "req.onload", .ex = "function cbk(event) { nb ++; evt = event; }" },
-        //.{ .src = "req.onload = cbk", .ex = "function cbk(event) { nb ++; evt = event; }" },
+        .{ .src = "req.onload = cbk", .ex = "function cbk(event) { nb ++; evt = event; }" },
 
         .{ .src = "req.open('GET', 'https://w3.org')", .ex = "undefined" },
         .{ .src = "req.setRequestHeader('User-Agent', 'lightpanda/1.0')", .ex = "undefined" },
