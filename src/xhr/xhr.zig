@@ -29,7 +29,6 @@ pub const Interfaces = generate.Tuple(.{
     XMLHttpRequestUpload,
     XMLHttpRequest,
     ProgressEvent,
-    ProgressEventInit,
 });
 
 pub const XMLHttpRequestEventTarget = struct {
@@ -125,30 +124,28 @@ pub const XMLHttpRequestUpload = struct {
     proto: XMLHttpRequestEventTarget = XMLHttpRequestEventTarget{},
 };
 
-pub const ProgressEventInit = struct {
-    pub const mem_guarantied = true;
-
-    lengthComputable: bool = false,
-    loaded: u64 = 0,
-    total: u64 = 0,
-};
-
 pub const ProgressEvent = struct {
     pub const prototype = *Event;
     pub const Exception = DOMException;
     pub const mem_guarantied = true;
+
+    pub const EventInit = struct {
+        lengthComputable: bool = false,
+        loaded: u64 = 0,
+        total: u64 = 0,
+    };
 
     proto: parser.Event,
     lengthComputable: bool,
     loaded: u64 = 0,
     total: u64 = 0,
 
-    pub fn constructor(eventType: []const u8, opts: ?ProgressEventInit) !ProgressEvent {
+    pub fn constructor(eventType: []const u8, opts: ?EventInit) !ProgressEvent {
         const event = try parser.eventCreate();
         defer parser.eventDestroy(event);
         try parser.eventInit(event, eventType, .{});
 
-        const o = opts orelse ProgressEventInit{};
+        const o = opts orelse EventInit{};
 
         return .{
             .proto = event.*,
@@ -332,7 +329,7 @@ pub const XMLHttpRequest = struct {
     fn dispatchProgressEvent(
         self: *XMLHttpRequest,
         typ: []const u8,
-        opts: ProgressEventInit,
+        opts: ProgressEvent.EventInit,
     ) void {
         // TODO destroy struct
         const evt = self.alloc.create(ProgressEvent) catch |e| {
