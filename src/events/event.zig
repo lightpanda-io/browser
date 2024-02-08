@@ -12,6 +12,7 @@ const parser = @import("../netsurf.zig");
 const DOMException = @import("../dom/exceptions.zig").DOMException;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const EventTargetUnion = @import("../dom/event_target.zig").Union;
+const UIEvent = @import("event_ui.zig").UIEvent;
 
 // https://dom.spec.whatwg.org/#event
 pub const Event = struct {
@@ -107,6 +108,7 @@ pub const Event = struct {
 // Event interfaces
 pub const Interfaces = generate.Tuple(.{
     Event,
+    UIEvent,
 });
 const Generated = generate.Union.compile(Interfaces);
 pub const Union = Generated._union;

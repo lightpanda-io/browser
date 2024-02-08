@@ -7,6 +7,8 @@ const c = @cImport({
 
 const Callback = @import("jsruntime").Callback;
 
+const Window = @import("html/window.zig").Window;
+
 // Vtable
 // ------
 
@@ -440,6 +442,36 @@ pub fn eventStopImmediatePropagation(evt: *Event) !void {
 
 pub fn eventPreventDefault(evt: *Event) !void {
     const err = c._dom_event_prevent_default(evt);
+    try DOMErr(err);
+}
+
+// UIEvent
+pub const UIEvent = c.dom_ui_event;
+
+pub fn uiEventCreate() !*UIEvent {
+    var evt: ?*UIEvent = undefined;
+    const err = c._dom_ui_event_create(&evt);
+    try DOMErr(err);
+    return evt.?;
+}
+
+pub const UIEventInit = struct {
+    bubbles: bool = false,
+    cancelable: bool = false,
+
+    view: ?Window = null,
+    detail: i32 = 0,
+};
+
+pub fn uiEventInit(evt: *UIEvent, typ: []const u8, opts: UIEventInit) !void {
+    const err = c._dom_ui_event_init(
+        evt,
+        try strFromData(typ),
+        opts.bubbles,
+        opts.cancelable,
+        null,
+        opts.detail,
+    );
     try DOMErr(err);
 }
 
