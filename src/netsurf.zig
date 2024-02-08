@@ -3,6 +3,8 @@ const std = @import("std");
 const c = @cImport({
     @cInclude("dom/dom.h");
     @cInclude("dom/bindings/hubbub/parser.h");
+    @cInclude("events/event.h");
+    @cInclude("events/ui_event.h");
 });
 
 const Callback = @import("jsruntime").Callback;
