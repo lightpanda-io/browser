@@ -22,7 +22,7 @@ const NodeListTestExecFn = @import("dom/nodelist.zig").testExecFn;
 const AttrTestExecFn = @import("dom/attribute.zig").testExecFn;
 const EventTargetTestExecFn = @import("dom/event_target.zig").testExecFn;
 const EventTestExecFn = @import("events/event.zig").testExecFn;
-const UIEventTestExecFn = @import("events/event_ui.zig").testExecFn;
+const UIEventTestExecFn = @import("events/ui_event.zig").testExecFn;
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 

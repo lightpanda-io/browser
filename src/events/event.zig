@@ -12,7 +12,7 @@ const parser = @import("../netsurf.zig");
 const DOMException = @import("../dom/exceptions.zig").DOMException;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const EventTargetUnion = @import("../dom/event_target.zig").Union;
-const UIEvent = @import("event_ui.zig").UIEvent;
+const UIEvent = @import("ui_event.zig").UIEvent;
 
 // https://dom.spec.whatwg.org/#event
 pub const Event = struct {
