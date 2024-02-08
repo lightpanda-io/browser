@@ -568,6 +568,8 @@ pub fn testExecFn(
         .{ .src = "const req = new XMLHttpRequest()", .ex = "undefined" },
 
         .{ .src = "req.onload = cbk", .ex = "function cbk(event) { nb ++; evt = event; }" },
+        // Getter returning a callback crashes.
+        // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/200
         // .{ .src = "req.onload", .ex = "function cbk(event) { nb ++; evt = event; }" },
         //.{ .src = "req.onload = cbk", .ex = "function cbk(event) { nb ++; evt = event; }" },
 
