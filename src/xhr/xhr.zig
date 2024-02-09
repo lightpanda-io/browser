@@ -466,6 +466,46 @@ pub const XMLHttpRequest = struct {
         self.dispatchProgressEvent("loadend", .{});
     }
 
+    pub fn get_responseType(self: *XMLHttpRequest) []const u8 {
+        return switch (self.response_type) {
+            .Empty => "",
+            .ArrayBuffer => "arraybuffer",
+            .Blob => "blob",
+            .Document => "document",
+            .JSON => "json",
+            .Text => "text",
+        };
+    }
+
+    pub fn set_responseType(self: *XMLHttpRequest, rtype: []const u8) !void {
+        if (self.state == LOADING or self.state == DONE) return DOMError.InvalidState;
+
+        if (std.mem.eql(u8, rtype, "")) {
+            self.response_type = .Empty;
+            return;
+        }
+        if (std.mem.eql(u8, rtype, "arraybuffer")) {
+            self.response_type = .ArrayBuffer;
+            return;
+        }
+        if (std.mem.eql(u8, rtype, "blob")) {
+            self.response_type = .Blob;
+            return;
+        }
+        if (std.mem.eql(u8, rtype, "document")) {
+            self.response_type = .Document;
+            return;
+        }
+        if (std.mem.eql(u8, rtype, "json")) {
+            self.response_type = .JSON;
+            return;
+        }
+        if (std.mem.eql(u8, rtype, "text")) {
+            self.response_type = .Text;
+            return;
+        }
+    }
+
     pub fn get_responseText(self: *XMLHttpRequest) ![]const u8 {
         if (self.response_type != .Empty and self.response_type != .Text) return DOMError.InvalidState;
 
