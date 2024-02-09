@@ -7,6 +7,7 @@ const generate = @import("generate.zig");
 const parser = @import("netsurf.zig");
 const apiweb = @import("apiweb.zig");
 const Window = @import("html/window.zig").Window;
+const xhr = @import("xhr/xhr.zig");
 
 const documentTestExecFn = @import("dom/document.zig").testExecFn;
 const HTMLDocumentTestExecFn = @import("html/document.zig").testExecFn;
@@ -23,8 +24,8 @@ const NodeListTestExecFn = @import("dom/nodelist.zig").testExecFn;
 const AttrTestExecFn = @import("dom/attribute.zig").testExecFn;
 const EventTargetTestExecFn = @import("dom/event_target.zig").testExecFn;
 const EventTestExecFn = @import("events/event.zig").testExecFn;
-const xhr = @import("xhr/xhr.zig");
 const XHRTestExecFn = xhr.testExecFn;
+const ProgressEventTestExecFn = @import("xhr/progress_event.zig").testExecFn;
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 
@@ -81,6 +82,7 @@ fn testsAllExecFn(
         EventTargetTestExecFn,
         EventTestExecFn,
         XHRTestExecFn,
+        ProgressEventTestExecFn,
     };
 
     inline for (testFns) |testFn| {

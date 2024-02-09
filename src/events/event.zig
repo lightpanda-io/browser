@@ -13,12 +13,12 @@ const DOMException = @import("../dom/exceptions.zig").DOMException;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const EventTargetUnion = @import("../dom/event_target.zig").Union;
 
-const xhr = @import("../xhr/xhr.zig");
+const ProgressEvent = @import("../xhr/progress_event.zig").ProgressEvent;
 
 // Event interfaces
 pub const Interfaces = generate.Tuple(.{
     Event,
-    xhr.ProgressEvent,
+    ProgressEvent,
 });
 const Generated = generate.Union.compile(Interfaces);
 pub const Union = Generated._union;
@@ -41,7 +41,7 @@ pub const Event = struct {
     pub fn toInterface(evt: *parser.Event) !Union {
         return switch (try parser.eventGetInternalType(evt)) {
             .event => .{ .Event = evt },
-            .progress_event => .{ .ProgressEvent = @as(*xhr.ProgressEvent, @ptrCast(evt)).* },
+            .progress_event => .{ .ProgressEvent = @as(*ProgressEvent, @ptrCast(evt)).* },
         };
     }
 
