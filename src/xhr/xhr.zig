@@ -11,6 +11,8 @@ const DOMException = @import("../dom/exceptions.zig").DOMException;
 const ProgressEvent = @import("progress_event.zig").ProgressEvent;
 const XMLHttpRequestEventTarget = @import("event_target.zig").XMLHttpRequestEventTarget;
 
+const Mime = @import("../browser/mime.zig");
+
 const Loop = jsruntime.Loop;
 const YieldImpl = Loop.Yield(XMLHttpRequest);
 const Client = @import("../async/Client.zig");
@@ -54,6 +56,37 @@ pub const XMLHttpRequest = struct {
         JSON,
     };
 
+    // TODO use std.json.Value instead, but it causes comptime error.
+    const JSONValue = u8;
+
+    const Response = union(ResponseType) {
+        Empty: void,
+        Text: []const u8,
+        ArrayBuffer: void,
+        Blob: void,
+        Document: *parser.DocumentHTML,
+        JSON: JSONValue,
+    };
+
+    const ResponseObjTag = enum {
+        Document,
+        Failure,
+        JSON,
+    };
+    const ResponseObj = union(ResponseObjTag) {
+        Document: *parser.DocumentHTML,
+        Failure: bool,
+        JSON: std.json.Parsed(JSONValue),
+
+        fn deinit(self: ResponseObj) void {
+            return switch (self) {
+                .Document => |d| parser.documentHTMLClose(d) catch {},
+                .JSON => |p| p.deinit(),
+                .Failure => {},
+            };
+        }
+    };
+
     const PrivState = enum { new, open, send, finish, wait, done };
 
     proto: XMLHttpRequestEventTarget = XMLHttpRequestEventTarget{},
@@ -80,6 +113,9 @@ pub const XMLHttpRequest = struct {
     response_type: ResponseType = .Empty,
     response_headers: std.http.Headers,
     response_status: u10 = 0,
+    response_override_mime_type: ?[]const u8 = null,
+    response_mime: Mime = undefined,
+    response_obj: ?ResponseObj = null,
     send_flag: bool = false,
 
     pub fn constructor(alloc: std.mem.Allocator, loop: *Loop) !XMLHttpRequest {
@@ -104,6 +140,8 @@ pub const XMLHttpRequest = struct {
         if (self.url) |v| alloc.free(v);
         if (self.response_bytes) |v| alloc.free(v);
         if (self.response_headers) |v| alloc.free(v);
+
+        if (self.response_obj) |v| v.deinit();
 
         if (self.req) |*r| r.deinit();
         // TODO the client must be shared between requests.
@@ -164,6 +202,11 @@ pub const XMLHttpRequest = struct {
         self.headers.clearAndFree();
         self.response_headers.clearAndFree();
         self.response_status = 0;
+
+        if (self.response_obj) |v| v.deinit();
+        self.response_obj = null;
+
+        self.response_mime = Mime.Empty;
 
         self.response_type = .Empty;
         if (self.response_bytes) |v| alloc.free(v);
@@ -297,6 +340,12 @@ pub const XMLHttpRequest = struct {
                 self.priv_state = .done;
                 self.response_headers = self.req.?.response.headers.clone(self.response_headers.allocator) catch |e| return self.onErr(e);
 
+                // extract a mime type from headers.
+                const ct = self.response_headers.getFirstValue("Content-Type") orelse "text/xml";
+                self.response_mime = Mime.parse(ct) catch |e| return self.onErr(e);
+
+                // TODO handle override mime type
+
                 self.state = HEADERS_RECEIVED;
                 self.dispatchEvt("readystatechange");
 
@@ -416,6 +465,107 @@ pub const XMLHttpRequest = struct {
         }
     }
 
+    // https://xhr.spec.whatwg.org/#the-response-attribute
+    pub fn get_response(self: *XMLHttpRequest) !?Response {
+        if (self.response_type == .Empty or self.response_type == .Text) {
+            if (self.state == LOADING or self.state == DONE) return .{ .Text = "" };
+            return .{ .Text = try self.get_responseText() };
+        }
+
+        if (self.state != DONE) return null;
+
+        // fastpath if response is previously parsed.
+        if (self.response_obj) |obj| {
+            return switch (obj) {
+                .Failure => null,
+                .Document => |v| .{ .Document = v },
+                .JSON => |v| .{ .JSON = v.value },
+            };
+        }
+
+        if (self.response_type == .ArrayBuffer) {
+            // TODO If this’s response type is "arraybuffer", then set this’s
+            // response object to a new ArrayBuffer object representing this’s
+            // received bytes. If this throws an exception, then set this’s
+            // response object to failure and return null.
+            return null;
+        }
+
+        if (self.response_type == .Blob) {
+            // TODO Otherwise, if this’s response type is "blob", set this’s
+            // response object to a new Blob object representing this’s
+            // received bytes with type set to the result of get a final MIME
+            // type for this.
+            return null;
+        }
+
+        // Otherwise, if this’s response type is "document", set a
+        // document response for this.
+        if (self.response_type == .Document) {
+            self.setResponseObjDocument();
+        }
+
+        if (self.response_type == .JSON) {
+            if (self.response_bytes == null) return null;
+
+            // TODO Let jsonObject be the result of running parse JSON from bytes
+            // on this’s received bytes. If that threw an exception, then return
+            // null.
+        }
+
+        if (self.response_obj) |obj| {
+            return switch (obj) {
+                .Failure => null,
+                .Document => |v| .{ .Document = v },
+                .JSON => |v| .{ .JSON = v.value },
+            };
+        }
+
+        return null;
+    }
+
+    // setResponseObjDocument parses the received bytes as HTML document and
+    // stores the result into response_obj.
+    // If the par sing fails, a Failure is stored in response_obj.
+    // TODO parse XML.
+    // https://xhr.spec.whatwg.org/#response-object
+    fn setResponseObjDocument(self: *XMLHttpRequest) void {
+        const isHTML = self.response_mime.eql(Mime.HTML);
+
+        // TODO If finalMIME is not an HTML MIME type or an XML MIME type, then
+        // return.
+        if (!isHTML) return;
+
+        if (self.response_type == .Empty) return;
+
+        const ccharset = self.alloc.dupeZ(u8, self.response_mime.charset orelse "utf-8") catch {
+            self.response_obj = .{ .Failure = true };
+            return;
+        };
+        defer self.alloc.free(ccharset);
+
+        var fbs = std.io.fixedBufferStream(self.response_bytes.?);
+        const doc = parser.documentHTMLParse(fbs.reader(), ccharset) catch {
+            self.response_obj = .{ .Failure = true };
+            return;
+        };
+
+        // TODO Set document’s URL to xhr’s response’s URL.
+        // TODO Set document’s origin to xhr’s relevant settings object’s origin.
+
+        self.response_obj = .{ .Document = doc };
+    }
+
+    // setResponseObjJSON parses the received bytes as a std.json.Value.
+    fn setResponseObjJSON(self: *XMLHttpRequest) void {
+        const p = std.json.parseFromSlice(JSONValue, self.alloc, self.response_bytes, .{}) catch {
+            self.response_obj = .{ .Failure = true };
+            return;
+        };
+
+        self.response_obj = .{ .JSON = p };
+    }
+
     pub fn get_responseText(self: *XMLHttpRequest) ![]const u8 {
         if (self.response_type != .Empty and self.response_type != .Text) return DOMError.InvalidState;
 
@@ -499,6 +649,7 @@ pub fn testExecFn(
         .{ .src = "req.getResponseHeader('Content-Type')", .ex = "text/html; charset=UTF-8" },
         .{ .src = "req.getAllResponseHeaders().length > 1024", .ex = "true" },
         .{ .src = "req.responseText.length > 1024", .ex = "true" },
+        .{ .src = "req.response", .ex = "" },
     };
     try checkCases(js_env, &send);
 }
