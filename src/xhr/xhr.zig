@@ -341,12 +341,14 @@ pub const XMLHttpRequest = struct {
             .total = opts.total,
             .loaded = opts.loaded,
         }) catch |e| {
+            self.alloc.destroy(evt);
             return log.err("construct progress event: {any}", .{e});
         };
         _ = parser.eventTargetDispatchEvent(
             @as(*parser.EventTarget, @ptrCast(self)),
             @as(*parser.Event, @ptrCast(evt)),
         ) catch |e| {
+            self.alloc.destroy(evt);
             return log.err("dispatch progress event: {any}", .{e});
         };
     }
