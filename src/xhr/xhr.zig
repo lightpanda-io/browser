@@ -318,6 +318,10 @@ pub const XMLHttpRequest = struct {
         const evt = parser.eventCreate() catch |e| {
             return log.err("dispatch event create: {any}", .{e});
         };
+
+        // We can we defer event destroy once the event is dispatched.
+        defer parser.eventDestroy(evt);
+
         parser.eventInit(evt, typ, .{ .bubbles = true, .cancelable = true }) catch |e| {
             return log.err("dispatch event init: {any}", .{e});
         };
@@ -331,24 +335,19 @@ pub const XMLHttpRequest = struct {
         typ: []const u8,
         opts: ProgressEvent.EventInit,
     ) void {
-        // TODO destroy struct
-        const evt = self.alloc.create(ProgressEvent) catch |e| {
-            return log.err("allocate progress event: {any}", .{e});
-        };
-        evt.* = ProgressEvent.constructor(typ, .{
+        var evt = ProgressEvent.constructor(typ, .{
             // https://xhr.spec.whatwg.org/#firing-events-using-the-progressevent-interface
             .lengthComputable = opts.total > 0,
             .total = opts.total,
             .loaded = opts.loaded,
         }) catch |e| {
-            self.alloc.destroy(evt);
             return log.err("construct progress event: {any}", .{e});
         };
+
         _ = parser.eventTargetDispatchEvent(
             @as(*parser.EventTarget, @ptrCast(self)),
-            @as(*parser.Event, @ptrCast(evt)),
+            @as(*parser.Event, @ptrCast(&evt)),
         ) catch |e| {
-            self.alloc.destroy(evt);
             return log.err("dispatch progress event: {any}", .{e});
         };
     }
