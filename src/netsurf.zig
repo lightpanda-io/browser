@@ -8,6 +8,7 @@ const c = @cImport({
 });
 
 const Callback = @import("jsruntime").Callback;
+const EventToInterface = @import("events/event.zig").Event.toInterface;
 
 // Vtable
 // ------
@@ -449,6 +450,23 @@ pub fn eventPreventDefault(evt: *Event) !void {
     try DOMErr(err);
 }
 
+pub fn eventGetInternalType(evt: *Event) !EventType {
+    var res: u32 = undefined;
+    const err = c._dom_event_get_internal_type(evt, &res);
+    try DOMErr(err);
+    return @enumFromInt(res);
+}
+
+pub fn eventSetInternalType(evt: *Event, internal_type: EventType) !void {
+    const err = c._dom_event_set_internal_type(evt, @intFromEnum(internal_type));
+    try DOMErr(err);
+}
+
+pub const EventType = enum(u8) {
+    event = 0,
+    progress_event = 1,
+};
+
 // EventHandler
 fn event_handler_cbk(data: *anyopaque) *Callback {
     const ptr: *align(@alignOf(*Callback)) anyopaque = @alignCast(data);
@@ -459,7 +477,14 @@ const event_handler = struct {
     fn handle(event: ?*Event, data: ?*anyopaque) callconv(.C) void {
         if (data) |d| {
             const func = event_handler_cbk(d);
-            func.call(.{event}) catch unreachable;
+
+            if (event) |evt| {
+                func.call(.{
+                    EventToInterface(evt) catch unreachable,
+                }) catch unreachable;
+            } else {
+                func.call(.{event}) catch unreachable;
+            }
             // NOTE: we can not call func.deinit here
             // b/c the handler can be called several times
             // either on this dispatch event or in anoter one
@@ -652,7 +677,12 @@ pub const EventTargetTBase = struct {
 
     pub fn dispatch_event(et: [*c]c.dom_event_target, evt: ?*c.struct_dom_event, res: [*c]bool) callconv(.C) c.dom_exception {
         const self = @as(*Self, @ptrCast(et));
-        return c._dom_event_target_dispatch(et, &self.eti, evt, c.DOM_BUBBLING_PHASE, res);
+        // Set the event target to the target dispatched.
+        const e = c._dom_event_set_target(evt, et);
+        if (e != c.DOM_NO_ERR) {
+            return e;
+        }
+        return c._dom_event_target_dispatch(et, &self.eti, evt, c.DOM_AT_TARGET, res);
     }
 
     pub fn remove_event_listener(et: [*c]c.dom_event_target, t: [*c]c.dom_string, l: ?*c.struct_dom_event_listener, capture: bool) callconv(.C) c.dom_exception {

@@ -28,7 +28,6 @@ pub const Interfaces = generate.Tuple(.{
     XMLHttpRequestEventTarget,
     XMLHttpRequestUpload,
     XMLHttpRequest,
-    ProgressEvent,
 });
 
 pub const XMLHttpRequestEventTarget = struct {
@@ -144,6 +143,7 @@ pub const ProgressEvent = struct {
         const event = try parser.eventCreate();
         defer parser.eventDestroy(event);
         try parser.eventInit(event, eventType, .{});
+        try parser.eventSetInternalType(event, .progress_event);
 
         const o = opts orelse EventInit{};
 
@@ -476,7 +476,6 @@ pub const XMLHttpRequest = struct {
                 self.dispatchEvt("readystatechange");
 
                 // dispatch a progress event load.
-                self.dispatchEvt("load");
                 self.dispatchProgressEvent("load", .{ .loaded = loaded, .total = total });
                 // dispatch a progress event loadend.
                 self.dispatchProgressEvent("loadend", .{ .loaded = loaded, .total = total });
@@ -585,7 +584,9 @@ pub fn testExecFn(
         // Each case executed waits for all loop callaback calls.
         // So the url has been retrieved.
         .{ .src = "nb", .ex = "1" },
-        // .{ .src = "evt.__proto__.constructor.name", .ex = "ProgressEvent" },
+        .{ .src = "evt.type", .ex = "load" },
+        .{ .src = "evt.loaded > 0", .ex = "true" },
+        .{ .src = "evt instanceof ProgressEvent", .ex = "true" },
         .{ .src = "req.status", .ex = "200" },
         .{ .src = "req.statusText", .ex = "OK" },
         .{ .src = "req.getResponseHeader('Content-Type')", .ex = "text/html; charset=UTF-8" },
@@ -597,7 +598,12 @@ pub fn testExecFn(
     var progress_event = [_]Case{
         .{ .src = "let pevt = new ProgressEvent('foo');", .ex = "undefined" },
         .{ .src = "pevt.loaded", .ex = "0" },
-        .{ .src = "pevt.__proto__.constructor.name", .ex = "ProgressEvent" },
+        .{ .src = "pevt instanceof ProgressEvent", .ex = "true" },
+        .{ .src = "var nnb = 0; var eevt = null; function ccbk(event) { nnb ++; eevt = event; }", .ex = "undefined" },
+        .{ .src = "document.addEventListener('foo', ccbk)", .ex = "undefined" },
+        .{ .src = "document.dispatchEvent(pevt)", .ex = "true" },
+        .{ .src = "eevt.type", .ex = "foo" },
+        .{ .src = "eevt instanceof ProgressEvent", .ex = "true" },
     };
     try checkCases(js_env, &progress_event);
 }
