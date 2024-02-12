@@ -652,7 +652,7 @@ pub const EventTargetTBase = struct {
 
     pub fn remove_event_listener(et: [*c]c.dom_event_target, t: [*c]c.dom_string, l: ?*c.struct_dom_event_listener, capture: bool) callconv(.C) c.dom_exception {
         const self = @as(*Self, @ptrCast(et));
-        return c._dom_event_target_add_event_listener(&self.eti, t, l, capture);
+        return c._dom_event_target_remove_event_listener(&self.eti, t, l, capture);
     }
 
     pub fn iter_event_listener(
