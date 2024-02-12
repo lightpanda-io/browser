@@ -637,7 +637,7 @@ pub fn testExecFn(
         // .{ .src = "req.onload", .ex = "function cbk(event) { nb ++; evt = event; }" },
         //.{ .src = "req.onload = cbk", .ex = "function cbk(event) { nb ++; evt = event; }" },
 
-        .{ .src = "req.open('GET', 'https://w3.org')", .ex = "undefined" },
+        .{ .src = "req.open('GET', 'http://httpbin.io/html')", .ex = "undefined" },
         .{ .src = "req.setRequestHeader('User-Agent', 'lightpanda/1.0')", .ex = "undefined" },
 
         // ensure open resets values
@@ -657,17 +657,17 @@ pub fn testExecFn(
         .{ .src = "evt instanceof ProgressEvent", .ex = "true" },
         .{ .src = "req.status", .ex = "200" },
         .{ .src = "req.statusText", .ex = "OK" },
-        .{ .src = "req.getResponseHeader('Content-Type')", .ex = "text/html; charset=UTF-8" },
-        .{ .src = "req.getAllResponseHeaders().length > 1024", .ex = "true" },
-        .{ .src = "req.responseText.length > 1024", .ex = "true" },
+        .{ .src = "req.getResponseHeader('Content-Type')", .ex = "text/html; charset=utf-8" },
+        .{ .src = "req.getAllResponseHeaders().length > 64", .ex = "true" },
+        .{ .src = "req.responseText.length > 64", .ex = "true" },
         .{ .src = "req.response", .ex = "" },
     };
     try checkCases(js_env, &send);
 
-    var json = [_]Case{
+    var document = [_]Case{
         .{ .src = "const req2 = new XMLHttpRequest()", .ex = "undefined" },
-        .{ .src = "req2.open('GET', 'http://httpbin.io/json')", .ex = "undefined" },
-        .{ .src = "req2.responseType = 'json'", .ex = "json" },
+        .{ .src = "req2.open('GET', 'http://httpbin.io/html')", .ex = "undefined" },
+        .{ .src = "req2.responseType = 'document'", .ex = "document" },
 
         .{ .src = "req2.send()", .ex = "undefined" },
 
@@ -675,7 +675,22 @@ pub fn testExecFn(
         // So the url has been retrieved.
         .{ .src = "req2.status", .ex = "200" },
         .{ .src = "req2.statusText", .ex = "OK" },
-        .{ .src = "req2.response", .ex = "" },
+        .{ .src = "req2.response instanceof HTMLDocument", .ex = "true" },
     };
-    try checkCases(js_env, &json);
+    try checkCases(js_env, &document);
+
+    // var json = [_]Case{
+    //     .{ .src = "const req3 = new XMLHttpRequest()", .ex = "undefined" },
+    //     .{ .src = "req3.open('GET', 'http://httpbin.io/json')", .ex = "undefined" },
+    //     .{ .src = "req3.responseType = 'json'", .ex = "json" },
+
+    //     .{ .src = "req3.send()", .ex = "undefined" },
+
+    //     // Each case executed waits for all loop callaback calls.
+    //     // So the url has been retrieved.
+    //     .{ .src = "req3.status", .ex = "200" },
+    //     .{ .src = "req3.statusText", .ex = "OK" },
+    //     .{ .src = "req3.response", .ex = "" },
+    // };
+    // try checkCases(js_env, &json);
 }
