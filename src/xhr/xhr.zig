@@ -57,6 +57,8 @@ pub const XMLHttpRequest = struct {
     };
 
     // TODO use std.json.Value instead, but it causes comptime error.
+    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/204
+    // const JSONValue = std.json.Value;
     const JSONValue = u8;
 
     const Response = union(ResponseType) {
@@ -466,7 +468,7 @@ pub const XMLHttpRequest = struct {
     }
 
     // https://xhr.spec.whatwg.org/#the-response-attribute
-    pub fn get_response(self: *XMLHttpRequest) !?Response {
+    pub fn get_response(self: *XMLHttpRequest, alloc: std.mem.Allocator) !?Response {
         if (self.response_type == .Empty or self.response_type == .Text) {
             if (self.state == LOADING or self.state == DONE) return .{ .Text = "" };
             return .{ .Text = try self.get_responseText() };
@@ -502,7 +504,7 @@ pub const XMLHttpRequest = struct {
         // Otherwise, if this’s response type is "document", set a
         // document response for this.
         if (self.response_type == .Document) {
-            self.setResponseObjDocument();
+            self.setResponseObjDocument(alloc);
         }
 
         if (self.response_type == .JSON) {
@@ -511,6 +513,7 @@ pub const XMLHttpRequest = struct {
             // TODO Let jsonObject be the result of running parse JSON from bytes
             // on this’s received bytes. If that threw an exception, then return
             // null.
+            self.setResponseObjJSON(alloc);
         }
 
         if (self.response_obj) |obj| {
@@ -529,7 +532,7 @@ pub const XMLHttpRequest = struct {
     // If the par sing fails, a Failure is stored in response_obj.
     // TODO parse XML.
     // https://xhr.spec.whatwg.org/#response-object
-    fn setResponseObjDocument(self: *XMLHttpRequest) void {
+    fn setResponseObjDocument(self: *XMLHttpRequest, alloc: std.mem.Allocator) void {
         const isHTML = self.response_mime.eql(Mime.HTML);
 
         // TODO If finalMIME is not an HTML MIME type or an XML MIME type, then
@@ -538,11 +541,11 @@ pub const XMLHttpRequest = struct {
 
         if (self.response_type == .Empty) return;
 
-        const ccharset = self.alloc.dupeZ(u8, self.response_mime.charset orelse "utf-8") catch {
+        const ccharset = alloc.dupeZ(u8, self.response_mime.charset orelse "utf-8") catch {
             self.response_obj = .{ .Failure = true };
             return;
         };
-        defer self.alloc.free(ccharset);
+        defer alloc.free(ccharset);
 
         var fbs = std.io.fixedBufferStream(self.response_bytes.?);
         const doc = parser.documentHTMLParse(fbs.reader(), ccharset) catch {
@@ -557,8 +560,16 @@ pub const XMLHttpRequest = struct {
     }
 
     // setResponseObjJSON parses the received bytes as a std.json.Value.
-    fn setResponseObjJSON(self: *XMLHttpRequest) void {
-        const p = std.json.parseFromSlice(JSONValue, self.alloc, self.response_bytes, .{}) catch {
+    fn setResponseObjJSON(self: *XMLHttpRequest, alloc: std.mem.Allocator) void {
+        // TODO should we use parseFromSliceLeaky if we expect the allocator is
+        // already an arena?
+        const p = std.json.parseFromSlice(
+            JSONValue,
+            alloc,
+            self.response_bytes.?,
+            .{},
+        ) catch |e| {
+            log.err("parse JSON: {}", .{e});
             self.response_obj = .{ .Failure = true };
             return;
         };
@@ -652,4 +663,19 @@ pub fn testExecFn(
         .{ .src = "req.response", .ex = "" },
     };
     try checkCases(js_env, &send);
+
+    var json = [_]Case{
+        .{ .src = "const req2 = new XMLHttpRequest()", .ex = "undefined" },
+        .{ .src = "req2.open('GET', 'http://httpbin.io/json')", .ex = "undefined" },
+        .{ .src = "req2.responseType = 'json'", .ex = "json" },
+
+        .{ .src = "req2.send()", .ex = "undefined" },
+
+        // Each case executed waits for all loop callaback calls.
+        // So the url has been retrieved.
+        .{ .src = "req2.status", .ex = "200" },
+        .{ .src = "req2.statusText", .ex = "OK" },
+        .{ .src = "req2.response", .ex = "" },
+    };
+    try checkCases(js_env, &json);
 }
