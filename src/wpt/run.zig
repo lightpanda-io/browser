@@ -149,7 +149,7 @@ pub fn find(allocator: std.mem.Allocator, comptime path: []const u8, list: *std.
         if (entry.kind != .file) {
             continue;
         }
-        if (!std.mem.endsWith(u8, entry.basename, ".html")) {
+        if (!std.mem.endsWith(u8, entry.basename, ".html") and !std.mem.endsWith(u8, entry.basename, ".htm")) {
             continue;
         }
 
