@@ -427,6 +427,10 @@ pub const XMLHttpRequest = struct {
         self.dispatchProgressEvent("loadend", .{});
     }
 
+    pub fn _abort(self: *XMLHttpRequest) void {
+        self.onErr(DOMError.Abort);
+    }
+
     pub fn get_responseType(self: *XMLHttpRequest) []const u8 {
         return switch (self.response_type) {
             .Empty => "",
