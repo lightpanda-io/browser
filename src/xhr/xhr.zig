@@ -467,6 +467,11 @@ pub const XMLHttpRequest = struct {
         }
     }
 
+    // TODO retrieve the redirected url
+    pub fn get_responseURL(self: *XMLHttpRequest) ?[]const u8 {
+        return self.url;
+    }
+
     pub fn get_responseXML(self: *XMLHttpRequest, alloc: std.mem.Allocator) !?Response {
         if (self.response_type != .Empty and self.response_type != .Document) {
             return DOMError.InvalidState;
