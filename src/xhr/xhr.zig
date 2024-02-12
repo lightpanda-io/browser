@@ -467,14 +467,40 @@ pub const XMLHttpRequest = struct {
         }
     }
 
+    pub fn get_responseXML(self: *XMLHttpRequest, alloc: std.mem.Allocator) !?Response {
+        if (self.response_type != .Empty and self.response_type != .Document) {
+            return DOMError.InvalidState;
+        }
+
+        if (self.state != DONE) return null;
+
+        // fastpath if response is previously parsed.
+        if (self.response_obj) |obj| {
+            return switch (obj) {
+                .Failure => null,
+                .Document => |v| .{ .Document = v },
+                .JSON => null,
+            };
+        }
+
+        self.setResponseObjDocument(alloc);
+
+        if (self.response_obj) |obj| {
+            return switch (obj) {
+                .Failure => null,
+                .Document => |v| .{ .Document = v },
+                .JSON => null,
+            };
+        }
+        return null;
+    }
+
     // https://xhr.spec.whatwg.org/#the-response-attribute
     pub fn get_response(self: *XMLHttpRequest, alloc: std.mem.Allocator) !?Response {
         if (self.response_type == .Empty or self.response_type == .Text) {
             if (self.state == LOADING or self.state == DONE) return .{ .Text = "" };
             return .{ .Text = try self.get_responseText() };
         }
-
-        if (self.state != DONE) return null;
 
         // fastpath if response is previously parsed.
         if (self.response_obj) |obj| {
@@ -538,8 +564,6 @@ pub const XMLHttpRequest = struct {
         // TODO If finalMIME is not an HTML MIME type or an XML MIME type, then
         // return.
         if (!isHTML) return;
-
-        if (self.response_type == .Empty) return;
 
         const ccharset = alloc.dupeZ(u8, self.response_mime.charset orelse "utf-8") catch {
             self.response_obj = .{ .Failure = true };
@@ -661,6 +685,7 @@ pub fn testExecFn(
         .{ .src = "req.getAllResponseHeaders().length > 64", .ex = "true" },
         .{ .src = "req.responseText.length > 64", .ex = "true" },
         .{ .src = "req.response", .ex = "" },
+        .{ .src = "req.responseXML instanceof HTMLDocument", .ex = "true" },
     };
     try checkCases(js_env, &send);
 
@@ -676,6 +701,7 @@ pub fn testExecFn(
         .{ .src = "req2.status", .ex = "200" },
         .{ .src = "req2.statusText", .ex = "OK" },
         .{ .src = "req2.response instanceof HTMLDocument", .ex = "true" },
+        .{ .src = "req2.responseXML instanceof HTMLDocument", .ex = "true" },
     };
     try checkCases(js_env, &document);
 
