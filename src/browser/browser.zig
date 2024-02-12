@@ -329,6 +329,11 @@ pub const Page = struct {
         // TODO wait for async scripts
 
         // TODO set document.readyState to complete
+
+        // dispatch window.load event
+        const loadevt = try parser.eventCreate();
+        try parser.eventInit(loadevt, "load", .{});
+        _ = try parser.eventTargetDispatchEvent(parser.toEventTarget(Window, &self.session.window), loadevt);
     }
 
     // evalScript evaluates the src in priority.
