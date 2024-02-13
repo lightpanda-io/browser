@@ -66,7 +66,7 @@ pub const XMLHttpRequest = struct {
         Text: []const u8,
         ArrayBuffer: void,
         Blob: void,
-        Document: *parser.DocumentHTML,
+        Document: *parser.Document,
         JSON: JSONValue,
     };
 
@@ -76,13 +76,16 @@ pub const XMLHttpRequest = struct {
         JSON,
     };
     const ResponseObj = union(ResponseObjTag) {
-        Document: *parser.DocumentHTML,
+        Document: *parser.Document,
         Failure: bool,
         JSON: std.json.Parsed(JSONValue),
 
         fn deinit(self: ResponseObj) void {
             return switch (self) {
-                .Document => |d| parser.documentHTMLClose(d) catch {},
+                .Document => |d| {
+                    const doc = @as(*parser.DocumentHTML, @ptrCast(d));
+                    parser.documentHTMLClose(doc) catch {};
+                },
                 .JSON => |p| p.deinit(),
                 .Failure => {},
             };
@@ -589,7 +592,9 @@ pub const XMLHttpRequest = struct {
         // TODO Set document’s URL to xhr’s response’s URL.
         // TODO Set document’s origin to xhr’s relevant settings object’s origin.
 
-        self.response_obj = .{ .Document = doc };
+        self.response_obj = .{
+            .Document = parser.documentHTMLToDocument(doc),
+        };
     }
 
     // setResponseObjJSON parses the received bytes as a std.json.Value.
@@ -694,7 +699,7 @@ pub fn testExecFn(
         .{ .src = "req.getAllResponseHeaders().length > 64", .ex = "true" },
         .{ .src = "req.responseText.length > 64", .ex = "true" },
         .{ .src = "req.response", .ex = "" },
-        .{ .src = "req.responseXML instanceof HTMLDocument", .ex = "true" },
+        .{ .src = "req.responseXML instanceof Document", .ex = "true" },
     };
     try checkCases(js_env, &send);
 
@@ -709,8 +714,8 @@ pub fn testExecFn(
         // So the url has been retrieved.
         .{ .src = "req2.status", .ex = "200" },
         .{ .src = "req2.statusText", .ex = "OK" },
-        .{ .src = "req2.response instanceof HTMLDocument", .ex = "true" },
-        .{ .src = "req2.responseXML instanceof HTMLDocument", .ex = "true" },
+        .{ .src = "req2.response instanceof Document", .ex = "true" },
+        .{ .src = "req2.responseXML instanceof Document", .ex = "true" },
     };
     try checkCases(js_env, &document);
 
