@@ -36,6 +36,44 @@ pub const XMLHttpRequestUpload = struct {
     proto: XMLHttpRequestEventTarget = XMLHttpRequestEventTarget{},
 };
 
+pub const XMLHttpRequestBodyInitTag = enum {
+    Blob,
+    BufferSource,
+    FormData,
+    URLSearchParams,
+    String,
+};
+
+pub const XMLHttpRequestBodyInit = union(XMLHttpRequestBodyInitTag) {
+    Blob: []const u8,
+    BufferSource: []const u8,
+    FormData: []const u8,
+    URLSearchParams: []const u8,
+    String: []const u8,
+
+    fn contentType(self: XMLHttpRequestBodyInit) ![]const u8 {
+        return switch (self) {
+            .Blob => error.NotImplemented,
+            .BufferSource => error.NotImplemented,
+            .FormData => "multipart/form-data; boundary=TODO",
+            .URLSearchParams => "application/x-www-form-urlencoded;charset=UTF-8",
+            .String => "text/plain;charset=UTF-8",
+        };
+    }
+
+    // Duplicate the body content.
+    // The caller owns the allocated string.
+    fn dupe(self: XMLHttpRequestBodyInit, alloc: std.mem.Allocator) ![]const u8 {
+        return switch (self) {
+            .Blob => error.NotImplemented,
+            .BufferSource => error.NotImplemented,
+            .FormData => error.NotImplemented,
+            .URLSearchParams => error.NotImplemented,
+            .String => |v| try alloc.dupe(u8, v),
+        };
+    }
+};
+
 pub const XMLHttpRequest = struct {
     pub const prototype = *XMLHttpRequestEventTarget;
     pub const mem_guarantied = true;
@@ -92,7 +130,7 @@ pub const XMLHttpRequest = struct {
         }
     };
 
-    const PrivState = enum { new, open, send, finish, wait, done };
+    const PrivState = enum { new, open, send, write, finish, wait, done };
 
     proto: XMLHttpRequestEventTarget = XMLHttpRequestEventTarget{},
     alloc: std.mem.Allocator,
@@ -110,7 +148,12 @@ pub const XMLHttpRequest = struct {
     sync: bool = true,
     err: ?anyerror = null,
 
-    upload: ?XMLHttpRequestUpload = null,
+    // TODO uncomment this field causes casting issue with
+    // XMLHttpRequestEventTarget. I think it's dueto an alignement issue, but
+    // not sure. see
+    // https://lightpanda.slack.com/archives/C05TRU6RBM1/p1707819010681019
+    // upload: ?XMLHttpRequestUpload = null,
+
     timeout: u32 = 0,
     withCredentials: bool = false,
     // TODO: response readonly attribute any response;
@@ -122,6 +165,8 @@ pub const XMLHttpRequest = struct {
     response_mime: Mime = undefined,
     response_obj: ?ResponseObj = null,
     send_flag: bool = false,
+
+    payload: ?[]const u8 = null,
 
     pub fn constructor(alloc: std.mem.Allocator, loop: *Loop) !XMLHttpRequest {
         return .{
@@ -138,17 +183,42 @@ pub const XMLHttpRequest = struct {
         };
     }
 
-    pub fn deinit(self: *XMLHttpRequest, alloc: std.mem.Allocator) void {
-        self.proto.deinit(alloc);
-        self.headers.deinit();
-        self.response_headers.deinit();
+    pub fn reset(self: *XMLHttpRequest, alloc: std.mem.Allocator) void {
         if (self.url) |v| alloc.free(v);
-        if (self.response_bytes) |v| alloc.free(v);
-        if (self.response_headers) |v| alloc.free(v);
+        self.url = null;
 
+        if (self.payload) |v| alloc.free(v);
+        self.payload = null;
+
+        if (self.response_bytes) |v| alloc.free(v);
         if (self.response_obj) |v| v.deinit();
 
-        if (self.req) |*r| r.deinit();
+        self.response_obj = null;
+        self.response_mime = Mime.Empty;
+        self.response_type = .Empty;
+
+        // TODO should we clearRetainingCapacity instead?
+        self.headers.clearAndFree();
+        self.response_headers.clearAndFree();
+        self.response_status = 0;
+
+        self.send_flag = false;
+
+        self.priv_state = .new;
+
+        if (self.req) |*r| {
+            r.deinit();
+            self.req = null;
+        }
+    }
+
+    pub fn deinit(self: *XMLHttpRequest, alloc: std.mem.Allocator) void {
+        self.reset();
+        self.headers.deinit();
+        self.response_headers.deinit();
+
+        self.proto.deinit(alloc);
+
         // TODO the client must be shared between requests.
         self.cli.deinit();
     }
@@ -198,31 +268,13 @@ pub const XMLHttpRequest = struct {
 
         self.method = try validMethod(method);
 
+        self.reset(alloc);
+
         self.url = try alloc.dupe(u8, url);
         self.uri = std.Uri.parse(self.url.?) catch return DOMError.Syntax;
         self.sync = if (asyn) |b| !b else false;
-        self.send_flag = false;
-
-        // TODO should we clearRetainingCapacity instead?
-        self.headers.clearAndFree();
-        self.response_headers.clearAndFree();
-        self.response_status = 0;
-
-        if (self.response_obj) |v| v.deinit();
-        self.response_obj = null;
-
-        self.response_mime = Mime.Empty;
-
-        self.response_type = .Empty;
-        if (self.response_bytes) |v| alloc.free(v);
 
         self.state = OPENED;
-        self.priv_state = .new;
-        if (self.req) |*r| {
-            r.deinit();
-            self.req = null;
-        }
-
         self.dispatchEvt("readystatechange");
     }
 
@@ -302,16 +354,30 @@ pub const XMLHttpRequest = struct {
         return try self.headers.append(name, value);
     }
 
-    // TODO body can be either a string or a document
-    pub fn _send(self: *XMLHttpRequest, body: ?[]const u8) !void {
+    // TODO body can be either a XMLHttpRequestBodyInit or a document
+    pub fn _send(self: *XMLHttpRequest, alloc: std.mem.Allocator, body: ?[]const u8) !void {
         if (self.state != OPENED) return DOMError.InvalidState;
         if (self.send_flag) return DOMError.InvalidState;
 
         //  The body argument provides the request body, if any, and is ignored
         //  if the request method is GET or HEAD.
         //  https://xhr.spec.whatwg.org/#the-send()-method
-        _ = body;
-        // TODO set Content-Type header according to the given body.
+        // var used_body: ?XMLHttpRequestBodyInit = null;
+        if (body != null and self.method != .GET and self.method != .HEAD) {
+            // TODO If body is a Document, then set this’s request body to body, serialized, converted, and UTF-8 encoded.
+
+            const body_init = XMLHttpRequestBodyInit{ .String = body.? };
+
+            // keep the user content type from request headers.
+            if (self.headers.getFirstEntry("Content-Type") == null) {
+                // https://fetch.spec.whatwg.org/#bodyinit-safely-extract
+                try self.headers.append("Content-Type", try body_init.contentType());
+            }
+
+            // copy the payload
+            if (self.payload) |v| alloc.free(v);
+            self.payload = try body_init.dupe(alloc);
+        }
 
         self.send_flag = true;
         self.impl.yield(self);
@@ -330,10 +396,22 @@ pub const XMLHttpRequest = struct {
                 self.req = self.cli.open(self.method, self.uri, self.headers, .{}) catch |e| return self.onErr(e);
             },
             .open => {
+                // prepare payload transfert.
+                if (self.payload) |v| self.req.?.transfer_encoding = .{ .content_length = v.len };
+
                 self.priv_state = .send;
                 self.req.?.send(.{}) catch |e| return self.onErr(e);
             },
             .send => {
+                if (self.payload) |payload| {
+                    self.priv_state = .write;
+                    self.req.?.writeAll(payload) catch |e| return self.onErr(e);
+                } else {
+                    self.priv_state = .finish;
+                    self.req.?.finish() catch |e| return self.onErr(e);
+                }
+            },
+            .write => {
                 self.priv_state = .finish;
                 self.req.?.finish() catch |e| return self.onErr(e);
             },
@@ -733,4 +811,17 @@ pub fn testExecFn(
     //     .{ .src = "req3.response", .ex = "" },
     // };
     // try checkCases(js_env, &json);
+    //
+    var post = [_]Case{
+        .{ .src = "const req3 = new XMLHttpRequest()", .ex = "undefined" },
+        .{ .src = "req3.open('POST', 'http://httpbin.io/post')", .ex = "undefined" },
+        .{ .src = "req3.send('foo')", .ex = "undefined" },
+
+        // Each case executed waits for all loop callaback calls.
+        // So the url has been retrieved.
+        .{ .src = "req3.status", .ex = "200" },
+        .{ .src = "req3.statusText", .ex = "OK" },
+        .{ .src = "req3.responseText.length > 64", .ex = "true" },
+    };
+    try checkCases(js_env, &post);
 }
