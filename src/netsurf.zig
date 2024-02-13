@@ -474,7 +474,12 @@ fn eventListenerGetData(lst: *EventListener) ?*anyopaque {
 pub const EventTarget = c.dom_event_target;
 
 fn eventTargetVtable(et: *EventTarget) c.dom_event_target_vtable {
-    return getVtable(c.dom_event_target_vtable, EventTarget, et);
+    // retrieve the vtable
+    const vtable = et.*.vtable.?;
+    // align correctly the vtable
+    const vtable_aligned: *align(@alignOf([*c]c.dom_event_target_vtable)) const anyopaque = @alignCast(vtable);
+    // convert the vtable to it's actual type and return it
+    return @as([*c]const c.dom_event_target_vtable, @ptrCast(vtable_aligned)).*;
 }
 
 pub inline fn toEventTarget(comptime T: type, v: *T) *EventTarget {
