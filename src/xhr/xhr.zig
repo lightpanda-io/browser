@@ -379,6 +379,8 @@ pub const XMLHttpRequest = struct {
             self.payload = try body_init.dupe(alloc);
         }
 
+        log.debug("{any} {any}", .{ self.method, self.uri });
+
         self.send_flag = true;
         self.impl.yield(self);
     }
@@ -420,6 +422,8 @@ pub const XMLHttpRequest = struct {
                 self.req.?.wait() catch |e| return self.onErr(e);
             },
             .wait => {
+                log.info("{any} {any} {d}", .{ self.method, self.uri, self.req.?.response.status });
+
                 self.priv_state = .done;
                 self.response_headers = self.req.?.response.headers.clone(self.response_headers.allocator) catch |e| return self.onErr(e);
 
@@ -506,6 +510,8 @@ pub const XMLHttpRequest = struct {
         self.dispatchEvt("readystatechange");
         self.dispatchProgressEvent("error", .{});
         self.dispatchProgressEvent("loadend", .{});
+
+        log.debug("{any} {any} {any}", .{ self.method, self.uri, self.err });
     }
 
     pub fn _abort(self: *XMLHttpRequest) void {
