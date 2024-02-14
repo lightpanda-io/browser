@@ -176,7 +176,15 @@ pub const Page = struct {
         log.info("GET {any} {d}", .{ self.uri, req.response.status });
 
         // TODO handle redirection
-        if (req.response.status != .ok) return error.BadStatusCode;
+        if (req.response.status != .ok) {
+            log.debug("{?} {d} {s}\n{any}", .{
+                req.response.version,
+                req.response.status,
+                req.response.reason,
+                req.response.headers,
+            });
+            return error.BadStatusCode;
+        }
 
         // TODO handle charset
         // https://html.spec.whatwg.org/#content-type
