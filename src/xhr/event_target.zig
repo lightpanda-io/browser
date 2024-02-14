@@ -4,16 +4,15 @@ const jsruntime = @import("jsruntime");
 const Callback = jsruntime.Callback;
 
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
+const XMLHttpRequest = @import("xhr.zig").XMLHttpRequest;
 
 const parser = @import("../netsurf.zig");
 
 const log = std.log.scoped(.xhr);
 
 pub const XMLHttpRequestEventTarget = struct {
-    pub const prototype = *EventTarget;
-    pub const mem_guarantied = true;
-
     // Extend libdom event target for pure zig struct.
+    alor: u8 = 5,
     base: parser.EventTargetTBase = parser.EventTargetTBase{},
 
     onloadstart_cbk: ?Callback = null,
@@ -23,8 +22,27 @@ pub const XMLHttpRequestEventTarget = struct {
     ontimeout_cbk: ?Callback = null,
     onloadend_cbk: ?Callback = null,
 
+    pub const prototype = *EventTarget;
+    pub const mem_guarantied = true;
+
+    pub fn protoCast(child_opaque: anytype) *XMLHttpRequestEventTarget {
+        const child = @as(*XMLHttpRequest, @ptrCast(child_opaque));
+        return child.base;
+    }
+
+    pub fn get_humm(self: *XMLHttpRequestEventTarget) u8 {
+        std.debug.print("ptr proto {any}\n", .{@intFromPtr(self)});
+        std.debug.print("proto {d}\n", .{self.alor});
+        std.debug.print("humm {d}\n", .{self.base.alors});
+        return self.base.alors;
+    }
+
     fn register(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator, typ: []const u8, cbk: Callback) !void {
-        try parser.eventTargetAddEventListener(@as(*parser.EventTarget, @ptrCast(self)), alloc, typ, cbk, false);
+        std.debug.print("xhr alors {d}\n", .{self.base.alors});
+        // std.debug.print("xhr event target {any}\n", .{self});
+        const et = @as(*parser.EventTarget, @ptrCast(self));
+        std.debug.print("et: {any}\n", .{et.*.vtable});
+        try parser.eventTargetAddEventListener(et, alloc, typ, cbk, false);
     }
     fn unregister(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator, typ: []const u8, cbk: Callback) !void {
         const et = @as(*parser.EventTarget, @ptrCast(self));

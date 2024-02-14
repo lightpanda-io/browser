@@ -662,6 +662,7 @@ pub fn eventTargetDispatchEvent(et: *EventTarget, event: *Event) !bool {
 pub const EventTargetTBase = struct {
     const Self = @This();
 
+    alors: u8 = 4,
     vtable: ?*const c.struct_dom_event_target_vtable = &c.struct_dom_event_target_vtable{
         .dispatch_event = dispatch_event,
         .remove_event_listener = remove_event_listener,
