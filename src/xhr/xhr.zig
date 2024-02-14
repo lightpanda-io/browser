@@ -56,8 +56,8 @@ pub const XMLHttpRequestBodyInit = union(XMLHttpRequestBodyInitTag) {
             .Blob => error.NotImplemented,
             .BufferSource => error.NotImplemented,
             .FormData => "multipart/form-data; boundary=TODO",
-            .URLSearchParams => "application/x-www-form-urlencoded;charset=UTF-8",
-            .String => "text/plain;charset=UTF-8",
+            .URLSearchParams => "application/x-www-form-urlencoded; charset=UTF-8",
+            .String => "text/plain; charset=UTF-8",
         };
     }
 
