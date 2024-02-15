@@ -3,6 +3,7 @@ const std = @import("std");
 const c = @cImport({
     @cInclude("dom/dom.h");
     @cInclude("dom/bindings/hubbub/parser.h");
+    @cInclude("events/event_target.h");
 });
 
 const Callback = @import("jsruntime").Callback;
@@ -476,6 +477,11 @@ fn eventTargetVtable(et: *EventTarget) c.dom_event_target_vtable {
     return getVtable(c.dom_event_target_vtable, EventTarget, et);
 }
 
+pub inline fn toEventTarget(comptime T: type, v: *T) *EventTarget {
+    const et_aligned: *align(@alignOf(EventTarget)) T = @alignCast(v);
+    return @as(*EventTarget, @ptrCast(et_aligned));
+}
+
 pub fn eventTargetHasListener(
     et: *EventTarget,
     typ: []const u8,
@@ -621,6 +627,46 @@ pub fn eventTargetDispatchEvent(et: *EventTarget, event: *Event) !bool {
     try DOMErr(err);
     return res;
 }
+
+// EventTargetBase is used to implement EventTarget for pure zig struct.
+pub const EventTargetTBase = struct {
+    const Self = @This();
+
+    vtable: ?*const c.struct_dom_event_target_vtable = &c.struct_dom_event_target_vtable{
+        .dispatch_event = dispatch_event,
+        .remove_event_listener = remove_event_listener,
+        .add_event_listener = add_event_listener,
+        .iter_event_listener = iter_event_listener,
+    },
+    eti: c.dom_event_target_internal = c.dom_event_target_internal{ .listeners = null },
+
+    pub fn add_event_listener(et: [*c]c.dom_event_target, t: [*c]c.dom_string, l: ?*c.struct_dom_event_listener, capture: bool) callconv(.C) c.dom_exception {
+        const self = @as(*Self, @ptrCast(et));
+        return c._dom_event_target_add_event_listener(&self.eti, t, l, capture);
+    }
+
+    pub fn dispatch_event(et: [*c]c.dom_event_target, evt: ?*c.struct_dom_event, res: [*c]bool) callconv(.C) c.dom_exception {
+        const self = @as(*Self, @ptrCast(et));
+        return c._dom_event_target_dispatch(et, &self.eti, evt, c.DOM_BUBBLING_PHASE, res);
+    }
+
+    pub fn remove_event_listener(et: [*c]c.dom_event_target, t: [*c]c.dom_string, l: ?*c.struct_dom_event_listener, capture: bool) callconv(.C) c.dom_exception {
+        const self = @as(*Self, @ptrCast(et));
+        return c._dom_event_target_remove_event_listener(&self.eti, t, l, capture);
+    }
+
+    pub fn iter_event_listener(
+        et: [*c]c.dom_event_target,
+        t: [*c]c.dom_string,
+        capture: bool,
+        cur: [*c]c.struct_listener_entry,
+        next: [*c][*c]c.struct_listener_entry,
+        l: [*c]?*c.struct_dom_event_listener,
+    ) callconv(.C) c.dom_exception {
+        const self = @as(*Self, @ptrCast(et));
+        return c._dom_event_target_iter_event_listener(self.eti, t, capture, cur, next, l);
+    }
+};
 
 // NodeType
 

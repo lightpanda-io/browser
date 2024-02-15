@@ -313,10 +313,13 @@ pub const Page = struct {
 
         // TODO wait for deferred scripts
 
-        // TODO dispatch DOMContentLoaded before the transition to "complete",
+        // dispatch DOMContentLoaded before the transition to "complete",
         // at the point where all subresources apart from async script elements
         // have loaded.
         // https://html.spec.whatwg.org/#reporting-document-loading-status
+        const evt = try parser.eventCreate();
+        try parser.eventInit(evt, "DOMContentLoaded", .{ .bubbles = true, .cancelable = true });
+        _ = try parser.eventTargetDispatchEvent(parser.toEventTarget(parser.DocumentHTML, html_doc), evt);
 
         // eval async scripts.
         for (sasync.items) |e| {
@@ -326,6 +329,11 @@ pub const Page = struct {
         // TODO wait for async scripts
 
         // TODO set document.readyState to complete
+
+        // dispatch window.load event
+        const loadevt = try parser.eventCreate();
+        try parser.eventInit(loadevt, "load", .{});
+        _ = try parser.eventTargetDispatchEvent(parser.toEventTarget(Window, &self.session.window), loadevt);
     }
 
     // evalScript evaluates the src in priority.

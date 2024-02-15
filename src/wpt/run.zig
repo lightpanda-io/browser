@@ -40,12 +40,19 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     try js_env.start(alloc);
     defer js_env.stop();
 
-    // add document object
-    try js_env.addObject(html_doc, "document");
+    // display console logs
+    defer {
+        var res = evalJS(js_env, alloc, "console.join('\\n');", "console") catch unreachable;
+        defer res.deinit(alloc);
+        if (res.result.len > 0) {
+            std.debug.print("-- CONSOLE LOG\n{s}\n--\n", .{res.result});
+        }
+    }
 
-    // alias global as self and window
+    // setup global env vars.
     try js_env.attachObject(try js_env.getGlobal(), "self", null);
     try js_env.attachObject(try js_env.getGlobal(), "window", null);
+    try js_env.addObject(html_doc, "document");
 
     // thanks to the arena, we don't need to deinit res.
     var res: jsruntime.JSResult = undefined;
@@ -114,12 +121,6 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
         return res;
     }
 
-    // display console logs
-    res = try evalJS(js_env, alloc, "console.join(', ');", "console");
-    if (res.result.len > 0) {
-        std.debug.print("-- CONSOLE LOG\n{s}\n--\n", .{res.result});
-    }
-
     // Check the final test status.
     res = try evalJS(js_env, alloc, "report.status;", "teststatus");
     if (!res.success) {
@@ -148,7 +149,7 @@ pub fn find(allocator: std.mem.Allocator, comptime path: []const u8, list: *std.
         if (entry.kind != .file) {
             continue;
         }
-        if (!std.mem.endsWith(u8, entry.basename, ".html")) {
+        if (!std.mem.endsWith(u8, entry.basename, ".html") and !std.mem.endsWith(u8, entry.basename, ".htm")) {
             continue;
         }
 
