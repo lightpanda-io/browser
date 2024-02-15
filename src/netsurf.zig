@@ -474,10 +474,20 @@ fn eventListenerGetData(lst: *EventListener) ?*anyopaque {
 pub const EventTarget = c.dom_event_target;
 
 fn eventTargetVtable(et: *EventTarget) c.dom_event_target_vtable {
-    return getVtable(c.dom_event_target_vtable, EventTarget, et);
+    // retrieve the vtable
+    const vtable = et.*.vtable.?;
+    // align correctly the vtable
+    const vtable_aligned: *align(@alignOf([*c]c.dom_event_target_vtable)) const anyopaque = @alignCast(vtable);
+    // convert the vtable to it's actual type and return it
+    return @as([*c]const c.dom_event_target_vtable, @ptrCast(vtable_aligned)).*;
 }
 
 pub inline fn toEventTarget(comptime T: type, v: *T) *EventTarget {
+    if (comptime eventTargetTBaseFieldName(T)) |field| {
+        const et_aligned: *align(@alignOf(EventTarget)) EventTargetTBase = @alignCast(&@field(v, field));
+        return @as(*EventTarget, @ptrCast(et_aligned));
+    }
+
     const et_aligned: *align(@alignOf(EventTarget)) T = @alignCast(v);
     return @as(*EventTarget, @ptrCast(et_aligned));
 }
@@ -628,8 +638,22 @@ pub fn eventTargetDispatchEvent(et: *EventTarget, event: *Event) !bool {
     return res;
 }
 
+pub fn eventTargetTBaseFieldName(comptime T: type) ?[]const u8 {
+    std.debug.assert(@inComptime());
+    switch (@typeInfo(T)) {
+        .Struct => |ti| {
+            for (ti.fields) |f| {
+                if (f.type == EventTargetTBase) return f.name;
+            }
+        },
+        else => {},
+    }
+
+    return null;
+}
+
 // EventTargetBase is used to implement EventTarget for pure zig struct.
-pub const EventTargetTBase = struct {
+pub const EventTargetTBase = extern struct {
     const Self = @This();
 
     vtable: ?*const c.struct_dom_event_target_vtable = &c.struct_dom_event_target_vtable{

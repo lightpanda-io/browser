@@ -143,6 +143,17 @@ test "Window is a libdom event target" {
     const event = try parser.eventCreate();
     try parser.eventInit(event, "foo", .{});
 
-    const et = @as(*parser.EventTarget, @ptrCast(&window));
+    const et = parser.toEventTarget(Window, &window);
+    _ = try parser.eventTargetDispatchEvent(et, event);
+}
+
+test "DocumentHTML is a libdom event target" {
+    doc = try parser.documentHTMLParseFromStr("<body></body>");
+    parser.documentHTMLClose(doc) catch {};
+
+    const event = try parser.eventCreate();
+    try parser.eventInit(event, "foo", .{});
+
+    const et = parser.toEventTarget(parser.DocumentHTML, doc);
     _ = try parser.eventTargetDispatchEvent(et, event);
 }
