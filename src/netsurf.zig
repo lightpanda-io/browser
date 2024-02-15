@@ -653,7 +653,7 @@ pub fn eventTargetTBaseFieldName(comptime T: type) ?[]const u8 {
 }
 
 // EventTargetBase is used to implement EventTarget for pure zig struct.
-pub const EventTargetTBase = struct {
+pub const EventTargetTBase = extern struct {
     const Self = @This();
 
     vtable: ?*const c.struct_dom_event_target_vtable = &c.struct_dom_event_target_vtable{
