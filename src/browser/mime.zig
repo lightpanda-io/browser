@@ -17,6 +17,7 @@ params: []const u8 = "",
 charset: ?[]const u8 = null,
 boundary: ?[]const u8 = null,
 
+pub const Empty = Self{ .mtype = "", .msubtype = "" };
 pub const HTML = Self{ .mtype = "text", .msubtype = "html" };
 pub const Javascript = Self{ .mtype = "application", .msubtype = "javascript" };
 

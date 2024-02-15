@@ -13,6 +13,16 @@ const DOMException = @import("../dom/exceptions.zig").DOMException;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const EventTargetUnion = @import("../dom/event_target.zig").Union;
 
+const ProgressEvent = @import("../xhr/progress_event.zig").ProgressEvent;
+
+// Event interfaces
+pub const Interfaces = generate.Tuple(.{
+    Event,
+    ProgressEvent,
+});
+const Generated = generate.Union.compile(Interfaces);
+pub const Union = Generated._union;
+
 // https://dom.spec.whatwg.org/#event
 pub const Event = struct {
     pub const Self = parser.Event;
@@ -27,6 +37,13 @@ pub const Event = struct {
     pub const _CAPTURING_PHASE = 1;
     pub const _AT_TARGET = 2;
     pub const _BUBBLING_PHASE = 3;
+
+    pub fn toInterface(evt: *parser.Event) !Union {
+        return switch (try parser.eventGetInternalType(evt)) {
+            .event => .{ .Event = evt },
+            .progress_event => .{ .ProgressEvent = @as(*ProgressEvent, @ptrCast(evt)).* },
+        };
+    }
 
     pub fn constructor(eventType: []const u8, opts: ?EventInit) !*parser.Event {
         const event = try parser.eventCreate();
@@ -103,13 +120,6 @@ pub const Event = struct {
         return try parser.eventPreventDefault(self);
     }
 };
-
-// Event interfaces
-pub const Interfaces = generate.Tuple(.{
-    Event,
-});
-const Generated = generate.Union.compile(Interfaces);
-pub const Union = Generated._union;
 
 pub fn testExecFn(
     _: std.mem.Allocator,
@@ -198,4 +208,13 @@ pub fn testExecFn(
         .{ .src = "nb", .ex = "1" },
     };
     try checkCases(js_env, &legacy);
+
+    var remove = [_]Case{
+        .{ .src = "var nb = 0; var evt = null; function cbk(event) { nb ++; evt=event; }", .ex = "undefined" },
+        .{ .src = "document.addEventListener('count', cbk)", .ex = "undefined" },
+        .{ .src = "document.removeEventListener('count', cbk)", .ex = "undefined" },
+        .{ .src = "document.dispatchEvent(new Event('count'))", .ex = "true" },
+        .{ .src = "nb", .ex = "0" },
+    };
+    try checkCases(js_env, &remove);
 }
