@@ -483,6 +483,11 @@ fn eventTargetVtable(et: *EventTarget) c.dom_event_target_vtable {
 }
 
 pub inline fn toEventTarget(comptime T: type, v: *T) *EventTarget {
+    if (comptime eventTargetTBaseFieldName(T)) |field| {
+        const et_aligned: *align(@alignOf(EventTarget)) EventTargetTBase = @alignCast(&@field(v, field));
+        return @as(*EventTarget, @ptrCast(et_aligned));
+    }
+
     const et_aligned: *align(@alignOf(EventTarget)) T = @alignCast(v);
     return @as(*EventTarget, @ptrCast(et_aligned));
 }
@@ -631,6 +636,20 @@ pub fn eventTargetDispatchEvent(et: *EventTarget, event: *Event) !bool {
     const err = eventTargetVtable(et).dispatch_event.?(et, event, &res);
     try DOMErr(err);
     return res;
+}
+
+pub fn eventTargetTBaseFieldName(comptime T: type) ?[]const u8 {
+    std.debug.assert(@inComptime());
+    switch (@typeInfo(T)) {
+        .Struct => |ti| {
+            for (ti.fields) |f| {
+                if (f.type == EventTargetTBase) return f.name;
+            }
+        },
+        else => {},
+    }
+
+    return null;
 }
 
 // EventTargetBase is used to implement EventTarget for pure zig struct.

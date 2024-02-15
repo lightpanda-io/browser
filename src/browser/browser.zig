@@ -333,7 +333,7 @@ pub const Page = struct {
         // dispatch window.load event
         const loadevt = try parser.eventCreate();
         try parser.eventInit(loadevt, "load", .{});
-        _ = try parser.eventTargetDispatchEvent(parser.toEventTarget(Window, &self.session.window), loadevt);
+        _ = try parser.eventTargetDispatchEvent(parser.toEventTarget(EventTargetTBase, &self.session.window), loadevt);
     }
 
     // evalScript evaluates the src in priority.
