@@ -294,24 +294,30 @@ pub const Node = struct {
     // function must accept either node or string.
     // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
     pub fn replaceChildren(self: *parser.Node, nodes: ?Variadic(*parser.Node)) !void {
+        // remove existing children
+        try removeChildren(self);
+
         if (nodes == null) return;
         if (nodes.?.slice.len == 0) return;
-
-        // remove existing children
-        if (try parser.nodeHasChildNodes(self)) {
-            const children = try parser.nodeGetChildNodes(self);
-            const ln = try parser.nodeListLength(children);
-            var i: u32 = 0;
-            while (i < ln) {
-                defer i += 1;
-                const child = try parser.nodeListItem(children, i) orelse continue;
-                _ = try parser.nodeRemoveChild(self, child);
-            }
-        }
 
         // add new children
         for (nodes.?.slice) |node| {
             _ = try parser.nodeAppendChild(self, node);
+        }
+    }
+
+    pub fn removeChildren(self: *parser.Node) !void {
+        if (!try parser.nodeHasChildNodes(self)) return;
+
+        const children = try parser.nodeGetChildNodes(self);
+        const ln = try parser.nodeListLength(children);
+        var i: u32 = 0;
+        while (i < ln) {
+            defer i += 1;
+            // we always retrieve the 0 index child on purpose: libdom nodelist
+            // are dynamic. So the next child to remove is always as pos 0.
+            const child = try parser.nodeListItem(children, 0) orelse continue;
+            _ = try parser.nodeRemoveChild(self, child);
         }
     }
 
