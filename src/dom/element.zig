@@ -8,6 +8,7 @@ const checkCases = jsruntime.test_utils.checkCases;
 const Variadic = jsruntime.Variadic;
 
 const collection = @import("html_collection.zig");
+const dumpNode = @import("../browser/dump.zig").nodeFile;
 
 const Node = @import("node.zig").Node;
 const Walker = @import("walker.zig").WalkerDepthFirst;
@@ -76,6 +77,16 @@ pub const Element = struct {
 
     pub fn get_attributes(self: *parser.Element) !*parser.NamedNodeMap {
         return try parser.nodeGetAttributes(parser.elementToNode(self));
+    }
+
+    pub fn get_innerHTML(self: *parser.Element, alloc: std.mem.Allocator) ![]const u8 {
+        var buf = std.ArrayList(u8).init(alloc);
+        defer buf.deinit();
+
+        try dumpNode(parser.elementToNode(self), buf.writer());
+        // TODO express the caller owned the slice.
+        // https://github.com/lightpanda-io/jsruntime-lib/issues/195
+        return buf.toOwnedSlice();
     }
 
     pub fn _hasAttributes(self: *parser.Element) !bool {
@@ -420,4 +431,10 @@ pub fn testExecFn(
         .{ .src = "f.getAttributeNode('bar')", .ex = "null" },
     };
     try checkCases(js_env, &attrNode);
+
+    var innerHTML = [_]Case{
+        .{ .src = "document.getElementById('para').innerHTML", .ex = " And" },
+        .{ .src = "document.getElementById('para-empty').innerHTML.trim()", .ex = "<span id=\"para-empty-child\"></span>" },
+    };
+    try checkCases(js_env, &innerHTML);
 }
