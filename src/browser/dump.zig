@@ -4,13 +4,14 @@ const File = std.fs.File;
 const parser = @import("../netsurf.zig");
 const Walker = @import("../dom/walker.zig").WalkerChildren;
 
-pub fn htmlFile(doc: *parser.Document, out: File) !void {
+pub fn htmlFile(doc: *parser.Document, out: anytype) !void {
     try out.writeAll("<!DOCTYPE html>\n");
     try nodeFile(parser.documentToNode(doc), out);
     try out.writeAll("\n");
 }
 
-fn nodeFile(root: *parser.Node, out: File) !void {
+// out must be a std.io.Writer
+pub fn nodeFile(root: *parser.Node, out: anytype) !void {
     const walker = Walker{};
     var next: ?*parser.Node = null;
     while (true) {
