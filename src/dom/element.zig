@@ -89,6 +89,28 @@ pub const Element = struct {
         return buf.toOwnedSlice();
     }
 
+    pub fn set_innerHTML(self: *parser.Element, str: []const u8) !void {
+        const node = parser.elementToNode(self);
+        const doc = try parser.nodeOwnerDocument(node) orelse return parser.DOMError.WrongDocument;
+        // parse the fragment
+        const fragment = try parser.documentParseFragmentFromStr(doc, str);
+
+        // remove existing children
+        try Node.removeChildren(node);
+
+        // get fragment body children
+        const children = try parser.documentFragmentBodyChildren(fragment) orelse return;
+
+        // append children to the node
+        const ln = try parser.nodeListLength(children);
+        var i: u32 = 0;
+        while (i < ln) {
+            defer i += 1;
+            const child = try parser.nodeListItem(children, i) orelse continue;
+            _ = try parser.nodeAppendChild(node, child);
+        }
+    }
+
     pub fn _hasAttributes(self: *parser.Element) !bool {
         return try parser.nodeHasAttributes(parser.elementToNode(self));
     }
@@ -434,6 +456,11 @@ pub fn testExecFn(
 
     var innerHTML = [_]Case{
         .{ .src = "document.getElementById('para').innerHTML", .ex = " And" },
+        .{ .src = "document.getElementById('para-empty').innerHTML.trim()", .ex = "<span id=\"para-empty-child\"></span>" },
+
+        .{ .src = "let h = document.getElementById('para-empty')", .ex = "undefined" },
+        .{ .src = "const prev = h.innerHTML", .ex = "undefined" },
+        .{ .src = "h.innerHTML = prev; true", .ex = "true" },
         .{ .src = "document.getElementById('para-empty').innerHTML.trim()", .ex = "<span id=\"para-empty-child\"></span>" },
     };
     try checkCases(js_env, &innerHTML);

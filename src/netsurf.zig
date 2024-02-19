@@ -1514,6 +1514,22 @@ pub const Video = struct { base: *c.dom_html_element };
 // Document Fragment
 pub const DocumentFragment = c.dom_document_fragment;
 
+pub inline fn documentFragmentToNode(doc: *DocumentFragment) *Node {
+    return @as(*Node, @ptrCast(doc));
+}
+
+pub fn documentFragmentBodyChildren(doc: *DocumentFragment) !?*NodeList {
+    const node = documentFragmentToNode(doc);
+    const html = try nodeFirstChild(node) orelse return null;
+    // TODO unref
+    const head = try nodeFirstChild(html) orelse return null;
+    // TODO unref
+    const body = try nodeNextSibling(head) orelse return null;
+    // TODO unref
+
+    return try nodeGetChildNodes(body);
+}
+
 // Document Position
 
 pub const DocumentPosition = enum(u2) {
@@ -1857,6 +1873,53 @@ pub fn documentHTMLParse(reader: anytype, enc: ?[:0]const u8) !*DocumentHTML {
     try parserErr(err);
 
     return @as(*DocumentHTML, @ptrCast(doc.?));
+}
+
+pub fn documentParseFragmentFromStr(self: *Document, str: []const u8) !*DocumentFragment {
+    var fbs = std.io.fixedBufferStream(str);
+    return try documentParseFragment(self, fbs.reader(), "UTF-8");
+}
+
+pub fn documentParseFragment(self: *Document, reader: anytype, enc: ?[:0]const u8) !*DocumentFragment {
+    var parser: ?*c.dom_hubbub_parser = undefined;
+    var fragment: ?*c.dom_document_fragment = undefined;
+    var err: c.hubbub_error = undefined;
+
+    var params = c.dom_hubbub_parser_params{
+        .enc = null,
+        .fix_enc = true,
+        .msg = null,
+        .script = null,
+        .enable_script = false,
+        .ctx = null,
+        .daf = null,
+    };
+
+    if (enc) |e| params.enc = e;
+
+    err = c.dom_hubbub_fragment_parser_create(&params, self, &parser, &fragment);
+    try parserErr(err);
+    defer c.dom_hubbub_parser_destroy(parser);
+
+    var buffer: [1024]u8 = undefined;
+    var ln = buffer.len;
+    while (ln > 0) {
+        ln = try reader.read(&buffer);
+        err = c.dom_hubbub_parser_parse_chunk(parser, &buffer, ln);
+        // TODO handle encoding change error return.
+        // When the HTML contains a META tag with a different encoding than the
+        // original one, a c.DOM_HUBBUB_HUBBUB_ERR_ENCODINGCHANGE error is
+        // returned.
+        // In this case, we must restart the parsing with the new detected
+        // encoding. The detected encoding is stored in the document and we can
+        // get it with documentGetInputEncoding().
+        try parserErr(err);
+    }
+
+    err = c.dom_hubbub_parser_completed(parser);
+    try parserErr(err);
+
+    return @as(*DocumentFragment, @ptrCast(fragment.?));
 }
 
 // documentHTMLClose closes the document.
