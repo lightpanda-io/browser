@@ -94,10 +94,7 @@ pub const XMLHttpRequest = struct {
         JSON,
     };
 
-    // TODO use std.json.Value instead, but it causes comptime error.
-    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/204
-    // const JSONValue = std.json.Value;
-    const JSONValue = u8;
+    const JSONValue = std.json.Value;
 
     const Response = union(ResponseType) {
         Empty: void,
@@ -803,31 +800,31 @@ pub fn testExecFn(
     };
     try checkCases(js_env, &document);
 
-    // var json = [_]Case{
-    //     .{ .src = "const req3 = new XMLHttpRequest()", .ex = "undefined" },
-    //     .{ .src = "req3.open('GET', 'http://httpbin.io/json')", .ex = "undefined" },
-    //     .{ .src = "req3.responseType = 'json'", .ex = "json" },
-
-    //     .{ .src = "req3.send()", .ex = "undefined" },
-
-    //     // Each case executed waits for all loop callaback calls.
-    //     // So the url has been retrieved.
-    //     .{ .src = "req3.status", .ex = "200" },
-    //     .{ .src = "req3.statusText", .ex = "OK" },
-    //     .{ .src = "req3.response", .ex = "" },
-    // };
-    // try checkCases(js_env, &json);
-    //
-    var post = [_]Case{
+    var json = [_]Case{
         .{ .src = "const req3 = new XMLHttpRequest()", .ex = "undefined" },
-        .{ .src = "req3.open('POST', 'http://httpbin.io/post')", .ex = "undefined" },
-        .{ .src = "req3.send('foo')", .ex = "undefined" },
+        .{ .src = "req3.open('GET', 'http://httpbin.io/json')", .ex = "undefined" },
+        .{ .src = "req3.responseType = 'json'", .ex = "json" },
+
+        .{ .src = "req3.send()", .ex = "undefined" },
 
         // Each case executed waits for all loop callaback calls.
         // So the url has been retrieved.
         .{ .src = "req3.status", .ex = "200" },
         .{ .src = "req3.statusText", .ex = "OK" },
-        .{ .src = "req3.responseText.length > 64", .ex = "true" },
+        .{ .src = "req3.response.slideshow.author", .ex = "Yours Truly" },
+    };
+    try checkCases(js_env, &json);
+
+    var post = [_]Case{
+        .{ .src = "const req4 = new XMLHttpRequest()", .ex = "undefined" },
+        .{ .src = "req4.open('POST', 'http://httpbin.io/post')", .ex = "undefined" },
+        .{ .src = "req4.send('foo')", .ex = "undefined" },
+
+        // Each case executed waits for all loop callaback calls.
+        // So the url has been retrieved.
+        .{ .src = "req4.status", .ex = "200" },
+        .{ .src = "req4.statusText", .ex = "OK" },
+        .{ .src = "req4.responseText.length > 64", .ex = "true" },
     };
     try checkCases(js_env, &post);
 }
