@@ -30,6 +30,7 @@ const Out = enum {
 };
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
+pub const GlobalType = apiweb.GlobalType;
 
 // TODO For now the WPT tests run is specific to WPT.
 // It manually load js framwork libs, and run the first script w/ js content in

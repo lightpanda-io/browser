@@ -240,9 +240,7 @@ pub const Page = struct {
 
         // add global objects
         log.debug("setup global env", .{});
-        try self.session.env.addObject(self.session.window, "window");
-        try self.session.env.addObject(self.session.window, "self");
-        try self.session.env.addObject(html_doc, "document");
+        try self.session.env.bindGlobal(self.session.window);
 
         // browse the DOM tree to retrieve scripts
         // TODO execute the synchronous scripts during the HTL parsing.

@@ -9,6 +9,7 @@ const EventTarget = @import("../dom/event_target.zig").EventTarget;
 pub const Window = struct {
     pub const prototype = *EventTarget;
     pub const mem_guarantied = true;
+    pub const global_type = true;
 
     // Extend libdom event target for pure zig struct.
     base: parser.EventTargetTBase = parser.EventTargetTBase{},
