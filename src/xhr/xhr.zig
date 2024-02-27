@@ -165,6 +165,8 @@ pub const XMLHttpRequest = struct {
 
     payload: ?[]const u8 = null,
 
+    const min_delay: u64 = 50000000; // 50ms
+
     pub fn constructor(alloc: std.mem.Allocator, loop: *Loop) !XMLHttpRequest {
         return .{
             .alloc = alloc,
@@ -298,6 +300,7 @@ pub const XMLHttpRequest = struct {
         typ: []const u8,
         opts: ProgressEvent.EventInit,
     ) void {
+        log.debug("dispatch progress event: {s}", .{typ});
         var evt = ProgressEvent.constructor(typ, .{
             // https://xhr.spec.whatwg.org/#firing-events-using-the-progressevent-interface
             .lengthComputable = opts.total > 0,
@@ -447,6 +450,7 @@ pub const XMLHttpRequest = struct {
                 const reader = self.req.?.reader();
                 var buffer: [1024]u8 = undefined;
                 var ln = buffer.len;
+                var prev_dispatch: ?std.time.Instant = null;
                 while (ln > 0) {
                     ln = reader.read(&buffer) catch |e| {
                         buf.deinit(self.alloc);
@@ -458,7 +462,13 @@ pub const XMLHttpRequest = struct {
                     };
                     loaded = loaded + ln;
 
-                    // TODO dispatch only if 50ms have passed.
+                    // Dispatch only if 50ms have passed.
+                    const now = std.time.Instant.now() catch |e| {
+                        buf.deinit(self.alloc);
+                        return self.onErr(e);
+                    };
+                    if (prev_dispatch != null and now.since(prev_dispatch.?) < min_delay) continue;
+                    defer prev_dispatch = now;
 
                     self.state = LOADING;
                     self.dispatchEvt("readystatechange");
