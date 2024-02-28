@@ -83,8 +83,10 @@ pub fn writeNode(root: *parser.Node, writer: anytype) !void {
     }
 }
 
-// writeHTMLTestFn is run by run_tests.zig
-pub fn writeHTMLTestFn(out: File) !void {
+test "dump.writeHTML" {
+    const out = try std.fs.openFileAbsolute("/dev/null", .{ .mode = .write_only });
+    defer out.close();
+
     const file = try std.fs.cwd().openFile("test.html", .{});
     defer file.close();
 
