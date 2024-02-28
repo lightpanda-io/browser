@@ -460,8 +460,11 @@ pub fn testExecFn(
 
         .{ .src = "let h = document.getElementById('para-empty')", .ex = "undefined" },
         .{ .src = "const prev = h.innerHTML", .ex = "undefined" },
-        .{ .src = "h.innerHTML = '<p>hello world</p>'", .ex = "<p>hello world</p>" },
-        .{ .src = "h.innerHTML", .ex = "<p>hello world</p>" },
+        .{ .src = "h.innerHTML = '<p id=\"hello\">hello world</p>'", .ex = "<p id=\"hello\">hello world</p>" },
+        .{ .src = "h.innerHTML", .ex = "<p id=\"hello\">hello world</p>" },
+        .{ .src = "h.firstChild.nodeName", .ex = "P" },
+        .{ .src = "h.firstChild.id", .ex = "hello" },
+        .{ .src = "h.firstChild.textContent", .ex = "hello world" },
         .{ .src = "h.innerHTML = prev; true", .ex = "true" },
         .{ .src = "document.getElementById('para-empty').innerHTML.trim()", .ex = "<span id=\"para-empty-child\"></span>" },
     };

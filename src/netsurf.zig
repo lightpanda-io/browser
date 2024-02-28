@@ -1837,40 +1837,13 @@ pub fn documentHTMLParse(reader: anytype, enc: ?[:0]const u8) !*DocumentHTML {
     var parser: ?*c.dom_hubbub_parser = undefined;
     var doc: ?*c.dom_document = undefined;
     var err: c.hubbub_error = undefined;
-
-    var params = c.dom_hubbub_parser_params{
-        .enc = null,
-        .fix_enc = true,
-        .msg = null,
-        .script = null,
-        .enable_script = false,
-        .ctx = null,
-        .daf = null,
-    };
-
-    if (enc) |e| params.enc = e;
+    var params = parseParams(enc);
 
     err = c.dom_hubbub_parser_create(&params, &parser, &doc);
     try parserErr(err);
     defer c.dom_hubbub_parser_destroy(parser);
 
-    var buffer: [1024]u8 = undefined;
-    var ln = buffer.len;
-    while (ln > 0) {
-        ln = try reader.read(&buffer);
-        err = c.dom_hubbub_parser_parse_chunk(parser, &buffer, ln);
-        // TODO handle encoding change error return.
-        // When the HTML contains a META tag with a different encoding than the
-        // original one, a c.DOM_HUBBUB_HUBBUB_ERR_ENCODINGCHANGE error is
-        // returned.
-        // In this case, we must restart the parsing with the new detected
-        // encoding. The detected encoding is stored in the document and we can
-        // get it with documentGetInputEncoding().
-        try parserErr(err);
-    }
-
-    err = c.dom_hubbub_parser_completed(parser);
-    try parserErr(err);
+    try parseData(parser.?, reader);
 
     return @as(*DocumentHTML, @ptrCast(doc.?));
 }
@@ -1884,9 +1857,20 @@ pub fn documentParseFragment(self: *Document, reader: anytype, enc: ?[:0]const u
     var parser: ?*c.dom_hubbub_parser = undefined;
     var fragment: ?*c.dom_document_fragment = undefined;
     var err: c.hubbub_error = undefined;
+    var params = parseParams(enc);
 
-    var params = c.dom_hubbub_parser_params{
-        .enc = null,
+    err = c.dom_hubbub_fragment_parser_create(&params, self, &parser, &fragment);
+    try parserErr(err);
+    defer c.dom_hubbub_parser_destroy(parser);
+
+    try parseData(parser.?, reader);
+
+    return @as(*DocumentFragment, @ptrCast(fragment.?));
+}
+
+fn parseParams(enc: ?[:0]const u8) c.dom_hubbub_parser_params {
+    return .{
+        .enc = enc orelse null,
         .fix_enc = true,
         .msg = null,
         .script = null,
@@ -1894,13 +1878,10 @@ pub fn documentParseFragment(self: *Document, reader: anytype, enc: ?[:0]const u
         .ctx = null,
         .daf = null,
     };
+}
 
-    if (enc) |e| params.enc = e;
-
-    err = c.dom_hubbub_fragment_parser_create(&params, self, &parser, &fragment);
-    try parserErr(err);
-    defer c.dom_hubbub_parser_destroy(parser);
-
+fn parseData(parser: *c.dom_hubbub_parser, reader: anytype) !void {
+    var err: c.hubbub_error = undefined;
     var buffer: [1024]u8 = undefined;
     var ln = buffer.len;
     while (ln > 0) {
@@ -1918,8 +1899,6 @@ pub fn documentParseFragment(self: *Document, reader: anytype, enc: ?[:0]const u
 
     err = c.dom_hubbub_parser_completed(parser);
     try parserErr(err);
-
-    return @as(*DocumentFragment, @ptrCast(fragment.?));
 }
 
 // documentHTMLClose closes the document.
