@@ -224,7 +224,9 @@ pub const Page = struct {
         // TODO set document.readyState to interactive
         // https://html.spec.whatwg.org/#reporting-document-loading-status
 
-        // TODO inject the URL to the document including the fragment.
+        // inject the URL to the document including the fragment.
+        try parser.documentSetDocumentURI(doc, self.rawuri orelse "about:blank");
+
         // TODO set the referrer to the document.
 
         self.session.window.replaceDocument(doc);
