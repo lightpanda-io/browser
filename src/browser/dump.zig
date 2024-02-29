@@ -4,13 +4,15 @@ const File = std.fs.File;
 const parser = @import("../netsurf.zig");
 const Walker = @import("../dom/walker.zig").WalkerChildren;
 
-pub fn htmlFile(doc: *parser.Document, out: File) !void {
-    try out.writeAll("<!DOCTYPE html>\n");
-    try nodeFile(parser.documentToNode(doc), out);
-    try out.writeAll("\n");
+// writer must be a std.io.Writer
+pub fn writeHTML(doc: *parser.Document, writer: anytype) !void {
+    try writer.writeAll("<!DOCTYPE html>\n");
+    try writeNode(parser.documentToNode(doc), writer);
+    try writer.writeAll("\n");
 }
 
-fn nodeFile(root: *parser.Node, out: File) !void {
+// writer must be a std.io.Writer
+pub fn writeNode(root: *parser.Node, writer: anytype) !void {
     const walker = Walker{};
     var next: ?*parser.Node = null;
     while (true) {
@@ -19,8 +21,8 @@ fn nodeFile(root: *parser.Node, out: File) !void {
             .element => {
                 // open the tag
                 const tag = try parser.nodeLocalName(next.?);
-                try out.writeAll("<");
-                try out.writeAll(tag);
+                try writer.writeAll("<");
+                try writer.writeAll(tag);
 
                 // write the attributes
                 const map = try parser.nodeGetAttributes(next.?);
@@ -28,40 +30,40 @@ fn nodeFile(root: *parser.Node, out: File) !void {
                 var i: u32 = 0;
                 while (i < ln) {
                     const attr = try parser.namedNodeMapItem(map, i) orelse break;
-                    try out.writeAll(" ");
-                    try out.writeAll(try parser.attributeGetName(attr));
-                    try out.writeAll("=\"");
-                    try out.writeAll(try parser.attributeGetValue(attr) orelse "");
-                    try out.writeAll("\"");
+                    try writer.writeAll(" ");
+                    try writer.writeAll(try parser.attributeGetName(attr));
+                    try writer.writeAll("=\"");
+                    try writer.writeAll(try parser.attributeGetValue(attr) orelse "");
+                    try writer.writeAll("\"");
                     i += 1;
                 }
 
-                try out.writeAll(">");
+                try writer.writeAll(">");
 
                 // write the children
                 // TODO avoid recursion
-                try nodeFile(next.?, out);
+                try writeNode(next.?, writer);
 
                 // close the tag
-                try out.writeAll("</");
-                try out.writeAll(tag);
-                try out.writeAll(">");
+                try writer.writeAll("</");
+                try writer.writeAll(tag);
+                try writer.writeAll(">");
             },
             .text => {
                 const v = try parser.nodeValue(next.?) orelse continue;
-                try out.writeAll(v);
+                try writer.writeAll(v);
             },
             .cdata_section => {
                 const v = try parser.nodeValue(next.?) orelse continue;
-                try out.writeAll("<![CDATA[");
-                try out.writeAll(v);
-                try out.writeAll("]]>");
+                try writer.writeAll("<![CDATA[");
+                try writer.writeAll(v);
+                try writer.writeAll("]]>");
             },
             .comment => {
                 const v = try parser.nodeValue(next.?) orelse continue;
-                try out.writeAll("<!--");
-                try out.writeAll(v);
-                try out.writeAll("-->");
+                try writer.writeAll("<!--");
+                try writer.writeAll(v);
+                try writer.writeAll("-->");
             },
             // TODO handle processing instruction dump
             .processing_instruction => continue,
@@ -81,8 +83,10 @@ fn nodeFile(root: *parser.Node, out: File) !void {
     }
 }
 
-// HTMLFileTestFn is run by run_tests.zig
-pub fn HTMLFileTestFn(out: File) !void {
+test "dump.writeHTML" {
+    const out = try std.fs.openFileAbsolute("/dev/null", .{ .mode = .write_only });
+    defer out.close();
+
     const file = try std.fs.cwd().openFile("test.html", .{});
     defer file.close();
 
@@ -92,5 +96,5 @@ pub fn HTMLFileTestFn(out: File) !void {
 
     const doc = parser.documentHTMLToDocument(doc_html);
 
-    try htmlFile(doc, out);
+    try writeHTML(doc, out);
 }

@@ -151,7 +151,7 @@ pub const Page = struct {
         }
 
         // if the page has a pointer to a document, dumps the HTML.
-        try Dump.htmlFile(self.doc.?, out);
+        try Dump.writeHTML(self.doc.?, out);
     }
 
     // spec reference: https://html.spec.whatwg.org/#document-lifecycle

@@ -8,6 +8,7 @@ const checkCases = jsruntime.test_utils.checkCases;
 const Variadic = jsruntime.Variadic;
 
 const collection = @import("html_collection.zig");
+const writeNode = @import("../browser/dump.zig").writeNode;
 
 const Node = @import("node.zig").Node;
 const Walker = @import("walker.zig").WalkerDepthFirst;
@@ -76,6 +77,38 @@ pub const Element = struct {
 
     pub fn get_attributes(self: *parser.Element) !*parser.NamedNodeMap {
         return try parser.nodeGetAttributes(parser.elementToNode(self));
+    }
+
+    pub fn get_innerHTML(self: *parser.Element, alloc: std.mem.Allocator) ![]const u8 {
+        var buf = std.ArrayList(u8).init(alloc);
+        defer buf.deinit();
+
+        try writeNode(parser.elementToNode(self), buf.writer());
+        // TODO express the caller owned the slice.
+        // https://github.com/lightpanda-io/jsruntime-lib/issues/195
+        return buf.toOwnedSlice();
+    }
+
+    pub fn set_innerHTML(self: *parser.Element, str: []const u8) !void {
+        const node = parser.elementToNode(self);
+        const doc = try parser.nodeOwnerDocument(node) orelse return parser.DOMError.WrongDocument;
+        // parse the fragment
+        const fragment = try parser.documentParseFragmentFromStr(doc, str);
+
+        // remove existing children
+        try Node.removeChildren(node);
+
+        // get fragment body children
+        const children = try parser.documentFragmentBodyChildren(fragment) orelse return;
+
+        // append children to the node
+        const ln = try parser.nodeListLength(children);
+        var i: u32 = 0;
+        while (i < ln) {
+            defer i += 1;
+            const child = try parser.nodeListItem(children, i) orelse continue;
+            _ = try parser.nodeAppendChild(node, child);
+        }
     }
 
     pub fn _hasAttributes(self: *parser.Element) !bool {
@@ -420,4 +453,20 @@ pub fn testExecFn(
         .{ .src = "f.getAttributeNode('bar')", .ex = "null" },
     };
     try checkCases(js_env, &attrNode);
+
+    var innerHTML = [_]Case{
+        .{ .src = "document.getElementById('para').innerHTML", .ex = " And" },
+        .{ .src = "document.getElementById('para-empty').innerHTML.trim()", .ex = "<span id=\"para-empty-child\"></span>" },
+
+        .{ .src = "let h = document.getElementById('para-empty')", .ex = "undefined" },
+        .{ .src = "const prev = h.innerHTML", .ex = "undefined" },
+        .{ .src = "h.innerHTML = '<p id=\"hello\">hello world</p>'", .ex = "<p id=\"hello\">hello world</p>" },
+        .{ .src = "h.innerHTML", .ex = "<p id=\"hello\">hello world</p>" },
+        .{ .src = "h.firstChild.nodeName", .ex = "P" },
+        .{ .src = "h.firstChild.id", .ex = "hello" },
+        .{ .src = "h.firstChild.textContent", .ex = "hello world" },
+        .{ .src = "h.innerHTML = prev; true", .ex = "true" },
+        .{ .src = "document.getElementById('para-empty').innerHTML.trim()", .ex = "<span id=\"para-empty-child\"></span>" },
+    };
+    try checkCases(js_env, &innerHTML);
 }

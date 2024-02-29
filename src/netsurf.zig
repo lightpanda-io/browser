@@ -1514,6 +1514,22 @@ pub const Video = struct { base: *c.dom_html_element };
 // Document Fragment
 pub const DocumentFragment = c.dom_document_fragment;
 
+pub inline fn documentFragmentToNode(doc: *DocumentFragment) *Node {
+    return @as(*Node, @ptrCast(doc));
+}
+
+pub fn documentFragmentBodyChildren(doc: *DocumentFragment) !?*NodeList {
+    const node = documentFragmentToNode(doc);
+    const html = try nodeFirstChild(node) orelse return null;
+    // TODO unref
+    const head = try nodeFirstChild(html) orelse return null;
+    // TODO unref
+    const body = try nodeNextSibling(head) orelse return null;
+    // TODO unref
+
+    return try nodeGetChildNodes(body);
+}
+
 // Document Position
 
 pub const DocumentPosition = enum(u2) {
@@ -1826,9 +1842,40 @@ pub fn documentHTMLParse(reader: anytype, enc: ?[:0]const u8) !*DocumentHTML {
     var parser: ?*c.dom_hubbub_parser = undefined;
     var doc: ?*c.dom_document = undefined;
     var err: c.hubbub_error = undefined;
+    var params = parseParams(enc);
 
-    var params = c.dom_hubbub_parser_params{
-        .enc = null,
+    err = c.dom_hubbub_parser_create(&params, &parser, &doc);
+    try parserErr(err);
+    defer c.dom_hubbub_parser_destroy(parser);
+
+    try parseData(parser.?, reader);
+
+    return @as(*DocumentHTML, @ptrCast(doc.?));
+}
+
+pub fn documentParseFragmentFromStr(self: *Document, str: []const u8) !*DocumentFragment {
+    var fbs = std.io.fixedBufferStream(str);
+    return try documentParseFragment(self, fbs.reader(), "UTF-8");
+}
+
+pub fn documentParseFragment(self: *Document, reader: anytype, enc: ?[:0]const u8) !*DocumentFragment {
+    var parser: ?*c.dom_hubbub_parser = undefined;
+    var fragment: ?*c.dom_document_fragment = undefined;
+    var err: c.hubbub_error = undefined;
+    var params = parseParams(enc);
+
+    err = c.dom_hubbub_fragment_parser_create(&params, self, &parser, &fragment);
+    try parserErr(err);
+    defer c.dom_hubbub_parser_destroy(parser);
+
+    try parseData(parser.?, reader);
+
+    return @as(*DocumentFragment, @ptrCast(fragment.?));
+}
+
+fn parseParams(enc: ?[:0]const u8) c.dom_hubbub_parser_params {
+    return .{
+        .enc = enc orelse null,
         .fix_enc = true,
         .msg = null,
         .script = null,
@@ -1836,13 +1883,10 @@ pub fn documentHTMLParse(reader: anytype, enc: ?[:0]const u8) !*DocumentHTML {
         .ctx = null,
         .daf = null,
     };
+}
 
-    if (enc) |e| params.enc = e;
-
-    err = c.dom_hubbub_parser_create(&params, &parser, &doc);
-    try parserErr(err);
-    defer c.dom_hubbub_parser_destroy(parser);
-
+fn parseData(parser: *c.dom_hubbub_parser, reader: anytype) !void {
+    var err: c.hubbub_error = undefined;
     var buffer: [1024]u8 = undefined;
     var ln = buffer.len;
     while (ln > 0) {
@@ -1860,8 +1904,6 @@ pub fn documentHTMLParse(reader: anytype, enc: ?[:0]const u8) !*DocumentHTML {
 
     err = c.dom_hubbub_parser_completed(parser);
     try parserErr(err);
-
-    return @as(*DocumentHTML, @ptrCast(doc.?));
 }
 
 // documentHTMLClose closes the document.
