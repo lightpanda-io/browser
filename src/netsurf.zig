@@ -1653,6 +1653,11 @@ pub inline fn documentGetDocumentURI(doc: *Document) ![]const u8 {
     return strToData(s.?);
 }
 
+pub fn documentSetDocumentURI(doc: *Document, uri: []const u8) !void {
+    const err = documentVtable(doc).dom_document_set_uri.?(doc, try strFromData(uri));
+    try DOMErr(err);
+}
+
 pub inline fn documentGetInputEncoding(doc: *Document) ![]const u8 {
     var s: ?*String = undefined;
     const err = documentVtable(doc).dom_document_get_input_encoding.?(doc, &s);
