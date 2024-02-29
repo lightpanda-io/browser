@@ -40,6 +40,9 @@ pub fn writeNode(root: *parser.Node, writer: anytype) !void {
 
                 try writer.writeAll(">");
 
+                // void elements can't have any content.
+                if (try isVoid(parser.nodeToElement(next.?))) continue;
+
                 // write the children
                 // TODO avoid recursion
                 try writeNode(next.?, writer);
@@ -81,6 +84,17 @@ pub fn writeNode(root: *parser.Node, writer: anytype) !void {
             .notation => continue,
         }
     }
+}
+
+// area, base, br, col, embed, hr, img, input, link, meta, source, track, wbr
+// https://html.spec.whatwg.org/#void-elements
+fn isVoid(elem: *parser.Element) !bool {
+    const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(elem)));
+    return switch (tag) {
+        .area, .base, .br, .col, .embed, .hr, .img, .input, .link => true,
+        .meta, .source, .track, .wbr => true,
+        else => false,
+    };
 }
 
 test "dump.writeHTML" {
