@@ -14,7 +14,7 @@ pub const Window = struct {
     // Extend libdom event target for pure zig struct.
     base: parser.EventTargetTBase = parser.EventTargetTBase{},
 
-    document: ?*parser.Document = null,
+    document: ?*parser.DocumentHTML = null,
     target: []const u8,
 
     pub fn create(target: ?[]const u8) Window {
@@ -23,7 +23,7 @@ pub const Window = struct {
         };
     }
 
-    pub fn replaceDocument(self: *Window, doc: *parser.Document) void {
+    pub fn replaceDocument(self: *Window, doc: *parser.DocumentHTML) void {
         self.document = doc;
     }
 
@@ -39,7 +39,7 @@ pub const Window = struct {
         return self;
     }
 
-    pub fn get_document(self: *Window) ?*parser.Document {
+    pub fn get_document(self: *Window) ?*parser.DocumentHTML {
         return self.document;
     }
 

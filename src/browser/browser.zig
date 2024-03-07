@@ -229,7 +229,7 @@ pub const Page = struct {
 
         // TODO set the referrer to the document.
 
-        self.session.window.replaceDocument(doc);
+        self.session.window.replaceDocument(html_doc);
 
         // https://html.spec.whatwg.org/#read-html
 

@@ -23,7 +23,6 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     defer file.close();
 
     const html_doc = try parser.documentHTMLParse(file.reader(), "UTF-8");
-    const doc = parser.documentHTMLToDocument(html_doc);
 
     const dirname = fspath.dirname(f[dir.len..]) orelse unreachable;
 
@@ -52,7 +51,7 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
 
     // setup global env vars.
     var window = Window.create(null);
-    window.replaceDocument(doc);
+    window.replaceDocument(html_doc);
     try js_env.bindGlobal(window);
 
     // thanks to the arena, we don't need to deinit res.
@@ -70,6 +69,7 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     }
 
     // loop hover the scripts.
+    const doc = parser.documentHTMLToDocument(html_doc);
     const scripts = try parser.documentGetElementsByTagName(doc, "script");
     const slen = try parser.nodeListLength(scripts);
     for (0..slen) |i| {

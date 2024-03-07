@@ -51,7 +51,7 @@ fn testExecFn(
 
     // alias global as self and window
     var window = Window.create(null);
-    window.replaceDocument(parser.documentHTMLToDocument(doc));
+    window.replaceDocument(doc);
     try js_env.bindGlobal(window);
 
     // run test
