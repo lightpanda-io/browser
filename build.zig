@@ -83,10 +83,12 @@ pub fn build(b: *std.build.Builder) !void {
     // ----
 
     // compile
-    const tests = b.addTest(.{ .root_source_file = .{ .path = "src/run_tests.zig" } });
+    const tests = b.addTest(.{
+        .root_source_file = .{ .path = "src/run_tests.zig" },
+        .test_runner = "src/test_runner.zig",
+        .single_threaded = true,
+    });
     try common(tests, options);
-    tests.single_threaded = true;
-    tests.test_runner = "src/test_runner.zig";
     const run_tests = b.addRunArtifact(tests);
 
     // step
