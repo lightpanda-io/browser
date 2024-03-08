@@ -8,6 +8,7 @@ const parser = @import("../netsurf.zig");
 const jsruntime = @import("jsruntime");
 const Loop = jsruntime.Loop;
 const Env = jsruntime.Env;
+const Window = @import("../html/window.zig").Window;
 
 const Types = @import("../main_wpt.zig").Types;
 
@@ -22,7 +23,6 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     defer file.close();
 
     const html_doc = try parser.documentHTMLParse(file.reader(), "UTF-8");
-    const doc = parser.documentHTMLToDocument(html_doc);
 
     const dirname = fspath.dirname(f[dir.len..]) orelse unreachable;
 
@@ -50,31 +50,14 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     }
 
     // setup global env vars.
-    try js_env.attachObject(try js_env.getGlobal(), "self", null);
-    try js_env.attachObject(try js_env.getGlobal(), "window", null);
-    try js_env.addObject(html_doc, "document");
+    var window = Window.create(null);
+    window.replaceDocument(html_doc);
+    try js_env.bindGlobal(window);
 
     // thanks to the arena, we don't need to deinit res.
     var res: jsruntime.JSResult = undefined;
 
     const init =
-        \\window.listeners = [];
-        \\window.document = document;
-        \\window.parent = window;
-        \\window.addEventListener = function (type, listener, options) {
-        \\  window.listeners.push({type: type, listener: listener, options: options});
-        \\};
-        \\window.dispatchEvent = function (event) {
-        \\  len = window.listeners.length;
-        \\  for (var i = 0; i < len; i++) {
-        \\      if (window.listeners[i].type == event.target) {
-        \\          window.listeners[i].listener(event);
-        \\      }
-        \\  }
-        \\  return true;
-        \\};
-        \\window.removeEventListener = function () {};
-        \\
         \\console = [];
         \\console.log = function () {
         \\  console.push(...arguments);
@@ -86,6 +69,7 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     }
 
     // loop hover the scripts.
+    const doc = parser.documentHTMLToDocument(html_doc);
     const scripts = try parser.documentGetElementsByTagName(doc, "script");
     const slen = try parser.nodeListLength(scripts);
     for (0..slen) |i| {
@@ -116,7 +100,7 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     }
 
     // Mark tests as ready to run.
-    res = try evalJS(js_env, alloc, "window.dispatchEvent({target: 'load'});", "ready");
+    res = try evalJS(js_env, alloc, "window.dispatchEvent(new Event('load'));", "ready");
     if (!res.success) {
         return res;
     }

@@ -4,6 +4,7 @@ const jsruntime = @import("jsruntime");
 
 const parser = @import("netsurf.zig");
 const apiweb = @import("apiweb.zig");
+const Window = @import("html/window.zig").Window;
 
 const html_test = @import("html_test.zig").html;
 
@@ -15,17 +16,14 @@ fn execJS(
     alloc: std.mem.Allocator,
     js_env: *jsruntime.Env,
 ) anyerror!void {
-
     // start JS env
     try js_env.start(alloc);
     defer js_env.stop();
 
     // alias global as self and window
-    try js_env.attachObject(try js_env.getGlobal(), "self", null);
-    try js_env.attachObject(try js_env.getGlobal(), "window", null);
-
-    // add document object
-    try js_env.addObject(doc, "document");
+    var window = Window.create(null);
+    window.replaceDocument(doc);
+    try js_env.bindGlobal(window);
 
     // launch shellExec
     try jsruntime.shellExec(alloc, js_env);

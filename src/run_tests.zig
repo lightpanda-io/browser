@@ -36,14 +36,9 @@ fn testExecFn(
     js_env: *jsruntime.Env,
     comptime execFn: jsruntime.ContextExecFn,
 ) anyerror!void {
-
     // start JS env
     try js_env.start(alloc);
     defer js_env.stop();
-
-    // alias global as self and window
-    try js_env.attachObject(try js_env.getGlobal(), "self", null);
-    try js_env.attachObject(try js_env.getGlobal(), "window", null);
 
     // document
     const file = try std.fs.cwd().openFile("test.html", .{});
@@ -54,8 +49,10 @@ fn testExecFn(
         std.debug.print("documentHTMLClose error: {s}\n", .{@errorName(err)});
     };
 
-    // add document object
-    try js_env.addObject(doc, "document");
+    // alias global as self and window
+    var window = Window.create(null);
+    window.replaceDocument(doc);
+    try js_env.bindGlobal(window);
 
     // run test
     try execFn(alloc, js_env);
@@ -91,6 +88,8 @@ fn testsAllExecFn(
 }
 
 pub fn main() !void {
+    try testJSRuntime();
+
     std.debug.print("\n", .{});
     for (builtin.test_functions) |test_fn| {
         try test_fn.func();
@@ -106,7 +105,7 @@ test {
     std.testing.refAllDecls(DumpTest);
 }
 
-test "jsruntime" {
+fn testJSRuntime() !void {
     // generate tests
     try generate.tests();
 
