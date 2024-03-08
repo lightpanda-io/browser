@@ -5,3 +5,4 @@ zig-out
 /vendor/netsurf/lib/
 /vendor/netsurf/include/
 /vendor/libiconv/
+/*.cache

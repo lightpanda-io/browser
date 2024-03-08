@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const Types = @import("root").Types;
 
@@ -430,6 +431,13 @@ pub const Page = struct {
         if (res.success) {
             log.debug("eval remote {s}: {s}", .{ src, res.result });
         } else {
+            // In debug mode only, save the file in a temp file.
+            if (comptime builtin.mode == .Debug) {
+                writeCache(alloc, u.path, fetchres.body.?) catch |e| {
+                    log.debug("cache: {any}", .{e});
+                };
+            }
+
             log.info("eval remote {s}: {s}", .{ src, res.result });
             return FetchError.JsErr;
         }
@@ -448,3 +456,24 @@ pub const Page = struct {
         return false;
     }
 };
+
+// writeCache write a cache file in the current dir with the given data.
+// Alloc is used to create a temp filename, cleared before returning.
+fn writeCache(alloc: std.mem.Allocator, name: []const u8, data: []const u8) !void {
+    const fname = try std.mem.concat(alloc, u8, &.{ name, ".cache" });
+    defer alloc.free(fname);
+
+    // clear invalid char.
+    for (fname, 0..) |c, i| {
+        if (!std.ascii.isPrint(c) or std.ascii.isWhitespace(c) or c == '/') {
+            fname[i] = '_';
+        }
+    }
+
+    log.debug("cache {s}", .{fname});
+
+    const f = try std.fs.cwd().createFile(fname, .{ .read = false, .truncate = true });
+    defer f.close();
+
+    try f.writeAll(data);
+}
