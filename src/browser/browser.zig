@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const Types = @import("root").Types;
 
@@ -384,7 +385,11 @@ pub const Page = struct {
             if (res.success) {
                 log.debug("eval inline: {s}", .{res.result});
             } else {
-                log.info("eval inline: {s}", .{res.result});
+                if (builtin.mode == .Debug and res.stack != null) {
+                    log.info("eval inline: {s}", .{res.stack.?});
+                } else {
+                    log.info("eval inline: {s}", .{res.result});
+                }
             }
 
             return;
@@ -430,7 +435,11 @@ pub const Page = struct {
         if (res.success) {
             log.debug("eval remote {s}: {s}", .{ src, res.result });
         } else {
-            log.info("eval remote {s}: {s}", .{ src, res.result });
+            if (builtin.mode == .Debug and res.stack != null) {
+                log.info("eval remote {s}: {s}", .{ src, res.stack.? });
+            } else {
+                log.info("eval remote {s}: {s}", .{ src, res.result });
+            }
             return FetchError.JsErr;
         }
     }
