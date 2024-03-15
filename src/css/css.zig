@@ -5,13 +5,13 @@ const std = @import("std");
 const Selector = @import("selector.zig").Selector;
 const parser = @import("parser.zig");
 
-// Parse parse a selector string and returns the parsed result or an error.
-pub fn Parse(alloc: std.mem.Allocator, s: []const u8, opts: parser.ParseOptions) parser.ParseError!Selector {
+// parse parse a selector string and returns the parsed result or an error.
+pub fn parse(alloc: std.mem.Allocator, s: []const u8, opts: parser.ParseOptions) parser.ParseError!Selector {
     var p = parser.Parser{ .s = s, .i = 0, .opts = opts };
     return p.parse(alloc);
 }
 
-test "Parse" {
+test "parse" {
     const alloc = std.testing.allocator;
 
     const testcases = [_][]const u8{
@@ -118,7 +118,7 @@ test "Parse" {
     };
 
     for (testcases) |tc| {
-        const s = Parse(alloc, tc, .{}) catch |e| {
+        const s = parse(alloc, tc, .{}) catch |e| {
             std.debug.print("query {s}", .{tc});
             return e;
         };
