@@ -11,6 +11,37 @@ pub fn parse(alloc: std.mem.Allocator, s: []const u8, opts: parser.ParseOptions)
     return p.parse(alloc);
 }
 
+// matchFirst call m.match with the first node that matches the selector s, from the
+// descendants of n and returns true. If none matches, it returns false.
+pub fn matchFirst(s: Selector, node: anytype, m: anytype) !bool {
+    var c = try node.firstChild();
+    while (true) {
+        if (c == null) break;
+
+        if (try s.match(c.?)) {
+            try m.match(c.?);
+            return true;
+        }
+
+        if (try matchFirst(s, c.?, m)) return true;
+        c = try c.?.nextSibling();
+    }
+    return false;
+}
+
+// matchAll call m.match with the all the nodes that matches the selector s, from the
+// descendants of n.
+pub fn matchAll(s: Selector, node: anytype, m: anytype) !void {
+    var c = try node.firstChild();
+    while (true) {
+        if (c == null) break;
+
+        if (try s.match(c.?)) try m.match(c.?);
+        try matchFirst(s, c.?, m);
+        c = try c.?.nextSibling();
+    }
+}
+
 test "parse" {
     const alloc = std.testing.allocator;
 

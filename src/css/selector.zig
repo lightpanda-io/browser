@@ -165,6 +165,13 @@ pub const Selector = union(enum) {
     },
     pseudo_element: PseudoClass,
 
+    pub fn match(s: Selector, n: anytype) !bool {
+        return switch (s) {
+            .tag => |v| std.ascii.eqlIgnoreCase(v, try n.tag()),
+            else => false,
+        };
+    }
+
     pub fn deinit(sel: Selector, alloc: std.mem.Allocator) void {
         switch (sel) {
             .group => |v| {
