@@ -9,6 +9,7 @@ const selector = @import("selector.zig");
 const Selector = selector.Selector;
 const PseudoClass = selector.PseudoClass;
 const AttributeOP = selector.AttributeOP;
+const Combinator = selector.Combinator;
 
 pub const ParseError = error{
     ExpectedSelector,
@@ -44,7 +45,7 @@ pub const ParseError = error{
     NotHandled,
     UnknownPseudoSelector,
     InvalidNthExpression,
-} || PseudoClass.Error || std.mem.Allocator.Error;
+} || PseudoClass.Error || Combinator.Error || std.mem.Allocator.Error;
 
 pub const ParseOptions = struct {
     accept_pseudo_elts: bool = true,
@@ -594,9 +595,9 @@ pub const Parser = struct {
         var s = try p.parseSimpleSelectorSequence(alloc);
 
         while (true) {
-            var combinator: u8 = undefined;
+            var combinator: Combinator = .empty;
             if (p.skipWhitespace()) {
-                combinator = ' ';
+                combinator = .descendant;
             }
             if (p.i >= p.s.len) {
                 return s;
@@ -604,16 +605,18 @@ pub const Parser = struct {
 
             switch (p.s[p.i]) {
                 '+', '>', '~' => {
-                    combinator = p.s[p.i];
+                    combinator = try Combinator.parse(p.s[p.i]);
                     p.i += 1;
                     _ = p.skipWhitespace();
                 },
                 // These characters can't begin a selector, but they can legally occur after one.
-                ',', ')' => return s,
+                ',', ')' => {
+                    return s;
+                },
                 else => {},
             }
 
-            if (combinator == 0) {
+            if (combinator == .empty) {
                 return s;
             }
 

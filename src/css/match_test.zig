@@ -5,6 +5,7 @@ const css = @import("css.zig");
 pub const Node = struct {
     child: ?*const Node = null,
     sibling: ?*const Node = null,
+    par: ?*const Node = null,
 
     name: []const u8 = "",
     att: ?[]const u8 = null,
@@ -15,6 +16,10 @@ pub const Node = struct {
 
     pub fn nextSibling(n: *const Node) !?*const Node {
         return n.sibling;
+    }
+
+    pub fn parent(n: *const Node) !?*const Node {
+        return n.par;
     }
 
     pub fn isElement(_: *const Node) bool {
@@ -153,6 +158,24 @@ test "matchFirst" {
             .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "ba" } } },
             .exp = 0,
         },
+        .{
+            .q = "strong, a",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "p a",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a", .par = &.{ .name = "p" } }, .sibling = &.{ .name = "a" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "p a",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "span", .child = &.{
+                .name = "a",
+                .par = &.{ .name = "span", .par = &.{ .name = "p" } },
+            } } } },
+            .exp = 1,
+        },
     };
 
     for (testcases) |tc| {
@@ -161,8 +184,15 @@ test "matchFirst" {
         const s = try css.parse(alloc, tc.q, .{});
         defer s.deinit(alloc);
 
-        _ = try css.matchFirst(s, &tc.n, &matcher);
-        try std.testing.expectEqual(tc.exp, matcher.nodes.items.len);
+        _ = css.matchFirst(s, &tc.n, &matcher) catch |e| {
+            std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+            return e;
+        };
+
+        std.testing.expectEqual(tc.exp, matcher.nodes.items.len) catch |e| {
+            std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+            return e;
+        };
     }
 }
 
@@ -267,6 +297,24 @@ test "matchAll" {
             .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "ba" } } },
             .exp = 0,
         },
+        .{
+            .q = "strong, a",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 2,
+        },
+        .{
+            .q = "p a",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a", .par = &.{ .name = "p" } }, .sibling = &.{ .name = "a" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "p a",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "span", .child = &.{
+                .name = "a",
+                .par = &.{ .name = "span", .par = &.{ .name = "p" } },
+            } } } },
+            .exp = 1,
+        },
     };
 
     for (testcases) |tc| {
@@ -275,7 +323,14 @@ test "matchAll" {
         const s = try css.parse(alloc, tc.q, .{});
         defer s.deinit(alloc);
 
-        _ = try css.matchAll(s, &tc.n, &matcher);
-        try std.testing.expectEqual(tc.exp, matcher.nodes.items.len);
+        _ = css.matchAll(s, &tc.n, &matcher) catch |e| {
+            std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+            return e;
+        };
+
+        std.testing.expectEqual(tc.exp, matcher.nodes.items.len) catch |e| {
+            std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+            return e;
+        };
     }
 }

@@ -16,6 +16,28 @@ pub const AttributeOP = enum {
     }
 };
 
+pub const Combinator = enum {
+    empty,
+    descendant, // space
+    child, // >
+    next_sibling, // +
+    subsequent_sibling, // ~
+
+    pub const Error = error{
+        InvalidCombinator,
+    };
+
+    pub fn parse(c: u8) Error!Combinator {
+        return switch (c) {
+            ' ' => .descendant,
+            '>' => .child,
+            '+' => .next_sibling,
+            '~' => .subsequent_sibling,
+            else => Error.InvalidCombinator,
+        };
+    }
+};
+
 pub const PseudoClass = enum {
     not,
     has,
@@ -119,6 +141,10 @@ pub const PseudoClass = enum {
 };
 
 pub const Selector = union(enum) {
+    pub const Error = error{
+        UnknownCombinedCombinator,
+    };
+
     compound: struct {
         selectors: []Selector,
         pseudo_elt: ?PseudoClass,
@@ -137,7 +163,7 @@ pub const Selector = union(enum) {
     combined: struct {
         first: *Selector,
         second: *Selector,
-        combinator: u8,
+        combinator: Combinator,
     },
 
     never_match: PseudoClass,
@@ -200,6 +226,40 @@ pub const Selector = union(enum) {
             .tag => |v| n.isElement() and std.ascii.eqlIgnoreCase(v, try n.tag()),
             .id => |v| return n.isElement() and std.mem.eql(u8, v, try n.attr("id") orelse return false),
             .class => |v| return n.isElement() and word(try n.attr("class") orelse return false, v, false),
+            .group => |v| {
+                for (v) |sel| {
+                    if (try sel.match(n)) return true;
+                }
+                return false;
+            },
+            .compound => |v| {
+                if (v.selectors.len == 0) return n.isElement();
+
+                for (v.selectors) |sel| {
+                    if (!try sel.match(n)) return false;
+                }
+                return true;
+            },
+            .combined => |v| {
+                return switch (v.combinator) {
+                    .empty => try v.first.match(n),
+                    .descendant => {
+                        if (!try v.second.match(n)) return false;
+
+                        // The first must match a ascendent.
+                        var p = try n.parent();
+                        while (p != null) {
+                            if (try v.first.match(p.?)) {
+                                return true;
+                            }
+                            p = try p.?.parent();
+                        }
+
+                        return false;
+                    },
+                    else => return Error.UnknownCombinedCombinator,
+                };
+            },
             .attribute => |v| {
                 const attr = try n.attr(v.key);
 

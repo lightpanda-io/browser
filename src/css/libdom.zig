@@ -20,6 +20,13 @@ pub const Node = struct {
         return null;
     }
 
+    pub fn parent(n: Node) !?Node {
+        const c = try parser.nodeParentNode(n.node);
+        if (c) |cc| return .{ .node = cc };
+
+        return null;
+    }
+
     pub fn isElement(n: Node) bool {
         const t = parser.nodeType(n.node) catch return false;
         return t == .element;
