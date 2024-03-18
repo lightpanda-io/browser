@@ -37,7 +37,7 @@ pub fn matchAll(s: Selector, node: anytype, m: anytype) !void {
         if (c == null) break;
 
         if (try s.match(c.?)) try m.match(c.?);
-        try matchFirst(s, c.?, m);
+        try matchAll(s, c.?, m);
         c = try c.?.nextSibling();
     }
 }

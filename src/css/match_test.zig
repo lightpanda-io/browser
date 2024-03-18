@@ -46,17 +46,57 @@ const Matcher = struct {
 test "matchFirst" {
     const alloc = std.testing.allocator;
 
-    const s = try css.parse(alloc, "address", .{});
-    defer s.deinit(alloc);
+    var matcher = Matcher.init(alloc);
+    defer matcher.deinit();
+
+    const testcases = [_]struct {
+        q: []const u8,
+        n: Node,
+        exp: usize,
+    }{
+        .{
+            .q = "address",
+            .n = .{ .name = "body", .child = &.{ .name = "address" } },
+            .exp = 1,
+        },
+    };
+
+    for (testcases) |tc| {
+        matcher.reset();
+
+        const s = try css.parse(alloc, tc.q, .{});
+        defer s.deinit(alloc);
+
+        _ = try css.matchFirst(s, &tc.n, &matcher);
+        try std.testing.expectEqual(tc.exp, matcher.nodes.items.len);
+    }
+}
+
+test "matchAll" {
+    const alloc = std.testing.allocator;
 
     var matcher = Matcher.init(alloc);
     defer matcher.deinit();
 
-    const node: Node = .{
-        .child = &.{ .name = "address" },
+    const testcases = [_]struct {
+        q: []const u8,
+        n: Node,
+        exp: usize,
+    }{
+        .{
+            .q = "address",
+            .n = .{ .name = "body", .child = &.{ .name = "address" } },
+            .exp = 1,
+        },
     };
 
-    _ = try css.matchFirst(s, &node, &matcher);
-    try std.testing.expect(1 == matcher.nodes.items.len);
-    try std.testing.expect(matcher.nodes.items[0] == node.child);
+    for (testcases) |tc| {
+        matcher.reset();
+
+        const s = try css.parse(alloc, tc.q, .{});
+        defer s.deinit(alloc);
+
+        _ = try css.matchAll(s, &tc.n, &matcher);
+        try std.testing.expectEqual(tc.exp, matcher.nodes.items.len);
+    }
 }

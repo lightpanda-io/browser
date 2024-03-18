@@ -28,17 +28,67 @@ const Matcher = struct {
 test "matchFirst" {
     const alloc = std.testing.allocator;
 
-    const s = try css.parse(alloc, "address", .{});
-    defer s.deinit(alloc);
+    var matcher = Matcher.init(alloc);
+    defer matcher.deinit();
+
+    const testcases = [_]struct {
+        q: []const u8,
+        html: []const u8,
+        exp: usize,
+    }{
+        .{
+            .q = "address",
+            .html = "<body><address>This address...</address></body>",
+            .exp = 1,
+        },
+    };
+
+    for (testcases) |tc| {
+        matcher.reset();
+
+        const doc = try parser.documentHTMLParseFromStr(tc.html);
+        defer parser.documentHTMLClose(doc) catch {};
+
+        const s = try css.parse(alloc, tc.q, .{});
+        defer s.deinit(alloc);
+
+        const node = Node{ .node = parser.documentHTMLToNode(doc) };
+
+        _ = try css.matchFirst(s, node, &matcher);
+        try std.testing.expectEqual(tc.exp, matcher.nodes.items.len);
+    }
+}
+
+test "matchAll" {
+    const alloc = std.testing.allocator;
 
     var matcher = Matcher.init(alloc);
     defer matcher.deinit();
 
-    const doc = try parser.documentHTMLParseFromStr("<body><address>This address...</address></body>");
-    defer parser.documentHTMLClose(doc) catch {};
+    const testcases = [_]struct {
+        q: []const u8,
+        html: []const u8,
+        exp: usize,
+    }{
+        .{
+            .q = "address",
+            .html = "<body><address>This address...</address></body>",
+            .exp = 1,
+        },
+    };
 
-    const node = Node{ .node = parser.documentHTMLToNode(doc) };
+    for (testcases) |tc| {
+        matcher.reset();
 
-    _ = try css.matchFirst(s, node, &matcher);
-    try std.testing.expect(1 == matcher.nodes.items.len);
+        const doc = try parser.documentHTMLParseFromStr(tc.html);
+        defer parser.documentHTMLClose(doc) catch {};
+
+        const s = try css.parse(alloc, tc.q, .{});
+        defer s.deinit(alloc);
+
+        const node = Node{ .node = parser.documentHTMLToNode(doc) };
+
+        _ = try css.matchAll(s, node, &matcher);
+        try std.testing.expectEqual(tc.exp, matcher.nodes.items.len);
+    }
 }
