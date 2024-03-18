@@ -57,7 +57,7 @@ pub const Parser = struct {
     opts: ParseOptions,
 
     pub fn parse(p: *Parser, alloc: std.mem.Allocator) ParseError!Selector {
-        return p.parseSelector(alloc);
+        return p.parseSelectorGroup(alloc);
     }
 
     // skipWhitespace consumes whitespace characters and comments.
@@ -582,6 +582,8 @@ pub const Parser = struct {
             const ss = try p.parseSelector(alloc);
             try buf.append(ss);
         }
+
+        if (buf.items.len == 1) return buf.items[0];
 
         return .{ .group = try buf.toOwnedSlice() };
     }
