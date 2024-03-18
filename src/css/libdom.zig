@@ -28,4 +28,8 @@ pub const Node = struct {
     pub fn tag(n: Node) ![]const u8 {
         return try parser.nodeName(n.node);
     }
+
+    pub fn attr(n: Node, key: []const u8) !?[]const u8 {
+        return try parser.elementGetAttribute(parser.nodeToElement(n.node), key);
+    }
 };

@@ -7,6 +7,7 @@ pub const Node = struct {
     sibling: ?*const Node = null,
 
     name: []const u8 = "",
+    att: ?[]const u8 = null,
 
     pub fn firstChild(n: *const Node) !?*const Node {
         return n.child;
@@ -22,6 +23,10 @@ pub const Node = struct {
 
     pub fn tag(n: *const Node) ![]const u8 {
         return n.name;
+    }
+
+    pub fn attr(n: *const Node, _: []const u8) !?[]const u8 {
+        return n.att;
     }
 };
 
@@ -60,7 +65,22 @@ test "matchFirst" {
     }{
         .{
             .q = "address",
-            .n = .{ .name = "body", .child = &.{ .name = "address" } },
+            .n = .{ .child = &.{ .name = "body", .child = &.{ .name = "address" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "#foo",
+            .n = .{ .child = &.{ .name = "p", .att = "foo", .child = &.{ .name = "p" } } },
+            .exp = 1,
+        },
+        .{
+            .q = ".t1",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "t1" } } },
+            .exp = 1,
+        },
+        .{
+            .q = ".t1",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "foo t1" } } },
             .exp = 1,
         },
     };
@@ -89,7 +109,22 @@ test "matchAll" {
     }{
         .{
             .q = "address",
-            .n = .{ .name = "body", .child = &.{ .name = "address" } },
+            .n = .{ .child = &.{ .name = "body", .child = &.{ .name = "address" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "#foo",
+            .n = .{ .child = &.{ .name = "p", .att = "foo", .child = &.{ .name = "p" } } },
+            .exp = 1,
+        },
+        .{
+            .q = ".t1",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "t1" } } },
+            .exp = 1,
+        },
+        .{
+            .q = ".t1",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "foo t1" } } },
             .exp = 1,
         },
     };

@@ -165,9 +165,21 @@ pub const Selector = union(enum) {
     },
     pseudo_element: PseudoClass,
 
+    // returns true if s is a whitespace-separated list that includes val.
+    fn contains(haystack: []const u8, needle: []const u8) bool {
+        if (haystack.len == 0) return false;
+        var it = std.mem.splitAny(u8, haystack, " \t\r\n"); // TODO add \f
+        while (it.next()) |part| {
+            if (std.mem.eql(u8, part, needle)) return true;
+        }
+        return false;
+    }
+
     pub fn match(s: Selector, n: anytype) !bool {
         return switch (s) {
             .tag => |v| n.isElement() and std.ascii.eqlIgnoreCase(v, try n.tag()),
+            .id => |v| return n.isElement() and std.mem.eql(u8, v, try n.attr("id") orelse return false),
+            .class => |v| return n.isElement() and contains(try n.attr("class") orelse return false, v),
             else => false,
         };
     }

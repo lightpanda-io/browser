@@ -36,11 +36,10 @@ test "matchFirst" {
         html: []const u8,
         exp: usize,
     }{
-        .{
-            .q = "address",
-            .html = "<body><address>This address...</address></body>",
-            .exp = 1,
-        },
+        .{ .q = "address", .html = "<body><address>This address...</address></body>", .exp = 1 },
+        .{ .q = "#foo", .html = "<p id=\"foo\"><p id=\"bar\">", .exp = 1 },
+        .{ .q = ".t1", .html = "<ul><li class=\"t1\"><li class=\"t2\">", .exp = 1 },
+        .{ .q = ".t3", .html = "<ul><li class=\"t1\"><li class=\"t2 t3\">", .exp = 1 },
     };
 
     for (testcases) |tc| {
@@ -70,11 +69,10 @@ test "matchAll" {
         html: []const u8,
         exp: usize,
     }{
-        .{
-            .q = "address",
-            .html = "<body><address>This address...</address></body>",
-            .exp = 1,
-        },
+        .{ .q = "address", .html = "<body><address>This address...</address></body>", .exp = 1 },
+        .{ .q = "#foo", .html = "<p id=\"foo\"><p id=\"bar\">", .exp = 1 },
+        .{ .q = ".t1", .html = "<ul><li class=\"t1\"><li class=\"t2\">", .exp = 1 },
+        .{ .q = ".t3", .html = "<ul><li class=\"t1\"><li class=\"t2 t3\">", .exp = 1 },
     };
 
     for (testcases) |tc| {
