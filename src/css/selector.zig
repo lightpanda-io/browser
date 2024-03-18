@@ -167,7 +167,7 @@ pub const Selector = union(enum) {
 
     pub fn match(s: Selector, n: anytype) !bool {
         return switch (s) {
-            .tag => |v| std.ascii.eqlIgnoreCase(v, try n.tag()),
+            .tag => |v| n.isElement() and std.ascii.eqlIgnoreCase(v, try n.tag()),
             else => false,
         };
     }

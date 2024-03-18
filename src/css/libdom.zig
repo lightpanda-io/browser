@@ -20,6 +20,11 @@ pub const Node = struct {
         return null;
     }
 
+    pub fn isElement(n: Node) bool {
+        const t = parser.nodeType(n.node) catch return false;
+        return t == .element;
+    }
+
     pub fn tag(n: Node) ![]const u8 {
         return try parser.nodeName(n.node);
     }

@@ -16,6 +16,10 @@ pub const Node = struct {
         return n.sibling;
     }
 
+    pub fn isElement(_: *const Node) bool {
+        return true;
+    }
+
     pub fn tag(n: *const Node) ![]const u8 {
         return n.name;
     }
