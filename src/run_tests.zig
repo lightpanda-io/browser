@@ -104,6 +104,12 @@ test {
     const dumpTest = @import("browser/dump.zig");
     std.testing.refAllDecls(dumpTest);
 
+    const cssTest = @import("css/css.zig");
+    std.testing.refAllDecls(cssTest);
+
+    const cssParserTest = @import("css/parser.zig");
+    std.testing.refAllDecls(cssParserTest);
+
     const cssMatchTest = @import("css/match_test.zig");
     std.testing.refAllDecls(cssMatchTest);
 
