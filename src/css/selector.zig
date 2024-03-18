@@ -166,20 +166,69 @@ pub const Selector = union(enum) {
     pseudo_element: PseudoClass,
 
     // returns true if s is a whitespace-separated list that includes val.
-    fn contains(haystack: []const u8, needle: []const u8) bool {
+    fn word(haystack: []const u8, needle: []const u8, ci: bool) bool {
         if (haystack.len == 0) return false;
         var it = std.mem.splitAny(u8, haystack, " \t\r\n"); // TODO add \f
         while (it.next()) |part| {
-            if (std.mem.eql(u8, part, needle)) return true;
+            if (eql(part, needle, ci)) return true;
         }
         return false;
+    }
+
+    fn eql(a: []const u8, b: []const u8, ci: bool) bool {
+        if (ci) return std.ascii.eqlIgnoreCase(a, b);
+        return std.mem.eql(u8, a, b);
+    }
+
+    fn starts(haystack: []const u8, needle: []const u8, ci: bool) bool {
+        if (ci) return std.ascii.startsWithIgnoreCase(haystack, needle);
+        return std.mem.startsWith(u8, haystack, needle);
+    }
+
+    fn ends(haystack: []const u8, needle: []const u8, ci: bool) bool {
+        if (ci) return std.ascii.endsWithIgnoreCase(haystack, needle);
+        return std.mem.endsWith(u8, haystack, needle);
+    }
+
+    fn contains(haystack: []const u8, needle: []const u8, ci: bool) bool {
+        if (ci) return std.ascii.indexOfIgnoreCase(haystack, needle) != null;
+        return std.mem.indexOf(u8, haystack, needle) != null;
     }
 
     pub fn match(s: Selector, n: anytype) !bool {
         return switch (s) {
             .tag => |v| n.isElement() and std.ascii.eqlIgnoreCase(v, try n.tag()),
             .id => |v| return n.isElement() and std.mem.eql(u8, v, try n.attr("id") orelse return false),
-            .class => |v| return n.isElement() and contains(try n.attr("class") orelse return false, v),
+            .class => |v| return n.isElement() and word(try n.attr("class") orelse return false, v, false),
+            .attribute => |v| {
+                const attr = try n.attr(v.key);
+
+                if (v.op == null) return attr != null;
+                if (v.val == null or v.val.?.len == 0) return false;
+
+                const val = v.val.?;
+
+                return switch (v.op.?) {
+                    .eql => attr != null and eql(attr.?, val, v.ci),
+                    .not_eql => attr == null or !eql(attr.?, val, v.ci),
+                    .one_of => attr != null and word(attr.?, val, v.ci),
+                    .prefix => attr != null and starts(attr.?, val, v.ci),
+                    .suffix => attr != null and ends(attr.?, val, v.ci),
+                    .contains => attr != null and contains(attr.?, val, v.ci),
+                    .prefix_hyphen => {
+                        if (attr == null) return false;
+                        if (eql(attr.?, val, v.ci)) return true;
+
+                        if (attr.?.len <= val.len) return false;
+
+                        if (!starts(attr.?, val, v.ci)) return false;
+
+                        return attr.?[val.len] == '-';
+                    },
+                    .regexp => false, // TODO handle regexp attribute operator.
+                };
+            },
+            .never_match => return false,
             else => false,
         };
     }

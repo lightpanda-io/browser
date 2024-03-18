@@ -83,6 +83,76 @@ test "matchFirst" {
             .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "foo t1" } } },
             .exp = 1,
         },
+        .{
+            .q = "[foo]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p" } } },
+            .exp = 0,
+        },
+        .{
+            .q = "[foo]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo=baz]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 0,
+        },
+        .{
+            .q = "[foo!=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo!=baz]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo~=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "baz bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo~=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "barbaz" } } },
+            .exp = 0,
+        },
+        .{
+            .q = "[foo^=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "barbaz" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo$=baz]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "barbaz" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo*=rb]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "barbaz" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo|=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo|=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar-baz" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo|=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "ba" } } },
+            .exp = 0,
+        },
     };
 
     for (testcases) |tc| {
@@ -126,6 +196,76 @@ test "matchAll" {
             .q = ".t1",
             .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "foo t1" } } },
             .exp = 1,
+        },
+        .{
+            .q = "[foo]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p" } } },
+            .exp = 0,
+        },
+        .{
+            .q = "[foo]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo=baz]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 0,
+        },
+        .{
+            .q = "[foo!=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo!=baz]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 2,
+        },
+        .{
+            .q = "[foo~=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "baz bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo~=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "barbaz" } } },
+            .exp = 0,
+        },
+        .{
+            .q = "[foo^=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "barbaz" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo$=baz]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "barbaz" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo*=rb]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "barbaz" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo|=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo|=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar-baz" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo|=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "ba" } } },
+            .exp = 0,
         },
     };
 
