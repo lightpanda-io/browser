@@ -176,6 +176,31 @@ test "matchFirst" {
             } } } },
             .exp = 1,
         },
+        .{
+            .q = ":not(p)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "p:has(a)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "p:has(strong)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 0,
+        },
+        .{
+            .q = "p:haschild(a)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "p:haschild(strong)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 0,
+        },
     };
 
     for (testcases) |tc| {
@@ -314,6 +339,31 @@ test "matchAll" {
                 .par = &.{ .name = "span", .par = &.{ .name = "p" } },
             } } } },
             .exp = 1,
+        },
+        .{
+            .q = ":not(p)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 2,
+        },
+        .{
+            .q = "p:has(a)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "p:has(strong)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 0,
+        },
+        .{
+            .q = "p:haschild(a)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "p:haschild(strong)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 0,
         },
     };
 

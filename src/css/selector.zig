@@ -143,6 +143,7 @@ pub const PseudoClass = enum {
 pub const Selector = union(enum) {
     pub const Error = error{
         UnknownCombinedCombinator,
+        UnsupportedRelativePseudoClass,
     };
 
     compound: struct {
@@ -289,8 +290,39 @@ pub const Selector = union(enum) {
                 };
             },
             .never_match => return false,
+            .pseudo_class_relative => |v| {
+                if (!n.isElement()) return false;
+
+                return switch (v.pseudo_class) {
+                    .not => !try v.match.match(n),
+                    .has => try hasDescendantMatch(v.match, n),
+                    .haschild => try hasChildMatch(v.match, n),
+                    else => Error.UnsupportedRelativePseudoClass,
+                };
+            },
             else => false,
         };
+    }
+
+    fn hasDescendantMatch(s: *const Selector, n: anytype) anyerror!bool {
+        var c = try n.firstChild();
+        while (c != null) {
+            if (try s.match(c.?)) return true;
+            if (c.?.isElement() and try hasDescendantMatch(s, c.?)) return true;
+            c = try c.?.nextSibling();
+        }
+
+        return false;
+    }
+
+    fn hasChildMatch(s: *const Selector, n: anytype) anyerror!bool {
+        var c = try n.firstChild();
+        while (c != null) {
+            if (try s.match(c.?)) return true;
+            c = try c.?.nextSibling();
+        }
+
+        return false;
     }
 
     pub fn deinit(sel: Selector, alloc: std.mem.Allocator) void {
