@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const jsruntime = @import("jsruntime");
 const generate = @import("generate.zig");
 
+const setCAllocator = @import("calloc.zig").setCAllocator;
 const parser = @import("netsurf.zig");
 const apiweb = @import("apiweb.zig");
 const Window = @import("html/window.zig").Window;
@@ -87,11 +88,19 @@ fn testsAllExecFn(
 
     inline for (testFns) |testFn| {
         try testExecFn(alloc, js_env, testFn);
+        _ = c_arena.reset(.retain_capacity);
     }
 }
 
+var c_arena: std.heap.ArenaAllocator = undefined;
+
 pub fn main() !void {
     std.debug.print("\n", .{});
+
+    c_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer c_arena.deinit();
+    setCAllocator(c_arena.allocator());
+
     for (builtin.test_functions) |test_fn| {
         try test_fn.func();
         std.debug.print("{s}\tOK\n", .{test_fn.name});
