@@ -36,6 +36,18 @@ pub const Node = struct {
         return true;
     }
 
+    pub fn isDocument(_: *const Node) bool {
+        return false;
+    }
+
+    pub fn isComment(_: *const Node) bool {
+        return false;
+    }
+
+    pub fn isText(_: *const Node) bool {
+        return false;
+    }
+
     pub fn tag(n: *const Node) ![]const u8 {
         return n.name;
     }

@@ -274,7 +274,7 @@ pub const Selector = union(enum) {
                         if (!try v.second.match(n)) return false;
                         var c = try n.prevSibling();
                         while (c != null) {
-                            if (!c.?.isElement()) { // TODO must check text node or comment node instead.
+                            if (c.?.isText() or c.?.isComment()) {
                                 c = try c.?.prevSibling();
                                 continue;
                             }
@@ -395,7 +395,7 @@ pub const Selector = union(enum) {
                         if (!n.isElement()) return false;
 
                         const p = try n.parent();
-                        return p == null;
+                        return (p != null and p.?.isDocument());
                     },
                     .link => {
                         const ntag = try n.tag();

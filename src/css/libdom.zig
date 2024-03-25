@@ -46,6 +46,21 @@ pub const Node = struct {
         return t == .element;
     }
 
+    pub fn isDocument(n: Node) bool {
+        const t = parser.nodeType(n.node) catch return false;
+        return t == .document;
+    }
+
+    pub fn isComment(n: Node) bool {
+        const t = parser.nodeType(n.node) catch return false;
+        return t == .comment;
+    }
+
+    pub fn isText(n: Node) bool {
+        const t = parser.nodeType(n.node) catch return false;
+        return t == .text;
+    }
+
     pub fn tag(n: Node) ![]const u8 {
         return try parser.nodeName(n.node);
     }
