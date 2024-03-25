@@ -144,6 +144,9 @@ pub const Selector = union(enum) {
     pub const Error = error{
         UnknownCombinedCombinator,
         UnsupportedRelativePseudoClass,
+        UnsupportedContainsPseudoClass,
+        UnsupportedRegexpPseudoClass,
+        UnsupportedAttrRegexpOperator,
     };
 
     compound: struct {
@@ -222,6 +225,7 @@ pub const Selector = union(enum) {
         return std.mem.indexOf(u8, haystack, needle) != null;
     }
 
+    // match returns true if the node matches the selector query.
     pub fn match(s: Selector, n: anytype) !bool {
         return switch (s) {
             .tag => |v| n.isElement() and std.ascii.eqlIgnoreCase(v, try n.tag()),
@@ -286,7 +290,7 @@ pub const Selector = union(enum) {
 
                         return attr.?[val.len] == '-';
                     },
-                    .regexp => false, // TODO handle regexp attribute operator.
+                    .regexp => return Error.UnsupportedAttrRegexpOperator, // TODO handle regexp attribute operator.
                 };
             },
             .never_match => return false,
@@ -300,8 +304,124 @@ pub const Selector = union(enum) {
                     else => Error.UnsupportedRelativePseudoClass,
                 };
             },
-            else => false,
+            .pseudo_class_contains => return Error.UnsupportedContainsPseudoClass, // TODO, need mem allocation.
+            .pseudo_class_regexp => return Error.UnsupportedRegexpPseudoClass, // TODO need mem allocation.
+            .pseudo_class_nth => |v| {
+                if (v.a == 0) {
+                    if (v.last) {
+                        return simpleNthLastChildMatch(v.b, v.of_type, n);
+                    }
+                    return simpleNthChildMatch(v.b, v.of_type, n);
+                }
+                return nthChildMatch(v.a, v.b, v.last, v.of_type, n);
+            },
+            .pseudo_class => return false,
+            .pseudo_class_only_child => return false,
+            .pseudo_class_lang => return false,
+            .pseudo_element => return false,
         };
+    }
+
+    // simpleNthLastChildMatch implements :nth-last-child(b).
+    // If ofType is true, implements :nth-last-of-type instead.
+    fn simpleNthLastChildMatch(b: isize, of_type: bool, n: anytype) anyerror!bool {
+        if (!n.isElement()) return false;
+
+        const p = try n.parent();
+        if (p == null) return false;
+
+        const ntag = try n.tag();
+
+        var count: isize = 0;
+        var c = try p.?.lastChild();
+        // loop hover all n siblings.
+        while (c != null) {
+            // ignore non elements or others tags if of-type is true.
+            if (!c.?.isElement() or (of_type and !std.mem.eql(u8, ntag, try c.?.tag()))) {
+                c = try c.?.prevSibling();
+                continue;
+            }
+
+            count += 1;
+
+            if (n.eql(c.?)) return count == b;
+            if (count >= b) return false;
+
+            c = try c.?.prevSibling();
+        }
+
+        return false;
+    }
+
+    // simpleNthChildMatch implements :nth-child(b).
+    // If ofType is true, implements :nth-of-type instead.
+    fn simpleNthChildMatch(b: isize, of_type: bool, n: anytype) anyerror!bool {
+        if (!n.isElement()) return false;
+
+        const p = try n.parent();
+        if (p == null) return false;
+
+        const ntag = try n.tag();
+
+        var count: isize = 0;
+        var c = try p.?.firstChild();
+        // loop hover all n siblings.
+        while (c != null) {
+            // ignore non elements or others tags if of-type is true.
+            if (!c.?.isElement() or (of_type and !std.mem.eql(u8, ntag, try c.?.tag()))) {
+                c = try c.?.nextSibling();
+                continue;
+            }
+
+            count += 1;
+
+            if (n.eql(c.?)) return count == b;
+            if (count >= b) return false;
+
+            c = try c.?.nextSibling();
+        }
+
+        return false;
+    }
+
+    // nthChildMatch implements :nth-child(an+b).
+    // If last is true, implements :nth-last-child instead.
+    // If ofType is true, implements :nth-of-type instead.
+    fn nthChildMatch(a: isize, b: isize, last: bool, of_type: bool, n: anytype) anyerror!bool {
+        if (!n.isElement()) return false;
+
+        const p = try n.parent();
+        if (p == null) return false;
+
+        const ntag = try n.tag();
+
+        var i: isize = -1;
+        var count: isize = 0;
+        var c = try p.?.firstChild();
+        // loop hover all n siblings.
+        while (c != null) {
+            // ignore non elements or others tags if of-type is true.
+            if (!c.?.isElement() or (of_type and !std.mem.eql(u8, ntag, try c.?.tag()))) {
+                c = try c.?.nextSibling();
+                continue;
+            }
+            count += 1;
+
+            if (n.eql(c.?)) {
+                i = count;
+                if (!last) break;
+            }
+
+            c = try c.?.nextSibling();
+        }
+
+        if (i == -1) return false;
+
+        if (last) i = count - i + 1;
+
+        i -= b;
+        if (a == 0) return i == 0;
+        return @mod(i, a) == 0 and @divTrunc(i, a) >= 0;
     }
 
     fn hasDescendantMatch(s: *const Selector, n: anytype) anyerror!bool {

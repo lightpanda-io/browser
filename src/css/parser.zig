@@ -711,7 +711,7 @@ pub const Parser = struct {
         if (p.i >= p.s.len) return ParseError.ExpectedNthExpression;
         const c = p.s[p.i];
         if (std.ascii.isDigit(c)) {
-            const a = try p.parseInteger() * -1;
+            const a = try p.parseInteger();
             return p.parseNthReadA(a);
         }
         if (c == 'n' or c == 'N') {

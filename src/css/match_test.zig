@@ -4,7 +4,9 @@ const css = @import("css.zig");
 // Node mock implementation for test only.
 pub const Node = struct {
     child: ?*const Node = null,
+    last: ?*const Node = null,
     sibling: ?*const Node = null,
+    prev: ?*const Node = null,
     par: ?*const Node = null,
 
     name: []const u8 = "",
@@ -14,8 +16,16 @@ pub const Node = struct {
         return n.child;
     }
 
+    pub fn lastChild(n: *const Node) !?*const Node {
+        return n.last;
+    }
+
     pub fn nextSibling(n: *const Node) !?*const Node {
         return n.sibling;
+    }
+
+    pub fn prevSibling(n: *const Node) !?*const Node {
+        return n.prev;
     }
 
     pub fn parent(n: *const Node) !?*const Node {
@@ -32,6 +42,10 @@ pub const Node = struct {
 
     pub fn attr(n: *const Node, _: []const u8) !?[]const u8 {
         return n.att;
+    }
+
+    pub fn eql(a: *const Node, b: *const Node) bool {
+        return a == b;
     }
 };
 
@@ -373,12 +387,81 @@ test "matchAll" {
         const s = try css.parse(alloc, tc.q, .{});
         defer s.deinit(alloc);
 
-        _ = css.matchAll(s, &tc.n, &matcher) catch |e| {
+        css.matchAll(s, &tc.n, &matcher) catch |e| {
             std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
             return e;
         };
 
         std.testing.expectEqual(tc.exp, matcher.nodes.items.len) catch |e| {
+            std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+            return e;
+        };
+    }
+}
+
+test "nth pseudo class" {
+    const alloc = std.testing.allocator;
+
+    var matcher = Matcher.init(alloc);
+    defer matcher.deinit();
+
+    var p1: Node = .{ .name = "p" };
+    var p2: Node = .{ .name = "p" };
+
+    p1.sibling = &p2;
+    p2.prev = &p1;
+
+    var root: Node = .{ .child = &p1, .last = &p2 };
+    p1.par = &root;
+    p2.par = &root;
+
+    const testcases = [_]struct {
+        q: []const u8,
+        n: Node,
+        exp: ?*const Node,
+    }{
+        .{ .q = "a:nth-of-type(1)", .n = root, .exp = null },
+        .{ .q = "p:nth-of-type(1)", .n = root, .exp = &p1 },
+        .{ .q = "p:nth-of-type(2)", .n = root, .exp = &p2 },
+        .{ .q = "p:nth-of-type(0)", .n = root, .exp = null },
+        .{ .q = "p:nth-of-type(2n)", .n = root, .exp = &p2 },
+        .{ .q = "p:nth-last-child(1)", .n = root, .exp = &p2 },
+        .{ .q = "p:nth-last-child(2)", .n = root, .exp = &p1 },
+        .{ .q = "p:nth-child(1)", .n = root, .exp = &p1 },
+        .{ .q = "p:nth-child(2)", .n = root, .exp = &p2 },
+        .{ .q = "p:nth-child(odd)", .n = root, .exp = &p1 },
+        .{ .q = "p:nth-child(even)", .n = root, .exp = &p2 },
+        .{ .q = "p:nth-child(n+2)", .n = root, .exp = &p2 },
+    };
+
+    for (testcases) |tc| {
+        matcher.reset();
+
+        const s = try css.parse(alloc, tc.q, .{});
+        defer s.deinit(alloc);
+
+        css.matchAll(s, &tc.n, &matcher) catch |e| {
+            std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+            return e;
+        };
+
+        if (tc.exp) |exp_n| {
+            const exp: usize = 1;
+            std.testing.expectEqual(exp, matcher.nodes.items.len) catch |e| {
+                std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+                return e;
+            };
+
+            std.testing.expectEqual(exp_n, matcher.nodes.items[0]) catch |e| {
+                std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+                return e;
+            };
+
+            continue;
+        }
+
+        const exp: usize = 0;
+        std.testing.expectEqual(exp, matcher.nodes.items.len) catch |e| {
             std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
             return e;
         };
