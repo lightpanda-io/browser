@@ -508,14 +508,26 @@ pub const Selector = union(enum) {
         };
     }
 
+    fn hasLegendInPreviousSiblings(n: anytype) anyerror!bool {
+        var c = try n.prevSibling();
+        while (c != null) {
+            const ctag = try c.?.tag();
+            if (std.ascii.eqlIgnoreCase("legend", ctag)) return true;
+            c = try c.?.prevSibling();
+        }
+        return false;
+    }
+
     fn inDisabledFieldset(n: anytype) anyerror!bool {
         const p = try n.parent();
         if (p == null) return false;
 
+        const ntag = try n.tag();
         const ptag = try p.?.tag();
 
         if (std.ascii.eqlIgnoreCase("fieldset", ptag) and
-            try p.?.attr("disabled") != null)
+            try p.?.attr("disabled") != null and
+            (!std.ascii.eqlIgnoreCase("legend", ntag) or try hasLegendInPreviousSiblings(n)))
         {
             return true;
         }
