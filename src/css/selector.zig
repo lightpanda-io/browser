@@ -264,7 +264,34 @@ pub const Selector = union(enum) {
 
                         return false;
                     },
-                    else => return Error.UnknownCombinedCombinator,
+                    .child => {
+                        const p = try n.parent();
+                        if (p == null) return false;
+
+                        return try v.second.match(n) and try v.first.match(p.?);
+                    },
+                    .next_sibling => {
+                        if (!try v.second.match(n)) return false;
+                        var c = try n.prevSibling();
+                        while (c != null) {
+                            if (!c.?.isElement()) { // TODO must check text node or comment node instead.
+                                c = try c.?.prevSibling();
+                                continue;
+                            }
+                            return try v.first.match(c.?);
+                        }
+                        return false;
+                    },
+                    .subsequent_sibling => {
+                        if (!try v.second.match(n)) return false;
+
+                        var c = try n.prevSibling();
+                        while (c != null) {
+                            if (try v.first.match(c.?)) return true;
+                            c = try c.?.prevSibling();
+                        }
+                        return false;
+                    },
                 };
             },
             .attribute => |v| {
