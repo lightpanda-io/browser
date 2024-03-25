@@ -61,6 +61,14 @@ pub const Node = struct {
         return t == .text;
     }
 
+    pub fn isEmptyText(n: Node) !bool {
+        const data = try parser.nodeTextContent(n.node);
+        if (data == null) return true;
+        if (data.?.len == 0) return true;
+
+        return std.mem.trim(u8, data.?, &std.ascii.whitespace).len == 0;
+    }
+
     pub fn tag(n: Node) ![]const u8 {
         return try parser.nodeName(n.node);
     }

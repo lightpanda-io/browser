@@ -383,8 +383,10 @@ pub const Selector = union(enum) {
                         while (c != null) {
                             if (c.?.isElement()) return false;
 
-                            // TODO check text node content equals an empty
-                            // string ("")
+                            if (c.?.isText()) {
+                                if (try c.?.isEmptyText()) continue;
+                                return false;
+                            }
 
                             c = try c.?.nextSibling();
                         }

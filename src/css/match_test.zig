@@ -48,6 +48,10 @@ pub const Node = struct {
         return false;
     }
 
+    pub fn isEmptyText(_: *const Node) !bool {
+        return false;
+    }
+
     pub fn tag(n: *const Node) ![]const u8 {
         return n.name;
     }
