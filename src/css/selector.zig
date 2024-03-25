@@ -146,6 +146,7 @@ pub const Selector = union(enum) {
         UnsupportedRelativePseudoClass,
         UnsupportedContainsPseudoClass,
         UnsupportedPseudoClass,
+        UnsupportedPseudoElement,
         UnsupportedRegexpPseudoClass,
         UnsupportedAttrRegexpOperator,
     };
@@ -317,29 +318,169 @@ pub const Selector = union(enum) {
                 return nthChildMatch(v.a, v.b, v.last, v.of_type, n);
             },
             .pseudo_class => |v| {
-                switch (v) {
-                    .input => return Error.UnsupportedPseudoClass,
-                    .empty => return Error.UnsupportedPseudoClass,
-                    .root => return Error.UnsupportedPseudoClass,
-                    .link => return Error.UnsupportedPseudoClass,
-                    .enabled => return Error.UnsupportedPseudoClass,
-                    .disabled => return Error.UnsupportedPseudoClass,
-                    .checked => return Error.UnsupportedPseudoClass,
-                    .visited => return Error.UnsupportedPseudoClass,
-                    .hover => return Error.UnsupportedPseudoClass,
-                    .active => return Error.UnsupportedPseudoClass,
-                    .focus => return Error.UnsupportedPseudoClass,
-                    .target => return Error.UnsupportedPseudoClass,
+                return switch (v) {
+                    .input => {
+                        if (!n.isElement()) return false;
+                        const ntag = try n.tag();
+
+                        return std.ascii.eqlIgnoreCase("input", ntag) or
+                            std.ascii.eqlIgnoreCase("select", ntag) or
+                            std.ascii.eqlIgnoreCase("button", ntag) or
+                            std.ascii.eqlIgnoreCase("textarea", ntag);
+                    },
+                    .empty => {
+                        if (!n.isElement()) return false;
+
+                        var c = try n.firstChild();
+                        while (c != null) {
+                            if (c.?.isElement()) return false;
+
+                            // TODO check text node content equals an empty
+                            // string ("")
+
+                            c = try c.?.nextSibling();
+                        }
+
+                        return true;
+                    },
+                    .root => {
+                        if (!n.isElement()) return false;
+
+                        const p = try n.parent();
+                        return p == null;
+                    },
+                    .link => {
+                        const ntag = try n.tag();
+
+                        return std.ascii.eqlIgnoreCase("a", ntag) or
+                            std.ascii.eqlIgnoreCase("area", ntag) or
+                            std.ascii.eqlIgnoreCase("link", ntag);
+                    },
+                    .enabled => {
+                        if (!n.isElement()) return false;
+
+                        const ntag = try n.tag();
+
+                        if (std.ascii.eqlIgnoreCase("a", ntag) or
+                            std.ascii.eqlIgnoreCase("area", ntag) or
+                            std.ascii.eqlIgnoreCase("link", ntag))
+                        {
+                            return try n.attr("href") != null;
+                        }
+
+                        if (std.ascii.eqlIgnoreCase("optgroup", ntag) or
+                            std.ascii.eqlIgnoreCase("menuitem", ntag) or
+                            std.ascii.eqlIgnoreCase("fieldset", ntag))
+                        {
+                            return try n.attr("disabled") == null;
+                        }
+
+                        if (std.ascii.eqlIgnoreCase("input", ntag) or
+                            std.ascii.eqlIgnoreCase("button", ntag) or
+                            std.ascii.eqlIgnoreCase("select", ntag) or
+                            std.ascii.eqlIgnoreCase("textarea", ntag) or
+                            std.ascii.eqlIgnoreCase("option", ntag))
+                        {
+                            return try n.attr("disabled") == null and
+                                !try inDisabledFieldset(n);
+                        }
+
+                        return false;
+                    },
+                    .disabled => {
+                        if (!n.isElement()) return false;
+
+                        const ntag = try n.tag();
+
+                        if (std.ascii.eqlIgnoreCase("optgroup", ntag) or
+                            std.ascii.eqlIgnoreCase("menuitem", ntag) or
+                            std.ascii.eqlIgnoreCase("fieldset", ntag))
+                        {
+                            return try n.attr("disabled") != null;
+                        }
+
+                        if (std.ascii.eqlIgnoreCase("input", ntag) or
+                            std.ascii.eqlIgnoreCase("button", ntag) or
+                            std.ascii.eqlIgnoreCase("select", ntag) or
+                            std.ascii.eqlIgnoreCase("textarea", ntag) or
+                            std.ascii.eqlIgnoreCase("option", ntag))
+                        {
+                            return try n.attr("disabled") != null or
+                                try inDisabledFieldset(n);
+                        }
+
+                        return false;
+                    },
+                    .checked => {
+                        if (!n.isElement()) return false;
+
+                        const ntag = try n.tag();
+
+                        if (std.ascii.eqlIgnoreCase("intput", ntag)) {
+                            const ntype = try n.attr("type");
+                            if (ntype == null) return false;
+
+                            if (std.mem.eql(u8, ntype.?, "checkbox") or
+                                std.mem.eql(u8, ntype.?, "radio"))
+                            {
+                                return try n.attr("checked") != null;
+                            }
+
+                            return false;
+                        }
+                        if (std.ascii.eqlIgnoreCase("option", ntag)) {
+                            return try n.attr("selected") != null;
+                        }
+
+                        return false;
+                    },
+                    .visited => return false,
+                    .hover => return false,
+                    .active => return false,
+                    .focus => return false,
+                    // TODO implement using the url fragment.
+                    // see https://developer.mozilla.org/en-US/docs/Web/CSS/:target
+                    .target => return false,
 
                     // all others pseudo class are handled by specialized
                     // pseudo_class_X selectors.
                     else => return Error.UnsupportedPseudoClass,
-                }
+                };
             },
             .pseudo_class_only_child => |v| onlyChildMatch(v, n),
             .pseudo_class_lang => |v| langMatch(v, n),
-            .pseudo_element => return false,
+
+            // pseudo elements doesn't make sense in the matching process.
+            // > A CSS pseudo-element is a keyword added to a selector that
+            // > lets you style a specific part of the selected element(s).
+            // https://developer.mozilla.org/en-US/docs/Web/CSS/Pseudo-elements
+            .pseudo_element => return Error.UnsupportedPseudoElement,
         };
+    }
+
+    fn inDisabledFieldset(n: anytype) anyerror!bool {
+        const p = try n.parent();
+        if (p == null) return false;
+
+        const ptag = try p.?.tag();
+
+        if (std.ascii.eqlIgnoreCase("fieldset", ptag) and
+            try p.?.attr("disabled") != null)
+        {
+            return true;
+        }
+
+        // TODO should we handle legend like cascadia does?
+        // The implemention below looks suspicious, I didn't find a test case
+        // in cascadia and I didn't find the reference about legend in the
+        // specs. For now I do prefer ignoring this part.
+        //
+        // ```
+        // (n.DataAtom != atom.Legend || hasLegendInPreviousSiblings(n)) {
+        // ```
+        // https://github.com/andybalholm/cascadia/blob/master/pseudo_classes.go#L434
+
+        return try inDisabledFieldset(p.?);
     }
 
     fn langMatch(lang: []const u8, n: anytype) anyerror!bool {
