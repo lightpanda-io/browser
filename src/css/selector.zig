@@ -337,9 +337,26 @@ pub const Selector = union(enum) {
                 }
             },
             .pseudo_class_only_child => |v| onlyChildMatch(v, n),
-            .pseudo_class_lang => return false,
+            .pseudo_class_lang => |v| langMatch(v, n),
             .pseudo_element => return false,
         };
+    }
+
+    fn langMatch(lang: []const u8, n: anytype) anyerror!bool {
+        if (try n.attr("lang")) |own| {
+            if (std.mem.eql(u8, own, lang)) return true;
+
+            // check if the lang attr starts with lang+'-'
+            if (std.mem.startsWith(u8, own, lang)) {
+                if (own.len > lang.len and own[lang.len] == '-') return true;
+            }
+        }
+
+        // if the tag doesn't match, try the parent.
+        const p = try n.parent();
+        if (p == null) return false;
+
+        return langMatch(lang, p.?);
     }
 
     // onlyChildMatch implements :only-child

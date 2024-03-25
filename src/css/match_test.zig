@@ -215,6 +215,16 @@ test "matchFirst" {
             .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
             .exp = 0,
         },
+        .{
+            .q = "p:lang(en)",
+            .n = .{ .child = &.{ .name = "p", .att = "en-US", .child = &.{ .name = "a" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "a:lang(en)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a", .par = &.{ .att = "en-US" } } } },
+            .exp = 1,
+        },
     };
 
     for (testcases) |tc| {
@@ -378,6 +388,16 @@ test "matchAll" {
             .q = "p:haschild(strong)",
             .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
             .exp = 0,
+        },
+        .{
+            .q = "p:lang(en)",
+            .n = .{ .child = &.{ .name = "p", .att = "en-US", .child = &.{ .name = "a" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "a:lang(en)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a", .par = &.{ .att = "en-US" } } } },
+            .exp = 1,
         },
     };
 
