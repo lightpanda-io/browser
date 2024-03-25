@@ -145,6 +145,7 @@ pub const Selector = union(enum) {
         UnknownCombinedCombinator,
         UnsupportedRelativePseudoClass,
         UnsupportedContainsPseudoClass,
+        UnsupportedPseudoClass,
         UnsupportedRegexpPseudoClass,
         UnsupportedAttrRegexpOperator,
     };
@@ -315,11 +316,59 @@ pub const Selector = union(enum) {
                 }
                 return nthChildMatch(v.a, v.b, v.last, v.of_type, n);
             },
-            .pseudo_class => return false,
-            .pseudo_class_only_child => return false,
+            .pseudo_class => |v| {
+                switch (v) {
+                    .input => return Error.UnsupportedPseudoClass,
+                    .empty => return Error.UnsupportedPseudoClass,
+                    .root => return Error.UnsupportedPseudoClass,
+                    .link => return Error.UnsupportedPseudoClass,
+                    .enabled => return Error.UnsupportedPseudoClass,
+                    .disabled => return Error.UnsupportedPseudoClass,
+                    .checked => return Error.UnsupportedPseudoClass,
+                    .visited => return Error.UnsupportedPseudoClass,
+                    .hover => return Error.UnsupportedPseudoClass,
+                    .active => return Error.UnsupportedPseudoClass,
+                    .focus => return Error.UnsupportedPseudoClass,
+                    .target => return Error.UnsupportedPseudoClass,
+
+                    // all others pseudo class are handled by specialized
+                    // pseudo_class_X selectors.
+                    else => return Error.UnsupportedPseudoClass,
+                }
+            },
+            .pseudo_class_only_child => |v| onlyChildMatch(v, n),
             .pseudo_class_lang => return false,
             .pseudo_element => return false,
         };
+    }
+
+    // onlyChildMatch implements :only-child
+    //  If `ofType` is true, it implements :only-of-type instead.
+    fn onlyChildMatch(of_type: bool, n: anytype) anyerror!bool {
+        if (!n.isElement()) return false;
+
+        const p = try n.parent();
+        if (p == null) return false;
+
+        const ntag = try n.tag();
+
+        var count: usize = 0;
+        var c = try p.?.firstChild();
+        // loop hover all n siblings.
+        while (c != null) {
+            // ignore non elements or others tags if of-type is true.
+            if (!c.?.isElement() or (of_type and !std.mem.eql(u8, ntag, try c.?.tag()))) {
+                c = try c.?.nextSibling();
+                continue;
+            }
+
+            count += 1;
+            if (count > 1) return false;
+
+            c = try c.?.nextSibling();
+        }
+
+        return count == 1;
     }
 
     // simpleNthLastChildMatch implements :nth-last-child(b).

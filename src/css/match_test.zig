@@ -399,6 +399,70 @@ test "matchAll" {
     }
 }
 
+test "pseudo class" {
+    const alloc = std.testing.allocator;
+
+    var matcher = Matcher.init(alloc);
+    defer matcher.deinit();
+
+    var p1: Node = .{ .name = "p" };
+    var p2: Node = .{ .name = "p" };
+    var a1: Node = .{ .name = "a" };
+
+    p1.sibling = &p2;
+    p2.prev = &p1;
+
+    p2.sibling = &a1;
+    a1.prev = &p2;
+
+    var root: Node = .{ .child = &p1, .last = &a1 };
+    p1.par = &root;
+    p2.par = &root;
+    a1.par = &root;
+
+    const testcases = [_]struct {
+        q: []const u8,
+        n: Node,
+        exp: ?*const Node,
+    }{
+        .{ .q = "p:only-child", .n = root, .exp = null },
+        .{ .q = "a:only-of-type", .n = root, .exp = &a1 },
+    };
+
+    for (testcases) |tc| {
+        matcher.reset();
+
+        const s = try css.parse(alloc, tc.q, .{});
+        defer s.deinit(alloc);
+
+        css.matchAll(s, &tc.n, &matcher) catch |e| {
+            std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+            return e;
+        };
+
+        if (tc.exp) |exp_n| {
+            const exp: usize = 1;
+            std.testing.expectEqual(exp, matcher.nodes.items.len) catch |e| {
+                std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+                return e;
+            };
+
+            std.testing.expectEqual(exp_n, matcher.nodes.items[0]) catch |e| {
+                std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+                return e;
+            };
+
+            continue;
+        }
+
+        const exp: usize = 0;
+        std.testing.expectEqual(exp, matcher.nodes.items.len) catch |e| {
+            std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+            return e;
+        };
+    }
+}
+
 test "nth pseudo class" {
     const alloc = std.testing.allocator;
 
