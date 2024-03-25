@@ -268,7 +268,7 @@ pub const Selector = union(enum) {
                 };
             },
             .attribute => |v| {
-                const attr = try n.attr(v.key);
+                var attr = try n.attr(v.key);
 
                 if (v.op == null) return attr != null;
                 if (v.val == null or v.val.?.len == 0) return false;
@@ -279,9 +279,30 @@ pub const Selector = union(enum) {
                     .eql => attr != null and eql(attr.?, val, v.ci),
                     .not_eql => attr == null or !eql(attr.?, val, v.ci),
                     .one_of => attr != null and word(attr.?, val, v.ci),
-                    .prefix => attr != null and starts(attr.?, val, v.ci),
-                    .suffix => attr != null and ends(attr.?, val, v.ci),
-                    .contains => attr != null and contains(attr.?, val, v.ci),
+                    .prefix => {
+                        if (attr == null) return false;
+                        attr.? = std.mem.trim(u8, attr.?, &std.ascii.whitespace);
+
+                        if (attr.?.len == 0) return false;
+
+                        return starts(attr.?, val, v.ci);
+                    },
+                    .suffix => {
+                        if (attr == null) return false;
+                        attr.? = std.mem.trim(u8, attr.?, &std.ascii.whitespace);
+
+                        if (attr.?.len == 0) return false;
+
+                        return ends(attr.?, val, v.ci);
+                    },
+                    .contains => {
+                        if (attr == null) return false;
+                        attr.? = std.mem.trim(u8, attr.?, &std.ascii.whitespace);
+
+                        if (attr.?.len == 0) return false;
+
+                        return contains(attr.?, val, v.ci);
+                    },
                     .prefix_hyphen => {
                         if (attr == null) return false;
                         if (eql(attr.?, val, v.ci)) return true;
