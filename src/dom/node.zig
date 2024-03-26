@@ -199,7 +199,7 @@ pub const Node = struct {
     }
 
     pub fn get_childNodes(self: *parser.Node, alloc: std.mem.Allocator) !NodeList {
-        var list = try NodeList.init();
+        var list = NodeList.init();
         errdefer list.deinit(alloc);
 
         var n = try parser.nodeFirstChild(self) orelse return list;

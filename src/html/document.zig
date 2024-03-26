@@ -80,7 +80,7 @@ pub const HTMLDocument = struct {
     }
 
     pub fn _getElementsByName(self: *parser.DocumentHTML, alloc: std.mem.Allocator, name: []const u8) !NodeList {
-        var list = try NodeList.init();
+        var list = NodeList.init();
         errdefer list.deinit(alloc);
 
         if (name.len == 0) return list;
