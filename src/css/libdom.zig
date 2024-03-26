@@ -74,6 +74,7 @@ pub const Node = struct {
     }
 
     pub fn attr(n: Node, key: []const u8) !?[]const u8 {
+        if (!n.isElement()) return null;
         return try parser.elementGetAttribute(parser.nodeToElement(n.node), key);
     }
 
