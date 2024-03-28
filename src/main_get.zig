@@ -58,7 +58,7 @@ pub fn main() !void {
     while (args.next()) |arg| {
         if (std.mem.eql(u8, "-h", arg) or std.mem.eql(u8, "--help", arg)) {
             try std.io.getStdErr().writer().print(usage, .{execname});
-            std.os.exit(0);
+            std.posix.exit(0);
         }
         if (std.mem.eql(u8, "--dump", arg)) {
             dump = true;
@@ -67,14 +67,14 @@ pub fn main() !void {
         // allow only one url
         if (url.len != 0) {
             try std.io.getStdErr().writer().print(usage, .{execname});
-            std.os.exit(1);
+            std.posix.exit(1);
         }
         url = arg;
     }
 
     if (url.len == 0) {
         try std.io.getStdErr().writer().print(usage, .{execname});
-        std.os.exit(1);
+        std.posix.exit(1);
     }
 
     const vm = jsruntime.VM.init();

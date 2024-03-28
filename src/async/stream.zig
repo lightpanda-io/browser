@@ -18,7 +18,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const os = std.os;
+const posix = std.posix;
 const io = std.io;
 const assert = std.debug.assert;
 
@@ -28,15 +28,15 @@ pub const Stream = struct {
     alloc: std.mem.Allocator,
     conn: *tcp.Conn,
 
-    handle: std.os.socket_t,
+    handle: posix.socket_t,
 
     pub fn close(self: Stream) void {
-        os.closeSocket(self.handle);
+        posix.closeSocket(self.handle);
         self.alloc.destroy(self.conn);
     }
 
-    pub const ReadError = os.ReadError;
-    pub const WriteError = os.WriteError;
+    pub const ReadError = posix.ReadError;
+    pub const WriteError = posix.WriteError;
 
     pub const Reader = io.Reader(Stream, ReadError, read);
     pub const Writer = io.Writer(Stream, WriteError, write);
@@ -55,8 +55,8 @@ pub const Stream = struct {
         };
     }
 
-    pub fn readv(s: Stream, iovecs: []const os.iovec) ReadError!usize {
-        return os.readv(s.handle, iovecs);
+    pub fn readv(s: Stream, iovecs: []const posix.iovec) ReadError!usize {
+        return posix.readv(s.handle, iovecs);
     }
 
     /// Returns the number of bytes read. If the number read is smaller than
@@ -105,7 +105,7 @@ pub const Stream = struct {
 
     /// See https://github.com/ziglang/zig/issues/7699
     /// See equivalent function: `std.fs.File.writev`.
-    pub fn writev(self: Stream, iovecs: []const os.iovec_const) WriteError!usize {
+    pub fn writev(self: Stream, iovecs: []const posix.iovec_const) WriteError!usize {
         if (iovecs.len == 0) return 0;
         const first_buffer = iovecs[0].iov_base[0..iovecs[0].iov_len];
         return try self.write(first_buffer);
@@ -115,7 +115,7 @@ pub const Stream = struct {
     /// order to handle partial writes from the underlying OS layer.
     /// See https://github.com/ziglang/zig/issues/7699
     /// See equivalent function: `std.fs.File.writevAll`.
-    pub fn writevAll(self: Stream, iovecs: []os.iovec_const) WriteError!void {
+    pub fn writevAll(self: Stream, iovecs: []posix.iovec_const) WriteError!void {
         if (iovecs.len == 0) return;
 
         var i: usize = 0;

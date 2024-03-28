@@ -35,9 +35,9 @@ fn itoa(comptime i: u8) ![]const u8 {
     return try std.fmt.bufPrint(buf[0..], "{d}", .{i});
 }
 
-fn fmtName(comptime T: type) []const u8 {
+fn fmtName(comptime T: type) [:0]const u8 {
     var it = std.mem.splitBackwards(u8, @typeName(T), ".");
-    return it.first();
+    return it.first() ++ "";
 }
 
 // Union
@@ -168,7 +168,11 @@ pub const Union = struct {
                     T = *T;
                 }
                 union_fields[done] = .{
-                    .name = fmtName(member_T),
+                    // UnionField.name expect a null terminated string.
+                    // concatenate the `[]const u8` string with an empty string
+                    // literal (`name ++ ""`) to explicitly coerce it to `[:0]const
+                    // u8`.
+                    .name = fmtName(member_T) ++ "",
                     .type = T,
                     .alignment = @alignOf(T),
                 };
@@ -176,7 +180,7 @@ pub const Union = struct {
             }
         }
         const union_info = std.builtin.Type.Union{
-            .layout = .Auto,
+            .layout = .auto,
             .tag_type = enum_T,
             .fields = &union_fields,
             .decls = &decls,
@@ -286,7 +290,11 @@ fn TupleT(comptime tuple: anytype) type {
             continue;
         }
         fields[done] = .{
-            .name = try itoa(done),
+            // StructField.name expect a null terminated string.
+            // concatenate the `[]const u8` string with an empty string
+            // literal (`name ++ ""`) to explicitly coerce it to `[:0]const
+            // u8`.
+            .name = try itoa(done) ++ "",
             .type = type,
             .default_value = null,
             .is_comptime = false,
@@ -296,7 +304,7 @@ fn TupleT(comptime tuple: anytype) type {
     }
     const decls: [0]std.builtin.Type.Declaration = undefined;
     const info = std.builtin.Type.Struct{
-        .layout = .Auto,
+        .layout = .auto,
         .fields = &fields,
         .decls = &decls,
         .is_tuple = true,

@@ -265,8 +265,8 @@ pub const Tag = enum(u8) {
     pub fn all() []Tag {
         comptime {
             const info = @typeInfo(Tag).Enum;
-            comptime var l: [info.fields.len]Tag = undefined;
-            inline for (info.fields, 0..) |field, i| {
+            var l: [info.fields.len]Tag = undefined;
+            for (info.fields, 0..) |field, i| {
                 l[i] = @as(Tag, @enumFromInt(field.value));
             }
             return &l;
@@ -277,7 +277,7 @@ pub const Tag = enum(u8) {
         comptime {
             const tags = all();
             var names: [tags.len][]const u8 = undefined;
-            inline for (tags, 0..) |tag, i| {
+            for (tags, 0..) |tag, i| {
                 names[i] = tag.elementName();
             }
             return &names;
