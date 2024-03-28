@@ -1,7 +1,7 @@
 # This dockerfile is used to build browsercore vendor dependencies except
 # jsruntime-lib v8.
 # jsruntime-lib v8 is built via zig-v8-fork/Dockerfile.
-ARG ZIG_DOCKER_VERSION=0.11.0
+ARG ZIG_DOCKER_VERSION=0.12.0-dev.3518-d2be725e4
 FROM ghcr.io/lightpanda-io/zig:${ZIG_DOCKER_VERSION} as build
 
 # Install required dependencies
