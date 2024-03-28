@@ -9,7 +9,7 @@ install it with the right version in order to build the project.
 
 Browsercore also depends on
 [js-runtimelib](https://github.com/francisbouvier/jsruntime-lib/) and
-[lexbor](https://github.com/lexbor/lexbor) libs.
+[Netsurf libs](https://www.netsurf-browser.org/) libs.
 
 To be able to build the v8 engine for js-runtimelib, you have to install some libs:
 
@@ -24,8 +24,6 @@ sudo apt install xz-utils \
 
 For MacOS, you only need Python 3 and cmake.
 
-To be able to build lexbor, you need to install also `cmake`.
-
 ### Install and build dependencies
 
 The project uses git submodule for dependencies.
@@ -36,18 +34,11 @@ directory.
 make install-submodule
 ```
 
-### Build netsurf
+### Build Netsurf
 
 The command `make install-netsurf` will build netsurf libs used by browsercore.
 ```
 make install-netsurf
-```
-
-### Build lexbor
-
-The command `make install-lexbor` will build lexbor lib used by browsercore.
-```
-make install-lexbor
 ```
 
 ### Build jsruntime-lib

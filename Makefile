@@ -93,15 +93,15 @@ test:
 # Install and build required dependencies commands
 # ------------
 .PHONY: install-submodule
-.PHONY: install-lexbor install-jsruntime install-jsruntime-dev install-libiconv
+.PHONY: install-jsruntime install-jsruntime-dev install-libiconv
 .PHONY: _install-netsurf install-netsurf clean-netsurf test-netsurf install-netsurf-dev
 .PHONY: install-dev install
 
 ## Install and build dependencies for release
-install: install-submodule install-lexbor install-jsruntime install-netsurf
+install: install-submodule install-jsruntime install-netsurf
 
 ## Install and build dependencies for dev
-install-dev: install-submodule install-lexbor install-jsruntime-dev install-netsurf-dev
+install-dev: install-submodule install-jsruntime-dev install-netsurf-dev
 
 install-netsurf-dev: _install-netsurf
 install-netsurf-dev: OPTCFLAGS := -O0 -g -DNDEBUG
@@ -176,12 +176,6 @@ ifeq ("$(wildcard vendor/libiconv/lib/libiconv.a)","")
 	./configure --prefix=$(BC)vendor/libiconv --enable-static && \
 	make && make install
 endif
-
-install-lexbor:
-	@mkdir -p vendor/lexbor
-	@cd vendor/lexbor && \
-	cmake ../lexbor-src -DLEXBOR_BUILD_SHARED=OFF && \
-	make
 
 install-jsruntime-dev:
 	@cd vendor/jsruntime-lib && \

@@ -12,10 +12,6 @@ RUN apt update && \
 COPY ./Makefile /src/
 WORKDIR /src
 
-# build lexbor
-ADD ./vendor/lexbor-src /src/vendor/lexbor-src
-RUN make install-lexbor
-
 # build libiconv
 RUN make install-libiconv
 
@@ -26,8 +22,6 @@ RUN make install-netsurf
 FROM scratch as artifact
 
 COPY --from=build /src/vendor/libiconv /usr/local/lib/libiconv
-
-COPY --from=build /src/vendor/lexbor /usr/local/lib/lexbor
 
 COPY --from=build /src/vendor/netsurf/build /usr/local/lib/netsurf/build
 COPY --from=build /src/vendor/netsurf/lib /usr/local/lib/netsurf/lib
