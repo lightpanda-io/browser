@@ -28,7 +28,7 @@ const jsruntime_pkgs = jsruntime.packages(jsruntime_path);
 /// which zig version to install.
 const recommended_zig_version = jsruntime.recommended_zig_version;
 
-pub fn build(b: *std.build.Builder) !void {
+pub fn build(b: *std.Build) !void {
     switch (comptime builtin.zig_version.order(std.SemanticVersion.parse(recommended_zig_version) catch unreachable)) {
         .eq => {},
         .lt => {
