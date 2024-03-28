@@ -4,7 +4,7 @@
 
 ### Prerequisites
 
-Browsercore is written with [Zig](https://ziglang.org/) `0.11.0`. You have to
+Browsercore is written with [Zig](https://ziglang.org/) `0.12`. You have to
 install it with the right version in order to build the project.
 
 Browsercore also depends on
