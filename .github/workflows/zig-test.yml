@@ -59,8 +59,6 @@ jobs:
 
       - name: install deps
         run: |
-          ln -s /usr/local/lib/lexbor vendor/lexbor
-
           ln -s /usr/local/lib/libiconv vendor/libiconv
 
           ln -s /usr/local/lib/netsurf/build vendor/netsurf/build
