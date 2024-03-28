@@ -44,7 +44,6 @@ pub fn build(b: *std.build.Builder) !void {
 
     // run
     const run_cmd = b.addRunArtifact(exe);
-    run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
@@ -68,7 +67,6 @@ pub fn build(b: *std.build.Builder) !void {
 
     // run
     const shell_cmd = b.addRunArtifact(shell);
-    shell_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         shell_cmd.addArgs(args);
     }
@@ -108,7 +106,6 @@ pub fn build(b: *std.build.Builder) !void {
 
     // run
     const wpt_cmd = b.addRunArtifact(wpt);
-    wpt_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         wpt_cmd.addArgs(args);
     }
@@ -131,7 +128,6 @@ pub fn build(b: *std.build.Builder) !void {
 
     // run
     const get_cmd = b.addRunArtifact(get);
-    get_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         get_cmd.addArgs(args);
     }
