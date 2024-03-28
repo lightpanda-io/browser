@@ -47,7 +47,7 @@ jobs:
 
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/lightpanda-io/zig-browsercore:0.12.0-dev.1773-8a8fd47d2
+      image: ghcr.io/lightpanda-io/zig-browsercore:0.12.1
       credentials:
        username: ${{ github.actor }}
        password: ${{ secrets.GITHUB_TOKEN }}
