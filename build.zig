@@ -157,7 +157,7 @@ fn linkNetSurf(step: *std.build.LibExeObjStep) void {
     step.addIncludePath(.{ .path = "vendor/libiconv/include" });
 
     // netsurf libs
-    const ns = "vendor/netsurf/";
+    const ns = "vendor/netsurf";
     const libs: [4][]const u8 = .{
         "libdom",
         "libhubbub",
@@ -166,7 +166,7 @@ fn linkNetSurf(step: *std.build.LibExeObjStep) void {
     };
     inline for (libs) |lib| {
         step.addObjectFile(.{ .path = ns ++ "/lib/" ++ lib ++ ".a" });
-        step.addIncludePath(.{ .path = ns ++ lib ++ "/src" });
+        step.addIncludePath(.{ .path = ns ++ "/" ++ lib ++ "/src" });
     }
     step.addIncludePath(.{ .path = ns ++ "/include" });
 }
