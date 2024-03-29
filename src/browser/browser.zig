@@ -247,29 +247,39 @@ pub const Page = struct {
 
         // TODO handle redirection
         if (req.response.status != .ok) {
-            log.debug("{?} {d} {s}\n{any}", .{
+            log.debug("{?} {d} {s}", .{
                 req.response.version,
                 req.response.status,
                 req.response.reason,
-                req.response.headers,
+                // TODO log headers
             });
             return error.BadStatusCode;
         }
 
         // TODO handle charset
         // https://html.spec.whatwg.org/#content-type
-        const ct = req.response.headers.getFirstValue("Content-Type") orelse {
+        var it = req.response.iterateHeaders();
+        var ct: ?[]const u8 = null;
+        while (true) {
+            const h = it.next() orelse break;
+            if (std.ascii.eqlIgnoreCase(h.name, "Content-Type")) {
+                ct = try alloc.dupe(u8, h.value);
+            }
+        }
+        if (ct == null) {
             // no content type in HTTP headers.
             // TODO try to sniff mime type from the body.
             log.info("no content-type HTTP header", .{});
             return;
-        };
-        log.debug("header content-type: {s}", .{ct});
-        const mime = try Mime.parse(ct);
+        }
+        defer alloc.free(ct.?);
+
+        log.debug("header content-type: {s}", .{ct.?});
+        const mime = try Mime.parse(ct.?);
         if (mime.eql(Mime.HTML)) {
             try self.loadHTMLDoc(req.reader(), mime.charset orelse "utf-8");
         } else {
-            log.info("non-HTML document: {s}", .{ct});
+            log.info("non-HTML document: {s}", .{ct.?});
 
             // save the body into the page.
             self.raw_data = try req.reader().readAllAlloc(alloc, 16 * 1024 * 1024);
@@ -500,20 +510,24 @@ pub const Page = struct {
 
         log.debug("starting fetch script {s}", .{src});
 
-        const u = std.Uri.parse(src) catch try std.Uri.parseWithoutScheme(src);
-        const ru = try std.Uri.resolve(self.uri, u, false, alloc);
+        var buffer: [1024]u8 = undefined;
+        const u = try std.Uri.resolve_inplace(self.uri, src, &buffer);
 
-        var fetchres = try self.session.loader.fetch(alloc, ru);
+        var fetchres = try self.session.loader.get(alloc, u);
         defer fetchres.deinit();
 
-        log.info("fech script {any}: {d}", .{ ru, fetchres.status });
+        const resp = fetchres.req.response;
 
-        if (fetchres.status != .ok) return FetchError.BadStatusCode;
+        log.info("fech script {any}: {d}", .{ u, resp.status });
+
+        if (resp.status != .ok) return FetchError.BadStatusCode;
 
         // TODO check content-type
+        const body = try fetchres.req.reader().readAllAlloc(alloc, 16 * 1024 * 1024);
+        defer alloc.free(body);
 
         // check no body
-        if (fetchres.body == null) return FetchError.NoBody;
+        if (body.len == 0) return FetchError.NoBody;
 
         var res = try self.session.env.execTryCatch(alloc, fetchres.body.?, src);
         defer res.deinit(alloc);

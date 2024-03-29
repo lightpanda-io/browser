@@ -98,7 +98,7 @@ pub fn tcpConnectToHost(alloc: std.mem.Allocator, loop: *Loop, name: []const u8,
 
 pub fn tcpConnectToAddress(alloc: std.mem.Allocator, loop: *Loop, addr: net.Address) !Stream {
     const sockfd = try std.posix.socket(addr.any.family, std.posix.SOCK.STREAM, std.posix.IPPROTO.TCP);
-    errdefer std.posix.closeSocket(sockfd);
+    errdefer std.posix.close(sockfd);
 
     var conn = try alloc.create(Conn);
     conn.* = Conn{ .loop = loop };

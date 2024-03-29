@@ -40,11 +40,9 @@ test "blocking mode fetch API" {
     // force client's CA cert scan from system.
     try client.ca_bundle.rescan(client.allocator);
 
-    var res = try client.fetch(alloc, .{
+    const res = try client.fetch(.{
         .location = .{ .uri = try std.Uri.parse(url) },
-        .payload = .none,
     });
-    defer res.deinit();
 
     try std.testing.expect(res.status == .ok);
 }
@@ -64,10 +62,10 @@ test "blocking mode open/send/wait API" {
     // force client's CA cert scan from system.
     try client.ca_bundle.rescan(client.allocator);
 
-    var headers = try std.http.Headers.initList(alloc, &[_]std.http.Field{});
-    defer headers.deinit();
-
-    var req = try client.open(.GET, try std.Uri.parse(url), headers, .{});
+    var buf: [2014]u8 = undefined;
+    var req = try client.open(.GET, try std.Uri.parse(url), .{
+        .server_header_buffer = &buf,
+    });
     defer req.deinit();
 
     try req.send(.{});
@@ -87,7 +85,6 @@ const AsyncClient = struct {
 
         cli: *Client,
         uri: std.Uri,
-        headers: std.http.Headers,
 
         req: ?Request = undefined,
         state: State = .new,
@@ -95,9 +92,10 @@ const AsyncClient = struct {
         impl: YieldImpl,
         err: ?anyerror = null,
 
+        buf: [2014]u8 = undefined,
+
         pub fn deinit(self: *AsyncRequest) void {
             if (self.req) |*r| r.deinit();
-            self.headers.deinit();
         }
 
         pub fn fetch(self: *AsyncRequest) void {
@@ -116,7 +114,9 @@ const AsyncClient = struct {
             switch (self.state) {
                 .new => {
                     self.state = .open;
-                    self.req = self.cli.open(.GET, self.uri, self.headers, .{}) catch |e| return self.onerr(e);
+                    self.req = self.cli.open(.GET, self.uri, .{
+                        .server_header_buffer = &self.buf,
+                    }) catch |e| return self.onerr(e);
                 },
                 .open => {
                     self.state = .send;
@@ -164,7 +164,6 @@ const AsyncClient = struct {
             .impl = YieldImpl.init(self.cli.loop),
             .cli = &self.cli,
             .uri = uri,
-            .headers = .{ .allocator = self.cli.allocator, .owned = false },
         };
     }
 };

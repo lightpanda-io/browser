@@ -31,7 +31,7 @@ pub const Stream = struct {
     handle: posix.socket_t,
 
     pub fn close(self: Stream) void {
-        posix.closeSocket(self.handle);
+        posix.close(self.handle);
         self.alloc.destroy(self.conn);
     }
 
