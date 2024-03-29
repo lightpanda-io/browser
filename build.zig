@@ -65,8 +65,6 @@ pub fn build(b: *std.build.Builder) !void {
     });
     try common(shell, options);
     try jsruntime_pkgs.add_shell(shell);
-    // do not install shell binary
-    b.installArtifact(shell);
 
     // run
     const shell_cmd = b.addRunArtifact(shell);
