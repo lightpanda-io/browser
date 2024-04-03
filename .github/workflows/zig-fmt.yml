@@ -11,6 +11,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
 
     paths:
+      - "build.zig"
       - "src/**/*.zig"
       - "src/*.zig"
   # Allows you to run this workflow manually from the Actions tab
