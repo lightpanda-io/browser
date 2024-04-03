@@ -1,9 +1,6 @@
 [submodule "vendor/jsruntime-lib"]
 	path = vendor/jsruntime-lib
 	url = git@github.com:lightpanda-io/jsruntime-lib.git
-[submodule "vendor/lexbor-src"]
-	path = vendor/lexbor-src
-	url = https://github.com/lexbor/lexbor
 [submodule "vendor/netsurf/libwapcaplet"]
 	path = vendor/netsurf/libwapcaplet
 	url = https://source.netsurf-browser.org/libwapcaplet.git

@@ -147,15 +147,7 @@ fn common(
     options: jsruntime.Options,
 ) !void {
     try jsruntime_pkgs.add(step, options);
-    linkLexbor(step);
     linkNetSurf(step);
-}
-
-fn linkLexbor(step: *std.build.LibExeObjStep) void {
-    // cmake . -DLEXBOR_BUILD_SHARED=OFF
-    const lib_path = "vendor/lexbor/liblexbor_static.a";
-    step.addObjectFile(.{ .path = lib_path });
-    step.addIncludePath(.{ .path = "vendor/lexbor-src/source" });
 }
 
 fn linkNetSurf(step: *std.build.LibExeObjStep) void {
