@@ -137,7 +137,7 @@ pub fn build(b: *std.build.Builder) !void {
 }
 
 fn common(
-    step: *std.Build.CompileStep,
+    step: *std.Build.Step.Compile,
     options: jsruntime.Options,
 ) !void {
     try jsruntime_pkgs.add(step, options);
