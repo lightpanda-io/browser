@@ -12,6 +12,7 @@ on:
     branches:
       - main
     paths:
+      - "build.zig"
       - "src/**/*.zig"
       - "src/*.zig"
       - "tests/wpt/**"
@@ -26,6 +27,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
 
     paths:
+      - "build.zig"
       - "src/**/*.zig"
       - "src/*.zig"
       - "tests/wpt/**"

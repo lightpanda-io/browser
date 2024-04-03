@@ -44,7 +44,6 @@ pub fn build(b: *std.build.Builder) !void {
 
     // run
     const run_cmd = b.addRunArtifact(exe);
-    run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
@@ -65,12 +64,9 @@ pub fn build(b: *std.build.Builder) !void {
     });
     try common(shell, options);
     try jsruntime_pkgs.add_shell(shell);
-    // do not install shell binary
-    b.installArtifact(shell);
 
     // run
     const shell_cmd = b.addRunArtifact(shell);
-    shell_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         shell_cmd.addArgs(args);
     }
@@ -110,7 +106,6 @@ pub fn build(b: *std.build.Builder) !void {
 
     // run
     const wpt_cmd = b.addRunArtifact(wpt);
-    wpt_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         wpt_cmd.addArgs(args);
     }
@@ -133,7 +128,6 @@ pub fn build(b: *std.build.Builder) !void {
 
     // run
     const get_cmd = b.addRunArtifact(get);
-    get_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         get_cmd.addArgs(args);
     }
@@ -143,7 +137,7 @@ pub fn build(b: *std.build.Builder) !void {
 }
 
 fn common(
-    step: *std.Build.CompileStep,
+    step: *std.Build.Step.Compile,
     options: jsruntime.Options,
 ) !void {
     try jsruntime_pkgs.add(step, options);
@@ -157,7 +151,7 @@ fn linkNetSurf(step: *std.build.LibExeObjStep) void {
     step.addIncludePath(.{ .path = "vendor/libiconv/include" });
 
     // netsurf libs
-    const ns = "vendor/netsurf/";
+    const ns = "vendor/netsurf";
     const libs: [4][]const u8 = .{
         "libdom",
         "libhubbub",
@@ -166,7 +160,7 @@ fn linkNetSurf(step: *std.build.LibExeObjStep) void {
     };
     inline for (libs) |lib| {
         step.addObjectFile(.{ .path = ns ++ "/lib/" ++ lib ++ ".a" });
-        step.addIncludePath(.{ .path = ns ++ lib ++ "/src" });
+        step.addIncludePath(.{ .path = ns ++ "/" ++ lib ++ "/src" });
     }
     step.addIncludePath(.{ .path = ns ++ "/include" });
 }
