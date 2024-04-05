@@ -2,6 +2,7 @@ const std = @import("std");
 
 const c = @cImport({
     @cInclude("dom/dom.h");
+    @cInclude("core/pi.h");
     @cInclude("dom/bindings/hubbub/parser.h");
     @cInclude("events/event_target.h");
     @cInclude("events/event.h");
@@ -1234,6 +1235,18 @@ pub const Comment = c.dom_comment;
 
 // ProcessingInstruction
 pub const ProcessingInstruction = c.dom_processing_instruction;
+
+// processingInstructionToNode is an helper to convert an ProcessingInstruction to a node.
+pub inline fn processingInstructionToNode(pi: *ProcessingInstruction) *Node {
+    return @as(*Node, @ptrCast(pi));
+}
+
+pub fn processInstructionCopy(pi: *ProcessingInstruction) !*ProcessingInstruction {
+    var res: ?*Node = undefined;
+    const err = c._dom_pi_copy(processingInstructionToNode(pi), &res);
+    try DOMErr(err);
+    return @as(*ProcessingInstruction, @ptrCast(res.?));
+}
 
 // Attribute
 pub const Attribute = c.dom_attr;

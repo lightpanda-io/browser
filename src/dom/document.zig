@@ -342,12 +342,14 @@ pub fn testExecFn(
     var createComment = [_]Case{
         .{ .src = "var v = document.createComment('foo')", .ex = "undefined" },
         .{ .src = "v.nodeName", .ex = "#comment" },
+        .{ .src = "let v2 = v.cloneNode()", .ex = "undefined" },
     };
     try checkCases(js_env, &createComment);
 
     var createProcessingInstruction = [_]Case{
         .{ .src = "let pi = document.createProcessingInstruction('foo', 'bar')", .ex = "undefined" },
         .{ .src = "pi.target", .ex = "foo" },
+        .{ .src = "let pi2 = pi.cloneNode()", .ex = "undefined" },
     };
     try checkCases(js_env, &createProcessingInstruction);
 
