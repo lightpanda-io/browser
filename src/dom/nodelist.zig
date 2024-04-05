@@ -26,7 +26,7 @@ pub const NodeList = struct {
 
     nodes: NodesArrayList,
 
-    pub fn init() !NodeList {
+    pub fn init() NodeList {
         return NodeList{
             .nodes = NodesArrayList{},
         };

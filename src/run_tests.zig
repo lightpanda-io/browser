@@ -98,11 +98,23 @@ pub fn main() !void {
 }
 
 test {
-    const AsyncTest = @import("async/test.zig");
-    std.testing.refAllDecls(AsyncTest);
+    const asyncTest = @import("async/test.zig");
+    std.testing.refAllDecls(asyncTest);
 
-    const DumpTest = @import("browser/dump.zig");
-    std.testing.refAllDecls(DumpTest);
+    const dumpTest = @import("browser/dump.zig");
+    std.testing.refAllDecls(dumpTest);
+
+    const cssTest = @import("css/css.zig");
+    std.testing.refAllDecls(cssTest);
+
+    const cssParserTest = @import("css/parser.zig");
+    std.testing.refAllDecls(cssParserTest);
+
+    const cssMatchTest = @import("css/match_test.zig");
+    std.testing.refAllDecls(cssMatchTest);
+
+    const cssLibdomTest = @import("css/libdom_test.zig");
+    std.testing.refAllDecls(cssLibdomTest);
 }
 
 fn testJSRuntime() !void {

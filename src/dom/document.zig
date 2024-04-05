@@ -13,6 +13,7 @@ const NodeUnion = @import("node.zig").Union;
 
 const Walker = @import("walker.zig").WalkerDepthFirst;
 const collection = @import("html_collection.zig");
+const css = @import("css.zig");
 
 const Element = @import("element.zig").Element;
 const ElementUnion = @import("element.zig").Union;
@@ -188,54 +189,18 @@ pub const Document = struct {
         return 1;
     }
 
-    // TODO netsurf doesn't handle query selectors. We have to implement a
-    // solution by ourselves.
-    // For now we handle only * and single id selector like `#foo`.
-    pub fn _querySelector(self: *parser.Document, selectors: []const u8) !?ElementUnion {
-        if (selectors.len == 0) return null;
+    pub fn _querySelector(self: *parser.Document, alloc: std.mem.Allocator, selector: []const u8) !?ElementUnion {
+        if (selector.len == 0) return null;
 
-        // catch-all, return the firstElementChild
-        if (selectors[0] == '*') return try get_firstElementChild(self);
+        const n = try css.querySelector(alloc, parser.documentToNode(self), selector);
 
-        // support only simple id selector.
-        if (selectors[0] != '#' or std.mem.indexOf(u8, selectors, " ") != null) return null;
+        if (n == null) return null;
 
-        return try _getElementById(self, selectors[1..]);
+        return try Element.toInterface(parser.nodeToElement(n.?));
     }
 
-    // TODO netsurf doesn't handle query selectors. We have to implement a
-    // solution by ourselves.
-    // We handle only * and single id selector like `#foo`.
-    pub fn _querySelectorAll(self: *parser.Document, alloc: std.mem.Allocator, selectors: []const u8) !NodeList {
-        var list = try NodeList.init();
-        errdefer list.deinit(alloc);
-
-        if (selectors.len == 0) return list;
-
-        // catch-all, return all elements
-        if (selectors[0] == '*') {
-            // walk over the node tree fo find the node by id.
-            const root = parser.documentToNode(self);
-            const walker = Walker{};
-            var next: ?*parser.Node = null;
-            while (true) {
-                next = try walker.get_next(root, next) orelse return list;
-                // ignore non-element nodes.
-                if (try parser.nodeType(next.?) != .element) {
-                    continue;
-                }
-                try list.append(alloc, next.?);
-            }
-        }
-
-        // support only simple id selector.
-        if (selectors[0] != '#' or std.mem.indexOf(u8, selectors, " ") != null) return list;
-
-        // walk over the node tree fo find the node by id.
-        const e = try parser.documentGetElementById(self, selectors[1..]) orelse return list;
-        try list.append(alloc, parser.elementToNode(e));
-
-        return list;
+    pub fn _querySelectorAll(self: *parser.Document, alloc: std.mem.Allocator, selector: []const u8) !NodeList {
+        return css.querySelectorAll(alloc, parser.documentToNode(self), selector);
     }
 
     // TODO according with https://dom.spec.whatwg.org/#parentnode, the
@@ -426,6 +391,12 @@ pub fn testExecFn(
         .{ .src = "document.querySelector('*').nodeName", .ex = "HTML" },
         .{ .src = "document.querySelector('#content').id", .ex = "content" },
         .{ .src = "document.querySelector('#para').id", .ex = "para" },
+        .{ .src = "document.querySelector('.ok').id", .ex = "link" },
+        .{ .src = "document.querySelector('a ~ p').id", .ex = "para-empty" },
+        .{ .src = "document.querySelector(':root').nodeName", .ex = "HTML" },
+
+        .{ .src = "document.querySelectorAll('p').length", .ex = "2" },
+        .{ .src = "document.querySelectorAll('.ok').item(0).id", .ex = "link" },
     };
     try checkCases(js_env, &querySelector);
 
