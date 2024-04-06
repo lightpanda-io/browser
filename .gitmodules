@@ -19,3 +19,6 @@
 [submodule "tests/wpt"]
 	path = tests/wpt
 	url = https://github.com/lightpanda-io/wpt
+[submodule "vendor/mimalloc"]
+	path = vendor/mimalloc
+	url = git@github.com:microsoft/mimalloc.git

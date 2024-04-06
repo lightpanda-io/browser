@@ -95,13 +95,14 @@ test:
 .PHONY: install-submodule
 .PHONY: install-jsruntime install-jsruntime-dev install-libiconv
 .PHONY: _install-netsurf install-netsurf clean-netsurf test-netsurf install-netsurf-dev
+.PHONY: install-mimalloc install-mimalloc-dev clean-mimalloc
 .PHONY: install-dev install
 
 ## Install and build dependencies for release
-install: install-submodule install-jsruntime install-netsurf
+install: install-submodule install-jsruntime install-netsurf install-mimalloc
 
 ## Install and build dependencies for dev
-install-dev: install-submodule install-jsruntime-dev install-netsurf-dev
+install-dev: install-submodule install-jsruntime-dev install-netsurf-dev install-mimalloc-dev
 
 install-netsurf-dev: _install-netsurf
 install-netsurf-dev: OPTCFLAGS := -O0 -g -DNDEBUG
@@ -184,6 +185,24 @@ install-jsruntime-dev:
 install-jsruntime:
 	@cd vendor/jsruntime-lib && \
 	make install
+
+install-mimalloc-dev:
+	@cd vendor/mimalloc && \
+		mkdir -p out && \
+		cd out && \
+		cmake -DCMAKE_BUILD_TYPE=Debug .. && \
+		make mimalloc-static && \
+		mv libmimalloc-debug.a libmimalloc.a
+
+install-mimalloc:
+	@cd vendor/mimalloc && \
+		mkdir -p out && \
+		cd out && \
+		cmake .. && \
+		make mimalloc-static
+
+clean-mimalloc:
+	rm -fr vendor/mimalloc/lib/*
 
 ## Init and update git submodule
 install-submodule:
