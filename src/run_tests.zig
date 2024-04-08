@@ -93,10 +93,10 @@ const usage =
     \\  Run the tests. By default the command will run both js and unit tests.
     \\
     \\  -h, --help       Print this help message and exit.
-    \\  --js             run only js tests
+    \\  --browser        run only browser js tests
     \\  --unit           run only js unit tests
     \\  --json           bench result is formatted in JSON.
-    \\                   only js tests are benchmarked.
+    \\                   only browser tests are benchmarked.
     \\
 ;
 
@@ -109,7 +109,7 @@ const Out = enum {
 // Which tests must be run.
 const Run = enum {
     all,
-    js,
+    browser,
     unit,
 };
 
@@ -136,8 +136,8 @@ pub fn main() !void {
             out = .json;
             continue;
         }
-        if (std.mem.eql(u8, "--js", arg)) {
-            run = .js;
+        if (std.mem.eql(u8, "--browser", arg)) {
+            run = .browser;
             continue;
         }
         if (std.mem.eql(u8, "--unit", arg)) {
@@ -147,7 +147,7 @@ pub fn main() !void {
     }
 
     // run js tests
-    if (run == .all or run == .js) try run_js(out);
+    if (run == .all or run == .browser) try run_js(out);
 
     // run standard unit tests.
     if (run == .all or run == .unit) {
@@ -183,7 +183,7 @@ fn run_js(out: Out) !void {
                 alloc_size: usize,
             },
         }{
-            .{ .name = "js", .bench = .{
+            .{ .name = "browser", .bench = .{
                 .duration = duration,
                 .alloc_nb = stats.alloc_nb,
                 .realloc_nb = stats.realloc_nb,
@@ -204,7 +204,7 @@ fn run_js(out: Out) !void {
     const table = try pretty.GenerateTable(1, row_shape, pretty.TableConf{ .margin_left = "  " });
     const header = .{ "FUNCTION", "DURATION", "ALLOCATIONS (nb)", "RE-ALLOCATIONS (nb)", "HEAP SIZE" };
     var t = table.init("Benchmark browsercore 🚀", header);
-    try t.addRow(.{ "js", dur, stats.alloc_nb, stats.realloc_nb, size });
+    try t.addRow(.{ "browser", dur, stats.alloc_nb, stats.realloc_nb, size });
     try t.render(std.io.getStdOut().writer());
 }
 
