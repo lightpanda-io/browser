@@ -87,13 +87,110 @@ fn testsAllExecFn(
     }
 }
 
-pub fn main() !void {
-    try testJSRuntime();
+const usage =
+    \\usage: test [options]
+    \\  Run the tests. By default the command will run both js and unit tests.
+    \\
+    \\  -h, --help       Print this help message and exit.
+    \\  --js             run only js tests
+    \\  --unit           run only js unit tests
+    \\  --json           bench result is formatted in JSON.
+    \\                   only js tests are benchmarked.
+    \\
+;
 
-    std.debug.print("\n", .{});
-    for (builtin.test_functions) |test_fn| {
-        try test_fn.func();
-        std.debug.print("{s}\tOK\n", .{test_fn.name});
+// Out list all the ouputs handled by bench.
+const Out = enum {
+    none,
+    json,
+};
+
+const Run = enum {
+    all,
+    js,
+    unit,
+};
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const gpa_alloc = gpa.allocator();
+
+    var args = try std.process.argsWithAllocator(gpa_alloc);
+    defer args.deinit();
+
+    // ignore the exec name.
+    _ = args.next().?;
+
+    var out: Out = .none;
+    var run: Run = .all;
+
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, "-h", arg) or std.mem.eql(u8, "--help", arg)) {
+            try std.io.getStdErr().writer().print(usage, .{});
+            std.os.exit(0);
+        }
+        if (std.mem.eql(u8, "--json", arg)) {
+            out = .json;
+            continue;
+        }
+        if (std.mem.eql(u8, "--js", arg)) {
+            run = .js;
+            continue;
+        }
+        if (std.mem.eql(u8, "--unit", arg)) {
+            run = .unit;
+            continue;
+        }
+    }
+
+    // run js tests
+    if (run == .all or run == .js) try run_js(out);
+
+    // run standard unit tests.
+    if (run == .all or run == .unit) {
+        std.debug.print("\n", .{});
+        for (builtin.test_functions) |test_fn| {
+            try test_fn.func();
+            std.debug.print("{s}\tOK\n", .{test_fn.name});
+        }
+    }
+}
+
+// Run js test and display the output depending of the output parameter.
+fn run_js(out: Out) !void {
+    var bench_alloc = jsruntime.bench_allocator(std.testing.allocator);
+
+    const start = try std.time.Instant.now();
+
+    // run js exectuion tests
+    try testJSRuntime(bench_alloc.allocator());
+
+    const duration = std.time.Instant.since(try std.time.Instant.now(), start);
+
+    // get and display the results
+    if (out == .json) {
+        const stats = bench_alloc.stats();
+
+        const res = [_]struct {
+            name: []const u8,
+            bench: struct {
+                duration: u64,
+
+                alloc_nb: usize,
+                realloc_nb: usize,
+                alloc_size: usize,
+            },
+        }{
+            .{ .name = "js", .bench = .{
+                .duration = duration,
+                .alloc_nb = stats.alloc_nb,
+                .realloc_nb = stats.realloc_nb,
+                .alloc_size = stats.alloc_size,
+            } },
+        };
+
+        try std.json.stringify(res, .{ .whitespace = .indent_2 }, std.io.getStdOut().writer());
     }
 }
 
@@ -117,7 +214,7 @@ test {
     std.testing.refAllDecls(cssLibdomTest);
 }
 
-fn testJSRuntime() !void {
+fn testJSRuntime(alloc: std.mem.Allocator) !void {
     // generate tests
     try generate.tests();
 
@@ -125,8 +222,7 @@ fn testJSRuntime() !void {
     const vm = jsruntime.VM.init();
     defer vm.deinit();
 
-    var bench_alloc = jsruntime.bench_allocator(std.testing.allocator);
-    var arena_alloc = std.heap.ArenaAllocator.init(bench_alloc.allocator());
+    var arena_alloc = std.heap.ArenaAllocator.init(alloc);
     defer arena_alloc.deinit();
 
     try jsruntime.loadEnv(&arena_alloc, testsAllExecFn);

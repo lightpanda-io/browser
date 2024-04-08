@@ -86,6 +86,9 @@ pub fn build(b: *std.build.Builder) !void {
     });
     try common(tests, options);
     const run_tests = b.addRunArtifact(tests);
+    if (b.args) |args| {
+        run_tests.addArgs(args);
+    }
 
     // step
     const test_step = b.step("test", "Run unit tests");
