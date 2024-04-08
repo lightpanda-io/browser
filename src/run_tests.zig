@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 
 const jsruntime = @import("jsruntime");
 const generate = @import("generate.zig");
+const pretty = @import("pretty");
 
 const parser = @import("netsurf.zig");
 const apiweb = @import("apiweb.zig");
@@ -99,12 +100,13 @@ const usage =
     \\
 ;
 
-// Out list all the ouputs handled by bench.
+// Out list all the ouputs handled by benchmark result and written on stdout.
 const Out = enum {
-    none,
+    text,
     json,
 };
 
+// Which tests must be run.
 const Run = enum {
     all,
     js,
@@ -122,7 +124,7 @@ pub fn main() !void {
     // ignore the exec name.
     _ = args.next().?;
 
-    var out: Out = .none;
+    var out: Out = .text;
     var run: Run = .all;
 
     while (args.next()) |arg| {
@@ -167,11 +169,10 @@ fn run_js(out: Out) !void {
     try testJSRuntime(bench_alloc.allocator());
 
     const duration = std.time.Instant.since(try std.time.Instant.now(), start);
+    const stats = bench_alloc.stats();
 
     // get and display the results
     if (out == .json) {
-        const stats = bench_alloc.stats();
-
         const res = [_]struct {
             name: []const u8,
             bench: struct {
@@ -191,8 +192,24 @@ fn run_js(out: Out) !void {
         };
 
         try std.json.stringify(res, .{ .whitespace = .indent_2 }, std.io.getStdOut().writer());
+        return;
     }
+
+    // display console result by default
+    const dur = pretty.Measure{ .unit = "us", .value = duration / us };
+    const size = pretty.Measure{ .unit = "kb", .value = stats.alloc_size / kb };
+
+    // benchmark table
+    const row_shape = .{ []const u8, pretty.Measure, u64, u64, pretty.Measure };
+    const table = try pretty.GenerateTable(1, row_shape, pretty.TableConf{ .margin_left = "  " });
+    const header = .{ "FUNCTION", "DURATION", "ALLOCATIONS (nb)", "RE-ALLOCATIONS (nb)", "HEAP SIZE" };
+    var t = table.init("Benchmark browsercore 🚀", header);
+    try t.addRow(.{ "js", dur, stats.alloc_nb, stats.realloc_nb, size });
+    try t.render(std.io.getStdOut().writer());
 }
+
+const kb = 1024;
+const us = std.time.ns_per_us;
 
 test {
     const asyncTest = @import("async/test.zig");
