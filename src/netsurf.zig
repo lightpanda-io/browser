@@ -8,8 +8,28 @@ const c = @cImport({
     @cInclude("events/event.h");
 });
 
+const mimalloc = @import("mimalloc.zig");
+
 const Callback = @import("jsruntime").Callback;
 const EventToInterface = @import("events/event.zig").Event.toInterface;
+
+// init initializes netsurf lib.
+// init starts a mimalloc heap arena for the netsurf session. The caller must
+// call deinit() to free the arena memory.
+pub fn init() !void {
+    try mimalloc.create();
+}
+
+// deinit frees the mimalloc heap arena memory.
+// It also clean dom namespaces and lwc strings.
+pub fn deinit() void {
+    _ = c.dom_namespace_finalise();
+
+    // destroy all lwc strings.
+    c.lwc_deinit_strings();
+
+    mimalloc.destroy();
+}
 
 // Vtable
 // ------
