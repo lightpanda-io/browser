@@ -73,9 +73,7 @@ pub fn testExecFn(
         .{ .src = "a.item(1)", .ex = "null" },
         .{ .src = "a.getNamedItem('id')", .ex = "[object Attr]" },
         .{ .src = "a.getNamedItem('foo')", .ex = "null" },
-        // TODO: with setCAllocator this test fails with a segfault
-        // see https://github.com/lightpanda-io/browsercore/issues/197
-        // .{ .src = "a.setNamedItem(a.getNamedItem('id'))", .ex = "[object Attr]" },
+        .{ .src = "a.setNamedItem(a.getNamedItem('id'))", .ex = "[object Attr]" },
     };
     try checkCases(js_env, &setItem);
 }

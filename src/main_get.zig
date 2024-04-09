@@ -2,7 +2,6 @@ const std = @import("std");
 const Browser = @import("browser/browser.zig").Browser;
 
 const jsruntime = @import("jsruntime");
-const setCAllocator = @import("calloc.zig").setCAllocator;
 const apiweb = @import("apiweb.zig");
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
@@ -29,10 +28,6 @@ pub fn main() !void {
         }
     }
     const allocator = gpa.allocator();
-
-    var c_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer c_arena.deinit();
-    setCAllocator(c_arena.allocator());
 
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
@@ -70,9 +65,10 @@ pub fn main() !void {
     defer browser.deinit();
 
     var page = try browser.currentSession().createPage();
-    defer page.end();
+    defer page.deinit();
 
     try page.navigate(url);
+    defer page.end();
 
     if (dump) {
         try page.dump(std.io.getStdOut());

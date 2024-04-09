@@ -5,7 +5,6 @@ const jsruntime = @import("jsruntime");
 const generate = @import("generate.zig");
 const pretty = @import("pretty");
 
-const setCAllocator = @import("calloc.zig").setCAllocator;
 const parser = @import("netsurf.zig");
 const apiweb = @import("apiweb.zig");
 const Window = @import("html/window.zig").Window;
@@ -39,6 +38,9 @@ fn testExecFn(
     js_env: *jsruntime.Env,
     comptime execFn: jsruntime.ContextExecFn,
 ) anyerror!void {
+    try parser.init();
+    defer parser.deinit();
+
     // start JS env
     try js_env.start(alloc);
     defer js_env.stop();
@@ -88,7 +90,6 @@ fn testsAllExecFn(
 
     inline for (testFns) |testFn| {
         try testExecFn(alloc, js_env, testFn);
-        _ = c_arena.reset(.retain_capacity);
     }
 }
 
@@ -116,8 +117,6 @@ const Run = enum {
     browser,
     unit,
 };
-
-var c_arena: std.heap.ArenaAllocator = undefined;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -152,10 +151,6 @@ pub fn main() !void {
         }
     }
 
-    c_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer c_arena.deinit();
-    setCAllocator(c_arena.allocator());
-
     // run js tests
     if (run == .all or run == .browser) try run_js(out);
 
@@ -163,6 +158,9 @@ pub fn main() !void {
     if (run == .all or run == .unit) {
         std.debug.print("\n", .{});
         for (builtin.test_functions) |test_fn| {
+            try parser.init();
+            defer parser.deinit();
+
             try test_fn.func();
             std.debug.print("{s}\tOK\n", .{test_fn.name});
         }

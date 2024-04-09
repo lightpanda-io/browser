@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const jsruntime = @import("jsruntime");
-const setCAllocator = @import("calloc.zig").setCAllocator;
 
 const parser = @import("netsurf.zig");
 const apiweb = @import("apiweb.zig");
@@ -38,9 +37,8 @@ pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
 
-    var c_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer c_arena.deinit();
-    setCAllocator(c_arena.allocator());
+    try parser.init();
+    defer parser.deinit();
 
     // document
     const file = try std.fs.cwd().openFile("test.html", .{});

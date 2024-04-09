@@ -134,6 +134,9 @@ pub const Page = struct {
         self.session.env.stop();
         // TODO unload document: https://html.spec.whatwg.org/#unloading-documents
 
+        // clear netsurf memory arena.
+        parser.deinit();
+
         _ = self.arena.reset(.free_all);
     }
 
@@ -210,6 +213,9 @@ pub const Page = struct {
     // https://html.spec.whatwg.org/#read-html
     fn loadHTMLDoc(self: *Page, reader: anytype, charset: []const u8) !void {
         const alloc = self.arena.allocator();
+
+        // start netsurf memory arena.
+        try parser.init();
 
         log.debug("parse html with charset {s}", .{charset});
 
