@@ -8,8 +8,9 @@ Browsercore is written with [Zig](https://ziglang.org/) `0.12`. You have to
 install it with the right version in order to build the project.
 
 Browsercore also depends on
-[js-runtimelib](https://github.com/francisbouvier/jsruntime-lib/) and
-[Netsurf libs](https://www.netsurf-browser.org/) libs.
+[js-runtimelib](https://github.com/francisbouvier/jsruntime-lib/),
+[Netsurf libs](https://www.netsurf-browser.org/) and
+[Mimalloc](https://microsoft.github.io/mimalloc) libs.
 
 To be able to build the v8 engine for js-runtimelib, you have to install some libs:
 
@@ -36,10 +37,25 @@ make install-submodule
 
 ### Build Netsurf
 
-The command `make install-netsurf` will build netsurf libs used by browsercore.
+The command `make install-netsurf` will build Netsurf libs used by browsercore.
 ```
 make install-netsurf
 ```
+
+For dev env, use `make install-netsurf-dev`.
+
+### Build Mimalloc
+
+The command `make install-mimalloc` will build Mimalloc lib used by browsercore.
+```
+make install-mimalloc
+```
+
+For dev env, use `make install-mimalloc-dev`.
+
+Note, when Mimalloc is built in dev mode, you can dump memory stats with the
+env var `MIMALLOC_SHOW_STATS=1`. See
+https://microsoft.github.io/mimalloc/environment.html
 
 ### Build jsruntime-lib
 
