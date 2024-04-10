@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 
 const jsruntime = @import("jsruntime");
 const generate = @import("generate.zig");
+const pretty = @import("pretty");
 
 const parser = @import("netsurf.zig");
 const apiweb = @import("apiweb.zig");
@@ -89,15 +90,154 @@ fn testsAllExecFn(
     }
 }
 
-pub fn main() !void {
-    try testJSRuntime();
+const usage =
+    \\usage: test [options]
+    \\  Run the tests. By default the command will run both js and unit tests.
+    \\
+    \\  -h, --help       Print this help message and exit.
+    \\  --browser        run only browser js tests
+    \\  --unit           run only js unit tests
+    \\  --json           bench result is formatted in JSON.
+    \\                   only browser tests are benchmarked.
+    \\
+;
 
-    std.debug.print("\n", .{});
-    for (builtin.test_functions) |test_fn| {
-        try test_fn.func();
-        std.debug.print("{s}\tOK\n", .{test_fn.name});
+// Out list all the ouputs handled by benchmark result and written on stdout.
+const Out = enum {
+    text,
+    json,
+};
+
+// Which tests must be run.
+const Run = enum {
+    all,
+    browser,
+    unit,
+};
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const gpa_alloc = gpa.allocator();
+
+    var args = try std.process.argsWithAllocator(gpa_alloc);
+    defer args.deinit();
+
+    // ignore the exec name.
+    _ = args.next().?;
+
+    var out: Out = .text;
+    var run: Run = .all;
+
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, "-h", arg) or std.mem.eql(u8, "--help", arg)) {
+            try std.io.getStdErr().writer().print(usage, .{});
+            std.os.exit(0);
+        }
+        if (std.mem.eql(u8, "--json", arg)) {
+            out = .json;
+            continue;
+        }
+        if (std.mem.eql(u8, "--browser", arg)) {
+            run = .browser;
+            continue;
+        }
+        if (std.mem.eql(u8, "--unit", arg)) {
+            run = .unit;
+            continue;
+        }
+    }
+
+    // run js tests
+    if (run == .all or run == .browser) try run_js(out);
+
+    // run standard unit tests.
+    if (run == .all or run == .unit) {
+        std.debug.print("\n", .{});
+        for (builtin.test_functions) |test_fn| {
+            try test_fn.func();
+            std.debug.print("{s}\tOK\n", .{test_fn.name});
+        }
     }
 }
+
+// Run js test and display the output depending of the output parameter.
+fn run_js(out: Out) !void {
+    var bench_alloc = jsruntime.bench_allocator(std.testing.allocator);
+
+    const start = try std.time.Instant.now();
+
+    // run js exectuion tests
+    try testJSRuntime(bench_alloc.allocator());
+
+    const duration = std.time.Instant.since(try std.time.Instant.now(), start);
+    const stats = bench_alloc.stats();
+
+    // get and display the results
+    if (out == .json) {
+        const res = [_]struct {
+            name: []const u8,
+            bench: struct {
+                duration: u64,
+
+                alloc_nb: usize,
+                realloc_nb: usize,
+                alloc_size: usize,
+            },
+        }{
+            .{ .name = "browser", .bench = .{
+                .duration = duration,
+                .alloc_nb = stats.alloc_nb,
+                .realloc_nb = stats.realloc_nb,
+                .alloc_size = stats.alloc_size,
+            } },
+            // TODO get libdom bench info.
+            .{ .name = "libdom", .bench = .{
+                .duration = duration,
+                .alloc_nb = 0,
+                .realloc_nb = 0,
+                .alloc_size = 0,
+            } },
+            // TODO get v8 bench info.
+            .{ .name = "v8", .bench = .{
+                .duration = duration,
+                .alloc_nb = 0,
+                .realloc_nb = 0,
+                .alloc_size = 0,
+            } },
+            // TODO get main bench info.
+            .{ .name = "main", .bench = .{
+                .duration = duration,
+                .alloc_nb = 0,
+                .realloc_nb = 0,
+                .alloc_size = 0,
+            } },
+        };
+
+        try std.json.stringify(res, .{ .whitespace = .indent_2 }, std.io.getStdOut().writer());
+        return;
+    }
+
+    // display console result by default
+    const dur = pretty.Measure{ .unit = "ms", .value = duration / ms };
+    const size = pretty.Measure{ .unit = "kb", .value = stats.alloc_size / kb };
+
+    const zerosize = pretty.Measure{ .unit = "kb", .value = 0 };
+
+    // benchmark table
+    const row_shape = .{ []const u8, pretty.Measure, u64, u64, pretty.Measure };
+    const table = try pretty.GenerateTable(4, row_shape, pretty.TableConf{ .margin_left = "  " });
+    const header = .{ "FUNCTION", "DURATION", "ALLOCATIONS (nb)", "RE-ALLOCATIONS (nb)", "HEAP SIZE" };
+    var t = table.init("Benchmark browsercore 🚀", header);
+    try t.addRow(.{ "browser", dur, stats.alloc_nb, stats.realloc_nb, size });
+    try t.addRow(.{ "libdom", dur, 0, 0, zerosize }); // TODO get libdom bench info.
+    try t.addRow(.{ "v8", dur, 0, 0, zerosize }); // TODO get v8 bench info.
+    try t.addRow(.{ "main", dur, 0, 0, zerosize }); // TODO get main bench info.
+    try t.render(std.io.getStdOut().writer());
+}
+
+const kb = 1024;
+const ms = std.time.ns_per_ms;
 
 test {
     const asyncTest = @import("async/test.zig");
@@ -119,7 +259,7 @@ test {
     std.testing.refAllDecls(cssLibdomTest);
 }
 
-fn testJSRuntime() !void {
+fn testJSRuntime(alloc: std.mem.Allocator) !void {
     // generate tests
     try generate.tests();
 
@@ -127,8 +267,7 @@ fn testJSRuntime() !void {
     const vm = jsruntime.VM.init();
     defer vm.deinit();
 
-    var bench_alloc = jsruntime.bench_allocator(std.testing.allocator);
-    var arena_alloc = std.heap.ArenaAllocator.init(bench_alloc.allocator());
+    var arena_alloc = std.heap.ArenaAllocator.init(alloc);
     defer arena_alloc.deinit();
 
     try jsruntime.loadEnv(&arena_alloc, testsAllExecFn);
