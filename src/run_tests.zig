@@ -196,7 +196,7 @@ fn run_js(out: Out) !void {
     }
 
     // display console result by default
-    const dur = pretty.Measure{ .unit = "us", .value = duration / us };
+    const dur = pretty.Measure{ .unit = "ms", .value = duration / ms };
     const size = pretty.Measure{ .unit = "kb", .value = stats.alloc_size / kb };
 
     // benchmark table
@@ -209,7 +209,7 @@ fn run_js(out: Out) !void {
 }
 
 const kb = 1024;
-const us = std.time.ns_per_us;
+const ms = std.time.ns_per_ms;
 
 test {
     const asyncTest = @import("async/test.zig");
