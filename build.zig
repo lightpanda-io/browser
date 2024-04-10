@@ -155,7 +155,7 @@ fn common(
 
     // link mimalloc
     step.addObjectFile(.{ .path = "vendor/mimalloc/out/libmimalloc.a" });
-    step.addIncludePath(.{ .path = "vendor/mimalloc/include" });
+    step.addIncludePath(.{ .path = "vendor/mimalloc/out/include" });
 }
 
 fn linkNetSurf(step: *std.build.LibExeObjStep) void {

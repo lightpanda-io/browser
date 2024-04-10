@@ -186,23 +186,25 @@ install-jsruntime:
 	@cd vendor/jsruntime-lib && \
 	make install
 
-install-mimalloc-dev:
+.PHONY: _build_mimalloc
+_build_mimalloc:
 	@cd vendor/mimalloc && \
-		mkdir -p out && \
+		mkdir -p out/include && \
+		cp include/mimalloc.h out/include/ && \
 		cd out && \
-		cmake -DCMAKE_BUILD_TYPE=Debug .. && \
-		make mimalloc-static && \
+		cmake -DMI_BUILD_SHARED=OFF -DMI_BUILD_OBJECT=OFF -DMI_BUILD_TESTS=OFF -DMI_OVERRIDE=OFF $(OPTS) .. && \
+		make
+
+install-mimalloc-dev: _build_mimalloc
+install-mimalloc-dev: OPTS=-DCMAKE_BUILD_TYPE=Debug
+install-mimalloc-dev:
+	@cd vendor/mimalloc/out && \
 		mv libmimalloc-debug.a libmimalloc.a
 
-install-mimalloc:
-	@cd vendor/mimalloc && \
-		mkdir -p out && \
-		cd out && \
-		cmake .. && \
-		make mimalloc-static
+install-mimalloc: _build_mimalloc
 
 clean-mimalloc:
-	rm -fr vendor/mimalloc/lib/*
+	@rm -fr vendor/mimalloc/lib/*
 
 ## Init and update git submodule
 install-submodule:
