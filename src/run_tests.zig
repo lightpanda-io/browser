@@ -189,6 +189,27 @@ fn run_js(out: Out) !void {
                 .realloc_nb = stats.realloc_nb,
                 .alloc_size = stats.alloc_size,
             } },
+            // TODO get libdom bench info.
+            .{ .name = "libdom", .bench = .{
+                .duration = duration,
+                .alloc_nb = 0,
+                .realloc_nb = 0,
+                .alloc_size = 0,
+            } },
+            // TODO get v8 bench info.
+            .{ .name = "v8", .bench = .{
+                .duration = duration,
+                .alloc_nb = 0,
+                .realloc_nb = 0,
+                .alloc_size = 0,
+            } },
+            // TODO get main bench info.
+            .{ .name = "main", .bench = .{
+                .duration = duration,
+                .alloc_nb = 0,
+                .realloc_nb = 0,
+                .alloc_size = 0,
+            } },
         };
 
         try std.json.stringify(res, .{ .whitespace = .indent_2 }, std.io.getStdOut().writer());
@@ -199,12 +220,17 @@ fn run_js(out: Out) !void {
     const dur = pretty.Measure{ .unit = "ms", .value = duration / ms };
     const size = pretty.Measure{ .unit = "kb", .value = stats.alloc_size / kb };
 
+    const zerosize = pretty.Measure{ .unit = "kb", .value = 0 };
+
     // benchmark table
     const row_shape = .{ []const u8, pretty.Measure, u64, u64, pretty.Measure };
-    const table = try pretty.GenerateTable(1, row_shape, pretty.TableConf{ .margin_left = "  " });
+    const table = try pretty.GenerateTable(4, row_shape, pretty.TableConf{ .margin_left = "  " });
     const header = .{ "FUNCTION", "DURATION", "ALLOCATIONS (nb)", "RE-ALLOCATIONS (nb)", "HEAP SIZE" };
     var t = table.init("Benchmark browsercore 🚀", header);
     try t.addRow(.{ "browser", dur, stats.alloc_nb, stats.realloc_nb, size });
+    try t.addRow(.{ "libdom", dur, 0, 0, zerosize }); // TODO get libdom bench info.
+    try t.addRow(.{ "v8", dur, 0, 0, zerosize }); // TODO get v8 bench info.
+    try t.addRow(.{ "main", dur, 0, 0, zerosize }); // TODO get main bench info.
     try t.render(std.io.getStdOut().writer());
 }
 
