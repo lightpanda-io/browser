@@ -16,7 +16,6 @@ pub fn do(
     alloc: std.mem.Allocator,
     s: []const u8,
     ctx: *Ctx,
-    comptime sendFn: SendFn,
 ) ![]const u8 {
     var scanner = std.json.Scanner.initCompleteInput(alloc, s);
     defer scanner.deinit();
@@ -29,15 +28,15 @@ pub fn do(
     try checkKey("method", (try scanner.next()).string);
     const method = (try scanner.next()).string;
 
-    std.log.debug("cmd: id {any}, method {s}\n", .{ id, method });
+    std.log.debug("cmd: id {any}, method {s}", .{ id, method });
 
     var iter = std.mem.splitScalar(u8, method, '.');
     const domain = std.meta.stringToEnum(Domains, iter.first()) orelse
         return error.UnknonwDomain;
 
     return switch (domain) {
-        .Browser => browser(alloc, id, iter.next().?, &scanner, ctx, sendFn),
-        .Target => target(alloc, id, iter.next().?, &scanner, ctx, sendFn),
+        .Browser => browser(alloc, id, iter.next().?, &scanner, ctx),
+        .Target => target(alloc, id, iter.next().?, &scanner, ctx),
     };
 }
 

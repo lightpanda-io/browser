@@ -12,7 +12,10 @@ pub const CmdContext = struct {
     js_env: *public.Env,
     socket: std.os.socket_t,
     completion: *public.IO.Completion,
-    buf: []u8,
+
+    read_buf: []u8,
+    write_buf: []const u8 = undefined,
+
     close: bool = false,
 
     try_catch: public.TryCatch,
@@ -20,6 +23,10 @@ pub const CmdContext = struct {
     // shortcuts
     fn alloc(self: *CmdContext) std.mem.Allocator {
         return self.js_env.nat_ctx.alloc;
+    }
+
+    fn loop(self: *CmdContext) *public.Loop {
+        return self.js_env.nat_ctx.loop;
     }
 };
 
@@ -36,30 +43,48 @@ fn respCallback(
     std.log.debug("send ok", .{});
 }
 
-pub fn send(ctx: *CmdContext, msg: []const u8) !void {
-    defer ctx.alloc().free(msg);
-    return osSend(ctx, msg);
+fn timeoutCallback(
+    ctx: *CmdContext,
+    completion: *public.IO.Completion,
+    result: public.IO.TimeoutError!void,
+) void {
+    std.log.debug("sending after", .{});
+    _ = result catch |err| {
+        ctx.close = true;
+        std.debug.print("timeout error: {s}\n", .{@errorName(err)});
+        return;
+    };
+
+    ctx.alloc().destroy(completion);
+    send(ctx, ctx.write_buf) catch unreachable;
 }
 
-pub const SendFn = (fn (*CmdContext, []const u8) anyerror!void);
+pub fn sendLater(ctx: *CmdContext, msg: []const u8) !void {
+    ctx.write_buf = msg;
+    // NOTE: it seems we can't use the same completion for concurrent
+    // recv and timeout operations
+    // TODO: maybe instead of allocating this each time we can create
+    // a timeout_completion on the context?
+    // Not sure if there is several concurrent timeout operations on the same context
+    const completion = try ctx.alloc().create(public.IO.Completion);
+    ctx.loop().io.timeout(*CmdContext, ctx, timeoutCallback, completion, 1000);
+}
 
-fn osSend(ctx: *CmdContext, msg: []const u8) !void {
+fn send(ctx: *CmdContext, msg: []const u8) !void {
     defer ctx.alloc().free(msg);
     const s = try std.os.write(ctx.socket, msg);
     std.log.debug("send ok {d}", .{s});
 }
 
 fn loopSend(ctx: *CmdContext, msg: []const u8) !void {
-    ctx.buf = ctx.buf[0..msg.len];
-    @memcpy(ctx.buf, msg);
-    ctx.alloc().free(msg);
-    ctx.js_env.nat_ctx.loop.io.send(
+    ctx.write_buf = msg;
+    ctx.loop().io.send(
         *CmdContext,
         ctx,
         respCallback,
         ctx.completion,
         ctx.socket,
-        ctx.buf,
+        ctx.write_buf,
     );
 }
 
@@ -69,13 +94,14 @@ fn cmdCallback(
     completion: *public.IO.Completion,
     result: public.IO.RecvError!usize,
 ) void {
+    // ctx.completion = completion;
     const size = result catch |err| {
         ctx.close = true;
         std.debug.print("recv error: {s}\n", .{@errorName(err)});
         return;
     };
 
-    const input = ctx.buf[0..size];
+    const input = ctx.read_buf[0..size];
 
     // close on exit command
     if (std.mem.eql(u8, input, "exit")) {
@@ -83,28 +109,27 @@ fn cmdCallback(
         return;
     }
 
-    // continue receving messages asynchronously
-    defer {
-        ctx.js_env.nat_ctx.loop.io.recv(
-            *CmdContext,
-            ctx,
-            cmdCallback,
-            completion,
-            ctx.socket,
-            ctx.buf,
-        );
-    }
-
-    std.debug.print("input {s}\n", .{input});
-    const res = cdp.do(ctx.alloc(), input, ctx, loopSend) catch |err| {
+    std.debug.print("\ninput {s}\n", .{input});
+    const res = cdp.do(ctx.alloc(), input, ctx) catch |err| {
         std.log.debug("error: {any}\n", .{err});
-        loopSend(ctx, "{}") catch unreachable;
+        send(ctx, "{}") catch unreachable;
         // TODO: return proper error
         return;
     };
     std.log.debug("res {s}", .{res});
 
-    loopSend(ctx, res) catch unreachable;
+    sendLater(ctx, res) catch unreachable;
+    std.log.debug("finish", .{});
+
+    // continue receving messages asynchronously
+    ctx.loop().io.recv(
+        *CmdContext,
+        ctx,
+        cmdCallback,
+        completion,
+        ctx.socket,
+        ctx.read_buf,
+    );
 }
 
 // I/O connection context
@@ -123,13 +148,13 @@ fn connCallback(
     ctx.cmdContext.socket = result catch |err| @panic(@errorName(err));
 
     // launch receving messages asynchronously
-    ctx.cmdContext.js_env.nat_ctx.loop.io.recv(
+    ctx.cmdContext.loop().io.recv(
         *CmdContext,
         ctx.cmdContext,
         cmdCallback,
         completion,
         ctx.cmdContext.socket,
-        ctx.cmdContext.buf,
+        ctx.cmdContext.read_buf,
     );
 }
 
@@ -165,7 +190,7 @@ pub fn execJS(
     var cmd_ctx = CmdContext{
         .js_env = js_env,
         .socket = undefined,
-        .buf = &input,
+        .read_buf = &input,
         .try_catch = try_catch,
         .completion = &completion,
     };
