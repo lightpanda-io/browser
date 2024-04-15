@@ -9,7 +9,6 @@ pub var socket_fd: std.os.socket_t = undefined;
 
 // I/O input command context
 pub const CmdContext = struct {
-    alloc: std.mem.Allocator,
     js_env: *public.Env,
     socket: std.os.socket_t,
     completion: *public.IO.Completion,
@@ -18,7 +17,10 @@ pub const CmdContext = struct {
 
     try_catch: public.TryCatch,
 
-    // cmds: cdp.Cmds,
+    // shortcuts
+    fn alloc(self: *CmdContext) std.mem.Allocator {
+        return self.js_env.nat_ctx.alloc;
+    }
 };
 
 fn respCallback(
@@ -32,6 +34,11 @@ fn respCallback(
         return;
     };
     std.log.debug("send ok", .{});
+}
+
+pub fn send(ctx: *CmdContext, msg: []const u8) !void {
+    defer ctx.alloc().free(msg);
+    return osSend(ctx, msg);
 }
 
 pub const SendFn = (fn (*CmdContext, []const u8) anyerror!void);
@@ -85,13 +92,12 @@ fn cmdCallback(
     }
 
     std.debug.print("input {s}\n", .{input});
-    const res = cdp.do(ctx.alloc, input, ctx, osSend) catch |err| {
+    const res = cdp.do(ctx.alloc(), input, ctx, osSend) catch |err| {
         std.log.debug("error: {any}\n", .{err});
         loopSend(ctx, "{}") catch unreachable;
         // TODO: return proper error
         return;
     };
-    defer ctx.alloc.free(res);
     std.log.debug("res {s}", .{res});
 
     osSend(ctx, res) catch unreachable;
@@ -189,7 +195,6 @@ pub fn execJS(
     var completion: public.IO.Completion = undefined;
     var input: [1024]u8 = undefined;
     var cmd_ctx = CmdContext{
-        .alloc = alloc,
         .js_env = js_env,
         .socket = undefined,
         .buf = &input,
