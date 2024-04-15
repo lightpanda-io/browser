@@ -5,6 +5,7 @@ const Ctx = server.Cmd;
 const browser = @import("browser.zig").browser;
 const target = @import("target.zig").target;
 const page = @import("page.zig").page;
+const log = @import("log.zig").log;
 
 pub const Error = error{
     UnknonwDomain,
@@ -26,6 +27,7 @@ const Domains = enum {
     Browser,
     Target,
     Page,
+    Log,
 };
 
 // The caller is responsible for calling `free` on the returned slice.
@@ -55,6 +57,7 @@ pub fn do(
         .Browser => browser(alloc, id, iter.next().?, &scanner, ctx),
         .Target => target(alloc, id, iter.next().?, &scanner, ctx),
         .Page => page(alloc, id, iter.next().?, &scanner, ctx),
+        .Log => log(alloc, id, iter.next().?, &scanner, ctx),
     };
 }
 
