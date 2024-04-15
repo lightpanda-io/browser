@@ -1,15 +1,13 @@
 const std = @import("std");
 
 const server = @import("../server.zig");
-const Ctx = server.CmdContext;
-const SendFn = server.SendFn;
+const Ctx = server.Cmd;
 const result = @import("cdp.zig").result;
 const getParams = @import("cdp.zig").getParams;
 const stringify = @import("cdp.zig").stringify;
 
 const TargetMethods = enum {
     setAutoAttach,
-    // attachedToTarget,
     // getTargetInfo,
 };
 
@@ -21,10 +19,10 @@ pub fn target(
     ctx: *Ctx,
 ) ![]const u8 {
     const method = std.meta.stringToEnum(TargetMethods, action) orelse
-        return error.UnknownTargetMethod;
+        return error.UnknownMethod;
     return switch (method) {
         .setAutoAttach => tagetSetAutoAttach(alloc, id, scanner, ctx),
-        // .getTargetInfo => tagetGetTargetInfo(alloc, id, scanner),
+        // .getTargetInfo => tagetGetTargetInfo(alloc, id, scanner, ctx),
     };
 }
 
@@ -63,7 +61,7 @@ fn tagetSetAutoAttach(
         } = .{},
     };
     const attached = try stringify(alloc, AttachToTarget{});
-    try server.sendLater(ctx, attached, 0);
+    try server.sendSync(ctx, attached);
 
     return result(alloc, id, null, null);
 }
@@ -93,28 +91,3 @@ fn tagetGetTargetInfo(
     _ = targetInfo;
     return result(alloc, id, null, null);
 }
-
-// fn tagetGetTargetInfo(
-//     alloc: std.mem.Allocator,
-//     id: u64,
-//     scanner: *std.json.Scanner,
-// ) ![]const u8 {
-//     _ = scanner;
-
-//     const TargetInfo = struct {
-//         targetId: []const u8,
-//         type: []const u8,
-//         title: []const u8,
-//         url: []const u8,
-//         attached: bool,
-//         canAccessOpener: bool,
-
-//         browserContextId: ?[]const u8 = null,
-//     };
-//     const targetInfo = TargetInfo{
-//         .targetId = TargetID,
-//         .type = "page",
-//     };
-//     _ = targetInfo;
-//     return result(alloc, id, null, null);
-// }

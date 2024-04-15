@@ -1,10 +1,25 @@
 const std = @import("std");
 
 const server = @import("../server.zig");
-const Ctx = server.CmdContext;
-const SendFn = server.SendFn;
+const Ctx = server.Cmd;
 const browser = @import("browser.zig").browser;
 const target = @import("target.zig").target;
+
+pub const Error = error{
+    UnknonwDomain,
+    UnknownMethod,
+};
+
+pub fn isCdpError(err: anyerror) ?Error {
+    // see https://github.com/ziglang/zig/issues/2473
+    const errors = @typeInfo(Error).ErrorSet.?;
+    inline for (errors) |e| {
+        if (std.mem.eql(u8, e.name, @errorName(err))) {
+            return @errorCast(err);
+        }
+    }
+    return null;
+}
 
 const Domains = enum {
     Browser,
