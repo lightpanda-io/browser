@@ -17,13 +17,12 @@ pub fn browser(
     action: []const u8,
     scanner: *std.json.Scanner,
     ctx: *Ctx,
-    comptime sendFn: SendFn,
 ) ![]const u8 {
     const method = std.meta.stringToEnum(BrowserMethods, action) orelse
         return error.UnknownBrowserMethod;
     return switch (method) {
-        .getVersion => browserGetVersion(alloc, id, scanner, ctx, sendFn),
-        .setDownloadBehavior => browserSetDownloadBehavior(alloc, id, scanner, ctx, sendFn),
+        .getVersion => browserGetVersion(alloc, id, scanner, ctx),
+        .setDownloadBehavior => browserSetDownloadBehavior(alloc, id, scanner, ctx),
     };
 }
 
@@ -38,7 +37,6 @@ fn browserGetVersion(
     id: u64,
     _: *std.json.Scanner,
     _: *Ctx,
-    comptime _: SendFn,
 ) ![]const u8 {
     const Res = struct {
         protocolVersion: []const u8,
@@ -63,7 +61,6 @@ fn browserSetDownloadBehavior(
     id: u64,
     scanner: *std.json.Scanner,
     _: *Ctx,
-    comptime _: SendFn,
 ) ![]const u8 {
     const Params = struct {
         behavior: []const u8,

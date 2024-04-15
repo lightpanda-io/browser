@@ -18,12 +18,11 @@ pub fn target(
     action: []const u8,
     scanner: *std.json.Scanner,
     ctx: *Ctx,
-    comptime sendFn: SendFn,
 ) ![]const u8 {
     const method = std.meta.stringToEnum(TargetMethods, action) orelse
         return error.UnknownTargetMethod;
     return switch (method) {
-        .setAutoAttach => tagetSetAutoAttach(alloc, id, scanner, ctx, sendFn),
+        .setAutoAttach => tagetSetAutoAttach(alloc, id, scanner, ctx),
         // .getTargetInfo => tagetGetTargetInfo(alloc, id, scanner),
     };
 }
@@ -33,7 +32,6 @@ fn tagetSetAutoAttach(
     id: u64,
     scanner: *std.json.Scanner,
     _: *Ctx,
-    comptime _: SendFn,
 ) ![]const u8 {
     const Params = struct {
         autoAttach: bool,
@@ -52,7 +50,6 @@ fn tagetGetTargetInfo(
     id: u64,
     scanner: *std.json.Scanner,
     _: *Ctx,
-    comptime _: SendFn,
 ) ![]const u8 {
     _ = scanner;
 
