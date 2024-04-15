@@ -66,7 +66,7 @@ fn sendLaterCallback(
     send(ctx.cmd_ctx, ctx.buf) catch unreachable;
 }
 
-pub fn sendLater(ctx: *CmdContext, msg: []const u8) !void {
+pub fn sendLater(ctx: *CmdContext, msg: []const u8, nanoseconds: u63) !void {
     // NOTE: it seems we can't use the same completion for concurrent
     // recv and timeout operations, that's why we create a new completion here
     const completion = try ctx.alloc().create(public.IO.Completion);
@@ -78,7 +78,7 @@ pub fn sendLater(ctx: *CmdContext, msg: []const u8) !void {
         .completion = completion,
         .buf = msg,
     };
-    ctx.loop().io.timeout(*SendLaterContext, sendLaterCtx, sendLaterCallback, completion, 1000);
+    ctx.loop().io.timeout(*SendLaterContext, sendLaterCtx, sendLaterCallback, completion, nanoseconds);
 }
 
 fn send(ctx: *CmdContext, msg: []const u8) !void {
@@ -129,7 +129,7 @@ fn cmdCallback(
     };
     std.log.debug("res {s}", .{res});
 
-    sendLater(ctx, res) catch unreachable;
+    send(ctx, res) catch unreachable;
     std.log.debug("finish", .{});
 
     // continue receving messages asynchronously
