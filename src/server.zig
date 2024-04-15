@@ -44,18 +44,22 @@ pub fn send(ctx: *CmdContext, msg: []const u8) !void {
 pub const SendFn = (fn (*CmdContext, []const u8) anyerror!void);
 
 fn osSend(ctx: *CmdContext, msg: []const u8) !void {
+    defer ctx.alloc().free(msg);
     const s = try std.os.write(ctx.socket, msg);
     std.log.debug("send ok {d}", .{s});
 }
 
 fn loopSend(ctx: *CmdContext, msg: []const u8) !void {
+    ctx.buf = ctx.buf[0..msg.len];
+    @memcpy(ctx.buf, msg);
+    ctx.alloc().free(msg);
     ctx.js_env.nat_ctx.loop.io.send(
         *CmdContext,
         ctx,
         respCallback,
         ctx.completion,
         ctx.socket,
-        msg,
+        ctx.buf,
     );
 }
 
@@ -92,7 +96,7 @@ fn cmdCallback(
     }
 
     std.debug.print("input {s}\n", .{input});
-    const res = cdp.do(ctx.alloc(), input, ctx, osSend) catch |err| {
+    const res = cdp.do(ctx.alloc(), input, ctx, loopSend) catch |err| {
         std.log.debug("error: {any}\n", .{err});
         loopSend(ctx, "{}") catch unreachable;
         // TODO: return proper error
@@ -100,43 +104,7 @@ fn cmdCallback(
     };
     std.log.debug("res {s}", .{res});
 
-    osSend(ctx, res) catch unreachable;
-
-    // ctx.js_env.nat_ctx.loop.io.send(
-    //     *CmdContext,
-    //     ctx,
-    //     respCallback,
-    //     completion,
-    //     ctx.socket,
-    //     res,
-    // );
-
-    // JS execute
-    // const res = ctx.js_env.exec(
-    //     ctx.alloc,
-    //     input,
-    //     "shell.js",
-    //     ctx.try_catch,
-    // ) catch |err| {
-    //     ctx.close = true;
-    //     std.debug.print("JS exec error: {s}\n", .{@errorName(err)});
-    //     return;
-    // };
-    // defer res.deinit(ctx.alloc);
-
-    // // JS print result
-    // if (res.success) {
-    //     if (std.mem.eql(u8, res.result, "undefined")) {
-    //         std.debug.print("<- \x1b[38;5;242m{s}\x1b[0m\n", .{res.result});
-    //     } else {
-    //         std.debug.print("<- \x1b[33m{s}\x1b[0m\n", .{res.result});
-    //     }
-    // } else {
-    //     std.debug.print("{s}\n", .{res.result});
-    // }
-
-    // acknowledge to repl result has been printed
-    // _ = std.os.write(ctx.socket, "ok") catch unreachable;
+    loopSend(ctx, res) catch unreachable;
 }
 
 // I/O connection context
@@ -200,7 +168,6 @@ pub fn execJS(
         .buf = &input,
         .try_catch = try_catch,
         .completion = &completion,
-        // .cmds = .{},
     };
     var conn_ctx = ConnContext{
         .socket = socket_fd,
