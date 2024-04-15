@@ -49,6 +49,18 @@ fn checkKey(key: []const u8, token: []const u8) !void {
 
 const resultNull = "{{\"id\": {d}, \"result\": {{}}}}";
 
+// caller owns the slice returned
+pub fn stringify(alloc: std.mem.Allocator, res: anytype) ![]const u8 {
+    var out = std.ArrayList(u8).init(alloc);
+    defer out.deinit();
+
+    try std.json.stringify(res, .{}, out.writer());
+    const ret = try alloc.alloc(u8, out.items.len);
+    @memcpy(ret, out.items);
+    return ret;
+}
+
+// caller owns the slice returned
 pub fn result(
     alloc: std.mem.Allocator,
     id: u64,
@@ -63,13 +75,7 @@ pub fn result(
     };
     const resp = Resp{ .id = id, .result = res };
 
-    var out = std.ArrayList(u8).init(alloc);
-    defer out.deinit();
-
-    try std.json.stringify(resp, .{}, out.writer());
-    const ret = try alloc.alloc(u8, out.items.len);
-    @memcpy(ret, out.items);
-    return ret;
+    return stringify(alloc, resp);
 }
 
 pub fn getParams(
