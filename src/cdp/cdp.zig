@@ -4,6 +4,7 @@ const server = @import("../server.zig");
 const Ctx = server.Cmd;
 const browser = @import("browser.zig").browser;
 const target = @import("target.zig").target;
+const page = @import("page.zig").page;
 
 pub const Error = error{
     UnknonwDomain,
@@ -24,6 +25,7 @@ pub fn isCdpError(err: anyerror) ?Error {
 const Domains = enum {
     Browser,
     Target,
+    Page,
 };
 
 // The caller is responsible for calling `free` on the returned slice.
@@ -52,6 +54,7 @@ pub fn do(
     return switch (domain) {
         .Browser => browser(alloc, id, iter.next().?, &scanner, ctx),
         .Target => target(alloc, id, iter.next().?, &scanner, ctx),
+        .Page => page(alloc, id, iter.next().?, &scanner, ctx),
     };
 }
 
