@@ -10,6 +10,7 @@ const PageMethods = enum {
     enable,
     getFrameTree,
     setLifecycleEventsEnabled,
+    addScriptToEvaluateOnNewDocument,
 };
 
 pub fn page(
@@ -25,6 +26,7 @@ pub fn page(
         .enable => enable(alloc, id, scanner, ctx),
         .getFrameTree => getFrameTree(alloc, id, scanner, ctx),
         .setLifecycleEventsEnabled => setLifecycleEventsEnabled(alloc, id, scanner, ctx),
+        .addScriptToEvaluateOnNewDocument => addScriptToEvaluateOnNewDocument(alloc, id, scanner, ctx),
     };
 }
 
@@ -55,4 +57,16 @@ fn setLifecycleEventsEnabled(
 ) ![]const u8 {
     // TODO: dummy
     return result(alloc, id, null, null);
+}
+
+fn addScriptToEvaluateOnNewDocument(
+    alloc: std.mem.Allocator,
+    id: u64,
+    _: *std.json.Scanner,
+    _: *Ctx,
+) ![]const u8 {
+    const Res = struct {
+        identifier: []const u8 = "1",
+    };
+    return result(alloc, id, Res, .{});
 }
