@@ -20,56 +20,15 @@ const std = @import("std");
 
 const jsruntime = @import("jsruntime");
 
+const server = @import("server.zig");
+
 const parser = @import("netsurf");
 const apiweb = @import("apiweb.zig");
-const Window = @import("html/window.zig").Window;
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 pub const UserContext = apiweb.UserContext;
 
 const socket_path = "/tmp/browsercore-server.sock";
-
-var doc: *parser.DocumentHTML = undefined;
-var server: std.net.Server = undefined;
-
-fn execJS(
-    alloc: std.mem.Allocator,
-    js_env: *jsruntime.Env,
-) anyerror!void {
-    // start JS env
-    try js_env.start();
-    defer js_env.stop();
-
-    // alias global as self and window
-    var window = Window.create(null);
-    window.replaceDocument(doc);
-    try js_env.bindGlobal(window);
-
-    // try catch
-    var try_catch: jsruntime.TryCatch = undefined;
-    try_catch.init(js_env.*);
-    defer try_catch.deinit();
-
-    while (true) {
-
-        // read cmd
-        const conn = try server.accept();
-        var buf: [100]u8 = undefined;
-        const read = try conn.stream.read(&buf);
-        const cmd = buf[0..read];
-        std.debug.print("<- {s}\n", .{cmd});
-        if (std.mem.eql(u8, cmd, "exit")) {
-            break;
-        }
-
-        const res = try js_env.exec(cmd, "cdp");
-        const res_str = try res.toString(alloc, js_env.*);
-        defer alloc.free(res_str);
-        std.debug.print("-> {s}\n", .{res_str});
-
-        _ = try conn.stream.write(res_str);
-    }
-}
 
 pub fn main() !void {
 
@@ -80,18 +39,6 @@ pub fn main() !void {
     // alloc
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
-
-    try parser.init();
-    defer parser.deinit();
-
-    // document
-    const file = try std.fs.cwd().openFile("test.html", .{});
-    defer file.close();
-
-    doc = try parser.documentHTMLParse(file.reader(), "UTF-8");
-    defer parser.documentHTMLClose(doc) catch |err| {
-        std.debug.print("documentHTMLClose error: {s}\n", .{@errorName(err)});
-    };
 
     // remove socket file of internal server
     // reuse_address (SO_REUSEADDR flag) does not seems to work on unix socket
@@ -105,9 +52,15 @@ pub fn main() !void {
 
     // server
     const addr = try std.net.Address.initUnix(socket_path);
-    server = try addr.listen(.{});
-    defer server.deinit();
+    var srv = std.net.StreamServer.init(.{
+        .reuse_address = true,
+        .reuse_port = true,
+        .force_nonblocking = true,
+    });
+    defer srv.deinit();
+    try srv.listen(addr);
     std.debug.print("Listening on: {s}...\n", .{socket_path});
+    server.socket_fd = srv.sockfd.?;
 
-    try jsruntime.loadEnv(&arena, null, execJS);
+    try jsruntime.loadEnv(&arena, server.execJS);
 }
