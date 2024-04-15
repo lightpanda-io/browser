@@ -43,31 +43,42 @@ fn respCallback(
     std.log.debug("send ok", .{});
 }
 
-fn timeoutCallback(
-    ctx: *CmdContext,
+const SendLaterContext = struct {
+    cmd_ctx: *CmdContext,
+    completion: *public.IO.Completion,
+    buf: []const u8,
+};
+
+fn sendLaterCallback(
+    ctx: *SendLaterContext,
     completion: *public.IO.Completion,
     result: public.IO.TimeoutError!void,
 ) void {
     std.log.debug("sending after", .{});
     _ = result catch |err| {
-        ctx.close = true;
+        ctx.cmd_ctx.close = true;
         std.debug.print("timeout error: {s}\n", .{@errorName(err)});
         return;
     };
 
-    ctx.alloc().destroy(completion);
-    send(ctx, ctx.write_buf) catch unreachable;
+    ctx.cmd_ctx.alloc().destroy(completion);
+    defer ctx.cmd_ctx.alloc().destroy(ctx);
+    send(ctx.cmd_ctx, ctx.buf) catch unreachable;
 }
 
 pub fn sendLater(ctx: *CmdContext, msg: []const u8) !void {
-    ctx.write_buf = msg;
     // NOTE: it seems we can't use the same completion for concurrent
-    // recv and timeout operations
-    // TODO: maybe instead of allocating this each time we can create
-    // a timeout_completion on the context?
-    // Not sure if there is several concurrent timeout operations on the same context
+    // recv and timeout operations, that's why we create a new completion here
     const completion = try ctx.alloc().create(public.IO.Completion);
-    ctx.loop().io.timeout(*CmdContext, ctx, timeoutCallback, completion, 1000);
+    // NOTE: to handle concurrent calls to sendLater we create each time a new context
+    // If no concurrent calls are required we could just use the main CmdContext
+    const sendLaterCtx = try ctx.alloc().create(SendLaterContext);
+    sendLaterCtx.* = .{
+        .cmd_ctx = ctx,
+        .completion = completion,
+        .buf = msg,
+    };
+    ctx.loop().io.timeout(*SendLaterContext, sendLaterCtx, sendLaterCallback, completion, 1000);
 }
 
 fn send(ctx: *CmdContext, msg: []const u8) !void {
