@@ -8,6 +8,7 @@ const target = @import("target.zig").target;
 const page = @import("page.zig").page;
 const log = @import("log.zig").log;
 const runtime = @import("runtime.zig").runtime;
+const emulation = @import("emulation.zig").emulation;
 
 pub const Error = error{
     UnknonwDomain,
@@ -31,6 +32,7 @@ const Domains = enum {
     Page,
     Log,
     Runtime,
+    Emulation,
 };
 
 // The caller is responsible for calling `free` on the returned slice.
@@ -62,6 +64,7 @@ pub fn do(
         .Page => page(alloc, id, iter.next().?, &scanner, ctx),
         .Log => log(alloc, id, iter.next().?, &scanner, ctx),
         .Runtime => runtime(alloc, id, iter.next().?, &scanner, ctx),
+        .Emulation => emulation(alloc, id, iter.next().?, &scanner, ctx),
     };
 }
 
