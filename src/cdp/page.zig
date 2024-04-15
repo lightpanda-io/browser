@@ -8,6 +8,7 @@ const stringify = @import("cdp.zig").stringify;
 
 const PageMethods = enum {
     enable,
+    getFrameTree,
 };
 
 pub fn page(
@@ -21,6 +22,7 @@ pub fn page(
         return error.UnknownMethod;
     return switch (method) {
         .enable => enable(alloc, id, scanner, ctx),
+        .getFrameTree => getFrameTree(alloc, id, scanner, ctx),
     };
 }
 
@@ -30,5 +32,15 @@ fn enable(
     _: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
+    return result(alloc, id, null, null);
+}
+
+fn getFrameTree(
+    alloc: std.mem.Allocator,
+    id: u64,
+    _: *std.json.Scanner,
+    _: *Ctx,
+) ![]const u8 {
+    // TODO: dummy
     return result(alloc, id, null, null);
 }
