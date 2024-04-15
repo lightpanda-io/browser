@@ -9,6 +9,7 @@ const stringify = @import("cdp.zig").stringify;
 const PageMethods = enum {
     enable,
     getFrameTree,
+    setLifecycleEventsEnabled,
 };
 
 pub fn page(
@@ -23,6 +24,7 @@ pub fn page(
     return switch (method) {
         .enable => enable(alloc, id, scanner, ctx),
         .getFrameTree => getFrameTree(alloc, id, scanner, ctx),
+        .setLifecycleEventsEnabled => setLifecycleEventsEnabled(alloc, id, scanner, ctx),
     };
 }
 
@@ -36,6 +38,16 @@ fn enable(
 }
 
 fn getFrameTree(
+    alloc: std.mem.Allocator,
+    id: u64,
+    _: *std.json.Scanner,
+    _: *Ctx,
+) ![]const u8 {
+    // TODO: dummy
+    return result(alloc, id, null, null);
+}
+
+fn setLifecycleEventsEnabled(
     alloc: std.mem.Allocator,
     id: u64,
     _: *std.json.Scanner,
