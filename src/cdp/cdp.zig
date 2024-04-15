@@ -8,6 +8,7 @@ const target = @import("target.zig").target;
 const page = @import("page.zig").page;
 const log = @import("log.zig").log;
 const runtime = @import("runtime.zig").runtime;
+const network = @import("network.zig").network;
 const emulation = @import("emulation.zig").emulation;
 
 pub const Error = error{
@@ -32,6 +33,7 @@ const Domains = enum {
     Page,
     Log,
     Runtime,
+    Network,
     Emulation,
 };
 
@@ -64,6 +66,7 @@ pub fn do(
         .Page => page(alloc, id, iter.next().?, &scanner, ctx),
         .Log => log(alloc, id, iter.next().?, &scanner, ctx),
         .Runtime => runtime(alloc, id, iter.next().?, &scanner, ctx),
+        .Network => network(alloc, id, iter.next().?, &scanner, ctx),
         .Emulation => emulation(alloc, id, iter.next().?, &scanner, ctx),
     };
 }
