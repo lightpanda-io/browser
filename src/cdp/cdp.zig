@@ -2,10 +2,12 @@ const std = @import("std");
 
 const server = @import("../server.zig");
 const Ctx = server.Cmd;
+
 const browser = @import("browser.zig").browser;
 const target = @import("target.zig").target;
 const page = @import("page.zig").page;
 const log = @import("log.zig").log;
+const runtime = @import("runtime.zig").runtime;
 
 pub const Error = error{
     UnknonwDomain,
@@ -28,6 +30,7 @@ const Domains = enum {
     Target,
     Page,
     Log,
+    Runtime,
 };
 
 // The caller is responsible for calling `free` on the returned slice.
@@ -58,6 +61,7 @@ pub fn do(
         .Target => target(alloc, id, iter.next().?, &scanner, ctx),
         .Page => page(alloc, id, iter.next().?, &scanner, ctx),
         .Log => log(alloc, id, iter.next().?, &scanner, ctx),
+        .Runtime => runtime(alloc, id, iter.next().?, &scanner, ctx),
     };
 }
 
