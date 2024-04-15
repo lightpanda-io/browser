@@ -1,178 +1,165 @@
 const std = @import("std");
 
 const public = @import("jsruntime");
+const Completion = public.IO.Completion;
+const AcceptError = public.IO.AcceptError;
+const RecvError = public.IO.RecvError;
+const SendError = public.IO.SendError;
+const TimeoutError = public.IO.TimeoutError;
 
 const Window = @import("html/window.zig").Window;
 
 const cdp = @import("cdp/cdp.zig");
 pub var socket_fd: std.os.socket_t = undefined;
 
-// I/O input command context
-pub const CmdContext = struct {
-    js_env: *public.Env,
+const NoError = error{NoError};
+const Error = AcceptError || RecvError || SendError || TimeoutError || cdp.Error || NoError;
+
+// I/O Recv
+// --------
+
+pub const Cmd = struct {
+
+    // internal fields
     socket: std.os.socket_t,
-    completion: *public.IO.Completion,
+    buf: []u8, // only for read operations
+    err: ?Error = null,
 
-    read_buf: []u8,
-    write_buf: []const u8 = undefined,
-
-    close: bool = false,
-
+    // JS fields
+    js_env: *public.Env,
     try_catch: public.TryCatch,
 
+    fn cbk(self: *Cmd, completion: *Completion, result: RecvError!usize) void {
+        const size = result catch |err| {
+            self.err = err;
+            return;
+        };
+
+        const input = self.buf[0..size];
+
+        // close on exit command
+        if (std.mem.eql(u8, input, "exit")) {
+            self.err = error.NoError;
+            return;
+        }
+
+        // input
+        if (std.log.defaultLogEnabled(.debug)) {
+            std.debug.print("\ninput {s}\n", .{input});
+        }
+
+        // cdp
+        const res = cdp.do(self.alloc(), input, self) catch |err| {
+            if (cdp.isCdpError(err)) |e| {
+                self.err = e;
+                return;
+            }
+            @panic(@errorName(err));
+        };
+        std.log.debug("res {s}", .{res});
+
+        sendAsync(self, res) catch unreachable;
+
+        // continue receving incomming messages asynchronously
+        self.loop().io.recv(*Cmd, self, cbk, completion, self.socket, self.buf);
+    }
+
     // shortcuts
-    fn alloc(self: *CmdContext) std.mem.Allocator {
+    fn alloc(self: *Cmd) std.mem.Allocator {
         return self.js_env.nat_ctx.alloc;
     }
 
-    fn loop(self: *CmdContext) *public.Loop {
+    fn loop(self: *Cmd) *public.Loop {
         return self.js_env.nat_ctx.loop;
     }
 };
 
-fn respCallback(
-    ctx: *CmdContext,
-    _: *public.IO.Completion,
-    result: public.IO.SendError!usize,
-) void {
-    _ = result catch |err| {
-        ctx.close = true;
-        std.debug.print("send error: {s}\n", .{@errorName(err)});
-        return;
-    };
-    std.log.debug("send ok", .{});
-}
+// I/O Send
+// --------
 
-const SendLaterContext = struct {
-    cmd_ctx: *CmdContext,
-    completion: *public.IO.Completion,
+const Send = struct {
+    cmd: *Cmd,
     buf: []const u8,
-};
 
-fn sendLaterCallback(
-    ctx: *SendLaterContext,
-    completion: *public.IO.Completion,
-    result: public.IO.TimeoutError!void,
-) void {
-    std.log.debug("sending after", .{});
-    _ = result catch |err| {
-        ctx.cmd_ctx.close = true;
-        std.debug.print("timeout error: {s}\n", .{@errorName(err)});
-        return;
-    };
-
-    ctx.cmd_ctx.alloc().destroy(completion);
-    defer ctx.cmd_ctx.alloc().destroy(ctx);
-    send(ctx.cmd_ctx, ctx.buf) catch unreachable;
-}
-
-pub fn sendLater(ctx: *CmdContext, msg: []const u8, nanoseconds: u63) !void {
-    // NOTE: it seems we can't use the same completion for concurrent
-    // recv and timeout operations, that's why we create a new completion here
-    const completion = try ctx.alloc().create(public.IO.Completion);
-    // NOTE: to handle concurrent calls to sendLater we create each time a new context
-    // If no concurrent calls are required we could just use the main CmdContext
-    const sendLaterCtx = try ctx.alloc().create(SendLaterContext);
-    sendLaterCtx.* = .{
-        .cmd_ctx = ctx,
-        .completion = completion,
-        .buf = msg,
-    };
-    ctx.loop().io.timeout(*SendLaterContext, sendLaterCtx, sendLaterCallback, completion, nanoseconds);
-}
-
-fn send(ctx: *CmdContext, msg: []const u8) !void {
-    defer ctx.alloc().free(msg);
-    const s = try std.os.write(ctx.socket, msg);
-    std.log.debug("send ok {d}", .{s});
-}
-
-fn loopSend(ctx: *CmdContext, msg: []const u8) !void {
-    ctx.write_buf = msg;
-    ctx.loop().io.send(
-        *CmdContext,
-        ctx,
-        respCallback,
-        ctx.completion,
-        ctx.socket,
-        ctx.write_buf,
-    );
-}
-
-// I/O input command callback
-fn cmdCallback(
-    ctx: *CmdContext,
-    completion: *public.IO.Completion,
-    result: public.IO.RecvError!usize,
-) void {
-    // ctx.completion = completion;
-    const size = result catch |err| {
-        ctx.close = true;
-        std.debug.print("recv error: {s}\n", .{@errorName(err)});
-        return;
-    };
-
-    const input = ctx.read_buf[0..size];
-
-    // close on exit command
-    if (std.mem.eql(u8, input, "exit")) {
-        ctx.close = true;
-        return;
+    fn init(ctx: *Cmd, msg: []const u8) !struct {
+        ctx: *Send,
+        completion: *Completion,
+    } {
+        // NOTE: it seems we can't use the same completion for concurrent
+        // recv and timeout operations, that's why we create a new completion here
+        const completion = try ctx.alloc().create(Completion);
+        // NOTE: to handle concurrent calls we create each time a new context
+        // If no concurrent calls where required we could just use the main CmdCtx
+        const sd = try ctx.alloc().create(Send);
+        sd.* = .{
+            .cmd = ctx,
+            .buf = msg,
+        };
+        return .{ .ctx = sd, .completion = completion };
     }
 
-    std.debug.print("\ninput {s}\n", .{input});
-    const res = cdp.do(ctx.alloc(), input, ctx) catch |err| {
-        std.log.debug("error: {any}\n", .{err});
-        send(ctx, "{}") catch unreachable;
-        // TODO: return proper error
-        return;
-    };
-    std.log.debug("res {s}", .{res});
+    fn deinit(self: *Send, completion: *Completion) void {
+        self.cmd.alloc().destroy(completion);
+        self.cmd.alloc().free(self.buf);
+        self.cmd.alloc().destroy(self);
+    }
 
-    send(ctx, res) catch unreachable;
-    std.log.debug("finish", .{});
+    fn laterCbk(self: *Send, completion: *Completion, result: TimeoutError!void) void {
+        std.log.debug("sending after", .{});
+        _ = result catch |err| {
+            self.cmd.err = err;
+            return;
+        };
 
-    // continue receving messages asynchronously
-    ctx.loop().io.recv(
-        *CmdContext,
-        ctx,
-        cmdCallback,
-        completion,
-        ctx.socket,
-        ctx.read_buf,
-    );
-}
+        self.cmd.loop().io.send(*Send, self, Send.asyncCbk, completion, self.cmd.socket, self.buf);
+    }
 
-// I/O connection context
-const ConnContext = struct {
-    socket: std.os.socket_t,
+    fn asyncCbk(self: *Send, completion: *Completion, result: SendError!usize) void {
+        const size = result catch |err| {
+            self.cmd.err = err;
+            return;
+        };
 
-    cmdContext: *CmdContext,
+        std.log.debug("send async {d} bytes", .{size});
+        self.deinit(completion);
+    }
 };
 
-// I/O connection callback
-fn connCallback(
-    ctx: *ConnContext,
-    completion: *public.IO.Completion,
-    result: public.IO.AcceptError!std.os.socket_t,
-) void {
-    ctx.cmdContext.socket = result catch |err| @panic(@errorName(err));
-
-    // launch receving messages asynchronously
-    ctx.cmdContext.loop().io.recv(
-        *CmdContext,
-        ctx.cmdContext,
-        cmdCallback,
-        completion,
-        ctx.cmdContext.socket,
-        ctx.cmdContext.read_buf,
-    );
+pub fn sendLater(ctx: *Cmd, msg: []const u8, ns: u63) !void {
+    const sd = try Send.init(ctx, msg);
+    ctx.loop().io.timeout(*Send, sd.ctx, Send.laterCbk, sd.completion, ns);
 }
 
-pub fn execJS(
-    alloc: std.mem.Allocator,
-    js_env: *public.Env,
-) anyerror!void {
+pub fn sendAsync(ctx: *Cmd, msg: []const u8) !void {
+    const sd = try Send.init(ctx, msg);
+    ctx.loop().io.send(*Send, sd.ctx, Send.asyncCbk, sd.completion, ctx.socket, msg);
+}
+
+pub fn sendSync(ctx: *Cmd, msg: []const u8) !void {
+    defer ctx.alloc().free(msg);
+    const s = try std.os.write(ctx.socket, msg);
+    std.log.debug("send sync {d} bytes", .{s});
+}
+
+// I/O Accept
+// ----------
+
+const Accept = struct {
+    cmd: *Cmd,
+    socket: std.os.socket_t,
+
+    fn cbk(self: *Accept, completion: *Completion, result: AcceptError!std.os.socket_t) void {
+        self.cmd.socket = result catch |err| {
+            self.cmd.err = err;
+            return;
+        };
+
+        // receving incomming messages asynchronously
+        self.cmd.loop().io.recv(*Cmd, self.cmd, Cmd.cbk, completion, self.cmd.socket, self.cmd.buf);
+    }
+};
+
+pub fn execJS(alloc: std.mem.Allocator, js_env: *public.Env) anyerror!void {
 
     // start JS env
     try js_env.start(alloc);
@@ -196,29 +183,22 @@ pub fn execJS(
 
     // create I/O contexts and callbacks
     // for accepting connections and receving messages
-    var completion: public.IO.Completion = undefined;
     var input: [1024]u8 = undefined;
-    var cmd_ctx = CmdContext{
+    var cmd = Cmd{
         .js_env = js_env,
         .socket = undefined,
-        .read_buf = &input,
+        .buf = &input,
         .try_catch = try_catch,
-        .completion = &completion,
     };
-    var conn_ctx = ConnContext{
+    var accept = Accept{
+        .cmd = &cmd,
         .socket = socket_fd,
-        .cmdContext = &cmd_ctx,
     };
 
-    // launch accepting connection asynchronously on internal server
+    // accepting connection asynchronously on internal server
     const loop = js_env.nat_ctx.loop;
-    loop.io.accept(
-        *ConnContext,
-        &conn_ctx,
-        connCallback,
-        &completion,
-        socket_fd,
-    );
+    var completion: Completion = undefined;
+    loop.io.accept(*Accept, &accept, Accept.cbk, &completion, socket_fd);
 
     // infinite loop on I/O events, either:
     // - cmd from incoming connection on server socket
@@ -232,7 +212,8 @@ pub fn execJS(
             }
             loop.cbk_error = false;
         }
-        if (cmd_ctx.close) {
+        if (cmd.err) |err| {
+            if (err != error.NoError) std.log.err("Server error: {any}", .{err});
             break;
         }
     }

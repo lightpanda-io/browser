@@ -1,8 +1,7 @@
 const std = @import("std");
 
 const server = @import("../server.zig");
-const Ctx = server.CmdContext;
-const SendFn = server.SendFn;
+const Ctx = server.Cmd;
 const result = @import("cdp.zig").result;
 const getParams = @import("cdp.zig").getParams;
 
@@ -19,7 +18,7 @@ pub fn browser(
     ctx: *Ctx,
 ) ![]const u8 {
     const method = std.meta.stringToEnum(BrowserMethods, action) orelse
-        return error.UnknownBrowserMethod;
+        return error.UnknownMethod;
     return switch (method) {
         .getVersion => browserGetVersion(alloc, id, scanner, ctx),
         .setDownloadBehavior => browserSetDownloadBehavior(alloc, id, scanner, ctx),
