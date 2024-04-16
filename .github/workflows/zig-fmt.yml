@@ -35,7 +35,7 @@ jobs:
       zig_fmt_errs: ${{ steps.fmt.outputs.zig_fmt_errs }}
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
