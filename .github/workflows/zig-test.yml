@@ -33,6 +33,11 @@ on:
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
+permissions:
+  pull-requests: read # required for dorny/paths-filter
+  contents: read
+  packages: read
+
 jobs:
   zig-build-dev:
     name: zig build dev
@@ -150,6 +155,29 @@ jobs:
           ln -s /usr/local/lib/netsurf/build vendor/netsurf/build
           ln -s /usr/local/lib/netsurf/lib vendor/netsurf/lib
           ln -s /usr/local/lib/netsurf/include vendor/netsurf/include
+
+      # detect file change
+      - uses: dorny/paths-filter@v3.0.2
+        id: changes
+        with:
+          filters: |
+            netsurf:
+              - 'vendor/netsurf/**'
+
+      # if a vendor has changed, install build dependencies.
+      - name: install build dependencies
+        if: steps.changes.outputs.netsurf == 'true'
+        run: |
+          apt update && \
+          apt install -y git curl bash xz-utils python3 ca-certificates pkg-config \
+          libglib2.0-dev gperf libexpat1-dev cmake build-essential
+
+      # if netsurf has changed, force a rebuild.
+      - name: build netsurf
+        if: steps.changes.outputs.netsurf == 'true'
+        run: |
+          make clean-netsurf
+          make install-netsurf
 
       - name: zig build test
         run: zig build test -Dengine=v8 -- --json > bench.json
