@@ -2,9 +2,10 @@ const std = @import("std");
 
 const server = @import("../server.zig");
 const Ctx = server.Cmd;
-const result = @import("cdp.zig").result;
-const getParams = @import("cdp.zig").getParams;
-const stringify = @import("cdp.zig").stringify;
+const cdp = @import("cdp.zig");
+const result = cdp.result;
+const getParams = cdp.getParams;
+const stringify = cdp.stringify;
 
 const NetworkMethods = enum {
     enable,
@@ -27,8 +28,11 @@ pub fn network(
 fn enable(
     alloc: std.mem.Allocator,
     id: u64,
-    _: *std.json.Scanner,
+    scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
-    return result(alloc, id, null, null);
+    return stringify(alloc, cdp.SessionIDResp{
+        .id = id,
+        .sessionId = try cdp.getSessionID(alloc, scanner),
+    });
 }

@@ -121,3 +121,33 @@ pub fn getParams(
     };
     return std.json.innerParse(T, alloc, scanner, options);
 }
+
+pub fn getSessionID(
+    alloc: std.mem.Allocator,
+    scanner: *std.json.Scanner,
+) ![]const u8 {
+    var n = (try scanner.next()).string;
+    if (std.mem.eql(u8, n, "params")) {
+        // ignore empty params
+        _ = (try scanner.next()).object_begin;
+        _ = (try scanner.next()).object_end;
+        n = (try scanner.next()).string;
+    }
+    try checkKey("sessionId", n);
+    const options = std.json.ParseOptions{
+        .max_value_len = scanner.input.len,
+        .allocate = .alloc_if_needed,
+    };
+    return std.json.innerParse([]const u8, alloc, scanner, options);
+}
+
+// Common
+// ------
+
+pub const SessionID = "9559320D92474062597D9875C664CAC0";
+
+pub const SessionIDResp = struct {
+    id: u64,
+    result: struct {} = .{},
+    sessionId: []const u8,
+};
