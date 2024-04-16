@@ -40,14 +40,30 @@ const DocumentType = @import("document_type.zig").DocumentType;
 const DocumentFragment = @import("document_fragment.zig").DocumentFragment;
 const DOMImplementation = @import("implementation.zig").DOMImplementation;
 
+const UserContext = @import("../user_context.zig").UserContext;
+
 // WEB IDL https://dom.spec.whatwg.org/#document
 pub const Document = struct {
     pub const Self = parser.Document;
     pub const prototype = *Node;
     pub const mem_guarantied = true;
 
-    pub fn constructor() !*parser.Document {
-        return try parser.domImplementationCreateHTMLDocument(null);
+    pub fn constructor(userctx: UserContext) !*parser.DocumentHTML {
+        var title: ?[]const u8 = null;
+        if (userctx.document) |cur| {
+            title = try parser.documentHTMLGetTitle(cur);
+        }
+        const doc = try parser.domImplementationCreateHTMLDocument(title);
+
+        if (userctx.document) |cur| {
+            // we have to work w/ document instead of html document.
+            const ddoc = parser.documentHTMLToDocument(doc);
+            const ccur = parser.documentHTMLToDocument(cur);
+            try parser.documentSetDocumentURI(ddoc, try parser.documentGetDocumentURI(ccur));
+            try parser.documentSetInputEncoding(ddoc, try parser.documentGetInputEncoding(ccur));
+        }
+
+        return doc;
     }
 
     // JS funcs
@@ -262,6 +278,13 @@ pub fn testExecFn(
         .{ .src = "newdoc.children.length", .ex = "0" },
         .{ .src = "newdoc.getElementsByTagName('*').length", .ex = "0" },
         .{ .src = "newdoc.getElementsByTagName('*').item(0)", .ex = "null" },
+        .{ .src = "newdoc.inputEncoding === document.inputEncoding", .ex = "true" },
+        .{ .src = "newdoc.documentURI === document.documentURI", .ex = "true" },
+        .{ .src = "newdoc.URL === document.URL", .ex = "true" },
+        .{ .src = "newdoc.compatMode === document.compatMode", .ex = "true" },
+        .{ .src = "newdoc.characterSet === document.characterSet", .ex = "true" },
+        .{ .src = "newdoc.charset === document.charset", .ex = "true" },
+        .{ .src = "newdoc.contentType === document.contentType", .ex = "true" },
     };
     try checkCases(js_env, &constructor);
 
