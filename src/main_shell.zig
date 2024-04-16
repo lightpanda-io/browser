@@ -28,6 +28,7 @@ const storage = @import("storage/storage.zig");
 const html_test = @import("html_test.zig").html;
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
+pub const UserContext = apiweb.UserContext;
 
 var doc: *parser.DocumentHTML = undefined;
 
@@ -38,6 +39,10 @@ fn execJS(
     // start JS env
     try js_env.start(alloc);
     defer js_env.stop();
+
+    js_env.setUserContext(UserContext{
+        .document = doc,
+    });
 
     var storageShelf = storage.Shelf.init(alloc);
     defer storageShelf.deinit();

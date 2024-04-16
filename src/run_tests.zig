@@ -54,6 +54,7 @@ const URLTestExecFn = url.testExecFn;
 const HTMLElementTestExecFn = @import("html/elements.zig").testExecFn;
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
+pub const UserContext = @import("user_context.zig").UserContext;
 
 var doc: *parser.DocumentHTML = undefined;
 
@@ -80,6 +81,8 @@ fn testExecFn(
     defer parser.documentHTMLClose(doc) catch |err| {
         std.debug.print("documentHTMLClose error: {s}\n", .{@errorName(err)});
     };
+
+    js_env.getUserContext().?.document = doc;
 
     // alias global as self and window
     var window = Window.create(null);
@@ -315,7 +318,11 @@ fn testJSRuntime(alloc: std.mem.Allocator) !void {
     var arena_alloc = std.heap.ArenaAllocator.init(alloc);
     defer arena_alloc.deinit();
 
-    try jsruntime.loadEnv(&arena_alloc, testsAllExecFn);
+    const userctx = UserContext{
+        .document = null,
+    };
+
+    try jsruntime.loadEnv(&arena_alloc, userctx, testsAllExecFn);
 }
 
 test "DocumentHTMLParseFromStr" {

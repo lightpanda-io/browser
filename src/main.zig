@@ -25,6 +25,7 @@ const apiweb = @import("apiweb.zig");
 const Window = @import("html/window.zig").Window;
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
+pub const UserContext = apiweb.UserContext;
 
 const socket_path = "/tmp/browsercore-server.sock";
 
@@ -103,5 +104,5 @@ pub fn main() !void {
     try server.listen(addr);
     std.debug.print("Listening on: {s}...\n", .{socket_path});
 
-    try jsruntime.loadEnv(&arena, execJS);
+    try jsruntime.loadEnv(&arena, null, execJS);
 }

@@ -107,7 +107,7 @@ pub const Session = struct {
             .storageShed = storage.Shed.init(alloc),
         };
 
-        self.env = try Env.init(self.arena.allocator(), &self.loop);
+        self.env = try Env.init(self.arena.allocator(), &self.loop, null);
         try self.env.load(&self.jstypes);
 
         return self;
