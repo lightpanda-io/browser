@@ -27,6 +27,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
 
     paths:
+      - ".github/**"
       - "build.zig"
       - "src/**/*.zig"
       - "src/*.zig"
@@ -34,6 +35,11 @@ on:
       - "vendor/**"
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
+
+permissions:
+  pull-requests: read # required for dorny/paths-filter
+  contents: read
+  packages: read
 
 jobs:
   wpt:
@@ -50,28 +56,14 @@ jobs:
        password: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_CI_PAT }}
           # fetch submodules recusively, to get jsruntime-lib submodules also.
           submodules: recursive
 
-      - name: install v8
-        run: |
-          mkdir -p vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/debug
-          ln -s /usr/local/lib/libc_v8.a vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/debug/libc_v8.a
-
-          mkdir -p vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/release
-          ln -s /usr/local/lib/libc_v8.a vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/release/libc_v8.a
-
-      - name: install deps
-        run: |
-          ln -s /usr/local/lib/libiconv vendor/libiconv
-
-          ln -s /usr/local/lib/netsurf/build vendor/netsurf/build
-          ln -s /usr/local/lib/netsurf/lib vendor/netsurf/lib
-          ln -s /usr/local/lib/netsurf/include vendor/netsurf/include
+      - uses: ./.github/actions/install
 
       - run: zig build wpt -Dengine=v8 -- --safe --summary
 
@@ -88,7 +80,7 @@ jobs:
           echo "${{github.sha}}" > commit.txt
 
       - name: upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: wpt-results
           path: |
@@ -112,7 +104,7 @@ jobs:
 
     steps:
       - name: download artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: wpt-results
 
