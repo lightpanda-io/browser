@@ -8,6 +8,7 @@ const stringify = @import("cdp.zig").stringify;
 
 const RuntimeMethods = enum {
     enable,
+    runIfWaitingForDebugger,
 };
 
 pub fn runtime(
@@ -21,10 +22,20 @@ pub fn runtime(
         return error.UnknownMethod;
     return switch (method) {
         .enable => enable(alloc, id, scanner, ctx),
+        .runIfWaitingForDebugger => runIfWaitingForDebugger(alloc, id, scanner, ctx),
     };
 }
 
 fn enable(
+    alloc: std.mem.Allocator,
+    id: u64,
+    _: *std.json.Scanner,
+    _: *Ctx,
+) ![]const u8 {
+    return result(alloc, id, null, null);
+}
+
+fn runIfWaitingForDebugger(
     alloc: std.mem.Allocator,
     id: u64,
     _: *std.json.Scanner,
