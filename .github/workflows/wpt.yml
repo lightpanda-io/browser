@@ -27,6 +27,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
 
     paths:
+      - ".github/**"
       - "build.zig"
       - "src/**/*.zig"
       - "src/*.zig"
