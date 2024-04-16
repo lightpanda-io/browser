@@ -35,7 +35,11 @@ pub const Cmd = struct {
             return;
         };
 
-        const input = self.buf[0..size];
+        // input
+        var input = self.buf[0..size];
+        if (std.log.defaultLogEnabled(.debug)) {
+            std.debug.print("\ninput {s}\n", .{input});
+        }
 
         // close on exit command
         if (std.mem.eql(u8, input, "exit")) {
@@ -43,22 +47,35 @@ pub const Cmd = struct {
             return;
         }
 
-        // input
-        if (std.log.defaultLogEnabled(.debug)) {
-            std.debug.print("\ninput {s}\n", .{input});
-        }
+        // cmds
+        var cmd: []const u8 = undefined;
+        while (true) {
 
-        // cdp
-        const res = cdp.do(self.alloc(), input, self) catch |err| {
-            if (cdp.isCdpError(err)) |e| {
-                self.err = e;
-                return;
+            // handle several JSON msg in 1 read
+            const pos = std.mem.indexOf(u8, input, "}{");
+            if (pos) |p| {
+                cmd = input[0 .. p + 1];
+                input = input[p + 1 ..];
+            } else {
+                cmd = input;
             }
-            @panic(@errorName(err));
-        };
-        std.log.debug("res {s}", .{res});
 
-        sendAsync(self, res) catch unreachable;
+            // cdp
+            const res = cdp.do(self.alloc(), cmd, self) catch |err| {
+                if (cdp.isCdpError(err)) |e| {
+                    self.err = e;
+                    return;
+                }
+                @panic(@errorName(err));
+            };
+            std.log.debug("res {s}", .{res});
+
+            sendAsync(self, res) catch unreachable;
+
+            if (pos == null) break;
+
+            // TODO: handle 1 read smaller than a complete JSON msg
+        }
 
         // continue receving incomming messages asynchronously
         self.loop().io.recv(*Cmd, self, cbk, completion, self.socket, self.buf);
