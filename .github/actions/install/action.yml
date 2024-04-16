@@ -19,6 +19,10 @@ runs:
       run: |
         ln -s /usr/local/lib/libiconv vendor/libiconv
 
+    - name: build mimalloc
+      shell: bash
+      run: make install-mimalloc
+
     - name: build netsurf
       shell: bash
       run: make install-netsurf
