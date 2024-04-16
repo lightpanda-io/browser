@@ -60,21 +60,7 @@ jobs:
           # fetch submodules recusively, to get jsruntime-lib submodules also.
           submodules: recursive
 
-      - name: install v8
-        run: |
-          mkdir -p vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/debug
-          ln -s /usr/local/lib/libc_v8.a vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/debug/libc_v8.a
-
-          mkdir -p vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/release
-          ln -s /usr/local/lib/libc_v8.a vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/release/libc_v8.a
-
-      - name: install deps
-        run: |
-          ln -s /usr/local/lib/libiconv vendor/libiconv
-
-          ln -s /usr/local/lib/netsurf/build vendor/netsurf/build
-          ln -s /usr/local/lib/netsurf/lib vendor/netsurf/lib
-          ln -s /usr/local/lib/netsurf/include vendor/netsurf/include
+      - uses: ./.github/actions/install
 
       - name: zig build debug
         run: zig build -Dengine=v8
@@ -100,21 +86,7 @@ jobs:
           # fetch submodules recusively, to get jsruntime-lib submodules also.
           submodules: recursive
 
-      - name: install v8
-        run: |
-          mkdir -p vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/debug
-          ln -s /usr/local/lib/libc_v8.a vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/debug/libc_v8.a
-
-          mkdir -p vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/release
-          ln -s /usr/local/lib/libc_v8.a vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/release/libc_v8.a
-
-      - name: install deps
-        run: |
-          ln -s /usr/local/lib/libiconv vendor/libiconv
-
-          ln -s /usr/local/lib/netsurf/build vendor/netsurf/build
-          ln -s /usr/local/lib/netsurf/lib vendor/netsurf/lib
-          ln -s /usr/local/lib/netsurf/include vendor/netsurf/include
+      - uses: ./.github/actions/install
 
       - name: zig build release
         run: zig build -Doptimize=ReleaseSafe -Dengine=v8
@@ -140,44 +112,7 @@ jobs:
           # fetch submodules recusively, to get jsruntime-lib submodules also.
           submodules: recursive
 
-      - name: install v8
-        run: |
-          mkdir -p vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/debug
-          ln -s /usr/local/lib/libc_v8.a vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/debug/libc_v8.a
-
-          mkdir -p vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/release
-          ln -s /usr/local/lib/libc_v8.a vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/release/libc_v8.a
-
-      - name: install deps
-        run: |
-          ln -s /usr/local/lib/libiconv vendor/libiconv
-
-          ln -s /usr/local/lib/netsurf/build vendor/netsurf/build
-          ln -s /usr/local/lib/netsurf/lib vendor/netsurf/lib
-          ln -s /usr/local/lib/netsurf/include vendor/netsurf/include
-
-      # detect file change
-      - uses: dorny/paths-filter@v3.0.2
-        id: changes
-        with:
-          filters: |
-            netsurf:
-              - 'vendor/netsurf/**'
-
-      # if a vendor has changed, install build dependencies.
-      - name: install build dependencies
-        if: steps.changes.outputs.netsurf == 'true'
-        run: |
-          apt update && \
-          apt install -y git curl bash xz-utils python3 ca-certificates pkg-config \
-          libglib2.0-dev gperf libexpat1-dev cmake build-essential
-
-      # if netsurf has changed, force a rebuild.
-      - name: build netsurf
-        if: steps.changes.outputs.netsurf == 'true'
-        run: |
-          make clean-netsurf
-          make install-netsurf
+      - uses: ./.github/actions/install
 
       - name: zig build test
         run: zig build test -Dengine=v8 -- --json > bench.json

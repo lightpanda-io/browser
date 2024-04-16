@@ -57,21 +57,7 @@ jobs:
           # fetch submodules recusively, to get jsruntime-lib submodules also.
           submodules: recursive
 
-      - name: install v8
-        run: |
-          mkdir -p vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/debug
-          ln -s /usr/local/lib/libc_v8.a vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/debug/libc_v8.a
-
-          mkdir -p vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/release
-          ln -s /usr/local/lib/libc_v8.a vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/release/libc_v8.a
-
-      - name: install deps
-        run: |
-          ln -s /usr/local/lib/libiconv vendor/libiconv
-
-          ln -s /usr/local/lib/netsurf/build vendor/netsurf/build
-          ln -s /usr/local/lib/netsurf/lib vendor/netsurf/lib
-          ln -s /usr/local/lib/netsurf/include vendor/netsurf/include
+      - uses: ./.github/actions/install
 
       - run: zig build wpt -Dengine=v8 -- --safe --summary
 
