@@ -66,11 +66,23 @@ fn setLifecycleEventsEnabled(
 fn addScriptToEvaluateOnNewDocument(
     alloc: std.mem.Allocator,
     id: u64,
-    _: *std.json.Scanner,
+    scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
-    const Res = struct {
-        identifier: []const u8 = "1",
+    const Params = struct {
+        source: []const u8,
+        worldName: ?[]const u8 = null,
     };
-    return result(alloc, id, Res, .{});
+    _ = try getParams(alloc, Params, scanner);
+    const Res = struct {
+        id: u64,
+        result: struct {
+            identifier: []const u8 = "1",
+        } = .{},
+        sessionId: []const u8,
+    };
+    return stringify(alloc, Res{
+        .id = id,
+        .sessionId = try cdp.getSessionID(alloc, scanner),
+    });
 }
