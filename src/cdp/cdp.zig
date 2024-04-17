@@ -85,7 +85,10 @@ pub fn stringify(alloc: std.mem.Allocator, res: anytype) ![]const u8 {
     var out = std.ArrayList(u8).init(alloc);
     defer out.deinit();
 
-    try std.json.stringify(res, .{}, out.writer());
+    // Do not emit optional null fields
+    const options: std.json.StringifyOptions = .{ .emit_null_optional_fields = false };
+
+    try std.json.stringify(res, options, out.writer());
     const ret = try alloc.alloc(u8, out.items.len);
     @memcpy(ret, out.items);
     return ret;
