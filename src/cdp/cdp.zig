@@ -78,8 +78,6 @@ fn checkKey(key: []const u8, token: []const u8) !void {
     if (!std.mem.eql(u8, key, token)) return error.WrongToken;
 }
 
-const resultNull = "{{\"id\": {d}, \"result\": {{}}}}";
-
 // caller owns the slice returned
 pub fn stringify(alloc: std.mem.Allocator, res: anytype) ![]const u8 {
     var out = std.ArrayList(u8).init(alloc);
@@ -94,20 +92,31 @@ pub fn stringify(alloc: std.mem.Allocator, res: anytype) ![]const u8 {
     return ret;
 }
 
+const resultNull = "{{\"id\": {d}, \"result\": {{}}}}";
+const resultNullSession = "{{\"id\": {d}, \"result\": {{}}, \"sessionId\": \"{s}\"}}";
+
 // caller owns the slice returned
 pub fn result(
     alloc: std.mem.Allocator,
     id: u64,
     comptime T: ?type,
     res: anytype,
+    sessionID: ?[]const u8,
 ) ![]const u8 {
-    if (T == null) return try std.fmt.allocPrint(alloc, resultNull, .{id});
+    if (T == null) {
+        // No need to stringify a custom JSON msg, just use string templates
+        if (sessionID) |sID| {
+            return try std.fmt.allocPrint(alloc, resultNullSession, .{ id, sID });
+        }
+        return try std.fmt.allocPrint(alloc, resultNull, .{id});
+    }
 
     const Resp = struct {
         id: u64,
         result: T.?,
+        sessionId: ?[]const u8,
     };
-    const resp = Resp{ .id = id, .result = res };
+    const resp = Resp{ .id = id, .result = res, .sessionId = sessionID };
 
     return stringify(alloc, resp);
 }
@@ -125,32 +134,32 @@ pub fn getParams(
     return std.json.innerParse(T, alloc, scanner, options);
 }
 
-pub fn getSessionID(
-    alloc: std.mem.Allocator,
-    scanner: *std.json.Scanner,
-) ![]const u8 {
-    var n = (try scanner.next()).string;
+pub fn getSessionID(scanner: *std.json.Scanner) !?[]const u8 {
+
+    // if next token is the end of the object, there is no "sessionId"
+    const t = try scanner.next();
+    if (t == .object_end) return null;
+
+    var n = t.string;
+
+    // if next token is "params" ignore them
+    // NOTE: will panic if it's not an empty "params" object
+    // TODO: maybe we should return a custom error here
     if (std.mem.eql(u8, n, "params")) {
         // ignore empty params
         _ = (try scanner.next()).object_begin;
         _ = (try scanner.next()).object_end;
         n = (try scanner.next()).string;
     }
-    try checkKey("sessionId", n);
-    const options = std.json.ParseOptions{
-        .max_value_len = scanner.input.len,
-        .allocate = .alloc_if_needed,
-    };
-    return std.json.innerParse([]const u8, alloc, scanner, options);
+
+    // if next token is not "sessionId" there is no "sessionId"
+    if (!std.mem.eql(u8, n, "sessionId")) return null;
+
+    // parse "sessionId"
+    return (try scanner.next()).string;
 }
 
 // Common
 // ------
 
 pub const SessionID = "9559320D92474062597D9875C664CAC0";
-
-pub const SessionIDResp = struct {
-    id: u64,
-    result: struct {} = .{},
-    sessionId: []const u8,
-};

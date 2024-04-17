@@ -32,7 +32,7 @@ fn setEmulatedMedia(
     _: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
-    return result(alloc, id, null, null);
+    return result(alloc, id, null, null, null);
 }
 
 fn setFocusEmulationEnabled(
@@ -41,5 +41,5 @@ fn setFocusEmulationEnabled(
     _: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
-    return result(alloc, id, null, null);
+    return result(alloc, id, null, null, null);
 }
