@@ -2,9 +2,10 @@ const std = @import("std");
 
 const server = @import("../server.zig");
 const Ctx = server.Cmd;
-const result = @import("cdp.zig").result;
-const getParams = @import("cdp.zig").getParams;
-const stringify = @import("cdp.zig").stringify;
+const cdp = @import("cdp.zig");
+const result = cdp.result;
+const getParams = cdp.getParams;
+const stringify = cdp.stringify;
 
 const TargetMethods = enum {
     setAutoAttach,
@@ -63,7 +64,7 @@ fn tagetSetAutoAttach(
     const attached = try stringify(alloc, AttachToTarget{});
     try server.sendSync(ctx, attached);
 
-    return result(alloc, id, null, null);
+    return result(alloc, id, null, null, null);
 }
 
 fn tagetGetTargetInfo(

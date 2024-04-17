@@ -31,8 +31,6 @@ fn enable(
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
-    return stringify(alloc, cdp.SessionIDResp{
-        .id = id,
-        .sessionId = try cdp.getSessionID(alloc, scanner),
-    });
+    const sessionID = try cdp.getSessionID(scanner);
+    return result(alloc, id, null, null, sessionID);
 }

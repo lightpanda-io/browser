@@ -52,7 +52,7 @@ fn browserGetVersion(
         .userAgent = UserAgent,
         .jsVersion = JsVersion,
     };
-    return result(alloc, id, Res, res);
+    return result(alloc, id, Res, res, null);
 }
 
 fn browserSetDownloadBehavior(
@@ -69,5 +69,5 @@ fn browserSetDownloadBehavior(
     };
     const params = try getParams(alloc, Params, scanner);
     std.log.debug("params {any}", .{params});
-    return result(alloc, id, null, null);
+    return result(alloc, id, null, null, null);
 }

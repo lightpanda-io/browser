@@ -37,10 +37,8 @@ fn enable(
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
-    return stringify(alloc, cdp.SessionIDResp{
-        .id = id,
-        .sessionId = try cdp.getSessionID(alloc, scanner),
-    });
+    const sessionID = try cdp.getSessionID(scanner);
+    return result(alloc, id, null, null, sessionID);
 }
 
 fn getFrameTree(
@@ -50,17 +48,26 @@ fn getFrameTree(
     _: *Ctx,
 ) ![]const u8 {
     // TODO: dummy
-    return result(alloc, id, null, null);
+    return result(alloc, id, null, null, null);
 }
 
 fn setLifecycleEventsEnabled(
     alloc: std.mem.Allocator,
     id: u64,
-    _: *std.json.Scanner,
+    scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
+
+    // input
+    const Params = struct {
+        enabled: bool,
+    };
+    _ = try getParams(alloc, Params, scanner);
+    const sessionID = try cdp.getSessionID(scanner);
+
+    // output
     // TODO: dummy
-    return result(alloc, id, null, null);
+    return result(alloc, id, null, null, sessionID);
 }
 
 fn addScriptToEvaluateOnNewDocument(
@@ -69,20 +76,18 @@ fn addScriptToEvaluateOnNewDocument(
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
+
+    // input
     const Params = struct {
         source: []const u8,
         worldName: ?[]const u8 = null,
     };
     _ = try getParams(alloc, Params, scanner);
+    const sessionID = try cdp.getSessionID(scanner);
+
+    // output
     const Res = struct {
-        id: u64,
-        result: struct {
-            identifier: []const u8 = "1",
-        } = .{},
-        sessionId: []const u8,
+        identifier: []const u8 = "1",
     };
-    return stringify(alloc, Res{
-        .id = id,
-        .sessionId = try cdp.getSessionID(alloc, scanner),
-    });
+    return result(alloc, id, Res, Res{}, sessionID);
 }
