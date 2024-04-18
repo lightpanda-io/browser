@@ -40,8 +40,9 @@ fn enable(
 fn runIfWaitingForDebugger(
     alloc: std.mem.Allocator,
     id: u64,
-    _: *std.json.Scanner,
+    scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
-    return result(alloc, id, null, null, null);
+    const sessionID = try cdp.getSessionID(scanner);
+    return result(alloc, id, null, null, sessionID);
 }
