@@ -42,6 +42,16 @@ pub export fn c_alloc(nmemb: usize, size: usize) callconv(.C) ?*anyopaque {
     return c.mi_heap_calloc(heap.?, nmemb, size);
 }
 
+pub export fn str_dup(s: [*c]const u8) callconv(.C) [*c]u8 {
+    if (heap == null) return null;
+    return c.mi_heap_strdup(heap.?, s);
+}
+
+pub export fn strn_dup(s: [*c]const u8, size: usize) callconv(.C) [*c]u8 {
+    if (heap == null) return null;
+    return c.mi_heap_strndup(heap.?, s, size);
+}
+
 // NOOP, use destroy to clear all the memory allocated at once.
 pub export fn f_ree(_: ?*anyopaque) callconv(.C) void {
     return;
