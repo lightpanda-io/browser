@@ -10,6 +10,7 @@ const BrowserMethods = enum {
     getVersion,
     setDownloadBehavior,
     getWindowForTarget,
+    setWindowBounds,
 };
 
 pub fn browser(
@@ -25,6 +26,7 @@ pub fn browser(
         .getVersion => browserGetVersion(alloc, id, scanner, ctx),
         .setDownloadBehavior => browserSetDownloadBehavior(alloc, id, scanner, ctx),
         .getWindowForTarget => getWindowForTarget(alloc, id, scanner, ctx),
+        .setWindowBounds => setWindowBounds(alloc, id, scanner, ctx),
     };
 }
 
@@ -102,4 +104,15 @@ fn getWindowForTarget(
         } = .{},
     };
     return result(alloc, id, Resp, Resp{}, content.sessionID.?);
+}
+
+fn setWindowBounds(
+    alloc: std.mem.Allocator,
+    id: u64,
+    scanner: *std.json.Scanner,
+    _: *Ctx,
+) ![]const u8 {
+    // NOTE: noop
+    const content = try cdp.getContent(alloc, void, scanner);
+    return result(alloc, id, null, null, content.sessionID);
 }
