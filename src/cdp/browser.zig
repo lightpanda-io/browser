@@ -2,12 +2,14 @@ const std = @import("std");
 
 const server = @import("../server.zig");
 const Ctx = server.Cmd;
-const result = @import("cdp.zig").result;
-const getParams = @import("cdp.zig").getParams;
+const cdp = @import("cdp.zig");
+const result = cdp.result;
+const getParams = cdp.getParams;
 
 const BrowserMethods = enum {
     getVersion,
     setDownloadBehavior,
+    getWindowForTarget,
 };
 
 pub fn browser(
@@ -22,6 +24,7 @@ pub fn browser(
     return switch (method) {
         .getVersion => browserGetVersion(alloc, id, scanner, ctx),
         .setDownloadBehavior => browserSetDownloadBehavior(alloc, id, scanner, ctx),
+        .getWindowForTarget => getWindowForTarget(alloc, id, scanner, ctx),
     };
 }
 
@@ -69,4 +72,34 @@ fn browserSetDownloadBehavior(
     };
     _ = try getParams(alloc, Params, scanner);
     return result(alloc, id, null, null, null);
+}
+
+const DevToolsWindowID = 1923710101;
+
+fn getWindowForTarget(
+    alloc: std.mem.Allocator,
+    id: u64,
+    scanner: *std.json.Scanner,
+    _: *Ctx,
+) ![]const u8 {
+
+    // input
+    const Params = struct {
+        targetId: ?[]const u8 = null,
+    };
+    const content = try cdp.getContent(alloc, ?Params, scanner);
+    std.debug.assert(content.sessionID != null);
+
+    // output
+    const Resp = struct {
+        windowId: u64 = DevToolsWindowID,
+        bounds: struct {
+            left: ?u64 = null,
+            top: ?u64 = null,
+            width: ?u64 = null,
+            height: ?u64 = null,
+            windowState: []const u8 = "normal",
+        } = .{},
+    };
+    return result(alloc, id, Resp, Resp{}, content.sessionID.?);
 }
