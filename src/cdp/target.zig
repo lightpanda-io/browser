@@ -31,6 +31,11 @@ const SessionID = "9559320D92474062597D9875C664CAC0";
 const TargetID = "CFCD6EC01573CF29BB638E9DC0F52DDC";
 const BrowserContextID = "65618675CB7D3585A95049E9DFE95EA9";
 
+const TargetFilter = struct {
+    type: []const u8,
+    exclude: bool,
+};
+
 fn tagetSetAutoAttach(
     alloc: std.mem.Allocator,
     id: u64,
@@ -40,7 +45,8 @@ fn tagetSetAutoAttach(
     const Params = struct {
         autoAttach: bool,
         waitForDebuggerOnStart: bool,
-        flatten: ?bool = null,
+        flatten: bool = true,
+        filter: ?[]TargetFilter = null,
     };
     const params = try getParams(alloc, Params, scanner);
     std.log.debug("params {any}", .{params});

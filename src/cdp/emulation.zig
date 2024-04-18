@@ -27,13 +27,28 @@ pub fn emulation(
     };
 }
 
+const MediaFeature = struct {
+    name: []const u8,
+    value: []const u8,
+};
+
 fn setEmulatedMedia(
     alloc: std.mem.Allocator,
     id: u64,
-    _: *std.json.Scanner,
+    scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
-    return result(alloc, id, null, null, null);
+    // input
+    const Params = struct {
+        media: ?[]const u8 = null,
+        features: ?[]MediaFeature = null,
+    };
+    _ = try getParams(alloc, Params, scanner);
+    const sessionID = try cdp.getSessionID(scanner);
+
+    // output
+    // TODO: dummy
+    return result(alloc, id, null, null, sessionID);
 }
 
 fn setFocusEmulationEnabled(

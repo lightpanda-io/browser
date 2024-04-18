@@ -104,6 +104,8 @@ fn addScriptToEvaluateOnNewDocument(
     const Params = struct {
         source: []const u8,
         worldName: ?[]const u8 = null,
+        includeCommandLineAPI: bool = false,
+        runImmediately: bool = false,
     };
     _ = try getParams(alloc, Params, scanner);
     const sessionID = try cdp.getSessionID(scanner);
