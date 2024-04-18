@@ -71,6 +71,14 @@ pub fn do(
     };
 }
 
+pub const State = struct {
+    frameID: []const u8 = FrameID,
+    url: []const u8 = URLBase,
+    securityOrigin: []const u8 = URLBase,
+    secureContextType: []const u8 = "Secure", // TODO: enum
+    loaderID: []const u8 = LoaderID,
+};
+
 // Utils
 // -----
 
@@ -240,3 +248,4 @@ pub fn getContent(
 pub const SessionID = "9559320D92474062597D9875C664CAC0";
 pub const URLBase = "chrome://newtab/";
 pub const FrameID = "90D14BBD8AED408A0467AC93100BCDBE";
+pub const LoaderID = "CFC8BED824DD2FD56CF1EF33C965C79C";

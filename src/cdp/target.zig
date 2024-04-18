@@ -178,13 +178,20 @@ fn createTarget(
     _ = try getParams(alloc, Params, scanner);
     const sessionID = try cdp.getSessionID(scanner);
 
+    // change CDP state
+    ctx.state.frameID = TargetID;
+    ctx.state.url = "about:blank";
+    ctx.state.securityOrigin = "://";
+    ctx.state.secureContextType = "InsecureScheme";
+    ctx.state.loaderID = "DD4A76F842AA389647D702B4D805F49A";
+
     // send attachToTarget event
     const attached = AttachToTarget{
         .sessionId = ContextSessionID,
         .targetInfo = .{
-            .targetId = TargetID,
+            .targetId = ctx.state.frameID,
             .title = "",
-            .url = "about:blank",
+            .url = ctx.state.url,
             .browserContextId = ContextID,
         },
         .waitingForDebugger = true,
