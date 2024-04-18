@@ -25,6 +25,9 @@ pub const Cmd = struct {
     buf: []u8, // only for read operations
     err: ?Error = null,
 
+    // CDP
+    state: cdp.State = .{},
+
     // JS fields
     js_env: *public.Env,
     try_catch: public.TryCatch,

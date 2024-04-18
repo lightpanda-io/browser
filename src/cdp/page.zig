@@ -41,35 +41,44 @@ fn enable(
     return result(alloc, id, null, null, sessionID);
 }
 
-const LoaderID = "CFC8BED824DD2FD56CF1EF33C965C79C";
-
 fn getFrameTree(
     alloc: std.mem.Allocator,
     id: u64,
     scanner: *std.json.Scanner,
-    _: *Ctx,
+    ctx: *Ctx,
 ) ![]const u8 {
     const sessionID = try cdp.getSessionID(scanner);
     const FrameTree = struct {
         frameTree: struct {
             frame: struct {
-                id: []const u8 = cdp.FrameID,
-                loaderId: []const u8 = LoaderID,
-                url: []const u8 = cdp.URLBase,
+                id: []const u8,
+                loaderId: []const u8,
+                url: []const u8,
                 domainAndRegistry: []const u8 = "",
-                securityOrigin: []const u8 = cdp.URLBase,
-                mimeType: []const u8 = "mimeType",
+                securityOrigin: []const u8,
+                mimeType: []const u8 = "text/html",
                 adFrameStatus: struct {
                     adFrameType: []const u8 = "none",
                 } = .{},
-                secureContextType: []const u8 = "Secure",
+                secureContextType: []const u8,
                 crossOriginIsolatedContextType: []const u8 = "NotIsolated",
                 gatedAPIFeatures: [][]const u8 = &[0][]const u8{},
-            } = .{},
-        } = .{},
+            },
+        },
         childFrames: ?[]@This() = null,
     };
-    return result(alloc, id, FrameTree, FrameTree{}, sessionID);
+    const frameTree = FrameTree{
+        .frameTree = .{
+            .frame = .{
+                .id = ctx.state.frameID,
+                .url = ctx.state.url,
+                .securityOrigin = ctx.state.securityOrigin,
+                .secureContextType = ctx.state.secureContextType,
+                .loaderId = ctx.state.loaderID,
+            },
+        },
+    };
+    return result(alloc, id, FrameTree, frameTree, sessionID);
 }
 
 fn setLifecycleEventsEnabled(
