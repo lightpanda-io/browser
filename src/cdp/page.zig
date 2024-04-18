@@ -12,6 +12,7 @@ const PageMethods = enum {
     getFrameTree,
     setLifecycleEventsEnabled,
     addScriptToEvaluateOnNewDocument,
+    createIsolatedWorld,
 };
 
 pub fn page(
@@ -28,6 +29,7 @@ pub fn page(
         .getFrameTree => getFrameTree(alloc, id, scanner, ctx),
         .setLifecycleEventsEnabled => setLifecycleEventsEnabled(alloc, id, scanner, ctx),
         .addScriptToEvaluateOnNewDocument => addScriptToEvaluateOnNewDocument(alloc, id, scanner, ctx),
+        .createIsolatedWorld => createIsolatedWorld(alloc, id, scanner, ctx),
     };
 }
 
@@ -122,4 +124,22 @@ fn addScriptToEvaluateOnNewDocument(
         identifier: []const u8 = "1",
     };
     return result(alloc, id, Res, Res{}, sessionID);
+}
+
+fn createIsolatedWorld(
+    alloc: std.mem.Allocator,
+    id: u64,
+    scanner: *std.json.Scanner,
+    _: *Ctx,
+) ![]const u8 {
+
+    // input
+    const content = try cdp.getContent(alloc, void, scanner);
+
+    // output
+    const Resp = struct {
+        executionContextId: u8 = 2,
+    };
+
+    return result(alloc, id, Resp, .{}, content.sessionID);
 }
