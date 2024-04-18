@@ -52,11 +52,11 @@ pub fn do(
     const id = try std.fmt.parseUnsigned(u64, (try scanner.next()).number, 10);
 
     try checkKey("method", (try scanner.next()).string);
-    const method = (try scanner.next()).string;
+    const method_name = (try scanner.next()).string;
 
-    std.log.debug("cmd: id {any}, method {s}", .{ id, method });
+    std.log.debug("cmd: id {any}, method {s}", .{ id, method_name });
 
-    var iter = std.mem.splitScalar(u8, method, '.');
+    var iter = std.mem.splitScalar(u8, method_name, '.');
     const domain = std.meta.stringToEnum(Domains, iter.first()) orelse
         return error.UnknonwDomain;
 
@@ -117,6 +117,24 @@ pub fn result(
         sessionId: ?[]const u8,
     };
     const resp = Resp{ .id = id, .result = res, .sessionId = sessionID };
+
+    return stringify(alloc, resp);
+}
+
+// caller owns the slice returned
+pub fn method(
+    alloc: std.mem.Allocator,
+    name: []const u8,
+    comptime T: type,
+    params: T,
+    sessionID: ?[]const u8,
+) ![]const u8 {
+    const Resp = struct {
+        method: []const u8,
+        params: T,
+        sessionId: ?[]const u8,
+    };
+    const resp = Resp{ .method = name, .params = params, .sessionId = sessionID };
 
     return stringify(alloc, resp);
 }
