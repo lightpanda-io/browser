@@ -213,9 +213,16 @@ pub fn getContent(
     if (std.mem.eql(u8, n, "params")) {
         if (T == void) {
 
-            // ignore empty params
-            _ = (try scanner.next()).object_begin;
-            _ = (try scanner.next()).object_end;
+            // ignore params
+            var finished: usize = 0;
+            while (true) {
+                switch (try scanner.next()) {
+                    .object_begin => finished += 1,
+                    .object_end => finished -= 1,
+                    else => continue,
+                }
+                if (finished == 0) break;
+            }
             n = (try scanner.next()).string;
             params = void{};
         } else {
