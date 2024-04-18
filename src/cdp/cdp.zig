@@ -186,6 +186,54 @@ pub fn getSessionID(scanner: *std.json.Scanner) !?[]const u8 {
     return (try scanner.next()).string;
 }
 
+pub fn getContent(
+    alloc: std.mem.Allocator,
+    comptime T: type,
+    scanner: *std.json.Scanner,
+) !struct { params: T, sessionID: ?[]const u8 } {
+
+    // if next token is the end of the object, error
+    const t = try scanner.next();
+    if (t == .object_end) return error.CDPNoContent;
+
+    var params: T = undefined;
+    var sessionID: ?[]const u8 = null;
+
+    var n = t.string;
+
+    // params
+    if (std.mem.eql(u8, n, "params")) {
+        if (T == void) {
+
+            // ignore empty params
+            _ = (try scanner.next()).object_begin;
+            _ = (try scanner.next()).object_end;
+            n = (try scanner.next()).string;
+            params = void{};
+        } else {
+
+            // parse "params"
+            const options = std.json.ParseOptions{
+                .max_value_len = scanner.input.len,
+                .allocate = .alloc_if_needed,
+            };
+            params = try std.json.innerParse(T, alloc, scanner, options);
+        }
+    } else {
+        params = switch (@typeInfo(T)) {
+            .Void => void{},
+            .Optional => null,
+            else => return error.CDPNoParams,
+        };
+    }
+
+    if (std.mem.eql(u8, n, "sessionId")) {
+        sessionID = (try scanner.next()).string;
+    }
+
+    return .{ .params = params, .sessionID = sessionID };
+}
+
 // Common
 // ------
 
