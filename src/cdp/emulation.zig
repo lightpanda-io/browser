@@ -10,6 +10,7 @@ const stringify = cdp.stringify;
 const EmulationMethods = enum {
     setEmulatedMedia,
     setFocusEmulationEnabled,
+    setDeviceMetricsOverride,
 };
 
 pub fn emulation(
@@ -24,6 +25,7 @@ pub fn emulation(
     return switch (method) {
         .setEmulatedMedia => setEmulatedMedia(alloc, id, scanner, ctx),
         .setFocusEmulationEnabled => setFocusEmulationEnabled(alloc, id, scanner, ctx),
+        .setDeviceMetricsOverride => setDeviceMetricsOverride(alloc, id, scanner, ctx),
     };
 }
 
@@ -68,4 +70,18 @@ fn setFocusEmulationEnabled(
     // output
     // TODO: dummy
     return result(alloc, id, null, null, sessionID);
+}
+
+fn setDeviceMetricsOverride(
+    alloc: std.mem.Allocator,
+    id: u64,
+    scanner: *std.json.Scanner,
+    _: *Ctx,
+) ![]const u8 {
+
+    // input
+    const content = try cdp.getContent(alloc, void, scanner);
+
+    // output
+    return result(alloc, id, null, null, content.sessionID);
 }
