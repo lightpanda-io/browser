@@ -125,13 +125,22 @@ pub fn getParams(
     alloc: std.mem.Allocator,
     comptime T: type,
     scanner: *std.json.Scanner,
-) !T {
-    try checkKey("params", (try scanner.next()).string);
+) !?T {
+
+    // if next token is the end of the object, there is no "params"
+    const t = try scanner.next();
+    if (t == .object_end) return null;
+
+    // if next token is not "params" there is no "params"
+    if (!std.mem.eql(u8, "params", t.string)) return null;
+
+    // parse "params"
     const options = std.json.ParseOptions{
         .max_value_len = scanner.input.len,
         .allocate = .alloc_if_needed,
     };
-    return std.json.innerParse(T, alloc, scanner, options);
+    const params = try std.json.innerParse(T, alloc, scanner, options);
+    return params;
 }
 
 pub fn getSessionID(scanner: *std.json.Scanner) !?[]const u8 {
