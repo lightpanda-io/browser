@@ -41,9 +41,7 @@ fn enable(
     return result(alloc, id, null, null, sessionID);
 }
 
-const FrameTreeID = "90D14BBD8AED408A0467AC93100BCDBE";
 const LoaderID = "CFC8BED824DD2FD56CF1EF33C965C79C";
-const URLBase = "chrome://newtab/";
 
 fn getFrameTree(
     alloc: std.mem.Allocator,
@@ -55,11 +53,11 @@ fn getFrameTree(
     const FrameTree = struct {
         frameTree: struct {
             frame: struct {
-                id: []const u8 = FrameTreeID,
+                id: []const u8 = cdp.FrameID,
                 loaderId: []const u8 = LoaderID,
-                url: []const u8 = URLBase,
+                url: []const u8 = cdp.URLBase,
                 domainAndRegistry: []const u8 = "",
-                securityOrigin: []const u8 = URLBase,
+                securityOrigin: []const u8 = cdp.URLBase,
                 mimeType: []const u8 = "mimeType",
                 adFrameStatus: struct {
                     adFrameType: []const u8 = "none",

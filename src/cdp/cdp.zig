@@ -190,3 +190,5 @@ pub fn getSessionID(scanner: *std.json.Scanner) !?[]const u8 {
 // ------
 
 pub const SessionID = "9559320D92474062597D9875C664CAC0";
+pub const URLBase = "chrome://newtab/";
+pub const FrameID = "90D14BBD8AED408A0467AC93100BCDBE";
