@@ -67,7 +67,6 @@ fn browserSetDownloadBehavior(
         downloadPath: ?[]const u8 = null,
         eventsEnabled: ?bool = null,
     };
-    const params = try getParams(alloc, Params, scanner);
-    std.log.debug("params {any}", .{params});
+    _ = try getParams(alloc, Params, scanner);
     return result(alloc, id, null, null, null);
 }
