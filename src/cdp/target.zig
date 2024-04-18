@@ -10,6 +10,7 @@ const stringify = cdp.stringify;
 const TargetMethods = enum {
     setAutoAttach,
     getTargetInfo,
+    createBrowserContext,
 };
 
 pub fn target(
@@ -24,6 +25,7 @@ pub fn target(
     return switch (method) {
         .setAutoAttach => tagetSetAutoAttach(alloc, id, scanner, ctx),
         .getTargetInfo => tagetGetTargetInfo(alloc, id, scanner, ctx),
+        .createBrowserContext => createBrowserContext(alloc, id, scanner, ctx),
     };
 }
 
@@ -106,4 +108,30 @@ fn tagetGetTargetInfo(
         .type = "browser",
     };
     return result(alloc, id, TargetInfo, targetInfo, null);
+}
+
+const ContextID = "22648B09EDCCDD11109E2D4FEFBE4F89";
+
+fn createBrowserContext(
+    alloc: std.mem.Allocator,
+    id: u64,
+    scanner: *std.json.Scanner,
+    _: *Ctx,
+) ![]const u8 {
+
+    // input
+    const Params = struct {
+        disposeOnDetach: bool = false,
+        proxyServer: ?[]const u8 = null,
+        proxyBypassList: ?[]const u8 = null,
+        originsWithUniversalNetworkAccess: ?[][]const u8 = null,
+    };
+    _ = try getParams(alloc, Params, scanner);
+    const sessionID = try cdp.getSessionID(scanner);
+
+    // output
+    const Resp = struct {
+        browserContextId: []const u8 = ContextID,
+    };
+    return result(alloc, id, Resp, Resp{}, sessionID);
 }
