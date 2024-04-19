@@ -76,9 +76,12 @@ pub const Cmd = struct {
                 }
                 @panic(@errorName(err));
             };
-            std.log.debug("res {s}", .{res});
 
-            sendAsync(self, res) catch unreachable;
+            // send result
+            if (!std.mem.eql(u8, res, "")) {
+                std.log.debug("res {s}", .{res});
+                sendAsync(self, res) catch unreachable;
+            }
 
             if (pos == null) break;
 
