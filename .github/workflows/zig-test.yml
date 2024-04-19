@@ -34,11 +34,6 @@ on:
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
-permissions:
-  pull-requests: read # required for dorny/paths-filter
-  contents: read
-  packages: read
-
 jobs:
   zig-build-dev:
     name: zig build dev
@@ -69,8 +64,8 @@ jobs:
   zig-build-release:
     name: zig build release
 
-    # Don't run the CI with draft PR.
-    if: github.event.pull_request.draft == false
+    # Don't run the CI on PR
+    if: github.event_name != 'pull_request'
 
     runs-on: ubuntu-latest
     container:
