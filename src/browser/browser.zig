@@ -132,7 +132,8 @@ pub const Page = struct {
     fn init(
         alloc: std.mem.Allocator,
         session: *Session,
-    ) Page {
+    ) !Page {
+        if (session.page != null) return error.SessionPageExists;
         var page = Page{
             .arena = std.heap.ArenaAllocator.init(alloc),
             .session = session,
