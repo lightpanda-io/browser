@@ -223,7 +223,6 @@ pub fn getContent(
                 }
                 if (finished == 0) break;
             }
-            n = (try scanner.next()).string;
             params = void{};
         } else {
 
@@ -234,6 +233,9 @@ pub fn getContent(
             };
             params = try std.json.innerParse(T, alloc, scanner, options);
         }
+
+        // go next
+        n = (try scanner.next()).string;
     } else {
         params = switch (@typeInfo(T)) {
             .Void => void{},
