@@ -46,6 +46,7 @@ const NodeListTestExecFn = @import("dom/nodelist.zig").testExecFn;
 const AttrTestExecFn = @import("dom/attribute.zig").testExecFn;
 const EventTargetTestExecFn = @import("dom/event_target.zig").testExecFn;
 const ProcessingInstructionTestExecFn = @import("dom/processing_instruction.zig").testExecFn;
+const CommentTestExecFn = @import("dom/comment.zig").testExecFn;
 const EventTestExecFn = @import("events/event.zig").testExecFn;
 const XHRTestExecFn = xhr.testExecFn;
 const ProgressEventTestExecFn = @import("xhr/progress_event.zig").testExecFn;
@@ -114,6 +115,7 @@ fn testsAllExecFn(
         DOMTokenListExecFn,
         NodeListTestExecFn,
         AttrTestExecFn,
+        CommentTestExecFn,
         EventTargetTestExecFn,
         EventTestExecFn,
         XHRTestExecFn,
