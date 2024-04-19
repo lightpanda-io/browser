@@ -152,6 +152,10 @@ fn common(
 ) !void {
     try jsruntime_pkgs.add(step, options);
     linkNetSurf(step);
+
+    // link mimalloc
+    step.addObjectFile(.{ .path = "vendor/mimalloc/out/libmimalloc.a" });
+    step.addIncludePath(.{ .path = "vendor/mimalloc/out/include" });
 }
 
 fn linkNetSurf(step: *std.build.LibExeObjStep) void {

@@ -3,10 +3,10 @@
 	url = git@github.com:lightpanda-io/jsruntime-lib.git
 [submodule "vendor/netsurf/libwapcaplet"]
 	path = vendor/netsurf/libwapcaplet
-	url = https://source.netsurf-browser.org/libwapcaplet.git
+	url = git@github.com:lightpanda-io/libwapcaplet.git
 [submodule "vendor/netsurf/libparserutils"]
 	path = vendor/netsurf/libparserutils
-	url = https://source.netsurf-browser.org/libparserutils.git
+	url = git@github.com:lightpanda-io/libparserutils.git
 [submodule "vendor/netsurf/libdom"]
 	path = vendor/netsurf/libdom
 	url = git@github.com:lightpanda-io/libdom.git
@@ -15,7 +15,10 @@
 	url = https://source.netsurf-browser.org/buildsystem.git
 [submodule "vendor/netsurf/libhubbub"]
 	path = vendor/netsurf/libhubbub
-	url = https://source.netsurf-browser.org/libhubbub.git
+	url = git@github.com:lightpanda-io/libhubbub.git
 [submodule "tests/wpt"]
 	path = tests/wpt
 	url = https://github.com/lightpanda-io/wpt
+[submodule "vendor/mimalloc"]
+	path = vendor/mimalloc
+	url = git@github.com:microsoft/mimalloc.git

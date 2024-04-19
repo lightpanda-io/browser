@@ -37,6 +37,9 @@ pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
 
+    try parser.init();
+    defer parser.deinit();
+
     // document
     const file = try std.fs.cwd().openFile("test.html", .{});
     defer file.close();

@@ -17,6 +17,8 @@ const Types = @import("../main_wpt.zig").Types;
 // It loads first the js libs files.
 pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const u8, loader: *FileLoader) !jsruntime.JSResult {
     const alloc = arena.allocator();
+    try parser.init();
+    defer parser.deinit();
 
     // document
     const file = try std.fs.cwd().openFile(f, .{});

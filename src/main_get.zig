@@ -65,8 +65,10 @@ pub fn main() !void {
     defer browser.deinit();
 
     var page = try browser.currentSession().createPage();
-    defer page.end();
+    defer page.deinit();
+
     try page.navigate(url);
+    defer page.end();
 
     if (dump) {
         try page.dump(std.io.getStdOut());
