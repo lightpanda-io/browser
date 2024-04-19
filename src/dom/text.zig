@@ -28,6 +28,8 @@ const parser = @import("../netsurf.zig");
 const CharacterData = @import("character_data.zig").CharacterData;
 const CDATASection = @import("cdata_section.zig").CDATASection;
 
+const UserContext = @import("../user_context.zig").UserContext;
+
 // Text interfaces
 pub const Interfaces = generate.Tuple(.{
     CDATASection,
@@ -44,8 +46,13 @@ pub const Text = struct {
     // > and this’s node document to current global object’s associated
     // > Document.
     // https://dom.spec.whatwg.org/#dom-text-text
-    pub fn constructor() !*parser.Comment {
-        return error.NotImplemented;
+    pub fn constructor(userctx: UserContext, data: ?[]const u8) !*parser.Text {
+        if (userctx.document == null) return parser.DOMError.NotSupported;
+
+        return parser.documentCreateTextNode(
+            parser.documentHTMLToDocument(userctx.document.?),
+            data orelse "",
+        );
     }
 
     // JS funcs
@@ -72,6 +79,15 @@ pub fn testExecFn(
     _: std.mem.Allocator,
     js_env: *jsruntime.Env,
 ) anyerror!void {
+    var constructor = [_]Case{
+        .{ .src = "let t = new Text('foo')", .ex = "undefined" },
+        .{ .src = "t.data", .ex = "foo" },
+
+        .{ .src = "let emptyt = new Text()", .ex = "undefined" },
+        .{ .src = "emptyt.data", .ex = "" },
+    };
+    try checkCases(js_env, &constructor);
+
     var get_whole_text = [_]Case{
         .{ .src = "let text = document.getElementById('link').firstChild", .ex = "undefined" },
         .{ .src = "text.wholeText === 'OK'", .ex = "true" },
