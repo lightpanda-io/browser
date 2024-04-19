@@ -129,14 +129,14 @@ pub fn result(
     return stringify(alloc, resp);
 }
 
-// caller owns the slice returned
-pub fn method(
+pub fn sendEvent(
     alloc: std.mem.Allocator,
+    ctx: *Ctx,
     name: []const u8,
     comptime T: type,
     params: T,
     sessionID: ?[]const u8,
-) ![]const u8 {
+) !void {
     const Resp = struct {
         method: []const u8,
         params: T,
@@ -144,7 +144,9 @@ pub fn method(
     };
     const resp = Resp{ .method = name, .params = params, .sessionId = sessionID };
 
-    return stringify(alloc, resp);
+    const event_msg = try stringify(alloc, resp);
+    std.log.debug("event {s}", .{event_msg});
+    try server.sendSync(ctx, event_msg);
 }
 
 pub fn getParams(
