@@ -89,7 +89,7 @@ fn setLifecycleEventsEnabled(
     alloc: std.mem.Allocator,
     id: u64,
     scanner: *std.json.Scanner,
-    _: *Ctx,
+    ctx: *Ctx,
 ) ![]const u8 {
 
     // input
@@ -99,8 +99,9 @@ fn setLifecycleEventsEnabled(
     _ = try getParams(alloc, Params, scanner);
     const sessionID = try cdp.getSessionID(scanner);
 
+    ctx.state.page_life_cycle_events = true;
+
     // output
-    // TODO: dummy
     return result(alloc, id, null, null, sessionID);
 }
 

@@ -77,6 +77,8 @@ pub const State = struct {
     securityOrigin: []const u8 = URLBase,
     secureContextType: []const u8 = "Secure", // TODO: enum
     loaderID: []const u8 = LoaderID,
+
+    page_life_cycle_events: bool = false, // TODO; Target based value
 };
 
 // Utils
