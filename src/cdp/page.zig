@@ -13,6 +13,7 @@ const PageMethods = enum {
     setLifecycleEventsEnabled,
     addScriptToEvaluateOnNewDocument,
     createIsolatedWorld,
+    navigate,
 };
 
 pub fn page(
@@ -30,6 +31,7 @@ pub fn page(
         .setLifecycleEventsEnabled => setLifecycleEventsEnabled(alloc, id, scanner, ctx),
         .addScriptToEvaluateOnNewDocument => addScriptToEvaluateOnNewDocument(alloc, id, scanner, ctx),
         .createIsolatedWorld => createIsolatedWorld(alloc, id, scanner, ctx),
+        .navigate => navigate(alloc, id, scanner, ctx),
     };
 }
 
@@ -142,4 +144,39 @@ fn createIsolatedWorld(
     };
 
     return result(alloc, id, Resp, .{}, content.sessionID);
+}
+
+fn navigate(
+    alloc: std.mem.Allocator,
+    id: u64,
+    scanner: *std.json.Scanner,
+    ctx: *Ctx,
+) ![]const u8 {
+
+    // input
+    const Params = struct {
+        url: []const u8,
+        referrer: ?[]const u8 = null,
+        transitionType: ?[]const u8 = null, // TODO: enum
+        frameId: ?[]const u8 = null,
+        referrerPolicy: ?[]const u8 = null, // TODO: enum
+    };
+    const content = try cdp.getContent(alloc, Params, scanner);
+    std.debug.assert(content.sessionID != null);
+
+    // change state
+    ctx.state.url = content.params.url;
+    ctx.state.loaderID = "AF8667A203C5392DBE9AC290044AA4C2";
+
+    // output
+    const Resp = struct {
+        frameId: []const u8,
+        loaderId: ?[]const u8,
+        errorText: ?[]const u8 = null,
+    };
+    const resp = Resp{
+        .frameId = ctx.state.frameID,
+        .loaderId = ctx.state.loaderID,
+    };
+    return result(alloc, id, Resp, resp, content.sessionID);
 }
