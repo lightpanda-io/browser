@@ -168,6 +168,8 @@ fn navigate(
     ctx.state.url = content.params.url;
     ctx.state.loaderID = "AF8667A203C5392DBE9AC290044AA4C2";
 
+    var page = try ctx.browser.currentSession().createPage();
+
     // output
     const Resp = struct {
         frameId: []const u8,

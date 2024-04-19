@@ -81,15 +81,7 @@ fn tagetSetAutoAttach(
                 .browserContextId = BrowserContextID,
             },
         };
-        const event = try cdp.method(
-            alloc,
-            "Target.attachedToTarget",
-            AttachToTarget,
-            attached,
-            null,
-        );
-        std.log.debug("event {s}", .{event});
-        try server.sendSync(ctx, event);
+        try cdp.sendEvent(alloc, ctx, "Target.attachedToTarget", AttachToTarget, attached, null);
     }
 
     return result(alloc, id, null, null, sessionID);
@@ -196,15 +188,7 @@ fn createTarget(
         },
         .waitingForDebugger = true,
     };
-    const event = try cdp.method(
-        alloc,
-        "Target.attachedToTarget",
-        AttachToTarget,
-        attached,
-        sessionID,
-    );
-    std.log.debug("event {s}", .{event});
-    try server.sendSync(ctx, event);
+    try cdp.sendEvent(alloc, ctx, "Target.attachedToTarget", AttachToTarget, attached, sessionID);
 
     // output
     const Resp = struct {
