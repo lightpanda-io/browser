@@ -64,8 +64,8 @@ jobs:
   zig-build-release:
     name: zig build release
 
-    # Don't run the CI with draft PR.
-    if: github.event.pull_request.draft == false
+    # Don't run the CI on PR
+    if: github.event_name != 'pull_request'
 
     runs-on: ubuntu-latest
     container:
