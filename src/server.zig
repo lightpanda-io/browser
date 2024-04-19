@@ -7,10 +7,9 @@ const RecvError = public.IO.RecvError;
 const SendError = public.IO.SendError;
 const TimeoutError = public.IO.TimeoutError;
 
-const Window = @import("html/window.zig").Window;
+const Browser = @import("browser/browser.zig").Browser;
 
 const cdp = @import("cdp/cdp.zig");
-pub var socket_fd: std.os.socket_t = undefined;
 
 const NoError = error{NoError};
 const Error = AcceptError || RecvError || SendError || TimeoutError || cdp.Error || NoError;
@@ -29,8 +28,8 @@ pub const Cmd = struct {
     state: cdp.State = .{},
 
     // JS fields
-    js_env: *public.Env,
-    try_catch: public.TryCatch,
+    browser: *Browser, // TODO: is pointer mandatory here?
+    // try_catch: public.TryCatch, // TODO
 
     fn cbk(self: *Cmd, completion: *Completion, result: RecvError!usize) void {
         const size = result catch |err| {
@@ -38,10 +37,16 @@ pub const Cmd = struct {
             return;
         };
 
+        if (size == 0) {
+            // continue receving incomming messages asynchronously
+            self.loop().io.recv(*Cmd, self, cbk, completion, self.socket, self.buf);
+            return;
+        }
+
         // input
         var input = self.buf[0..size];
         if (std.log.defaultLogEnabled(.debug)) {
-            std.debug.print("\ninput {s}\n", .{input});
+            std.debug.print("\ninput size: {d}, content: {s}\n", .{ size, input });
         }
 
         // close on exit command
@@ -86,11 +91,13 @@ pub const Cmd = struct {
 
     // shortcuts
     fn alloc(self: *Cmd) std.mem.Allocator {
-        return self.js_env.nat_ctx.alloc;
+        // TODO: should we return the allocator from the page instead?
+        return self.browser.currentSession().alloc;
     }
 
-    fn loop(self: *Cmd) *public.Loop {
-        return self.js_env.nat_ctx.loop;
+    fn loop(self: *Cmd) public.Loop {
+        // TODO: pointer instead?
+        return self.browser.currentSession().loop;
     }
 };
 
@@ -179,46 +186,28 @@ const Accept = struct {
     }
 };
 
-pub fn execJS(alloc: std.mem.Allocator, js_env: *public.Env) anyerror!void {
+// Listen
+// ------
 
-    // start JS env
-    try js_env.start(alloc);
-    defer js_env.stop();
-
-    // alias global as self
-    try js_env.attachObject(try js_env.getGlobal(), "self", null);
-
-    // alias global as self and window
-    const window = Window.create(null);
-    // window.replaceDocument(doc); TODO
-    try js_env.bindGlobal(window);
-
-    // add console object
-    const console = public.Console{};
-    try js_env.addObject(console, "console");
-
-    // JS try cache
-    var try_catch = public.TryCatch.init(js_env.*);
-    defer try_catch.deinit();
+pub fn listen(browser: *Browser, socket: std.os.socket_t) anyerror!void {
 
     // create I/O contexts and callbacks
     // for accepting connections and receving messages
     var input: [1024]u8 = undefined;
     var cmd = Cmd{
-        .js_env = js_env,
+        .browser = browser,
         .socket = undefined,
         .buf = &input,
-        .try_catch = try_catch,
     };
     var accept = Accept{
         .cmd = &cmd,
-        .socket = socket_fd,
+        .socket = socket,
     };
 
     // accepting connection asynchronously on internal server
-    const loop = js_env.nat_ctx.loop;
+    const loop = browser.currentSession().loop;
     var completion: Completion = undefined;
-    loop.io.accept(*Accept, &accept, Accept.cbk, &completion, socket_fd);
+    loop.io.accept(*Accept, &accept, Accept.cbk, &completion, socket);
 
     // infinite loop on I/O events, either:
     // - cmd from incoming connection on server socket
@@ -226,11 +215,12 @@ pub fn execJS(alloc: std.mem.Allocator, js_env: *public.Env) anyerror!void {
     while (true) {
         try loop.io.tick();
         if (loop.cbk_error) {
-            if (try try_catch.exception(alloc, js_env.*)) |msg| {
-                std.debug.print("\n\rUncaught {s}\n\r", .{msg});
-                alloc.free(msg);
-            }
-            loop.cbk_error = false;
+            std.log.err("JS error", .{});
+            // if (try try_catch.exception(alloc, js_env.*)) |msg| {
+            //     std.debug.print("\n\rUncaught {s}\n\r", .{msg});
+            //     alloc.free(msg);
+            // }
+            // loop.cbk_error = false;
         }
         if (cmd.err) |err| {
             if (err != error.NoError) std.log.err("Server error: {any}", .{err});
