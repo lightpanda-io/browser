@@ -277,26 +277,6 @@ pub const Node = struct {
         return try Node.toInterface(res);
     }
 
-    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
-    // function must accept either node or string.
-    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
-    pub fn prepend(self: *parser.Node, nodes: ?Variadic(*parser.Node)) !void {
-        if (nodes == null) return;
-        if (nodes.?.slice.len == 0) return;
-        const first = try parser.nodeFirstChild(self);
-
-        if (first == null) {
-            for (nodes.?.slice) |node| {
-                _ = try parser.nodeAppendChild(self, node);
-            }
-            return;
-        }
-
-        for (nodes.?.slice) |node| {
-            _ = try parser.nodeInsertBefore(self, node, first.?);
-        }
-    }
-
     // Check if the hierarchy node tree constraints are respected.
     // For now, it checks only if new nodes are not self.
     // TODO implements the others contraints.
@@ -308,6 +288,29 @@ pub const Node = struct {
         for (nodes.?.slice) |node| if (self == node) return false;
 
         return true;
+    }
+
+    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
+    // function must accept either node or string.
+    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
+    pub fn prepend(self: *parser.Node, nodes: ?Variadic(*parser.Node)) !void {
+        if (nodes == null) return;
+        if (nodes.?.slice.len == 0) return;
+
+        // check hierarchy
+        if (!try hierarchy(self, nodes)) return parser.DOMError.HierarchyRequest;
+
+        const first = try parser.nodeFirstChild(self);
+        if (first == null) {
+            for (nodes.?.slice) |node| {
+                _ = try parser.nodeAppendChild(self, node);
+            }
+            return;
+        }
+
+        for (nodes.?.slice) |node| {
+            _ = try parser.nodeInsertBefore(self, node, first.?);
+        }
     }
 
     // TODO according with https://dom.spec.whatwg.org/#parentnode, the

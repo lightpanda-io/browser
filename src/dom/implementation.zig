@@ -96,6 +96,7 @@ pub fn testExecFn(
     var getImplementation = [_]Case{
         .{ .src = "let impl = document.implementation", .ex = "undefined" },
         .{ .src = "impl.createHTMLDocument();", .ex = "[object HTMLDocument]" },
+        .{ .src = "impl.createHTMLDocument('foo');", .ex = "[object HTMLDocument]" },
         .{ .src = "impl.createDocument(null, 'foo');", .ex = "[object Document]" },
         .{ .src = "impl.createDocumentType('foo', 'bar', 'baz')", .ex = "[object DocumentType]" },
         .{ .src = "impl.hasFeature()", .ex = "true" },

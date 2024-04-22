@@ -53,7 +53,7 @@ pub const Document = struct {
         if (userctx.document) |cur| {
             title = try parser.documentHTMLGetTitle(cur);
         }
-        const doc = try parser.domImplementationCreateHTMLDocument(title);
+        const doc = try parser.documentCreateDocument(title);
 
         if (userctx.document) |cur| {
             // we have to work w/ document instead of html document.
