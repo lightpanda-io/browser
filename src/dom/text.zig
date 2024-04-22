@@ -40,12 +40,6 @@ pub const Text = struct {
     pub const prototype = *CharacterData;
     pub const mem_guarantied = true;
 
-    // TODO add constructor, but I need to associate the new Text
-    // with the current document global object...
-    // > The new Text(data) constructor steps are to set this’s data to data
-    // > and this’s node document to current global object’s associated
-    // > Document.
-    // https://dom.spec.whatwg.org/#dom-text-text
     pub fn constructor(userctx: UserContext, data: ?[]const u8) !*parser.Text {
         if (userctx.document == null) return parser.DOMError.NotSupported;
 
