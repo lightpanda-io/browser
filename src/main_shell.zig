@@ -40,7 +40,7 @@ fn execJS(
     try js_env.start(alloc);
     defer js_env.stop();
 
-    js_env.setUserContext(UserContext{
+    try js_env.setUserContext(UserContext{
         .document = doc,
     });
 
