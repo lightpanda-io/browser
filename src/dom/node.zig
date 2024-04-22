@@ -297,12 +297,29 @@ pub const Node = struct {
         }
     }
 
+    // Check if the hierarchy node tree constraints are respected.
+    // For now, it checks only if new nodes are not self.
+    // TODO implements the others contraints.
+    // see https://dom.spec.whatwg.org/#concept-node-tree
+    pub fn hierarchy(self: *parser.Node, nodes: ?Variadic(*parser.Node)) !bool {
+        if (nodes == null) return true;
+        if (nodes.?.slice.len == 0) return true;
+
+        for (nodes.?.slice) |node| if (self == node) return false;
+
+        return true;
+    }
+
     // TODO according with https://dom.spec.whatwg.org/#parentnode, the
     // function must accept either node or string.
     // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
     pub fn append(self: *parser.Node, nodes: ?Variadic(*parser.Node)) !void {
         if (nodes == null) return;
         if (nodes.?.slice.len == 0) return;
+
+        // check hierarchy
+        if (!try hierarchy(self, nodes)) return parser.DOMError.HierarchyRequest;
+
         for (nodes.?.slice) |node| {
             _ = try parser.nodeAppendChild(self, node);
         }
@@ -312,11 +329,14 @@ pub const Node = struct {
     // function must accept either node or string.
     // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
     pub fn replaceChildren(self: *parser.Node, nodes: ?Variadic(*parser.Node)) !void {
-        // remove existing children
-        try removeChildren(self);
-
         if (nodes == null) return;
         if (nodes.?.slice.len == 0) return;
+
+        // check hierarchy
+        if (!try hierarchy(self, nodes)) return parser.DOMError.HierarchyRequest;
+
+        // remove existing children
+        try removeChildren(self);
 
         // add new children
         for (nodes.?.slice) |node| {
