@@ -55,7 +55,7 @@ fn enable(
     return result(alloc, id, null, null, sessionID);
 }
 
-const AuxData = struct {
+pub const AuxData = struct {
     isDefault: bool = true,
     type: []const u8 = "default",
     frameId: []const u8 = cdp.FrameID,
@@ -69,15 +69,16 @@ const ExecutionContextDescription = struct {
     auxData: ?AuxData = null,
 };
 
-fn executionContextCreated(
+pub fn executionContextCreated(
     alloc: std.mem.Allocator,
+    ctx: *Ctx,
     id: u64,
     origin: []const u8,
     name: []const u8,
     uniqueID: []const u8,
     auxData: ?AuxData,
     sessionID: ?[]const u8,
-) ![]const u8 {
+) !void {
     const Params = struct {
         context: ExecutionContextDescription,
     };
@@ -90,7 +91,7 @@ fn executionContextCreated(
             .auxData = auxData,
         },
     };
-    return try cdp.method(alloc, "Runtime.executionContextCreated", Params, params, sessionID);
+    try cdp.sendEvent(alloc, ctx, "Runtime.executionContextCreated", Params, params, sessionID);
 }
 
 fn runIfWaitingForDebugger(
