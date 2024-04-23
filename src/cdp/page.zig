@@ -108,7 +108,7 @@ fn setLifecycleEventsEnabled(
     return result(alloc, id, null, null, sessionID);
 }
 
-const LifeCycleEvent = struct {
+const LifecycleEvent = struct {
     frameId: []const u8,
     loaderId: ?[]const u8,
     name: []const u8 = undefined,
@@ -180,7 +180,7 @@ fn navigate(
     ctx.state.url = input.params.url;
     ctx.state.loaderID = "AF8667A203C5392DBE9AC290044AA4C2";
 
-    var life_event = LifeCycleEvent{
+    var life_event = LifecycleEvent{
         .frameId = ctx.state.frameID,
         .loaderId = ctx.state.loaderID,
     };
@@ -195,7 +195,7 @@ fn navigate(
     if (ctx.state.page_life_cycle_events) {
         life_event.name = "init";
         life_event.timestamp = 343721.796037;
-        try sendEvent(alloc, ctx, "Page.lifeCycleEvent", LifeCycleEvent, life_event, sessionID);
+        try sendEvent(alloc, ctx, "Page.lifecycleEvent", LifecycleEvent, life_event, sessionID);
     }
 
     // output
@@ -234,7 +234,7 @@ fn navigate(
     if (ctx.state.page_life_cycle_events) {
         life_event.name = "load";
         life_event.timestamp = 343721.824655;
-        try sendEvent(alloc, ctx, "Page.lifeCycleEvent", LifeCycleEvent, life_event, sessionID);
+        try sendEvent(alloc, ctx, "Page.lifecycleEvent", LifecycleEvent, life_event, sessionID);
     }
 
     // domContentEventFired event
@@ -243,7 +243,7 @@ fn navigate(
     if (ctx.state.page_life_cycle_events) {
         life_event.name = "DOMContentLoaded";
         life_event.timestamp = 343721.803338;
-        try sendEvent(alloc, ctx, "Page.lifeCycleEvent", LifeCycleEvent, life_event, sessionID);
+        try sendEvent(alloc, ctx, "Page.lifecycleEvent", LifecycleEvent, life_event, sessionID);
     }
 
     // loadEventFired event
@@ -252,7 +252,7 @@ fn navigate(
     if (ctx.state.page_life_cycle_events) {
         life_event.name = "load";
         life_event.timestamp = 343721.824655;
-        try sendEvent(alloc, ctx, "Page.lifeCycleEvent", LifeCycleEvent, life_event, sessionID);
+        try sendEvent(alloc, ctx, "Page.lifecycleEvent", LifecycleEvent, life_event, sessionID);
     }
 
     // frameStoppedLoading
