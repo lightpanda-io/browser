@@ -12,7 +12,8 @@ const Browser = @import("browser/browser.zig").Browser;
 const cdp = @import("cdp/cdp.zig");
 
 const NoError = error{NoError};
-const Error = AcceptError || RecvError || SendError || TimeoutError || cdp.Error || NoError;
+const IOError = AcceptError || RecvError || SendError || TimeoutError;
+const Error = IOError || std.fmt.ParseIntError || cdp.Error || NoError;
 
 // I/O Recv
 // --------
@@ -56,16 +57,35 @@ pub const Cmd = struct {
         }
 
         // cmds
-        var cmd: []const u8 = undefined;
         while (true) {
 
+            // parse json msg size
+            const size_pos = std.mem.indexOfScalar(u8, input, ':').?;
+            std.log.debug("msg size pos: {d}", .{size_pos});
+            const size_str = input[0..size_pos];
+            input = input[size_pos + 1 ..];
+            const size_msg = std.fmt.parseInt(u32, size_str, 10) catch |err| {
+                self.err = err;
+                return;
+            };
+            std.log.debug("msg size: {d}", .{size_msg});
+
+            // part
+            const is_part = input.len < size_msg;
+            std.log.debug("is_part: {any}", .{is_part});
+            if (is_part) {
+                std.log.debug("size_msg {d}, input {d}", .{ size_msg, input.len });
+                @panic("part msg"); // TODO: implement part
+            }
+
             // handle several JSON msg in 1 read
-            const pos = std.mem.indexOf(u8, input, "}{");
-            if (pos) |p| {
-                cmd = input[0 .. p + 1];
-                input = input[p + 1 ..];
-            } else {
-                cmd = input;
+            const is_multi = input.len > size_msg;
+            std.log.debug("is_multi: {any}", .{is_multi});
+            const cmd = input[0..size_msg];
+            std.log.debug("cmd: {s}", .{cmd});
+            if (is_multi) {
+                input = input[size_msg..];
+                std.log.debug("rest: {s}", .{input});
             }
 
             // cdp
@@ -83,7 +103,7 @@ pub const Cmd = struct {
                 sendAsync(self, res) catch unreachable;
             }
 
-            if (pos == null) break;
+            if (!is_multi) break;
 
             // TODO: handle 1 read smaller than a complete JSON msg
         }
