@@ -8,6 +8,8 @@ const getParams = cdp.getParams;
 const stringify = cdp.stringify;
 const sendEvent = cdp.sendEvent;
 
+const Runtime = @import("runtime.zig");
+
 const PageMethods = enum {
     enable,
     getFrameTree,
@@ -212,6 +214,9 @@ fn navigate(
     std.log.debug("res {s}", .{res});
     try server.sendSync(ctx, res);
 
+    // Runtime.executionContextsCleared event
+    try sendEvent(alloc, ctx, "Runtime.executionContextsCleared", void, {}, sessionID);
+
     // launch navigate
     var p = try ctx.browser.currentSession().createPage();
     _ = try p.navigate(input.params.url);
@@ -236,6 +241,28 @@ fn navigate(
         life_event.timestamp = 343721.824655;
         try sendEvent(alloc, ctx, "Page.lifecycleEvent", LifecycleEvent, life_event, sessionID);
     }
+
+    try Runtime.executionContextCreated(
+        alloc,
+        ctx,
+        3,
+        "http://127.0.0.1:1234",
+        "",
+        "7102379147004877974.3265385113993241162",
+        .{ .frameId = ctx.state.frameID },
+        sessionID,
+    );
+
+    try Runtime.executionContextCreated(
+        alloc,
+        ctx,
+        4,
+        "://",
+        "__playwright_utility_world__",
+        "-4572718120346458707.6016875269626438350",
+        .{ .isDefault = false, .type = "isolated", .frameId = ctx.state.frameID },
+        sessionID,
+    );
 
     // domContentEventFired event
     ts_event = .{ .timestamp = 343721.803338 };
