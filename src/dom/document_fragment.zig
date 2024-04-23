@@ -35,10 +35,8 @@ pub const DocumentFragment = struct {
     pub const mem_guarantied = true;
 
     pub fn constructor(userctx: UserContext) !*parser.DocumentFragment {
-        if (userctx.document == null) return parser.DOMError.NotSupported;
-
         return parser.documentCreateDocumentFragment(
-            parser.documentHTMLToDocument(userctx.document.?),
+            parser.documentHTMLToDocument(userctx.document),
         );
     }
 };

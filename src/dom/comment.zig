@@ -34,10 +34,8 @@ pub const Comment = struct {
     pub const mem_guarantied = true;
 
     pub fn constructor(userctx: UserContext, data: ?[]const u8) !*parser.Comment {
-        if (userctx.document == null) return parser.DOMError.NotSupported;
-
         return parser.documentCreateComment(
-            parser.documentHTMLToDocument(userctx.document.?),
+            parser.documentHTMLToDocument(userctx.document),
             data orelse "",
         );
     }

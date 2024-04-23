@@ -49,19 +49,15 @@ pub const Document = struct {
     pub const mem_guarantied = true;
 
     pub fn constructor(userctx: UserContext) !*parser.DocumentHTML {
-        var title: ?[]const u8 = null;
-        if (userctx.document) |cur| {
-            title = try parser.documentHTMLGetTitle(cur);
-        }
-        const doc = try parser.documentCreateDocument(title);
+        const doc = try parser.documentCreateDocument(
+            try parser.documentHTMLGetTitle(userctx.document),
+        );
 
-        if (userctx.document) |cur| {
-            // we have to work w/ document instead of html document.
-            const ddoc = parser.documentHTMLToDocument(doc);
-            const ccur = parser.documentHTMLToDocument(cur);
-            try parser.documentSetDocumentURI(ddoc, try parser.documentGetDocumentURI(ccur));
-            try parser.documentSetInputEncoding(ddoc, try parser.documentGetInputEncoding(ccur));
-        }
+        // we have to work w/ document instead of html document.
+        const ddoc = parser.documentHTMLToDocument(doc);
+        const ccur = parser.documentHTMLToDocument(userctx.document);
+        try parser.documentSetDocumentURI(ddoc, try parser.documentGetDocumentURI(ccur));
+        try parser.documentSetInputEncoding(ddoc, try parser.documentGetInputEncoding(ccur));
 
         return doc;
     }

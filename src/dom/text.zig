@@ -41,10 +41,8 @@ pub const Text = struct {
     pub const mem_guarantied = true;
 
     pub fn constructor(userctx: UserContext, data: ?[]const u8) !*parser.Text {
-        if (userctx.document == null) return parser.DOMError.NotSupported;
-
         return parser.documentCreateTextNode(
-            parser.documentHTMLToDocument(userctx.document.?),
+            parser.documentHTMLToDocument(userctx.document),
             data orelse "",
         );
     }
