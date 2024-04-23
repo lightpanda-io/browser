@@ -31,6 +31,7 @@ const storage = @import("../storage/storage.zig");
 
 const Types = @import("../main_wpt.zig").Types;
 const UserContext = @import("../main_wpt.zig").UserContext;
+const Client = @import("../async/Client.zig");
 
 // runWPT parses the given HTML file, starts a js env and run the first script
 // tags containing javascript sources.
@@ -51,8 +52,13 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     // create JS env
     var loop = try Loop.init(alloc);
     defer loop.deinit();
+
+    var cli = Client{ .allocator = alloc, .loop = &loop };
+    defer cli.deinit();
+
     var js_env = try Env.init(alloc, &loop, UserContext{
         .document = html_doc,
+        .httpClient = &cli,
     });
     defer js_env.deinit();
 

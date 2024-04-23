@@ -30,6 +30,7 @@ const xhr = @import("xhr/xhr.zig");
 const storage = @import("storage/storage.zig");
 const url = @import("url/url.zig");
 const urlquery = @import("url/query.zig");
+const Client = @import("async/Client.zig");
 
 const documentTestExecFn = @import("dom/document.zig").testExecFn;
 const HTMLDocumentTestExecFn = @import("html/document.zig").testExecFn;
@@ -84,7 +85,13 @@ fn testExecFn(
         std.debug.print("documentHTMLClose error: {s}\n", .{@errorName(err)});
     };
 
-    js_env.getUserContext().?.document = doc;
+    var cli = Client{ .allocator = alloc, .loop = js_env.nat_ctx.loop };
+    defer cli.deinit();
+
+    try js_env.setUserContext(.{
+        .document = doc,
+        .httpClient = &cli,
+    });
 
     // alias global as self and window
     var window = Window.create(null);
@@ -322,11 +329,7 @@ fn testJSRuntime(alloc: std.mem.Allocator) !void {
     var arena_alloc = std.heap.ArenaAllocator.init(alloc);
     defer arena_alloc.deinit();
 
-    const userctx = UserContext{
-        .document = null,
-    };
-
-    try jsruntime.loadEnv(&arena_alloc, userctx, testsAllExecFn);
+    try jsruntime.loadEnv(&arena_alloc, null, testsAllExecFn);
 }
 
 test "DocumentHTMLParseFromStr" {

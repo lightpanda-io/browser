@@ -37,6 +37,8 @@ const Client = @import("../async/Client.zig");
 
 const parser = @import("../netsurf.zig");
 
+const UserContext = @import("../user_context.zig").UserContext;
+
 const log = std.log.scoped(.xhr);
 
 // XHR interfaces
@@ -149,7 +151,7 @@ pub const XMLHttpRequest = struct {
 
     proto: XMLHttpRequestEventTarget = XMLHttpRequestEventTarget{},
     alloc: std.mem.Allocator,
-    cli: Client,
+    cli: *Client,
     impl: YieldImpl,
 
     priv_state: PrivState = .new,
@@ -185,7 +187,7 @@ pub const XMLHttpRequest = struct {
 
     const min_delay: u64 = 50000000; // 50ms
 
-    pub fn constructor(alloc: std.mem.Allocator, loop: *Loop) !XMLHttpRequest {
+    pub fn constructor(alloc: std.mem.Allocator, loop: *Loop, userctx: UserContext) !XMLHttpRequest {
         return .{
             .alloc = alloc,
             .headers = .{ .allocator = alloc, .owned = true },
@@ -195,8 +197,7 @@ pub const XMLHttpRequest = struct {
             .url = null,
             .uri = undefined,
             .state = UNSENT,
-            // TODO retrieve the HTTP client globally to reuse existing connections.
-            .cli = .{ .allocator = alloc, .loop = loop },
+            .cli = userctx.httpClient,
         };
     }
 
@@ -235,9 +236,6 @@ pub const XMLHttpRequest = struct {
         self.response_headers.deinit();
 
         self.proto.deinit(alloc);
-
-        // TODO the client must be shared between requests.
-        self.cli.deinit();
     }
 
     pub fn get_readyState(self: *XMLHttpRequest) u16 {

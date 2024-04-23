@@ -29,6 +29,7 @@ const html_test = @import("html_test.zig").html;
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 pub const UserContext = apiweb.UserContext;
+const Client = @import("async/Client.zig");
 
 var doc: *parser.DocumentHTML = undefined;
 
@@ -40,8 +41,12 @@ fn execJS(
     try js_env.start(alloc);
     defer js_env.stop();
 
+    var cli = Client{ .allocator = alloc, .loop = js_env.nat_ctx.loop };
+    defer cli.deinit();
+
     try js_env.setUserContext(UserContext{
         .document = doc,
+        .httpClient = &cli,
     });
 
     var storageShelf = storage.Shelf.init(alloc);

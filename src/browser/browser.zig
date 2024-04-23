@@ -39,6 +39,9 @@ const storage = @import("../storage/storage.zig");
 
 const FetchResult = std.http.Client.FetchResult;
 
+const UserContext = @import("../user_context.zig").UserContext;
+const HttpClient = @import("../async/Client.zig");
+
 const log = std.log.scoped(.browser);
 
 // Browser is an instance of the browser.
@@ -92,6 +95,7 @@ pub const Session = struct {
     // TODO move the shed to the browser?
     storageShed: storage.Shed,
     page: ?*Page = null,
+    httpClient: HttpClient,
 
     jstypes: [Types.len]usize = undefined,
 
@@ -105,9 +109,11 @@ pub const Session = struct {
             .loader = Loader.init(alloc),
             .loop = try Loop.init(alloc),
             .storageShed = storage.Shed.init(alloc),
+            .httpClient = undefined,
         };
 
         self.env = try Env.init(self.arena.allocator(), &self.loop, null);
+        self.httpClient = .{ .allocator = alloc, .loop = &self.loop };
         try self.env.load(&self.jstypes);
 
         return self;
@@ -122,6 +128,7 @@ pub const Session = struct {
         self.loader.deinit();
         self.loop.deinit();
         self.storageShed.deinit();
+        self.httpClient.deinit();
         self.alloc.destroy(self);
     }
 
@@ -288,6 +295,12 @@ pub const Page = struct {
         // TODO load the js env concurrently with the HTML parsing.
         log.debug("start js env", .{});
         try self.session.env.start(alloc);
+
+        // replace the user context document with the new one.
+        try self.session.env.setUserContext(.{
+            .document = html_doc,
+            .httpClient = &self.session.httpClient,
+        });
 
         // add global objects
         log.debug("setup global env", .{});
