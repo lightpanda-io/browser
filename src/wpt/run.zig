@@ -9,6 +9,7 @@ const jsruntime = @import("jsruntime");
 const Loop = jsruntime.Loop;
 const Env = jsruntime.Env;
 const Window = @import("../html/window.zig").Window;
+const storage = @import("../storage/storage.zig");
 
 const Types = @import("../main_wpt.zig").Types;
 
@@ -34,6 +35,9 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     var js_env = try Env.init(alloc, &loop);
     defer js_env.deinit();
 
+    var storageShelf = storage.Shelf.init(alloc);
+    defer storageShelf.deinit();
+
     // load user-defined types in JS env
     var js_types: [Types.len]usize = undefined;
     try js_env.load(&js_types);
@@ -54,6 +58,7 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     // setup global env vars.
     var window = Window.create(null);
     window.replaceDocument(html_doc);
+    window.setStorageShelf(&storageShelf);
     try js_env.bindGlobal(window);
 
     // thanks to the arena, we don't need to deinit res.

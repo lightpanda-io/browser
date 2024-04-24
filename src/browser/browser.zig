@@ -17,6 +17,8 @@ const apiweb = @import("../apiweb.zig");
 const Window = @import("../html/window.zig").Window;
 const Walker = @import("../dom/walker.zig").WalkerDepthFirst;
 
+const storage = @import("../storage/storage.zig");
+
 const FetchResult = std.http.Client.FetchResult;
 
 const log = std.log.scoped(.browser);
@@ -69,6 +71,8 @@ pub const Session = struct {
     env: Env = undefined,
     loop: Loop,
     window: Window,
+    // TODO move the shed to the browser?
+    storageShed: storage.Shed,
 
     jstypes: [Types.len]usize = undefined,
 
@@ -81,6 +85,7 @@ pub const Session = struct {
             .window = Window.create(null),
             .loader = Loader.init(alloc),
             .loop = try Loop.init(alloc),
+            .storageShed = storage.Shed.init(alloc),
         };
 
         self.env = try Env.init(self.arena.allocator(), &self.loop);
@@ -95,6 +100,7 @@ pub const Session = struct {
 
         self.loader.deinit();
         self.loop.deinit();
+        self.storageShed.deinit();
         self.alloc.destroy(self);
     }
 
@@ -116,6 +122,7 @@ pub const Page = struct {
     // handle url
     rawuri: ?[]const u8 = null,
     uri: std.Uri = undefined,
+    origin: ?[]const u8 = null,
 
     raw_data: ?[]const u8 = null,
 
@@ -168,6 +175,15 @@ pub const Page = struct {
         if (self.rawuri) |prev| alloc.free(prev);
         self.rawuri = try alloc.dupe(u8, uri);
         self.uri = std.Uri.parse(self.rawuri.?) catch try std.Uri.parseWithoutScheme(self.rawuri.?);
+
+        // prepare origin value.
+        var buf = std.ArrayList(u8).init(alloc);
+        defer buf.deinit();
+        try self.uri.writeToStream(.{
+            .scheme = true,
+            .authority = true,
+        }, buf.writer());
+        self.origin = try buf.toOwnedSlice();
 
         // TODO handle fragment in url.
 
@@ -237,6 +253,9 @@ pub const Page = struct {
         // TODO set the referrer to the document.
 
         self.session.window.replaceDocument(html_doc);
+        self.session.window.setStorageShelf(
+            try self.session.storageShed.getOrPut(self.origin orelse "null"),
+        );
 
         // https://html.spec.whatwg.org/#read-html
 

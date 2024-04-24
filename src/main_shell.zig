@@ -5,6 +5,7 @@ const jsruntime = @import("jsruntime");
 const parser = @import("netsurf.zig");
 const apiweb = @import("apiweb.zig");
 const Window = @import("html/window.zig").Window;
+const storage = @import("storage/storage.zig");
 
 const html_test = @import("html_test.zig").html;
 
@@ -20,9 +21,13 @@ fn execJS(
     try js_env.start(alloc);
     defer js_env.stop();
 
+    var storageShelf = storage.Shelf.init(alloc);
+    defer storageShelf.deinit();
+
     // alias global as self and window
     var window = Window.create(null);
     window.replaceDocument(doc);
+    window.setStorageShelf(&storageShelf);
     try js_env.bindGlobal(window);
 
     // launch shellExec
