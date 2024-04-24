@@ -45,7 +45,7 @@ pub const Cmd = struct {
         }
 
         // input
-        var input = self.buf[0..size];
+        const input = self.buf[0..size];
         if (std.log.defaultLogEnabled(.debug)) {
             std.debug.print("\ninput size: {d}, content: {s}\n", .{ size, input });
         }
@@ -56,57 +56,8 @@ pub const Cmd = struct {
             return;
         }
 
-        // cmds
-        while (true) {
-
-            // parse json msg size
-            const size_pos = std.mem.indexOfScalar(u8, input, ':').?;
-            std.log.debug("msg size pos: {d}", .{size_pos});
-            const size_str = input[0..size_pos];
-            input = input[size_pos + 1 ..];
-            const size_msg = std.fmt.parseInt(u32, size_str, 10) catch |err| {
-                self.err = err;
-                return;
-            };
-            std.log.debug("msg size: {d}", .{size_msg});
-
-            // part
-            const is_part = input.len < size_msg;
-            std.log.debug("is_part: {any}", .{is_part});
-            if (is_part) {
-                std.log.debug("size_msg {d}, input {d}", .{ size_msg, input.len });
-                @panic("part msg"); // TODO: implement part
-            }
-
-            // handle several JSON msg in 1 read
-            const is_multi = input.len > size_msg;
-            std.log.debug("is_multi: {any}", .{is_multi});
-            const cmd = input[0..size_msg];
-            std.log.debug("cmd: {s}", .{cmd});
-            if (is_multi) {
-                input = input[size_msg..];
-                std.log.debug("rest: {s}", .{input});
-            }
-
-            // cdp
-            const res = cdp.do(self.alloc(), cmd, self) catch |err| {
-                if (cdp.isCdpError(err)) |e| {
-                    self.err = e;
-                    return;
-                }
-                @panic(@errorName(err));
-            };
-
-            // send result
-            if (!std.mem.eql(u8, res, "")) {
-                std.log.debug("res {s}", .{res});
-                sendAsync(self, res) catch unreachable;
-            }
-
-            if (!is_multi) break;
-
-            // TODO: handle 1 read smaller than a complete JSON msg
-        }
+        // read and execute input
+        readInput(input, Cmd.do, self) catch unreachable;
 
         // continue receving incomming messages asynchronously
         self.loop().io.recv(*Cmd, self, cbk, completion, self.socket, self.buf);
@@ -122,7 +73,75 @@ pub const Cmd = struct {
         // TODO: pointer instead?
         return self.browser.currentSession().loop;
     }
+
+    fn do(self: *Cmd, cmd: []const u8) !void {
+        const res = try cdp.do(self.alloc(), cmd, self);
+
+        // send result
+        if (!std.mem.eql(u8, res, "")) {
+            std.log.debug("res {s}", .{res});
+            return sendAsync(self, res);
+        }
+    }
 };
+
+fn readInput(buf: []const u8, func: anytype, data: anytype) !void {
+    var input = buf;
+
+    while (true) {
+        var cmd: []const u8 = undefined;
+
+        // size msg
+        var size_msg: usize = undefined;
+
+        // parse json msg size
+        const size_pos = std.mem.indexOfScalar(u8, input, ':').?;
+        std.log.debug("msg size pos: {d}", .{size_pos});
+        const size_str = input[0..size_pos];
+        input = input[size_pos + 1 ..];
+        size_msg = try std.fmt.parseInt(u32, size_str, 10);
+        // }
+        std.log.debug("msg size: {d}", .{size_msg});
+
+        // handle several JSON msg in 1 read
+        const is_multi = input.len > size_msg;
+        std.log.debug("is_multi: {any}", .{is_multi});
+        cmd = input[0..size_msg];
+        std.log.debug("cmd: {s}", .{cmd[0..@min(BufReadSize, size_msg)]});
+        if (is_multi) {
+            input = input[size_msg..];
+            std.log.debug("rest: {s}", .{input});
+        }
+
+        try @call(.auto, func, .{ data, cmd });
+
+        if (!is_multi) break;
+
+        // TODO: handle 1 read smaller than a complete JSON msg
+    }
+}
+
+fn doTest(nb: *u8, _: []const u8) anyerror!void {
+    nb.* += 1;
+}
+
+test {
+    const Case = struct {
+        input: []const u8,
+        nb: u8,
+    };
+    const cases = [_]Case{
+        // simple
+        .{ .input = "2:ok", .nb = 1 },
+        // multi
+        .{ .input = "2:ok3:foo7:bar2:ok", .nb = 3 }, // "bar2:ok" is a message, no need to escape "2:" here
+    };
+    for (cases) |case| {
+        var nb: u8 = 0;
+        try readInput(case.input, doTest, &nb);
+        try std.testing.expect(nb == case.nb);
+    }
+}
 
 // I/O Send
 // --------
