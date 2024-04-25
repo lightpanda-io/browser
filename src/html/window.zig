@@ -19,6 +19,10 @@
 const std = @import("std");
 
 const parser = @import("netsurf");
+const jsruntime = @import("jsruntime");
+const Callback = jsruntime.Callback;
+const CallbackArg = jsruntime.CallbackArg;
+const Loop = jsruntime.Loop;
 
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 
@@ -81,5 +85,17 @@ pub const Window = struct {
     pub fn get_sessionStorage(self: *Window) !*storage.Bottle {
         if (self.storageShelf == null) return parser.DOMError.NotSupported;
         return &self.storageShelf.?.bucket.session;
+    }
+
+    // TODO handle callback arguments.
+    pub fn _setTimeout(_: *Window, loop: *Loop, cbk: Callback, delay: ?u32) !u32 {
+        const ddelay: u63 = delay orelse 0;
+        loop.timeout(ddelay * std.time.ns_per_ms, cbk);
+        // TODO handle timeout ID
+        return 1;
+    }
+
+    pub fn _clearTimeout(_: *Window, _: *Loop, id: u32) !void {
+        _ = id;
     }
 };
