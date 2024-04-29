@@ -397,6 +397,10 @@ pub fn eventType(evt: *Event) ![]const u8 {
     var s: ?*String = undefined;
     const err = c._dom_event_get_type(evt, &s);
     try DOMErr(err);
+
+    // if the event type is null, return a empty string.
+    if (s == null) return "";
+
     return strToData(s.?);
 }
 
