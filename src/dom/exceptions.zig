@@ -91,6 +91,12 @@ pub const DOMException = struct {
             error.InvalidNodeType => "InvalidNodeTypeError",
             error.DataClone => "DataCloneError",
             error.NoError => unreachable,
+
+            // custom netsurf error
+            error.UnspecifiedEventType => "UnspecifiedEventTypeError",
+            error.DispatchRequest => "DispatchRequestError",
+            error.NoMemory => "NoMemoryError",
+            error.AttributeWrongType => "AttributeWrongTypeError",
         };
     }
 
@@ -124,6 +130,12 @@ pub const DOMException = struct {
             error.InvalidNodeType => 24,
             error.DataClone => 25,
             error.NoError => unreachable,
+
+            // custom netsurf error
+            error.UnspecifiedEventType => 128,
+            error.DispatchRequest => 129,
+            error.NoMemory => 130,
+            error.AttributeWrongType => 131,
         };
     }
 

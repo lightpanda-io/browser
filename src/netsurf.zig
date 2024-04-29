@@ -339,6 +339,12 @@ pub const DOMError = error{
     Timeout,
     InvalidNodeType,
     DataClone,
+
+    // custom netsurf error
+    UnspecifiedEventType,
+    DispatchRequest,
+    NoMemory,
+    AttributeWrongType,
 };
 
 const DOMException = c.dom_exception;
@@ -363,6 +369,13 @@ fn DOMErr(except: DOMException) DOMError!void {
         c.DOM_INVALID_ACCESS_ERR => DOMError.InvalidAccess,
         c.DOM_VALIDATION_ERR => DOMError.Validation,
         c.DOM_TYPE_MISMATCH_ERR => DOMError.TypeMismatch,
+
+        // custom netsurf error
+        c.DOM_UNSPECIFIED_EVENT_TYPE_ERR => DOMError.UnspecifiedEventType,
+        c.DOM_DISPATCH_REQUEST_ERR => DOMError.DispatchRequest,
+        c.DOM_NO_MEM_ERR => DOMError.NoMemory,
+        c.DOM_ATTR_WRONG_TYPE_ERR => DOMError.AttributeWrongType,
+
         else => unreachable,
     };
 }
@@ -397,6 +410,10 @@ pub fn eventType(evt: *Event) ![]const u8 {
     var s: ?*String = undefined;
     const err = c._dom_event_get_type(evt, &s);
     try DOMErr(err);
+
+    // if the event type is null, return a empty string.
+    if (s == null) return "";
+
     return strToData(s.?);
 }
 
