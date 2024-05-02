@@ -147,27 +147,45 @@ pub const Bottle = struct {
             return DOMError.QuotaExceeded;
         };
 
-        // TODO dispatch event
         // > Broadcast this with key, oldValue, and value.
         // https://html.spec.whatwg.org/multipage/webstorage.html#the-storageevent-interface
+        //
+        // > The storage event of the Window interface fires when a storage
+        // > area (localStorage or sessionStorage) has been modified in the
+        // > context of another document.
+        // https://developer.mozilla.org/en-US/docs/Web/API/Window/storage_event
+        //
+        // So for now, we won't impement the feature.
     }
 
     pub fn _removeItem(self: *Bottle, k: []const u8) !void {
         const old = self.map.fetchRemove(k);
         if (old == null) return;
 
-        // TODO dispatch event
         // > Broadcast this with key, oldValue, and null.
         // https://html.spec.whatwg.org/multipage/webstorage.html#the-storageevent-interface
+        //
+        // > The storage event of the Window interface fires when a storage
+        // > area (localStorage or sessionStorage) has been modified in the
+        // > context of another document.
+        // https://developer.mozilla.org/en-US/docs/Web/API/Window/storage_event
+        //
+        // So for now, we won't impement the feature.
     }
 
     pub fn _clear(self: *Bottle) void {
         self.free();
         self.map.clearRetainingCapacity();
 
-        // TODO dispatch event
         // > Broadcast this with null, null, and null.
         // https://html.spec.whatwg.org/multipage/webstorage.html#the-storageevent-interface
+        //
+        // > The storage event of the Window interface fires when a storage
+        // > area (localStorage or sessionStorage) has been modified in the
+        // > context of another document.
+        // https://developer.mozilla.org/en-US/docs/Web/API/Window/storage_event
+        //
+        // So for now, we won't impement the feature.
     }
 };
 
