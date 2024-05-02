@@ -6,6 +6,7 @@ const DOM = @import("dom/dom.zig");
 const HTML = @import("html/html.zig");
 const Events = @import("events/event.zig");
 const XHR = @import("xhr/xhr.zig");
+const Storage = @import("storage/storage.zig");
 
 pub const HTMLDocument = @import("html/document.zig").HTMLDocument;
 
@@ -16,4 +17,5 @@ pub const Interfaces = generate.Tuple(.{
     Events.Interfaces,
     HTML.Interfaces,
     XHR.Interfaces,
+    Storage.Interfaces,
 });

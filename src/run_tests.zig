@@ -9,6 +9,7 @@ const parser = @import("netsurf.zig");
 const apiweb = @import("apiweb.zig");
 const Window = @import("html/window.zig").Window;
 const xhr = @import("xhr/xhr.zig");
+const storage = @import("storage/storage.zig");
 
 const documentTestExecFn = @import("dom/document.zig").testExecFn;
 const HTMLDocumentTestExecFn = @import("html/document.zig").testExecFn;
@@ -28,6 +29,7 @@ const ProcessingInstructionTestExecFn = @import("dom/processing_instruction.zig"
 const EventTestExecFn = @import("events/event.zig").testExecFn;
 const XHRTestExecFn = xhr.testExecFn;
 const ProgressEventTestExecFn = @import("xhr/progress_event.zig").testExecFn;
+const StorageTestExecFn = storage.testExecFn;
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 
@@ -45,6 +47,9 @@ fn testExecFn(
     try js_env.start(alloc);
     defer js_env.stop();
 
+    var storageShelf = storage.Shelf.init(alloc);
+    defer storageShelf.deinit();
+
     // document
     const file = try std.fs.cwd().openFile("test.html", .{});
     defer file.close();
@@ -56,7 +61,10 @@ fn testExecFn(
 
     // alias global as self and window
     var window = Window.create(null);
+
     window.replaceDocument(doc);
+    window.setStorageShelf(&storageShelf);
+
     try js_env.bindGlobal(window);
 
     // run test
@@ -86,6 +94,7 @@ fn testsAllExecFn(
         XHRTestExecFn,
         ProgressEventTestExecFn,
         ProcessingInstructionTestExecFn,
+        StorageTestExecFn,
     };
 
     inline for (testFns) |testFn| {
