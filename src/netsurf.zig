@@ -622,6 +622,11 @@ pub fn eventTargetAddEventListener(
     const cbk_ptr = try alloc.create(Callback);
     cbk_ptr.* = cbk;
 
+    // When a function is used as an event handler, its this parameter is bound
+    // to the DOM element on which the listener is placed.
+    // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/this#this_in_dom_event_handlers
+    try cbk_ptr.setThisArg(et);
+
     const ctx = @as(*anyopaque, @ptrCast(cbk_ptr));
     var listener: ?*EventListener = undefined;
     const errLst = c.dom_event_listener_create(event_handler, ctx, &listener);

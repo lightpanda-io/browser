@@ -837,4 +837,16 @@ pub fn testExecFn(
         .{ .src = "req4.responseText.length > 64", .ex = "true" },
     };
     try checkCases(js_env, &post);
+
+    var cbk = [_]Case{
+        .{ .src = "const req5 = new XMLHttpRequest()", .ex = "undefined" },
+        .{ .src = "req5.open('GET', 'http://httpbin.io/json')", .ex = "undefined" },
+        .{ .src = "var status = 0; req5.onload = function () { status = this.status };", .ex = "function () { status = this.status }" },
+        .{ .src = "req5.send()", .ex = "undefined" },
+
+        // Each case executed waits for all loop callaback calls.
+        // So the url has been retrieved.
+        .{ .src = "status", .ex = "200" },
+    };
+    try checkCases(js_env, &cbk);
 }
