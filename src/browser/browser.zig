@@ -73,6 +73,7 @@ pub const Session = struct {
     window: Window,
     // TODO move the shed to the browser?
     storageShed: storage.Shed,
+    page: ?*Page = null,
 
     jstypes: [Types.len]usize = undefined,
 
@@ -95,6 +96,8 @@ pub const Session = struct {
     }
 
     fn deinit(self: *Session) void {
+        if (self.page) |page| page.end();
+
         self.env.deinit();
         self.arena.deinit();
 
@@ -129,11 +132,14 @@ pub const Page = struct {
     fn init(
         alloc: std.mem.Allocator,
         session: *Session,
-    ) Page {
-        return Page{
+    ) !Page {
+        if (session.page != null) return error.SessionPageExists;
+        var page = Page{
             .arena = std.heap.ArenaAllocator.init(alloc),
             .session = session,
         };
+        session.page = &page;
+        return page;
     }
 
     // reset js env and mem arena.
@@ -149,6 +155,7 @@ pub const Page = struct {
 
     pub fn deinit(self: *Page) void {
         self.arena.deinit();
+        self.session.page = null;
     }
 
     // dump writes the page content into the given file.
