@@ -10,6 +10,7 @@ const apiweb = @import("apiweb.zig");
 const Window = @import("html/window.zig").Window;
 const xhr = @import("xhr/xhr.zig");
 const storage = @import("storage/storage.zig");
+const url = @import("url/url.zig");
 
 const documentTestExecFn = @import("dom/document.zig").testExecFn;
 const HTMLDocumentTestExecFn = @import("html/document.zig").testExecFn;
@@ -30,6 +31,7 @@ const EventTestExecFn = @import("events/event.zig").testExecFn;
 const XHRTestExecFn = xhr.testExecFn;
 const ProgressEventTestExecFn = @import("xhr/progress_event.zig").testExecFn;
 const StorageTestExecFn = storage.testExecFn;
+const URLTestExecFn = url.testExecFn;
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 
@@ -95,6 +97,7 @@ fn testsAllExecFn(
         ProgressEventTestExecFn,
         ProcessingInstructionTestExecFn,
         StorageTestExecFn,
+        URLTestExecFn,
     };
 
     inline for (testFns) |testFn| {
