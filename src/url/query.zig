@@ -41,6 +41,17 @@ pub const Values = struct {
         try self.map.put(self.alloc, kk, list);
     }
 
+    // append by taking the ownership of the key and the value
+    fn appendOwned(self: *Values, k: []const u8, v: []const u8) !void {
+        if (self.map.getPtr(k)) |list| {
+            return try list.append(self.alloc, v);
+        }
+
+        var list = List{};
+        try list.append(self.alloc, v);
+        try self.map.put(self.alloc, k, list);
+    }
+
     pub fn get(self: *Values, k: []const u8) [][]const u8 {
         if (self.map.get(k)) |list| {
             return list.items;
@@ -83,6 +94,49 @@ pub const Values = struct {
     }
 };
 
+fn unhex(c: u8) u8 {
+    if ('0' <= c and c <= '9') return c - '0';
+    if ('a' <= c and c <= 'f') return c - 'a' + 10;
+    if ('A' <= c and c <= 'F') return c - 'A' + 10;
+    return 0;
+}
+
+// unescape decodes a percent encoded string.
+// The caller owned the returned string.
+pub fn unescape(alloc: std.mem.Allocator, s: []const u8) ![]const u8 {
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(alloc);
+
+    var i: usize = 0;
+    while (i < s.len) {
+        defer i += 1;
+
+        switch (s[i]) {
+            '%' => {
+                if (i + 2 > s.len) return error.EscapeError;
+                if (!std.ascii.isHex(s[i + 1])) return error.EscapeError;
+                if (!std.ascii.isHex(s[i + 2])) return error.EscapeError;
+
+                try buf.append(alloc, unhex(s[i + 1]) << 4 | unhex(s[i + 2]));
+                i += 2;
+            },
+            '+' => try buf.append(alloc, ' '), // TODO should we decode or keep as it?
+            else => try buf.append(alloc, s[i]),
+        }
+    }
+
+    return try buf.toOwnedSlice(alloc);
+}
+
+test "unescape" {
+    var v: []const u8 = undefined;
+    const alloc = std.testing.allocator;
+
+    v = try unescape(alloc, "%7E");
+    try std.testing.expect(std.mem.eql(u8, "~", v));
+    alloc.free(v);
+}
+
 // Parse the given query.
 pub fn parseQuery(alloc: std.mem.Allocator, s: []const u8) !Values {
     var values = Values.init(alloc);
@@ -103,9 +157,11 @@ pub fn parseQuery(alloc: std.mem.Allocator, s: []const u8) !Values {
         _ = rr.skip();
         const v = rr.tail();
 
-        // TODO decode k and v
+        // decode k and v
+        const kk = try unescape(alloc, k);
+        const vv = try unescape(alloc, v);
 
-        try values.append(k, v);
+        try values.appendOwned(kk, vv);
 
         if (!r.skip()) break;
     }
