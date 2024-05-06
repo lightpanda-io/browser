@@ -56,9 +56,17 @@ pub const URL = struct {
     // the caller must free the returned string.
     // TODO return a disposable string
     // https://github.com/lightpanda-io/jsruntime-lib/issues/195
-    pub fn get_href(self: URL, alloc: std.mem.Allocator) ![]const u8 {
+    pub fn get_href(self: *URL, alloc: std.mem.Allocator) ![]const u8 {
         var buf = std.ArrayList(u8).init(alloc);
         defer buf.deinit();
+
+        // retrieve the query search from search_params.
+        const cur = self.uri.query;
+        defer self.uri.query = cur;
+        var q = std.ArrayList(u8).init(alloc);
+        defer q.deinit();
+        try self.search_params.values.encode(q.writer());
+        self.uri.query = q.items;
 
         try self.uri.writeToStream(.{
             .scheme = true,
@@ -116,9 +124,14 @@ pub const URL = struct {
     // TODO return a disposable string
     // https://github.com/lightpanda-io/jsruntime-lib/issues/195
     pub fn get_search(self: *URL, alloc: std.mem.Allocator) ![]const u8 {
-        if (self.uri.query == null) return try alloc.dupe(u8, "");
+        if (self.search_params.get_size() == 0) return try alloc.dupe(u8, "");
 
-        return try std.mem.concat(alloc, u8, &[_][]const u8{ "?", self.uri.query.? });
+        var buf: std.ArrayListUnmanaged(u8) = .{};
+        defer buf.deinit(alloc);
+
+        try buf.append(alloc, '?');
+        try self.search_params.values.encode(buf.writer(alloc));
+        return buf.toOwnedSlice(alloc);
     }
 
     // the caller must free the returned string.
@@ -207,12 +220,18 @@ pub fn testExecFn(
     try checkCases(js_env, &url);
 
     var qs = [_]Case{
-        .{ .src = "var url = new URL('https://foo.bar/path?a=~&b=%7E')", .ex = "undefined" },
+        .{ .src = "var url = new URL('https://foo.bar/path?a=~&b=%7E#fragment')", .ex = "undefined" },
         .{ .src = "url.searchParams.get('a')", .ex = "~" },
         .{ .src = "url.searchParams.get('b')", .ex = "~" },
         .{ .src = "url.searchParams.append('c', 'foo')", .ex = "undefined" },
         .{ .src = "url.searchParams.get('c')", .ex = "foo" },
         .{ .src = "url.searchParams.size", .ex = "3" },
+
+        // search is dynamic
+        .{ .src = "url.search", .ex = "?a=%7E&b=%7E&c=foo" },
+        // href is dynamic
+        .{ .src = "url.href", .ex = "https://foo.bar/path?a=%7E&b=%7E&c=foo#fragment" },
+
         .{ .src = "url.searchParams.delete('c', 'foo')", .ex = "undefined" },
         .{ .src = "url.searchParams.get('c')", .ex = "" },
         .{ .src = "url.searchParams.delete('a')", .ex = "undefined" },
