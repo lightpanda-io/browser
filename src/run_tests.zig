@@ -264,6 +264,9 @@ test {
     const dumpTest = @import("browser/dump.zig");
     std.testing.refAllDecls(dumpTest);
 
+    const mimeTest = @import("browser/mime.zig");
+    std.testing.refAllDecls(mimeTest);
+
     const cssTest = @import("css/css.zig");
     std.testing.refAllDecls(cssTest);
 
