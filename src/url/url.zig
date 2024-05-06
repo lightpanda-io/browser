@@ -5,6 +5,8 @@ const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 const generate = @import("../generate.zig");
 
+const query = @import("query.zig");
+
 pub const Interfaces = generate.Tuple(.{
     URL,
     URLSearchParams,
@@ -27,6 +29,7 @@ pub const Interfaces = generate.Tuple(.{
 pub const URL = struct {
     rawuri: []const u8,
     uri: std.Uri,
+    search_params: URLSearchParams,
 
     pub const mem_guarantied = true;
 
@@ -41,10 +44,12 @@ pub const URL = struct {
         return .{
             .rawuri = raw,
             .uri = uri,
+            .search_params = try URLSearchParams.constructor(alloc, uri.query),
         };
     }
 
     pub fn deinit(self: *URL, alloc: std.mem.Allocator) void {
+        self.search_params.deinit();
         alloc.free(self.rawuri);
     }
 
@@ -125,14 +130,57 @@ pub const URL = struct {
         return try std.mem.concat(alloc, u8, &[_][]const u8{ "#", self.uri.fragment.? });
     }
 
+    pub fn get_searchParams(self: *URL) *URLSearchParams {
+        return &self.search_params;
+    }
+
     pub fn _toJSON(self: *URL, alloc: std.mem.Allocator) ![]const u8 {
         return try self.get_href(alloc);
     }
 };
 
 // https://url.spec.whatwg.org/#interface-urlsearchparams
+// TODO array like
 pub const URLSearchParams = struct {
+    values: query.Values,
+
     pub const mem_guarantied = true;
+
+    pub fn constructor(alloc: std.mem.Allocator, init: ?[]const u8) !URLSearchParams {
+        return .{
+            .values = try query.parseQuery(alloc, init orelse ""),
+        };
+    }
+
+    pub fn deinit(self: *URLSearchParams, _: std.mem.Allocator) void {
+        self.values.deinit();
+    }
+
+    pub fn get_size(self: *URLSearchParams) u32 {
+        return @intCast(self.values.count());
+    }
+
+    pub fn _append(self: *URLSearchParams, name: []const u8, value: []const u8) !void {
+        try self.values.append(name, value);
+    }
+
+    pub fn _delete(self: *URLSearchParams, name: []const u8, value: ?[]const u8) !void {
+        if (value) |v| return self.values.deleteValue(name, v);
+
+        self.values.delete(name);
+    }
+
+    pub fn _get(self: *URLSearchParams, name: []const u8) ?[]const u8 {
+        return self.values.first(name);
+    }
+
+    // TODO return generates an error: caught unexpected error 'TypeLookup'
+    // pub fn _getAll(self: *URLSearchParams, name: []const u8) [][]const u8 {
+    //     try self.values.get(name);
+    // }
+
+    // TODO
+    pub fn _sort(_: *URLSearchParams) void {}
 };
 
 // Tests
@@ -154,6 +202,21 @@ pub fn testExecFn(
         .{ .src = "url.pathname", .ex = "/path" },
         .{ .src = "url.search", .ex = "?query" },
         .{ .src = "url.hash", .ex = "#fragment" },
+        .{ .src = "url.searchParams.get('query')", .ex = "" },
     };
     try checkCases(js_env, &url);
+
+    var qs = [_]Case{
+        .{ .src = "var url = new URL('https://foo.bar/path?a=~&b=%7E')", .ex = "undefined" },
+        .{ .src = "url.searchParams.get('a')", .ex = "~" },
+        .{ .src = "url.searchParams.get('b')", .ex = "~" },
+        .{ .src = "url.searchParams.append('c', 'foo')", .ex = "undefined" },
+        .{ .src = "url.searchParams.get('c')", .ex = "foo" },
+        .{ .src = "url.searchParams.size", .ex = "3" },
+        .{ .src = "url.searchParams.delete('c', 'foo')", .ex = "undefined" },
+        .{ .src = "url.searchParams.get('c')", .ex = "" },
+        .{ .src = "url.searchParams.delete('a')", .ex = "undefined" },
+        .{ .src = "url.searchParams.get('a')", .ex = "" },
+    };
+    try checkCases(js_env, &qs);
 }
