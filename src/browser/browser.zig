@@ -273,7 +273,7 @@ pub const Page = struct {
 
         // add global objects
         log.debug("setup global env", .{});
-        try self.session.env.bindGlobal(self.session.window);
+        try self.session.env.bindGlobal(&self.session.window);
 
         // browse the DOM tree to retrieve scripts
         // TODO execute the synchronous scripts during the HTL parsing.
@@ -359,6 +359,8 @@ pub const Page = struct {
         // have loaded.
         // https://html.spec.whatwg.org/#reporting-document-loading-status
         const evt = try parser.eventCreate();
+        defer parser.eventDestroy(evt);
+
         try parser.eventInit(evt, "DOMContentLoaded", .{ .bubbles = true, .cancelable = true });
         _ = try parser.eventTargetDispatchEvent(parser.toEventTarget(parser.DocumentHTML, html_doc), evt);
 
@@ -373,8 +375,13 @@ pub const Page = struct {
 
         // dispatch window.load event
         const loadevt = try parser.eventCreate();
+        defer parser.eventDestroy(loadevt);
+
         try parser.eventInit(loadevt, "load", .{});
-        _ = try parser.eventTargetDispatchEvent(parser.toEventTarget(Window, &self.session.window), loadevt);
+        _ = try parser.eventTargetDispatchEvent(
+            parser.toEventTarget(Window, &self.session.window),
+            loadevt,
+        );
     }
 
     // evalScript evaluates the src in priority.
