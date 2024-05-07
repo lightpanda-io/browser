@@ -59,7 +59,7 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     var window = Window.create(null);
     window.replaceDocument(html_doc);
     window.setStorageShelf(&storageShelf);
-    try js_env.bindGlobal(window);
+    try js_env.bindGlobal(&window);
 
     // thanks to the arena, we don't need to deinit res.
     var res: jsruntime.JSResult = undefined;
@@ -107,10 +107,14 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     }
 
     // Mark tests as ready to run.
-    res = try evalJS(js_env, alloc, "window.dispatchEvent(new Event('load'));", "ready");
-    if (!res.success) {
-        return res;
-    }
+    const loadevt = try parser.eventCreate();
+    defer parser.eventDestroy(loadevt);
+
+    try parser.eventInit(loadevt, "load", .{});
+    _ = try parser.eventTargetDispatchEvent(
+        parser.toEventTarget(Window, &window),
+        loadevt,
+    );
 
     // Check the final test status.
     res = try evalJS(js_env, alloc, "report.status;", "teststatus");
