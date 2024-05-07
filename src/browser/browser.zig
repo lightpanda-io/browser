@@ -197,6 +197,24 @@ pub const Page = struct {
         try Dump.writeHTML(self.doc.?, out);
     }
 
+    pub fn wait(self: *Page) !void {
+        const alloc = self.arena.allocator();
+        var res = try self.session.env.waitTryCatch(alloc);
+        defer res.deinit(alloc);
+
+        if (res.success) {
+            log.debug("wait: {s}", .{res.result});
+        } else {
+            if (builtin.mode == .Debug and res.stack != null) {
+                log.info("wait: {s}", .{res.stack.?});
+            } else {
+                log.info("wait: {s}", .{res.result});
+            }
+        }
+
+        return;
+    }
+
     // spec reference: https://html.spec.whatwg.org/#document-lifecycle
     pub fn navigate(self: *Page, uri: []const u8) !void {
         const alloc = self.arena.allocator();
@@ -448,8 +466,7 @@ pub const Page = struct {
         const opt_text = try parser.nodeTextContent(parser.elementToNode(e));
         if (opt_text) |text| {
             // TODO handle charset attribute
-            var res = jsruntime.JSResult{};
-            try self.session.env.run(alloc, text, "", &res, null);
+            var res = try self.session.env.execTryCatch(alloc, text, "");
             defer res.deinit(alloc);
 
             if (res.success) {
@@ -498,8 +515,7 @@ pub const Page = struct {
         // check no body
         if (fetchres.body == null) return FetchError.NoBody;
 
-        var res = jsruntime.JSResult{};
-        try self.session.env.run(alloc, fetchres.body.?, src, &res, null);
+        var res = try self.session.env.execTryCatch(alloc, fetchres.body.?, src);
         defer res.deinit(alloc);
 
         if (res.success) {
