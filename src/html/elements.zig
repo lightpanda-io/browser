@@ -196,19 +196,181 @@ pub const HTMLAnchorElement = struct {
     }
 
     // TODO return a disposable string
+    pub fn get_origin(self: *parser.Anchor, alloc: std.mem.Allocator) ![]const u8 {
+        var u = try url(self, alloc);
+        defer u.deinit(alloc);
+
+        return try u.get_origin(alloc);
+    }
+
+    // TODO return a disposable string
+    pub fn get_protocol(self: *parser.Anchor, alloc: std.mem.Allocator) ![]const u8 {
+        var u = try url(self, alloc);
+        defer u.deinit(alloc);
+
+        return u.get_protocol(alloc);
+    }
+
+    pub fn set_protocol(self: *parser.Anchor, alloc: std.mem.Allocator, v: []const u8) !void {
+        var u = try url(self, alloc);
+        defer u.deinit(alloc);
+
+        u.uri.scheme = v;
+        const href = try u.format(alloc);
+        defer alloc.free(href);
+
+        try parser.anchorSetHref(self, href);
+    }
+
+    // TODO return a disposable string
     pub fn get_host(self: *parser.Anchor, alloc: std.mem.Allocator) ![]const u8 {
         var u = try url(self, alloc);
         defer u.deinit(alloc);
 
-        return try alloc.dupe(u8, u.get_host());
+        return try u.get_host(alloc);
     }
 
     pub fn set_host(self: *parser.Anchor, alloc: std.mem.Allocator, v: []const u8) !void {
+        _ = self;
+        _ = alloc;
+        _ = v;
+        // TODO
+        return error.NotImplemented;
+    }
+
+    // TODO return a disposable string
+    pub fn get_hostname(self: *parser.Anchor, alloc: std.mem.Allocator) ![]const u8 {
+        var u = try url(self, alloc);
+        defer u.deinit(alloc);
+
+        return try alloc.dupe(u8, u.get_hostname());
+    }
+
+    pub fn set_hostname(self: *parser.Anchor, alloc: std.mem.Allocator, v: []const u8) !void {
         var u = try url(self, alloc);
         defer u.deinit(alloc);
 
         u.uri.host = v;
-        const href = try u.get_href(alloc);
+        const href = try u.format(alloc);
+        try parser.anchorSetHref(self, href);
+    }
+
+    // TODO return a disposable string
+    pub fn get_port(self: *parser.Anchor, alloc: std.mem.Allocator) ![]const u8 {
+        var u = try url(self, alloc);
+        defer u.deinit(alloc);
+
+        return try u.get_port(alloc);
+    }
+
+    pub fn set_port(self: *parser.Anchor, alloc: std.mem.Allocator, v: ?[]const u8) !void {
+        var u = try url(self, alloc);
+        defer u.deinit(alloc);
+
+        if (v != null and v.?.len > 0) {
+            u.uri.port = try std.fmt.parseInt(u16, v.?, 10);
+        } else {
+            u.uri.port = null;
+        }
+
+        const href = try u.format(alloc);
+        defer alloc.free(href);
+
+        try parser.anchorSetHref(self, href);
+    }
+
+    // TODO return a disposable string
+    pub fn get_username(self: *parser.Anchor, alloc: std.mem.Allocator) ![]const u8 {
+        var u = try url(self, alloc);
+        defer u.deinit(alloc);
+
+        return try alloc.dupe(u8, u.get_username());
+    }
+
+    pub fn set_username(self: *parser.Anchor, alloc: std.mem.Allocator, v: ?[]const u8) !void {
+        var u = try url(self, alloc);
+        defer u.deinit(alloc);
+
+        u.uri.user = v;
+        const href = try u.format(alloc);
+        defer alloc.free(href);
+
+        try parser.anchorSetHref(self, href);
+    }
+
+    // TODO return a disposable string
+    pub fn get_password(self: *parser.Anchor, alloc: std.mem.Allocator) ![]const u8 {
+        var u = try url(self, alloc);
+        defer u.deinit(alloc);
+
+        return try alloc.dupe(u8, u.get_password());
+    }
+
+    pub fn set_password(self: *parser.Anchor, alloc: std.mem.Allocator, v: ?[]const u8) !void {
+        var u = try url(self, alloc);
+        defer u.deinit(alloc);
+
+        u.uri.password = v;
+        const href = try u.format(alloc);
+        defer alloc.free(href);
+
+        try parser.anchorSetHref(self, href);
+    }
+
+    // TODO return a disposable string
+    pub fn get_pathname(self: *parser.Anchor, alloc: std.mem.Allocator) ![]const u8 {
+        var u = try url(self, alloc);
+        defer u.deinit(alloc);
+
+        return try alloc.dupe(u8, u.get_pathname());
+    }
+
+    pub fn set_pathname(self: *parser.Anchor, alloc: std.mem.Allocator, v: []const u8) !void {
+        var u = try url(self, alloc);
+        defer u.deinit(alloc);
+
+        u.uri.path = v;
+        const href = try u.format(alloc);
+        defer alloc.free(href);
+
+        try parser.anchorSetHref(self, href);
+    }
+
+    // TODO return a disposable string
+    pub fn get_search(self: *parser.Anchor, alloc: std.mem.Allocator) ![]const u8 {
+        var u = try url(self, alloc);
+        defer u.deinit(alloc);
+
+        return try u.get_search(alloc);
+    }
+
+    pub fn set_search(self: *parser.Anchor, alloc: std.mem.Allocator, v: ?[]const u8) !void {
+        var u = try url(self, alloc);
+        defer u.deinit(alloc);
+
+        u.uri.query = v;
+        const href = try u.format(alloc);
+        defer alloc.free(href);
+
+        try parser.anchorSetHref(self, href);
+    }
+
+    // TODO return a disposable string
+    pub fn get_hash(self: *parser.Anchor, alloc: std.mem.Allocator) ![]const u8 {
+        var u = try url(self, alloc);
+        defer u.deinit(alloc);
+
+        return try u.get_hash(alloc);
+    }
+
+    pub fn set_hash(self: *parser.Anchor, alloc: std.mem.Allocator, v: ?[]const u8) !void {
+        var u = try url(self, alloc);
+        defer u.deinit(alloc);
+
+        u.uri.fragment = v;
+        const href = try u.format(alloc);
+        defer alloc.free(href);
+
         try parser.anchorSetHref(self, href);
     }
 
@@ -691,9 +853,30 @@ pub fn testExecFn(
         .{ .src = "a.href = 'https://lightpanda.io/'", .ex = "https://lightpanda.io/" },
         .{ .src = "a.href", .ex = "https://lightpanda.io/" },
 
+        .{ .src = "a.origin", .ex = "https://lightpanda.io" },
+
         .{ .src = "a.host", .ex = "lightpanda.io" },
-        .{ .src = "a.host = 'foo.bar'", .ex = "foo.bar" },
+        .{ .src = "a.hostname", .ex = "lightpanda.io" },
+        .{ .src = "a.hostname = 'foo.bar'", .ex = "foo.bar" },
         .{ .src = "a.href", .ex = "https://foo.bar/" },
+
+        .{ .src = "a.search", .ex = "" },
+        .{ .src = "a.search = 'q=bar'", .ex = "q=bar" },
+        .{ .src = "a.search", .ex = "?q=bar" },
+        .{ .src = "a.href", .ex = "https://foo.bar/?q=bar" },
+
+        .{ .src = "a.hash", .ex = "" },
+        .{ .src = "a.hash = 'frag'", .ex = "frag" },
+        .{ .src = "a.hash", .ex = "#frag" },
+        .{ .src = "a.href", .ex = "https://foo.bar/?q=bar#frag" },
+
+        .{ .src = "a.port", .ex = "" },
+        .{ .src = "a.port = '443'", .ex = "443" },
+        .{ .src = "a.host", .ex = "foo.bar:443" },
+        .{ .src = "a.hostname", .ex = "foo.bar" },
+        .{ .src = "a.href", .ex = "https://foo.bar:443/?q=bar#frag" },
+        .{ .src = "a.port = null", .ex = "null" },
+        .{ .src = "a.href", .ex = "https://foo.bar/?q=bar#frag" },
 
         .{ .src = "a.href = 'foo'", .ex = "foo" },
 

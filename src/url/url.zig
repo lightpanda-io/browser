@@ -71,6 +71,9 @@ pub const URL = struct {
         alloc.free(self.rawuri);
     }
 
+    // the caller must free the returned string.
+    // TODO return a disposable string
+    // https://github.com/lightpanda-io/jsruntime-lib/issues/195
     pub fn get_origin(self: *URL, alloc: std.mem.Allocator) ![]const u8 {
         var buf = std.ArrayList(u8).init(alloc);
         defer buf.deinit();
@@ -86,13 +89,13 @@ pub const URL = struct {
         return try buf.toOwnedSlice();
     }
 
+    // get_href returns the URL by writing all its components.
+    // The query is replaced by a dump of search params.
+    //
     // the caller must free the returned string.
     // TODO return a disposable string
     // https://github.com/lightpanda-io/jsruntime-lib/issues/195
     pub fn get_href(self: *URL, alloc: std.mem.Allocator) ![]const u8 {
-        var buf = std.ArrayList(u8).init(alloc);
-        defer buf.deinit();
-
         // retrieve the query search from search_params.
         const cur = self.uri.query;
         defer self.uri.query = cur;
@@ -100,6 +103,14 @@ pub const URL = struct {
         defer q.deinit();
         try self.search_params.values.encode(q.writer());
         self.uri.query = q.items;
+
+        return try self.format(alloc);
+    }
+
+    // format the url with all its components.
+    pub fn format(self: *URL, alloc: std.mem.Allocator) ![]const u8 {
+        var buf = std.ArrayList(u8).init(alloc);
+        defer buf.deinit();
 
         try self.uri.writeToStream(.{
             .scheme = true,
@@ -127,8 +138,22 @@ pub const URL = struct {
         return self.uri.password orelse "";
     }
 
-    pub fn get_host(self: *URL) []const u8 {
-        return self.uri.host orelse "";
+    // the caller must free the returned string.
+    // TODO return a disposable string
+    // https://github.com/lightpanda-io/jsruntime-lib/issues/195
+    pub fn get_host(self: *URL, alloc: std.mem.Allocator) ![]const u8 {
+        var buf = std.ArrayList(u8).init(alloc);
+        defer buf.deinit();
+
+        try self.uri.writeToStream(.{
+            .scheme = false,
+            .authentication = false,
+            .authority = true,
+            .path = false,
+            .query = false,
+            .fragment = false,
+        }, buf.writer());
+        return try buf.toOwnedSlice();
     }
 
     pub fn get_hostname(self: *URL) []const u8 {
