@@ -71,6 +71,21 @@ pub const URL = struct {
         alloc.free(self.rawuri);
     }
 
+    pub fn get_origin(self: *URL, alloc: std.mem.Allocator) ![]const u8 {
+        var buf = std.ArrayList(u8).init(alloc);
+        defer buf.deinit();
+
+        try self.uri.writeToStream(.{
+            .scheme = true,
+            .authentication = false,
+            .authority = true,
+            .path = false,
+            .query = false,
+            .fragment = false,
+        }, buf.writer());
+        return try buf.toOwnedSlice();
+    }
+
     // the caller must free the returned string.
     // TODO return a disposable string
     // https://github.com/lightpanda-io/jsruntime-lib/issues/195
@@ -223,6 +238,7 @@ pub fn testExecFn(
 ) anyerror!void {
     var url = [_]Case{
         .{ .src = "var url = new URL('https://foo.bar/path?query#fragment')", .ex = "undefined" },
+        .{ .src = "url.origin", .ex = "https://foo.bar" },
         .{ .src = "url.href", .ex = "https://foo.bar/path?query#fragment" },
         .{ .src = "url.protocol", .ex = "https:" },
         .{ .src = "url.username", .ex = "" },
