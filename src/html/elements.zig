@@ -15,9 +15,14 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
+const std = @import("std");
 
 const parser = @import("../netsurf.zig");
 const generate = @import("../generate.zig");
+
+const jsruntime = @import("jsruntime");
+const Case = jsruntime.test_utils.Case;
+const checkCases = jsruntime.test_utils.checkCases;
 
 const Element = @import("../dom/element.zig").Element;
 
@@ -126,10 +131,31 @@ pub const HTMLUnknownElement = struct {
     pub const mem_guarantied = true;
 };
 
+// https://html.spec.whatwg.org/#the-a-element
 pub const HTMLAnchorElement = struct {
     pub const Self = parser.Anchor;
     pub const prototype = *HTMLElement;
     pub const mem_guarantied = true;
+
+    pub fn get_target(self: *parser.Anchor) ![]const u8 {
+        return try parser.anchorGetTarget(self);
+    }
+
+    pub fn set_target(self: *parser.Anchor, href: []const u8) !void {
+        return try parser.anchorSetTarget(self, href);
+    }
+
+    pub fn get_download(_: *parser.Anchor) ![]const u8 {
+        return ""; // TODO
+    }
+
+    pub fn get_href(self: *parser.Anchor) ![]const u8 {
+        return try parser.anchorGetHref(self);
+    }
+
+    pub fn set_href(self: *parser.Anchor, href: []const u8) !void {
+        return try parser.anchorSetTarget(self, href);
+    }
 };
 
 pub const HTMLAppletElement = struct {
@@ -588,4 +614,21 @@ pub fn toInterface(comptime T: type, e: *parser.Element) !T {
         .video => .{ .HTMLVideoElement = @as(*parser.Video, @ptrCast(elem)) },
         .undef => .{ .HTMLUnknownElement = @as(*parser.Unknown, @ptrCast(elem)) },
     };
+}
+
+// Tests
+// -----
+
+pub fn testExecFn(
+    _: std.mem.Allocator,
+    js_env: *jsruntime.Env,
+) anyerror!void {
+    var anchor = [_]Case{
+        .{ .src = "let a = document.getElementById('link')", .ex = "undefined" },
+        .{ .src = "a.target", .ex = "" },
+        .{ .src = "a.target = '_blank'", .ex = "_blank" },
+        .{ .src = "a.href", .ex = "foo" },
+        .{ .src = "a.href = 'https://lightpanda.io/'", .ex = "https://lightpanda.io/" },
+    };
+    try checkCases(js_env, &anchor);
 }

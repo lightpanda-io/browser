@@ -1513,6 +1513,33 @@ pub fn elementHTMLGetTagType(elem_html: *ElementHTML) !Tag {
     return @as(Tag, @enumFromInt(tag_type));
 }
 
+// HTMLAnchorElement
+pub fn anchorGetTarget(a: *Anchor) ![]const u8 {
+    var res: ?*String = undefined;
+    const err = c.dom_html_anchor_element_get_target(a, &res);
+    try DOMErr(err);
+    if (res == null) return "";
+    return strToData(res.?);
+}
+
+pub fn anchorSetTarget(a: *Anchor, target: []const u8) !void {
+    const err = c.dom_html_anchor_element_set_target(a, try strFromData(target));
+    try DOMErr(err);
+}
+
+pub fn anchorGetHref(a: *Anchor) ![]const u8 {
+    var res: ?*String = undefined;
+    const err = c.dom_html_anchor_element_get_href(a, &res);
+    try DOMErr(err);
+    if (res == null) return "";
+    return strToData(res.?);
+}
+
+pub fn anchorSetHref(a: *Anchor, href: []const u8) !void {
+    const err = c.dom_html_anchor_element_set_href(a, try strFromData(href));
+    try DOMErr(err);
+}
+
 // ElementsHTML
 
 pub const MediaElement = struct { base: *c.dom_html_element };
