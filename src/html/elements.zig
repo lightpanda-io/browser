@@ -154,7 +154,39 @@ pub const HTMLAnchorElement = struct {
     }
 
     pub fn set_href(self: *parser.Anchor, href: []const u8) !void {
-        return try parser.anchorSetTarget(self, href);
+        return try parser.anchorSetHref(self, href);
+    }
+
+    pub fn get_hreflang(self: *parser.Anchor) ![]const u8 {
+        return try parser.anchorGetHrefLang(self);
+    }
+
+    pub fn set_hreflang(self: *parser.Anchor, href: []const u8) !void {
+        return try parser.anchorSetHrefLang(self, href);
+    }
+
+    pub fn get_type(self: *parser.Anchor) ![]const u8 {
+        return try parser.anchorGetType(self);
+    }
+
+    pub fn set_type(self: *parser.Anchor, t: []const u8) !void {
+        return try parser.anchorSetType(self, t);
+    }
+
+    pub fn get_rel(self: *parser.Anchor) ![]const u8 {
+        return try parser.anchorGetRel(self);
+    }
+
+    pub fn set_rel(self: *parser.Anchor, t: []const u8) !void {
+        return try parser.anchorSetRel(self, t);
+    }
+
+    pub fn get_text(self: *parser.Anchor) !?[]const u8 {
+        return try parser.nodeTextContent(parser.anchorToNode(self));
+    }
+
+    pub fn set_text(self: *parser.Anchor, v: []const u8) !void {
+        return try parser.nodeSetTextContent(parser.anchorToNode(self), v);
     }
 };
 
@@ -627,8 +659,23 @@ pub fn testExecFn(
         .{ .src = "let a = document.getElementById('link')", .ex = "undefined" },
         .{ .src = "a.target", .ex = "" },
         .{ .src = "a.target = '_blank'", .ex = "_blank" },
+        .{ .src = "a.target", .ex = "_blank" },
+        .{ .src = "a.target = ''", .ex = "" },
+
         .{ .src = "a.href", .ex = "foo" },
         .{ .src = "a.href = 'https://lightpanda.io/'", .ex = "https://lightpanda.io/" },
+        .{ .src = "a.href", .ex = "https://lightpanda.io/" },
+        .{ .src = "a.href = 'foo'", .ex = "foo" },
+
+        .{ .src = "a.type", .ex = "" },
+        .{ .src = "a.type = 'text/html'", .ex = "text/html" },
+        .{ .src = "a.type", .ex = "text/html" },
+        .{ .src = "a.type = ''", .ex = "" },
+
+        .{ .src = "a.text", .ex = "OK" },
+        .{ .src = "a.text = 'foo'", .ex = "foo" },
+        .{ .src = "a.text", .ex = "foo" },
+        .{ .src = "a.text = 'OK'", .ex = "OK" },
     };
     try checkCases(js_env, &anchor);
 }
