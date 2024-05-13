@@ -25,6 +25,7 @@ const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 
 const Element = @import("../dom/element.zig").Element;
+const URL = @import("../url/url.zig").URL;
 
 // HTMLElement interfaces
 pub const Interfaces = .{
@@ -188,6 +189,30 @@ pub const HTMLAnchorElement = struct {
     pub fn set_text(self: *parser.Anchor, v: []const u8) !void {
         return try parser.nodeSetTextContent(parser.anchorToNode(self), v);
     }
+
+    inline fn url(self: *parser.Anchor, alloc: std.mem.Allocator) !URL {
+        const href = try parser.anchorGetHref(self);
+        return URL.constructor(alloc, href, null); // TODO inject base url
+    }
+
+    // TODO return a disposable string
+    pub fn get_host(self: *parser.Anchor, alloc: std.mem.Allocator) ![]const u8 {
+        var u = try url(self, alloc);
+        defer u.deinit(alloc);
+
+        return try alloc.dupe(u8, u.get_host());
+    }
+
+    pub fn set_host(self: *parser.Anchor, alloc: std.mem.Allocator, v: []const u8) !void {
+        var u = try url(self, alloc);
+        defer u.deinit(alloc);
+
+        u.uri.host = v;
+        const href = try u.get_href(alloc);
+        try parser.anchorSetHref(self, href);
+    }
+
+    pub fn deinit(_: *parser.Anchor, _: std.mem.Allocator) void {}
 };
 
 pub const HTMLAppletElement = struct {
@@ -665,6 +690,11 @@ pub fn testExecFn(
         .{ .src = "a.href", .ex = "foo" },
         .{ .src = "a.href = 'https://lightpanda.io/'", .ex = "https://lightpanda.io/" },
         .{ .src = "a.href", .ex = "https://lightpanda.io/" },
+
+        .{ .src = "a.host", .ex = "lightpanda.io" },
+        .{ .src = "a.host = 'foo.bar'", .ex = "foo.bar" },
+        .{ .src = "a.href", .ex = "https://foo.bar/" },
+
         .{ .src = "a.href = 'foo'", .ex = "foo" },
 
         .{ .src = "a.type", .ex = "" },
