@@ -1,6 +1,10 @@
 const std = @import("std");
 const testing = std.testing;
 
+const strparser = @import("../str/parser.zig");
+const Reader = strparser.Reader;
+const trim = strparser.trim;
+
 const Self = @This();
 
 const MimeError = error{
@@ -20,91 +24,6 @@ boundary: ?[]const u8 = null,
 pub const Empty = Self{ .mtype = "", .msubtype = "" };
 pub const HTML = Self{ .mtype = "text", .msubtype = "html" };
 pub const Javascript = Self{ .mtype = "application", .msubtype = "javascript" };
-
-const reader = struct {
-    s: []const u8,
-    i: usize = 0,
-
-    fn until(self: *reader, c: u8) []const u8 {
-        const ln = self.s.len;
-        const start = self.i;
-        while (self.i < ln) {
-            if (c == self.s[self.i]) return self.s[start..self.i];
-            self.i += 1;
-        }
-
-        return self.s[start..self.i];
-    }
-
-    fn tail(self: *reader) []const u8 {
-        if (self.i > self.s.len) return "";
-        defer self.i = self.s.len;
-        return self.s[self.i..];
-    }
-
-    fn skip(self: *reader) bool {
-        if (self.i >= self.s.len) return false;
-        self.i += 1;
-        return true;
-    }
-};
-
-test "reader.skip" {
-    var r = reader{ .s = "foo" };
-    try testing.expect(r.skip());
-    try testing.expect(r.skip());
-    try testing.expect(r.skip());
-    try testing.expect(!r.skip());
-    try testing.expect(!r.skip());
-}
-
-test "reader.tail" {
-    var r = reader{ .s = "foo" };
-    try testing.expectEqualStrings("foo", r.tail());
-    try testing.expectEqualStrings("", r.tail());
-}
-
-test "reader.until" {
-    var r = reader{ .s = "foo.bar.baz" };
-    try testing.expectEqualStrings("foo", r.until('.'));
-    _ = r.skip();
-    try testing.expectEqualStrings("bar", r.until('.'));
-    _ = r.skip();
-    try testing.expectEqualStrings("baz", r.until('.'));
-
-    r = reader{ .s = "foo" };
-    try testing.expectEqualStrings("foo", r.until('.'));
-
-    r = reader{ .s = "" };
-    try testing.expectEqualStrings("", r.until('.'));
-}
-
-fn trim(s: []const u8) []const u8 {
-    const ln = s.len;
-    if (ln == 0) {
-        return "";
-    }
-    var start: usize = 0;
-    while (start < ln) {
-        if (!std.ascii.isWhitespace(s[start])) break;
-        start += 1;
-    }
-
-    var end: usize = ln;
-    while (end > 0) {
-        if (!std.ascii.isWhitespace(s[end - 1])) break;
-        end -= 1;
-    }
-
-    return s[start..end];
-}
-
-test "trim" {
-    try testing.expectEqualStrings("", trim(""));
-    try testing.expectEqualStrings("foo", trim("foo"));
-    try testing.expectEqualStrings("foo", trim(" \n\tfoo"));
-    try testing.expectEqualStrings("foo", trim("foo \n\t"));
-}
 
 // https://mimesniff.spec.whatwg.org/#http-token-code-point
 fn isHTTPCodePoint(c: u8) bool {
@@ -133,7 +52,7 @@ pub fn parse(s: []const u8) Self.MimeError!Self {
     if (ln > 255) return MimeError.TooBig;
 
     var res = Self{ .mtype = "", .msubtype = "" };
-    var r = reader{ .s = s };
+    var r = Reader{ .s = s };
 
     res.mtype = trim(r.until('/'));
     if (res.mtype.len == 0) return MimeError.Invalid;
@@ -150,7 +69,7 @@ pub fn parse(s: []const u8) Self.MimeError!Self {
 
     // parse well known parameters.
     // don't check invalid parameter format.
-    var rp = reader{ .s = res.params };
+    var rp = Reader{ .s = res.params };
     while (true) {
         const name = trim(rp.until('='));
         if (!rp.skip()) return res;
