@@ -67,7 +67,7 @@ pub const URL = struct {
     }
 
     pub fn deinit(self: *URL, alloc: std.mem.Allocator) void {
-        self.search_params.deinit();
+        self.search_params.deinit(alloc);
         alloc.free(self.rawuri);
     }
 
@@ -90,9 +90,9 @@ pub const URL = struct {
             .scheme = true,
             .authentication = true,
             .authority = true,
-            .path = true,
-            .query = true,
-            .fragment = true,
+            .path = self.uri.path.len > 0,
+            .query = self.uri.query != null and self.uri.query.?.len > 0,
+            .fragment = self.uri.fragment != null and self.uri.fragment.?.len > 0,
         }, buf.writer());
         return try buf.toOwnedSlice();
     }
