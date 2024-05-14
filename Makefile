@@ -25,7 +25,7 @@ help:
 # ------------
 .PHONY: build build-release run run-release shell test bench download-zig wpt
 
-zig_version = $(shell grep 'recommended_zig_version = "' "vendor/jsruntime-lib/build.zig" | cut -d'"' -f2)
+zig_version = $(shell grep 'recommended_zig_version = "' "vendor/zig-js-runtime/build.zig" | cut -d'"' -f2)
 kernel = $(shell uname -ms)
 
 ## Download the zig recommended version
@@ -93,16 +93,16 @@ test:
 # Install and build required dependencies commands
 # ------------
 .PHONY: install-submodule
-.PHONY: install-jsruntime install-jsruntime-dev install-libiconv
+.PHONY: install-zig-js-runtime install-zig-js-runtime-dev install-libiconv
 .PHONY: _install-netsurf install-netsurf clean-netsurf test-netsurf install-netsurf-dev
 .PHONY: install-mimalloc install-mimalloc-dev clean-mimalloc
 .PHONY: install-dev install
 
 ## Install and build dependencies for release
-install: install-submodule install-jsruntime install-netsurf install-mimalloc
+install: install-submodule install-zig-js-runtime install-netsurf install-mimalloc
 
 ## Install and build dependencies for dev
-install-dev: install-submodule install-jsruntime-dev install-netsurf-dev install-mimalloc-dev
+install-dev: install-submodule install-zig-js-runtime-dev install-netsurf-dev install-mimalloc-dev
 
 install-netsurf-dev: _install-netsurf
 install-netsurf-dev: OPTCFLAGS := -O0 -g -DNDEBUG
@@ -178,12 +178,12 @@ ifeq ("$(wildcard vendor/libiconv/lib/libiconv.a)","")
 	make && make install
 endif
 
-install-jsruntime-dev:
-	@cd vendor/jsruntime-lib && \
+install-zig-js-runtime-dev:
+	@cd vendor/zig-js-runtime && \
 	make install-dev
 
-install-jsruntime:
-	@cd vendor/jsruntime-lib && \
+install-zig-js-runtime:
+	@cd vendor/zig-js-runtime && \
 	make install
 
 .PHONY: _build_mimalloc

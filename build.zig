@@ -20,8 +20,8 @@ const std = @import("std");
 
 const builtin = @import("builtin");
 
-const jsruntime_path = "vendor/jsruntime-lib/";
-const jsruntime = @import("vendor/jsruntime-lib/build.zig");
+const jsruntime_path = "vendor/zig-js-runtime/";
+const jsruntime = @import("vendor/zig-js-runtime/build.zig");
 const jsruntime_pkgs = jsruntime.packages(jsruntime_path);
 
 /// Do not rename this constant. It is scanned by some scripts to determine
@@ -106,7 +106,7 @@ pub fn build(b: *std.build.Builder) !void {
 
     // add jsruntime pretty deps
     const pretty = tests.step.owner.createModule(.{
-        .source_file = .{ .path = "vendor/jsruntime-lib/src/pretty.zig" },
+        .source_file = .{ .path = "vendor/zig-js-runtime/src/pretty.zig" },
     });
     tests.addModule("pretty", pretty);
 

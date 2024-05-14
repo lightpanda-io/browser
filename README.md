@@ -8,7 +8,7 @@ Browsercore is written with [Zig](https://ziglang.org/) `0.12`. You have to
 install it with the right version in order to build the project.
 
 Browsercore also depends on
-[js-runtimelib](https://github.com/francisbouvier/jsruntime-lib/),
+[js-runtimelib](https://github.com/francisbouvier/zig-js-runtime/),
 [Netsurf libs](https://www.netsurf-browser.org/) and
 [Mimalloc](https://microsoft.github.io/mimalloc) libs.
 
@@ -57,13 +57,13 @@ Note, when Mimalloc is built in dev mode, you can dump memory stats with the
 env var `MIMALLOC_SHOW_STATS=1`. See
 https://microsoft.github.io/mimalloc/environment.html
 
-### Build jsruntime-lib
+### Build zig-js-runtime
 
-The command `make install-jsruntime-dev` uses jsruntime-lib's `zig-v8` dependency to build v8 engine lib.
+The command `make install-jsruntime-dev` uses zig-js-runtime's `zig-v8` dependency to build v8 engine lib.
 Be aware the build task is very long and cpu consuming.
 
 Build v8 engine for debug/dev version, it creates
-`vendor/jsruntime-lib/vendor/v8/$ARCH/debug/libc_v8.a` file.
+`vendor/zig-js-runtime/vendor/v8/$ARCH/debug/libc_v8.a` file.
 
 ```
 make install-jsruntime-dev
