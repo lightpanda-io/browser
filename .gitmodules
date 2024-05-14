@@ -1,6 +1,6 @@
-[submodule "vendor/jsruntime-lib"]
-	path = vendor/jsruntime-lib
-	url = git@github.com:lightpanda-io/jsruntime-lib.git
+[submodule "vendor/zig-js-runtime"]
+	path = vendor/zig-js-runtime
+	url = git@github.com:lightpanda-io/zig-js-runtime.git
 [submodule "vendor/netsurf/libwapcaplet"]
 	path = vendor/netsurf/libwapcaplet
 	url = git@github.com:lightpanda-io/libwapcaplet.git
