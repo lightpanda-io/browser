@@ -1513,6 +1513,85 @@ pub fn elementHTMLGetTagType(elem_html: *ElementHTML) !Tag {
     return @as(Tag, @enumFromInt(tag_type));
 }
 
+// HTMLScriptElement
+
+// scriptToElt is an helper to convert an script to an element.
+pub inline fn scriptToElt(s: *Script) *Element {
+    return @as(*Element, @ptrCast(s));
+}
+
+// HTMLAnchorElement
+
+// anchorToNode is an helper to convert an anchor to a node.
+pub inline fn anchorToNode(a: *Anchor) *Node {
+    return @as(*Node, @ptrCast(a));
+}
+
+pub fn anchorGetTarget(a: *Anchor) ![]const u8 {
+    var res: ?*String = undefined;
+    const err = c.dom_html_anchor_element_get_target(a, &res);
+    try DOMErr(err);
+    if (res == null) return "";
+    return strToData(res.?);
+}
+
+pub fn anchorSetTarget(a: *Anchor, target: []const u8) !void {
+    const err = c.dom_html_anchor_element_set_target(a, try strFromData(target));
+    try DOMErr(err);
+}
+
+pub fn anchorGetHref(a: *Anchor) ![]const u8 {
+    var res: ?*String = undefined;
+    const err = c.dom_html_anchor_element_get_href(a, &res);
+    try DOMErr(err);
+    if (res == null) return "";
+    return strToData(res.?);
+}
+
+pub fn anchorSetHref(a: *Anchor, href: []const u8) !void {
+    const err = c.dom_html_anchor_element_set_href(a, try strFromData(href));
+    try DOMErr(err);
+}
+
+pub fn anchorGetHrefLang(a: *Anchor) ![]const u8 {
+    var res: ?*String = undefined;
+    const err = c.dom_html_anchor_element_get_hreflang(a, &res);
+    try DOMErr(err);
+    if (res == null) return "";
+    return strToData(res.?);
+}
+
+pub fn anchorSetHrefLang(a: *Anchor, href: []const u8) !void {
+    const err = c.dom_html_anchor_element_set_hreflang(a, try strFromData(href));
+    try DOMErr(err);
+}
+
+pub fn anchorGetType(a: *Anchor) ![]const u8 {
+    var res: ?*String = undefined;
+    const err = c.dom_html_anchor_element_get_type(a, &res);
+    try DOMErr(err);
+    if (res == null) return "";
+    return strToData(res.?);
+}
+
+pub fn anchorSetType(a: *Anchor, t: []const u8) !void {
+    const err = c.dom_html_anchor_element_set_type(a, try strFromData(t));
+    try DOMErr(err);
+}
+
+pub fn anchorGetRel(a: *Anchor) ![]const u8 {
+    var res: ?*String = undefined;
+    const err = c.dom_html_anchor_element_get_rel(a, &res);
+    try DOMErr(err);
+    if (res == null) return "";
+    return strToData(res.?);
+}
+
+pub fn anchorSetRel(a: *Anchor, rel: []const u8) !void {
+    const err = c.dom_html_anchor_element_set_rel(a, try strFromData(rel));
+    try DOMErr(err);
+}
+
 // ElementsHTML
 
 pub const MediaElement = struct { base: *c.dom_html_element };

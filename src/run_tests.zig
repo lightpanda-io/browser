@@ -51,6 +51,7 @@ const XHRTestExecFn = xhr.testExecFn;
 const ProgressEventTestExecFn = @import("xhr/progress_event.zig").testExecFn;
 const StorageTestExecFn = storage.testExecFn;
 const URLTestExecFn = url.testExecFn;
+const HTMLElementTestExecFn = @import("html/elements.zig").testExecFn;
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 
@@ -117,6 +118,7 @@ fn testsAllExecFn(
         ProcessingInstructionTestExecFn,
         StorageTestExecFn,
         URLTestExecFn,
+        HTMLElementTestExecFn,
     };
 
     inline for (testFns) |testFn| {
