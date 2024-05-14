@@ -8,11 +8,11 @@ runs:
     - name: install v8
       shell: bash
       run: |
-        mkdir -p vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/debug
-        ln -s /usr/local/lib/libc_v8.a vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/debug/libc_v8.a
+        mkdir -p vendor/zig-js-runtime/vendor/v8/${{env.ARCH}}/debug
+        ln -s /usr/local/lib/libc_v8.a vendor/zig-js-runtime/vendor/v8/${{env.ARCH}}/debug/libc_v8.a
 
-        mkdir -p vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/release
-        ln -s /usr/local/lib/libc_v8.a vendor/jsruntime-lib/vendor/v8/${{env.ARCH}}/release/libc_v8.a
+        mkdir -p vendor/zig-js-runtime/vendor/v8/${{env.ARCH}}/release
+        ln -s /usr/local/lib/libc_v8.a vendor/zig-js-runtime/vendor/v8/${{env.ARCH}}/release/libc_v8.a
 
     - name: libiconv
       shell: bash

@@ -15,7 +15,7 @@ on:
       - "build.zig"
       - "src/**/*.zig"
       - "src/*.zig"
-      - "vendor/jsruntime-lib"
+      - "vendor/zig-js-runtime"
   pull_request:
 
     # By default GH trigger on types opened, synchronize and reopened.
@@ -53,7 +53,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_CI_PAT }}
-          # fetch submodules recusively, to get jsruntime-lib submodules also.
+          # fetch submodules recusively, to get zig-js-runtime submodules also.
           submodules: recursive
 
       - uses: ./.github/actions/install
@@ -79,7 +79,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_CI_PAT }}
-          # fetch submodules recusively, to get jsruntime-lib submodules also.
+          # fetch submodules recusively, to get zig-js-runtime submodules also.
           submodules: recursive
 
       - uses: ./.github/actions/install
@@ -105,7 +105,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_CI_PAT }}
-          # fetch submodules recusively, to get jsruntime-lib submodules also.
+          # fetch submodules recusively, to get zig-js-runtime submodules also.
           submodules: recursive
 
       - uses: ./.github/actions/install
