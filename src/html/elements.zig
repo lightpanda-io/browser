@@ -674,10 +674,120 @@ pub const HTMLQuoteElement = struct {
     pub const mem_guarantied = true;
 };
 
+// https://html.spec.whatwg.org/#the-script-element
 pub const HTMLScriptElement = struct {
     pub const Self = parser.Script;
     pub const prototype = *HTMLElement;
     pub const mem_guarantied = true;
+
+    pub fn get_src(self: *parser.Script) !?[]const u8 {
+        return try parser.elementGetAttribute(
+            parser.scriptToElt(self),
+            "src",
+        ) orelse "";
+    }
+
+    pub fn set_src(self: *parser.Script, v: []const u8) !void {
+        return try parser.elementSetAttribute(
+            parser.scriptToElt(self),
+            "src",
+            v,
+        );
+    }
+
+    pub fn get_type(self: *parser.Script) !?[]const u8 {
+        return try parser.elementGetAttribute(
+            parser.scriptToElt(self),
+            "type",
+        ) orelse "";
+    }
+
+    pub fn set_type(self: *parser.Script, v: []const u8) !void {
+        return try parser.elementSetAttribute(
+            parser.scriptToElt(self),
+            "type",
+            v,
+        );
+    }
+
+    pub fn get_text(self: *parser.Script) !?[]const u8 {
+        return try parser.elementGetAttribute(
+            parser.scriptToElt(self),
+            "text",
+        ) orelse "";
+    }
+
+    pub fn set_text(self: *parser.Script, v: []const u8) !void {
+        return try parser.elementSetAttribute(
+            parser.scriptToElt(self),
+            "text",
+            v,
+        );
+    }
+
+    pub fn get_integrity(self: *parser.Script) !?[]const u8 {
+        return try parser.elementGetAttribute(
+            parser.scriptToElt(self),
+            "integrity",
+        ) orelse "";
+    }
+
+    pub fn set_integrity(self: *parser.Script, v: []const u8) !void {
+        return try parser.elementSetAttribute(
+            parser.scriptToElt(self),
+            "integrity",
+            v,
+        );
+    }
+
+    pub fn get_async(self: *parser.Script) !bool {
+        _ = try parser.elementGetAttribute(
+            parser.scriptToElt(self),
+            "async",
+        ) orelse return false;
+
+        return true;
+    }
+
+    pub fn set_async(self: *parser.Script, v: bool) !void {
+        if (v) {
+            return try parser.elementSetAttribute(parser.scriptToElt(self), "async", "");
+        }
+
+        return try parser.elementRemoveAttribute(parser.scriptToElt(self), "async");
+    }
+
+    pub fn get_defer(self: *parser.Script) !bool {
+        _ = try parser.elementGetAttribute(
+            parser.scriptToElt(self),
+            "defer",
+        ) orelse false;
+        return true;
+    }
+
+    pub fn set_defer(self: *parser.Script, v: bool) !void {
+        if (v) {
+            return try parser.elementSetAttribute(parser.scriptToElt(self), "defer", "");
+        }
+
+        return try parser.elementRemoveAttribute(parser.scriptToElt(self), "defer");
+    }
+
+    pub fn get_noModule(self: *parser.Script) !bool {
+        _ = try parser.elementGetAttribute(
+            parser.scriptToElt(self),
+            "nomodule",
+        ) orelse false;
+        return true;
+    }
+
+    pub fn set_noModule(self: *parser.Script, v: bool) !void {
+        if (v) {
+            return try parser.elementSetAttribute(parser.scriptToElt(self), "nomodule", "");
+        }
+
+        return try parser.elementRemoveAttribute(parser.scriptToElt(self), "nomodule");
+    }
 };
 
 pub const HTMLSelectElement = struct {
@@ -922,4 +1032,15 @@ pub fn testExecFn(
         .{ .src = "a.text = 'OK'", .ex = "OK" },
     };
     try checkCases(js_env, &anchor);
+
+    var script = [_]Case{
+        .{ .src = "let script = document.createElement('script')", .ex = "undefined" },
+        .{ .src = "script.src = 'foo.bar'", .ex = "foo.bar" },
+
+        .{ .src = "script.async = true", .ex = "true" },
+        .{ .src = "script.async", .ex = "true" },
+        .{ .src = "script.async = false", .ex = "false" },
+        .{ .src = "script.async", .ex = "false" },
+    };
+    try checkCases(js_env, &script);
 }

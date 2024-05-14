@@ -1513,9 +1513,16 @@ pub fn elementHTMLGetTagType(elem_html: *ElementHTML) !Tag {
     return @as(Tag, @enumFromInt(tag_type));
 }
 
+// HTMLScriptElement
+
+// scriptToElt is an helper to convert an script to an element.
+pub inline fn scriptToElt(s: *Script) *Element {
+    return @as(*Element, @ptrCast(s));
+}
+
 // HTMLAnchorElement
 
-// anchorToNode is an helper to convert an element to a node.
+// anchorToNode is an helper to convert an anchor to a node.
 pub inline fn anchorToNode(a: *Anchor) *Node {
     return @as(*Node, @ptrCast(a));
 }
