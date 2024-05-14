@@ -59,20 +59,20 @@ https://microsoft.github.io/mimalloc/environment.html
 
 ### Build zig-js-runtime
 
-The command `make install-jsruntime-dev` uses zig-js-runtime's `zig-v8` dependency to build v8 engine lib.
+The command `make install-zig-js-runtime-dev` uses zig-js-runtime's `zig-v8` dependency to build v8 engine lib.
 Be aware the build task is very long and cpu consuming.
 
 Build v8 engine for debug/dev version, it creates
 `vendor/zig-js-runtime/vendor/v8/$ARCH/debug/libc_v8.a` file.
 
 ```
-make install-jsruntime-dev
+make install-zig-js-runtime-dev
 ```
 
 You should also build a release vesion of v8 with:
 
 ```
-make install-jsruntime
+make install-zig-js-runtime
 ```
 
 ### All in one build
