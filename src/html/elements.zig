@@ -231,11 +231,32 @@ pub const HTMLAnchorElement = struct {
     }
 
     pub fn set_host(self: *parser.Anchor, alloc: std.mem.Allocator, v: []const u8) !void {
-        _ = self;
-        _ = alloc;
-        _ = v;
-        // TODO
-        return error.NotImplemented;
+        // search : separator
+        var p: ?u16 = null;
+        var h: []const u8 = undefined;
+        for (v, 0..) |c, i| {
+            if (c == ':') {
+                h = v[0..i];
+                p = try std.fmt.parseInt(u16, v[i + 1 ..], 10);
+                break;
+            }
+        }
+
+        var u = try url(self, alloc);
+        defer u.deinit(alloc);
+
+        if (p) |pp| {
+            u.uri.host = h;
+            u.uri.port = pp;
+        } else {
+            u.uri.host = v;
+            u.uri.port = null;
+        }
+
+        const href = try u.format(alloc);
+        defer alloc.free(href);
+
+        try parser.anchorSetHref(self, href);
     }
 
     // TODO return a disposable string
@@ -854,6 +875,16 @@ pub fn testExecFn(
         .{ .src = "a.href", .ex = "https://lightpanda.io/" },
 
         .{ .src = "a.origin", .ex = "https://lightpanda.io" },
+
+        .{ .src = "a.host = 'lightpanda.io:443'", .ex = "lightpanda.io:443" },
+        .{ .src = "a.host", .ex = "lightpanda.io:443" },
+        .{ .src = "a.port", .ex = "443" },
+        .{ .src = "a.hostname", .ex = "lightpanda.io" },
+
+        .{ .src = "a.host = 'lightpanda.io'", .ex = "lightpanda.io" },
+        .{ .src = "a.host", .ex = "lightpanda.io" },
+        .{ .src = "a.port", .ex = "" },
+        .{ .src = "a.hostname", .ex = "lightpanda.io" },
 
         .{ .src = "a.host", .ex = "lightpanda.io" },
         .{ .src = "a.hostname", .ex = "lightpanda.io" },
