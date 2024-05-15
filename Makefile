@@ -23,7 +23,7 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-release run run-release shell test bench download-zig wpt
+.PHONY: build build-dev run run-release shell test bench download-zig wpt
 
 zig_version = $(shell grep 'recommended_zig_version = "' "vendor/zig-js-runtime/build.zig" | cut -d'"' -f2)
 kernel = $(shell uname -ms)
@@ -54,23 +54,24 @@ endif
 	@curl -o "$(dest)" -L "$(url)" || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 	@printf "\e[33mDownloaded $(dest)\e[0m\n"
 
-## Build in debug mode
+## Build in release-safe mode
 build:
-	@printf "\e[36mBuilding (debug)...\e[0m\n"
-	@$(ZIG) build -Dengine=v8 || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
-	@printf "\e[33mBuild OK\e[0m\n"
-
-build-release:
 	@printf "\e[36mBuilding (release safe)...\e[0m\n"
 	@$(ZIG) build -Doptimize=ReleaseSafe -Dengine=v8 || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 	@printf "\e[33mBuild OK\e[0m\n"
 
-## Run the server
+## Build in debug mode
+build-dev:
+	@printf "\e[36mBuilding (debug)...\e[0m\n"
+	@$(ZIG) build -Dengine=v8 || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+	@printf "\e[33mBuild OK\e[0m\n"
+
+## Run the server in debug mode
 run: build
 	@printf "\e[36mRunning...\e[0m\n"
 	@./zig-out/bin/browsercore || (printf "\e[33mRun ERROR\e[0m\n"; exit 1;)
 
-## Run a JS shell in release-safe mode
+## Run a JS shell in debug mode
 shell:
 	@printf "\e[36mBuilding shell...\e[0m\n"
 	@$(ZIG) build shell -Dengine=v8 || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
