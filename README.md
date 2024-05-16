@@ -1,20 +1,69 @@
-# Browsercore
+<p align="center">
+  <a href="https://lightpanda.io"><img src="https://lpd-cdn.s3.eu-west-3.amazonaws.com/assets/images/logo/lpd-logo.png" alt="Logo" height=170></a>
+</p>
 
-## Build
+<h1 align="center">Lightpanda</h1>
+
+<div align="center">
+	<br />
+</div>
+
+Lightpanda is the open-source browser made for headless usage:
+
+- Javascript execution
+- Support of the Web APIs (partial, WIP)
+- Compatible with Playwright, Puppeteer through CDP (WIP)
+
+Fast scraping and web automation with minimal memory footprint:
+
+- Ultra-low memory footprint (12x less than Chrome)
+- Blazingly fast & instant startup (64x faster than Chrome)
+
+See [benchmark details](https://github.com/lightpanda-io/demo).
+
+## Why?
+
+### Javascript execution is mandatory for the modern web
+
+Back in the good old times, grabbing a webpage was as easy as making an HTTP request, cURL-like. It’s not possible anymore, because Javascript is everywhere, like it or not:
+
+- Ajax, Single Page App, Infinite loading, “click to display”, instant search, etc.
+- JS web frameworks: React, Vue, Angular & others
+
+### Chrome is not the right tool
+
+So if we need Javascript, why not use a real web browser. Let’s take a huge desktop application, hack it, and run it on the server, right? Hundreds of instance of Chrome if you use it at scale. Are you sure it’s such a good idea?
+
+- Heavy on RAM and CPU, expensive to run
+- Hard to package, deploy and maintain at scale
+- Bloated, lots of features are not useful in headless usage
+
+### Lightpanda is built for performance
+
+If we want both Javascript and performance, for a real headless browser, we need to start from scratch. Not yet another iteration of Chromium, really from a blank page. Crazy right? But that’s we did:
+
+- Not based on Chromium, Blink or WebKit
+- Low-level system programming language (Zig) with optimisations in mind
+- Opinionated, no rendering
+
+## Build from sources
+
+We do not provide yet binary versions of Lightpanda, you have to compile it from source.
 
 ### Prerequisites
 
-Browsercore is written with [Zig](https://ziglang.org/) `0.12`. You have to
+Lightpanda is written with [Zig](https://ziglang.org/) `0.12`. You have to
 install it with the right version in order to build the project.
 
-Browsercore also depends on
-[js-runtimelib](https://github.com/francisbouvier/zig-js-runtime/),
+Lightpanda also depends on
+[zig-js-runtime](https://github.com/lightpanda-io/zig-js-runtime/) (with v8),
 [Netsurf libs](https://www.netsurf-browser.org/) and
-[Mimalloc](https://microsoft.github.io/mimalloc) libs.
+[Mimalloc](https://microsoft.github.io/mimalloc).
 
-To be able to build the v8 engine for js-runtimelib, you have to install some libs:
+To be able to build the v8 engine for zig-js-runtime, you have to install some libs:
 
 For Debian/Ubuntu based Linux:
+
 ```
 sudo apt install xz-utils \
     python3 ca-certificates git \
@@ -23,100 +72,103 @@ sudo apt install xz-utils \
     cmake clang
 ```
 
-For MacOS, you only need Python 3 and cmake.
+For MacOS, you only need cmake:
+
+```
+brew install cmake
+```
 
 ### Install and build dependencies
 
-The project uses git submodule for dependencies.
-The `make install-submodule` will init and update the submodules in the `vendor/`
-directory.
+#### All in one build
+
+You can run `make install` to install deps all in one (or `make install-dev` if you need the development versions).
+
+Be aware that the build task is very long and cpu consuming, as you will build from sources all dependancies, including the v8 Javascript engine.
+
+#### Step by step build dependancy
+
+The project uses git submodules for dependencies.
+
+To init or update the submodules in the `vendor/` directory:
 
 ```
 make install-submodule
 ```
 
-### Build Netsurf
+**Netsurf libs**
 
-The command `make install-netsurf` will build Netsurf libs used by browsercore.
+Netsurf libs are used for HTML parsing and DOM tree generation.
+
 ```
 make install-netsurf
 ```
 
 For dev env, use `make install-netsurf-dev`.
 
-### Build Mimalloc
+**Mimalloc**
 
-The command `make install-mimalloc` will build Mimalloc lib used by browsercore.
+Mimalloc is used as a C memory allocator.
+
 ```
 make install-mimalloc
 ```
 
 For dev env, use `make install-mimalloc-dev`.
 
-Note, when Mimalloc is built in dev mode, you can dump memory stats with the
+Note: when Mimalloc is built in dev mode, you can dump memory stats with the
 env var `MIMALLOC_SHOW_STATS=1`. See
-https://microsoft.github.io/mimalloc/environment.html
+[https://microsoft.github.io/mimalloc/environment.html](https://microsoft.github.io/mimalloc/environment.html).
 
-### Build zig-js-runtime
+**zig-js-runtime**
 
-The command `make install-zig-js-runtime-dev` uses zig-js-runtime's `zig-v8` dependency to build v8 engine lib.
-Be aware the build task is very long and cpu consuming.
+Our own Zig/Javascript runtime, which includes the v8 Javascript engine.
 
-Build v8 engine for debug/dev version, it creates
-`vendor/zig-js-runtime/vendor/v8/$ARCH/debug/libc_v8.a` file.
-
-```
-make install-zig-js-runtime-dev
-```
-
-You should also build a release vesion of v8 with:
+This build task is very long and cpu consuming, as you will build v8 from sources.
 
 ```
 make install-zig-js-runtime
 ```
 
-### All in one build
-
-You can run `make intall` and `make install-dev` to install deps all in one.
+For dev env, use `make iinstall-zig-js-runtime-dev`.
 
 ## Test
 
 ### Unit Tests
 
-You can test browsercore by running `make test`.
+You can test Lightpanda by running `make test`.
 
 ### Web Platform Tests
 
-Browsercore is tested against the standardized [Web Platform
+Lightpanda is tested against the standardized [Web Platform
 Tests](https://web-platform-tests.org/).
 
-The relevant tests cases for Browsercore are commit with the project.
-All the tests cases executed are located in `tests/wpt` dir and come from an
-external repository: https://github.com/lightpanda-io/wpt
+The relevant tests cases are committed in a [dedicated repository](https://github.com/lightpanda-io/wpt) which is fetched by the `make install-submodule` command.
+
+All the tests cases executed are located in the `tests/wpt` sub-directory.
 
 For reference, you can easily execute a WPT test case with your browser via
 [wpt.live](https://wpt.live).
 
-*Run WPT test suite*
+#### Run WPT test suite
 
-You can run all the test.
-The runner execute all the tests ending with `.html`.
+To run all the tests:
+
 ```
 make wpt
 ```
 
-Or one specific test by using a suffix.
+Or one specific test:
+
 ```
 make wpt Node-childNodes.html
 ```
 
-*Add a new WPT test case*
+#### Add a new WPT test case
 
-We add new tests cases files with implemented changes in Browsercore.
+We add new relevant tests cases files when we implemented changes in Lightpanda.
 
-Copy the test case you want to add from the [WPT
-repo](https://github.com/web-platform-tests/wpt) into `tests/wpt` dir, commit
-the files in the https://github.com/lightpanda-io/wpt repository and update the
-git submodule in browsercore.
+To add a new test, copy the file you want from the [WPT
+repo](https://github.com/web-platform-tests/wpt) into the `tests/wpt` directory.
 
-:warning: Please keep the original directory tree structure into `tests/wpt`.
+:warning: Please keep the original directory tree structure of `tests/wpt`.
