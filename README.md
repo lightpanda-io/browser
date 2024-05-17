@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://lightpanda.io"><img src="https://lpd-cdn.s3.eu-west-3.amazonaws.com/assets/images/logo/lpd-logo.png" alt="Logo" height=170></a>
+  <a href="https://lightpanda.io"><img src="https://cdn.lightpanda.io/assets/images/logo/lpd-logo.png" alt="Logo" height=170></a>
 </p>
 
 <h1 align="center">Lightpanda</h1>
@@ -18,6 +18,8 @@ Fast scraping and web automation with minimal memory footprint:
 
 - Ultra-low memory footprint (12x less than Chrome)
 - Blazingly fast & instant startup (64x faster than Chrome)
+
+<img width=500px src="https://cdn.lightpanda.io/assets/images/benchmark2.png">
 
 See [benchmark details](https://github.com/lightpanda-io/demo).
 
