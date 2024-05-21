@@ -43,6 +43,11 @@ pub const Window = struct {
 
     storageShelf: ?*storage.Shelf = null,
 
+    // store a map between internal timeouts ids and pointers to uint.
+    // the maximum number of possible timeouts is fixed.
+    timeoutid: u32 = 0,
+    timeoutids: [512]u64 = undefined,
+
     pub fn create(target: ?[]const u8) Window {
         return Window{
             .target = target orelse "",
@@ -88,14 +93,20 @@ pub const Window = struct {
     }
 
     // TODO handle callback arguments.
-    pub fn _setTimeout(_: *Window, loop: *Loop, cbk: Callback, delay: ?u32) !u32 {
+    pub fn _setTimeout(self: *Window, loop: *Loop, cbk: Callback, delay: ?u32) !u32 {
+        if (self.timeoutid >= self.timeoutids.len) return error.TooMuchTimeout;
+
         const ddelay: u63 = delay orelse 0;
-        loop.timeout(ddelay * std.time.ns_per_ms, cbk);
-        // TODO handle timeout ID
-        return 1;
+        const id = loop.timeout(ddelay * std.time.ns_per_ms, cbk);
+
+        self.timeoutids[self.timeoutid] = id;
+        defer self.timeoutid += 1;
+
+        return self.timeoutid;
     }
 
-    pub fn _clearTimeout(_: *Window, _: *Loop, id: u32) !void {
-        _ = id;
+    pub fn _clearTimeout(self: *Window, loop: *Loop, id: u32) !void {
+        if (id >= self.timeoutid) return error.InvalidTimeoutId;
+        loop.cancel(self.timeoutids[id], null);
     }
 };
