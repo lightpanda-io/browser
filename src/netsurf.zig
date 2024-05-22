@@ -29,7 +29,10 @@ const c = @cImport({
 const mimalloc = @import("mimalloc.zig");
 
 const Callback = @import("jsruntime").Callback;
+const CallbackResult = @import("jsruntime").CallbackResult;
 const EventToInterface = @import("events/event.zig").Event.toInterface;
+
+const log = std.log.scoped(.netsurf);
 
 // init initializes netsurf lib.
 // init starts a mimalloc heap arena for the netsurf session. The caller must
@@ -534,13 +537,24 @@ const event_handler = struct {
         if (data) |d| {
             const func = event_handler_cbk(d);
 
+            // TODO get the allocator by another way?
+            var res = CallbackResult.init(func.nat_ctx.alloc);
+            defer res.deinit();
+
             if (event) |evt| {
-                func.call(.{
+                func.trycall(.{
                     EventToInterface(evt) catch unreachable,
-                }) catch unreachable;
+                }, &res) catch {};
             } else {
-                func.call(.{event}) catch unreachable;
+                func.trycall(.{event}, &res) catch {};
             }
+
+            // in case of function error, we log the result and the trace.
+            if (!res.success) {
+                log.info("event handler error: {s}", .{res.result orelse "unknown"});
+                log.debug("{s}", .{res.stack orelse "no stack trace"});
+            }
+
             // NOTE: we can not call func.deinit here
             // b/c the handler can be called several times
             // either on this dispatch event or in anoter one
