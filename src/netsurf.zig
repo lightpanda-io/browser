@@ -1763,21 +1763,29 @@ pub inline fn domImplementationCreateDocumentType(
     return dt.?;
 }
 
-pub inline fn domImplementationCreateHTMLDocument(title: ?[]const u8) !*Document {
-    var doc: ?*Document = undefined;
-    const err = c.dom_implementation_create_document(
-        c.DOM_IMPLEMENTATION_HTML,
-        null,
-        null,
-        null,
-        null,
-        null,
-        &doc,
-    );
-    try DOMErr(err);
-    // TODO set title
-    _ = title;
-    return doc.?;
+pub inline fn domImplementationCreateHTMLDocument(title: ?[]const u8) !*DocumentHTML {
+    const doc_html = try documentCreateDocument(title);
+    const doc = documentHTMLToDocument(doc_html);
+
+    // add hierarchy: html, head, body.
+    const html = try documentCreateElement(doc, "html");
+    _ = try nodeAppendChild(documentToNode(doc), elementToNode(html));
+
+    const head = try documentCreateElement(doc, "head");
+    _ = try nodeAppendChild(elementToNode(html), elementToNode(head));
+
+    if (title) |t| {
+        try documentHTMLSetTitle(doc_html, t);
+        const htitle = try documentCreateElement(doc, "title");
+        const txt = try documentCreateTextNode(doc, t);
+        _ = try nodeAppendChild(elementToNode(htitle), @as(*Node, @ptrCast(txt)));
+        _ = try nodeAppendChild(elementToNode(head), elementToNode(htitle));
+    }
+
+    const body = try documentCreateElement(doc, "body");
+    _ = try nodeAppendChild(elementToNode(html), elementToNode(body));
+
+    return doc_html;
 }
 
 // Document
@@ -1831,6 +1839,28 @@ pub inline fn documentGetInputEncoding(doc: *Document) ![]const u8 {
     const err = documentVtable(doc).dom_document_get_input_encoding.?(doc, &s);
     try DOMErr(err);
     return strToData(s.?);
+}
+
+pub inline fn documentSetInputEncoding(doc: *Document, enc: []const u8) !void {
+    const err = documentVtable(doc).dom_document_set_input_encoding.?(doc, try strFromData(enc));
+    try DOMErr(err);
+}
+
+pub inline fn documentCreateDocument(title: ?[]const u8) !*DocumentHTML {
+    var doc: ?*Document = undefined;
+    const err = c.dom_implementation_create_document(
+        c.DOM_IMPLEMENTATION_HTML,
+        null,
+        null,
+        null,
+        null,
+        null,
+        &doc,
+    );
+    try DOMErr(err);
+    const doc_html = @as(*DocumentHTML, @ptrCast(doc.?));
+    if (title) |t| try documentHTMLSetTitle(doc_html, t);
+    return doc_html;
 }
 
 pub inline fn documentCreateElement(doc: *Document, tag_name: []const u8) !*Element {

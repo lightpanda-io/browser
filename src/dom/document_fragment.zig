@@ -20,7 +20,13 @@ const std = @import("std");
 
 const parser = @import("../netsurf.zig");
 
+const jsruntime = @import("jsruntime");
+const Case = jsruntime.test_utils.Case;
+const checkCases = jsruntime.test_utils.checkCases;
+
 const Node = @import("node.zig").Node;
+
+const UserContext = @import("../user_context.zig").UserContext;
 
 // WEB IDL https://dom.spec.whatwg.org/#documentfragment
 pub const DocumentFragment = struct {
@@ -28,12 +34,23 @@ pub const DocumentFragment = struct {
     pub const prototype = *Node;
     pub const mem_guarantied = true;
 
-    // TODO add constructor, but I need to associate the new DocumentFragment
-    // with the current document global object...
-    // > The new DocumentFragment() constructor steps are to set this’s node
-    // > document to current global object’s associated Document.
-    // https://dom.spec.whatwg.org/#dom-documentfragment-documentfragment
-    pub fn constructor() !*parser.DocumentFragment {
-        return error.NotImplemented;
+    pub fn constructor(userctx: UserContext) !*parser.DocumentFragment {
+        return parser.documentCreateDocumentFragment(
+            parser.documentHTMLToDocument(userctx.document),
+        );
     }
 };
+
+// Tests
+// -----
+
+pub fn testExecFn(
+    _: std.mem.Allocator,
+    js_env: *jsruntime.Env,
+) anyerror!void {
+    var constructor = [_]Case{
+        .{ .src = "const dc = new DocumentFragment()", .ex = "undefined" },
+        .{ .src = "dc.constructor.name", .ex = "DocumentFragment" },
+    };
+    try checkCases(js_env, &constructor);
+}

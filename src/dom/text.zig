@@ -28,6 +28,8 @@ const parser = @import("../netsurf.zig");
 const CharacterData = @import("character_data.zig").CharacterData;
 const CDATASection = @import("cdata_section.zig").CDATASection;
 
+const UserContext = @import("../user_context.zig").UserContext;
+
 // Text interfaces
 pub const Interfaces = generate.Tuple(.{
     CDATASection,
@@ -37,6 +39,13 @@ pub const Text = struct {
     pub const Self = parser.Text;
     pub const prototype = *CharacterData;
     pub const mem_guarantied = true;
+
+    pub fn constructor(userctx: UserContext, data: ?[]const u8) !*parser.Text {
+        return parser.documentCreateTextNode(
+            parser.documentHTMLToDocument(userctx.document),
+            data orelse "",
+        );
+    }
 
     // JS funcs
     // --------
@@ -62,6 +71,15 @@ pub fn testExecFn(
     _: std.mem.Allocator,
     js_env: *jsruntime.Env,
 ) anyerror!void {
+    var constructor = [_]Case{
+        .{ .src = "let t = new Text('foo')", .ex = "undefined" },
+        .{ .src = "t.data", .ex = "foo" },
+
+        .{ .src = "let emptyt = new Text()", .ex = "undefined" },
+        .{ .src = "emptyt.data", .ex = "" },
+    };
+    try checkCases(js_env, &constructor);
+
     var get_whole_text = [_]Case{
         .{ .src = "let text = document.getElementById('link').firstChild", .ex = "undefined" },
         .{ .src = "text.wholeText === 'OK'", .ex = "true" },

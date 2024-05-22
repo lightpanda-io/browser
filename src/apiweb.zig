@@ -39,3 +39,5 @@ pub const Interfaces = generate.Tuple(.{
     Storage.Interfaces,
     URL.Interfaces,
 });
+
+pub const UserContext = @import("user_context.zig").UserContext;

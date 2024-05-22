@@ -75,7 +75,7 @@ pub const DOMImplementation = struct {
         return try parser.domImplementationCreateDocument(cnamespace, cqname, doctype);
     }
 
-    pub fn _createHTMLDocument(_: *DOMImplementation, title: ?[]const u8) !*parser.Document {
+    pub fn _createHTMLDocument(_: *DOMImplementation, title: ?[]const u8) !*parser.DocumentHTML {
         return try parser.domImplementationCreateHTMLDocument(title);
     }
 
@@ -95,7 +95,8 @@ pub fn testExecFn(
 ) anyerror!void {
     var getImplementation = [_]Case{
         .{ .src = "let impl = document.implementation", .ex = "undefined" },
-        .{ .src = "impl.createHTMLDocument();", .ex = "[object Document]" },
+        .{ .src = "impl.createHTMLDocument();", .ex = "[object HTMLDocument]" },
+        .{ .src = "impl.createHTMLDocument('foo');", .ex = "[object HTMLDocument]" },
         .{ .src = "impl.createDocument(null, 'foo');", .ex = "[object Document]" },
         .{ .src = "impl.createDocumentType('foo', 'bar', 'baz')", .ex = "[object DocumentType]" },
         .{ .src = "impl.hasFeature()", .ex = "true" },

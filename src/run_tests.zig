@@ -30,6 +30,7 @@ const xhr = @import("xhr/xhr.zig");
 const storage = @import("storage/storage.zig");
 const url = @import("url/url.zig");
 const urlquery = @import("url/query.zig");
+const Client = @import("async/Client.zig");
 
 const documentTestExecFn = @import("dom/document.zig").testExecFn;
 const HTMLDocumentTestExecFn = @import("html/document.zig").testExecFn;
@@ -46,6 +47,8 @@ const NodeListTestExecFn = @import("dom/nodelist.zig").testExecFn;
 const AttrTestExecFn = @import("dom/attribute.zig").testExecFn;
 const EventTargetTestExecFn = @import("dom/event_target.zig").testExecFn;
 const ProcessingInstructionTestExecFn = @import("dom/processing_instruction.zig").testExecFn;
+const CommentTestExecFn = @import("dom/comment.zig").testExecFn;
+const DocumentFragmentTestExecFn = @import("dom/document_fragment.zig").testExecFn;
 const EventTestExecFn = @import("events/event.zig").testExecFn;
 const XHRTestExecFn = xhr.testExecFn;
 const ProgressEventTestExecFn = @import("xhr/progress_event.zig").testExecFn;
@@ -54,6 +57,7 @@ const URLTestExecFn = url.testExecFn;
 const HTMLElementTestExecFn = @import("html/elements.zig").testExecFn;
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
+pub const UserContext = @import("user_context.zig").UserContext;
 
 var doc: *parser.DocumentHTML = undefined;
 
@@ -80,6 +84,14 @@ fn testExecFn(
     defer parser.documentHTMLClose(doc) catch |err| {
         std.debug.print("documentHTMLClose error: {s}\n", .{@errorName(err)});
     };
+
+    var cli = Client{ .allocator = alloc, .loop = js_env.nat_ctx.loop };
+    defer cli.deinit();
+
+    try js_env.setUserContext(.{
+        .document = doc,
+        .httpClient = &cli,
+    });
 
     // alias global as self and window
     var window = Window.create(null);
@@ -111,6 +123,8 @@ fn testsAllExecFn(
         DOMTokenListExecFn,
         NodeListTestExecFn,
         AttrTestExecFn,
+        CommentTestExecFn,
+        DocumentFragmentTestExecFn,
         EventTargetTestExecFn,
         EventTestExecFn,
         XHRTestExecFn,
@@ -315,7 +329,7 @@ fn testJSRuntime(alloc: std.mem.Allocator) !void {
     var arena_alloc = std.heap.ArenaAllocator.init(alloc);
     defer arena_alloc.deinit();
 
-    try jsruntime.loadEnv(&arena_alloc, testsAllExecFn);
+    try jsruntime.loadEnv(&arena_alloc, null, testsAllExecFn);
 }
 
 test "DocumentHTMLParseFromStr" {
