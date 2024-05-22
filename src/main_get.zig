@@ -89,6 +89,8 @@ pub fn main() !void {
     try page.navigate(url);
     defer page.end();
 
+    try page.wait();
+
     if (dump) {
         try page.dump(std.io.getStdOut());
     }
