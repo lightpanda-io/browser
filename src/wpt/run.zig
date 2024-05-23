@@ -96,6 +96,9 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
         \\console.log = function () {
         \\  console.push(...arguments);
         \\};
+        \\console.debug = function () {
+        \\  console.push("debug", ...arguments);
+        \\};
     ;
     res = try evalJS(js_env, alloc, init, "init");
     if (!res.success) {
