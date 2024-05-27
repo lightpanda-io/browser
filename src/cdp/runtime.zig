@@ -10,6 +10,7 @@ const stringify = cdp.stringify;
 const RuntimeMethods = enum {
     enable,
     runIfWaitingForDebugger,
+    evaluate,
 };
 
 pub fn runtime(
@@ -24,6 +25,7 @@ pub fn runtime(
     return switch (method) {
         .enable => enable(alloc, id, scanner, ctx),
         .runIfWaitingForDebugger => runIfWaitingForDebugger(alloc, id, scanner, ctx),
+        .evaluate => evaluate(alloc, id, scanner, ctx),
     };
 }
 
@@ -102,4 +104,26 @@ fn runIfWaitingForDebugger(
 ) ![]const u8 {
     const sessionID = try cdp.getSessionID(scanner);
     return result(alloc, id, null, null, sessionID);
+}
+
+fn evaluate(
+    alloc: std.mem.Allocator,
+    _: u64,
+    scanner: *std.json.Scanner,
+    _: *Ctx,
+) ![]const u8 {
+
+    // input
+    const Params = struct {
+        expression: []const u8,
+        contextId: ?u8,
+    };
+
+    const input = try cdp.getContent(alloc, Params, scanner);
+    const sessionID = input.sessionID;
+    std.debug.assert(sessionID != null);
+
+    std.log.debug("expr: len {d}", .{input.params.expression.len});
+
+    return error.CDPNormal;
 }
