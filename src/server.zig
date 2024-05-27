@@ -18,7 +18,7 @@ const Error = IOError || std.fmt.ParseIntError || cdp.Error || NoError;
 // I/O Recv
 // --------
 
-const BufReadSize = 1024;
+const BufReadSize = 1024; // 1KB
 
 pub const Cmd = struct {
 
@@ -332,7 +332,7 @@ pub fn listen(browser: *Browser, socket: std.os.socket_t) anyerror!void {
     const loop = browser.currentSession().loop;
 
     // MsgBuffer
-    var msg_buf = try MsgBuffer.init(loop.alloc, BufReadSize);
+    var msg_buf = try MsgBuffer.init(loop.alloc, BufReadSize * 256); // 256KB
     defer msg_buf.deinit(loop.alloc);
 
     // create I/O contexts and callbacks
