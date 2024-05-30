@@ -43,23 +43,43 @@ pub fn do(
     s: []const u8,
     ctx: *Ctx,
 ) ![]const u8 {
+
+    // JSON scanner
     var scanner = std.json.Scanner.initCompleteInput(alloc, s);
     defer scanner.deinit();
 
     std.debug.assert(try scanner.next() == .object_begin);
 
-    try checkKey("id", (try scanner.next()).string);
-    const id = try std.fmt.parseUnsigned(u64, (try scanner.next()).number, 10);
+    // handle 2 possible orders:
+    // - id, method <...>
+    // - method, id <...>
+    var id_key = (try scanner.next()).string;
+    var id_token = try scanner.next();
+    var method_key = (try scanner.next()).string;
+    var method_token = try scanner.next();
+    // check swap order
+    if (!std.mem.eql(u8, id_key, "id")) {
+        const swap_key = method_key;
+        const swap_token = method_token;
+        method_key = id_key;
+        method_token = id_token;
+        id_key = swap_key;
+        id_token = swap_token;
+    }
+    try checkKey(id_key, "id");
+    try checkKey(method_key, "method");
 
-    try checkKey("method", (try scanner.next()).string);
-    const method_name = (try scanner.next()).string;
-
+    // retrieve id and method
+    const id = try std.fmt.parseUnsigned(u64, id_token.number, 10);
+    const method_name = method_token.string;
     std.log.debug("cmd: id {any}, method {s}", .{ id, method_name });
 
+    // retrieve domain from method
     var iter = std.mem.splitScalar(u8, method_name, '.');
     const domain = std.meta.stringToEnum(Domains, iter.first()) orelse
         return error.UnknonwDomain;
 
+    // select corresponding domain
     return switch (domain) {
         .Browser => browser(alloc, id, iter.next().?, &scanner, ctx),
         .Target => target(alloc, id, iter.next().?, &scanner, ctx),
