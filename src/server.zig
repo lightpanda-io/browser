@@ -19,6 +19,7 @@ const Error = IOError || std.fmt.ParseIntError || cdp.Error || NoError;
 // --------
 
 const BufReadSize = 1024; // 1KB
+const MaxStdOutSize = 512; // ensure debug msg are not too long
 
 pub const Cmd = struct {
 
@@ -51,7 +52,8 @@ pub const Cmd = struct {
         // input
         const input = self.buf[0..size];
         if (std.log.defaultLogEnabled(.debug)) {
-            std.debug.print("\ninput size: {d}, content: {s}\n", .{ size, input });
+            const content = input[0..@min(MaxStdOutSize, size)];
+            std.debug.print("\ninput size: {d}, content: {s}\n", .{ size, content });
         }
 
         // close on exit command
@@ -188,7 +190,7 @@ const MsgBuffer = struct {
             // handle several JSON msg in 1 read
             const is_combined = _input.len > msg_size;
             msg = _input[0..msg_size];
-            std.log.debug("msg: {s}", .{msg[0..@min(BufReadSize, msg_size)]});
+            std.log.debug("msg: {s}", .{msg[0..@min(MaxStdOutSize, msg_size)]});
             if (is_combined) {
                 _input = _input[msg_size..];
             }

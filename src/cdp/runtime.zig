@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const jsruntime = @import("jsruntime");
+
 const server = @import("../server.zig");
 const Ctx = server.Cmd;
 const cdp = @import("cdp.zig");
@@ -108,10 +110,13 @@ fn runIfWaitingForDebugger(
 
 fn evaluate(
     alloc: std.mem.Allocator,
-    _: u64,
+    id: u64,
     scanner: *std.json.Scanner,
-    _: *Ctx,
+    ctx: *Ctx,
 ) ![]const u8 {
+
+    // ensure a page has been previously created
+    if (ctx.browser.currentSession().page == null) return error.CDPNoPage;
 
     // input
     const Params = struct {
@@ -123,7 +128,45 @@ fn evaluate(
     const sessionID = input.sessionID;
     std.debug.assert(sessionID != null);
 
-    std.log.debug("expr: len {d}", .{input.params.expression.len});
+    // save script in file at debug mode
+    std.log.debug("script {d} length: {d}", .{ id, input.params.expression.len });
+    if (std.log.defaultLogEnabled(.debug)) {
+        const name = try std.fmt.allocPrint(alloc, "id_{d}.js", .{id});
+        defer alloc.free(name);
+        const dir = try std.fs.cwd().makeOpenPath("zig-cache/tmp", .{});
+        const f = try dir.createFile(name, .{});
+        defer f.close();
+        const nb = try f.write(input.params.expression);
+        std.debug.assert(nb == input.params.expression.len);
+        const p = try dir.realpathAlloc(alloc, name);
+        defer alloc.free(p);
+        std.log.debug("Script {d} saved at {s}", .{ id, p });
+    }
 
-    return error.CDPNormal;
+    // evaluate the script in the context of the current page
+    // TODO: should we use instead the allocator of the page?
+    // the following code does not work
+    // const page_alloc = ctx.browser.currentSession().page.?.arena.allocator();
+    const session_alloc = ctx.browser.currentSession().alloc;
+    var res = jsruntime.JSResult{};
+    try ctx.browser.currentSession().env.run(session_alloc, input.params.expression, "cdp", &res, null);
+    defer res.deinit(session_alloc);
+
+    if (!res.success) {
+        std.log.err("script {d} result: {s}", .{ id, res.result });
+        if (res.stack) |stack| {
+            std.log.err("script {d} stack: {s}", .{ id, stack });
+        }
+        return error.CDPRuntimeEvaluate;
+    }
+    std.log.debug("script {d} result: {s}", .{ id, res.result });
+
+    // TODO: Resp should depends on JS result returned by the JS engine
+    const Resp = struct {
+        type: []const u8 = "object",
+        className: []const u8 = "UtilityScript",
+        description: []const u8 = "UtilityScript",
+        objectId: []const u8 = "7481631759780215274.3.2",
+    };
+    return result(alloc, id, Resp, Resp{}, sessionID);
 }
