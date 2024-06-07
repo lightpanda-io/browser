@@ -4,7 +4,7 @@ const server = @import("../server.zig");
 const Ctx = server.Cmd;
 const cdp = @import("cdp.zig");
 const result = cdp.result;
-const getParams = cdp.getParams;
+const getMsg = cdp.getMsg;
 
 const BrowserMethods = enum {
     getVersion,
@@ -15,7 +15,7 @@ const BrowserMethods = enum {
 
 pub fn browser(
     alloc: std.mem.Allocator,
-    id: u64,
+    id: ?u16,
     action: []const u8,
     scanner: *std.json.Scanner,
     ctx: *Ctx,
@@ -38,10 +38,12 @@ const JsVersion = "12.4.254.8";
 
 fn browserGetVersion(
     alloc: std.mem.Allocator,
-    id: u64,
-    _: *std.json.Scanner,
+    id: ?u16,
+    scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
+    const msg = try getMsg(alloc, void, scanner);
+
     const Res = struct {
         protocolVersion: []const u8,
         product: []const u8,
@@ -57,12 +59,12 @@ fn browserGetVersion(
         .userAgent = UserAgent,
         .jsVersion = JsVersion,
     };
-    return result(alloc, id, Res, res, null);
+    return result(alloc, id orelse msg.id.?, Res, res, null);
 }
 
 fn browserSetDownloadBehavior(
     alloc: std.mem.Allocator,
-    id: u64,
+    id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
@@ -72,15 +74,15 @@ fn browserSetDownloadBehavior(
         downloadPath: ?[]const u8 = null,
         eventsEnabled: ?bool = null,
     };
-    _ = try getParams(alloc, Params, scanner);
-    return result(alloc, id, null, null, null);
+    const msg = try getMsg(alloc, Params, scanner);
+    return result(alloc, id orelse msg.id.?, null, null, null);
 }
 
 const DevToolsWindowID = 1923710101;
 
 fn getWindowForTarget(
     alloc: std.mem.Allocator,
-    id: u64,
+    id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
@@ -89,8 +91,8 @@ fn getWindowForTarget(
     const Params = struct {
         targetId: ?[]const u8 = null,
     };
-    const content = try cdp.getContent(alloc, ?Params, scanner);
-    std.debug.assert(content.sessionID != null);
+    const msg = try cdp.getMsg(alloc, ?Params, scanner);
+    std.debug.assert(msg.sessionID != null);
 
     // output
     const Resp = struct {
@@ -103,16 +105,16 @@ fn getWindowForTarget(
             windowState: []const u8 = "normal",
         } = .{},
     };
-    return result(alloc, id, Resp, Resp{}, content.sessionID.?);
+    return result(alloc, id orelse msg.id.?, Resp, Resp{}, msg.sessionID.?);
 }
 
 fn setWindowBounds(
     alloc: std.mem.Allocator,
-    id: u64,
+    id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
     // NOTE: noop
-    const content = try cdp.getContent(alloc, void, scanner);
-    return result(alloc, id, null, null, content.sessionID);
+    const msg = try cdp.getMsg(alloc, void, scanner);
+    return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
 }

@@ -6,7 +6,7 @@ const server = @import("../server.zig");
 const Ctx = server.Cmd;
 const cdp = @import("cdp.zig");
 const result = cdp.result;
-const getParams = cdp.getParams;
+const getMsg = cdp.getMsg;
 const stringify = cdp.stringify;
 
 const RuntimeMethods = enum {
@@ -17,7 +17,7 @@ const RuntimeMethods = enum {
 
 pub fn runtime(
     alloc: std.mem.Allocator,
-    id: u64,
+    id: ?u16,
     action: []const u8,
     scanner: *std.json.Scanner,
     ctx: *Ctx,
@@ -33,14 +33,13 @@ pub fn runtime(
 
 fn enable(
     alloc: std.mem.Allocator,
-    id: u64,
+    id: ?u16,
     scanner: *std.json.Scanner,
-    ctx: *Ctx,
+    _: *Ctx,
 ) ![]const u8 {
-    _ = ctx;
 
     // input
-    const sessionID = try cdp.getSessionID(scanner);
+    const msg = try getMsg(alloc, void, scanner);
 
     // output
     // const uniqueID = "1367118932354479079.-1471398151593995849";
@@ -56,7 +55,7 @@ fn enable(
     // std.log.debug("res {s}", .{mainCtx});
     // try server.sendAsync(ctx, mainCtx);
 
-    return result(alloc, id, null, null, sessionID);
+    return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
 }
 
 pub const AuxData = struct {
@@ -76,7 +75,7 @@ const ExecutionContextDescription = struct {
 pub fn executionContextCreated(
     alloc: std.mem.Allocator,
     ctx: *Ctx,
-    id: u64,
+    id: u16,
     origin: []const u8,
     name: []const u8,
     uniqueID: []const u8,
@@ -100,17 +99,18 @@ pub fn executionContextCreated(
 
 fn runIfWaitingForDebugger(
     alloc: std.mem.Allocator,
-    id: u64,
+    id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
-    const sessionID = try cdp.getSessionID(scanner);
-    return result(alloc, id, null, null, sessionID);
+    const msg = try getMsg(alloc, void, scanner);
+
+    return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
 }
 
 fn evaluate(
     alloc: std.mem.Allocator,
-    id: u64,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
@@ -124,20 +124,21 @@ fn evaluate(
         contextId: ?u8,
     };
 
-    const input = try cdp.getContent(alloc, Params, scanner);
-    const sessionID = input.sessionID;
-    std.debug.assert(sessionID != null);
+    const msg = try getMsg(alloc, Params, scanner);
+    std.debug.assert(msg.sessionID != null);
+    const params = msg.params.?;
+    const id = _id orelse msg.id.?;
 
     // save script in file at debug mode
-    std.log.debug("script {d} length: {d}", .{ id, input.params.expression.len });
+    std.log.debug("script {d} length: {d}", .{ id, params.expression.len });
     if (std.log.defaultLogEnabled(.debug)) {
         const name = try std.fmt.allocPrint(alloc, "id_{d}.js", .{id});
         defer alloc.free(name);
         const dir = try std.fs.cwd().makeOpenPath("zig-cache/tmp", .{});
         const f = try dir.createFile(name, .{});
         defer f.close();
-        const nb = try f.write(input.params.expression);
-        std.debug.assert(nb == input.params.expression.len);
+        const nb = try f.write(params.expression);
+        std.debug.assert(nb == params.expression.len);
         const p = try dir.realpathAlloc(alloc, name);
         defer alloc.free(p);
         std.log.debug("Script {d} saved at {s}", .{ id, p });
@@ -149,7 +150,7 @@ fn evaluate(
     // const page_alloc = ctx.browser.currentSession().page.?.arena.allocator();
     const session_alloc = ctx.browser.currentSession().alloc;
     var res = jsruntime.JSResult{};
-    try ctx.browser.currentSession().env.run(session_alloc, input.params.expression, "cdp", &res, null);
+    try ctx.browser.currentSession().env.run(session_alloc, params.expression, "cdp", &res, null);
     defer res.deinit(session_alloc);
 
     if (!res.success) {
@@ -168,5 +169,5 @@ fn evaluate(
         description: []const u8 = "UtilityScript",
         objectId: []const u8 = "7481631759780215274.3.2",
     };
-    return result(alloc, id, Resp, Resp{}, sessionID);
+    return result(alloc, id, Resp, Resp{}, msg.sessionID);
 }

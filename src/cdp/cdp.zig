@@ -53,26 +53,22 @@ pub fn do(
     // handle 2 possible orders:
     // - id, method <...>
     // - method, id <...>
-    var id_key = (try scanner.next()).string;
-    var id_token = try scanner.next();
     var method_key = (try scanner.next()).string;
-    var method_token = try scanner.next();
+    var method_token: std.json.Token = undefined;
+    var id: ?u16 = null;
     // check swap order
-    if (!std.mem.eql(u8, id_key, "id")) {
-        const swap_key = method_key;
-        const swap_token = method_token;
-        method_key = id_key;
-        method_token = id_token;
-        id_key = swap_key;
-        id_token = swap_token;
+    if (std.mem.eql(u8, method_key, "id")) {
+        id = try getId(&scanner, method_key);
+        method_key = (try scanner.next()).string;
+        method_token = try scanner.next();
+    } else {
+        method_token = try scanner.next();
     }
-    try checkKey(id_key, "id");
     try checkKey(method_key, "method");
 
-    // retrieve id and method
-    const id = try std.fmt.parseUnsigned(u64, id_token.number, 10);
+    // retrieve method
     const method_name = method_token.string;
-    std.log.debug("cmd: id {any}, method {s}", .{ id, method_name });
+    std.log.debug("cmd: method {s}, id {any}", .{ method_name, id });
 
     // retrieve domain from method
     var iter = std.mem.splitScalar(u8, method_name, '.');
@@ -128,7 +124,7 @@ const resultNullSession = "{{\"id\": {d}, \"result\": {{}}, \"sessionId\": \"{s}
 // caller owns the slice returned
 pub fn result(
     alloc: std.mem.Allocator,
-    id: u64,
+    id: u16,
     comptime T: ?type,
     res: anytype,
     sessionID: ?[]const u8,
@@ -142,7 +138,7 @@ pub fn result(
     }
 
     const Resp = struct {
-        id: u64,
+        id: u16,
         result: T.?,
         sessionId: ?[]const u8,
     };
@@ -171,108 +167,94 @@ pub fn sendEvent(
     try server.sendSync(ctx, event_msg);
 }
 
-pub fn getParams(
+fn getParams(
     alloc: std.mem.Allocator,
     comptime T: type,
     scanner: *std.json.Scanner,
+    key: []const u8,
 ) !?T {
 
-    // if next token is the end of the object, there is no "params"
-    const t = try scanner.next();
-    if (t == .object_end) return null;
+    // check key key is "params"
+    if (!std.mem.eql(u8, "params", key)) return null;
 
-    // if next token is not "params" there is no "params"
-    if (!std.mem.eql(u8, "params", t.string)) return null;
+    // skip "params" if not requested
+    if (T == void) {
+        var finished: usize = 0;
+        while (true) {
+            switch (try scanner.next()) {
+                .object_begin => finished += 1,
+                .object_end => finished -= 1,
+                else => continue,
+            }
+            if (finished == 0) break;
+        }
+        return void{};
+    }
 
     // parse "params"
     const options = std.json.ParseOptions{
         .max_value_len = scanner.input.len,
         .allocate = .alloc_if_needed,
     };
-    const params = try std.json.innerParse(T, alloc, scanner, options);
-    return params;
+    return try std.json.innerParse(T, alloc, scanner, options);
 }
 
-pub fn getSessionID(scanner: *std.json.Scanner) !?[]const u8 {
+fn getId(scanner: *std.json.Scanner, key: []const u8) !?u16 {
 
-    // if next token is the end of the object, there is no "sessionId"
-    const t = try scanner.next();
-    if (t == .object_end) return null;
+    // check key is "id"
+    if (!std.mem.eql(u8, "id", key)) return null;
 
-    var n = t.string;
+    // parse "id"
+    return try std.fmt.parseUnsigned(u16, (try scanner.next()).number, 10);
+}
 
-    // if next token is "params" ignore them
-    // NOTE: will panic if it's not an empty "params" object
-    // TODO: maybe we should return a custom error here
-    if (std.mem.eql(u8, n, "params")) {
-        // ignore empty params
-        _ = (try scanner.next()).object_begin;
-        _ = (try scanner.next()).object_end;
-        n = (try scanner.next()).string;
-    }
+fn getSessionId(scanner: *std.json.Scanner, key: []const u8) !?[]const u8 {
 
-    // if next token is not "sessionId" there is no "sessionId"
-    if (!std.mem.eql(u8, n, "sessionId")) return null;
+    // check key is "sessionId"
+    if (!std.mem.eql(u8, "sessionId", key)) return null;
 
     // parse "sessionId"
     return (try scanner.next()).string;
 }
 
-pub fn getContent(
+pub fn getMsg(
     alloc: std.mem.Allocator,
-    comptime T: type,
+    comptime params_T: type,
     scanner: *std.json.Scanner,
-) !struct { params: T, sessionID: ?[]const u8 } {
-
-    // if next token is the end of the object, error
-    const t = try scanner.next();
-    if (t == .object_end) return error.CDPNoContent;
-
-    var params: T = undefined;
+) !struct { id: ?u16, params: ?params_T, sessionID: ?[]const u8 } {
+    var id: ?u16 = null;
+    var params: ?params_T = null;
     var sessionID: ?[]const u8 = null;
 
-    var n = t.string;
+    var t: std.json.Token = undefined;
 
-    // params
-    if (std.mem.eql(u8, n, "params")) {
-        if (T == void) {
-
-            // ignore params
-            var finished: usize = 0;
-            while (true) {
-                switch (try scanner.next()) {
-                    .object_begin => finished += 1,
-                    .object_end => finished -= 1,
-                    else => continue,
-                }
-                if (finished == 0) break;
-            }
-            params = void{};
-        } else {
-
-            // parse "params"
-            const options = std.json.ParseOptions{
-                .max_value_len = scanner.input.len,
-                .allocate = .alloc_if_needed,
-            };
-            params = try std.json.innerParse(T, alloc, scanner, options);
+    while (true) {
+        t = try scanner.next();
+        if (t == .object_end) break;
+        if (t != .string) {
+            return error.CDPMsgWrong;
         }
-
-        // go next
-        n = (try scanner.next()).string;
-    } else {
-        params = switch (@typeInfo(T)) {
-            .Void => void{},
-            .Optional => null,
-            else => return error.CDPNoParams,
-        };
+        if (id == null) {
+            id = try getId(scanner, t.string);
+            if (id != null) continue;
+        }
+        if (params == null) {
+            params = try getParams(alloc, params_T, scanner, t.string);
+            if (params != null) continue;
+        }
+        if (sessionID == null) {
+            sessionID = try getSessionId(scanner, t.string);
+        }
     }
 
-    if (std.mem.eql(u8, n, "sessionId")) {
-        sessionID = (try scanner.next()).string;
-    }
-
-    return .{ .params = params, .sessionID = sessionID };
+    // end
+    std.log.debug(
+        "id {any}, params {any}, sessionID: {any}, token {any}",
+        .{ id, params, sessionID, t },
+    );
+    t = try scanner.next();
+    if (t != .end_of_document) return error.CDPMsgEnd;
+    return .{ .id = id, .params = params, .sessionID = sessionID };
 }
 
 // Common
