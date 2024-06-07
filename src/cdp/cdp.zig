@@ -11,6 +11,7 @@ const runtime = @import("runtime.zig").runtime;
 const network = @import("network.zig").network;
 const emulation = @import("emulation.zig").emulation;
 const fetch = @import("fetch.zig").fetch;
+const performance = @import("performance.zig").performance;
 
 pub const Error = error{
     UnknonwDomain,
@@ -37,6 +38,7 @@ const Domains = enum {
     Network,
     Emulation,
     Fetch,
+    Performance,
 };
 
 // The caller is responsible for calling `free` on the returned slice.
@@ -87,6 +89,7 @@ pub fn do(
         .Network => network(alloc, id, iter.next().?, &scanner, ctx),
         .Emulation => emulation(alloc, id, iter.next().?, &scanner, ctx),
         .Fetch => fetch(alloc, id, iter.next().?, &scanner, ctx),
+        .Performance => performance(alloc, id, iter.next().?, &scanner, ctx),
     };
 }
 
