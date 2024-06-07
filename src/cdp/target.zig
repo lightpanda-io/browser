@@ -4,7 +4,7 @@ const server = @import("../server.zig");
 const Ctx = server.Cmd;
 const cdp = @import("cdp.zig");
 const result = cdp.result;
-const getParams = cdp.getParams;
+const getMsg = cdp.getMsg;
 const stringify = cdp.stringify;
 
 const TargetMethods = enum {
@@ -16,7 +16,7 @@ const TargetMethods = enum {
 
 pub fn target(
     alloc: std.mem.Allocator,
-    id: u64,
+    id: ?u16,
     action: []const u8,
     scanner: *std.json.Scanner,
     ctx: *Ctx,
@@ -56,7 +56,7 @@ const TargetFilter = struct {
 
 fn tagetSetAutoAttach(
     alloc: std.mem.Allocator,
-    id: u64,
+    id: ?u16,
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
@@ -66,12 +66,10 @@ fn tagetSetAutoAttach(
         flatten: bool = true,
         filter: ?[]TargetFilter = null,
     };
-    const params = try getParams(alloc, Params, scanner);
-    std.log.debug("params {any}", .{params});
+    const msg = try getMsg(alloc, Params, scanner);
+    std.log.debug("params {any}", .{msg.params});
 
-    const sessionID = try cdp.getSessionID(scanner);
-
-    if (sessionID == null) {
+    if (msg.sessionID == null) {
         const attached = AttachToTarget{
             .sessionId = cdp.SessionID,
             .targetInfo = .{
@@ -84,12 +82,12 @@ fn tagetSetAutoAttach(
         try cdp.sendEvent(alloc, ctx, "Target.attachedToTarget", AttachToTarget, attached, null);
     }
 
-    return result(alloc, id, null, null, sessionID);
+    return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
 }
 
 fn tagetGetTargetInfo(
     alloc: std.mem.Allocator,
-    id: u64,
+    id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
@@ -98,7 +96,7 @@ fn tagetGetTargetInfo(
     const Params = struct {
         targetId: ?[]const u8 = null,
     };
-    _ = try getParams(alloc, Params, scanner);
+    const msg = try getMsg(alloc, Params, scanner);
 
     // output
     const TargetInfo = struct {
@@ -117,7 +115,7 @@ fn tagetGetTargetInfo(
         .targetId = BrowserTargetID,
         .type = "browser",
     };
-    return result(alloc, id, TargetInfo, targetInfo, null);
+    return result(alloc, id orelse msg.id.?, TargetInfo, targetInfo, null);
 }
 
 const ContextID = "22648B09EDCCDD11109E2D4FEFBE4F89";
@@ -125,9 +123,9 @@ const ContextSessionID = "4FDC2CB760A23A220497A05C95417CF4";
 
 fn createBrowserContext(
     alloc: std.mem.Allocator,
-    id: u64,
+    id: ?u16,
     scanner: *std.json.Scanner,
-    _: *Ctx,
+    ctx: *Ctx,
 ) ![]const u8 {
 
     // input
@@ -137,21 +135,20 @@ fn createBrowserContext(
         proxyBypassList: ?[]const u8 = null,
         originsWithUniversalNetworkAccess: ?[][]const u8 = null,
     };
-    _ = try getParams(alloc, Params, scanner);
-    const sessionID = try cdp.getSessionID(scanner);
+    const msg = try getMsg(alloc, Params, scanner);
 
     // output
     const Resp = struct {
         browserContextId: []const u8 = ContextID,
     };
-    return result(alloc, id, Resp, Resp{}, sessionID);
+    return result(alloc, id orelse msg.id.?, Resp, Resp{}, msg.sessionID);
 }
 
 const TargetID = "57356548460A8F29706A2ADF14316298";
 
 fn createTarget(
     alloc: std.mem.Allocator,
-    id: u64,
+    id: ?u16,
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
@@ -167,8 +164,7 @@ fn createTarget(
         background: bool = false,
         forTab: ?bool = null,
     };
-    _ = try getParams(alloc, Params, scanner);
-    const sessionID = try cdp.getSessionID(scanner);
+    const msg = try getMsg(alloc, Params, scanner);
 
     // change CDP state
     ctx.state.frameID = TargetID;
@@ -188,11 +184,11 @@ fn createTarget(
         },
         .waitingForDebugger = true,
     };
-    try cdp.sendEvent(alloc, ctx, "Target.attachedToTarget", AttachToTarget, attached, sessionID);
+    try cdp.sendEvent(alloc, ctx, "Target.attachedToTarget", AttachToTarget, attached, msg.sessionID);
 
     // output
     const Resp = struct {
         targetId: []const u8 = TargetID,
     };
-    return result(alloc, id, Resp, Resp{}, sessionID);
+    return result(alloc, id orelse msg.id.?, Resp, Resp{}, msg.sessionID);
 }
