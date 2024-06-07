@@ -88,6 +88,7 @@ pub fn do(
 }
 
 pub const State = struct {
+    contextID: ?[]const u8 = null,
     frameID: []const u8 = FrameID,
     url: []const u8 = URLBase,
     securityOrigin: []const u8 = URLBase,
