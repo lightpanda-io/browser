@@ -11,6 +11,7 @@ const EmulationMethods = enum {
     setEmulatedMedia,
     setFocusEmulationEnabled,
     setDeviceMetricsOverride,
+    setTouchEmulationEnabled,
 };
 
 pub fn emulation(
@@ -26,6 +27,7 @@ pub fn emulation(
         .setEmulatedMedia => setEmulatedMedia(alloc, id, scanner, ctx),
         .setFocusEmulationEnabled => setFocusEmulationEnabled(alloc, id, scanner, ctx),
         .setDeviceMetricsOverride => setDeviceMetricsOverride(alloc, id, scanner, ctx),
+        .setTouchEmulationEnabled => setTouchEmulationEnabled(alloc, id, scanner, ctx),
     };
 }
 
@@ -82,5 +84,16 @@ fn setDeviceMetricsOverride(
     const msg = try cdp.getMsg(alloc, void, scanner);
 
     // output
+    return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
+}
+
+fn setTouchEmulationEnabled(
+    alloc: std.mem.Allocator,
+    id: ?u16,
+    scanner: *std.json.Scanner,
+    _: *Ctx,
+) ![]const u8 {
+    const msg = try cdp.getMsg(alloc, void, scanner);
+
     return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
 }
