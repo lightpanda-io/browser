@@ -178,6 +178,8 @@ fn createBrowserContext(
     };
     const msg = try getMsg(alloc, Params, scanner);
 
+    ctx.state.contextID = ContextID;
+
     // output
     const Resp = struct {
         browserContextId: []const u8 = ContextID,
