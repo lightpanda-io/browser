@@ -8,6 +8,7 @@ const getMsg = cdp.getMsg;
 const stringify = cdp.stringify;
 
 const TargetMethods = enum {
+    setDiscoverTargets,
     setAutoAttach,
     getTargetInfo,
     getBrowserContexts,
@@ -25,6 +26,7 @@ pub fn target(
     const method = std.meta.stringToEnum(TargetMethods, action) orelse
         return error.UnknownMethod;
     return switch (method) {
+        .setDiscoverTargets => targetSetDiscoverTargets(alloc, id, scanner, ctx),
         .setAutoAttach => tagetSetAutoAttach(alloc, id, scanner, ctx),
         .getTargetInfo => tagetGetTargetInfo(alloc, id, scanner, ctx),
         .getBrowserContexts => getBrowserContexts(alloc, id, scanner, ctx),
@@ -36,6 +38,17 @@ pub fn target(
 const PageTargetID = "CFCD6EC01573CF29BB638E9DC0F52DDC";
 const BrowserTargetID = "2d2bdef9-1c95-416f-8c0e-83f3ab73a30c";
 const BrowserContextID = "65618675CB7D3585A95049E9DFE95EA9";
+
+fn targetSetDiscoverTargets(
+    alloc: std.mem.Allocator,
+    id: ?u16,
+    scanner: *std.json.Scanner,
+    _: *Ctx,
+) ![]const u8 {
+    const msg = try getMsg(alloc, void, scanner);
+
+    return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
+}
 
 const AttachToTarget = struct {
     sessionId: []const u8,
@@ -52,8 +65,8 @@ const AttachToTarget = struct {
 };
 
 const TargetFilter = struct {
-    type: []const u8,
-    exclude: bool,
+    type: ?[]const u8 = null,
+    exclude: ?bool = null,
 };
 
 fn tagetSetAutoAttach(
