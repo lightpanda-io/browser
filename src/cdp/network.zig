@@ -9,6 +9,7 @@ const stringify = cdp.stringify;
 
 const NetworkMethods = enum {
     enable,
+    setCacheDisabled,
 };
 
 pub fn network(
@@ -23,10 +24,22 @@ pub fn network(
 
     return switch (method) {
         .enable => networkEnable(alloc, id, scanner, ctx),
+        .setCacheDisabled => networkSetCacheDisabled(alloc, id, scanner, ctx),
     };
 }
 
 fn networkEnable(
+    alloc: std.mem.Allocator,
+    id: ?u16,
+    scanner: *std.json.Scanner,
+    _: *Ctx,
+) ![]const u8 {
+    const msg = try getMsg(alloc, void, scanner);
+
+    return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
+}
+
+fn networkSetCacheDisabled(
     alloc: std.mem.Allocator,
     id: ?u16,
     scanner: *std.json.Scanner,
