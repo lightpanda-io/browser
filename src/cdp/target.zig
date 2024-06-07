@@ -10,6 +10,7 @@ const stringify = cdp.stringify;
 const TargetMethods = enum {
     setAutoAttach,
     getTargetInfo,
+    getBrowserContexts,
     createBrowserContext,
     createTarget,
 };
@@ -26,6 +27,7 @@ pub fn target(
     return switch (method) {
         .setAutoAttach => tagetSetAutoAttach(alloc, id, scanner, ctx),
         .getTargetInfo => tagetGetTargetInfo(alloc, id, scanner, ctx),
+        .getBrowserContexts => getBrowserContexts(alloc, id, scanner, ctx),
         .createBrowserContext => createBrowserContext(alloc, id, scanner, ctx),
         .createTarget => createTarget(alloc, id, scanner, ctx),
     };
@@ -116,6 +118,32 @@ fn tagetGetTargetInfo(
         .type = "browser",
     };
     return result(alloc, id orelse msg.id.?, TargetInfo, targetInfo, null);
+}
+
+// Browser context are not handled and not in the roadmap for now
+// The following methods are "fake"
+
+fn getBrowserContexts(
+    alloc: std.mem.Allocator,
+    id: ?u16,
+    scanner: *std.json.Scanner,
+    ctx: *Ctx,
+) ![]const u8 {
+    const msg = try getMsg(alloc, void, scanner);
+
+    // ouptut
+    const Resp = struct {
+        browserContextIds: [][]const u8,
+    };
+    var resp: Resp = undefined;
+    if (ctx.state.contextID) |contextID| {
+        var contextIDs = [1][]const u8{contextID};
+        resp = .{ .browserContextIds = &contextIDs };
+    } else {
+        const contextIDs = [0][]const u8{};
+        resp = .{ .browserContextIds = &contextIDs };
+    }
+    return result(alloc, id orelse msg.id.?, Resp, resp, null);
 }
 
 const ContextID = "22648B09EDCCDD11109E2D4FEFBE4F89";
