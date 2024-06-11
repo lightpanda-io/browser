@@ -68,7 +68,7 @@ We will not provide binary versions until we reach at least the Beta stage.
 
 NOTE: There are hundreds of Web APIs. Developing a browser, even just for headless mode, is a huge task. It's more about coverage than a _working/not working_ binary situation.
 
-You can also follow the progess of our Javascript support in our dedicated [zig-js-runtime](https://github.com/lightpanda-io/zig-js-runtime#development) project.
+You can also follow the progress of our Javascript support in our dedicated [zig-js-runtime](https://github.com/lightpanda-io/zig-js-runtime#development) project.
 
 ## Build from sources
 
