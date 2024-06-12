@@ -13,6 +13,7 @@ const RuntimeMethods = enum {
     enable,
     runIfWaitingForDebugger,
     evaluate,
+    addBinding,
 };
 
 pub fn runtime(
@@ -28,6 +29,7 @@ pub fn runtime(
         .enable => enable(alloc, id, scanner, ctx),
         .runIfWaitingForDebugger => runIfWaitingForDebugger(alloc, id, scanner, ctx),
         .evaluate => evaluate(alloc, id, scanner, ctx),
+        .addBinding => addBinding(alloc, id, scanner, ctx),
     };
 }
 
@@ -170,4 +172,55 @@ fn evaluate(
         objectId: []const u8 = "7481631759780215274.3.2",
     };
     return result(alloc, id, Resp, Resp{}, msg.sessionID);
+}
+
+fn addBinding(
+    alloc: std.mem.Allocator,
+    _id: ?u16,
+    scanner: *std.json.Scanner,
+    ctx: *Ctx,
+) ![]const u8 {
+
+    // input
+    const Params = struct {
+        name: []const u8,
+        executionContextId: ?u8 = null,
+    };
+    const msg = try getMsg(alloc, Params, scanner);
+    const id = _id orelse msg.id.?;
+    const params = msg.params.?;
+    if (params.executionContextId) |contextId| {
+        std.debug.assert(contextId == ctx.state.executionContextId);
+    }
+
+    const script = try std.fmt.allocPrint(alloc, "globalThis['{s}'] = {{}};", .{params.name});
+    defer alloc.free(script);
+
+    const session = ctx.browser.currentSession();
+    const res = try runtimeEvaluate(session.alloc, id, session.env, script, "addBinding");
+    defer res.deinit(session.alloc);
+
+    return result(alloc, id, null, null, msg.sessionID);
+}
+
+// caller is the owner of JSResult returned
+fn runtimeEvaluate(
+    alloc: std.mem.Allocator,
+    id: u16,
+    env: jsruntime.Env,
+    script: []const u8,
+    comptime name: []const u8,
+) !jsruntime.JSResult {
+    var res = jsruntime.JSResult{};
+    try env.run(alloc, script, "cdp.Runtime." ++ name, &res, null);
+
+    if (!res.success) {
+        std.log.err("'{s}' id {d}, result: {s}", .{ name, id, res.result });
+        if (res.stack) |stack| {
+            std.log.err("'{s}' id {d}, stack: {s}", .{ name, id, stack });
+        }
+        return error.CDPRuntimeEvaluate;
+    }
+    std.log.debug("'{s}' id {d}, result: {s}", .{ name, id, res.result });
+    return res;
 }
