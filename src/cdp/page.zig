@@ -225,12 +225,25 @@ fn navigate(
     std.log.debug("res {s}", .{res});
     try server.sendSync(ctx, res);
 
-    // Runtime.executionContextsCleared event
+    // Send clear runtime contexts event (noop)
     try sendEvent(alloc, ctx, "Runtime.executionContextsCleared", void, {}, msg.sessionID);
 
-    // launch navigate
+    // Launch navigate
     var p = try ctx.browser.currentSession().createPage();
     _ = try p.navigate(params.url);
+
+    // Send create runtime context event
+    ctx.state.executionContextId += 1;
+    try Runtime.executionContextCreated(
+        alloc,
+        ctx,
+        ctx.state.executionContextId,
+        "http://127.0.0.1:1234", // TODO: real domain
+        "",
+        "7102379147004877974.3265385113993241162",
+        .{ .frameId = ctx.state.frameID },
+        msg.sessionID,
+    );
 
     // frameNavigated event
     const FrameNavigated = struct {
@@ -266,28 +279,6 @@ fn navigate(
             msg.sessionID,
         );
     }
-
-    try Runtime.executionContextCreated(
-        alloc,
-        ctx,
-        3,
-        "http://127.0.0.1:1234",
-        "",
-        "7102379147004877974.3265385113993241162",
-        .{ .frameId = ctx.state.frameID },
-        msg.sessionID,
-    );
-
-    try Runtime.executionContextCreated(
-        alloc,
-        ctx,
-        4,
-        "://",
-        "__playwright_utility_world__",
-        "-4572718120346458707.6016875269626438350",
-        .{ .isDefault = false, .type = "isolated", .frameId = ctx.state.frameID },
-        msg.sessionID,
-    );
 
     // domContentEventFired event
     ts_event = .{ .timestamp = 343721.803338 };
