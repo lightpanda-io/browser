@@ -99,16 +99,15 @@ pub fn build(b: *std.Build) !void {
     // compile
     const tests = b.addTest(.{
         .root_source_file = .{ .path = "src/run_tests.zig" },
-        .test_runner = "src/test_runner.zig",
+        .test_runner = .{ .path = "src/test_runner.zig" },
         .single_threaded = true,
     });
     try common(tests, options);
 
     // add jsruntime pretty deps
-    const pretty = tests.step.owner.createModule(.{
-        .source_file = .{ .path = "vendor/zig-js-runtime/src/pretty.zig" },
+    tests.root_module.addAnonymousImport("pretty", .{
+        .root_source_file = .{ .path = "vendor/zig-js-runtime/src/pretty.zig" },
     });
-    tests.addModule("pretty", pretty);
 
     const run_tests = b.addRunArtifact(tests);
     if (b.args) |args| {
@@ -176,7 +175,7 @@ fn common(
     step.addIncludePath(.{ .path = "vendor/mimalloc/out/include" });
 }
 
-fn linkNetSurf(step: *std.build.LibExeObjStep) void {
+fn linkNetSurf(step: *std.Build.Step.Compile) void {
 
     // iconv
     step.addObjectFile(.{ .path = "vendor/libiconv/lib/libiconv.a" });
