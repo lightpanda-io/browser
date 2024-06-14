@@ -69,7 +69,7 @@ pub const Loader = struct {
         });
         errdefer resp.req.deinit();
 
-        try resp.req.send(.{});
+        try resp.req.send();
         try resp.req.finish();
         try resp.req.wait();
 

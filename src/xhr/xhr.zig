@@ -97,7 +97,7 @@ pub const XMLHttpRequestBodyInit = union(XMLHttpRequestBodyInitTag) {
 pub const XMLHttpRequest = struct {
     proto: XMLHttpRequestEventTarget = XMLHttpRequestEventTarget{},
     alloc: std.mem.Allocator,
-    cli: Client,
+    cli: *Client,
     impl: YieldImpl,
 
     priv_state: PrivState = .new,
@@ -509,7 +509,7 @@ pub const XMLHttpRequest = struct {
                 if (self.payload) |v| self.req.?.transfer_encoding = .{ .content_length = v.len };
 
                 self.priv_state = .send;
-                self.req.?.send(.{}) catch |e| return self.onErr(e);
+                self.req.?.send() catch |e| return self.onErr(e);
             },
             .send => {
                 if (self.payload) |payload| {

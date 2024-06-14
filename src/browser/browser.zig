@@ -224,7 +224,7 @@ pub const Page = struct {
         // own the url
         if (self.rawuri) |prev| alloc.free(prev);
         self.rawuri = try alloc.dupe(u8, uri);
-        self.uri = std.Uri.parse(self.rawuri.?) catch try std.Uri.parseWithoutScheme(self.rawuri.?);
+        self.uri = std.Uri.parse(self.rawuri.?) catch try std.Uri.parseAfterScheme("", self.rawuri.?);
 
         // prepare origin value.
         var buf = std.ArrayList(u8).init(alloc);
@@ -511,7 +511,8 @@ pub const Page = struct {
         log.debug("starting fetch script {s}", .{src});
 
         var buffer: [1024]u8 = undefined;
-        const u = try std.Uri.resolve_inplace(self.uri, src, &buffer);
+        var b: []u8 = buffer[0..];
+        const u = try std.Uri.resolve_inplace(self.uri, src, &b);
 
         var fetchres = try self.session.loader.get(alloc, u);
         defer fetchres.deinit();
@@ -529,7 +530,7 @@ pub const Page = struct {
         // check no body
         if (body.len == 0) return FetchError.NoBody;
 
-        var res = try self.session.env.execTryCatch(alloc, fetchres.body.?, src);
+        var res = try self.session.env.execTryCatch(alloc, body, src);
         defer res.deinit(alloc);
 
         if (res.success) {

@@ -68,7 +68,7 @@ test "blocking mode open/send/wait API" {
     });
     defer req.deinit();
 
-    try req.send(.{});
+    try req.send();
     try req.finish();
     try req.wait();
 
@@ -120,7 +120,7 @@ const AsyncClient = struct {
                 },
                 .open => {
                     self.state = .send;
-                    self.req.?.send(.{}) catch |e| return self.onerr(e);
+                    self.req.?.send() catch |e| return self.onerr(e);
                 },
                 .send => {
                     self.state = .finish;
