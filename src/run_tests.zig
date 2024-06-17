@@ -23,7 +23,7 @@ const jsruntime = @import("jsruntime");
 const generate = @import("generate.zig");
 const pretty = @import("pretty");
 
-const parser = @import("netsurf.zig");
+const parser = @import("netsurf");
 const apiweb = @import("apiweb.zig");
 const Window = @import("html/window.zig").Window;
 const xhr = @import("xhr/xhr.zig");

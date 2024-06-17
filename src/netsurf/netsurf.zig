@@ -26,13 +26,9 @@ const c = @cImport({
     @cInclude("events/event.h");
 });
 
-const mimalloc = @import("mimalloc.zig");
+const mimalloc = @import("mimalloc");
 
 const Callback = @import("jsruntime").Callback;
-const CallbackResult = @import("jsruntime").CallbackResult;
-const EventToInterface = @import("events/event.zig").Event.toInterface;
-
-const log = std.log.scoped(.netsurf);
 
 // init initializes netsurf lib.
 // init starts a mimalloc heap arena for the netsurf session. The caller must
@@ -527,40 +523,10 @@ pub const EventType = enum(u8) {
 };
 
 // EventHandler
-fn event_handler_cbk(data: *anyopaque) *Callback {
+pub fn event_handler_cbk(data: *anyopaque) *Callback {
     const ptr: *align(@alignOf(*Callback)) anyopaque = @alignCast(data);
     return @as(*Callback, @ptrCast(ptr));
 }
-
-const event_handler = struct {
-    fn handle(event: ?*Event, data: ?*anyopaque) callconv(.C) void {
-        if (data) |d| {
-            const func = event_handler_cbk(d);
-
-            // TODO get the allocator by another way?
-            var res = CallbackResult.init(func.nat_ctx.alloc);
-            defer res.deinit();
-
-            if (event) |evt| {
-                func.trycall(.{
-                    EventToInterface(evt) catch unreachable,
-                }, &res) catch {};
-            } else {
-                func.trycall(.{event}, &res) catch {};
-            }
-
-            // in case of function error, we log the result and the trace.
-            if (!res.success) {
-                log.info("event handler error: {s}", .{res.result orelse "unknown"});
-                log.debug("{s}", .{res.stack orelse "no stack trace"});
-            }
-
-            // NOTE: we can not call func.deinit here
-            // b/c the handler can be called several times
-            // either on this dispatch event or in anoter one
-        }
-    }
-}.handle;
 
 // EventListener
 pub const EventListener = c.dom_event_listener;
@@ -648,6 +614,7 @@ pub fn eventTargetAddEventListener(
     typ: []const u8,
     cbk: Callback,
     capture: bool,
+    handler: anytype,
 ) !void {
     // this allocation will be removed either on
     // eventTargetRemoveEventListener or eventTargetRemoveAllEventListeners
@@ -661,7 +628,7 @@ pub fn eventTargetAddEventListener(
 
     const ctx = @as(*anyopaque, @ptrCast(cbk_ptr));
     var listener: ?*EventListener = undefined;
-    const errLst = c.dom_event_listener_create(event_handler, ctx, &listener);
+    const errLst = c.dom_event_listener_create(handler, ctx, &listener);
     try DOMErr(errLst);
     defer c.dom_event_listener_unref(listener);
 

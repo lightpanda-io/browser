@@ -19,7 +19,7 @@
 const std = @import("std");
 const File = std.fs.File;
 
-const parser = @import("../netsurf.zig");
+const parser = @import("netsurf");
 const Walker = @import("../dom/walker.zig").WalkerChildren;
 
 // writer must be a std.io.Writer

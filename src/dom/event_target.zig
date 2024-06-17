@@ -24,7 +24,8 @@ const JSObjectID = jsruntime.JSObjectID;
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 
-const parser = @import("../netsurf.zig");
+const parser = @import("netsurf");
+const event_handler = @import("../events/event.zig").event_handler;
 
 const DOMException = @import("exceptions.zig").DOMException;
 const Nod = @import("node.zig");
@@ -74,6 +75,7 @@ pub const EventTarget = struct {
             eventType,
             cbk,
             capture orelse false,
+            event_handler,
         );
     }
 

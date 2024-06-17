@@ -23,7 +23,7 @@ const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 const generate = @import("../generate.zig");
 
-const DOMError = @import("../netsurf.zig").DOMError;
+const DOMError = @import("netsurf").DOMError;
 const DOMException = @import("../dom/exceptions.zig").DOMException;
 
 const ProgressEvent = @import("progress_event.zig").ProgressEvent;
@@ -35,7 +35,7 @@ const Loop = jsruntime.Loop;
 const YieldImpl = Loop.Yield(XMLHttpRequest);
 const Client = @import("../async/Client.zig");
 
-const parser = @import("../netsurf.zig");
+const parser = @import("netsurf");
 
 const UserContext = @import("../user_context.zig").UserContext;
 

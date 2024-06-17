@@ -22,7 +22,7 @@ const jsruntime = @import("jsruntime");
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 
-const parser = @import("../netsurf.zig");
+const parser = @import("netsurf");
 const Event = @import("../events/event.zig").Event;
 
 const DOMException = @import("../dom/exceptions.zig").DOMException;

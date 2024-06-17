@@ -21,7 +21,7 @@ const fspath = std.fs.path;
 
 const FileLoader = @import("fileloader.zig").FileLoader;
 
-const parser = @import("../netsurf.zig");
+const parser = @import("netsurf");
 
 const jsruntime = @import("jsruntime");
 const Loop = jsruntime.Loop;

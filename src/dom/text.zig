@@ -23,7 +23,7 @@ const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 const generate = @import("../generate.zig");
 
-const parser = @import("../netsurf.zig");
+const parser = @import("netsurf");
 
 const CharacterData = @import("character_data.zig").CharacterData;
 const CDATASection = @import("cdata_section.zig").CDATASection;

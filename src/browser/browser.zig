@@ -21,7 +21,7 @@ const builtin = @import("builtin");
 
 const Types = @import("root").Types;
 
-const parser = @import("../netsurf.zig");
+const parser = @import("netsurf");
 const Loader = @import("loader.zig").Loader;
 const Dump = @import("dump.zig");
 const Mime = @import("mime.zig");

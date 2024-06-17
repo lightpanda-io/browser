@@ -168,22 +168,33 @@ fn common(
     step: *std.Build.Step.Compile,
     options: jsruntime.Options,
 ) !void {
-    try jsruntime_pkgs.add(step, options);
-    linkNetSurf(b, step);
+    const jsruntimemod = try jsruntime_pkgs.module(
+        b,
+        options,
+        step.root_module.optimize.?,
+        step.root_module.resolved_target.?,
+    );
+    step.root_module.addImport("jsruntime", jsruntimemod);
 
-    // link mimalloc
-    step.addObjectFile(b.path("vendor/mimalloc/out/libmimalloc.a"));
-    step.addIncludePath(b.path("vendor/mimalloc/out/include"));
+    const netsurf = moduleNetSurf(b);
+    netsurf.addImport("jsruntime", jsruntimemod);
+    step.root_module.addImport("netsurf", netsurf);
 }
 
-fn linkNetSurf(b: *std.Build, step: *std.Build.Step.Compile) void {
+fn moduleNetSurf(b: *std.Build) *std.Build.Module {
+    const mod = b.addModule("netsurf", .{
+        .root_source_file = b.path("src/netsurf/netsurf.zig"),
+    });
     // iconv
-    step.addObjectFile(b.path("vendor/libiconv/lib/libiconv.a"));
-    step.addIncludePath(b.path("vendor/libiconv/include"));
+    mod.addObjectFile(b.path("vendor/libiconv/lib/libiconv.a"));
+    mod.addIncludePath(b.path("vendor/libiconv/include"));
+
+    // mimalloc
+    mod.addImport("mimalloc", moduleMimalloc(b));
 
     // netsurf libs
     const ns = "vendor/netsurf";
-    step.addIncludePath(b.path(ns ++ "/include"));
+    mod.addIncludePath(b.path(ns ++ "/include"));
 
     const libs: [4][]const u8 = .{
         "libdom",
@@ -192,7 +203,20 @@ fn linkNetSurf(b: *std.Build, step: *std.Build.Step.Compile) void {
         "libwapcaplet",
     };
     inline for (libs) |lib| {
-        step.addObjectFile(b.path(ns ++ "/lib/" ++ lib ++ ".a"));
-        step.addIncludePath(b.path(ns ++ "/" ++ lib ++ "/src"));
+        mod.addObjectFile(b.path(ns ++ "/lib/" ++ lib ++ ".a"));
+        mod.addIncludePath(b.path(ns ++ "/" ++ lib ++ "/src"));
     }
+
+    return mod;
+}
+
+fn moduleMimalloc(b: *std.Build) *std.Build.Module {
+    const mod = b.addModule("mimalloc", .{
+        .root_source_file = b.path("src/mimalloc/mimalloc.zig"),
+    });
+
+    mod.addObjectFile(b.path("vendor/mimalloc/out/libmimalloc.a"));
+    mod.addIncludePath(b.path("vendor/mimalloc/out/include"));
+
+    return mod;
 }
