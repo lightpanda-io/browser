@@ -53,11 +53,11 @@ pub fn build(b: *std.Build) !void {
     // compile and install
     const exe = b.addExecutable(.{
         .name = "browsercore",
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = mode,
     });
-    try common(exe, options);
+    try common(b, exe, options);
     b.installArtifact(exe);
 
     // run
@@ -76,11 +76,11 @@ pub fn build(b: *std.Build) !void {
     // compile and install
     const shell = b.addExecutable(.{
         .name = "browsercore-shell",
-        .root_source_file = .{ .path = "src/main_shell.zig" },
+        .root_source_file = b.path("src/main_shell.zig"),
         .target = target,
         .optimize = mode,
     });
-    try common(shell, options);
+    try common(b, shell, options);
     try jsruntime_pkgs.add_shell(shell);
 
     // run
@@ -98,15 +98,16 @@ pub fn build(b: *std.Build) !void {
 
     // compile
     const tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/run_tests.zig" },
-        .test_runner = .{ .path = "src/test_runner.zig" },
-        .single_threaded = true,
+        .root_source_file = b.path("src/run_tests.zig"),
+        .test_runner = b.path("src/test_runner.zig"),
+        .target = target,
+        .optimize = mode,
     });
-    try common(tests, options);
+    try common(b, tests, options);
 
     // add jsruntime pretty deps
     tests.root_module.addAnonymousImport("pretty", .{
-        .root_source_file = .{ .path = "vendor/zig-js-runtime/src/pretty.zig" },
+        .root_source_file = b.path("vendor/zig-js-runtime/src/pretty.zig"),
     });
 
     const run_tests = b.addRunArtifact(tests);
@@ -124,12 +125,11 @@ pub fn build(b: *std.Build) !void {
     // compile and install
     const wpt = b.addExecutable(.{
         .name = "browsercore-wpt",
-        .root_source_file = .{ .path = "src/main_wpt.zig" },
+        .root_source_file = b.path("src/main_wpt.zig"),
         .target = target,
         .optimize = mode,
     });
-    try common(wpt, options);
-    b.installArtifact(wpt);
+    try common(b, wpt, options);
 
     // run
     const wpt_cmd = b.addRunArtifact(wpt);
@@ -146,11 +146,11 @@ pub fn build(b: *std.Build) !void {
     // compile and install
     const get = b.addExecutable(.{
         .name = "browsercore-get",
-        .root_source_file = .{ .path = "src/main_get.zig" },
+        .root_source_file = b.path("src/main_get.zig"),
         .target = target,
         .optimize = mode,
     });
-    try common(get, options);
+    try common(b, get, options);
     b.installArtifact(get);
 
     // run
@@ -164,25 +164,27 @@ pub fn build(b: *std.Build) !void {
 }
 
 fn common(
+    b: *std.Build,
     step: *std.Build.Step.Compile,
     options: jsruntime.Options,
 ) !void {
     try jsruntime_pkgs.add(step, options);
-    linkNetSurf(step);
+    linkNetSurf(b, step);
 
     // link mimalloc
-    step.addObjectFile(.{ .path = "vendor/mimalloc/out/libmimalloc.a" });
-    step.addIncludePath(.{ .path = "vendor/mimalloc/out/include" });
+    step.addObjectFile(b.path("vendor/mimalloc/out/libmimalloc.a"));
+    step.addIncludePath(b.path("vendor/mimalloc/out/include"));
 }
 
-fn linkNetSurf(step: *std.Build.Step.Compile) void {
-
+fn linkNetSurf(b: *std.Build, step: *std.Build.Step.Compile) void {
     // iconv
-    step.addObjectFile(.{ .path = "vendor/libiconv/lib/libiconv.a" });
-    step.addIncludePath(.{ .path = "vendor/libiconv/include" });
+    step.addObjectFile(b.path("vendor/libiconv/lib/libiconv.a"));
+    step.addIncludePath(b.path("vendor/libiconv/include"));
 
     // netsurf libs
     const ns = "vendor/netsurf";
+    step.addIncludePath(b.path(ns ++ "/include"));
+
     const libs: [4][]const u8 = .{
         "libdom",
         "libhubbub",
@@ -190,8 +192,7 @@ fn linkNetSurf(step: *std.Build.Step.Compile) void {
         "libwapcaplet",
     };
     inline for (libs) |lib| {
-        step.addObjectFile(.{ .path = ns ++ "/lib/" ++ lib ++ ".a" });
-        step.addIncludePath(.{ .path = ns ++ "/" ++ lib ++ "/src" });
+        step.addObjectFile(b.path(ns ++ "/lib/" ++ lib ++ ".a"));
+        step.addIncludePath(b.path(ns ++ "/" ++ lib ++ "/src"));
     }
-    step.addIncludePath(.{ .path = ns ++ "/include" });
 }
