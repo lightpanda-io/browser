@@ -14,6 +14,7 @@ const RuntimeMethods = enum {
     runIfWaitingForDebugger,
     evaluate,
     addBinding,
+    callFunctionOn,
 };
 
 pub fn runtime(
@@ -30,6 +31,7 @@ pub fn runtime(
         .runIfWaitingForDebugger => runIfWaitingForDebugger(alloc, id, scanner, ctx),
         .evaluate => evaluate(alloc, id, scanner, ctx),
         .addBinding => addBinding(alloc, id, scanner, ctx),
+        .callFunctionOn => callFunctionOn(alloc, id, scanner, ctx),
     };
 }
 
@@ -192,6 +194,80 @@ fn addBinding(
     defer res.deinit(session.alloc);
 
     return result(alloc, id, null, null, msg.sessionID);
+}
+
+fn callFunctionOn(
+    alloc: std.mem.Allocator,
+    _id: ?u16,
+    scanner: *std.json.Scanner,
+    ctx: *Ctx,
+) ![]const u8 {
+
+    // input
+    const Params = struct {
+        functionDeclaration: []const u8,
+        objectId: ?[]const u8 = null,
+        executionContextId: ?u8 = null,
+        arguments: ?[]struct {
+            value: ?[]const u8 = null,
+        } = null,
+        returnByValue: ?bool = null,
+        awaitPromise: ?bool = null,
+        userGesture: ?bool = null,
+    };
+    const msg = try getMsg(alloc, Params, scanner);
+    const id = _id orelse msg.id.?;
+    const params = msg.params.?;
+    std.debug.assert(params.objectId != null or params.executionContextId != null);
+    if (params.executionContextId) |contextID| {
+        std.debug.assert(contextID == ctx.state.executionContextId);
+    }
+    const name = "callFunctionOn";
+
+    // save script in file at debug mode
+    std.log.debug("{s} script id {d}, length: {d}", .{ name, id, params.functionDeclaration.len });
+    if (std.log.defaultLogEnabled(.debug)) {
+        try cdp.dumpFile(alloc, id, params.functionDeclaration);
+    }
+
+    // parse function
+    if (!std.mem.startsWith(u8, params.functionDeclaration, "function ")) {
+        return error.CDPRuntimeCallFunctionOnNotFunction;
+    }
+    const pos = std.mem.indexOfScalar(u8, params.functionDeclaration, '(');
+    if (pos == null) return error.CDPRuntimeCallFunctionOnWrongFunction;
+    var function = params.functionDeclaration[9..pos.?];
+    function = try std.fmt.allocPrint(alloc, "{s}(", .{function});
+    defer alloc.free(function);
+    if (params.arguments) |args| {
+        for (args, 0..) |arg, i| {
+            if (i > 0) {
+                function = try std.fmt.allocPrint(alloc, "{s}, ", .{function});
+            }
+            if (arg.value) |value| {
+                function = try std.fmt.allocPrint(alloc, "{s}\"{s}\"", .{ function, value });
+            } else {
+                function = try std.fmt.allocPrint(alloc, "{s}undefined", .{function});
+            }
+        }
+    }
+    function = try std.fmt.allocPrint(alloc, "{s});", .{function});
+    std.log.debug("{s} id {d}, function parsed: {s}", .{ name, id, function });
+
+    const session = ctx.browser.currentSession();
+    // TODO: should we use the page's allocator instead of the session's allocator?
+    // the following code does not work:
+    // const page_alloc = ctx.browser.currentSession().page.?.arena.allocator();
+
+    // first evaluate the function declaration
+    const decl = try runtimeEvaluate(session.alloc, id, session.env, params.functionDeclaration, name);
+    defer decl.deinit(session.alloc);
+
+    // then call the function on the arguments
+    const res = try runtimeEvaluate(session.alloc, id, session.env, function, name);
+    defer res.deinit(session.alloc);
+
+    return result(alloc, id, null, "{\"type\":\"undefined\"}", msg.sessionID);
 }
 
 // caller is the owner of JSResult returned
