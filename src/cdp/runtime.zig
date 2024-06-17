@@ -134,16 +134,7 @@ fn evaluate(
     // save script in file at debug mode
     std.log.debug("script {d} length: {d}", .{ id, params.expression.len });
     if (std.log.defaultLogEnabled(.debug)) {
-        const name = try std.fmt.allocPrint(alloc, "id_{d}.js", .{id});
-        defer alloc.free(name);
-        const dir = try std.fs.cwd().makeOpenPath("zig-cache/tmp", .{});
-        const f = try dir.createFile(name, .{});
-        defer f.close();
-        const nb = try f.write(params.expression);
-        std.debug.assert(nb == params.expression.len);
-        const p = try dir.realpathAlloc(alloc, name);
-        defer alloc.free(p);
-        std.log.debug("Script {d} saved at {s}", .{ id, p });
+        try cdp.dumpFile(alloc, id, params.expression);
     }
 
     // evaluate the script in the context of the current page

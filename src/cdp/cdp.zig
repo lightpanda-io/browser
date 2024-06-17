@@ -108,6 +108,23 @@ pub const State = struct {
 // Utils
 // -----
 
+pub fn dumpFile(
+    alloc: std.mem.Allocator,
+    id: u16,
+    script: []const u8,
+) !void {
+    const name = try std.fmt.allocPrint(alloc, "id_{d}.js", .{id});
+    defer alloc.free(name);
+    const dir = try std.fs.cwd().makeOpenPath("zig-cache/tmp", .{});
+    const f = try dir.createFile(name, .{});
+    defer f.close();
+    const nb = try f.write(script);
+    std.debug.assert(nb == script.len);
+    const p = try dir.realpathAlloc(alloc, name);
+    defer alloc.free(p);
+    std.log.debug("Script {d} saved at {s}", .{ id, p });
+}
+
 fn checkKey(key: []const u8, token: []const u8) !void {
     if (!std.mem.eql(u8, key, token)) return error.WrongToken;
 }
