@@ -129,8 +129,11 @@ pub const XMLHttpRequest = struct {
     response_bytes: ?[]const u8 = null,
     response_type: ResponseType = .Empty,
     response_headers: Headers,
-    // used by zig client to parse reponse headers.
-    response_header_buffer: [1024]u8 = undefined,
+
+    // used by zig client to parse response headers.
+    // use 16KB for headers buffer size.
+    response_header_buffer: [1024 * 16]u8 = undefined,
+
     response_status: u10 = 0,
     response_override_mime_type: ?[]const u8 = null,
     response_mime: Mime = undefined,
