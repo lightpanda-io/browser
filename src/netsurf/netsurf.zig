@@ -608,13 +608,15 @@ pub fn eventTargetHasListener(
     return null;
 }
 
+const EventHandler = fn (event: ?*Event, data: ?*anyopaque) callconv(.C) void;
+
 pub fn eventTargetAddEventListener(
     et: *EventTarget,
     alloc: std.mem.Allocator,
     typ: []const u8,
     cbk: Callback,
     capture: bool,
-    handler: anytype,
+    handler: EventHandler,
 ) !void {
     // this allocation will be removed either on
     // eventTargetRemoveEventListener or eventTargetRemoveAllEventListeners

@@ -22,7 +22,7 @@ const jsruntime = @import("jsruntime");
 const Callback = jsruntime.Callback;
 
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
-const event_handler = @import("../events/event.zig").event_handler;
+const EventHandler = @import("../events/event.zig").EventHandler;
 
 const parser = @import("netsurf");
 
@@ -54,7 +54,7 @@ pub const XMLHttpRequestEventTarget = struct {
             typ,
             cbk,
             false,
-            event_handler,
+            EventHandler,
         );
     }
     fn unregister(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator, typ: []const u8, cbk: Callback) !void {

@@ -118,7 +118,12 @@ pub const XMLHttpRequest = struct {
     // https://lightpanda.slack.com/archives/C05TRU6RBM1/p1707819010681019
     // upload: ?XMLHttpRequestUpload = null,
 
-    timeout: u32 = 0,
+    // TODO uncomment this field causes casting issue with
+    // XMLHttpRequestEventTarget. I think it's dueto an alignement issue, but
+    // not sure. see
+    // https://lightpanda.slack.com/archives/C05TRU6RBM1/p1707819010681019
+    // timeout: u32 = 0,
+
     withCredentials: bool = false,
     // TODO: response readonly attribute any response;
     response_bytes: ?[]const u8 = null,
@@ -195,7 +200,7 @@ pub const XMLHttpRequest = struct {
 
         fn has(self: Headers, k: []const u8) bool {
             for (self.list.items) |h| {
-                if (std.ascii.eqlIgnoreCase(k, h.value)) {
+                if (std.ascii.eqlIgnoreCase(k, h.name)) {
                     return true;
                 }
             }
@@ -205,7 +210,7 @@ pub const XMLHttpRequest = struct {
 
         fn getFirstValue(self: Headers, k: []const u8) ?[]const u8 {
             for (self.list.items) |h| {
-                if (std.ascii.eqlIgnoreCase(k, h.value)) {
+                if (std.ascii.eqlIgnoreCase(k, h.name)) {
                     return h.value;
                 }
             }
@@ -216,7 +221,7 @@ pub const XMLHttpRequest = struct {
         // replace any existing header with the same key
         fn set(self: *Headers, k: []const u8, v: []const u8) !void {
             for (self.list.items, 0..) |h, i| {
-                if (std.ascii.eqlIgnoreCase(k, h.value)) {
+                if (std.ascii.eqlIgnoreCase(k, h.name)) {
                     const hh = self.list.swapRemove(i);
                     self.alloc.free(hh.name);
                     self.alloc.free(hh.value);
@@ -330,16 +335,16 @@ pub const XMLHttpRequest = struct {
         return self.state;
     }
 
-    pub fn get_timeout(self: *XMLHttpRequest) u32 {
-        return self.timeout;
+    pub fn get_timeout(_: *XMLHttpRequest) u32 {
+        return 0;
     }
 
-    pub fn set_timeout(self: *XMLHttpRequest, timeout: u32) !void {
+    // TODO, the value is ignored for now.
+    pub fn set_timeout(_: *XMLHttpRequest, _: u32) !void {
         // TODO If the current global object is a Window object and this’s
         // synchronous flag is set, then throw an "InvalidAccessError"
         // DOMException.
         // https://xhr.spec.whatwg.org/#dom-xmlhttprequest-timeout
-        self.timeout = timeout;
     }
 
     pub fn get_withCredentials(self: *XMLHttpRequest) bool {

@@ -105,7 +105,7 @@ pub const URL = struct {
         var q = std.ArrayList(u8).init(alloc);
         defer q.deinit();
         try self.search_params.values.encode(q.writer());
-        self.uri.query = .{ .raw = q.items };
+        self.uri.query = .{ .percent_encoded = q.items };
 
         return try self.format(alloc);
     }

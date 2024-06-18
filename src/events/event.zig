@@ -240,7 +240,7 @@ pub fn testExecFn(
     try checkCases(js_env, &remove);
 }
 
-pub const event_handler = struct {
+pub const EventHandler = struct {
     fn handle(event: ?*parser.Event, data: ?*anyopaque) callconv(.C) void {
         if (data) |d| {
             const func = parser.event_handler_cbk(d);
@@ -252,9 +252,9 @@ pub const event_handler = struct {
             if (event) |evt| {
                 func.trycall(.{
                     Event.toInterface(evt) catch unreachable,
-                }, &res) catch {};
+                }, &res) catch |e| log.err("event handler error: {any}", .{e});
             } else {
-                func.trycall(.{event}, &res) catch {};
+                func.trycall(.{event}, &res) catch |e| log.err("event handler error: {any}", .{e});
             }
 
             // in case of function error, we log the result and the trace.
