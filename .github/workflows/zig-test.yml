@@ -100,6 +100,11 @@ jobs:
        username: ${{ github.actor }}
        password: ${{ secrets.GITHUB_TOKEN }}
 
+      # docker blocks io_uring syscalls by default now.
+      # see https://github.com/tigerbeetle/tigerbeetle/pull/1995
+      # see https://github.com/moby/moby/pull/46762
+      options: "--security-opt seccomp=unconfined"
+
     steps:
       - uses: actions/checkout@v4
         with:
