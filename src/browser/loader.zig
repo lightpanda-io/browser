@@ -22,7 +22,8 @@ const user_agent = "Lightpanda.io/1.0";
 
 pub const Loader = struct {
     client: std.http.Client,
-    server_header_buffer: [1024]u8 = undefined,
+    // use 16KB for headers buffer size.
+    server_header_buffer: [1024 * 16]u8 = undefined,
 
     pub const Response = struct {
         alloc: std.mem.Allocator,
