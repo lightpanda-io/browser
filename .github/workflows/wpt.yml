@@ -17,6 +17,7 @@ on:
       - "src/*.zig"
       - "tests/wpt/**"
       - "vendor/**"
+      - ".github/**"
   pull_request:
 
     # By default GH trigger on types opened, synchronize and reopened.
@@ -33,6 +34,7 @@ on:
       - "src/*.zig"
       - "tests/wpt/**"
       - "vendor/**"
+      - ".github/**"
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
