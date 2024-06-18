@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 const std = @import("std");
 
-const parser = @import("../netsurf.zig");
+const parser = @import("netsurf");
 const generate = @import("../generate.zig");
 
 const jsruntime = @import("jsruntime");
@@ -246,10 +246,10 @@ pub const HTMLAnchorElement = struct {
         defer u.deinit(alloc);
 
         if (p) |pp| {
-            u.uri.host = h;
+            u.uri.host = .{ .raw = h };
             u.uri.port = pp;
         } else {
-            u.uri.host = v;
+            u.uri.host = .{ .raw = v };
             u.uri.port = null;
         }
 
@@ -271,7 +271,7 @@ pub const HTMLAnchorElement = struct {
         var u = try url(self, alloc);
         defer u.deinit(alloc);
 
-        u.uri.host = v;
+        u.uri.host = .{ .raw = v };
         const href = try u.format(alloc);
         try parser.anchorSetHref(self, href);
     }
@@ -312,7 +312,11 @@ pub const HTMLAnchorElement = struct {
         var u = try url(self, alloc);
         defer u.deinit(alloc);
 
-        u.uri.user = v;
+        if (v) |vv| {
+            u.uri.user = .{ .raw = vv };
+        } else {
+            u.uri.user = null;
+        }
         const href = try u.format(alloc);
         defer alloc.free(href);
 
@@ -331,7 +335,11 @@ pub const HTMLAnchorElement = struct {
         var u = try url(self, alloc);
         defer u.deinit(alloc);
 
-        u.uri.password = v;
+        if (v) |vv| {
+            u.uri.password = .{ .raw = vv };
+        } else {
+            u.uri.password = null;
+        }
         const href = try u.format(alloc);
         defer alloc.free(href);
 
@@ -350,7 +358,7 @@ pub const HTMLAnchorElement = struct {
         var u = try url(self, alloc);
         defer u.deinit(alloc);
 
-        u.uri.path = v;
+        u.uri.path = .{ .raw = v };
         const href = try u.format(alloc);
         defer alloc.free(href);
 
@@ -369,7 +377,11 @@ pub const HTMLAnchorElement = struct {
         var u = try url(self, alloc);
         defer u.deinit(alloc);
 
-        u.uri.query = v;
+        if (v) |vv| {
+            u.uri.query = .{ .raw = vv };
+        } else {
+            u.uri.query = null;
+        }
         const href = try u.format(alloc);
         defer alloc.free(href);
 
@@ -388,7 +400,11 @@ pub const HTMLAnchorElement = struct {
         var u = try url(self, alloc);
         defer u.deinit(alloc);
 
-        u.uri.fragment = v;
+        if (v) |vv| {
+            u.uri.fragment = .{ .raw = vv };
+        } else {
+            u.uri.fragment = null;
+        }
         const href = try u.format(alloc);
         defer alloc.free(href);
 

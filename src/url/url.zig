@@ -62,7 +62,10 @@ pub const URL = struct {
         return .{
             .rawuri = raw,
             .uri = uri,
-            .search_params = try URLSearchParams.constructor(alloc, uri.query),
+            .search_params = try URLSearchParams.constructor(
+                alloc,
+                uriComponentNullStr(uri.query),
+            ),
         };
     }
 
@@ -102,7 +105,7 @@ pub const URL = struct {
         var q = std.ArrayList(u8).init(alloc);
         defer q.deinit();
         try self.search_params.values.encode(q.writer());
-        self.uri.query = q.items;
+        self.uri.query = .{ .percent_encoded = q.items };
 
         return try self.format(alloc);
     }
@@ -116,9 +119,9 @@ pub const URL = struct {
             .scheme = true,
             .authentication = true,
             .authority = true,
-            .path = self.uri.path.len > 0,
-            .query = self.uri.query != null and self.uri.query.?.len > 0,
-            .fragment = self.uri.fragment != null and self.uri.fragment.?.len > 0,
+            .path = uriComponentNullStr(self.uri.path).len > 0,
+            .query = uriComponentNullStr(self.uri.query).len > 0,
+            .fragment = uriComponentNullStr(self.uri.fragment).len > 0,
         }, buf.writer());
         return try buf.toOwnedSlice();
     }
@@ -131,11 +134,11 @@ pub const URL = struct {
     }
 
     pub fn get_username(self: *URL) []const u8 {
-        return self.uri.user orelse "";
+        return uriComponentNullStr(self.uri.user);
     }
 
     pub fn get_password(self: *URL) []const u8 {
-        return self.uri.password orelse "";
+        return uriComponentNullStr(self.uri.password);
     }
 
     // the caller must free the returned string.
@@ -157,7 +160,7 @@ pub const URL = struct {
     }
 
     pub fn get_hostname(self: *URL) []const u8 {
-        return self.uri.host orelse "";
+        return uriComponentNullStr(self.uri.host);
     }
 
     // the caller must free the returned string.
@@ -174,8 +177,8 @@ pub const URL = struct {
     }
 
     pub fn get_pathname(self: *URL) []const u8 {
-        if (self.uri.path.len == 0) return "/";
-        return self.uri.path;
+        if (uriComponentStr(self.uri.path).len == 0) return "/";
+        return uriComponentStr(self.uri.path);
     }
 
     // the caller must free the returned string.
@@ -198,7 +201,7 @@ pub const URL = struct {
     pub fn get_hash(self: *URL, alloc: std.mem.Allocator) ![]const u8 {
         if (self.uri.fragment == null) return try alloc.dupe(u8, "");
 
-        return try std.mem.concat(alloc, u8, &[_][]const u8{ "#", self.uri.fragment.? });
+        return try std.mem.concat(alloc, u8, &[_][]const u8{ "#", uriComponentNullStr(self.uri.fragment) });
     }
 
     pub fn get_searchParams(self: *URL) *URLSearchParams {
@@ -209,6 +212,21 @@ pub const URL = struct {
         return try self.get_href(alloc);
     }
 };
+
+// uriComponentNullStr converts an optional std.Uri.Component to string value.
+// The string value can be undecoded.
+fn uriComponentNullStr(c: ?std.Uri.Component) []const u8 {
+    if (c == null) return "";
+
+    return uriComponentStr(c.?);
+}
+
+fn uriComponentStr(c: std.Uri.Component) []const u8 {
+    return switch (c) {
+        .raw => |v| v,
+        .percent_encoded => |v| v,
+    };
+}
 
 // https://url.spec.whatwg.org/#interface-urlsearchparams
 // TODO array like

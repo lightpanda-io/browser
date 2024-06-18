@@ -59,19 +59,19 @@ pub const Conn = struct {
 
     loop: *Loop,
 
-    pub fn connect(self: *Conn, socket: std.os.socket_t, address: std.net.Address) !void {
+    pub fn connect(self: *Conn, socket: std.posix.socket_t, address: std.net.Address) !void {
         var cmd = Command{ .impl = NetworkImpl.init(self.loop) };
         cmd.impl.connect(&cmd, socket, address);
         _ = try cmd.wait();
     }
 
-    pub fn send(self: *Conn, socket: std.os.socket_t, buffer: []const u8) !usize {
+    pub fn send(self: *Conn, socket: std.posix.socket_t, buffer: []const u8) !usize {
         var cmd = Command{ .impl = NetworkImpl.init(self.loop) };
         cmd.impl.send(&cmd, socket, buffer);
         return try cmd.wait();
     }
 
-    pub fn receive(self: *Conn, socket: std.os.socket_t, buffer: []u8) !usize {
+    pub fn receive(self: *Conn, socket: std.posix.socket_t, buffer: []u8) !usize {
         var cmd = Command{ .impl = NetworkImpl.init(self.loop) };
         cmd.impl.receive(&cmd, socket, buffer);
         return try cmd.wait();
@@ -93,12 +93,12 @@ pub fn tcpConnectToHost(alloc: std.mem.Allocator, loop: *Loop, name: []const u8,
             else => return err,
         };
     }
-    return std.os.ConnectError.ConnectionRefused;
+    return std.posix.ConnectError.ConnectionRefused;
 }
 
 pub fn tcpConnectToAddress(alloc: std.mem.Allocator, loop: *Loop, addr: net.Address) !Stream {
-    const sockfd = try std.os.socket(addr.any.family, std.os.SOCK.STREAM, std.os.IPPROTO.TCP);
-    errdefer std.os.closeSocket(sockfd);
+    const sockfd = try std.posix.socket(addr.any.family, std.posix.SOCK.STREAM, std.posix.IPPROTO.TCP);
+    errdefer std.posix.close(sockfd);
 
     var conn = try alloc.create(Conn);
     conn.* = Conn{ .loop = loop };

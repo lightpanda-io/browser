@@ -26,7 +26,7 @@ const Variadic = jsruntime.Variadic;
 
 const generate = @import("../generate.zig");
 
-const parser = @import("../netsurf.zig");
+const parser = @import("netsurf");
 
 const EventTarget = @import("event_target.zig").EventTarget;
 

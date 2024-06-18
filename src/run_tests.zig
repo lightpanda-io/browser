@@ -23,7 +23,7 @@ const jsruntime = @import("jsruntime");
 const generate = @import("generate.zig");
 const pretty = @import("pretty");
 
-const parser = @import("netsurf.zig");
+const parser = @import("netsurf");
 const apiweb = @import("apiweb.zig");
 const Window = @import("html/window.zig").Window;
 const xhr = @import("xhr/xhr.zig");
@@ -182,7 +182,7 @@ pub fn main() !void {
     while (args.next()) |arg| {
         if (std.mem.eql(u8, "-h", arg) or std.mem.eql(u8, "--help", arg)) {
             try std.io.getStdErr().writer().print(usage, .{});
-            std.os.exit(0);
+            std.posix.exit(0);
         }
         if (std.mem.eql(u8, "--json", arg)) {
             out = .json;

@@ -22,16 +22,19 @@ const generate = @import("../generate.zig");
 
 const jsruntime = @import("jsruntime");
 const Callback = jsruntime.Callback;
+const CallbackResult = jsruntime.CallbackResult;
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 
-const parser = @import("../netsurf.zig");
+const parser = @import("netsurf");
 
 const DOMException = @import("../dom/exceptions.zig").DOMException;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const EventTargetUnion = @import("../dom/event_target.zig").Union;
 
 const ProgressEvent = @import("../xhr/progress_event.zig").ProgressEvent;
+
+const log = std.log.scoped(.events);
 
 // Event interfaces
 pub const Interfaces = generate.Tuple(.{
@@ -236,3 +239,33 @@ pub fn testExecFn(
     };
     try checkCases(js_env, &remove);
 }
+
+pub const EventHandler = struct {
+    fn handle(event: ?*parser.Event, data: ?*anyopaque) callconv(.C) void {
+        if (data) |d| {
+            const func = parser.event_handler_cbk(d);
+
+            // TODO get the allocator by another way?
+            var res = CallbackResult.init(func.nat_ctx.alloc);
+            defer res.deinit();
+
+            if (event) |evt| {
+                func.trycall(.{
+                    Event.toInterface(evt) catch unreachable,
+                }, &res) catch |e| log.err("event handler error: {any}", .{e});
+            } else {
+                func.trycall(.{event}, &res) catch |e| log.err("event handler error: {any}", .{e});
+            }
+
+            // in case of function error, we log the result and the trace.
+            if (!res.success) {
+                log.info("event handler error: {s}", .{res.result orelse "unknown"});
+                log.debug("{s}", .{res.stack orelse "no stack trace"});
+            }
+
+            // NOTE: we can not call func.deinit here
+            // b/c the handler can be called several times
+            // either on this dispatch event or in anoter one
+        }
+    }
+}.handle;

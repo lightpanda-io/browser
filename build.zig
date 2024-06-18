@@ -28,7 +28,7 @@ const jsruntime_pkgs = jsruntime.packages(jsruntime_path);
 /// which zig version to install.
 const recommended_zig_version = jsruntime.recommended_zig_version;
 
-pub fn build(b: *std.build.Builder) !void {
+pub fn build(b: *std.Build) !void {
     switch (comptime builtin.zig_version.order(std.SemanticVersion.parse(recommended_zig_version) catch unreachable)) {
         .eq => {},
         .lt => {
@@ -53,11 +53,11 @@ pub fn build(b: *std.build.Builder) !void {
     // compile and install
     const exe = b.addExecutable(.{
         .name = "browsercore",
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = mode,
     });
-    try common(exe, options);
+    try common(b, exe, options);
     b.installArtifact(exe);
 
     // run
@@ -76,11 +76,11 @@ pub fn build(b: *std.build.Builder) !void {
     // compile and install
     const shell = b.addExecutable(.{
         .name = "browsercore-shell",
-        .root_source_file = .{ .path = "src/main_shell.zig" },
+        .root_source_file = b.path("src/main_shell.zig"),
         .target = target,
         .optimize = mode,
     });
-    try common(shell, options);
+    try common(b, shell, options);
     try jsruntime_pkgs.add_shell(shell);
 
     // run
@@ -98,17 +98,17 @@ pub fn build(b: *std.build.Builder) !void {
 
     // compile
     const tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/run_tests.zig" },
-        .test_runner = "src/test_runner.zig",
-        .single_threaded = true,
+        .root_source_file = b.path("src/run_tests.zig"),
+        .test_runner = b.path("src/test_runner.zig"),
+        .target = target,
+        .optimize = mode,
     });
-    try common(tests, options);
+    try common(b, tests, options);
 
     // add jsruntime pretty deps
-    const pretty = tests.step.owner.createModule(.{
-        .source_file = .{ .path = "vendor/zig-js-runtime/src/pretty.zig" },
+    tests.root_module.addAnonymousImport("pretty", .{
+        .root_source_file = b.path("vendor/zig-js-runtime/src/pretty.zig"),
     });
-    tests.addModule("pretty", pretty);
 
     const run_tests = b.addRunArtifact(tests);
     if (b.args) |args| {
@@ -125,12 +125,11 @@ pub fn build(b: *std.build.Builder) !void {
     // compile and install
     const wpt = b.addExecutable(.{
         .name = "browsercore-wpt",
-        .root_source_file = .{ .path = "src/main_wpt.zig" },
+        .root_source_file = b.path("src/main_wpt.zig"),
         .target = target,
         .optimize = mode,
     });
-    try common(wpt, options);
-    b.installArtifact(wpt);
+    try common(b, wpt, options);
 
     // run
     const wpt_cmd = b.addRunArtifact(wpt);
@@ -147,11 +146,11 @@ pub fn build(b: *std.build.Builder) !void {
     // compile and install
     const get = b.addExecutable(.{
         .name = "browsercore-get",
-        .root_source_file = .{ .path = "src/main_get.zig" },
+        .root_source_file = b.path("src/main_get.zig"),
         .target = target,
         .optimize = mode,
     });
-    try common(get, options);
+    try common(b, get, options);
     b.installArtifact(get);
 
     // run
@@ -165,25 +164,38 @@ pub fn build(b: *std.build.Builder) !void {
 }
 
 fn common(
+    b: *std.Build,
     step: *std.Build.Step.Compile,
     options: jsruntime.Options,
 ) !void {
-    try jsruntime_pkgs.add(step, options);
-    linkNetSurf(step);
+    const jsruntimemod = try jsruntime_pkgs.module(
+        b,
+        options,
+        step.root_module.optimize.?,
+        step.root_module.resolved_target.?,
+    );
+    step.root_module.addImport("jsruntime", jsruntimemod);
 
-    // link mimalloc
-    step.addObjectFile(.{ .path = "vendor/mimalloc/out/libmimalloc.a" });
-    step.addIncludePath(.{ .path = "vendor/mimalloc/out/include" });
+    const netsurf = moduleNetSurf(b);
+    netsurf.addImport("jsruntime", jsruntimemod);
+    step.root_module.addImport("netsurf", netsurf);
 }
 
-fn linkNetSurf(step: *std.build.LibExeObjStep) void {
-
+fn moduleNetSurf(b: *std.Build) *std.Build.Module {
+    const mod = b.addModule("netsurf", .{
+        .root_source_file = b.path("src/netsurf/netsurf.zig"),
+    });
     // iconv
-    step.addObjectFile(.{ .path = "vendor/libiconv/lib/libiconv.a" });
-    step.addIncludePath(.{ .path = "vendor/libiconv/include" });
+    mod.addObjectFile(b.path("vendor/libiconv/lib/libiconv.a"));
+    mod.addIncludePath(b.path("vendor/libiconv/include"));
+
+    // mimalloc
+    mod.addImport("mimalloc", moduleMimalloc(b));
 
     // netsurf libs
     const ns = "vendor/netsurf";
+    mod.addIncludePath(b.path(ns ++ "/include"));
+
     const libs: [4][]const u8 = .{
         "libdom",
         "libhubbub",
@@ -191,8 +203,20 @@ fn linkNetSurf(step: *std.build.LibExeObjStep) void {
         "libwapcaplet",
     };
     inline for (libs) |lib| {
-        step.addObjectFile(.{ .path = ns ++ "/lib/" ++ lib ++ ".a" });
-        step.addIncludePath(.{ .path = ns ++ "/" ++ lib ++ "/src" });
+        mod.addObjectFile(b.path(ns ++ "/lib/" ++ lib ++ ".a"));
+        mod.addIncludePath(b.path(ns ++ "/" ++ lib ++ "/src"));
     }
-    step.addIncludePath(.{ .path = ns ++ "/include" });
+
+    return mod;
+}
+
+fn moduleMimalloc(b: *std.Build) *std.Build.Module {
+    const mod = b.addModule("mimalloc", .{
+        .root_source_file = b.path("src/mimalloc/mimalloc.zig"),
+    });
+
+    mod.addObjectFile(b.path("vendor/mimalloc/out/libmimalloc.a"));
+    mod.addIncludePath(b.path("vendor/mimalloc/out/include"));
+
+    return mod;
 }

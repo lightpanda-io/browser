@@ -76,7 +76,7 @@ We do not provide yet binary versions of Lightpanda, you have to compile it from
 
 ### Prerequisites
 
-Lightpanda is written with [Zig](https://ziglang.org/) `0.12`. You have to
+Lightpanda is written with [Zig](https://ziglang.org/) `0.12.1`. You have to
 install it with the right version in order to build the project.
 
 Lightpanda also depends on

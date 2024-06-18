@@ -19,7 +19,7 @@
 const std = @import("std");
 const css = @import("css.zig");
 const Node = @import("libdom.zig").Node;
-const parser = @import("../netsurf.zig");
+const parser = @import("netsurf");
 
 const Matcher = struct {
     const Nodes = std.ArrayList(Node);

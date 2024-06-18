@@ -76,7 +76,7 @@ pub fn main() !void {
     while (args.next()) |arg| {
         if (std.mem.eql(u8, "-h", arg) or std.mem.eql(u8, "--help", arg)) {
             try std.io.getStdErr().writer().print(usage, .{execname});
-            std.os.exit(0);
+            std.posix.exit(0);
         }
         if (std.mem.eql(u8, "--json", arg)) {
             out = .json;
@@ -214,12 +214,12 @@ pub fn main() !void {
         }
 
         try std.json.stringify(output.items, .{ .whitespace = .indent_2 }, std.io.getStdOut().writer());
-        std.os.exit(0);
+        std.posix.exit(0);
     }
 
     if (out == .text and failures > 0) {
         std.debug.print("{d}/{d} tests suites failures\n", .{ failures, run });
-        std.os.exit(1);
+        std.posix.exit(1);
     }
 }
 

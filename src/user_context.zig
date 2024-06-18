@@ -1,5 +1,5 @@
 const std = @import("std");
-const parser = @import("netsurf.zig");
+const parser = @import("netsurf");
 const Client = @import("async/Client.zig");
 
 pub const UserContext = struct {

@@ -20,7 +20,7 @@ const std = @import("std");
 
 const jsruntime = @import("jsruntime");
 
-const parser = @import("netsurf.zig");
+const parser = @import("netsurf");
 const apiweb = @import("apiweb.zig");
 const Window = @import("html/window.zig").Window;
 
@@ -30,7 +30,7 @@ pub const UserContext = apiweb.UserContext;
 const socket_path = "/tmp/browsercore-server.sock";
 
 var doc: *parser.DocumentHTML = undefined;
-var server: std.net.StreamServer = undefined;
+var server: std.net.Server = undefined;
 
 fn execJS(
     alloc: std.mem.Allocator,
@@ -91,7 +91,7 @@ pub fn main() !void {
     // reuse_address (SO_REUSEADDR flag) does not seems to work on unix socket
     // see: https://gavv.net/articles/unix-socket-reuse/
     // TODO: use a lock file instead
-    std.os.unlink(socket_path) catch |err| {
+    std.posix.unlink(socket_path) catch |err| {
         if (err != error.FileNotFound) {
             return err;
         }
@@ -99,9 +99,8 @@ pub fn main() !void {
 
     // server
     const addr = try std.net.Address.initUnix(socket_path);
-    server = std.net.StreamServer.init(.{});
+    server = try addr.listen(.{});
     defer server.deinit();
-    try server.listen(addr);
     std.debug.print("Listening on: {s}...\n", .{socket_path});
 
     try jsruntime.loadEnv(&arena, null, execJS);

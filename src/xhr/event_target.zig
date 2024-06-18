@@ -22,8 +22,9 @@ const jsruntime = @import("jsruntime");
 const Callback = jsruntime.Callback;
 
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
+const EventHandler = @import("../events/event.zig").EventHandler;
 
-const parser = @import("../netsurf.zig");
+const parser = @import("netsurf");
 
 const log = std.log.scoped(.xhr);
 
@@ -41,8 +42,20 @@ pub const XMLHttpRequestEventTarget = struct {
     ontimeout_cbk: ?Callback = null,
     onloadend_cbk: ?Callback = null,
 
-    fn register(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator, typ: []const u8, cbk: Callback) !void {
-        try parser.eventTargetAddEventListener(@as(*parser.EventTarget, @ptrCast(self)), alloc, typ, cbk, false);
+    fn register(
+        self: *XMLHttpRequestEventTarget,
+        alloc: std.mem.Allocator,
+        typ: []const u8,
+        cbk: Callback,
+    ) !void {
+        try parser.eventTargetAddEventListener(
+            @as(*parser.EventTarget, @ptrCast(self)),
+            alloc,
+            typ,
+            cbk,
+            false,
+            EventHandler,
+        );
     }
     fn unregister(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator, typ: []const u8, cbk: Callback) !void {
         const et = @as(*parser.EventTarget, @ptrCast(self));

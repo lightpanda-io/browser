@@ -23,7 +23,7 @@ const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 const generate = @import("../generate.zig");
 
-const DOMError = @import("../netsurf.zig").DOMError;
+const DOMError = @import("netsurf").DOMError;
 const DOMException = @import("../dom/exceptions.zig").DOMException;
 
 const ProgressEvent = @import("progress_event.zig").ProgressEvent;
@@ -35,7 +35,7 @@ const Loop = jsruntime.Loop;
 const YieldImpl = Loop.Yield(XMLHttpRequest);
 const Client = @import("../async/Client.zig");
 
-const parser = @import("../netsurf.zig");
+const parser = @import("netsurf");
 
 const UserContext = @import("../user_context.zig").UserContext;
 
@@ -95,6 +95,50 @@ pub const XMLHttpRequestBodyInit = union(XMLHttpRequestBodyInitTag) {
 };
 
 pub const XMLHttpRequest = struct {
+    proto: XMLHttpRequestEventTarget = XMLHttpRequestEventTarget{},
+    alloc: std.mem.Allocator,
+    cli: *Client,
+    impl: YieldImpl,
+
+    priv_state: PrivState = .new,
+    req: ?Client.Request = null,
+
+    method: std.http.Method,
+    state: u16,
+    url: ?[]const u8,
+    uri: std.Uri,
+    // request headers
+    headers: Headers,
+    sync: bool = true,
+    err: ?anyerror = null,
+
+    // TODO uncomment this field causes casting issue with
+    // XMLHttpRequestEventTarget. I think it's dueto an alignement issue, but
+    // not sure. see
+    // https://lightpanda.slack.com/archives/C05TRU6RBM1/p1707819010681019
+    // upload: ?XMLHttpRequestUpload = null,
+
+    // TODO uncomment this field causes casting issue with
+    // XMLHttpRequestEventTarget. I think it's dueto an alignement issue, but
+    // not sure. see
+    // https://lightpanda.slack.com/archives/C05TRU6RBM1/p1707819010681019
+    // timeout: u32 = 0,
+
+    withCredentials: bool = false,
+    // TODO: response readonly attribute any response;
+    response_bytes: ?[]const u8 = null,
+    response_type: ResponseType = .Empty,
+    response_headers: Headers,
+    // used by zig client to parse reponse headers.
+    response_header_buffer: [1024]u8 = undefined,
+    response_status: u10 = 0,
+    response_override_mime_type: ?[]const u8 = null,
+    response_mime: Mime = undefined,
+    response_obj: ?ResponseObj = null,
+    send_flag: bool = false,
+
+    payload: ?[]const u8 = null,
+
     pub const prototype = *XMLHttpRequestEventTarget;
     pub const mem_guarantied = true;
 
@@ -115,6 +159,91 @@ pub const XMLHttpRequest = struct {
     };
 
     const JSONValue = std.json.Value;
+
+    const Headers = struct {
+        alloc: std.mem.Allocator,
+        list: List,
+
+        const List = std.ArrayListUnmanaged(std.http.Header);
+
+        fn init(alloc: std.mem.Allocator) Headers {
+            return .{
+                .alloc = alloc,
+                .list = List{},
+            };
+        }
+
+        fn deinit(self: *Headers) void {
+            self.free();
+            self.list.deinit(self.alloc);
+        }
+
+        fn append(self: *Headers, k: []const u8, v: []const u8) !void {
+            // duplicate strings
+            const kk = try self.alloc.dupe(u8, k);
+            const vv = try self.alloc.dupe(u8, v);
+            try self.list.append(self.alloc, .{ .name = kk, .value = vv });
+        }
+
+        // free all strings allocated.
+        fn free(self: *Headers) void {
+            for (self.list.items) |h| {
+                self.alloc.free(h.name);
+                self.alloc.free(h.value);
+            }
+        }
+
+        fn clearAndFree(self: *Headers) void {
+            self.free();
+            self.list.clearAndFree(self.alloc);
+        }
+
+        fn has(self: Headers, k: []const u8) bool {
+            for (self.list.items) |h| {
+                if (std.ascii.eqlIgnoreCase(k, h.name)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        fn getFirstValue(self: Headers, k: []const u8) ?[]const u8 {
+            for (self.list.items) |h| {
+                if (std.ascii.eqlIgnoreCase(k, h.name)) {
+                    return h.value;
+                }
+            }
+
+            return null;
+        }
+
+        // replace any existing header with the same key
+        fn set(self: *Headers, k: []const u8, v: []const u8) !void {
+            for (self.list.items, 0..) |h, i| {
+                if (std.ascii.eqlIgnoreCase(k, h.name)) {
+                    const hh = self.list.swapRemove(i);
+                    self.alloc.free(hh.name);
+                    self.alloc.free(hh.value);
+                }
+            }
+            self.append(k, v);
+        }
+
+        // TODO
+        fn sort(_: *Headers) void {}
+
+        fn all(self: Headers) []std.http.Header {
+            return self.list.items;
+        }
+
+        fn load(self: *Headers, it: *std.http.HeaderIterator) !void {
+            while (true) {
+                const h = it.next() orelse break;
+                _ = try self.append(h.name, h.value);
+            }
+        }
+    };
 
     const Response = union(ResponseType) {
         Empty: void,
@@ -149,49 +278,13 @@ pub const XMLHttpRequest = struct {
 
     const PrivState = enum { new, open, send, write, finish, wait, done };
 
-    proto: XMLHttpRequestEventTarget = XMLHttpRequestEventTarget{},
-    alloc: std.mem.Allocator,
-    cli: *Client,
-    impl: YieldImpl,
-
-    priv_state: PrivState = .new,
-    req: ?Client.Request = null,
-
-    method: std.http.Method,
-    state: u16,
-    url: ?[]const u8,
-    uri: std.Uri,
-    headers: std.http.Headers,
-    sync: bool = true,
-    err: ?anyerror = null,
-
-    // TODO uncomment this field causes casting issue with
-    // XMLHttpRequestEventTarget. I think it's dueto an alignement issue, but
-    // not sure. see
-    // https://lightpanda.slack.com/archives/C05TRU6RBM1/p1707819010681019
-    // upload: ?XMLHttpRequestUpload = null,
-
-    timeout: u32 = 0,
-    withCredentials: bool = false,
-    // TODO: response readonly attribute any response;
-    response_bytes: ?[]const u8 = null,
-    response_type: ResponseType = .Empty,
-    response_headers: std.http.Headers,
-    response_status: u10 = 0,
-    response_override_mime_type: ?[]const u8 = null,
-    response_mime: Mime = undefined,
-    response_obj: ?ResponseObj = null,
-    send_flag: bool = false,
-
-    payload: ?[]const u8 = null,
-
     const min_delay: u64 = 50000000; // 50ms
 
     pub fn constructor(alloc: std.mem.Allocator, loop: *Loop, userctx: UserContext) !XMLHttpRequest {
         return .{
             .alloc = alloc,
-            .headers = .{ .allocator = alloc, .owned = true },
-            .response_headers = .{ .allocator = alloc, .owned = true },
+            .headers = Headers.init(alloc),
+            .response_headers = Headers.init(alloc),
             .impl = YieldImpl.init(loop),
             .method = undefined,
             .url = null,
@@ -242,16 +335,16 @@ pub const XMLHttpRequest = struct {
         return self.state;
     }
 
-    pub fn get_timeout(self: *XMLHttpRequest) u32 {
-        return self.timeout;
+    pub fn get_timeout(_: *XMLHttpRequest) u32 {
+        return 0;
     }
 
-    pub fn set_timeout(self: *XMLHttpRequest, timeout: u32) !void {
+    // TODO, the value is ignored for now.
+    pub fn set_timeout(_: *XMLHttpRequest, _: u32) !void {
         // TODO If the current global object is a Window object and this’s
         // synchronous flag is set, then throw an "InvalidAccessError"
         // DOMException.
         // https://xhr.spec.whatwg.org/#dom-xmlhttprequest-timeout
-        self.timeout = timeout;
     }
 
     pub fn get_withCredentials(self: *XMLHttpRequest) bool {
@@ -385,7 +478,7 @@ pub const XMLHttpRequest = struct {
             const body_init = XMLHttpRequestBodyInit{ .String = body.? };
 
             // keep the user content type from request headers.
-            if (self.headers.getFirstEntry("Content-Type") == null) {
+            if (self.headers.has("Content-Type")) {
                 // https://fetch.spec.whatwg.org/#bodyinit-safely-extract
                 try self.headers.append("Content-Type", try body_init.contentType());
             }
@@ -411,14 +504,17 @@ pub const XMLHttpRequest = struct {
         switch (self.priv_state) {
             .new => {
                 self.priv_state = .open;
-                self.req = self.cli.open(self.method, self.uri, self.headers, .{}) catch |e| return self.onErr(e);
+                self.req = self.cli.open(self.method, self.uri, .{
+                    .server_header_buffer = &self.response_header_buffer,
+                    .extra_headers = self.headers.all(),
+                }) catch |e| return self.onErr(e);
             },
             .open => {
                 // prepare payload transfert.
                 if (self.payload) |v| self.req.?.transfer_encoding = .{ .content_length = v.len };
 
                 self.priv_state = .send;
-                self.req.?.send(.{}) catch |e| return self.onErr(e);
+                self.req.?.send() catch |e| return self.onErr(e);
             },
             .send => {
                 if (self.payload) |payload| {
@@ -441,7 +537,8 @@ pub const XMLHttpRequest = struct {
                 log.info("{any} {any} {d}", .{ self.method, self.uri, self.req.?.response.status });
 
                 self.priv_state = .done;
-                self.response_headers = self.req.?.response.headers.clone(self.response_headers.allocator) catch |e| return self.onErr(e);
+                var it = self.req.?.response.iterateHeaders();
+                self.response_headers.load(&it) catch |e| return self.onErr(e);
 
                 // extract a mime type from headers.
                 const ct = self.response_headers.getFirstValue("Content-Type") orelse "text/xml";
