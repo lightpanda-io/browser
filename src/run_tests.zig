@@ -55,6 +55,7 @@ const ProgressEventTestExecFn = @import("xhr/progress_event.zig").testExecFn;
 const StorageTestExecFn = storage.testExecFn;
 const URLTestExecFn = url.testExecFn;
 const HTMLElementTestExecFn = @import("html/elements.zig").testExecFn;
+const MutationObserverTestExecFn = @import("dom/mutation_observer.zig").testExecFn;
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 pub const UserContext = @import("user_context.zig").UserContext;
@@ -133,6 +134,7 @@ fn testsAllExecFn(
         StorageTestExecFn,
         URLTestExecFn,
         HTMLElementTestExecFn,
+        MutationObserverTestExecFn,
     };
 
     inline for (testFns) |testFn| {
