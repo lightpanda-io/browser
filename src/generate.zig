@@ -28,6 +28,8 @@ fn itoa(comptime i: u8) ![]const u8 {
         len = 1;
     } else if (i < 100) {
         len = 2;
+    } else if (i < 1000) {
+        len = 3;
     } else {
         return error.GenerateTooMuchMembers;
     }
