@@ -24,7 +24,7 @@ const MaxStdOutSize = 512; // ensure debug msg are not too long
 pub const Cmd = struct {
 
     // internal fields
-    socket: std.os.socket_t,
+    socket: std.posix.socket_t,
     buf: []u8, // only for read operations
     err: ?Error = null,
 
@@ -154,7 +154,7 @@ pub fn sendAsync(ctx: *Cmd, msg: []const u8) !void {
 
 pub fn sendSync(ctx: *Cmd, msg: []const u8) !void {
     defer ctx.alloc().free(msg);
-    const s = try std.os.write(ctx.socket, msg);
+    const s = try std.posix.write(ctx.socket, msg);
     std.log.debug("send sync {d} bytes", .{s});
 }
 
@@ -163,9 +163,9 @@ pub fn sendSync(ctx: *Cmd, msg: []const u8) !void {
 
 const Accept = struct {
     cmd: *Cmd,
-    socket: std.os.socket_t,
+    socket: std.posix.socket_t,
 
-    fn cbk(self: *Accept, completion: *Completion, result: AcceptError!std.os.socket_t) void {
+    fn cbk(self: *Accept, completion: *Completion, result: AcceptError!std.posix.socket_t) void {
         self.cmd.socket = result catch |err| {
             self.cmd.err = err;
             return;
@@ -179,7 +179,7 @@ const Accept = struct {
 // Listen
 // ------
 
-pub fn listen(browser: *Browser, socket: std.os.socket_t) anyerror!void {
+pub fn listen(browser: *Browser, socket: std.posix.socket_t) anyerror!void {
     const loop = browser.currentSession().loop;
 
     // MsgBuffer
