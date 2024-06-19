@@ -7,7 +7,7 @@ const result = cdp.result;
 const getMsg = cdp.getMsg;
 const stringify = cdp.stringify;
 
-const LogMethods = enum {
+const Methods = enum {
     enable,
 };
 
@@ -18,15 +18,15 @@ pub fn log(
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
-    const method = std.meta.stringToEnum(LogMethods, action) orelse
+    const method = std.meta.stringToEnum(Methods, action) orelse
         return error.UnknownMethod;
 
     return switch (method) {
-        .enable => logEnable(alloc, id, scanner, ctx),
+        .enable => enable(alloc, id, scanner, ctx),
     };
 }
 
-fn logEnable(
+fn enable(
     alloc: std.mem.Allocator,
     id: ?u16,
     scanner: *std.json.Scanner,

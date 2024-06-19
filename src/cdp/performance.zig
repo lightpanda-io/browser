@@ -6,7 +6,7 @@ const cdp = @import("cdp.zig");
 const result = cdp.result;
 const getMsg = cdp.getMsg;
 
-const PerformanceMethods = enum {
+const Methods = enum {
     enable,
 };
 
@@ -17,15 +17,15 @@ pub fn performance(
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
-    const method = std.meta.stringToEnum(PerformanceMethods, action) orelse
+    const method = std.meta.stringToEnum(Methods, action) orelse
         return error.UnknownMethod;
 
     return switch (method) {
-        .enable => performanceEnable(alloc, id, scanner, ctx),
+        .enable => enable(alloc, id, scanner, ctx),
     };
 }
 
-fn performanceEnable(
+fn enable(
     alloc: std.mem.Allocator,
     id: ?u16,
     scanner: *std.json.Scanner,

@@ -7,7 +7,7 @@ const result = cdp.result;
 const getMsg = cdp.getMsg;
 const stringify = cdp.stringify;
 
-const EmulationMethods = enum {
+const Methods = enum {
     setEmulatedMedia,
     setFocusEmulationEnabled,
     setDeviceMetricsOverride,
@@ -21,7 +21,7 @@ pub fn emulation(
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
-    const method = std.meta.stringToEnum(EmulationMethods, action) orelse
+    const method = std.meta.stringToEnum(Methods, action) orelse
         return error.UnknownMethod;
     return switch (method) {
         .setEmulatedMedia => setEmulatedMedia(alloc, id, scanner, ctx),
