@@ -295,6 +295,9 @@ const kb = 1024;
 const ms = std.time.ns_per_ms;
 
 test {
+    const msgTest = @import("msg.zig");
+    std.testing.refAllDecls(msgTest);
+
     const asyncTest = @import("async/test.zig");
     std.testing.refAllDecls(asyncTest);
 
