@@ -125,7 +125,10 @@ fn evaluate(
     // input
     const Params = struct {
         expression: []const u8,
-        contextId: ?u8,
+        contextId: ?u8 = null,
+        returnByValue: ?bool = null,
+        awaitPromise: ?bool = null,
+        userGesture: ?bool = null,
     };
 
     const msg = try getMsg(alloc, Params, scanner);
