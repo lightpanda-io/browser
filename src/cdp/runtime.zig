@@ -9,7 +9,7 @@ const result = cdp.result;
 const getMsg = cdp.getMsg;
 const stringify = cdp.stringify;
 
-const RuntimeMethods = enum {
+const Methods = enum {
     enable,
     runIfWaitingForDebugger,
     evaluate,
@@ -24,7 +24,7 @@ pub fn runtime(
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
-    const method = std.meta.stringToEnum(RuntimeMethods, action) orelse
+    const method = std.meta.stringToEnum(Methods, action) orelse
         return error.UnknownMethod;
     return switch (method) {
         .enable => enable(alloc, id, scanner, ctx),

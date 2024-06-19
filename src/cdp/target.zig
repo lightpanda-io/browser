@@ -7,7 +7,7 @@ const result = cdp.result;
 const getMsg = cdp.getMsg;
 const stringify = cdp.stringify;
 
-const TargetMethods = enum {
+const Methods = enum {
     setDiscoverTargets,
     setAutoAttach,
     getTargetInfo,
@@ -23,12 +23,12 @@ pub fn target(
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
-    const method = std.meta.stringToEnum(TargetMethods, action) orelse
+    const method = std.meta.stringToEnum(Methods, action) orelse
         return error.UnknownMethod;
     return switch (method) {
-        .setDiscoverTargets => targetSetDiscoverTargets(alloc, id, scanner, ctx),
-        .setAutoAttach => tagetSetAutoAttach(alloc, id, scanner, ctx),
-        .getTargetInfo => tagetGetTargetInfo(alloc, id, scanner, ctx),
+        .setDiscoverTargets => setDiscoverTargets(alloc, id, scanner, ctx),
+        .setAutoAttach => setAutoAttach(alloc, id, scanner, ctx),
+        .getTargetInfo => getTargetInfo(alloc, id, scanner, ctx),
         .getBrowserContexts => getBrowserContexts(alloc, id, scanner, ctx),
         .createBrowserContext => createBrowserContext(alloc, id, scanner, ctx),
         .createTarget => createTarget(alloc, id, scanner, ctx),
@@ -39,7 +39,7 @@ const PageTargetID = "CFCD6EC01573CF29BB638E9DC0F52DDC";
 const BrowserTargetID = "2d2bdef9-1c95-416f-8c0e-83f3ab73a30c";
 const BrowserContextID = "65618675CB7D3585A95049E9DFE95EA9";
 
-fn targetSetDiscoverTargets(
+fn setDiscoverTargets(
     alloc: std.mem.Allocator,
     id: ?u16,
     scanner: *std.json.Scanner,
@@ -69,7 +69,7 @@ const TargetFilter = struct {
     exclude: ?bool = null,
 };
 
-fn tagetSetAutoAttach(
+fn setAutoAttach(
     alloc: std.mem.Allocator,
     id: ?u16,
     scanner: *std.json.Scanner,
@@ -100,7 +100,7 @@ fn tagetSetAutoAttach(
     return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
 }
 
-fn tagetGetTargetInfo(
+fn getTargetInfo(
     alloc: std.mem.Allocator,
     id: ?u16,
     scanner: *std.json.Scanner,

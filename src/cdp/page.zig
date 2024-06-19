@@ -10,7 +10,7 @@ const sendEvent = cdp.sendEvent;
 
 const Runtime = @import("runtime.zig");
 
-const PageMethods = enum {
+const Methods = enum {
     enable,
     getFrameTree,
     setLifecycleEventsEnabled,
@@ -26,7 +26,7 @@ pub fn page(
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
-    const method = std.meta.stringToEnum(PageMethods, action) orelse
+    const method = std.meta.stringToEnum(Methods, action) orelse
         return error.UnknownMethod;
     return switch (method) {
         .enable => enable(alloc, id, scanner, ctx),

@@ -5,9 +5,8 @@ const Ctx = server.Cmd;
 const cdp = @import("cdp.zig");
 const result = cdp.result;
 const getMsg = cdp.getMsg;
-const stringify = cdp.stringify;
 
-const NetworkMethods = enum {
+const Methods = enum {
     enable,
     setCacheDisabled,
 };
@@ -19,16 +18,16 @@ pub fn network(
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
-    const method = std.meta.stringToEnum(NetworkMethods, action) orelse
+    const method = std.meta.stringToEnum(Methods, action) orelse
         return error.UnknownMethod;
 
     return switch (method) {
-        .enable => networkEnable(alloc, id, scanner, ctx),
-        .setCacheDisabled => networkSetCacheDisabled(alloc, id, scanner, ctx),
+        .enable => enable(alloc, id, scanner, ctx),
+        .setCacheDisabled => setCacheDisabled(alloc, id, scanner, ctx),
     };
 }
 
-fn networkEnable(
+fn enable(
     alloc: std.mem.Allocator,
     id: ?u16,
     scanner: *std.json.Scanner,
@@ -39,7 +38,7 @@ fn networkEnable(
     return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
 }
 
-fn networkSetCacheDisabled(
+fn setCacheDisabled(
     alloc: std.mem.Allocator,
     id: ?u16,
     scanner: *std.json.Scanner,
