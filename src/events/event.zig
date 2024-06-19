@@ -241,31 +241,23 @@ pub fn testExecFn(
 }
 
 pub const EventHandler = struct {
-    fn handle(event: ?*parser.Event, data: ?*anyopaque) callconv(.C) void {
-        if (data) |d| {
-            const func = parser.event_handler_cbk(d);
+    fn handle(event: ?*parser.Event, data: parser.EventHandlerData) void {
+        // TODO get the allocator by another way?
+        var res = CallbackResult.init(data.cbk.nat_ctx.alloc);
+        defer res.deinit();
 
-            // TODO get the allocator by another way?
-            var res = CallbackResult.init(func.nat_ctx.alloc);
-            defer res.deinit();
+        if (event) |evt| {
+            data.cbk.trycall(.{
+                Event.toInterface(evt) catch unreachable,
+            }, &res) catch |e| log.err("event handler error: {any}", .{e});
+        } else {
+            data.cbk.trycall(.{event}, &res) catch |e| log.err("event handler error: {any}", .{e});
+        }
 
-            if (event) |evt| {
-                func.trycall(.{
-                    Event.toInterface(evt) catch unreachable,
-                }, &res) catch |e| log.err("event handler error: {any}", .{e});
-            } else {
-                func.trycall(.{event}, &res) catch |e| log.err("event handler error: {any}", .{e});
-            }
-
-            // in case of function error, we log the result and the trace.
-            if (!res.success) {
-                log.info("event handler error: {s}", .{res.result orelse "unknown"});
-                log.debug("{s}", .{res.stack orelse "no stack trace"});
-            }
-
-            // NOTE: we can not call func.deinit here
-            // b/c the handler can be called several times
-            // either on this dispatch event or in anoter one
+        // in case of function error, we log the result and the trace.
+        if (!res.success) {
+            log.info("event handler error: {s}", .{res.result orelse "unknown"});
+            log.debug("{s}", .{res.stack orelse "no stack trace"});
         }
     }
 }.handle;
