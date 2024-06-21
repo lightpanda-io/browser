@@ -1436,6 +1436,20 @@ pub fn elementGetAttribute(elem: *Element, name: []const u8) !?[]const u8 {
     return strToData(s.?);
 }
 
+pub fn elementGetAttributeNS(elem: *Element, ns: []const u8, name: []const u8) !?[]const u8 {
+    var s: ?*String = undefined;
+    const err = elementVtable(elem).dom_element_get_attribute_ns.?(
+        elem,
+        try strFromData(ns),
+        try strFromData(name),
+        &s,
+    );
+    try DOMErr(err);
+    if (s == null) return null;
+
+    return strToData(s.?);
+}
+
 pub fn elementSetAttribute(elem: *Element, qname: []const u8, value: []const u8) !void {
     const err = elementVtable(elem).dom_element_set_attribute.?(
         elem,
@@ -1445,8 +1459,32 @@ pub fn elementSetAttribute(elem: *Element, qname: []const u8, value: []const u8)
     try DOMErr(err);
 }
 
+pub fn elementSetAttributeNS(
+    elem: *Element,
+    ns: []const u8,
+    qname: []const u8,
+    value: []const u8,
+) !void {
+    const err = elementVtable(elem).dom_element_set_attribute_ns.?(
+        elem,
+        try strFromData(ns),
+        try strFromData(qname),
+        try strFromData(value),
+    );
+    try DOMErr(err);
+}
+
 pub fn elementRemoveAttribute(elem: *Element, qname: []const u8) !void {
     const err = elementVtable(elem).dom_element_remove_attribute.?(elem, try strFromData(qname));
+    try DOMErr(err);
+}
+
+pub fn elementRemoveAttributeNS(elem: *Element, ns: []const u8, qname: []const u8) !void {
+    const err = elementVtable(elem).dom_element_remove_attribute_ns.?(
+        elem,
+        try strFromData(ns),
+        try strFromData(qname),
+    );
     try DOMErr(err);
 }
 

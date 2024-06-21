@@ -138,12 +138,24 @@ pub const Element = struct {
         return try parser.elementGetAttribute(self, qname);
     }
 
+    pub fn _getAttributeNS(self: *parser.Element, ns: []const u8, qname: []const u8) !?[]const u8 {
+        return try parser.elementGetAttributeNS(self, ns, qname);
+    }
+
     pub fn _setAttribute(self: *parser.Element, qname: []const u8, value: []const u8) !void {
         return try parser.elementSetAttribute(self, qname, value);
     }
 
+    pub fn _setAttributeNS(self: *parser.Element, ns: []const u8, qname: []const u8, value: []const u8) !void {
+        return try parser.elementSetAttributeNS(self, ns, qname, value);
+    }
+
     pub fn _removeAttribute(self: *parser.Element, qname: []const u8) !void {
         return try parser.elementRemoveAttribute(self, qname);
+    }
+
+    pub fn _removeAttributeNS(self: *parser.Element, ns: []const u8, qname: []const u8) !void {
+        return try parser.elementRemoveAttributeNS(self, ns, qname);
     }
 
     pub fn _hasAttribute(self: *parser.Element, qname: []const u8) !bool {
