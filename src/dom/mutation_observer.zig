@@ -284,6 +284,9 @@ const EventHandler = struct {
 
         const muevt = parser.eventToMutationEvent(evt.?);
 
+        // TODO get the allocator by another way?
+        const alloc = data.cbk.nat_ctx.alloc;
+
         if (std.mem.eql(u8, t, "DOMAttrModified")) {
             mrs.first = .{
                 .type = "attributes",
@@ -305,12 +308,41 @@ const EventHandler = struct {
             if (o.options.characterDataOldValue) {
                 mrs.first.?.oldValue = parser.mutationEventPrevValue(muevt) catch null;
             }
+        } else if (std.mem.eql(u8, t, "DOMNodeInserted")) {
+            mrs.first = .{
+                .type = "childList",
+                .target = o.node,
+                .addedNodes = NodeList.init(),
+                .removedNodes = NodeList.init(),
+            };
+
+            const rn = parser.mutationEventRelatedNode(muevt) catch null;
+            if (rn) |n| {
+                mrs.first.?.addedNodes.append(alloc, n) catch |e| {
+                    log.err("mutation event handler error: {any}", .{e});
+                    return;
+                };
+            }
+        } else if (std.mem.eql(u8, t, "DOMNodeRemoved")) {
+            mrs.first = .{
+                .type = "childList",
+                .target = o.node,
+                .addedNodes = NodeList.init(),
+                .removedNodes = NodeList.init(),
+            };
+
+            const rn = parser.mutationEventRelatedNode(muevt) catch null;
+            if (rn) |n| {
+                mrs.first.?.removedNodes.append(alloc, n) catch |e| {
+                    log.err("mutation event handler error: {any}", .{e});
+                    return;
+                };
+            }
         } else {
             return;
         }
 
-        // TODO get the allocator by another way?
-        var res = CallbackResult.init(data.cbk.nat_ctx.alloc);
+        var res = CallbackResult.init(alloc);
         defer res.deinit();
 
         // TODO pass MutationRecords and MutationObserver

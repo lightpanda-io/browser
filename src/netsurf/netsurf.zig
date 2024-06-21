@@ -543,6 +543,14 @@ pub fn mutationEventPrevValue(evt: *MutationEvent) !?[]const u8 {
     return strToData(s.?);
 }
 
+pub fn mutationEventRelatedNode(evt: *MutationEvent) !?*Node {
+    var n: NodeExternal = undefined;
+    const err = c._dom_mutation_event_get_related_node(evt, &n);
+    try DOMErr(err);
+    if (n == null) return null;
+    return @as(*Node, @ptrCast(n));
+}
+
 // EventListener
 pub const EventListener = c.dom_event_listener;
 const EventListenerEntry = c.listener_entry;
