@@ -522,6 +522,27 @@ pub const EventType = enum(u8) {
     progress_event = 1,
 };
 
+pub const MutationEvent = c.dom_mutation_event;
+
+pub fn eventToMutationEvent(evt: *Event) *MutationEvent {
+    return @as(*MutationEvent, @ptrCast(evt));
+}
+
+pub fn mutationEventAttributeName(evt: *MutationEvent) ![]const u8 {
+    var s: ?*String = undefined;
+    const err = c._dom_mutation_event_get_attr_name(evt, &s);
+    try DOMErr(err);
+    return strToData(s.?);
+}
+
+pub fn mutationEventPrevValue(evt: *MutationEvent) !?[]const u8 {
+    var s: ?*String = undefined;
+    const err = c._dom_mutation_event_get_prev_value(evt, &s);
+    try DOMErr(err);
+    if (s == null) return null;
+    return strToData(s.?);
+}
+
 // EventListener
 pub const EventListener = c.dom_event_listener;
 const EventListenerEntry = c.listener_entry;
@@ -532,6 +553,10 @@ fn eventListenerGetData(lst: *EventListener) ?*anyopaque {
 
 // EventTarget
 pub const EventTarget = c.dom_event_target;
+
+pub fn eventTargetToNode(et: *EventTarget) *Node {
+    return @as(*Node, @ptrCast(et));
+}
 
 fn eventTargetVtable(et: *EventTarget) c.dom_event_target_vtable {
     // retrieve the vtable
