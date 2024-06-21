@@ -137,6 +137,16 @@ pub const Suite = struct {
             try cases.append(case);
         }
 
+        if (cases.items.len == 0) {
+            // no test case, create a failed one.
+            suite.pass = false;
+            try cases.append(.{
+                .pass = false,
+                .name = "no test case",
+                .message = "no test case",
+            });
+        }
+
         suite.cases = try cases.toOwnedSlice();
 
         return suite;
