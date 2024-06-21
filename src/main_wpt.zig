@@ -323,7 +323,7 @@ fn runSafe(
                     if (c.pass) pass += 1;
                 }
             }
-            const status = if (pass == all) "Pass" else "Fail";
+            const status = if (all > 0 and pass == all) "Pass" else "Fail";
             std.debug.print("{s} {d}/{d}", .{ status, pass, all });
 
             continue;
@@ -366,7 +366,8 @@ fn runSafe(
                 if (c.pass) pass += 1;
             }
         }
-        std.debug.print("{d}/{d}\n\n", .{ pass, all });
+        const status = if (all > 0 and pass == all) "Pass" else "Fail";
+        std.debug.print("{s} {d}/{d}\n\n", .{ status, pass, all });
     }
 
     if (out == .json) {
