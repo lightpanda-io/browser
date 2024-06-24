@@ -522,12 +522,6 @@ pub const EventType = enum(u8) {
     progress_event = 1,
 };
 
-// EventHandler
-pub fn event_handler_cbk(data: *anyopaque) *Callback {
-    const ptr: *align(@alignOf(*Callback)) anyopaque = @alignCast(data);
-    return @as(*Callback, @ptrCast(ptr));
-}
-
 // EventListener
 pub const EventListener = c.dom_event_listener;
 const EventListenerEntry = c.listener_entry;
@@ -587,10 +581,9 @@ pub fn eventTargetHasListener(
             // and capture property,
             // let's check if the callback handler is the same
             defer c.dom_event_listener_unref(listener);
-            const data = eventListenerGetData(listener);
-            if (data) |d| {
-                const cbk = event_handler_cbk(d);
-                if (cbk_id == cbk.id()) {
+            const ehd = EventHandlerDataInternal.fromListener(listener);
+            if (ehd) |d| {
+                if (cbk_id == d.data.cbk.id()) {
                     return lst;
                 }
             }
@@ -608,29 +601,99 @@ pub fn eventTargetHasListener(
     return null;
 }
 
-const EventHandler = fn (event: ?*Event, data: ?*anyopaque) callconv(.C) void;
+// EventHandlerFunc is a zig function called when the event is dispatched to a
+// listener.
+// The EventHandlerFunc is responsible to call the callback included into the
+// EventHandlerData.
+pub const EventHandlerFunc = *const fn (event: ?*Event, data: EventHandlerData) void;
+
+// EventHandler implements the function exposed in C and called by libdom.
+// It retrieves the EventHandlerInternalData and call the EventHandlerFunc with
+// the EventHandlerData in parameter.
+const EventHandler = struct {
+    fn handle(event: ?*Event, data: ?*anyopaque) callconv(.C) void {
+        if (data) |d| {
+            const ehd = EventHandlerDataInternal.get(d);
+            ehd.handler(event, ehd.data);
+
+            // NOTE: we can not call func.deinit here
+            // b/c the handler can be called several times
+            // either on this dispatch event or in anoter one
+        }
+    }
+}.handle;
+
+// EventHandlerData contains a JS callback and the data associated to the
+// handler.
+// If given, deinitFunc is called with the data pointer to allow the creator to
+// clean memory.
+// The callback is deinit by EventHandlerDataInternal. It must NOT be deinit
+// into deinitFunc.
+pub const EventHandlerData = struct {
+    cbk: Callback,
+    data: ?*anyopaque = null,
+    // deinitFunc implements the data deinitialization.
+    deinitFunc: ?DeinitFunc = null,
+
+    pub const DeinitFunc = *const fn (data: ?*anyopaque, alloc: std.mem.Allocator) void;
+};
+
+// EventHandlerDataInternal groups the EventHandlerFunc and the EventHandlerData.
+const EventHandlerDataInternal = struct {
+    data: EventHandlerData,
+    handler: EventHandlerFunc,
+
+    fn init(alloc: std.mem.Allocator, handler: EventHandlerFunc, data: EventHandlerData) !*EventHandlerDataInternal {
+        const ptr = try alloc.create(EventHandlerDataInternal);
+        ptr.* = .{
+            .data = data,
+            .handler = handler,
+        };
+        return ptr;
+    }
+
+    fn deinit(self: *EventHandlerDataInternal, alloc: std.mem.Allocator) void {
+        if (self.data.deinitFunc) |d| d(self.data.data, alloc);
+        self.data.cbk.deinit(alloc);
+        alloc.destroy(self);
+    }
+
+    fn get(data: *anyopaque) *EventHandlerDataInternal {
+        const ptr: *align(@alignOf(*EventHandlerDataInternal)) anyopaque = @alignCast(data);
+        return @as(*EventHandlerDataInternal, @ptrCast(ptr));
+    }
+
+    // retrieve a EventHandlerDataInternal from a listener.
+    fn fromListener(lst: *EventListener) ?*EventHandlerDataInternal {
+        const data = eventListenerGetData(lst);
+        // free cbk allocation made on eventTargetAddEventListener
+        if (data == null) return null;
+
+        return get(data.?);
+    }
+};
 
 pub fn eventTargetAddEventListener(
     et: *EventTarget,
     alloc: std.mem.Allocator,
     typ: []const u8,
-    cbk: Callback,
+    handlerFunc: EventHandlerFunc,
+    data: EventHandlerData,
     capture: bool,
-    handler: EventHandler,
 ) !void {
     // this allocation will be removed either on
     // eventTargetRemoveEventListener or eventTargetRemoveAllEventListeners
-    const cbk_ptr = try alloc.create(Callback);
-    cbk_ptr.* = cbk;
+    const ehd = try EventHandlerDataInternal.init(alloc, handlerFunc, data);
+    errdefer ehd.deinit(alloc);
 
     // When a function is used as an event handler, its this parameter is bound
     // to the DOM element on which the listener is placed.
     // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/this#this_in_dom_event_handlers
-    try cbk_ptr.setThisArg(et);
+    try ehd.data.cbk.setThisArg(et);
 
-    const ctx = @as(*anyopaque, @ptrCast(cbk_ptr));
+    const ctx = @as(*anyopaque, @ptrCast(ehd));
     var listener: ?*EventListener = undefined;
-    const errLst = c.dom_event_listener_create(handler, ctx, &listener);
+    const errLst = c.dom_event_listener_create(EventHandler, ctx, &listener);
     try DOMErr(errLst);
     defer c.dom_event_listener_unref(listener);
 
@@ -646,13 +709,9 @@ pub fn eventTargetRemoveEventListener(
     lst: *EventListener,
     capture: bool,
 ) !void {
-    const data = eventListenerGetData(lst);
-    // free cbk allocation made on eventTargetAddEventListener
-    if (data) |d| {
-        const cbk_ptr = event_handler_cbk(d);
-        cbk_ptr.deinit(alloc);
-        alloc.destroy(cbk_ptr);
-    }
+    // free data allocation made on eventTargetAddEventListener
+    const ehd = EventHandlerDataInternal.fromListener(lst);
+    if (ehd) |d| d.deinit(alloc);
 
     const s = try strFromData(typ);
     const err = eventTargetVtable(et).remove_event_listener.?(et, s, lst, capture);
@@ -680,13 +739,10 @@ pub fn eventTargetRemoveAllEventListeners(
 
         if (lst) |listener| {
             defer c.dom_event_listener_unref(listener);
-            const data = eventListenerGetData(listener);
-            if (data) |d| {
-                // free cbk allocation made on eventTargetAddEventListener
-                const cbk = event_handler_cbk(d);
-                cbk.deinit(alloc);
-                alloc.destroy(cbk);
-            }
+
+            const ehd = EventHandlerDataInternal.fromListener(listener);
+            if (ehd) |d| d.deinit(alloc);
+
             const err = eventTargetVtable(et).remove_event_listener.?(
                 et,
                 null,

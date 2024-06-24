@@ -52,9 +52,9 @@ pub const XMLHttpRequestEventTarget = struct {
             @as(*parser.EventTarget, @ptrCast(self)),
             alloc,
             typ,
-            cbk,
-            false,
             EventHandler,
+            .{ .cbk = cbk },
+            false,
         );
     }
     fn unregister(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator, typ: []const u8, cbk: Callback) !void {

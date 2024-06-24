@@ -73,9 +73,9 @@ pub const EventTarget = struct {
             self,
             alloc,
             eventType,
-            cbk,
-            capture orelse false,
             EventHandler,
+            .{ .cbk = cbk },
+            capture orelse false,
         );
     }
 
