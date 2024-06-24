@@ -25,6 +25,7 @@ const NamedNodeMap = @import("namednodemap.zig").NamedNodeMap;
 const DOMTokenList = @import("token_list.zig").DOMTokenList;
 const NodeList = @import("nodelist.zig").NodeList;
 const Nod = @import("node.zig");
+const MutationObserver = @import("mutation_observer.zig");
 
 pub const Interfaces = generate.Tuple(.{
     DOMException,
@@ -35,4 +36,5 @@ pub const Interfaces = generate.Tuple(.{
     NodeList,
     Nod.Node,
     Nod.Interfaces,
+    MutationObserver.Interfaces,
 });
