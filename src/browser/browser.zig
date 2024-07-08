@@ -198,21 +198,21 @@ pub const Page = struct {
     }
 
     pub fn wait(self: *Page) !void {
-        const alloc = self.arena.allocator();
-        var res = try self.session.env.waitTryCatch(alloc);
-        defer res.deinit(alloc);
 
-        if (res.success) {
-            log.debug("wait: {s}", .{res.result});
-        } else {
-            if (builtin.mode == .Debug and res.stack != null) {
-                log.info("wait: {s}", .{res.stack.?});
-            } else {
-                log.info("wait: {s}", .{res.result});
+        // try catch
+        var try_catch: jsruntime.TryCatch = undefined;
+        try_catch.init(self.session.env);
+        defer try_catch.deinit();
+
+        self.session.env.wait() catch {
+            const alloc = self.arena.allocator();
+            if (try try_catch.err(alloc, self.session.env)) |msg| {
+                defer alloc.free(msg);
+                std.log.info("wait error: {s}", .{msg});
+                return;
             }
-        }
-
-        return;
+        };
+        log.debug("wait: OK", .{});
     }
 
     // spec reference: https://html.spec.whatwg.org/#document-lifecycle
@@ -322,7 +322,7 @@ pub const Page = struct {
         // start JS env
         // TODO load the js env concurrently with the HTML parsing.
         log.debug("start js env", .{});
-        try self.session.env.start(alloc);
+        try self.session.env.start();
 
         // replace the user context document with the new one.
         try self.session.env.setUserContext(.{
@@ -473,22 +473,26 @@ pub const Page = struct {
             return;
         }
 
+        var try_catch: jsruntime.TryCatch = undefined;
+        try_catch.init(self.session.env);
+        defer try_catch.deinit();
+
         const opt_text = try parser.nodeTextContent(parser.elementToNode(e));
         if (opt_text) |text| {
             // TODO handle charset attribute
-            var res = try self.session.env.execTryCatch(alloc, text, "");
-            defer res.deinit(alloc);
-
-            if (res.success) {
-                log.debug("eval inline: {s}", .{res.result});
-            } else {
-                if (builtin.mode == .Debug and res.stack != null) {
-                    log.info("eval inline: {s}", .{res.stack.?});
-                } else {
-                    log.info("eval inline: {s}", .{res.result});
+            const res = self.session.env.exec(text, "") catch {
+                if (try try_catch.err(alloc, self.session.env)) |msg| {
+                    defer alloc.free(msg);
+                    log.info("eval inline {s}: {s}", .{ text, msg });
                 }
-            }
+                return;
+            };
 
+            if (builtin.mode == .Debug) {
+                const msg = try res.toString(alloc, self.session.env);
+                defer alloc.free(msg);
+                log.debug("eval inline {s}", .{msg});
+            }
             return;
         }
 
@@ -530,18 +534,22 @@ pub const Page = struct {
         // check no body
         if (body.len == 0) return FetchError.NoBody;
 
-        var res = try self.session.env.execTryCatch(alloc, body, src);
-        defer res.deinit(alloc);
+        var try_catch: jsruntime.TryCatch = undefined;
+        try_catch.init(self.session.env);
+        defer try_catch.deinit();
 
-        if (res.success) {
-            log.debug("eval remote {s}: {s}", .{ src, res.result });
-        } else {
-            if (builtin.mode == .Debug and res.stack != null) {
-                log.info("eval remote {s}: {s}", .{ src, res.stack.? });
-            } else {
-                log.info("eval remote {s}: {s}", .{ src, res.result });
+        const res = self.session.env.exec(body, src) catch {
+            if (try try_catch.err(alloc, self.session.env)) |msg| {
+                defer alloc.free(msg);
+                log.info("eval remote {s}: {s}", .{ src, msg });
             }
             return FetchError.JsErr;
+        };
+
+        if (builtin.mode == .Debug) {
+            const msg = try res.toString(alloc, self.session.env);
+            defer alloc.free(msg);
+            log.debug("eval remote {s}: {s}", .{ src, msg });
         }
     }
 

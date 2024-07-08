@@ -141,7 +141,7 @@ pub fn main() !void {
         var arena = std.heap.ArenaAllocator.init(alloc);
         defer arena.deinit();
 
-        const res = wpt.run(&arena, wpt_dir, tc, &loader) catch |err| {
+        const result = wpt.run(&arena, wpt_dir, tc, &loader) catch |err| {
             const suite = try Suite.init(alloc, tc, false, @errorName(err), null);
             try results.append(suite);
 
@@ -151,9 +151,8 @@ pub fn main() !void {
             failures += 1;
             continue;
         };
-        // no need to call res.deinit() thanks to the arena allocator.
 
-        const suite = try Suite.init(alloc, tc, res.success, res.result, res.stack);
+        const suite = try Suite.init(alloc, tc, true, result, null);
         try results.append(suite);
 
         if (out == .json) {
