@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const jsruntime = @import("jsruntime");
 
@@ -143,22 +144,11 @@ fn evaluate(
     }
 
     // evaluate the script in the context of the current page
+    const session = ctx.browser.currentSession();
     // TODO: should we use instead the allocator of the page?
-    // the following code does not work
-    // const page_alloc = ctx.browser.currentSession().page.?.arena.allocator();
-    const session_alloc = ctx.browser.currentSession().alloc;
-    var res = jsruntime.JSResult{};
-    try ctx.browser.currentSession().env.run(session_alloc, params.expression, "cdp", &res, null);
-    defer res.deinit(session_alloc);
+    // the following code does not work with session.page.?.arena.allocator() as alloc
 
-    if (!res.success) {
-        std.log.err("script {d} result: {s}", .{ id, res.result });
-        if (res.stack) |stack| {
-            std.log.err("script {d} stack: {s}", .{ id, stack });
-        }
-        return error.CDPRuntimeEvaluate;
-    }
-    std.log.debug("script {d} result: {s}", .{ id, res.result });
+    _ = try runtimeEvaluate(session.alloc, id, session.env, params.expression, "cdp");
 
     // TODO: Resp should depends on JS result returned by the JS engine
     const Resp = struct {
@@ -193,8 +183,7 @@ fn addBinding(
     defer alloc.free(script);
 
     const session = ctx.browser.currentSession();
-    const res = try runtimeEvaluate(session.alloc, id, session.env, script, "addBinding");
-    defer res.deinit(session.alloc);
+    _ = try runtimeEvaluate(session.alloc, id, session.env, script, "addBinding");
 
     return result(alloc, id, null, null, msg.sessionID);
 }
@@ -259,16 +248,13 @@ fn callFunctionOn(
 
     const session = ctx.browser.currentSession();
     // TODO: should we use the page's allocator instead of the session's allocator?
-    // the following code does not work:
-    // const page_alloc = ctx.browser.currentSession().page.?.arena.allocator();
+    // the following code does not work with session.page.?.arena.allocator() as alloc
 
     // first evaluate the function declaration
-    const decl = try runtimeEvaluate(session.alloc, id, session.env, params.functionDeclaration, name);
-    defer decl.deinit(session.alloc);
+    _ = try runtimeEvaluate(session.alloc, id, session.env, params.functionDeclaration, name);
 
     // then call the function on the arguments
-    const res = try runtimeEvaluate(session.alloc, id, session.env, function, name);
-    defer res.deinit(session.alloc);
+    _ = try runtimeEvaluate(session.alloc, id, session.env, function, name);
 
     return result(alloc, id, null, "{\"type\":\"undefined\"}", msg.sessionID);
 }
@@ -280,17 +266,26 @@ fn runtimeEvaluate(
     env: jsruntime.Env,
     script: []const u8,
     comptime name: []const u8,
-) !jsruntime.JSResult {
-    var res = jsruntime.JSResult{};
-    try env.run(alloc, script, "cdp.Runtime." ++ name, &res, null);
+) !jsruntime.JSValue {
 
-    if (!res.success) {
-        std.log.err("'{s}' id {d}, result: {s}", .{ name, id, res.result });
-        if (res.stack) |stack| {
-            std.log.err("'{s}' id {d}, stack: {s}", .{ name, id, stack });
+    // try catch
+    var try_catch: jsruntime.TryCatch = undefined;
+    try_catch.init(env);
+    defer try_catch.deinit();
+
+    // script exec
+    const res = env.execWait(script, name) catch {
+        if (try try_catch.err(alloc, env)) |err_msg| {
+            defer alloc.free(err_msg);
+            std.log.err("'{s}' id {d}, result: {s}", .{ name, id, err_msg });
         }
         return error.CDPRuntimeEvaluate;
+    };
+
+    if (builtin.mode == .Debug) {
+        const res_msg = try res.toString(alloc, env);
+        defer alloc.free(res_msg);
+        std.log.debug("'{s}' id {d}, result: {s}", .{ name, id, res_msg });
     }
-    std.log.debug("'{s}' id {d}, result: {s}", .{ name, id, res.result });
     return res;
 }
