@@ -71,7 +71,7 @@ fn testExecFn(
     defer parser.deinit();
 
     // start JS env
-    try js_env.start(alloc);
+    try js_env.start();
     defer js_env.stop();
 
     var storageShelf = storage.Shelf.init(alloc);
