@@ -147,17 +147,32 @@ fn evaluate(
     const session = ctx.browser.currentSession();
     // TODO: should we use instead the allocator of the page?
     // the following code does not work with session.page.?.arena.allocator() as alloc
+    const res = try runtimeEvaluate(session.alloc, id, session.env, params.expression, "cdp");
 
-    _ = try runtimeEvaluate(session.alloc, id, session.env, params.expression, "cdp");
+    // check result
+    const res_type = try res.typeOf(session.env);
 
     // TODO: Resp should depends on JS result returned by the JS engine
     const Resp = struct {
-        type: []const u8 = "object",
-        className: []const u8 = "UtilityScript",
-        description: []const u8 = "UtilityScript",
-        objectId: []const u8 = "7481631759780215274.3.2",
+        result: struct {
+            type: []const u8,
+            subtype: ?[]const u8 = null,
+            className: ?[]const u8 = null,
+            description: ?[]const u8 = null,
+            objectId: ?[]const u8 = null,
+        },
     };
-    return result(alloc, id, Resp, Resp{}, msg.sessionID);
+    var resp = Resp{
+        .result = .{
+            .type = @tagName(res_type),
+        },
+    };
+    if (res_type == .object) {
+        resp.result.className = "Object";
+        resp.result.description = "Object";
+        resp.result.objectId = "-9051357107442861868.3.2";
+    }
+    return result(alloc, id, Resp, resp, msg.sessionID);
 }
 
 fn addBinding(
