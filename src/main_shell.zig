@@ -38,7 +38,7 @@ fn execJS(
     js_env: *jsruntime.Env,
 ) anyerror!void {
     // start JS env
-    try js_env.start(alloc);
+    try js_env.start();
     defer js_env.stop();
 
     var cli = Client{ .allocator = alloc, .loop = js_env.nat_ctx.loop };

@@ -17,53 +17,116 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const posix = std.posix;
 
 const jsruntime = @import("jsruntime");
 
+const Browser = @import("browser/browser.zig").Browser;
+const server = @import("server.zig");
+
 const parser = @import("netsurf");
 const apiweb = @import("apiweb.zig");
-const Window = @import("html/window.zig").Window;
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 pub const UserContext = apiweb.UserContext;
 
 const socket_path = "/tmp/browsercore-server.sock";
 
-var doc: *parser.DocumentHTML = undefined;
-var server: std.net.Server = undefined;
+// Inspired by std.net.StreamServer in Zig < 0.12
+pub const StreamServer = struct {
+    /// Copied from `Options` on `init`.
+    kernel_backlog: u31,
+    reuse_address: bool,
+    reuse_port: bool,
+    nonblocking: bool,
 
-fn execJS(
-    alloc: std.mem.Allocator,
-    js_env: *jsruntime.Env,
-) anyerror!void {
-    // start JS env
-    try js_env.start(alloc);
-    defer js_env.stop();
+    /// `undefined` until `listen` returns successfully.
+    listen_address: std.net.Address,
 
-    // alias global as self and window
-    var window = Window.create(null);
-    window.replaceDocument(doc);
-    try js_env.bindGlobal(window);
+    sockfd: ?posix.socket_t,
 
-    while (true) {
+    pub const Options = struct {
+        /// How many connections the kernel will accept on the application's behalf.
+        /// If more than this many connections pool in the kernel, clients will start
+        /// seeing "Connection refused".
+        kernel_backlog: u31 = 128,
 
-        // read cmd
-        const conn = try server.accept();
-        var buf: [100]u8 = undefined;
-        const read = try conn.stream.read(&buf);
-        const cmd = buf[0..read];
-        std.debug.print("<- {s}\n", .{cmd});
-        if (std.mem.eql(u8, cmd, "exit")) {
-            break;
-        }
+        /// Enable SO.REUSEADDR on the socket.
+        reuse_address: bool = false,
 
-        const res = try js_env.execTryCatch(alloc, cmd, "cdp");
-        if (res.success) {
-            std.debug.print("-> {s}\n", .{res.result});
-        }
-        _ = try conn.stream.write(res.result);
+        /// Enable SO.REUSEPORT on the socket.
+        reuse_port: bool = false,
+
+        /// Non-blocking mode.
+        nonblocking: bool = false,
+    };
+
+    /// After this call succeeds, resources have been acquired and must
+    /// be released with `deinit`.
+    pub fn init(options: Options) StreamServer {
+        return StreamServer{
+            .sockfd = null,
+            .kernel_backlog = options.kernel_backlog,
+            .reuse_address = options.reuse_address,
+            .reuse_port = options.reuse_port,
+            .nonblocking = options.nonblocking,
+            .listen_address = undefined,
+        };
     }
-}
+
+    /// Release all resources. The `StreamServer` memory becomes `undefined`.
+    pub fn deinit(self: *StreamServer) void {
+        self.close();
+        self.* = undefined;
+    }
+
+    pub fn listen(self: *StreamServer, address: std.net.Address) !void {
+        const sock_flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC;
+        var use_sock_flags: u32 = sock_flags;
+        if (self.nonblocking) use_sock_flags |= posix.SOCK.NONBLOCK;
+        const proto = if (address.any.family == posix.AF.UNIX) @as(u32, 0) else posix.IPPROTO.TCP;
+
+        const sockfd = try posix.socket(address.any.family, use_sock_flags, proto);
+        self.sockfd = sockfd;
+        errdefer {
+            posix.close(sockfd);
+            self.sockfd = null;
+        }
+
+        if (self.reuse_address) {
+            try posix.setsockopt(
+                sockfd,
+                posix.SOL.SOCKET,
+                posix.SO.REUSEADDR,
+                &std.mem.toBytes(@as(c_int, 1)),
+            );
+        }
+        if (@hasDecl(posix.SO, "REUSEPORT") and self.reuse_port) {
+            try posix.setsockopt(
+                sockfd,
+                posix.SOL.SOCKET,
+                posix.SO.REUSEPORT,
+                &std.mem.toBytes(@as(c_int, 1)),
+            );
+        }
+
+        var socklen = address.getOsSockLen();
+        try posix.bind(sockfd, &address.any, socklen);
+        try posix.listen(sockfd, self.kernel_backlog);
+        try posix.getsockname(sockfd, &self.listen_address.any, &socklen);
+    }
+
+    /// Stop listening. It is still necessary to call `deinit` after stopping listening.
+    /// Calling `deinit` will automatically call `close`. It is safe to call `close` when
+    /// not listening.
+    pub fn close(self: *StreamServer) void {
+        if (self.sockfd) |fd| {
+            posix.close(fd);
+            self.sockfd = null;
+            self.listen_address = undefined;
+        }
+    }
+};
 
 pub fn main() !void {
 
@@ -74,18 +137,6 @@ pub fn main() !void {
     // alloc
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
-
-    try parser.init();
-    defer parser.deinit();
-
-    // document
-    const file = try std.fs.cwd().openFile("test.html", .{});
-    defer file.close();
-
-    doc = try parser.documentHTMLParse(file.reader(), "UTF-8");
-    defer parser.documentHTMLClose(doc) catch |err| {
-        std.debug.print("documentHTMLClose error: {s}\n", .{@errorName(err)});
-    };
 
     // remove socket file of internal server
     // reuse_address (SO_REUSEADDR flag) does not seems to work on unix socket
@@ -99,9 +150,19 @@ pub fn main() !void {
 
     // server
     const addr = try std.net.Address.initUnix(socket_path);
-    server = try addr.listen(.{});
-    defer server.deinit();
+    var srv = StreamServer.init(.{
+        .reuse_address = true,
+        .reuse_port = true,
+        .nonblocking = true,
+    });
+    defer srv.deinit();
+
+    try srv.listen(addr);
+    defer srv.close();
     std.debug.print("Listening on: {s}...\n", .{socket_path});
 
-    try jsruntime.loadEnv(&arena, null, execJS);
+    var browser = try Browser.init(arena.allocator(), vm);
+    defer browser.deinit();
+
+    try server.listen(&browser, srv.sockfd.?);
 }
