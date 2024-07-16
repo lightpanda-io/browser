@@ -1,0 +1,57 @@
+name: nightly build
+
+env:
+  ARCH: x86_64-linux
+
+on:
+  schedule:
+    - cron: "2 2 * * *"
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: read
+
+jobs:
+  build:
+    name: nightly build
+
+    strategy:
+      matrix:
+        target:
+          - x86_64-linux
+        include:
+          - target: x86_64-linux
+            os: ubuntu-latest
+
+    runs-on: ${{ matrix.os }}
+    container:
+      image: ghcr.io/lightpanda-io/zig-browsercore:0.12.1
+      credentials:
+       username: ${{ github.actor }}
+       password: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_CI_PAT }}
+          # fetch submodules recusively, to get zig-js-runtime submodules also.
+          submodules: recursive
+
+      - uses: ./.github/actions/install
+
+      - name: zig build
+        run: zig build --release=safe -Doptimize=ReleaseSafe -Dengine=v8
+
+      - name: Rename binary
+        run: mv zig-out/bin/browsercore-get lightpanda-get-${{ matrix.target }}
+
+      - name: Upload the build
+        uses: ncipollo/release-action@v1
+        with:
+          allowUpdates: true
+          artifacts: lightpanda-get-${{ matrix.target }}
+          tag: nightly
