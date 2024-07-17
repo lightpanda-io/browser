@@ -1,5 +1,8 @@
 name: zig-fmt
 
+env:
+  ZIG_VERSION: 0.12.1
+
 on:
   pull_request:
 
@@ -26,15 +29,12 @@ jobs:
     if: github.event.pull_request.draft == false
 
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/lightpanda-io/zig:0.12.1
-      credentials:
-       username: ${{ github.actor }}
-       password: ${{ secrets.GITHUB_TOKEN }}
-    outputs:
-      zig_fmt_errs: ${{ steps.fmt.outputs.zig_fmt_errs }}
 
     steps:
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0

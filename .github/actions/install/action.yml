@@ -1,23 +1,73 @@
 name: "Browsercore install"
 description: "Install deps for the project browsercore"
 
+inputs:
+  zig:
+    description: 'Zig version to install'
+    required: false
+    default: '0.12.1'
+  arch:
+    description: 'CPU arch used to select the v8 lib'
+    required: false
+    default: 'x86_64'
+  os:
+    description: 'OS used to select the v8 lib'
+    required: false
+    default: 'linux'
+  zig-v8:
+    description: 'zig v8 version to install'
+    required: false
+    default: 'v0.1.5'
+  v8:
+    description: 'v8 version to install'
+    required: false
+    default: '11.1.134'
+  cache-dir:
+    description: 'cache dir to use'
+    required: false
+    default: '~/.cache'
+
 runs:
   using: "composite"
 
   steps:
+    - name: Install apt deps
+      if: ${{ inputs.os == 'linux' }}
+      shell: bash
+      run: sudo apt-get install -y wget xz-utils python3 ca-certificates git pkg-config libglib2.0-dev gperf libexpat1-dev cmake clang
+
+    - uses: mlugg/setup-zig@v1
+      with:
+        version: ${{ inputs.zig }}
+
+    - name: Cache v8
+      id: cache-v8
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-v8
+      with:
+        path: ${{ inputs.cache-dir }}/v8
+        key: libc_v8_${{ inputs.v8 }}_${{ inputs.os }}_${{ inputs.arch }}.a
+
+    - if: ${{ steps.cache-v8.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: |
+        mkdir -p ${{ inputs.cache-dir }}/v8
+
+        wget -O ${{ inputs.cache-dir }}/v8/libc_v8.a https://github.com/lightpanda-io/zig-v8-fork/releases/download/${{ inputs.zig-v8 }}/libc_v8_${{ inputs.v8 }}_${{ inputs.os }}_${{ inputs.arch }}.a
+
     - name: install v8
       shell: bash
       run: |
-        mkdir -p vendor/zig-js-runtime/vendor/v8/${{env.ARCH}}/debug
-        ln -s /usr/local/lib/libc_v8.a vendor/zig-js-runtime/vendor/v8/${{env.ARCH}}/debug/libc_v8.a
+        mkdir -p vendor/zig-js-runtime/vendor/v8/${{inputs.arch}}-${{inputs.os}}/debug
+        ln -s ${{ inputs.cache-dir }}/v8/libc_v8.a vendor/zig-js-runtime/vendor/v8/${{inputs.arch}}-${{inputs.os}}/debug/libc_v8.a
 
-        mkdir -p vendor/zig-js-runtime/vendor/v8/${{env.ARCH}}/release
-        ln -s /usr/local/lib/libc_v8.a vendor/zig-js-runtime/vendor/v8/${{env.ARCH}}/release/libc_v8.a
+        mkdir -p vendor/zig-js-runtime/vendor/v8/${{inputs.arch}}-${{inputs.os}}/release
+        ln -s ${{ inputs.cache-dir }}/v8/libc_v8.a vendor/zig-js-runtime/vendor/v8/${{inputs.arch}}-${{inputs.os}}/release/libc_v8.a
 
     - name: libiconv
       shell: bash
-      run: |
-        ln -s /usr/local/lib/libiconv vendor/libiconv
+      run: make install-libiconv
 
     - name: build mimalloc
       shell: bash

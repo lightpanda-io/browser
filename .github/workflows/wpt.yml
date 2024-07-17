@@ -1,7 +1,6 @@
 name: wpt
 
 env:
-  ARCH: x86_64-linux
   AWS_ACCESS_KEY_ID: ${{ vars.LPD_PERF_AWS_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.LPD_PERF_AWS_SECRET_ACCESS_KEY }}
   AWS_BUCKET: ${{ vars.LPD_PERF_AWS_BUCKET }}
@@ -46,16 +45,6 @@ jobs:
     if: github.event.pull_request.draft == false
 
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/lightpanda-io/zig-browsercore:0.12.1
-      credentials:
-       username: ${{ github.actor }}
-       password: ${{ secrets.GITHUB_TOKEN }}
-
-      # docker blocks io_uring syscalls by default now.
-      # see https://github.com/tigerbeetle/tigerbeetle/pull/1995
-      # see https://github.com/moby/moby/pull/46762
-      options: "--security-opt seccomp=unconfined"
 
     steps:
       - uses: actions/checkout@v4
