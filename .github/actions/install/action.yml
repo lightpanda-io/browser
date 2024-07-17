@@ -32,6 +32,7 @@ runs:
 
   steps:
     - name: Install apt deps
+      if: ${{ inputs.os == 'linux' }}
       shell: bash
       run: sudo apt-get install -y wget xz-utils python3 ca-certificates git pkg-config libglib2.0-dev gperf libexpat1-dev cmake clang
 
