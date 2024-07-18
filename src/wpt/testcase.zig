@@ -67,28 +67,22 @@ pub const Suite = struct {
     pass: bool,
     name: []const u8,
     message: ?[]const u8,
-    stack: ?[]const u8,
     cases: ?[]Case,
 
     // caller owns the wpt.Suite.
     // owner must call deinit().
-    pub fn init(alloc: std.mem.Allocator, name: []const u8, pass: bool, res: []const u8, stack: ?[]const u8) !Suite {
+    pub fn init(alloc: std.mem.Allocator, name: []const u8, pass: bool, res: []const u8) !Suite {
         var suite = Suite{
             .alloc = alloc,
             .pass = false,
             .name = try alloc.dupe(u8, name),
             .message = null,
-            .stack = null,
             .cases = null,
         };
 
         // handle JS error.
         if (!pass) {
             suite.message = try alloc.dupe(u8, res);
-            if (stack) |st| {
-                suite.stack = try alloc.dupe(u8, st);
-            }
-
             return suite;
         }
 
@@ -155,10 +149,6 @@ pub const Suite = struct {
     pub fn deinit(self: Suite) void {
         self.alloc.free(self.name);
 
-        if (self.stack) |stack| {
-            self.alloc.free(stack);
-        }
-
         if (self.message) |res| {
             self.alloc.free(res);
         }
@@ -173,9 +163,6 @@ pub const Suite = struct {
 
     pub fn fmtMessage(self: Suite) []const u8 {
         if (self.message) |v| {
-            return v;
-        }
-        if (self.stack) |v| {
             return v;
         }
         return "";
@@ -199,7 +186,7 @@ test "success test case" {
         ,
     };
 
-    const suite = Suite.init(alloc, "foo", res.pass, res.result, null) catch unreachable; // TODO
+    const suite = Suite.init(alloc, "foo", res.pass, res.result) catch unreachable; // TODO
     defer suite.deinit();
 
     try testing.expect(suite.pass == true);
@@ -226,7 +213,7 @@ test "failed test case" {
         ,
     };
 
-    const suite = Suite.init(alloc, "foo", res.pass, res.result, null) catch unreachable; // TODO
+    const suite = Suite.init(alloc, "foo", res.pass, res.result) catch unreachable; // TODO
     defer suite.deinit();
 
     try testing.expect(suite.pass == false);
@@ -251,7 +238,7 @@ test "invalid result" {
         ,
     };
 
-    const suite = Suite.init(alloc, "foo", res.pass, res.result, null) catch unreachable; // TODO
+    const suite = Suite.init(alloc, "foo", res.pass, res.result) catch unreachable; // TODO
     defer suite.deinit();
 
     try testing.expect(suite.pass == false);
@@ -266,7 +253,7 @@ test "invalid result" {
         ,
     };
 
-    const suite2 = Suite.init(alloc, "foo", res2.pass, res2.result, null) catch unreachable; // TODO
+    const suite2 = Suite.init(alloc, "foo", res2.pass, res2.result) catch unreachable; // TODO
     defer suite2.deinit();
 
     try testing.expect(suite2.pass == false);
