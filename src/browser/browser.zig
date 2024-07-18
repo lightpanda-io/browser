@@ -37,7 +37,7 @@ const Walker = @import("../dom/walker.zig").WalkerDepthFirst;
 
 const storage = @import("../storage/storage.zig");
 
-const FetchResult = std.http.Client.FetchResult;
+const FetchResult = @import("../http/Client.zig").Client.FetchResult;
 
 const UserContext = @import("../user_context.zig").UserContext;
 const HttpClient = @import("../async/Client.zig");
