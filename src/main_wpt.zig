@@ -142,7 +142,7 @@ pub fn main() !void {
         defer arena.deinit();
 
         const res = wpt.run(&arena, wpt_dir, tc, &loader) catch |err| {
-            const suite = try Suite.init(alloc, tc, false, @errorName(err), null);
+            const suite = try Suite.init(alloc, tc, false, @errorName(err));
             try results.append(suite);
 
             if (out == .text) {
@@ -151,9 +151,9 @@ pub fn main() !void {
             failures += 1;
             continue;
         };
-        // no need to call res.deinit() thanks to the arena allocator.
+        defer res.deinit(arena.allocator());
 
-        const suite = try Suite.init(alloc, tc, res.success, res.result, res.stack);
+        const suite = try Suite.init(alloc, tc, res.ok, res.msg orelse "");
         try results.append(suite);
 
         if (out == .json) {
@@ -196,7 +196,7 @@ pub fn main() !void {
                 try cases.append(Case{
                     .pass = suite.pass,
                     .name = suite.name,
-                    .message = suite.stack orelse suite.message,
+                    .message = suite.message,
                 });
             }
 

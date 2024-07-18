@@ -36,7 +36,7 @@ const Client = @import("../async/Client.zig");
 // runWPT parses the given HTML file, starts a js env and run the first script
 // tags containing javascript sources.
 // It loads first the js libs files.
-pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const u8, loader: *FileLoader) !jsruntime.JSResult {
+pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const u8, loader: *FileLoader) !Res {
     const alloc = arena.allocator();
     try parser.init();
     defer parser.deinit();
@@ -70,15 +70,16 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     try js_env.load(&js_types);
 
     // start JS env
-    try js_env.start(alloc);
+    try js_env.start();
     defer js_env.stop();
 
     // display console logs
     defer {
-        var res = evalJS(js_env, alloc, "console.join('\\n');", "console") catch unreachable;
+        const res = evalJS(js_env, alloc, "console.join('\\n');", "console") catch unreachable;
         defer res.deinit(alloc);
-        if (res.result.len > 0) {
-            std.debug.print("-- CONSOLE LOG\n{s}\n--\n", .{res.result});
+
+        if (res.msg != null and res.msg.?.len > 0) {
+            std.debug.print("-- CONSOLE LOG\n{s}\n--\n", .{res.msg.?});
         }
     }
 
@@ -87,9 +88,6 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     window.replaceDocument(html_doc);
     window.setStorageShelf(&storageShelf);
     try js_env.bindGlobal(&window);
-
-    // thanks to the arena, we don't need to deinit res.
-    var res: jsruntime.JSResult = undefined;
 
     const init =
         \\console = [];
@@ -100,10 +98,8 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
         \\  console.push("debug", ...arguments);
         \\};
     ;
-    res = try evalJS(js_env, alloc, init, "init");
-    if (!res.success) {
-        return res;
-    }
+    var res = try evalJS(js_env, alloc, init, "init");
+    if (!res.ok) return res;
     res.deinit(alloc);
 
     // loop hover the scripts.
@@ -122,20 +118,14 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
             }
 
             res = try evalJS(js_env, alloc, try loader.get(path), src);
-            if (!res.success) {
-                return res;
-            }
+            if (!res.ok) return res;
             res.deinit(alloc);
         }
 
         // If the script as a source text, execute it.
         const src = try parser.nodeTextContent(s) orelse continue;
         res = try evalJS(js_env, alloc, src, "");
-
-        // return the first failure.
-        if (!res.success) {
-            return res;
-        }
+        if (!res.ok) return res;
         res.deinit(alloc);
     }
 
@@ -150,25 +140,52 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     );
 
     // wait for all async executions
-    res = try js_env.waitTryCatch(alloc);
-    if (!res.success) {
-        return res;
-    }
-    res.deinit(alloc);
+    var try_catch: jsruntime.TryCatch = undefined;
+    try_catch.init(js_env);
+    defer try_catch.deinit();
+    js_env.wait() catch {
+        return .{
+            .ok = false,
+            .msg = try try_catch.err(alloc, js_env),
+        };
+    };
 
     // Check the final test status.
     res = try evalJS(js_env, alloc, "report.status;", "teststatus");
-    if (!res.success) {
-        return res;
-    }
+    if (!res.ok) return res;
     res.deinit(alloc);
 
     // return the detailed result.
     return try evalJS(js_env, alloc, "report.log", "teststatus");
 }
 
-fn evalJS(env: jsruntime.Env, alloc: std.mem.Allocator, script: []const u8, name: ?[]const u8) !jsruntime.JSResult {
-    return try env.execTryCatch(alloc, script, name);
+pub const Res = struct {
+    ok: bool,
+    msg: ?[]const u8,
+
+    pub fn deinit(res: Res, alloc: std.mem.Allocator) void {
+        if (res.msg) |msg| {
+            alloc.free(msg);
+        }
+    }
+};
+
+fn evalJS(env: jsruntime.Env, alloc: std.mem.Allocator, script: []const u8, name: ?[]const u8) !Res {
+    var try_catch: jsruntime.TryCatch = undefined;
+    try_catch.init(env);
+    defer try_catch.deinit();
+
+    const v = env.exec(script, name) catch {
+        return .{
+            .ok = false,
+            .msg = try try_catch.err(alloc, env),
+        };
+    };
+
+    return .{
+        .ok = true,
+        .msg = try v.toString(alloc, env),
+    };
 }
 
 // browse the path to find the tests list.

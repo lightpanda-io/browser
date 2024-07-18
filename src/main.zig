@@ -37,13 +37,18 @@ fn execJS(
     js_env: *jsruntime.Env,
 ) anyerror!void {
     // start JS env
-    try js_env.start(alloc);
+    try js_env.start();
     defer js_env.stop();
 
     // alias global as self and window
     var window = Window.create(null);
     window.replaceDocument(doc);
     try js_env.bindGlobal(window);
+
+    // try catch
+    var try_catch: jsruntime.TryCatch = undefined;
+    try_catch.init(js_env.*);
+    defer try_catch.deinit();
 
     while (true) {
 
@@ -57,11 +62,12 @@ fn execJS(
             break;
         }
 
-        const res = try js_env.execTryCatch(alloc, cmd, "cdp");
-        if (res.success) {
-            std.debug.print("-> {s}\n", .{res.result});
-        }
-        _ = try conn.stream.write(res.result);
+        const res = try js_env.exec(cmd, "cdp");
+        const res_str = try res.toString(alloc, js_env.*);
+        defer alloc.free(res_str);
+        std.debug.print("-> {s}\n", .{res_str});
+
+        _ = try conn.stream.write(res_str);
     }
 }
 
