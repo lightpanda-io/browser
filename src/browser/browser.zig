@@ -208,7 +208,7 @@ pub const Page = struct {
             const alloc = self.arena.allocator();
             if (try try_catch.err(alloc, self.session.env)) |msg| {
                 defer alloc.free(msg);
-                std.log.info("wait error: {s}", .{msg});
+                log.info("wait error: {s}", .{msg});
                 return;
             }
         };
