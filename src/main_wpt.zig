@@ -288,7 +288,7 @@ fn runSafe(
         argv.appendAssumeCapacity(tc);
         defer _ = argv.pop();
 
-        const run = try std.ChildProcess.run(.{
+        const run = try std.process.Child.run(.{
             .allocator = alloc,
             .argv = argv.items,
             .max_output_bytes = 1024 * 1024,

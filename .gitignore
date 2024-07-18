@@ -1,4 +1,5 @@
 zig-cache
+/.zig-cache/
 zig-out
 /vendor/netsurf/build/
 /vendor/netsurf/lib/
