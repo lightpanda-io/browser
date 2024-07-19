@@ -204,7 +204,10 @@ pub const Page = struct {
         try_catch.init(self.session.env);
         defer try_catch.deinit();
 
-        self.session.env.wait() catch {
+        self.session.env.wait() catch |err| {
+            // the js env could not be started if the document wasn't an HTML.
+            if (err == error.EnvNotStarted) return;
+
             const alloc = self.arena.allocator();
             if (try try_catch.err(alloc, self.session.env)) |msg| {
                 defer alloc.free(msg);
