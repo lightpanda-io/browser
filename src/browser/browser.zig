@@ -125,10 +125,10 @@ pub const Session = struct {
         self.env.deinit();
         self.arena.deinit();
 
-        self.loader.deinit();
-        self.loop.deinit();
-        self.storageShed.deinit();
         self.httpClient.deinit();
+        self.loader.deinit();
+        self.storageShed.deinit();
+        self.loop.deinit();
         self.alloc.destroy(self);
     }
 
