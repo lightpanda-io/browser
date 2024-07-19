@@ -107,7 +107,7 @@ pub const Stream = struct {
     /// See equivalent function: `std.fs.File.writev`.
     pub fn writev(self: Stream, iovecs: []const posix.iovec_const) WriteError!usize {
         if (iovecs.len == 0) return 0;
-        const first_buffer = iovecs[0].iov_base[0..iovecs[0].iov_len];
+        const first_buffer = iovecs[0].base[0..iovecs[0].len];
         return try self.write(first_buffer);
     }
 
@@ -121,13 +121,13 @@ pub const Stream = struct {
         var i: usize = 0;
         while (true) {
             var amt = try self.writev(iovecs[i..]);
-            while (amt >= iovecs[i].iov_len) {
-                amt -= iovecs[i].iov_len;
+            while (amt >= iovecs[i].len) {
+                amt -= iovecs[i].len;
                 i += 1;
                 if (i >= iovecs.len) return;
             }
-            iovecs[i].iov_base += amt;
-            iovecs[i].iov_len -= amt;
+            iovecs[i].base += amt;
+            iovecs[i].len -= amt;
         }
     }
 };

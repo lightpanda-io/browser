@@ -5,7 +5,7 @@ inputs:
   zig:
     description: 'Zig version to install'
     required: false
-    default: '0.12.1'
+    default: '0.13.0'
   arch:
     description: 'CPU arch used to select the v8 lib'
     required: false
@@ -17,7 +17,7 @@ inputs:
   zig-v8:
     description: 'zig v8 version to install'
     required: false
-    default: 'v0.1.5'
+    default: 'v0.1.6'
   v8:
     description: 'v8 version to install'
     required: false
