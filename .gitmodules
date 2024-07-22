@@ -22,3 +22,6 @@
 [submodule "vendor/mimalloc"]
 	path = vendor/mimalloc
 	url = git@github.com:microsoft/mimalloc.git
+[submodule "vendor/tls.zig"]
+	path = vendor/tls.zig
+	url = git@github.com:ianic/tls.zig.git

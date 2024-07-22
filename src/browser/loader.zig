@@ -17,17 +17,18 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const Client = @import("../http/Client.zig");
 
 const user_agent = "Lightpanda.io/1.0";
 
 pub const Loader = struct {
-    client: std.http.Client,
+    client: Client,
     // use 16KB for headers buffer size.
     server_header_buffer: [1024 * 16]u8 = undefined,
 
     pub const Response = struct {
         alloc: std.mem.Allocator,
-        req: *std.http.Client.Request,
+        req: *Client.Request,
 
         pub fn deinit(self: *Response) void {
             self.req.deinit();
@@ -37,7 +38,7 @@ pub const Loader = struct {
 
     pub fn init(alloc: std.mem.Allocator) Loader {
         return Loader{
-            .client = std.http.Client{
+            .client = Client{
                 .allocator = alloc,
             },
         };
@@ -54,7 +55,7 @@ pub const Loader = struct {
     pub fn get(self: *Loader, alloc: std.mem.Allocator, uri: std.Uri) !Response {
         var resp = Response{
             .alloc = alloc,
-            .req = try alloc.create(std.http.Client.Request),
+            .req = try alloc.create(Client.Request),
         };
         errdefer alloc.destroy(resp.req);
 

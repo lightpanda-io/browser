@@ -24,7 +24,6 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const Stream = @import("stream.zig").Stream;
 const testing = std.testing;
 const http = std.http;
 const mem = std.mem;
@@ -39,16 +38,10 @@ const proto = std.http.protocol;
 
 const tls23 = @import("tls");
 
-const Loop = @import("jsruntime").Loop;
-const tcp = @import("tcp.zig");
-
 pub const disable_tls = std.options.http_disable_tls;
 
 /// Used for all client allocations. Must be thread-safe.
 allocator: Allocator,
-
-// std.net.Stream implementation using jsruntime Loop
-loop: *Loop,
 
 ca_bundle: if (disable_tls) void else std.crypto.Certificate.Bundle = if (disable_tls) {} else .{},
 ca_bundle_mutex: std.Thread.Mutex = .{},
@@ -217,9 +210,9 @@ pub const ConnectionPool = struct {
 
 /// An interface to either a plain or TLS connection.
 pub const Connection = struct {
-    stream: Stream,
+    stream: net.Stream,
     /// undefined unless protocol is tls.
-    tls_client: if (!disable_tls) *tls23.Connection(Stream) else void,
+    tls_client: if (!disable_tls) *tls23.Connection(net.Stream) else void,
 
     /// The protocol that this connection is using.
     protocol: Protocol,
@@ -1352,7 +1345,7 @@ pub fn connectTcp(client: *Client, host: []const u8, port: u16, protocol: Connec
     errdefer client.allocator.destroy(conn);
     conn.* = .{ .data = undefined };
 
-    const stream = tcp.tcpConnectToHost(client.allocator, client.loop, host, port) catch |err| switch (err) {
+    const stream = net.tcpConnectToHost(client.allocator, host, port) catch |err| switch (err) {
         error.ConnectionRefused => return error.ConnectionRefused,
         error.NetworkUnreachable => return error.NetworkUnreachable,
         error.ConnectionTimedOut => return error.ConnectionTimedOut,
@@ -1378,7 +1371,7 @@ pub fn connectTcp(client: *Client, host: []const u8, port: u16, protocol: Connec
     if (protocol == .tls) {
         if (disable_tls) unreachable;
 
-        conn.data.tls_client = try client.allocator.create(tls23.Connection(Stream));
+        conn.data.tls_client = try client.allocator.create(tls23.Connection(net.Stream));
         errdefer client.allocator.destroy(conn.data.tls_client);
 
         conn.data.tls_client.* = tls23.client(stream, .{
@@ -1386,6 +1379,41 @@ pub fn connectTcp(client: *Client, host: []const u8, port: u16, protocol: Connec
             .root_ca = client.ca_bundle,
         }) catch return error.TlsInitializationFailed;
     }
+
+    client.connection_pool.addUsed(conn);
+
+    return &conn.data;
+}
+
+pub const ConnectUnixError = Allocator.Error || std.posix.SocketError || error{NameTooLong} || std.posix.ConnectError;
+
+/// Connect to `path` as a unix domain socket. This will reuse a connection if one is already open.
+///
+/// This function is threadsafe.
+pub fn connectUnix(client: *Client, path: []const u8) ConnectUnixError!*Connection {
+    if (client.connection_pool.findConnection(.{
+        .host = path,
+        .port = 0,
+        .protocol = .plain,
+    })) |node|
+        return node;
+
+    const conn = try client.allocator.create(ConnectionPool.Node);
+    errdefer client.allocator.destroy(conn);
+    conn.* = .{ .data = undefined };
+
+    const stream = try std.net.connectUnixSocket(path);
+    errdefer stream.close();
+
+    conn.data = .{
+        .stream = stream,
+        .tls_client = undefined,
+        .protocol = .plain,
+
+        .host = try client.allocator.dupe(u8, path),
+        .port = 0,
+    };
+    errdefer client.allocator.free(conn.data.host);
 
     client.connection_pool.addUsed(conn);
 

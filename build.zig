@@ -179,6 +179,11 @@ fn common(
     const netsurf = moduleNetSurf(b);
     netsurf.addImport("jsruntime", jsruntimemod);
     step.root_module.addImport("netsurf", netsurf);
+
+    const tlsmod = b.addModule("tls", .{
+        .root_source_file = b.path("vendor/tls.zig/src/main.zig"),
+    });
+    step.root_module.addImport("tls", tlsmod);
 }
 
 fn moduleNetSurf(b: *std.Build) *std.Build.Module {
