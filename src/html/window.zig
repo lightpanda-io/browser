@@ -19,6 +19,10 @@
 const std = @import("std");
 
 const parser = @import("netsurf");
+const jsruntime = @import("jsruntime");
+const Callback = jsruntime.Callback;
+const CallbackArg = jsruntime.CallbackArg;
+const Loop = jsruntime.Loop;
 
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 
@@ -38,6 +42,11 @@ pub const Window = struct {
     target: []const u8,
 
     storageShelf: ?*storage.Shelf = null,
+
+    // store a map between internal timeouts ids and pointers to uint.
+    // the maximum number of possible timeouts is fixed.
+    timeoutid: u32 = 0,
+    timeoutids: [512]u64 = undefined,
 
     pub fn create(target: ?[]const u8) Window {
         return Window{
@@ -81,5 +90,27 @@ pub const Window = struct {
     pub fn get_sessionStorage(self: *Window) !*storage.Bottle {
         if (self.storageShelf == null) return parser.DOMError.NotSupported;
         return &self.storageShelf.?.bucket.session;
+    }
+
+    // TODO handle callback arguments.
+    pub fn _setTimeout(self: *Window, loop: *Loop, cbk: Callback, delay: ?u32) !u32 {
+        if (self.timeoutid >= self.timeoutids.len) return error.TooMuchTimeout;
+
+        const ddelay: u63 = delay orelse 0;
+        const id = loop.timeout(ddelay * std.time.ns_per_ms, cbk);
+
+        self.timeoutids[self.timeoutid] = id;
+        defer self.timeoutid += 1;
+
+        return self.timeoutid;
+    }
+
+    pub fn _clearTimeout(self: *Window, loop: *Loop, id: u32) void {
+        // I do would prefer return an error in this case, but it seems some JS
+        // uses invalid id, in particular id 0.
+        // So we silently ignore invalid id for now.
+        if (id >= self.timeoutid) return;
+
+        loop.cancel(self.timeoutids[id], null);
     }
 };
