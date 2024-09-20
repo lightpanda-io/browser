@@ -21,11 +21,15 @@ const std = @import("std");
 const parser = @import("netsurf");
 
 const jsruntime = @import("jsruntime");
+const Callback = jsruntime.Callback;
+const CallbackResult = jsruntime.CallbackResult;
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 
 const NodeUnion = @import("node.zig").Union;
 const Node = @import("node.zig").Node;
+
+const log = std.log.scoped(.nodelist);
 
 const DOMException = @import("exceptions.zig").DOMException;
 
@@ -72,6 +76,21 @@ pub const NodeList = struct {
         return try Node.toInterface(n);
     }
 
+    pub fn _forEach(self: *NodeList, alloc: std.mem.Allocator, cbk: Callback) !void { // TODO handle thisArg
+        var res = CallbackResult.init(alloc);
+        defer res.deinit();
+
+        for (self.nodes.items, 0..) |n, i| {
+            const ii: u32 = @intCast(i);
+            cbk.trycall(.{ n, ii, self }, &res) catch |e| {
+                log.err("callback error: {s}", .{res.result orelse "unknown"});
+                log.debug("{s}", .{res.stack orelse "no stack trace"});
+
+                return e;
+            };
+        }
+    }
+
     // TODO _symbol_iterator
 
     // TODO implement postAttach
@@ -87,6 +106,13 @@ pub fn testExecFn(
     var childnodes = [_]Case{
         .{ .src = "let list = document.getElementById('content').childNodes", .ex = "undefined" },
         .{ .src = "list.length", .ex = "9" },
+        .{ .src = 
+        \\let i = 0;
+        \\list.forEach(function (n, idx) {
+        \\  i += idx;
+        \\});
+        \\i;
+        , .ex = "36" },
     };
     try checkCases(js_env, &childnodes);
 }
