@@ -411,7 +411,9 @@ pub const Page = struct {
             // > immediately before the browser continues to parse the
             // > page.
             // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#notes
+            try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(e));
             self.evalScript(e) catch |err| log.warn("evaljs: {any}", .{err});
+            try parser.documentHTMLSetCurrentScript(html_doc, null);
         }
 
         // TODO wait for deferred scripts
@@ -428,7 +430,9 @@ pub const Page = struct {
 
         // eval async scripts.
         for (sasync.items) |e| {
+            try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(e));
             self.evalScript(e) catch |err| log.warn("evaljs: {any}", .{err});
+            try parser.documentHTMLSetCurrentScript(html_doc, null);
         }
 
         // TODO wait for async scripts

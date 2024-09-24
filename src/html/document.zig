@@ -153,8 +153,8 @@ pub const HTMLDocument = struct {
         return try collection.HTMLCollectionAll(parser.documentHTMLToNode(self), true);
     }
 
-    pub fn get_currentScript(_: *parser.DocumentHTML) !?*parser.Element {
-        return null;
+    pub fn get_currentScript(self: *parser.DocumentHTML) !?*parser.Script {
+        return try parser.documentHTMLGetCurrentScript(self);
     }
 
     pub fn get_designMode(_: *parser.DocumentHTML) []const u8 {
