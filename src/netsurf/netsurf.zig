@@ -2249,3 +2249,18 @@ pub inline fn documentHTMLSetTitle(doc: *DocumentHTML, v: []const u8) !void {
     const err = documentHTMLVtable(doc).set_title.?(doc, try strFromData(v));
     try DOMErr(err);
 }
+
+pub fn documentHTMLSetCurrentScript(doc: *DocumentHTML, script: ?*Script) !void {
+    var s: ?*ElementHTML = null;
+    if (script != null) s = @ptrCast(script.?);
+    const err = documentHTMLVtable(doc).set_current_script.?(doc, s);
+    try DOMErr(err);
+}
+
+pub fn documentHTMLGetCurrentScript(doc: *DocumentHTML) !?*Script {
+    var elem: ?*ElementHTML = undefined;
+    const err = documentHTMLVtable(doc).get_current_script.?(doc, &elem);
+    try DOMErr(err);
+    if (elem == null) return null;
+    return @ptrCast(elem.?);
+}
