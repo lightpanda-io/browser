@@ -435,7 +435,11 @@ pub fn testExecFn(
         .{ .src = "document.querySelector(':root').nodeName", .ex = "HTML" },
 
         .{ .src = "document.querySelectorAll('p').length", .ex = "2" },
-        .{ .src = "document.querySelectorAll('.ok').item(0).id", .ex = "link" },
+        .{ .src = 
+        \\Array.from(document.querySelectorAll('#content > p#para-empty'))
+        \\.map(row => row.querySelector('span').textContent)
+        \\.length;
+        , .ex = "1" },
     };
     try checkCases(js_env, &querySelector);
 

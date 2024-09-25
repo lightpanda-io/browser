@@ -25,13 +25,77 @@ const Callback = jsruntime.Callback;
 const CallbackResult = jsruntime.CallbackResult;
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
+const generate = @import("../generate.zig");
 
 const NodeUnion = @import("node.zig").Union;
 const Node = @import("node.zig").Node;
 
+const U32Iterator = @import("../iterator/iterator.zig").U32Iterator;
+
 const log = std.log.scoped(.nodelist);
 
 const DOMException = @import("exceptions.zig").DOMException;
+
+pub const Interfaces = generate.Tuple(.{
+    NodeListIterator,
+    NodeList,
+});
+
+pub const NodeListIterator = struct {
+    pub const mem_guarantied = true;
+
+    coll: *NodeList,
+    index: u32 = 0,
+
+    pub const Return = struct {
+        value: ?NodeUnion,
+        done: bool,
+    };
+
+    pub fn _next(self: *NodeListIterator) !Return {
+        const e = try self.coll._item(self.index);
+        if (e == null) {
+            return Return{
+                .value = null,
+                .done = true,
+            };
+        }
+
+        self.index += 1;
+        return Return{
+            .value = e,
+            .done = false,
+        };
+    }
+};
+
+pub const NodeListEntriesIterator = struct {
+    pub const mem_guarantied = true;
+
+    coll: *NodeList,
+    index: u32 = 0,
+
+    pub const Return = struct {
+        value: ?NodeUnion,
+        done: bool,
+    };
+
+    pub fn _next(self: *NodeListEntriesIterator) !Return {
+        const e = try self.coll._item(self.index);
+        if (e == null) {
+            return Return{
+                .value = null,
+                .done = true,
+            };
+        }
+
+        self.index += 1;
+        return Return{
+            .value = e,
+            .done = false,
+        };
+    }
+};
 
 // Nodelist is implemented in pure Zig b/c libdom's NodeList doesn't allow to
 // append nodes.
@@ -91,9 +155,38 @@ pub const NodeList = struct {
         }
     }
 
-    // TODO _symbol_iterator
+    pub fn _keys(self: *NodeList) U32Iterator {
+        log.debug("keys", .{});
+        return .{
+            .length = self.get_length(),
+        };
+    }
 
-    // TODO implement postAttach
+    pub fn _values(self: *NodeList) NodeListIterator {
+        log.debug("values", .{});
+        return .{
+            .coll = self,
+        };
+    }
+
+    pub fn _symbol_iterator(self: *NodeList) NodeListIterator {
+        log.debug("symbol", .{});
+        return self._values();
+    }
+
+    // TODO entries() https://developer.mozilla.org/en-US/docs/Web/API/NodeList/entries
+
+    pub fn postAttach(self: *NodeList, alloc: std.mem.Allocator, js_obj: jsruntime.JSObject) !void {
+        const ln = self.get_length();
+        var i: u32 = 0;
+        while (i < ln) {
+            defer i += 1;
+            const k = try std.fmt.allocPrint(alloc, "{d}", .{i});
+
+            const node = try self._item(i) orelse unreachable;
+            try js_obj.set(k, node);
+        }
+    }
 };
 
 // Tests
@@ -106,6 +199,7 @@ pub fn testExecFn(
     var childnodes = [_]Case{
         .{ .src = "let list = document.getElementById('content').childNodes", .ex = "undefined" },
         .{ .src = "list.length", .ex = "9" },
+        .{ .src = "list[0].__proto__.constructor.name", .ex = "Text" },
         .{ .src = 
         \\let i = 0;
         \\list.forEach(function (n, idx) {
