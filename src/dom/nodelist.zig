@@ -156,21 +156,18 @@ pub const NodeList = struct {
     }
 
     pub fn _keys(self: *NodeList) U32Iterator {
-        log.debug("keys", .{});
         return .{
             .length = self.get_length(),
         };
     }
 
     pub fn _values(self: *NodeList) NodeListIterator {
-        log.debug("values", .{});
         return .{
             .coll = self,
         };
     }
 
     pub fn _symbol_iterator(self: *NodeList) NodeListIterator {
-        log.debug("symbol", .{});
         return self._values();
     }
 
