@@ -13,6 +13,7 @@ const Methods = enum {
     getTargetInfo,
     getBrowserContexts,
     createBrowserContext,
+    disposeBrowserContext,
     createTarget,
     closeTarget,
 };
@@ -32,6 +33,7 @@ pub fn target(
         .getTargetInfo => getTargetInfo(alloc, id, scanner, ctx),
         .getBrowserContexts => getBrowserContexts(alloc, id, scanner, ctx),
         .createBrowserContext => createBrowserContext(alloc, id, scanner, ctx),
+        .disposeBrowserContext => disposeBrowserContext(alloc, id, scanner, ctx),
         .createTarget => createTarget(alloc, id, scanner, ctx),
         .closeTarget => closeTarget(alloc, id, scanner, ctx),
     };
@@ -188,6 +190,22 @@ fn createBrowserContext(
         browserContextId: []const u8 = ContextID,
     };
     return result(alloc, id orelse msg.id.?, Resp, Resp{}, msg.sessionID);
+}
+
+fn disposeBrowserContext(
+    alloc: std.mem.Allocator,
+    id: ?u16,
+    scanner: *std.json.Scanner,
+    _: *Ctx,
+) ![]const u8 {
+
+    // input
+    const Params = struct {
+        browserContextId: []const u8,
+    };
+    const msg = try getMsg(alloc, Params, scanner);
+
+    return result(alloc, id orelse msg.id.?, null, {}, null);
 }
 
 const TargetID = "57356548460A8F29706A2ADF14316298";
