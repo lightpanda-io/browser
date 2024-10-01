@@ -14,6 +14,7 @@ const Methods = enum {
     getBrowserContexts,
     createBrowserContext,
     createTarget,
+    closeTarget,
 };
 
 pub fn target(
@@ -32,6 +33,7 @@ pub fn target(
         .getBrowserContexts => getBrowserContexts(alloc, id, scanner, ctx),
         .createBrowserContext => createBrowserContext(alloc, id, scanner, ctx),
         .createTarget => createTarget(alloc, id, scanner, ctx),
+        .closeTarget => closeTarget(alloc, id, scanner, ctx),
     };
 }
 
@@ -75,6 +77,8 @@ fn setAutoAttach(
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
+
+    // input
     const Params = struct {
         autoAttach: bool,
         waitForDebuggerOnStart: bool,
@@ -233,4 +237,56 @@ fn createTarget(
         targetId: []const u8 = TargetID,
     };
     return result(alloc, id orelse msg.id.?, Resp, Resp{}, msg.sessionID);
+}
+
+fn closeTarget(
+    alloc: std.mem.Allocator,
+    id: ?u16,
+    scanner: *std.json.Scanner,
+    ctx: *Ctx,
+) ![]const u8 {
+
+    // input
+    const Params = struct {
+        targetId: []const u8,
+    };
+    const msg = try getMsg(alloc, Params, scanner);
+
+    // output
+    const Resp = struct {
+        success: bool = true,
+    };
+    const res = try result(alloc, id orelse msg.id.?, Resp, Resp{}, null);
+    try server.sendSync(ctx, res);
+
+    // events
+    const InspectorDetached = struct {
+        reason: []const u8 = "Render process gone.",
+    };
+    try cdp.sendEvent(
+        alloc,
+        ctx,
+        "Inspector.detached",
+        InspectorDetached,
+        .{},
+        msg.sessionID orelse cdp.ContextSessionID,
+    );
+
+    const TargetDetached = struct {
+        sessionId: []const u8,
+        targetId: []const u8,
+    };
+    try cdp.sendEvent(
+        alloc,
+        ctx,
+        "Target.detachedFromTarget",
+        TargetDetached,
+        .{
+            .sessionId = msg.sessionID orelse cdp.ContextSessionID,
+            .targetId = msg.params.?.targetId,
+        },
+        null,
+    );
+
+    return "";
 }
