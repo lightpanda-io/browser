@@ -25,6 +25,7 @@ pub fn fetch(
     };
 }
 
+// TODO: noop method
 fn disable(
     alloc: std.mem.Allocator,
     id: ?u16,

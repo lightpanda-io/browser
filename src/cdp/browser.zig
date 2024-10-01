@@ -30,6 +30,7 @@ pub fn browser(
     };
 }
 
+// TODO: hard coded data
 const ProtocolVersion = "1.3";
 const Product = "Chrome/124.0.6367.29";
 const Revision = "@9e6ded5ac1ff5e38d930ae52bd9aec09bd1a68e4";
@@ -42,32 +43,30 @@ fn getVersion(
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
+
+    // input
     const msg = try getMsg(alloc, void, scanner);
 
+    // ouput
     const Res = struct {
-        protocolVersion: []const u8,
-        product: []const u8,
-        revision: []const u8,
-        userAgent: []const u8,
-        jsVersion: []const u8,
+        protocolVersion: []const u8 = ProtocolVersion,
+        product: []const u8 = Product,
+        revision: []const u8 = Revision,
+        userAgent: []const u8 = UserAgent,
+        jsVersion: []const u8 = JsVersion,
     };
-
-    const res = Res{
-        .protocolVersion = ProtocolVersion,
-        .product = Product,
-        .revision = Revision,
-        .userAgent = UserAgent,
-        .jsVersion = JsVersion,
-    };
-    return result(alloc, id orelse msg.id.?, Res, res, null);
+    return result(alloc, id orelse msg.id.?, Res, .{}, null);
 }
 
+// TODO: noop method
 fn setDownloadBehavior(
     alloc: std.mem.Allocator,
     id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
+
+    // input
     const Params = struct {
         behavior: []const u8,
         browserContextId: ?[]const u8 = null,
@@ -75,9 +74,12 @@ fn setDownloadBehavior(
         eventsEnabled: ?bool = null,
     };
     const msg = try getMsg(alloc, Params, scanner);
+
+    // output
     return result(alloc, id orelse msg.id.?, null, null, null);
 }
 
+// TODO: hard coded ID
 const DevToolsWindowID = 1923710101;
 
 fn getWindowForTarget(
@@ -108,13 +110,17 @@ fn getWindowForTarget(
     return result(alloc, id orelse msg.id.?, Resp, Resp{}, msg.sessionID.?);
 }
 
+// TODO: noop method
 fn setWindowBounds(
     alloc: std.mem.Allocator,
     id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
-    // NOTE: noop
+
+    // input
     const msg = try cdp.getMsg(alloc, void, scanner);
+
+    // output
     return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
 }

@@ -286,6 +286,7 @@ pub fn getMsg(
 // Common
 // ------
 
+// TODO: hard coded IDs
 pub const BrowserSessionID = "9559320D92474062597D9875C664CAC0";
 pub const ContextSessionID = "4FDC2CB760A23A220497A05C95417CF4";
 pub const URLBase = "chrome://newtab/";

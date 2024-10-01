@@ -39,18 +39,23 @@ pub fn target(
     };
 }
 
+// TODO: hard coded IDs
 const PageTargetID = "CFCD6EC01573CF29BB638E9DC0F52DDC";
 const BrowserTargetID = "2d2bdef9-1c95-416f-8c0e-83f3ab73a30c";
 const BrowserContextID = "65618675CB7D3585A95049E9DFE95EA9";
 
+// TODO: noop method
 fn setDiscoverTargets(
     alloc: std.mem.Allocator,
     id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
+
+    // input
     const msg = try getMsg(alloc, void, scanner);
 
+    // output
     return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
 }
 
@@ -73,6 +78,7 @@ const TargetFilter = struct {
     exclude: ?bool = null,
 };
 
+// TODO: noop method
 fn setAutoAttach(
     alloc: std.mem.Allocator,
     id: ?u16,
@@ -90,6 +96,7 @@ fn setAutoAttach(
     const msg = try getMsg(alloc, Params, scanner);
     std.log.debug("params {any}", .{msg.params});
 
+    // attachedToTarget event
     if (msg.sessionID == null) {
         const attached = AttachToTarget{
             .sessionId = cdp.BrowserSessionID,
@@ -103,6 +110,7 @@ fn setAutoAttach(
         try cdp.sendEvent(alloc, ctx, "Target.attachedToTarget", AttachToTarget, attached, null);
     }
 
+    // output
     return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
 }
 
@@ -142,12 +150,15 @@ fn getTargetInfo(
 // Browser context are not handled and not in the roadmap for now
 // The following methods are "fake"
 
+// TODO: noop method
 fn getBrowserContexts(
     alloc: std.mem.Allocator,
     id: ?u16,
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
+
+    // input
     const msg = try getMsg(alloc, void, scanner);
 
     // ouptut
@@ -167,6 +178,7 @@ fn getBrowserContexts(
 
 const ContextID = "22648B09EDCCDD11109E2D4FEFBE4F89";
 
+// TODO: noop method
 fn createBrowserContext(
     alloc: std.mem.Allocator,
     id: ?u16,
@@ -205,10 +217,13 @@ fn disposeBrowserContext(
     };
     const msg = try getMsg(alloc, Params, scanner);
 
+    // output
     return result(alloc, id orelse msg.id.?, null, {}, null);
 }
 
+// TODO: hard coded IDs
 const TargetID = "57356548460A8F29706A2ADF14316298";
+const LoaderID = "DD4A76F842AA389647D702B4D805F49A";
 
 fn createTarget(
     alloc: std.mem.Allocator,
@@ -235,7 +250,7 @@ fn createTarget(
     ctx.state.url = "about:blank";
     ctx.state.securityOrigin = "://";
     ctx.state.secureContextType = "InsecureScheme";
-    ctx.state.loaderID = "DD4A76F842AA389647D702B4D805F49A";
+    ctx.state.loaderID = LoaderID;
 
     // send attachToTarget event
     const attached = AttachToTarget{
@@ -277,7 +292,7 @@ fn closeTarget(
     const res = try result(alloc, id orelse msg.id.?, Resp, Resp{}, null);
     try server.sendSync(ctx, res);
 
-    // events
+    // Inspector.detached event
     const InspectorDetached = struct {
         reason: []const u8 = "Render process gone.",
     };
@@ -290,6 +305,7 @@ fn closeTarget(
         msg.sessionID orelse cdp.ContextSessionID,
     );
 
+    // detachedFromTarget event
     const TargetDetached = struct {
         sessionId: []const u8,
         targetId: []const u8,

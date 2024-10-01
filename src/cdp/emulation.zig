@@ -36,6 +36,7 @@ const MediaFeature = struct {
     value: []const u8,
 };
 
+// TODO: noop method
 fn setEmulatedMedia(
     alloc: std.mem.Allocator,
     id: ?u16,
@@ -51,10 +52,10 @@ fn setEmulatedMedia(
     const msg = try getMsg(alloc, Params, scanner);
 
     // output
-    // TODO: dummy
     return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
 }
 
+// TODO: noop method
 fn setFocusEmulationEnabled(
     alloc: std.mem.Allocator,
     id: ?u16,
@@ -69,10 +70,10 @@ fn setFocusEmulationEnabled(
     const msg = try getMsg(alloc, Params, scanner);
 
     // output
-    // TODO: dummy
     return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
 }
 
+// TODO: noop method
 fn setDeviceMetricsOverride(
     alloc: std.mem.Allocator,
     id: ?u16,
@@ -87,6 +88,7 @@ fn setDeviceMetricsOverride(
     return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
 }
 
+// TODO: noop method
 fn setTouchEmulationEnabled(
     alloc: std.mem.Allocator,
     id: ?u16,

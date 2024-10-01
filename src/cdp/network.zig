@@ -38,6 +38,7 @@ fn enable(
     return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
 }
 
+// TODO: noop method
 fn setCacheDisabled(
     alloc: std.mem.Allocator,
     id: ?u16,

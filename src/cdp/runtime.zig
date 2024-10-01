@@ -140,6 +140,8 @@ pub fn executionContextCreated(
     try cdp.sendEvent(alloc, ctx, "Runtime.executionContextCreated", Params, params, sessionID);
 }
 
+// TODO: noop method
+// should we be passing this also to the JS Inspector?
 fn runIfWaitingForDebugger(
     alloc: std.mem.Allocator,
     id: ?u16,

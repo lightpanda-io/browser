@@ -117,6 +117,7 @@ const LifecycleEvent = struct {
     timestamp: f32 = undefined,
 };
 
+// TODO: hard coded method
 fn addScriptToEvaluateOnNewDocument(
     alloc: std.mem.Allocator,
     id: ?u16,
@@ -140,6 +141,7 @@ fn addScriptToEvaluateOnNewDocument(
     return result(alloc, id orelse msg.id.?, Res, Res{}, msg.sessionID);
 }
 
+// TODO: hard coded method
 fn createIsolatedWorld(
     alloc: std.mem.Allocator,
     id: ?u16,
@@ -202,6 +204,7 @@ fn navigate(
 
     // change state
     ctx.state.url = params.url;
+    // TODO: hard coded ID
     ctx.state.loaderID = "AF8667A203C5392DBE9AC290044AA4C2";
 
     var life_event = LifecycleEvent{
@@ -211,6 +214,7 @@ fn navigate(
     var ts_event: cdp.TimestampEvent = undefined;
 
     // frameStartedLoading event
+    // TODO: event partially hard coded
     const FrameStartedLoading = struct {
         frameId: []const u8,
     };
@@ -250,7 +254,10 @@ fn navigate(
     std.log.debug("res {s}", .{res});
     try server.sendSync(ctx, res);
 
-    // Send clear runtime contexts event (noop)
+    // TODO: at this point do we need async the following actions to be async?
+
+    // Send Runtime.executionContextsCleared event
+    // TODO: noop event, we have no env context at this point, is it necesarry?
     try sendEvent(alloc, ctx, "Runtime.executionContextsCleared", void, {}, msg.sessionID);
 
     // Launch navigate
@@ -258,11 +265,29 @@ fn navigate(
     ctx.state.executionContextId += 1;
     const auxData = try std.fmt.allocPrint(
         alloc,
+        // TODO: we assume this is the default web page, is it right?
         "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}",
         .{ctx.state.frameID},
     );
     defer alloc.free(auxData);
     _ = try p.navigate(params.url, auxData);
+
+    // Events
+
+    // lifecycle init event
+    // TODO: partially hard coded
+    if (ctx.state.page_life_cycle_events) {
+        life_event.name = "init";
+        life_event.timestamp = 343721.796037;
+        try sendEvent(
+            alloc,
+            ctx,
+            "Page.lifecycleEvent",
+            LifecycleEvent,
+            life_event,
+            msg.sessionID,
+        );
+    }
 
     // frameNavigated event
     const FrameNavigated = struct {
@@ -286,20 +311,9 @@ fn navigate(
         frame_navigated,
         msg.sessionID,
     );
-    if (ctx.state.page_life_cycle_events) {
-        life_event.name = "load";
-        life_event.timestamp = 343721.824655;
-        try sendEvent(
-            alloc,
-            ctx,
-            "Page.lifecycleEvent",
-            LifecycleEvent,
-            life_event,
-            msg.sessionID,
-        );
-    }
 
     // domContentEventFired event
+    // TODO: partially hard coded
     ts_event = .{ .timestamp = 343721.803338 };
     try sendEvent(
         alloc,
@@ -309,6 +323,9 @@ fn navigate(
         ts_event,
         msg.sessionID,
     );
+
+    // lifecycle DOMContentLoaded event
+    // TODO: partially hard coded
     if (ctx.state.page_life_cycle_events) {
         life_event.name = "DOMContentLoaded";
         life_event.timestamp = 343721.803338;
@@ -323,6 +340,7 @@ fn navigate(
     }
 
     // loadEventFired event
+    // TODO: partially hard coded
     ts_event = .{ .timestamp = 343721.824655 };
     try sendEvent(
         alloc,
@@ -332,6 +350,9 @@ fn navigate(
         ts_event,
         msg.sessionID,
     );
+
+    // lifecycle DOMContentLoaded event
+    // TODO: partially hard coded
     if (ctx.state.page_life_cycle_events) {
         life_event.name = "load";
         life_event.timestamp = 343721.824655;
