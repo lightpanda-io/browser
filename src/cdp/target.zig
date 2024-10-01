@@ -86,7 +86,7 @@ fn setAutoAttach(
 
     if (msg.sessionID == null) {
         const attached = AttachToTarget{
-            .sessionId = cdp.SessionID,
+            .sessionId = cdp.BrowserSessionID,
             .targetInfo = .{
                 .targetId = PageTargetID,
                 .title = "New Incognito tab",
@@ -160,7 +160,6 @@ fn getBrowserContexts(
 }
 
 const ContextID = "22648B09EDCCDD11109E2D4FEFBE4F89";
-const ContextSessionID = "4FDC2CB760A23A220497A05C95417CF4";
 
 fn createBrowserContext(
     alloc: std.mem.Allocator,
@@ -218,7 +217,7 @@ fn createTarget(
 
     // send attachToTarget event
     const attached = AttachToTarget{
-        .sessionId = ContextSessionID,
+        .sessionId = cdp.ContextSessionID,
         .targetInfo = .{
             .targetId = ctx.state.frameID,
             .title = "",

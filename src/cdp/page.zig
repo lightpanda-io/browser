@@ -144,13 +144,38 @@ fn createIsolatedWorld(
     alloc: std.mem.Allocator,
     id: ?u16,
     scanner: *std.json.Scanner,
-    _: *Ctx,
+    ctx: *Ctx,
 ) ![]const u8 {
-    const msg = try getMsg(alloc, void, scanner);
+
+    // input
+    const Params = struct {
+        frameId: []const u8,
+        worldName: []const u8,
+        grantUniveralAccess: bool,
+    };
+    const msg = try getMsg(alloc, Params, scanner);
+    std.debug.assert(msg.sessionID != null);
+    const params = msg.params.?;
+
+    // noop executionContextCreated event
+    try Runtime.executionContextCreated(
+        alloc,
+        ctx,
+        0,
+        "",
+        params.worldName,
+        "7102379147004877974.3265385113993241162",
+        .{
+            .isDefault = false,
+            .type = "isolated",
+            .frameId = params.frameId,
+        },
+        msg.sessionID,
+    );
 
     // output
     const Resp = struct {
-        executionContextId: u8 = 2,
+        executionContextId: u8 = 0,
     };
 
     return result(alloc, id orelse msg.id.?, Resp, .{}, msg.sessionID);
@@ -230,20 +255,14 @@ fn navigate(
 
     // Launch navigate
     var p = try ctx.browser.currentSession().createPage();
-    _ = try p.navigate(params.url);
-
-    // Send create runtime context event
     ctx.state.executionContextId += 1;
-    try Runtime.executionContextCreated(
+    const auxData = try std.fmt.allocPrint(
         alloc,
-        ctx,
-        ctx.state.executionContextId,
-        "http://127.0.0.1:1234", // TODO: real domain
-        "",
-        "7102379147004877974.3265385113993241162",
-        .{ .frameId = ctx.state.frameID },
-        msg.sessionID,
+        "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}",
+        .{ctx.state.frameID},
     );
+    defer alloc.free(auxData);
+    _ = try p.navigate(params.url, auxData);
 
     // frameNavigated event
     const FrameNavigated = struct {

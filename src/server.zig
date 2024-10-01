@@ -70,14 +70,18 @@ pub const Cmd = struct {
     }
 
     // shortcuts
-    fn alloc(self: *Cmd) std.mem.Allocator {
+    inline fn alloc(self: *Cmd) std.mem.Allocator {
         // TODO: should we return the allocator from the page instead?
         return self.browser.currentSession().alloc;
     }
 
-    fn loop(self: *Cmd) public.Loop {
+    inline fn loop(self: *Cmd) public.Loop {
         // TODO: pointer instead?
         return self.browser.currentSession().loop;
+    }
+
+    inline fn env(self: Cmd) public.Env {
+        return self.browser.currentSession().env;
     }
 
     fn do(self: *Cmd, cmd: []const u8) anyerror!void {
@@ -88,6 +92,49 @@ pub const Cmd = struct {
             std.log.debug("res {s}", .{res});
             return sendAsync(self, res);
         }
+    }
+
+    // Inspector
+
+    pub fn sendInspector(self: *Cmd, msg: []const u8) void {
+        if (self.env().getInspector()) |inspector| {
+            inspector.send(self.env(), msg);
+        }
+    }
+
+    pub fn onInspectorResp(cmd_opaque: *anyopaque, _: u32, msg: []const u8) void {
+        std.log.debug("onResp biz fn called: {s}", .{msg});
+        const aligned = @as(*align(@alignOf(Cmd)) anyopaque, @alignCast(cmd_opaque));
+        const self = @as(*Cmd, @ptrCast(aligned));
+
+        const tpl = "{s},\"sessionId\":\"{s}\"}}";
+        const msg_open = msg[0 .. msg.len - 1]; // remove closing bracket
+        const s = std.fmt.allocPrint(
+            self.alloc(),
+            tpl,
+            .{ msg_open, cdp.ContextSessionID },
+        ) catch unreachable;
+        defer self.alloc().free(s);
+
+        sendSync(self, s) catch unreachable;
+    }
+
+    pub fn onInspectorNotif(cmd_opaque: *anyopaque, msg: []const u8) void {
+        std.log.debug("onNotif biz fn called: {s}", .{msg});
+        const aligned = @as(*align(@alignOf(Cmd)) anyopaque, @alignCast(cmd_opaque));
+        const self = @as(*Cmd, @ptrCast(aligned));
+
+        const tpl = "{s},\"sessionId\":\"{s}\"}}";
+        const msg_open = msg[0 .. msg.len - 1]; // remove closing bracket
+        const s = std.fmt.allocPrint(
+            self.alloc(),
+            tpl,
+            .{ msg_open, cdp.ContextSessionID },
+        ) catch unreachable;
+        defer self.alloc().free(s);
+        std.log.debug("event: {s}", .{s});
+
+        sendSync(self, s) catch unreachable;
     }
 };
 
@@ -195,6 +242,9 @@ pub fn listen(browser: *Browser, socket: std.posix.socket_t) anyerror!void {
         .buf = &ctxInput,
         .msg_buf = &msg_buf,
     };
+    const cmd_opaque = @as(*anyopaque, @ptrCast(&cmd));
+    try browser.currentSession().setInspector(cmd_opaque, Cmd.onInspectorResp, Cmd.onInspectorNotif);
+
     var accept = Accept{
         .cmd = &cmd,
         .socket = socket,

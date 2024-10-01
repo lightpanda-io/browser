@@ -80,13 +80,13 @@ pub fn main() !void {
     const vm = jsruntime.VM.init();
     defer vm.deinit();
 
-    var browser = try Browser.init(allocator, vm);
+    var browser = try Browser.init(allocator);
     defer browser.deinit();
 
     var page = try browser.currentSession().createPage();
     defer page.deinit();
 
-    try page.navigate(url);
+    try page.navigate(url, null);
     defer page.end();
 
     try page.wait();

@@ -161,7 +161,7 @@ pub fn main() !void {
     defer srv.close();
     std.debug.print("Listening on: {s}...\n", .{socket_path});
 
-    var browser = try Browser.init(arena.allocator(), vm);
+    var browser = try Browser.init(arena.allocator());
     defer browser.deinit();
 
     try server.listen(&browser, srv.sockfd.?);

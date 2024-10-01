@@ -51,10 +51,9 @@ const log = std.log.scoped(.browser);
 pub const Browser = struct {
     session: *Session,
 
-    pub fn init(alloc: std.mem.Allocator, vm: jsruntime.VM) !Browser {
+    pub fn init(alloc: std.mem.Allocator) !Browser {
         // We want to ensure the caller initialised a VM, but the browser
         // doesn't use it directly...
-        _ = vm;
 
         return Browser{
             .session = try Session.init(alloc, "about:blank"),
@@ -91,6 +90,7 @@ pub const Session = struct {
     loader: Loader,
     env: Env = undefined,
     loop: Loop,
+    inspector: ?jsruntime.Inspector = null,
     window: Window,
     // TODO move the shed to the browser?
     storageShed: storage.Shed,
@@ -122,6 +122,10 @@ pub const Session = struct {
     fn deinit(self: *Session) void {
         if (self.page) |page| page.end();
 
+        if (self.inspector) |inspector| {
+            inspector.deinit(self.alloc);
+        }
+
         self.env.deinit();
         self.arena.deinit();
 
@@ -132,8 +136,24 @@ pub const Session = struct {
         self.alloc.destroy(self);
     }
 
+    pub fn setInspector(
+        self: *Session,
+        ctx: *anyopaque,
+        onResp: jsruntime.InspectorOnResponseFn,
+        onEvent: jsruntime.InspectorOnEventFn,
+    ) !void {
+        self.inspector = try jsruntime.Inspector.init(self.alloc, self.env, ctx, onResp, onEvent);
+        self.env.setInspector(self.inspector.?);
+    }
+
     pub fn createPage(self: *Session) !Page {
         return Page.init(self.alloc, self);
+    }
+
+    pub fn callInspector(self: *Session, msg: []const u8) void {
+        if (self.inspector) |inspector| {
+            inspector.send(msg, self.env);
+        }
     }
 };
 
@@ -219,7 +239,7 @@ pub const Page = struct {
     }
 
     // spec reference: https://html.spec.whatwg.org/#document-lifecycle
-    pub fn navigate(self: *Page, uri: []const u8) !void {
+    pub fn navigate(self: *Page, uri: []const u8, auxData: ?[]const u8) !void {
         const alloc = self.arena.allocator();
 
         log.debug("starting GET {s}", .{uri});
@@ -280,7 +300,7 @@ pub const Page = struct {
         log.debug("header content-type: {s}", .{ct.?});
         const mime = try Mime.parse(ct.?);
         if (mime.eql(Mime.HTML)) {
-            try self.loadHTMLDoc(req.reader(), mime.charset orelse "utf-8");
+            try self.loadHTMLDoc(req.reader(), mime.charset orelse "utf-8", auxData);
         } else {
             log.info("non-HTML document: {s}", .{ct.?});
 
@@ -290,7 +310,7 @@ pub const Page = struct {
     }
 
     // https://html.spec.whatwg.org/#read-html
-    fn loadHTMLDoc(self: *Page, reader: anytype, charset: []const u8) !void {
+    fn loadHTMLDoc(self: *Page, reader: anytype, charset: []const u8, auxData: ?[]const u8) !void {
         const alloc = self.arena.allocator();
 
         // start netsurf memory arena.
@@ -326,6 +346,11 @@ pub const Page = struct {
         // TODO load the js env concurrently with the HTML parsing.
         log.debug("start js env", .{});
         try self.session.env.start();
+
+        // inspector
+        if (self.session.inspector) |inspector| {
+            inspector.contextCreated(self.session.env, "", self.origin.?, auxData);
+        }
 
         // replace the user context document with the new one.
         try self.session.env.setUserContext(.{

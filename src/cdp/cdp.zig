@@ -16,6 +16,7 @@ const performance = @import("performance.zig").performance;
 pub const Error = error{
     UnknonwDomain,
     UnknownMethod,
+    NoResponse,
 };
 
 pub fn isCdpError(err: anyerror) ?Error {
@@ -85,7 +86,7 @@ pub fn do(
         .Target => target(alloc, id, iter.next().?, &scanner, ctx),
         .Page => page(alloc, id, iter.next().?, &scanner, ctx),
         .Log => log(alloc, id, iter.next().?, &scanner, ctx),
-        .Runtime => runtime(alloc, id, iter.next().?, &scanner, ctx),
+        .Runtime => runtime(alloc, id, iter.next().?, &scanner, s, ctx),
         .Network => network(alloc, id, iter.next().?, &scanner, ctx),
         .Emulation => emulation(alloc, id, iter.next().?, &scanner, ctx),
         .Fetch => fetch(alloc, id, iter.next().?, &scanner, ctx),
@@ -199,7 +200,7 @@ fn getParams(
     key: []const u8,
 ) !?T {
 
-    // check key key is "params"
+    // check key is "params"
     if (!std.mem.eql(u8, "params", key)) return null;
 
     // skip "params" if not requested
@@ -285,7 +286,8 @@ pub fn getMsg(
 // Common
 // ------
 
-pub const SessionID = "9559320D92474062597D9875C664CAC0";
+pub const BrowserSessionID = "9559320D92474062597D9875C664CAC0";
+pub const ContextSessionID = "4FDC2CB760A23A220497A05C95417CF4";
 pub const URLBase = "chrome://newtab/";
 pub const FrameID = "90D14BBD8AED408A0467AC93100BCDBE";
 pub const LoaderID = "CFC8BED824DD2FD56CF1EF33C965C79C";
