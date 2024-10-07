@@ -226,7 +226,7 @@ fn disposeBrowserContext(
     alloc: std.mem.Allocator,
     id: ?u16,
     scanner: *std.json.Scanner,
-    _: *Ctx,
+    ctx: *Ctx,
 ) ![]const u8 {
 
     // input
@@ -236,7 +236,11 @@ fn disposeBrowserContext(
     const msg = try getMsg(alloc, Params, scanner);
 
     // output
-    return result(alloc, id orelse msg.id.?, null, {}, null);
+    const res = try result(alloc, id orelse msg.id.?, null, .{}, null);
+    defer alloc.free(res);
+    try server.sendSync(ctx, res);
+
+    return error.DisposeBrowserContext;
 }
 
 // TODO: hard coded IDs

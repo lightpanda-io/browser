@@ -64,6 +64,11 @@ pub const Browser = struct {
         self.session.deinit();
     }
 
+    pub fn newSession(self: *Browser, alloc: std.mem.Allocator, loop: *jsruntime.Loop) !void {
+        self.session.deinit();
+        self.session = try Session.init(alloc, loop, "about:blank");
+    }
+
     pub fn currentSession(self: *Browser) *Session {
         return self.session;
     }

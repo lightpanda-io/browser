@@ -82,7 +82,10 @@ pub const Cmd = struct {
         }
 
         // read and execute input
-        self.msg_buf.read(self.alloc(), input, self, Cmd.do) catch unreachable;
+        self.msg_buf.read(self.alloc(), input, self, Cmd.do) catch |err| {
+            std.log.err("do error: {any}", .{err});
+            return;
+        };
 
         // continue receving incomming messages asynchronously
         self.loop.io.recv(*Cmd, self, cbk, completion, self.socket, self.buf);
@@ -99,13 +102,26 @@ pub const Cmd = struct {
     }
 
     fn do(self: *Cmd, cmd: []const u8) anyerror!void {
-        const res = try cdp.do(self.alloc(), cmd, self);
+        const res = cdp.do(self.alloc(), cmd, self) catch |err| {
+            if (err == error.DisposeBrowserContext) {
+                try self.newSession();
+                return;
+            }
+            return err;
+        };
 
         // send result
         if (!std.mem.eql(u8, res, "")) {
             std.log.debug("res {s}", .{res});
             return sendAsync(self, res);
         }
+    }
+
+    fn newSession(self: *Cmd) !void {
+        std.log.info("new session", .{});
+        try self.browser.newSession(self.alloc(), self.loop);
+        const cmd_opaque = @as(*anyopaque, @ptrCast(self));
+        try self.browser.currentSession().setInspector(cmd_opaque, Cmd.onInspectorResp, Cmd.onInspectorNotif);
     }
 
     // Inspector
