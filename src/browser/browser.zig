@@ -51,12 +51,12 @@ const log = std.log.scoped(.browser);
 pub const Browser = struct {
     session: *Session,
 
-    pub fn init(alloc: std.mem.Allocator) !Browser {
+    pub fn init(alloc: std.mem.Allocator, loop: *Loop) !Browser {
         // We want to ensure the caller initialised a VM, but the browser
         // doesn't use it directly...
 
         return Browser{
-            .session = try Session.init(alloc, "about:blank"),
+            .session = try Session.init(alloc, loop, "about:blank"),
         };
     }
 
@@ -89,7 +89,6 @@ pub const Session = struct {
     // TODO handle proxy
     loader: Loader,
     env: Env = undefined,
-    loop: Loop,
     inspector: ?jsruntime.Inspector = null,
     window: Window,
     // TODO move the shed to the browser?
@@ -99,7 +98,7 @@ pub const Session = struct {
 
     jstypes: [Types.len]usize = undefined,
 
-    fn init(alloc: std.mem.Allocator, uri: []const u8) !*Session {
+    fn init(alloc: std.mem.Allocator, loop: *Loop, uri: []const u8) !*Session {
         var self = try alloc.create(Session);
         self.* = Session{
             .uri = uri,
@@ -107,13 +106,12 @@ pub const Session = struct {
             .arena = std.heap.ArenaAllocator.init(alloc),
             .window = Window.create(null),
             .loader = Loader.init(alloc),
-            .loop = try Loop.init(alloc),
             .storageShed = storage.Shed.init(alloc),
             .httpClient = undefined,
         };
 
-        self.env = try Env.init(self.arena.allocator(), &self.loop, null);
-        self.httpClient = .{ .allocator = alloc, .loop = &self.loop };
+        self.env = try Env.init(self.arena.allocator(), loop, null);
+        self.httpClient = .{ .allocator = alloc, .loop = loop };
         try self.env.load(&self.jstypes);
 
         return self;
@@ -132,7 +130,6 @@ pub const Session = struct {
         self.httpClient.deinit();
         self.loader.deinit();
         self.storageShed.deinit();
-        self.loop.deinit();
         self.alloc.destroy(self);
     }
 

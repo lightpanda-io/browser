@@ -40,6 +40,7 @@ const BufReadSize = 1024; // 1KB
 const MaxStdOutSize = 512; // ensure debug msg are not too long
 
 pub const Cmd = struct {
+    loop: *public.Loop,
 
     // internal fields
     socket: std.posix.socket_t,
@@ -63,7 +64,7 @@ pub const Cmd = struct {
 
         if (size == 0) {
             // continue receving incomming messages asynchronously
-            self.loop().io.recv(*Cmd, self, cbk, completion, self.socket, self.buf);
+            self.loop.io.recv(*Cmd, self, cbk, completion, self.socket, self.buf);
             return;
         }
 
@@ -84,18 +85,13 @@ pub const Cmd = struct {
         self.msg_buf.read(self.alloc(), input, self, Cmd.do) catch unreachable;
 
         // continue receving incomming messages asynchronously
-        self.loop().io.recv(*Cmd, self, cbk, completion, self.socket, self.buf);
+        self.loop.io.recv(*Cmd, self, cbk, completion, self.socket, self.buf);
     }
 
     // shortcuts
     inline fn alloc(self: *Cmd) std.mem.Allocator {
         // TODO: should we return the allocator from the page instead?
         return self.browser.currentSession().alloc;
-    }
-
-    inline fn loop(self: *Cmd) public.Loop {
-        // TODO: pointer instead?
-        return self.browser.currentSession().loop;
     }
 
     inline fn env(self: Cmd) public.Env {
@@ -193,7 +189,7 @@ const Send = struct {
             return;
         };
 
-        self.cmd.loop().io.send(*Send, self, Send.asyncCbk, completion, self.cmd.socket, self.buf);
+        self.cmd.loop.io.send(*Send, self, Send.asyncCbk, completion, self.cmd.socket, self.buf);
     }
 
     fn asyncCbk(self: *Send, completion: *Completion, result: SendError!usize) void {
@@ -209,12 +205,12 @@ const Send = struct {
 
 pub fn sendLater(ctx: *Cmd, msg: []const u8, ns: u63) !void {
     const sd = try Send.init(ctx, msg);
-    ctx.loop().io.timeout(*Send, sd.ctx, Send.laterCbk, sd.completion, ns);
+    ctx.loop.io.timeout(*Send, sd.ctx, Send.laterCbk, sd.completion, ns);
 }
 
 pub fn sendAsync(ctx: *Cmd, msg: []const u8) !void {
     const sd = try Send.init(ctx, msg);
-    ctx.loop().io.send(*Send, sd.ctx, Send.asyncCbk, sd.completion, ctx.socket, msg);
+    ctx.loop.io.send(*Send, sd.ctx, Send.asyncCbk, sd.completion, ctx.socket, msg);
 }
 
 pub fn sendSync(ctx: *Cmd, msg: []const u8) !void {
@@ -237,15 +233,14 @@ const Accept = struct {
         };
 
         // receving incomming messages asynchronously
-        self.cmd.loop().io.recv(*Cmd, self.cmd, Cmd.cbk, completion, self.cmd.socket, self.cmd.buf);
+        self.cmd.loop.io.recv(*Cmd, self.cmd, Cmd.cbk, completion, self.cmd.socket, self.cmd.buf);
     }
 };
 
 // Listen
 // ------
 
-pub fn listen(browser: *Browser, socket: std.posix.socket_t) anyerror!void {
-    const loop = browser.currentSession().loop;
+pub fn listen(browser: *Browser, loop: *public.Loop, socket: std.posix.socket_t) anyerror!void {
 
     // MsgBuffer
     var msg_buf = try MsgBuffer.init(loop.alloc, BufReadSize * 256); // 256KB
@@ -255,6 +250,7 @@ pub fn listen(browser: *Browser, socket: std.posix.socket_t) anyerror!void {
     // for accepting connections and receving messages
     var ctxInput: [BufReadSize]u8 = undefined;
     var cmd = Cmd{
+        .loop = loop,
         .browser = browser,
         .socket = undefined,
         .buf = &ctxInput,
