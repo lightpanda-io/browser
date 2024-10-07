@@ -214,7 +214,6 @@ pub fn sendAsync(ctx: *Cmd, msg: []const u8) !void {
 }
 
 pub fn sendSync(ctx: *Cmd, msg: []const u8) !void {
-    defer ctx.alloc().free(msg);
     const s = try std.posix.write(ctx.socket, msg);
     std.log.debug("send sync {d} bytes", .{s});
 }

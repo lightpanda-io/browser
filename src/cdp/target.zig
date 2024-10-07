@@ -308,6 +308,7 @@ fn closeTarget(
         success: bool = true,
     };
     const res = try result(alloc, id orelse msg.id.?, Resp, Resp{}, null);
+    defer alloc.free(res);
     try server.sendSync(ctx, res);
 
     // Inspector.detached event

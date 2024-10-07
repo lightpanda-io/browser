@@ -207,6 +207,7 @@ pub fn sendEvent(
     const resp = Resp{ .method = name, .params = params, .sessionId = sessionID };
 
     const event_msg = try stringify(alloc, resp);
+    defer alloc.free(event_msg);
     std.log.debug("event {s}", .{event_msg});
     try server.sendSync(ctx, event_msg);
 }

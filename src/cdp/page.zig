@@ -269,6 +269,7 @@ fn navigate(
         .loaderId = ctx.state.loaderID,
     };
     const res = try result(alloc, id orelse msg.id.?, Resp, resp, msg.sessionID);
+    defer alloc.free(res);
     std.log.debug("res {s}", .{res});
     try server.sendSync(ctx, res);
 
