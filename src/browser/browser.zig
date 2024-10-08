@@ -140,11 +140,12 @@ pub const Session = struct {
 
     pub fn setInspector(
         self: *Session,
-        ctx: *anyopaque,
+        ctx: anytype,
         onResp: jsruntime.InspectorOnResponseFn,
         onEvent: jsruntime.InspectorOnEventFn,
     ) !void {
-        self.inspector = try jsruntime.Inspector.init(self.alloc, self.env, ctx, onResp, onEvent);
+        const ctx_opaque = @as(*anyopaque, @ptrCast(ctx));
+        self.inspector = try jsruntime.Inspector.init(self.alloc, self.env, ctx_opaque, onResp, onEvent);
         self.env.setInspector(self.inspector.?);
     }
 

@@ -245,8 +245,7 @@ pub const Ctx = struct {
 
     fn newSession(self: *Ctx) !void {
         try self.browser.newSession(self.alloc(), self.loop);
-        const ctx_opaque = @as(*anyopaque, @ptrCast(self));
-        try self.browser.currentSession().setInspector(ctx_opaque, Ctx.onInspectorResp, Ctx.onInspectorNotif);
+        try self.browser.currentSession().setInspector(self, Ctx.onInspectorResp, Ctx.onInspectorNotif);
         self.sessionNew = true;
         std.log.debug("new session", .{});
     }
@@ -380,8 +379,7 @@ pub fn listen(browser: *Browser, loop: *public.Loop, server_socket: std.posix.so
         .conn_completion = &conn_completion,
         .timeout_completion = &timeout_completion,
     };
-    const ctx_opaque = @as(*anyopaque, @ptrCast(ctx));
-    try browser.currentSession().setInspector(ctx_opaque, Ctx.onInspectorResp, Ctx.onInspectorNotif);
+    try browser.currentSession().setInspector(&ctx, Ctx.onInspectorResp, Ctx.onInspectorNotif);
 
     // accepting connection asynchronously on internal server
     std.log.debug("accepting new conn...", .{});
