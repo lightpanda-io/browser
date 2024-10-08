@@ -49,10 +49,9 @@ pub const Ctx = struct {
     // internal fields
     accept_socket: std.posix.socket_t,
     conn_socket: std.posix.socket_t = undefined,
-    buf: []u8, // only for read operations
-    err: ?Error = null,
-
+    read_buf: []u8, // only for read operations
     msg_buf: *MsgBuffer,
+    err: ?Error = null,
 
     // I/O fields
     conn_completion: *Completion,
@@ -86,7 +85,7 @@ pub const Ctx = struct {
         self.loop.io.timeout(*Ctx, self, Ctx.timeoutCbk, self.timeout_completion, TimeoutCheck);
 
         // receving incomming messages asynchronously
-        self.loop.io.recv(*Ctx, self, Ctx.readCbk, self.conn_completion, self.conn_socket, self.buf);
+        self.loop.io.recv(*Ctx, self, Ctx.readCbk, self.conn_completion, self.conn_socket, self.read_buf);
     }
 
     fn readCbk(self: *Ctx, completion: *Completion, result: RecvError!usize) void {
@@ -99,16 +98,16 @@ pub const Ctx = struct {
 
         if (size == 0) {
             // continue receving incomming messages asynchronously
-            self.loop.io.recv(*Ctx, self, Ctx.readCbk, self.conn_completion, self.conn_socket, self.buf);
+            self.loop.io.recv(*Ctx, self, Ctx.readCbk, self.conn_completion, self.conn_socket, self.read_buf);
             return;
         }
 
         // input
-        const input = self.buf[0..size];
         if (std.log.defaultLogEnabled(.debug)) {
             const content = input[0..@min(MaxStdOutSize, size)];
             std.debug.print("\ninput size: {d}, content: {s}\n", .{ size, content });
         }
+        const input = self.read_buf[0..size];
 
         // read and execute input
         self.msg_buf.read(self.alloc(), input, self, Ctx.do) catch |err| {
@@ -125,7 +124,7 @@ pub const Ctx = struct {
         };
 
         // continue receving incomming messages asynchronously
-        self.loop.io.recv(*Ctx, self, Ctx.readCbk, self.conn_completion, self.conn_socket, self.buf);
+        self.loop.io.recv(*Ctx, self, Ctx.readCbk, self.conn_completion, self.conn_socket, self.read_buf);
     }
 
     fn timeoutCbk(self: *Ctx, completion: *Completion, result: TimeoutError!void) void {
@@ -224,14 +223,16 @@ pub const Ctx = struct {
 
         if (self.sessionNew) self.sessionNew = false;
 
-        // cdp end cmd
         const res = cdp.do(self.alloc(), cmd, self) catch |err| {
+
+            // cdp end cmd
             if (err == error.DisposeBrowserContext) {
                 // restart a new browser session
                 std.log.debug("cdp end cmd", .{});
                 try self.newSession();
                 return;
             }
+
             return err;
         };
 
@@ -366,7 +367,8 @@ pub fn sendSync(ctx: *Ctx, msg: []const u8) !void {
 
 pub fn listen(browser: *Browser, loop: *public.Loop, server_socket: std.posix.socket_t) anyerror!void {
 
-    // MsgBuffer
+    // create buffers
+    var read_buf: [BufReadSize]u8 = undefined;
     var msg_buf = try MsgBuffer.init(loop.alloc, BufReadSize * 256); // 256KB
     defer msg_buf.deinit(loop.alloc);
 
@@ -376,12 +378,11 @@ pub fn listen(browser: *Browser, loop: *public.Loop, server_socket: std.posix.so
 
     // create I/O contexts and callbacks
     // for accepting connections and receving messages
-    var ctxInput: [BufReadSize]u8 = undefined;
     var ctx = Ctx{
         .loop = loop,
         .browser = browser,
         .sessionNew = true,
-        .buf = &ctxInput,
+        .read_buf = &read_buf,
         .msg_buf = &msg_buf,
         .accept_socket = server_socket,
         .conn_completion = &conn_completion,
