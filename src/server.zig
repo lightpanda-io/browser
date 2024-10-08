@@ -260,39 +260,31 @@ pub const Ctx = struct {
         }
     }
 
-    pub fn onInspectorResp(cmd_opaque: *anyopaque, _: u32, msg: []const u8) void {
-        std.log.debug("onResp biz fn called: {s}", .{msg});
-        const aligned = @as(*align(@alignOf(Ctx)) anyopaque, @alignCast(cmd_opaque));
-        const self = @as(*Ctx, @ptrCast(aligned));
-
-        const tpl = "{s},\"sessionId\":\"{s}\"}}";
-        const msg_open = msg[0 .. msg.len - 1]; // remove closing bracket
-        const s = std.fmt.allocPrint(
-            self.alloc(),
-            tpl,
-            .{ msg_open, cdp.ContextSessionID },
-        ) catch unreachable;
-        defer self.alloc().free(s);
-
-        sendSync(self, s) catch unreachable;
+    inline fn inspectorCtx(ctx_opaque: *anyopaque) *Ctx {
+        const aligned = @as(*align(@alignOf(Ctx)) anyopaque, @alignCast(ctx_opaque));
+        return @as(*Ctx, @ptrCast(aligned));
     }
 
-    pub fn onInspectorNotif(cmd_opaque: *anyopaque, msg: []const u8) void {
-        std.log.debug("onNotif biz fn called: {s}", .{msg});
-        const aligned = @as(*align(@alignOf(Ctx)) anyopaque, @alignCast(cmd_opaque));
-        const self = @as(*Ctx, @ptrCast(aligned));
-
+    fn inspectorMsg(allocator: std.mem.Allocator, ctx: *Ctx, msg: []const u8) !void {
+        // inject sessionID in cdp msg
         const tpl = "{s},\"sessionId\":\"{s}\"}}";
         const msg_open = msg[0 .. msg.len - 1]; // remove closing bracket
-        const s = std.fmt.allocPrint(
-            self.alloc(),
-            tpl,
-            .{ msg_open, cdp.ContextSessionID },
-        ) catch unreachable;
-        defer self.alloc().free(s);
-        std.log.debug("event: {s}", .{s});
+        const s = try std.fmt.allocPrint(allocator, tpl, .{ msg_open, cdp.ContextSessionID });
+        defer ctx.alloc().free(s);
 
-        sendSync(self, s) catch unreachable;
+        try sendSync(ctx, s);
+    }
+
+    pub fn onInspectorResp(ctx_opaque: *anyopaque, _: u32, msg: []const u8) void {
+        std.log.debug("inspector resp: {s}", .{msg});
+        const ctx = inspectorCtx(ctx_opaque);
+        inspectorMsg(ctx.alloc(), ctx, msg) catch unreachable;
+    }
+
+    pub fn onInspectorNotif(ctx_opaque: *anyopaque, msg: []const u8) void {
+        std.log.debug("inspector event: {s}", .{msg});
+        const ctx = inspectorCtx(ctx_opaque);
+        inspectorMsg(ctx.alloc(), ctx, msg) catch unreachable;
     }
 };
 
