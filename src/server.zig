@@ -317,16 +317,6 @@ const Send = struct {
         self.ctx.alloc().destroy(self);
     }
 
-    fn laterCbk(self: *Send, completion: *Completion, result: TimeoutError!void) void {
-        std.log.debug("sending after", .{});
-        _ = result catch |err| {
-            self.ctx.err = err;
-            return;
-        };
-
-        self.ctx.loop.io.send(*Send, self, Send.asyncCbk, completion, self.ctx.socket, self.buf);
-    }
-
     fn asyncCbk(self: *Send, completion: *Completion, result: SendError!usize) void {
         const size = result catch |err| {
             self.ctx.err = err;
@@ -337,11 +327,6 @@ const Send = struct {
         self.deinit(completion);
     }
 };
-
-pub fn sendLater(ctx: *Ctx, msg: []const u8, ns: u63) !void {
-    const sd = try Send.init(ctx, msg);
-    ctx.loop.io.timeout(*Send, sd.ctx, Send.laterCbk, sd.completion, ns);
-}
 
 pub fn sendAsync(ctx: *Ctx, msg: []const u8) !void {
     const sd = try Send.init(ctx, msg);
