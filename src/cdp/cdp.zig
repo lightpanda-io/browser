@@ -19,7 +19,7 @@
 const std = @import("std");
 
 const server = @import("../server.zig");
-const Ctx = server.Cmd;
+const Ctx = server.Ctx;
 
 const browser = @import("browser.zig").browser;
 const target = @import("target.zig").target;

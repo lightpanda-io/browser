@@ -19,7 +19,7 @@
 const std = @import("std");
 
 const server = @import("../server.zig");
-const Ctx = server.Cmd;
+const Ctx = server.Ctx;
 const cdp = @import("cdp.zig");
 const result = cdp.result;
 const getMsg = cdp.getMsg;

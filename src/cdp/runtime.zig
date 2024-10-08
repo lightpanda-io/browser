@@ -22,7 +22,7 @@ const builtin = @import("builtin");
 const jsruntime = @import("jsruntime");
 
 const server = @import("../server.zig");
-const Ctx = server.Cmd;
+const Ctx = server.Ctx;
 const cdp = @import("cdp.zig");
 const result = cdp.result;
 const getMsg = cdp.getMsg;
