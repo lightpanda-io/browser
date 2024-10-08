@@ -23,6 +23,7 @@ const Completion = public.IO.Completion;
 const AcceptError = public.IO.AcceptError;
 const RecvError = public.IO.RecvError;
 const SendError = public.IO.SendError;
+const CloseError = public.IO.CloseError;
 const TimeoutError = public.IO.TimeoutError;
 
 const MsgBuffer = @import("msg.zig").MsgBuffer;
@@ -30,7 +31,7 @@ const Browser = @import("browser/browser.zig").Browser;
 const cdp = @import("cdp/cdp.zig");
 
 const NoError = error{NoError};
-const IOError = AcceptError || RecvError || SendError || TimeoutError;
+const IOError = AcceptError || RecvError || SendError || CloseError || TimeoutError;
 const Error = IOError || std.fmt.ParseIntError || cdp.Error || NoError;
 
 // I/O Recv
@@ -46,6 +47,9 @@ pub const Cmd = struct {
     socket: std.posix.socket_t,
     buf: []u8, // only for read operations
     err: ?Error = null,
+
+    completion: *Completion,
+    acceptCtx: *Accept = undefined,
 
     msg_buf: *MsgBuffer,
 
@@ -83,7 +87,9 @@ pub const Cmd = struct {
 
         // read and execute input
         self.msg_buf.read(self.alloc(), input, self, Cmd.do) catch |err| {
-            std.log.err("do error: {any}", .{err});
+            if (err != error.Closed) {
+                std.log.err("do error: {any}", .{err});
+            }
             return;
         };
 
@@ -101,8 +107,20 @@ pub const Cmd = struct {
         return self.browser.currentSession().env;
     }
 
+    // actions
+    // -------
+
     fn do(self: *Cmd, cmd: []const u8) anyerror!void {
+
+        // close cmd
+        if (std.mem.eql(u8, cmd, "close")) {
+            self.loop.io.close(*Cmd, self, Cmd.closeCbk, self.completion, self.socket);
+            return error.Closed;
+        }
+
+        // cdp cmd
         const res = cdp.do(self.alloc(), cmd, self) catch |err| {
+            // cdp end
             if (err == error.DisposeBrowserContext) {
                 try self.newSession();
                 return;
@@ -122,6 +140,17 @@ pub const Cmd = struct {
         try self.browser.newSession(self.alloc(), self.loop);
         const cmd_opaque = @as(*anyopaque, @ptrCast(self));
         try self.browser.currentSession().setInspector(cmd_opaque, Cmd.onInspectorResp, Cmd.onInspectorNotif);
+    }
+
+    fn closeCbk(self: *Cmd, completion: *Completion, result: CloseError!void) void {
+        _ = result catch |err| {
+            self.err = err;
+            return;
+        };
+        std.log.debug("conn closed", .{});
+
+        // continue accepting incoming requests
+        self.loop.io.accept(*Accept, self.acceptCtx, Accept.cbk, completion, self.acceptCtx.socket);
     }
 
     // Inspector
@@ -264,12 +293,14 @@ pub fn listen(browser: *Browser, loop: *public.Loop, socket: std.posix.socket_t)
     // create I/O contexts and callbacks
     // for accepting connections and receving messages
     var ctxInput: [BufReadSize]u8 = undefined;
+    var completion: Completion = undefined;
     var cmd = Cmd{
         .loop = loop,
         .browser = browser,
         .socket = undefined,
         .buf = &ctxInput,
         .msg_buf = &msg_buf,
+        .completion = &completion,
     };
     const cmd_opaque = @as(*anyopaque, @ptrCast(&cmd));
     try browser.currentSession().setInspector(cmd_opaque, Cmd.onInspectorResp, Cmd.onInspectorNotif);
@@ -278,9 +309,9 @@ pub fn listen(browser: *Browser, loop: *public.Loop, socket: std.posix.socket_t)
         .cmd = &cmd,
         .socket = socket,
     };
+    cmd.acceptCtx = &accept;
 
     // accepting connection asynchronously on internal server
-    var completion: Completion = undefined;
     loop.io.accept(*Accept, &accept, Accept.cbk, &completion, socket);
 
     // infinite loop on I/O events, either:
