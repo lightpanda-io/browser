@@ -30,7 +30,9 @@ const apiweb = @import("apiweb.zig");
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 pub const UserContext = apiweb.UserContext;
 
-const socket_path = "/tmp/browsercore-server.sock";
+// TODO: move to cli options
+const host = "127.0.0.1";
+const port = 3245;
 
 // Inspired by std.net.StreamServer in Zig < 0.12
 pub const StreamServer = struct {
@@ -138,18 +140,8 @@ pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
-    // remove socket file of internal server
-    // reuse_address (SO_REUSEADDR flag) does not seems to work on unix socket
-    // see: https://gavv.net/articles/unix-socket-reuse/
-    // TODO: use a lock file instead
-    std.posix.unlink(socket_path) catch |err| {
-        if (err != error.FileNotFound) {
-            return err;
-        }
-    };
-
     // server
-    const addr = try std.net.Address.initUnix(socket_path);
+    const addr = try std.net.Address.parseIp4(host, port);
     var srv = StreamServer.init(.{
         .reuse_address = true,
         .reuse_port = true,
@@ -159,7 +151,7 @@ pub fn main() !void {
 
     try srv.listen(addr);
     defer srv.close();
-    std.debug.print("Listening on: {s}...\n", .{socket_path});
+    std.log.info("Listening on: {s}:{d}...", .{ host, port });
 
     var loop = try jsruntime.Loop.init(arena.allocator());
     defer loop.deinit();
