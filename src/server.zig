@@ -290,47 +290,40 @@ pub const Ctx = struct {
 // I/O Send
 // --------
 
+// NOTE: to allow concurrent send we create each time a dedicated context
+// (with its own completion), allocated on the heap.
+// After the send (on the sendCbk) the dedicated context will be destroy
+// and the msg slice will be free.
 const Send = struct {
     ctx: *Ctx,
-    buf: []const u8,
+    msg: []const u8,
+    completion: Completion = undefined,
 
-    fn init(ctx: *Ctx, msg: []const u8) !struct {
-        ctx: *Send,
-        completion: *Completion,
-    } {
-        // NOTE: it seems we can't use the same completion for concurrent
-        // recv and timeout operations, that's why we create a new completion here
-        const completion = try ctx.alloc().create(Completion);
-        // NOTE: to handle concurrent calls we create each time a new context
-        // If no concurrent calls where required we could just use the main Ctx
+    fn init(ctx: *Ctx, msg: []const u8) !*Send {
         const sd = try ctx.alloc().create(Send);
-        sd.* = .{
-            .ctx = ctx,
-            .buf = msg,
-        };
-        return .{ .ctx = sd, .completion = completion };
+        sd.* = .{ .ctx = ctx, .msg = msg };
+        return sd;
     }
 
-    fn deinit(self: *Send, completion: *Completion) void {
-        self.ctx.alloc().destroy(completion);
-        self.ctx.alloc().free(self.buf);
+    fn deinit(self: *Send) void {
+        self.ctx.alloc().free(self.msg);
         self.ctx.alloc().destroy(self);
     }
 
-    fn asyncCbk(self: *Send, completion: *Completion, result: SendError!usize) void {
+    fn asyncCbk(self: *Send, _: *Completion, result: SendError!usize) void {
         const size = result catch |err| {
             self.ctx.err = err;
             return;
         };
 
         std.log.debug("send async {d} bytes", .{size});
-        self.deinit(completion);
+        self.deinit();
     }
 };
 
 pub fn sendAsync(ctx: *Ctx, msg: []const u8) !void {
     const sd = try Send.init(ctx, msg);
-    ctx.loop.io.send(*Send, sd.ctx, Send.asyncCbk, sd.completion, ctx.conn_socket, msg);
+    ctx.loop.io.send(*Send, sd, Send.asyncCbk, &sd.completion, ctx.conn_socket, msg);
 }
 
 pub fn sendSync(ctx: *Ctx, msg: []const u8) !void {
