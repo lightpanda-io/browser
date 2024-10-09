@@ -30,9 +30,21 @@ const apiweb = @import("apiweb.zig");
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 pub const UserContext = apiweb.UserContext;
 
-// TODO: move to cli options
-const host = "127.0.0.1";
-const port = 3245;
+// Default options
+const Host = "127.0.0.1";
+const Port = 3245;
+const Timeout = 3; // in seconds
+
+const usage =
+    \\usage: {s} [options]
+    \\  start Lightpanda browser in CDP server mode
+    \\
+    \\  -h, --help      Print this help message and exit.
+    \\  --host          Host of the server (default "127.0.0.1")
+    \\  --port          Port of the server (default "3245")
+    \\  --timeout       Timeout for incoming connections in seconds (default "3")
+    \\
+;
 
 // Inspired by std.net.StreamServer in Zig < 0.12
 pub const StreamServer = struct {
@@ -130,18 +142,74 @@ pub const StreamServer = struct {
     }
 };
 
+fn printUsageExit(execname: []const u8, res: u8) void {
+    std.io.getStdErr().writer().print(usage, .{execname}) catch |err| {
+        std.log.err("Print usage error: {any}", .{err});
+        std.posix.exit(1);
+    };
+    std.posix.exit(res);
+}
+
 pub fn main() !void {
 
-    // create v8 vm
-    const vm = jsruntime.VM.init();
-    defer vm.deinit();
-
-    // alloc
+    // allocator
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
+    // args
+    var args = try std.process.argsWithAllocator(arena.allocator());
+    defer args.deinit();
+
+    const execname = args.next().?;
+    var host: []const u8 = Host;
+    var port: u16 = Port;
+    var addr: std.net.Address = undefined;
+    var timeout: u8 = undefined;
+
+    while (args.next()) |opt| {
+        if (std.mem.eql(u8, "-h", opt) or std.mem.eql(u8, "--help", opt)) {
+            printUsageExit(execname, 0);
+        }
+        if (std.mem.eql(u8, "--host", opt)) {
+            if (args.next()) |arg| {
+                host = arg;
+                continue;
+            } else {
+                std.log.err("--host not provided\n", .{});
+                return printUsageExit(execname, 1);
+            }
+        }
+        if (std.mem.eql(u8, "--port", opt)) {
+            if (args.next()) |arg| {
+                port = std.fmt.parseInt(u16, arg, 10) catch |err| {
+                    std.log.err("--port {any}\n", .{err});
+                    return printUsageExit(execname, 1);
+                };
+                continue;
+            } else {
+                std.log.err("--port not provided\n", .{});
+                return printUsageExit(execname, 1);
+            }
+        }
+        if (std.mem.eql(u8, "--timeout", opt)) {
+            if (args.next()) |arg| {
+                timeout = std.fmt.parseInt(u8, arg, 10) catch |err| {
+                    std.log.err("--timeout {any}\n", .{err});
+                    return printUsageExit(execname, 1);
+                };
+                continue;
+            } else {
+                std.log.err("--timeout not provided\n", .{});
+                return printUsageExit(execname, 1);
+            }
+        }
+    }
+    addr = std.net.Address.parseIp4(host, port) catch |err| {
+        std.log.err("address (host:port) {any}\n", .{err});
+        return printUsageExit(execname, 1);
+    };
+
     // server
-    const addr = try std.net.Address.parseIp4(host, port);
     var srv = StreamServer.init(.{
         .reuse_address = true,
         .reuse_port = true,
@@ -149,15 +217,25 @@ pub fn main() !void {
     });
     defer srv.deinit();
 
-    try srv.listen(addr);
+    srv.listen(addr) catch |err| {
+        std.log.err("address (host:port) {any}\n", .{err});
+        return printUsageExit(execname, 1);
+    };
     defer srv.close();
     std.log.info("Listening on: {s}:{d}...", .{ host, port });
 
+    // create v8 vm
+    const vm = jsruntime.VM.init();
+    defer vm.deinit();
+
+    // loop
     var loop = try jsruntime.Loop.init(arena.allocator());
     defer loop.deinit();
 
+    // browser
     var browser = try Browser.init(arena.allocator(), &loop);
     defer browser.deinit();
 
-    try server.listen(&browser, &loop, srv.sockfd.?);
+    // listen
+    try server.listen(&browser, &loop, srv.sockfd.?, std.time.ns_per_s * @as(u64, timeout));
 }

@@ -35,7 +35,6 @@ const IOError = AcceptError || RecvError || SendError || CloseError || TimeoutEr
 const Error = IOError || std.fmt.ParseIntError || cdp.Error || NoError;
 
 const TimeoutCheck = std.time.ns_per_ms * 100;
-const TimeoutRead = std.time.ns_per_s * 3; // TODO: cli option
 
 // I/O Main
 // --------
@@ -56,6 +55,7 @@ pub const Ctx = struct {
     // I/O fields
     conn_completion: *Completion,
     timeout_completion: *Completion,
+    timeout: u64,
     last_active: ?std.time.Instant = null,
 
     // CDP
@@ -146,7 +146,7 @@ pub const Ctx = struct {
             return;
         };
 
-        if (now.since(self.last_active.?) > TimeoutRead) {
+        if (now.since(self.last_active.?) > self.timeout) {
             // closing
             std.log.debug("conn timeout, closing...", .{});
 
@@ -334,7 +334,12 @@ pub fn sendSync(ctx: *Ctx, msg: []const u8) !void {
 // Listen
 // ------
 
-pub fn listen(browser: *Browser, loop: *public.Loop, server_socket: std.posix.socket_t) anyerror!void {
+pub fn listen(
+    browser: *Browser,
+    loop: *public.Loop,
+    server_socket: std.posix.socket_t,
+    timeout: u64,
+) anyerror!void {
 
     // create buffers
     var read_buf: [BufReadSize]u8 = undefined;
@@ -354,6 +359,7 @@ pub fn listen(browser: *Browser, loop: *public.Loop, server_socket: std.posix.so
         .read_buf = &read_buf,
         .msg_buf = &msg_buf,
         .accept_socket = server_socket,
+        .timeout = timeout,
         .conn_completion = &conn_completion,
         .timeout_completion = &timeout_completion,
     };
