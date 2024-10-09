@@ -152,6 +152,8 @@ pub const Session = struct {
     pub fn callInspector(self: *Session, msg: []const u8) void {
         if (self.inspector) |inspector| {
             inspector.send(msg, self.env);
+        } else {
+            @panic("No Inspector");
         }
     }
 
