@@ -18,13 +18,13 @@
 
 const std = @import("std");
 
-const public = @import("jsruntime");
-const Completion = public.IO.Completion;
-const AcceptError = public.IO.AcceptError;
-const RecvError = public.IO.RecvError;
-const SendError = public.IO.SendError;
-const CloseError = public.IO.CloseError;
-const TimeoutError = public.IO.TimeoutError;
+const jsruntime = @import("jsruntime");
+const Completion = jsruntime.IO.Completion;
+const AcceptError = jsruntime.IO.AcceptError;
+const RecvError = jsruntime.IO.RecvError;
+const SendError = jsruntime.IO.SendError;
+const CloseError = jsruntime.IO.CloseError;
+const TimeoutError = jsruntime.IO.TimeoutError;
 
 const MsgBuffer = @import("msg.zig").MsgBuffer;
 const Browser = @import("browser/browser.zig").Browser;
@@ -43,7 +43,7 @@ const BufReadSize = 1024; // 1KB
 const MaxStdOutSize = 512; // ensure debug msg are not too long
 
 pub const Ctx = struct {
-    loop: *public.Loop,
+    loop: *jsruntime.Loop,
 
     // internal fields
     accept_socket: std.posix.socket_t,
@@ -64,7 +64,7 @@ pub const Ctx = struct {
     // JS fields
     browser: *Browser, // TODO: is pointer mandatory here?
     sessionNew: bool,
-    // try_catch: public.TryCatch, // TODO
+    // try_catch: jsruntime.TryCatch, // TODO
 
     // callbacks
     // ---------
@@ -253,7 +253,7 @@ pub const Ctx = struct {
     }
 
     // JS env of the current session
-    inline fn env(self: Ctx) public.Env {
+    inline fn env(self: Ctx) jsruntime.Env {
         return self.browser.currentSession().env;
     }
 
@@ -399,7 +399,7 @@ pub fn sendSync(ctx: *Ctx, msg: []const u8) !void {
 
 pub fn listen(
     browser: *Browser,
-    loop: *public.Loop,
+    loop: *jsruntime.Loop,
     server_socket: std.posix.socket_t,
     timeout: u64,
 ) anyerror!void {
