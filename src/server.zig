@@ -300,7 +300,7 @@ pub const Ctx = struct {
 
     fn newSession(self: *Ctx) !void {
         try self.browser.newSession(self.alloc(), self.loop);
-        try self.browser.currentSession().setInspector(
+        try self.browser.currentSession().initInspector(
             self,
             Ctx.onInspectorResp,
             Ctx.onInspectorNotif,
@@ -426,7 +426,7 @@ pub fn listen(
         .conn_completion = &conn_completion,
         .timeout_completion = &timeout_completion,
     };
-    try browser.currentSession().setInspector(
+    try browser.currentSession().initInspector(
         &ctx,
         Ctx.onInspectorResp,
         Ctx.onInspectorNotif,

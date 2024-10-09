@@ -138,7 +138,7 @@ pub const Session = struct {
         self.alloc.destroy(self);
     }
 
-    pub fn setInspector(
+    pub fn initInspector(
         self: *Session,
         ctx: anytype,
         onResp: jsruntime.InspectorOnResponseFn,
@@ -149,14 +149,14 @@ pub const Session = struct {
         self.env.setInspector(self.inspector.?);
     }
 
-    pub fn createPage(self: *Session) !Page {
-        return Page.init(self.alloc, self);
-    }
-
     pub fn callInspector(self: *Session, msg: []const u8) void {
         if (self.inspector) |inspector| {
             inspector.send(msg, self.env);
         }
+    }
+
+    pub fn createPage(self: *Session) !Page {
+        return Page.init(self.alloc, self);
     }
 };
 
