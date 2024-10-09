@@ -244,6 +244,8 @@ pub const Page = struct {
     }
 
     // spec reference: https://html.spec.whatwg.org/#document-lifecycle
+    // - auxData: extra data forwarded to the Inspector
+    // see Inspector.contextCreated
     pub fn navigate(self: *Page, uri: []const u8, auxData: ?[]const u8) !void {
         const alloc = self.arena.allocator();
 
