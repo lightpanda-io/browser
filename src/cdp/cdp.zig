@@ -76,13 +76,13 @@ pub fn do(
     // handle 2 possible orders:
     // - id, method <...>
     // - method, id <...>
-    var method_key = (try scanner.next()).string;
+    var method_key = try nextString(&scanner);
     var method_token: std.json.Token = undefined;
     var id: ?u16 = null;
     // check swap order
     if (std.mem.eql(u8, method_key, "id")) {
         id = try getId(&scanner, method_key);
-        method_key = (try scanner.next()).string;
+        method_key = try nextString(&scanner);
         method_token = try scanner.next();
     } else {
         method_token = try scanner.next();
@@ -90,6 +90,9 @@ pub fn do(
     try checkKey(method_key, "method");
 
     // retrieve method
+    if (method_token != .string) {
+        return error.WrongTokenType;
+    }
     const method_name = method_token.string;
     std.log.debug("cmd: method {s}, id {any}", .{ method_name, id });
 
@@ -126,6 +129,14 @@ pub const State = struct {
 
 // Utils
 // -----
+
+fn nextString(scanner: *std.json.Scanner) ![]const u8 {
+    const token = try scanner.next();
+    if (token != .string) {
+        return error.WrongTokenType;
+    }
+    return token.string;
+}
 
 pub fn dumpFile(
     alloc: std.mem.Allocator,
@@ -259,7 +270,7 @@ fn getSessionId(scanner: *std.json.Scanner, key: []const u8) !?[]const u8 {
     if (!std.mem.eql(u8, "sessionId", key)) return null;
 
     // parse "sessionId"
-    return (try scanner.next()).string;
+    return try nextString(scanner);
 }
 
 pub fn getMsg(
@@ -277,7 +288,7 @@ pub fn getMsg(
         t = try scanner.next();
         if (t == .object_end) break;
         if (t != .string) {
-            return error.CDPMsgWrong;
+            return error.WrongTokenType;
         }
         if (id == null) {
             id = try getId(scanner, t.string);
