@@ -102,16 +102,17 @@ pub fn do(
         return error.UnknonwDomain;
 
     // select corresponding domain
+    const action = iter.next() orelse return error.BadMethod;
     return switch (domain) {
-        .Browser => browser(alloc, id, iter.next().?, &scanner, ctx),
-        .Target => target(alloc, id, iter.next().?, &scanner, ctx),
-        .Page => page(alloc, id, iter.next().?, &scanner, ctx),
-        .Log => log(alloc, id, iter.next().?, &scanner, ctx),
-        .Runtime => runtime(alloc, id, iter.next().?, &scanner, s, ctx),
-        .Network => network(alloc, id, iter.next().?, &scanner, ctx),
-        .Emulation => emulation(alloc, id, iter.next().?, &scanner, ctx),
-        .Fetch => fetch(alloc, id, iter.next().?, &scanner, ctx),
-        .Performance => performance(alloc, id, iter.next().?, &scanner, ctx),
+        .Browser => browser(alloc, id, action, &scanner, ctx),
+        .Target => target(alloc, id, action, &scanner, ctx),
+        .Page => page(alloc, id, action, &scanner, ctx),
+        .Log => log(alloc, id, action, &scanner, ctx),
+        .Runtime => runtime(alloc, id, action, &scanner, s, ctx),
+        .Network => network(alloc, id, action, &scanner, ctx),
+        .Emulation => emulation(alloc, id, action, &scanner, ctx),
+        .Fetch => fetch(alloc, id, action, &scanner, ctx),
+        .Performance => performance(alloc, id, action, &scanner, ctx),
     };
 }
 
