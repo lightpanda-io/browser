@@ -69,7 +69,11 @@ pub const Ctx = struct {
     // callbacks
     // ---------
 
-    fn acceptCbk(self: *Ctx, completion: *Completion, result: AcceptError!std.posix.socket_t) void {
+    fn acceptCbk(
+        self: *Ctx,
+        completion: *Completion,
+        result: AcceptError!std.posix.socket_t,
+    ) void {
         std.debug.assert(completion == self.conn_completion);
 
         self.conn_socket = result catch |err| {
@@ -82,10 +86,23 @@ pub const Ctx = struct {
             std.log.err("accept timestamp error: {any}", .{err});
             return;
         };
-        self.loop.io.timeout(*Ctx, self, Ctx.timeoutCbk, self.timeout_completion, TimeoutCheck);
+        self.loop.io.timeout(
+            *Ctx,
+            self,
+            Ctx.timeoutCbk,
+            self.timeout_completion,
+            TimeoutCheck,
+        );
 
         // receving incomming messages asynchronously
-        self.loop.io.recv(*Ctx, self, Ctx.readCbk, self.conn_completion, self.conn_socket, self.read_buf);
+        self.loop.io.recv(
+            *Ctx,
+            self,
+            Ctx.readCbk,
+            self.conn_completion,
+            self.conn_socket,
+            self.read_buf,
+        );
     }
 
     fn readCbk(self: *Ctx, completion: *Completion, result: RecvError!usize) void {
@@ -98,7 +115,14 @@ pub const Ctx = struct {
 
         if (size == 0) {
             // continue receving incomming messages asynchronously
-            self.loop.io.recv(*Ctx, self, Ctx.readCbk, self.conn_completion, self.conn_socket, self.read_buf);
+            self.loop.io.recv(
+                *Ctx,
+                self,
+                Ctx.readCbk,
+                self.conn_completion,
+                self.conn_socket,
+                self.read_buf,
+            );
             return;
         }
 
@@ -124,7 +148,14 @@ pub const Ctx = struct {
         };
 
         // continue receving incomming messages asynchronously
-        self.loop.io.recv(*Ctx, self, Ctx.readCbk, self.conn_completion, self.conn_socket, self.read_buf);
+        self.loop.io.recv(
+            *Ctx,
+            self,
+            Ctx.readCbk,
+            self.conn_completion,
+            self.conn_socket,
+            self.read_buf,
+        );
     }
 
     fn timeoutCbk(self: *Ctx, completion: *Completion, result: TimeoutError!void) void {
@@ -155,12 +186,24 @@ pub const Ctx = struct {
             // (and cancel does not work on MacOS)
 
             // close current connection
-            self.loop.io.close(*Ctx, self, Ctx.closeCbk, self.timeout_completion, self.conn_socket);
+            self.loop.io.close(
+                *Ctx,
+                self,
+                Ctx.closeCbk,
+                self.timeout_completion,
+                self.conn_socket,
+            );
             return;
         }
 
         // continue checking timeout
-        self.loop.io.timeout(*Ctx, self, Ctx.timeoutCbk, self.timeout_completion, TimeoutCheck);
+        self.loop.io.timeout(
+            *Ctx,
+            self,
+            Ctx.timeoutCbk,
+            self.timeout_completion,
+            TimeoutCheck,
+        );
     }
 
     fn closeCbk(self: *Ctx, completion: *Completion, result: CloseError!void) void {
@@ -187,7 +230,13 @@ pub const Ctx = struct {
         std.log.debug("accepting new conn...", .{});
 
         // continue accepting incoming requests
-        self.loop.io.accept(*Ctx, self, Ctx.acceptCbk, self.conn_completion, self.accept_socket);
+        self.loop.io.accept(
+            *Ctx,
+            self,
+            Ctx.acceptCbk,
+            self.conn_completion,
+            self.accept_socket,
+        );
     }
 
     // shortcuts
@@ -217,7 +266,13 @@ pub const Ctx = struct {
         if (std.mem.eql(u8, cmd, "close")) {
             // close connection
             std.log.debug("close cmd, closing...", .{});
-            self.loop.io.close(*Ctx, self, Ctx.closeCbk, self.conn_completion, self.conn_socket);
+            self.loop.io.close(
+                *Ctx,
+                self,
+                Ctx.closeCbk,
+                self.conn_completion,
+                self.conn_socket,
+            );
             return error.Closed;
         }
 
@@ -245,7 +300,11 @@ pub const Ctx = struct {
 
     fn newSession(self: *Ctx) !void {
         try self.browser.newSession(self.alloc(), self.loop);
-        try self.browser.currentSession().setInspector(self, Ctx.onInspectorResp, Ctx.onInspectorNotif);
+        try self.browser.currentSession().setInspector(
+            self,
+            Ctx.onInspectorResp,
+            Ctx.onInspectorNotif,
+        );
         self.sessionNew = true;
         std.log.debug("new session", .{});
     }
@@ -268,7 +327,11 @@ pub const Ctx = struct {
         // inject sessionID in cdp msg
         const tpl = "{s},\"sessionId\":\"{s}\"}}";
         const msg_open = msg[0 .. msg.len - 1]; // remove closing bracket
-        const s = try std.fmt.allocPrint(allocator, tpl, .{ msg_open, cdp.ContextSessionID });
+        const s = try std.fmt.allocPrint(
+            allocator,
+            tpl,
+            .{ msg_open, cdp.ContextSessionID },
+        );
         defer ctx.alloc().free(s);
 
         try sendSync(ctx, s);
@@ -363,7 +426,11 @@ pub fn listen(
         .conn_completion = &conn_completion,
         .timeout_completion = &timeout_completion,
     };
-    try browser.currentSession().setInspector(&ctx, Ctx.onInspectorResp, Ctx.onInspectorNotif);
+    try browser.currentSession().setInspector(
+        &ctx,
+        Ctx.onInspectorResp,
+        Ctx.onInspectorNotif,
+    );
 
     // accepting connection asynchronously on internal server
     std.log.debug("accepting new conn...", .{});
