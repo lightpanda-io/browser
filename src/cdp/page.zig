@@ -284,7 +284,7 @@ fn navigate(
     ctx.state.executionContextId += 1;
     const auxData = try std.fmt.allocPrint(
         alloc,
-        // TODO: we assume this is the default web page, is it right?
+        // NOTE: we assume this is the default web page
         "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}",
         .{ctx.state.frameID},
     );
