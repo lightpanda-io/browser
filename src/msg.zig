@@ -20,12 +20,12 @@ const std = @import("std");
 
 // pub const MaxStdOutSize = 512; // ensure debug msg are not too long
 
-/// MsgBuffer return messages from a raw text read stream,
+/// MsgBuffer returns messages from a raw text read stream,
 /// according to the following format `<msg_size>:<msg>`.
 /// It handles both:
 /// - combined messages in one read
-/// - single message in several read (multipart)
-/// It is safe (and good practice) to reuse the same MsgBuffer
+/// - single message in several reads (multipart)
+/// It's safe (and a good practice) to reuse the same MsgBuffer
 /// on several reads of the same stream.
 pub const MsgBuffer = struct {
     size: usize = 0,
@@ -56,8 +56,7 @@ pub const MsgBuffer = struct {
 
     // read input
     // - `do_func` is a callback to execute on each message of the input
-    // - `data` is a arbitrary payload that will be passed to the callback along with
-    // the message itself
+    // - `data` is an arbitrary user data that will be forwarded to the do_func callback
     pub fn read(
         self: *MsgBuffer,
         alloc: std.mem.Allocator,
