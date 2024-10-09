@@ -73,7 +73,7 @@ pub const MsgBuffer = struct {
             var msg_size: usize = undefined;
             if (self.isEmpty()) {
                 // parse msg size metadata
-                const size_pos = std.mem.indexOfScalar(u8, _input, ':').?;
+                const size_pos = std.mem.indexOfScalar(u8, _input, ':') orelse return error.InputWithoutSize;
                 const size_str = _input[0..size_pos];
                 msg_size = try std.fmt.parseInt(u32, size_str, 10);
                 _input = _input[size_pos + 1 ..];
