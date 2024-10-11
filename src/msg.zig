@@ -95,8 +95,11 @@ pub const MsgBuffer = struct {
 
                 // check if the current input can fit in MsgBuffer
                 if (new_pos > self.buf.len) {
-                    // max_size is the max between msg size and current new cursor position
-                    const max_size = @max(self.size, new_pos);
+                    // we want to realloc at least:
+                    // - a size equals to new_pos to fit the entire input
+                    // - a size big enough (ie. current size + starting size)
+                    // to avoid multiple reallocation
+                    const max_size = @max(self.buf.len + self.size, new_pos);
                     // resize the MsgBuffer to fit
                     self.buf = try alloc.realloc(self.buf, max_size);
                 }
