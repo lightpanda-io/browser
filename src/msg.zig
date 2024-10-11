@@ -32,6 +32,8 @@ pub const MsgBuffer = struct {
     buf: []u8,
     pos: usize = 0,
 
+    const MaxSize = 1024 * 1024; // 1MB
+
     pub fn init(alloc: std.mem.Allocator, size: usize) std.mem.Allocator.Error!MsgBuffer {
         const buf = try alloc.alloc(u8, size);
         return .{ .buf = buf };
@@ -93,15 +95,20 @@ pub const MsgBuffer = struct {
                 // get the new position of the cursor
                 const new_pos = self.pos + _input.len;
 
+                // check max limit size
+                if (new_pos > MaxSize) {
+                    return error.MsgTooBig;
+                }
+
                 // check if the current input can fit in MsgBuffer
                 if (new_pos > self.buf.len) {
                     // we want to realloc at least:
-                    // - a size equals to new_pos to fit the entire input
+                    // - a size big enough to fit the entire input (ie. new_pos)
                     // - a size big enough (ie. current size + starting size)
                     // to avoid multiple reallocation
-                    const max_size = @max(self.buf.len + self.size, new_pos);
+                    const new_size = @max(self.buf.len + self.size, new_pos);
                     // resize the MsgBuffer to fit
-                    self.buf = try alloc.realloc(self.buf, max_size);
+                    self.buf = try alloc.realloc(self.buf, new_size);
                 }
 
                 // copy the current input into MsgBuffer
