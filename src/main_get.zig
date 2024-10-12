@@ -83,7 +83,7 @@ pub fn main() !void {
     var loop = try jsruntime.Loop.init(allocator);
     defer loop.deinit();
 
-    var browser = try Browser.init(allocator, &loop);
+    var browser = try Browser.init(allocator, &loop, vm);
     defer browser.deinit();
 
     var page = try browser.currentSession().createPage();

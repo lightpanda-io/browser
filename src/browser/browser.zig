@@ -51,9 +51,10 @@ const log = std.log.scoped(.browser);
 pub const Browser = struct {
     session: *Session,
 
-    pub fn init(alloc: std.mem.Allocator, loop: *Loop) !Browser {
+    pub fn init(alloc: std.mem.Allocator, loop: *Loop, vm: jsruntime.VM) !Browser {
         // We want to ensure the caller initialised a VM, but the browser
         // doesn't use it directly...
+        _ = vm;
 
         return Browser{
             .session = try Session.init(alloc, loop, "about:blank"),

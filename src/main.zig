@@ -233,7 +233,7 @@ pub fn main() !void {
     defer loop.deinit();
 
     // browser
-    var browser = try Browser.init(arena.allocator(), &loop);
+    var browser = try Browser.init(arena.allocator(), &loop, vm);
     defer browser.deinit();
 
     // listen
