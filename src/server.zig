@@ -315,7 +315,7 @@ pub const Ctx = struct {
     pub fn sendInspector(self: *Ctx, msg: []const u8) void {
         if (self.env().getInspector()) |inspector| {
             inspector.send(self.env(), msg);
-        }
+        } else @panic("Inspector has not been set");
     }
 
     inline fn inspectorCtx(ctx_opaque: *anyopaque) *Ctx {
