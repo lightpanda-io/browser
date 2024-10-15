@@ -79,10 +79,10 @@ fn sendInspector(
                 userGesture: ?bool = null,
             };
 
-            const msg = try getMsg(alloc, Params, scanner);
+            const msg = try getMsg(alloc, _id, Params, scanner);
             const params = msg.params.?;
             script = params.expression;
-            id = _id orelse msg.id.?;
+            id = msg.id;
         } else if (method == .callFunctionOn) {
             const Params = struct {
                 functionDeclaration: []const u8,
@@ -97,10 +97,10 @@ fn sendInspector(
                 userGesture: ?bool = null,
             };
 
-            const msg = try getMsg(alloc, Params, scanner);
+            const msg = try getMsg(alloc, _id, Params, scanner);
             const params = msg.params.?;
             script = params.functionDeclaration;
-            id = _id orelse msg.id.?;
+            id = msg.id;
         }
 
         if (script) |src| {
@@ -162,11 +162,11 @@ pub fn executionContextCreated(
 // should we be passing this also to the JS Inspector?
 fn runIfWaitingForDebugger(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
-    const msg = try getMsg(alloc, void, scanner);
+    const msg = try getMsg(alloc, _id, void, scanner);
 
-    return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
+    return result(alloc, msg.id, null, null, msg.sessionID);
 }

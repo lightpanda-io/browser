@@ -65,16 +65,16 @@ const BrowserContextID = "65618675CB7D3585A95049E9DFE95EA9";
 // TODO: noop method
 fn setDiscoverTargets(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
 
     // input
-    const msg = try getMsg(alloc, void, scanner);
+    const msg = try getMsg(alloc, _id, void, scanner);
 
     // output
-    return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
+    return result(alloc, msg.id, null, null, msg.sessionID);
 }
 
 const AttachToTarget = struct {
@@ -99,7 +99,7 @@ const TargetFilter = struct {
 // TODO: noop method
 fn setAutoAttach(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
@@ -111,7 +111,7 @@ fn setAutoAttach(
         flatten: bool = true,
         filter: ?[]TargetFilter = null,
     };
-    const msg = try getMsg(alloc, Params, scanner);
+    const msg = try getMsg(alloc, _id, Params, scanner);
     std.log.debug("params {any}", .{msg.params});
 
     // attachedToTarget event
@@ -129,12 +129,12 @@ fn setAutoAttach(
     }
 
     // output
-    return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
+    return result(alloc, msg.id, null, null, msg.sessionID);
 }
 
 fn getTargetInfo(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
@@ -143,7 +143,7 @@ fn getTargetInfo(
     const Params = struct {
         targetId: ?[]const u8 = null,
     };
-    const msg = try getMsg(alloc, Params, scanner);
+    const msg = try getMsg(alloc, _id, Params, scanner);
 
     // output
     const TargetInfo = struct {
@@ -162,7 +162,7 @@ fn getTargetInfo(
         .targetId = BrowserTargetID,
         .type = "browser",
     };
-    return result(alloc, id orelse msg.id.?, TargetInfo, targetInfo, null);
+    return result(alloc, msg.id, TargetInfo, targetInfo, null);
 }
 
 // Browser context are not handled and not in the roadmap for now
@@ -171,13 +171,13 @@ fn getTargetInfo(
 // TODO: noop method
 fn getBrowserContexts(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
 
     // input
-    const msg = try getMsg(alloc, void, scanner);
+    const msg = try getMsg(alloc, _id, void, scanner);
 
     // ouptut
     const Resp = struct {
@@ -191,7 +191,7 @@ fn getBrowserContexts(
         const contextIDs = [0][]const u8{};
         resp = .{ .browserContextIds = &contextIDs };
     }
-    return result(alloc, id orelse msg.id.?, Resp, resp, null);
+    return result(alloc, msg.id, Resp, resp, null);
 }
 
 const ContextID = "22648B09EDCCDD11109E2D4FEFBE4F89";
@@ -199,7 +199,7 @@ const ContextID = "22648B09EDCCDD11109E2D4FEFBE4F89";
 // TODO: noop method
 fn createBrowserContext(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
@@ -211,7 +211,7 @@ fn createBrowserContext(
         proxyBypassList: ?[]const u8 = null,
         originsWithUniversalNetworkAccess: ?[][]const u8 = null,
     };
-    const msg = try getMsg(alloc, Params, scanner);
+    const msg = try getMsg(alloc, _id, Params, scanner);
 
     ctx.state.contextID = ContextID;
 
@@ -219,12 +219,12 @@ fn createBrowserContext(
     const Resp = struct {
         browserContextId: []const u8 = ContextID,
     };
-    return result(alloc, id orelse msg.id.?, Resp, Resp{}, msg.sessionID);
+    return result(alloc, msg.id, Resp, Resp{}, msg.sessionID);
 }
 
 fn disposeBrowserContext(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
@@ -233,10 +233,10 @@ fn disposeBrowserContext(
     const Params = struct {
         browserContextId: []const u8,
     };
-    const msg = try getMsg(alloc, Params, scanner);
+    const msg = try getMsg(alloc, _id, Params, scanner);
 
     // output
-    const res = try result(alloc, id orelse msg.id.?, null, .{}, null);
+    const res = try result(alloc, msg.id, null, .{}, null);
     defer alloc.free(res);
     try server.sendSync(ctx, res);
 
@@ -249,7 +249,7 @@ const LoaderID = "DD4A76F842AA389647D702B4D805F49A";
 
 fn createTarget(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
@@ -265,7 +265,7 @@ fn createTarget(
         background: bool = false,
         forTab: ?bool = null,
     };
-    const msg = try getMsg(alloc, Params, scanner);
+    const msg = try getMsg(alloc, _id, Params, scanner);
 
     // change CDP state
     ctx.state.frameID = TargetID;
@@ -291,12 +291,12 @@ fn createTarget(
     const Resp = struct {
         targetId: []const u8 = TargetID,
     };
-    return result(alloc, id orelse msg.id.?, Resp, Resp{}, msg.sessionID);
+    return result(alloc, msg.id, Resp, Resp{}, msg.sessionID);
 }
 
 fn closeTarget(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
@@ -305,13 +305,13 @@ fn closeTarget(
     const Params = struct {
         targetId: []const u8,
     };
-    const msg = try getMsg(alloc, Params, scanner);
+    const msg = try getMsg(alloc, _id, Params, scanner);
 
     // output
     const Resp = struct {
         success: bool = true,
     };
-    const res = try result(alloc, id orelse msg.id.?, Resp, Resp{}, null);
+    const res = try result(alloc, msg.id, Resp, Resp{}, null);
     defer alloc.free(res);
     try server.sendSync(ctx, res);
 

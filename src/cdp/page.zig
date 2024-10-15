@@ -58,12 +58,12 @@ pub fn page(
 
 fn enable(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
-    const msg = try getMsg(alloc, void, scanner);
-    return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
+    const msg = try getMsg(alloc, _id, void, scanner);
+    return result(alloc, msg.id, null, null, msg.sessionID);
 }
 
 const Frame = struct {
@@ -83,11 +83,11 @@ const Frame = struct {
 
 fn getFrameTree(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
-    const msg = try cdp.getMsg(alloc, void, scanner);
+    const msg = try cdp.getMsg(alloc, _id, void, scanner);
 
     const FrameTree = struct {
         frameTree: struct {
@@ -106,12 +106,12 @@ fn getFrameTree(
             },
         },
     };
-    return result(alloc, id orelse msg.id.?, FrameTree, frameTree, msg.sessionID);
+    return result(alloc, msg.id, FrameTree, frameTree, msg.sessionID);
 }
 
 fn setLifecycleEventsEnabled(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
@@ -120,12 +120,12 @@ fn setLifecycleEventsEnabled(
     const Params = struct {
         enabled: bool,
     };
-    const msg = try getMsg(alloc, Params, scanner);
+    const msg = try getMsg(alloc, _id, Params, scanner);
 
     ctx.state.page_life_cycle_events = true;
 
     // output
-    return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
+    return result(alloc, msg.id, null, null, msg.sessionID);
 }
 
 const LifecycleEvent = struct {
@@ -138,7 +138,7 @@ const LifecycleEvent = struct {
 // TODO: hard coded method
 fn addScriptToEvaluateOnNewDocument(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
@@ -150,19 +150,19 @@ fn addScriptToEvaluateOnNewDocument(
         includeCommandLineAPI: bool = false,
         runImmediately: bool = false,
     };
-    const msg = try getMsg(alloc, Params, scanner);
+    const msg = try getMsg(alloc, _id, Params, scanner);
 
     // output
     const Res = struct {
         identifier: []const u8 = "1",
     };
-    return result(alloc, id orelse msg.id.?, Res, Res{}, msg.sessionID);
+    return result(alloc, msg.id, Res, Res{}, msg.sessionID);
 }
 
 // TODO: hard coded method
 fn createIsolatedWorld(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
@@ -173,7 +173,7 @@ fn createIsolatedWorld(
         worldName: []const u8,
         grantUniveralAccess: bool,
     };
-    const msg = try getMsg(alloc, Params, scanner);
+    const msg = try getMsg(alloc, _id, Params, scanner);
     std.debug.assert(msg.sessionID != null);
     const params = msg.params.?;
 
@@ -199,12 +199,12 @@ fn createIsolatedWorld(
         executionContextId: u8 = 0,
     };
 
-    return result(alloc, id orelse msg.id.?, Resp, .{}, msg.sessionID);
+    return result(alloc, msg.id, Resp, .{}, msg.sessionID);
 }
 
 fn navigate(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
@@ -217,7 +217,7 @@ fn navigate(
         frameId: ?[]const u8 = null,
         referrerPolicy: ?[]const u8 = null, // TODO: enum
     };
-    const msg = try getMsg(alloc, Params, scanner);
+    const msg = try getMsg(alloc, _id, Params, scanner);
     std.debug.assert(msg.sessionID != null);
     const params = msg.params.?;
 
@@ -269,7 +269,7 @@ fn navigate(
         .frameId = ctx.state.frameID,
         .loaderId = ctx.state.loaderID,
     };
-    const res = try result(alloc, id orelse msg.id.?, Resp, resp, msg.sessionID);
+    const res = try result(alloc, msg.id, Resp, resp, msg.sessionID);
     defer alloc.free(res);
     std.log.debug("res {s}", .{res});
     try server.sendSync(ctx, res);

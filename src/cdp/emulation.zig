@@ -57,7 +57,7 @@ const MediaFeature = struct {
 // TODO: noop method
 fn setEmulatedMedia(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
@@ -67,16 +67,16 @@ fn setEmulatedMedia(
         media: ?[]const u8 = null,
         features: ?[]MediaFeature = null,
     };
-    const msg = try getMsg(alloc, Params, scanner);
+    const msg = try getMsg(alloc, _id, Params, scanner);
 
     // output
-    return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
+    return result(alloc, msg.id, null, null, msg.sessionID);
 }
 
 // TODO: noop method
 fn setFocusEmulationEnabled(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
@@ -85,35 +85,35 @@ fn setFocusEmulationEnabled(
     const Params = struct {
         enabled: bool,
     };
-    const msg = try getMsg(alloc, Params, scanner);
+    const msg = try getMsg(alloc, _id, Params, scanner);
 
     // output
-    return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
+    return result(alloc, msg.id, null, null, msg.sessionID);
 }
 
 // TODO: noop method
 fn setDeviceMetricsOverride(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
 
     // input
-    const msg = try cdp.getMsg(alloc, void, scanner);
+    const msg = try cdp.getMsg(alloc, _id, void, scanner);
 
     // output
-    return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
+    return result(alloc, msg.id, null, null, msg.sessionID);
 }
 
 // TODO: noop method
 fn setTouchEmulationEnabled(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
-    const msg = try cdp.getMsg(alloc, void, scanner);
+    const msg = try cdp.getMsg(alloc, _id, void, scanner);
 
-    return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
+    return result(alloc, msg.id, null, null, msg.sessionID);
 }

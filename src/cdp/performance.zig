@@ -45,11 +45,11 @@ pub fn performance(
 
 fn enable(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
-    const msg = try getMsg(alloc, void, scanner);
+    const msg = try getMsg(alloc, _id, void, scanner);
 
-    return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
+    return result(alloc, msg.id, null, null, msg.sessionID);
 }

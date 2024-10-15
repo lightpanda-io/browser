@@ -57,13 +57,13 @@ const JsVersion = "12.4.254.8";
 
 fn getVersion(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
 
     // input
-    const msg = try getMsg(alloc, void, scanner);
+    const msg = try getMsg(alloc, _id, void, scanner);
 
     // ouput
     const Res = struct {
@@ -73,13 +73,13 @@ fn getVersion(
         userAgent: []const u8 = UserAgent,
         jsVersion: []const u8 = JsVersion,
     };
-    return result(alloc, id orelse msg.id.?, Res, .{}, null);
+    return result(alloc, msg.id, Res, .{}, null);
 }
 
 // TODO: noop method
 fn setDownloadBehavior(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
@@ -91,10 +91,10 @@ fn setDownloadBehavior(
         downloadPath: ?[]const u8 = null,
         eventsEnabled: ?bool = null,
     };
-    const msg = try getMsg(alloc, Params, scanner);
+    const msg = try getMsg(alloc, _id, Params, scanner);
 
     // output
-    return result(alloc, id orelse msg.id.?, null, null, null);
+    return result(alloc, msg.id, null, null, null);
 }
 
 // TODO: hard coded ID
@@ -102,7 +102,7 @@ const DevToolsWindowID = 1923710101;
 
 fn getWindowForTarget(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
@@ -111,7 +111,7 @@ fn getWindowForTarget(
     const Params = struct {
         targetId: ?[]const u8 = null,
     };
-    const msg = try cdp.getMsg(alloc, ?Params, scanner);
+    const msg = try cdp.getMsg(alloc, _id, ?Params, scanner);
     std.debug.assert(msg.sessionID != null);
 
     // output
@@ -125,20 +125,20 @@ fn getWindowForTarget(
             windowState: []const u8 = "normal",
         } = .{},
     };
-    return result(alloc, id orelse msg.id.?, Resp, Resp{}, msg.sessionID.?);
+    return result(alloc, msg.id, Resp, Resp{}, msg.sessionID.?);
 }
 
 // TODO: noop method
 fn setWindowBounds(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    _id: ?u16,
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
 
     // input
-    const msg = try cdp.getMsg(alloc, void, scanner);
+    const msg = try cdp.getMsg(alloc, _id, void, scanner);
 
     // output
-    return result(alloc, id orelse msg.id.?, null, null, msg.sessionID);
+    return result(alloc, msg.id, null, null, msg.sessionID);
 }

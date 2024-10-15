@@ -35,6 +35,7 @@ pub const Error = error{
     UnknonwDomain,
     UnknownMethod,
     NoResponse,
+    RequestWithoutID,
 };
 
 pub fn isCdpError(err: anyerror) ?Error {
@@ -276,10 +277,11 @@ fn getSessionId(scanner: *std.json.Scanner, key: []const u8) !?[]const u8 {
 
 pub fn getMsg(
     alloc: std.mem.Allocator,
+    _id: ?u16,
     comptime params_T: type,
     scanner: *std.json.Scanner,
-) !struct { id: ?u16, params: ?params_T, sessionID: ?[]const u8 } {
-    var id: ?u16 = null;
+) !struct { id: u16, params: ?params_T, sessionID: ?[]const u8 } {
+    var id_msg: ?u16 = null;
     var params: ?params_T = null;
     var sessionID: ?[]const u8 = null;
 
@@ -291,9 +293,9 @@ pub fn getMsg(
         if (t != .string) {
             return error.WrongTokenType;
         }
-        if (id == null) {
-            id = try getId(scanner, t.string);
-            if (id != null) continue;
+        if (_id == null and id_msg == null) {
+            id_msg = try getId(scanner, t.string);
+            if (id_msg != null) continue;
         }
         if (params == null) {
             params = try getParams(alloc, params_T, scanner, t.string);
@@ -311,7 +313,11 @@ pub fn getMsg(
     );
     t = try scanner.next();
     if (t != .end_of_document) return error.CDPMsgEnd;
-    return .{ .id = id, .params = params, .sessionID = sessionID };
+
+    // check id
+    if (_id == null and id_msg == null) return error.RequestWithoutID;
+
+    return .{ .id = _id orelse id_msg.?, .params = params, .sessionID = sessionID };
 }
 
 // Common
