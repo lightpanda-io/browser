@@ -160,6 +160,10 @@ test "MsgBuffer" {
         // multipart & combined
         .{ .input = "9:multi", .nb = 0 },
         .{ .input = "part2:ok", .nb = 2 },
+        // multipart & combined with other multipart
+        .{ .input = "9:multi", .nb = 0 },
+        .{ .input = "part8:co", .nb = 1 },
+        .{ .input = "mbined", .nb = 1 },
         // several multipart
         .{ .input = "23:multi", .nb = 0 },
         .{ .input = "several", .nb = 0 },
