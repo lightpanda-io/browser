@@ -224,18 +224,10 @@ pub fn main() !void {
     defer srv.close();
     std.log.info("Listening on: {s}:{d}...", .{ host, port });
 
-    // create v8 vm
-    const vm = jsruntime.VM.init();
-    defer vm.deinit();
-
     // loop
     var loop = try jsruntime.Loop.init(arena.allocator());
     defer loop.deinit();
 
-    // browser
-    var browser = try Browser.init(arena.allocator(), &loop, vm);
-    defer browser.deinit();
-
     // listen
-    try server.listen(&browser, &loop, srv.sockfd.?, std.time.ns_per_s * @as(u64, timeout));
+    try server.listen(arena.allocator(), &loop, srv.sockfd.?, std.time.ns_per_s * @as(u64, timeout));
 }

@@ -249,12 +249,12 @@ pub const Ctx = struct {
 
     // allocator of the current session
     inline fn alloc(self: *Ctx) std.mem.Allocator {
-        return self.browser.currentSession().alloc;
+        return self.browser.session.alloc;
     }
 
     // JS env of the current session
     inline fn env(self: Ctx) jsruntime.Env {
-        return self.browser.currentSession().env;
+        return self.browser.session.env;
     }
 
     // actions
@@ -300,7 +300,7 @@ pub const Ctx = struct {
 
     fn newSession(self: *Ctx) !void {
         try self.browser.newSession(self.alloc(), self.loop);
-        try self.browser.currentSession().initInspector(
+        try self.browser.session.initInspector(
             self,
             Ctx.onInspectorResp,
             Ctx.onInspectorNotif,
@@ -398,11 +398,20 @@ pub fn sendSync(ctx: *Ctx, msg: []const u8) !void {
 // ------
 
 pub fn listen(
-    browser: *Browser,
+    alloc: std.mem.Allocator,
     loop: *jsruntime.Loop,
     server_socket: std.posix.socket_t,
     timeout: u64,
 ) anyerror!void {
+
+    // create v8 vm
+    const vm = jsruntime.VM.init();
+    defer vm.deinit();
+
+    // browser
+    var browser: Browser = undefined;
+    try Browser.init(&browser, alloc, loop, vm);
+    defer browser.deinit();
 
     // create buffers
     var read_buf: [BufReadSize]u8 = undefined;
@@ -417,7 +426,7 @@ pub fn listen(
     // for accepting connections and receving messages
     var ctx = Ctx{
         .loop = loop,
-        .browser = browser,
+        .browser = &browser,
         .sessionNew = true,
         .read_buf = &read_buf,
         .msg_buf = &msg_buf,
@@ -426,7 +435,7 @@ pub fn listen(
         .conn_completion = &conn_completion,
         .timeout_completion = &timeout_completion,
     };
-    try browser.currentSession().initInspector(
+    try browser.session.initInspector(
         &ctx,
         Ctx.onInspectorResp,
         Ctx.onInspectorNotif,

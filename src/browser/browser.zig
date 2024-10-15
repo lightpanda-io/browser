@@ -49,29 +49,33 @@ const log = std.log.scoped(.browser);
 // A browser contains only one session.
 // TODO allow multiple sessions per browser.
 pub const Browser = struct {
-    session: *Session,
+    session: Session = undefined,
 
-    pub fn init(alloc: std.mem.Allocator, loop: *Loop, vm: jsruntime.VM) !Browser {
+    const uri = "about:blank";
+
+    pub fn init(self: *Browser, alloc: std.mem.Allocator, loop: *Loop, vm: jsruntime.VM) !void {
         // We want to ensure the caller initialised a VM, but the browser
         // doesn't use it directly...
         _ = vm;
 
-        return Browser{
-            .session = try Session.init(alloc, loop, "about:blank"),
-        };
+        try Session.init(&self.session, alloc, loop, uri);
     }
 
     pub fn deinit(self: *Browser) void {
         self.session.deinit();
     }
 
-    pub fn newSession(self: *Browser, alloc: std.mem.Allocator, loop: *jsruntime.Loop) !void {
+    pub fn newSession(
+        self: *Browser,
+        alloc: std.mem.Allocator,
+        loop: *jsruntime.Loop,
+    ) !void {
         self.session.deinit();
-        self.session = try Session.init(alloc, loop, "about:blank");
+        try Session.init(&self.session, alloc, loop, uri);
     }
 
     pub fn currentSession(self: *Browser) *Session {
-        return self.session;
+        return &self.session;
     }
 };
 
@@ -99,13 +103,12 @@ pub const Session = struct {
     window: Window,
     // TODO move the shed to the browser?
     storageShed: storage.Shed,
-    page: ?*Page = null,
+    _page: ?Page = null,
     httpClient: HttpClient,
 
     jstypes: [Types.len]usize = undefined,
 
-    fn init(alloc: std.mem.Allocator, loop: *Loop, uri: []const u8) !*Session {
-        var self = try alloc.create(Session);
+    fn init(self: *Session, alloc: std.mem.Allocator, loop: *Loop, uri: []const u8) !void {
         self.* = Session{
             .uri = uri,
             .alloc = alloc,
@@ -116,15 +119,13 @@ pub const Session = struct {
             .httpClient = undefined,
         };
 
-        self.env = try Env.init(self.arena.allocator(), loop, null);
+        Env.init(&self.env, self.arena.allocator(), loop, null);
         self.httpClient = .{ .allocator = alloc, .loop = loop };
         try self.env.load(&self.jstypes);
-
-        return self;
     }
 
     fn deinit(self: *Session) void {
-        if (self.page) |page| page.end();
+        if (self._page) |*p| p.end();
 
         if (self.inspector) |inspector| {
             inspector.deinit(self.alloc);
@@ -136,7 +137,6 @@ pub const Session = struct {
         self.httpClient.deinit();
         self.loader.deinit();
         self.storageShed.deinit();
-        self.alloc.destroy(self);
     }
 
     pub fn initInspector(
@@ -158,8 +158,17 @@ pub const Session = struct {
         }
     }
 
-    pub fn createPage(self: *Session) !Page {
-        return Page.init(self.alloc, self);
+    pub fn createPage(self: *Session) !void {
+        if (self._page != null) return error.SessionPageExists;
+        const p: Page = undefined;
+        self._page = p;
+        Page.init(&self._page.?, self.alloc, self);
+    }
+
+    // shortcut
+    pub fn page(self: *Session) *Page {
+        if (self._page) |*p| return p;
+        @panic("No Page on this session");
     }
 };
 
@@ -181,16 +190,14 @@ pub const Page = struct {
     raw_data: ?[]const u8 = null,
 
     fn init(
+        self: *Page,
         alloc: std.mem.Allocator,
         session: *Session,
-    ) !Page {
-        if (session.page != null) return error.SessionPageExists;
-        var page = Page{
+    ) void {
+        self.* = .{
             .arena = std.heap.ArenaAllocator.init(alloc),
             .session = session,
         };
-        session.page = &page;
-        return page;
     }
 
     // reset js env and mem arena.

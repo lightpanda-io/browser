@@ -83,18 +83,18 @@ pub fn main() !void {
     var loop = try jsruntime.Loop.init(allocator);
     defer loop.deinit();
 
-    var browser = try Browser.init(allocator, &loop, vm);
+    var browser = Browser{};
+    try Browser.init(&browser, allocator, &loop, vm);
     defer browser.deinit();
 
-    var page = try browser.currentSession().createPage();
-    defer page.deinit();
+    try browser.session.createPage();
 
-    try page.navigate(url, null);
-    defer page.end();
+    try browser.session.page().navigate(url, null);
+    defer browser.session.page().end();
 
-    try page.wait();
+    try browser.session.page().wait();
 
     if (dump) {
-        try page.dump(std.io.getStdOut());
+        try browser.session.page().dump(std.io.getStdOut());
     }
 }

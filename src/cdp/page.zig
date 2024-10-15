@@ -281,7 +281,7 @@ fn navigate(
     try sendEvent(alloc, ctx, "Runtime.executionContextsCleared", void, {}, msg.sessionID);
 
     // Launch navigate
-    var p = try ctx.browser.currentSession().createPage();
+    try ctx.browser.session.createPage();
     ctx.state.executionContextId += 1;
     const auxData = try std.fmt.allocPrint(
         alloc,
@@ -290,7 +290,7 @@ fn navigate(
         .{ctx.state.frameID},
     );
     defer alloc.free(auxData);
-    _ = try p.navigate(params.url, auxData);
+    try ctx.browser.session.page().navigate(params.url, auxData);
 
     // Events
 
