@@ -26,6 +26,8 @@ const getMsg = cdp.getMsg;
 const stringify = cdp.stringify;
 const sendEvent = cdp.sendEvent;
 
+const log = std.log.scoped(.cdp);
+
 const Runtime = @import("runtime.zig");
 
 const Methods = enum {
@@ -62,7 +64,11 @@ fn enable(
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
+
+    // input
     const msg = try getMsg(alloc, _id, void, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "page.enable" });
+
     return result(alloc, msg.id, null, null, msg.sessionID);
 }
 
@@ -87,13 +93,36 @@ fn getFrameTree(
     scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
-    const msg = try cdp.getMsg(alloc, _id, void, scanner);
 
+    // input
+    const msg = try cdp.getMsg(alloc, _id, void, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "page.getFrameTree" });
+
+    // output
     const FrameTree = struct {
         frameTree: struct {
             frame: Frame,
         },
         childFrames: ?[]@This() = null,
+
+        pub fn format(
+            self: @This(),
+            comptime _: []const u8,
+            options: std.fmt.FormatOptions,
+            writer: anytype,
+        ) !void {
+            try writer.writeAll("cdp.page.getFrameTree { ");
+            try writer.writeAll(".frameTree = { ");
+            try writer.writeAll(".frame = { ");
+            const frame = self.frameTree.frame;
+            try writer.writeAll(".id = ");
+            try std.fmt.formatText(frame.id, "s", options, writer);
+            try writer.writeAll(", .loaderId = ");
+            try std.fmt.formatText(frame.loaderId, "s", options, writer);
+            try writer.writeAll(", .url = ");
+            try std.fmt.formatText(frame.url, "s", options, writer);
+            try writer.writeAll(" } } }");
+        }
     };
     const frameTree = FrameTree{
         .frameTree = .{
@@ -121,6 +150,7 @@ fn setLifecycleEventsEnabled(
         enabled: bool,
     };
     const msg = try getMsg(alloc, _id, Params, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "page.setLifecycleEventsEnabled" });
 
     ctx.state.page_life_cycle_events = true;
 
@@ -151,10 +181,23 @@ fn addScriptToEvaluateOnNewDocument(
         runImmediately: bool = false,
     };
     const msg = try getMsg(alloc, _id, Params, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "page.addScriptToEvaluateOnNewDocument" });
 
     // output
     const Res = struct {
         identifier: []const u8 = "1",
+
+        pub fn format(
+            self: @This(),
+            comptime _: []const u8,
+            options: std.fmt.FormatOptions,
+            writer: anytype,
+        ) !void {
+            try writer.writeAll("cdp.page.addScriptToEvaluateOnNewDocument { ");
+            try writer.writeAll(".identifier = ");
+            try std.fmt.formatText(self.identifier, "s", options, writer);
+            try writer.writeAll(" }");
+        }
     };
     return result(alloc, msg.id, Res, Res{}, msg.sessionID);
 }
@@ -175,6 +218,7 @@ fn createIsolatedWorld(
     };
     const msg = try getMsg(alloc, _id, Params, scanner);
     std.debug.assert(msg.sessionID != null);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "page.createIsolatedWorld" });
     const params = msg.params.?;
 
     // noop executionContextCreated event
@@ -219,6 +263,7 @@ fn navigate(
     };
     const msg = try getMsg(alloc, _id, Params, scanner);
     std.debug.assert(msg.sessionID != null);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "page.navigate" });
     const params = msg.params.?;
 
     // change state
@@ -264,6 +309,22 @@ fn navigate(
         frameId: []const u8,
         loaderId: ?[]const u8,
         errorText: ?[]const u8 = null,
+
+        pub fn format(
+            self: @This(),
+            comptime _: []const u8,
+            options: std.fmt.FormatOptions,
+            writer: anytype,
+        ) !void {
+            try writer.writeAll("cdp.page.navigate.Resp { ");
+            try writer.writeAll(".frameId = ");
+            try std.fmt.formatText(self.frameId, "s", options, writer);
+            if (self.loaderId) |loaderId| {
+                try writer.writeAll(", .loaderId = '");
+                try std.fmt.formatText(loaderId, "s", options, writer);
+            }
+            try writer.writeAll(" }");
+        }
     };
     const resp = Resp{
         .frameId = ctx.state.frameID,
@@ -271,7 +332,6 @@ fn navigate(
     };
     const res = try result(alloc, msg.id, Resp, resp, msg.sessionID);
     defer alloc.free(res);
-    std.log.debug("res {s}", .{res});
     try server.sendSync(ctx, res);
 
     // TODO: at this point do we need async the following actions to be async?

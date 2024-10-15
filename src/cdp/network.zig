@@ -24,6 +24,8 @@ const cdp = @import("cdp.zig");
 const result = cdp.result;
 const getMsg = cdp.getMsg;
 
+const log = std.log.scoped(.cdp);
+
 const Methods = enum {
     enable,
     setCacheDisabled,
@@ -51,7 +53,10 @@ fn enable(
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
+
+    // input
     const msg = try getMsg(alloc, _id, void, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "network.enable" });
 
     return result(alloc, msg.id, null, null, msg.sessionID);
 }
@@ -63,7 +68,10 @@ fn setCacheDisabled(
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
+
+    // input
     const msg = try getMsg(alloc, _id, void, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "network.setCacheDisabled" });
 
     return result(alloc, msg.id, null, null, msg.sessionID);
 }

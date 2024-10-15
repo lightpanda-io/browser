@@ -25,6 +25,8 @@ const result = cdp.result;
 const getMsg = cdp.getMsg;
 const stringify = cdp.stringify;
 
+const log_cdp = std.log.scoped(.cdp);
+
 const Methods = enum {
     enable,
 };
@@ -51,6 +53,7 @@ fn enable(
     _: *Ctx,
 ) ![]const u8 {
     const msg = try getMsg(alloc, _id, void, scanner);
+    log_cdp.debug("Req > id {d}, method {s}", .{ msg.id, "log.enable" });
 
     return result(alloc, msg.id, null, null, msg.sessionID);
 }

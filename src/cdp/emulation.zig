@@ -25,6 +25,8 @@ const result = cdp.result;
 const getMsg = cdp.getMsg;
 const stringify = cdp.stringify;
 
+const log = std.log.scoped(.cdp);
+
 const Methods = enum {
     setEmulatedMedia,
     setFocusEmulationEnabled,
@@ -68,6 +70,7 @@ fn setEmulatedMedia(
         features: ?[]MediaFeature = null,
     };
     const msg = try getMsg(alloc, _id, Params, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "emulation.setEmulatedMedia" });
 
     // output
     return result(alloc, msg.id, null, null, msg.sessionID);
@@ -86,6 +89,7 @@ fn setFocusEmulationEnabled(
         enabled: bool,
     };
     const msg = try getMsg(alloc, _id, Params, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "emulation.setFocusEmulationEnabled" });
 
     // output
     return result(alloc, msg.id, null, null, msg.sessionID);
@@ -101,6 +105,7 @@ fn setDeviceMetricsOverride(
 
     // input
     const msg = try cdp.getMsg(alloc, _id, void, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "emulation.setDeviceMetricsOverride" });
 
     // output
     return result(alloc, msg.id, null, null, msg.sessionID);
@@ -114,6 +119,7 @@ fn setTouchEmulationEnabled(
     _: *Ctx,
 ) ![]const u8 {
     const msg = try cdp.getMsg(alloc, _id, void, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "emulation.setTouchEmulationEnabled" });
 
     return result(alloc, msg.id, null, null, msg.sessionID);
 }

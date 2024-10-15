@@ -36,6 +36,8 @@ const Error = IOError || std.fmt.ParseIntError || cdp.Error || NoError;
 
 const TimeoutCheck = std.time.ns_per_ms * 100;
 
+const log = std.log.scoped(.server);
+
 // I/O Main
 // --------
 
@@ -83,7 +85,7 @@ pub const Ctx = struct {
 
         // set connection timestamp and timeout
         self.last_active = std.time.Instant.now() catch |err| {
-            std.log.err("accept timestamp error: {any}", .{err});
+            log.err("accept timestamp error: {any}", .{err});
             return;
         };
         self.loop.io.timeout(
@@ -127,23 +129,19 @@ pub const Ctx = struct {
         }
 
         // input
-        if (std.log.defaultLogEnabled(.debug)) {
-            const content = input[0..@min(MaxStdOutSize, size)];
-            std.debug.print("\ninput size: {d}, content: {s}\n", .{ size, content });
-        }
         const input = self.read_buf[0..size];
 
         // read and execute input
         self.msg_buf.read(self.alloc(), input, self, Ctx.do) catch |err| {
             if (err != error.Closed) {
-                std.log.err("do error: {any}", .{err});
+                log.err("do error: {any}", .{err});
             }
             return;
         };
 
         // set connection timestamp
         self.last_active = std.time.Instant.now() catch |err| {
-            std.log.err("read timestamp error: {any}", .{err});
+            log.err("read timestamp error: {any}", .{err});
             return;
         };
 
@@ -173,13 +171,13 @@ pub const Ctx = struct {
 
         // check time since last read
         const now = std.time.Instant.now() catch |err| {
-            std.log.err("timeout timestamp error: {any}", .{err});
+            log.err("timeout timestamp error: {any}", .{err});
             return;
         };
 
         if (now.since(self.last_active.?) > self.timeout) {
             // closing
-            std.log.debug("conn timeout, closing...", .{});
+            log.debug("conn timeout, closing...", .{});
 
             // NOTE: we should cancel the current read
             // but it seems that's just closing the connection is enough
@@ -221,13 +219,12 @@ pub const Ctx = struct {
         // restart a new browser session in case of re-connect
         if (!self.sessionNew) {
             self.newSession() catch |err| {
-                std.log.err("new session error: {any}", .{err});
+                log.err("new session error: {any}", .{err});
                 return;
             };
         }
 
-        std.log.debug("conn closed", .{});
-        std.log.debug("accepting new conn...", .{});
+        log.info("accepting new conn...", .{});
 
         // continue accepting incoming requests
         self.loop.io.accept(
@@ -265,7 +262,7 @@ pub const Ctx = struct {
         // close cmd
         if (std.mem.eql(u8, cmd, "close")) {
             // close connection
-            std.log.debug("close cmd, closing...", .{});
+            log.info("close cmd, closing conn...", .{});
             self.loop.io.close(
                 *Ctx,
                 self,
@@ -283,7 +280,7 @@ pub const Ctx = struct {
             // cdp end cmd
             if (err == error.DisposeBrowserContext) {
                 // restart a new browser session
-                std.log.debug("cdp end cmd", .{});
+                std.log.scoped(.cdp).debug("end cmd, restarting a new session...", .{});
                 try self.newSession();
                 return;
             }
@@ -293,7 +290,6 @@ pub const Ctx = struct {
 
         // send result
         if (!std.mem.eql(u8, res, "")) {
-            std.log.debug("res {s}", .{res});
             return sendAsync(self, res);
         }
     }
@@ -306,7 +302,6 @@ pub const Ctx = struct {
             Ctx.onInspectorNotif,
         );
         self.sessionNew = true;
-        std.log.debug("new session", .{});
     }
 
     // inspector
@@ -338,13 +333,23 @@ pub const Ctx = struct {
     }
 
     pub fn onInspectorResp(ctx_opaque: *anyopaque, _: u32, msg: []const u8) void {
-        std.log.debug("inspector resp: {s}", .{msg});
+        if (std.log.defaultLogEnabled(.debug)) {
+            // msg should be {"id":<id>,...
+            const id_end = std.mem.indexOfScalar(u8, msg, ',') orelse unreachable;
+            const id = msg[6..id_end];
+            std.log.scoped(.cdp).debug("Res (inspector) > id {s}", .{id});
+        }
         const ctx = inspectorCtx(ctx_opaque);
         inspectorMsg(ctx.alloc(), ctx, msg) catch unreachable;
     }
 
     pub fn onInspectorNotif(ctx_opaque: *anyopaque, msg: []const u8) void {
-        std.log.debug("inspector event: {s}", .{msg});
+        if (std.log.defaultLogEnabled(.debug)) {
+            // msg should be {"method":<method>,...
+            const method_end = std.mem.indexOfScalar(u8, msg, ',') orelse unreachable;
+            const method = msg[10..method_end];
+            std.log.scoped(.cdp).debug("Event (inspector) > method {s}", .{method});
+        }
         const ctx = inspectorCtx(ctx_opaque);
         inspectorMsg(ctx.alloc(), ctx, msg) catch unreachable;
     }
@@ -374,12 +379,10 @@ const Send = struct {
     }
 
     fn asyncCbk(self: *Send, _: *Completion, result: SendError!usize) void {
-        const size = result catch |err| {
+        _ = result catch |err| {
             self.ctx.err = err;
             return;
         };
-
-        std.log.debug("send async {d} bytes", .{size});
         self.deinit();
     }
 };
@@ -390,8 +393,7 @@ pub fn sendAsync(ctx: *Ctx, msg: []const u8) !void {
 }
 
 pub fn sendSync(ctx: *Ctx, msg: []const u8) !void {
-    const s = try std.posix.write(ctx.conn_socket, msg);
-    std.log.debug("send sync {d} bytes", .{s});
+    _ = try std.posix.write(ctx.conn_socket, msg);
 }
 
 // Listen
@@ -442,7 +444,7 @@ pub fn listen(
     );
 
     // accepting connection asynchronously on internal server
-    std.log.debug("accepting new conn...", .{});
+    log.info("accepting new conn...", .{});
     loop.io.accept(*Ctx, &ctx, Ctx.acceptCbk, ctx.conn_completion, ctx.accept_socket);
 
     // infinite loop on I/O events, either:
@@ -451,7 +453,7 @@ pub fn listen(
     while (true) {
         try loop.io.tick();
         if (loop.cbk_error) {
-            std.log.err("JS error", .{});
+            log.err("JS error", .{});
             // if (try try_catch.exception(alloc, js_env.*)) |msg| {
             //     std.debug.print("\n\rUncaught {s}\n\r", .{msg});
             //     alloc.free(msg);
@@ -459,7 +461,7 @@ pub fn listen(
             // loop.cbk_error = false;
         }
         if (ctx.err) |err| {
-            if (err != error.NoError) std.log.err("Server error: {any}", .{err});
+            if (err != error.NoError) log.err("Server error: {any}", .{err});
             break;
         }
     }

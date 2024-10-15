@@ -24,6 +24,8 @@ const cdp = @import("cdp.zig");
 const result = cdp.result;
 const getMsg = cdp.getMsg;
 
+const log = std.log.scoped(.cdp);
+
 const Methods = enum {
     disable,
 };
@@ -51,6 +53,7 @@ fn disable(
     _: *Ctx,
 ) ![]const u8 {
     const msg = try getMsg(alloc, _id, void, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "fetch.disable" });
 
     return result(alloc, msg.id, null, null, msg.sessionID);
 }

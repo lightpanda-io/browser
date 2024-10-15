@@ -31,6 +31,8 @@ const emulation = @import("emulation.zig").emulation;
 const fetch = @import("fetch.zig").fetch;
 const performance = @import("performance.zig").performance;
 
+const log_cdp = std.log.scoped(.cdp);
+
 pub const Error = error{
     UnknonwDomain,
     UnknownMethod,
@@ -95,7 +97,6 @@ pub fn do(
         return error.WrongTokenType;
     }
     const method_name = method_token.string;
-    std.log.debug("cmd: method {s}, id {any}", .{ method_name, id });
 
     // retrieve domain from method
     var iter = std.mem.splitScalar(u8, method_name, '.');
@@ -154,7 +155,6 @@ pub fn dumpFile(
     std.debug.assert(nb == script.len);
     const p = try dir.realpathAlloc(alloc, name);
     defer alloc.free(p);
-    std.log.debug("Script {d} saved at {s}", .{ id, p });
 }
 
 fn checkKey(key: []const u8, token: []const u8) !void {
@@ -186,6 +186,10 @@ pub fn result(
     res: anytype,
     sessionID: ?[]const u8,
 ) ![]const u8 {
+    log_cdp.debug(
+        "Res > id {d}, sessionID {?s}, result {any}",
+        .{ id, sessionID, res },
+    );
     if (T == null) {
         // No need to stringify a custom JSON msg, just use string templates
         if (sessionID) |sID| {
@@ -212,6 +216,7 @@ pub fn sendEvent(
     params: T,
     sessionID: ?[]const u8,
 ) !void {
+    log_cdp.debug("Event > method {s}, sessionID {?s}", .{ name, sessionID });
     const Resp = struct {
         method: []const u8,
         params: T,
@@ -221,7 +226,6 @@ pub fn sendEvent(
 
     const event_msg = try stringify(alloc, resp);
     defer alloc.free(event_msg);
-    std.log.debug("event {s}", .{event_msg});
     try server.sendSync(ctx, event_msg);
 }
 
@@ -307,10 +311,6 @@ pub fn getMsg(
     }
 
     // end
-    std.log.debug(
-        "id {any}, params {any}, sessionID: {any}, token {any}",
-        .{ id, params, sessionID, t },
-    );
     t = try scanner.next();
     if (t != .end_of_document) return error.CDPMsgEnd;
 

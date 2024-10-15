@@ -27,6 +27,8 @@ const server = @import("server.zig");
 const parser = @import("netsurf");
 const apiweb = @import("apiweb.zig");
 
+const log = std.log.scoped(.server);
+
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 pub const UserContext = apiweb.UserContext;
 
@@ -144,7 +146,7 @@ pub const StreamServer = struct {
 
 fn printUsageExit(execname: []const u8, res: u8) void {
     std.io.getStdErr().writer().print(usage, .{execname}) catch |err| {
-        std.log.err("Print usage error: {any}", .{err});
+        log.err("Print usage error: {any}", .{err});
         std.posix.exit(1);
     };
     std.posix.exit(res);
@@ -175,37 +177,37 @@ pub fn main() !void {
                 host = arg;
                 continue;
             } else {
-                std.log.err("--host not provided\n", .{});
+                log.err("--host not provided\n", .{});
                 return printUsageExit(execname, 1);
             }
         }
         if (std.mem.eql(u8, "--port", opt)) {
             if (args.next()) |arg| {
                 port = std.fmt.parseInt(u16, arg, 10) catch |err| {
-                    std.log.err("--port {any}\n", .{err});
+                    log.err("--port {any}\n", .{err});
                     return printUsageExit(execname, 1);
                 };
                 continue;
             } else {
-                std.log.err("--port not provided\n", .{});
+                log.err("--port not provided\n", .{});
                 return printUsageExit(execname, 1);
             }
         }
         if (std.mem.eql(u8, "--timeout", opt)) {
             if (args.next()) |arg| {
                 timeout = std.fmt.parseInt(u8, arg, 10) catch |err| {
-                    std.log.err("--timeout {any}\n", .{err});
+                    log.err("--timeout {any}\n", .{err});
                     return printUsageExit(execname, 1);
                 };
                 continue;
             } else {
-                std.log.err("--timeout not provided\n", .{});
+                log.err("--timeout not provided\n", .{});
                 return printUsageExit(execname, 1);
             }
         }
     }
     addr = std.net.Address.parseIp4(host, port) catch |err| {
-        std.log.err("address (host:port) {any}\n", .{err});
+        log.err("address (host:port) {any}\n", .{err});
         return printUsageExit(execname, 1);
     };
 
@@ -218,11 +220,11 @@ pub fn main() !void {
     defer srv.deinit();
 
     srv.listen(addr) catch |err| {
-        std.log.err("address (host:port) {any}\n", .{err});
+        log.err("address (host:port) {any}\n", .{err});
         return printUsageExit(execname, 1);
     };
     defer srv.close();
-    std.log.info("Listening on: {s}:{d}...", .{ host, port });
+    log.info("Listening on: {s}:{d}...", .{ host, port });
 
     // loop
     var loop = try jsruntime.Loop.init(arena.allocator());

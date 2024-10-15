@@ -25,6 +25,8 @@ const result = cdp.result;
 const getMsg = cdp.getMsg;
 const stringify = cdp.stringify;
 
+const log = std.log.scoped(.cdp);
+
 const Methods = enum {
     setDiscoverTargets,
     setAutoAttach,
@@ -72,6 +74,7 @@ fn setDiscoverTargets(
 
     // input
     const msg = try getMsg(alloc, _id, void, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "target.setDiscoverTargets" });
 
     // output
     return result(alloc, msg.id, null, null, msg.sessionID);
@@ -112,7 +115,7 @@ fn setAutoAttach(
         filter: ?[]TargetFilter = null,
     };
     const msg = try getMsg(alloc, _id, Params, scanner);
-    std.log.debug("params {any}", .{msg.params});
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "target.setAutoAttach" });
 
     // attachedToTarget event
     if (msg.sessionID == null) {
@@ -144,6 +147,7 @@ fn getTargetInfo(
         targetId: ?[]const u8 = null,
     };
     const msg = try getMsg(alloc, _id, Params, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "target.getTargetInfo" });
 
     // output
     const TargetInfo = struct {
@@ -178,6 +182,7 @@ fn getBrowserContexts(
 
     // input
     const msg = try getMsg(alloc, _id, void, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "target.getBrowserContexts" });
 
     // ouptut
     const Resp = struct {
@@ -212,12 +217,25 @@ fn createBrowserContext(
         originsWithUniversalNetworkAccess: ?[][]const u8 = null,
     };
     const msg = try getMsg(alloc, _id, Params, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "target.createBrowserContext" });
 
     ctx.state.contextID = ContextID;
 
     // output
     const Resp = struct {
         browserContextId: []const u8 = ContextID,
+
+        pub fn format(
+            self: @This(),
+            comptime _: []const u8,
+            options: std.fmt.FormatOptions,
+            writer: anytype,
+        ) !void {
+            try writer.writeAll("cdp.target.createBrowserContext { ");
+            try writer.writeAll(".browserContextId = ");
+            try std.fmt.formatText(self.browserContextId, "s", options, writer);
+            try writer.writeAll(" }");
+        }
     };
     return result(alloc, msg.id, Resp, Resp{}, msg.sessionID);
 }
@@ -234,6 +252,7 @@ fn disposeBrowserContext(
         browserContextId: []const u8,
     };
     const msg = try getMsg(alloc, _id, Params, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "target.disposeBrowserContext" });
 
     // output
     const res = try result(alloc, msg.id, null, .{}, null);
@@ -266,6 +285,7 @@ fn createTarget(
         forTab: ?bool = null,
     };
     const msg = try getMsg(alloc, _id, Params, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "target.createTarget" });
 
     // change CDP state
     ctx.state.frameID = TargetID;
@@ -290,6 +310,18 @@ fn createTarget(
     // output
     const Resp = struct {
         targetId: []const u8 = TargetID,
+
+        pub fn format(
+            self: @This(),
+            comptime _: []const u8,
+            options: std.fmt.FormatOptions,
+            writer: anytype,
+        ) !void {
+            try writer.writeAll("cdp.target.createTarget { ");
+            try writer.writeAll(".targetId = ");
+            try std.fmt.formatText(self.targetId, "s", options, writer);
+            try writer.writeAll(" }");
+        }
     };
     return result(alloc, msg.id, Resp, Resp{}, msg.sessionID);
 }
@@ -306,6 +338,7 @@ fn closeTarget(
         targetId: []const u8,
     };
     const msg = try getMsg(alloc, _id, Params, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "target.closeTarget" });
 
     // output
     const Resp = struct {

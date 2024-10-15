@@ -24,6 +24,8 @@ const cdp = @import("cdp.zig");
 const result = cdp.result;
 const getMsg = cdp.getMsg;
 
+const log = std.log.scoped(.cdp);
+
 const Methods = enum {
     getVersion,
     setDownloadBehavior,
@@ -64,6 +66,7 @@ fn getVersion(
 
     // input
     const msg = try getMsg(alloc, _id, void, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "browser.getVersion" });
 
     // ouput
     const Res = struct {
@@ -92,6 +95,7 @@ fn setDownloadBehavior(
         eventsEnabled: ?bool = null,
     };
     const msg = try getMsg(alloc, _id, Params, scanner);
+    log.debug("REQ > id {d}, method {s}", .{ msg.id, "browser.setDownloadBehavior" });
 
     // output
     return result(alloc, msg.id, null, null, null);
@@ -113,6 +117,7 @@ fn getWindowForTarget(
     };
     const msg = try cdp.getMsg(alloc, _id, ?Params, scanner);
     std.debug.assert(msg.sessionID != null);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "browser.getWindowForTarget" });
 
     // output
     const Resp = struct {
@@ -138,6 +143,7 @@ fn setWindowBounds(
 
     // input
     const msg = try cdp.getMsg(alloc, _id, void, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "browser.setWindowBounds" });
 
     // output
     return result(alloc, msg.id, null, null, msg.sessionID);

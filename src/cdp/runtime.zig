@@ -28,6 +28,8 @@ const result = cdp.result;
 const getMsg = cdp.getMsg;
 const stringify = cdp.stringify;
 
+const log = std.log.scoped(.cdp);
+
 const Methods = enum {
     enable,
     runIfWaitingForDebugger,
@@ -80,6 +82,7 @@ fn sendInspector(
             };
 
             const msg = try getMsg(alloc, _id, Params, scanner);
+            log.debug("Req > id {d}, method {s} (script saved on cache)", .{ msg.id, "runtime.evaluate" });
             const params = msg.params.?;
             script = params.expression;
             id = msg.id;
@@ -98,6 +101,7 @@ fn sendInspector(
             };
 
             const msg = try getMsg(alloc, _id, Params, scanner);
+            log.debug("Req > id {d}, method {s} (script saved on cache)", .{ msg.id, "runtime.callFunctionOn" });
             const params = msg.params.?;
             script = params.functionDeclaration;
             id = msg.id;
@@ -166,7 +170,10 @@ fn runIfWaitingForDebugger(
     scanner: *std.json.Scanner,
     _: *Ctx,
 ) ![]const u8 {
+
+    // input
     const msg = try getMsg(alloc, _id, void, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "runtime.runIfWaitingForDebugger" });
 
     return result(alloc, msg.id, null, null, msg.sessionID);
 }
