@@ -18,8 +18,6 @@
 
 const std = @import("std");
 
-// pub const MaxStdOutSize = 512; // ensure debug msg are not too long
-
 /// MsgBuffer returns messages from a raw text read stream,
 /// according to the following format `<msg_size>:<msg>`.
 /// It handles both:

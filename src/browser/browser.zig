@@ -73,10 +73,6 @@ pub const Browser = struct {
         self.session.deinit();
         try Session.init(&self.session, alloc, loop, uri);
     }
-
-    pub fn currentSession(self: *Browser) *Session {
-        return &self.session;
-    }
 };
 
 // Session is like a browser's tab.
