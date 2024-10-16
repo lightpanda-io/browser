@@ -96,6 +96,7 @@ pub const Interfaces = .{
     HTMLTrackElement,
     HTMLUListElement,
     HTMLVideoElement,
+    CSSProperties,
 };
 const Generated = generate.Union.compile(Interfaces);
 pub const Union = Generated._union;
@@ -104,10 +105,18 @@ pub const Tags = Generated._enum;
 // Abstract class
 // --------------
 
+const CSSProperties = struct {
+    pub const mem_guarantied = true;
+};
+
 pub const HTMLElement = struct {
     pub const Self = parser.ElementHTML;
     pub const prototype = *Element;
     pub const mem_guarantied = true;
+
+    pub fn get_style(_: *parser.ElementHTML) CSSProperties {
+        return .{};
+    }
 };
 
 // Deprecated HTMLElements in Chrome (2023/03/15)
