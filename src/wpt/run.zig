@@ -56,7 +56,8 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     var cli = Client{ .allocator = alloc, .loop = &loop };
     defer cli.deinit();
 
-    var js_env = try Env.init(alloc, &loop, UserContext{
+    var js_env: Env = undefined;
+    Env.init(&js_env, alloc, &loop, UserContext{
         .document = html_doc,
         .httpClient = &cli,
     });
