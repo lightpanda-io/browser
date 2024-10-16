@@ -47,6 +47,8 @@ pub fn build(b: *std.Build) !void {
 
     const options = try jsruntime.buildOptions(b);
 
+    const x86 = b.option(bool, "x86", "Use x86 backend") orelse false;
+
     // browser
     // -------
 
@@ -56,6 +58,8 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = mode,
+        .use_llvm = !x86,
+        .use_lld = !x86,
     });
     try common(b, exe, options);
     b.installArtifact(exe);
@@ -79,6 +83,8 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("src/main_shell.zig"),
         .target = target,
         .optimize = mode,
+        .use_llvm = !x86,
+        .use_lld = !x86,
     });
     try common(b, shell, options);
     try jsruntime_pkgs.add_shell(shell);
@@ -102,6 +108,8 @@ pub fn build(b: *std.Build) !void {
         .test_runner = b.path("src/test_runner.zig"),
         .target = target,
         .optimize = mode,
+        .use_llvm = !x86,
+        .use_lld = !x86,
     });
     try common(b, tests, options);
 
@@ -128,6 +136,8 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("src/main_wpt.zig"),
         .target = target,
         .optimize = mode,
+        .use_llvm = !x86,
+        .use_lld = !x86,
     });
     try common(b, wpt, options);
 
@@ -149,6 +159,8 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("src/main_get.zig"),
         .target = target,
         .optimize = mode,
+        .use_llvm = !x86,
+        .use_lld = !x86,
     });
     try common(b, get, options);
     b.installArtifact(get);
