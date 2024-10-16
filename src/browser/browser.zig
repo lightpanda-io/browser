@@ -103,7 +103,7 @@ pub const Session = struct {
     window: Window,
     // TODO move the shed to the browser?
     storageShed: storage.Shed,
-    _page: ?Page = null,
+    page: ?Page = null,
     httpClient: HttpClient,
 
     jstypes: [Types.len]usize = undefined,
@@ -125,7 +125,7 @@ pub const Session = struct {
     }
 
     fn deinit(self: *Session) void {
-        if (self._page) |*p| p.end();
+        if (self.page) |*p| p.end();
 
         if (self.inspector) |inspector| {
             inspector.deinit(self.alloc);
@@ -158,17 +158,14 @@ pub const Session = struct {
         }
     }
 
-    pub fn createPage(self: *Session) !void {
-        if (self._page != null) return error.SessionPageExists;
+    // NOTE: the caller is not the owner of the returned value,
+    // the pointer on Page is just returned as a convenience
+    pub fn createPage(self: *Session) !*Page {
+        if (self.page != null) return error.SessionPageExists;
         const p: Page = undefined;
-        self._page = p;
-        Page.init(&self._page.?, self.alloc, self);
-    }
-
-    // shortcut
-    pub fn page(self: *Session) *Page {
-        if (self._page) |*p| return p;
-        @panic("No Page on this session");
+        self.page = p;
+        Page.init(&self.page.?, self.alloc, self);
+        return &self.page.?;
     }
 };
 

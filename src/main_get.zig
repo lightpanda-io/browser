@@ -87,14 +87,13 @@ pub fn main() !void {
     try Browser.init(&browser, allocator, &loop, vm);
     defer browser.deinit();
 
-    try browser.session.createPage();
+    const page = try browser.session.createPage();
 
-    try browser.session.page().navigate(url, null);
-    defer browser.session.page().end();
+    try page.navigate(url, null);
 
-    try browser.session.page().wait();
+    try page.wait();
 
     if (dump) {
-        try browser.session.page().dump(std.io.getStdOut());
+        try page.dump(std.io.getStdOut());
     }
 }
