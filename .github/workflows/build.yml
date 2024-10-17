@@ -16,7 +16,7 @@ jobs:
       ARCH: x86_64
       OS: linux
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4

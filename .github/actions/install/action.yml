@@ -17,7 +17,7 @@ inputs:
   zig-v8:
     description: 'zig v8 version to install'
     required: false
-    default: 'v0.1.6'
+    default: 'v0.1.8'
   v8:
     description: 'v8 version to install'
     required: false
@@ -47,7 +47,7 @@ runs:
         cache-name: cache-v8
       with:
         path: ${{ inputs.cache-dir }}/v8
-        key: libc_v8_${{ inputs.v8 }}_${{ inputs.os }}_${{ inputs.arch }}.a
+        key: libc_v8_${{ inputs.v8 }}_${{ inputs.os }}_${{ inputs.arch }}_${{ inputs.zig-v8 }}.a
 
     - if: ${{ steps.cache-v8.outputs.cache-hit != 'true' }}
       shell: bash

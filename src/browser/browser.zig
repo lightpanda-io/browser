@@ -49,24 +49,29 @@ const log = std.log.scoped(.browser);
 // A browser contains only one session.
 // TODO allow multiple sessions per browser.
 pub const Browser = struct {
-    session: *Session,
+    session: Session = undefined,
 
-    pub fn init(alloc: std.mem.Allocator, vm: jsruntime.VM) !Browser {
+    const uri = "about:blank";
+
+    pub fn init(self: *Browser, alloc: std.mem.Allocator, loop: *Loop, vm: jsruntime.VM) !void {
         // We want to ensure the caller initialised a VM, but the browser
         // doesn't use it directly...
         _ = vm;
 
-        return Browser{
-            .session = try Session.init(alloc, "about:blank"),
-        };
+        try Session.init(&self.session, alloc, loop, uri);
     }
 
     pub fn deinit(self: *Browser) void {
         self.session.deinit();
     }
 
-    pub fn currentSession(self: *Browser) *Session {
-        return self.session;
+    pub fn newSession(
+        self: *Browser,
+        alloc: std.mem.Allocator,
+        loop: *jsruntime.Loop,
+    ) !void {
+        self.session.deinit();
+        try Session.init(&self.session, alloc, loop, uri);
     }
 };
 
@@ -90,37 +95,37 @@ pub const Session = struct {
     // TODO handle proxy
     loader: Loader,
     env: Env = undefined,
-    loop: Loop,
+    inspector: ?jsruntime.Inspector = null,
     window: Window,
     // TODO move the shed to the browser?
     storageShed: storage.Shed,
-    page: ?*Page = null,
+    page: ?Page = null,
     httpClient: HttpClient,
 
     jstypes: [Types.len]usize = undefined,
 
-    fn init(alloc: std.mem.Allocator, uri: []const u8) !*Session {
-        var self = try alloc.create(Session);
+    fn init(self: *Session, alloc: std.mem.Allocator, loop: *Loop, uri: []const u8) !void {
         self.* = Session{
             .uri = uri,
             .alloc = alloc,
             .arena = std.heap.ArenaAllocator.init(alloc),
             .window = Window.create(null),
             .loader = Loader.init(alloc),
-            .loop = try Loop.init(alloc),
             .storageShed = storage.Shed.init(alloc),
             .httpClient = undefined,
         };
 
-        self.env = try Env.init(self.arena.allocator(), &self.loop, null);
-        self.httpClient = .{ .allocator = alloc, .loop = &self.loop };
+        Env.init(&self.env, self.arena.allocator(), loop, null);
+        self.httpClient = .{ .allocator = alloc, .loop = loop };
         try self.env.load(&self.jstypes);
-
-        return self;
     }
 
     fn deinit(self: *Session) void {
-        if (self.page) |page| page.end();
+        if (self.page) |*p| p.end();
+
+        if (self.inspector) |inspector| {
+            inspector.deinit(self.alloc);
+        }
 
         self.env.deinit();
         self.arena.deinit();
@@ -128,12 +133,35 @@ pub const Session = struct {
         self.httpClient.deinit();
         self.loader.deinit();
         self.storageShed.deinit();
-        self.loop.deinit();
-        self.alloc.destroy(self);
     }
 
-    pub fn createPage(self: *Session) !Page {
-        return Page.init(self.alloc, self);
+    pub fn initInspector(
+        self: *Session,
+        ctx: anytype,
+        onResp: jsruntime.InspectorOnResponseFn,
+        onEvent: jsruntime.InspectorOnEventFn,
+    ) !void {
+        const ctx_opaque = @as(*anyopaque, @ptrCast(ctx));
+        self.inspector = try jsruntime.Inspector.init(self.alloc, self.env, ctx_opaque, onResp, onEvent);
+        self.env.setInspector(self.inspector.?);
+    }
+
+    pub fn callInspector(self: *Session, msg: []const u8) void {
+        if (self.inspector) |inspector| {
+            inspector.send(msg, self.env);
+        } else {
+            @panic("No Inspector");
+        }
+    }
+
+    // NOTE: the caller is not the owner of the returned value,
+    // the pointer on Page is just returned as a convenience
+    pub fn createPage(self: *Session) !*Page {
+        if (self.page != null) return error.SessionPageExists;
+        const p: Page = undefined;
+        self.page = p;
+        Page.init(&self.page.?, self.alloc, self);
+        return &self.page.?;
     }
 };
 
@@ -155,16 +183,14 @@ pub const Page = struct {
     raw_data: ?[]const u8 = null,
 
     fn init(
+        self: *Page,
         alloc: std.mem.Allocator,
         session: *Session,
-    ) !Page {
-        if (session.page != null) return error.SessionPageExists;
-        var page = Page{
+    ) void {
+        self.* = .{
             .arena = std.heap.ArenaAllocator.init(alloc),
             .session = session,
         };
-        session.page = &page;
-        return page;
     }
 
     // reset js env and mem arena.
@@ -219,7 +245,9 @@ pub const Page = struct {
     }
 
     // spec reference: https://html.spec.whatwg.org/#document-lifecycle
-    pub fn navigate(self: *Page, uri: []const u8) !void {
+    // - auxData: extra data forwarded to the Inspector
+    // see Inspector.contextCreated
+    pub fn navigate(self: *Page, uri: []const u8, auxData: ?[]const u8) !void {
         const alloc = self.arena.allocator();
 
         log.debug("starting GET {s}", .{uri});
@@ -280,7 +308,7 @@ pub const Page = struct {
         log.debug("header content-type: {s}", .{ct.?});
         const mime = try Mime.parse(ct.?);
         if (mime.eql(Mime.HTML)) {
-            try self.loadHTMLDoc(req.reader(), mime.charset orelse "utf-8");
+            try self.loadHTMLDoc(req.reader(), mime.charset orelse "utf-8", auxData);
         } else {
             log.info("non-HTML document: {s}", .{ct.?});
 
@@ -290,7 +318,7 @@ pub const Page = struct {
     }
 
     // https://html.spec.whatwg.org/#read-html
-    fn loadHTMLDoc(self: *Page, reader: anytype, charset: []const u8) !void {
+    fn loadHTMLDoc(self: *Page, reader: anytype, charset: []const u8, auxData: ?[]const u8) !void {
         const alloc = self.arena.allocator();
 
         // start netsurf memory arena.
@@ -326,6 +354,11 @@ pub const Page = struct {
         // TODO load the js env concurrently with the HTML parsing.
         log.debug("start js env", .{});
         try self.session.env.start();
+
+        // inspector
+        if (self.session.inspector) |inspector| {
+            inspector.contextCreated(self.session.env, "", self.origin.?, auxData);
+        }
 
         // replace the user context document with the new one.
         try self.session.env.setUserContext(.{

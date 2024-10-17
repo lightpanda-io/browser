@@ -17,97 +17,219 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const posix = std.posix;
 
 const jsruntime = @import("jsruntime");
 
+const Browser = @import("browser/browser.zig").Browser;
+const server = @import("server.zig");
+
 const parser = @import("netsurf");
 const apiweb = @import("apiweb.zig");
-const Window = @import("html/window.zig").Window;
+
+const log = std.log.scoped(.server);
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 pub const UserContext = apiweb.UserContext;
 
-const socket_path = "/tmp/browsercore-server.sock";
+// Default options
+const Host = "127.0.0.1";
+const Port = 3245;
+const Timeout = 3; // in seconds
 
-var doc: *parser.DocumentHTML = undefined;
-var server: std.net.Server = undefined;
+const usage =
+    \\usage: {s} [options]
+    \\  start Lightpanda browser in CDP server mode
+    \\
+    \\  -h, --help      Print this help message and exit.
+    \\  --host          Host of the server (default "127.0.0.1")
+    \\  --port          Port of the server (default "3245")
+    \\  --timeout       Timeout for incoming connections in seconds (default "3")
+    \\
+;
 
-fn execJS(
-    alloc: std.mem.Allocator,
-    js_env: *jsruntime.Env,
-) anyerror!void {
-    // start JS env
-    try js_env.start();
-    defer js_env.stop();
+// Inspired by std.net.StreamServer in Zig < 0.12
+pub const StreamServer = struct {
+    /// Copied from `Options` on `init`.
+    kernel_backlog: u31,
+    reuse_address: bool,
+    reuse_port: bool,
+    nonblocking: bool,
 
-    // alias global as self and window
-    var window = Window.create(null);
-    window.replaceDocument(doc);
-    try js_env.bindGlobal(window);
+    /// `undefined` until `listen` returns successfully.
+    listen_address: std.net.Address,
 
-    // try catch
-    var try_catch: jsruntime.TryCatch = undefined;
-    try_catch.init(js_env.*);
-    defer try_catch.deinit();
+    sockfd: ?posix.socket_t,
 
-    while (true) {
+    pub const Options = struct {
+        /// How many connections the kernel will accept on the application's behalf.
+        /// If more than this many connections pool in the kernel, clients will start
+        /// seeing "Connection refused".
+        kernel_backlog: u31 = 128,
 
-        // read cmd
-        const conn = try server.accept();
-        var buf: [100]u8 = undefined;
-        const read = try conn.stream.read(&buf);
-        const cmd = buf[0..read];
-        std.debug.print("<- {s}\n", .{cmd});
-        if (std.mem.eql(u8, cmd, "exit")) {
-            break;
+        /// Enable SO.REUSEADDR on the socket.
+        reuse_address: bool = false,
+
+        /// Enable SO.REUSEPORT on the socket.
+        reuse_port: bool = false,
+
+        /// Non-blocking mode.
+        nonblocking: bool = false,
+    };
+
+    /// After this call succeeds, resources have been acquired and must
+    /// be released with `deinit`.
+    pub fn init(options: Options) StreamServer {
+        return StreamServer{
+            .sockfd = null,
+            .kernel_backlog = options.kernel_backlog,
+            .reuse_address = options.reuse_address,
+            .reuse_port = options.reuse_port,
+            .nonblocking = options.nonblocking,
+            .listen_address = undefined,
+        };
+    }
+
+    /// Release all resources. The `StreamServer` memory becomes `undefined`.
+    pub fn deinit(self: *StreamServer) void {
+        self.close();
+        self.* = undefined;
+    }
+
+    pub fn listen(self: *StreamServer, address: std.net.Address) !void {
+        const sock_flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC;
+        var use_sock_flags: u32 = sock_flags;
+        if (self.nonblocking) use_sock_flags |= posix.SOCK.NONBLOCK;
+        const proto = if (address.any.family == posix.AF.UNIX) @as(u32, 0) else posix.IPPROTO.TCP;
+
+        const sockfd = try posix.socket(address.any.family, use_sock_flags, proto);
+        self.sockfd = sockfd;
+        errdefer {
+            posix.close(sockfd);
+            self.sockfd = null;
         }
 
-        const res = try js_env.exec(cmd, "cdp");
-        const res_str = try res.toString(alloc, js_env.*);
-        defer alloc.free(res_str);
-        std.debug.print("-> {s}\n", .{res_str});
+        if (self.reuse_address) {
+            try posix.setsockopt(
+                sockfd,
+                posix.SOL.SOCKET,
+                posix.SO.REUSEADDR,
+                &std.mem.toBytes(@as(c_int, 1)),
+            );
+        }
+        if (@hasDecl(posix.SO, "REUSEPORT") and self.reuse_port) {
+            try posix.setsockopt(
+                sockfd,
+                posix.SOL.SOCKET,
+                posix.SO.REUSEPORT,
+                &std.mem.toBytes(@as(c_int, 1)),
+            );
+        }
 
-        _ = try conn.stream.write(res_str);
+        var socklen = address.getOsSockLen();
+        try posix.bind(sockfd, &address.any, socklen);
+        try posix.listen(sockfd, self.kernel_backlog);
+        try posix.getsockname(sockfd, &self.listen_address.any, &socklen);
     }
+
+    /// Stop listening. It is still necessary to call `deinit` after stopping listening.
+    /// Calling `deinit` will automatically call `close`. It is safe to call `close` when
+    /// not listening.
+    pub fn close(self: *StreamServer) void {
+        if (self.sockfd) |fd| {
+            posix.close(fd);
+            self.sockfd = null;
+            self.listen_address = undefined;
+        }
+    }
+};
+
+fn printUsageExit(execname: []const u8, res: u8) void {
+    std.io.getStdErr().writer().print(usage, .{execname}) catch |err| {
+        log.err("Print usage error: {any}", .{err});
+        std.posix.exit(1);
+    };
+    std.posix.exit(res);
 }
 
 pub fn main() !void {
 
-    // create v8 vm
-    const vm = jsruntime.VM.init();
-    defer vm.deinit();
-
-    // alloc
+    // allocator
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
-    try parser.init();
-    defer parser.deinit();
+    // args
+    var args = try std.process.argsWithAllocator(arena.allocator());
+    defer args.deinit();
 
-    // document
-    const file = try std.fs.cwd().openFile("test.html", .{});
-    defer file.close();
+    const execname = args.next().?;
+    var host: []const u8 = Host;
+    var port: u16 = Port;
+    var addr: std.net.Address = undefined;
+    var timeout: u8 = undefined;
 
-    doc = try parser.documentHTMLParse(file.reader(), "UTF-8");
-    defer parser.documentHTMLClose(doc) catch |err| {
-        std.debug.print("documentHTMLClose error: {s}\n", .{@errorName(err)});
-    };
-
-    // remove socket file of internal server
-    // reuse_address (SO_REUSEADDR flag) does not seems to work on unix socket
-    // see: https://gavv.net/articles/unix-socket-reuse/
-    // TODO: use a lock file instead
-    std.posix.unlink(socket_path) catch |err| {
-        if (err != error.FileNotFound) {
-            return err;
+    while (args.next()) |opt| {
+        if (std.mem.eql(u8, "-h", opt) or std.mem.eql(u8, "--help", opt)) {
+            printUsageExit(execname, 0);
         }
+        if (std.mem.eql(u8, "--host", opt)) {
+            if (args.next()) |arg| {
+                host = arg;
+                continue;
+            } else {
+                log.err("--host not provided\n", .{});
+                return printUsageExit(execname, 1);
+            }
+        }
+        if (std.mem.eql(u8, "--port", opt)) {
+            if (args.next()) |arg| {
+                port = std.fmt.parseInt(u16, arg, 10) catch |err| {
+                    log.err("--port {any}\n", .{err});
+                    return printUsageExit(execname, 1);
+                };
+                continue;
+            } else {
+                log.err("--port not provided\n", .{});
+                return printUsageExit(execname, 1);
+            }
+        }
+        if (std.mem.eql(u8, "--timeout", opt)) {
+            if (args.next()) |arg| {
+                timeout = std.fmt.parseInt(u8, arg, 10) catch |err| {
+                    log.err("--timeout {any}\n", .{err});
+                    return printUsageExit(execname, 1);
+                };
+                continue;
+            } else {
+                log.err("--timeout not provided\n", .{});
+                return printUsageExit(execname, 1);
+            }
+        }
+    }
+    addr = std.net.Address.parseIp4(host, port) catch |err| {
+        log.err("address (host:port) {any}\n", .{err});
+        return printUsageExit(execname, 1);
     };
 
     // server
-    const addr = try std.net.Address.initUnix(socket_path);
-    server = try addr.listen(.{});
-    defer server.deinit();
-    std.debug.print("Listening on: {s}...\n", .{socket_path});
+    var srv = StreamServer.init(.{
+        .reuse_address = true,
+        .reuse_port = true,
+        .nonblocking = true,
+    });
+    defer srv.deinit();
 
-    try jsruntime.loadEnv(&arena, null, execJS);
+    srv.listen(addr) catch |err| {
+        log.err("address (host:port) {any}\n", .{err});
+        return printUsageExit(execname, 1);
+    };
+    defer srv.close();
+    log.info("Listening on: {s}:{d}...", .{ host, port });
+
+    // loop
+    var loop = try jsruntime.Loop.init(arena.allocator());
+    defer loop.deinit();
+
+    // listen
+    try server.listen(arena.allocator(), &loop, srv.sockfd.?, std.time.ns_per_s * @as(u64, timeout));
 }
