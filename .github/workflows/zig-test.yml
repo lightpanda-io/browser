@@ -42,7 +42,7 @@ jobs:
     # Don't run the CI with draft PR.
     if: github.event.pull_request.draft == false
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
@@ -63,7 +63,7 @@ jobs:
     # Don't run the CI on PR
     if: github.event_name != 'pull_request'
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
@@ -84,7 +84,7 @@ jobs:
     # Don't run the CI with draft PR.
     if: github.event.pull_request.draft == false
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
@@ -119,7 +119,7 @@ jobs:
     # Don't execute on PR
     if: github.event_name != 'pull_request'
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container:
       image: ghcr.io/lightpanda-io/perf-fmt:latest
       credentials:

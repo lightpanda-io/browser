@@ -28,7 +28,7 @@ jobs:
     # Don't run the CI with draft PR.
     if: github.event.pull_request.draft == false
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: mlugg/setup-zig@v1
