@@ -1794,7 +1794,7 @@ pub fn documentFragmentBodyChildren(doc: *DocumentFragment) !?*NodeList {
 
 // Document Position
 
-pub const DocumentPosition = enum(u2) {
+pub const DocumentPosition = enum(u32) {
     disconnected = c.DOM_DOCUMENT_POSITION_DISCONNECTED,
     preceding = c.DOM_DOCUMENT_POSITION_PRECEDING,
     following = c.DOM_DOCUMENT_POSITION_FOLLOWING,

@@ -40,6 +40,7 @@ const DocumentType = @import("document_type.zig").DocumentType;
 const DocumentFragment = @import("document_fragment.zig").DocumentFragment;
 const HTMLCollection = @import("html_collection.zig").HTMLCollection;
 const HTMLCollectionIterator = @import("html_collection.zig").HTMLCollectionIterator;
+const Walker = @import("walker.zig").WalkerDepthFirst;
 
 // HTML
 const HTML = @import("../html/html.zig");
@@ -195,21 +196,68 @@ pub const Node = struct {
         return try Node.toInterface(clone);
     }
 
-    pub fn _compareDocumentPosition(self: *parser.Node, other: *parser.Node) void {
-        // TODO
-        _ = other;
-        _ = self;
-        std.log.err("Not implemented {s}", .{"node.compareDocumentPosition()"});
+    pub fn _compareDocumentPosition(self: *parser.Node, other: *parser.Node) !u32 {
+        if (self == other) return 0;
+
+        const docself = try parser.nodeOwnerDocument(self);
+        const docother = try parser.nodeOwnerDocument(other);
+
+        // Both are in different document.
+        if (docself == null or docother == null or docother.? != docself.?) {
+            return @intFromEnum(parser.DocumentPosition.disconnected);
+        }
+
+        // TODO Both are in a different trees in the same document.
+
+        const w = Walker{};
+        var next: ?*parser.Node = null;
+
+        // Is other a descendant of self?
+        while (true) {
+            next = try w.get_next(self, next) orelse break;
+            if (other == next) {
+                return @intFromEnum(parser.DocumentPosition.following) +
+                    @intFromEnum(parser.DocumentPosition.contained_by);
+            }
+        }
+
+        // Is self a descendant of other?
+        next = null;
+        while (true) {
+            next = try w.get_next(other, next) orelse break;
+            if (self == next) {
+                return @intFromEnum(parser.DocumentPosition.contains) +
+                    @intFromEnum(parser.DocumentPosition.preceding);
+            }
+        }
+
+        next = null;
+        while (true) {
+            next = try w.get_next(parser.documentToNode(docself.?), next) orelse break;
+            if (other == next) {
+                // other precedes self.
+                return @intFromEnum(parser.DocumentPosition.preceding);
+            }
+            if (self == next) {
+                // other follows self.
+                return @intFromEnum(parser.DocumentPosition.following);
+            }
+        }
+
+        return 0;
     }
 
     pub fn _contains(self: *parser.Node, other: *parser.Node) !bool {
         return try parser.nodeContains(self, other);
     }
 
-    pub fn _getRootNode(self: *parser.Node) void {
-        // TODO
-        _ = self;
-        std.log.err("Not implemented {s}", .{"node.getRootNode()"});
+    pub fn _getRootNode(self: *parser.Node) !?HTMLElem.Union {
+        // TODO return this’s shadow-including root if options["composed"] is true
+        const res = try parser.nodeOwnerDocument(self);
+        if (res == null) {
+            return null;
+        }
+        return try HTMLElem.toInterface(HTMLElem.Union, @as(*parser.Element, @ptrCast(res.?)));
     }
 
     pub fn _hasChildNodes(self: *parser.Node) !bool {
@@ -383,6 +431,21 @@ pub fn testExecFn(
         \\}
     ;
     try runScript(js_env, alloc, trim_and_replace, "proto_test");
+
+    var node_compare_document_position = [_]Case{
+        .{ .src = "document.body.compareDocumentPosition(document.firstChild); ", .ex = "10" },
+        .{ .src = "document.getElementById(\"para-empty\").compareDocumentPosition(document.getElementById(\"content\"));", .ex = "10" },
+        .{ .src = "document.getElementById(\"content\").compareDocumentPosition(document.getElementById(\"para-empty\"));", .ex = "20" },
+        .{ .src = "document.getElementById(\"link\").compareDocumentPosition(document.getElementById(\"link\"));", .ex = "0" },
+        .{ .src = "document.getElementById(\"para-empty\").compareDocumentPosition(document.getElementById(\"link\"));", .ex = "2" },
+        .{ .src = "document.getElementById(\"link\").compareDocumentPosition(document.getElementById(\"para-empty\"));", .ex = "4" },
+    };
+    try checkCases(js_env, &node_compare_document_position);
+
+    var get_root_node = [_]Case{
+        .{ .src = "document.getElementById('content').getRootNode().__proto__.constructor.name", .ex = "HTMLDocument" },
+    };
+    try checkCases(js_env, &get_root_node);
 
     var first_child = [_]Case{
         // for next test cases
