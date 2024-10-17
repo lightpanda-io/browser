@@ -251,10 +251,13 @@ pub const Node = struct {
         return try parser.nodeContains(self, other);
     }
 
-    pub fn _getRootNode(self: *parser.Node) void {
-        // TODO
-        _ = self;
-        std.log.err("Not implemented {s}", .{"node.getRootNode()"});
+    pub fn _getRootNode(self: *parser.Node) !?HTMLElem.Union {
+        // TODO return this’s shadow-including root if options["composed"] is true
+        const res = try parser.nodeOwnerDocument(self);
+        if (res == null) {
+            return null;
+        }
+        return try HTMLElem.toInterface(HTMLElem.Union, @as(*parser.Element, @ptrCast(res.?)));
     }
 
     pub fn _hasChildNodes(self: *parser.Node) !bool {
@@ -438,6 +441,11 @@ pub fn testExecFn(
         .{ .src = "document.getElementById(\"link\").compareDocumentPosition(document.getElementById(\"para-empty\"));", .ex = "4" },
     };
     try checkCases(js_env, &node_compare_document_position);
+
+    var get_root_node = [_]Case{
+        .{ .src = "document.getElementById('content').getRootNode().__proto__.constructor.name", .ex = "HTMLDocument" },
+    };
+    try checkCases(js_env, &get_root_node);
 
     var first_child = [_]Case{
         // for next test cases
