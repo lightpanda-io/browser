@@ -139,28 +139,6 @@ pub fn build(b: *std.Build) !void {
     // step
     const wpt_step = b.step("wpt", "WPT tests");
     wpt_step.dependOn(&wpt_cmd.step);
-
-    // get
-    // -----
-
-    // compile and install
-    const get = b.addExecutable(.{
-        .name = "browsercore-get",
-        .root_source_file = b.path("src/main_get.zig"),
-        .target = target,
-        .optimize = mode,
-    });
-    try common(b, get, options);
-    b.installArtifact(get);
-
-    // run
-    const get_cmd = b.addRunArtifact(get);
-    if (b.args) |args| {
-        get_cmd.addArgs(args);
-    }
-    // step
-    const get_step = b.step("get", "request URL");
-    get_step.dependOn(&get_cmd.step);
 }
 
 fn common(

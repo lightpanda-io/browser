@@ -27,8 +27,6 @@ const server = @import("server.zig");
 const parser = @import("netsurf");
 const apiweb = @import("apiweb.zig");
 
-const log = std.log.scoped(.server);
-
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 pub const UserContext = apiweb.UserContext;
 
@@ -39,12 +37,17 @@ const Timeout = 3; // in seconds
 
 const usage =
     \\usage: {s} [options]
-    \\  start Lightpanda browser in CDP server mode
+    \\
+    \\  start Lightpanda browser
+    \\
+    \\  * if an url is provided the browser will fetch the page and exit
+    \\  * otherwhise the browser starts a CDP server
     \\
     \\  -h, --help      Print this help message and exit.
-    \\  --host          Host of the server (default "127.0.0.1")
-    \\  --port          Port of the server (default "3245")
-    \\  --timeout       Timeout for incoming connections in seconds (default "3")
+    \\  --host          Host of the CDP server (default "127.0.0.1")
+    \\  --port          Port of the CDP server (default "3245")
+    \\  --timeout       Timeout for incoming connections of the CDP server (in seconds, default "3")
+    \\  --dump          Dump document in stdout (fetch mode only)
     \\
 ;
 
@@ -146,7 +149,7 @@ pub const StreamServer = struct {
 
 fn printUsageExit(execname: []const u8, res: u8) void {
     std.io.getStdErr().writer().print(usage, .{execname}) catch |err| {
-        log.err("Print usage error: {any}", .{err});
+        std.log.err("Print usage error: {any}", .{err});
         std.posix.exit(1);
     };
     std.posix.exit(res);
@@ -157,12 +160,20 @@ pub fn main() !void {
     // allocator
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
+    const alloc = arena.allocator();
 
     // args
     var args = try std.process.argsWithAllocator(arena.allocator());
     defer args.deinit();
 
     const execname = args.next().?;
+    var server_mode = true;
+
+    // fetch mode variables
+    var url: []const u8 = "";
+    var dump: bool = false;
+
+    // server mode variables
     var host: []const u8 = Host;
     var port: u16 = Port;
     var addr: std.net.Address = undefined;
@@ -172,64 +183,126 @@ pub fn main() !void {
         if (std.mem.eql(u8, "-h", opt) or std.mem.eql(u8, "--help", opt)) {
             printUsageExit(execname, 0);
         }
+        if (std.mem.eql(u8, "--dump", opt)) {
+            dump = true;
+            continue;
+        }
         if (std.mem.eql(u8, "--host", opt)) {
             if (args.next()) |arg| {
                 host = arg;
                 continue;
             } else {
-                log.err("--host not provided\n", .{});
+                std.log.err("--host not provided\n", .{});
                 return printUsageExit(execname, 1);
             }
         }
         if (std.mem.eql(u8, "--port", opt)) {
             if (args.next()) |arg| {
                 port = std.fmt.parseInt(u16, arg, 10) catch |err| {
-                    log.err("--port {any}\n", .{err});
+                    std.log.err("--port {any}\n", .{err});
                     return printUsageExit(execname, 1);
                 };
                 continue;
             } else {
-                log.err("--port not provided\n", .{});
+                std.log.err("--port not provided\n", .{});
                 return printUsageExit(execname, 1);
             }
         }
         if (std.mem.eql(u8, "--timeout", opt)) {
             if (args.next()) |arg| {
                 timeout = std.fmt.parseInt(u8, arg, 10) catch |err| {
-                    log.err("--timeout {any}\n", .{err});
+                    std.log.err("--timeout {any}\n", .{err});
                     return printUsageExit(execname, 1);
                 };
                 continue;
             } else {
-                log.err("--timeout not provided\n", .{});
+                std.log.err("--timeout not provided\n", .{});
                 return printUsageExit(execname, 1);
             }
         }
+
+        // unknown option
+        if (std.mem.startsWith(u8, opt, "--")) {
+            std.log.err("unknown option\n", .{});
+            return printUsageExit(execname, 1);
+        }
+
+        // other argument is considered to be an URL, ie. fetch mode
+        server_mode = false;
+
+        // allow only one url
+        if (url.len != 0) {
+            std.log.err("more than 1 url provided\n", .{});
+            return printUsageExit(execname, 1);
+        }
+
+        url = opt;
     }
-    addr = std.net.Address.parseIp4(host, port) catch |err| {
-        log.err("address (host:port) {any}\n", .{err});
-        return printUsageExit(execname, 1);
-    };
 
-    // server
-    var srv = StreamServer.init(.{
-        .reuse_address = true,
-        .reuse_port = true,
-        .nonblocking = true,
-    });
-    defer srv.deinit();
+    if (server_mode) {
 
-    srv.listen(addr) catch |err| {
-        log.err("address (host:port) {any}\n", .{err});
-        return printUsageExit(execname, 1);
-    };
-    defer srv.close();
-    log.info("Listening on: {s}:{d}...", .{ host, port });
+        // server mode
+        addr = std.net.Address.parseIp4(host, port) catch |err| {
+            std.log.err("address (host:port) {any}\n", .{err});
+            return printUsageExit(execname, 1);
+        };
 
-    // loop
-    var loop = try jsruntime.Loop.init(arena.allocator());
-    defer loop.deinit();
+        // server
+        var srv = StreamServer.init(.{
+            .reuse_address = true,
+            .reuse_port = true,
+            .nonblocking = true,
+        });
+        defer srv.deinit();
 
-    // listen
-    try server.listen(arena.allocator(), &loop, srv.sockfd.?, std.time.ns_per_s * @as(u64, timeout));
+        srv.listen(addr) catch |err| {
+            std.log.err("address (host:port) {any}\n", .{err});
+            return printUsageExit(execname, 1);
+        };
+        defer srv.close();
+        std.log.info("Listening on: {s}:{d}...", .{ host, port });
+
+        // loop
+        var loop = try jsruntime.Loop.init(arena.allocator());
+        defer loop.deinit();
+
+        // listen
+        try server.listen(alloc, &loop, srv.sockfd.?, std.time.ns_per_s * @as(u64, timeout));
+    } else {
+
+        // fetch mode
+        if (url.len == 0) {
+            try std.io.getStdErr().writer().print(usage, .{execname});
+            std.posix.exit(1);
+        }
+
+        const vm = jsruntime.VM.init();
+        defer vm.deinit();
+
+        var loop = try jsruntime.Loop.init(arena.allocator());
+        defer loop.deinit();
+
+        var browser = Browser{};
+        try Browser.init(&browser, alloc, &loop, vm);
+        defer browser.deinit();
+
+        const page = try browser.session.createPage();
+
+        _ = page.navigate(url, null) catch |err| switch (err) {
+            error.UnsupportedUriScheme, error.UriMissingHost => {
+                std.log.err("'{s}' is not a valid URL ({any})\n", .{ url, err });
+                return printUsageExit(execname, 1);
+            },
+            else => {
+                std.log.err("'{s}' fetching error ({any})s\n", .{ url, err });
+                return printUsageExit(execname, 1);
+            },
+        };
+
+        try page.wait();
+
+        if (dump) {
+            try page.dump(std.io.getStdOut());
+        }
+    }
 }
