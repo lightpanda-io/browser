@@ -32,13 +32,13 @@ jobs:
         run: zig build --release=safe -Doptimize=ReleaseSafe -Dengine=v8 -Dcpu=x86_64
 
       - name: Rename binary
-        run: mv zig-out/bin/browsercore-get lightpanda-get-${{ env.ARCH }}-${{ env.OS }}
+        run: mv zig-out/bin/browsercore lightpanda-${{ env.ARCH }}-${{ env.OS }}
 
       - name: Upload the build
         uses: ncipollo/release-action@v1
         with:
           allowUpdates: true
-          artifacts: lightpanda-get-${{ env.ARCH }}-${{ env.OS }}
+          artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
           tag: nightly
 
   build-macos-aarch64:
@@ -65,11 +65,11 @@ jobs:
         run: zig build --release=safe -Doptimize=ReleaseSafe -Dengine=v8
 
       - name: Rename binary
-        run: mv zig-out/bin/browsercore-get lightpanda-get-${{ env.ARCH }}-${{ env.OS }}
+        run: mv zig-out/bin/browsercore-get lightpanda-${{ env.ARCH }}-${{ env.OS }}
 
       - name: Upload the build
         uses: ncipollo/release-action@v1
         with:
           allowUpdates: true
-          artifacts: lightpanda-get-${{ env.ARCH }}-${{ env.OS }}
+          artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
           tag: nightly
