@@ -55,89 +55,72 @@ pub const MsgBuffer = struct {
     }
 
     // read input
-    // - `do_func` is a callback to execute on each message of the input
-    // - `data` is an arbitrary user data that will be forwarded to the do_func callback
-    pub fn read(
-        self: *MsgBuffer,
-        alloc: std.mem.Allocator,
-        input: []const u8,
-        data: anytype,
-        comptime do_func: fn (data: @TypeOf(data), msg: []const u8) anyerror!void,
-    ) !void {
+    pub fn read(self: *MsgBuffer, alloc: std.mem.Allocator, input: []const u8) !struct {
+        msg: []const u8,
+        left: []const u8,
+    } {
         var _input = input; // make input writable
 
-        while (true) {
-            var msg: []const u8 = undefined;
-
-            // msg size
-            var msg_size: usize = undefined;
-            if (self.isEmpty()) {
-                // parse msg size metadata
-                const size_pos = std.mem.indexOfScalar(u8, _input, ':') orelse return error.InputWithoutSize;
-                const size_str = _input[0..size_pos];
-                msg_size = try std.fmt.parseInt(u32, size_str, 10);
-                _input = _input[size_pos + 1 ..];
-            } else {
-                msg_size = self.size;
-            }
-
-            // multipart
-            const is_multipart = !self.isEmpty() or _input.len < msg_size;
-            if (is_multipart) {
-
-                // set msg size on empty MsgBuffer
-                if (self.isEmpty()) {
-                    self.size = msg_size;
-                }
-
-                // get the new position of the cursor
-                const new_pos = self.pos + _input.len;
-
-                // check max limit size
-                if (new_pos > MaxSize) {
-                    return error.MsgTooBig;
-                }
-
-                // check if the current input can fit in MsgBuffer
-                if (new_pos > self.buf.len) {
-                    // we want to realloc at least:
-                    // - a size big enough to fit the entire input (ie. new_pos)
-                    // - a size big enough (ie. current size + starting size)
-                    // to avoid multiple reallocation
-                    const new_size = @max(self.buf.len + self.size, new_pos);
-                    // resize the MsgBuffer to fit
-                    self.buf = try alloc.realloc(self.buf, new_size);
-                }
-
-                // copy the current input into MsgBuffer
-                @memcpy(self.buf[self.pos..new_pos], _input[0..]);
-
-                // set the new cursor position
-                self.pos = new_pos;
-
-                // if multipart is not finished, go fetch the next input
-                if (!self.isFinished()) return;
-
-                // otherwhise multipart is finished, use its buffer as input
-                _input = self.buf[0..self.pos];
-                self.reset();
-            }
-
-            // handle several JSON msg in 1 read
-            const is_combined = _input.len > msg_size;
-            msg = _input[0..msg_size];
-            if (is_combined) {
-                _input = _input[msg_size..];
-            }
-
-            try @call(.auto, do_func, .{ data, msg });
-
-            if (!is_combined) break;
+        // msg size
+        var msg_size: usize = undefined;
+        if (self.isEmpty()) {
+            // parse msg size metadata
+            const size_pos = std.mem.indexOfScalar(u8, _input, ':') orelse return error.InputWithoutSize;
+            const size_str = _input[0..size_pos];
+            msg_size = try std.fmt.parseInt(u32, size_str, 10);
+            _input = _input[size_pos + 1 ..];
+        } else {
+            msg_size = self.size;
         }
+
+        // multipart
+        const is_multipart = !self.isEmpty() or _input.len < msg_size;
+        if (is_multipart) {
+
+            // set msg size on empty MsgBuffer
+            if (self.isEmpty()) {
+                self.size = msg_size;
+            }
+
+            // get the new position of the cursor
+            const new_pos = self.pos + _input.len;
+
+            // check max limit size
+            if (new_pos > MaxSize) {
+                return error.MsgTooBig;
+            }
+
+            // check if the current input can fit in MsgBuffer
+            if (new_pos > self.buf.len) {
+                // we want to realloc at least:
+                // - a size big enough to fit the entire input (ie. new_pos)
+                // - a size big enough (ie. current msg size + starting buffer size)
+                // to avoid multiple reallocation
+                const new_size = @max(self.buf.len + self.size, new_pos);
+                // resize the MsgBuffer to fit
+                self.buf = try alloc.realloc(self.buf, new_size);
+            }
+
+            // copy the current input into MsgBuffer
+            @memcpy(self.buf[self.pos..new_pos], _input[0..]);
+
+            // set the new cursor position
+            self.pos = new_pos;
+
+            // if multipart is not finished, go fetch the next input
+            if (!self.isFinished()) return error.MsgMultipart;
+
+            // otherwhise multipart is finished, use its buffer as input
+            _input = self.buf[0..self.pos];
+            self.reset();
+        }
+
+        // handle several JSON msg in 1 read
+        return .{ .msg = _input[0..msg_size], .left = _input[msg_size..] };
     }
 };
 
-fn doTest(nb: *u8, _: []const u8) anyerror!void {
+fn doTest(nb: *u8) void {
     nb.* += 1;
 }
 
@@ -171,12 +154,19 @@ test "MsgBuffer" {
         .{ .input = "2:ok9:multi", .nb = 1 },
         .{ .input = "part", .nb = 1 },
     };
-    var nb: u8 = undefined;
     var msg_buf = try MsgBuffer.init(alloc, 10);
     defer msg_buf.deinit(alloc);
     for (cases) |case| {
-        nb = 0;
-        try msg_buf.read(alloc, case.input, &nb, doTest);
+        var nb: u8 = 0;
+        var input: []const u8 = case.input;
+        while (input.len > 0) {
+            const parts = msg_buf.read(alloc, input) catch |err| {
+                if (err == error.MsgMultipart) break; // go to the next case input
+                return err;
+            };
+            nb += 1;
+            input = parts.left;
+        }
         try std.testing.expect(nb == case.nb);
     }
 }
