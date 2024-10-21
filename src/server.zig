@@ -336,9 +336,8 @@ pub const Ctx = struct {
             tpl,
             .{ msg_open, cdp.ContextSessionID },
         );
-        defer ctx.alloc().free(s);
 
-        try sendSync(ctx, s);
+        try sendAsync(ctx, s);
     }
 
     pub fn onInspectorResp(ctx_opaque: *anyopaque, _: u32, msg: []const u8) void {
@@ -399,10 +398,6 @@ const Send = struct {
 pub fn sendAsync(ctx: *Ctx, msg: []const u8) !void {
     const sd = try Send.init(ctx, msg);
     ctx.loop.io.send(*Send, sd, Send.asyncCbk, &sd.completion, ctx.conn_socket, msg);
-}
-
-pub fn sendSync(ctx: *Ctx, msg: []const u8) !void {
-    _ = try std.posix.write(ctx.conn_socket, msg);
 }
 
 // Listen
