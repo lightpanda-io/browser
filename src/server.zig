@@ -464,5 +464,6 @@ pub fn listen(
             if (err != error.NoError) log.err("Server error: {any}", .{err});
             break;
         }
+        std.time.sleep(1000); // 1ms
     }
 }
