@@ -148,7 +148,8 @@ pub fn dumpFile(
 ) !void {
     const name = try std.fmt.allocPrint(alloc, "id_{d}.js", .{id});
     defer alloc.free(name);
-    const dir = try std.fs.cwd().makeOpenPath("zig-cache/tmp", .{});
+    var dir = try std.fs.cwd().makeOpenPath("zig-cache/tmp", .{});
+    defer dir.close();
     const f = try dir.createFile(name, .{});
     defer f.close();
     const nb = try f.write(script);
