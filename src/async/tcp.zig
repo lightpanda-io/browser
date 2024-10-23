@@ -41,7 +41,10 @@ pub const Conn = struct {
         }
 
         fn wait(self: *Command) !usize {
-            while (!self.done) try self.impl.tick();
+            while (!self.done) {
+                try self.impl.tick();
+                std.time.sleep(100); // 100ns
+            }
 
             if (self.err) |err| return err;
             return self.ln;
