@@ -226,8 +226,7 @@ pub fn sendEvent(
     const resp = Resp{ .method = name, .params = params, .sessionId = sessionID };
 
     const event_msg = try stringify(alloc, resp);
-    defer alloc.free(event_msg);
-    try server.sendSync(ctx, event_msg);
+    try server.sendAsync(ctx, event_msg);
 }
 
 fn getParams(

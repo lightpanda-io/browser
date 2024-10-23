@@ -331,8 +331,7 @@ fn navigate(
         .loaderId = ctx.state.loaderID,
     };
     const res = try result(alloc, msg.id, Resp, resp, msg.sessionID);
-    defer alloc.free(res);
-    try server.sendSync(ctx, res);
+    try server.sendAsync(ctx, res);
 
     // TODO: at this point do we need async the following actions to be async?
 

@@ -256,8 +256,7 @@ fn disposeBrowserContext(
 
     // output
     const res = try result(alloc, msg.id, null, .{}, null);
-    defer alloc.free(res);
-    try server.sendSync(ctx, res);
+    try server.sendAsync(ctx, res);
 
     return error.DisposeBrowserContext;
 }
@@ -345,8 +344,7 @@ fn closeTarget(
         success: bool = true,
     };
     const res = try result(alloc, msg.id, Resp, Resp{}, null);
-    defer alloc.free(res);
-    try server.sendSync(ctx, res);
+    try server.sendAsync(ctx, res);
 
     // Inspector.detached event
     const InspectorDetached = struct {

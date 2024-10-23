@@ -128,17 +128,6 @@ pub const Ctx = struct {
             return;
         }
 
-        // input
-        const input = self.read_buf[0..size];
-
-        // read and execute input
-        self.msg_buf.read(self.alloc(), input, self, Ctx.do) catch |err| {
-            if (err != error.Closed) {
-                log.err("do error: {any}", .{err});
-            }
-            return;
-        };
-
         // set connection timestamp
         self.last_active = std.time.Instant.now() catch |err| {
             log.err("read timestamp error: {any}", .{err});
@@ -154,6 +143,26 @@ pub const Ctx = struct {
             self.conn_socket,
             self.read_buf,
         );
+
+        // read and execute input
+        var input: []const u8 = self.read_buf[0..size];
+        while (input.len > 0) {
+            const parts = self.msg_buf.read(self.alloc(), input) catch |err| {
+                if (err == error.MsgMultipart) {
+                    return;
+                } else {
+                    log.err("msg read error: {any}", .{err});
+                    return;
+                }
+            };
+            input = parts.left;
+            // execute
+            self.do(parts.msg) catch |err| {
+                if (err != error.Closed) {
+                    log.err("do error: {any}", .{err});
+                }
+            };
+        }
     }
 
     fn timeoutCbk(self: *Ctx, completion: *Completion, result: TimeoutError!void) void {
@@ -327,9 +336,8 @@ pub const Ctx = struct {
             tpl,
             .{ msg_open, cdp.ContextSessionID },
         );
-        defer ctx.alloc().free(s);
 
-        try sendSync(ctx, s);
+        try sendAsync(ctx, s);
     }
 
     pub fn onInspectorResp(ctx_opaque: *anyopaque, _: u32, msg: []const u8) void {
@@ -390,10 +398,6 @@ const Send = struct {
 pub fn sendAsync(ctx: *Ctx, msg: []const u8) !void {
     const sd = try Send.init(ctx, msg);
     ctx.loop.io.send(*Send, sd, Send.asyncCbk, &sd.completion, ctx.conn_socket, msg);
-}
-
-pub fn sendSync(ctx: *Ctx, msg: []const u8) !void {
-    _ = try std.posix.write(ctx.conn_socket, msg);
 }
 
 // Listen
