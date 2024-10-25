@@ -30,6 +30,7 @@ const log = std.log.scoped(.cdp);
 const Methods = enum {
     setDiscoverTargets,
     setAutoAttach,
+    attachToTarget,
     getTargetInfo,
     getBrowserContexts,
     createBrowserContext,
@@ -50,6 +51,7 @@ pub fn target(
     return switch (method) {
         .setDiscoverTargets => setDiscoverTargets(alloc, id, scanner, ctx),
         .setAutoAttach => setAutoAttach(alloc, id, scanner, ctx),
+        .attachToTarget => attachToTarget(alloc, id, scanner, ctx),
         .getTargetInfo => getTargetInfo(alloc, id, scanner, ctx),
         .getBrowserContexts => getBrowserContexts(alloc, id, scanner, ctx),
         .createBrowserContext => createBrowserContext(alloc, id, scanner, ctx),
@@ -133,6 +135,46 @@ fn setAutoAttach(
 
     // output
     return result(alloc, msg.id, null, null, msg.sessionID);
+}
+
+// TODO: noop method
+fn attachToTarget(
+    alloc: std.mem.Allocator,
+    _id: ?u16,
+    scanner: *std.json.Scanner,
+    ctx: *Ctx,
+) ![]const u8 {
+
+    // input
+    const Params = struct {
+        targetId: []const u8,
+        flatten: bool = true,
+    };
+    const msg = try getMsg(alloc, _id, Params, scanner);
+    log.debug("Req > id {d}, method {s}", .{ msg.id, "target.setAutoAttach" });
+
+    // attachedToTarget event
+    if (msg.sessionID == null) {
+        const attached = AttachToTarget{
+            .sessionId = cdp.BrowserSessionID,
+            .targetInfo = .{
+                .targetId = PageTargetID,
+                .title = "New Incognito tab",
+                .url = cdp.URLBase,
+                .browserContextId = BrowserContextID,
+            },
+        };
+        try cdp.sendEvent(alloc, ctx, "Target.attachedToTarget", AttachToTarget, attached, null);
+    }
+
+    // output
+    const SessionId = struct {
+        sessionId: []const u8,
+    };
+    const output = SessionId{
+        .sessionId = msg.sessionID orelse BrowserContextID,
+    };
+    return result(alloc, msg.id, SessionId, output, null);
 }
 
 fn getTargetInfo(
