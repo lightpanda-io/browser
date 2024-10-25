@@ -381,7 +381,6 @@ const Send = struct {
     fn asyncCbk(self: *Send, _: *Completion, result: SendError!usize) void {
         _ = result catch |err| {
             self.ctx.err = err;
-            return;
         };
         self.deinit();
     }
