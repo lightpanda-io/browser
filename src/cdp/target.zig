@@ -62,9 +62,9 @@ pub fn target(
 }
 
 // TODO: hard coded IDs
-const PageTargetID = "CFCD6EC01573CF29BB638E9DC0F52DDC";
-const BrowserTargetID = "2d2bdef9-1c95-416f-8c0e-83f3ab73a30c";
-const BrowserContextID = "65618675CB7D3585A95049E9DFE95EA9";
+pub const PageTargetID = "CFCD6EC01573CF29BB638E9DC0F52DDC";
+pub const BrowserTargetID = "2d2bdef9-1c95-416f-8c0e-83f3ab73a30c";
+pub const BrowserContextID = "65618675CB7D3585A95049E9DFE95EA9";
 
 // TODO: noop method
 fn setDiscoverTargets(
