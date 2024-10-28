@@ -170,9 +170,23 @@ fn moduleNetSurf(b: *std.Build, target: std.Build.ResolvedTarget) !*std.Build.Mo
         .root_source_file = b.path("src/netsurf/netsurf.zig"),
         .target = target,
     });
+
+    const os = target.result.os.tag;
+    const arch = target.result.cpu.arch;
+
     // iconv
-    mod.addObjectFile(b.path("vendor/libiconv/lib/libiconv.a"));
-    mod.addIncludePath(b.path("vendor/libiconv/include"));
+    const libiconv_lib_path = try std.fmt.allocPrint(
+        mod.owner.allocator,
+        "vendor/libiconv/out/{s}-{s}/lib/libiconv.a",
+        .{ @tagName(os), @tagName(arch) },
+    );
+    const libiconv_include_path = try std.fmt.allocPrint(
+        mod.owner.allocator,
+        "vendor/libiconv/out/{s}-{s}/lib/libiconv.a",
+        .{ @tagName(os), @tagName(arch) },
+    );
+    mod.addObjectFile(b.path(libiconv_lib_path));
+    mod.addIncludePath(b.path(libiconv_include_path));
 
     // mimalloc
     mod.addImport("mimalloc", (try moduleMimalloc(b, target)));

@@ -112,7 +112,7 @@ install-netsurf: _install-netsurf
 install-netsurf: OPTCFLAGS := -DNDEBUG
 
 BC_NS := $(BC)vendor/netsurf
-ICONV := $(BC)vendor/libiconv
+ICONV := $(BC)vendor/libiconv/out/$(OS)-$(ARCH)
 # TODO: add Linux iconv path (I guess it depends on the distro)
 # TODO: this way of linking libiconv is not ideal. We should have a more generic way
 # and stick to a specif version. Maybe build from source. Anyway not now.
@@ -169,15 +169,22 @@ test-netsurf:
 	cd vendor/netsurf/libdom && \
 	BUILDDIR=$(BC_NS)/build/libdom make test
 
-install-libiconv:
-ifeq ("$(wildcard vendor/libiconv/lib/libiconv.a)","")
+download-libiconv:
+ifeq ("$(wildcard vendor/libiconv/libiconv-1.17)","")
 	@mkdir -p vendor/libiconv
 	@cd vendor/libiconv && \
 	curl https://ftp.gnu.org/pub/gnu/libiconv/libiconv-1.17.tar.gz | tar -xvzf -
-	@cd vendor/libiconv/libiconv-1.17 && \
-	./configure --prefix=$(BC)vendor/libiconv --enable-static && \
-	make && make install
 endif
+
+install-libiconv: download-libiconv clean-libiconv
+	@cd vendor/libiconv/libiconv-1.17 && \
+	./configure --prefix=$(ICONV) --enable-static && \
+	make && make install
+
+clean-libiconv:
+	@cd vendor/libiconv/libiconv-1.17 && \
+	make clean > /dev/null && cd .. && \
+	rm -Rf lib && rm -Rf share && rm -Rf bin && rm -Rf include
 
 install-zig-js-runtime-dev:
 	@cd vendor/zig-js-runtime && \
