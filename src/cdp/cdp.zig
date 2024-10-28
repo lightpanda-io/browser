@@ -221,11 +221,11 @@ pub fn sendEvent(
 // ------
 
 // TODO: hard coded IDs
-pub const BrowserSessionID = "9559320D92474062597D9875C664CAC0";
-pub const ContextSessionID = "4FDC2CB760A23A220497A05C95417CF4";
+pub const BrowserSessionID = "BROWSERSESSIONID597D9875C664CAC0";
+pub const ContextSessionID = "CONTEXTSESSIONID0497A05C95417CF4";
 pub const URLBase = "chrome://newtab/";
-pub const FrameID = "90D14BBD8AED408A0467AC93100BCDBE";
-pub const LoaderID = "CFC8BED824DD2FD56CF1EF33C965C79C";
+pub const LoaderID = "LOADERID24DD2FD56CF1EF33C965C79C";
+pub const FrameID = "FRAMEIDD8AED408A0467AC93100BCDBE";
 
 pub const TimestampEvent = struct {
     timestamp: f64,

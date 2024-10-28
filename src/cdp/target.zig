@@ -64,9 +64,9 @@ pub fn target(
 }
 
 // TODO: hard coded IDs
-pub const PageTargetID = "CFCD6EC01573CF29BB638E9DC0F52DDC";
-pub const BrowserTargetID = "2d2bdef9-1c95-416f-8c0e-83f3ab73a30c";
-pub const BrowserContextID = "65618675CB7D3585A95049E9DFE95EA9";
+pub const PageTargetID = "PAGETARGETIDB638E9DC0F52DDC";
+pub const BrowserTargetID = "browser9-targ-et6f-id0e-83f3ab73a30c";
+pub const BrowserContextID = "BROWSERCONTEXTIDA95049E9DFE95EA9";
 
 // TODO: noop method
 fn setDiscoverTargets(
@@ -252,7 +252,7 @@ fn getBrowserContexts(
     return result(alloc, input.id, Resp, resp, null);
 }
 
-const ContextID = "22648B09EDCCDD11109E2D4FEFBE4F89";
+const ContextID = "CONTEXTIDDCCDD11109E2D4FEFBE4F89";
 
 // TODO: noop method
 fn createBrowserContext(
@@ -313,8 +313,8 @@ fn disposeBrowserContext(
 }
 
 // TODO: hard coded IDs
-const TargetID = "57356548460A8F29706A2ADF14316298";
-const LoaderID = "DD4A76F842AA389647D702B4D805F49A";
+const TargetID = "TARGETID460A8F29706A2ADF14316298";
+const LoaderID = "LOADERID42AA389647D702B4D805F49A";
 
 fn createTarget(
     alloc: std.mem.Allocator,
