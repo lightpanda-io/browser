@@ -69,7 +69,7 @@ build-dev:
 ## Run the server in debug mode
 run: build
 	@printf "\e[36mRunning...\e[0m\n"
-	@./zig-out/bin/browsercore || (printf "\e[33mRun ERROR\e[0m\n"; exit 1;)
+	@./zig-out/bin/lightpanda || (printf "\e[33mRun ERROR\e[0m\n"; exit 1;)
 
 ## Run a JS shell in debug mode
 shell:
