@@ -22,8 +22,8 @@ const server = @import("../server.zig");
 const Ctx = server.Ctx;
 const cdp = @import("cdp.zig");
 const result = cdp.result;
-const getMsg = cdp.getMsg;
 const stringify = cdp.stringify;
+const IncomingMessage = @import("msg.zig").IncomingMessage;
 
 const log = std.log.scoped(.cdp);
 
@@ -36,18 +36,17 @@ const Methods = enum {
 
 pub fn emulation(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    msg: *IncomingMessage,
     action: []const u8,
-    scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
     const method = std.meta.stringToEnum(Methods, action) orelse
         return error.UnknownMethod;
     return switch (method) {
-        .setEmulatedMedia => setEmulatedMedia(alloc, id, scanner, ctx),
-        .setFocusEmulationEnabled => setFocusEmulationEnabled(alloc, id, scanner, ctx),
-        .setDeviceMetricsOverride => setDeviceMetricsOverride(alloc, id, scanner, ctx),
-        .setTouchEmulationEnabled => setTouchEmulationEnabled(alloc, id, scanner, ctx),
+        .setEmulatedMedia => setEmulatedMedia(alloc, msg, ctx),
+        .setFocusEmulationEnabled => setFocusEmulationEnabled(alloc, msg, ctx),
+        .setDeviceMetricsOverride => setDeviceMetricsOverride(alloc, msg, ctx),
+        .setTouchEmulationEnabled => setTouchEmulationEnabled(alloc, msg, ctx),
     };
 }
 
@@ -59,8 +58,7 @@ const MediaFeature = struct {
 // TODO: noop method
 fn setEmulatedMedia(
     alloc: std.mem.Allocator,
-    _id: ?u16,
-    scanner: *std.json.Scanner,
+    msg: *IncomingMessage,
     _: *Ctx,
 ) ![]const u8 {
 
@@ -69,57 +67,52 @@ fn setEmulatedMedia(
         media: ?[]const u8 = null,
         features: ?[]MediaFeature = null,
     };
-    const msg = try getMsg(alloc, _id, Params, scanner);
-    log.debug("Req > id {d}, method {s}", .{ msg.id, "emulation.setEmulatedMedia" });
+    const input = try msg.getInput(alloc, Params);
+    log.debug("Req > id {d}, method {s}", .{ input.id, "emulation.setEmulatedMedia" });
 
     // output
-    return result(alloc, msg.id, null, null, msg.sessionID);
+    return result(alloc, input.id, null, null, input.sessionId);
 }
 
 // TODO: noop method
 fn setFocusEmulationEnabled(
     alloc: std.mem.Allocator,
-    _id: ?u16,
-    scanner: *std.json.Scanner,
+    msg: *IncomingMessage,
     _: *Ctx,
 ) ![]const u8 {
-
     // input
     const Params = struct {
         enabled: bool,
     };
-    const msg = try getMsg(alloc, _id, Params, scanner);
-    log.debug("Req > id {d}, method {s}", .{ msg.id, "emulation.setFocusEmulationEnabled" });
+    const input = try msg.getInput(alloc, Params);
+    log.debug("Req > id {d}, method {s}", .{ input.id, "emulation.setFocusEmulationEnabled" });
 
     // output
-    return result(alloc, msg.id, null, null, msg.sessionID);
+    return result(alloc, input.id, null, null, input.sessionId);
 }
 
 // TODO: noop method
 fn setDeviceMetricsOverride(
     alloc: std.mem.Allocator,
-    _id: ?u16,
-    scanner: *std.json.Scanner,
+    msg: *IncomingMessage,
     _: *Ctx,
 ) ![]const u8 {
-
     // input
-    const msg = try cdp.getMsg(alloc, _id, void, scanner);
-    log.debug("Req > id {d}, method {s}", .{ msg.id, "emulation.setDeviceMetricsOverride" });
+    const input = try msg.getInput(alloc, void);
+    log.debug("Req > id {d}, method {s}", .{ input.id, "emulation.setDeviceMetricsOverride" });
 
     // output
-    return result(alloc, msg.id, null, null, msg.sessionID);
+    return result(alloc, input.id, null, null, input.sessionId);
 }
 
 // TODO: noop method
 fn setTouchEmulationEnabled(
     alloc: std.mem.Allocator,
-    _id: ?u16,
-    scanner: *std.json.Scanner,
+    msg: *IncomingMessage,
     _: *Ctx,
 ) ![]const u8 {
-    const msg = try cdp.getMsg(alloc, _id, void, scanner);
-    log.debug("Req > id {d}, method {s}", .{ msg.id, "emulation.setTouchEmulationEnabled" });
+    const input = try msg.getInput(alloc, void);
+    log.debug("Req > id {d}, method {s}", .{ input.id, "emulation.setTouchEmulationEnabled" });
 
-    return result(alloc, msg.id, null, null, msg.sessionID);
+    return result(alloc, input.id, null, null, input.sessionId);
 }

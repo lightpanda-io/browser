@@ -22,7 +22,7 @@ const server = @import("../server.zig");
 const Ctx = server.Ctx;
 const cdp = @import("cdp.zig");
 const result = cdp.result;
-const getMsg = cdp.getMsg;
+const IncomingMessage = @import("msg.zig").IncomingMessage;
 
 const log = std.log.scoped(.cdp);
 
@@ -32,29 +32,26 @@ const Methods = enum {
 
 pub fn performance(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    msg: *IncomingMessage,
     action: []const u8,
-    scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
     const method = std.meta.stringToEnum(Methods, action) orelse
         return error.UnknownMethod;
 
     return switch (method) {
-        .enable => enable(alloc, id, scanner, ctx),
+        .enable => enable(alloc, msg, ctx),
     };
 }
 
 fn enable(
     alloc: std.mem.Allocator,
-    _id: ?u16,
-    scanner: *std.json.Scanner,
+    msg: *IncomingMessage,
     _: *Ctx,
 ) ![]const u8 {
-
     // input
-    const msg = try getMsg(alloc, _id, void, scanner);
-    log.debug("Req > id {d}, method {s}", .{ msg.id, "performance.enable" });
+    const input = try msg.getInput(alloc, void);
+    log.debug("Req > id {d}, method {s}", .{ input.id, "performance.enable" });
 
-    return result(alloc, msg.id, null, null, msg.sessionID);
+    return result(alloc, input.id, null, null, input.sessionId);
 }

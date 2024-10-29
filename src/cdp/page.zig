@@ -22,9 +22,9 @@ const server = @import("../server.zig");
 const Ctx = server.Ctx;
 const cdp = @import("cdp.zig");
 const result = cdp.result;
-const getMsg = cdp.getMsg;
 const stringify = cdp.stringify;
 const sendEvent = cdp.sendEvent;
+const IncomingMessage = @import("msg.zig").IncomingMessage;
 
 const log = std.log.scoped(.cdp);
 
@@ -41,35 +41,32 @@ const Methods = enum {
 
 pub fn page(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    msg: *IncomingMessage,
     action: []const u8,
-    scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
     const method = std.meta.stringToEnum(Methods, action) orelse
         return error.UnknownMethod;
     return switch (method) {
-        .enable => enable(alloc, id, scanner, ctx),
-        .getFrameTree => getFrameTree(alloc, id, scanner, ctx),
-        .setLifecycleEventsEnabled => setLifecycleEventsEnabled(alloc, id, scanner, ctx),
-        .addScriptToEvaluateOnNewDocument => addScriptToEvaluateOnNewDocument(alloc, id, scanner, ctx),
-        .createIsolatedWorld => createIsolatedWorld(alloc, id, scanner, ctx),
-        .navigate => navigate(alloc, id, scanner, ctx),
+        .enable => enable(alloc, msg, ctx),
+        .getFrameTree => getFrameTree(alloc, msg, ctx),
+        .setLifecycleEventsEnabled => setLifecycleEventsEnabled(alloc, msg, ctx),
+        .addScriptToEvaluateOnNewDocument => addScriptToEvaluateOnNewDocument(alloc, msg, ctx),
+        .createIsolatedWorld => createIsolatedWorld(alloc, msg, ctx),
+        .navigate => navigate(alloc, msg, ctx),
     };
 }
 
 fn enable(
     alloc: std.mem.Allocator,
-    _id: ?u16,
-    scanner: *std.json.Scanner,
+    msg: *IncomingMessage,
     _: *Ctx,
 ) ![]const u8 {
-
     // input
-    const msg = try getMsg(alloc, _id, void, scanner);
-    log.debug("Req > id {d}, method {s}", .{ msg.id, "page.enable" });
+    const input = try msg.getInput(alloc, void);
+    log.debug("Req > id {d}, method {s}", .{ input.id, "page.enable" });
 
-    return result(alloc, msg.id, null, null, msg.sessionID);
+    return result(alloc, input.id, null, null, input.sessionId);
 }
 
 const Frame = struct {
@@ -89,14 +86,12 @@ const Frame = struct {
 
 fn getFrameTree(
     alloc: std.mem.Allocator,
-    _id: ?u16,
-    scanner: *std.json.Scanner,
+    msg: *IncomingMessage,
     ctx: *Ctx,
 ) ![]const u8 {
-
     // input
-    const msg = try cdp.getMsg(alloc, _id, void, scanner);
-    log.debug("Req > id {d}, method {s}", .{ msg.id, "page.getFrameTree" });
+    const input = try msg.getInput(alloc, void);
+    log.debug("Req > id {d}, method {s}", .{ input.id, "page.getFrameTree" });
 
     // output
     const FrameTree = struct {
@@ -135,27 +130,25 @@ fn getFrameTree(
             },
         },
     };
-    return result(alloc, msg.id, FrameTree, frameTree, msg.sessionID);
+    return result(alloc, input.id, FrameTree, frameTree, input.sessionId);
 }
 
 fn setLifecycleEventsEnabled(
     alloc: std.mem.Allocator,
-    _id: ?u16,
-    scanner: *std.json.Scanner,
+    msg: *IncomingMessage,
     ctx: *Ctx,
 ) ![]const u8 {
-
     // input
     const Params = struct {
         enabled: bool,
     };
-    const msg = try getMsg(alloc, _id, Params, scanner);
-    log.debug("Req > id {d}, method {s}", .{ msg.id, "page.setLifecycleEventsEnabled" });
+    const input = try msg.getInput(alloc, Params);
+    log.debug("Req > id {d}, method {s}", .{ input.id, "page.setLifecycleEventsEnabled" });
 
     ctx.state.page_life_cycle_events = true;
 
     // output
-    return result(alloc, msg.id, null, null, msg.sessionID);
+    return result(alloc, input.id, null, null, input.sessionId);
 }
 
 const LifecycleEvent = struct {
@@ -168,11 +161,9 @@ const LifecycleEvent = struct {
 // TODO: hard coded method
 fn addScriptToEvaluateOnNewDocument(
     alloc: std.mem.Allocator,
-    _id: ?u16,
-    scanner: *std.json.Scanner,
+    msg: *IncomingMessage,
     _: *Ctx,
 ) ![]const u8 {
-
     // input
     const Params = struct {
         source: []const u8,
@@ -180,8 +171,8 @@ fn addScriptToEvaluateOnNewDocument(
         includeCommandLineAPI: bool = false,
         runImmediately: bool = false,
     };
-    const msg = try getMsg(alloc, _id, Params, scanner);
-    log.debug("Req > id {d}, method {s}", .{ msg.id, "page.addScriptToEvaluateOnNewDocument" });
+    const input = try msg.getInput(alloc, Params);
+    log.debug("Req > id {d}, method {s}", .{ input.id, "page.addScriptToEvaluateOnNewDocument" });
 
     // output
     const Res = struct {
@@ -199,27 +190,24 @@ fn addScriptToEvaluateOnNewDocument(
             try writer.writeAll(" }");
         }
     };
-    return result(alloc, msg.id, Res, Res{}, msg.sessionID);
+    return result(alloc, input.id, Res, Res{}, input.sessionId);
 }
 
 // TODO: hard coded method
 fn createIsolatedWorld(
     alloc: std.mem.Allocator,
-    _id: ?u16,
-    scanner: *std.json.Scanner,
+    msg: *IncomingMessage,
     ctx: *Ctx,
 ) ![]const u8 {
-
     // input
     const Params = struct {
         frameId: []const u8,
         worldName: []const u8,
         grantUniveralAccess: bool,
     };
-    const msg = try getMsg(alloc, _id, Params, scanner);
-    std.debug.assert(msg.sessionID != null);
-    log.debug("Req > id {d}, method {s}", .{ msg.id, "page.createIsolatedWorld" });
-    const params = msg.params.?;
+    const input = try msg.getInput(alloc, Params);
+    std.debug.assert(input.sessionId != null);
+    log.debug("Req > id {d}, method {s}", .{ input.id, "page.createIsolatedWorld" });
 
     // noop executionContextCreated event
     try Runtime.executionContextCreated(
@@ -227,15 +215,15 @@ fn createIsolatedWorld(
         ctx,
         0,
         "",
-        params.worldName,
+        input.params.worldName,
         // TODO: hard coded ID
         "7102379147004877974.3265385113993241162",
         .{
             .isDefault = false,
             .type = "isolated",
-            .frameId = params.frameId,
+            .frameId = input.params.frameId,
         },
-        msg.sessionID,
+        input.sessionId,
     );
 
     // output
@@ -243,16 +231,14 @@ fn createIsolatedWorld(
         executionContextId: u8 = 0,
     };
 
-    return result(alloc, msg.id, Resp, .{}, msg.sessionID);
+    return result(alloc, input.id, Resp, .{}, input.sessionId);
 }
 
 fn navigate(
     alloc: std.mem.Allocator,
-    _id: ?u16,
-    scanner: *std.json.Scanner,
+    msg: *IncomingMessage,
     ctx: *Ctx,
 ) ![]const u8 {
-
     // input
     const Params = struct {
         url: []const u8,
@@ -261,13 +247,12 @@ fn navigate(
         frameId: ?[]const u8 = null,
         referrerPolicy: ?[]const u8 = null, // TODO: enum
     };
-    const msg = try getMsg(alloc, _id, Params, scanner);
-    std.debug.assert(msg.sessionID != null);
-    log.debug("Req > id {d}, method {s}", .{ msg.id, "page.navigate" });
-    const params = msg.params.?;
+    const input = try msg.getInput(alloc, Params);
+    std.debug.assert(input.sessionId != null);
+    log.debug("Req > id {d}, method {s}", .{ input.id, "page.navigate" });
 
     // change state
-    ctx.state.url = params.url;
+    ctx.state.url = input.params.url;
     // TODO: hard coded ID
     ctx.state.loaderID = "AF8667A203C5392DBE9AC290044AA4C2";
 
@@ -289,7 +274,7 @@ fn navigate(
         "Page.frameStartedLoading",
         FrameStartedLoading,
         frame_started_loading,
-        msg.sessionID,
+        input.sessionId,
     );
     if (ctx.state.page_life_cycle_events) {
         life_event.name = "init";
@@ -300,7 +285,7 @@ fn navigate(
             "Page.lifecycleEvent",
             LifecycleEvent,
             life_event,
-            msg.sessionID,
+            input.sessionId,
         );
     }
 
@@ -330,7 +315,7 @@ fn navigate(
         .frameId = ctx.state.frameID,
         .loaderId = ctx.state.loaderID,
     };
-    const res = try result(alloc, msg.id, Resp, resp, msg.sessionID);
+    const res = try result(alloc, input.id, Resp, resp, input.sessionId);
     defer alloc.free(res);
     try server.sendSync(ctx, res);
 
@@ -338,7 +323,7 @@ fn navigate(
 
     // Send Runtime.executionContextsCleared event
     // TODO: noop event, we have no env context at this point, is it necesarry?
-    try sendEvent(alloc, ctx, "Runtime.executionContextsCleared", void, {}, msg.sessionID);
+    try sendEvent(alloc, ctx, "Runtime.executionContextsCleared", void, {}, input.sessionId);
 
     // Launch navigate
     const p = try ctx.browser.session.createPage();
@@ -350,7 +335,7 @@ fn navigate(
         .{ctx.state.frameID},
     );
     defer alloc.free(auxData);
-    try p.navigate(params.url, auxData);
+    try p.navigate(input.params.url, auxData);
 
     // Events
 
@@ -365,7 +350,7 @@ fn navigate(
             "Page.lifecycleEvent",
             LifecycleEvent,
             life_event,
-            msg.sessionID,
+            input.sessionId,
         );
     }
 
@@ -389,7 +374,7 @@ fn navigate(
         "Page.frameNavigated",
         FrameNavigated,
         frame_navigated,
-        msg.sessionID,
+        input.sessionId,
     );
 
     // domContentEventFired event
@@ -401,7 +386,7 @@ fn navigate(
         "Page.domContentEventFired",
         cdp.TimestampEvent,
         ts_event,
-        msg.sessionID,
+        input.sessionId,
     );
 
     // lifecycle DOMContentLoaded event
@@ -415,7 +400,7 @@ fn navigate(
             "Page.lifecycleEvent",
             LifecycleEvent,
             life_event,
-            msg.sessionID,
+            input.sessionId,
         );
     }
 
@@ -428,7 +413,7 @@ fn navigate(
         "Page.loadEventFired",
         cdp.TimestampEvent,
         ts_event,
-        msg.sessionID,
+        input.sessionId,
     );
 
     // lifecycle DOMContentLoaded event
@@ -442,7 +427,7 @@ fn navigate(
             "Page.lifecycleEvent",
             LifecycleEvent,
             life_event,
-            msg.sessionID,
+            input.sessionId,
         );
     }
 
@@ -454,7 +439,7 @@ fn navigate(
         "Page.frameStoppedLoading",
         FrameStoppedLoading,
         .{ .frameId = ctx.state.frameID },
-        msg.sessionID,
+        input.sessionId,
     );
 
     return "";
