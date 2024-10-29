@@ -30,6 +30,7 @@ const network = @import("network.zig").network;
 const emulation = @import("emulation.zig").emulation;
 const fetch = @import("fetch.zig").fetch;
 const performance = @import("performance.zig").performance;
+const IncomingMessage = @import("msg.zig").IncomingMessage;
 
 const log_cdp = std.log.scoped(.cdp);
 
@@ -70,51 +71,29 @@ pub fn do(
     ctx: *Ctx,
 ) ![]const u8 {
 
-    // JSON scanner
-    var scanner = std.json.Scanner.initCompleteInput(alloc, s);
-    defer scanner.deinit();
+    // incoming message parser
+    var msg = IncomingMessage.init(alloc, s);
+    defer msg.deinit();
 
-    std.debug.assert(try scanner.next() == .object_begin);
-
-    // handle 2 possible orders:
-    // - id, method <...>
-    // - method, id <...>
-    var method_key = try nextString(&scanner);
-    var method_token: std.json.Token = undefined;
-    var id: ?u16 = null;
-    // check swap order
-    if (std.mem.eql(u8, method_key, "id")) {
-        id = try getId(&scanner, method_key);
-        method_key = try nextString(&scanner);
-        method_token = try scanner.next();
-    } else {
-        method_token = try scanner.next();
-    }
-    try checkKey(method_key, "method");
-
-    // retrieve method
-    if (method_token != .string) {
-        return error.WrongTokenType;
-    }
-    const method_name = method_token.string;
+    const method = try msg.getMethod();
 
     // retrieve domain from method
-    var iter = std.mem.splitScalar(u8, method_name, '.');
+    var iter = std.mem.splitScalar(u8, method, '.');
     const domain = std.meta.stringToEnum(Domains, iter.first()) orelse
         return error.UnknonwDomain;
 
     // select corresponding domain
     const action = iter.next() orelse return error.BadMethod;
     return switch (domain) {
-        .Browser => browser(alloc, id, action, &scanner, ctx),
-        .Target => target(alloc, id, action, &scanner, ctx),
-        .Page => page(alloc, id, action, &scanner, ctx),
-        .Log => log(alloc, id, action, &scanner, ctx),
-        .Runtime => runtime(alloc, id, action, &scanner, s, ctx),
-        .Network => network(alloc, id, action, &scanner, ctx),
-        .Emulation => emulation(alloc, id, action, &scanner, ctx),
-        .Fetch => fetch(alloc, id, action, &scanner, ctx),
-        .Performance => performance(alloc, id, action, &scanner, ctx),
+        .Browser => browser(alloc, &msg, action, ctx),
+        .Target => target(alloc, &msg, action, ctx),
+        .Page => page(alloc, &msg, action, ctx),
+        .Log => log(alloc, &msg, action, ctx),
+        .Runtime => runtime(alloc, &msg, action, ctx),
+        .Network => network(alloc, &msg, action, ctx),
+        .Emulation => emulation(alloc, &msg, action, ctx),
+        .Fetch => fetch(alloc, &msg, action, ctx),
+        .Performance => performance(alloc, &msg, action, ctx),
     };
 }
 
@@ -133,14 +112,6 @@ pub const State = struct {
 // Utils
 // -----
 
-fn nextString(scanner: *std.json.Scanner) ![]const u8 {
-    const token = try scanner.next();
-    if (token != .string) {
-        return error.WrongTokenType;
-    }
-    return token.string;
-}
-
 pub fn dumpFile(
     alloc: std.mem.Allocator,
     id: u16,
@@ -156,10 +127,6 @@ pub fn dumpFile(
     std.debug.assert(nb == script.len);
     const p = try dir.realpathAlloc(alloc, name);
     defer alloc.free(p);
-}
-
-fn checkKey(key: []const u8, token: []const u8) !void {
-    if (!std.mem.eql(u8, key, token)) return error.WrongToken;
 }
 
 // caller owns the slice returned
@@ -227,97 +194,6 @@ pub fn sendEvent(
 
     const event_msg = try stringify(alloc, resp);
     try server.sendAsync(ctx, event_msg);
-}
-
-fn getParams(
-    alloc: std.mem.Allocator,
-    comptime T: type,
-    scanner: *std.json.Scanner,
-    key: []const u8,
-) !?T {
-
-    // check key is "params"
-    if (!std.mem.eql(u8, "params", key)) return null;
-
-    // skip "params" if not requested
-    if (T == void) {
-        var finished: usize = 0;
-        while (true) {
-            switch (try scanner.next()) {
-                .object_begin => finished += 1,
-                .object_end => finished -= 1,
-                else => continue,
-            }
-            if (finished == 0) break;
-        }
-        return void{};
-    }
-
-    // parse "params"
-    const options = std.json.ParseOptions{
-        .max_value_len = scanner.input.len,
-        .allocate = .alloc_if_needed,
-    };
-    return try std.json.innerParse(T, alloc, scanner, options);
-}
-
-fn getId(scanner: *std.json.Scanner, key: []const u8) !?u16 {
-
-    // check key is "id"
-    if (!std.mem.eql(u8, "id", key)) return null;
-
-    // parse "id"
-    return try std.fmt.parseUnsigned(u16, (try scanner.next()).number, 10);
-}
-
-fn getSessionId(scanner: *std.json.Scanner, key: []const u8) !?[]const u8 {
-
-    // check key is "sessionId"
-    if (!std.mem.eql(u8, "sessionId", key)) return null;
-
-    // parse "sessionId"
-    return try nextString(scanner);
-}
-
-pub fn getMsg(
-    alloc: std.mem.Allocator,
-    _id: ?u16,
-    comptime params_T: type,
-    scanner: *std.json.Scanner,
-) !struct { id: u16, params: ?params_T, sessionID: ?[]const u8 } {
-    var id_msg: ?u16 = null;
-    var params: ?params_T = null;
-    var sessionID: ?[]const u8 = null;
-
-    var t: std.json.Token = undefined;
-
-    while (true) {
-        t = try scanner.next();
-        if (t == .object_end) break;
-        if (t != .string) {
-            return error.WrongTokenType;
-        }
-        if (_id == null and id_msg == null) {
-            id_msg = try getId(scanner, t.string);
-            if (id_msg != null) continue;
-        }
-        if (params == null) {
-            params = try getParams(alloc, params_T, scanner, t.string);
-            if (params != null) continue;
-        }
-        if (sessionID == null) {
-            sessionID = try getSessionId(scanner, t.string);
-        }
-    }
-
-    // end
-    t = try scanner.next();
-    if (t != .end_of_document) return error.CDPMsgEnd;
-
-    // check id
-    if (_id == null and id_msg == null) return error.RequestWithoutID;
-
-    return .{ .id = _id orelse id_msg.?, .params = params, .sessionID = sessionID };
 }
 
 // Common

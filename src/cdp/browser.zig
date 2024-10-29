@@ -22,7 +22,7 @@ const server = @import("../server.zig");
 const Ctx = server.Ctx;
 const cdp = @import("cdp.zig");
 const result = cdp.result;
-const getMsg = cdp.getMsg;
+const IncomingMessage = @import("msg.zig").IncomingMessage;
 
 const log = std.log.scoped(.cdp);
 
@@ -35,18 +35,17 @@ const Methods = enum {
 
 pub fn browser(
     alloc: std.mem.Allocator,
-    id: ?u16,
+    msg: *IncomingMessage,
     action: []const u8,
-    scanner: *std.json.Scanner,
     ctx: *Ctx,
 ) ![]const u8 {
     const method = std.meta.stringToEnum(Methods, action) orelse
         return error.UnknownMethod;
     return switch (method) {
-        .getVersion => getVersion(alloc, id, scanner, ctx),
-        .setDownloadBehavior => setDownloadBehavior(alloc, id, scanner, ctx),
-        .getWindowForTarget => getWindowForTarget(alloc, id, scanner, ctx),
-        .setWindowBounds => setWindowBounds(alloc, id, scanner, ctx),
+        .getVersion => getVersion(alloc, msg, ctx),
+        .setDownloadBehavior => setDownloadBehavior(alloc, msg, ctx),
+        .getWindowForTarget => getWindowForTarget(alloc, msg, ctx),
+        .setWindowBounds => setWindowBounds(alloc, msg, ctx),
     };
 }
 
@@ -59,14 +58,12 @@ const JsVersion = "12.4.254.8";
 
 fn getVersion(
     alloc: std.mem.Allocator,
-    _id: ?u16,
-    scanner: *std.json.Scanner,
+    msg: *IncomingMessage,
     _: *Ctx,
 ) ![]const u8 {
-
     // input
-    const msg = try getMsg(alloc, _id, void, scanner);
-    log.debug("Req > id {d}, method {s}", .{ msg.id, "browser.getVersion" });
+    const input = try msg.getInput(alloc, void);
+    log.debug("Req > id {d}, method {s}", .{ input.id, "browser.getVersion" });
 
     // ouput
     const Res = struct {
@@ -76,17 +73,15 @@ fn getVersion(
         userAgent: []const u8 = UserAgent,
         jsVersion: []const u8 = JsVersion,
     };
-    return result(alloc, msg.id, Res, .{}, null);
+    return result(alloc, input.id, Res, .{}, null);
 }
 
 // TODO: noop method
 fn setDownloadBehavior(
     alloc: std.mem.Allocator,
-    _id: ?u16,
-    scanner: *std.json.Scanner,
+    msg: *IncomingMessage,
     _: *Ctx,
 ) ![]const u8 {
-
     // input
     const Params = struct {
         behavior: []const u8,
@@ -94,11 +89,11 @@ fn setDownloadBehavior(
         downloadPath: ?[]const u8 = null,
         eventsEnabled: ?bool = null,
     };
-    const msg = try getMsg(alloc, _id, Params, scanner);
-    log.debug("REQ > id {d}, method {s}", .{ msg.id, "browser.setDownloadBehavior" });
+    const input = try msg.getInput(alloc, Params);
+    log.debug("REQ > id {d}, method {s}", .{ input.id, "browser.setDownloadBehavior" });
 
     // output
-    return result(alloc, msg.id, null, null, null);
+    return result(alloc, input.id, null, null, null);
 }
 
 // TODO: hard coded ID
@@ -106,8 +101,7 @@ const DevToolsWindowID = 1923710101;
 
 fn getWindowForTarget(
     alloc: std.mem.Allocator,
-    _id: ?u16,
-    scanner: *std.json.Scanner,
+    msg: *IncomingMessage,
     _: *Ctx,
 ) ![]const u8 {
 
@@ -115,9 +109,9 @@ fn getWindowForTarget(
     const Params = struct {
         targetId: ?[]const u8 = null,
     };
-    const msg = try cdp.getMsg(alloc, _id, ?Params, scanner);
-    std.debug.assert(msg.sessionID != null);
-    log.debug("Req > id {d}, method {s}", .{ msg.id, "browser.getWindowForTarget" });
+    const input = try msg.getInput(alloc, Params);
+    std.debug.assert(input.sessionId != null);
+    log.debug("Req > id {d}, method {s}", .{ input.id, "browser.getWindowForTarget" });
 
     // output
     const Resp = struct {
@@ -130,21 +124,20 @@ fn getWindowForTarget(
             windowState: []const u8 = "normal",
         } = .{},
     };
-    return result(alloc, msg.id, Resp, Resp{}, msg.sessionID.?);
+    return result(alloc, input.id, Resp, Resp{}, input.sessionId);
 }
 
 // TODO: noop method
 fn setWindowBounds(
     alloc: std.mem.Allocator,
-    _id: ?u16,
-    scanner: *std.json.Scanner,
+    msg: *IncomingMessage,
     _: *Ctx,
 ) ![]const u8 {
+    const input = try msg.getInput(alloc, void);
 
     // input
-    const msg = try cdp.getMsg(alloc, _id, void, scanner);
-    log.debug("Req > id {d}, method {s}", .{ msg.id, "browser.setWindowBounds" });
+    log.debug("Req > id {d}, method {s}", .{ input.id, "browser.setWindowBounds" });
 
     // output
-    return result(alloc, msg.id, null, null, msg.sessionID);
+    return result(alloc, input.id, null, null, input.sessionId);
 }
