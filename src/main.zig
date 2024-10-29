@@ -36,7 +36,7 @@ const Port = 3245;
 const Timeout = 3; // in seconds
 
 const usage =
-    \\usage: {s} [options]
+    \\usage: {s} [options] [URL]
     \\
     \\  start Lightpanda browser
     \\
