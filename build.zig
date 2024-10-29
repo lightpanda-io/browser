@@ -52,7 +52,7 @@ pub fn build(b: *std.Build) !void {
 
     // compile and install
     const exe = b.addExecutable(.{
-        .name = "browsercore",
+        .name = "lightpanda",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = mode,
@@ -75,7 +75,7 @@ pub fn build(b: *std.Build) !void {
 
     // compile and install
     const shell = b.addExecutable(.{
-        .name = "browsercore-shell",
+        .name = "lightpanda-shell",
         .root_source_file = b.path("src/main_shell.zig"),
         .target = target,
         .optimize = mode,
@@ -124,7 +124,7 @@ pub fn build(b: *std.Build) !void {
 
     // compile and install
     const wpt = b.addExecutable(.{
-        .name = "browsercore-wpt",
+        .name = "lightpanda-wpt",
         .root_source_file = b.path("src/main_wpt.zig"),
         .target = target,
         .optimize = mode,

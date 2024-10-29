@@ -54,7 +54,7 @@ pub const UserContext = apiweb.UserContext;
 // TODO For now the WPT tests run is specific to WPT.
 // It manually load js framwork libs, and run the first script w/ js content in
 // the HTML page.
-// Once browsercore will have the html loader, it would be useful to refacto
+// Once lightpanda will have the html loader, it would be useful to refacto
 // this test to use it.
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

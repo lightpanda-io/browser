@@ -87,5 +87,5 @@ pub fn main() !void {
     defer vm.deinit();
 
     // launch shell
-    try jsruntime.shell(&arena, execJS, .{ .app_name = "browsercore" });
+    try jsruntime.shell(&arena, execJS, .{ .app_name = "lightpanda-shell" });
 }

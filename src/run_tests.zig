@@ -283,7 +283,7 @@ fn run_js(out: Out) !void {
     const row_shape = .{ []const u8, pretty.Measure, u64, u64, pretty.Measure };
     const table = try pretty.GenerateTable(4, row_shape, pretty.TableConf{ .margin_left = "  " });
     const header = .{ "FUNCTION", "DURATION", "ALLOCATIONS (nb)", "RE-ALLOCATIONS (nb)", "HEAP SIZE" };
-    var t = table.init("Benchmark browsercore 🚀", header);
+    var t = table.init("Benchmark lightpanda 🚀", header);
     try t.addRow(.{ "browser", dur, stats.alloc_nb, stats.realloc_nb, size });
     try t.addRow(.{ "libdom", dur, 0, 0, zerosize }); // TODO get libdom bench info.
     try t.addRow(.{ "v8", dur, 0, 0, zerosize }); // TODO get v8 bench info.
