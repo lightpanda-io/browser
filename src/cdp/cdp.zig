@@ -69,6 +69,9 @@ pub fn do(
     s: []const u8,
     ctx: *Ctx,
 ) ![]const u8 {
+    var tstart: i128 = 0;
+    var tstop: i128 = 0;
+    tstart = std.time.nanoTimestamp();
 
     // JSON scanner
     var scanner = std.json.Scanner.initCompleteInput(alloc, s);
@@ -81,6 +84,7 @@ pub fn do(
     // - method, id <...>
     var method_key = try nextString(&scanner);
     var method_token: std.json.Token = undefined;
+
     var id: ?u16 = null;
     // check swap order
     if (std.mem.eql(u8, method_key, "id")) {
@@ -97,6 +101,11 @@ pub fn do(
         return error.WrongTokenType;
     }
     const method_name = method_token.string;
+
+    defer {
+        tstop = std.time.nanoTimestamp();
+        std.debug.print("do\t{s}\t\t{d}µs\n", .{ method_name, @divFloor((tstop - tstart), std.time.ns_per_us) });
+    }
 
     // retrieve domain from method
     var iter = std.mem.splitScalar(u8, method_name, '.');
