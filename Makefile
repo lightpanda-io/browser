@@ -100,10 +100,10 @@ test:
 .PHONY: install-dev install
 
 ## Install and build dependencies for release
-install: install-submodule install-zig-js-runtime install-netsurf install-mimalloc
+install: install-submodule install-zig-js-runtime install-libiconv install-netsurf install-mimalloc
 
 ## Install and build dependencies for dev
-install-dev: install-submodule install-zig-js-runtime-dev install-netsurf-dev install-mimalloc-dev
+install-dev: install-submodule install-zig-js-runtime-dev install-libiconv install-netsurf-dev install-mimalloc-dev
 
 install-netsurf-dev: _install-netsurf
 install-netsurf-dev: OPTCFLAGS := -O0 -g -DNDEBUG
@@ -111,14 +111,16 @@ install-netsurf-dev: OPTCFLAGS := -O0 -g -DNDEBUG
 install-netsurf: _install-netsurf
 install-netsurf: OPTCFLAGS := -DNDEBUG
 
-BC_NS := $(BC)vendor/netsurf
+BC_NS := $(BC)vendor/netsurf/out/$(OS)-$(ARCH)
 ICONV := $(BC)vendor/libiconv/out/$(OS)-$(ARCH)
 # TODO: add Linux iconv path (I guess it depends on the distro)
 # TODO: this way of linking libiconv is not ideal. We should have a more generic way
 # and stick to a specif version. Maybe build from source. Anyway not now.
-_install-netsurf: install-libiconv
+_install-netsurf: clean-netsurf
 	@printf "\e[36mInstalling NetSurf...\e[0m\n" && \
-	ls $(ICONV) 1> /dev/null || (printf "\e[33mERROR: you need to install libiconv in your system (on MacOS on with Homebrew)\e[0m\n"; exit 1;) && \
+	ls $(ICONV)/lib/libiconv.a 1> /dev/null || (printf "\e[33mERROR: you need to execute 'make install-libiconv'\e[0m\n"; exit 1;) && \
+	mkdir -p $(BC_NS) && \
+	cp -R vendor/netsurf/share $(BC_NS) && \
 	export PREFIX=$(BC_NS) && \
 	export OPTLDFLAGS="-L$(ICONV)/lib" && \
 	export OPTCFLAGS="$(OPTCFLAGS) -I$(ICONV)/include" && \
@@ -156,10 +158,7 @@ _install-netsurf: install-libiconv
 
 clean-netsurf:
 	@printf "\e[36mCleaning NetSurf build...\e[0m\n" && \
-	cd vendor/netsurf && \
-	rm -R build && \
-	rm -R lib && \
-	rm -R include
+	rm -Rf $(BC_NS)
 
 test-netsurf:
 	@printf "\e[36mTesting NetSurf...\e[0m\n" && \
@@ -195,6 +194,7 @@ install-zig-js-runtime:
 	make install
 
 .PHONY: _build_mimalloc
+
 MIMALLOC := $(BC)vendor/mimalloc/out/$(OS)-$(ARCH)
 _build_mimalloc: clean-mimalloc
 	@mkdir -p $(MIMALLOC)/build && \

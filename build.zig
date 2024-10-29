@@ -193,7 +193,12 @@ fn moduleNetSurf(b: *std.Build, target: std.Build.ResolvedTarget) !*std.Build.Mo
 
     // netsurf libs
     const ns = "vendor/netsurf";
-    mod.addIncludePath(b.path(ns ++ "/include"));
+    const ns_include_path = try std.fmt.allocPrint(
+        mod.owner.allocator,
+        ns ++ "/out/{s}-{s}/include",
+        .{ @tagName(os), @tagName(arch) },
+    );
+    mod.addIncludePath(b.path(ns_include_path));
 
     const libs: [4][]const u8 = .{
         "libdom",
@@ -202,7 +207,12 @@ fn moduleNetSurf(b: *std.Build, target: std.Build.ResolvedTarget) !*std.Build.Mo
         "libwapcaplet",
     };
     inline for (libs) |lib| {
-        mod.addObjectFile(b.path(ns ++ "/lib/" ++ lib ++ ".a"));
+        const ns_lib_path = try std.fmt.allocPrint(
+            mod.owner.allocator,
+            ns ++ "/out/{s}-{s}/lib/" ++ lib ++ ".a",
+            .{ @tagName(os), @tagName(arch) },
+        );
+        mod.addObjectFile(b.path(ns_lib_path));
         mod.addIncludePath(b.path(ns ++ "/" ++ lib ++ "/src"));
     }
 
