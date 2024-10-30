@@ -68,7 +68,6 @@ RUN make build
 
 FROM ubuntu:22.04
 
-COPY --from=0 /browser/zig-out/bin/browsercore /bin/lightpanda
-COPY --from=0 /browser/zig-out/bin/browsercore-get /bin/lightpanda-get
+COPY --from=0 /browser/zig-out/bin/lightpanda /bin/lightpanda
 
 CMD ["/bin/lightpanda", "--host", "0.0.0.0", "--port", "3245"]
