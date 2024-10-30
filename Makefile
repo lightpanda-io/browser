@@ -181,9 +181,10 @@ install-libiconv: download-libiconv clean-libiconv
 	make && make install
 
 clean-libiconv:
+ifneq ("$(wildcard vendor/libiconv/libiconv-1.17/Makefile)","")
 	@cd vendor/libiconv/libiconv-1.17 && \
-	make clean > /dev/null && cd .. && \
-	rm -Rf lib && rm -Rf share && rm -Rf bin && rm -Rf include
+	make clean
+endif
 
 install-zig-js-runtime-dev:
 	@cd vendor/zig-js-runtime && \
