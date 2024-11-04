@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const posix = std.posix;
+const builtin = @import("builtin");
 
 const jsruntime = @import("jsruntime");
 
@@ -99,6 +100,10 @@ pub const StreamServer = struct {
         self.* = undefined;
     }
 
+    fn setSockOpt(fd: posix.socket_t, level: i32, option: u32, value: c_int) !void {
+        try posix.setsockopt(fd, level, option, &std.mem.toBytes(value));
+    }
+
     pub fn listen(self: *StreamServer, address: std.net.Address) !void {
         const sock_flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC;
         var use_sock_flags: u32 = sock_flags;
@@ -112,21 +117,16 @@ pub const StreamServer = struct {
             self.sockfd = null;
         }
 
+        // socket options
         if (self.reuse_address) {
-            try posix.setsockopt(
-                sockfd,
-                posix.SOL.SOCKET,
-                posix.SO.REUSEADDR,
-                &std.mem.toBytes(@as(c_int, 1)),
-            );
+            try setSockOpt(sockfd, posix.SOL.SOCKET, posix.SO.REUSEADDR, 1);
         }
         if (@hasDecl(posix.SO, "REUSEPORT") and self.reuse_port) {
-            try posix.setsockopt(
-                sockfd,
-                posix.SOL.SOCKET,
-                posix.SO.REUSEPORT,
-                &std.mem.toBytes(@as(c_int, 1)),
-            );
+            try setSockOpt(sockfd, posix.SOL.SOCKET, posix.SO.REUSEPORT, 1);
+        }
+        if (builtin.target.os.tag == .linux) { // posix.TCP not available on MacOS
+            // WARNING: disable Nagle's alogrithm to avoid latency issues
+            try setSockOpt(sockfd, posix.IPPROTO.TCP, posix.TCP.NODELAY, 1);
         }
 
         var socklen = address.getOsSockLen();
