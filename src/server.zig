@@ -79,6 +79,7 @@ pub const Ctx = struct {
         std.debug.assert(completion == self.conn_completion);
 
         self.conn_socket = result catch |err| {
+            log.err("accept error: {any}", .{err});
             self.err = err;
             return;
         };
@@ -111,6 +112,7 @@ pub const Ctx = struct {
         std.debug.assert(completion == self.conn_completion);
 
         const size = result catch |err| {
+            log.err("read error: {any}", .{err});
             self.err = err;
             return;
         };
@@ -169,6 +171,7 @@ pub const Ctx = struct {
         std.debug.assert(completion == self.timeout_completion);
 
         _ = result catch |err| {
+            log.err("timeout error: {any}", .{err});
             self.err = err;
             return;
         };
@@ -218,6 +221,7 @@ pub const Ctx = struct {
         // NOTE: completion can be either self.conn_completion or self.timeout_completion
 
         _ = result catch |err| {
+            log.err("close error: {any}", .{err});
             self.err = err;
             return;
         };
@@ -388,6 +392,7 @@ const Send = struct {
 
     fn asyncCbk(self: *Send, _: *Completion, result: SendError!usize) void {
         _ = result catch |err| {
+            log.err("send error: {any}", .{err});
             self.ctx.err = err;
             return;
         };
