@@ -415,7 +415,6 @@ const Send = struct {
         _ = result catch |err| {
             log.err("send error: {any}", .{err});
             self.ctx.err = err;
-            return;
         };
         self.deinit();
     }
