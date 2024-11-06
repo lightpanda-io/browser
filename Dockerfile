@@ -55,7 +55,8 @@ RUN cd vendor/zig-js-runtime && \
     git submodule init && \
     git submodule update --recursive
 
-RUN make install-netsurf && \
+RUN make install-libiconv && \
+    make install-netsurf && \
     make install-mimalloc
 
 # download and install v8

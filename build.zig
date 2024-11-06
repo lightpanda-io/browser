@@ -146,15 +146,16 @@ fn common(
     step: *std.Build.Step.Compile,
     options: jsruntime.Options,
 ) !void {
+    const target = step.root_module.resolved_target.?;
     const jsruntimemod = try jsruntime_pkgs.module(
         b,
         options,
         step.root_module.optimize.?,
-        step.root_module.resolved_target.?,
+        target,
     );
     step.root_module.addImport("jsruntime", jsruntimemod);
 
-    const netsurf = moduleNetSurf(b);
+    const netsurf = try moduleNetSurf(b, target);
     netsurf.addImport("jsruntime", jsruntimemod);
     step.root_module.addImport("netsurf", netsurf);
 
@@ -164,20 +165,40 @@ fn common(
     step.root_module.addImport("tls", tlsmod);
 }
 
-fn moduleNetSurf(b: *std.Build) *std.Build.Module {
+fn moduleNetSurf(b: *std.Build, target: std.Build.ResolvedTarget) !*std.Build.Module {
     const mod = b.addModule("netsurf", .{
         .root_source_file = b.path("src/netsurf/netsurf.zig"),
+        .target = target,
     });
+
+    const os = target.result.os.tag;
+    const arch = target.result.cpu.arch;
+
     // iconv
-    mod.addObjectFile(b.path("vendor/libiconv/lib/libiconv.a"));
-    mod.addIncludePath(b.path("vendor/libiconv/include"));
+    const libiconv_lib_path = try std.fmt.allocPrint(
+        mod.owner.allocator,
+        "vendor/libiconv/out/{s}-{s}/lib/libiconv.a",
+        .{ @tagName(os), @tagName(arch) },
+    );
+    const libiconv_include_path = try std.fmt.allocPrint(
+        mod.owner.allocator,
+        "vendor/libiconv/out/{s}-{s}/lib/libiconv.a",
+        .{ @tagName(os), @tagName(arch) },
+    );
+    mod.addObjectFile(b.path(libiconv_lib_path));
+    mod.addIncludePath(b.path(libiconv_include_path));
 
     // mimalloc
-    mod.addImport("mimalloc", moduleMimalloc(b));
+    mod.addImport("mimalloc", (try moduleMimalloc(b, target)));
 
     // netsurf libs
     const ns = "vendor/netsurf";
-    mod.addIncludePath(b.path(ns ++ "/include"));
+    const ns_include_path = try std.fmt.allocPrint(
+        mod.owner.allocator,
+        ns ++ "/out/{s}-{s}/include",
+        .{ @tagName(os), @tagName(arch) },
+    );
+    mod.addIncludePath(b.path(ns_include_path));
 
     const libs: [4][]const u8 = .{
         "libdom",
@@ -186,20 +207,35 @@ fn moduleNetSurf(b: *std.Build) *std.Build.Module {
         "libwapcaplet",
     };
     inline for (libs) |lib| {
-        mod.addObjectFile(b.path(ns ++ "/lib/" ++ lib ++ ".a"));
+        const ns_lib_path = try std.fmt.allocPrint(
+            mod.owner.allocator,
+            ns ++ "/out/{s}-{s}/lib/" ++ lib ++ ".a",
+            .{ @tagName(os), @tagName(arch) },
+        );
+        mod.addObjectFile(b.path(ns_lib_path));
         mod.addIncludePath(b.path(ns ++ "/" ++ lib ++ "/src"));
     }
 
     return mod;
 }
 
-fn moduleMimalloc(b: *std.Build) *std.Build.Module {
+fn moduleMimalloc(b: *std.Build, target: std.Build.ResolvedTarget) !*std.Build.Module {
     const mod = b.addModule("mimalloc", .{
         .root_source_file = b.path("src/mimalloc/mimalloc.zig"),
+        .target = target,
     });
 
-    mod.addObjectFile(b.path("vendor/mimalloc/out/libmimalloc.a"));
-    mod.addIncludePath(b.path("vendor/mimalloc/out/include"));
+    const os = target.result.os.tag;
+    const arch = target.result.cpu.arch;
+
+    const mimalloc = "vendor/mimalloc";
+    const lib_path = try std.fmt.allocPrint(
+        mod.owner.allocator,
+        mimalloc ++ "/out/{s}-{s}/lib/libmimalloc.a",
+        .{ @tagName(os), @tagName(arch) },
+    );
+    mod.addObjectFile(b.path(lib_path));
+    mod.addIncludePath(b.path(mimalloc ++ "/include"));
 
     return mod;
 }

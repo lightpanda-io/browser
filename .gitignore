@@ -1,7 +1,5 @@
 zig-cache
 /.zig-cache/
 zig-out
-/vendor/netsurf/build/
-/vendor/netsurf/lib/
-/vendor/netsurf/include/
+/vendor/netsurf/out
 /vendor/libiconv/
