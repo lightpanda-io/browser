@@ -119,7 +119,7 @@ pub fn do(
 }
 
 pub const State = struct {
-    executionContextId: u8 = 0,
+    executionContextId: u32 = 0,
     contextID: ?[]const u8 = null,
     frameID: []const u8 = FrameID,
     url: []const u8 = URLBase,
