@@ -136,8 +136,9 @@ pub const IncomingMessage = struct {
     }
 
     // getParams restart the JSON parsing
-    fn getParams(self: *IncomingMessage, alloc: std.mem.Allocator, T: type) !T {
+    fn getParams(self: *IncomingMessage, alloc: ?std.mem.Allocator, T: type) !T {
         if (T == void) return void{};
+        std.debug.assert(alloc != null); // if T is not void, alloc should not be null
 
         if (self.params_skip) {
             // TODO if the params have been skipped, we have to retart the
@@ -150,19 +151,55 @@ pub const IncomingMessage = struct {
         // parse "params"
         const options = std.json.ParseOptions{
             .max_value_len = self.scanner.input.len,
-            .allocate = .alloc_if_needed,
+            .allocate = .alloc_always,
         };
-        return try std.json.innerParse(T, alloc, &self.scanner, options);
-    }
-
-    pub fn getInput(self: *IncomingMessage, alloc: std.mem.Allocator, T: type) !struct { id: u16, sessionId: ?[]const u8, params: T } {
-        return .{
-            .params = try self.getParams(alloc, T),
-            .id = try self.getId(),
-            .sessionId = try self.getSessionId(),
-        };
+        return try std.json.innerParse(T, alloc.?, &self.scanner, options);
     }
 };
+
+pub fn Input(T: type) type {
+    return struct {
+        arena: ?*std.heap.ArenaAllocator = null,
+        id: u16,
+        params: T,
+        sessionId: ?[]const u8,
+
+        const Self = @This();
+
+        pub fn get(alloc: std.mem.Allocator, msg: *IncomingMessage) !Self {
+            var arena: ?*std.heap.ArenaAllocator = null;
+            var allocator: ?std.mem.Allocator = null;
+
+            if (T != void) {
+                arena = try alloc.create(std.heap.ArenaAllocator);
+                arena.?.* = std.heap.ArenaAllocator.init(alloc);
+                allocator = arena.?.allocator();
+            }
+
+            errdefer {
+                if (arena) |_arena| {
+                    _arena.deinit();
+                    alloc.destroy(_arena);
+                }
+            }
+
+            return .{
+                .arena = arena,
+                .params = try msg.getParams(allocator, T),
+                .id = try msg.getId(),
+                .sessionId = try msg.getSessionId(),
+            };
+        }
+
+        pub fn deinit(self: Self) void {
+            if (self.arena) |arena| {
+                const allocator = arena.child_allocator;
+                arena.deinit();
+                allocator.destroy(arena);
+            }
+        }
+    };
+}
 
 test "read incoming message" {
     const inputs = [_][]const u8{
@@ -185,11 +222,12 @@ test "read incoming message" {
         try std.testing.expectEqualSlices(u8, "bar", (try msg.getSessionId()).?);
 
         const T = struct { bar: []const u8 };
-        const in = msg.getInput(std.testing.allocator, T) catch |err| {
+        const in = Input(T).get(std.testing.allocator, &msg) catch |err| {
             if (err != error.SkippedParams) return err;
             // TODO remove this check when params in the beginning is handled.
             continue;
         };
+        defer in.deinit();
         try std.testing.expectEqualSlices(u8, "baz", in.params.bar);
     }
 }

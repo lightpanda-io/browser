@@ -23,6 +23,7 @@ const Ctx = server.Ctx;
 const cdp = @import("cdp.zig");
 const result = cdp.result;
 const IncomingMessage = @import("msg.zig").IncomingMessage;
+const Input = @import("msg.zig").Input;
 const stringify = cdp.stringify;
 
 const log_cdp = std.log.scoped(.cdp);
@@ -50,7 +51,8 @@ fn enable(
     msg: *IncomingMessage,
     _: *Ctx,
 ) ![]const u8 {
-    const input = try msg.getInput(alloc, void);
+    const input = try Input(void).get(alloc, msg);
+    defer input.deinit();
     log_cdp.debug("Req > id {d}, method {s}", .{ input.id, "log.enable" });
 
     return result(alloc, input.id, null, null, input.sessionId);
