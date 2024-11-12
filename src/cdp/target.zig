@@ -301,7 +301,7 @@ fn createTarget(
             .targetId = ctx.state.frameID,
             .title = "",
             .url = ctx.state.url,
-            .browserContextId = ContextID,
+            .browserContextId = msg.params.?.browserContextId orelse ContextID,
         },
         .waitingForDebugger = true,
     };
