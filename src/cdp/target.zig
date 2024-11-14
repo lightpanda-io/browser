@@ -319,7 +319,7 @@ fn createTarget(
         url: []const u8,
         width: ?u64 = null,
         height: ?u64 = null,
-        browserContextId: []const u8,
+        browserContextId: ?[]const u8 = null,
         enableBeginFrameControl: bool = false,
         newWindow: bool = false,
         background: bool = false,
@@ -342,7 +342,7 @@ fn createTarget(
             .targetId = ctx.state.frameID,
             .title = "",
             .url = ctx.state.url,
-            .browserContextId = ContextID,
+            .browserContextId = msg.params.?.browserContextId orelse ContextID,
         },
         .waitingForDebugger = true,
     };
