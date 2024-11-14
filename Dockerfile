@@ -45,7 +45,7 @@ EOF
 # clone lightpanda
 RUN git clone git@github.com:lightpanda-io/browser.git
 
-WORKDIR browser
+WORKDIR /browser
 
 # install deps
 RUN git submodule init && \
