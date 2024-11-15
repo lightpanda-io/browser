@@ -22,7 +22,7 @@ const tls23 = @import("../../tls.zig/main.zig");
 const VecPut = @import("../../tls.zig/connection.zig").VecPut;
 const GenericStack = @import("../../stack.zig").Stack;
 const async_io = @import("../../io.zig");
-pub const Loop = async_io.SingleThreaded(Ctx);
+pub const Loop = async_io.SingleThreaded;
 
 const cipher = @import("../../tls.zig/cipher.zig");
 
@@ -1343,8 +1343,29 @@ pub const Request = struct {
         }
     }
 
+    fn onWriteAll(ctx: *Ctx, res: anyerror!void) !void {
+        res catch |err| return ctx.pop(err);
+        switch (ctx.req.transfer_encoding) {
+            .chunked => unreachable,
+            .none => unreachable,
+            .content_length => |*len| {
+                len.* = 0;
+            },
+        }
+        try ctx.pop({});
+    }
+
     pub fn async_writeAll(req: *Request, buf: []const u8, ctx: *Ctx, comptime cbk: Cbk) !void {
-        try req.connection.?.async_writeAllDirect(buf, ctx, cbk);
+        switch (req.transfer_encoding) {
+            .chunked => return error.ChunkedNotImplemented,
+            .none => return error.NotWriteable,
+            .content_length => |len| {
+                try ctx.push(cbk);
+                if (len < buf.len) return error.MessageTooLong;
+
+                try req.connection.?.async_writeAllDirect(buf, ctx, onWriteAll);
+            },
+        }
     }
 
     pub const FinishError = WriteError || error{MessageNotCompleted};
@@ -1757,6 +1778,7 @@ pub fn async_connectTcp(
         .port = port,
         .protocol = protocol,
     })) |conn| {
+        ctx.data.conn = conn;
         ctx.req.connection = conn;
         return ctx.pop({});
     }
@@ -1845,7 +1867,6 @@ pub fn connectTunnel(
             .connection = conn,
             .server_header_buffer = &buffer,
         }) catch |err| {
-            std.log.debug("err {}", .{err});
             break :tunnel err;
         };
         defer req.deinit();
@@ -2426,14 +2447,19 @@ pub const Ctx = struct {
 
     pub fn pop(self: *Ctx, res: anyerror!void) !void {
         if (self.stack) |stack| {
-            const func = stack.pop(self.alloc(), null);
-            const ret = @call(.auto, func, .{ self, res });
-            if (stack.next == null) {
-                self.stack = null;
-                self.alloc().destroy(stack);
+            const allocator = self.alloc();
+            const func = stack.pop(allocator, null);
+
+            defer {
+                if (stack.next == null) {
+                    allocator.destroy(stack);
+                    self.stack = null;
+                }
             }
-            return ret;
+
+            return @call(.auto, func, .{ self, res });
         }
+        unreachable;
     }
 
     pub fn deinit(self: Ctx) void {
@@ -2483,63 +2509,4 @@ fn setRequestConnection(ctx: *Ctx, res: anyerror!void) anyerror!void {
 
     ctx.req.connection = ctx.data.conn;
     return ctx.pop({});
-}
-
-fn onRequestWait(ctx: *Ctx, res: anyerror!void) !void {
-    res catch |e| {
-        std.debug.print("error: {any}\n", .{e});
-        return e;
-    };
-    std.log.debug("REQUEST WAITED", .{});
-    std.log.debug("Status code: {any}", .{ctx.req.response.status});
-    const body = try ctx.req.reader().readAllAlloc(ctx.alloc(), 1024 * 1024);
-    defer ctx.alloc().free(body);
-    std.log.debug("Body: \n{s}", .{body});
-}
-
-fn onRequestFinish(ctx: *Ctx, res: anyerror!void) !void {
-    res catch |err| return err;
-    std.log.debug("REQUEST FINISHED", .{});
-    return ctx.req.async_wait(ctx, onRequestWait);
-}
-
-fn onRequestSend(ctx: *Ctx, res: anyerror!void) !void {
-    res catch |err| return err;
-    std.log.debug("REQUEST SENT", .{});
-    return ctx.req.async_finish(ctx, onRequestFinish);
-}
-
-pub fn onRequestConnect(ctx: *Ctx, res: anyerror!void) anyerror!void {
-    res catch |err| return err;
-    std.log.debug("REQUEST CONNECTED", .{});
-    return ctx.req.async_send(ctx, onRequestSend);
-}
-
-test {
-    const alloc = std.testing.allocator;
-
-    var loop = Loop{};
-
-    var client = Client{ .allocator = alloc };
-    defer client.deinit();
-
-    var req = Request{
-        .client = &client,
-    };
-    defer req.deinit();
-
-    var ctx = try Ctx.init(&loop, &req);
-    defer ctx.deinit();
-
-    var server_header_buffer: [2048]u8 = undefined;
-
-    const url = "http://www.example.com";
-    // const url = "http://127.0.0.1:8000/zig";
-    try client.async_open(
-        .GET,
-        try std.Uri.parse(url),
-        .{ .server_header_buffer = &server_header_buffer },
-        &ctx,
-        onRequestConnect,
-    );
 }

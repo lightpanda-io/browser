@@ -40,7 +40,7 @@ const storage = @import("../storage/storage.zig");
 const FetchResult = @import("../http/Client.zig").Client.FetchResult;
 
 const UserContext = @import("../user_context.zig").UserContext;
-const HttpClient = @import("../async/Client.zig");
+const HttpClient = @import("../http/async/main.zig").Client;
 
 const log = std.log.scoped(.browser);
 
@@ -116,7 +116,7 @@ pub const Session = struct {
         };
 
         Env.init(&self.env, self.arena.allocator(), loop, null);
-        self.httpClient = .{ .allocator = alloc, .loop = loop };
+        self.httpClient = .{ .allocator = alloc };
         try self.env.load(&self.jstypes);
     }
 

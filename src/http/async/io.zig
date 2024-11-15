@@ -1,6 +1,8 @@
 const std = @import("std");
 
-pub const IO = @import("jsruntime").IO;
+const Ctx = @import("std/http/Client.zig").Ctx;
+const Loop = @import("jsruntime").Loop;
+const NetworkImpl = Loop.Network(SingleThreaded);
 
 pub const Blocking = struct {
     pub fn connect(
@@ -57,92 +59,75 @@ pub const Blocking = struct {
     }
 };
 
-pub fn SingleThreaded(comptime CtxT: type) type {
-    return struct {
-        io: *IO,
-        completion: IO.Completion,
-        ctx: *CtxT,
-        cbk: CbkT,
+pub const SingleThreaded = struct {
+    impl: NetworkImpl,
+    cbk: Cbk,
+    ctx: *Ctx,
 
-        count: u32 = 0,
+    const Self = @This();
+    const Cbk = *const fn (ctx: *Ctx, res: anyerror!void) anyerror!void;
 
-        const CbkT = *const fn (ctx: *CtxT, res: anyerror!void) anyerror!void;
+    pub fn init(loop: *Loop) Self {
+        return .{
+            .impl = NetworkImpl.init(loop),
+            .cbk = undefined,
+            .ctx = undefined,
+        };
+    }
 
-        const Self = @This();
+    pub fn connect(
+        self: *Self,
+        comptime _: type,
+        ctx: *Ctx,
+        comptime cbk: Cbk,
+        socket: std.posix.socket_t,
+        address: std.net.Address,
+    ) void {
+        self.cbk = cbk;
+        self.ctx = ctx;
+        self.impl.connect(self, socket, address);
+    }
 
-        pub fn init(io: *IO) Self {
-            return .{
-                .io = io,
-                .completion = undefined,
-                .ctx = undefined,
-                .cbk = undefined,
-            };
-        }
+    pub fn onConnect(self: *Self, err: ?anyerror) void {
+        if (err) |e| return self.ctx.setErr(e);
+        self.cbk(self.ctx, {}) catch |e| self.ctx.setErr(e);
+    }
 
-        pub fn connect(
-            self: *Self,
-            comptime _: type,
-            ctx: *CtxT,
-            comptime cbk: CbkT,
-            socket: std.posix.socket_t,
-            address: std.net.Address,
-        ) void {
-            self.ctx = ctx;
-            self.cbk = cbk;
-            self.count += 1;
-            self.io.connect(*Self, self, Self.connectCbk, &self.completion, socket, address);
-        }
+    pub fn send(
+        self: *Self,
+        comptime _: type,
+        ctx: *Ctx,
+        comptime cbk: Cbk,
+        socket: std.posix.socket_t,
+        buf: []const u8,
+    ) void {
+        self.ctx = ctx;
+        self.cbk = cbk;
+        self.impl.send(self, socket, buf);
+    }
 
-        fn connectCbk(self: *Self, _: *IO.Completion, result: IO.ConnectError!void) void {
-            defer self.count -= 1;
-            _ = result catch |e| return self.ctx.setErr(e);
-            self.cbk(self.ctx, {}) catch |e| self.ctx.setErr(e);
-        }
+    pub fn onSend(self: *Self, ln: usize, err: ?anyerror) void {
+        if (err) |e| return self.ctx.setErr(e);
+        self.ctx.setLen(ln);
+        self.cbk(self.ctx, {}) catch |e| self.ctx.setErr(e);
+    }
 
-        pub fn send(
-            self: *Self,
-            comptime _: type,
-            ctx: *CtxT,
-            comptime cbk: CbkT,
-            socket: std.posix.socket_t,
-            buf: []const u8,
-        ) void {
-            self.ctx = ctx;
-            self.cbk = cbk;
-            self.count += 1;
-            self.io.send(*Self, self, Self.sendCbk, &self.completion, socket, buf);
-        }
+    pub fn recv(
+        self: *Self,
+        comptime _: type,
+        ctx: *Ctx,
+        comptime cbk: Cbk,
+        socket: std.posix.socket_t,
+        buf: []u8,
+    ) void {
+        self.ctx = ctx;
+        self.cbk = cbk;
+        self.impl.receive(self, socket, buf);
+    }
 
-        fn sendCbk(self: *Self, _: *IO.Completion, result: IO.SendError!usize) void {
-            defer self.count -= 1;
-            const ln = result catch |e| return self.ctx.setErr(e);
-            self.ctx.setLen(ln);
-            self.cbk(self.ctx, {}) catch |e| self.ctx.setErr(e);
-        }
-
-        pub fn recv(
-            self: *Self,
-            comptime _: type,
-            ctx: *CtxT,
-            comptime cbk: CbkT,
-            socket: std.posix.socket_t,
-            buf: []u8,
-        ) void {
-            self.ctx = ctx;
-            self.cbk = cbk;
-            self.count += 1;
-            self.io.recv(*Self, self, Self.receiveCbk, &self.completion, socket, buf);
-        }
-
-        fn receiveCbk(self: *Self, _: *IO.Completion, result: IO.RecvError!usize) void {
-            defer self.count -= 1;
-            const ln = result catch |e| return self.ctx.setErr(e);
-            self.ctx.setLen(ln);
-            self.cbk(self.ctx, {}) catch |e| self.ctx.setErr(e);
-        }
-
-        pub fn isDone(self: *Self) bool {
-            return self.count == 0;
-        }
-    };
-}
+    pub fn onReceive(self: *Self, ln: usize, err: ?anyerror) void {
+        if (err) |e| return self.ctx.setErr(e);
+        self.ctx.setLen(ln);
+        self.cbk(self.ctx, {}) catch |e| self.ctx.setErr(e);
+    }
+};

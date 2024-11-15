@@ -30,7 +30,7 @@ const xhr = @import("xhr/xhr.zig");
 const storage = @import("storage/storage.zig");
 const url = @import("url/url.zig");
 const urlquery = @import("url/query.zig");
-const Client = @import("async/Client.zig");
+const Client = @import("http/async/main.zig").Client;
 
 const documentTestExecFn = @import("dom/document.zig").testExecFn;
 const HTMLDocumentTestExecFn = @import("html/document.zig").testExecFn;
@@ -86,7 +86,7 @@ fn testExecFn(
         std.debug.print("documentHTMLClose error: {s}\n", .{@errorName(err)});
     };
 
-    var cli = Client{ .allocator = alloc, .loop = js_env.nat_ctx.loop };
+    var cli = Client{ .allocator = alloc };
     defer cli.deinit();
 
     try js_env.setUserContext(.{
