@@ -482,7 +482,7 @@ pub fn listen(
     // - cmd from incoming connection on server socket
     // - JS callbacks events from scripts
     while (true) {
-        try loop.io.tick();
+        try loop.io.run_for_ns(10 * std.time.ns_per_ms);
         if (loop.cbk_error) {
             log.err("JS error", .{});
             // if (try try_catch.exception(alloc, js_env.*)) |msg| {
