@@ -26,6 +26,7 @@ const Ctx = server.Ctx;
 const cdp = @import("cdp.zig");
 const result = cdp.result;
 const IncomingMessage = @import("msg.zig").IncomingMessage;
+const Input = @import("msg.zig").Input;
 const stringify = cdp.stringify;
 
 const log = std.log.scoped(.cdp);
@@ -77,9 +78,13 @@ fn sendInspector(
                 userGesture: ?bool = null,
             };
 
-            const input = try msg.getInput(alloc, Params);
+            const input = try Input(Params).get(alloc, msg);
+            defer input.deinit();
             log.debug("Req > id {d}, method {s} (script saved on cache)", .{ input.id, "runtime.evaluate" });
-            script = input.params.expression;
+            const params = input.params;
+            const func = try alloc.alloc(u8, params.expression.len);
+            @memcpy(func, params.expression);
+            script = func;
             id = input.id;
         } else if (method == .callFunctionOn) {
             const Params = struct {
@@ -95,14 +100,19 @@ fn sendInspector(
                 userGesture: ?bool = null,
             };
 
-            const input = try msg.getInput(alloc, Params);
+            const input = try Input(Params).get(alloc, msg);
+            defer input.deinit();
             log.debug("Req > id {d}, method {s} (script saved on cache)", .{ input.id, "runtime.callFunctionOn" });
-            script = input.params.functionDeclaration;
+            const params = input.params;
+            const func = try alloc.alloc(u8, params.functionDeclaration.len);
+            @memcpy(func, params.functionDeclaration);
+            script = func;
             id = input.id;
         }
 
         if (script) |src| {
             try cdp.dumpFile(alloc, id, src);
+            alloc.free(src);
         }
     }
 
@@ -163,7 +173,8 @@ fn runIfWaitingForDebugger(
     msg: *IncomingMessage,
     _: *Ctx,
 ) ![]const u8 {
-    const input = try msg.getInput(alloc, void);
+    const input = try Input(void).get(alloc, msg);
+    defer input.deinit();
     log.debug("Req > id {d}, method {s}", .{ input.id, "runtime.runIfWaitingForDebugger" });
 
     return result(alloc, input.id, null, null, input.sessionId);

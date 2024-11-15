@@ -23,6 +23,7 @@ const Ctx = server.Ctx;
 const cdp = @import("cdp.zig");
 const result = cdp.result;
 const IncomingMessage = @import("msg.zig").IncomingMessage;
+const Input = @import("msg.zig").Input;
 
 const log = std.log.scoped(.cdp);
 
@@ -62,7 +63,8 @@ fn getVersion(
     _: *Ctx,
 ) ![]const u8 {
     // input
-    const input = try msg.getInput(alloc, void);
+    const input = try Input(void).get(alloc, msg);
+    defer input.deinit();
     log.debug("Req > id {d}, method {s}", .{ input.id, "browser.getVersion" });
 
     // ouput
@@ -89,7 +91,8 @@ fn setDownloadBehavior(
         downloadPath: ?[]const u8 = null,
         eventsEnabled: ?bool = null,
     };
-    const input = try msg.getInput(alloc, Params);
+    const input = try Input(Params).get(alloc, msg);
+    defer input.deinit();
     log.debug("REQ > id {d}, method {s}", .{ input.id, "browser.setDownloadBehavior" });
 
     // output
@@ -109,7 +112,8 @@ fn getWindowForTarget(
     const Params = struct {
         targetId: ?[]const u8 = null,
     };
-    const input = try msg.getInput(alloc, Params);
+    const input = try Input(Params).get(alloc, msg);
+    defer input.deinit();
     std.debug.assert(input.sessionId != null);
     log.debug("Req > id {d}, method {s}", .{ input.id, "browser.getWindowForTarget" });
 
@@ -133,9 +137,10 @@ fn setWindowBounds(
     msg: *IncomingMessage,
     _: *Ctx,
 ) ![]const u8 {
-    const input = try msg.getInput(alloc, void);
 
     // input
+    const input = try Input(void).get(alloc, msg);
+    defer input.deinit();
     log.debug("Req > id {d}, method {s}", .{ input.id, "browser.setWindowBounds" });
 
     // output

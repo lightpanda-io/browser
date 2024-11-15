@@ -25,6 +25,7 @@ const result = cdp.result;
 const stringify = cdp.stringify;
 const sendEvent = cdp.sendEvent;
 const IncomingMessage = @import("msg.zig").IncomingMessage;
+const Input = @import("msg.zig").Input;
 
 const log = std.log.scoped(.cdp);
 
@@ -63,7 +64,8 @@ fn enable(
     _: *Ctx,
 ) ![]const u8 {
     // input
-    const input = try msg.getInput(alloc, void);
+    const input = try Input(void).get(alloc, msg);
+    defer input.deinit();
     log.debug("Req > id {d}, method {s}", .{ input.id, "page.enable" });
 
     return result(alloc, input.id, null, null, input.sessionId);
@@ -90,7 +92,8 @@ fn getFrameTree(
     ctx: *Ctx,
 ) ![]const u8 {
     // input
-    const input = try msg.getInput(alloc, void);
+    const input = try Input(void).get(alloc, msg);
+    defer input.deinit();
     log.debug("Req > id {d}, method {s}", .{ input.id, "page.getFrameTree" });
 
     // output
@@ -142,7 +145,8 @@ fn setLifecycleEventsEnabled(
     const Params = struct {
         enabled: bool,
     };
-    const input = try msg.getInput(alloc, Params);
+    const input = try Input(Params).get(alloc, msg);
+    defer input.deinit();
     log.debug("Req > id {d}, method {s}", .{ input.id, "page.setLifecycleEventsEnabled" });
 
     ctx.state.page_life_cycle_events = true;
@@ -171,7 +175,8 @@ fn addScriptToEvaluateOnNewDocument(
         includeCommandLineAPI: bool = false,
         runImmediately: bool = false,
     };
-    const input = try msg.getInput(alloc, Params);
+    const input = try Input(Params).get(alloc, msg);
+    defer input.deinit();
     log.debug("Req > id {d}, method {s}", .{ input.id, "page.addScriptToEvaluateOnNewDocument" });
 
     // output
@@ -205,7 +210,8 @@ fn createIsolatedWorld(
         worldName: []const u8,
         grantUniveralAccess: bool,
     };
-    const input = try msg.getInput(alloc, Params);
+    const input = try Input(Params).get(alloc, msg);
+    defer input.deinit();
     std.debug.assert(input.sessionId != null);
     log.debug("Req > id {d}, method {s}", .{ input.id, "page.createIsolatedWorld" });
 
@@ -247,7 +253,8 @@ fn navigate(
         frameId: ?[]const u8 = null,
         referrerPolicy: ?[]const u8 = null, // TODO: enum
     };
-    const input = try msg.getInput(alloc, Params);
+    const input = try Input(Params).get(alloc, msg);
+    defer input.deinit();
     std.debug.assert(input.sessionId != null);
     log.debug("Req > id {d}, method {s}", .{ input.id, "page.navigate" });
 

@@ -158,12 +158,27 @@ fn printUsageExit(execname: []const u8, res: u8) void {
 pub fn main() !void {
 
     // allocator
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
+    // - in Debug mode we use the General Purpose Allocator to detect memory leaks
+    // - in Release mode we use the page allocator
+    var alloc: std.mem.Allocator = undefined;
+    var _gpa: ?std.heap.GeneralPurposeAllocator(.{}) = null;
+    if (builtin.mode == .Debug) {
+        _gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        alloc = _gpa.?.allocator();
+    } else {
+        alloc = std.heap.page_allocator;
+    }
+    defer {
+        if (_gpa) |*gpa| {
+            switch (gpa.deinit()) {
+                .ok => std.debug.print("No memory leaks\n", .{}),
+                .leak => @panic("Memory leak"),
+            }
+        }
+    }
 
     // args
-    var args = try std.process.argsWithAllocator(arena.allocator());
+    var args = try std.process.argsWithAllocator(alloc);
     defer args.deinit();
 
     const execname = args.next().?;
@@ -263,7 +278,7 @@ pub fn main() !void {
         std.log.info("Listening on: {s}:{d}...", .{ host, port });
 
         // loop
-        var loop = try jsruntime.Loop.init(arena.allocator());
+        var loop = try jsruntime.Loop.init(alloc);
         defer loop.deinit();
 
         // listen
@@ -279,7 +294,7 @@ pub fn main() !void {
         const vm = jsruntime.VM.init();
         defer vm.deinit();
 
-        var loop = try jsruntime.Loop.init(arena.allocator());
+        var loop = try jsruntime.Loop.init(alloc);
         defer loop.deinit();
 
         var browser = Browser{};

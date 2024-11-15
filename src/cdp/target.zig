@@ -24,6 +24,7 @@ const cdp = @import("cdp.zig");
 const result = cdp.result;
 const stringify = cdp.stringify;
 const IncomingMessage = @import("msg.zig").IncomingMessage;
+const Input = @import("msg.zig").Input;
 
 const log = std.log.scoped(.cdp);
 
@@ -72,7 +73,8 @@ fn setDiscoverTargets(
     _: *Ctx,
 ) ![]const u8 {
     // input
-    const input = try msg.getInput(alloc, void);
+    const input = try Input(void).get(alloc, msg);
+    defer input.deinit();
     log.debug("Req > id {d}, method {s}", .{ input.id, "target.setDiscoverTargets" });
 
     // output
@@ -111,7 +113,8 @@ fn setAutoAttach(
         flatten: bool = true,
         filter: ?[]TargetFilter = null,
     };
-    const input = try msg.getInput(alloc, Params);
+    const input = try Input(Params).get(alloc, msg);
+    defer input.deinit();
     log.debug("Req > id {d}, method {s}", .{ input.id, "target.setAutoAttach" });
 
     // attachedToTarget event
@@ -144,7 +147,8 @@ fn attachToTarget(
         targetId: []const u8,
         flatten: bool = true,
     };
-    const input = try msg.getInput(alloc, Params);
+    const input = try Input(Params).get(alloc, msg);
+    defer input.deinit();
     log.debug("Req > id {d}, method {s}", .{ input.id, "target.attachToTarget" });
 
     // attachedToTarget event
@@ -180,7 +184,8 @@ fn getTargetInfo(
     const Params = struct {
         targetId: ?[]const u8 = null,
     };
-    const input = try msg.getInput(alloc, Params);
+    const input = try Input(Params).get(alloc, msg);
+    defer input.deinit();
     log.debug("Req > id {d}, method {s}", .{ input.id, "target.getTargetInfo" });
 
     // output
@@ -213,7 +218,8 @@ fn getBrowserContexts(
     ctx: *Ctx,
 ) ![]const u8 {
     // input
-    const input = try msg.getInput(alloc, void);
+    const input = try Input(void).get(alloc, msg);
+    defer input.deinit();
     log.debug("Req > id {d}, method {s}", .{ input.id, "target.getBrowserContexts" });
 
     // ouptut
@@ -246,7 +252,8 @@ fn createBrowserContext(
         proxyBypassList: ?[]const u8 = null,
         originsWithUniversalNetworkAccess: ?[][]const u8 = null,
     };
-    const input = try msg.getInput(alloc, Params);
+    const input = try Input(Params).get(alloc, msg);
+    defer input.deinit();
     log.debug("Req > id {d}, method {s}", .{ input.id, "target.createBrowserContext" });
 
     ctx.state.contextID = ContextID;
@@ -279,7 +286,8 @@ fn disposeBrowserContext(
     const Params = struct {
         browserContextId: []const u8,
     };
-    const input = try msg.getInput(alloc, Params);
+    const input = try Input(Params).get(alloc, msg);
+    defer input.deinit();
     log.debug("Req > id {d}, method {s}", .{ input.id, "target.disposeBrowserContext" });
 
     // output
@@ -309,7 +317,8 @@ fn createTarget(
         background: bool = false,
         forTab: ?bool = null,
     };
-    const input = try msg.getInput(alloc, Params);
+    const input = try Input(Params).get(alloc, msg);
+    defer input.deinit();
     log.debug("Req > id {d}, method {s}", .{ input.id, "target.createTarget" });
 
     // change CDP state
@@ -326,7 +335,7 @@ fn createTarget(
             .targetId = ctx.state.frameID,
             .title = "",
             .url = ctx.state.url,
-            .browserContextId = msg.params.?.browserContextId orelse ContextID,
+            .browserContextId = input.params.browserContextId orelse ContextID,
         },
         .waitingForDebugger = true,
     };
@@ -360,7 +369,8 @@ fn closeTarget(
     const Params = struct {
         targetId: []const u8,
     };
-    const input = try msg.getInput(alloc, Params);
+    const input = try Input(Params).get(alloc, msg);
+    defer input.deinit();
     log.debug("Req > id {d}, method {s}", .{ input.id, "target.closeTarget" });
 
     // output

@@ -24,6 +24,7 @@ const cdp = @import("cdp.zig");
 const result = cdp.result;
 const stringify = cdp.stringify;
 const IncomingMessage = @import("msg.zig").IncomingMessage;
+const Input = @import("msg.zig").Input;
 
 const log = std.log.scoped(.cdp);
 
@@ -67,7 +68,8 @@ fn setEmulatedMedia(
         media: ?[]const u8 = null,
         features: ?[]MediaFeature = null,
     };
-    const input = try msg.getInput(alloc, Params);
+    const input = try Input(Params).get(alloc, msg);
+    defer input.deinit();
     log.debug("Req > id {d}, method {s}", .{ input.id, "emulation.setEmulatedMedia" });
 
     // output
@@ -84,7 +86,8 @@ fn setFocusEmulationEnabled(
     const Params = struct {
         enabled: bool,
     };
-    const input = try msg.getInput(alloc, Params);
+    const input = try Input(Params).get(alloc, msg);
+    defer input.deinit();
     log.debug("Req > id {d}, method {s}", .{ input.id, "emulation.setFocusEmulationEnabled" });
 
     // output
@@ -98,7 +101,8 @@ fn setDeviceMetricsOverride(
     _: *Ctx,
 ) ![]const u8 {
     // input
-    const input = try msg.getInput(alloc, void);
+    const input = try Input(void).get(alloc, msg);
+    defer input.deinit();
     log.debug("Req > id {d}, method {s}", .{ input.id, "emulation.setDeviceMetricsOverride" });
 
     // output
@@ -111,7 +115,8 @@ fn setTouchEmulationEnabled(
     msg: *IncomingMessage,
     _: *Ctx,
 ) ![]const u8 {
-    const input = try msg.getInput(alloc, void);
+    const input = try Input(void).get(alloc, msg);
+    defer input.deinit();
     log.debug("Req > id {d}, method {s}", .{ input.id, "emulation.setTouchEmulationEnabled" });
 
     return result(alloc, input.id, null, null, input.sessionId);
