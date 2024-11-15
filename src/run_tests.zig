@@ -298,7 +298,7 @@ test {
     const msgTest = @import("msg.zig");
     std.testing.refAllDecls(msgTest);
 
-    const asyncTest = @import("async/test.zig");
+    const asyncTest = @import("http/async/std/http.zig");
     std.testing.refAllDecls(asyncTest);
 
     const dumpTest = @import("browser/dump.zig");
