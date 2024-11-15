@@ -321,6 +321,8 @@ test {
 
     const queryTest = @import("url/query.zig");
     std.testing.refAllDecls(queryTest);
+
+    std.testing.refAllDecls(@import("cdp/msg.zig"));
 }
 
 fn testJSRuntime(alloc: std.mem.Allocator) !void {
