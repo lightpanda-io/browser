@@ -382,7 +382,11 @@ pub const XMLHttpRequest = struct {
         self.reset(alloc);
 
         self.url = try alloc.dupe(u8, url);
-        self.uri = std.Uri.parse(self.url.?) catch return DOMError.Syntax;
+        self.uri = std.Uri.parse(self.url.?) catch |err| {
+            log.debug("parse url ({s}): {any}", .{ self.url.?, err });
+            return DOMError.Syntax;
+        };
+        log.debug("open url ({s})", .{self.url.?});
         self.sync = if (asyn) |b| !b else false;
 
         self.state = OPENED;

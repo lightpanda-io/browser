@@ -251,12 +251,12 @@ pub const EventHandler = struct {
                 Event.toInterface(evt) catch unreachable,
             }, &res) catch |e| log.err("event handler error: {any}", .{e});
         } else {
-            data.cbk.trycall(.{event}, &res) catch |e| log.err("event handler error: {any}", .{e});
+            data.cbk.trycall(.{event}, &res) catch |e| log.err("event handler error (null event): {any}", .{e});
         }
 
         // in case of function error, we log the result and the trace.
         if (!res.success) {
-            log.info("event handler error: {s}", .{res.result orelse "unknown"});
+            log.info("event handler error try catch: {s}", .{res.result orelse "unknown"});
             log.debug("{s}", .{res.stack orelse "no stack trace"});
         }
     }
