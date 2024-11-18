@@ -563,7 +563,7 @@ pub const Page = struct {
 
         const resp = fetchres.req.response;
 
-        log.info("fech script {any}: {d}", .{ u, resp.status });
+        log.info("fetch script {any}: {d}", .{ u, resp.status });
 
         if (resp.status != .ok) return FetchError.BadStatusCode;
 
