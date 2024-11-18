@@ -292,7 +292,7 @@ pub fn Connection(comptime Stream: type) type {
 
                 if (read_buf_len == 0) {
                     // read another buffer
-                    c.async_next(ctx.stream(), ctx, onReadv) catch |err| return ctx.pop(err);
+                    return c.async_next(ctx.stream(), ctx, onReadv) catch |err| return ctx.pop(err);
                 }
 
                 ctx._tls_read_buf = ctx._tls_read_buf.?[n..];
