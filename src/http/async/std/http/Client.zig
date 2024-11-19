@@ -2451,8 +2451,8 @@ pub const Ctx = struct {
             const func = stack.pop(allocator, null);
 
             defer {
-                if (stack.next == null) {
-                    allocator.destroy(stack);
+                if (self.stack != null and self.stack.?.next == null) {
+                    allocator.destroy(self.stack.?);
                     self.stack = null;
                 }
             }
