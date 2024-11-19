@@ -64,10 +64,9 @@ pub const SingleThreaded = struct {
     cbk: Cbk,
     ctx: *Ctx,
 
-    const Self = @This();
     const Cbk = *const fn (ctx: *Ctx, res: anyerror!void) anyerror!void;
 
-    pub fn init(loop: *Loop) Self {
+    pub fn init(loop: *Loop) SingleThreaded {
         return .{
             .impl = NetworkImpl.init(loop),
             .cbk = undefined,
@@ -76,7 +75,7 @@ pub const SingleThreaded = struct {
     }
 
     pub fn connect(
-        self: *Self,
+        self: *SingleThreaded,
         comptime _: type,
         ctx: *Ctx,
         comptime cbk: Cbk,
@@ -88,13 +87,13 @@ pub const SingleThreaded = struct {
         self.impl.connect(self, socket, address);
     }
 
-    pub fn onConnect(self: *Self, err: ?anyerror) void {
+    pub fn onConnect(self: *SingleThreaded, err: ?anyerror) void {
         if (err) |e| return self.ctx.setErr(e);
         self.cbk(self.ctx, {}) catch |e| self.ctx.setErr(e);
     }
 
     pub fn send(
-        self: *Self,
+        self: *SingleThreaded,
         comptime _: type,
         ctx: *Ctx,
         comptime cbk: Cbk,
@@ -106,14 +105,14 @@ pub const SingleThreaded = struct {
         self.impl.send(self, socket, buf);
     }
 
-    pub fn onSend(self: *Self, ln: usize, err: ?anyerror) void {
+    pub fn onSend(self: *SingleThreaded, ln: usize, err: ?anyerror) void {
         if (err) |e| return self.ctx.setErr(e);
         self.ctx.setLen(ln);
         self.cbk(self.ctx, {}) catch |e| self.ctx.setErr(e);
     }
 
     pub fn recv(
-        self: *Self,
+        self: *SingleThreaded,
         comptime _: type,
         ctx: *Ctx,
         comptime cbk: Cbk,
@@ -125,7 +124,7 @@ pub const SingleThreaded = struct {
         self.impl.receive(self, socket, buf);
     }
 
-    pub fn onReceive(self: *Self, ln: usize, err: ?anyerror) void {
+    pub fn onReceive(self: *SingleThreaded, ln: usize, err: ?anyerror) void {
         if (err) |e| return self.ctx.setErr(e);
         self.ctx.setLen(ln);
         self.cbk(self.ctx, {}) catch |e| self.ctx.setErr(e);
