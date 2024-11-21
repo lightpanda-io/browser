@@ -32,8 +32,7 @@ const XMLHttpRequestEventTarget = @import("event_target.zig").XMLHttpRequestEven
 const Mime = @import("../browser/mime.zig");
 
 const Loop = jsruntime.Loop;
-const YieldImpl = Loop.Yield(XMLHttpRequest);
-const Client = @import("../async/Client.zig");
+const Client = @import("asyncio").Client;
 
 const parser = @import("netsurf");
 
@@ -98,10 +97,11 @@ pub const XMLHttpRequest = struct {
     proto: XMLHttpRequestEventTarget = XMLHttpRequestEventTarget{},
     alloc: std.mem.Allocator,
     cli: *Client,
-    impl: YieldImpl,
+    io: Client.IO,
 
     priv_state: PrivState = .new,
     req: ?Client.Request = null,
+    ctx: ?Client.Ctx = null,
 
     method: std.http.Method,
     state: u16,
@@ -135,7 +135,13 @@ pub const XMLHttpRequest = struct {
     response_header_buffer: [1024 * 16]u8 = undefined,
 
     response_status: u10 = 0,
-    response_override_mime_type: ?[]const u8 = null,
+
+    // TODO uncomment this field causes casting issue with
+    // XMLHttpRequestEventTarget. I think it's dueto an alignement issue, but
+    // not sure. see
+    // https://lightpanda.slack.com/archives/C05TRU6RBM1/p1707819010681019
+    // response_override_mime_type: ?[]const u8 = null,
+
     response_mime: Mime = undefined,
     response_obj: ?ResponseObj = null,
     send_flag: bool = false,
@@ -288,7 +294,7 @@ pub const XMLHttpRequest = struct {
             .alloc = alloc,
             .headers = Headers.init(alloc),
             .response_headers = Headers.init(alloc),
-            .impl = YieldImpl.init(loop),
+            .io = Client.IO.init(loop),
             .method = undefined,
             .url = null,
             .uri = undefined,
@@ -320,10 +326,11 @@ pub const XMLHttpRequest = struct {
 
         self.priv_state = .new;
 
-        if (self.req) |*r| {
-            r.deinit();
-            self.req = null;
-        }
+        if (self.ctx) |*c| c.deinit();
+        self.ctx = null;
+
+        if (self.req) |*r| r.deinit();
+        self.req = null;
     }
 
     pub fn deinit(self: *XMLHttpRequest, alloc: std.mem.Allocator) void {
@@ -498,138 +505,160 @@ pub const XMLHttpRequest = struct {
         log.debug("{any} {any}", .{ self.method, self.uri });
 
         self.send_flag = true;
-        self.impl.yield(self);
-    }
 
-    // onYield is a callback called between each request's steps.
-    // Between each step, the code is blocking.
-    // Yielding allows pseudo-async and gives a chance to other async process
-    // to be called.
-    pub fn onYield(self: *XMLHttpRequest, err: ?anyerror) void {
-        if (err) |e| return self.onErr(e);
+        self.priv_state = .open;
 
-        switch (self.priv_state) {
-            .new => {
-                self.priv_state = .open;
-                self.req = self.cli.open(self.method, self.uri, .{
-                    .server_header_buffer = &self.response_header_buffer,
-                    .extra_headers = self.headers.all(),
-                }) catch |e| return self.onErr(e);
-            },
-            .open => {
-                // prepare payload transfert.
-                if (self.payload) |v| self.req.?.transfer_encoding = .{ .content_length = v.len };
-
-                self.priv_state = .send;
-                self.req.?.send() catch |e| return self.onErr(e);
-            },
-            .send => {
-                if (self.payload) |payload| {
-                    self.priv_state = .write;
-                    self.req.?.writeAll(payload) catch |e| return self.onErr(e);
-                } else {
-                    self.priv_state = .finish;
-                    self.req.?.finish() catch |e| return self.onErr(e);
-                }
-            },
-            .write => {
-                self.priv_state = .finish;
-                self.req.?.finish() catch |e| return self.onErr(e);
-            },
-            .finish => {
-                self.priv_state = .wait;
-                self.req.?.wait() catch |e| return self.onErr(e);
-            },
-            .wait => {
-                log.info("{any} {any} {d}", .{ self.method, self.uri, self.req.?.response.status });
-
-                self.priv_state = .done;
-                var it = self.req.?.response.iterateHeaders();
-                self.response_headers.load(&it) catch |e| return self.onErr(e);
-
-                // extract a mime type from headers.
-                const ct = self.response_headers.getFirstValue("Content-Type") orelse "text/xml";
-                self.response_mime = Mime.parse(ct) catch |e| return self.onErr(e);
-
-                // TODO handle override mime type
-
-                self.state = HEADERS_RECEIVED;
-                self.dispatchEvt("readystatechange");
-
-                self.response_status = @intFromEnum(self.req.?.response.status);
-
-                var buf: std.ArrayListUnmanaged(u8) = .{};
-
-                // TODO set correct length
-                const total = 0;
-                var loaded: u64 = 0;
-
-                // dispatch a progress event loadstart.
-                self.dispatchProgressEvent("loadstart", .{ .loaded = loaded, .total = total });
-
-                const reader = self.req.?.reader();
-                var buffer: [1024]u8 = undefined;
-                var ln = buffer.len;
-                var prev_dispatch: ?std.time.Instant = null;
-                while (ln > 0) {
-                    ln = reader.read(&buffer) catch |e| {
-                        buf.deinit(self.alloc);
-                        return self.onErr(e);
-                    };
-                    buf.appendSlice(self.alloc, buffer[0..ln]) catch |e| {
-                        buf.deinit(self.alloc);
-                        return self.onErr(e);
-                    };
-                    loaded = loaded + ln;
-
-                    // Dispatch only if 50ms have passed.
-                    const now = std.time.Instant.now() catch |e| {
-                        buf.deinit(self.alloc);
-                        return self.onErr(e);
-                    };
-                    if (prev_dispatch != null and now.since(prev_dispatch.?) < min_delay) continue;
-                    defer prev_dispatch = now;
-
-                    self.state = LOADING;
-                    self.dispatchEvt("readystatechange");
-
-                    // dispatch a progress event progress.
-                    self.dispatchProgressEvent("progress", .{
-                        .loaded = loaded,
-                        .total = total,
-                    });
-                }
-                self.response_bytes = buf.items;
-                self.send_flag = false;
-
-                self.state = DONE;
-                self.dispatchEvt("readystatechange");
-
-                // dispatch a progress event load.
-                self.dispatchProgressEvent("load", .{ .loaded = loaded, .total = total });
-                // dispatch a progress event loadend.
-                self.dispatchProgressEvent("loadend", .{ .loaded = loaded, .total = total });
-            },
-            .done => {
-                if (self.req) |*r| {
-                    r.deinit();
-                    self.req = null;
-                }
-
-                // finalize fetch process.
-                return;
-            },
+        self.req = try self.cli.create(self.method, self.uri, .{
+            .server_header_buffer = &self.response_header_buffer,
+            .extra_headers = self.headers.all(),
+        });
+        errdefer {
+            self.req.?.deinit();
+            self.req = null;
         }
 
-        self.impl.yield(self);
+        self.ctx = try Client.Ctx.init(&self.io, &self.req.?);
+        errdefer {
+            self.ctx.?.deinit();
+            self.ctx = null;
+        }
+        self.ctx.?.userData = self;
+
+        try self.cli.async_open(
+            self.method,
+            self.uri,
+            .{ .server_header_buffer = &self.response_header_buffer },
+            &self.ctx.?,
+            onRequestConnect,
+        );
+    }
+
+    fn onRequestWait(ctx: *Client.Ctx, res: anyerror!void) !void {
+        var self = selfCtx(ctx);
+        res catch |err| return self.onErr(err);
+
+        log.info("{any} {any} {d}", .{ self.method, self.uri, self.req.?.response.status });
+
+        self.priv_state = .done;
+        var it = self.req.?.response.iterateHeaders();
+        self.response_headers.load(&it) catch |e| return self.onErr(e);
+
+        // extract a mime type from headers.
+        const ct = self.response_headers.getFirstValue("Content-Type") orelse "text/xml";
+        self.response_mime = Mime.parse(ct) catch |e| return self.onErr(e);
+
+        // TODO handle override mime type
+
+        self.state = HEADERS_RECEIVED;
+        self.dispatchEvt("readystatechange");
+
+        self.response_status = @intFromEnum(self.req.?.response.status);
+
+        var buf: std.ArrayListUnmanaged(u8) = .{};
+
+        // TODO set correct length
+        const total = 0;
+        var loaded: u64 = 0;
+
+        // dispatch a progress event loadstart.
+        self.dispatchProgressEvent("loadstart", .{ .loaded = loaded, .total = total });
+
+        // TODO read async
+        const reader = self.req.?.reader();
+        var buffer: [1024]u8 = undefined;
+        var ln = buffer.len;
+        var prev_dispatch: ?std.time.Instant = null;
+        while (ln > 0) {
+            ln = reader.read(&buffer) catch |e| {
+                buf.deinit(self.alloc);
+                return self.onErr(e);
+            };
+            buf.appendSlice(self.alloc, buffer[0..ln]) catch |e| {
+                buf.deinit(self.alloc);
+                return self.onErr(e);
+            };
+            loaded = loaded + ln;
+
+            // Dispatch only if 50ms have passed.
+            const now = std.time.Instant.now() catch |e| {
+                buf.deinit(self.alloc);
+                return self.onErr(e);
+            };
+            if (prev_dispatch != null and now.since(prev_dispatch.?) < min_delay) continue;
+            defer prev_dispatch = now;
+
+            self.state = LOADING;
+            self.dispatchEvt("readystatechange");
+
+            // dispatch a progress event progress.
+            self.dispatchProgressEvent("progress", .{
+                .loaded = loaded,
+                .total = total,
+            });
+        }
+        self.response_bytes = buf.items;
+        self.send_flag = false;
+
+        self.state = DONE;
+        self.dispatchEvt("readystatechange");
+
+        // dispatch a progress event load.
+        self.dispatchProgressEvent("load", .{ .loaded = loaded, .total = total });
+        // dispatch a progress event loadend.
+        self.dispatchProgressEvent("loadend", .{ .loaded = loaded, .total = total });
+
+        if (self.ctx) |*c| c.deinit();
+        self.ctx = null;
+
+        if (self.req) |*r| r.deinit();
+        self.req = null;
+    }
+
+    fn onRequestFinish(ctx: *Client.Ctx, res: anyerror!void) !void {
+        var self = selfCtx(ctx);
+        res catch |err| return self.onErr(err);
+
+        self.priv_state = .wait;
+        return ctx.req.async_wait(ctx, onRequestWait) catch |e| return self.onErr(e);
+    }
+
+    fn onRequestSend(ctx: *Client.Ctx, res: anyerror!void) !void {
+        var self = selfCtx(ctx);
+        res catch |err| return self.onErr(err);
+
+        if (self.payload) |payload| {
+            self.priv_state = .write;
+            return ctx.req.async_writeAll(payload, ctx, onRequestWrite) catch |e| return self.onErr(e);
+        }
+
+        self.priv_state = .finish;
+        return ctx.req.async_finish(ctx, onRequestFinish) catch |e| return self.onErr(e);
+    }
+
+    fn onRequestWrite(ctx: *Client.Ctx, res: anyerror!void) !void {
+        var self = selfCtx(ctx);
+        res catch |err| return self.onErr(err);
+        self.priv_state = .finish;
+        return ctx.req.async_finish(ctx, onRequestFinish) catch |e| return self.onErr(e);
+    }
+
+    fn onRequestConnect(ctx: *Client.Ctx, res: anyerror!void) anyerror!void {
+        var self = selfCtx(ctx);
+        res catch |err| return self.onErr(err);
+
+        // prepare payload transfert.
+        if (self.payload) |v| self.req.?.transfer_encoding = .{ .content_length = v.len };
+
+        self.priv_state = .send;
+        return ctx.req.async_send(ctx, onRequestSend) catch |err| return self.onErr(err);
+    }
+
+    fn selfCtx(ctx: *Client.Ctx) *XMLHttpRequest {
+        return @ptrCast(@alignCast(ctx.userData));
     }
 
     fn onErr(self: *XMLHttpRequest, err: anyerror) void {
         self.priv_state = .done;
-        if (self.req) |*r| {
-            r.deinit();
-            self.req = null;
-        }
 
         self.err = err;
         self.state = DONE;
@@ -639,6 +668,12 @@ pub const XMLHttpRequest = struct {
         self.dispatchProgressEvent("loadend", .{});
 
         log.debug("{any} {any} {any}", .{ self.method, self.uri, self.err });
+
+        if (self.ctx) |*c| c.deinit();
+        self.ctx = null;
+
+        if (self.req) |*r| r.deinit();
+        self.req = null;
     }
 
     pub fn _abort(self: *XMLHttpRequest) void {
@@ -886,7 +921,7 @@ pub fn testExecFn(
         // .{ .src = "req.onload", .ex = "function cbk(event) { nb ++; evt = event; }" },
         //.{ .src = "req.onload = cbk", .ex = "function cbk(event) { nb ++; evt = event; }" },
 
-        .{ .src = "req.open('GET', 'http://httpbin.io/html')", .ex = "undefined" },
+        .{ .src = "req.open('GET', 'https://httpbin.io/html')", .ex = "undefined" },
         .{ .src = "req.setRequestHeader('User-Agent', 'lightpanda/1.0')", .ex = "undefined" },
 
         // ensure open resets values
@@ -916,7 +951,7 @@ pub fn testExecFn(
 
     var document = [_]Case{
         .{ .src = "const req2 = new XMLHttpRequest()", .ex = "undefined" },
-        .{ .src = "req2.open('GET', 'http://httpbin.io/html')", .ex = "undefined" },
+        .{ .src = "req2.open('GET', 'https://httpbin.io/html')", .ex = "undefined" },
         .{ .src = "req2.responseType = 'document'", .ex = "document" },
 
         .{ .src = "req2.send()", .ex = "undefined" },
@@ -932,7 +967,7 @@ pub fn testExecFn(
 
     var json = [_]Case{
         .{ .src = "const req3 = new XMLHttpRequest()", .ex = "undefined" },
-        .{ .src = "req3.open('GET', 'http://httpbin.io/json')", .ex = "undefined" },
+        .{ .src = "req3.open('GET', 'https://httpbin.io/json')", .ex = "undefined" },
         .{ .src = "req3.responseType = 'json'", .ex = "json" },
 
         .{ .src = "req3.send()", .ex = "undefined" },
@@ -947,7 +982,7 @@ pub fn testExecFn(
 
     var post = [_]Case{
         .{ .src = "const req4 = new XMLHttpRequest()", .ex = "undefined" },
-        .{ .src = "req4.open('POST', 'http://httpbin.io/post')", .ex = "undefined" },
+        .{ .src = "req4.open('POST', 'https://httpbin.io/post')", .ex = "undefined" },
         .{ .src = "req4.send('foo')", .ex = "undefined" },
 
         // Each case executed waits for all loop callaback calls.
@@ -960,7 +995,7 @@ pub fn testExecFn(
 
     var cbk = [_]Case{
         .{ .src = "const req5 = new XMLHttpRequest()", .ex = "undefined" },
-        .{ .src = "req5.open('GET', 'http://httpbin.io/json')", .ex = "undefined" },
+        .{ .src = "req5.open('GET', 'https://httpbin.io/json')", .ex = "undefined" },
         .{ .src = "var status = 0; req5.onload = function () { status = this.status };", .ex = "function () { status = this.status }" },
         .{ .src = "req5.send()", .ex = "undefined" },
 

@@ -28,10 +28,10 @@ const Loop = jsruntime.Loop;
 const Env = jsruntime.Env;
 const Window = @import("../html/window.zig").Window;
 const storage = @import("../storage/storage.zig");
+const Client = @import("asyncio").Client;
 
 const Types = @import("../main_wpt.zig").Types;
 const UserContext = @import("../main_wpt.zig").UserContext;
-const Client = @import("../async/Client.zig");
 
 // runWPT parses the given HTML file, starts a js env and run the first script
 // tags containing javascript sources.
@@ -53,7 +53,7 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     var loop = try Loop.init(alloc);
     defer loop.deinit();
 
-    var cli = Client{ .allocator = alloc, .loop = &loop };
+    var cli = Client{ .allocator = alloc };
     defer cli.deinit();
 
     var js_env: Env = undefined;

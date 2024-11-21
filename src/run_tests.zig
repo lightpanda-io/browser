@@ -30,7 +30,7 @@ const xhr = @import("xhr/xhr.zig");
 const storage = @import("storage/storage.zig");
 const url = @import("url/url.zig");
 const urlquery = @import("url/query.zig");
-const Client = @import("async/Client.zig");
+const Client = @import("asyncio").Client;
 
 const documentTestExecFn = @import("dom/document.zig").testExecFn;
 const HTMLDocumentTestExecFn = @import("html/document.zig").testExecFn;
@@ -59,6 +59,7 @@ const MutationObserverTestExecFn = @import("dom/mutation_observer.zig").testExec
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 pub const UserContext = @import("user_context.zig").UserContext;
+pub const IO = @import("asyncio").Wrapper(jsruntime.Loop);
 
 var doc: *parser.DocumentHTML = undefined;
 
@@ -86,7 +87,7 @@ fn testExecFn(
         std.debug.print("documentHTMLClose error: {s}\n", .{@errorName(err)});
     };
 
-    var cli = Client{ .allocator = alloc, .loop = js_env.nat_ctx.loop };
+    var cli = Client{ .allocator = alloc };
     defer cli.deinit();
 
     try js_env.setUserContext(.{
@@ -297,9 +298,6 @@ const ms = std.time.ns_per_ms;
 test {
     const msgTest = @import("msg.zig");
     std.testing.refAllDecls(msgTest);
-
-    const asyncTest = @import("async/test.zig");
-    std.testing.refAllDecls(asyncTest);
 
     const dumpTest = @import("browser/dump.zig");
     std.testing.refAllDecls(dumpTest);

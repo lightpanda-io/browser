@@ -159,6 +159,11 @@ fn common(
     netsurf.addImport("jsruntime", jsruntimemod);
     step.root_module.addImport("netsurf", netsurf);
 
+    const asyncio = b.addModule("asyncio", .{
+        .root_source_file = b.path("vendor/zig-async-io/src/lib.zig"),
+    });
+    step.root_module.addImport("asyncio", asyncio);
+
     const tlsmod = b.addModule("tls", .{
         .root_source_file = b.path("vendor/tls.zig/src/main.zig"),
     });
