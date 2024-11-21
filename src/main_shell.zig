@@ -24,12 +24,13 @@ const parser = @import("netsurf");
 const apiweb = @import("apiweb.zig");
 const Window = @import("html/window.zig").Window;
 const storage = @import("storage/storage.zig");
+const Client = @import("asyncio").Client;
 
 const html_test = @import("html_test.zig").html;
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 pub const UserContext = apiweb.UserContext;
-const Client = @import("http/async/main.zig").Client;
+pub const IO = @import("asyncio").Wrapper(jsruntime.Loop);
 
 var doc: *parser.DocumentHTML = undefined;
 

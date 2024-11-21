@@ -40,7 +40,7 @@ const storage = @import("../storage/storage.zig");
 const FetchResult = @import("../http/Client.zig").Client.FetchResult;
 
 const UserContext = @import("../user_context.zig").UserContext;
-const HttpClient = @import("../http/async/main.zig").Client;
+const HttpClient = @import("asyncio").Client;
 
 const log = std.log.scoped(.browser);
 

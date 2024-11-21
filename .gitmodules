@@ -25,3 +25,6 @@
 [submodule "vendor/tls.zig"]
 	path = vendor/tls.zig
 	url = git@github.com:ianic/tls.zig.git
+[submodule "vendor/zig-async-io"]
+	path = vendor/zig-async-io
+	url = git@github.com:lightpanda-io/zig-async-io.git

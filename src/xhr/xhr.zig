@@ -32,7 +32,7 @@ const XMLHttpRequestEventTarget = @import("event_target.zig").XMLHttpRequestEven
 const Mime = @import("../browser/mime.zig");
 
 const Loop = jsruntime.Loop;
-const Client = @import("../http/async/main.zig").Client;
+const Client = @import("asyncio").Client;
 
 const parser = @import("netsurf");
 
@@ -97,7 +97,7 @@ pub const XMLHttpRequest = struct {
     proto: XMLHttpRequestEventTarget = XMLHttpRequestEventTarget{},
     alloc: std.mem.Allocator,
     cli: *Client,
-    loop: Client.Loop,
+    io: Client.IO,
 
     priv_state: PrivState = .new,
     req: ?Client.Request = null,
@@ -294,7 +294,7 @@ pub const XMLHttpRequest = struct {
             .alloc = alloc,
             .headers = Headers.init(alloc),
             .response_headers = Headers.init(alloc),
-            .loop = Client.Loop.init(loop),
+            .io = Client.IO.init(loop),
             .method = undefined,
             .url = null,
             .uri = undefined,
@@ -513,7 +513,7 @@ pub const XMLHttpRequest = struct {
             self.req = null;
         }
 
-        self.ctx = try Client.Ctx.init(&self.loop, &self.req.?);
+        self.ctx = try Client.Ctx.init(&self.io, &self.req.?);
         errdefer {
             self.ctx.?.deinit();
             self.ctx = null;

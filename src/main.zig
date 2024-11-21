@@ -30,6 +30,7 @@ const apiweb = @import("apiweb.zig");
 
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 pub const UserContext = apiweb.UserContext;
+pub const IO = @import("asyncio").Wrapper(jsruntime.Loop);
 
 // Default options
 const Host = "127.0.0.1";

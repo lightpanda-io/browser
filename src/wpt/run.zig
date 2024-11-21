@@ -28,10 +28,10 @@ const Loop = jsruntime.Loop;
 const Env = jsruntime.Env;
 const Window = @import("../html/window.zig").Window;
 const storage = @import("../storage/storage.zig");
+const Client = @import("asyncio").Client;
 
 const Types = @import("../main_wpt.zig").Types;
 const UserContext = @import("../main_wpt.zig").UserContext;
-const Client = @import("../http/async/main.zig").Client;
 
 // runWPT parses the given HTML file, starts a js env and run the first script
 // tags containing javascript sources.
