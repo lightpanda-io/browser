@@ -48,7 +48,7 @@ zig_version = $(shell grep 'recommended_zig_version = "' "vendor/zig-js-runtime/
 
 ## Download the zig recommended version
 download-zig:
-	$(eval url = "https://ziglang.org/builds/zig-$(OS)-$(ARCH)-$(zig_version).tar.xz")
+	$(eval url = "https://ziglang.org/download/$(zig_version)/zig-$(OS)-$(ARCH)-$(zig_version).tar.xz")
 	$(eval dest = "/tmp/zig-$(OS)-$(ARCH)-$(zig_version).tar.xz")
 	@printf "\e[36mDownload zig version $(zig_version)...\e[0m\n"
 	@curl -o "$(dest)" -L "$(url)" || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
