@@ -69,6 +69,9 @@ RUN make build
 
 FROM ubuntu:22.04
 
+# copy ca certificates
+COPY --from=0 /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+
 COPY --from=0 /browser/zig-out/bin/lightpanda /bin/lightpanda
 
 CMD ["/bin/lightpanda", "--host", "0.0.0.0", "--port", "3245"]
