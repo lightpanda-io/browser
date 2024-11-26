@@ -45,7 +45,7 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const mode = b.standardOptimizeOption(.{});
 
-    const options = try jsruntime.buildOptions(b);
+    const options = jsruntime.buildOptions(b);
 
     // browser
     // -------
