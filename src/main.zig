@@ -17,13 +17,14 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const posix = std.posix;
 const builtin = @import("builtin");
 
 const jsruntime = @import("jsruntime");
+const websocket = @import("websocket");
 
 const Browser = @import("browser/browser.zig").Browser;
 const server = @import("server.zig");
+const handler = @import("handler.zig");
 
 const parser = @import("netsurf");
 const apiweb = @import("apiweb.zig");
@@ -32,102 +33,11 @@ pub const Types = jsruntime.reflect(apiweb.Interfaces);
 pub const UserContext = apiweb.UserContext;
 pub const IO = @import("asyncio").Wrapper(jsruntime.Loop);
 
+// Simple blocking websocket connection model
+// ie. 1 thread per ws connection without thread pool and epoll/kqueue
+pub const websocket_blocking = true;
+
 const log = std.log.scoped(.cli);
-
-// Inspired by std.net.StreamServer in Zig < 0.12
-pub const StreamServer = struct {
-    /// Copied from `Options` on `init`.
-    kernel_backlog: u31,
-    reuse_address: bool,
-    reuse_port: bool,
-    nonblocking: bool,
-
-    /// `undefined` until `listen` returns successfully.
-    listen_address: std.net.Address,
-
-    sockfd: ?posix.socket_t,
-
-    pub const Options = struct {
-        /// How many connections the kernel will accept on the application's behalf.
-        /// If more than this many connections pool in the kernel, clients will start
-        /// seeing "Connection refused".
-        kernel_backlog: u31 = 128,
-
-        /// Enable SO.REUSEADDR on the socket.
-        reuse_address: bool = false,
-
-        /// Enable SO.REUSEPORT on the socket.
-        reuse_port: bool = false,
-
-        /// Non-blocking mode.
-        nonblocking: bool = false,
-    };
-
-    /// After this call succeeds, resources have been acquired and must
-    /// be released with `deinit`.
-    pub fn init(options: Options) StreamServer {
-        return StreamServer{
-            .sockfd = null,
-            .kernel_backlog = options.kernel_backlog,
-            .reuse_address = options.reuse_address,
-            .reuse_port = options.reuse_port,
-            .nonblocking = options.nonblocking,
-            .listen_address = undefined,
-        };
-    }
-
-    /// Release all resources. The `StreamServer` memory becomes `undefined`.
-    pub fn deinit(self: *StreamServer) void {
-        self.close();
-        self.* = undefined;
-    }
-
-    fn setSockOpt(fd: posix.socket_t, level: i32, option: u32, value: c_int) !void {
-        try posix.setsockopt(fd, level, option, &std.mem.toBytes(value));
-    }
-
-    pub fn listen(self: *StreamServer, address: std.net.Address) !void {
-        const sock_flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC;
-        var use_sock_flags: u32 = sock_flags;
-        if (self.nonblocking) use_sock_flags |= posix.SOCK.NONBLOCK;
-        const proto = if (address.any.family == posix.AF.UNIX) @as(u32, 0) else posix.IPPROTO.TCP;
-
-        const sockfd = try posix.socket(address.any.family, use_sock_flags, proto);
-        self.sockfd = sockfd;
-        errdefer {
-            posix.close(sockfd);
-            self.sockfd = null;
-        }
-
-        // socket options
-        if (self.reuse_address) {
-            try setSockOpt(sockfd, posix.SOL.SOCKET, posix.SO.REUSEADDR, 1);
-        }
-        if (@hasDecl(posix.SO, "REUSEPORT") and self.reuse_port) {
-            try setSockOpt(sockfd, posix.SOL.SOCKET, posix.SO.REUSEPORT, 1);
-        }
-        if (builtin.target.os.tag == .linux) { // posix.TCP not available on MacOS
-            // WARNING: disable Nagle's alogrithm to avoid latency issues
-            try setSockOpt(sockfd, posix.IPPROTO.TCP, posix.TCP.NODELAY, 1);
-        }
-
-        var socklen = address.getOsSockLen();
-        try posix.bind(sockfd, &address.any, socklen);
-        try posix.listen(sockfd, self.kernel_backlog);
-        try posix.getsockname(sockfd, &self.listen_address.any, &socklen);
-    }
-
-    /// Stop listening. It is still necessary to call `deinit` after stopping listening.
-    /// Calling `deinit` will automatically call `close`. It is safe to call `close` when
-    /// not listening.
-    pub fn close(self: *StreamServer) void {
-        if (self.sockfd) |fd| {
-            posix.close(fd);
-            self.sockfd = null;
-            self.listen_address = undefined;
-        }
-    }
-};
 
 const usage =
     \\usage: {s} [options] [URL]
@@ -319,27 +229,49 @@ pub fn main() !void {
     switch (cli_mode) {
         .server => |mode| {
 
-            // server
-            var srv = StreamServer.init(.{
-                .reuse_address = true,
-                .reuse_port = true,
-                .nonblocking = true,
-            });
-            defer srv.deinit();
-
-            srv.listen(mode.addr) catch |err| {
+            // Stream server
+            const socket = server.listen(mode.addr) catch |err| {
                 log.err("address (host:port) {any}\n", .{err});
                 return printUsageExit(mode.execname, 1);
             };
-            defer srv.close();
-            log.info("Server mode: listening on {s}:{d}...", .{ mode.host, mode.port });
+            defer std.posix.close(socket);
+            log.debug("Server mode: listening internally on {s}:{d}...", .{ mode.host, mode.port });
+
+            var stream = handler.Stream{};
 
             // loop
             var loop = try jsruntime.Loop.init(alloc);
             defer loop.deinit();
 
-            // listen
-            try server.listen(alloc, &loop, srv.sockfd.?, std.time.ns_per_s * @as(u64, mode.timeout));
+            // start stream server in separate thread
+            const cdp_thread = try std.Thread.spawn(
+                .{ .allocator = alloc },
+                server.handle,
+                .{
+                    alloc,
+                    &loop,
+                    socket,
+                    &stream,
+                    std.time.ns_per_s * @as(u64, mode.timeout),
+                },
+            );
+
+            // Websocket server
+            var ws = try websocket.Server(handler.Handler).init(alloc, .{
+                .port = 9222,
+                .address = "127.0.0.1",
+                .handshake = .{
+                    .timeout = 3,
+                    .max_size = 1024,
+                    // since we aren't using hanshake.headers
+                    // we can set this to 0 to save a few bytes.
+                    .max_headers = 0,
+                },
+            });
+            defer ws.deinit();
+
+            try ws.listen(&stream);
+            cdp_thread.join();
         },
 
         .fetch => |mode| {

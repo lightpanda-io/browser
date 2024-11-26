@@ -168,6 +168,11 @@ fn common(
         .root_source_file = b.path("vendor/tls.zig/src/main.zig"),
     });
     step.root_module.addImport("tls", tlsmod);
+
+    const wsmod = b.addModule("ws", .{
+        .root_source_file = b.path("vendor/websocket.zig/src/websocket.zig"),
+    });
+    step.root_module.addImport("websocket", wsmod);
 }
 
 fn moduleNetSurf(b: *std.Build, target: std.Build.ResolvedTarget) !*std.Build.Module {

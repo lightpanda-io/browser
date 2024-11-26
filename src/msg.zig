@@ -102,7 +102,10 @@ pub const MsgBuffer = struct {
             }
 
             // copy the current input into MsgBuffer
-            @memcpy(self.buf[self.pos..new_pos], _input[0..]);
+            // NOTE: we could use @memcpy but it's not Thread-safe (alias problem)
+            // see https://www.openmymind.net/Zigs-memcpy-copyForwards-and-copyBackwards/
+            // Intead we just use std.mem.copyForwards
+            std.mem.copyForwards(u8, self.buf[self.pos..new_pos], _input[0..]);
 
             // set the new cursor position
             self.pos = new_pos;
