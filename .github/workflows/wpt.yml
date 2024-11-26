@@ -50,7 +50,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GH_CI_PAT }}
           # fetch submodules recusively, to get zig-js-runtime submodules also.
           submodules: recursive
 
