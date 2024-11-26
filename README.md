@@ -196,3 +196,10 @@ To add a new test, copy the file you want from the [WPT
 repo](https://github.com/web-platform-tests/wpt) into the `tests/wpt` directory.
 
 :warning: Please keep the original directory tree structure of `tests/wpt`.
+
+## Contributing
+
+Lightpanda accepts pull requests through GitHub.
+
+You have to sign our [CLA](CLA.md) during the pull request process otherwise
+we're not able to accept your contributions.
