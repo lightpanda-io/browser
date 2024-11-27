@@ -136,6 +136,7 @@ fn testsAllExecFn(
         URLTestExecFn,
         HTMLElementTestExecFn,
         MutationObserverTestExecFn,
+        @import("polyfill/fetch.zig").testExecFn,
     };
 
     inline for (testFns) |testFn| {
