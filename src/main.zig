@@ -232,12 +232,12 @@ pub fn main() !void {
     defer cli_mode.deinit();
 
     switch (cli_mode) {
-        .server => |mode| {
+        .server => |opts| {
 
             // Stream server
             const addr = blk: {
-                if (mode.tcp) {
-                    break :blk mode.addr;
+                if (opts.tcp) {
+                    break :blk opts.addr;
                 } else {
                     const unix_path = "/tmp/lightpanda";
                     std.fs.deleteFileAbsolute(unix_path) catch {}; // file could not exists
@@ -246,19 +246,19 @@ pub fn main() !void {
             };
             const socket = server.listen(addr) catch |err| {
                 log.err("Server listen error: {any}\n", .{err});
-                return printUsageExit(mode.execname, 1);
+                return printUsageExit(opts.execname, 1);
             };
             defer std.posix.close(socket);
-            log.debug("Server mode: listening internally on {any}...", .{addr});
+            log.debug("Server opts: listening internally on {any}...", .{addr});
 
-            const timeout = std.time.ns_per_s * @as(u64, mode.timeout);
+            const timeout = std.time.ns_per_s * @as(u64, opts.timeout);
 
             // loop
             var loop = try jsruntime.Loop.init(alloc);
             defer loop.deinit();
 
             // TCP server mode
-            if (mode.tcp) {
+            if (opts.tcp) {
                 return server.handle(alloc, &loop, socket, null, timeout);
             }
 
@@ -272,8 +272,8 @@ pub fn main() !void {
 
             // Websocket server
             var ws = try websocket.Server(handler.Handler).init(alloc, .{
-                .port = mode.port,
-                .address = mode.host,
+                .port = opts.port,
+                .address = opts.host,
                 .handshake = .{
                     .timeout = 3,
                     .max_size = 1024,
@@ -288,8 +288,8 @@ pub fn main() !void {
             cdp_thread.join();
         },
 
-        .fetch => |mode| {
-            log.debug("Fetch mode: url {s}, dump {any}", .{ mode.url, mode.dump });
+        .fetch => |opts| {
+            log.debug("Fetch mode: url {s}, dump {any}", .{ opts.url, opts.dump });
 
             // vm
             const vm = jsruntime.VM.init();
@@ -307,21 +307,21 @@ pub fn main() !void {
             // page
             const page = try browser.session.createPage();
 
-            _ = page.navigate(mode.url, null) catch |err| switch (err) {
+            _ = page.navigate(opts.url, null) catch |err| switch (err) {
                 error.UnsupportedUriScheme, error.UriMissingHost => {
-                    log.err("'{s}' is not a valid URL ({any})\n", .{ mode.url, err });
-                    return printUsageExit(mode.execname, 1);
+                    log.err("'{s}' is not a valid URL ({any})\n", .{ opts.url, err });
+                    return printUsageExit(opts.execname, 1);
                 },
                 else => {
-                    log.err("'{s}' fetching error ({any})s\n", .{ mode.url, err });
-                    return printUsageExit(mode.execname, 1);
+                    log.err("'{s}' fetching error ({any})s\n", .{ opts.url, err });
+                    return printUsageExit(opts.execname, 1);
                 },
             };
 
             try page.wait();
 
             // dump
-            if (mode.dump) {
+            if (opts.dump) {
                 try page.dump(std.io.getStdOut());
             }
         },
