@@ -518,21 +518,29 @@ fn setSockOpt(fd: std.posix.socket_t, level: i32, option: u32, value: c_int) !vo
     try std.posix.setsockopt(fd, level, option, &std.mem.toBytes(value));
 }
 
+fn isUnixSocket(addr: std.net.Address) bool {
+    return addr.any.family == std.posix.AF.UNIX;
+}
+
 pub fn listen(address: std.net.Address) !std.posix.socket_t {
 
     // create socket
     const flags = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK;
-    const sockfd = try std.posix.socket(address.any.family, flags, std.posix.IPPROTO.TCP);
+    const proto = if (isUnixSocket(address)) @as(u32, 0) else std.posix.IPPROTO.TCP;
+    const sockfd = try std.posix.socket(address.any.family, flags, proto);
     errdefer std.posix.close(sockfd);
 
     // socket options
-    try setSockOpt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, 1);
     if (@hasDecl(std.posix.SO, "REUSEPORT")) {
         try setSockOpt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.REUSEPORT, 1);
+    } else {
+        try setSockOpt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, 1);
     }
-    if (builtin.target.os.tag == .linux) { // posix.TCP not available on MacOS
-        // WARNING: disable Nagle's alogrithm to avoid latency issues
-        try setSockOpt(sockfd, std.posix.IPPROTO.TCP, std.posix.TCP.NODELAY, 1);
+    if (!isUnixSocket(address)) {
+        if (builtin.target.os.tag == .linux) { // posix.TCP not available on MacOS
+            // WARNING: disable Nagle's alogrithm to avoid latency issues
+            try setSockOpt(sockfd, std.posix.IPPROTO.TCP, std.posix.TCP.NODELAY, 1);
+        }
     }
 
     // bind & listen

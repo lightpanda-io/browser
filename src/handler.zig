@@ -23,20 +23,22 @@ const ws = @import("websocket");
 const log = std.log.scoped(.handler);
 
 pub const Stream = struct {
+    addr: std.net.Address,
     socket: std.posix.socket_t = undefined,
     ws_conn: *ws.Conn = undefined,
 
     fn connectCDP(self: *Stream) !void {
-        const address = try std.net.Address.parseIp("127.0.0.1", 3245);
-
         const flags: u32 = std.posix.SOCK.STREAM;
-        const proto = std.posix.IPPROTO.TCP;
-        const socket = try std.posix.socket(address.any.family, flags, proto);
+        const proto = blk: {
+            if (self.addr.any.family == std.posix.AF.UNIX) break :blk @as(u32, 0);
+            break :blk std.posix.IPPROTO.TCP;
+        };
+        const socket = try std.posix.socket(self.addr.any.family, flags, proto);
 
         try std.posix.connect(
             socket,
-            &address.any,
-            address.getOsSockLen(),
+            &self.addr.any,
+            self.addr.getOsSockLen(),
         );
         log.debug("connected to Stream server", .{});
         self.socket = socket;

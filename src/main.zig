@@ -80,10 +80,11 @@ const CliMode = union(CliModeTag) {
         host: []const u8 = Host,
         port: u16 = Port,
         timeout: u8 = Timeout,
+        tcp: bool = false, // undocumented TCP mode
 
         // default options
         const Host = "127.0.0.1";
-        const Port = 3245;
+        const Port = 9222;
         const Timeout = 3; // in seconds
     };
 
@@ -144,6 +145,10 @@ const CliMode = union(CliModeTag) {
                     log.err("--timeout not provided\n", .{});
                     return printUsageExit(execname, 1);
                 }
+            }
+            if (std.mem.eql(u8, "--tcp", opt)) {
+                _server.tcp = true;
+                continue;
             }
 
             // unknown option
@@ -230,36 +235,45 @@ pub fn main() !void {
         .server => |mode| {
 
             // Stream server
-            const socket = server.listen(mode.addr) catch |err| {
-                log.err("address (host:port) {any}\n", .{err});
+            const addr = blk: {
+                if (mode.tcp) {
+                    break :blk mode.addr;
+                } else {
+                    const unix_path = "/tmp/lightpanda";
+                    std.fs.deleteFileAbsolute(unix_path) catch {}; // file could not exists
+                    break :blk try std.net.Address.initUnix(unix_path);
+                }
+            };
+            const socket = server.listen(addr) catch |err| {
+                log.err("Server listen error: {any}\n", .{err});
                 return printUsageExit(mode.execname, 1);
             };
             defer std.posix.close(socket);
-            log.debug("Server mode: listening internally on {s}:{d}...", .{ mode.host, mode.port });
+            log.debug("Server mode: listening internally on {any}...", .{addr});
 
-            var stream = handler.Stream{};
+            const timeout = std.time.ns_per_s * @as(u64, mode.timeout);
 
             // loop
             var loop = try jsruntime.Loop.init(alloc);
             defer loop.deinit();
 
+            // TCP server mode
+            if (mode.tcp) {
+                return server.handle(alloc, &loop, socket, null, timeout);
+            }
+
             // start stream server in separate thread
+            var stream = handler.Stream{ .addr = addr };
             const cdp_thread = try std.Thread.spawn(
                 .{ .allocator = alloc },
                 server.handle,
-                .{
-                    alloc,
-                    &loop,
-                    socket,
-                    &stream,
-                    std.time.ns_per_s * @as(u64, mode.timeout),
-                },
+                .{ alloc, &loop, socket, &stream, timeout },
             );
 
             // Websocket server
             var ws = try websocket.Server(handler.Handler).init(alloc, .{
-                .port = 9222,
-                .address = "127.0.0.1",
+                .port = mode.port,
+                .address = mode.host,
                 .handshake = .{
                     .timeout = 3,
                     .max_size = 1024,
