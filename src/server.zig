@@ -31,6 +31,7 @@ const CancelError = jsruntime.IO.CancelError;
 const TimeoutError = jsruntime.IO.TimeoutError;
 
 const MsgBuffer = @import("msg.zig").MsgBuffer;
+const MaxSize = @import("msg.zig").MaxSize;
 const Browser = @import("browser/browser.zig").Browser;
 const cdp = @import("cdp/cdp.zig");
 
@@ -161,7 +162,7 @@ pub const Ctx = struct {
         // read and execute input
         var input: []const u8 = self.read_buf[0..size];
         while (input.len > 0) {
-            const parts = self.msg_buf.read(self.alloc(), input) catch |err| {
+            const parts = self.msg_buf.read(input) catch |err| {
                 if (err == error.MsgMultipart) {
                     return;
                 } else {
@@ -434,8 +435,8 @@ pub fn handle(
 
     // create buffers
     var read_buf: [BufReadSize]u8 = undefined;
-    var msg_buf = try MsgBuffer.init(loop.alloc, BufReadSize * 256); // 256KB
-    defer msg_buf.deinit(loop.alloc);
+    var buf: [MaxSize]u8 = undefined;
+    var msg_buf = MsgBuffer{ .buf = &buf };
 
     // create I/O completions
     var accept_completion: Completion = undefined;

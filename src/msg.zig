@@ -18,6 +18,20 @@
 
 const std = @import("std");
 
+pub const MsgSize = 16 * 1204; // 16KB
+pub const HeaderSize = 2;
+pub const MaxSize = HeaderSize + MsgSize;
+
+pub const Msg = struct {
+    pub fn getSize(data: []const u8) usize {
+        return std.mem.readInt(u16, data[0..HeaderSize], .little);
+    }
+
+    pub fn setSize(len: usize, header: *[2]u8) void {
+        std.mem.writeInt(u16, header, @intCast(len), .little);
+    }
+};
+
 /// MsgBuffer returns messages from a raw text read stream,
 /// according to the following format `<msg_size>:<msg>`.
 /// It handles both:
@@ -26,20 +40,9 @@ const std = @import("std");
 /// It's safe (and a good practice) to reuse the same MsgBuffer
 /// on several reads of the same stream.
 pub const MsgBuffer = struct {
-    size: usize = 0,
     buf: []u8,
+    size: usize = 0,
     pos: usize = 0,
-
-    const MaxSize = 1024 * 1024; // 1MB
-
-    pub fn init(alloc: std.mem.Allocator, size: usize) std.mem.Allocator.Error!MsgBuffer {
-        const buf = try alloc.alloc(u8, size);
-        return .{ .buf = buf };
-    }
-
-    pub fn deinit(self: MsgBuffer, alloc: std.mem.Allocator) void {
-        alloc.free(self.buf);
-    }
 
     fn isFinished(self: *MsgBuffer) bool {
         return self.pos >= self.size;
@@ -55,7 +58,7 @@ pub const MsgBuffer = struct {
     }
 
     // read input
-    pub fn read(self: *MsgBuffer, alloc: std.mem.Allocator, input: []const u8) !struct {
+    pub fn read(self: *MsgBuffer, input: []const u8) !struct {
         msg: []const u8,
         left: []const u8,
     } {
@@ -64,11 +67,9 @@ pub const MsgBuffer = struct {
         // msg size
         var msg_size: usize = undefined;
         if (self.isEmpty()) {
-            // parse msg size metadata
-            const size_pos = std.mem.indexOfScalar(u8, _input, ':') orelse return error.InputWithoutSize;
-            const size_str = _input[0..size_pos];
-            msg_size = try std.fmt.parseInt(u32, size_str, 10);
-            _input = _input[size_pos + 1 ..];
+            // decode msg size header
+            msg_size = Msg.getSize(_input);
+            _input = _input[HeaderSize..];
         } else {
             msg_size = self.size;
         }
@@ -88,17 +89,6 @@ pub const MsgBuffer = struct {
             // check max limit size
             if (new_pos > MaxSize) {
                 return error.MsgTooBig;
-            }
-
-            // check if the current input can fit in MsgBuffer
-            if (new_pos > self.buf.len) {
-                // we want to realloc at least:
-                // - a size big enough to fit the entire input (ie. new_pos)
-                // - a size big enough (ie. current msg size + starting buffer size)
-                // to avoid multiple reallocation
-                const new_size = @max(self.buf.len + self.size, new_pos);
-                // resize the MsgBuffer to fit
-                self.buf = try alloc.realloc(self.buf, new_size);
             }
 
             // copy the current input into MsgBuffer
@@ -123,47 +113,45 @@ pub const MsgBuffer = struct {
     }
 };
 
-fn doTest(nb: *u8) void {
-    nb.* += 1;
-}
-
 test "MsgBuffer" {
     const Case = struct {
         input: []const u8,
         nb: u8,
     };
-    const alloc = std.testing.allocator;
+
     const cases = [_]Case{
         // simple
-        .{ .input = "2:ok", .nb = 1 },
+        .{ .input = .{ 2, 0 } ++ "ok", .nb = 1 },
         // combined
-        .{ .input = "2:ok3:foo7:bar2:ok", .nb = 3 }, // "bar2:ok" is a message, no need to escape "2:" here
+        .{ .input = .{ 2, 0 } ++ "ok" ++ .{ 3, 0 } ++ "foo", .nb = 2 },
         // multipart
-        .{ .input = "9:multi", .nb = 0 },
+        .{ .input = .{ 9, 0 } ++ "multi", .nb = 0 },
         .{ .input = "part", .nb = 1 },
         // multipart & combined
-        .{ .input = "9:multi", .nb = 0 },
-        .{ .input = "part2:ok", .nb = 2 },
+        .{ .input = .{ 9, 0 } ++ "multi", .nb = 0 },
+        .{ .input = "part" ++ .{ 2, 0 } ++ "ok", .nb = 2 },
         // multipart & combined with other multipart
-        .{ .input = "9:multi", .nb = 0 },
-        .{ .input = "part8:co", .nb = 1 },
+        .{ .input = .{ 9, 0 } ++ "multi", .nb = 0 },
+        .{ .input = "part" ++ .{ 8, 0 } ++ "co", .nb = 1 },
         .{ .input = "mbined", .nb = 1 },
         // several multipart
-        .{ .input = "23:multi", .nb = 0 },
+        .{ .input = .{ 23, 0 } ++ "multi", .nb = 0 },
         .{ .input = "several", .nb = 0 },
         .{ .input = "complex", .nb = 0 },
         .{ .input = "part", .nb = 1 },
         // combined & multipart
-        .{ .input = "2:ok9:multi", .nb = 1 },
+        .{ .input = .{ 2, 0 } ++ "ok" ++ .{ 9, 0 } ++ "multi", .nb = 1 },
         .{ .input = "part", .nb = 1 },
     };
-    var msg_buf = try MsgBuffer.init(alloc, 10);
-    defer msg_buf.deinit(alloc);
+
+    var buf: [MaxSize]u8 = undefined;
+    var msg_buf = MsgBuffer{ .buf = &buf };
+
     for (cases) |case| {
         var nb: u8 = 0;
-        var input: []const u8 = case.input;
+        var input = case.input;
         while (input.len > 0) {
-            const parts = msg_buf.read(alloc, input) catch |err| {
+            const parts = msg_buf.read(input) catch |err| {
                 if (err == error.MsgMultipart) break; // go to the next case input
                 return err;
             };
