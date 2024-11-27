@@ -30,7 +30,7 @@ const CloseError = jsruntime.IO.CloseError;
 const CancelError = jsruntime.IO.CancelError;
 const TimeoutError = jsruntime.IO.TimeoutError;
 
-const MsgBuffer = @import("msg.zig").MsgBuffer;
+const MsgBuffer = @import("msg.zig").Buffer;
 const MaxSize = @import("msg.zig").MaxSize;
 const Browser = @import("browser/browser.zig").Browser;
 const cdp = @import("cdp/cdp.zig");

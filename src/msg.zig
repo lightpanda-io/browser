@@ -32,33 +32,33 @@ pub const Msg = struct {
     }
 };
 
-/// MsgBuffer returns messages from a raw text read stream,
-/// according to the following format `<msg_size>:<msg>`.
+/// Buffer returns messages from a raw text read stream,
+/// with the message size being encoded on the 2 first bytes (little endian)
 /// It handles both:
 /// - combined messages in one read
 /// - single message in several reads (multipart)
-/// It's safe (and a good practice) to reuse the same MsgBuffer
+/// It's safe (and a good practice) to reuse the same Buffer
 /// on several reads of the same stream.
-pub const MsgBuffer = struct {
+pub const Buffer = struct {
     buf: []u8,
     size: usize = 0,
     pos: usize = 0,
 
-    fn isFinished(self: *MsgBuffer) bool {
+    fn isFinished(self: *const Buffer) bool {
         return self.pos >= self.size;
     }
 
-    fn isEmpty(self: MsgBuffer) bool {
+    fn isEmpty(self: *const Buffer) bool {
         return self.size == 0 and self.pos == 0;
     }
 
-    fn reset(self: *MsgBuffer) void {
+    fn reset(self: *Buffer) void {
         self.size = 0;
         self.pos = 0;
     }
 
     // read input
-    pub fn read(self: *MsgBuffer, input: []const u8) !struct {
+    pub fn read(self: *Buffer, input: []const u8) !struct {
         msg: []const u8,
         left: []const u8,
     } {
@@ -78,7 +78,7 @@ pub const MsgBuffer = struct {
         const is_multipart = !self.isEmpty() or _input.len < msg_size;
         if (is_multipart) {
 
-            // set msg size on empty MsgBuffer
+            // set msg size on empty Buffer
             if (self.isEmpty()) {
                 self.size = msg_size;
             }
@@ -91,7 +91,7 @@ pub const MsgBuffer = struct {
                 return error.MsgTooBig;
             }
 
-            // copy the current input into MsgBuffer
+            // copy the current input into Buffer
             // NOTE: we could use @memcpy but it's not Thread-safe (alias problem)
             // see https://www.openmymind.net/Zigs-memcpy-copyForwards-and-copyBackwards/
             // Intead we just use std.mem.copyForwards
@@ -113,7 +113,7 @@ pub const MsgBuffer = struct {
     }
 };
 
-test "MsgBuffer" {
+test "Buffer" {
     const Case = struct {
         input: []const u8,
         nb: u8,
@@ -144,14 +144,14 @@ test "MsgBuffer" {
         .{ .input = "part", .nb = 1 },
     };
 
-    var buf: [MaxSize]u8 = undefined;
-    var msg_buf = MsgBuffer{ .buf = &buf };
+    var b: [MaxSize]u8 = undefined;
+    var buf = Buffer{ .buf = &b };
 
     for (cases) |case| {
         var nb: u8 = 0;
         var input = case.input;
         while (input.len > 0) {
-            const parts = msg_buf.read(input) catch |err| {
+            const parts = buf.read(input) catch |err| {
                 if (err == error.MsgMultipart) break; // go to the next case input
                 return err;
             };
