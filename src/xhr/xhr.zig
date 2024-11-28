@@ -756,8 +756,10 @@ pub const XMLHttpRequest = struct {
     // https://xhr.spec.whatwg.org/#the-response-attribute
     pub fn get_response(self: *XMLHttpRequest, alloc: std.mem.Allocator) !?Response {
         if (self.response_type == .Empty or self.response_type == .Text) {
-            if (self.state == LOADING or self.state == DONE) return .{ .Text = "" };
-            return .{ .Text = try self.get_responseText() };
+            if (self.state == LOADING or self.state == DONE) {
+                return .{ .Text = try self.get_responseText() };
+            }
+            return .{ .Text = "" };
         }
 
         // fastpath if response is previously parsed.
@@ -774,6 +776,7 @@ pub const XMLHttpRequest = struct {
             // response object to a new ArrayBuffer object representing this’s
             // received bytes. If this throws an exception, then set this’s
             // response object to failure and return null.
+            log.err("response type ArrayBuffer not implemented", .{});
             return null;
         }
 
@@ -782,6 +785,7 @@ pub const XMLHttpRequest = struct {
             // response object to a new Blob object representing this’s
             // received bytes with type set to the result of get a final MIME
             // type for this.
+            log.err("response type Blob not implemented", .{});
             return null;
         }
 
@@ -944,7 +948,7 @@ pub fn testExecFn(
         .{ .src = "req.getResponseHeader('Content-Type')", .ex = "text/html; charset=utf-8" },
         .{ .src = "req.getAllResponseHeaders().length > 64", .ex = "true" },
         .{ .src = "req.responseText.length > 64", .ex = "true" },
-        .{ .src = "req.response", .ex = "" },
+        .{ .src = "req.response.length == req.responseText.length", .ex = "true" },
         .{ .src = "req.responseXML instanceof Document", .ex = "true" },
     };
     try checkCases(js_env, &send);
