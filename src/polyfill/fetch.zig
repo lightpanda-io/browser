@@ -44,7 +44,13 @@ pub const source =
     \\        }
     \\      })(),
     \\    formData: 'FormData' in g,
-    \\    arrayBuffer: 'ArrayBuffer' in g
+    \\
+
+    // Arraybuffer is available but xhr doesn't implement it for now.
+    //\\    arrayBuffer: 'ArrayBuffer' in g
+    \\    arrayBuffer: false
+    //
+
     \\  };
     \\
     \\  function isDataView(obj) {
