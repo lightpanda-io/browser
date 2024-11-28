@@ -26,6 +26,7 @@ const checkCases = jsruntime.test_utils.checkCases;
 
 const Element = @import("../dom/element.zig").Element;
 const URL = @import("../url/url.zig").URL;
+const Node = @import("../dom/node.zig").Node;
 
 // HTMLElement interfaces
 pub const Interfaces = .{
@@ -116,6 +117,25 @@ pub const HTMLElement = struct {
 
     pub fn get_style(_: *parser.ElementHTML) CSSProperties {
         return .{};
+    }
+
+    pub fn get_innerText(e: *parser.ElementHTML) ![]const u8 {
+        const n = @as(*parser.Node, @ptrCast(e));
+        return try parser.nodeTextContent(n) orelse "";
+    }
+
+    pub fn set_innerText(e: *parser.ElementHTML, s: []const u8) !void {
+        const n = @as(*parser.Node, @ptrCast(e));
+
+        // create text node.
+        const doc = try parser.nodeOwnerDocument(n) orelse return error.NoDocument;
+        const t = try parser.documentCreateTextNode(doc, s);
+
+        // remove existing children.
+        try Node.removeChildren(n);
+
+        // attach the text node.
+        _ = try parser.nodeAppendChild(n, @as(*parser.Node, @ptrCast(t)));
     }
 };
 
@@ -1068,4 +1088,12 @@ pub fn testExecFn(
         .{ .src = "script.async", .ex = "false" },
     };
     try checkCases(js_env, &script);
+
+    var innertext = [_]Case{
+        .{ .src = "const backup = document.getElementById('content')", .ex = "undefined" },
+        .{ .src = "document.getElementById('content').innerText = 'foo';", .ex = "foo" },
+        .{ .src = "document.getElementById('content').innerText", .ex = "foo" },
+        .{ .src = "document.getElementById('content').innerHTML = backup; true;", .ex = "true" },
+    };
+    try checkCases(js_env, &innertext);
 }
