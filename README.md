@@ -62,17 +62,17 @@ Here are the key features we want to implement before releasing a Beta version:
   - [x] XHR API
   - [ ] Fetch API
 - [x] DOM dump
-- [ ] Basic CDP server
-
-We will not provide binary versions until we reach at least the Beta stage.
+- [x] Basic CDP server
 
 NOTE: There are hundreds of Web APIs. Developing a browser, even just for headless mode, is a huge task. It's more about coverage than a _working/not working_ binary situation.
 
 You can also follow the progress of our Javascript support in our dedicated [zig-js-runtime](https://github.com/lightpanda-io/zig-js-runtime#development) project.
 
-## Build from sources
+## Install
 
-We do not provide yet binary versions of Lightpanda, you have to compile it from source.
+We do provide [nighly builds](https://github.com/lightpanda-io/browser/releases/tag/nightly) for Linux x86_64 and MacOS aarch64.
+
+## Build from sources
 
 ### Prerequisites
 
