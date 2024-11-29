@@ -120,8 +120,8 @@ pub const Ctx = struct {
         std.debug.assert(completion == self.conn_completion);
 
         const size = result catch |err| {
-            if (err == error.Canceled) {
-                log.debug("read canceled", .{});
+            if (self.isClosed() and err == error.FileDescriptorInvalid) {
+                log.debug("read has been canceled", .{});
                 return;
             }
             log.err("read error: {any}", .{err});
@@ -202,7 +202,7 @@ pub const Ctx = struct {
         if (now.since(self.last_active.?) > self.timeout) {
             // close current connection
             log.debug("conn timeout, closing...", .{});
-            self.cancelAndClose();
+            self.close();
             return;
         }
 
@@ -214,19 +214,6 @@ pub const Ctx = struct {
             self.timeout_completion,
             TimeoutCheck,
         );
-    }
-
-    fn cancelCbk(self: *Ctx, completion: *Completion, result: CancelError!void) void {
-        std.debug.assert(completion == self.accept_completion);
-
-        _ = result catch |err| {
-            log.err("cancel error: {any}", .{err});
-            self.err = err;
-            return;
-        };
-        log.debug("cancel done", .{});
-
-        self.close();
     }
 
     // shortcuts
@@ -265,7 +252,7 @@ pub const Ctx = struct {
         if (std.mem.eql(u8, cmd, "close")) {
             // close connection
             log.info("close cmd, closing conn...", .{});
-            self.cancelAndClose();
+            self.close();
             return error.Closed;
         }
 
@@ -301,26 +288,12 @@ pub const Ctx = struct {
         }
     }
 
-    fn cancelAndClose(self: *Ctx) void {
-        if (isLinux) { // cancel is only available on Linux
-            self.loop.io.cancel(
-                *Ctx,
-                self,
-                Ctx.cancelCbk,
-                self.accept_completion,
-                self.conn_completion,
-            );
-        } else {
-            self.close();
-        }
-    }
-
     fn close(self: *Ctx) void {
-        std.posix.close(self.conn_socket);
 
         // conn is closed
-        log.debug("connection closed", .{});
         self.last_active = null;
+        std.posix.close(self.conn_socket);
+        log.debug("connection closed", .{});
 
         // restart a new browser session in case of re-connect
         if (!self.sessionNew) {

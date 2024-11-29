@@ -45,6 +45,10 @@ pub const Stream = struct {
     }
 
     fn closeCDP(self: *const Stream) void {
+        const close_msg: []const u8 = .{ 5, 0 } ++ "close";
+        self.recv(close_msg) catch |err| {
+            log.err("stream close error: {any}", .{err});
+        };
         std.posix.close(self.socket);
     }
 
