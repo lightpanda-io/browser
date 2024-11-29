@@ -193,7 +193,7 @@ pub fn sendEvent(
     const resp = Resp{ .method = name, .params = params, .sessionId = sessionID };
 
     const event_msg = try stringify(alloc, resp);
-    try server.sendAsync(ctx, event_msg);
+    try ctx.send(event_msg);
 }
 
 // Common

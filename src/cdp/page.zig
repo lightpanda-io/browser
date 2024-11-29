@@ -323,7 +323,7 @@ fn navigate(
         .loaderId = ctx.state.loaderID,
     };
     const res = try result(alloc, input.id, Resp, resp, input.sessionId);
-    try server.sendAsync(ctx, res);
+    try ctx.send(res);
 
     // TODO: at this point do we need async the following actions to be async?
 

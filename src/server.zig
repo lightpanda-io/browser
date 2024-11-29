@@ -19,6 +19,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const Stream = @import("handler.zig").Stream;
+
 const jsruntime = @import("jsruntime");
 const Completion = jsruntime.IO.Completion;
 const AcceptError = jsruntime.IO.AcceptError;
@@ -49,6 +51,7 @@ const MaxStdOutSize = 512; // ensure debug msg are not too long
 
 pub const Ctx = struct {
     loop: *jsruntime.Loop,
+    stream: ?*Stream,
 
     // internal fields
     accept_socket: std.posix.socket_t,
@@ -117,8 +120,8 @@ pub const Ctx = struct {
         std.debug.assert(completion == self.conn_completion);
 
         const size = result catch |err| {
-            if (err == error.Canceled) {
-                log.debug("read canceled", .{});
+            if (self.isClosed() and err == error.FileDescriptorInvalid) {
+                log.debug("read has been canceled", .{});
                 return;
             }
             log.err("read error: {any}", .{err});
@@ -199,7 +202,7 @@ pub const Ctx = struct {
         if (now.since(self.last_active.?) > self.timeout) {
             // close current connection
             log.debug("conn timeout, closing...", .{});
-            self.cancelAndClose();
+            self.close();
             return;
         }
 
@@ -211,19 +214,6 @@ pub const Ctx = struct {
             self.timeout_completion,
             TimeoutCheck,
         );
-    }
-
-    fn cancelCbk(self: *Ctx, completion: *Completion, result: CancelError!void) void {
-        std.debug.assert(completion == self.accept_completion);
-
-        _ = result catch |err| {
-            log.err("cancel error: {any}", .{err});
-            self.err = err;
-            return;
-        };
-        log.debug("cancel done", .{});
-
-        self.close();
     }
 
     // shortcuts
@@ -262,7 +252,7 @@ pub const Ctx = struct {
         if (std.mem.eql(u8, cmd, "close")) {
             // close connection
             log.info("close cmd, closing conn...", .{});
-            self.cancelAndClose();
+            self.close();
             return error.Closed;
         }
 
@@ -283,30 +273,27 @@ pub const Ctx = struct {
 
         // send result
         if (!std.mem.eql(u8, res, "")) {
-            return sendAsync(self, res);
+            return self.send(res);
         }
     }
 
-    fn cancelAndClose(self: *Ctx) void {
-        if (isLinux) { // cancel is only available on Linux
-            self.loop.io.cancel(
-                *Ctx,
-                self,
-                Ctx.cancelCbk,
-                self.accept_completion,
-                self.conn_completion,
-            );
+    pub fn send(self: *Ctx, msg: []const u8) !void {
+        if (self.stream) |stream| {
+            // if we have a stream connection, just write on it
+            defer self.alloc().free(msg);
+            try stream.send(msg);
         } else {
-            self.close();
+            // otherwise write asynchronously on the socket connection
+            return sendAsync(self, msg);
         }
     }
 
     fn close(self: *Ctx) void {
-        std.posix.close(self.conn_socket);
 
         // conn is closed
-        log.debug("connection closed", .{});
         self.last_active = null;
+        std.posix.close(self.conn_socket);
+        log.debug("connection closed", .{});
 
         // restart a new browser session in case of re-connect
         if (!self.sessionNew) {
@@ -362,7 +349,7 @@ pub const Ctx = struct {
             .{ msg_open, cdp.ContextSessionID },
         );
 
-        try sendAsync(ctx, s);
+        try ctx.send(s);
     }
 
     pub fn onInspectorResp(ctx_opaque: *anyopaque, _: u32, msg: []const u8) void {
@@ -422,16 +409,17 @@ const Send = struct {
 
 pub fn sendAsync(ctx: *Ctx, msg: []const u8) !void {
     const sd = try Send.init(ctx, msg);
-    ctx.loop.io.send(*Send, sd, Send.asyncCbk, &sd.completion, ctx.conn_socket, msg);
+    ctx.loop.io.send(*Send, sd, Send.asyncCbk, &sd.completion, ctx.conn_socket, sd.msg);
 }
 
-// Listen
-// ------
+// Listener and handler
+// --------------------
 
-pub fn listen(
+pub fn handle(
     alloc: std.mem.Allocator,
     loop: *jsruntime.Loop,
     server_socket: std.posix.socket_t,
+    stream: ?*Stream,
     timeout: u64,
 ) anyerror!void {
 
@@ -458,6 +446,7 @@ pub fn listen(
     // for accepting connections and receving messages
     var ctx = Ctx{
         .loop = loop,
+        .stream = stream,
         .browser = &browser,
         .sessionNew = true,
         .read_buf = &read_buf,
@@ -496,4 +485,44 @@ pub fn listen(
             break;
         }
     }
+}
+
+fn setSockOpt(fd: std.posix.socket_t, level: i32, option: u32, value: c_int) !void {
+    try std.posix.setsockopt(fd, level, option, &std.mem.toBytes(value));
+}
+
+fn isUnixSocket(addr: std.net.Address) bool {
+    return addr.any.family == std.posix.AF.UNIX;
+}
+
+pub fn listen(address: std.net.Address) !std.posix.socket_t {
+
+    // create socket
+    const flags = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK;
+    const proto = if (isUnixSocket(address)) @as(u32, 0) else std.posix.IPPROTO.TCP;
+    const sockfd = try std.posix.socket(address.any.family, flags, proto);
+    errdefer std.posix.close(sockfd);
+
+    // socket options
+    if (@hasDecl(std.posix.SO, "REUSEPORT")) {
+        try setSockOpt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.REUSEPORT, 1);
+    } else {
+        try setSockOpt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, 1);
+    }
+    if (!isUnixSocket(address)) {
+        if (builtin.target.os.tag == .linux) { // posix.TCP not available on MacOS
+            // WARNING: disable Nagle's alogrithm to avoid latency issues
+            try setSockOpt(sockfd, std.posix.IPPROTO.TCP, std.posix.TCP.NODELAY, 1);
+        }
+    }
+
+    // bind & listen
+    var socklen = address.getOsSockLen();
+    try std.posix.bind(sockfd, &address.any, socklen);
+    const kernel_backlog = 1; // default value is 128. Here we just want 1 connection
+    try std.posix.listen(sockfd, kernel_backlog);
+    var listen_address: std.net.Address = undefined;
+    try std.posix.getsockname(sockfd, &listen_address.any, &socklen);
+
+    return sockfd;
 }
