@@ -49,7 +49,7 @@ const usage =
     \\
     \\  -h, --help      Print this help message and exit.
     \\  --host          Host of the CDP server (default "127.0.0.1")
-    \\  --port          Port of the CDP server (default "3245")
+    \\  --port          Port of the CDP server (default "9222")
     \\  --timeout       Timeout for incoming connections of the CDP server (in seconds, default "3")
     \\  --dump          Dump document in stdout (fetch mode only)
     \\

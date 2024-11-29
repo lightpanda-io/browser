@@ -169,7 +169,7 @@ fn common(
     });
     step.root_module.addImport("tls", tlsmod);
 
-    const wsmod = b.addModule("ws", .{
+    const wsmod = b.addModule("websocket", .{
         .root_source_file = b.path("vendor/websocket.zig/src/websocket.zig"),
     });
     step.root_module.addImport("websocket", wsmod);
