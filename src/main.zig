@@ -25,6 +25,7 @@ const websocket = @import("websocket");
 const Browser = @import("browser/browser.zig").Browser;
 const server = @import("server.zig");
 const handler = @import("handler.zig");
+const MaxSize = @import("msg.zig").MaxSize;
 
 const parser = @import("netsurf");
 const apiweb = @import("apiweb.zig");
@@ -274,6 +275,8 @@ pub fn main() !void {
             var ws = try websocket.Server(handler.Handler).init(alloc, .{
                 .port = opts.port,
                 .address = opts.host,
+                .max_message_size = MaxSize + 14, // overhead websocket
+                .max_conn = 1,
                 .handshake = .{
                     .timeout = 3,
                     .max_size = 1024,
