@@ -50,9 +50,9 @@ If we want both Javascript and performance, for a real headless browser, we need
 
 ## Status
 
-Lightpanda is still a work in progress and is currently at the Alpha stage.
+Lightpanda is still a work in progress and is currently at a Beta stage.
 
-Here are the key features we want to implement before releasing a Beta version:
+Here are the key features we have implemented:
 
 - [x] Loader
 - [x] HTML parser and DOM tree
@@ -60,9 +60,9 @@ Here are the key features we want to implement before releasing a Beta version:
 - [x] Basic DOM APIs
 - [x] Ajax
   - [x] XHR API
-  - [ ] Fetch API
+  - [x] Fetch API
 - [x] DOM dump
-- [x] Basic CDP server
+- [x] Basic CDP/websockets server
 
 NOTE: There are hundreds of Web APIs. Developing a browser, even just for headless mode, is a huge task. It's more about coverage than a _working/not working_ binary situation.
 
