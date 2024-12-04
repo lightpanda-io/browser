@@ -18,17 +18,20 @@
 
 const std = @import("std");
 
-pub const MsgSize = 16 * 1204; // 16KB
-pub const HeaderSize = 2;
+pub const HeaderSize = 4;
+pub const MsgSize = 256 * 1204; // 256KB
+// NOTE: Theorically we could go up to 4GB with a 4 bytes binary encoding
+// but we prefer to put a lower hard limit for obvious memory size reasons.
+
 pub const MaxSize = HeaderSize + MsgSize;
 
 pub const Msg = struct {
     pub fn getSize(data: []const u8) usize {
-        return std.mem.readInt(u16, data[0..HeaderSize], .little);
+        return std.mem.readInt(u32, data[0..HeaderSize], .little);
     }
 
-    pub fn setSize(len: usize, header: *[2]u8) void {
-        std.mem.writeInt(u16, header, @intCast(len), .little);
+    pub fn setSize(len: usize, header: *[4]u8) void {
+        std.mem.writeInt(u32, header, @intCast(len), .little);
     }
 };
 
@@ -121,26 +124,26 @@ test "Buffer" {
 
     const cases = [_]Case{
         // simple
-        .{ .input = .{ 2, 0 } ++ "ok", .nb = 1 },
+        .{ .input = .{ 2, 0, 0, 0 } ++ "ok", .nb = 1 },
         // combined
-        .{ .input = .{ 2, 0 } ++ "ok" ++ .{ 3, 0 } ++ "foo", .nb = 2 },
+        .{ .input = .{ 2, 0, 0, 0 } ++ "ok" ++ .{ 3, 0, 0, 0 } ++ "foo", .nb = 2 },
         // multipart
-        .{ .input = .{ 9, 0 } ++ "multi", .nb = 0 },
+        .{ .input = .{ 9, 0, 0, 0 } ++ "multi", .nb = 0 },
         .{ .input = "part", .nb = 1 },
         // multipart & combined
-        .{ .input = .{ 9, 0 } ++ "multi", .nb = 0 },
-        .{ .input = "part" ++ .{ 2, 0 } ++ "ok", .nb = 2 },
+        .{ .input = .{ 9, 0, 0, 0 } ++ "multi", .nb = 0 },
+        .{ .input = "part" ++ .{ 2, 0, 0, 0 } ++ "ok", .nb = 2 },
         // multipart & combined with other multipart
-        .{ .input = .{ 9, 0 } ++ "multi", .nb = 0 },
-        .{ .input = "part" ++ .{ 8, 0 } ++ "co", .nb = 1 },
+        .{ .input = .{ 9, 0, 0, 0 } ++ "multi", .nb = 0 },
+        .{ .input = "part" ++ .{ 8, 0, 0, 0 } ++ "co", .nb = 1 },
         .{ .input = "mbined", .nb = 1 },
         // several multipart
-        .{ .input = .{ 23, 0 } ++ "multi", .nb = 0 },
+        .{ .input = .{ 23, 0, 0, 0 } ++ "multi", .nb = 0 },
         .{ .input = "several", .nb = 0 },
         .{ .input = "complex", .nb = 0 },
         .{ .input = "part", .nb = 1 },
         // combined & multipart
-        .{ .input = .{ 2, 0 } ++ "ok" ++ .{ 9, 0 } ++ "multi", .nb = 1 },
+        .{ .input = .{ 2, 0, 0, 0 } ++ "ok" ++ .{ 9, 0, 0, 0 } ++ "multi", .nb = 1 },
         .{ .input = "part", .nb = 1 },
     };
 
