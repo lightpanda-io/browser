@@ -33,6 +33,8 @@ const Client = @import("asyncio").Client;
 const Types = @import("../main_wpt.zig").Types;
 const UserContext = @import("../main_wpt.zig").UserContext;
 
+const polyfill = @import("../polyfill/polyfill.zig");
+
 // runWPT parses the given HTML file, starts a js env and run the first script
 // tags containing javascript sources.
 // It loads first the js libs files.
@@ -73,6 +75,9 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     // start JS env
     try js_env.start();
     defer js_env.stop();
+
+    // load polyfills
+    try polyfill.load(alloc, js_env);
 
     // display console logs
     defer {

@@ -11,6 +11,7 @@ The following files are licensed under MIT:
 
 ```
 src/http/Client.zig
+src/polyfill/fetch.js
 ```
 
 The following directories and their subdirectories are licensed under their

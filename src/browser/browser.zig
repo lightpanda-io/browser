@@ -42,6 +42,8 @@ const FetchResult = @import("../http/Client.zig").Client.FetchResult;
 const UserContext = @import("../user_context.zig").UserContext;
 const HttpClient = @import("asyncio").Client;
 
+const polyfill = @import("../polyfill/polyfill.zig");
+
 const log = std.log.scoped(.browser);
 
 // Browser is an instance of the browser.
@@ -354,6 +356,9 @@ pub const Page = struct {
         // TODO load the js env concurrently with the HTML parsing.
         log.debug("start js env", .{});
         try self.session.env.start();
+
+        // load polyfills
+        try polyfill.load(alloc, self.session.env);
 
         // inspector
         if (self.session.inspector) |inspector| {
