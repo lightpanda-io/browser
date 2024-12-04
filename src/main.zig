@@ -264,7 +264,11 @@ pub fn main() !void {
             }
 
             // start stream server in separate thread
-            var stream = handler.Stream{ .addr = addr };
+            var stream = handler.Stream{
+                .ws_host = opts.host,
+                .ws_port = opts.port,
+                .addr = addr,
+            };
             const cdp_thread = try std.Thread.spawn(
                 .{ .allocator = alloc },
                 server.handle,

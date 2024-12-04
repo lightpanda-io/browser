@@ -26,6 +26,9 @@ const log = std.log.scoped(.handler);
 pub const Stream = struct {
     addr: std.net.Address,
     socket: std.posix.socket_t = undefined,
+
+    ws_host: []const u8,
+    ws_port: u16,
     ws_conn: *ws.Conn = undefined,
 
     fn connectCDP(self: *Stream) !void {
