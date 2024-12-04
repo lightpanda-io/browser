@@ -184,7 +184,7 @@ fn getTargetInfo(
     const Params = struct {
         targetId: ?[]const u8 = null,
     };
-    const input = try Input(Params).get(alloc, msg);
+    const input = try Input(?Params).get(alloc, msg);
     defer input.deinit();
     log.debug("Req > id {d}, method {s}", .{ input.id, "target.getTargetInfo" });
 

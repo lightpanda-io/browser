@@ -112,7 +112,7 @@ fn getWindowForTarget(
     const Params = struct {
         targetId: ?[]const u8 = null,
     };
-    const input = try Input(Params).get(alloc, msg);
+    const input = try Input(?Params).get(alloc, msg);
     defer input.deinit();
     std.debug.assert(input.sessionId != null);
     log.debug("Req > id {d}, method {s}", .{ input.id, "browser.getWindowForTarget" });

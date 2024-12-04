@@ -146,7 +146,15 @@ pub const IncomingMessage = struct {
             return error.SkippedParams;
         }
 
-        try self.scanUntil("params");
+        self.scanUntil("params") catch |err| {
+            // handle nullable type
+            if (@typeInfo(T) == .Optional) {
+                if (err == error.InvalidToken or err == error.EndOfDocument) {
+                    return null;
+                }
+            }
+            return err;
+        };
 
         // parse "params"
         const options = std.json.ParseOptions{
@@ -249,4 +257,35 @@ test "read incoming message with null session id" {
         try std.testing.expect(try msg.getSessionId() == null);
         try std.testing.expectEqual(1, try msg.getId());
     }
+}
+
+test "message with nullable params" {
+    const T = struct {
+        bar: []const u8,
+    };
+
+    // nullable type, params is present => value
+    const not_null =
+        \\{"id": 1,"method":"foo","params":{"bar":"baz"}}
+    ;
+    var msg = IncomingMessage.init(std.testing.allocator, not_null);
+    defer msg.deinit();
+    const input = try Input(?T).get(std.testing.allocator, &msg);
+    defer input.deinit();
+    try std.testing.expectEqualStrings(input.params.?.bar, "baz");
+
+    // nullable type, params is not present => null
+    const is_null =
+        \\{"id": 1,"method":"foo","sessionId":"AAA"}
+    ;
+    var msg_null = IncomingMessage.init(std.testing.allocator, is_null);
+    defer msg_null.deinit();
+    const input_null = try Input(?T).get(std.testing.allocator, &msg_null);
+    defer input_null.deinit();
+    try std.testing.expectEqual(null, input_null.params);
+    try std.testing.expectEqualStrings("AAA", input_null.sessionId.?);
+
+    // not nullable type, params is not present => error
+    const params_or_error = msg_null.getParams(std.testing.allocator, T);
+    try std.testing.expectError(error.EndOfDocument, params_or_error);
 }
