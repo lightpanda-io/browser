@@ -2,7 +2,9 @@
   <a href="https://lightpanda.io"><img src="https://cdn.lightpanda.io/assets/images/logo/lpd-logo.png" alt="Logo" height=170></a>
 </p>
 
-<h1 align="center">Lightpanda</h1>
+<h1 align="center">Lightpanda Browser</h1>
+
+<p align="center"><a href="https://lightpanda.io/">lightpanda.io</a></p>
 
 <div align="center">
 	<br />
@@ -16,10 +18,10 @@ Lightpanda is the open-source browser made for headless usage:
 
 Fast scraping and web automation with minimal memory footprint:
 
-- Ultra-low memory footprint (12x less than Chrome)
-- Blazingly fast & instant startup (64x faster than Chrome)
+- Ultra-low memory footprint (9x less than Chrome)
+- Blazingly fast execution (11x faster than Chrome) & instant startup
 
-<img width=500px src="https://cdn.lightpanda.io/assets/images/benchmark2.png">
+<img width=500px src="https://cdn.lightpanda.io/assets/images/benchmark_2024-12-04.png">
 
 See [benchmark details](https://github.com/lightpanda-io/demo).
 
@@ -34,7 +36,7 @@ Back in the good old times, grabbing a webpage was as easy as making an HTTP req
 
 ### Chrome is not the right tool
 
-So if we need Javascript, why not use a real web browser. Let’s take a huge desktop application, hack it, and run it on the server, right? Hundreds of instance of Chrome if you use it at scale. Are you sure it’s such a good idea?
+So if we need Javascript, why not use a real web browser. Let’s take a huge desktop application, hack it, and run it on the server, right? Hundreds or thousands of instances of Chrome if you use it at scale. Are you sure it’s such a good idea?
 
 - Heavy on RAM and CPU, expensive to run
 - Hard to package, deploy and maintain at scale
@@ -46,7 +48,7 @@ If we want both Javascript and performance, for a real headless browser, we need
 
 - Not based on Chromium, Blink or WebKit
 - Low-level system programming language (Zig) with optimisations in mind
-- Opinionated, no rendering
+- Opinionated, without graphical rendering
 
 ## Status
 
@@ -54,9 +56,9 @@ Lightpanda is still a work in progress and is currently at a Beta stage.
 
 Here are the key features we have implemented:
 
-- [x] Loader
+- [x] HTTP loader
 - [x] HTML parser and DOM tree
-- [x] Javascript support
+- [x] Javascript support (v8)
 - [x] Basic DOM APIs
 - [x] Ajax
   - [x] XHR API
