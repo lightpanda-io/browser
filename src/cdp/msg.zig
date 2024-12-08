@@ -150,6 +150,7 @@ pub const IncomingMessage = struct {
 
         // parse "params"
         const options = std.json.ParseOptions{
+            .ignore_unknown_fields = true,
             .max_value_len = self.scanner.input.len,
             .allocate = .alloc_always,
         };
