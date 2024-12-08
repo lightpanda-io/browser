@@ -49,7 +49,7 @@ pub const Stream = struct {
     }
 
     fn closeCDP(self: *const Stream) void {
-        const close_msg: []const u8 = .{ 5, 0 } ++ "close";
+        const close_msg: []const u8 = .{ 5, 0, 0, 0 } ++ "close";
         self.recv(close_msg) catch |err| {
             log.err("stream close error: {any}", .{err});
         };
@@ -87,7 +87,7 @@ pub const Handler = struct {
     }
 
     pub fn clientMessage(self: *Handler, data: []const u8) !void {
-        var header: [2]u8 = undefined;
+        var header: [4]u8 = undefined;
         Msg.setSize(data.len, &header);
         try self.stream.recv(&header);
         try self.stream.recv(data);
