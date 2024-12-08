@@ -119,13 +119,16 @@ fn sendInspector(
     // remove awaitPromise true params
     // TODO: delete when Promise are correctly handled by zig-js-runtime
     if (method == .callFunctionOn or method == .evaluate) {
-        const buf = try alloc.alloc(u8, msg.json.len + 1);
-        defer alloc.free(buf);
-        _ = std.mem.replace(u8, msg.json, "\"awaitPromise\":true", "\"awaitPromise\":false", buf);
-        ctx.sendInspector(buf);
-    } else {
-        ctx.sendInspector(msg.json);
+        if (std.mem.indexOf(u8, msg.json, "\"awaitPromise\":true")) |_| {
+            const buf = try alloc.alloc(u8, msg.json.len + 1);
+            defer alloc.free(buf);
+            _ = std.mem.replace(u8, msg.json, "\"awaitPromise\":true", "\"awaitPromise\":false", buf);
+            ctx.sendInspector(buf);
+            return "";
+        }
     }
+
+    ctx.sendInspector(msg.json);
     return "";
 }
 
