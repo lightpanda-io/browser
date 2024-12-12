@@ -13,13 +13,13 @@
 Lightpanda is the open-source browser made for headless usage:
 
 - Javascript execution
-- Support of the Web APIs (partial, WIP)
+- Support of Web APIs (partial, WIP)
 - Compatible with Playwright, Puppeteer through CDP (WIP)
 
 Fast scraping and web automation with minimal memory footprint:
 
 - Ultra-low memory footprint (9x less than Chrome)
-- Blazingly fast execution (11x faster than Chrome) & instant startup
+- Exceptionally fast execution (11x faster than Chrome) & instant startup
 
 <img width=500px src="https://cdn.lightpanda.io/assets/images/benchmark_2024-12-04.png">
 
@@ -29,14 +29,14 @@ See [benchmark details](https://github.com/lightpanda-io/demo).
 
 ### Javascript execution is mandatory for the modern web
 
-Back in the good old times, grabbing a webpage was as easy as making an HTTP request, cURL-like. It’s not possible anymore, because Javascript is everywhere, like it or not:
+In the good old days, scraping a webpage was as easy as making an HTTP request, cURL-like. It’s not possible anymore, because Javascript is everywhere, like it or not:
 
-- Ajax, Single Page App, Infinite loading, “click to display”, instant search, etc.
+- Ajax, Single Page App, infinite loading, “click to display”, instant search, etc.
 - JS web frameworks: React, Vue, Angular & others
 
 ### Chrome is not the right tool
 
-So if we need Javascript, why not use a real web browser. Let’s take a huge desktop application, hack it, and run it on the server, right? Hundreds or thousands of instances of Chrome if you use it at scale. Are you sure it’s such a good idea?
+If we need Javascript, why not use a real web browser? Take a huge desktop application, hack it, and run it on the server. Hundreds or thousands of instances of Chrome if you use it at scale. Are you sure it’s such a good idea?
 
 - Heavy on RAM and CPU, expensive to run
 - Hard to package, deploy and maintain at scale
@@ -44,11 +44,11 @@ So if we need Javascript, why not use a real web browser. Let’s take a huge de
 
 ### Lightpanda is built for performance
 
-If we want both Javascript and performance, for a real headless browser, we need to start from scratch. Not yet another iteration of Chromium, really from a blank page. Crazy right? But that’s we did:
+If we want both Javascript and performance in a true headless browser, we need to start from scratch. Not another iteration of Chromium, really from a blank page. Crazy right? But that’s we did:
 
 - Not based on Chromium, Blink or WebKit
 - Low-level system programming language (Zig) with optimisations in mind
-- Opinionated, without graphical rendering
+- Opinionated: without graphical rendering
 
 ## Status
 
@@ -66,13 +66,13 @@ Here are the key features we have implemented:
 - [x] DOM dump
 - [x] Basic CDP/websockets server
 
-NOTE: There are hundreds of Web APIs. Developing a browser, even just for headless mode, is a huge task. It's more about coverage than a _working/not working_ binary situation.
+NOTE: There are hundreds of Web APIs. Developing a browser (even just for headless mode) is a huge task. It's more about coverage than a _working/not working_ binary situation.
 
 You can also follow the progress of our Javascript support in our dedicated [zig-js-runtime](https://github.com/lightpanda-io/zig-js-runtime#development) project.
 
 ## Install
 
-We do provide [nighly builds](https://github.com/lightpanda-io/browser/releases/tag/nightly) for Linux x86_64 and MacOS aarch64.
+We provide [nighly builds](https://github.com/lightpanda-io/browser/releases/tag/nightly) for Linux x86_64 and MacOS aarch64.
 
 ## Build from sources
 
