@@ -276,18 +276,15 @@ pub const Page = struct {
 
         const req = resp.req;
 
-        log.info("GET {any} {d}", .{ self.uri, req.response.status });
+        log.info("GET {any} {d}", .{ self.uri, @intFromEnum(req.response.status) });
 
         // TODO handle redirection
-        if (req.response.status != .ok) {
-            log.debug("{?} {d} {s}", .{
-                req.response.version,
-                req.response.status,
-                req.response.reason,
-                // TODO log headers
-            });
-            return error.BadStatusCode;
-        }
+        log.debug("{?} {d} {s}", .{
+            req.response.version,
+            @intFromEnum(req.response.status),
+            req.response.reason,
+            // TODO log headers
+        });
 
         // TODO handle charset
         // https://html.spec.whatwg.org/#content-type
