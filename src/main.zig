@@ -40,6 +40,14 @@ pub const websocket_blocking = true;
 
 const log = std.log.scoped(.cli);
 
+pub const std_options = .{
+    // Set the log level to info
+    .log_level = .debug,
+
+    // Define logFn to override the std implementation
+    .logFn = logFn,
+};
+
 const usage =
     \\usage: {s} [options] [URL]
     \\
@@ -49,6 +57,7 @@ const usage =
     \\  * otherwhise the browser starts a CDP server
     \\
     \\  -h, --help      Print this help message and exit.
+    \\  --verbose       Display all logs. By default only info, warn and err levels are displayed.
     \\  --host          Host of the CDP server (default "127.0.0.1")
     \\  --port          Port of the CDP server (default "9222")
     \\  --timeout       Timeout for incoming connections of the CDP server (in seconds, default "3")
@@ -109,6 +118,10 @@ const CliMode = union(CliModeTag) {
         while (args.next()) |opt| {
             if (std.mem.eql(u8, "-h", opt) or std.mem.eql(u8, "--help", opt)) {
                 return printUsageExit(execname, 0);
+            }
+            if (std.mem.eql(u8, "--verbose", opt)) {
+                verbose = true;
+                continue;
             }
             if (std.mem.eql(u8, "--dump", opt)) {
                 _fetch.dump = true;
@@ -333,4 +346,19 @@ pub fn main() !void {
             }
         },
     }
+}
+
+var verbose: bool = builtin.mode == .Debug; // In debug mode, force verbose.
+fn logFn(
+    comptime level: std.log.Level,
+    comptime scope: @Type(.EnumLiteral),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    if (!verbose) {
+        // hide all messages with level greater of equal to debug level.
+        if (@intFromEnum(level) >= @intFromEnum(std.log.Level.debug)) return;
+    }
+    // default std log function.
+    std.log.defaultLog(level, scope, format, args);
 }
