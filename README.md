@@ -70,9 +70,73 @@ NOTE: There are hundreds of Web APIs. Developing a browser (even just for headle
 
 You can also follow the progress of our Javascript support in our dedicated [zig-js-runtime](https://github.com/lightpanda-io/zig-js-runtime#development) project.
 
-## Install
+## Quick start
 
-We provide [nighly builds](https://github.com/lightpanda-io/browser/releases/tag/nightly) for Linux x86_64 and MacOS aarch64.
+### Install from the nightly builds
+
+You can download the last binary from the [nightly
+builds](https://github.com/lightpanda-io/browser/releases/tag/nightly) for
+Linux x86_64 and MacOS aarch64.
+
+```console
+# Download the binary
+$ wget https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux
+$ chmod a+x ./lightpanda-x86_64-linux
+$ ./lightpanda-x86_64-linux -h
+usage: ./lightpanda-x86_64-linux [options] [URL]
+
+  start Lightpanda browser
+
+  * if an url is provided the browser will fetch the page and exit
+  * otherwhise the browser starts a CDP server
+
+  -h, --help      Print this help message and exit.
+  --host          Host of the CDP server (default "127.0.0.1")
+  --port          Port of the CDP server (default "9222")
+  --timeout       Timeout for incoming connections of the CDP server (in seconds, default "3")
+  --dump          Dump document in stdout (fetch mode only)
+```
+
+### Dump an URL
+
+```console
+$ ./lightpanda-x86_64-linux --dump https://lightpanda.io
+info(browser): GET https://lightpanda.io/ http.Status.ok
+info(browser): fetch script https://api.website.lightpanda.io/js/script.js: http.Status.ok
+info(browser): eval remote https://api.website.lightpanda.io/js/script.js: TypeError: Cannot read properties of undefined (reading 'pushState')
+<!DOCTYPE html>
+```
+
+### Start a CDP server
+
+```console
+$ ./lightpanda-x86_64-linux --host 127.0.0.1 --port 9222
+info(websocket): starting blocking worker to listen on 127.0.0.1:9222
+info(server): accepting new conn...
+```
+
+Once the CDP server started, you can run a Puppeteer script by configuring the
+`browserWSEndpoint`.
+
+```js
+'use scrict'
+
+import puppeteer from 'puppeteer-core';
+
+// use browserWSEndpoint to pass the Lightpanda's CDP server address.
+const browser = await puppeteer.connect({
+  browserWSEndpoint: "ws://127.0.0.1:9222",
+});
+
+// The rest of your script remains the same.
+const context = await browser.createBrowserContext();
+const page = await context.newPage();
+
+await page.goto('https://wikipedia.com/');
+
+await page.close();
+await context.close();
+```
 
 ## Build from sources
 
