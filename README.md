@@ -54,10 +54,12 @@ If we want both Javascript and performance in a true headless browser, we need t
 
 Lightpanda is still a work in progress and is currently at a Beta stage.
 
+:warning: You should expect most websites to fail or crash.
+
 Here are the key features we have implemented:
 
 - [x] HTTP loader
-- [x] HTML parser and DOM tree
+- [x] HTML parser and DOM tree (based on Netsurf libs)
 - [x] Javascript support (v8)
 - [x] Basic DOM APIs
 - [x] Ajax
@@ -66,7 +68,7 @@ Here are the key features we have implemented:
 - [x] DOM dump
 - [x] Basic CDP/websockets server
 
-NOTE: There are hundreds of Web APIs. Developing a browser (even just for headless mode) is a huge task. It's more about coverage than a _working/not working_ binary situation.
+NOTE: There are hundreds of Web APIs. Developing a browser (even just for headless mode) is a huge task. Coverage will increase over time.
 
 You can also follow the progress of our Javascript support in our dedicated [zig-js-runtime](https://github.com/lightpanda-io/zig-js-runtime#development) project.
 
