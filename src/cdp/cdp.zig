@@ -121,6 +121,7 @@ pub fn dispatch(
 pub const State = struct {
     executionContextId: u32 = 0,
     contextID: ?[]const u8 = null,
+    sessionID: ?[]const u8 = null,
     frameID: []const u8 = FrameID,
     url: []const u8 = URLBase,
     securityOrigin: []const u8 = URLBase,

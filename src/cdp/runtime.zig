@@ -129,13 +129,11 @@ fn sendInspector(
         }
     }
 
-    ctx.sendInspector(msg.json);
-
     if (method == .enable) {
         try executionContextCreated(
             alloc,
             ctx,
-            0,
+            1,
             "://",
             "",
             // TODO: hard coded ID
@@ -147,9 +145,11 @@ fn sendInspector(
                 .frameId = cdp.FrameID,
             },
             // TODO: hard coded ID
-            target.BrowserContextID,
+            msg.sessionId orelse target.BrowserContextID,
         );
     }
+
+    ctx.sendInspector(msg.json);
 
     if (msg.id == null) return "";
 
