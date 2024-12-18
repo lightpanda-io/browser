@@ -123,7 +123,7 @@ fn setAutoAttach(
             .sessionId = cdp.BrowserSessionID,
             .targetInfo = .{
                 .targetId = PageTargetID,
-                .title = "New Incognito tab",
+                .title = "about:blank",
                 .url = cdp.URLBase,
                 .browserContextId = BrowserContextID,
             },
@@ -156,8 +156,8 @@ fn attachToTarget(
         const attached = AttachToTarget{
             .sessionId = cdp.BrowserSessionID,
             .targetInfo = .{
-                .targetId = PageTargetID,
-                .title = "New Incognito tab",
+                .targetId = input.params.targetId,
+                .title = "about:blank",
                 .url = cdp.URLBase,
                 .browserContextId = BrowserContextID,
             },
@@ -170,7 +170,7 @@ fn attachToTarget(
         sessionId: []const u8,
     };
     const output = SessionId{
-        .sessionId = input.sessionId orelse BrowserContextID,
+        .sessionId = input.sessionId orelse cdp.BrowserSessionID,
     };
     return result(alloc, input.id, SessionId, output, null);
 }
@@ -327,15 +327,17 @@ fn createTarget(
     ctx.state.securityOrigin = "://";
     ctx.state.secureContextType = "InsecureScheme";
     ctx.state.loaderID = LoaderID;
+    ctx.state.sessionID = msg.sessionId;
 
     // send attachToTarget event
     const attached = AttachToTarget{
         .sessionId = cdp.ContextSessionID,
         .targetInfo = .{
             .targetId = ctx.state.frameID,
-            .title = "",
+            .title = "about:blank",
             .url = ctx.state.url,
             .browserContextId = input.params.browserContextId orelse ContextID,
+            .attached = true,
         },
         .waitingForDebugger = true,
     };

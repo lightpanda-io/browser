@@ -117,6 +117,8 @@ fn sendInspector(
         }
     }
 
+    ctx.state.sessionID = msg.sessionId;
+
     // remove awaitPromise true params
     // TODO: delete when Promise are correctly handled by zig-js-runtime
     if (method == .callFunctionOn or method == .evaluate) {
@@ -129,13 +131,11 @@ fn sendInspector(
         }
     }
 
-    ctx.sendInspector(msg.json);
-
     if (method == .enable) {
         try executionContextCreated(
             alloc,
             ctx,
-            0,
+            1,
             "://",
             "",
             // TODO: hard coded ID
@@ -147,9 +147,11 @@ fn sendInspector(
                 .frameId = cdp.FrameID,
             },
             // TODO: hard coded ID
-            target.BrowserContextID,
+            msg.sessionId orelse target.BrowserContextID,
         );
     }
+
+    ctx.sendInspector(msg.json);
 
     return "";
 }
