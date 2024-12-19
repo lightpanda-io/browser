@@ -39,6 +39,7 @@ const Methods = enum {
     createTarget,
     closeTarget,
     sendMessageToTarget,
+    detachFromTarget,
 };
 
 pub fn target(
@@ -60,6 +61,7 @@ pub fn target(
         .createTarget => createTarget(alloc, msg, ctx),
         .closeTarget => closeTarget(alloc, msg, ctx),
         .sendMessageToTarget => sendMessageToTarget(alloc, msg, ctx),
+        .detachFromTarget => detachFromTarget(alloc, msg, ctx),
     };
 }
 
@@ -495,4 +497,19 @@ fn sendMessageToTarget(
     );
 
     return "";
+}
+
+// noop
+fn detachFromTarget(
+    alloc: std.mem.Allocator,
+    msg: *IncomingMessage,
+    _: *Ctx,
+) ![]const u8 {
+    // input
+    const input = try Input(void).get(alloc, msg);
+    defer input.deinit();
+    log.debug("Req > id {d}, method {s}", .{ input.id, "target.detachFromTarget" });
+
+    // output
+    return result(alloc, input.id, bool, true, input.sessionId);
 }
