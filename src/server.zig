@@ -175,6 +175,7 @@ pub const Ctx = struct {
             self.do(parts.msg) catch |err| {
                 if (err != error.Closed) {
                     log.err("do error: {any}", .{err});
+                    log.debug("last msg: {s}", .{parts.msg});
                 }
             };
         }
