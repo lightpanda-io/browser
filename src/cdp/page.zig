@@ -331,8 +331,9 @@ fn navigate(
     // TODO: noop event, we have no env context at this point, is it necesarry?
     try sendEvent(alloc, ctx, "Runtime.executionContextsCleared", void, {}, input.sessionId);
 
-    // Launch navigate
-    const p = try ctx.browser.session.createPage();
+    // Launch navigate, the page must have been created by a
+    // target.createTarget.
+    var p = ctx.browser.session.page orelse return error.NoPage;
     ctx.state.executionContextId += 1;
     const auxData = try std.fmt.allocPrint(
         alloc,

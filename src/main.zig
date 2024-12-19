@@ -326,6 +326,8 @@ pub fn main() !void {
 
             // page
             const page = try browser.session.createPage();
+            try page.start();
+            defer page.end();
 
             _ = page.navigate(opts.url, null) catch |err| switch (err) {
                 error.UnsupportedUriScheme, error.UriMissingHost => {
