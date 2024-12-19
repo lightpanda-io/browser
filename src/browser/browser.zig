@@ -195,6 +195,17 @@ pub const Page = struct {
         };
     }
 
+    // start js env.
+    pub fn start(self: *Page) !void {
+        // start JS env
+        log.debug("start js env", .{});
+        try self.session.env.start();
+
+        // add global objects
+        log.debug("setup global env", .{});
+        try self.session.env.bindGlobal(&self.session.window);
+    }
+
     // reset js env and mem arena.
     pub fn end(self: *Page) void {
         self.session.env.stop();
@@ -349,11 +360,6 @@ pub const Page = struct {
 
         // https://html.spec.whatwg.org/#read-html
 
-        // start JS env
-        // TODO load the js env concurrently with the HTML parsing.
-        log.debug("start js env", .{});
-        try self.session.env.start();
-
         // load polyfills
         try polyfill.load(alloc, self.session.env);
 
@@ -367,10 +373,6 @@ pub const Page = struct {
             .document = html_doc,
             .httpClient = &self.session.httpClient,
         });
-
-        // add global objects
-        log.debug("setup global env", .{});
-        try self.session.env.bindGlobal(&self.session.window);
 
         // browse the DOM tree to retrieve scripts
         // TODO execute the synchronous scripts during the HTL parsing.
