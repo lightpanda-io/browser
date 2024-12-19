@@ -329,6 +329,14 @@ fn createTarget(
     ctx.state.loaderID = LoaderID;
     ctx.state.sessionID = msg.sessionId;
 
+    // TODO stop the previous page instead?
+    if (ctx.browser.session.page != null) return error.pageAlreadyExists;
+
+    // create the page
+    const p = try ctx.browser.session.createPage();
+    // start the js env
+    try p.start();
+
     // send attachToTarget event
     const attached = AttachToTarget{
         .sessionId = cdp.ContextSessionID,
@@ -411,6 +419,8 @@ fn closeTarget(
         },
         null,
     );
+
+    if (ctx.browser.session.page != null) ctx.browser.session.page.?.end();
 
     return "";
 }
