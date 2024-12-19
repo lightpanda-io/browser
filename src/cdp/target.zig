@@ -38,6 +38,7 @@ const Methods = enum {
     disposeBrowserContext,
     createTarget,
     closeTarget,
+    detachFromTarget,
 };
 
 pub fn target(
@@ -58,6 +59,7 @@ pub fn target(
         .disposeBrowserContext => disposeBrowserContext(alloc, msg, ctx),
         .createTarget => createTarget(alloc, msg, ctx),
         .closeTarget => closeTarget(alloc, msg, ctx),
+        .detachFromTarget => detachFromTarget(alloc, msg, ctx),
     };
 }
 
@@ -423,4 +425,19 @@ fn closeTarget(
     if (ctx.browser.session.page != null) ctx.browser.session.page.?.end();
 
     return "";
+}
+
+// noop
+fn detachFromTarget(
+    alloc: std.mem.Allocator,
+    msg: *IncomingMessage,
+    _: *Ctx,
+) ![]const u8 {
+    // input
+    const input = try Input(void).get(alloc, msg);
+    defer input.deinit();
+    log.debug("Req > id {d}, method {s}", .{ input.id, "target.detachFromTarget" });
+
+    // output
+    return result(alloc, input.id, bool, true, input.sessionId);
 }
