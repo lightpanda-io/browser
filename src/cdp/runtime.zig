@@ -28,6 +28,7 @@ const result = cdp.result;
 const IncomingMessage = @import("msg.zig").IncomingMessage;
 const Input = @import("msg.zig").Input;
 const stringify = cdp.stringify;
+const target = @import("target.zig");
 
 const log = std.log.scoped(.cdp);
 
@@ -116,6 +117,8 @@ fn sendInspector(
         }
     }
 
+    ctx.state.sessionID = msg.sessionId;
+
     // remove awaitPromise true params
     // TODO: delete when Promise are correctly handled by zig-js-runtime
     if (method == .callFunctionOn or method == .evaluate) {
@@ -128,7 +131,28 @@ fn sendInspector(
         }
     }
 
+    if (method == .enable) {
+        try executionContextCreated(
+            alloc,
+            ctx,
+            1,
+            "://",
+            "",
+            // TODO: hard coded ID
+            "7102379147004877974.3265385113993241162",
+            .{
+                .isDefault = true,
+                .type = "default",
+                // TODO: hard coded ID
+                .frameId = cdp.FrameID,
+            },
+            // TODO: hard coded ID
+            msg.sessionId orelse target.BrowserContextID,
+        );
+    }
+
     ctx.sendInspector(msg.json);
+
     return "";
 }
 
