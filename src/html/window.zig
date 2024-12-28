@@ -28,6 +28,8 @@ const EventTarget = @import("../dom/event_target.zig").EventTarget;
 
 const storage = @import("../storage/storage.zig");
 
+const log = std.log.scoped(.window);
+
 // https://dom.spec.whatwg.org/#interface-window-extensions
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#window
 pub const Window = struct {
@@ -64,6 +66,10 @@ pub const Window = struct {
 
     pub fn get_window(self: *Window) *Window {
         return self;
+    }
+
+    pub fn _debug(_: *Window, str: []const u8) void {
+        log.debug("{s}", .{str});
     }
 
     pub fn get_self(self: *Window) *Window {
