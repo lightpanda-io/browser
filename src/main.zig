@@ -326,7 +326,7 @@ pub fn main() !void {
 
             // page
             const page = try browser.session.createPage();
-            try page.start();
+            try page.start(null);
             defer page.end();
 
             _ = page.navigate(opts.url, null) catch |err| switch (err) {
