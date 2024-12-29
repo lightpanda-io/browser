@@ -215,7 +215,9 @@ pub const Page = struct {
     }
 
     // start js env.
-    pub fn start(self: *Page) !void {
+    // - auxData: extra data forwarded to the Inspector
+    // see Inspector.contextCreated
+    pub fn start(self: *Page, auxData: ?[]const u8) !void {
         // start JS env
         log.debug("start js env", .{});
         try self.session.env.start();
@@ -226,6 +228,15 @@ pub const Page = struct {
         // add global objects
         log.debug("setup global env", .{});
         try self.session.env.bindGlobal(&self.session.window);
+
+        // load polyfills
+        try polyfill.load(self.arena.allocator(), self.session.env);
+
+        // inspector
+        if (self.session.inspector) |inspector| {
+            log.debug("inspector context created", .{});
+            inspector.contextCreated(self.session.env, "", self.origin orelse "://", auxData);
+        }
     }
 
     // reset js env and mem arena.
@@ -386,9 +397,6 @@ pub const Page = struct {
         );
 
         // https://html.spec.whatwg.org/#read-html
-
-        // load polyfills
-        try polyfill.load(alloc, self.session.env);
 
         // inspector
         if (self.session.inspector) |inspector| {

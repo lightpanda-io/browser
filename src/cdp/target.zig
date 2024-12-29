@@ -351,8 +351,16 @@ fn createTarget(
 
     // create the page
     const p = try ctx.browser.session.createPage();
+    ctx.state.executionContextId += 1;
     // start the js env
-    try p.start();
+    const auxData = try std.fmt.allocPrint(
+        alloc,
+        // NOTE: we assume this is the default web page
+        "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}",
+        .{ctx.state.frameID},
+    );
+    defer alloc.free(auxData);
+    try p.start(auxData);
 
     // send targetCreated event
     const created = TargetCreated{
