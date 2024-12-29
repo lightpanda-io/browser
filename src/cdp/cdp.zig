@@ -31,6 +31,7 @@ const emulation = @import("emulation.zig").emulation;
 const fetch = @import("fetch.zig").fetch;
 const performance = @import("performance.zig").performance;
 const IncomingMessage = @import("msg.zig").IncomingMessage;
+const inspector = @import("inspector.zig").inspector;
 
 const log_cdp = std.log.scoped(.cdp);
 
@@ -59,6 +60,7 @@ const Domains = enum {
     Log,
     Runtime,
     Network,
+    Inspector,
     Emulation,
     Fetch,
     Performance,
@@ -91,6 +93,7 @@ pub fn do(
         .Log => log(alloc, &msg, action, ctx),
         .Runtime => runtime(alloc, &msg, action, ctx),
         .Network => network(alloc, &msg, action, ctx),
+        .Inspector => inspector(alloc, &msg, action, ctx),
         .Emulation => emulation(alloc, &msg, action, ctx),
         .Fetch => fetch(alloc, &msg, action, ctx),
         .Performance => performance(alloc, &msg, action, ctx),
