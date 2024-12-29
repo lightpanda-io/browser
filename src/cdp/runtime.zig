@@ -129,26 +129,6 @@ fn sendInspector(
         }
     }
 
-    if (method == .enable) {
-        try executionContextCreated(
-            alloc,
-            ctx,
-            1,
-            "://",
-            "",
-            // TODO: hard coded ID
-            "7102379147004877974.3265385113993241162",
-            .{
-                .isDefault = true,
-                .type = "default",
-                // TODO: hard coded ID
-                .frameId = cdp.FrameID,
-            },
-            // TODO: hard coded ID
-            msg.sessionId orelse target.BrowserContextID,
-        );
-    }
-
     ctx.sendInspector(msg.json);
 
     if (msg.id == null) return "";
