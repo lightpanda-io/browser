@@ -46,7 +46,7 @@ const polyfill = @import("../polyfill/polyfill.zig");
 
 const log = std.log.scoped(.browser);
 
-const user_agent = "Lightpanda.io/1.0";
+pub const user_agent = "Lightpanda/1.0";
 
 // Browser is an instance of the browser.
 // You can create multiple browser instances.

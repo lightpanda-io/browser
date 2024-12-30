@@ -19,7 +19,7 @@
 const std = @import("std");
 const Client = @import("../http/Client.zig");
 
-const user_agent = "Lightpanda.io/1.0";
+const user_agent = @import("browser.zig").user_agent;
 
 pub const Loader = struct {
     client: Client,

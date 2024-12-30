@@ -18,6 +18,7 @@
 
 const std = @import("std");
 
+const builtin = @import("builtin");
 const parser = @import("netsurf");
 const jsruntime = @import("jsruntime");
 const Callback = jsruntime.Callback;
@@ -35,10 +36,37 @@ const storage = @import("../storage/storage.zig");
 pub const Navigator = struct {
     pub const mem_guarantied = true;
 
-    agent: []const u8 = "",
+    agent: []const u8 = "Lightpanda/1.0",
+    version: []const u8 = "1.0",
+    vendor: []const u8 = "",
+    platform: []const u8 = std.fmt.comptimePrint("{any} {any}", .{ builtin.os.tag, builtin.cpu.arch }),
 
     pub fn get_userAgent(self: *Navigator) []const u8 {
         return self.agent;
+    }
+    pub fn get_appCodeName(_: *Navigator) []const u8 {
+        return "Mozilla";
+    }
+    pub fn get_appName(_: *Navigator) []const u8 {
+        return "Netscape";
+    }
+    pub fn get_appVersion(self: *Navigator) []const u8 {
+        return self.version;
+    }
+    pub fn get_platform(self: *Navigator) []const u8 {
+        return self.platform;
+    }
+    pub fn get_product(_: *Navigator) []const u8 {
+        return "Gecko";
+    }
+    pub fn get_productSub(_: *Navigator) []const u8 {
+        return "20030107";
+    }
+    pub fn get_vendor(self: *Navigator) []const u8 {
+        return self.vendor;
+    }
+    pub fn get_vendorSub(_: *Navigator) []const u8 {
+        return "";
     }
 };
 
@@ -50,7 +78,8 @@ pub fn testExecFn(
     js_env: *jsruntime.Env,
 ) anyerror!void {
     var navigator = [_]Case{
-        .{ .src = "navigator.userAgent", .ex = "" },
+        .{ .src = "navigator.userAgent", .ex = "Lightpanda/1.0" },
+        .{ .src = "navigator.appVersion", .ex = "1.0" },
     };
     try checkCases(js_env, &navigator);
 }
