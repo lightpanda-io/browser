@@ -41,6 +41,8 @@ pub const Navigator = struct {
     vendor: []const u8 = "",
     platform: []const u8 = std.fmt.comptimePrint("{any} {any}", .{ builtin.os.tag, builtin.cpu.arch }),
 
+    language: []const u8 = "en-US",
+
     pub fn get_userAgent(self: *Navigator) []const u8 {
         return self.agent;
     }
@@ -68,6 +70,13 @@ pub const Navigator = struct {
     pub fn get_vendorSub(_: *Navigator) []const u8 {
         return "";
     }
+    pub fn get_language(self: *Navigator) []const u8 {
+        return self.language;
+    }
+    // TODO wait for arrays.
+    //pub fn get_languages(self: *Navigator) [][]const u8 {
+    //    return .{self.language};
+    //}
 };
 
 // Tests
@@ -80,6 +89,7 @@ pub fn testExecFn(
     var navigator = [_]Case{
         .{ .src = "navigator.userAgent", .ex = "Lightpanda/1.0" },
         .{ .src = "navigator.appVersion", .ex = "1.0" },
+        .{ .src = "navigator.language", .ex = "en-US" },
     };
     try checkCases(js_env, &navigator);
 }
