@@ -77,6 +77,21 @@ pub const Navigator = struct {
     //pub fn get_languages(self: *Navigator) [][]const u8 {
     //    return .{self.language};
     //}
+    pub fn get_online(_: *Navigator) bool {
+        return true;
+    }
+    pub fn _registerProtocolHandler(_: *Navigator, scheme: []const u8, url: []const u8) void {
+        _ = scheme;
+        _ = url;
+    }
+    pub fn _unregisterProtocolHandler(_: *Navigator, scheme: []const u8, url: []const u8) void {
+        _ = scheme;
+        _ = url;
+    }
+
+    pub fn get_cookieEnabled(_: *Navigator) bool {
+        return true;
+    }
 };
 
 // Tests
