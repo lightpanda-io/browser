@@ -388,7 +388,7 @@ pub const Page = struct {
         // sasync stores scripts which can be run asynchronously.
         // for now they are just run after the non-async one in order to
         // dispatch DOMContentLoaded the sooner as possible.
-        var sasync = std.ArrayList(*parser.Element).init(alloc);
+        var sasync = std.ArrayList(Script).init(alloc);
         defer sasync.deinit();
 
         const root = parser.documentToNode(doc);
@@ -403,21 +403,11 @@ pub const Page = struct {
             }
 
             const e = parser.nodeToElement(next.?);
-            const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(e)));
-
-            // ignore non-script tags
-            if (tag != .script) continue;
 
             // ignore non-js script.
-            // > type
-            // > Attribute is not set (default), an empty string, or a JavaScript MIME
-            // > type indicates that the script is a "classic script", containing
-            // > JavaScript code.
-            // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#attribute_is_not_set_default_an_empty_string_or_a_javascript_mime_type
-            const stype = try parser.elementGetAttribute(e, "type");
-            if (!isJS(stype)) {
-                continue;
-            }
+            const script = try Script.init(e) orelse continue;
+            if (script.kind == .unknown) continue;
+            if (script.kind == .module) continue;
 
             // Ignore the defer attribute b/c we analyze all script
             // after the document has been parsed.
@@ -431,8 +421,8 @@ pub const Page = struct {
             // > then the classic script will be fetched in parallel to
             // > parsing and evaluated as soon as it is available.
             // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#async
-            if (try parser.elementGetAttribute(e, "async") != null) {
-                try sasync.append(e);
+            if (script.isasync) {
+                try sasync.append(script);
                 continue;
             }
 
@@ -455,7 +445,7 @@ pub const Page = struct {
             // > page.
             // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#notes
             try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(e));
-            self.evalScript(e) catch |err| log.warn("evaljs: {any}", .{err});
+            self.evalScript(script) catch |err| log.warn("evaljs: {any}", .{err});
             try parser.documentHTMLSetCurrentScript(html_doc, null);
         }
 
@@ -472,9 +462,9 @@ pub const Page = struct {
         _ = try parser.eventTargetDispatchEvent(parser.toEventTarget(parser.DocumentHTML, html_doc), evt);
 
         // eval async scripts.
-        for (sasync.items) |e| {
-            try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(e));
-            self.evalScript(e) catch |err| log.warn("evaljs: {any}", .{err});
+        for (sasync.items) |s| {
+            try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(s.element));
+            self.evalScript(s) catch |err| log.warn("evaljs: {any}", .{err});
             try parser.documentHTMLSetCurrentScript(html_doc, null);
         }
 
@@ -496,15 +486,15 @@ pub const Page = struct {
     // evalScript evaluates the src in priority.
     // if no src is present, we evaluate the text source.
     // https://html.spec.whatwg.org/multipage/scripting.html#script-processing-model
-    fn evalScript(self: *Page, e: *parser.Element) !void {
+    fn evalScript(self: *Page, s: Script) !void {
         const alloc = self.arena.allocator();
 
         // https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-classic-script
-        const opt_src = try parser.elementGetAttribute(e, "src");
+        const opt_src = try parser.elementGetAttribute(s.element, "src");
         if (opt_src) |src| {
             log.debug("starting GET {s}", .{src});
 
-            self.fetchScript(src) catch |err| {
+            self.fetchScript(s) catch |err| {
                 switch (err) {
                     FetchError.BadStatusCode => return err,
 
@@ -523,26 +513,10 @@ pub const Page = struct {
             return;
         }
 
-        var try_catch: jsruntime.TryCatch = undefined;
-        try_catch.init(self.session.env);
-        defer try_catch.deinit();
-
-        const opt_text = try parser.nodeTextContent(parser.elementToNode(e));
+        // TODO handle charset attribute
+        const opt_text = try parser.nodeTextContent(parser.elementToNode(s.element));
         if (opt_text) |text| {
-            // TODO handle charset attribute
-            const res = self.session.env.exec(text, "") catch {
-                if (try try_catch.err(alloc, self.session.env)) |msg| {
-                    defer alloc.free(msg);
-                    log.info("eval inline {s}: {s}", .{ text, msg });
-                }
-                return;
-            };
-
-            if (builtin.mode == .Debug) {
-                const msg = try res.toString(alloc, self.session.env);
-                defer alloc.free(msg);
-                log.debug("eval inline {s}", .{msg});
-            }
+            try s.eval(alloc, self.session.env, text);
             return;
         }
 
@@ -559,14 +533,14 @@ pub const Page = struct {
 
     // fetchScript senf a GET request to the src and execute the script
     // received.
-    fn fetchScript(self: *Page, src: []const u8) !void {
+    fn fetchScript(self: *Page, s: Script) !void {
         const alloc = self.arena.allocator();
 
-        log.debug("starting fetch script {s}", .{src});
+        log.debug("starting fetch script {s}", .{s.src});
 
         var buffer: [1024]u8 = undefined;
         var b: []u8 = buffer[0..];
-        const u = try std.Uri.resolve_inplace(self.uri, src, &b);
+        const u = try std.Uri.resolve_inplace(self.uri, s.src, &b);
 
         var fetchres = try self.session.loader.get(alloc, u);
         defer fetchres.deinit();
@@ -584,35 +558,73 @@ pub const Page = struct {
         // check no body
         if (body.len == 0) return FetchError.NoBody;
 
-        var try_catch: jsruntime.TryCatch = undefined;
-        try_catch.init(self.session.env);
-        defer try_catch.deinit();
+        try s.eval(alloc, self.session.env, body);
+    }
 
-        const res = self.session.env.exec(body, src) catch {
-            if (try try_catch.err(alloc, self.session.env)) |msg| {
-                defer alloc.free(msg);
-                log.info("eval remote {s}: {s}", .{ src, msg });
-            }
-            return FetchError.JsErr;
+    const Script = struct {
+        element: *parser.Element,
+        kind: Kind,
+        isasync: bool,
+
+        src: []const u8,
+
+        const Kind = enum {
+            unknown,
+            javascript,
+            module,
         };
 
-        if (builtin.mode == .Debug) {
-            const msg = try res.toString(alloc, self.session.env);
-            defer alloc.free(msg);
-            log.debug("eval remote {s}: {s}", .{ src, msg });
+        fn init(e: *parser.Element) !?Script {
+            // ignore non-script tags
+            const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(e)));
+            if (tag != .script) return null;
+
+            return .{
+                .element = e,
+                .kind = kind(try parser.elementGetAttribute(e, "type")),
+                .isasync = try parser.elementGetAttribute(e, "async") != null,
+
+                .src = try parser.elementGetAttribute(e, "src") orelse "inline",
+            };
         }
-    }
 
-    // > type
-    // > Attribute is not set (default), an empty string, or a JavaScript MIME
-    // > type indicates that the script is a "classic script", containing
-    // > JavaScript code.
-    // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#attribute_is_not_set_default_an_empty_string_or_a_javascript_mime_type
-    fn isJS(stype: ?[]const u8) bool {
-        if (stype == null or stype.?.len == 0) return true;
-        if (std.mem.eql(u8, stype.?, "application/javascript")) return true;
-        if (!std.mem.eql(u8, stype.?, "module")) return true;
+        // > type
+        // > Attribute is not set (default), an empty string, or a JavaScript MIME
+        // > type indicates that the script is a "classic script", containing
+        // > JavaScript code.
+        // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#attribute_is_not_set_default_an_empty_string_or_a_javascript_mime_type
+        fn kind(stype: ?[]const u8) Kind {
+            if (stype == null or stype.?.len == 0) return .javascript;
+            if (std.mem.eql(u8, stype.?, "application/javascript")) return .javascript;
+            if (!std.mem.eql(u8, stype.?, "module")) return .module;
 
-        return false;
-    }
+            return .unknown;
+        }
+
+        fn eval(self: Script, alloc: std.mem.Allocator, env: Env, body: []const u8) !void {
+            switch (self.kind) {
+                .unknown => return error.UnknownScript,
+                .javascript => {},
+                .module => {},
+            }
+
+            var try_catch: jsruntime.TryCatch = undefined;
+            try_catch.init(env);
+            defer try_catch.deinit();
+
+            const res = env.exec(body, self.src) catch {
+                if (try try_catch.err(alloc, env)) |msg| {
+                    defer alloc.free(msg);
+                    log.info("eval script {s}: {s}", .{ self.src, msg });
+                }
+                return FetchError.JsErr;
+            };
+
+            if (builtin.mode == .Debug) {
+                const msg = try res.toString(alloc, env);
+                defer alloc.free(msg);
+                log.debug("eval script {s}: {s}", .{ self.src, msg });
+            }
+        }
+    };
 };
