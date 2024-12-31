@@ -56,6 +56,14 @@ jobs:
       - name: zig build debug
         run: zig build -Dengine=v8
 
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lightpanda-build-dev
+          path: |
+            zig-out/bin/lightpanda
+          retention-days: 1
+
   zig-build-release:
     name: zig build release
 
@@ -131,3 +139,30 @@ jobs:
 
       - name: format and send json result
         run: /perf-fmt bench-browser ${{ github.sha }} bench.json
+
+  demo-puppeteer:
+    name: demo-puppeteer
+    needs: zig-build-dev
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: 'lightpanda-io/demo'
+          fetch-depth: 0
+
+      - run: npm install
+
+      - name: download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lightpanda-build-dev
+
+      - run: chmod a+x ./lightpanda
+
+      - name: run puppeteer
+        run: |
+          python3 -m http.server 1234 -d ./public &
+          ./lightpanda &
+          RUNS=2 npm run bench-puppeteer-cdp
