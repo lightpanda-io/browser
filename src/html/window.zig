@@ -25,6 +25,7 @@ const CallbackArg = jsruntime.CallbackArg;
 const Loop = jsruntime.Loop;
 
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
+const Navigator = @import("navigator.zig").Navigator;
 
 const storage = @import("../storage/storage.zig");
 
@@ -48,9 +49,12 @@ pub const Window = struct {
     timeoutid: u32 = 0,
     timeoutids: [512]u64 = undefined,
 
-    pub fn create(target: ?[]const u8) Window {
+    navigator: Navigator,
+
+    pub fn create(target: ?[]const u8, navigator: ?Navigator) Window {
         return Window{
             .target = target orelse "",
+            .navigator = navigator orelse .{},
         };
     }
 
@@ -64,6 +68,10 @@ pub const Window = struct {
 
     pub fn get_window(self: *Window) *Window {
         return self;
+    }
+
+    pub fn get_navigator(self: *Window) *Navigator {
+        return &self.navigator;
     }
 
     pub fn get_self(self: *Window) *Window {

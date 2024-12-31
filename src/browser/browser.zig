@@ -46,12 +46,15 @@ const polyfill = @import("../polyfill/polyfill.zig");
 
 const log = std.log.scoped(.browser);
 
+pub const user_agent = "Lightpanda/1.0";
+
 // Browser is an instance of the browser.
 // You can create multiple browser instances.
 // A browser contains only one session.
 // TODO allow multiple sessions per browser.
 pub const Browser = struct {
     session: Session = undefined,
+    agent: []const u8 = user_agent,
 
     const uri = "about:blank";
 
@@ -111,7 +114,7 @@ pub const Session = struct {
             .uri = uri,
             .alloc = alloc,
             .arena = std.heap.ArenaAllocator.init(alloc),
-            .window = Window.create(null),
+            .window = Window.create(null, .{ .agent = user_agent }),
             .loader = Loader.init(alloc),
             .storageShed = storage.Shed.init(alloc),
             .httpClient = undefined,
@@ -195,6 +198,28 @@ pub const Page = struct {
         };
     }
 
+    // start js env.
+    // - auxData: extra data forwarded to the Inspector
+    // see Inspector.contextCreated
+    pub fn start(self: *Page, auxData: ?[]const u8) !void {
+        // start JS env
+        log.debug("start js env", .{});
+        try self.session.env.start();
+
+        // add global objects
+        log.debug("setup global env", .{});
+        try self.session.env.bindGlobal(&self.session.window);
+
+        // load polyfills
+        try polyfill.load(self.arena.allocator(), self.session.env);
+
+        // inspector
+        if (self.session.inspector) |inspector| {
+            log.debug("inspector context created", .{});
+            inspector.contextCreated(self.session.env, "", self.origin orelse "://", auxData);
+        }
+    }
+
     // reset js env and mem arena.
     pub fn end(self: *Page) void {
         self.session.env.stop();
@@ -253,6 +278,11 @@ pub const Page = struct {
         const alloc = self.arena.allocator();
 
         log.debug("starting GET {s}", .{uri});
+
+        // if the uri is about:blank, nothing to do.
+        if (std.mem.eql(u8, "about:blank", uri)) {
+            return;
+        }
 
         // own the url
         if (self.rawuri) |prev| alloc.free(prev);
@@ -349,14 +379,6 @@ pub const Page = struct {
 
         // https://html.spec.whatwg.org/#read-html
 
-        // start JS env
-        // TODO load the js env concurrently with the HTML parsing.
-        log.debug("start js env", .{});
-        try self.session.env.start();
-
-        // load polyfills
-        try polyfill.load(alloc, self.session.env);
-
         // inspector
         if (self.session.inspector) |inspector| {
             inspector.contextCreated(self.session.env, "", self.origin.?, auxData);
@@ -367,10 +389,6 @@ pub const Page = struct {
             .document = html_doc,
             .httpClient = &self.session.httpClient,
         });
-
-        // add global objects
-        log.debug("setup global env", .{});
-        try self.session.env.bindGlobal(&self.session.window);
 
         // browse the DOM tree to retrieve scripts
         // TODO execute the synchronous scripts during the HTL parsing.

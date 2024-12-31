@@ -31,6 +31,9 @@ const emulation = @import("emulation.zig").emulation;
 const fetch = @import("fetch.zig").fetch;
 const performance = @import("performance.zig").performance;
 const IncomingMessage = @import("msg.zig").IncomingMessage;
+const inspector = @import("inspector.zig").inspector;
+const dom = @import("dom.zig").dom;
+const css = @import("css.zig").css;
 
 const log_cdp = std.log.scoped(.cdp);
 
@@ -59,6 +62,9 @@ const Domains = enum {
     Log,
     Runtime,
     Network,
+    DOM,
+    CSS,
+    Inspector,
     Emulation,
     Fetch,
     Performance,
@@ -91,6 +97,9 @@ pub fn do(
         .Log => log(alloc, &msg, action, ctx),
         .Runtime => runtime(alloc, &msg, action, ctx),
         .Network => network(alloc, &msg, action, ctx),
+        .DOM => dom(alloc, &msg, action, ctx),
+        .CSS => css(alloc, &msg, action, ctx),
+        .Inspector => inspector(alloc, &msg, action, ctx),
         .Emulation => emulation(alloc, &msg, action, ctx),
         .Fetch => fetch(alloc, &msg, action, ctx),
         .Performance => performance(alloc, &msg, action, ctx),
@@ -100,6 +109,7 @@ pub fn do(
 pub const State = struct {
     executionContextId: u32 = 0,
     contextID: ?[]const u8 = null,
+    sessionID: ?[]const u8 = null,
     frameID: []const u8 = FrameID,
     url: []const u8 = URLBase,
     securityOrigin: []const u8 = URLBase,
@@ -200,11 +210,11 @@ pub fn sendEvent(
 // ------
 
 // TODO: hard coded IDs
-pub const BrowserSessionID = "9559320D92474062597D9875C664CAC0";
-pub const ContextSessionID = "4FDC2CB760A23A220497A05C95417CF4";
+pub const BrowserSessionID = "BROWSERSESSIONID597D9875C664CAC0";
+pub const ContextSessionID = "CONTEXTSESSIONID0497A05C95417CF4";
 pub const URLBase = "chrome://newtab/";
-pub const FrameID = "90D14BBD8AED408A0467AC93100BCDBE";
-pub const LoaderID = "CFC8BED824DD2FD56CF1EF33C965C79C";
+pub const LoaderID = "LOADERID24DD2FD56CF1EF33C965C79C";
+pub const FrameID = "FRAMEIDD8AED408A0467AC93100BCDBE";
 
 pub const TimestampEvent = struct {
     timestamp: f64,

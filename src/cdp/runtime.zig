@@ -28,6 +28,7 @@ const result = cdp.result;
 const IncomingMessage = @import("msg.zig").IncomingMessage;
 const Input = @import("msg.zig").Input;
 const stringify = cdp.stringify;
+const target = @import("target.zig");
 
 const log = std.log.scoped(.cdp);
 
@@ -116,6 +117,8 @@ fn sendInspector(
         }
     }
 
+    ctx.state.sessionID = msg.sessionId;
+
     // remove awaitPromise true params
     // TODO: delete when Promise are correctly handled by zig-js-runtime
     if (method == .callFunctionOn or method == .evaluate) {
@@ -129,6 +132,7 @@ fn sendInspector(
     }
 
     ctx.sendInspector(msg.json);
+
     return "";
 }
 
