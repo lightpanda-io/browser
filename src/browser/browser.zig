@@ -407,7 +407,6 @@ pub const Page = struct {
             // ignore non-js script.
             const script = try Script.init(e) orelse continue;
             if (script.kind == .unknown) continue;
-            if (script.kind == .module) continue;
 
             // Ignore the defer attribute b/c we analyze all script
             // after the document has been parsed.
@@ -596,23 +595,21 @@ pub const Page = struct {
         fn kind(stype: ?[]const u8) Kind {
             if (stype == null or stype.?.len == 0) return .javascript;
             if (std.mem.eql(u8, stype.?, "application/javascript")) return .javascript;
-            if (!std.mem.eql(u8, stype.?, "module")) return .module;
+            if (std.mem.eql(u8, stype.?, "module")) return .module;
 
             return .unknown;
         }
 
         fn eval(self: Script, alloc: std.mem.Allocator, env: Env, body: []const u8) !void {
-            switch (self.kind) {
-                .unknown => return error.UnknownScript,
-                .javascript => {},
-                .module => {},
-            }
-
             var try_catch: jsruntime.TryCatch = undefined;
             try_catch.init(env);
             defer try_catch.deinit();
 
-            const res = env.exec(body, self.src) catch {
+            const res = switch (self.kind) {
+                .unknown => return error.UnknownScript,
+                .javascript => env.exec(body, self.src),
+                .module => env.module(body, self.src),
+            } catch {
                 if (try try_catch.err(alloc, env)) |msg| {
                     defer alloc.free(msg);
                     log.info("eval script {s}: {s}", .{ self.src, msg });
