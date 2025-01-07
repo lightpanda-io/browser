@@ -95,6 +95,19 @@ const AttachToTarget = struct {
     waitingForDebugger: bool = false,
 };
 
+const TargetCreated = struct {
+    sessionId: []const u8,
+    targetInfo: struct {
+        targetId: []const u8,
+        type: []const u8 = "page",
+        title: []const u8,
+        url: []const u8,
+        attached: bool = true,
+        canAccessOpener: bool = false,
+        browserContextId: []const u8,
+    },
+};
+
 const TargetFilter = struct {
     type: ?[]const u8 = null,
     exclude: ?bool = null,
@@ -327,6 +340,19 @@ fn createTarget(
     ctx.state.securityOrigin = "://";
     ctx.state.secureContextType = "InsecureScheme";
     ctx.state.loaderID = LoaderID;
+
+    // send targetCreated event
+    const created = TargetCreated{
+        .sessionId = cdp.ContextSessionID,
+        .targetInfo = .{
+            .targetId = ctx.state.frameID,
+            .title = "about:blank",
+            .url = ctx.state.url,
+            .browserContextId = input.params.browserContextId orelse ContextID,
+            .attached = true,
+        },
+    };
+    try cdp.sendEvent(alloc, ctx, "Target.targetCreated", TargetCreated, created, input.sessionId);
 
     // send attachToTarget event
     const attached = AttachToTarget{
