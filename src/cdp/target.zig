@@ -38,6 +38,7 @@ const Methods = enum {
     disposeBrowserContext,
     createTarget,
     closeTarget,
+    sendMessageToTarget,
 };
 
 pub fn target(
@@ -58,6 +59,7 @@ pub fn target(
         .disposeBrowserContext => disposeBrowserContext(alloc, msg, ctx),
         .createTarget => createTarget(alloc, msg, ctx),
         .closeTarget => closeTarget(alloc, msg, ctx),
+        .sendMessageToTarget => sendMessageToTarget(alloc, msg, ctx),
     };
 }
 
@@ -434,6 +436,47 @@ fn closeTarget(
             .targetId = input.params.targetId,
         },
         null,
+    );
+
+    return "";
+}
+
+// noop
+fn sendMessageToTarget(
+    alloc: std.mem.Allocator,
+    msg: *IncomingMessage,
+    ctx: *Ctx,
+) ![]const u8 {
+    // input
+    const Params = struct {
+        message: []const u8,
+        sessionId: []const u8,
+    };
+    const input = try Input(Params).get(alloc, msg);
+    defer input.deinit();
+    log.debug("Req > id {d}, method {s}", .{ input.id, "target.sendMessageToTarget" });
+
+    // get the wrapped message.
+    var wmsg = IncomingMessage.init(alloc, input.params.message);
+    defer wmsg.deinit();
+
+    const res = try cdp.dispatch(alloc, &wmsg, ctx);
+
+    // receivedMessageFromTarget event
+    const ReceivedMessageFromTarget = struct {
+        sessionId: []const u8,
+        message: []const u8,
+    };
+    try cdp.sendEvent(
+        alloc,
+        ctx,
+        "Target.receivedMessageFromTarget",
+        ReceivedMessageFromTarget,
+        .{
+            .sessionId = input.params.sessionId,
+            .message = res,
+        },
+        input.params.sessionId,
     );
 
     return "";
