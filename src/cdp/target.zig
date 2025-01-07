@@ -441,7 +441,6 @@ fn closeTarget(
     return "";
 }
 
-// noop
 fn sendMessageToTarget(
     alloc: std.mem.Allocator,
     msg: *IncomingMessage,
@@ -464,8 +463,8 @@ fn sendMessageToTarget(
 
     // receivedMessageFromTarget event
     const ReceivedMessageFromTarget = struct {
-        sessionId: []const u8,
         message: []const u8,
+        sessionId: []const u8,
     };
     try cdp.sendEvent(
         alloc,
@@ -473,10 +472,10 @@ fn sendMessageToTarget(
         "Target.receivedMessageFromTarget",
         ReceivedMessageFromTarget,
         .{
-            .sessionId = input.params.sessionId,
             .message = res,
+            .sessionId = input.params.sessionId,
         },
-        input.params.sessionId,
+        null,
     );
 
     return "";
