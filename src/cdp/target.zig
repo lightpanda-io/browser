@@ -453,13 +453,17 @@ fn sendMessageToTarget(
     };
     const input = try Input(Params).get(alloc, msg);
     defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "target.sendMessageToTarget" });
+    log.debug("Req > id {d}, method {s} ({s})", .{ input.id, "target.sendMessageToTarget", input.params.message });
 
     // get the wrapped message.
     var wmsg = IncomingMessage.init(alloc, input.params.message);
     defer wmsg.deinit();
 
-    const res = try cdp.dispatch(alloc, &wmsg, ctx);
+    const res = cdp.dispatch(alloc, &wmsg, ctx) catch |e| {
+        log.err("send message {d} ({s}): {any}", .{ input.id, input.params.message, e });
+        // TODO dispatch error correctly.
+        return e;
+    };
 
     // receivedMessageFromTarget event
     const ReceivedMessageFromTarget = struct {

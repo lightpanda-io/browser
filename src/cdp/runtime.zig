@@ -129,7 +129,10 @@ fn sendInspector(
     }
 
     ctx.sendInspector(msg.json);
-    return "";
+
+    if (msg.id == null) return "";
+
+    return result(alloc, msg.id.?, null, null, msg.sessionId);
 }
 
 pub const AuxData = struct {
