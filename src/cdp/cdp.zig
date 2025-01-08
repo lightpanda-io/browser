@@ -35,6 +35,7 @@ const Input = @import("msg.zig").Input;
 const inspector = @import("inspector.zig").inspector;
 const dom = @import("dom.zig").dom;
 const css = @import("css.zig").css;
+const security = @import("security.zig").security;
 
 const log_cdp = std.log.scoped(.cdp);
 
@@ -69,6 +70,7 @@ const Domains = enum {
     Emulation,
     Fetch,
     Performance,
+    Security,
 };
 
 // The caller is responsible for calling `free` on the returned slice.
@@ -112,6 +114,7 @@ pub fn dispatch(
         .Emulation => emulation(alloc, msg, action, ctx),
         .Fetch => fetch(alloc, msg, action, ctx),
         .Performance => performance(alloc, msg, action, ctx),
+        .Security => security(alloc, msg, action, ctx),
     };
 }
 
