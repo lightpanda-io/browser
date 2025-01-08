@@ -257,6 +257,11 @@ pub const Page = struct {
 
         log.debug("starting GET {s}", .{uri});
 
+        // if the uri is about:blank, nothing to do.
+        if (std.mem.eql(u8, "about:blank", uri)) {
+            return;
+        }
+
         // own the url
         if (self.rawuri) |prev| alloc.free(prev);
         self.rawuri = try alloc.dupe(u8, uri);
