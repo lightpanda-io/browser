@@ -54,7 +54,7 @@ fn execJS(
     defer storageShelf.deinit();
 
     // alias global as self and window
-    var window = Window.create(null);
+    var window = Window.create(null, null);
     window.replaceDocument(doc);
     window.setStorageShelf(&storageShelf);
     try js_env.bindGlobal(window);
