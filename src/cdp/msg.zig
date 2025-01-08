@@ -130,7 +130,8 @@ pub const IncomingMessage = struct {
     // asking for getParams, we don't know how to parse them.
     fn scanParams(self: *IncomingMessage) !void {
         const tt = try self.scanner.peekNextTokenType();
-        if (tt != .object_begin) return error.InvalidParams;
+        // accept object begin or null JSON value.
+        if (tt != .object_begin and tt != .null) return error.InvalidParams;
         try self.scanner.skipValue();
         self.params_skip = true;
     }

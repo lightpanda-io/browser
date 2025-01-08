@@ -38,6 +38,7 @@ const Methods = enum {
     disposeBrowserContext,
     createTarget,
     closeTarget,
+    sendMessageToTarget,
 };
 
 pub fn target(
@@ -58,6 +59,7 @@ pub fn target(
         .disposeBrowserContext => disposeBrowserContext(alloc, msg, ctx),
         .createTarget => createTarget(alloc, msg, ctx),
         .closeTarget => closeTarget(alloc, msg, ctx),
+        .sendMessageToTarget => sendMessageToTarget(alloc, msg, ctx),
     };
 }
 
@@ -93,6 +95,19 @@ const AttachToTarget = struct {
         browserContextId: []const u8,
     },
     waitingForDebugger: bool = false,
+};
+
+const TargetCreated = struct {
+    sessionId: []const u8,
+    targetInfo: struct {
+        targetId: []const u8,
+        type: []const u8 = "page",
+        title: []const u8,
+        url: []const u8,
+        attached: bool = true,
+        canAccessOpener: bool = false,
+        browserContextId: []const u8,
+    },
 };
 
 const TargetFilter = struct {
@@ -328,6 +343,19 @@ fn createTarget(
     ctx.state.secureContextType = "InsecureScheme";
     ctx.state.loaderID = LoaderID;
 
+    // send targetCreated event
+    const created = TargetCreated{
+        .sessionId = cdp.ContextSessionID,
+        .targetInfo = .{
+            .targetId = ctx.state.frameID,
+            .title = "about:blank",
+            .url = ctx.state.url,
+            .browserContextId = input.params.browserContextId orelse ContextID,
+            .attached = true,
+        },
+    };
+    try cdp.sendEvent(alloc, ctx, "Target.targetCreated", TargetCreated, created, input.sessionId);
+
     // send attachToTarget event
     const attached = AttachToTarget{
         .sessionId = cdp.ContextSessionID,
@@ -406,6 +434,46 @@ fn closeTarget(
         .{
             .sessionId = input.sessionId orelse cdp.ContextSessionID,
             .targetId = input.params.targetId,
+        },
+        null,
+    );
+
+    return "";
+}
+
+fn sendMessageToTarget(
+    alloc: std.mem.Allocator,
+    msg: *IncomingMessage,
+    ctx: *Ctx,
+) ![]const u8 {
+    // input
+    const Params = struct {
+        message: []const u8,
+        sessionId: []const u8,
+    };
+    const input = try Input(Params).get(alloc, msg);
+    defer input.deinit();
+    log.debug("Req > id {d}, method {s}", .{ input.id, "target.sendMessageToTarget" });
+
+    // get the wrapped message.
+    var wmsg = IncomingMessage.init(alloc, input.params.message);
+    defer wmsg.deinit();
+
+    const res = try cdp.dispatch(alloc, &wmsg, ctx);
+
+    // receivedMessageFromTarget event
+    const ReceivedMessageFromTarget = struct {
+        message: []const u8,
+        sessionId: []const u8,
+    };
+    try cdp.sendEvent(
+        alloc,
+        ctx,
+        "Target.receivedMessageFromTarget",
+        ReceivedMessageFromTarget,
+        .{
+            .message = res,
+            .sessionId = input.params.sessionId,
         },
         null,
     );

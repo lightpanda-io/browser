@@ -31,6 +31,7 @@ const emulation = @import("emulation.zig").emulation;
 const fetch = @import("fetch.zig").fetch;
 const performance = @import("performance.zig").performance;
 const IncomingMessage = @import("msg.zig").IncomingMessage;
+const Input = @import("msg.zig").Input;
 
 const log_cdp = std.log.scoped(.cdp);
 
@@ -69,12 +70,20 @@ pub fn do(
     alloc: std.mem.Allocator,
     s: []const u8,
     ctx: *Ctx,
-) ![]const u8 {
+) anyerror![]const u8 {
 
     // incoming message parser
     var msg = IncomingMessage.init(alloc, s);
     defer msg.deinit();
 
+    return dispatch(alloc, &msg, ctx);
+}
+
+pub fn dispatch(
+    alloc: std.mem.Allocator,
+    msg: *IncomingMessage,
+    ctx: *Ctx,
+) anyerror![]const u8 {
     const method = try msg.getMethod();
 
     // retrieve domain from method
@@ -85,15 +94,15 @@ pub fn do(
     // select corresponding domain
     const action = iter.next() orelse return error.BadMethod;
     return switch (domain) {
-        .Browser => browser(alloc, &msg, action, ctx),
-        .Target => target(alloc, &msg, action, ctx),
-        .Page => page(alloc, &msg, action, ctx),
-        .Log => log(alloc, &msg, action, ctx),
-        .Runtime => runtime(alloc, &msg, action, ctx),
-        .Network => network(alloc, &msg, action, ctx),
-        .Emulation => emulation(alloc, &msg, action, ctx),
-        .Fetch => fetch(alloc, &msg, action, ctx),
-        .Performance => performance(alloc, &msg, action, ctx),
+        .Browser => browser(alloc, msg, action, ctx),
+        .Target => target(alloc, msg, action, ctx),
+        .Page => page(alloc, msg, action, ctx),
+        .Log => log(alloc, msg, action, ctx),
+        .Runtime => runtime(alloc, msg, action, ctx),
+        .Network => network(alloc, msg, action, ctx),
+        .Emulation => emulation(alloc, msg, action, ctx),
+        .Fetch => fetch(alloc, msg, action, ctx),
+        .Performance => performance(alloc, msg, action, ctx),
     };
 }
 
