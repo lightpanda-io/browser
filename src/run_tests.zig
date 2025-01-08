@@ -96,7 +96,7 @@ fn testExecFn(
     });
 
     // alias global as self and window
-    var window = Window.create(null);
+    var window = Window.create(null, null);
 
     window.replaceDocument(doc);
     window.setStorageShelf(&storageShelf);
@@ -137,6 +137,7 @@ fn testsAllExecFn(
         HTMLElementTestExecFn,
         MutationObserverTestExecFn,
         @import("polyfill/fetch.zig").testExecFn,
+        @import("html/navigator.zig").testExecFn,
     };
 
     inline for (testFns) |testFn| {
@@ -359,7 +360,7 @@ test "bug document html parsing #4" {
 }
 
 test "Window is a libdom event target" {
-    var window = Window.create(null);
+    var window = Window.create(null, null);
 
     const event = try parser.eventCreate();
     try parser.eventInit(event, "foo", .{});

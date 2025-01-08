@@ -46,12 +46,15 @@ const polyfill = @import("../polyfill/polyfill.zig");
 
 const log = std.log.scoped(.browser);
 
+pub const user_agent = "Lightpanda/1.0";
+
 // Browser is an instance of the browser.
 // You can create multiple browser instances.
 // A browser contains only one session.
 // TODO allow multiple sessions per browser.
 pub const Browser = struct {
     session: Session = undefined,
+    agent: []const u8 = user_agent,
 
     const uri = "about:blank";
 
@@ -111,7 +114,7 @@ pub const Session = struct {
             .uri = uri,
             .alloc = alloc,
             .arena = std.heap.ArenaAllocator.init(alloc),
-            .window = Window.create(null),
+            .window = Window.create(null, .{ .agent = user_agent }),
             .loader = Loader.init(alloc),
             .storageShed = storage.Shed.init(alloc),
             .httpClient = undefined,

@@ -21,6 +21,7 @@ const generate = @import("../generate.zig");
 const HTMLDocument = @import("document.zig").HTMLDocument;
 const HTMLElem = @import("elements.zig");
 const Window = @import("window.zig").Window;
+const Navigator = @import("navigator.zig").Navigator;
 
 pub const Interfaces = generate.Tuple(.{
     HTMLDocument,
@@ -28,4 +29,5 @@ pub const Interfaces = generate.Tuple(.{
     HTMLElem.HTMLMediaElement,
     HTMLElem.Interfaces,
     Window,
+    Navigator,
 });
