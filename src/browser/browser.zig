@@ -29,6 +29,7 @@ const Mime = @import("mime.zig");
 const jsruntime = @import("jsruntime");
 const Loop = jsruntime.Loop;
 const Env = jsruntime.Env;
+const Module = jsruntime.Module;
 
 const apiweb = @import("../apiweb.zig");
 
@@ -123,6 +124,21 @@ pub const Session = struct {
         Env.init(&self.env, self.arena.allocator(), loop, null);
         self.httpClient = .{ .allocator = alloc };
         try self.env.load(&self.jstypes);
+    }
+
+    fn fetchModule(ctx: *anyopaque, referrer: ?jsruntime.Module, specifier: []const u8) !jsruntime.Module {
+        _ = referrer;
+
+        const self: *Session = @ptrCast(@alignCast(ctx));
+
+        if (self.page == null) return error.NoPage;
+
+        log.debug("fetch module: specifier: {s}", .{specifier});
+        const alloc = self.arena.allocator();
+        const body = try self.page.?.fetchData(alloc, specifier);
+        defer alloc.free(body);
+
+        return self.env.compileModule(body, specifier);
     }
 
     fn deinit(self: *Session) void {
@@ -362,6 +378,9 @@ pub const Page = struct {
         log.debug("start js env", .{});
         try self.session.env.start();
 
+        // register the module loader
+        try self.session.env.setModuleLoadFn(self.session, Session.fetchModule);
+
         // load polyfills
         try polyfill.load(alloc, self.session.env);
 
@@ -530,32 +549,38 @@ pub const Page = struct {
         JsErr,
     };
 
-    // fetchScript senf a GET request to the src and execute the script
-    // received.
-    fn fetchScript(self: *Page, s: Script) !void {
-        const alloc = self.arena.allocator();
-
-        log.debug("starting fetch script {s}", .{s.src});
+    // the caller owns the returned string
+    fn fetchData(self: *Page, alloc: std.mem.Allocator, src: []const u8) ![]const u8 {
+        log.debug("starting fetch {s}", .{src});
 
         var buffer: [1024]u8 = undefined;
         var b: []u8 = buffer[0..];
-        const u = try std.Uri.resolve_inplace(self.uri, s.src, &b);
+        const u = try std.Uri.resolve_inplace(self.uri, src, &b);
 
         var fetchres = try self.session.loader.get(alloc, u);
         defer fetchres.deinit();
 
         const resp = fetchres.req.response;
 
-        log.info("fetch script {any}: {d}", .{ u, resp.status });
+        log.info("fetch {any}: {d}", .{ u, resp.status });
 
         if (resp.status != .ok) return FetchError.BadStatusCode;
 
         // TODO check content-type
         const body = try fetchres.req.reader().readAllAlloc(alloc, 16 * 1024 * 1024);
-        defer alloc.free(body);
 
         // check no body
         if (body.len == 0) return FetchError.NoBody;
+
+        return body;
+    }
+
+    // fetchScript senf a GET request to the src and execute the script
+    // received.
+    fn fetchScript(self: *Page, s: Script) !void {
+        const alloc = self.arena.allocator();
+        const body = try self.fetchData(alloc, s.src);
+        defer alloc.free(body);
 
         try s.eval(alloc, self.session.env, body);
     }
