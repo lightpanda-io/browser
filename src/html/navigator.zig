@@ -19,18 +19,10 @@
 const std = @import("std");
 
 const builtin = @import("builtin");
-const parser = @import("netsurf");
 const jsruntime = @import("jsruntime");
-const Callback = jsruntime.Callback;
-const CallbackArg = jsruntime.CallbackArg;
-const Loop = jsruntime.Loop;
 
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
-
-const EventTarget = @import("../dom/event_target.zig").EventTarget;
-
-const storage = @import("../storage/storage.zig");
 
 // https://html.spec.whatwg.org/multipage/system-state.html#navigator
 pub const Navigator = struct {
