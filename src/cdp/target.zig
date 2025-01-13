@@ -39,6 +39,7 @@ const Methods = enum {
     createTarget,
     closeTarget,
     sendMessageToTarget,
+    detachFromTarget,
 };
 
 pub fn target(
@@ -60,13 +61,14 @@ pub fn target(
         .createTarget => createTarget(alloc, msg, ctx),
         .closeTarget => closeTarget(alloc, msg, ctx),
         .sendMessageToTarget => sendMessageToTarget(alloc, msg, ctx),
+        .detachFromTarget => detachFromTarget(alloc, msg, ctx),
     };
 }
 
 // TODO: hard coded IDs
-const PageTargetID = "CFCD6EC01573CF29BB638E9DC0F52DDC";
-const BrowserTargetID = "2d2bdef9-1c95-416f-8c0e-83f3ab73a30c";
-const BrowserContextID = "65618675CB7D3585A95049E9DFE95EA9";
+pub const PageTargetID = "PAGETARGETIDB638E9DC0F52DDC";
+pub const BrowserTargetID = "browser9-targ-et6f-id0e-83f3ab73a30c";
+pub const BrowserContextID = "BROWSERCONTEXTIDA95049E9DFE95EA9";
 
 // TODO: noop method
 fn setDiscoverTargets(
@@ -138,7 +140,7 @@ fn setAutoAttach(
             .sessionId = cdp.BrowserSessionID,
             .targetInfo = .{
                 .targetId = PageTargetID,
-                .title = "New Incognito tab",
+                .title = "about:blank",
                 .url = cdp.URLBase,
                 .browserContextId = BrowserContextID,
             },
@@ -171,8 +173,8 @@ fn attachToTarget(
         const attached = AttachToTarget{
             .sessionId = cdp.BrowserSessionID,
             .targetInfo = .{
-                .targetId = PageTargetID,
-                .title = "New Incognito tab",
+                .targetId = input.params.targetId,
+                .title = "about:blank",
                 .url = cdp.URLBase,
                 .browserContextId = BrowserContextID,
             },
@@ -185,7 +187,7 @@ fn attachToTarget(
         sessionId: []const u8,
     };
     const output = SessionId{
-        .sessionId = input.sessionId orelse BrowserContextID,
+        .sessionId = input.sessionId orelse cdp.BrowserSessionID,
     };
     return result(alloc, input.id, SessionId, output, null);
 }
@@ -252,7 +254,7 @@ fn getBrowserContexts(
     return result(alloc, input.id, Resp, resp, null);
 }
 
-const ContextID = "22648B09EDCCDD11109E2D4FEFBE4F89";
+const ContextID = "CONTEXTIDDCCDD11109E2D4FEFBE4F89";
 
 // TODO: noop method
 fn createBrowserContext(
@@ -313,8 +315,8 @@ fn disposeBrowserContext(
 }
 
 // TODO: hard coded IDs
-const TargetID = "57356548460A8F29706A2ADF14316298";
-const LoaderID = "DD4A76F842AA389647D702B4D805F49A";
+const TargetID = "TARGETID460A8F29706A2ADF14316298";
+const LoaderID = "LOADERID42AA389647D702B4D805F49A";
 
 fn createTarget(
     alloc: std.mem.Allocator,
@@ -342,6 +344,23 @@ fn createTarget(
     ctx.state.securityOrigin = "://";
     ctx.state.secureContextType = "InsecureScheme";
     ctx.state.loaderID = LoaderID;
+    ctx.state.sessionID = msg.sessionId;
+
+    // TODO stop the previous page instead?
+    if (ctx.browser.session.page != null) return error.pageAlreadyExists;
+
+    // create the page
+    const p = try ctx.browser.session.createPage();
+    ctx.state.executionContextId += 1;
+    // start the js env
+    const auxData = try std.fmt.allocPrint(
+        alloc,
+        // NOTE: we assume this is the default web page
+        "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}",
+        .{ctx.state.frameID},
+    );
+    defer alloc.free(auxData);
+    try p.start(auxData);
 
     // send targetCreated event
     const created = TargetCreated{
@@ -361,9 +380,10 @@ fn createTarget(
         .sessionId = cdp.ContextSessionID,
         .targetInfo = .{
             .targetId = ctx.state.frameID,
-            .title = "",
+            .title = "about:blank",
             .url = ctx.state.url,
             .browserContextId = input.params.browserContextId orelse ContextID,
+            .attached = true,
         },
         .waitingForDebugger = true,
     };
@@ -438,6 +458,8 @@ fn closeTarget(
         null,
     );
 
+    if (ctx.browser.session.page != null) ctx.browser.session.page.?.end();
+
     return "";
 }
 
@@ -483,4 +505,19 @@ fn sendMessageToTarget(
     );
 
     return "";
+}
+
+// noop
+fn detachFromTarget(
+    alloc: std.mem.Allocator,
+    msg: *IncomingMessage,
+    _: *Ctx,
+) ![]const u8 {
+    // input
+    const input = try Input(void).get(alloc, msg);
+    defer input.deinit();
+    log.debug("Req > id {d}, method {s}", .{ input.id, "target.detachFromTarget" });
+
+    // output
+    return result(alloc, input.id, bool, true, input.sessionId);
 }
