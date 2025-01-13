@@ -117,6 +117,8 @@ fn sendInspector(
         }
     }
 
+    ctx.state.sessionID = msg.sessionId;
+
     // remove awaitPromise true params
     // TODO: delete when Promise are correctly handled by zig-js-runtime
     if (method == .callFunctionOn or method == .evaluate) {
