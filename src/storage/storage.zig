@@ -173,7 +173,7 @@ pub const Bottle = struct {
         // > context of another document.
         // https://developer.mozilla.org/en-US/docs/Web/API/Window/storage_event
         //
-        // So for now, we won't impement the feature.
+        // So for now, we won't implement the feature.
     }
 
     pub fn _removeItem(self: *Bottle, k: []const u8) !void {
