@@ -38,53 +38,6 @@ pub const History = struct {
     pub fn get_length(_: *History) u64 {
         return 0;
     }
-
-    pub fn get_appCodeName(_: *Navigator) []const u8 {
-        return "Mozilla";
-    }
-    pub fn get_appName(_: *Navigator) []const u8 {
-        return "Netscape";
-    }
-    pub fn get_appVersion(self: *Navigator) []const u8 {
-        return self.version;
-    }
-    pub fn get_platform(self: *Navigator) []const u8 {
-        return self.platform;
-    }
-    pub fn get_product(_: *Navigator) []const u8 {
-        return "Gecko";
-    }
-    pub fn get_productSub(_: *Navigator) []const u8 {
-        return "20030107";
-    }
-    pub fn get_vendor(self: *Navigator) []const u8 {
-        return self.vendor;
-    }
-    pub fn get_vendorSub(_: *Navigator) []const u8 {
-        return "";
-    }
-    pub fn get_language(self: *Navigator) []const u8 {
-        return self.language;
-    }
-    // TODO wait for arrays.
-    //pub fn get_languages(self: *Navigator) [][]const u8 {
-    //    return .{self.language};
-    //}
-    pub fn get_online(_: *Navigator) bool {
-        return true;
-    }
-    pub fn _registerProtocolHandler(_: *Navigator, scheme: []const u8, url: []const u8) void {
-        _ = scheme;
-        _ = url;
-    }
-    pub fn _unregisterProtocolHandler(_: *Navigator, scheme: []const u8, url: []const u8) void {
-        _ = scheme;
-        _ = url;
-    }
-
-    pub fn get_cookieEnabled(_: *Navigator) bool {
-        return true;
-    }
 };
 
 // Tests
@@ -94,11 +47,8 @@ pub fn testExecFn(
     _: std.mem.Allocator,
     js_env: *jsruntime.Env,
 ) anyerror!void {
-    var navigator = [_]Case{
-        .{ .src = "navigator.userAgent", .ex = "Lightpanda/1.0" },
-        .{ .src = "navigator.appVersion", .ex = "1.0" },
-        .{ .src = "navigator.language", .ex = "en-US" },
+    var history = [_]Case{
+        .{ .src = "true", .ex = "true" },
     };
-    try checkCases(js_env, &navigator);
+    try checkCases(js_env, &history);
 }
-
