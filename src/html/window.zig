@@ -26,6 +26,7 @@ const Loop = jsruntime.Loop;
 
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const Navigator = @import("navigator.zig").Navigator;
+const History = @import("history.zig").History;
 
 const storage = @import("../storage/storage.zig");
 
@@ -41,6 +42,7 @@ pub const Window = struct {
 
     document: ?*parser.DocumentHTML = null,
     target: []const u8,
+    history: History = .{},
 
     storageShelf: ?*storage.Shelf = null,
 
@@ -84,6 +86,10 @@ pub const Window = struct {
 
     pub fn get_document(self: *Window) ?*parser.DocumentHTML {
         return self.document;
+    }
+
+    pub fn get_history(self: *Window) *History {
+        return &self.history;
     }
 
     pub fn get_name(self: *Window) []const u8 {

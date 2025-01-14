@@ -138,6 +138,7 @@ fn testsAllExecFn(
         MutationObserverTestExecFn,
         @import("polyfill/fetch.zig").testExecFn,
         @import("html/navigator.zig").testExecFn,
+        @import("html/history.zig").testExecFn,
     };
 
     inline for (testFns) |testFn| {

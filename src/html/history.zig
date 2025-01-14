@@ -28,15 +28,70 @@ const checkCases = jsruntime.test_utils.checkCases;
 pub const History = struct {
     pub const mem_guarantied = true;
 
-    const ScrollRestaurationMode = enum {
+    const ScrollRestorationMode = enum {
         auto,
         manual,
     };
 
-    scrollRestauration: ScrollRestaurationMode = .audio,
+    scrollRestoration: ScrollRestorationMode = .auto,
+    state: std.json.Value = .null,
 
-    pub fn get_length(_: *History) u64 {
-        return 0;
+    // count tracks the history length until we implement correctly pushstate.
+    count: u32 = 0,
+
+    pub fn get_length(self: *History) u32 {
+        // TODO return the real history length value.
+        return self.count;
+    }
+
+    pub fn get_scrollRestoration(self: *History) []const u8 {
+        return switch (self.scrollRestoration) {
+            .auto => "auto",
+            .manual => "manual",
+        };
+    }
+
+    pub fn set_scrollRestoration(self: *History, mode: []const u8) void {
+        if (std.mem.eql(u8, "manual", mode)) self.scrollRestoration = .manual;
+        if (std.mem.eql(u8, "auto", mode)) self.scrollRestoration = .auto;
+    }
+
+    pub fn get_state(self: *History) std.json.Value {
+        return self.state;
+    }
+
+    // TODO implement the function
+    // data must handle any argument. We could expect a std.json.Value but
+    // https://github.com/lightpanda-io/zig-js-runtime/issues/267 is missing.
+    pub fn _pushState(self: *History, data: []const u8, _: ?[]const u8, url: ?[]const u8) void {
+        self.count += 1;
+        _ = url;
+        _ = data;
+    }
+
+    // TODO implement the function
+    // data must handle any argument. We could expect a std.json.Value but
+    // https://github.com/lightpanda-io/zig-js-runtime/issues/267 is missing.
+    pub fn _replaceState(self: *History, data: []const u8, _: ?[]const u8, url: ?[]const u8) void {
+        _ = self;
+        _ = url;
+        _ = data;
+    }
+
+    // TODO implement the function
+    pub fn _go(self: *History, delta: ?i32) void {
+        _ = self;
+        _ = delta;
+    }
+
+    // TODO implement the function
+    pub fn _back(self: *History) void {
+        _ = self;
+    }
+
+    // TODO implement the function
+    pub fn _forward(self: *History) void {
+        _ = self;
     }
 };
 
@@ -48,7 +103,26 @@ pub fn testExecFn(
     js_env: *jsruntime.Env,
 ) anyerror!void {
     var history = [_]Case{
-        .{ .src = "true", .ex = "true" },
+        .{ .src = "history.scrollRestoration", .ex = "auto" },
+        .{ .src = "history.scrollRestoration = 'manual'", .ex = "manual" },
+        .{ .src = "history.scrollRestoration = 'foo'", .ex = "foo" },
+        .{ .src = "history.scrollRestoration", .ex = "manual" },
+        .{ .src = "history.scrollRestoration = 'auto'", .ex = "auto" },
+        .{ .src = "history.scrollRestoration", .ex = "auto" },
+
+        .{ .src = "history.state", .ex = "null" },
+
+        .{ .src = "history.pushState({}, null, '')", .ex = "undefined" },
+
+        .{ .src = "history.replaceState({}, null, '')", .ex = "undefined" },
+
+        .{ .src = "history.go()", .ex = "undefined" },
+        .{ .src = "history.go(1)", .ex = "undefined" },
+        .{ .src = "history.go(-1)", .ex = "undefined" },
+
+        .{ .src = "history.forward()", .ex = "undefined" },
+
+        .{ .src = "history.back()", .ex = "undefined" },
     };
     try checkCases(js_env, &history);
 }
