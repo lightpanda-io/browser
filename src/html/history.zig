@@ -28,62 +28,70 @@ const checkCases = jsruntime.test_utils.checkCases;
 pub const History = struct {
     pub const mem_guarantied = true;
 
-    const ScrollRestaurationMode = enum {
+    const ScrollRestorationMode = enum {
         auto,
         manual,
     };
 
-    scrollRestauration: ScrollRestaurationMode = .audio,
+    scrollRestoration: ScrollRestorationMode = .auto,
+    state: std.json.Value = .null,
 
-    pub fn get_length(_: *History) u64 {
-        return 0;
+    // count tracks the history length until we implement correctly pushstate.
+    count: u32 = 0,
+
+    pub fn get_length(self: *History) u32 {
+        // TODO return the real history length value.
+        return self.count;
     }
 
-    pub fn get_appCodeName(_: *Navigator) []const u8 {
-        return "Mozilla";
+    pub fn get_scrollRestoration(self: *History) []const u8 {
+        return switch (self.scrollRestoration) {
+            .auto => "auto",
+            .manual => "manual",
+        };
     }
-    pub fn get_appName(_: *Navigator) []const u8 {
-        return "Netscape";
+
+    pub fn set_scrollRestoration(self: *History, mode: []const u8) void {
+        if (std.mem.eql(u8, "manual", mode)) self.scrollRestoration = .manual;
+        if (std.mem.eql(u8, "auto", mode)) self.scrollRestoration = .auto;
     }
-    pub fn get_appVersion(self: *Navigator) []const u8 {
-        return self.version;
+
+    pub fn get_state(self: *History) std.json.Value {
+        return self.state;
     }
-    pub fn get_platform(self: *Navigator) []const u8 {
-        return self.platform;
-    }
-    pub fn get_product(_: *Navigator) []const u8 {
-        return "Gecko";
-    }
-    pub fn get_productSub(_: *Navigator) []const u8 {
-        return "20030107";
-    }
-    pub fn get_vendor(self: *Navigator) []const u8 {
-        return self.vendor;
-    }
-    pub fn get_vendorSub(_: *Navigator) []const u8 {
-        return "";
-    }
-    pub fn get_language(self: *Navigator) []const u8 {
-        return self.language;
-    }
-    // TODO wait for arrays.
-    //pub fn get_languages(self: *Navigator) [][]const u8 {
-    //    return .{self.language};
-    //}
-    pub fn get_online(_: *Navigator) bool {
-        return true;
-    }
-    pub fn _registerProtocolHandler(_: *Navigator, scheme: []const u8, url: []const u8) void {
-        _ = scheme;
+
+    // TODO implement the function
+    // data must handle any argument. We could expect a std.json.Value but
+    // https://github.com/lightpanda-io/zig-js-runtime/issues/267 is missing.
+    pub fn _pushState(self: *History, data: []const u8, _: ?[]const u8, url: ?[]const u8) void {
+        self.count += 1;
         _ = url;
-    }
-    pub fn _unregisterProtocolHandler(_: *Navigator, scheme: []const u8, url: []const u8) void {
-        _ = scheme;
-        _ = url;
+        _ = data;
     }
 
-    pub fn get_cookieEnabled(_: *Navigator) bool {
-        return true;
+    // TODO implement the function
+    // data must handle any argument. We could expect a std.json.Value but
+    // https://github.com/lightpanda-io/zig-js-runtime/issues/267 is missing.
+    pub fn _replaceState(self: *History, data: []const u8, _: ?[]const u8, url: ?[]const u8) void {
+        _ = self;
+        _ = url;
+        _ = data;
+    }
+
+    // TODO implement the function
+    pub fn _go(self: *History, delta: ?i32) void {
+        _ = self;
+        _ = delta;
+    }
+
+    // TODO implement the function
+    pub fn _back(self: *History) void {
+        _ = self;
+    }
+
+    // TODO implement the function
+    pub fn _forward(self: *History) void {
+        _ = self;
     }
 };
 
@@ -94,11 +102,27 @@ pub fn testExecFn(
     _: std.mem.Allocator,
     js_env: *jsruntime.Env,
 ) anyerror!void {
-    var navigator = [_]Case{
-        .{ .src = "navigator.userAgent", .ex = "Lightpanda/1.0" },
-        .{ .src = "navigator.appVersion", .ex = "1.0" },
-        .{ .src = "navigator.language", .ex = "en-US" },
-    };
-    try checkCases(js_env, &navigator);
-}
+    var history = [_]Case{
+        .{ .src = "history.scrollRestoration", .ex = "auto" },
+        .{ .src = "history.scrollRestoration = 'manual'", .ex = "manual" },
+        .{ .src = "history.scrollRestoration = 'foo'", .ex = "foo" },
+        .{ .src = "history.scrollRestoration", .ex = "manual" },
+        .{ .src = "history.scrollRestoration = 'auto'", .ex = "auto" },
+        .{ .src = "history.scrollRestoration", .ex = "auto" },
 
+        .{ .src = "history.state", .ex = "null" },
+
+        .{ .src = "history.pushState({}, null, '')", .ex = "undefined" },
+
+        .{ .src = "history.replaceState({}, null, '')", .ex = "undefined" },
+
+        .{ .src = "history.go()", .ex = "undefined" },
+        .{ .src = "history.go(1)", .ex = "undefined" },
+        .{ .src = "history.go(-1)", .ex = "undefined" },
+
+        .{ .src = "history.forward()", .ex = "undefined" },
+
+        .{ .src = "history.back()", .ex = "undefined" },
+    };
+    try checkCases(js_env, &history);
+}
