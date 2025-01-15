@@ -139,6 +139,7 @@ fn testsAllExecFn(
         @import("polyfill/fetch.zig").testExecFn,
         @import("html/navigator.zig").testExecFn,
         @import("html/history.zig").testExecFn,
+        @import("html/location.zig").testExecFn,
     };
 
     inline for (testFns) |testFn| {

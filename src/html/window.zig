@@ -27,6 +27,7 @@ const Loop = jsruntime.Loop;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const Navigator = @import("navigator.zig").Navigator;
 const History = @import("history.zig").History;
+const Location = @import("location.zig").Location;
 
 const storage = @import("../storage/storage.zig");
 
@@ -43,6 +44,7 @@ pub const Window = struct {
     document: ?*parser.DocumentHTML = null,
     target: []const u8,
     history: History = .{},
+    location: Location = .{},
 
     storageShelf: ?*storage.Shelf = null,
 
@@ -60,6 +62,10 @@ pub const Window = struct {
         };
     }
 
+    pub fn replaceLocation(self: *Window, loc: Location) void {
+        self.location = loc;
+    }
+
     pub fn replaceDocument(self: *Window, doc: *parser.DocumentHTML) void {
         self.document = doc;
     }
@@ -74,6 +80,10 @@ pub const Window = struct {
 
     pub fn get_navigator(self: *Window) *Navigator {
         return &self.navigator;
+    }
+
+    pub fn get_location(self: *Window) *Location {
+        return &self.location;
     }
 
     pub fn get_self(self: *Window) *Window {
