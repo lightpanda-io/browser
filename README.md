@@ -16,7 +16,7 @@ Lightpanda is the open-source browser made for headless usage:
 - Support of Web APIs (partial, WIP)
 - Compatible with Playwright, Puppeteer through CDP (WIP)
 
-Fast scraping and web automation with minimal memory footprint:
+Fast web automation for AI agents, LLM training, scraping and testing with minimal memory footprint:
 
 - Ultra-low memory footprint (9x less than Chrome)
 - Exceptionally fast execution (11x faster than Chrome) & instant startup
@@ -24,53 +24,6 @@ Fast scraping and web automation with minimal memory footprint:
 <img width=500px src="https://cdn.lightpanda.io/assets/images/benchmark_2024-12-04.png">
 
 See [benchmark details](https://github.com/lightpanda-io/demo).
-
-## Why?
-
-### Javascript execution is mandatory for the modern web
-
-In the good old days, scraping a webpage was as easy as making an HTTP request, cURL-like. It’s not possible anymore, because Javascript is everywhere, like it or not:
-
-- Ajax, Single Page App, infinite loading, “click to display”, instant search, etc.
-- JS web frameworks: React, Vue, Angular & others
-
-### Chrome is not the right tool
-
-If we need Javascript, why not use a real web browser? Take a huge desktop application, hack it, and run it on the server. Hundreds or thousands of instances of Chrome if you use it at scale. Are you sure it’s such a good idea?
-
-- Heavy on RAM and CPU, expensive to run
-- Hard to package, deploy and maintain at scale
-- Bloated, lots of features are not useful in headless usage
-
-### Lightpanda is built for performance
-
-If we want both Javascript and performance in a true headless browser, we need to start from scratch. Not another iteration of Chromium, really from a blank page. Crazy right? But that’s we did:
-
-- Not based on Chromium, Blink or WebKit
-- Low-level system programming language (Zig) with optimisations in mind
-- Opinionated: without graphical rendering
-
-## Status
-
-Lightpanda is still a work in progress and is currently at a Beta stage.
-
-:warning: You should expect most websites to fail or crash.
-
-Here are the key features we have implemented:
-
-- [x] HTTP loader
-- [x] HTML parser and DOM tree (based on Netsurf libs)
-- [x] Javascript support (v8)
-- [x] Basic DOM APIs
-- [x] Ajax
-  - [x] XHR API
-  - [x] Fetch API
-- [x] DOM dump
-- [x] Basic CDP/websockets server
-
-NOTE: There are hundreds of Web APIs. Developing a browser (even just for headless mode) is a huge task. Coverage will increase over time.
-
-You can also follow the progress of our Javascript support in our dedicated [zig-js-runtime](https://github.com/lightpanda-io/zig-js-runtime#development) project.
 
 ## Quick start
 
@@ -271,3 +224,50 @@ Lightpanda accepts pull requests through GitHub.
 
 You have to sign our [CLA](CLA.md) during the pull request process otherwise
 we're not able to accept your contributions.
+
+## Why?
+
+### Javascript execution is mandatory for the modern web
+
+In the good old days, scraping a webpage was as easy as making an HTTP request, cURL-like. It’s not possible anymore, because Javascript is everywhere, like it or not:
+
+- Ajax, Single Page App, infinite loading, “click to display”, instant search, etc.
+- JS web frameworks: React, Vue, Angular & others
+
+### Chrome is not the right tool
+
+If we need Javascript, why not use a real web browser? Take a huge desktop application, hack it, and run it on the server. Hundreds or thousands of instances of Chrome if you use it at scale. Are you sure it’s such a good idea?
+
+- Heavy on RAM and CPU, expensive to run
+- Hard to package, deploy and maintain at scale
+- Bloated, lots of features are not useful in headless usage
+
+### Lightpanda is built for performance
+
+If we want both Javascript and performance in a true headless browser, we need to start from scratch. Not another iteration of Chromium, really from a blank page. Crazy right? But that’s we did:
+
+- Not based on Chromium, Blink or WebKit
+- Low-level system programming language (Zig) with optimisations in mind
+- Opinionated: without graphical rendering
+
+## Status
+
+Lightpanda is still a work in progress and is currently at a Beta stage.
+
+:warning: You should expect most websites to fail or crash.
+
+Here are the key features we have implemented:
+
+- [x] HTTP loader
+- [x] HTML parser and DOM tree (based on Netsurf libs)
+- [x] Javascript support (v8)
+- [x] Basic DOM APIs
+- [x] Ajax
+  - [x] XHR API
+  - [x] Fetch API
+- [x] DOM dump
+- [x] Basic CDP/websockets server
+
+NOTE: There are hundreds of Web APIs. Developing a browser (even just for headless mode) is a huge task. Coverage will increase over time.
+
+You can also follow the progress of our Javascript support in our dedicated [zig-js-runtime](https://github.com/lightpanda-io/zig-js-runtime#development) project.
