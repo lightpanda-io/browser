@@ -5,7 +5,7 @@ ARG ZIG_MINISIG=RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
 ARG OS=linux
 ARG ARCH=x86_64
 ARG V8=11.1.134
-ARG ZIG_V8=v0.1.9
+ARG ZIG_V8=v0.1.11
 
 RUN apt-get update -yq && \
     apt-get install -yq xz-utils \
