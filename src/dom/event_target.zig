@@ -29,6 +29,7 @@ const EventHandler = @import("../events/event.zig").EventHandler;
 
 const DOMException = @import("exceptions.zig").DOMException;
 const Nod = @import("node.zig");
+const Window = @import("../html/window.zig").Window;
 
 // EventTarget interfaces
 pub const Union = Nod.Union;
@@ -40,9 +41,10 @@ pub const EventTarget = struct {
     pub const mem_guarantied = true;
 
     pub fn toInterface(et: *parser.EventTarget) !Union {
-        // NOTE: for now we state that all EventTarget are Nodes
-        // TODO: handle other types (eg. Window)
-        return Nod.Node.toInterface(@as(*parser.Node, @ptrCast(et)));
+        return switch (try parser.eventTargetGetType(et)) {
+            .window => .{ .Window = @as(*Window, @ptrCast(et)) },
+            .node => Nod.Node.toInterface(@as(*parser.Node, @ptrCast(et))),
+        };
     }
 
     // JS funcs

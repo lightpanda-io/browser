@@ -57,6 +57,7 @@ pub const Window = struct {
         return Window{
             .target = target orelse "",
             .navigator = navigator orelse .{},
+            .base = .{ .et_type = @intFromEnum(parser.EventTargetType.window) },
         };
     }
 
