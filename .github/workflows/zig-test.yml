@@ -16,6 +16,7 @@ on:
       - "src/*.zig"
       - "vendor/zig-js-runtime"
       - ".github/**"
+      - "vendor/**"
   pull_request:
 
     # By default GH trigger on types opened, synchronize and reopened.
@@ -32,6 +33,7 @@ on:
       - "src/*.zig"
       - "vendor/**"
       - ".github/**"
+      - "vendor/**"
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
