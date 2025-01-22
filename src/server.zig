@@ -498,19 +498,22 @@ fn isUnixSocket(addr: std.net.Address) bool {
 }
 
 pub fn listen(address: std.net.Address) !std.posix.socket_t {
+    const isunixsock = isUnixSocket(address);
 
     // create socket
     const flags = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK;
-    const proto = if (isUnixSocket(address)) @as(u32, 0) else std.posix.IPPROTO.TCP;
+    const proto = if (isunixsock) @as(u32, 0) else std.posix.IPPROTO.TCP;
     const sockfd = try std.posix.socket(address.any.family, flags, proto);
     errdefer std.posix.close(sockfd);
 
     // socket options
-    if (@hasDecl(std.posix.SO, "REUSEPORT")) {
+    //
+    // REUSEPORT can't be set on unix socket anymore.
+    // see https://github.com/torvalds/linux/commit/5b0af621c3f6ef9261cf6067812f2fd9943acb4b
+    if (@hasDecl(std.posix.SO, "REUSEPORT") and !isunixsock) {
         try setSockOpt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.REUSEPORT, 1);
-    } else {
-        try setSockOpt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, 1);
     }
+    try setSockOpt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, 1);
     if (!isUnixSocket(address)) {
         if (builtin.target.os.tag == .linux) { // posix.TCP not available on MacOS
             // WARNING: disable Nagle's alogrithm to avoid latency issues
