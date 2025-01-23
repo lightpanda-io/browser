@@ -91,7 +91,7 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
 
     // setup global env vars.
     var window = Window.create(null, null);
-    window.replaceDocument(html_doc);
+    try window.replaceDocument(html_doc);
     window.setStorageShelf(&storageShelf);
     try js_env.bindGlobal(&window);
 

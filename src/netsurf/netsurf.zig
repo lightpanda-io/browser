@@ -2265,14 +2265,19 @@ pub fn documentHTMLGetCurrentScript(doc: *DocumentHTML) !?*Script {
     return @ptrCast(elem.?);
 }
 
-pub fn documentHTMLSetLocation(doc: *DocumentHTML, location: ?*anyopaque) !void {
-    const err = documentHTMLVtable(doc).set_location.?(doc, location);
+pub fn documentHTMLSetLocation(T: type, doc: *DocumentHTML, location: *T) !void {
+    const l = @as(*anyopaque, @ptrCast(location));
+    const err = documentHTMLVtable(doc).set_location.?(doc, l);
     try DOMErr(err);
 }
 
-pub fn documentHTMLGetLocation(doc: *DocumentHTML) !?*anyopaque {
-    var loc: ?*anyopaque = undefined;
-    const err = documentHTMLVtable(doc).get_location.?(doc, &loc);
+pub fn documentHTMLGetLocation(T: type, doc: *DocumentHTML) !?*T {
+    var l: ?*anyopaque = undefined;
+    const err = documentHTMLVtable(doc).get_location.?(doc, &l);
     try DOMErr(err);
-    return loc;
+
+    if (l == null) return null;
+
+    const ptr: *align(@alignOf(*T)) anyopaque = @alignCast(l.?);
+    return @as(*T, @ptrCast(ptr));
 }

@@ -115,6 +115,7 @@ pub fn testExecFn(
 ) anyerror!void {
     var location = [_]Case{
         .{ .src = "location.href", .ex = "" },
+        .{ .src = "document.location.href", .ex = "" },
     };
     try checkCases(js_env, &location);
 }

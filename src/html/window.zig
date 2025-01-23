@@ -62,12 +62,17 @@ pub const Window = struct {
         };
     }
 
-    pub fn replaceLocation(self: *Window, loc: Location) void {
+    pub fn replaceLocation(self: *Window, loc: Location) !void {
         self.location = loc;
+
+        if (self.doc != null) {
+            try parser.documentHTMLSetLocation(Location, self.doc.?, &self.location);
+        }
     }
 
-    pub fn replaceDocument(self: *Window, doc: *parser.DocumentHTML) void {
+    pub fn replaceDocument(self: *Window, doc: *parser.DocumentHTML) !void {
         self.document = doc;
+        try parser.documentHTMLSetLocation(Location, doc, &self.location);
     }
 
     pub fn setStorageShelf(self: *Window, shelf: *storage.Shelf) void {

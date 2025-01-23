@@ -28,6 +28,7 @@ const Node = @import("../dom/node.zig").Node;
 const Document = @import("../dom/document.zig").Document;
 const NodeList = @import("../dom/nodelist.zig").NodeList;
 const HTMLElem = @import("elements.zig");
+const Location = @import("location.zig").Location;
 
 const collection = @import("../dom/html_collection.zig");
 const Walker = @import("../dom/walker.zig").WalkerDepthFirst;
@@ -155,6 +156,10 @@ pub const HTMLDocument = struct {
 
     pub fn get_currentScript(self: *parser.DocumentHTML) !?*parser.Script {
         return try parser.documentHTMLGetCurrentScript(self);
+    }
+
+    pub fn get_location(self: *parser.DocumentHTML) !?*Location {
+        return try parser.documentHTMLGetLocation(Location, self);
     }
 
     pub fn get_designMode(_: *parser.DocumentHTML) []const u8 {

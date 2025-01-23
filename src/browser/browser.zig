@@ -391,7 +391,7 @@ pub const Page = struct {
 
         // TODO set the referrer to the document.
 
-        self.session.window.replaceDocument(html_doc);
+        try self.session.window.replaceDocument(html_doc);
         self.session.window.setStorageShelf(
             try self.session.storageShed.getOrPut(self.origin orelse "null"),
         );
