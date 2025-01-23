@@ -2264,3 +2264,15 @@ pub fn documentHTMLGetCurrentScript(doc: *DocumentHTML) !?*Script {
     if (elem == null) return null;
     return @ptrCast(elem.?);
 }
+
+pub fn documentHTMLSetLocation(doc: *DocumentHTML, location: ?*anyopaque) !void {
+    const err = documentHTMLVtable(doc).set_location.?(doc, location);
+    try DOMErr(err);
+}
+
+pub fn documentHTMLGetLocation(doc: *DocumentHTML) !?*anyopaque {
+    var loc: ?*anyopaque = undefined;
+    const err = documentHTMLVtable(doc).get_location.?(doc, &loc);
+    try DOMErr(err);
+    return loc;
+}
