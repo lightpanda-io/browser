@@ -10,6 +10,11 @@
 	<br />
 </div>
 
+[![Twitter Follow](https://img.shields.io/twitter/follow/lightpanda_io)](https://twitter.com/lightpanda_io)
+[![GitHub stars](https://img.shields.io/github/stars/lightpanda-io/browser)](https://github.com/lightpanda-io/browser)
+
+</div>
+
 Lightpanda is the open-source browser made for headless usage:
 
 - Javascript execution
