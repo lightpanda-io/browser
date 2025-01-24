@@ -31,6 +31,8 @@ const Location = @import("location.zig").Location;
 
 const storage = @import("../storage/storage.zig");
 
+var emptyLocation = Location{};
+
 // https://dom.spec.whatwg.org/#interface-window-extensions
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#window
 pub const Window = struct {
@@ -44,7 +46,7 @@ pub const Window = struct {
     document: ?*parser.DocumentHTML = null,
     target: []const u8,
     history: History = .{},
-    location: Location = .{},
+    location: *Location = &emptyLocation,
 
     storageShelf: ?*storage.Shelf = null,
 
@@ -62,17 +64,17 @@ pub const Window = struct {
         };
     }
 
-    pub fn replaceLocation(self: *Window, loc: Location) !void {
+    pub fn replaceLocation(self: *Window, loc: *Location) !void {
         self.location = loc;
 
-        if (self.doc != null) {
-            try parser.documentHTMLSetLocation(Location, self.doc.?, &self.location);
+        if (self.document != null) {
+            try parser.documentHTMLSetLocation(Location, self.document.?, self.location);
         }
     }
 
     pub fn replaceDocument(self: *Window, doc: *parser.DocumentHTML) !void {
         self.document = doc;
-        try parser.documentHTMLSetLocation(Location, doc, &self.location);
+        try parser.documentHTMLSetLocation(Location, doc, self.location);
     }
 
     pub fn setStorageShelf(self: *Window, shelf: *storage.Shelf) void {
@@ -88,7 +90,7 @@ pub const Window = struct {
     }
 
     pub fn get_location(self: *Window) *Location {
-        return &self.location;
+        return self.location;
     }
 
     pub fn get_self(self: *Window) *Window {

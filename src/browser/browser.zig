@@ -36,6 +36,9 @@ const apiweb = @import("../apiweb.zig");
 const Window = @import("../html/window.zig").Window;
 const Walker = @import("../dom/walker.zig").WalkerDepthFirst;
 
+const URL = @import("../url/url.zig").URL;
+const Location = @import("../html/location.zig").Location;
+
 const storage = @import("../storage/storage.zig");
 
 const FetchResult = @import("../http/Client.zig").Client.FetchResult;
@@ -102,7 +105,9 @@ pub const Session = struct {
     loader: Loader,
     env: Env = undefined,
     inspector: ?jsruntime.Inspector = null,
+
     window: Window,
+
     // TODO move the shed to the browser?
     storageShed: storage.Shed,
     page: ?Page = null,
@@ -201,6 +206,10 @@ pub const Page = struct {
     uri: std.Uri = undefined,
     origin: ?[]const u8 = null,
 
+    // html url and location
+    url: ?URL = null,
+    location: Location = .{},
+
     raw_data: ?[]const u8 = null,
 
     fn init(
@@ -243,6 +252,13 @@ pub const Page = struct {
     pub fn end(self: *Page) void {
         self.session.env.stop();
         // TODO unload document: https://html.spec.whatwg.org/#unloading-documents
+
+        if (self.url) |*u| u.deinit(self.arena.allocator());
+        self.url = null;
+        self.location.url = null;
+        self.session.window.replaceLocation(&self.location) catch |e| {
+            log.err("reset window location: {any}", .{e});
+        };
 
         // clear netsurf memory arena.
         parser.deinit();
@@ -307,6 +323,11 @@ pub const Page = struct {
         if (self.rawuri) |prev| alloc.free(prev);
         self.rawuri = try alloc.dupe(u8, uri);
         self.uri = std.Uri.parse(self.rawuri.?) catch try std.Uri.parseAfterScheme("", self.rawuri.?);
+
+        if (self.url) |*prev| prev.deinit(alloc);
+        self.url = try URL.constructor(alloc, self.rawuri.?, null);
+        self.location.url = &self.url.?;
+        try self.session.window.replaceLocation(&self.location);
 
         // prepare origin value.
         var buf = std.ArrayList(u8).init(alloc);

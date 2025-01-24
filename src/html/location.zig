@@ -114,8 +114,16 @@ pub fn testExecFn(
     js_env: *jsruntime.Env,
 ) anyerror!void {
     var location = [_]Case{
-        .{ .src = "location.href", .ex = "" },
-        .{ .src = "document.location.href", .ex = "" },
+        .{ .src = "location.href", .ex = "https://lightpanda.io/opensource-browser/" },
+        .{ .src = "document.location.href", .ex = "https://lightpanda.io/opensource-browser/" },
+
+        .{ .src = "location.host", .ex = "lightpanda.io" },
+        .{ .src = "location.hostname", .ex = "lightpanda.io" },
+        .{ .src = "location.origin", .ex = "https://lightpanda.io" },
+        .{ .src = "location.pathname", .ex = "/opensource-browser/" },
+        .{ .src = "location.hash", .ex = "" },
+        .{ .src = "location.port", .ex = "" },
+        .{ .src = "location.search", .ex = "" },
     };
     try checkCases(js_env, &location);
 }

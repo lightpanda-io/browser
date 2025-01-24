@@ -29,8 +29,10 @@ const Window = @import("html/window.zig").Window;
 const xhr = @import("xhr/xhr.zig");
 const storage = @import("storage/storage.zig");
 const url = @import("url/url.zig");
+const URL = url.URL;
 const urlquery = @import("url/query.zig");
 const Client = @import("asyncio").Client;
+const Location = @import("html/location.zig").Location;
 
 const documentTestExecFn = @import("dom/document.zig").testExecFn;
 const HTMLDocumentTestExecFn = @import("html/document.zig").testExecFn;
@@ -97,6 +99,11 @@ fn testExecFn(
 
     // alias global as self and window
     var window = Window.create(null, null);
+
+    var u = try URL.constructor(alloc, "https://lightpanda.io/opensource-browser/", null);
+    defer u.deinit(alloc);
+    var location = Location{ .url = &u };
+    try window.replaceLocation(&location);
 
     try window.replaceDocument(doc);
     window.setStorageShelf(&storageShelf);
