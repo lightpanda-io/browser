@@ -79,7 +79,7 @@ Once the CDP server started, you can run a Puppeteer script by configuring the
 `browserWSEndpoint`.
 
 ```js
-'use scrict'
+'use strict'
 
 import puppeteer from 'puppeteer-core';
 
