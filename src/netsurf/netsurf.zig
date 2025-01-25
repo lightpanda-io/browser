@@ -560,6 +560,11 @@ fn eventListenerGetData(lst: *EventListener) ?*anyopaque {
 }
 
 // EventTarget
+pub const EventTargetType = enum(u4) {
+    node = c.DOM_EVENT_TARGET_NODE,
+    window = 2,
+};
+
 pub const EventTarget = c.dom_event_target;
 
 pub fn eventTargetToNode(et: *EventTarget) *Node {
@@ -801,6 +806,14 @@ pub fn eventTargetDispatchEvent(et: *EventTarget, event: *Event) !bool {
     return res;
 }
 
+pub fn eventTargetGetType(et: *EventTarget) !EventTargetType {
+    var res: c.dom_event_target_type = undefined;
+    const err = eventTargetVtable(et).dom_event_target_get_type.?(et, &res);
+    try DOMErr(err);
+
+    return @enumFromInt(res);
+}
+
 pub fn eventTargetTBaseFieldName(comptime T: type) ?[]const u8 {
     std.debug.assert(@inComptime());
     switch (@typeInfo(T)) {
@@ -824,8 +837,10 @@ pub const EventTargetTBase = extern struct {
         .remove_event_listener = remove_event_listener,
         .add_event_listener = add_event_listener,
         .iter_event_listener = iter_event_listener,
+        .dom_event_target_get_type = dom_event_target_get_type,
     },
     eti: c.dom_event_target_internal = c.dom_event_target_internal{ .listeners = null },
+    et_type: c.dom_event_target_type = @intFromEnum(EventTargetType.node),
 
     pub fn add_event_listener(et: [*c]c.dom_event_target, t: [*c]c.dom_string, l: ?*c.struct_dom_event_listener, capture: bool) callconv(.C) c.dom_exception {
         const self = @as(*Self, @ptrCast(et));
@@ -857,6 +872,17 @@ pub const EventTargetTBase = extern struct {
     ) callconv(.C) c.dom_exception {
         const self = @as(*Self, @ptrCast(et));
         return c._dom_event_target_iter_event_listener(self.eti, t, capture, cur, next, l);
+    }
+
+    pub fn dom_event_target_get_type(
+        et: [*c]c.dom_event_target,
+        res: [*c]c.dom_event_target_type,
+    ) callconv(.C) c.dom_exception {
+        const self = @as(*Self, @ptrCast(et));
+
+        res.* = self.et_type;
+
+        return c.DOM_NO_ERR;
     }
 };
 
