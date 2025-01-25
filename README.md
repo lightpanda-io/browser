@@ -249,7 +249,7 @@ If we need Javascript, why not use a real web browser? Take a huge desktop appli
 
 ### Lightpanda is built for performance
 
-If we want both Javascript and performance in a true headless browser, we need to start from scratch. Not another iteration of Chromium, really from a blank page. Crazy right? But that’s we did:
+If we want both Javascript and performance in a true headless browser, we need to start from scratch. Not another iteration of Chromium, really from a blank page. Crazy right? But that’s what we did:
 
 - Not based on Chromium, Blink or WebKit
 - Low-level system programming language (Zig) with optimisations in mind
