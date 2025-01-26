@@ -134,9 +134,9 @@ brew install cmake
 
 You can run `make install` to install deps all in one (or `make install-dev` if you need the development versions).
 
-Be aware that the build task is very long and cpu consuming, as you will build from sources all dependancies, including the v8 Javascript engine.
+Be aware that the build task is very long and cpu consuming, as you will build from sources all dependencies, including the v8 Javascript engine.
 
-#### Step by step build dependancy
+#### Step by step build dependency
 
 The project uses git submodules for dependencies.
 
