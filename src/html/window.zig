@@ -27,8 +27,11 @@ const Loop = jsruntime.Loop;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const Navigator = @import("navigator.zig").Navigator;
 const History = @import("history.zig").History;
+const Location = @import("location.zig").Location;
 
 const storage = @import("../storage/storage.zig");
+
+var emptyLocation = Location{};
 
 // https://dom.spec.whatwg.org/#interface-window-extensions
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#window
@@ -43,6 +46,7 @@ pub const Window = struct {
     document: ?*parser.DocumentHTML = null,
     target: []const u8,
     history: History = .{},
+    location: *Location = &emptyLocation,
 
     storageShelf: ?*storage.Shelf = null,
 
@@ -60,8 +64,17 @@ pub const Window = struct {
         };
     }
 
-    pub fn replaceDocument(self: *Window, doc: *parser.DocumentHTML) void {
+    pub fn replaceLocation(self: *Window, loc: *Location) !void {
+        self.location = loc;
+
+        if (self.document != null) {
+            try parser.documentHTMLSetLocation(Location, self.document.?, self.location);
+        }
+    }
+
+    pub fn replaceDocument(self: *Window, doc: *parser.DocumentHTML) !void {
         self.document = doc;
+        try parser.documentHTMLSetLocation(Location, doc, self.location);
     }
 
     pub fn setStorageShelf(self: *Window, shelf: *storage.Shelf) void {
@@ -74,6 +87,10 @@ pub const Window = struct {
 
     pub fn get_navigator(self: *Window) *Navigator {
         return &self.navigator;
+    }
+
+    pub fn get_location(self: *Window) *Location {
+        return self.location;
     }
 
     pub fn get_self(self: *Window) *Window {
