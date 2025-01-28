@@ -206,6 +206,9 @@ pub fn sendEvent(
     params: T,
     sessionID: ?[]const u8,
 ) !void {
+    // some clients like chromedp expects empty parameters structs.
+    if (T == void) @compileError("sendEvent: use struct{} instead of void for empty parameters");
+
     log_cdp.debug("Event > method {s}, sessionID {?s}", .{ name, sessionID });
     const Resp = struct {
         method: []const u8,
