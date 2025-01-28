@@ -329,7 +329,7 @@ fn navigate(
 
     // Send Runtime.executionContextsCleared event
     // TODO: noop event, we have no env context at this point, is it necesarry?
-    try sendEvent(alloc, ctx, "Runtime.executionContextsCleared", void, {}, input.sessionId);
+    try sendEvent(alloc, ctx, "Runtime.executionContextsCleared", struct {}, .{}, input.sessionId);
 
     // Launch navigate, the page must have been created by a
     // target.createTarget.
