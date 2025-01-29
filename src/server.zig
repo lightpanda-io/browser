@@ -348,7 +348,7 @@ pub const Ctx = struct {
         const s = try std.fmt.allocPrint(
             allocator,
             tpl,
-            .{ msg_open, ctx.state.sessionID orelse cdp.ContextSessionID },
+            .{ msg_open, @tagName(ctx.state.sessionID) },
         );
 
         try ctx.send(s);

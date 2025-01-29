@@ -117,7 +117,12 @@ fn sendInspector(
         }
     }
 
-    ctx.state.sessionID = msg.sessionId;
+    if (msg.sessionId) |s| {
+        ctx.state.sessionID = cdp.SessionID.parse(s) catch |err| {
+            log.err("parse sessionID: {s} {any}", .{ s, err });
+            return err;
+        };
+    }
 
     // remove awaitPromise true params
     // TODO: delete when Promise are correctly handled by zig-js-runtime
