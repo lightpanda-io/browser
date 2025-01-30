@@ -26,7 +26,7 @@ const checkCases = jsruntime.test_utils.checkCases;
 const Variadic = jsruntime.Variadic;
 
 const collection = @import("html_collection.zig");
-const writeNode = @import("../browser/dump.zig").writeNode;
+const writeChildren = @import("../browser/dump.zig").writeChildren;
 const css = @import("css.zig");
 
 const Node = @import("node.zig").Node;
@@ -102,7 +102,7 @@ pub const Element = struct {
         var buf = std.ArrayList(u8).init(alloc);
         defer buf.deinit();
 
-        try writeNode(parser.elementToNode(self), buf.writer());
+        try writeChildren(parser.elementToNode(self), buf.writer());
         // TODO express the caller owned the slice.
         // https://github.com/lightpanda-io/jsruntime-lib/issues/195
         return buf.toOwnedSlice();
