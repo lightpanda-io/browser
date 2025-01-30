@@ -186,7 +186,7 @@ This build task is very long and cpu consuming, as you will build v8 from source
 make install-zig-js-runtime
 ```
 
-For dev env, use `make iinstall-zig-js-runtime-dev`.
+For dev env, use `make install-zig-js-runtime-dev`.
 
 ## Test
 
