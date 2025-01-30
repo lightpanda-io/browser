@@ -1,34 +1,34 @@
 [submodule "vendor/zig-js-runtime"]
 	path = vendor/zig-js-runtime
-	url = git@github.com:lightpanda-io/zig-js-runtime.git
+	url = https://github.com/lightpanda-io/zig-js-runtime.git/
 [submodule "vendor/netsurf/libwapcaplet"]
 	path = vendor/netsurf/libwapcaplet
-	url = git@github.com:lightpanda-io/libwapcaplet.git
+	url = https://github.com/lightpanda-io/libwapcaplet.git/
 [submodule "vendor/netsurf/libparserutils"]
 	path = vendor/netsurf/libparserutils
-	url = git@github.com:lightpanda-io/libparserutils.git
+	url = https://github.com/lightpanda-io/libparserutils.git/
 [submodule "vendor/netsurf/libdom"]
 	path = vendor/netsurf/libdom
-	url = git@github.com:lightpanda-io/libdom.git
+	url = https://github.com/lightpanda-io/libdom.git/
 [submodule "vendor/netsurf/share/netsurf-buildsystem"]
 	path = vendor/netsurf/share/netsurf-buildsystem
 	url = https://source.netsurf-browser.org/buildsystem.git
 [submodule "vendor/netsurf/libhubbub"]
 	path = vendor/netsurf/libhubbub
-	url = git@github.com:lightpanda-io/libhubbub.git
+	url = https://github.com/lightpanda-io/libhubbub.git/
 [submodule "tests/wpt"]
 	path = tests/wpt
 	url = https://github.com/lightpanda-io/wpt
 [submodule "vendor/mimalloc"]
 	path = vendor/mimalloc
-	url = git@github.com:microsoft/mimalloc.git
+	url = https://github.com/microsoft/mimalloc.git/
 [submodule "vendor/tls.zig"]
 	path = vendor/tls.zig
-	url = git@github.com:ianic/tls.zig.git
+	url = https://github.com/ianic/tls.zig.git/
 [submodule "vendor/zig-async-io"]
 	path = vendor/zig-async-io
-	url = git@github.com:lightpanda-io/zig-async-io.git
+	url = https://github.com/lightpanda-io/zig-async-io.git/
 [submodule "vendor/websocket.zig"]
 	path = vendor/websocket.zig
-	url = git@github.com:lightpanda-io/websocket.zig.git
+	url = https://github.com/lightpanda-io/websocket.zig.git/
 	branch = lightpanda
