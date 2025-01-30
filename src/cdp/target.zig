@@ -344,7 +344,13 @@ fn createTarget(
     ctx.state.securityOrigin = "://";
     ctx.state.secureContextType = "InsecureScheme";
     ctx.state.loaderID = LoaderID;
-    ctx.state.sessionID = msg.sessionId;
+
+    if (msg.sessionId) |s| {
+        ctx.state.sessionID = cdp.SessionID.parse(s) catch |err| {
+            log.err("parse sessionID: {s} {any}", .{ s, err });
+            return err;
+        };
+    }
 
     // TODO stop the previous page instead?
     if (ctx.browser.session.page != null) return error.pageAlreadyExists;

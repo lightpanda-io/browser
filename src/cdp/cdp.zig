@@ -121,7 +121,7 @@ pub fn dispatch(
 pub const State = struct {
     executionContextId: u32 = 0,
     contextID: ?[]const u8 = null,
-    sessionID: ?[]const u8 = null,
+    sessionID: SessionID = .CONTEXTSESSIONID0497A05C95417CF4,
     frameID: []const u8 = FrameID,
     url: []const u8 = URLBase,
     securityOrigin: []const u8 = URLBase,
@@ -225,8 +225,21 @@ pub fn sendEvent(
 // ------
 
 // TODO: hard coded IDs
-pub const BrowserSessionID = "BROWSERSESSIONID597D9875C664CAC0";
-pub const ContextSessionID = "CONTEXTSESSIONID0497A05C95417CF4";
+pub const SessionID = enum {
+    BROWSERSESSIONID597D9875C664CAC0,
+    CONTEXTSESSIONID0497A05C95417CF4,
+
+    pub fn parse(str: []const u8) !SessionID {
+        inline for (@typeInfo(SessionID).Enum.fields) |enumField| {
+            if (std.mem.eql(u8, str, enumField.name)) {
+                return @field(SessionID, enumField.name);
+            }
+        }
+        return error.InvalidSessionID;
+    }
+};
+pub const BrowserSessionID = @tagName(SessionID.BROWSERSESSIONID597D9875C664CAC0);
+pub const ContextSessionID = @tagName(SessionID.CONTEXTSESSIONID0497A05C95417CF4);
 pub const URLBase = "chrome://newtab/";
 pub const LoaderID = "LOADERID24DD2FD56CF1EF33C965C79C";
 pub const FrameID = "FRAMEIDD8AED408A0467AC93100BCDBE";
