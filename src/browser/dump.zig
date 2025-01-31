@@ -46,7 +46,8 @@ pub fn writeNode(node: *parser.Node, writer: anytype) anyerror!void {
                 try writer.writeAll(" ");
                 try writer.writeAll(try parser.attributeGetName(attr));
                 try writer.writeAll("=\"");
-                try writer.writeAll(try parser.attributeGetValue(attr) orelse "");
+                const attribute_value = try parser.attributeGetValue(attr) orelse "";
+                try writeEscapedAttributeValue(writer, attribute_value);
                 try writer.writeAll("\"");
                 i += 1;
             }
@@ -67,7 +68,7 @@ pub fn writeNode(node: *parser.Node, writer: anytype) anyerror!void {
         },
         .text => {
             const v = try parser.nodeValue(node) orelse return;
-            try writer.writeAll(v);
+            try writeEscapedTextNode(writer, v);
         },
         .cdata_section => {
             const v = try parser.nodeValue(node) orelse return;
@@ -119,18 +120,85 @@ fn isVoid(elem: *parser.Element) !bool {
     };
 }
 
+fn writeEscapedTextNode(writer: anytype, value: []const u8) !void {
+    var v = value;
+    while (v.len > 0) {
+        const index = std.mem.indexOfAnyPos(u8, v, 0, &.{'&', '<', '>'}) orelse {
+            return writer.writeAll(v);
+        };
+        try writer.writeAll(v[0..index]);
+        switch (v[index]) {
+            '&' => try writer.writeAll("&amp;"),
+            '<' => try writer.writeAll("&lt;"),
+            '>' => try writer.writeAll("&gt;"),
+            else => unreachable,
+        }
+        v = v[index+1..];
+    }
+}
+
+fn writeEscapedAttributeValue(writer: anytype, value: []const u8) !void {
+    var v = value;
+    while (v.len > 0) {
+        const index = std.mem.indexOfAnyPos(u8, v, 0, &.{'&', '<', '>', '"'}) orelse {
+            return writer.writeAll(v);
+        };
+        try writer.writeAll(v[0..index]);
+        switch (v[index]) {
+            '&' => try writer.writeAll("&amp;"),
+            '<' => try writer.writeAll("&lt;"),
+            '>' => try writer.writeAll("&gt;"),
+            '"' => try writer.writeAll("&quot;"),
+            else => unreachable,
+        }
+        v = v[index+1..];
+    }
+}
+
+const testing = std.testing;
 test "dump.writeHTML" {
-    const out = try std.fs.openFileAbsolute("/dev/null", .{ .mode = .write_only });
-    defer out.close();
+    try testWriteHTML(
+        "<div id=\"content\">Over 9000!</div>",
+        "<div id=\"content\">Over 9000!</div>"
+    );
 
-    const file = try std.fs.cwd().openFile("test.html", .{});
-    defer file.close();
+    try testWriteHTML(
+        "<root><!-- a comment --></root>",
+        "<root><!-- a comment --></root>"
+    );
 
-    const doc_html = try parser.documentHTMLParse(file.reader(), "UTF-8");
-    // ignore close error
+    try testWriteHTML(
+        "<p>&lt; &gt; &amp;</p>",
+        "<p>&lt; &gt; &amp;</p>"
+    );
+
+    try testWriteHTML(
+        "<p id=\"&quot;&gt;&lt;&amp;&quot;''\">wat?</p>",
+        "<p id='\">&lt;&amp;&quot;&#39;&apos;'>wat?</p>"
+    );
+
+    try testWriteFullHTML(
+        \\<!DOCTYPE html>
+        \\<html><head><title>It's over what?</title><meta name="a" value="b">
+        \\</head><body>9000</body></html>
+        \\
+    ,
+        "<html><title>It's over what?</title><meta name=a value=\"b\">\n<body>9000"
+    );
+}
+
+fn testWriteHTML(comptime expected: []const u8, src: []const u8) !void {
+    return testWriteFullHTML("<!DOCTYPE html>\n<html><head></head><body>" ++ expected ++ "</body></html>\n", src);
+}
+
+fn testWriteFullHTML(comptime expected: []const u8, src: []const u8) !void {
+    var buf = std.ArrayListUnmanaged(u8){};
+    defer buf.deinit(testing.allocator);
+
+    const doc_html = try parser.documentHTMLParseFromStr(src);
     defer parser.documentHTMLClose(doc_html) catch {};
 
     const doc = parser.documentHTMLToDocument(doc_html);
-
-    try writeHTML(doc, out);
+    try writeHTML(doc, buf.writer(testing.allocator));
+    try testing.expectEqualStrings(expected, buf.items);
 }
