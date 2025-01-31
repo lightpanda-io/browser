@@ -27,6 +27,7 @@ const XHR = @import("xhr/xhr.zig");
 const Storage = @import("storage/storage.zig");
 const URL = @import("url/url.zig");
 const Iterators = @import("iterator/iterator.zig");
+const XMLSerializer = @import("xmlserializer/xmlserializer.zig");
 
 pub const HTMLDocument = @import("html/document.zig").HTMLDocument;
 
@@ -40,6 +41,7 @@ pub const Interfaces = generate.Tuple(.{
     Storage.Interfaces,
     URL.Interfaces,
     Iterators.Interfaces,
+    XMLSerializer.Interfaces,
 });
 
 pub const UserContext = @import("user_context.zig").UserContext;

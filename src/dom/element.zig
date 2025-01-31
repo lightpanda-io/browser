@@ -26,7 +26,7 @@ const checkCases = jsruntime.test_utils.checkCases;
 const Variadic = jsruntime.Variadic;
 
 const collection = @import("html_collection.zig");
-const writeNode = @import("../browser/dump.zig").writeNode;
+const dump = @import("../browser/dump.zig");
 const css = @import("css.zig");
 
 const Node = @import("node.zig").Node;
@@ -102,7 +102,17 @@ pub const Element = struct {
         var buf = std.ArrayList(u8).init(alloc);
         defer buf.deinit();
 
-        try writeNode(parser.elementToNode(self), buf.writer());
+        try dump.writeChildren(parser.elementToNode(self), buf.writer());
+        // TODO express the caller owned the slice.
+        // https://github.com/lightpanda-io/jsruntime-lib/issues/195
+        return buf.toOwnedSlice();
+    }
+
+    pub fn get_outerHTML(self: *parser.Element, alloc: std.mem.Allocator) ![]const u8 {
+        var buf = std.ArrayList(u8).init(alloc);
+        defer buf.deinit();
+
+        try dump.writeNode(parser.elementToNode(self), buf.writer());
         // TODO express the caller owned the slice.
         // https://github.com/lightpanda-io/jsruntime-lib/issues/195
         return buf.toOwnedSlice();
@@ -470,4 +480,9 @@ pub fn testExecFn(
         .{ .src = "document.getElementById('para-empty').innerHTML.trim()", .ex = "<span id=\"para-empty-child\"></span>" },
     };
     try checkCases(js_env, &innerHTML);
+
+    var outerHTML = [_]Case{
+        .{ .src = "document.getElementById('para').outerHTML", .ex = "<p id=\"para\"> And</p>" },
+    };
+    try checkCases(js_env, &outerHTML);
 }

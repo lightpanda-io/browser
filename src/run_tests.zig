@@ -147,6 +147,7 @@ fn testsAllExecFn(
         @import("html/navigator.zig").testExecFn,
         @import("html/history.zig").testExecFn,
         @import("html/location.zig").testExecFn,
+        @import("xmlserializer/xmlserializer.zig").testExecFn,
     };
 
     inline for (testFns) |testFn| {
