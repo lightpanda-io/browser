@@ -25,7 +25,7 @@ const Navigator = @import("navigator.zig").Navigator;
 const History = @import("history.zig").History;
 const Location = @import("location.zig").Location;
 
-pub const Interfaces = generate.Tuple(.{
+pub const Interfaces = .{
     HTMLDocument,
     HTMLElem.HTMLElement,
     HTMLElem.HTMLMediaElement,
@@ -34,4 +34,4 @@ pub const Interfaces = generate.Tuple(.{
     Navigator,
     History,
     Location,
-});
+};

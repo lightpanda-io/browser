@@ -332,13 +332,11 @@ test {
     const queryTest = @import("url/query.zig");
     std.testing.refAllDecls(queryTest);
 
+    std.testing.refAllDecls(@import("generate.zig"));
     std.testing.refAllDecls(@import("cdp/msg.zig"));
 }
 
 fn testJSRuntime(alloc: std.mem.Allocator) !void {
-    // generate tests
-    try generate.tests();
-
     // create JS vm
     const vm = jsruntime.VM.init();
     defer vm.deinit();

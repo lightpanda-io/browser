@@ -21,15 +21,13 @@ const std = @import("std");
 const jsruntime = @import("jsruntime");
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
-const generate = @import("../generate.zig");
-
 const DOMError = @import("netsurf").DOMError;
 
 const log = std.log.scoped(.storage);
 
-pub const Interfaces = generate.Tuple(.{
+pub const Interfaces = .{
     Bottle,
-});
+};
 
 // See https://storage.spec.whatwg.org/#model for storage hierarchy.
 // A Shed contains map of Shelves. The key is the document's origin.

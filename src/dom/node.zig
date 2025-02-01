@@ -47,7 +47,7 @@ const HTML = @import("../html/html.zig");
 const HTMLElem = @import("../html/elements.zig");
 
 // Node interfaces
-pub const Interfaces = generate.Tuple(.{
+pub const Interfaces = .{
     Attr,
     CData.CharacterData,
     CData.Interfaces,
@@ -57,12 +57,10 @@ pub const Interfaces = generate.Tuple(.{
     DocumentFragment,
     HTMLCollection,
     HTMLCollectionIterator,
-
     HTML.Interfaces,
-});
-const Generated = generate.Union.compile(Interfaces);
-pub const Union = Generated._union;
-pub const Tags = Generated._enum;
+};
+
+pub const Union = generate.Union(Interfaces);
 
 // Node implementation
 pub const Node = struct {

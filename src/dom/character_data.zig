@@ -21,7 +21,6 @@ const std = @import("std");
 const jsruntime = @import("jsruntime");
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
-const generate = @import("../generate.zig");
 
 const parser = @import("netsurf");
 
@@ -32,12 +31,12 @@ const ProcessingInstruction = @import("processing_instruction.zig").ProcessingIn
 const HTMLElem = @import("../html/elements.zig");
 
 // CharacterData interfaces
-pub const Interfaces = generate.Tuple(.{
+pub const Interfaces = .{
     Comment,
     Text.Text,
     Text.Interfaces,
     ProcessingInstruction,
-});
+};
 
 // CharacterData implementation
 pub const CharacterData = struct {

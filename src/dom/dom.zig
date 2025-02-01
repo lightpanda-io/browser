@@ -16,8 +16,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const generate = @import("../generate.zig");
-
 const DOMException = @import("exceptions.zig").DOMException;
 const EventTarget = @import("event_target.zig").EventTarget;
 const DOMImplementation = @import("implementation.zig").DOMImplementation;
@@ -27,7 +25,7 @@ const NodeList = @import("nodelist.zig");
 const Nod = @import("node.zig");
 const MutationObserver = @import("mutation_observer.zig");
 
-pub const Interfaces = generate.Tuple(.{
+pub const Interfaces = .{
     DOMException,
     EventTarget,
     DOMImplementation,
@@ -37,4 +35,4 @@ pub const Interfaces = generate.Tuple(.{
     Nod.Node,
     Nod.Interfaces,
     MutationObserver.Interfaces,
-});
+};
