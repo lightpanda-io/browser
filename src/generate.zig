@@ -173,7 +173,7 @@ test "generate.Union" {
         value: u8 = 0,
     };
 
-    const value = Union(.{ Astruct, Bstruct, .{ Cstruct } });
+    const value = Union(.{ Astruct, Bstruct, .{Cstruct} });
     const ti = @typeInfo(value).Union;
     try std.testing.expectEqual(3, ti.fields.len);
     try std.testing.expectEqualStrings("*generate.test.generate.Union.Astruct.Other", @typeName(ti.fields[0].type));
@@ -185,8 +185,7 @@ test "generate.Union" {
 }
 
 test "generate.Tuple" {
-    const Astruct = struct {
-    };
+    const Astruct = struct {};
 
     const Bstruct = struct {
         value: u8 = 0,
@@ -207,7 +206,7 @@ test "generate.Tuple" {
 
     {
         // dedupe
-        const tuple = Tuple(.{ Cstruct, Astruct, .{ Astruct }, Bstruct, .{ Astruct, .{ Astruct, Bstruct } } }){};
+        const tuple = Tuple(.{ Cstruct, Astruct, .{Astruct}, Bstruct, .{ Astruct, .{ Astruct, Bstruct } } }){};
         const ti = @typeInfo(@TypeOf(tuple)).Struct;
         try std.testing.expectEqual(true, ti.is_tuple);
         try std.testing.expectEqual(3, ti.fields.len);

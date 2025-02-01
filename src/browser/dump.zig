@@ -123,7 +123,7 @@ fn isVoid(elem: *parser.Element) !bool {
 fn writeEscapedTextNode(writer: anytype, value: []const u8) !void {
     var v = value;
     while (v.len > 0) {
-        const index = std.mem.indexOfAnyPos(u8, v, 0, &.{'&', '<', '>'}) orelse {
+        const index = std.mem.indexOfAnyPos(u8, v, 0, &.{ '&', '<', '>' }) orelse {
             return writer.writeAll(v);
         };
         try writer.writeAll(v[0..index]);
@@ -133,14 +133,14 @@ fn writeEscapedTextNode(writer: anytype, value: []const u8) !void {
             '>' => try writer.writeAll("&gt;"),
             else => unreachable,
         }
-        v = v[index+1..];
+        v = v[index + 1 ..];
     }
 }
 
 fn writeEscapedAttributeValue(writer: anytype, value: []const u8) !void {
     var v = value;
     while (v.len > 0) {
-        const index = std.mem.indexOfAnyPos(u8, v, 0, &.{'&', '<', '>', '"'}) orelse {
+        const index = std.mem.indexOfAnyPos(u8, v, 0, &.{ '&', '<', '>', '"' }) orelse {
             return writer.writeAll(v);
         };
         try writer.writeAll(v[0..index]);
@@ -151,40 +151,26 @@ fn writeEscapedAttributeValue(writer: anytype, value: []const u8) !void {
             '"' => try writer.writeAll("&quot;"),
             else => unreachable,
         }
-        v = v[index+1..];
+        v = v[index + 1 ..];
     }
 }
 
 const testing = std.testing;
 test "dump.writeHTML" {
-    try testWriteHTML(
-        "<div id=\"content\">Over 9000!</div>",
-        "<div id=\"content\">Over 9000!</div>"
-    );
+    try testWriteHTML("<div id=\"content\">Over 9000!</div>", "<div id=\"content\">Over 9000!</div>");
 
-    try testWriteHTML(
-        "<root><!-- a comment --></root>",
-        "<root><!-- a comment --></root>"
-    );
+    try testWriteHTML("<root><!-- a comment --></root>", "<root><!-- a comment --></root>");
 
-    try testWriteHTML(
-        "<p>&lt; &gt; &amp;</p>",
-        "<p>&lt; &gt; &amp;</p>"
-    );
+    try testWriteHTML("<p>&lt; &gt; &amp;</p>", "<p>&lt; &gt; &amp;</p>");
 
-    try testWriteHTML(
-        "<p id=\"&quot;&gt;&lt;&amp;&quot;''\">wat?</p>",
-        "<p id='\">&lt;&amp;&quot;&#39;&apos;'>wat?</p>"
-    );
+    try testWriteHTML("<p id=\"&quot;&gt;&lt;&amp;&quot;''\">wat?</p>", "<p id='\">&lt;&amp;&quot;&#39;&apos;'>wat?</p>");
 
     try testWriteFullHTML(
         \\<!DOCTYPE html>
         \\<html><head><title>It's over what?</title><meta name="a" value="b">
         \\</head><body>9000</body></html>
         \\
-    ,
-        "<html><title>It's over what?</title><meta name=a value=\"b\">\n<body>9000"
-    );
+    , "<html><title>It's over what?</title><meta name=a value=\"b\">\n<body>9000");
 }
 
 fn testWriteHTML(comptime expected: []const u8, src: []const u8) !void {
