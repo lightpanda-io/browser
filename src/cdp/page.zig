@@ -361,6 +361,16 @@ fn navigate(
         );
     }
 
+    // DOM.documentUpdated
+    try sendEvent(
+        alloc,
+        ctx,
+        "DOM.documentUpdated",
+        struct {},
+        .{},
+        input.sessionId,
+    );
+
     // frameNavigated event
     const FrameNavigated = struct {
         frame: Frame,
