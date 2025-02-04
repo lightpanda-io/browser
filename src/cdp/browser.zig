@@ -32,6 +32,7 @@ const Methods = enum {
     setDownloadBehavior,
     getWindowForTarget,
     setWindowBounds,
+    close,
 };
 
 pub fn browser(
@@ -47,6 +48,10 @@ pub fn browser(
         .setDownloadBehavior => setDownloadBehavior(alloc, msg, ctx),
         .getWindowForTarget => getWindowForTarget(alloc, msg, ctx),
         .setWindowBounds => setWindowBounds(alloc, msg, ctx),
+        .close => {
+            ctx.state.close = true;
+            return "";
+        }
     };
 }
 

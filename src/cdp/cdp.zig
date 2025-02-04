@@ -119,6 +119,7 @@ pub fn dispatch(
 }
 
 pub const State = struct {
+    close: bool = false,
     executionContextId: u32 = 0,
     contextID: ?[]const u8 = null,
     sessionID: SessionID = .CONTEXTSESSIONID0497A05C95417CF4,

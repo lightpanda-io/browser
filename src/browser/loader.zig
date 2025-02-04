@@ -84,7 +84,8 @@ test "basic url get" {
     var loader = Loader.init(alloc);
     defer loader.deinit();
 
-    var result = try loader.get(alloc, "https://en.wikipedia.org/wiki/Main_Page");
+    const uri = try std.Uri.parse("https://en.wikipedia.org/wiki/Main_Page");
+    var result = try loader.get(alloc, uri);
     defer result.deinit();
 
     try std.testing.expect(result.req.response.status == std.http.Status.ok);
