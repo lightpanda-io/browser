@@ -153,7 +153,7 @@ pub const Session = struct {
     }
 
     fn deinit(self: *Session) void {
-        if (self.page) |*p| p.end();
+        if (self.page) |*p| p.deinit();
 
         if (self.inspector) |inspector| {
             inspector.deinit(self.alloc);
@@ -265,6 +265,7 @@ pub const Page = struct {
         self.session.window.replaceLocation(&self.location) catch |e| {
             log.err("reset window location: {any}", .{e});
         };
+        self.doc = null;
 
         // clear netsurf memory arena.
         parser.deinit();
@@ -273,6 +274,7 @@ pub const Page = struct {
     }
 
     pub fn deinit(self: *Page) void {
+        self.end();
         self.arena.deinit();
         self.session.page = null;
     }
