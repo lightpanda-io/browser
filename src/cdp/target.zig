@@ -353,7 +353,7 @@ fn createTarget(
     }
 
     // TODO stop the previous page instead?
-    if (ctx.browser.session.page != null) return error.pageAlreadyExists;
+    if (ctx.browser.currentPage() != null) return error.pageAlreadyExists;
 
     // create the page
     const p = try ctx.browser.session.createPage();
@@ -464,7 +464,7 @@ fn closeTarget(
         null,
     );
 
-    if (ctx.browser.session.page != null) ctx.browser.session.page.?.end();
+    if (ctx.browser.currentPage()) |page| page.end();
 
     return "";
 }

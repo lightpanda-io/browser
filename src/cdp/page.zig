@@ -333,7 +333,7 @@ fn navigate(
 
     // Launch navigate, the page must have been created by a
     // target.createTarget.
-    var p = ctx.browser.session.page orelse return error.NoPage;
+    var p = ctx.browser.currentPage() orelse return error.NoPage;
     ctx.state.executionContextId += 1;
     const auxData = try std.fmt.allocPrint(
         alloc,

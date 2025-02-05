@@ -112,16 +112,10 @@ fn getDocument(
     std.debug.assert(input.sessionId != null);
     log.debug("Req > id {d}, method {s}", .{ input.id, "DOM.getDocument" });
 
-    if (ctx.browser.session.page == null) {
-        return error.NoPage;
-    }
-
     // retrieve the root node
-    const page = ctx.browser.session.page.?;
+    const page = ctx.browser.currentPage() orelse return error.NoPage;
 
-    if (page.doc == null) {
-        return error.NoDocument;
-    }
+    if (page.doc == null) return error.NoDocument;
 
     const root = try parser.documentGetDocumentElement(page.doc.?) orelse {
         return error.NoRoot;
