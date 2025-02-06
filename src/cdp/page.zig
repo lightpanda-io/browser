@@ -259,6 +259,7 @@ fn navigate(
     log.debug("Req > id {d}, method {s}", .{ input.id, "page.navigate" });
 
     // change state
+    ctx.state.reset();
     ctx.state.url = input.params.url;
     // TODO: hard coded ID
     ctx.state.loaderID = "AF8667A203C5392DBE9AC290044AA4C2";
