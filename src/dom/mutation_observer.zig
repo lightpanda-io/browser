@@ -26,15 +26,13 @@ const CallbackResult = jsruntime.CallbackResult;
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
 
-const generate = @import("../generate.zig");
-
 const NodeList = @import("nodelist.zig").NodeList;
 
-pub const Interfaces = generate.Tuple(.{
+pub const Interfaces = .{
     MutationObserver,
     MutationRecord,
     MutationRecords,
-});
+};
 
 const Walker = @import("../dom/walker.zig").WalkerChildren;
 

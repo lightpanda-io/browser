@@ -21,14 +21,13 @@ const std = @import("std");
 const jsruntime = @import("jsruntime");
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
-const generate = @import("../generate.zig");
 
 const query = @import("query.zig");
 
-pub const Interfaces = generate.Tuple(.{
+pub const Interfaces = .{
     URL,
     URLSearchParams,
-});
+};
 
 // https://url.spec.whatwg.org/#url
 //

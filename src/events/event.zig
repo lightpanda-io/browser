@@ -37,12 +37,12 @@ const ProgressEvent = @import("../xhr/progress_event.zig").ProgressEvent;
 const log = std.log.scoped(.events);
 
 // Event interfaces
-pub const Interfaces = generate.Tuple(.{
+pub const Interfaces = .{
     Event,
     ProgressEvent,
-});
-const Generated = generate.Union.compile(Interfaces);
-pub const Union = Generated._union;
+};
+
+pub const Union = generate.Union(Interfaces);
 
 // https://dom.spec.whatwg.org/#event
 pub const Event = struct {

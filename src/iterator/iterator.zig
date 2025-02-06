@@ -1,10 +1,8 @@
 const std = @import("std");
 
-const generate = @import("../generate.zig");
-
-pub const Interfaces = generate.Tuple(.{
+pub const Interfaces = .{
     U32Iterator,
-});
+};
 
 pub const U32Iterator = struct {
     pub const mem_guarantied = true;

@@ -25,7 +25,6 @@ const Callback = jsruntime.Callback;
 const CallbackResult = jsruntime.CallbackResult;
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
-const generate = @import("../generate.zig");
 
 const NodeUnion = @import("node.zig").Union;
 const Node = @import("node.zig").Node;
@@ -36,10 +35,10 @@ const log = std.log.scoped(.nodelist);
 
 const DOMException = @import("exceptions.zig").DOMException;
 
-pub const Interfaces = generate.Tuple(.{
+pub const Interfaces = .{
     NodeListIterator,
     NodeList,
-});
+};
 
 pub const NodeListIterator = struct {
     pub const mem_guarantied = true;

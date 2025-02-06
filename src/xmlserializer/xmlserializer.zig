@@ -21,16 +21,15 @@ const std = @import("std");
 const jsruntime = @import("jsruntime");
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
-const generate = @import("../generate.zig");
 
 const DOMError = @import("netsurf").DOMError;
 
 const parser = @import("netsurf");
 const dump = @import("../browser/dump.zig");
 
-pub const Interfaces = generate.Tuple(.{
+pub const Interfaces = .{
     XMLSerializer,
-});
+};
 
 // https://w3c.github.io/DOM-Parsing/#dom-xmlserializer-constructor
 pub const XMLSerializer = struct {

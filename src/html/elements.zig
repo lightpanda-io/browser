@@ -99,9 +99,8 @@ pub const Interfaces = .{
     HTMLVideoElement,
     CSSProperties,
 };
-const Generated = generate.Union.compile(Interfaces);
-pub const Union = Generated._union;
-pub const Tags = Generated._enum;
+
+pub const Union = generate.Union(Interfaces);
 
 // Abstract class
 // --------------

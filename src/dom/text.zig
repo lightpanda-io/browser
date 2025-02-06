@@ -21,7 +21,6 @@ const std = @import("std");
 const jsruntime = @import("jsruntime");
 const Case = jsruntime.test_utils.Case;
 const checkCases = jsruntime.test_utils.checkCases;
-const generate = @import("../generate.zig");
 
 const parser = @import("netsurf");
 
@@ -31,9 +30,9 @@ const CDATASection = @import("cdata_section.zig").CDATASection;
 const UserContext = @import("../user_context.zig").UserContext;
 
 // Text interfaces
-pub const Interfaces = generate.Tuple(.{
+pub const Interfaces = .{
     CDATASection,
-});
+};
 
 pub const Text = struct {
     pub const Self = parser.Text;
