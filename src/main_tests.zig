@@ -314,9 +314,6 @@ const kb = 1024;
 const ms = std.time.ns_per_ms;
 
 test {
-    const msgTest = @import("msg.zig");
-    std.testing.refAllDecls(msgTest);
-
     const dumpTest = @import("browser/dump.zig");
     std.testing.refAllDecls(dumpTest);
 
@@ -340,6 +337,7 @@ test {
 
     std.testing.refAllDecls(@import("generate.zig"));
     std.testing.refAllDecls(@import("cdp/msg.zig"));
+    std.testing.refAllDecls(@import("server.zig"));
 }
 
 fn testJSRuntime(alloc: std.mem.Allocator) !void {
