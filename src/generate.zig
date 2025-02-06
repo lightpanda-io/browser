@@ -17,8 +17,14 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+
+// ----
 const Type = std.builtin.Type;
 
+// Union
+// -----
+
+// Generate a flatten tagged Union from a Tuple
 pub fn Union(interfaces: anytype) type {
     // @setEvalBranchQuota(10000);
     const tuple = Tuple(interfaces){};
@@ -57,7 +63,7 @@ pub fn Union(interfaces: anytype) type {
         .decls = &.{},
         .is_exhaustive = true,
     };
-    const enum_T = @Type(std.builtin.Type{ .Enum = enum_info });
+    const enum_T = @Type(.{ .Enum = enum_info });
 
     // third iteration to generate union type
     var union_fields: [fields.len]Type.UnionField = undefined;
@@ -81,6 +87,12 @@ pub fn Union(interfaces: anytype) type {
     } });
 }
 
+// Tuple
+// -----
+
+// Flattens and depuplicates a list of nested tuples. For example
+// input: {A, B, {C, B, D}, {A, E}}
+// output {A, B, C, D, E}
 pub fn Tuple(args: anytype) type {
     @setEvalBranchQuota(100000);
 
