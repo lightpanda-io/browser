@@ -20,12 +20,9 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const jsruntime = @import("jsruntime");
-const websocket = @import("websocket");
 
 const Browser = @import("browser/browser.zig").Browser;
 const server = @import("server.zig");
-const handler = @import("handler.zig");
-const MaxSize = @import("msg.zig").MaxSize;
 
 const parser = @import("netsurf");
 const apiweb = @import("apiweb.zig");
@@ -86,11 +83,9 @@ const CliMode = union(CliModeTag) {
     const Server = struct {
         execname: []const u8 = undefined,
         args: *std.process.ArgIterator = undefined,
-        addr: std.net.Address = undefined,
         host: []const u8 = Host,
         port: u16 = Port,
         timeout: u8 = Timeout,
-        tcp: bool = false, // undocumented TCP mode
 
         // default options
         const Host = "127.0.0.1";
@@ -160,10 +155,6 @@ const CliMode = union(CliModeTag) {
                     return printUsageExit(execname, 1);
                 }
             }
-            if (std.mem.eql(u8, "--tcp", opt)) {
-                _server.tcp = true;
-                continue;
-            }
 
             // unknown option
             if (std.mem.startsWith(u8, opt, "--")) {
@@ -186,10 +177,6 @@ const CliMode = union(CliModeTag) {
         if (default_mode == .server) {
 
             // server mode
-            _server.addr = std.net.Address.parseIp4(_server.host, _server.port) catch |err| {
-                log.err("address (host:port) {any}\n", .{err});
-                return printUsageExit(execname, 1);
-            };
             _server.execname = execname;
             _server.args = args;
             return CliMode{ .server = _server };
@@ -247,65 +234,19 @@ pub fn main() !void {
 
     switch (cli_mode) {
         .server => |opts| {
-
-            // Stream server
-            const addr = blk: {
-                if (opts.tcp) {
-                    break :blk opts.addr;
-                } else {
-                    const unix_path = "/tmp/lightpanda";
-                    std.fs.deleteFileAbsolute(unix_path) catch {}; // file could not exists
-                    break :blk try std.net.Address.initUnix(unix_path);
-                }
-            };
-            const socket = server.listen(addr) catch |err| {
-                log.err("Server listen error: {any}\n", .{err});
+            const address = std.net.Address.parseIp4(opts.host, opts.port) catch |err| {
+                log.err("address (host:port) {any}\n", .{err});
                 return printUsageExit(opts.execname, 1);
             };
-            defer std.posix.close(socket);
-            log.debug("Server opts: listening internally on {any}...", .{addr});
 
-            const timeout = std.time.ns_per_s * @as(u64, opts.timeout);
-
-            // loop
             var loop = try jsruntime.Loop.init(alloc);
             defer loop.deinit();
 
-            // TCP server mode
-            if (opts.tcp) {
-                return server.handle(alloc, &loop, socket, null, timeout);
-            }
-
-            // start stream server in separate thread
-            var stream = handler.Stream{
-                .ws_host = opts.host,
-                .ws_port = opts.port,
-                .addr = addr,
+            const timeout = std.time.ns_per_s * @as(u64, opts.timeout);
+            server.run(alloc, address, timeout, &loop) catch |err| {
+                log.err("Server error", .{});
+                return err;
             };
-            const cdp_thread = try std.Thread.spawn(
-                .{ .allocator = alloc },
-                server.handle,
-                .{ alloc, &loop, socket, &stream, timeout },
-            );
-
-            // Websocket server
-            var ws = try websocket.Server(handler.Handler).init(alloc, .{
-                .port = opts.port,
-                .address = opts.host,
-                .max_message_size = MaxSize + 14, // overhead websocket
-                .max_conn = 1,
-                .handshake = .{
-                    .timeout = 3,
-                    .max_size = 1024,
-                    // since we aren't using hanshake.headers
-                    // we can set this to 0 to save a few bytes.
-                    .max_headers = 0,
-                },
-            });
-            defer ws.deinit();
-
-            try ws.listen(&stream);
-            cdp_thread.join();
         },
 
         .fetch => |opts| {
