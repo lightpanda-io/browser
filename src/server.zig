@@ -251,7 +251,7 @@ const Server = struct {
 
     fn callbackClose(self: *Server, completion: *Completion, _: CloseError!void) void {
         std.debug.assert(completion == &self.close_completion);
-        if (self.client != null)  {
+        if (self.client != null) {
             self.client = null;
         }
         self.queueAccept();
