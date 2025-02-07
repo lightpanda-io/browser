@@ -62,6 +62,7 @@ pub const Values = struct {
     // append by taking the ownership of the key and the value
     fn appendOwned(self: *Values, k: []const u8, v: []const u8) !void {
         if (self.map.getPtr(k)) |list| {
+            self.alloc.free(k);
             return try list.append(self.alloc, v);
         }
 

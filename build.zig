@@ -98,8 +98,8 @@ pub fn build(b: *std.Build) !void {
 
     // compile
     const tests = b.addTest(.{
-        .root_source_file = b.path("src/run_tests.zig"),
-        .test_runner = b.path("src/test_runner.zig"),
+        .root_source_file = b.path("src/main_tests.zig"),
+        .test_runner = b.path("src/main_tests.zig"),
         .target = target,
         .optimize = mode,
     });
@@ -118,6 +118,27 @@ pub fn build(b: *std.Build) !void {
     // step
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
+
+    // unittest
+    // ----
+
+    // compile
+    const unit_tests = b.addTest(.{
+        .root_source_file = b.path("src/unit_tests.zig"),
+        .test_runner = b.path("src/unit_tests.zig"),
+        .target = target,
+        .optimize = mode,
+    });
+    try common(b, unit_tests, options);
+
+    const run_unit_tests = b.addRunArtifact(unit_tests);
+    if (b.args) |args| {
+        run_unit_tests.addArgs(args);
+    }
+
+    // step
+    const unit_test_step = b.step("unittest", "Run unit tests");
+    unit_test_step.dependOn(&run_unit_tests.step);
 
     // wpt
     // -----
