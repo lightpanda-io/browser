@@ -34,6 +34,8 @@ const Methods = enum {
     enable,
     getDocument,
     performSearch,
+    getSearchResults,
+    discardSearchResults,
 };
 
 pub fn dom(
@@ -49,6 +51,8 @@ pub fn dom(
         .enable => enable(alloc, msg, ctx),
         .getDocument => getDocument(alloc, msg, ctx),
         .performSearch => performSearch(alloc, msg, ctx),
+        .getSearchResults => getSearchResults(alloc, msg, ctx),
+        .discardSearchResults => discardSearchResults(alloc, msg, ctx),
     };
 }
 
@@ -234,6 +238,78 @@ fn performSearch(
     const resp: Resp = .{
         .searchId = ns.name,
         .resultCount = @intCast(ln),
+    };
+
+    return result(alloc, input.id, Resp, resp, input.sessionId);
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-discardSearchResults
+fn discardSearchResults(
+    alloc: std.mem.Allocator,
+    msg: *IncomingMessage,
+    ctx: *Ctx,
+) ![]const u8 {
+    // input
+    const Params = struct {
+        searchId: []const u8,
+    };
+    const input = try Input(Params).get(alloc, msg);
+    defer input.deinit();
+    std.debug.assert(input.sessionId != null);
+    log.debug("Req > id {d}, method {s}", .{ input.id, "DOM.discardSearchResults" });
+
+    // retrieve the search from context
+    for (ctx.state.nodesearchlist.items, 0..) |*s, i| {
+        if (!std.mem.eql(u8, s.name, input.params.searchId)) continue;
+
+        s.deinit();
+        _ = ctx.state.nodesearchlist.swapRemove(i);
+        break;
+    }
+
+    return result(alloc, input.id, null, null, input.sessionId);
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-getSearchResults
+fn getSearchResults(
+    alloc: std.mem.Allocator,
+    msg: *IncomingMessage,
+    ctx: *Ctx,
+) ![]const u8 {
+    // input
+    const Params = struct {
+        searchId: []const u8,
+        fromIndex: u32,
+        toIndex: u32,
+    };
+    const input = try Input(Params).get(alloc, msg);
+    defer input.deinit();
+    std.debug.assert(input.sessionId != null);
+    log.debug("Req > id {d}, method {s}", .{ input.id, "DOM.getSearchResults" });
+
+    if (input.params.fromIndex >= input.params.toIndex) return error.BadIndices;
+
+    // retrieve the search from context
+    var ns: ?*const NodeSearch = undefined;
+    for (ctx.state.nodesearchlist.items) |s| {
+        if (!std.mem.eql(u8, s.name, input.params.searchId)) continue;
+
+        ns = &s;
+        break;
+    }
+
+    if (ns == null) return error.searchResultNotFound;
+    const items = ns.?.coll.items;
+
+    if (input.params.fromIndex >= items.len) return error.BadFromIndex;
+    if (input.params.toIndex > items.len) return error.BadToIndex;
+
+    // output
+    const Resp = struct {
+        nodeIds: []NodeId,
+    };
+    const resp: Resp = .{
+        .nodeIds = ns.?.coll.items[input.params.fromIndex..input.params.toIndex],
     };
 
     return result(alloc, input.id, Resp, resp, input.sessionId);
