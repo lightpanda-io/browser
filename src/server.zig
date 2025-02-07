@@ -529,12 +529,13 @@ fn Client(comptime S: type) type {
 
             errdefer self.server.queueClose(self.socket);
 
+            if (request.len > MAX_HTTP_REQUEST_SIZE) {
+                self.writeHTTPErrorResponse(413, "Request too large");
+                return error.RequestTooLarge;
+            }
+
             // we're only expecting [body-less] GET requests.
             if (std.mem.endsWith(u8, request, "\r\n\r\n") == false) {
-                if (request.len > MAX_HTTP_REQUEST_SIZE) {
-                    self.writeHTTPErrorResponse(413, "Request too large");
-                    return error.RequestTooLarge;
-                }
                 // we need more data, put any more data here
                 self.read_len = request.len;
                 return;
@@ -1055,6 +1056,16 @@ test "server: buildJSONVersionResponse" {
         "{\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9001/\"}", res);
 }
 
+test "Client: http invalid request" {
+    try assertHTTPError(
+        error.RequestTooLarge,
+        413,
+        "Request too large",
+        "GET /over/9000 HTTP/1.1\r\n" ++ "Header: " ++ ("a" ** 2050) ++ "\r\n\r\n",
+    );
+
+}
+
 test "Client: http invalid handshake" {
     try assertHTTPError(
         error.InvalidRequest,
@@ -1327,7 +1338,7 @@ test "Client: fuzz" {
         }
     };
 
-    for (0..1) |_| {
+    for (0..100) |_| {
         var ms = MockServer{};
         defer ms.deinit();
 
