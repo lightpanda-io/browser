@@ -19,9 +19,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-const strparser = @import("../str/parser.zig");
-const Reader = strparser.Reader;
-const trim = strparser.trim;
+const Reader = @import("../str/parser.zig").Reader;
 
 const Self = @This();
 
@@ -70,7 +68,7 @@ pub fn parse(s: []const u8) Self.MimeError!Self {
     if (ln > 255) return MimeError.TooBig;
 
     var res = Self{ .mtype = "", .msubtype = "" };
-    var r = Reader{ .s = s };
+    var r = Reader{ .data = s };
 
     res.mtype = trim(r.until('/'));
     if (res.mtype.len == 0) return MimeError.Invalid;
@@ -87,7 +85,7 @@ pub fn parse(s: []const u8) Self.MimeError!Self {
 
     // parse well known parameters.
     // don't check invalid parameter format.
-    var rp = Reader{ .s = res.params };
+    var rp = Reader{ .data = res.params };
     while (true) {
         const name = trim(rp.until('='));
         if (!rp.skip()) return res;
@@ -104,6 +102,10 @@ pub fn parse(s: []const u8) Self.MimeError!Self {
     }
 
     return res;
+}
+
+fn trim(s: []const u8) []const u8 {
+    return std.mem.trim(u8, s, &std.ascii.whitespace);
 }
 
 test "parse valid" {
