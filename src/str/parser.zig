@@ -48,6 +48,27 @@ pub const Reader = struct {
     }
 };
 
+// converts a comptime-known string (i.e. null terminated) to an uint
+pub fn asUint(comptime string: anytype) AsUintReturn(string) {
+    const byteLength = @bitSizeOf(@TypeOf(string.*)) / 8 - 1;
+    const expectedType = *const [byteLength:0]u8;
+    if (@TypeOf(string) != expectedType) {
+        @compileError("expected : " ++ @typeName(expectedType) ++
+            ", got: " ++ @typeName(@TypeOf(string)));
+    }
+
+    return @bitCast(@as(*const [byteLength]u8, string).*);
+}
+
+fn AsUintReturn(comptime string: anytype) type {
+    return @Type(.{
+        .Int = .{
+            .bits = @bitSizeOf(@TypeOf(string.*)) - 8, // (- 8) to exclude sentinel 0
+            .signedness = .unsigned,
+        },
+    });
+}
+
 test "Reader.skip" {
     var r = Reader{ .s = "foo" };
     try testing.expect(r.skip());
@@ -103,4 +124,21 @@ test "trim" {
     try testing.expectEqualStrings("foo", trim("foo"));
     try testing.expectEqualStrings("foo", trim(" \n\tfoo"));
     try testing.expectEqualStrings("foo", trim("foo \n\t"));
+}
+
+test "parser: asUint" {
+    const ASCII_x = @as(u8, @bitCast([1]u8{'x'}));
+    const ASCII_ab = @as(u16, @bitCast([2]u8{ 'a', 'b' }));
+    const ASCII_xyz = @as(u24, @bitCast([3]u8{ 'x', 'y', 'z' }));
+    const ASCII_abcd = @as(u32, @bitCast([4]u8{ 'a', 'b', 'c', 'd' }));
+
+    try testing.expectEqual(ASCII_x, asUint("x"));
+    try testing.expectEqual(ASCII_ab, asUint("ab"));
+    try testing.expectEqual(ASCII_xyz, asUint("xyz"));
+    try testing.expectEqual(ASCII_abcd, asUint("abcd"));
+
+    try testing.expectEqual(u8, @TypeOf(asUint("x")));
+    try testing.expectEqual(u16, @TypeOf(asUint("ab")));
+    try testing.expectEqual(u24, @TypeOf(asUint("xyz")));
+    try testing.expectEqual(u32, @TypeOf(asUint("abcd")));
 }
