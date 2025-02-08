@@ -161,6 +161,8 @@ pub fn parseQuery(alloc: std.mem.Allocator, s: []const u8) !Values {
     var values = Values.init(alloc);
     errdefer values.deinit();
 
+    const arena = values.arena.allocator();
+
     const ln = s.len;
     if (ln == 0) return values;
 
@@ -177,8 +179,8 @@ pub fn parseQuery(alloc: std.mem.Allocator, s: []const u8) !Values {
         const v = rr.tail();
 
         // decode k and v
-        const kk = try unescape(alloc, k);
-        const vv = try unescape(alloc, v);
+        const kk = try unescape(arena, k);
+        const vv = try unescape(arena, v);
 
         try values.appendOwned(kk, vv);
 
