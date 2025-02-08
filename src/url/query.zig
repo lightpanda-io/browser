@@ -199,12 +199,12 @@ pub fn parseQuery(alloc: std.mem.Allocator, s: []const u8) !Values {
     const ln = s.len;
     if (ln == 0) return values;
 
-    var r = Reader{ .s = s };
+    var r = Reader{ .data = s };
     while (true) {
         const param = r.until('&');
         if (param.len == 0) break;
 
-        var rr = Reader{ .s = param };
+        var rr = Reader{ .data = param };
         const k = rr.until('=');
         if (k.len == 0) continue;
 
