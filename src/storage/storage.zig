@@ -149,19 +149,21 @@ pub const Bottle = struct {
     }
 
     pub fn _setItem(self: *Bottle, k: []const u8, v: []const u8) !void {
-        const old = self.map.get(k);
-        if (old != null and std.mem.eql(u8, v, old.?)) return;
-
-        // owns k and v by copying them.
-        const kk = try self.alloc.dupe(u8, k);
-        errdefer self.alloc.free(kk);
-        const vv = try self.alloc.dupe(u8, v);
-        errdefer self.alloc.free(vv);
-
-        self.map.put(self.alloc, kk, vv) catch |e| {
+        const gop = self.map.getOrPut(self.alloc, k) catch |e| {
             log.debug("set item: {any}", .{e});
             return DOMError.QuotaExceeded;
         };
+
+        if (gop.found_existing == false) {
+            gop.key_ptr.* = try self.alloc.dupe(u8, k);
+            gop.value_ptr.* = try self.alloc.dupe(u8, v);
+            return;
+        }
+
+        if (std.mem.eql(u8, v, gop.value_ptr.*) == false) {
+            self.alloc.free(gop.value_ptr.*);
+            gop.value_ptr.* = try self.alloc.dupe(u8, v);
+        }
 
         // > Broadcast this with key, oldValue, and value.
         // https://html.spec.whatwg.org/multipage/webstorage.html#the-storageevent-interface
@@ -175,8 +177,10 @@ pub const Bottle = struct {
     }
 
     pub fn _removeItem(self: *Bottle, k: []const u8) !void {
-        const old = self.map.fetchRemove(k);
-        if (old == null) return;
+        if (self.map.fetchRemove(k)) |kv| {
+            self.alloc.free(kv.key);
+            self.alloc.free(kv.value);
+        }
 
         // > Broadcast this with key, oldValue, and null.
         // https://html.spec.whatwg.org/multipage/webstorage.html#the-storageevent-interface
@@ -235,14 +239,17 @@ test "storage bottle" {
     var bottle = Bottle.init(std.testing.allocator);
     defer bottle.deinit();
 
-    try std.testing.expect(0 == bottle.get_length());
-    try std.testing.expect(null == bottle._getItem("foo"));
+    try std.testing.expectEqual(0, bottle.get_length());
+    try std.testing.expectEqual(null, bottle._getItem("foo"));
 
     try bottle._setItem("foo", "bar");
-    try std.testing.expect(std.mem.eql(u8, "bar", bottle._getItem("foo").?));
+    try std.testing.expectEqualStrings("bar", bottle._getItem("foo").?);
+
+    try bottle._setItem("foo", "other");
+    try std.testing.expectEqualStrings("other", bottle._getItem("foo").?);
 
     try bottle._removeItem("foo");
 
-    try std.testing.expect(0 == bottle.get_length());
-    try std.testing.expect(null == bottle._getItem("foo"));
+    try std.testing.expectEqual(0, bottle.get_length());
+    try std.testing.expectEqual(null, bottle._getItem("foo"));
 }

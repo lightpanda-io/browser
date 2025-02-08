@@ -223,8 +223,14 @@ pub fn main() !void {
             try parser.init();
             defer parser.deinit();
 
+            std.testing.allocator_instance = .{};
             try test_fn.func();
-            std.debug.print("{s}\tOK\n", .{test_fn.name});
+
+            if (std.testing.allocator_instance.deinit() == .leak) {
+                std.debug.print("======Memory Leak: {s}======\n", .{test_fn.name});
+            } else {
+                std.debug.print("{s}\tOK\n", .{test_fn.name});
+            }
         }
     }
 }
