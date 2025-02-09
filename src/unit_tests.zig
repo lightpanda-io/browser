@@ -48,7 +48,7 @@ pub fn main() !void {
     var leak: usize = 0;
 
     const address = try std.net.Address.parseIp("127.0.0.1", 9582);
-    var listener = try address.listen(.{.reuse_address = true});
+    var listener = try address.listen(.{ .reuse_address = true });
     defer listener.deinit();
     const http_thread = try std.Thread.spawn(.{}, serverHTTP, .{&listener});
     defer http_thread.join();
@@ -337,7 +337,7 @@ fn serverHTTP(listener: *std.net.Server) !void {
                 else => {
                     std.debug.print("Test HTTP Server error: {}\n", .{err});
                     return err;
-                }
+                },
             };
 
             const path = request.head.target;
@@ -356,13 +356,11 @@ const Response = struct {
 };
 
 fn writeResponse(req: *std.http.Server.Request, res: Response) !void {
-    try req.respond(res.body, .{
-        .status = res.status
-    });
+    try req.respond(res.body, .{ .status = res.status });
 }
 
 test {
-    std.testing.refAllDecls( @import("url/query.zig"));
+    std.testing.refAllDecls(@import("url/query.zig"));
     std.testing.refAllDecls(@import("browser/dump.zig"));
     std.testing.refAllDecls(@import("browser/loader.zig"));
     std.testing.refAllDecls(@import("browser/mime.zig"));
@@ -375,4 +373,5 @@ test {
     std.testing.refAllDecls(@import("http/Client.zig"));
     std.testing.refAllDecls(@import("msg.zig"));
     std.testing.refAllDecls(@import("storage/storage.zig"));
+    std.testing.refAllDecls(@import("iterator/iterator.zig"));
 }
