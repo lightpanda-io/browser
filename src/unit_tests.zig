@@ -57,22 +57,9 @@ pub fn main() !void {
     printer.fmt("\r\x1b[0K", .{}); // beginning of line and clear to end of line
 
     for (builtin.test_functions) |t| {
-        if (isSetup(t)) {
-            t.func() catch |err| {
-                printer.status(.fail, "\nsetup \"{s}\" failed: {}\n", .{ t.name, err });
-                return err;
-            };
-        }
-    }
-
-    for (builtin.test_functions) |t| {
         if (std.mem.eql(u8, t.name, "unit_tests.test_0")) {
             // don't display anything for this test
             try t.func();
-            continue;
-        }
-
-        if (isSetup(t) or isTeardown(t)) {
             continue;
         }
 
@@ -135,15 +122,6 @@ pub fn main() !void {
             printer.status(status, "{s} ({d:.2}ms)\n", .{ friendly_name, ms });
         } else {
             printer.status(status, ".", .{});
-        }
-    }
-
-    for (builtin.test_functions) |t| {
-        if (isTeardown(t)) {
-            t.func() catch |err| {
-                printer.status(.fail, "\nteardown \"{s}\" failed: {}\n", .{ t.name, err });
-                return err;
-            };
         }
     }
 
@@ -314,14 +292,6 @@ fn isUnnamed(t: std.builtin.TestFn) bool {
     const index = std.mem.indexOf(u8, test_name, marker) orelse return false;
     _ = std.fmt.parseInt(u32, test_name[index + marker.len ..], 10) catch return false;
     return true;
-}
-
-fn isSetup(t: std.builtin.TestFn) bool {
-    return std.mem.endsWith(u8, t.name, "tests:beforeAll");
-}
-
-fn isTeardown(t: std.builtin.TestFn) bool {
-    return std.mem.endsWith(u8, t.name, "tests:afterAll");
 }
 
 fn serverHTTP(listener: *std.net.Server) !void {
