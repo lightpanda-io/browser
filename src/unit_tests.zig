@@ -21,6 +21,10 @@ const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
 
+pub const std_options = std.Options{
+    .http_disable_tls = true,
+};
+
 const BORDER = "=" ** 80;
 
 // use in custom panic handler
@@ -42,6 +46,12 @@ pub fn main() !void {
     var fail: usize = 0;
     var skip: usize = 0;
     var leak: usize = 0;
+
+    const address = try std.net.Address.parseIp("127.0.0.1", 9582);
+    var listener = try address.listen(.{.reuse_address = true});
+    defer listener.deinit();
+    const http_thread = try std.Thread.spawn(.{}, serverHTTP, .{&listener});
+    defer http_thread.join();
 
     const printer = Printer.init();
     printer.fmt("\r\x1b[0K", .{}); // beginning of line and clear to end of line
@@ -314,31 +324,55 @@ fn isTeardown(t: std.builtin.TestFn) bool {
     return std.mem.endsWith(u8, t.name, "tests:afterAll");
 }
 
+fn serverHTTP(listener: *std.net.Server) !void {
+    var read_buffer: [1024]u8 = undefined;
+    ACCEPT: while (true) {
+        var conn = try listener.accept();
+        defer conn.stream.close();
+        var server = std.http.Server.init(conn, &read_buffer);
+
+        while (server.state == .ready) {
+            var request = server.receiveHead() catch |err| switch (err) {
+                error.HttpConnectionClosing => continue :ACCEPT,
+                else => {
+                    std.debug.print("Test HTTP Server error: {}\n", .{err});
+                    return err;
+                }
+            };
+
+            const path = request.head.target;
+            if (std.mem.eql(u8, path, "/loader")) {
+                try writeResponse(&request, .{
+                    .body = "Hello!",
+                });
+            }
+        }
+    }
+}
+
+const Response = struct {
+    body: []const u8 = "",
+    status: std.http.Status = .ok,
+};
+
+fn writeResponse(req: *std.http.Server.Request, res: Response) !void {
+    try req.respond(res.body, .{
+        .status = res.status
+    });
+}
+
 test {
-    const msgTest = @import("msg.zig");
-    std.testing.refAllDecls(msgTest);
-
-    const dumpTest = @import("browser/dump.zig");
-    std.testing.refAllDecls(dumpTest);
-
-    const mimeTest = @import("browser/mime.zig");
-    std.testing.refAllDecls(mimeTest);
-
-    const cssTest = @import("css/css.zig");
-    std.testing.refAllDecls(cssTest);
-
-    const cssParserTest = @import("css/parser.zig");
-    std.testing.refAllDecls(cssParserTest);
-
-    const cssMatchTest = @import("css/match_test.zig");
-    std.testing.refAllDecls(cssMatchTest);
-
-    const cssLibdomTest = @import("css/libdom_test.zig");
-    std.testing.refAllDecls(cssLibdomTest);
-
-    const queryTest = @import("url/query.zig");
-    std.testing.refAllDecls(queryTest);
-
-    std.testing.refAllDecls(@import("generate.zig"));
+    std.testing.refAllDecls( @import("url/query.zig"));
+    std.testing.refAllDecls(@import("browser/dump.zig"));
+    std.testing.refAllDecls(@import("browser/loader.zig"));
+    std.testing.refAllDecls(@import("browser/mime.zig"));
     std.testing.refAllDecls(@import("cdp/msg.zig"));
+    std.testing.refAllDecls(@import("css/css.zig"));
+    std.testing.refAllDecls(@import("css/libdom_test.zig"));
+    std.testing.refAllDecls(@import("css/match_test.zig"));
+    std.testing.refAllDecls(@import("css/parser.zig"));
+    std.testing.refAllDecls(@import("generate.zig"));
+    std.testing.refAllDecls(@import("http/Client.zig"));
+    std.testing.refAllDecls(@import("msg.zig"));
+    std.testing.refAllDecls(@import("storage/storage.zig"));
 }
