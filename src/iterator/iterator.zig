@@ -24,7 +24,7 @@ pub const U32Iterator = struct {
             };
         }
 
-        self.index += 1;
+        self.index = i + 1;
         return .{
             .value = i,
             .done = false,
