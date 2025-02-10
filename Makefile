@@ -3,6 +3,8 @@
 
 ZIG := zig
 BC := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+# option test filter make unittest F="server"
+F=
 
 # OS and ARCH
 kernel = $(shell uname -ms)
@@ -42,7 +44,7 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-dev run run-release shell test bench download-zig wpt
+.PHONY: build build-dev run run-release shell test bench download-zig wpt unittest
 
 zig_version = $(shell grep 'recommended_zig_version = "' "vendor/zig-js-runtime/build.zig" | cut -d'"' -f2)
 
@@ -90,6 +92,9 @@ test:
 	@printf "\e[36mTesting...\e[0m\n"
 	@$(ZIG) build test -Dengine=v8 || (printf "\e[33mTest ERROR\e[0m\n"; exit 1;)
 	@printf "\e[33mTest OK\e[0m\n"
+
+unittest:
+	@TEST_FILTER='${F}' $(ZIG) build unittest -freference-trace --summary all
 
 # Install and build required dependencies commands
 # ------------
