@@ -17,132 +17,66 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-
-const server = @import("../server.zig");
-const Ctx = server.Ctx;
 const cdp = @import("cdp.zig");
-const result = cdp.result;
-const IncomingMessage = @import("msg.zig").IncomingMessage;
-const Input = @import("msg.zig").Input;
-
-const log = std.log.scoped(.cdp);
-
-const Methods = enum {
-    getVersion,
-    setDownloadBehavior,
-    getWindowForTarget,
-    setWindowBounds,
-};
-
-pub fn browser(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    action: []const u8,
-    ctx: *Ctx,
-) ![]const u8 {
-    const method = std.meta.stringToEnum(Methods, action) orelse
-        return error.UnknownMethod;
-    return switch (method) {
-        .getVersion => getVersion(alloc, msg, ctx),
-        .setDownloadBehavior => setDownloadBehavior(alloc, msg, ctx),
-        .getWindowForTarget => getWindowForTarget(alloc, msg, ctx),
-        .setWindowBounds => setWindowBounds(alloc, msg, ctx),
-    };
-}
 
 // TODO: hard coded data
-const ProtocolVersion = "1.3";
-const Product = "Chrome/124.0.6367.29";
-const Revision = "@9e6ded5ac1ff5e38d930ae52bd9aec09bd1a68e4";
-const UserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-const JsVersion = "12.4.254.8";
+const PROTOCOL_VERSION = "1.3";
+const PRODUCT = "Chrome/124.0.6367.29";
+const REVISION = "@9e6ded5ac1ff5e38d930ae52bd9aec09bd1a68e4";
+const USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+const JS_VERSION = "12.4.254.8";
+const DEV_TOOLS_WINDOW_ID = 1923710101;
 
-fn getVersion(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    _: *Ctx,
-) ![]const u8 {
-    // input
-    const input = try Input(void).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "browser.getVersion" });
+pub fn processMessage(cmd: anytype) !void {
+    const action = std.meta.stringToEnum(enum {
+        getVersion,
+        setDownloadBehavior,
+        getWindowForTarget,
+        setWindowBounds,
+    }, cmd.action) orelse return error.UnknownMethod;
 
-    // ouput
-    const Res = struct {
-        protocolVersion: []const u8 = ProtocolVersion,
-        product: []const u8 = Product,
-        revision: []const u8 = Revision,
-        userAgent: []const u8 = UserAgent,
-        jsVersion: []const u8 = JsVersion,
-    };
-    return result(alloc, input.id, Res, .{}, null);
+    switch (action) {
+        .getVersion => return getVersion(cmd),
+        .setDownloadBehavior => return setDownloadBehavior(cmd),
+        .getWindowForTarget => return getWindowForTarget(cmd),
+        .setWindowBounds => return setWindowBounds(cmd),
+    }
+}
+
+fn getVersion(cmd: anytype) !void {
+    // TODO: pre-serialize?
+    return cmd.sendResult(.{
+        .protocolVersion = PROTOCOL_VERSION,
+        .product = PRODUCT,
+        .revision = REVISION,
+        .userAgent = USER_AGENT,
+        .jsVersion = JS_VERSION,
+    }, .{ .include_session_id = false });
 }
 
 // TODO: noop method
-fn setDownloadBehavior(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    _: *Ctx,
-) ![]const u8 {
-    // input
-    const Params = struct {
-        behavior: []const u8,
-        browserContextId: ?[]const u8 = null,
-        downloadPath: ?[]const u8 = null,
-        eventsEnabled: ?bool = null,
-    };
-    const input = try Input(Params).get(alloc, msg);
-    defer input.deinit();
-    log.debug("REQ > id {d}, method {s}", .{ input.id, "browser.setDownloadBehavior" });
+fn setDownloadBehavior(cmd: anytype) !void {
+    // const params = (try cmd.params(struct {
+    //     behavior: []const u8,
+    //     browserContextId: ?[]const u8 = null,
+    //     downloadPath: ?[]const u8 = null,
+    //     eventsEnabled: ?bool = null,
+    // })) orelse return error.InvalidParams;
 
-    // output
-    return result(alloc, input.id, null, null, null);
+    return cmd.sendResult(null, .{ .include_session_id = false });
 }
 
-// TODO: hard coded ID
-const DevToolsWindowID = 1923710101;
+fn getWindowForTarget(cmd: anytype) !void {
+    // const params = (try cmd.params(struct {
+    //     targetId: ?[]const u8 = null,
+    // })) orelse return error.InvalidParams;
 
-fn getWindowForTarget(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    _: *Ctx,
-) ![]const u8 {
-
-    // input
-    const Params = struct {
-        targetId: ?[]const u8 = null,
-    };
-    const input = try Input(?Params).get(alloc, msg);
-    defer input.deinit();
-    std.debug.assert(input.sessionId != null);
-    log.debug("Req > id {d}, method {s}", .{ input.id, "browser.getWindowForTarget" });
-
-    // output
-    const Resp = struct {
-        windowId: u64 = DevToolsWindowID,
-        bounds: struct {
-            left: ?u64 = null,
-            top: ?u64 = null,
-            width: ?u64 = null,
-            height: ?u64 = null,
-            windowState: []const u8 = "normal",
-        } = .{},
-    };
-    return result(alloc, input.id, Resp, Resp{}, input.sessionId);
+    return cmd.sendResult(.{ .windowId = DEV_TOOLS_WINDOW_ID, .bounds = .{
+        .windowState = "normal",
+    } }, .{});
 }
 
 // TODO: noop method
-fn setWindowBounds(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    _: *Ctx,
-) ![]const u8 {
-
-    // input
-    const input = try Input(void).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "browser.setWindowBounds" });
-
-    // output
-    return result(alloc, input.id, null, null, input.sessionId);
+fn setWindowBounds(cmd: anytype) !void {
+    return cmd.sendResult(null, .{});
 }

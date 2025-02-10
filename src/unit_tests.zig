@@ -334,14 +334,12 @@ test {
     std.testing.refAllDecls(@import("browser/dump.zig"));
     std.testing.refAllDecls(@import("browser/loader.zig"));
     std.testing.refAllDecls(@import("browser/mime.zig"));
-    std.testing.refAllDecls(@import("cdp/msg.zig"));
     std.testing.refAllDecls(@import("css/css.zig"));
     std.testing.refAllDecls(@import("css/libdom_test.zig"));
     std.testing.refAllDecls(@import("css/match_test.zig"));
     std.testing.refAllDecls(@import("css/parser.zig"));
     std.testing.refAllDecls(@import("generate.zig"));
     std.testing.refAllDecls(@import("http/Client.zig"));
-    std.testing.refAllDecls(@import("msg.zig"));
     std.testing.refAllDecls(@import("storage/storage.zig"));
-    std.testing.refAllDecls(@import("iterator/iterator.zig"));
+    std.testing.refAllDecls(@import("server.zig"));
 }

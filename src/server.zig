@@ -23,6 +23,7 @@ const net = std.net;
 const posix = std.posix;
 
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 
 const jsruntime = @import("jsruntime");
 const Completion = jsruntime.IO.Completion;
@@ -33,31 +34,7 @@ const CloseError = jsruntime.IO.CloseError;
 const CancelError = jsruntime.IO.CancelError;
 const TimeoutError = jsruntime.IO.TimeoutError;
 
-const Browser = @import("browser/browser.zig").Browser;
-const cdp = @import("cdp/cdp.zig");
-
-const IOError = AcceptError || RecvError || SendError || CloseError || TimeoutError || CancelError;
-const HTTPError = error{
-    OutOfMemory,
-    RequestTooLarge,
-    NotFound,
-    InvalidRequest,
-    MissingHeaders,
-    InvalidProtocol,
-    InvalidUpgradeHeader,
-    InvalidVersionHeader,
-    InvalidConnectionHeader,
-};
-const WebSocketError = error{
-    OutOfMemory,
-    ReservedFlags,
-    NotMasked,
-    TooLarge,
-    InvalidMessageType,
-    InvalidContinuation,
-    NestedFragementation,
-};
-const Error = IOError || cdp.Error || HTTPError || WebSocketError;
+const CDP = @import("cdp/cdp.zig").CDP;
 
 const TimeoutCheck = std.time.ns_per_ms * 100;
 
@@ -70,10 +47,7 @@ const MAX_HTTP_REQUEST_SIZE = 2048;
 // +140 for the max control packet that might be interleaved in a message
 const MAX_MESSAGE_SIZE = 256 * 1024 + 14;
 
-// For now, cdp does @import("server.zig").Ctx. Could change cdp to use "Server"
-// but I rather try to decouple the CDP code from the server, so a quick
-// stopgap is fine. TODO: Decouple cdp from the server
-pub const Ctx = Server;
+pub const Client = ClientT(*Server, CDP);
 
 const Server = struct {
     allocator: Allocator,
@@ -81,11 +55,14 @@ const Server = struct {
 
     // internal fields
     listener: posix.socket_t,
-    client: ?Client(*Server) = null,
+    client: ?*Client = null,
     timeout: u64,
 
     // a memory poor for our Send objects
     send_pool: std.heap.MemoryPool(Send),
+
+    // a memory poor for our Clietns
+    client_pool: std.heap.MemoryPool(Client),
 
     // I/O fields
     conn_completion: Completion,
@@ -93,20 +70,12 @@ const Server = struct {
     accept_completion: Completion,
     timeout_completion: Completion,
 
-    // used when gluing the session id to the inspector message
-    scrap: std.ArrayListUnmanaged(u8) = .{},
-
     // The response to send on a GET /json/version request
     json_version_response: []const u8,
 
-    // CDP
-    state: cdp.State = .{},
-
-    // JS fields
-    browser: *Browser, // TODO: is pointer mandatory here?
-
     fn deinit(self: *Server) void {
         self.send_pool.deinit();
+        self.client_pool.deinit();
         self.allocator.free(self.json_version_response);
     }
 
@@ -126,6 +95,7 @@ const Server = struct {
         completion: *Completion,
         result: AcceptError!posix.socket_t,
     ) void {
+        std.debug.assert(self.client == null);
         std.debug.assert(completion == &self.accept_completion);
 
         const socket = result catch |err| {
@@ -134,14 +104,18 @@ const Server = struct {
             return;
         };
 
-        self.newSession() catch |err| {
-            log.err("new session error: {any}", .{err});
-            self.queueClose(socket);
+        const client = self.client_pool.create() catch |err| {
+            log.err("failed to create client: {any}", .{err});
+            posix.close(socket);
             return;
         };
+        errdefer self.client_pool.destroy(client);
+
+        client.* = Client.init(socket, self);
+
+        self.client = client;
 
         log.info("client connected", .{});
-        self.client = Client(*Server).init(socket, self);
         self.queueRead();
         self.queueTimeout();
     }
@@ -163,7 +137,7 @@ const Server = struct {
     ) void {
         std.debug.assert(completion == &self.timeout_completion);
 
-        const client = &(self.client orelse return);
+        const client = self.client orelse return;
 
         if (result) |_| {
             if (now().since(client.last_active) > self.timeout) {
@@ -184,7 +158,7 @@ const Server = struct {
     }
 
     fn queueRead(self: *Server) void {
-        if (self.client) |*client| {
+        if (self.client) |client| {
             self.loop.io.recv(
                 *Server,
                 self,
@@ -203,16 +177,16 @@ const Server = struct {
     ) void {
         std.debug.assert(completion == &self.conn_completion);
 
-        var client = &(self.client orelse return);
+        var client = self.client orelse return;
 
         const size = result catch |err| {
             log.err("read error: {any}", .{err});
-            self.queueClose(client.socket);
+            client.close(null);
             return;
         };
 
         const more = client.processData(size) catch |err| {
-            log.err("Client Processing Error: {}\n", .{err});
+            log.err("Client Processing Error: {any}\n", .{err});
             return;
         };
 
@@ -225,19 +199,18 @@ const Server = struct {
     fn queueSend(
         self: *Server,
         socket: posix.socket_t,
+        arena: ?ArenaAllocator,
         data: []const u8,
-        free_when_done: bool,
     ) !void {
         const sd = try self.send_pool.create();
         errdefer self.send_pool.destroy(sd);
 
         sd.* = .{
-            .data = data,
             .unsent = data,
             .server = self,
             .socket = socket,
             .completion = undefined,
-            .free_when_done = free_when_done,
+            .arena = arena,
         };
         sd.queueSend();
     }
@@ -254,127 +227,11 @@ const Server = struct {
 
     fn callbackClose(self: *Server, completion: *Completion, _: CloseError!void) void {
         std.debug.assert(completion == &self.close_completion);
-        if (self.client != null) {
-            self.client = null;
-        }
+        var client = self.client.?;
+        client.deinit();
+        self.client_pool.destroy(client);
+        self.client = null;
         self.queueAccept();
-    }
-
-    fn handleCDP(self: *Server, cmd: []const u8) !void {
-        const res = cdp.do(self.allocator, cmd, self) catch |err| {
-
-            // cdp end cmd
-            if (err == error.DisposeBrowserContext) {
-                // restart a new browser session
-                std.log.scoped(.cdp).debug("end cmd, restarting a new session...", .{});
-                try self.newSession();
-                return;
-            }
-
-            return err;
-        };
-
-        // send result
-        if (res.len != 0) {
-            return self.send(res);
-        }
-    }
-
-    // called from CDP
-    pub fn send(self: *Server, data: []const u8) !void {
-        if (self.client) |*client| {
-            try client.sendWS(data);
-        }
-    }
-
-    fn newSession(self: *Server) !void {
-        try self.browser.newSession(self.allocator, self.loop);
-        try self.browser.session.initInspector(
-            self,
-            inspectorResponse,
-            inspectorEvent,
-        );
-    }
-
-    // // inspector
-    // // ---------
-
-    // called by cdp
-    pub fn sendInspector(self: *Server, msg: []const u8) !void {
-        const env = self.browser.session.env;
-        if (env.getInspector()) |inspector| {
-            inspector.send(env, msg);
-            return;
-        }
-        return error.InspectNotSet;
-    }
-
-    fn inspectorResponse(ctx: *anyopaque, _: u32, msg: []const u8) void {
-        if (std.log.defaultLogEnabled(.debug)) {
-            // msg should be {"id":<id>,...
-            std.debug.assert(std.mem.startsWith(u8, msg, "{\"id\":"));
-
-            const id_end = std.mem.indexOfScalar(u8, msg, ',') orelse {
-                log.warn("invalid inspector response message: {s}", .{msg});
-                return;
-            };
-
-            const id = msg[6..id_end];
-            std.log.scoped(.cdp).debug("Res (inspector) > id {s}", .{id});
-        }
-        sendInspectorMessage(@alignCast(@ptrCast(ctx)), msg);
-    }
-
-    fn inspectorEvent(ctx: *anyopaque, msg: []const u8) void {
-        if (std.log.defaultLogEnabled(.debug)) {
-            // msg should be {"method":<method>,...
-            std.debug.assert(std.mem.startsWith(u8, msg, "{\"method\":"));
-            const method_end = std.mem.indexOfScalar(u8, msg, ',') orelse {
-                log.warn("invalid inspector event message: {s}", .{msg});
-                return;
-            };
-            const method = msg[10..method_end];
-            std.log.scoped(.cdp).debug("Event (inspector) > method {s}", .{method});
-        }
-
-        sendInspectorMessage(@alignCast(@ptrCast(ctx)), msg);
-    }
-
-    fn sendInspectorMessage(self: *Server, msg: []const u8) void {
-        var client = &(self.client orelse return);
-
-        var scrap = &self.scrap;
-        scrap.clearRetainingCapacity();
-
-        const field = ",\"sessionId\":";
-        const sessionID = @tagName(self.state.sessionID);
-
-        // + 2 for the quotes around the session
-        const message_len = msg.len + sessionID.len + 2 + field.len;
-
-        scrap.ensureTotalCapacity(self.allocator, message_len) catch |err| {
-            log.err("Failed to expand inspector buffer: {}", .{err});
-            return;
-        };
-
-        // -1  because we dont' want the closing brace '}'
-        scrap.appendSliceAssumeCapacity(msg[0 .. msg.len - 1]);
-        scrap.appendSliceAssumeCapacity(field);
-        scrap.appendAssumeCapacity('"');
-        scrap.appendSliceAssumeCapacity(sessionID);
-        scrap.appendSliceAssumeCapacity("\"}");
-        std.debug.assert(scrap.items.len == message_len);
-
-        // TODO: Remove when we clean up ownership of messages between
-        // CDD and sending.
-        const owned = self.allocator.dupe(u8, scrap.items) catch return;
-
-        client.sendWS(owned) catch |err| {
-            log.debug("Failed to write inspector message to client: {}", .{err});
-            // don't bother trying to cleanly close the client, if sendWS fails
-            // we're almost certainly in a non-recoverable state (i.e. OOM)
-            self.queueClose(client.socket);
-        };
     }
 };
 
@@ -386,26 +243,20 @@ const Server = struct {
 // After the send (on the sendCbk) the dedicated context will be destroy
 // and the data slice will be free.
 const Send = struct {
-    // The full data to be sent
-    data: []const u8,
-
-    // Whether or not to free the data once the message is sent (or fails to)
-    // send. This is false in cases where the message is comptime known
-    free_when_done: bool,
-
-    // Any unsent data we have. Initially unsent == data, but as part of the
-    // message is succesfully sent, unsent becomes a smaller and smaller slice
-    // of data
+    // Any unsent data we have.
     unsent: []const u8,
 
     server: *Server,
     completion: Completion,
     socket: posix.socket_t,
 
+    // If we need to free anything when we're done
+    arena: ?ArenaAllocator,
+
     fn deinit(self: *Send) void {
         var server = self.server;
-        if (self.free_when_done) {
-            server.allocator.free(self.data);
+        if (self.arena) |arena| {
+            arena.deinit();
         }
         server.send_pool.destroy(self);
     }
@@ -421,15 +272,11 @@ const Send = struct {
         );
     }
 
-    fn sendCallback(
-        self: *Send,
-        _: *Completion,
-        result: SendError!usize,
-    ) void {
+    fn sendCallback(self: *Send, _: *Completion, result: SendError!usize) void {
         const sent = result catch |err| {
-            log.err("send error: {any}", .{err});
-            if (self.server.client) |*client| {
-                self.server.queueClose(client.socket);
+            log.info("send error: {any}", .{err});
+            if (self.server.client) |client| {
+                client.close(null);
             }
             self.deinit();
             return;
@@ -453,19 +300,28 @@ const Send = struct {
 // and when we send a message, we'll use server.send(...) to send via the server's
 // IO loop. During tests, we can inject a simple mock to record (and then verify)
 // the send message
-fn Client(comptime S: type) type {
+fn ClientT(comptime S: type, comptime C: type) type {
     const EMPTY_PONG = [_]u8{ 138, 0 };
 
     // CLOSE, 2 length, code
     const CLOSE_NORMAL = [_]u8{ 136, 2, 3, 232 }; // code: 1000
     const CLOSE_TOO_BIG = [_]u8{ 136, 2, 3, 241 }; // 1009
     const CLOSE_PROTOCOL_ERROR = [_]u8{ 136, 2, 3, 234 }; //code: 1002
+
+    // "private-use" close codes must be from 4000-49999
     const CLOSE_TIMEOUT = [_]u8{ 136, 2, 15, 160 }; // code: 4000
 
     return struct {
         // The client is initially serving HTTP requests but, under normal circumstances
         // should eventually be upgraded to a websocket connections
         mode: Mode,
+
+        // The CDP instance that processes messages from this client
+        // (a generic so we can test with a mock
+        // null until mode == .websocket
+        cdp: ?C,
+
+        // Our Server (a generic so we can test with a mock)
         server: S,
         reader: Reader,
         socket: posix.socket_t,
@@ -480,6 +336,7 @@ fn Client(comptime S: type) type {
 
         fn init(socket: posix.socket_t, server: S) Self {
             return .{
+                .cdp = null,
                 .mode = .http,
                 .socket = socket,
                 .server = server,
@@ -488,14 +345,22 @@ fn Client(comptime S: type) type {
             };
         }
 
-        fn close(self: *Self, close_code: CloseCode) void {
-            if (self.mode == .websocket) {
-                switch (close_code) {
-                    .timeout => self.send(&CLOSE_TIMEOUT, false) catch {},
+        pub fn deinit(self: *Self) void {
+            self.reader.deinit();
+            if (self.cdp) |*cdp| {
+                cdp.deinit();
+            }
+        }
+
+        pub fn close(self: *Self, close_code: ?CloseCode) void {
+            if (close_code) |code| {
+                if (self.mode == .websocket) {
+                    switch (code) {
+                        .timeout => self.send(&CLOSE_TIMEOUT) catch {},
+                    }
                 }
             }
             self.server.queueClose(self.socket);
-            self.reader.deinit();
         }
 
         fn readBuf(self: *Self) []u8 {
@@ -515,7 +380,7 @@ fn Client(comptime S: type) type {
             }
         }
 
-        fn processHTTPRequest(self: *Self) HTTPError!void {
+        fn processHTTPRequest(self: *Self) !void {
             std.debug.assert(self.reader.pos == 0);
             const request = self.reader.buf[0..self.reader.len];
 
@@ -542,7 +407,7 @@ fn Client(comptime S: type) type {
                     error.InvalidVersionHeader => self.writeHTTPErrorResponse(400, "Invalid websocket version"),
                     error.InvalidConnectionHeader => self.writeHTTPErrorResponse(400, "Invalid connection header"),
                     else => {
-                        log.err("error processing HTTP request: {}", .{err});
+                        log.err("error processing HTTP request: {any}", .{err});
                         self.writeHTTPErrorResponse(500, "Internal Server Error");
                     },
                 }
@@ -574,7 +439,7 @@ fn Client(comptime S: type) type {
             }
 
             if (std.mem.eql(u8, url, "/json/version")) {
-                return self.send(self.server.json_version_response, false);
+                return self.send(self.server.json_version_response);
             }
 
             return error.NotFound;
@@ -640,6 +505,9 @@ fn Client(comptime S: type) type {
             // our caller has already made sure this request ended in \r\n\r\n
             // so it isn't something we need to check again
 
+            var arena = ArenaAllocator.init(self.server.allocator);
+            errdefer arena.deinit();
+
             const response = blk: {
                 // Response to an ugprade request is always this, with
                 // the Sec-Websocket-Accept value a spacial sha1 hash of the
@@ -653,9 +521,8 @@ fn Client(comptime S: type) type {
 
                 // The response will be sent via the IO Loop and thus has to have its
                 // own lifetime.
-                const res = try self.server.allocator.dupe(u8, template);
-                errdefer self.server.allocator.free(res);
 
+                const res = try arena.allocator().dupe(u8, template);
                 // magic response
                 const key_pos = res.len - 32;
                 var h: [20]u8 = undefined;
@@ -671,7 +538,19 @@ fn Client(comptime S: type) type {
             };
 
             self.mode = .websocket;
-            return self.send(response, true);
+            self.cdp = C.init(self.server.allocator, self, self.server.loop);
+            return self.sendAlloc(arena, response);
+        }
+
+        fn writeHTTPErrorResponse(self: *Self, comptime status: u16, comptime body: []const u8) void {
+            const response = std.fmt.comptimePrint(
+                "HTTP/1.1 {d} \r\nConnection: Close\r\nContent-Length: {d}\r\n\r\n{s}",
+                .{ status, body.len, body },
+            );
+
+            // we're going to close this connection anyways, swallowing any
+            // error seems safe
+            self.send(response) catch {};
         }
 
         fn processWebsocketMessage(self: *Self) !bool {
@@ -681,12 +560,13 @@ fn Client(comptime S: type) type {
             while (true) {
                 const msg = reader.next() catch |err| {
                     switch (err) {
-                        error.TooLarge => self.send(&CLOSE_TOO_BIG, false) catch {},
-                        error.NotMasked => self.send(&CLOSE_PROTOCOL_ERROR, false) catch {},
-                        error.ReservedFlags => self.send(&CLOSE_PROTOCOL_ERROR, false) catch {},
-                        error.InvalidMessageType => self.send(&CLOSE_PROTOCOL_ERROR, false) catch {},
-                        error.InvalidContinuation => self.send(&CLOSE_PROTOCOL_ERROR, false) catch {},
-                        error.NestedFragementation => self.send(&CLOSE_PROTOCOL_ERROR, false) catch {},
+                        error.TooLarge => self.send(&CLOSE_TOO_BIG) catch {},
+                        error.NotMasked => self.send(&CLOSE_PROTOCOL_ERROR) catch {},
+                        error.ReservedFlags => self.send(&CLOSE_PROTOCOL_ERROR) catch {},
+                        error.InvalidMessageType => self.send(&CLOSE_PROTOCOL_ERROR) catch {},
+                        error.ControlTooLarge => self.send(&CLOSE_PROTOCOL_ERROR) catch {},
+                        error.InvalidContinuation => self.send(&CLOSE_PROTOCOL_ERROR) catch {},
+                        error.NestedFragementation => self.send(&CLOSE_PROTOCOL_ERROR) catch {},
                         error.OutOfMemory => {}, // don't borther trying to send an error in this case
                     }
                     return err;
@@ -696,11 +576,11 @@ fn Client(comptime S: type) type {
                     .pong => {},
                     .ping => try self.sendPong(msg.data),
                     .close => {
-                        self.send(&CLOSE_NORMAL, false) catch {};
+                        self.send(&CLOSE_NORMAL) catch {};
                         self.server.queueClose(self.socket);
                         return false;
                     },
-                    .text, .binary => try self.server.handleCDP(msg.data),
+                    .text, .binary => self.cdp.?.processMessage(msg.data),
                 }
                 if (msg.cleanup_fragment) {
                     reader.cleanup();
@@ -715,84 +595,60 @@ fn Client(comptime S: type) type {
 
         fn sendPong(self: *Self, data: []const u8) !void {
             if (data.len == 0) {
-                return self.send(&EMPTY_PONG, false);
+                return self.send(&EMPTY_PONG);
             }
-
-            return self.sendFrame(data, .pong);
-        }
-
-        fn sendWS(self: *Self, data: []const u8) !void {
-            std.debug.assert(data.len < 4294967296);
-
-            // for now, we're going to dupe this before we send it, so we don't need
-            // to keep this around.
-            defer self.server.allocator.free(data);
-            return self.sendFrame(data, .text);
-        }
-
-        // We need to append the websocket header to data. If our IO loop supported
-        // a writev call, this would be simple.
-        // For now, we'll just have to dupe data into a larger message.
-        // TODO: Remove this awful allocation (probably by passing a websocket-aware
-        // Writer into CDP)
-        fn sendFrame(self: *Self, data: []const u8, op_code: OpCode) !void {
-            if (comptime builtin.is_test == false) {
-                std.debug.assert(self.mode == .websocket);
-            }
-
-            // 10 is the max possible length of our header
-            // server->client has no mask, so it's 4 fewer bytes than the reader overhead
             var header_buf: [10]u8 = undefined;
+            const header = websocketHeader(&header_buf, .pong, data.len);
 
-            const header: []const u8 = blk: {
-                const len = data.len;
-                header_buf[0] = 128 | @intFromEnum(op_code); // fin | opcode
+            var arena = ArenaAllocator.init(self.server.allocator);
+            errdefer arena.deinit();
 
-                if (len <= 125) {
-                    header_buf[1] = @intCast(len);
-                    break :blk header_buf[0..2];
-                }
-
-                if (len < 65536) {
-                    header_buf[1] = 126;
-                    header_buf[2] = @intCast((len >> 8) & 0xFF);
-                    header_buf[3] = @intCast(len & 0xFF);
-                    break :blk header_buf[0..4];
-                }
-
-                header_buf[1] = 127;
-                header_buf[2] = 0;
-                header_buf[3] = 0;
-                header_buf[4] = 0;
-                header_buf[5] = 0;
-                header_buf[6] = @intCast((len >> 24) & 0xFF);
-                header_buf[7] = @intCast((len >> 16) & 0xFF);
-                header_buf[8] = @intCast((len >> 8) & 0xFF);
-                header_buf[9] = @intCast(len & 0xFF);
-                break :blk header_buf[0..10];
-            };
-
-            const allocator = self.server.allocator;
-            const full = try allocator.alloc(u8, header.len + data.len);
-            errdefer allocator.free(full);
-            @memcpy(full[0..header.len], header);
-            @memcpy(full[header.len..], data);
-            try self.send(full, true);
+            var framed = try arena.allocator().alloc(u8, header.len + data.len);
+            @memcpy(framed[0..header.len], header);
+            @memcpy(framed[header.len..], data);
+            return self.sendAlloc(arena, framed);
         }
 
-        fn writeHTTPErrorResponse(self: *Self, comptime status: u16, comptime body: []const u8) void {
-            const response = std.fmt.comptimePrint(
-                "HTTP/1.1 {d} \r\nConnection: Close\r\nContent-Length: {d}\r\n\r\n{s}",
-                .{ status, body.len, body },
-            );
+        // called by CDP
+        // Websocket frames have a variable lenght header. For server-client,
+        // it could be anywhere from 2 to 10 bytes. Our IO.Loop doesn't have
+        // writev, so we need to get creative. We'll JSON serialize to a
+        // buffer, where the first 10 bytes are reserved. We can then backfill
+        // the header and send the slice.
+        pub fn sendJSON(self: *Self, message: anytype, opts: std.json.StringifyOptions) !void {
+            var arena = ArenaAllocator.init(self.server.allocator);
+            errdefer arena.deinit();
 
-            // we're going to close this connection anyways, swallowing any
-            // error seems safe
-            self.send(response, false) catch {};
+            const allocator = arena.allocator();
+
+            var buf: std.ArrayListUnmanaged(u8) = .{};
+            try buf.ensureTotalCapacity(allocator, 512);
+
+            // reserve space for the maximum possible header
+            buf.appendSliceAssumeCapacity(&.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 });
+
+            try std.json.stringify(message, opts, buf.writer(allocator));
+            const framed = fillWebsocketHeader(buf);
+            return self.sendAlloc(arena, framed);
         }
 
-        fn send(self: *Self, data: []const u8, free_when_done: bool) !void {
-            return self.server.queueSend(self.socket, data, free_when_done);
+        pub fn sendJSONRaw(
+            self: *Self,
+            arena: ArenaAllocator,
+            buf: std.ArrayListUnmanaged(u8),
+        ) !void {
+            // Dangerous API!. We assume the caller has reserved the first 10
+            // bytes in `buf`.
+            const framed = fillWebsocketHeader(buf);
+            return self.sendAlloc(arena, framed);
+        }
+
+        fn send(self: *Self, data: []const u8) !void {
+            return self.server.queueSend(self.socket, null, data);
+        }
+
+        fn sendAlloc(self: *Self, arena: ArenaAllocator, data: []const u8) !void {
+            return self.server.queueSend(self.socket, arena, data);
         }
     };
 }
@@ -853,19 +709,33 @@ const Reader = struct {
                 return error.NotMasked;
             }
 
+            var is_control = false;
             var is_continuation = false;
             var message_type: Message.Type = undefined;
             switch (byte1 & 15) {
                 0 => is_continuation = true,
                 1 => message_type = .text,
                 2 => message_type = .binary,
-                8 => message_type = .close,
-                9 => message_type = .ping,
-                10 => message_type = .pong,
+                8 => {
+                    is_control = true;
+                    message_type = .close;
+                },
+                9 => {
+                    is_control = true;
+                    message_type = .ping;
+                },
+                10 => {
+                    is_control = true;
+                    message_type = .pong;
+                },
                 else => return error.InvalidMessageType,
             }
 
-            if (message_len > MAX_MESSAGE_SIZE) {
+            if (is_control) {
+                if (message_len > 125) {
+                    return error.ControlTooLarge;
+                }
+            } else if (message_len > MAX_MESSAGE_SIZE) {
                 return error.TooLarge;
             }
 
@@ -1037,10 +907,60 @@ const OpCode = enum(u8) {
     pong = 128 | 10,
 };
 
-// "private-use" close codes must be from 4000-49999
 const CloseCode = enum {
     timeout,
 };
+
+fn fillWebsocketHeader(buf: std.ArrayListUnmanaged(u8)) []const u8 {
+    // can't use buf[0..10] here, because the header length
+    // is variable. If it's just 2 bytes, for example, we need the
+    // framed message to be:
+    //     h1, h2, data
+    // If we use buf[0..10], we'd get:
+    //    h1, h2, 0, 0, 0, 0, 0, 0, 0, 0, data
+
+    var header_buf: [10]u8 = undefined;
+
+    // -10 because we reserved 10 bytes for the header above
+    const header = websocketHeader(&header_buf, .text, buf.items.len - 10);
+    const start = 10 - header.len;
+
+    const message = buf.items;
+    @memcpy(message[start..10], header);
+    return message[start..];
+}
+
+// makes the assumption that our caller reserved the first
+// 10 bytes for the header
+fn websocketHeader(buf: []u8, op_code: OpCode, payload_len: usize) []const u8 {
+    std.debug.assert(buf.len == 10);
+
+    const len = payload_len;
+    buf[0] = 128 | @intFromEnum(op_code); // fin | opcode
+
+    if (len <= 125) {
+        buf[1] = @intCast(len);
+        return buf[0..2];
+    }
+
+    if (len < 65536) {
+        buf[1] = 126;
+        buf[2] = @intCast((len >> 8) & 0xFF);
+        buf[3] = @intCast(len & 0xFF);
+        return buf[0..4];
+    }
+
+    buf[1] = 127;
+    buf[2] = 0;
+    buf[3] = 0;
+    buf[4] = 0;
+    buf[5] = 0;
+    buf[6] = @intCast((len >> 24) & 0xFF);
+    buf[7] = @intCast((len >> 16) & 0xFF);
+    buf[8] = @intCast((len >> 8) & 0xFF);
+    buf[9] = @intCast(len & 0xFF);
+    return buf[0..10];
+}
 
 pub fn run(
     allocator: Allocator,
@@ -1048,6 +968,14 @@ pub fn run(
     timeout: u64,
     loop: *jsruntime.Loop,
 ) !void {
+    if (comptime builtin.is_test) {
+        // There's bunch of code that won't compiler in a test build (because
+        // it relies on a global root.Types). So we fight the compiler and make
+        // sure it doesn't include any of that code. Hopefully one day we can
+        // remove all this.
+        return;
+    }
+
     // create socket
     const flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK;
     const listener = try posix.socket(address.any.family, flags, posix.IPPROTO.TCP);
@@ -1069,17 +997,11 @@ pub fn run(
     const vm = jsruntime.VM.init();
     defer vm.deinit();
 
-    // browser
-    var browser: Browser = undefined;
-    try Browser.init(&browser, allocator, loop, vm);
-    defer browser.deinit();
-
     const json_version_response = try buildJSONVersionResponse(allocator, address);
 
     var server = Server{
         .loop = loop,
         .timeout = timeout,
-        .browser = &browser,
         .listener = listener,
         .allocator = allocator,
         .conn_completion = undefined,
@@ -1088,10 +1010,9 @@ pub fn run(
         .timeout_completion = undefined,
         .json_version_response = json_version_response,
         .send_pool = std.heap.MemoryPool(Send).init(allocator),
+        .client_pool = std.heap.MemoryPool(Client).init(allocator),
     };
     defer server.deinit();
-
-    try browser.session.initInspector(&server, Server.inspectorResponse, Server.inspectorEvent);
 
     // accept an connection
     server.queueAccept();
@@ -1255,7 +1176,8 @@ test "Client: http valid handshake" {
     var ms = MockServer{};
     defer ms.deinit();
 
-    var client = Client(*MockServer).init(0, &ms);
+    var client = ClientT(*MockServer, MockCDP).init(0, &ms);
+    defer client.deinit();
 
     const request =
         "GET /   HTTP/1.1\r\n" ++
@@ -1282,7 +1204,8 @@ test "Client: http get json version" {
     var ms = MockServer{};
     defer ms.deinit();
 
-    var client = Client(*MockServer).init(0, &ms);
+    var client = ClientT(*MockServer, MockCDP).init(0, &ms);
+    defer client.deinit();
 
     const request = "GET /json/version HTTP/1.1\r\n\r\n";
 
@@ -1296,20 +1219,21 @@ test "Client: http get json version" {
 }
 
 test "Client: write websocket message" {
-    var ms = MockServer{};
-    defer ms.deinit();
-
-    var client = Client(*MockServer).init(0, &ms);
-
     const cases = [_]struct { expected: []const u8, message: []const u8 }{
-        .{ .expected = &.{ 129, 0 }, .message = "" },
-        .{ .expected = [_]u8{ 129, 12 } ++ "hello world!", .message = "hello world!" },
-        .{ .expected = [_]u8{ 129, 126, 0, 130 } ++ ("A" ** 130), .message = "A" ** 130 },
+        .{ .expected = &.{ 129, 2, '"', '"' }, .message = "" },
+        .{ .expected = [_]u8{ 129, 14 } ++ "\"hello world!\"", .message = "hello world!" },
+        .{ .expected = [_]u8{ 129, 126, 0, 132 } ++ "\"" ++ ("A" ** 130) ++ "\"", .message = "A" ** 130 },
     };
 
     for (cases) |c| {
-        ms.sent.clearRetainingCapacity();
-        try client.sendWS(try testing.allocator.dupe(u8, c.message));
+        var ms = MockServer{};
+        defer ms.deinit();
+
+        var client = ClientT(*MockServer, MockCDP).init(0, &ms);
+        defer client.deinit();
+
+        try client.sendJSON(c.message, .{});
+
         try testing.expectEqual(1, ms.sent.items.len);
         try testing.expectEqualSlices(u8, c.expected, ms.sent.items[0]);
     }
@@ -1349,6 +1273,16 @@ test "Client: read invalid websocket message" {
         "",
         &.{ 129, 1, 'a' },
     );
+
+    // control types (ping/ping/close) can't be > 125 bytes
+    for ([_]u8{ 136, 137, 138 }) |op| {
+        try assertWebSocketError(
+            error.ControlTooLarge,
+            1002,
+            "",
+            &.{ op, 254, 1, 1 },
+        );
+    }
 
     // length of message is 0000 0401, i.e: 1024 * 256 + 1
     try assertWebSocketError(
@@ -1537,7 +1471,8 @@ test "Client: fuzz" {
         var ms = MockServer{};
         defer ms.deinit();
 
-        var client = Client(*MockServer).init(0, &ms);
+        var client = ClientT(*MockServer, MockCDP).init(0, &ms);
+        defer client.deinit();
 
         try SendRandom.send(&client, random, "GET /json/version HTTP/1.1\r\nContent-Length: 0\r\n\r\n");
         try SendRandom.send(&client, random, "GET /   HTTP/1.1\r\n" ++
@@ -1579,23 +1514,24 @@ test "Client: fuzz" {
             ms.sent.items[4],
         );
 
-        try testing.expectEqual(3, ms.cdp.items.len);
+        const received = client.cdp.?.messages.items;
+        try testing.expectEqual(3, received.len);
         try testing.expectEqualSlices(
             u8,
             &.{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 },
-            ms.cdp.items[0],
+            received[0],
         );
 
         try testing.expectEqualSlices(
             u8,
             &([_]u8{ 64, 67, 66, 69 } ** 171 ++ [_]u8{ 64, 67, 66 }),
-            ms.cdp.items[1],
+            received[1],
         );
 
         try testing.expectEqualSlices(
             u8,
             &.{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 },
-            ms.cdp.items[2],
+            received[2],
         );
 
         try testing.expectEqual(true, ms.closed);
@@ -1619,7 +1555,7 @@ test "server: mask" {
 }
 
 fn assertHTTPError(
-    expected_error: HTTPError,
+    expected_error: anyerror,
     comptime expected_status: u16,
     comptime expected_body: []const u8,
     input: []const u8,
@@ -1627,7 +1563,9 @@ fn assertHTTPError(
     var ms = MockServer{};
     defer ms.deinit();
 
-    var client = Client(*MockServer).init(0, &ms);
+    var client = ClientT(*MockServer, MockCDP).init(0, &ms);
+    defer client.deinit();
+
     @memcpy(client.reader.buf[0..input.len], input);
     try testing.expectError(expected_error, client.processData(input.len));
 
@@ -1641,7 +1579,7 @@ fn assertHTTPError(
 }
 
 fn assertWebSocketError(
-    expected_error: WebSocketError,
+    expected_error: anyerror,
     close_code: u16,
     close_payload: []const u8,
     input: []const u8,
@@ -1649,7 +1587,9 @@ fn assertWebSocketError(
     var ms = MockServer{};
     defer ms.deinit();
 
-    var client = Client(*MockServer).init(0, &ms);
+    var client = ClientT(*MockServer, MockCDP).init(0, &ms);
+    defer client.deinit();
+
     client.mode = .websocket; // force websocket message processing
 
     @memcpy(client.reader.buf[0..input.len], input);
@@ -1679,7 +1619,8 @@ fn assertWebSocketMessage(
     var ms = MockServer{};
     defer ms.deinit();
 
-    var client = Client(*MockServer).init(0, &ms);
+    var client = ClientT(*MockServer, MockCDP).init(0, &ms);
+    defer client.deinit();
     client.mode = .websocket; // force websocket message processing
 
     @memcpy(client.reader.buf[0..input.len], input);
@@ -1700,13 +1641,11 @@ fn assertWebSocketMessage(
 }
 
 const MockServer = struct {
+    loop: *jsruntime.Loop = undefined,
     closed: bool = false,
 
     // record the messages we sent to the client
     sent: std.ArrayListUnmanaged([]const u8) = .{},
-
-    // record the CDP messages we need to process
-    cdp: std.ArrayListUnmanaged([]const u8) = .{},
 
     allocator: Allocator = testing.allocator,
 
@@ -1719,33 +1658,48 @@ const MockServer = struct {
             allocator.free(msg);
         }
         self.sent.deinit(allocator);
-
-        for (self.cdp.items) |msg| {
-            allocator.free(msg);
-        }
-        self.cdp.deinit(allocator);
     }
 
     fn queueClose(self: *MockServer, _: anytype) void {
         self.closed = true;
     }
 
-    fn handleCDP(self: *MockServer, message: []const u8) !void {
-        const owned = try self.allocator.dupe(u8, message);
-        try self.cdp.append(self.allocator, owned);
-    }
-
     fn queueSend(
         self: *MockServer,
         socket: posix.socket_t,
+        arena: ?ArenaAllocator,
         data: []const u8,
-        free_when_done: bool,
     ) !void {
         _ = socket;
         const owned = try self.allocator.dupe(u8, data);
         try self.sent.append(self.allocator, owned);
-        if (free_when_done) {
-            testing.allocator.free(data);
+        if (arena) |a| {
+            a.deinit();
         }
+    }
+};
+
+const MockCDP = struct {
+    messages: std.ArrayListUnmanaged([]const u8) = .{},
+
+    allocator: Allocator = testing.allocator,
+
+    fn init(_: Allocator, client: anytype, loop: *jsruntime.Loop) MockCDP {
+        _ = loop;
+        _ = client;
+        return .{};
+    }
+
+    fn deinit(self: *MockCDP) void {
+        const allocator = self.allocator;
+        for (self.messages.items) |msg| {
+            allocator.free(msg);
+        }
+        self.messages.deinit(allocator);
+    }
+
+    fn processMessage(self: *MockCDP, message: []const u8) void {
+        const owned = self.allocator.dupe(u8, message) catch unreachable;
+        self.messages.append(self.allocator, owned) catch unreachable;
     }
 };

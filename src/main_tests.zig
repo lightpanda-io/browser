@@ -336,7 +336,6 @@ test {
     std.testing.refAllDecls(queryTest);
 
     std.testing.refAllDecls(@import("generate.zig"));
-    std.testing.refAllDecls(@import("cdp/msg.zig"));
 
     // Don't use refAllDecls, as this will pull in the entire project
     // and break the test build.

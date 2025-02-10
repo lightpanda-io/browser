@@ -19,6 +19,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const Allocator = std.mem.Allocator;
+
 const Types = @import("root").Types;
 
 const parser = @import("netsurf");
@@ -57,30 +59,44 @@ pub const user_agent = "Lightpanda/1.0";
 // A browser contains only one session.
 // TODO allow multiple sessions per browser.
 pub const Browser = struct {
-    session: Session = undefined,
-    agent: []const u8 = user_agent,
+    loop: *Loop,
+    session: ?*Session,
+    allocator: Allocator,
+    session_pool: SessionPool,
+
+    const SessionPool = std.heap.MemoryPool(Session);
 
     const uri = "about:blank";
 
-    pub fn init(self: *Browser, alloc: std.mem.Allocator, loop: *Loop, vm: jsruntime.VM) !void {
-        // We want to ensure the caller initialised a VM, but the browser
-        // doesn't use it directly...
-        _ = vm;
-
-        try Session.init(&self.session, alloc, loop, uri);
+    pub fn init(allocator: Allocator, loop: *Loop) Browser {
+        return .{
+            .loop = loop,
+            .session = null,
+            .allocator = allocator,
+            .session_pool = SessionPool.init(allocator),
+        };
     }
 
     pub fn deinit(self: *Browser) void {
-        self.session.deinit();
+        self.closeSession();
+        self.session_pool.deinit();
     }
 
-    pub fn newSession(
-        self: *Browser,
-        alloc: std.mem.Allocator,
-        loop: *jsruntime.Loop,
-    ) !void {
-        self.session.deinit();
-        try Session.init(&self.session, alloc, loop, uri);
+    pub fn newSession(self: *Browser, ctx: anytype) !*Session {
+        self.closeSession();
+
+        const session = try self.session_pool.create();
+        try Session.init(session, self.allocator, ctx, self.loop, uri);
+        self.session = session;
+        return session;
+    }
+
+    fn closeSession(self: *Browser) void {
+        if (self.session) |session| {
+            session.deinit();
+            self.session_pool.destroy(session);
+            self.session = null;
+        }
     }
 };
 
@@ -90,7 +106,7 @@ pub const Browser = struct {
 // deinit a page before running another one.
 pub const Session = struct {
     // allocator used to init the arena.
-    alloc: std.mem.Allocator,
+    allocator: Allocator,
 
     // The arena is used only to bound the js env init b/c it leaks memory.
     // see https://github.com/lightpanda-io/jsruntime-lib/issues/181
@@ -103,8 +119,9 @@ pub const Session = struct {
 
     // TODO handle proxy
     loader: Loader,
-    env: Env = undefined,
-    inspector: ?jsruntime.Inspector = null,
+
+    env: Env,
+    inspector: jsruntime.Inspector,
 
     window: Window,
 
@@ -115,20 +132,54 @@ pub const Session = struct {
 
     jstypes: [Types.len]usize = undefined,
 
-    fn init(self: *Session, alloc: std.mem.Allocator, loop: *Loop, uri: []const u8) !void {
-        self.* = Session{
+    fn init(self: *Session, allocator: Allocator, ctx: anytype, loop: *Loop, uri: []const u8) !void {
+        self.* = .{
             .uri = uri,
-            .alloc = alloc,
-            .arena = std.heap.ArenaAllocator.init(alloc),
+            .env = undefined,
+            .inspector = undefined,
+            .allocator = allocator,
+            .loader = Loader.init(allocator),
+            .httpClient = .{ .allocator = allocator },
+            .storageShed = storage.Shed.init(allocator),
+            .arena = std.heap.ArenaAllocator.init(allocator),
             .window = Window.create(null, .{ .agent = user_agent }),
-            .loader = Loader.init(alloc),
-            .storageShed = storage.Shed.init(alloc),
-            .httpClient = undefined,
         };
 
-        Env.init(&self.env, self.arena.allocator(), loop, null);
-        self.httpClient = .{ .allocator = alloc };
+        const arena = self.arena.allocator();
+
+        Env.init(&self.env, arena, loop, null);
+        errdefer self.env.deinit();
         try self.env.load(&self.jstypes);
+
+        const ContextT = @TypeOf(ctx);
+        const InspectorContainer = switch (@typeInfo(ContextT)) {
+            .Struct => ContextT,
+            .Pointer => |ptr| ptr.child,
+            .Void => NoopInspector,
+            else => @compileError("invalid context type"),
+        };
+
+        // const ctx_opaque = @as(*anyopaque, @ptrCast(ctx));
+        self.inspector = try jsruntime.Inspector.init(
+            arena,
+            self.env,
+            if (@TypeOf(ctx) == void) @constCast(@ptrCast(&{})) else ctx,
+            InspectorContainer.onInspectorResponse,
+            InspectorContainer.onInspectorEvent,
+        );
+        self.env.setInspector(self.inspector);
+    }
+
+    fn deinit(self: *Session) void {
+        if (self.page) |*p| {
+            p.end();
+        }
+
+        self.env.deinit();
+        self.arena.deinit();
+        self.httpClient.deinit();
+        self.loader.deinit();
+        self.storageShed.deinit();
     }
 
     fn fetchModule(ctx: *anyopaque, referrer: ?jsruntime.Module, specifier: []const u8) !jsruntime.Module {
@@ -146,47 +197,15 @@ pub const Session = struct {
         return self.env.compileModule(body, specifier);
     }
 
-    fn deinit(self: *Session) void {
-        if (self.page) |*p| p.end();
-
-        if (self.inspector) |inspector| {
-            inspector.deinit(self.alloc);
-        }
-
-        self.env.deinit();
-        self.arena.deinit();
-
-        self.httpClient.deinit();
-        self.loader.deinit();
-        self.storageShed.deinit();
-    }
-
-    pub fn initInspector(
-        self: *Session,
-        ctx: anytype,
-        onResp: jsruntime.InspectorOnResponseFn,
-        onEvent: jsruntime.InspectorOnEventFn,
-    ) !void {
-        const ctx_opaque = @as(*anyopaque, @ptrCast(ctx));
-        self.inspector = try jsruntime.Inspector.init(self.alloc, self.env, ctx_opaque, onResp, onEvent);
-        self.env.setInspector(self.inspector.?);
-    }
-
     pub fn callInspector(self: *Session, msg: []const u8) void {
-        if (self.inspector) |inspector| {
-            inspector.send(msg, self.env);
-        } else {
-            @panic("No Inspector");
-        }
+        self.inspector.send(self.env, msg);
     }
 
     // NOTE: the caller is not the owner of the returned value,
     // the pointer on Page is just returned as a convenience
     pub fn createPage(self: *Session) !*Page {
         if (self.page != null) return error.SessionPageExists;
-        const p: Page = undefined;
-        self.page = p;
-        Page.init(&self.page.?, self.alloc, self);
+        self.page = Page.init(self.allocator, self);
         return &self.page.?;
     }
 };
@@ -197,8 +216,8 @@ pub const Session = struct {
 // The page handle all its memory in an arena allocator. The arena is reseted
 // when end() is called.
 pub const Page = struct {
-    arena: std.heap.ArenaAllocator,
     session: *Session,
+    arena: std.heap.ArenaAllocator,
     doc: ?*parser.Document = null,
 
     // handle url
@@ -212,15 +231,16 @@ pub const Page = struct {
 
     raw_data: ?[]const u8 = null,
 
-    fn init(
-        self: *Page,
-        alloc: std.mem.Allocator,
-        session: *Session,
-    ) void {
-        self.* = .{
-            .arena = std.heap.ArenaAllocator.init(alloc),
+    fn init(allocator: Allocator, session: *Session) Page {
+        return .{
             .session = session,
+            .arena = std.heap.ArenaAllocator.init(allocator),
         };
+    }
+
+    pub fn deinit(self: *Page) void {
+        self.arena.deinit();
+        self.session.page = null;
     }
 
     // start js env.
@@ -242,10 +262,8 @@ pub const Page = struct {
         try polyfill.load(self.arena.allocator(), self.session.env);
 
         // inspector
-        if (self.session.inspector) |inspector| {
-            log.debug("inspector context created", .{});
-            inspector.contextCreated(self.session.env, "", self.origin orelse "://", auxData);
-        }
+        log.debug("inspector context created", .{});
+        self.session.inspector.contextCreated(self.session.env, "", self.origin orelse "://", auxData);
     }
 
     // reset js env and mem arena.
@@ -253,7 +271,6 @@ pub const Page = struct {
         self.session.env.stop();
         // TODO unload document: https://html.spec.whatwg.org/#unloading-documents
 
-        if (self.url) |*u| u.deinit(self.arena.allocator());
         self.url = null;
         self.location.url = null;
         self.session.window.replaceLocation(&self.location) catch |e| {
@@ -266,13 +283,8 @@ pub const Page = struct {
         _ = self.arena.reset(.free_all);
     }
 
-    pub fn deinit(self: *Page) void {
-        self.arena.deinit();
-        self.session.page = null;
-    }
-
     // dump writes the page content into the given file.
-    pub fn dump(self: *Page, out: std.fs.File) !void {
+    pub fn dump(self: *const Page, out: std.fs.File) !void {
 
         // if no HTML document pointer available, dump the data content only.
         if (self.doc == null) {
@@ -320,11 +332,9 @@ pub const Page = struct {
         }
 
         // own the url
-        if (self.rawuri) |prev| alloc.free(prev);
         self.rawuri = try alloc.dupe(u8, uri);
         self.uri = std.Uri.parse(self.rawuri.?) catch try std.Uri.parseAfterScheme("", self.rawuri.?);
 
-        if (self.url) |*prev| prev.deinit(alloc);
         self.url = try URL.constructor(alloc, self.rawuri.?, null);
         self.location.url = &self.url.?;
         try self.session.window.replaceLocation(&self.location);
@@ -422,9 +432,7 @@ pub const Page = struct {
         // https://html.spec.whatwg.org/#read-html
 
         // inspector
-        if (self.session.inspector) |inspector| {
-            inspector.contextCreated(self.session.env, "", self.origin.?, auxData);
-        }
+        self.session.inspector.contextCreated(self.session.env, "", self.origin.?, auxData);
 
         // replace the user context document with the new one.
         try self.session.env.setUserContext(.{
@@ -583,7 +591,7 @@ pub const Page = struct {
     };
 
     // the caller owns the returned string
-    fn fetchData(self: *Page, alloc: std.mem.Allocator, src: []const u8) ![]const u8 {
+    fn fetchData(self: *Page, alloc: Allocator, src: []const u8) ![]const u8 {
         log.debug("starting fetch {s}", .{src});
 
         var buffer: [1024]u8 = undefined;
@@ -658,7 +666,7 @@ pub const Page = struct {
             return .unknown;
         }
 
-        fn eval(self: Script, alloc: std.mem.Allocator, env: Env, body: []const u8) !void {
+        fn eval(self: Script, alloc: Allocator, env: Env, body: []const u8) !void {
             var try_catch: jsruntime.TryCatch = undefined;
             try_catch.init(env);
             defer try_catch.deinit();
@@ -682,4 +690,9 @@ pub const Page = struct {
             }
         }
     };
+};
+
+const NoopInspector = struct {
+    pub fn onInspectorResponse(_: *anyopaque, _: u32, _: []const u8) void {}
+    pub fn onInspectorEvent(_: *anyopaque, _: []const u8) void {}
 };
