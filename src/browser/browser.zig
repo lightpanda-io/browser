@@ -375,7 +375,7 @@ pub const Page = struct {
         defer alloc.free(ct.?);
 
         log.debug("header content-type: {s}", .{ct.?});
-        const mime = try Mime.parse(ct.?);
+        var mime = try Mime.parse(alloc, ct.?);
         defer mime.deinit();
 
         if (mime.isHTML()) {
