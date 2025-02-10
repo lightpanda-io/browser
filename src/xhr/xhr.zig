@@ -28,7 +28,7 @@ const DOMException = @import("../dom/exceptions.zig").DOMException;
 const ProgressEvent = @import("progress_event.zig").ProgressEvent;
 const XMLHttpRequestEventTarget = @import("event_target.zig").XMLHttpRequestEventTarget;
 
-const Mime = @import("../browser/mime.zig");
+const Mime = @import("../browser/mime.zig").Mime;
 
 const Loop = jsruntime.Loop;
 const Client = @import("asyncio").Client;
@@ -141,7 +141,7 @@ pub const XMLHttpRequest = struct {
     // https://lightpanda.slack.com/archives/C05TRU6RBM1/p1707819010681019
     // response_override_mime_type: ?[]const u8 = null,
 
-    response_mime: Mime = undefined,
+    response_mime: ?Mime = null,
     response_obj: ?ResponseObj = null,
     send_flag: bool = false,
 
@@ -313,8 +313,11 @@ pub const XMLHttpRequest = struct {
         if (self.response_obj) |v| v.deinit();
 
         self.response_obj = null;
-        self.response_mime = Mime.Empty;
         self.response_type = .Empty;
+        if (self.response_mime) |*mime| {
+            mime.deinit();
+            self.response_mime = null;
+        }
 
         // TODO should we clearRetainingCapacity instead?
         self.headers.clearAndFree();
@@ -336,6 +339,9 @@ pub const XMLHttpRequest = struct {
         self.reset();
         self.headers.deinit();
         self.response_headers.deinit();
+        if (self.response_mime) |*mime| {
+            mime.deinit();
+        }
 
         self.proto.deinit(alloc);
     }
@@ -544,7 +550,7 @@ pub const XMLHttpRequest = struct {
 
         // extract a mime type from headers.
         const ct = self.response_headers.getFirstValue("Content-Type") orelse "text/xml";
-        self.response_mime = Mime.parse(ct) catch |e| return self.onErr(e);
+        self.response_mime = Mime.parse(self.alloc, ct) catch |e| return self.onErr(e);
 
         // TODO handle override mime type
 
@@ -820,13 +826,14 @@ pub const XMLHttpRequest = struct {
     // TODO parse XML.
     // https://xhr.spec.whatwg.org/#response-object
     fn setResponseObjDocument(self: *XMLHttpRequest, alloc: std.mem.Allocator) void {
-        const isHTML = self.response_mime.eql(Mime.HTML);
+        const response_mime = &self.response_mime.?;
+        const isHTML = response_mime.isHTML();
 
         // TODO If finalMIME is not an HTML MIME type or an XML MIME type, then
         // return.
         if (!isHTML) return;
 
-        const ccharset = alloc.dupeZ(u8, self.response_mime.charset orelse "utf-8") catch {
+        const ccharset = alloc.dupeZ(u8, response_mime.charset orelse "utf-8") catch {
             self.response_obj = .{ .Failure = true };
             return;
         };

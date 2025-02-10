@@ -35,7 +35,7 @@ pub const Reader = struct {
     pub fn tail(self: *Reader) []const u8 {
         const pos = self.pos;
         const data = self.data;
-        if (pos > data.len)  {
+        if (pos > data.len) {
             return "";
         }
         self.pos = data.len;
