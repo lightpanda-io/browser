@@ -109,7 +109,7 @@ const Node = struct {
     nodeName: []const u8 = "",
     localName: []const u8 = "",
     nodeValue: []const u8 = "",
-    childNodeCount: u32,
+    childNodeCount: ?u32 = null,
     children: ?[]const Node = null,
     documentURL: ?[]const u8 = null,
     baseURL: ?[]const u8 = null,
@@ -117,10 +117,8 @@ const Node = struct {
     compatibilityMode: []const u8 = "NoQuirksMode",
     isScrollable: bool = false,
 
-    fn init(n: *parser.Node, id: NodeId) !Node {
-        const children = try parser.nodeGetChildNodes(n);
-        const ln = try parser.nodeListLength(children);
-
+    fn init(n: *parser.Node, nlist: *NodeList) !Node {
+        const id = try nlist.set(n);
         return .{
             .nodeId = id,
             .backendNodeId = id,
@@ -128,8 +126,31 @@ const Node = struct {
             .nodeName = try parser.nodeName(n),
             .localName = try parser.nodeLocalName(n),
             .nodeValue = try parser.nodeValue(n) orelse "",
-            .childNodeCount = ln,
         };
+    }
+
+    fn initChildren(
+        self: *Node,
+        alloc: std.mem.Allocator,
+        n: *parser.Node,
+        nlist: *NodeList,
+    ) !std.ArrayList(Node) {
+        const children = try parser.nodeGetChildNodes(n);
+        const ln = try parser.nodeListLength(children);
+        self.childNodeCount = ln;
+
+        var list = try std.ArrayList(Node).initCapacity(alloc, ln);
+
+        var i: u32 = 0;
+        while (i < ln) {
+            defer i += 1;
+            const child = try parser.nodeListItem(children, i) orelse continue;
+            try list.append(try Node.init(child, nlist));
+        }
+
+        self.children = list.items;
+
+        return list;
     }
 };
 
@@ -155,17 +176,22 @@ fn getDocument(
     if (page.doc == null) return error.NoDocument;
 
     const node = parser.documentToNode(page.doc.?);
-    const id = try ctx.state.nodelist.set(node);
+    var n = try Node.init(node, &ctx.state.nodelist);
+    var list = try n.initChildren(alloc, node, &ctx.state.nodelist);
+    defer list.deinit();
 
     // output
     const Resp = struct {
         root: Node,
     };
     const resp: Resp = .{
-        .root = try Node.init(node, id),
+        .root = n,
     };
 
-    return result(alloc, input.id, Resp, resp, input.sessionId);
+    const res = try result(alloc, input.id, Resp, resp, input.sessionId);
+    try ctx.send(res);
+
+    return "";
 }
 
 pub const NodeSearch = struct {
