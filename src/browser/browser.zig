@@ -24,7 +24,7 @@ const Types = @import("root").Types;
 const parser = @import("netsurf");
 const Loader = @import("loader.zig").Loader;
 const Dump = @import("dump.zig");
-const Mime = @import("mime.zig");
+const Mime = @import("mime.zig").Mime;
 
 const jsruntime = @import("jsruntime");
 const Loop = jsruntime.Loop;
@@ -375,8 +375,10 @@ pub const Page = struct {
         defer alloc.free(ct.?);
 
         log.debug("header content-type: {s}", .{ct.?});
-        const mime = try Mime.parse(ct.?);
-        if (mime.eql(Mime.HTML)) {
+        var mime = try Mime.parse(alloc, ct.?);
+        defer mime.deinit();
+
+        if (mime.isHTML()) {
             try self.loadHTMLDoc(req.reader(), mime.charset orelse "utf-8", auxData);
         } else {
             log.info("non-HTML document: {s}", .{ct.?});
