@@ -259,6 +259,7 @@ fn navigate(
     log.debug("Req > id {d}, method {s}", .{ input.id, "page.navigate" });
 
     // change state
+    ctx.state.reset();
     ctx.state.url = input.params.url;
     // TODO: hard coded ID
     ctx.state.loaderID = "AF8667A203C5392DBE9AC290044AA4C2";
@@ -333,7 +334,7 @@ fn navigate(
 
     // Launch navigate, the page must have been created by a
     // target.createTarget.
-    var p = ctx.browser.session.page orelse return error.NoPage;
+    var p = ctx.browser.currentPage() orelse return error.NoPage;
     ctx.state.executionContextId += 1;
     const auxData = try std.fmt.allocPrint(
         alloc,
@@ -360,6 +361,16 @@ fn navigate(
             input.sessionId,
         );
     }
+
+    // DOM.documentUpdated
+    try sendEvent(
+        alloc,
+        ctx,
+        "DOM.documentUpdated",
+        struct {},
+        .{},
+        input.sessionId,
+    );
 
     // frameNavigated event
     const FrameNavigated = struct {

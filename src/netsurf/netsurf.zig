@@ -1008,6 +1008,7 @@ pub fn nodeLocalName(node: *Node) ![]const u8 {
     var s: ?*String = undefined;
     const err = nodeVtable(node).dom_node_get_local_name.?(node, &s);
     try DOMErr(err);
+    if (s == null) return "";
     var s_lower: ?*String = undefined;
     const errStr = c.dom_string_tolower(s, true, &s_lower);
     try DOMErr(errStr);
@@ -1098,6 +1099,7 @@ pub fn nodeName(node: *Node) ![]const u8 {
     var s: ?*String = undefined;
     const err = nodeVtable(node).dom_node_get_node_name.?(node, &s);
     try DOMErr(err);
+    if (s == null) return "";
     return strToData(s.?);
 }
 

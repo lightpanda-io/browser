@@ -69,12 +69,16 @@ pub const Ctx = struct {
     last_active: ?std.time.Instant = null,
 
     // CDP
-    state: cdp.State = .{},
+    state: cdp.State = undefined,
 
     // JS fields
     browser: *Browser, // TODO: is pointer mandatory here?
     sessionNew: bool,
     // try_catch: jsruntime.TryCatch, // TODO
+
+    pub fn deinit(self: *Ctx) void {
+        self.state.deinit();
+    }
 
     // callbacks
     // ---------
@@ -458,7 +462,10 @@ pub fn handle(
         .accept_completion = &accept_completion,
         .conn_completion = &conn_completion,
         .timeout_completion = &timeout_completion,
+        .state = cdp.State.init(browser.session.alloc),
     };
+    defer ctx.deinit();
+
     try browser.session.initInspector(
         &ctx,
         Ctx.onInspectorResp,

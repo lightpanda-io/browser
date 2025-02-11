@@ -34,6 +34,7 @@ const IncomingMessage = @import("msg.zig").IncomingMessage;
 const Input = @import("msg.zig").Input;
 const inspector = @import("inspector.zig").inspector;
 const dom = @import("dom.zig").dom;
+const cdpdom = @import("dom.zig");
 const css = @import("css.zig").css;
 const security = @import("security.zig").security;
 
@@ -129,6 +130,33 @@ pub const State = struct {
     loaderID: []const u8 = LoaderID,
 
     page_life_cycle_events: bool = false, // TODO; Target based value
+
+    // DOM
+    nodelist: cdpdom.NodeList,
+    nodesearchlist: cdpdom.NodeSearchList,
+
+    pub fn init(alloc: std.mem.Allocator) State {
+        return .{
+            .nodelist = cdpdom.NodeList.init(alloc),
+            .nodesearchlist = cdpdom.NodeSearchList.init(alloc),
+        };
+    }
+
+    pub fn deinit(self: *State) void {
+        self.nodelist.deinit();
+
+        // deinit all node searches.
+        for (self.nodesearchlist.items) |*s| s.deinit();
+        self.nodesearchlist.deinit();
+    }
+
+    pub fn reset(self: *State) void {
+        self.nodelist.reset();
+
+        // deinit all node searches.
+        for (self.nodesearchlist.items) |*s| s.deinit();
+        self.nodesearchlist.clearAndFree();
+    }
 };
 
 // Utils
