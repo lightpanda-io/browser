@@ -98,6 +98,12 @@ pub const Browser = struct {
             self.session = null;
         }
     }
+
+    pub fn currentPage(self: *Browser) ?*Page {
+        if (self.session.page == null) return null;
+
+        return &self.session.page.?;
+    }
 };
 
 // Session is like a browser's tab.
@@ -239,6 +245,7 @@ pub const Page = struct {
     }
 
     pub fn deinit(self: *Page) void {
+        self.end();
         self.arena.deinit();
         self.session.page = null;
     }
@@ -276,6 +283,7 @@ pub const Page = struct {
         self.session.window.replaceLocation(&self.location) catch |e| {
             log.err("reset window location: {any}", .{e});
         };
+        self.doc = null;
 
         // clear netsurf memory arena.
         parser.deinit();

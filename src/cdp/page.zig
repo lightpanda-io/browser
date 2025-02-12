@@ -178,6 +178,7 @@ fn navigate(cmd: anytype) !void {
 
     // change state
     var state = cmd.cdp;
+    state.reset();
     state.url = params.url;
 
     // TODO: hard coded ID
@@ -263,6 +264,9 @@ fn navigate(cmd: anytype) !void {
         life_event.timestamp = 343721.796037;
         try cmd.sendEvent("Page.lifecycleEvent", life_event, .{ .session_id = session_id });
     }
+
+
+    try cmd.sendEvent("DOM.documentUpdated", null, .{.session_id = session_id});
 
     // frameNavigated event
     try cmd.sendEvent("Page.frameNavigated", .{

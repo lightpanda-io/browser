@@ -20,6 +20,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const json = std.json;
 
+const dom = @import("dom.zig");
 const Loop = @import("jsruntime").Loop;
 const Client = @import("../server.zig").Client;
 const asUint = @import("../str/parser.zig").asUint;
@@ -64,6 +65,8 @@ pub const CDP = struct {
     security_origin: []const u8,
     page_life_cycle_events: bool,
     secure_context_type: []const u8,
+    node_list: dom.NodeList,
+    node_search_list: dom.NodeSearchList,
 
     pub fn init(allocator: Allocator, client: *Client, loop: *Loop) CDP {
         return .{
@@ -81,12 +84,30 @@ pub const CDP = struct {
             .loader_id = LOADER_ID,
             .message_arena = std.heap.ArenaAllocator.init(allocator),
             .page_life_cycle_events = false, // TODO; Target based value
+            .node_list = dom.NodeList.init(allocator),
+            .node_search_list = dom.NodeSearchList.init(allocator),
         };
     }
 
     pub fn deinit(self: *CDP) void {
+        self.node_list.deinit();
+        for (self.node_search_list.items) |*s| {
+            s.deinit();
+        }
+        self.node_search_list.deinit();
+
         self.browser.deinit();
         self.message_arena.deinit();
+    }
+
+    pub fn reset(self: *CDP) void {
+        self.node_list.reset();
+
+        // deinit all node searches.
+        for (self.node_search_list.items) |*s| {
+            s.deinit();
+        }
+        self.node_search_list.clearAndFree();
     }
 
     pub fn newSession(self: *CDP) !void {
