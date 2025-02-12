@@ -265,8 +265,7 @@ fn navigate(cmd: anytype) !void {
         try cmd.sendEvent("Page.lifecycleEvent", life_event, .{ .session_id = session_id });
     }
 
-
-    try cmd.sendEvent("DOM.documentUpdated", null, .{.session_id = session_id});
+    try cmd.sendEvent("DOM.documentUpdated", null, .{ .session_id = session_id });
 
     // frameNavigated event
     try cmd.sendEvent("Page.frameNavigated", .{

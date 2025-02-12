@@ -37,7 +37,6 @@ pub fn processMessage(cmd: anytype) !void {
         .performSearch => return performSearch(cmd),
         .getSearchResults => return getSearchResults(cmd),
         .discardSearchResults => return discardSearchResults(cmd),
-
     }
 }
 
@@ -181,8 +180,8 @@ pub const NodeSearchList = std.ArrayList(NodeSearch);
 // https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-performSearch
 fn performSearch(cmd: anytype) !void {
     const params = (try cmd.params(struct {
-       query: []const u8,
-       includeUserAgentShadowDOM: ?bool = null,
+        query: []const u8,
+        includeUserAgentShadowDOM: ?bool = null,
     })) orelse return error.InvalidParams;
 
     // retrieve the root node
@@ -210,7 +209,7 @@ fn performSearch(cmd: anytype) !void {
 // https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-discardSearchResults
 fn discardSearchResults(cmd: anytype) !void {
     const params = (try cmd.params(struct {
-       searchId: []const u8,
+        searchId: []const u8,
     })) orelse return error.InvalidParams;
 
     var state = cmd.cdp;
@@ -256,7 +255,5 @@ fn getSearchResults(cmd: anytype) !void {
     if (params.fromIndex >= items.len) return error.BadFromIndex;
     if (params.toIndex > items.len) return error.BadToIndex;
 
-    return cmd.sendResult(.{
-        .nodeIds = ns.?.coll.items[params.fromIndex..params.toIndex]
-    }, .{});
+    return cmd.sendResult(.{ .nodeIds = ns.?.coll.items[params.fromIndex..params.toIndex] }, .{});
 }
