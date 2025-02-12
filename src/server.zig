@@ -27,7 +27,7 @@ const AcceptError = jsruntime.IO.AcceptError;
 const RecvError = jsruntime.IO.RecvError;
 const SendError = jsruntime.IO.SendError;
 const CloseError = jsruntime.IO.CloseError;
-const CancelError = jsruntime.IO.CancelError;
+const CancelError = jsruntime.IO.CancelOneError;
 const TimeoutError = jsruntime.IO.TimeoutError;
 
 const MsgBuffer = @import("msg.zig").Buffer;
