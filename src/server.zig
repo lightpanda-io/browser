@@ -31,7 +31,7 @@ const AcceptError = jsruntime.IO.AcceptError;
 const RecvError = jsruntime.IO.RecvError;
 const SendError = jsruntime.IO.SendError;
 const CloseError = jsruntime.IO.CloseError;
-const CancelError = jsruntime.IO.CancelError;
+const CancelError = jsruntime.IO.CancelOneError;
 const TimeoutError = jsruntime.IO.TimeoutError;
 
 const CDP = @import("cdp/cdp.zig").CDP;
@@ -46,6 +46,7 @@ const MAX_HTTP_REQUEST_SIZE = 2048;
 // +14 for max websocket payload overhead
 // +140 for the max control packet that might be interleaved in a message
 const MAX_MESSAGE_SIZE = 256 * 1024 + 14;
+
 
 pub const Client = ClientT(*Server, CDP);
 
@@ -242,8 +243,7 @@ const Server = struct {
 // (with its own completion), allocated on the heap.
 // After the send (on the sendCbk) the dedicated context will be destroy
 // and the data slice will be free.
-const Send = struct {
-    // Any unsent data we have.
+const Send = struct {    // Any unsent data we have.
     unsent: []const u8,
 
     server: *Server,
@@ -307,7 +307,6 @@ fn ClientT(comptime S: type, comptime C: type) type {
     const CLOSE_NORMAL = [_]u8{ 136, 2, 3, 232 }; // code: 1000
     const CLOSE_TOO_BIG = [_]u8{ 136, 2, 3, 241 }; // 1009
     const CLOSE_PROTOCOL_ERROR = [_]u8{ 136, 2, 3, 234 }; //code: 1002
-
     // "private-use" close codes must be from 4000-49999
     const CLOSE_TIMEOUT = [_]u8{ 136, 2, 15, 160 }; // code: 4000
 
@@ -521,8 +520,8 @@ fn ClientT(comptime S: type, comptime C: type) type {
 
                 // The response will be sent via the IO Loop and thus has to have its
                 // own lifetime.
-
                 const res = try arena.allocator().dupe(u8, template);
+
                 // magic response
                 const key_pos = res.len - 32;
                 var h: [20]u8 = undefined;
@@ -1223,6 +1222,7 @@ test "Client: write websocket message" {
         .{ .expected = &.{ 129, 2, '"', '"' }, .message = "" },
         .{ .expected = [_]u8{ 129, 14 } ++ "\"hello world!\"", .message = "hello world!" },
         .{ .expected = [_]u8{ 129, 126, 0, 132 } ++ "\"" ++ ("A" ** 130) ++ "\"", .message = "A" ** 130 },
+
     };
 
     for (cases) |c| {
@@ -1233,7 +1233,6 @@ test "Client: write websocket message" {
         defer client.deinit();
 
         try client.sendJSON(c.message, .{});
-
         try testing.expectEqual(1, ms.sent.items.len);
         try testing.expectEqualSlices(u8, c.expected, ms.sent.items[0]);
     }
