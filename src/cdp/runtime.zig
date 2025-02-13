@@ -17,179 +17,106 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const builtin = @import("builtin");
-
-const jsruntime = @import("jsruntime");
-
-const server = @import("../server.zig");
-const Ctx = server.Ctx;
 const cdp = @import("cdp.zig");
-const result = cdp.result;
-const IncomingMessage = @import("msg.zig").IncomingMessage;
-const Input = @import("msg.zig").Input;
-const stringify = cdp.stringify;
-const target = @import("target.zig");
 
-const log = std.log.scoped(.cdp);
+pub fn processMessage(cmd: anytype) !void {
+    const action = std.meta.stringToEnum(enum {
+        enable,
+        runIfWaitingForDebugger,
+        evaluate,
+        addBinding,
+        callFunctionOn,
+        releaseObject,
+    }, cmd.action) orelse return error.UnknownMethod;
 
-const Methods = enum {
-    enable,
-    runIfWaitingForDebugger,
-    evaluate,
-    addBinding,
-    callFunctionOn,
-    releaseObject,
-};
-
-pub fn runtime(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    action: []const u8,
-    ctx: *Ctx,
-) ![]const u8 {
-    const method = std.meta.stringToEnum(Methods, action) orelse
-        // NOTE: we could send it anyway to the JS runtime but it's good to check it
-        return error.UnknownMethod;
-    return switch (method) {
-        .runIfWaitingForDebugger => runIfWaitingForDebugger(alloc, msg, ctx),
-        else => sendInspector(alloc, method, msg, ctx),
-    };
+    switch (action) {
+        .runIfWaitingForDebugger => return cmd.sendResult(null, .{}),
+        else => return sendInspector(cmd, action),
+    }
 }
 
-fn sendInspector(
-    alloc: std.mem.Allocator,
-    method: Methods,
-    msg: *IncomingMessage,
-    ctx: *Ctx,
-) ![]const u8 {
-
+fn sendInspector(cmd: anytype, action: anytype) !void {
     // save script in file at debug mode
     if (std.log.defaultLogEnabled(.debug)) {
-
-        // input
-        var id: u16 = undefined;
-        var script: ?[]const u8 = null;
-
-        if (method == .evaluate) {
-            const Params = struct {
-                expression: []const u8,
-                contextId: ?u8 = null,
-                returnByValue: ?bool = null,
-                awaitPromise: ?bool = null,
-                userGesture: ?bool = null,
-            };
-
-            const input = try Input(Params).get(alloc, msg);
-            defer input.deinit();
-            log.debug("Req > id {d}, method {s} (script saved on cache)", .{ input.id, "runtime.evaluate" });
-            const params = input.params;
-            const func = try alloc.alloc(u8, params.expression.len);
-            @memcpy(func, params.expression);
-            script = func;
-            id = input.id;
-        } else if (method == .callFunctionOn) {
-            const Params = struct {
-                functionDeclaration: []const u8,
-                objectId: ?[]const u8 = null,
-                executionContextId: ?u8 = null,
-                arguments: ?[]struct {
-                    value: ?[]const u8 = null,
-                    objectId: ?[]const u8 = null,
-                } = null,
-                returnByValue: ?bool = null,
-                awaitPromise: ?bool = null,
-                userGesture: ?bool = null,
-            };
-
-            const input = try Input(Params).get(alloc, msg);
-            defer input.deinit();
-            log.debug("Req > id {d}, method {s} (script saved on cache)", .{ input.id, "runtime.callFunctionOn" });
-            const params = input.params;
-            const func = try alloc.alloc(u8, params.functionDeclaration.len);
-            @memcpy(func, params.functionDeclaration);
-            script = func;
-            id = input.id;
-        }
-
-        if (script) |src| {
-            try cdp.dumpFile(alloc, id, src);
-            alloc.free(src);
-        }
+        try logInspector(cmd, action);
     }
 
-    if (msg.sessionId) |s| {
-        ctx.state.sessionID = cdp.SessionID.parse(s) catch |err| {
-            log.err("parse sessionID: {s} {any}", .{ s, err });
-            return err;
-        };
+    if (cmd.session_id) |s| {
+        cmd.cdp.session_id = try cdp.SessionID.parse(s);
     }
 
     // remove awaitPromise true params
     // TODO: delete when Promise are correctly handled by zig-js-runtime
-    if (method == .callFunctionOn or method == .evaluate) {
-        if (std.mem.indexOf(u8, msg.json, "\"awaitPromise\":true")) |_| {
-            const buf = try alloc.alloc(u8, msg.json.len + 1);
-            defer alloc.free(buf);
-            _ = std.mem.replace(u8, msg.json, "\"awaitPromise\":true", "\"awaitPromise\":false", buf);
-            try ctx.sendInspector(buf);
-            return "";
+    if (action == .callFunctionOn or action == .evaluate) {
+        const json = cmd.json;
+        if (std.mem.indexOf(u8, json, "\"awaitPromise\":true")) |_| {
+            // +1 because we'll be turning a true -> false
+            const buf = try cmd.arena.alloc(u8, json.len + 1);
+            _ = std.mem.replace(u8, json, "\"awaitPromise\":true", "\"awaitPromise\":false", buf);
+            cmd.session.callInspector(buf);
+            return;
         }
     }
 
-    try ctx.sendInspector(msg.json);
+    cmd.session.callInspector(cmd.json);
 
-    if (msg.id == null) return "";
-
-    return result(alloc, msg.id.?, null, null, msg.sessionId);
+    if (cmd.id != null) {
+        return cmd.sendResult(null, .{});
+    }
 }
 
-pub const AuxData = struct {
-    isDefault: bool = true,
-    type: []const u8 = "default",
-    frameId: []const u8 = cdp.FrameID,
-};
-
-pub fn executionContextCreated(
-    alloc: std.mem.Allocator,
-    ctx: *Ctx,
-    id: u16,
+pub const ExecutionContextCreated = struct {
+    id: u64,
     origin: []const u8,
     name: []const u8,
-    uniqueID: []const u8,
-    auxData: ?AuxData,
-    sessionID: ?[]const u8,
-) !void {
-    const Params = struct {
-        context: struct {
-            id: u64,
-            origin: []const u8,
-            name: []const u8,
-            uniqueId: []const u8,
-            auxData: ?AuxData = null,
-        },
-    };
-    const params = Params{
-        .context = .{
-            .id = id,
-            .origin = origin,
-            .name = name,
-            .uniqueId = uniqueID,
-            .auxData = auxData,
-        },
-    };
-    try cdp.sendEvent(alloc, ctx, "Runtime.executionContextCreated", Params, params, sessionID);
-}
+    uniqueId: []const u8,
+    auxData: ?AuxData = null,
 
-// TODO: noop method
-// should we be passing this also to the JS Inspector?
-fn runIfWaitingForDebugger(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    _: *Ctx,
-) ![]const u8 {
-    const input = try Input(void).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "runtime.runIfWaitingForDebugger" });
+    pub const AuxData = struct {
+        isDefault: bool = true,
+        type: []const u8 = "default",
+        frameId: []const u8 = cdp.FRAME_ID,
+    };
+};
 
-    return result(alloc, input.id, null, null, input.sessionId);
+fn logInspector(cmd: anytype, action: anytype) !void {
+    const script = switch (action) {
+        .evaluate => blk: {
+            const params = (try cmd.params(struct {
+                expression: []const u8,
+                // contextId: ?u8 = null,
+                // returnByValue: ?bool = null,
+                // awaitPromise: ?bool = null,
+                // userGesture: ?bool = null,
+            })) orelse return error.InvalidParams;
+
+            break :blk params.expression;
+        },
+        .callFunctionOn => blk: {
+            const params = (try cmd.params(struct {
+                functionDeclaration: []const u8,
+                // objectId: ?[]const u8 = null,
+                // executionContextId: ?u8 = null,
+                // arguments: ?[]struct {
+                //     value: ?[]const u8 = null,
+                //     objectId: ?[]const u8 = null,
+                // } = null,
+                // returnByValue: ?bool = null,
+                // awaitPromise: ?bool = null,
+                // userGesture: ?bool = null,
+            })) orelse return error.InvalidParams;
+
+            break :blk params.functionDeclaration;
+        },
+        else => return,
+    };
+    const id = cmd.id orelse return error.RequiredId;
+    const name = try std.fmt.allocPrint(cmd.arena, "id_{d}.js", .{id});
+
+    var dir = try std.fs.cwd().makeOpenPath("zig-cache/tmp", .{});
+    defer dir.close();
+
+    const f = try dir.createFile(name, .{});
+    defer f.close();
+    try f.writeAll(script);
 }

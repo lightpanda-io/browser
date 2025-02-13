@@ -17,59 +17,16 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-
-const server = @import("../server.zig");
-const Ctx = server.Ctx;
 const cdp = @import("cdp.zig");
-const result = cdp.result;
-const IncomingMessage = @import("msg.zig").IncomingMessage;
-const Input = @import("msg.zig").Input;
 
-const log = std.log.scoped(.cdp);
+pub fn processMessage(cmd: anytype) !void {
+    const action = std.meta.stringToEnum(enum {
+        enable,
+        setCacheDisabled,
+    }, cmd.action) orelse return error.UnknownMethod;
 
-const Methods = enum {
-    enable,
-    setCacheDisabled,
-};
-
-pub fn network(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    action: []const u8,
-    ctx: *Ctx,
-) ![]const u8 {
-    const method = std.meta.stringToEnum(Methods, action) orelse
-        return error.UnknownMethod;
-
-    return switch (method) {
-        .enable => enable(alloc, msg, ctx),
-        .setCacheDisabled => setCacheDisabled(alloc, msg, ctx),
-    };
-}
-
-fn enable(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    _: *Ctx,
-) ![]const u8 {
-    // input
-    const input = try Input(void).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "network.enable" });
-
-    return result(alloc, input.id, null, null, input.sessionId);
-}
-
-// TODO: noop method
-fn setCacheDisabled(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    _: *Ctx,
-) ![]const u8 {
-    // input
-    const input = try Input(void).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "network.setCacheDisabled" });
-
-    return result(alloc, input.id, null, null, input.sessionId);
+    switch (action) {
+        .enable => return cmd.sendResult(null, .{}),
+        .setCacheDisabled => return cmd.sendResult(null, .{}),
+    }
 }
