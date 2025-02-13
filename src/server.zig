@@ -676,9 +676,13 @@ fn Client(comptime S: type) type {
         }
 
         fn processWebsocketMessage(self: *Self) !bool {
-            errdefer self.server.queueClose(self.socket);
-
             var reader = &self.reader;
+
+            errdefer {
+                reader.cleanup();
+                self.server.queueClose(self.socket);
+            }
+
             while (true) {
                 const msg = reader.next() catch |err| {
                     switch (err) {
