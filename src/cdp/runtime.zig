@@ -131,12 +131,12 @@ fn sendInspector(
             const buf = try alloc.alloc(u8, msg.json.len + 1);
             defer alloc.free(buf);
             _ = std.mem.replace(u8, msg.json, "\"awaitPromise\":true", "\"awaitPromise\":false", buf);
-            ctx.sendInspector(buf);
+            try ctx.sendInspector(buf);
             return "";
         }
     }
 
-    ctx.sendInspector(msg.json);
+    try ctx.sendInspector(msg.json);
 
     if (msg.id == null) return "";
 

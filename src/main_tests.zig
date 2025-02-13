@@ -314,9 +314,6 @@ const kb = 1024;
 const ms = std.time.ns_per_ms;
 
 test {
-    const msgTest = @import("msg.zig");
-    std.testing.refAllDecls(msgTest);
-
     const dumpTest = @import("browser/dump.zig");
     std.testing.refAllDecls(dumpTest);
 
@@ -340,6 +337,12 @@ test {
 
     std.testing.refAllDecls(@import("generate.zig"));
     std.testing.refAllDecls(@import("cdp/msg.zig"));
+
+    // Don't use refAllDecls, as this will pull in the entire project
+    // and break the test build.
+    // We should fix this. See this branch & the commit message for details:
+    // https://github.com/karlseguin/browser/commit/193ab5ceab3d3758ea06db04f7690460d79eb79e
+    _ = @import("server.zig");
 }
 
 fn testJSRuntime(alloc: std.mem.Allocator) !void {

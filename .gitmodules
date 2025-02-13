@@ -28,7 +28,3 @@
 [submodule "vendor/zig-async-io"]
 	path = vendor/zig-async-io
 	url = https://github.com/lightpanda-io/zig-async-io.git/
-[submodule "vendor/websocket.zig"]
-	path = vendor/websocket.zig
-	url = https://github.com/lightpanda-io/websocket.zig.git/
-	branch = lightpanda
