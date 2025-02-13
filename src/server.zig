@@ -47,7 +47,6 @@ const MAX_HTTP_REQUEST_SIZE = 2048;
 // +140 for the max control packet that might be interleaved in a message
 const MAX_MESSAGE_SIZE = 256 * 1024 + 14;
 
-
 pub const Client = ClientT(*Server, CDP);
 
 const Server = struct {
@@ -243,7 +242,7 @@ const Server = struct {
 // (with its own completion), allocated on the heap.
 // After the send (on the sendCbk) the dedicated context will be destroy
 // and the data slice will be free.
-const Send = struct {    // Any unsent data we have.
+const Send = struct { // Any unsent data we have.
     unsent: []const u8,
 
     server: *Server,
@@ -1222,7 +1221,6 @@ test "Client: write websocket message" {
         .{ .expected = &.{ 129, 2, '"', '"' }, .message = "" },
         .{ .expected = [_]u8{ 129, 14 } ++ "\"hello world!\"", .message = "hello world!" },
         .{ .expected = [_]u8{ 129, 126, 0, 132 } ++ "\"" ++ ("A" ** 130) ++ "\"", .message = "A" ** 130 },
-
     };
 
     for (cases) |c| {
