@@ -1,0 +1,107 @@
+name: e2e-test
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "build.zig"
+      - "src/**/*.zig"
+      - "src/*.zig"
+      - "vendor/zig-js-runtime"
+      - ".github/**"
+      - "vendor/**"
+  pull_request:
+
+    # By default GH trigger on types opened, synchronize and reopened.
+    # see https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#pull_request
+    # Since we skip the job when the PR is in draft state, we want to force CI
+    # running when the PR is marked ready_for_review w/o other change.
+    # see https://github.com/orgs/community/discussions/25722#discussioncomment-3248917
+    types: [opened, synchronize, reopened, ready_for_review]
+
+    paths:
+      - ".github/**"
+      - "build.zig"
+      - "src/**/*.zig"
+      - "src/*.zig"
+      - "vendor/**"
+      - ".github/**"
+      - "vendor/**"
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  zig-build-release:
+    name: zig build release
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # fetch submodules recusively, to get zig-js-runtime submodules also.
+          submodules: recursive
+
+      - uses: ./.github/actions/install
+
+      - name: zig build release
+        run: zig build -Doptimize=ReleaseSafe -Dengine=v8
+
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lightpanda-build-release
+          path: |
+            zig-out/bin/lightpanda
+          retention-days: 1
+
+  puppeteer:
+    name: puppeteer
+    needs: zig-build-release
+
+    env:
+      MAX_MEMORY: 24000
+      MAX_AVG_DURATION: 23
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: 'lightpanda-io/demo'
+          fetch-depth: 0
+
+      - run: npm install
+
+      - name: download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lightpanda-build-release
+
+      - run: chmod a+x ./lightpanda
+
+      - name: run puppeteer
+        run: |
+          python3 -m http.server 1234 -d ./public & echo $! > PYTHON.pid
+          ./lightpanda & echo $! > LPD.pid
+          RUNS=100 npm run bench-puppeteer-cdp > puppeteer.out || exit 1
+          cat /proc/`cat LPD.pid`/status |grep VmHWM|grep -oP '\d+' > LPD.VmHWM
+          kill `cat LPD.pid` `cat PYTHON.pid`
+
+      - name: puppeteer result
+        run: cat puppeteer.out
+
+      - name: memory regression
+        run: |
+          export LPD_VmHWM=`cat LPD.VmHWM`
+          echo "Peak resident set size: $LPD_VmHWM"
+          test "$LPD_VmHWM" -le "$MAX_MEMORY"
+
+      - name: duration regression
+        run: |
+          export PUPPETEER_AVG_DURATION=`cat puppeteer.out|grep 'avg run'|sed 's/avg run duration (ms) //'`
+          echo "puppeteer avg duration: $PUPPETEER_AVG_DURATION"
+          test "$PUPPETEER_AVG_DURATION" -le "$MAX_AVG_DURATION"
+

@@ -66,31 +66,6 @@ jobs:
             zig-out/bin/lightpanda
           retention-days: 1
 
-  zig-build-release:
-    name: zig build release
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          # fetch submodules recusively, to get zig-js-runtime submodules also.
-          submodules: recursive
-
-      - uses: ./.github/actions/install
-
-      - name: zig build release
-        run: zig build -Doptimize=ReleaseSafe -Dengine=v8
-
-      - name: upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: lightpanda-build-release
-          path: |
-            zig-out/bin/lightpanda
-          retention-days: 1
-
   zig-test:
     name: zig test
 
@@ -146,43 +121,3 @@ jobs:
 
       - name: format and send json result
         run: /perf-fmt bench-browser ${{ github.sha }} bench.json
-
-  demo-puppeteer:
-    name: demo-puppeteer
-    needs: zig-build-dev
-
-    env:
-      MAX_MEMORY: 23456
-      MAX_AVG_DURATION: 22
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          repository: 'lightpanda-io/demo'
-          fetch-depth: 0
-
-      - run: npm install
-
-      - name: download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: lightpanda-build-release
-
-      - run: chmod a+x ./lightpanda
-
-      - name: run puppeteer
-        run: |
-          go run ws/main.go &
-          /usr/bin/time -f'%M' -omrs.out ./lightpanda &
-          RUNS=100 npm run bench-puppeteer-cdp |tee output
-
-      - name: memory regression
-        run: |
-          test "`cat mrs.out`" -le "$MAX_MEMORY"
-
-      - name: duration regression
-        run: |
-          test "`cat output|grep 'avg run'|sed 's/avg run duration (ms) //'`" -le "$MAX_AVG_DURATION"
-
