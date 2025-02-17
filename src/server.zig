@@ -223,14 +223,14 @@ const Server = struct {
             &self.close_completion,
             socket,
         );
-    }
-
-    fn callbackClose(self: *Server, completion: *Completion, _: CloseError!void) void {
-        std.debug.assert(completion == &self.close_completion);
         var client = self.client.?;
         client.deinit();
         self.client_pool.destroy(client);
         self.client = null;
+    }
+
+    fn callbackClose(self: *Server, completion: *Completion, _: CloseError!void) void {
+        std.debug.assert(completion == &self.close_completion);
         self.queueAccept();
     }
 };
