@@ -178,7 +178,7 @@ pub const Session = struct {
 
     fn deinit(self: *Session) void {
         if (self.page) |*p| {
-            p.end();
+            p.deinit();
         }
 
         self.env.deinit();
@@ -213,6 +213,10 @@ pub const Session = struct {
         if (self.page != null) return error.SessionPageExists;
         self.page = Page.init(self.allocator, self);
         return &self.page.?;
+    }
+
+    pub fn currentPage(self: *Session) ?*Page {
+        return &(self.page orelse return null);
     }
 };
 

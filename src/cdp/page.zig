@@ -244,7 +244,7 @@ fn navigate(cmd: anytype) !void {
 
     // Launch navigate, the page must have been created by a
     // target.createTarget.
-    var p = cmd.session.page orelse return error.NoPage;
+    var p = cmd.session.currentPage() orelse return error.NoPage;
     state.execution_context_id += 1;
 
     const aux_data = try std.fmt.allocPrint(
