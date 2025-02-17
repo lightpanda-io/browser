@@ -555,6 +555,7 @@ fn ClientT(comptime S: type, comptime C: type) type {
             errdefer self.server.queueClose(self.socket);
 
             var reader = &self.reader;
+
             while (true) {
                 const msg = reader.next() catch |err| {
                     switch (err) {
@@ -578,7 +579,10 @@ fn ClientT(comptime S: type, comptime C: type) type {
                         self.server.queueClose(self.socket);
                         return false;
                     },
-                    .text, .binary => self.cdp.?.processMessage(msg.data),
+                    .text, .binary => if (self.cdp.?.processMessage(msg.data) == false) {
+                        self.close(null);
+                        return false;
+                    },
                 }
                 if (msg.cleanup_fragment) {
                     reader.cleanup();

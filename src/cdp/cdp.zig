@@ -114,15 +114,15 @@ pub const CDP = struct {
         self.session = try self.browser.newSession(self);
     }
 
-    pub fn processMessage(self: *CDP, msg: []const u8) void {
+    pub fn processMessage(self: *CDP, msg: []const u8) bool {
         const arena = &self.message_arena;
         defer _ = arena.reset(.{ .retain_with_limit = 1024 * 16 });
 
         self.dispatch(arena.allocator(), self, msg) catch |err| {
             log.err("failed to process message: {}\n{s}", .{ err, msg });
-            self.client.close(null);
-            return;
+            return false;
         };
+        return true;
     }
 
     // Called from above, in processMessage which handles client messages
