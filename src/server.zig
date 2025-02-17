@@ -1699,8 +1699,9 @@ const MockCDP = struct {
         self.messages.deinit(allocator);
     }
 
-    fn processMessage(self: *MockCDP, message: []const u8) void {
+    fn processMessage(self: *MockCDP, message: []const u8) bool {
         const owned = self.allocator.dupe(u8, message) catch unreachable;
         self.messages.append(self.allocator, owned) catch unreachable;
+        return true;
     }
 };
