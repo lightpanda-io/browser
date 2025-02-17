@@ -31,11 +31,8 @@ pub const Types = jsruntime.reflect(apiweb.Interfaces);
 pub const UserContext = apiweb.UserContext;
 pub const IO = @import("asyncio").Wrapper(jsruntime.Loop);
 
-// Simple blocking websocket connection model
-// ie. 1 thread per ws connection without thread pool and epoll/kqueue
-pub const websocket_blocking = true;
-
-const log = std.log.scoped(.cli);
+const Log = @import("log.zig").Log;
+pub const LogLevel = Log.Level.debug;
 
 pub const std_options = .{
     // Set the log level to info
@@ -100,7 +97,7 @@ const CliMode = union(CliModeTag) {
         dump: bool = false,
     };
 
-    fn init(alloc: std.mem.Allocator, args: *std.process.ArgIterator) !CliMode {
+    fn init(alloc: std.mem.Allocator, args: *std.process.ArgIterator, log: *Log) !CliMode {
         args.* = try std.process.argsWithAllocator(alloc);
         errdefer args.deinit();
 
@@ -220,9 +217,12 @@ pub fn main() !void {
         }
     }
 
+    var log = try Log.init(alloc);
+    defer log.deinit();
+
     // args
     var args: std.process.ArgIterator = undefined;
-    const cli_mode = CliMode.init(alloc, &args) catch |err| {
+    const cli_mode = CliMode.init(alloc, &args, &log) catch |err| {
         if (err == error.NoError) {
             std.posix.exit(0);
         } else {
@@ -235,7 +235,11 @@ pub fn main() !void {
     switch (cli_mode) {
         .server => |opts| {
             const address = std.net.Address.parseIp4(opts.host, opts.port) catch |err| {
-                log.err("address (host:port) {any}\n", .{err});
+                log.fatal("main_opts_address", .{
+                    .host = opts.host,
+                    .port = opts.port,
+                    .err = err,
+                });
                 return printUsageExit(opts.execname, 1);
             };
 
@@ -244,13 +248,16 @@ pub fn main() !void {
 
             const timeout = std.time.ns_per_s * @as(u64, opts.timeout);
             server.run(alloc, address, timeout, &loop) catch |err| {
-                log.err("Server error", .{});
+                log.fatal("main_opts_server", .{.err = err});
                 return err;
             };
         },
 
         .fetch => |opts| {
-            log.debug("Fetch mode: url {s}, dump {any}", .{ opts.url, opts.dump });
+            log.debug("main_fetch", .{
+                .url = opts.url,
+                .dump = opts.dump,
+            });
 
             // vm
             const vm = jsruntime.VM.init();
@@ -272,11 +279,17 @@ pub fn main() !void {
 
             _ = page.navigate(opts.url, null) catch |err| switch (err) {
                 error.UnsupportedUriScheme, error.UriMissingHost => {
-                    log.err("'{s}' is not a valid URL ({any})\n", .{ opts.url, err });
+                    log.fatal("main_fetch_invalid_url", .{
+                        .url = opts.url,
+                        .err = err,
+                    });
                     return printUsageExit(opts.execname, 1);
                 },
                 else => {
-                    log.err("'{s}' fetching error ({any})s\n", .{ opts.url, err });
+                    log.fatal("main_fetch_error", .{
+                        .url = opts.url,
+                        .err = err,
+                    });
                     return printUsageExit(opts.execname, 1);
                 },
             };
