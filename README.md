@@ -51,7 +51,9 @@ chmod a+x ./lightpanda
 ### Dump an URL
 
 ```console
-$ ./lightpanda --dump https://lightpanda.io
+./lightpanda --dump https://lightpanda.io
+```
+```console
 info(browser): GET https://lightpanda.io/ http.Status.ok
 info(browser): fetch script https://api.website.lightpanda.io/js/script.js: http.Status.ok
 info(browser): eval remote https://api.website.lightpanda.io/js/script.js: TypeError: Cannot read properties of undefined (reading 'pushState')
@@ -61,7 +63,9 @@ info(browser): eval remote https://api.website.lightpanda.io/js/script.js: TypeE
 ### Start a CDP server
 
 ```console
-$ ./lightpanda --host 127.0.0.1 --port 9222
+./lightpanda --host 127.0.0.1 --port 9222
+```
+```console
 info(websocket): starting blocking worker to listen on 127.0.0.1:9222
 info(server): accepting new conn...
 ```
