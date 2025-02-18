@@ -26,8 +26,9 @@ Fast web automation for AI agents, LLM training, scraping and testing:
 - Exceptionally fast execution (11x faster than Chrome)
 - Instant startup
 
-<img width=500px src="https://cdn.lightpanda.io/assets/images/benchmark_2024-12-04.png">
+[![](https://cdn.lightpanda.io/assets/images/benchmark_2025-02-19.png)](https://github.com/lightpanda-io/demo)
 
+Puppeteer requesting 100 pages from a local website on a AWS EC2 m5.large instance.
 See [benchmark details](https://github.com/lightpanda-io/demo).
 
 ## Quick start
