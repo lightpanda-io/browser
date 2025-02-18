@@ -39,13 +39,13 @@ Linux x86_64 and MacOS aarch64.
 
 *For linux*
 ```console
-wget -O lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux && \
+curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux && \
 chmod a+x ./lightpanda
 ```
 
 *For MacOS*
 ```console
-wget -O lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-aarch64-macos && \
+curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-aarch64-macos && \
 chmod a+x ./lightpanda
 ```
 
