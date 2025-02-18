@@ -7,17 +7,9 @@
 <p align="center"><a href="https://lightpanda.io/">lightpanda.io</a></p>
 
 <div align="center">
-
-[![Commit Activity](https://img.shields.io/github/commit-activity/m/lightpanda-io/browser)](https://github.com/lightpanda-io/browser/commits/main)
 [![License](https://img.shields.io/github/license/lightpanda-io/browser)](https://github.com/lightpanda-io/browser/blob/main/LICENSE)
 [![Twitter Follow](https://img.shields.io/twitter/follow/lightpanda_io)](https://twitter.com/lightpanda_io)
 [![GitHub stars](https://img.shields.io/github/stars/lightpanda-io/browser)](https://github.com/lightpanda-io/browser)
-
-</div>
-
-<div align="center">
-  
-<a href="https://trendshift.io/repositories/12815" target="_blank"><img src="https://trendshift.io/api/badge/repositories/12815" alt="lightpanda-io%2Fbrowser | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 
 </div>
 
@@ -27,10 +19,11 @@ Lightpanda is the open-source browser made for headless usage:
 - Support of Web APIs (partial, WIP)
 - Compatible with Playwright, Puppeteer through CDP (WIP)
 
-Fast web automation for AI agents, LLM training, scraping and testing with minimal memory footprint:
+Fast web automation for AI agents, LLM training, scraping and testing:
 
 - Ultra-low memory footprint (9x less than Chrome)
-- Exceptionally fast execution (11x faster than Chrome) & instant startup
+- Exceptionally fast execution (11x faster than Chrome)
+- Instant startup
 
 <img width=500px src="https://cdn.lightpanda.io/assets/images/benchmark_2024-12-04.png">
 
@@ -44,29 +37,24 @@ You can download the last binary from the [nightly
 builds](https://github.com/lightpanda-io/browser/releases/tag/nightly) for
 Linux x86_64 and MacOS aarch64.
 
+*For linux*
 ```console
-# Download the binary
-$ wget https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux
-$ chmod a+x ./lightpanda-x86_64-linux
-$ ./lightpanda-x86_64-linux -h
-usage: ./lightpanda-x86_64-linux [options] [URL]
+curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux && \
+chmod a+x ./lightpanda
+```
 
-  start Lightpanda browser
-
-  * if an url is provided the browser will fetch the page and exit
-  * otherwhise the browser starts a CDP server
-
-  -h, --help      Print this help message and exit.
-  --host          Host of the CDP server (default "127.0.0.1")
-  --port          Port of the CDP server (default "9222")
-  --timeout       Timeout for incoming connections of the CDP server (in seconds, default "3")
-  --dump          Dump document in stdout (fetch mode only)
+*For MacOS*
+```console
+curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-aarch64-macos && \
+chmod a+x ./lightpanda
 ```
 
 ### Dump an URL
 
 ```console
-$ ./lightpanda-x86_64-linux --dump https://lightpanda.io
+./lightpanda --dump https://lightpanda.io
+```
+```console
 info(browser): GET https://lightpanda.io/ http.Status.ok
 info(browser): fetch script https://api.website.lightpanda.io/js/script.js: http.Status.ok
 info(browser): eval remote https://api.website.lightpanda.io/js/script.js: TypeError: Cannot read properties of undefined (reading 'pushState')
@@ -76,7 +64,9 @@ info(browser): eval remote https://api.website.lightpanda.io/js/script.js: TypeE
 ### Start a CDP server
 
 ```console
-$ ./lightpanda-x86_64-linux --host 127.0.0.1 --port 9222
+./lightpanda --host 127.0.0.1 --port 9222
+```
+```console
 info(websocket): starting blocking worker to listen on 127.0.0.1:9222
 info(server): accepting new conn...
 ```
@@ -98,10 +88,20 @@ const browser = await puppeteer.connect({
 const context = await browser.createBrowserContext();
 const page = await context.newPage();
 
+// Dump all the links from the page.
 await page.goto('https://wikipedia.com/');
+
+const links = await page.evaluate(() => {
+  return Array.from(document.querySelectorAll('a')).map(row => {
+    return row.getAttribute('href');
+  });
+});
+
+console.log(links);
 
 await page.close();
 await context.close();
+await browser.disconnect();
 ```
 
 ## Build from sources
