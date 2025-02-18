@@ -7,17 +7,9 @@
 <p align="center"><a href="https://lightpanda.io/">lightpanda.io</a></p>
 
 <div align="center">
-
-[![Commit Activity](https://img.shields.io/github/commit-activity/m/lightpanda-io/browser)](https://github.com/lightpanda-io/browser/commits/main)
 [![License](https://img.shields.io/github/license/lightpanda-io/browser)](https://github.com/lightpanda-io/browser/blob/main/LICENSE)
 [![Twitter Follow](https://img.shields.io/twitter/follow/lightpanda_io)](https://twitter.com/lightpanda_io)
 [![GitHub stars](https://img.shields.io/github/stars/lightpanda-io/browser)](https://github.com/lightpanda-io/browser)
-
-</div>
-
-<div align="center">
-  
-<a href="https://trendshift.io/repositories/12815" target="_blank"><img src="https://trendshift.io/api/badge/repositories/12815" alt="lightpanda-io%2Fbrowser | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 
 </div>
 
