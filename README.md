@@ -25,13 +25,18 @@ Fast web automation for AI agents, LLM training, scraping and testing:
 - Ultra-low memory footprint (9x less than Chrome)
 - Exceptionally fast execution (11x faster than Chrome)
 - Instant startup
+<br />
+<br />
 
-<a href="https://github.com/lightpanda-io/demo">
-<img width="400px" src="https://cdn.lightpanda.io/assets/images/benchmark_2025-02-19.png">
-</a>
+[<img width="350px" src="https://cdn.lightpanda.io/assets/images/github/execution-time.svg">
+](https://github.com/lightpanda-io/demo)
+&emsp;
+[<img width="350px" src="https://cdn.lightpanda.io/assets/images/github/memory-frame.svg">
+](https://github.com/lightpanda-io/demo)
+</div>
 
-Puppeteer requesting 100 pages from a local website on a AWS EC2 m5.large instance.
-See [benchmark details](https://github.com/lightpanda-io/demo).
+_Puppeteer requesting 100 pages from a local website on a AWS EC2 m5.large instance.
+See [benchmark details](https://github.com/lightpanda-io/demo)._
 
 ## Quick start
 
