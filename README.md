@@ -36,29 +36,22 @@ You can download the last binary from the [nightly
 builds](https://github.com/lightpanda-io/browser/releases/tag/nightly) for
 Linux x86_64 and MacOS aarch64.
 
+*For linux*
 ```console
-# Download the binary
-$ wget https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux
-$ chmod a+x ./lightpanda-x86_64-linux
-$ ./lightpanda-x86_64-linux -h
-usage: ./lightpanda-x86_64-linux [options] [URL]
+$ wget -O lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux
+$ chmod a+x ./lightpanda
+```
 
-  start Lightpanda browser
-
-  * if an url is provided the browser will fetch the page and exit
-  * otherwhise the browser starts a CDP server
-
-  -h, --help      Print this help message and exit.
-  --host          Host of the CDP server (default "127.0.0.1")
-  --port          Port of the CDP server (default "9222")
-  --timeout       Timeout for incoming connections of the CDP server (in seconds, default "3")
-  --dump          Dump document in stdout (fetch mode only)
+*For MacOS*
+```console
+$ wget -O lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-aarch64-macos
+$ chmod a+x ./lightpanda
 ```
 
 ### Dump an URL
 
 ```console
-$ ./lightpanda-x86_64-linux --dump https://lightpanda.io
+$ ./lightpanda --dump https://lightpanda.io
 info(browser): GET https://lightpanda.io/ http.Status.ok
 info(browser): fetch script https://api.website.lightpanda.io/js/script.js: http.Status.ok
 info(browser): eval remote https://api.website.lightpanda.io/js/script.js: TypeError: Cannot read properties of undefined (reading 'pushState')
@@ -68,7 +61,7 @@ info(browser): eval remote https://api.website.lightpanda.io/js/script.js: TypeE
 ### Start a CDP server
 
 ```console
-$ ./lightpanda-x86_64-linux --host 127.0.0.1 --port 9222
+$ ./lightpanda --host 127.0.0.1 --port 9222
 info(websocket): starting blocking worker to listen on 127.0.0.1:9222
 info(server): accepting new conn...
 ```
