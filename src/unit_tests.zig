@@ -18,10 +18,17 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const parser = @import("netsurf");
 
 const Allocator = std.mem.Allocator;
 
+const jsruntime = @import("jsruntime");
+pub const Types = jsruntime.reflect(@import("generate.zig").Tuple(.{}){});
+pub const UserContext = @import("user_context.zig").UserContext;
+// pub const IO = @import("asyncio").Wrapper(jsruntime.Loop);
+
 pub const std_options = std.Options{
+    .log_level = .err,
     .http_disable_tls = true,
 };
 
@@ -31,10 +38,15 @@ const BORDER = "=" ** 80;
 var current_test: ?[]const u8 = null;
 
 pub fn main() !void {
+    try parser.init();
+    defer parser.deinit();
+
     var mem: [8192]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&mem);
-
     const allocator = fba.allocator();
+
+    var loop = try jsruntime.Loop.init(allocator);
+    defer loop.deinit();
 
     const env = Env.init(allocator);
     defer env.deinit(allocator);
@@ -47,11 +59,19 @@ pub fn main() !void {
     var skip: usize = 0;
     var leak: usize = 0;
 
-    const address = try std.net.Address.parseIp("127.0.0.1", 9582);
-    var listener = try address.listen(.{ .reuse_address = true });
-    defer listener.deinit();
-    const http_thread = try std.Thread.spawn(.{}, serverHTTP, .{&listener});
+    const http_thread = blk: {
+        const address = try std.net.Address.parseIp("127.0.0.1", 9582);
+        const thread = try std.Thread.spawn(.{}, serveHTTP, .{address});
+        break :blk thread;
+    };
     defer http_thread.join();
+
+    const cdp_thread = blk: {
+        const address = try std.net.Address.parseIp("127.0.0.1", 9583);
+        const thread = try std.Thread.spawn(.{}, serveCDP, .{ allocator, address, &loop });
+        break :blk thread;
+    };
+    defer cdp_thread.join();
 
     const printer = Printer.init();
     printer.fmt("\r\x1b[0K", .{}); // beginning of line and clear to end of line
@@ -98,7 +118,9 @@ pub fn main() !void {
         }
 
         if (result) |_| {
-            pass += 1;
+            if (is_unnamed_test == false) {
+                pass += 1;
+            }
         } else |err| switch (err) {
             error.SkipZigTest => {
                 skip += 1;
@@ -117,11 +139,13 @@ pub fn main() !void {
             },
         }
 
-        if (env.verbose) {
-            const ms = @as(f64, @floatFromInt(ns_taken)) / 1_000_000.0;
-            printer.status(status, "{s} ({d:.2}ms)\n", .{ friendly_name, ms });
-        } else {
-            printer.status(status, ".", .{});
+        if (is_unnamed_test == false) {
+            if (env.verbose) {
+                const ms = @as(f64, @floatFromInt(ns_taken)) / 1_000_000.0;
+                printer.status(status, "{s} ({d:.2}ms)\n", .{ friendly_name, ms });
+            } else {
+                printer.status(status, ".", .{});
+            }
         }
     }
 
@@ -294,7 +318,10 @@ fn isUnnamed(t: std.builtin.TestFn) bool {
     return true;
 }
 
-fn serverHTTP(listener: *std.net.Server) !void {
+fn serveHTTP(address: std.net.Address) !void {
+    var listener = try address.listen(.{ .reuse_address = true });
+    defer listener.deinit();
+
     var read_buffer: [1024]u8 = undefined;
     ACCEPT: while (true) {
         var conn = try listener.accept();
@@ -318,6 +345,14 @@ fn serverHTTP(listener: *std.net.Server) !void {
             }
         }
     }
+}
+
+fn serveCDP(allocator: Allocator, address: std.net.Address, loop: *jsruntime.Loop) !void {
+    const server = @import("server.zig");
+    server.run(allocator, address, std.time.ns_per_s * 2, loop) catch |err| {
+        std.debug.print("CDP server error: {}", .{err});
+        return err;
+    };
 }
 
 const Response = struct {
