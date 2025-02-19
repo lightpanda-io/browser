@@ -17,267 +17,174 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-
-const server = @import("../server.zig");
-const Ctx = server.Ctx;
 const cdp = @import("cdp.zig");
-const result = cdp.result;
-const stringify = cdp.stringify;
-const IncomingMessage = @import("msg.zig").IncomingMessage;
-const Input = @import("msg.zig").Input;
 
 const log = std.log.scoped(.cdp);
 
-const Methods = enum {
-    setDiscoverTargets,
-    setAutoAttach,
-    attachToTarget,
-    getTargetInfo,
-    getBrowserContexts,
-    createBrowserContext,
-    disposeBrowserContext,
-    createTarget,
-    closeTarget,
-    sendMessageToTarget,
-    detachFromTarget,
-};
-
-pub fn target(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    action: []const u8,
-    ctx: *Ctx,
-) ![]const u8 {
-    const method = std.meta.stringToEnum(Methods, action) orelse
-        return error.UnknownMethod;
-    return switch (method) {
-        .setDiscoverTargets => setDiscoverTargets(alloc, msg, ctx),
-        .setAutoAttach => setAutoAttach(alloc, msg, ctx),
-        .attachToTarget => attachToTarget(alloc, msg, ctx),
-        .getTargetInfo => getTargetInfo(alloc, msg, ctx),
-        .getBrowserContexts => getBrowserContexts(alloc, msg, ctx),
-        .createBrowserContext => createBrowserContext(alloc, msg, ctx),
-        .disposeBrowserContext => disposeBrowserContext(alloc, msg, ctx),
-        .createTarget => createTarget(alloc, msg, ctx),
-        .closeTarget => closeTarget(alloc, msg, ctx),
-        .sendMessageToTarget => sendMessageToTarget(alloc, msg, ctx),
-        .detachFromTarget => detachFromTarget(alloc, msg, ctx),
-    };
-}
-
 // TODO: hard coded IDs
-pub const PageTargetID = "PAGETARGETIDB638E9DC0F52DDC";
-pub const BrowserTargetID = "browser9-targ-et6f-id0e-83f3ab73a30c";
-pub const BrowserContextID = "BROWSERCONTEXTIDA95049E9DFE95EA9";
+const CONTEXT_ID = "CONTEXTIDDCCDD11109E2D4FEFBE4F89";
+const PAGE_TARGET_ID = "PAGETARGETIDB638E9DC0F52DDC";
+const BROWSER_TARGET_ID = "browser9-targ-et6f-id0e-83f3ab73a30c";
+const BROWER_CONTEXT_ID = "BROWSERCONTEXTIDA95049E9DFE95EA9";
+const TARGET_ID = "TARGETID460A8F29706A2ADF14316298";
+const LOADER_ID = "LOADERID42AA389647D702B4D805F49A";
 
+pub fn processMessage(cmd: anytype) !void {
+    const action = std.meta.stringToEnum(enum {
+        setDiscoverTargets,
+        setAutoAttach,
+        attachToTarget,
+        getTargetInfo,
+        getBrowserContexts,
+        createBrowserContext,
+        disposeBrowserContext,
+        createTarget,
+        closeTarget,
+        sendMessageToTarget,
+        detachFromTarget,
+    }, cmd.action) orelse return error.UnknownMethod;
+
+    switch (action) {
+        .setDiscoverTargets => return setDiscoverTargets(cmd),
+        .setAutoAttach => return setAutoAttach(cmd),
+        .attachToTarget => return attachToTarget(cmd),
+        .getTargetInfo => return getTargetInfo(cmd),
+        .getBrowserContexts => return getBrowserContexts(cmd),
+        .createBrowserContext => return createBrowserContext(cmd),
+        .disposeBrowserContext => return disposeBrowserContext(cmd),
+        .createTarget => return createTarget(cmd),
+        .closeTarget => return closeTarget(cmd),
+        .sendMessageToTarget => return sendMessageToTarget(cmd),
+        .detachFromTarget => return detachFromTarget(cmd),
+    }
+}
 // TODO: noop method
-fn setDiscoverTargets(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    _: *Ctx,
-) ![]const u8 {
-    // input
-    const input = try Input(void).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "target.setDiscoverTargets" });
-
-    // output
-    return result(alloc, input.id, null, null, input.sessionId);
+fn setDiscoverTargets(cmd: anytype) !void {
+    return cmd.sendResult(null, .{});
 }
 
 const AttachToTarget = struct {
     sessionId: []const u8,
-    targetInfo: struct {
-        targetId: []const u8,
-        type: []const u8 = "page",
-        title: []const u8,
-        url: []const u8,
-        attached: bool = true,
-        canAccessOpener: bool = false,
-        browserContextId: []const u8,
-    },
+    targetInfo: TargetInfo,
     waitingForDebugger: bool = false,
 };
 
 const TargetCreated = struct {
     sessionId: []const u8,
-    targetInfo: struct {
-        targetId: []const u8,
-        type: []const u8 = "page",
-        title: []const u8,
-        url: []const u8,
-        attached: bool = true,
-        canAccessOpener: bool = false,
-        browserContextId: []const u8,
-    },
+    targetInfo: TargetInfo,
 };
 
-const TargetFilter = struct {
-    type: ?[]const u8 = null,
-    exclude: ?bool = null,
+const TargetInfo = struct {
+    targetId: []const u8,
+    type: []const u8 = "page",
+    title: []const u8,
+    url: []const u8,
+    attached: bool = true,
+    canAccessOpener: bool = false,
+    browserContextId: []const u8,
 };
 
 // TODO: noop method
-fn setAutoAttach(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    ctx: *Ctx,
-) ![]const u8 {
-    // input
-    const Params = struct {
-        autoAttach: bool,
-        waitForDebuggerOnStart: bool,
-        flatten: bool = true,
-        filter: ?[]TargetFilter = null,
-    };
-    const input = try Input(Params).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "target.setAutoAttach" });
+fn setAutoAttach(cmd: anytype) !void {
+    // const TargetFilter = struct {
+    //     type: ?[]const u8 = null,
+    //     exclude: ?bool = null,
+    // };
+
+    // const params = (try cmd.params(struct {
+    //     autoAttach: bool,
+    //     waitForDebuggerOnStart: bool,
+    //     flatten: bool = true,
+    //     filter: ?[]TargetFilter = null,
+    // })) orelse return error.InvalidParams;
 
     // attachedToTarget event
-    if (input.sessionId == null) {
-        const attached = AttachToTarget{
-            .sessionId = cdp.BrowserSessionID,
+    if (cmd.session_id == null) {
+        try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
+            .sessionId = cdp.BROWSER_SESSION_ID,
             .targetInfo = .{
-                .targetId = PageTargetID,
+                .targetId = PAGE_TARGET_ID,
                 .title = "about:blank",
-                .url = cdp.URLBase,
-                .browserContextId = BrowserContextID,
+                .url = cdp.URL_BASE,
+                .browserContextId = BROWER_CONTEXT_ID,
             },
-        };
-        try cdp.sendEvent(alloc, ctx, "Target.attachedToTarget", AttachToTarget, attached, null);
+        }, .{});
     }
 
-    // output
-    return result(alloc, input.id, null, null, input.sessionId);
+    return cmd.sendResult(null, .{});
 }
 
 // TODO: noop method
-fn attachToTarget(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    ctx: *Ctx,
-) ![]const u8 {
-
-    // input
-    const Params = struct {
+fn attachToTarget(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
         targetId: []const u8,
         flatten: bool = true,
-    };
-    const input = try Input(Params).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "target.attachToTarget" });
+    })) orelse return error.InvalidParams;
 
     // attachedToTarget event
-    if (input.sessionId == null) {
-        const attached = AttachToTarget{
-            .sessionId = cdp.BrowserSessionID,
+    if (cmd.session_id == null) {
+        try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
+            .sessionId = cdp.BROWSER_SESSION_ID,
             .targetInfo = .{
-                .targetId = input.params.targetId,
+                .targetId = params.targetId,
                 .title = "about:blank",
-                .url = cdp.URLBase,
-                .browserContextId = BrowserContextID,
+                .url = cdp.URL_BASE,
+                .browserContextId = BROWER_CONTEXT_ID,
             },
-        };
-        try cdp.sendEvent(alloc, ctx, "Target.attachedToTarget", AttachToTarget, attached, null);
+        }, .{});
     }
 
-    // output
-    const SessionId = struct {
-        sessionId: []const u8,
-    };
-    const output = SessionId{
-        .sessionId = input.sessionId orelse cdp.BrowserSessionID,
-    };
-    return result(alloc, input.id, SessionId, output, null);
+    return cmd.sendResult(
+        .{ .sessionId = cmd.session_id orelse cdp.BROWSER_SESSION_ID },
+        .{ .include_session_id = false },
+    );
 }
 
-fn getTargetInfo(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    _: *Ctx,
-) ![]const u8 {
-    // input
-    const Params = struct {
-        targetId: ?[]const u8 = null,
-    };
-    const input = try Input(?Params).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "target.getTargetInfo" });
+fn getTargetInfo(cmd: anytype) !void {
+    // const params = (try cmd.params(struct {
+    //     targetId: ?[]const u8 = null,
+    // })) orelse return error.InvalidParams;
 
-    // output
-    const TargetInfo = struct {
-        targetId: []const u8,
-        type: []const u8,
-        title: []const u8 = "",
-        url: []const u8 = "",
-        attached: bool = true,
-        openerId: ?[]const u8 = null,
-        canAccessOpener: bool = false,
-        openerFrameId: ?[]const u8 = null,
-        browserContextId: ?[]const u8 = null,
-        subtype: ?[]const u8 = null,
-    };
-    const targetInfo = TargetInfo{
-        .targetId = BrowserTargetID,
+    return cmd.sendResult(.{
+        .targetId = BROWSER_TARGET_ID,
         .type = "browser",
-    };
-    return result(alloc, input.id, TargetInfo, targetInfo, null);
+        .title = "",
+        .url = "",
+        .attached = true,
+        .canAccessOpener = false,
+    }, .{ .include_session_id = false });
 }
 
 // Browser context are not handled and not in the roadmap for now
 // The following methods are "fake"
 
 // TODO: noop method
-fn getBrowserContexts(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    ctx: *Ctx,
-) ![]const u8 {
-    // input
-    const input = try Input(void).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "target.getBrowserContexts" });
-
-    // ouptut
-    const Resp = struct {
-        browserContextIds: [][]const u8,
-    };
-    var resp: Resp = undefined;
-    if (ctx.state.contextID) |contextID| {
-        var contextIDs = [1][]const u8{contextID};
-        resp = .{ .browserContextIds = &contextIDs };
+fn getBrowserContexts(cmd: anytype) !void {
+    var context_ids: []const []const u8 = undefined;
+    if (cmd.cdp.context_id) |context_id| {
+        context_ids = &.{context_id};
     } else {
-        const contextIDs = [0][]const u8{};
-        resp = .{ .browserContextIds = &contextIDs };
+        context_ids = &.{};
     }
-    return result(alloc, input.id, Resp, resp, null);
+
+    return cmd.sendResult(.{
+        .browserContextIds = context_ids,
+    }, .{ .include_session_id = false });
 }
 
-const ContextID = "CONTEXTIDDCCDD11109E2D4FEFBE4F89";
-
 // TODO: noop method
-fn createBrowserContext(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    ctx: *Ctx,
-) ![]const u8 {
-    // input
-    const Params = struct {
-        disposeOnDetach: bool = false,
-        proxyServer: ?[]const u8 = null,
-        proxyBypassList: ?[]const u8 = null,
-        originsWithUniversalNetworkAccess: ?[][]const u8 = null,
-    };
-    const input = try Input(Params).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "target.createBrowserContext" });
+fn createBrowserContext(cmd: anytype) !void {
+    // const params = (try cmd.params(struct {
+    //    disposeOnDetach: bool = false,
+    //    proxyServer: ?[]const u8 = null,
+    //    proxyBypassList: ?[]const u8 = null,
+    //    originsWithUniversalNetworkAccess: ?[][]const u8 = null,
+    // })) orelse return error.InvalidParams;
 
-    ctx.state.contextID = ContextID;
+    cmd.cdp.context_id = CONTEXT_ID;
 
-    // output
-    const Resp = struct {
-        browserContextId: []const u8 = ContextID,
+    const Response = struct {
+        browserContextId: []const u8,
 
         pub fn format(
             self: @This(),
@@ -291,40 +198,26 @@ fn createBrowserContext(
             try writer.writeAll(" }");
         }
     };
-    return result(alloc, input.id, Resp, Resp{}, input.sessionId);
+
+    return cmd.sendResult(Response{
+        .browserContextId = CONTEXT_ID,
+    }, .{});
 }
 
-fn disposeBrowserContext(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    ctx: *Ctx,
-) ![]const u8 {
-    // input
-    const Params = struct {
-        browserContextId: []const u8,
-    };
-    const input = try Input(Params).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "target.disposeBrowserContext" });
+fn disposeBrowserContext(cmd: anytype) !void {
+    // const params = (try cmd.params(struct {
+    //    browserContextId: []const u8,
+    //    proxyServer: ?[]const u8 = null,
+    //    proxyBypassList: ?[]const u8 = null,
+    //    originsWithUniversalNetworkAccess: ?[][]const u8 = null,
+    // })) orelse return error.InvalidParams;
 
-    // output
-    const res = try result(alloc, input.id, null, .{}, null);
-    try ctx.send(res);
-
-    return error.DisposeBrowserContext;
+    try cmd.cdp.newSession();
+    try cmd.sendResult(null, .{});
 }
 
-// TODO: hard coded IDs
-const TargetID = "TARGETID460A8F29706A2ADF14316298";
-const LoaderID = "LOADERID42AA389647D702B4D805F49A";
-
-fn createTarget(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    ctx: *Ctx,
-) ![]const u8 {
-    // input
-    const Params = struct {
+fn createTarget(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
         url: []const u8,
         width: ?u64 = null,
         height: ?u64 = null,
@@ -333,71 +226,67 @@ fn createTarget(
         newWindow: bool = false,
         background: bool = false,
         forTab: ?bool = null,
-    };
-    const input = try Input(Params).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "target.createTarget" });
+    })) orelse return error.InvalidParams;
 
     // change CDP state
-    ctx.state.frameID = TargetID;
-    ctx.state.url = "about:blank";
-    ctx.state.securityOrigin = "://";
-    ctx.state.secureContextType = "InsecureScheme";
-    ctx.state.loaderID = LoaderID;
+    var state = cmd.cdp;
+    state.frame_id = TARGET_ID;
+    state.url = "about:blank";
+    state.security_origin = "://";
+    state.secure_context_type = "InsecureScheme";
+    state.loader_id = LOADER_ID;
 
-    if (msg.sessionId) |s| {
-        ctx.state.sessionID = cdp.SessionID.parse(s) catch |err| {
-            log.err("parse sessionID: {s} {any}", .{ s, err });
-            return err;
-        };
+    if (cmd.session_id) |s| {
+        state.session_id = try cdp.SessionID.parse(s);
     }
 
     // TODO stop the previous page instead?
-    if (ctx.browser.currentPage() != null) return error.pageAlreadyExists;
+    if (cmd.session.page != null) {
+        return error.pageAlreadyExists;
+    }
 
     // create the page
-    const p = try ctx.browser.session.createPage();
-    ctx.state.executionContextId += 1;
+    const p = try cmd.session.createPage();
+    state.execution_context_id += 1;
+
     // start the js env
-    const auxData = try std.fmt.allocPrint(
-        alloc,
+    const aux_data = try std.fmt.allocPrint(
+        cmd.arena,
         // NOTE: we assume this is the default web page
         "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}",
-        .{ctx.state.frameID},
+        .{state.frame_id},
     );
-    defer alloc.free(auxData);
-    try p.start(auxData);
+    try p.start(aux_data);
+
+    const browser_context_id = params.browserContextId orelse CONTEXT_ID;
 
     // send targetCreated event
-    const created = TargetCreated{
-        .sessionId = cdp.ContextSessionID,
+    try cmd.sendEvent("Target.targetCreated", TargetCreated{
+        .sessionId = cdp.CONTEXT_SESSION_ID,
         .targetInfo = .{
-            .targetId = ctx.state.frameID,
+            .targetId = state.frame_id,
             .title = "about:blank",
-            .url = ctx.state.url,
-            .browserContextId = input.params.browserContextId orelse ContextID,
+            .url = state.url,
+            .browserContextId = browser_context_id,
             .attached = true,
         },
-    };
-    try cdp.sendEvent(alloc, ctx, "Target.targetCreated", TargetCreated, created, input.sessionId);
+    }, .{ .session_id = cmd.session_id });
 
     // send attachToTarget event
-    const attached = AttachToTarget{
-        .sessionId = cdp.ContextSessionID,
+    try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
+        .sessionId = cdp.CONTEXT_SESSION_ID,
+        .waitingForDebugger = true,
         .targetInfo = .{
-            .targetId = ctx.state.frameID,
+            .targetId = state.frame_id,
             .title = "about:blank",
-            .url = ctx.state.url,
-            .browserContextId = input.params.browserContextId orelse ContextID,
+            .url = state.url,
+            .browserContextId = browser_context_id,
             .attached = true,
         },
-        .waitingForDebugger = true,
-    };
-    try cdp.sendEvent(alloc, ctx, "Target.attachedToTarget", AttachToTarget, attached, input.sessionId);
+    }, .{ .session_id = cmd.session_id });
 
-    // output
-    const Resp = struct {
-        targetId: []const u8 = TargetID,
+    const Response = struct {
+        targetId: []const u8 = TARGET_ID,
 
         pub fn format(
             self: @This(),
@@ -411,119 +300,71 @@ fn createTarget(
             try writer.writeAll(" }");
         }
     };
-    return result(alloc, input.id, Resp, Resp{}, input.sessionId);
+    return cmd.sendResult(Response{}, .{});
 }
 
-fn closeTarget(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    ctx: *Ctx,
-) ![]const u8 {
-    // input
-    const Params = struct {
+fn closeTarget(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
         targetId: []const u8,
-    };
-    const input = try Input(Params).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "target.closeTarget" });
+    })) orelse return error.InvalidParams;
 
-    // output
-    const Resp = struct {
-        success: bool = true,
-    };
-    const res = try result(alloc, input.id, Resp, Resp{}, null);
-    try ctx.send(res);
+    try cmd.sendResult(.{
+        .success = true,
+    }, .{ .include_session_id = false });
+
+    const session_id = cmd.session_id orelse cdp.CONTEXT_SESSION_ID;
 
     // Inspector.detached event
-    const InspectorDetached = struct {
-        reason: []const u8 = "Render process gone.",
-    };
-    try cdp.sendEvent(
-        alloc,
-        ctx,
-        "Inspector.detached",
-        InspectorDetached,
-        .{},
-        input.sessionId orelse cdp.ContextSessionID,
-    );
+    try cmd.sendEvent("Inspector.detached", .{
+        .reason = "Render process gone.",
+    }, .{ .session_id = session_id });
 
     // detachedFromTarget event
-    const TargetDetached = struct {
-        sessionId: []const u8,
-        targetId: []const u8,
-    };
-    try cdp.sendEvent(
-        alloc,
-        ctx,
-        "Target.detachedFromTarget",
-        TargetDetached,
-        .{
-            .sessionId = input.sessionId orelse cdp.ContextSessionID,
-            .targetId = input.params.targetId,
-        },
-        null,
-    );
+    try cmd.sendEvent("Target.detachedFromTarget", .{
+        .sessionId = session_id,
+        .targetId = params.targetId,
+        .reason = "Render process gone.",
+    }, .{});
 
-    if (ctx.browser.currentPage()) |page| page.end();
-
-    return "";
+    if (cmd.session.page) |*page| {
+        page.end();
+    }
 }
 
-fn sendMessageToTarget(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    ctx: *Ctx,
-) ![]const u8 {
-    // input
-    const Params = struct {
+fn sendMessageToTarget(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
         message: []const u8,
         sessionId: []const u8,
-    };
-    const input = try Input(Params).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s} ({s})", .{ input.id, "target.sendMessageToTarget", input.params.message });
+    })) orelse return error.InvalidParams;
 
-    // get the wrapped message.
-    var wmsg = IncomingMessage.init(alloc, input.params.message);
-    defer wmsg.deinit();
+    const Capture = struct {
+        allocator: std.mem.Allocator,
+        buf: std.ArrayListUnmanaged(u8),
 
-    const res = cdp.dispatch(alloc, &wmsg, ctx) catch |e| {
-        log.err("send message {d} ({s}): {any}", .{ input.id, input.params.message, e });
-        // TODO dispatch error correctly.
-        return e;
+        pub fn sendJSON(self: *@This(), message: anytype) !void {
+            return std.json.stringify(message, .{
+                .emit_null_optional_fields = false,
+            }, self.buf.writer(self.allocator));
+        }
     };
 
-    // receivedMessageFromTarget event
-    const ReceivedMessageFromTarget = struct {
-        message: []const u8,
-        sessionId: []const u8,
+    var capture = Capture{
+        .buf = .{},
+        .allocator = cmd.arena,
     };
-    try cdp.sendEvent(
-        alloc,
-        ctx,
-        "Target.receivedMessageFromTarget",
-        ReceivedMessageFromTarget,
-        .{
-            .message = res,
-            .sessionId = input.params.sessionId,
-        },
-        null,
-    );
 
-    return "";
+    cmd.cdp.dispatch(cmd.arena, &capture, params.message) catch |err| {
+        log.err("send message {d} ({s}): {any}", .{ cmd.id orelse -1, params.message, err });
+        return err;
+    };
+
+    try cmd.sendEvent("Target.receivedMessageFromTarget", .{
+        .message = capture.buf.items,
+        .sessionId = params.sessionId,
+    }, .{});
 }
 
 // noop
-fn detachFromTarget(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    _: *Ctx,
-) ![]const u8 {
-    // input
-    const input = try Input(void).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "target.detachFromTarget" });
-
-    // output
-    return result(alloc, input.id, bool, true, input.sessionId);
+fn detachFromTarget(cmd: anytype) !void {
+    return cmd.sendResult(null, .{});
 }
