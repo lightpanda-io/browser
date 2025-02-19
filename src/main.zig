@@ -202,23 +202,13 @@ pub fn main() !void {
 
     // allocator
     // - in Debug mode we use the General Purpose Allocator to detect memory leaks
-    // - in Release mode we use the page allocator
-    var alloc: std.mem.Allocator = undefined;
-    var _gpa: ?std.heap.GeneralPurposeAllocator(.{}) = null;
-    if (builtin.mode == .Debug) {
-        _gpa = std.heap.GeneralPurposeAllocator(.{}){};
-        alloc = _gpa.?.allocator();
-    } else {
-        alloc = std.heap.page_allocator;
-    }
-    defer {
-        if (_gpa) |*gpa| {
-            switch (gpa.deinit()) {
-                .ok => std.debug.print("No memory leaks\n", .{}),
-                .leak => @panic("Memory leak"),
-            }
-        }
-    }
+    // - in Release mode we use the c allocator
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const alloc = if (builtin.mode == .Debug) gpa.allocator() else std.heap.c_allocator;
+
+    defer if (builtin.mode == .Debug) {
+        _ = gpa.detectLeaks();
+    };
 
     // args
     var args: std.process.ArgIterator = undefined;
