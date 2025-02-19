@@ -83,6 +83,9 @@ jobs:
 
       - uses: ./.github/actions/install
 
+      - name: zig build unittest
+        run: zig build unittest -freference-trace --summary all
+
       - name: zig build test
         run: zig build test -Dengine=v8 -- --json > bench.json
 
