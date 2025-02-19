@@ -344,4 +344,5 @@ test {
     std.testing.refAllDecls(@import("storage/storage.zig"));
     std.testing.refAllDecls(@import("iterator/iterator.zig"));
     std.testing.refAllDecls(@import("server.zig"));
+    std.testing.refAllDecls(@import("log.zig"));
 }
