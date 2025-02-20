@@ -1722,7 +1722,6 @@ const MockServer = struct {
     }
 };
 
-
 const MockCDP = struct {
     messages: std.ArrayListUnmanaged([]const u8) = .{},
 
