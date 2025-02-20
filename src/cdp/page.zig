@@ -17,58 +17,27 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-
-const server = @import("../server.zig");
-const Ctx = server.Ctx;
 const cdp = @import("cdp.zig");
-const result = cdp.result;
-const stringify = cdp.stringify;
-const sendEvent = cdp.sendEvent;
-const IncomingMessage = @import("msg.zig").IncomingMessage;
-const Input = @import("msg.zig").Input;
+const runtime = @import("runtime.zig");
 
-const log = std.log.scoped(.cdp);
+pub fn processMessage(cmd: anytype) !void {
+    const action = std.meta.stringToEnum(enum {
+        enable,
+        getFrameTree,
+        setLifecycleEventsEnabled,
+        addScriptToEvaluateOnNewDocument,
+        createIsolatedWorld,
+        navigate,
+    }, cmd.action) orelse return error.UnknownMethod;
 
-const Runtime = @import("runtime.zig");
-
-const Methods = enum {
-    enable,
-    getFrameTree,
-    setLifecycleEventsEnabled,
-    addScriptToEvaluateOnNewDocument,
-    createIsolatedWorld,
-    navigate,
-};
-
-pub fn page(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    action: []const u8,
-    ctx: *Ctx,
-) ![]const u8 {
-    const method = std.meta.stringToEnum(Methods, action) orelse
-        return error.UnknownMethod;
-    return switch (method) {
-        .enable => enable(alloc, msg, ctx),
-        .getFrameTree => getFrameTree(alloc, msg, ctx),
-        .setLifecycleEventsEnabled => setLifecycleEventsEnabled(alloc, msg, ctx),
-        .addScriptToEvaluateOnNewDocument => addScriptToEvaluateOnNewDocument(alloc, msg, ctx),
-        .createIsolatedWorld => createIsolatedWorld(alloc, msg, ctx),
-        .navigate => navigate(alloc, msg, ctx),
-    };
-}
-
-fn enable(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    _: *Ctx,
-) ![]const u8 {
-    // input
-    const input = try Input(void).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "page.enable" });
-
-    return result(alloc, input.id, null, null, input.sessionId);
+    switch (action) {
+        .enable => return cmd.sendResult(null, .{}),
+        .getFrameTree => return getFrameTree(cmd),
+        .setLifecycleEventsEnabled => return setLifecycleEventsEnabled(cmd),
+        .addScriptToEvaluateOnNewDocument => return addScriptToEvaluateOnNewDocument(cmd),
+        .createIsolatedWorld => return createIsolatedWorld(cmd),
+        .navigate => return navigate(cmd),
+    }
 }
 
 const Frame = struct {
@@ -86,16 +55,7 @@ const Frame = struct {
     gatedAPIFeatures: [][]const u8 = &[0][]const u8{},
 };
 
-fn getFrameTree(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    ctx: *Ctx,
-) ![]const u8 {
-    // input
-    const input = try Input(void).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "page.getFrameTree" });
-
+fn getFrameTree(cmd: anytype) !void {
     // output
     const FrameTree = struct {
         frameTree: struct {
@@ -112,6 +72,7 @@ fn getFrameTree(
             try writer.writeAll("cdp.page.getFrameTree { ");
             try writer.writeAll(".frameTree = { ");
             try writer.writeAll(".frame = { ");
+
             const frame = self.frameTree.frame;
             try writer.writeAll(".id = ");
             try std.fmt.formatText(frame.id, "s", options, writer);
@@ -122,65 +83,40 @@ fn getFrameTree(
             try writer.writeAll(" } } }");
         }
     };
-    const frameTree = FrameTree{
+
+    const state = cmd.cdp;
+    return cmd.sendResult(FrameTree{
         .frameTree = .{
             .frame = .{
-                .id = ctx.state.frameID,
-                .url = ctx.state.url,
-                .securityOrigin = ctx.state.securityOrigin,
-                .secureContextType = ctx.state.secureContextType,
-                .loaderId = ctx.state.loaderID,
+                .id = state.frame_id,
+                .url = state.url,
+                .securityOrigin = state.security_origin,
+                .secureContextType = state.secure_context_type,
+                .loaderId = state.loader_id,
             },
         },
-    };
-    return result(alloc, input.id, FrameTree, frameTree, input.sessionId);
+    }, .{});
 }
 
-fn setLifecycleEventsEnabled(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    ctx: *Ctx,
-) ![]const u8 {
-    // input
-    const Params = struct {
-        enabled: bool,
-    };
-    const input = try Input(Params).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "page.setLifecycleEventsEnabled" });
+fn setLifecycleEventsEnabled(cmd: anytype) !void {
+    // const params = (try cmd.params(struct {
+    //     enabled: bool,
+    // })) orelse return error.InvalidParams;
 
-    ctx.state.page_life_cycle_events = true;
-
-    // output
-    return result(alloc, input.id, null, null, input.sessionId);
+    cmd.cdp.page_life_cycle_events = true;
+    return cmd.sendResult(null, .{});
 }
-
-const LifecycleEvent = struct {
-    frameId: []const u8,
-    loaderId: ?[]const u8,
-    name: []const u8 = undefined,
-    timestamp: f32 = undefined,
-};
 
 // TODO: hard coded method
-fn addScriptToEvaluateOnNewDocument(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    _: *Ctx,
-) ![]const u8 {
-    // input
-    const Params = struct {
-        source: []const u8,
-        worldName: ?[]const u8 = null,
-        includeCommandLineAPI: bool = false,
-        runImmediately: bool = false,
-    };
-    const input = try Input(Params).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "page.addScriptToEvaluateOnNewDocument" });
+fn addScriptToEvaluateOnNewDocument(cmd: anytype) !void {
+    // const params = (try cmd.params(struct {
+    //     source: []const u8,
+    //     worldName: ?[]const u8 = null,
+    //     includeCommandLineAPI: bool = false,
+    //     runImmediately: bool = false,
+    // })) orelse return error.InvalidParams;
 
-    // output
-    const Res = struct {
+    const Response = struct {
         identifier: []const u8 = "1",
 
         pub fn format(
@@ -195,110 +131,85 @@ fn addScriptToEvaluateOnNewDocument(
             try writer.writeAll(" }");
         }
     };
-    return result(alloc, input.id, Res, Res{}, input.sessionId);
+    return cmd.sendResult(Response{}, .{});
 }
 
 // TODO: hard coded method
-fn createIsolatedWorld(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    ctx: *Ctx,
-) ![]const u8 {
-    // input
-    const Params = struct {
+fn createIsolatedWorld(cmd: anytype) !void {
+    const session_id = cmd.session_id orelse return error.SessionIdRequired;
+
+    const params = (try cmd.params(struct {
         frameId: []const u8,
         worldName: []const u8,
         grantUniveralAccess: bool,
-    };
-    const input = try Input(Params).get(alloc, msg);
-    defer input.deinit();
-    std.debug.assert(input.sessionId != null);
-    log.debug("Req > id {d}, method {s}", .{ input.id, "page.createIsolatedWorld" });
+    })) orelse return error.InvalidParams;
 
     // noop executionContextCreated event
-    try Runtime.executionContextCreated(
-        alloc,
-        ctx,
-        0,
-        "",
-        input.params.worldName,
-        // TODO: hard coded ID
-        "7102379147004877974.3265385113993241162",
-        .{
-            .isDefault = false,
-            .type = "isolated",
-            .frameId = input.params.frameId,
+    try cmd.sendEvent("Runtime.executionContextCreated", .{
+        .context = runtime.ExecutionContextCreated{
+            .id = 0,
+            .origin = "",
+            .name = params.worldName,
+            // TODO: hard coded ID
+            .uniqueId = "7102379147004877974.3265385113993241162",
+            .auxData = .{
+                .isDefault = false,
+                .type = "isolated",
+                .frameId = params.frameId,
+            },
         },
-        input.sessionId,
-    );
+    }, .{ .session_id = session_id });
 
-    // output
-    const Resp = struct {
-        executionContextId: u8 = 0,
-    };
-
-    return result(alloc, input.id, Resp, .{}, input.sessionId);
+    return cmd.sendResult(.{
+        .executionContextId = 0,
+    }, .{});
 }
 
-fn navigate(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    ctx: *Ctx,
-) ![]const u8 {
-    // input
-    const Params = struct {
+fn navigate(cmd: anytype) !void {
+    const session_id = cmd.session_id orelse return error.SessionIdRequired;
+
+    const params = (try cmd.params(struct {
         url: []const u8,
         referrer: ?[]const u8 = null,
         transitionType: ?[]const u8 = null, // TODO: enum
         frameId: ?[]const u8 = null,
         referrerPolicy: ?[]const u8 = null, // TODO: enum
-    };
-    const input = try Input(Params).get(alloc, msg);
-    defer input.deinit();
-    std.debug.assert(input.sessionId != null);
-    log.debug("Req > id {d}, method {s}", .{ input.id, "page.navigate" });
+    })) orelse return error.InvalidParams;
 
     // change state
-    ctx.state.reset();
-    ctx.state.url = input.params.url;
+    var state = cmd.cdp;
+    state.reset();
+    state.url = params.url;
+
     // TODO: hard coded ID
-    ctx.state.loaderID = "AF8667A203C5392DBE9AC290044AA4C2";
+    state.loader_id = "AF8667A203C5392DBE9AC290044AA4C2";
+
+    const LifecycleEvent = struct {
+        frameId: []const u8,
+        loaderId: ?[]const u8,
+        name: []const u8,
+        timestamp: f32,
+    };
 
     var life_event = LifecycleEvent{
-        .frameId = ctx.state.frameID,
-        .loaderId = ctx.state.loaderID,
+        .frameId = state.frame_id,
+        .loaderId = state.loader_id,
+        .name = "init",
+        .timestamp = 343721.796037,
     };
-    var ts_event: cdp.TimestampEvent = undefined;
 
     // frameStartedLoading event
     // TODO: event partially hard coded
-    const FrameStartedLoading = struct {
-        frameId: []const u8,
-    };
-    const frame_started_loading = FrameStartedLoading{ .frameId = ctx.state.frameID };
-    try sendEvent(
-        alloc,
-        ctx,
-        "Page.frameStartedLoading",
-        FrameStartedLoading,
-        frame_started_loading,
-        input.sessionId,
-    );
-    if (ctx.state.page_life_cycle_events) {
-        life_event.name = "init";
-        life_event.timestamp = 343721.796037;
-        try sendEvent(
-            alloc,
-            ctx,
-            "Page.lifecycleEvent",
-            LifecycleEvent,
-            life_event,
-            input.sessionId,
-        );
+    try cmd.sendEvent("Page.frameStartedLoading", .{
+        .frameId = state.frame_id,
+    }, .{ .session_id = session_id });
+
+    if (state.page_life_cycle_events) {
+        try cmd.sendEvent("Page.lifecycleEvent", life_event, .{ .session_id = session_id });
     }
 
     // output
-    const Resp = struct {
+    const Response = struct {
         frameId: []const u8,
         loaderId: ?[]const u8,
         errorText: ?[]const u8 = null,
@@ -319,146 +230,89 @@ fn navigate(
             try writer.writeAll(" }");
         }
     };
-    const resp = Resp{
-        .frameId = ctx.state.frameID,
-        .loaderId = ctx.state.loaderID,
-    };
-    const res = try result(alloc, input.id, Resp, resp, input.sessionId);
-    try ctx.send(res);
+
+    try cmd.sendResult(Response{
+        .frameId = state.frame_id,
+        .loaderId = state.loader_id,
+    }, .{});
 
     // TODO: at this point do we need async the following actions to be async?
 
     // Send Runtime.executionContextsCleared event
     // TODO: noop event, we have no env context at this point, is it necesarry?
-    try sendEvent(alloc, ctx, "Runtime.executionContextsCleared", struct {}, .{}, input.sessionId);
+    try cmd.sendEvent("Runtime.executionContextsCleared", null, .{ .session_id = session_id });
 
     // Launch navigate, the page must have been created by a
     // target.createTarget.
-    var p = ctx.browser.currentPage() orelse return error.NoPage;
-    ctx.state.executionContextId += 1;
-    const auxData = try std.fmt.allocPrint(
-        alloc,
+    var p = cmd.session.currentPage() orelse return error.NoPage;
+    state.execution_context_id += 1;
+
+    const aux_data = try std.fmt.allocPrint(
+        cmd.arena,
         // NOTE: we assume this is the default web page
         "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}",
-        .{ctx.state.frameID},
+        .{state.frame_id},
     );
-    defer alloc.free(auxData);
-    try p.navigate(input.params.url, auxData);
+    try p.navigate(params.url, aux_data);
 
     // Events
 
     // lifecycle init event
     // TODO: partially hard coded
-    if (ctx.state.page_life_cycle_events) {
+    if (state.page_life_cycle_events) {
         life_event.name = "init";
         life_event.timestamp = 343721.796037;
-        try sendEvent(
-            alloc,
-            ctx,
-            "Page.lifecycleEvent",
-            LifecycleEvent,
-            life_event,
-            input.sessionId,
-        );
+        try cmd.sendEvent("Page.lifecycleEvent", life_event, .{ .session_id = session_id });
     }
 
-    // DOM.documentUpdated
-    try sendEvent(
-        alloc,
-        ctx,
-        "DOM.documentUpdated",
-        struct {},
-        .{},
-        input.sessionId,
-    );
+    try cmd.sendEvent("DOM.documentUpdated", null, .{ .session_id = session_id });
 
     // frameNavigated event
-    const FrameNavigated = struct {
-        frame: Frame,
-        type: []const u8 = "Navigation",
-    };
-    const frame_navigated = FrameNavigated{
-        .frame = .{
-            .id = ctx.state.frameID,
-            .url = ctx.state.url,
-            .securityOrigin = ctx.state.securityOrigin,
-            .secureContextType = ctx.state.secureContextType,
-            .loaderId = ctx.state.loaderID,
+    try cmd.sendEvent("Page.frameNavigated", .{
+        .type = "Navigation",
+        .frame = Frame{
+            .id = state.frame_id,
+            .url = state.url,
+            .securityOrigin = state.security_origin,
+            .secureContextType = state.secure_context_type,
+            .loaderId = state.loader_id,
         },
-    };
-    try sendEvent(
-        alloc,
-        ctx,
-        "Page.frameNavigated",
-        FrameNavigated,
-        frame_navigated,
-        input.sessionId,
-    );
+    }, .{ .session_id = session_id });
 
     // domContentEventFired event
     // TODO: partially hard coded
-    ts_event = .{ .timestamp = 343721.803338 };
-    try sendEvent(
-        alloc,
-        ctx,
+    try cmd.sendEvent(
         "Page.domContentEventFired",
-        cdp.TimestampEvent,
-        ts_event,
-        input.sessionId,
+        cdp.TimestampEvent{ .timestamp = 343721.803338 },
+        .{ .session_id = session_id },
     );
 
     // lifecycle DOMContentLoaded event
     // TODO: partially hard coded
-    if (ctx.state.page_life_cycle_events) {
+    if (state.page_life_cycle_events) {
         life_event.name = "DOMContentLoaded";
         life_event.timestamp = 343721.803338;
-        try sendEvent(
-            alloc,
-            ctx,
-            "Page.lifecycleEvent",
-            LifecycleEvent,
-            life_event,
-            input.sessionId,
-        );
+        try cmd.sendEvent("Page.lifecycleEvent", life_event, .{ .session_id = session_id });
     }
 
     // loadEventFired event
     // TODO: partially hard coded
-    ts_event = .{ .timestamp = 343721.824655 };
-    try sendEvent(
-        alloc,
-        ctx,
+    try cmd.sendEvent(
         "Page.loadEventFired",
-        cdp.TimestampEvent,
-        ts_event,
-        input.sessionId,
+        cdp.TimestampEvent{ .timestamp = 343721.824655 },
+        .{ .session_id = session_id },
     );
 
     // lifecycle DOMContentLoaded event
     // TODO: partially hard coded
-    if (ctx.state.page_life_cycle_events) {
+    if (state.page_life_cycle_events) {
         life_event.name = "load";
         life_event.timestamp = 343721.824655;
-        try sendEvent(
-            alloc,
-            ctx,
-            "Page.lifecycleEvent",
-            LifecycleEvent,
-            life_event,
-            input.sessionId,
-        );
+        try cmd.sendEvent("Page.lifecycleEvent", life_event, .{ .session_id = session_id });
     }
 
     // frameStoppedLoading
-    const FrameStoppedLoading = struct { frameId: []const u8 };
-    try sendEvent(
-        alloc,
-        ctx,
-        "Page.frameStoppedLoading",
-        FrameStoppedLoading,
-        .{ .frameId = ctx.state.frameID },
-        input.sessionId,
-    );
-
-    return "";
+    return cmd.sendEvent("Page.frameStoppedLoading", .{
+        .frameId = state.frame_id,
+    }, .{ .session_id = session_id });
 }

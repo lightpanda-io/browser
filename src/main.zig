@@ -251,12 +251,13 @@ pub fn main() !void {
             defer loop.deinit();
 
             // browser
-            var browser = Browser{};
-            try Browser.init(&browser, alloc, &loop, vm);
+            var browser = Browser.init(alloc, &loop);
             defer browser.deinit();
 
+            var session = try browser.newSession({});
+
             // page
-            const page = try browser.session.createPage();
+            const page = try session.createPage();
             try page.start(null);
             defer page.end();
 

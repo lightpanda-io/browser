@@ -41,9 +41,8 @@ pub fn main() !void {
     try parser.init();
     defer parser.deinit();
 
-    var mem: [8192]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&mem);
-    const allocator = fba.allocator();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
 
     var loop = try jsruntime.Loop.init(allocator);
     defer loop.deinit();
@@ -369,7 +368,6 @@ test {
     std.testing.refAllDecls(@import("browser/dump.zig"));
     std.testing.refAllDecls(@import("browser/loader.zig"));
     std.testing.refAllDecls(@import("browser/mime.zig"));
-    std.testing.refAllDecls(@import("cdp/msg.zig"));
     std.testing.refAllDecls(@import("css/css.zig"));
     std.testing.refAllDecls(@import("css/libdom_test.zig"));
     std.testing.refAllDecls(@import("css/match_test.zig"));

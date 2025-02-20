@@ -17,107 +17,52 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-
-const server = @import("../server.zig");
-const Ctx = server.Ctx;
 const cdp = @import("cdp.zig");
-const result = cdp.result;
-const stringify = cdp.stringify;
-const IncomingMessage = @import("msg.zig").IncomingMessage;
-const Input = @import("msg.zig").Input;
+const Runtime = @import("runtime.zig");
 
-const log = std.log.scoped(.cdp);
+pub fn processMessage(cmd: anytype) !void {
+    const action = std.meta.stringToEnum(enum {
+        setEmulatedMedia,
+        setFocusEmulationEnabled,
+        setDeviceMetricsOverride,
+        setTouchEmulationEnabled,
+    }, cmd.action) orelse return error.UnknownMethod;
 
-const Methods = enum {
-    setEmulatedMedia,
-    setFocusEmulationEnabled,
-    setDeviceMetricsOverride,
-    setTouchEmulationEnabled,
-};
-
-pub fn emulation(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    action: []const u8,
-    ctx: *Ctx,
-) ![]const u8 {
-    const method = std.meta.stringToEnum(Methods, action) orelse
-        return error.UnknownMethod;
-    return switch (method) {
-        .setEmulatedMedia => setEmulatedMedia(alloc, msg, ctx),
-        .setFocusEmulationEnabled => setFocusEmulationEnabled(alloc, msg, ctx),
-        .setDeviceMetricsOverride => setDeviceMetricsOverride(alloc, msg, ctx),
-        .setTouchEmulationEnabled => setTouchEmulationEnabled(alloc, msg, ctx),
-    };
-}
-
-const MediaFeature = struct {
-    name: []const u8,
-    value: []const u8,
-};
-
-// TODO: noop method
-fn setEmulatedMedia(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    _: *Ctx,
-) ![]const u8 {
-
-    // input
-    const Params = struct {
-        media: ?[]const u8 = null,
-        features: ?[]MediaFeature = null,
-    };
-    const input = try Input(Params).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "emulation.setEmulatedMedia" });
-
-    // output
-    return result(alloc, input.id, null, null, input.sessionId);
+    switch (action) {
+        .setEmulatedMedia => return setEmulatedMedia(cmd),
+        .setFocusEmulationEnabled => return setFocusEmulationEnabled(cmd),
+        .setDeviceMetricsOverride => return setDeviceMetricsOverride(cmd),
+        .setTouchEmulationEnabled => return setTouchEmulationEnabled(cmd),
+    }
 }
 
 // TODO: noop method
-fn setFocusEmulationEnabled(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    _: *Ctx,
-) ![]const u8 {
-    // input
-    const Params = struct {
-        enabled: bool,
-    };
-    const input = try Input(Params).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "emulation.setFocusEmulationEnabled" });
+fn setEmulatedMedia(cmd: anytype) !void {
+    // const input = (try const incoming.params(struct {
+    //     media: ?[]const u8 = null,
+    //     features: ?[]struct{
+    //         name: []const u8,
+    //         value: [] const u8
+    //     } = null,
+    // })) orelse return error.InvalidParams;
 
-    // output
-    return result(alloc, input.id, null, null, input.sessionId);
+    return cmd.sendResult(null, .{});
 }
 
 // TODO: noop method
-fn setDeviceMetricsOverride(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    _: *Ctx,
-) ![]const u8 {
-    // input
-    const input = try Input(void).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "emulation.setDeviceMetricsOverride" });
-
-    // output
-    return result(alloc, input.id, null, null, input.sessionId);
+fn setFocusEmulationEnabled(cmd: anytype) !void {
+    // const input = (try const incoming.params(struct {
+    //     enabled: bool,
+    // })) orelse return error.InvalidParams;
+    return cmd.sendResult(null, .{});
 }
 
 // TODO: noop method
-fn setTouchEmulationEnabled(
-    alloc: std.mem.Allocator,
-    msg: *IncomingMessage,
-    _: *Ctx,
-) ![]const u8 {
-    const input = try Input(void).get(alloc, msg);
-    defer input.deinit();
-    log.debug("Req > id {d}, method {s}", .{ input.id, "emulation.setTouchEmulationEnabled" });
+fn setDeviceMetricsOverride(cmd: anytype) !void {
+    return cmd.sendResult(null, .{});
+}
 
-    return result(alloc, input.id, null, null, input.sessionId);
+// TODO: noop method
+fn setTouchEmulationEnabled(cmd: anytype) !void {
+    return cmd.sendResult(null, .{});
 }
