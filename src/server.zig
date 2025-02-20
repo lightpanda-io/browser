@@ -64,11 +64,12 @@ const Server = struct {
     // a memory poor for our Clietns
     client_pool: std.heap.MemoryPool(Client),
 
+    timeout_completion_pool: std.heap.MemoryPool(Completion),
+
     // I/O fields
     conn_completion: Completion,
     close_completion: Completion,
     accept_completion: Completion,
-    timeout_completion: Completion,
 
     // The response to send on a GET /json/version request
     json_version_response: []const u8,
@@ -76,6 +77,7 @@ const Server = struct {
     fn deinit(self: *Server) void {
         self.send_pool.deinit();
         self.client_pool.deinit();
+        self.timeout_completion_pool.deinit();
         self.allocator.free(self.json_version_response);
     }
 
@@ -121,11 +123,16 @@ const Server = struct {
     }
 
     fn queueTimeout(self: *Server) void {
+        const completion = self.timeout_completion_pool.create() catch |err| {
+            log.err("failed to create timeout completion: {any}", .{err});
+            return;
+        };
+
         self.loop.io.timeout(
             *Server,
             self,
             callbackTimeout,
-            &self.timeout_completion,
+            completion,
             TimeoutCheck,
         );
     }
@@ -135,8 +142,7 @@ const Server = struct {
         completion: *Completion,
         result: TimeoutError!void,
     ) void {
-        std.debug.assert(completion == &self.timeout_completion);
-
+        self.timeout_completion_pool.destroy(completion);
         const client = self.client orelse return;
 
         if (result) |_| {
@@ -1008,10 +1014,10 @@ pub fn run(
         .conn_completion = undefined,
         .close_completion = undefined,
         .accept_completion = undefined,
-        .timeout_completion = undefined,
         .json_version_response = json_version_response,
         .send_pool = std.heap.MemoryPool(Send).init(allocator),
         .client_pool = std.heap.MemoryPool(Client).init(allocator),
+        .timeout_completion_pool = std.heap.MemoryPool(Completion).init(allocator),
     };
     defer server.deinit();
 
