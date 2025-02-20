@@ -1,7 +1,11 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
 
+// synchronizes writes to the output
+// in debug mode, also synchronizes the timestamp counter for a more human-
+// readable time display
 var mutex: std.Thread.Mutex = .{};
 
 const LogLevel : Log.Level = blk: {
@@ -9,10 +13,10 @@ const LogLevel : Log.Level = blk: {
     break :blk if (@hasDecl(root, "LogLevel")) root.LogLevel else .info;
 };
 
-pub const Log = LogT(std.fs.File);
+pub const Log = LogT(std.fs.File, builtin.mode == .Debug);
 
 // Generic so that we can test it against an ArrayList
-fn LogT(comptime Out: type) type {
+fn LogT(comptime Out: type, comptime enhanced_readability: bool) type {
     return struct {
         out: Out,
         inject: ?[]const u8,
@@ -25,7 +29,7 @@ fn LogT(comptime Out: type) type {
             debug,
             info,
             warn,
-            err,
+            @"error",
             fatal,
         };
 
@@ -55,51 +59,91 @@ fn LogT(comptime Out: type) type {
             return @intFromEnum(level) >= @intFromEnum(LogLevel);
         }
 
-        pub fn debug(self: *Self, comptime ctx: []const u8, data: anytype) void {
-            self.log(.debug, ctx, data);
+        pub fn debug(self: *Self, comptime msg: []const u8, data: anytype) void {
+            self.log(.debug, msg, data);
         }
 
-        pub fn info(self: *Self, comptime ctx: []const u8, data: anytype) void {
-            self.log(.info, ctx, data);
+        pub fn info(self: *Self, comptime msg: []const u8, data: anytype) void {
+            self.log(.info, msg, data);
         }
 
-        pub fn warn(self: *Self, comptime ctx: []const u8, data: anytype) void {
-            self.log(.warn, ctx, data);
+        pub fn warn(self: *Self, comptime msg: []const u8, data: anytype) void {
+            self.log(.warn, msg, data);
         }
 
-        pub fn err(self: *Self, comptime ctx: []const u8, data: anytype) void {
-            self.log(.err, ctx, data);
+        pub fn err(self: *Self, comptime msg: []const u8, data: anytype) void {
+            self.log(.@"error", msg, data);
         }
 
-        pub fn fatal(self: *Self, comptime ctx: []const u8, data: anytype) void {
-            self.log(.fatal, ctx, data);
+        pub fn fatal(self: *Self, comptime msg: []const u8, data: anytype) void {
+            self.log(.fatal, msg, data);
         }
 
-        fn log(self: *Self, comptime level: Level, comptime ctx: []const u8, data: anytype) void {
+        fn log(self: *Self, comptime level: Level, comptime msg: []const u8, data: anytype) void {
             if (comptime enabled(level) == false) {
                 return;
             }
             defer self.buffer.clearRetainingCapacity();
-            self._log(level, ctx, data) catch |e| {
-                std.debug.print("log error: {}  ({s} - {s})\n", .{ e, @tagName(level), ctx });
+            self._log(level, msg, data) catch |e| {
+                std.debug.print("log error: {}  ({s} - {s})\n", .{ e, @tagName(level), msg });
             };
         }
 
-        fn _log(self: *Self, comptime level: Level, comptime ctx: []const u8, data: anytype) !void {
-            const now = getTime();
+        fn _log(self: *Self, comptime level: Level, comptime msg: []const u8, data: anytype) !void {
             const allocator = self.allocator;
 
             // We use *AssumeCapacity here because we expect buffer to have
-            // a reasonable default size. We expect time + level + ctx + inject
+            // a reasonable default size. We expect time + level + msg + inject
             // to fit in the initial buffer;
             var buffer = &self.buffer;
+
+            comptime {
+                if (msg.len > 512) {
+                    @compileError("log msg cannot be greater than 512 characters: '" ++ msg ++ "'");
+                }
+                for (msg) |b| {
+                    switch (b) {
+                        'A'...'Z', 'a'...'z', ' ', '0'...'9', '_', '-', '.', '{', '}' => {},
+                        else => @compileError("log msg contains an invalid character '" ++ msg ++ "'"),
+                    }
+                }
+            }
+
             std.debug.assert(buffer.capacity >= 1024);
 
-            buffer.appendSliceAssumeCapacity("_time=");
-            try std.fmt.format(buffer.writer(allocator), "{d}", .{now});
+            if (comptime enhanced_readability) {
+                // used when developing, and we prefer readability over having
+                // the output in logfmt
+                switch (level) {
+                    .warn => buffer.appendSliceAssumeCapacity("\x1b[33m"),
+                    .@"error" =>  buffer.appendSliceAssumeCapacity("\x1b[31m"),
+                    .fatal =>  buffer.appendSliceAssumeCapacity("\x1b[41m"),
+                    else => {},
+                }
 
-            const level_and_ctx = " _level=" ++ @tagName(level) ++ " _ctx=" ++ ctx;
-            buffer.appendSliceAssumeCapacity(level_and_ctx);
+                const level_and_msg = @tagName(level) ++ "\x1b[0m | " ++ msg ++ " | ";
+                buffer.appendSliceAssumeCapacity(level_and_msg);
+                const since_last_log = msSinceLastLog();
+
+                if (since_last_log > 1000) {
+                    buffer.appendSliceAssumeCapacity("\x1b[35m");
+                }
+                try std.fmt.format(buffer.writer(allocator), "{d}\x1b[0m |", .{since_last_log});
+
+            } else {
+                buffer.appendSliceAssumeCapacity("_time=");
+                try std.fmt.format(buffer.writer(allocator), "{d}", .{getTime()});
+
+                const level_and_msg = comptime blk: {
+                    // only wrap msg in quotes if it contains a space
+                    const lm = " _level=" ++ @tagName(level) ++ " _msg=";
+                    if (std.mem.indexOfScalar(u8, msg, ' ') == null) {
+                        break :blk lm ++ msg;
+                    }
+                    break :blk lm ++ "\"" ++ msg ++ "\"";
+                };
+                buffer.appendSliceAssumeCapacity(level_and_msg);
+            }
 
             if (self.inject) |inject| {
                 buffer.appendAssumeCapacity(' ');
@@ -116,6 +160,12 @@ fn LogT(comptime Out: type) type {
                 buffer.appendAssumeCapacity('=');
                 try writeValue(allocator, buffer, @field(data, f.name));
             }
+
+            if (comptime enhanced_readability) {
+                // reset any color
+                try buffer.appendSlice(allocator, "\x1b[0m");
+            }
+
             try buffer.append(allocator, '\n');
 
             mutex.lock();
@@ -229,8 +279,24 @@ fn getTime() i64 {
     return std.time.milliTimestamp();
 }
 
+var last_log_for_debug: i64 = 0;
+fn msSinceLastLog() i64 {
+    if (comptime builtin.mode != .Debug) {
+        @compileError("Log's enhanced_readability is not safe to use in non-Debug mode");
+    }
+    const now = getTime();
+
+    mutex.lock();
+    defer mutex.unlock();
+    defer last_log_for_debug = now;
+    if (last_log_for_debug == 0) {
+        return 0;
+    }
+    return now - last_log_for_debug;
+}
+
 const testing = std.testing;
-const TestLogger = LogT(std.ArrayListUnmanaged(u8).Writer);
+const TestLogger = LogT(std.ArrayListUnmanaged(u8).Writer, false);
 
 test "log: data" {
     var buf: std.ArrayListUnmanaged(u8) = .{};
@@ -241,7 +307,7 @@ test "log: data" {
 
     {
         log.err("nope", .{});
-        try testing.expectEqualStrings("_time=1739795092929 _level=err _ctx=nope\n", buf.items);
+        try testing.expectEqualStrings("_time=1739795092929 _level=error _msg=nope\n", buf.items);
     }
 
     {
@@ -249,7 +315,7 @@ test "log: data" {
         const string = try testing.allocator.dupe(u8, "spice_must_flow");
         defer testing.allocator.free(string);
 
-        log.warn("a_ctx", .{
+        log.warn("a msg", .{
           .cint = 5,
             .cfloat = 3.43,
             .int = @as(i16, -49),
@@ -265,7 +331,7 @@ test "log: data" {
         });
 
         try testing.expectEqualStrings(
-            "_time=1739795092929 _level=warn _ctx=a_ctx " ++
+            "_time=1739795092929 _level=warn _msg=\"a msg\" " ++
             "cint=5 cfloat=3.43 int=-49 float=0.0003232 bt=true bf=false " ++
             "nn=33 n=null lit=over9000! slice=spice_must_flow " ++
             "err=Nope level=warn\n"
@@ -280,7 +346,7 @@ test "log: string escape" {
     var log = try TestLogger.initTo(testing.allocator, buf.writer(testing.allocator));
     defer log.deinit();
 
-    const prefix = "_time=1739795092929 _level=err _ctx=test ";
+    const prefix = "_time=1739795092929 _level=error _msg=test ";
     {
         log.err("test", .{.string = "hello world"});
         try testing.expectEqualStrings(prefix ++ "string=\"hello world\"\n", buf.items);
@@ -308,5 +374,5 @@ test "log: with inject" {
 
     log.inject = "conn_id=339494";
     log.fatal("hit", .{.over = 9000});
-    try testing.expectEqualStrings("_time=1739795092929 _level=fatal _ctx=hit conn_id=339494 over=9000\n", buf.items);
+    try testing.expectEqualStrings("_time=1739795092929 _level=fatal _msg=hit conn_id=339494 over=9000\n", buf.items);
 }

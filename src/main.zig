@@ -32,7 +32,7 @@ pub const UserContext = apiweb.UserContext;
 pub const IO = @import("asyncio").Wrapper(jsruntime.Loop);
 
 const Log = @import("log.zig").Log;
-pub const LogLevel = Log.Level.debug;
+pub const LogLevel = Log.Level.info;
 
 pub const std_options = .{
     // Set the log level to info
@@ -131,31 +131,31 @@ const CliMode = union(CliModeTag) {
             if (std.mem.eql(u8, "--port", opt)) {
                 if (args.next()) |arg| {
                     _server.port = std.fmt.parseInt(u16, arg, 10) catch |err| {
-                        log.err("--port {any}\n", .{err});
+                        log.err("--port {any}", .{.err = err});
                         return printUsageExit(execname, 1);
                     };
                     continue;
                 } else {
-                    log.err("--port not provided\n", .{});
+                    log.err("--port not provided", .{});
                     return printUsageExit(execname, 1);
                 }
             }
             if (std.mem.eql(u8, "--timeout", opt)) {
                 if (args.next()) |arg| {
                     _server.timeout = std.fmt.parseInt(u8, arg, 10) catch |err| {
-                        log.err("--timeout {any}\n", .{err});
+                        log.err("--timeout {any}", .{err});
                         return printUsageExit(execname, 1);
                     };
                     continue;
                 } else {
-                    log.err("--timeout not provided\n", .{});
+                    log.err("--timeout not provided", .{});
                     return printUsageExit(execname, 1);
                 }
             }
 
             // unknown option
             if (std.mem.startsWith(u8, opt, "--")) {
-                log.err("unknown option\n", .{});
+                log.err("unknown option", .{});
                 return printUsageExit(execname, 1);
             }
 
@@ -164,7 +164,7 @@ const CliMode = union(CliModeTag) {
 
             // allow only one url
             if (_fetch.url.len != 0) {
-                log.err("more than 1 url provided\n", .{});
+                log.err("more than 1 url provided", .{});
                 return printUsageExit(execname, 1);
             }
 
@@ -235,7 +235,7 @@ pub fn main() !void {
     switch (cli_mode) {
         .server => |opts| {
             const address = std.net.Address.parseIp4(opts.host, opts.port) catch |err| {
-                log.fatal("main_opts_address", .{
+                log.fatal("invalid address", .{
                     .host = opts.host,
                     .port = opts.port,
                     .err = err,
@@ -248,13 +248,13 @@ pub fn main() !void {
 
             const timeout = std.time.ns_per_s * @as(u64, opts.timeout);
             server.run(alloc, address, timeout, &loop) catch |err| {
-                log.fatal("main_opts_server", .{.err = err});
+                log.fatal("server error", .{.err = err});
                 return err;
             };
         },
 
         .fetch => |opts| {
-            log.debug("main_fetch", .{
+            log.debug("fetch mode", .{
                 .url = opts.url,
                 .dump = opts.dump,
             });
@@ -279,14 +279,14 @@ pub fn main() !void {
 
             _ = page.navigate(opts.url, null) catch |err| switch (err) {
                 error.UnsupportedUriScheme, error.UriMissingHost => {
-                    log.fatal("main_fetch_invalid_url", .{
+                    log.fatal("fetch has invalid url", .{
                         .url = opts.url,
                         .err = err,
                     });
                     return printUsageExit(opts.execname, 1);
                 },
                 else => {
-                    log.fatal("main_fetch_error", .{
+                    log.fatal("fetch error", .{
                         .url = opts.url,
                         .err = err,
                     });
