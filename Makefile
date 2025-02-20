@@ -144,7 +144,7 @@ _install-netsurf: clean-netsurf
 	BUILDDIR=$(BC_NS)/build/libdom make install && \
 	printf "\e[33mRunning libdom example...\e[0m\n" && \
 	cd examples && \
-	zig cc \
+	$(ZIG) cc \
 	-I$(ICONV)/include \
 	-I$(BC_NS)/include \
 	-L$(ICONV)/lib \

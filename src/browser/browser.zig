@@ -267,7 +267,12 @@ pub const Page = struct {
 
         // add global objects
         log.debug("setup global env", .{});
-        try self.session.env.bindGlobal(&self.session.window);
+
+        if (comptime builtin.is_test == false) {
+            // By not loading this during tests, we aren't required to load
+            // all of the interfaces into zig-js-runtime.
+            try self.session.env.bindGlobal(&self.session.window);
+        }
 
         // load polyfills
         try polyfill.load(self.arena.allocator(), self.session.env);

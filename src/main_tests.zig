@@ -336,12 +336,6 @@ test {
     std.testing.refAllDecls(queryTest);
 
     std.testing.refAllDecls(@import("generate.zig"));
-
-    // Don't use refAllDecls, as this will pull in the entire project
-    // and break the test build.
-    // We should fix this. See this branch & the commit message for details:
-    // https://github.com/karlseguin/browser/commit/193ab5ceab3d3758ea06db04f7690460d79eb79e
-    _ = @import("server.zig");
 }
 
 fn testJSRuntime(alloc: std.mem.Allocator) !void {

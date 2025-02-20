@@ -103,7 +103,7 @@ pub const XMLHttpRequest = struct {
     ctx: ?Client.Ctx = null,
 
     method: std.http.Method,
-    state: u16,
+    state: State,
     url: ?[]const u8,
     uri: std.Uri,
     // request headers
@@ -150,11 +150,13 @@ pub const XMLHttpRequest = struct {
     pub const prototype = *XMLHttpRequestEventTarget;
     pub const mem_guarantied = true;
 
-    pub const UNSENT: u16 = 0;
-    pub const OPENED: u16 = 1;
-    pub const HEADERS_RECEIVED: u16 = 2;
-    pub const LOADING: u16 = 3;
-    pub const DONE: u16 = 4;
+    const State = enum(u16) {
+        unsent = 0,
+        opened = 1,
+        headers_received = 2,
+        loading = 3,
+        done = 4,
+    };
 
     // https://xhr.spec.whatwg.org/#response-type
     const ResponseType = enum {
@@ -297,7 +299,7 @@ pub const XMLHttpRequest = struct {
             .method = undefined,
             .url = null,
             .uri = undefined,
-            .state = UNSENT,
+            .state = .unsent,
             .cli = userctx.httpClient,
         };
     }
@@ -347,7 +349,7 @@ pub const XMLHttpRequest = struct {
     }
 
     pub fn get_readyState(self: *XMLHttpRequest) u16 {
-        return self.state;
+        return @intFromEnum(self.state);
     }
 
     pub fn get_timeout(_: *XMLHttpRequest) u32 {
@@ -367,7 +369,7 @@ pub const XMLHttpRequest = struct {
     }
 
     pub fn set_withCredentials(self: *XMLHttpRequest, withCredentials: bool) !void {
-        if (self.state != OPENED and self.state != UNSENT) return DOMError.InvalidState;
+        if (self.state != .opened and self.state != .unsent) return DOMError.InvalidState;
         if (self.send_flag) return DOMError.InvalidState;
 
         self.withCredentials = withCredentials;
@@ -401,7 +403,7 @@ pub const XMLHttpRequest = struct {
         log.debug("open url ({s})", .{self.url.?});
         self.sync = if (asyn) |b| !b else false;
 
-        self.state = OPENED;
+        self.state = .opened;
         self.dispatchEvt("readystatechange");
     }
 
@@ -477,14 +479,14 @@ pub const XMLHttpRequest = struct {
     }
 
     pub fn _setRequestHeader(self: *XMLHttpRequest, name: []const u8, value: []const u8) !void {
-        if (self.state != OPENED) return DOMError.InvalidState;
+        if (self.state != .opened) return DOMError.InvalidState;
         if (self.send_flag) return DOMError.InvalidState;
         return try self.headers.append(name, value);
     }
 
     // TODO body can be either a XMLHttpRequestBodyInit or a document
     pub fn _send(self: *XMLHttpRequest, alloc: std.mem.Allocator, body: ?[]const u8) !void {
-        if (self.state != OPENED) return DOMError.InvalidState;
+        if (self.state != .opened) return DOMError.InvalidState;
         if (self.send_flag) return DOMError.InvalidState;
 
         //  The body argument provides the request body, if any, and is ignored
@@ -554,7 +556,7 @@ pub const XMLHttpRequest = struct {
 
         // TODO handle override mime type
 
-        self.state = HEADERS_RECEIVED;
+        self.state = .headers_received;
         self.dispatchEvt("readystatechange");
 
         self.response_status = @intFromEnum(self.req.?.response.status);
@@ -592,7 +594,7 @@ pub const XMLHttpRequest = struct {
             if (prev_dispatch != null and now.since(prev_dispatch.?) < min_delay) continue;
             defer prev_dispatch = now;
 
-            self.state = LOADING;
+            self.state = .loading;
             self.dispatchEvt("readystatechange");
 
             // dispatch a progress event progress.
@@ -604,7 +606,7 @@ pub const XMLHttpRequest = struct {
         self.response_bytes = buf.items;
         self.send_flag = false;
 
-        self.state = DONE;
+        self.state = .done;
         self.dispatchEvt("readystatechange");
 
         // dispatch a progress event load.
@@ -666,7 +668,7 @@ pub const XMLHttpRequest = struct {
         self.priv_state = .done;
 
         self.err = err;
-        self.state = DONE;
+        self.state = .done;
         self.send_flag = false;
         self.dispatchEvt("readystatechange");
         self.dispatchProgressEvent("error", .{});
@@ -697,7 +699,7 @@ pub const XMLHttpRequest = struct {
     }
 
     pub fn set_responseType(self: *XMLHttpRequest, rtype: []const u8) !void {
-        if (self.state == LOADING or self.state == DONE) return DOMError.InvalidState;
+        if (self.state == .loading or self.state == .done) return DOMError.InvalidState;
 
         if (std.mem.eql(u8, rtype, "")) {
             self.response_type = .Empty;
@@ -735,7 +737,7 @@ pub const XMLHttpRequest = struct {
             return DOMError.InvalidState;
         }
 
-        if (self.state != DONE) return null;
+        if (self.state != .done) return null;
 
         // fastpath if response is previously parsed.
         if (self.response_obj) |obj| {
@@ -761,7 +763,7 @@ pub const XMLHttpRequest = struct {
     // https://xhr.spec.whatwg.org/#the-response-attribute
     pub fn get_response(self: *XMLHttpRequest, alloc: std.mem.Allocator) !?Response {
         if (self.response_type == .Empty or self.response_type == .Text) {
-            if (self.state == LOADING or self.state == DONE) {
+            if (self.state == .loading or self.state == .done) {
                 return .{ .Text = try self.get_responseText() };
             }
             return .{ .Text = "" };

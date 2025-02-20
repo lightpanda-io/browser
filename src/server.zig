@@ -184,6 +184,13 @@ const Server = struct {
             client.close(null);
             return;
         };
+        if (size == 0) {
+            if (self.client != null) {
+                self.client = null;
+            }
+            self.queueAccept();
+            return;
+        }
 
         const more = client.processData(size) catch |err| {
             log.err("Client Processing Error: {any}\n", .{err});
@@ -970,14 +977,6 @@ pub fn run(
     timeout: u64,
     loop: *jsruntime.Loop,
 ) !void {
-    if (comptime builtin.is_test) {
-        // There's bunch of code that won't compiler in a test build (because
-        // it relies on a global root.Types). So we fight the compiler and make
-        // sure it doesn't include any of that code. Hopefully one day we can
-        // remove all this.
-        return;
-    }
-
     // create socket
     const flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK;
     const listener = try posix.socket(address.any.family, flags, posix.IPPROTO.TCP);
@@ -1555,6 +1554,49 @@ test "server: mask" {
     }
 }
 
+test "server: 404" {
+    var c = try createTestClient();
+    defer c.deinit();
+
+    const res = try c.httpRequest("GET /unknown HTTP/1.1\r\n\r\n");
+    try testing.expectEqualStrings("HTTP/1.1 404 \r\n" ++
+        "Connection: Close\r\n" ++
+        "Content-Length: 9\r\n\r\n" ++
+        "Not found", res);
+}
+
+test "server: get /json/version" {
+    const expected_response =
+        "HTTP/1.1 200 OK\r\n" ++
+        "Content-Length: 48\r\n" ++
+        "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
+        "{\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9583/\"}";
+
+    {
+        // twice on the same connection
+        var c = try createTestClient();
+        defer c.deinit();
+
+        const res1 = try c.httpRequest("GET /json/version HTTP/1.1\r\n\r\n");
+        try testing.expectEqualStrings(expected_response, res1);
+
+        const res2 = try c.httpRequest("GET /json/version HTTP/1.1\r\n\r\n");
+        try testing.expectEqualStrings(expected_response, res2);
+    }
+
+    {
+        // again on a new connection
+        var c = try createTestClient();
+        defer c.deinit();
+
+        const res1 = try c.httpRequest("GET /json/version HTTP/1.1\r\n\r\n");
+        try testing.expectEqualStrings(expected_response, res1);
+
+        const res2 = try c.httpRequest("GET /json/version HTTP/1.1\r\n\r\n");
+        try testing.expectEqualStrings(expected_response, res2);
+    }
+}
+
 fn assertHTTPError(
     expected_error: anyerror,
     comptime expected_status: u16,
@@ -1680,6 +1722,7 @@ const MockServer = struct {
     }
 };
 
+
 const MockCDP = struct {
     messages: std.ArrayListUnmanaged([]const u8) = .{},
 
@@ -1703,5 +1746,65 @@ const MockCDP = struct {
         const owned = self.allocator.dupe(u8, message) catch unreachable;
         self.messages.append(self.allocator, owned) catch unreachable;
         return true;
+    }
+};
+
+fn createTestClient() !TestClient {
+    const address = std.net.Address.initIp4([_]u8{ 127, 0, 0, 1 }, 9583);
+    const stream = try std.net.tcpConnectToAddress(address);
+
+    const timeout = std.mem.toBytes(posix.timeval{
+        .tv_sec = 2,
+        .tv_usec = 0,
+    });
+    try posix.setsockopt(stream.handle, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeout);
+    try posix.setsockopt(stream.handle, posix.SOL.SOCKET, posix.SO.SNDTIMEO, &timeout);
+    return .{ .stream = stream };
+}
+
+const TestClient = struct {
+    stream: std.net.Stream,
+    buf: [1024]u8 = undefined,
+
+    fn deinit(self: *TestClient) void {
+        self.stream.close();
+    }
+
+    fn httpRequest(self: *TestClient, req: []const u8) ![]const u8 {
+        try self.stream.writeAll(req);
+
+        var pos: usize = 0;
+        var total_length: ?usize = null;
+        while (true) {
+            pos += try self.stream.read(self.buf[pos..]);
+            const response = self.buf[0..pos];
+            if (total_length == null) {
+                const header_end = std.mem.indexOf(u8, response, "\r\n\r\n") orelse continue;
+                const header = response[0 .. header_end + 4];
+
+                const cl_header = "Content-Length: ";
+                const start = (std.mem.indexOf(u8, header, cl_header) orelse {
+                    return error.MissingContentLength;
+                }) + cl_header.len;
+
+                const end = std.mem.indexOfScalarPos(u8, header, start, '\r') orelse {
+                    return error.InvalidContentLength;
+                };
+                const cl = std.fmt.parseInt(usize, header[start..end], 10) catch {
+                    return error.InvalidContentLength;
+                };
+
+                total_length = cl + header.len;
+            }
+
+            if (total_length) |tl| {
+                if (pos == tl) {
+                    return response;
+                }
+                if (pos > tl) {
+                    return error.DataExceedsContentLength;
+                }
+            }
+        }
     }
 };
