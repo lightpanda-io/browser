@@ -109,7 +109,7 @@ pub fn main() !void {
         const result = t.func();
         current_test = null;
 
-        const ns_taken = slowest.endTiming(friendly_name);
+        const ns_taken = slowest.endTiming(friendly_name, is_unnamed_test);
 
         if (std.testing.allocator_instance.deinit() == .leak) {
             leak += 1;
@@ -227,9 +227,12 @@ const SlowTracker = struct {
         self.timer.reset();
     }
 
-    fn endTiming(self: *SlowTracker, test_name: []const u8) u64 {
+    fn endTiming(self: *SlowTracker, test_name: []const u8, is_unnamed_test: bool) u64 {
         var timer = self.timer;
         const ns = timer.lap();
+        if (is_unnamed_test) {
+            return ns;
+        }
 
         var slowest = &self.slowest;
 
@@ -377,4 +380,5 @@ test {
     std.testing.refAllDecls(@import("storage/storage.zig"));
     std.testing.refAllDecls(@import("iterator/iterator.zig"));
     std.testing.refAllDecls(@import("server.zig"));
+    std.testing.refAllDecls(@import("cdp/cdp.zig"));
 }
