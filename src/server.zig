@@ -592,7 +592,7 @@ fn ClientT(comptime S: type, comptime C: type) type {
                         self.server.queueClose(self.socket);
                         return false;
                     },
-                    .text, .binary => if (self.cdp.?.processMessage(msg.data) == false) {
+                    .text, .binary => if (self.cdp.?.handleMessage(msg.data) == false) {
                         self.close(null);
                         return false;
                     },
@@ -1747,7 +1747,7 @@ const MockCDP = struct {
         self.messages.deinit(allocator);
     }
 
-    fn processMessage(self: *MockCDP, message: []const u8) bool {
+    fn handleMessage(self: *MockCDP, message: []const u8) bool {
         const owned = self.allocator.dupe(u8, message) catch unreachable;
         self.messages.append(self.allocator, owned) catch unreachable;
         return true;

@@ -80,3 +80,41 @@ fn getWindowForTarget(cmd: anytype) !void {
 fn setWindowBounds(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
+
+const testing = @import("testing.zig");
+test "cdp.browser: getVersion" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{
+        .id = 32,
+        .sessionID = "leto",
+        .method = "Browser.getVersion",
+    });
+
+    try ctx.expectSentCount(1);
+    try ctx.expectSentResult(.{
+        .protocolVersion = PROTOCOL_VERSION,
+        .product = PRODUCT,
+        .revision = REVISION,
+        .userAgent = USER_AGENT,
+        .jsVersion = JS_VERSION,
+    }, .{ .id = 32, .index = 0 });
+}
+
+test "cdp.browser: getWindowForTarget" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{
+        .id = 33,
+        .sessionId = "leto",
+        .method = "Browser.getWindowForTarget",
+    });
+
+    try ctx.expectSentCount(1);
+    try ctx.expectSentResult(.{
+        .windowId = DEV_TOOLS_WINDOW_ID,
+        .bounds = .{ .windowState = "normal" },
+    }, .{ .id = 33, .index = 0, .session_id = "leto" });
+}
