@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const Allocator = std.mem.Allocator;
 
 const jsruntime = @import("jsruntime");
 
@@ -31,10 +32,6 @@ pub const Types = jsruntime.reflect(apiweb.Interfaces);
 pub const UserContext = apiweb.UserContext;
 pub const IO = @import("asyncio").Wrapper(jsruntime.Loop);
 
-// Simple blocking websocket connection model
-// ie. 1 thread per ws connection without thread pool and epoll/kqueue
-pub const websocket_blocking = true;
-
 const log = std.log.scoped(.cli);
 
 pub const std_options = .{
@@ -45,160 +42,15 @@ pub const std_options = .{
     .logFn = logFn,
 };
 
-const usage =
-    \\usage: {s} [options] [URL]
-    \\
-    \\  start Lightpanda browser
-    \\
-    \\  * if an url is provided the browser will fetch the page and exit
-    \\  * otherwhise the browser starts a CDP server
-    \\
-    \\  -h, --help      Print this help message and exit.
-    \\  --verbose       Display all logs. By default only info, warn and err levels are displayed.
-    \\  --host          Host of the CDP server (default "127.0.0.1")
-    \\  --port          Port of the CDP server (default "9222")
-    \\  --timeout       Timeout for incoming connections of the CDP server (in seconds, default "3")
-    \\  --dump          Dump document in stdout (fetch mode only)
-    \\
-;
-
-fn printUsageExit(execname: []const u8, res: u8) anyerror {
-    std.io.getStdErr().writer().print(usage, .{execname}) catch |err| {
-        std.log.err("Print usage error: {any}", .{err});
-        return error.Cli;
-    };
-    if (res == 1) return error.Usage;
-    return error.NoError;
-}
-
-const CliModeTag = enum {
-    server,
-    fetch,
-};
-
-const CliMode = union(CliModeTag) {
-    server: Server,
-    fetch: Fetch,
-
-    const Server = struct {
-        execname: []const u8 = undefined,
-        args: *std.process.ArgIterator = undefined,
-        host: []const u8 = Host,
-        port: u16 = Port,
-        timeout: u8 = Timeout,
-
-        // default options
-        const Host = "127.0.0.1";
-        const Port = 9222;
-        const Timeout = 3; // in seconds
-    };
-
-    const Fetch = struct {
-        execname: []const u8 = undefined,
-        args: *std.process.ArgIterator = undefined,
-        url: []const u8 = "",
-        dump: bool = false,
-    };
-
-    fn init(alloc: std.mem.Allocator, args: *std.process.ArgIterator) !CliMode {
-        args.* = try std.process.argsWithAllocator(alloc);
-        errdefer args.deinit();
-
-        const execname = args.next().?;
-        var default_mode: CliModeTag = .server;
-
-        var _server = Server{};
-        var _fetch = Fetch{};
-
-        while (args.next()) |opt| {
-            if (std.mem.eql(u8, "-h", opt) or std.mem.eql(u8, "--help", opt)) {
-                return printUsageExit(execname, 0);
-            }
-            if (std.mem.eql(u8, "--verbose", opt)) {
-                verbose = true;
-                continue;
-            }
-            if (std.mem.eql(u8, "--dump", opt)) {
-                _fetch.dump = true;
-                continue;
-            }
-            if (std.mem.eql(u8, "--host", opt)) {
-                if (args.next()) |arg| {
-                    _server.host = arg;
-                    continue;
-                } else {
-                    std.log.err("--host not provided\n", .{});
-                    return printUsageExit(execname, 1);
-                }
-            }
-            if (std.mem.eql(u8, "--port", opt)) {
-                if (args.next()) |arg| {
-                    _server.port = std.fmt.parseInt(u16, arg, 10) catch |err| {
-                        log.err("--port {any}\n", .{err});
-                        return printUsageExit(execname, 1);
-                    };
-                    continue;
-                } else {
-                    log.err("--port not provided\n", .{});
-                    return printUsageExit(execname, 1);
-                }
-            }
-            if (std.mem.eql(u8, "--timeout", opt)) {
-                if (args.next()) |arg| {
-                    _server.timeout = std.fmt.parseInt(u8, arg, 10) catch |err| {
-                        log.err("--timeout {any}\n", .{err});
-                        return printUsageExit(execname, 1);
-                    };
-                    continue;
-                } else {
-                    log.err("--timeout not provided\n", .{});
-                    return printUsageExit(execname, 1);
-                }
-            }
-
-            // unknown option
-            if (std.mem.startsWith(u8, opt, "--")) {
-                log.err("unknown option\n", .{});
-                return printUsageExit(execname, 1);
-            }
-
-            // other argument is considered to be an URL, ie. fetch mode
-            default_mode = .fetch;
-
-            // allow only one url
-            if (_fetch.url.len != 0) {
-                log.err("more than 1 url provided\n", .{});
-                return printUsageExit(execname, 1);
-            }
-
-            _fetch.url = opt;
-        }
-
-        if (default_mode == .server) {
-
-            // server mode
-            _server.execname = execname;
-            _server.args = args;
-            return CliMode{ .server = _server };
-        } else {
-
-            // fetch mode
-            _fetch.execname = execname;
-            _fetch.args = args;
-            return CliMode{ .fetch = _fetch };
-        }
-    }
-
-    fn deinit(self: CliMode) void {
-        switch (self) {
-            inline .server, .fetch => |*_mode| {
-                _mode.args.deinit();
-            },
-        }
-    }
-};
-
 pub fn main() !void {
+    var mem: [4096]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&mem);
+    const args = try parseArgs(fba.allocator());
+
+    if (args.mode == .usage) {
+        // don't need to create a gpa in this case
+        return args.printUsageAndExit(args.mode.usage);
+    }
 
     // allocator
     // - in Debug mode we use the General Purpose Allocator to detect memory leaks
@@ -210,23 +62,12 @@ pub fn main() !void {
         _ = gpa.detectLeaks();
     };
 
-    // args
-    var args: std.process.ArgIterator = undefined;
-    const cli_mode = CliMode.init(alloc, &args) catch |err| {
-        if (err == error.NoError) {
-            std.posix.exit(0);
-        } else {
-            std.posix.exit(1);
-        }
-        return;
-    };
-    defer cli_mode.deinit();
-
-    switch (cli_mode) {
-        .server => |opts| {
+    switch (args.mode) {
+        .usage => unreachable, // handled above
+        .serve => |opts| {
             const address = std.net.Address.parseIp4(opts.host, opts.port) catch |err| {
                 log.err("address (host:port) {any}\n", .{err});
-                return printUsageExit(opts.execname, 1);
+                return args.printUsageAndExit(false);
             };
 
             var loop = try jsruntime.Loop.init(alloc);
@@ -238,7 +79,6 @@ pub fn main() !void {
                 return err;
             };
         },
-
         .fetch => |opts| {
             log.debug("Fetch mode: url {s}, dump {any}", .{ opts.url, opts.dump });
 
@@ -264,11 +104,11 @@ pub fn main() !void {
             _ = page.navigate(opts.url, null) catch |err| switch (err) {
                 error.UnsupportedUriScheme, error.UriMissingHost => {
                     log.err("'{s}' is not a valid URL ({any})\n", .{ opts.url, err });
-                    return printUsageExit(opts.execname, 1);
+                    return args.printUsageAndExit(false);
                 },
                 else => {
-                    log.err("'{s}' fetching error ({any})s\n", .{ opts.url, err });
-                    return printUsageExit(opts.execname, 1);
+                    log.err("'{s}' fetching error ({any})\n", .{ opts.url, err });
+                    return err;
                 },
             };
 
@@ -280,6 +120,183 @@ pub fn main() !void {
             }
         },
     }
+}
+
+const Command = struct {
+    mode: Mode,
+    exec_name: []const u8,
+
+    const Mode = union(enum) {
+        usage: bool, // false when being printed because of an error
+        fetch: Fetch,
+        serve: Serve,
+    };
+
+    const Serve = struct {
+        host: []const u8,
+        port: u16,
+        timeout: u8,
+    };
+
+    const Fetch = struct {
+        url: []const u8,
+        dump: bool = false,
+    };
+
+    fn printUsageAndExit(self: *const Command, success: bool) void {
+        const usage =
+            \\usage: {s} command [options] [URL]
+            \\
+            \\Command can be either 'fetch', 'serve' or 'help'
+            \\
+            \\fetch command
+            \\Fetches the specified URL
+            \\Example: {s} fetch --dump https://lightpanda.io/
+            \\
+            \\Options:
+            \\--dump          Dumps document to stdout.
+            \\                Defaults to false.
+            \\
+            \\serve command
+            \\Starts a websocket CDP server
+            \\Example: {s} server --host 127.0.0.1 --port 9222
+            \\
+            \\Options:
+            \\--host          Host of the CDP server
+            \\
+            \\                Defaults to "127.0.0.1"
+            \\--port          Port of the CDP server
+            \\
+            \\                Defaults to 9222
+            \\--timeout       Inactivity timeout in seconds before disconnecting clients
+            \\                Defaults to 3 (seconds)
+            \\
+            \\help command
+            \\Displays this message
+        ;
+        std.debug.print(usage, .{ self.exec_name, self.exec_name, self.exec_name });
+        if (success) {
+            return std.process.cleanExit();
+        }
+        std.process.exit(1);
+    }
+};
+
+fn parseArgs(allocator: Allocator) !Command {
+    var args = try std.process.argsWithAllocator(allocator);
+
+    const exec_name = std.fs.path.basename(args.next().?);
+    var cmd = Command{
+        .mode = .{ .usage = false },
+        .exec_name = try allocator.dupe(u8, exec_name),
+    };
+
+    const command = args.next() orelse "";
+    if (std.mem.eql(u8, command, "serve")) {
+        cmd.mode = .{ .serve = parseServeArgs(allocator, &args) catch return cmd };
+        return cmd;
+    }
+
+    if (std.mem.eql(u8, command, "fetch")) {
+        cmd.mode = .{ .fetch = parseFetchArgs(allocator, &args) catch return cmd };
+        return cmd;
+    }
+
+    if (std.mem.eql(u8, command, "help")) {
+        cmd.mode = .{ .usage = true };
+        return cmd;
+    }
+
+    log.err("first argument should be one of: fetch, serve or help", .{});
+    return cmd;
+}
+
+fn parseServeArgs(
+    allocator: Allocator,
+    args: *std.process.ArgIterator,
+) !Command.Serve {
+    var host: []const u8 = "127.0.0.1";
+    var port: u16 = 9222;
+    var timeout: u8 = 3;
+
+    while (args.next()) |opt| {
+        if (std.mem.eql(u8, "--host", opt)) {
+            const str = args.next() orelse {
+                log.err("--host argument requires an value", .{});
+                return error.InvalidMissingHost;
+            };
+            host = try allocator.dupe(u8, str);
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--port", opt)) {
+            const str = args.next() orelse {
+                log.err("--port argument requires an value", .{});
+                return error.InvalidMissingPort;
+            };
+
+            port = std.fmt.parseInt(u16, str, 10) catch |err| {
+                log.err("--port value is invalid: {}", .{err});
+                return error.InvalidPort;
+            };
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--timeout", opt)) {
+            const str = args.next() orelse {
+                log.err("--timeout argument requires an value", .{});
+                return error.MissingTimeout;
+            };
+
+            timeout = std.fmt.parseInt(u8, str, 10) catch |err| {
+                log.err("--timeout value is invalid: {}", .{err});
+                return error.InvalidTimeout;
+            };
+            continue;
+        }
+
+        log.err("Unknown option to serve command: '{s}'", .{opt});
+        return error.UnkownOption;
+    }
+
+    return .{
+        .host = host,
+        .port = port,
+        .timeout = timeout,
+    };
+}
+
+fn parseFetchArgs(
+    allocator: Allocator,
+    args: *std.process.ArgIterator,
+) !Command.Fetch {
+    var dump: bool = false;
+    var url: ?[]const u8 = null;
+
+    while (args.next()) |opt| {
+        if (std.mem.eql(u8, "--dump", opt)) {
+            dump = true;
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, opt, "--")) {
+            log.err("Unknown option to serve command: '{s}'", .{opt});
+            return error.UnkownOption;
+        }
+
+        if (url != null) {
+            log.err("Can only fetch 1 URL", .{});
+            return error.TooManyURLs;
+        }
+        url = try allocator.dupe(u8, opt);
+    }
+
+    if (url == null) {
+        log.err("A URL must be provided to the fetch command", .{});
+        return error.MissingURL;
+    }
+
+    return .{ .url = url.?, .dump = dump };
 }
 
 var verbose: bool = builtin.mode == .Debug; // In debug mode, force verbose.

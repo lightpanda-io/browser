@@ -61,7 +61,7 @@ chmod a+x ./lightpanda
 ### Dump an URL
 
 ```console
-./lightpanda --dump https://lightpanda.io
+./lightpanda fetch --dump https://lightpanda.io
 ```
 ```console
 info(browser): GET https://lightpanda.io/ http.Status.ok
@@ -73,7 +73,7 @@ info(browser): eval remote https://api.website.lightpanda.io/js/script.js: TypeE
 ### Start a CDP server
 
 ```console
-./lightpanda --host 127.0.0.1 --port 9222
+./lightpanda serve --host 127.0.0.1 --port 9222
 ```
 ```console
 info(websocket): starting blocking worker to listen on 127.0.0.1:9222
