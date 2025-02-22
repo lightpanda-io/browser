@@ -43,15 +43,6 @@ pub const std_options = .{
 };
 
 pub fn main() !void {
-    var mem: [4096]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&mem);
-    const args = try parseArgs(fba.allocator());
-
-    if (args.mode == .help) {
-        // don't need to create a gpa in this case
-        return args.printUsageAndExit(args.mode.help);
-    }
-
     // allocator
     // - in Debug mode we use the General Purpose Allocator to detect memory leaks
     // - in Release mode we use the c allocator
@@ -62,8 +53,12 @@ pub fn main() !void {
         _ = gpa.detectLeaks();
     };
 
+    var args_arena = std.heap.ArenaAllocator.init(alloc);
+    defer args_arena.deinit();
+    const args = try parseArgs(args_arena.allocator());
+
     switch (args.mode) {
-        .help => unreachable, // handled above
+        .help => args.printUsageAndExit(args.mode.help),
         .serve => |opts| {
             const address = std.net.Address.parseIp4(opts.host, opts.port) catch |err| {
                 log.err("address (host:port) {any}\n", .{err});
