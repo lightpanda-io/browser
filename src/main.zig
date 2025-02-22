@@ -47,9 +47,9 @@ pub fn main() !void {
     var fba = std.heap.FixedBufferAllocator.init(&mem);
     const args = try parseArgs(fba.allocator());
 
-    if (args.mode == .usage) {
+    if (args.mode == .help) {
         // don't need to create a gpa in this case
-        return args.printUsageAndExit(args.mode.usage);
+        return args.printUsageAndExit(args.mode.help);
     }
 
     // allocator
@@ -63,7 +63,7 @@ pub fn main() !void {
     };
 
     switch (args.mode) {
-        .usage => unreachable, // handled above
+        .help => unreachable, // handled above
         .serve => |opts| {
             const address = std.net.Address.parseIp4(opts.host, opts.port) catch |err| {
                 log.err("address (host:port) {any}\n", .{err});
@@ -126,8 +126,14 @@ const Command = struct {
     mode: Mode,
     exec_name: []const u8,
 
-    const Mode = union(enum) {
-        usage: bool, // false when being printed because of an error
+    const ModeType = enum {
+        help,
+        fetch,
+        serve,
+    };
+
+    const Mode = union(ModeType) {
+        help: bool, // false when being printed because of an error
         fetch: Fetch,
         serve: Serve,
     };
@@ -159,15 +165,15 @@ const Command = struct {
             \\
             \\serve command
             \\Starts a websocket CDP server
-            \\Example: {s} server --host 127.0.0.1 --port 9222
+            \\Example: {s} serve --host 127.0.0.1 --port 9222
             \\
             \\Options:
             \\--host          Host of the CDP server
-            \\
             \\                Defaults to "127.0.0.1"
-            \\--port          Port of the CDP server
             \\
+            \\--port          Port of the CDP server
             \\                Defaults to 9222
+            \\
             \\--timeout       Inactivity timeout in seconds before disconnecting clients
             \\                Defaults to 3 (seconds)
             \\
@@ -184,31 +190,62 @@ const Command = struct {
 
 fn parseArgs(allocator: Allocator) !Command {
     var args = try std.process.argsWithAllocator(allocator);
+    defer args.deinit();
 
     const exec_name = std.fs.path.basename(args.next().?);
+
     var cmd = Command{
-        .mode = .{ .usage = false },
+        .mode = .{ .help = false },
         .exec_name = try allocator.dupe(u8, exec_name),
     };
 
-    const command = args.next() orelse "";
-    if (std.mem.eql(u8, command, "serve")) {
-        cmd.mode = .{ .serve = parseServeArgs(allocator, &args) catch return cmd };
-        return cmd;
-    }
+    const mode_string = args.next() orelse "";
+    const mode = std.meta.stringToEnum(Command.ModeType, mode_string) orelse blk: {
+        const inferred_mode = inferMode(mode_string) orelse return cmd;
+        // "command" wasn't a command but an option. We can't reset args, but
+        // we can create a new one. Not great, but this fallback is temporary
+        // as we transition to this command mode approach.
+        args.deinit();
 
-    if (std.mem.eql(u8, command, "fetch")) {
-        cmd.mode = .{ .fetch = parseFetchArgs(allocator, &args) catch return cmd };
-        return cmd;
-    }
+        args = try std.process.argsWithAllocator(allocator);
+        // skip the exec_name
+        _ = args.skip();
 
-    if (std.mem.eql(u8, command, "help")) {
-        cmd.mode = .{ .usage = true };
-        return cmd;
-    }
+        break :blk inferred_mode;
+    };
 
-    log.err("first argument should be one of: fetch, serve or help", .{});
+    cmd.mode = switch (mode) {
+        .help => Command.Mode{ .help = true },
+        .serve => Command.Mode{ .serve = parseServeArgs(allocator, &args) catch return cmd },
+        .fetch => Command.Mode{ .fetch = parseFetchArgs(allocator, &args) catch return cmd },
+    };
     return cmd;
+}
+
+fn inferMode(opt: []const u8) ?Command.ModeType {
+    if (opt.len == 0) {
+        return .serve;
+    }
+
+    if (std.mem.eql(u8, opt, "--dump")) {
+        return .fetch;
+    }
+    if (std.mem.startsWith(u8, opt, "--") == false) {
+        return .fetch;
+    }
+
+    if (std.mem.eql(u8, opt, "--host")) {
+        return .serve;
+    }
+
+    if (std.mem.eql(u8, opt, "--port")) {
+        return .serve;
+    }
+
+    if (std.mem.eql(u8, opt, "--timeout")) {
+        return .serve;
+    }
+    return null;
 }
 
 fn parseServeArgs(
