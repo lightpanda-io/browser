@@ -381,4 +381,5 @@ test {
     std.testing.refAllDecls(@import("iterator/iterator.zig"));
     std.testing.refAllDecls(@import("server.zig"));
     std.testing.refAllDecls(@import("cdp/cdp.zig"));
+    std.testing.refAllDecls(@import("log.zig"));
 }
