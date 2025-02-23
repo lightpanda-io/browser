@@ -499,6 +499,16 @@ fn ClientT(comptime S: type, comptime C: type) type {
                 return self.send(self.server.json_version_response);
             }
 
+            const json_list_response =
+                "HTTP/1.1 200 OK\r\n" ++
+                "Content-Length: 47\r\n" ++
+                "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
+                "[{\"id\":\"1\",\"type\":\"page\",\"url\":\"abount:blank\"}]";
+
+            if (std.mem.eql(u8, url, "/json/list")) {
+                return self.send(json_list_response, false);
+            }
+
             return error.NotFound;
         }
 
@@ -1082,12 +1092,12 @@ pub fn run(
 
 // Utils
 // --------
-
+//
 fn buildJSONVersionResponse(
     allocator: Allocator,
     address: net.Address,
 ) ![]const u8 {
-    const body_format = "{{\"webSocketDebuggerUrl\": \"ws://{}/\"}}";
+    const body_format = "{{\"Browser\": \"Chrome/132.0.6834.110\", \"WebKit-Version\": \"537.36 (@df453a35f099772fdb954e33551388add2ca3cde)\", \"webSocketDebuggerUrl\": \"ws://{}/\"}}";
     const body_len = std.fmt.count(body_format, .{address});
 
     const response_format =
