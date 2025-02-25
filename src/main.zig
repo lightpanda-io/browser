@@ -31,6 +31,7 @@ const apiweb = @import("apiweb.zig");
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 pub const UserContext = apiweb.UserContext;
 pub const IO = @import("asyncio").Wrapper(jsruntime.Loop);
+const version = @import("build_info").git_commit;
 
 const log = std.log.scoped(.cli);
 
@@ -53,6 +54,9 @@ pub fn main() !void {
         _ = gpa.detectLeaks();
     };
 
+    var app = try @import("app.zig").App.init(alloc);
+    defer app.deinit();
+
     var args_arena = std.heap.ArenaAllocator.init(alloc);
     defer args_arena.deinit();
     const args = try parseArgs(args_arena.allocator());
@@ -60,10 +64,11 @@ pub fn main() !void {
     switch (args.mode) {
         .help => args.printUsageAndExit(args.mode.help),
         .version => {
-            std.debug.print("{s}\n", .{@import("build_info").git_commit});
+            std.debug.print("{s}\n", .{version});
             return std.process.cleanExit();
         },
         .serve => |opts| {
+            app.telemetry.record(.{ .run = .{ .mode = .serve, .version = version } });
             const address = std.net.Address.parseIp4(opts.host, opts.port) catch |err| {
                 log.err("address (host:port) {any}\n", .{err});
                 return args.printUsageAndExit(false);
@@ -79,6 +84,7 @@ pub fn main() !void {
             };
         },
         .fetch => |opts| {
+            app.telemetry.record(.{ .run = .{ .mode = .fetch, .version = version } });
             log.debug("Fetch mode: url {s}, dump {any}", .{ opts.url, opts.dump });
 
             // vm
