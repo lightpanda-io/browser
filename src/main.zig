@@ -210,6 +210,9 @@ pub fn main() !void {
         _ = gpa.detectLeaks();
     };
 
+    var app = try @import("app.zig").App.init(alloc);
+    defer app.deinit();
+
     // args
     var args: std.process.ArgIterator = undefined;
     const cli_mode = CliMode.init(alloc, &args) catch |err| {
@@ -224,6 +227,8 @@ pub fn main() !void {
 
     switch (cli_mode) {
         .server => |opts| {
+            app.telemetry.record(.{ .run = .{ .mode = .serve, .version = "DEV" } });
+
             const address = std.net.Address.parseIp4(opts.host, opts.port) catch |err| {
                 log.err("address (host:port) {any}\n", .{err});
                 return printUsageExit(opts.execname, 1);
@@ -240,6 +245,7 @@ pub fn main() !void {
         },
 
         .fetch => |opts| {
+            app.telemetry.record(.{ .run = .{ .mode = .fetch, .version = "DEV" } });
             log.debug("Fetch mode: url {s}, dump {any}", .{ opts.url, opts.dump });
 
             // vm
