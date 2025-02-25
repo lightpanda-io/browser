@@ -28,7 +28,7 @@ jobs:
       - uses: ./.github/actions/install
 
       - name: zig build
-        run: zig build --release=safe -Doptimize=ReleaseSafe -Dengine=v8 -Dcpu=x86_64
+        run: zig build --release=safe -Doptimize=ReleaseSafe -Dengine=v8 -Dcpu=x86_64 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
 
       - name: Rename binary
         run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
@@ -60,7 +60,7 @@ jobs:
           arch: ${{env.ARCH}}
 
       - name: zig build
-        run: zig build --release=safe -Doptimize=ReleaseSafe -Dengine=v8
+        run: zig build --release=safe -Doptimize=ReleaseSafe -Dengine=v8 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
 
       - name: Rename binary
         run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}

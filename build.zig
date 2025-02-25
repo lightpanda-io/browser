@@ -58,6 +58,15 @@ pub fn build(b: *std.Build) !void {
         .optimize = mode,
     });
     try common(b, exe, options);
+    {
+        var opt = b.addOptions();
+        opt.addOption(
+            []const u8,
+            "git_commit",
+            b.option([]const u8, "git_commit", "Current git commit") orelse "dev",
+        );
+        exe.root_module.addImport("build_info", opt.createModule());
+    }
     b.installArtifact(exe);
 
     // run
