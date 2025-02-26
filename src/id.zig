@@ -9,7 +9,7 @@ const std = @import("std");
 //   - while incrementor is valid
 //   - until the next call to next()
 // On the positive, it's zero allocation
-fn Incrementing(comptime T: type, comptime prefix: []const u8) type {
+pub fn Incrementing(comptime T: type, comptime prefix: []const u8) type {
     // +1 for the '-' separator
     const NUMERIC_START = prefix.len + 1;
     const MAX_BYTES = NUMERIC_START + switch (T) {
@@ -35,15 +35,15 @@ fn Incrementing(comptime T: type, comptime prefix: []const u8) type {
     const PREFIX_INT_CODE: PrefixIntType = @bitCast(buffer[0..NUMERIC_START].*);
 
     return struct {
-        current: T = 0,
+        counter: T = 0,
         buffer: [MAX_BYTES]u8 = buffer,
 
         const Self = @This();
 
         pub fn next(self: *Self) []const u8 {
-            const current = self.current;
-            const n = current +% 1;
-            defer self.current = n;
+            const counter = self.counter;
+            const n = counter +% 1;
+            defer self.counter = n;
 
             const size = std.fmt.formatIntBuf(self.buffer[NUMERIC_START..], n, 10, .lower, .{});
             return self.buffer[0 .. NUMERIC_START + size];
@@ -106,7 +106,7 @@ test "id: Incrementing.next" {
     try testing.expectEqualStrings("IDX-3", id.next());
 
     // force a wrap
-    id.current = 65533;
+    id.counter = 65533;
     try testing.expectEqualStrings("IDX-65534", id.next());
     try testing.expectEqualStrings("IDX-65535", id.next());
     try testing.expectEqualStrings("IDX-0", id.next());
