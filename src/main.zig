@@ -59,6 +59,10 @@ pub fn main() !void {
 
     switch (args.mode) {
         .help => args.printUsageAndExit(args.mode.help),
+        .version => {
+            std.debug.print("{s}\n", .{@import("build_info").git_commit});
+            return std.process.cleanExit();
+        },
         .serve => |opts| {
             const address = std.net.Address.parseIp4(opts.host, opts.port) catch |err| {
                 log.err("address (host:port) {any}\n", .{err});
@@ -125,12 +129,14 @@ const Command = struct {
         help,
         fetch,
         serve,
+        version,
     };
 
     const Mode = union(ModeType) {
         help: bool, // false when being printed because of an error
         fetch: Fetch,
         serve: Serve,
+        version: void,
     };
 
     const Serve = struct {
@@ -172,10 +178,13 @@ const Command = struct {
             \\--timeout       Inactivity timeout in seconds before disconnecting clients
             \\                Defaults to 3 (seconds)
             \\
+            \\version command
+            \\Displays the version of {s}
+            \\
             \\help command
             \\Displays this message
         ;
-        std.debug.print(usage, .{ self.exec_name, self.exec_name, self.exec_name });
+        std.debug.print(usage, .{ self.exec_name, self.exec_name, self.exec_name, self.exec_name });
         if (success) {
             return std.process.cleanExit();
         }
@@ -210,9 +219,10 @@ fn parseArgs(allocator: Allocator) !Command {
     };
 
     cmd.mode = switch (mode) {
-        .help => Command.Mode{ .help = true },
-        .serve => Command.Mode{ .serve = parseServeArgs(allocator, &args) catch return cmd },
-        .fetch => Command.Mode{ .fetch = parseFetchArgs(allocator, &args) catch return cmd },
+        .help => .{ .help = true },
+        .serve => .{ .serve = parseServeArgs(allocator, &args) catch return cmd },
+        .fetch => .{ .fetch = parseFetchArgs(allocator, &args) catch return cmd },
+        .version => .{ .version = {} },
     };
     return cmd;
 }
