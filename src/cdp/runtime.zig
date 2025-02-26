@@ -27,7 +27,7 @@ pub fn processMessage(cmd: anytype) !void {
         addBinding,
         callFunctionOn,
         releaseObject,
-    }, cmd.action) orelse return error.UnknownMethod;
+    }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
         .runIfWaitingForDebugger => return cmd.sendResult(null, .{}),
@@ -41,26 +41,24 @@ fn sendInspector(cmd: anytype, action: anytype) !void {
         try logInspector(cmd, action);
     }
 
-    if (cmd.session_id) |s| {
-        cmd.cdp.session_id = try cdp.SessionID.parse(s);
-    }
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     // remove awaitPromise true params
     // TODO: delete when Promise are correctly handled by zig-js-runtime
     if (action == .callFunctionOn or action == .evaluate) {
-        const json = cmd.json;
+        const json = cmd.input.json;
         if (std.mem.indexOf(u8, json, "\"awaitPromise\":true")) |_| {
             // +1 because we'll be turning a true -> false
             const buf = try cmd.arena.alloc(u8, json.len + 1);
             _ = std.mem.replace(u8, json, "\"awaitPromise\":true", "\"awaitPromise\":false", buf);
-            cmd.session.callInspector(buf);
+            bc.session.callInspector(buf);
             return;
         }
     }
 
-    cmd.session.callInspector(cmd.json);
+    bc.session.callInspector(cmd.input.json);
 
-    if (cmd.id != null) {
+    if (cmd.input.id != null) {
         return cmd.sendResult(null, .{});
     }
 }
@@ -110,7 +108,7 @@ fn logInspector(cmd: anytype, action: anytype) !void {
         },
         else => return,
     };
-    const id = cmd.id orelse return error.RequiredId;
+    const id = cmd.input.id orelse return error.RequiredId;
     const name = try std.fmt.allocPrint(cmd.arena, "id_{d}.js", .{id});
 
     var dir = try std.fs.cwd().makeOpenPath("zig-cache/tmp", .{});

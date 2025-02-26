@@ -98,12 +98,6 @@ pub const Browser = struct {
             self.session = null;
         }
     }
-
-    pub fn currentPage(self: *Browser) ?*Page {
-        if (self.session.page == null) return null;
-
-        return &self.session.page.?;
-    }
 };
 
 // Session is like a browser's tab.
