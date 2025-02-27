@@ -5,6 +5,67 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 
 const DateTime = @import("../datetime.zig").DateTime;
 
+pub const Jar = struct {
+    allocator: Allocator,
+    cookies: std.ArrayListUnmanaged(u8),
+
+    pub fn init(allocator: Allocator) Jar {
+        return .{
+            .cookies = .{},
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *Jar) void {
+        for (self.cookies.items) |c| {
+            c.deinit();
+        }
+        self.cookies.deinit(self.allocator);
+    }
+
+    pub fn forRequest(
+        self: *const Jar,
+        allocator: Allocator,
+        request_start: i64,
+        origin_uri: ?Uri,
+        target_uri: Uri,
+        navitation: bool,
+    ) !CookieList {
+        const is_secure = std.mem.eql(u8, target_uri.scheme, "https");
+        const target_host = (target_uri.host orelse return error.InvalidURI).percent_encoded;
+        const same_site = try areSameSite(origin_uri, target_host);
+
+        var i: usize = 0;
+        var cookies = self.cookies.items;
+        while (i < cookies.len) {
+            const cookie = &cookies[i];
+            if (cookie.isExpired(request_start)) {
+                self.swapRemove(i);
+                // don't increment i !
+                continue;
+            }
+            i += 1;
+
+            if (is_secure == false and cookie.secure) {
+                continue;
+            }
+
+            // www.google.com
+
+            if (navitation == false and cookie.same_site != .strict) {
+                continue;
+            }
+        }
+    }
+};
+
+// abc.lightpanda.io is the same site as lightpanda.io or 123.lightpanda.io
+// or spice.123.lightpanda.io
+fn areSameSite(origin_uri_: ?std.Uri, target_host: []const u8) !bool {
+    const origin_uri = origin_uri_ orelse return true;
+    const origin_host = (origin_uri.host orelse return error.InvalidURI).percent_encoded;
+}
+
 pub const Cookie = struct {
     arena: ArenaAllocator,
     name: []const u8,
