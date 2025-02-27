@@ -142,7 +142,7 @@ const Command = struct {
     const Serve = struct {
         host: []const u8,
         port: u16,
-        timeout: u8,
+        timeout: u16,
     };
 
     const Fetch = struct {
@@ -259,7 +259,7 @@ fn parseServeArgs(
 ) !Command.Serve {
     var host: []const u8 = "127.0.0.1";
     var port: u16 = 9222;
-    var timeout: u8 = 3;
+    var timeout: u16 = 3;
 
     while (args.next()) |opt| {
         if (std.mem.eql(u8, "--host", opt)) {
@@ -290,7 +290,7 @@ fn parseServeArgs(
                 return error.MissingTimeout;
             };
 
-            timeout = std.fmt.parseInt(u8, str, 10) catch |err| {
+            timeout = std.fmt.parseInt(u16, str, 10) catch |err| {
                 log.err("--timeout value is invalid: {}", .{err});
                 return error.InvalidTimeout;
             };
