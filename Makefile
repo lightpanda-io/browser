@@ -44,7 +44,7 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-dev run run-release shell test bench download-zig wpt unittest
+.PHONY: build build-dev run run-release shell test bench download-zig wpt unittest data
 
 zig_version = $(shell grep 'recommended_zig_version = "' "vendor/zig-js-runtime/build.zig" | cut -d'"' -f2)
 
@@ -198,6 +198,9 @@ install-zig-js-runtime-dev:
 install-zig-js-runtime:
 	@cd vendor/zig-js-runtime && \
 	make install
+
+data:
+	cd src/data && go run public_suffix_list_gen.go > public_suffix_list.zig
 
 .PHONY: _build_mimalloc
 
