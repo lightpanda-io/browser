@@ -244,9 +244,6 @@ pub const Cookie = struct {
             }
         }
 
-        var arena = ArenaAllocator.init(allocator);
-        errdefer arena.deinit();
-
         const cookie_name, const cookie_value, const rest = parseNameValue(str) catch {
             return error.InvalidNameValue;
         };
@@ -322,6 +319,12 @@ pub const Cookie = struct {
             }
         }
 
+        if (same_site == .none and secure == null) {
+            return error.InsecureSameSite;
+        }
+
+        var arena = ArenaAllocator.init(allocator);
+        errdefer arena.deinit();
         const aa = arena.allocator();
         const owned_name = try aa.dupe(u8, cookie_name);
         const owned_value = try aa.dupe(u8, cookie_value);
@@ -505,7 +508,7 @@ test "Jar: forRequest" {
     try jar.add(try Cookie.parse(testing.allocator, test_uri, "path1=3;Path=/about"), now);
     try jar.add(try Cookie.parse(testing.allocator, test_uri, "path2=4;Path=/docs/"), now);
     try jar.add(try Cookie.parse(testing.allocator, test_uri, "secure=5;Secure"), now);
-    try jar.add(try Cookie.parse(testing.allocator, test_uri, "sitenone=6;SameSite=None;Path=/x/"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_uri, "sitenone=6;SameSite=None;Path=/x/;Secure"), now);
     try jar.add(try Cookie.parse(testing.allocator, test_uri, "sitelax=7;SameSite=Lax;Path=/x/"), now);
     try jar.add(try Cookie.parse(testing.allocator, test_uri, "sitestrict=8;SameSite=Strict;Path=/x/"), now);
     try jar.add(try Cookie.parse(testing.allocator, test_uri_2, "domain1=9;domain=test.lightpanda.io"), now);
@@ -518,55 +521,133 @@ test "Jar: forRequest" {
 
     {
         // matching path without trailing /
-        var matches = try jar.forRequest(testing.allocator, now, test_uri, try std.Uri.parse("http://lightpanda.io/about"), true);
+        var matches = try jar.forRequest(
+            testing.allocator,
+            now,
+            test_uri,
+            try std.Uri.parse("http://lightpanda.io/about"),
+            true,
+        );
         try expectCookies(&.{ "global1", "global2", "path1" }, &matches);
     }
 
     {
         // incomplete prefix path
-        var matches = try jar.forRequest(testing.allocator, now, test_uri, try std.Uri.parse("http://lightpanda.io/abou"), true);
+        var matches = try jar.forRequest(
+            testing.allocator,
+            now,
+            test_uri,
+            try std.Uri.parse("http://lightpanda.io/abou"),
+            true,
+        );
         try expectCookies(&.{ "global1", "global2" }, &matches);
     }
 
     {
         // path doesn't match
-        var matches = try jar.forRequest(testing.allocator, now, test_uri, try std.Uri.parse("http://lightpanda.io/aboutus"), true);
+        var matches = try jar.forRequest(
+            testing.allocator,
+            now,
+            test_uri,
+            try std.Uri.parse("http://lightpanda.io/aboutus"),
+            true,
+        );
         try expectCookies(&.{ "global1", "global2" }, &matches);
     }
 
     {
         // path doesn't match cookie directory
-        var matches = try jar.forRequest(testing.allocator, now, test_uri, try std.Uri.parse("http://lightpanda.io/docs"), true);
+        var matches = try jar.forRequest(
+            testing.allocator,
+            now,
+            test_uri,
+            try std.Uri.parse("http://lightpanda.io/docs"),
+            true,
+        );
         try expectCookies(&.{ "global1", "global2" }, &matches);
     }
 
     {
         // exact directory match
-        var matches = try jar.forRequest(testing.allocator, now, test_uri, try std.Uri.parse("http://lightpanda.io/docs/"), true);
+        var matches = try jar.forRequest(
+            testing.allocator,
+            now,
+            test_uri,
+            try std.Uri.parse("http://lightpanda.io/docs/"),
+            true,
+        );
         try expectCookies(&.{ "global1", "global2", "path2" }, &matches);
     }
 
     {
         // sub directory match
-        var matches = try jar.forRequest(testing.allocator, now, test_uri, try std.Uri.parse("http://lightpanda.io/docs/more"), true);
+        var matches = try jar.forRequest(
+            testing.allocator,
+            now,
+            test_uri,
+            try std.Uri.parse("http://lightpanda.io/docs/more"),
+            true,
+        );
         try expectCookies(&.{ "global1", "global2", "path2" }, &matches);
     }
 
     {
         // secure
-        var matches = try jar.forRequest(testing.allocator, now, test_uri, try std.Uri.parse("https://lightpanda.io/"), true);
+        var matches = try jar.forRequest(
+            testing.allocator,
+            now,
+            test_uri,
+            try std.Uri.parse("https://lightpanda.io/"),
+            true,
+        );
         try expectCookies(&.{ "global1", "global2", "secure" }, &matches);
     }
 
     {
-        // navigational cross domain
-        var matches = try jar.forRequest(testing.allocator, now, try std.Uri.parse("http://example.com/"), try std.Uri.parse("http://lightpanda.io/x/"), true);
-        try expectCookies(&.{ "global1", "global2", "sitenone", "sitelax" }, &matches);
+        // navigational cross domain, secure
+        var matches = try jar.forRequest(
+            testing.allocator,
+            now,
+            try std.Uri.parse("https://example.com/"),
+            try std.Uri.parse("https://lightpanda.io/x/"),
+            true,
+        );
+        try expectCookies(&.{ "global1", "global2", "sitenone", "sitelax", "secure" }, &matches);
     }
 
     {
-        // non-navigational cross domain
-        var matches = try jar.forRequest(testing.allocator, now, try std.Uri.parse("http://example.com/"), try std.Uri.parse("http://lightpanda.io/x/"), false);
+        // navigational cross domain, insecure
+        var matches = try jar.forRequest(
+            testing.allocator,
+            now,
+            try std.Uri.parse("http://example.com/"),
+            try std.Uri.parse("http://lightpanda.io/x/"),
+            true,
+        );
+        try expectCookies(&.{ "global1", "global2", "sitelax" }, &matches);
+    }
+
+    {
+        // non-navigational cross domain, insecure
+        var matches = try jar.forRequest(
+            testing.allocator,
+            now,
+            try std.Uri.parse("http://example.com/"),
+            try std.Uri.parse("http://lightpanda.io/x/"),
+            false,
+        );
+        try expectCookies(&.{}, &matches);
+    }
+
+    {
+        // non-navigational cross domain, secure
+        var matches = try jar.forRequest(
+            testing.allocator,
+            now,
+            try std.Uri.parse("https://example.com/"),
+            try std.Uri.parse("https://lightpanda.io/x/"),
+            false,
+        );
         try expectCookies(&.{"sitenone"}, &matches);
     }
 
@@ -579,24 +660,42 @@ test "Jar: forRequest" {
             try std.Uri.parse("http://lightpanda.io/x/"),
             false,
         );
-        try expectCookies(&.{ "global1", "global2", "sitenone", "sitelax", "sitestrict" }, &matches);
+        try expectCookies(&.{ "global1", "global2", "sitelax", "sitestrict" }, &matches);
     }
 
     {
         // exact domain match
-        var matches = try jar.forRequest(testing.allocator, now, test_uri, try std.Uri.parse("http://test.lightpanda.io/"), true);
+        var matches = try jar.forRequest(
+            testing.allocator,
+            now,
+            test_uri,
+            try std.Uri.parse("http://test.lightpanda.io/"),
+            true,
+        );
         try expectCookies(&.{"domain1"}, &matches);
     }
 
     {
         // domain suffix match
-        var matches = try jar.forRequest(testing.allocator, now, test_uri, try std.Uri.parse("http://1.test.lightpanda.io/"), true);
+        var matches = try jar.forRequest(
+            testing.allocator,
+            now,
+            test_uri,
+            try std.Uri.parse("http://1.test.lightpanda.io/"),
+            true,
+        );
         try expectCookies(&.{"domain1"}, &matches);
     }
 
     {
         // non-matching domain
-        var matches = try jar.forRequest(testing.allocator, now, test_uri, try std.Uri.parse("http://other.lightpanda.io/"), true);
+        var matches = try jar.forRequest(
+            testing.allocator,
+            now,
+            test_uri,
+            try std.Uri.parse("http://other.lightpanda.io/"),
+            true,
+        );
         try expectCookies(&.{}, &matches);
     }
 
@@ -677,7 +776,7 @@ test "Cookie: parse secure" {
     try expectAttribute(.{ .secure = true }, null, "b; seCUre=Off  ");
 }
 
-test "Cookie: parse httponly" {
+test "Cookie: parse HttpOnly" {
     try expectAttribute(.{ .http_only = false }, null, "b");
     try expectAttribute(.{ .http_only = false }, null, "b;HttpOnly0");
     try expectAttribute(.{ .http_only = false }, null, "b;H ttpOnly");
@@ -689,24 +788,28 @@ test "Cookie: parse httponly" {
     try expectAttribute(.{ .http_only = true }, null, "b;    HttpOnly=Off  ");
 }
 
-test "Cookie: parse strict" {
+test "Cookie: parse SameSite" {
     try expectAttribute(.{ .same_site = .lax }, null, "b;samesite");
     try expectAttribute(.{ .same_site = .lax }, null, "b;samesite=lax");
     try expectAttribute(.{ .same_site = .lax }, null, "b;  SameSite=Lax  ");
     try expectAttribute(.{ .same_site = .lax }, null, "b;  SameSite=Other  ");
     try expectAttribute(.{ .same_site = .lax }, null, "b;  SameSite=Nope  ");
 
-    try expectAttribute(.{ .same_site = .none }, null, "b;  samesite=none  ");
-    try expectAttribute(.{ .same_site = .none }, null, "b;  SameSite=None  ");
-    try expectAttribute(.{ .same_site = .none }, null, "b;  SameSite=None;");
-    try expectAttribute(.{ .same_site = .none }, null, "b; SameSite=None");
+    // SameSite=none is only valid when Secure is set. The whole cookie is
+    // rejected otherwise
+    try expectError(error.InsecureSameSite, null, "b;samesite=none");
+    try expectError(error.InsecureSameSite, null, "b;SameSite=None");
+    try expectAttribute(.{ .same_site = .none }, null, "b;  samesite=none; secure  ");
+    try expectAttribute(.{ .same_site = .none }, null, "b;  SameSite=None  ; SECURE");
+    try expectAttribute(.{ .same_site = .none }, null, "b;Secure;  SameSite=None");
+    try expectAttribute(.{ .same_site = .none }, null, "b; SameSite=None; Secure");
 
     try expectAttribute(.{ .same_site = .strict }, null, "b;  samesite=Strict  ");
     try expectAttribute(.{ .same_site = .strict }, null, "b;  SameSite=  STRICT  ");
     try expectAttribute(.{ .same_site = .strict }, null, "b;  SameSITE=strict;");
     try expectAttribute(.{ .same_site = .strict }, null, "b; SameSite=Strict");
 
-    try expectAttribute(.{ .same_site = .none }, null, "b; SameSite=Strict; SameSite=lax; SameSite=NONE");
+    try expectAttribute(.{ .same_site = .strict }, null, "b; SameSite=None; SameSite=lax; SameSite=Strict");
 }
 
 test "Cookie: parse max-age" {
