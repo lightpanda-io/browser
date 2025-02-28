@@ -316,3 +316,42 @@ fn navigate(cmd: anytype) !void {
         .frameId = state.frame_id,
     }, .{ .session_id = session_id });
 }
+
+const testing = @import("testing.zig");
+test "cdp.page: getFrameTree" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    const state = ctx.cdp();
+    state.frame_id = "frame-id";
+    state.loader_id = "loader-id";
+    state.url = "chrome://newtab/";
+    state.secure_context_type = "Secure";
+    state.security_origin = "origin";
+
+    try ctx.processMessage(.{
+        .id = 32,
+        .sessionID = "leto",
+        .method = "Page.getFrameTree",
+    });
+
+    try ctx.expectSentCount(1);
+    try ctx.expectSentResult(.{
+        .frameTree = .{
+            .frame = .{
+                .id = state.frame_id,
+                .loaderId = state.loader_id,
+                .url = state.url,
+                .domainAndRegistry = "",
+                .securityOrigin = state.security_origin,
+                .mimeType = "text/html",
+                .adFrameStatus = .{
+                    .adFrameType = "none",
+                },
+                .secureContextType = state.secure_context_type,
+                .crossOriginIsolatedContextType = "NotIsolated",
+                .gatedAPIFeatures = [_][]const u8{},
+            },
+        },
+    }, .{ .id = 32, .index = 0 });
+}
