@@ -33,7 +33,7 @@ pub fn processMessage(cmd: anytype) !void {
         setDownloadBehavior,
         getWindowForTarget,
         setWindowBounds,
-    }, cmd.action) orelse return error.UnknownMethod;
+    }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
         .getVersion => return getVersion(cmd),
@@ -88,7 +88,6 @@ test "cdp.browser: getVersion" {
 
     try ctx.processMessage(.{
         .id = 32,
-        .sessionID = "leto",
         .method = "Browser.getVersion",
     });
 
@@ -99,7 +98,7 @@ test "cdp.browser: getVersion" {
         .revision = REVISION,
         .userAgent = USER_AGENT,
         .jsVersion = JS_VERSION,
-    }, .{ .id = 32, .index = 0 });
+    }, .{ .id = 32, .index = 0, .session_id = null });
 }
 
 test "cdp.browser: getWindowForTarget" {
@@ -108,7 +107,6 @@ test "cdp.browser: getWindowForTarget" {
 
     try ctx.processMessage(.{
         .id = 33,
-        .sessionId = "leto",
         .method = "Browser.getWindowForTarget",
     });
 
@@ -116,5 +114,5 @@ test "cdp.browser: getWindowForTarget" {
     try ctx.expectSentResult(.{
         .windowId = DEV_TOOLS_WINDOW_ID,
         .bounds = .{ .windowState = "normal" },
-    }, .{ .id = 33, .index = 0, .session_id = "leto" });
+    }, .{ .id = 33, .index = 0, .session_id = null });
 }
