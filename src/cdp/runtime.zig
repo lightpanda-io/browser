@@ -58,11 +58,8 @@ fn sendInspector(cmd: anytype, action: anytype) !void {
         }
     }
 
+    // the result to return is handled directly by the inspector.
     cmd.session.callInspector(cmd.json);
-
-    if (cmd.id != null) {
-        return cmd.sendResult(null, .{});
-    }
 }
 
 pub const ExecutionContextCreated = struct {
