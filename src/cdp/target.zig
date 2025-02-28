@@ -146,12 +146,14 @@ fn getTargetInfo(cmd: anytype) !void {
     // })) orelse return error.InvalidParams;
 
     return cmd.sendResult(.{
-        .targetId = BROWSER_TARGET_ID,
-        .type = "browser",
-        .title = "",
-        .url = "",
-        .attached = true,
-        .canAccessOpener = false,
+        .targetInfo = .{
+            .targetId = BROWSER_TARGET_ID,
+            .type = "browser",
+            .title = "",
+            .url = "",
+            .attached = true,
+            .canAccessOpener = false,
+        },
     }, .{ .include_session_id = false });
 }
 
@@ -367,4 +369,28 @@ fn sendMessageToTarget(cmd: anytype) !void {
 // noop
 fn detachFromTarget(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
+}
+
+const testing = @import("testing.zig");
+test "cdp.target: getTargetInfo" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{
+        .id = 32,
+        .sessionID = "leto",
+        .method = "Target.getTargetInfo",
+    });
+
+    try ctx.expectSentCount(1);
+    try ctx.expectSentResult(.{
+        .targetInfo = .{
+            .targetId = BROWSER_TARGET_ID,
+            .type = "browser",
+            .title = "",
+            .url = "",
+            .attached = true,
+            .canAccessOpener = false,
+        },
+    }, .{ .id = 32, .index = 0 });
 }
