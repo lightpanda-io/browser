@@ -73,54 +73,55 @@ pub const LightPanda = struct {
         );
     }
 
-    fn handleError(self: *LightPanda, ctx: *Client.Ctx, err: anyerror) anyerror!void {
-        ctx.deinit();
-        self.client_context_pool.destroy(ctx);
+    fn handleError(sending: *Sending, ctx: *Client.Ctx, err: anyerror) anyerror!void {
+        const lightpanda = sending.lightpanda;
 
-        var sending: *Sending = @ptrCast(@alignCast(ctx.userData));
+        ctx.deinit();
+        lightpanda.client_context_pool.destroy(ctx);
+
         sending.deinit();
-        self.sending_pool.destroy(sending);
+        lightpanda.sending_pool.destroy(sending);
         log.info("request failure: {}", .{err});
     }
 
     fn onRequestConnect(ctx: *Client.Ctx, res: anyerror!void) anyerror!void {
-        var sending: *Sending = @ptrCast(@alignCast(ctx.userData));
-        res catch |err| return sending.lightpanda.handleError(ctx, err);
+        const sending: *Sending = @ptrCast(@alignCast(ctx.userData));
+        res catch |err| return handleError(sending, ctx, err);
 
         ctx.req.transfer_encoding = .{ .content_length = sending.body.len };
         return ctx.req.async_send(ctx, onRequestSend) catch |err| {
-            return sending.lightpanda.handleError(ctx, err);
+            return handleError(sending, ctx, err);
         };
     }
 
     fn onRequestSend(ctx: *Client.Ctx, res: anyerror!void) anyerror!void {
-        var sending: *Sending = @ptrCast(@alignCast(ctx.userData));
-        res catch |err| return sending.lightpanda.handleError(ctx, err);
+        const sending: *Sending = @ptrCast(@alignCast(ctx.userData));
+        res catch |err| return handleError(sending, ctx, err);
 
         return ctx.req.async_writeAll(sending.body, ctx, onRequestWrite) catch |err| {
-            return sending.lightpanda.handleError(ctx, err);
+            return handleError(sending, ctx, err);
         };
     }
 
     fn onRequestWrite(ctx: *Client.Ctx, res: anyerror!void) anyerror!void {
-        var sending: *Sending = @ptrCast(@alignCast(ctx.userData));
-        res catch |err| return sending.lightpanda.handleError(ctx, err);
+        const sending: *Sending = @ptrCast(@alignCast(ctx.userData));
+        res catch |err| return handleError(sending, ctx, err);
         return ctx.req.async_finish(ctx, onRequestFinish) catch |err| {
-            return sending.lightpanda.handleError(ctx, err);
+            return handleError(sending, ctx, err);
         };
     }
 
     fn onRequestFinish(ctx: *Client.Ctx, res: anyerror!void) anyerror!void {
-        var sending: *Sending = @ptrCast(@alignCast(ctx.userData));
-        res catch |err| return sending.lightpanda.handleError(ctx, err);
+        const sending: *Sending = @ptrCast(@alignCast(ctx.userData));
+        res catch |err| return handleError(sending, ctx, err);
         return ctx.req.async_wait(ctx, onRequestWait) catch |err| {
-            return sending.lightpanda.handleError(ctx, err);
+            return handleError(sending, ctx, err);
         };
     }
 
     fn onRequestWait(ctx: *Client.Ctx, res: anyerror!void) anyerror!void {
-        var sending: *Sending = @ptrCast(@alignCast(ctx.userData));
-        res catch |err| return sending.lightpanda.handleError(ctx, err);
+        const sending: *Sending = @ptrCast(@alignCast(ctx.userData));
+        res catch |err| return handleError(sending, ctx, err);
 
         const lightpanda = sending.lightpanda;
 
