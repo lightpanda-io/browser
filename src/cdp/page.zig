@@ -262,3 +262,37 @@ fn navigate(cmd: anytype) !void {
         .frameId = bc.frame_id,
     }, .{ .session_id = session_id });
 }
+
+const testing = @import("testing.zig");
+test "cdp.page: getFrameTree" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    {
+        try testing.expectError(error.BrowserContextNotLoaded, ctx.processMessage(.{ .id = 10, .method = "Page.getFrameTree", .params = .{ .targetId = "X" } }));
+        try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 10 });
+    }
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-9" });
+    {
+        try ctx.processMessage(.{ .id = 11, .method = "Page.getFrameTree" });
+        try ctx.expectSentResult(.{
+            .frameTree = .{
+                .frame = .{
+                    .id = bc.frame_id,
+                    .loaderId = bc.loader_id,
+                    .url = bc.url,
+                    .domainAndRegistry = "",
+                    .securityOrigin = bc.security_origin,
+                    .mimeType = "text/html",
+                    .adFrameStatus = .{
+                        .adFrameType = "none",
+                    },
+                    .secureContextType = bc.secure_context_type,
+                    .crossOriginIsolatedContextType = "NotIsolated",
+                    .gatedAPIFeatures = [_][]const u8{},
+                },
+            },
+        }, .{ .id = 11 });
+    }
+}
