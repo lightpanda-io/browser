@@ -121,6 +121,7 @@ pub const Session = struct {
     loader: Loader,
 
     env: Env,
+    loop: *Loop,
     inspector: jsruntime.Inspector,
 
     window: Window,
@@ -143,6 +144,7 @@ pub const Session = struct {
             .storageShed = storage.Shed.init(allocator),
             .arena = std.heap.ArenaAllocator.init(allocator),
             .window = Window.create(null, .{ .agent = user_agent }),
+            .loop = loop,
         };
 
         const arena = self.arena.allocator();
@@ -278,6 +280,9 @@ pub const Page = struct {
 
     // reset js env and mem arena.
     pub fn end(self: *Page) void {
+        // Reset all existing callbacks.
+        self.session.loop.reset();
+
         self.session.env.stop();
         // TODO unload document: https://html.spec.whatwg.org/#unloading-documents
 
