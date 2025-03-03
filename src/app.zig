@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const Loop = @import("jsruntime").Loop;
 const Allocator = std.mem.Allocator;
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
 
@@ -8,8 +9,8 @@ const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
 pub const App = struct {
     telemetry: Telemetry,
 
-    pub fn init(allocator: Allocator) !App {
-        const telemetry = Telemetry.init(allocator);
+    pub fn init(allocator: Allocator, loop: *Loop) !App {
+        const telemetry = Telemetry.init(allocator, loop);
         errdefer telemetry.deinit();
 
         return .{

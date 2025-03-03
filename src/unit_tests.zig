@@ -22,6 +22,7 @@ const parser = @import("netsurf");
 
 const Allocator = std.mem.Allocator;
 
+const App = @import("app.zig").App;
 const jsruntime = @import("jsruntime");
 pub const Types = jsruntime.reflect(@import("generate.zig").Tuple(.{}){});
 pub const UserContext = @import("user_context.zig").UserContext;
@@ -47,6 +48,9 @@ pub fn main() !void {
     var loop = try jsruntime.Loop.init(allocator);
     defer loop.deinit();
 
+    var app = try App.init(allocator, &loop);
+    defer app.deinit();
+
     const env = Env.init(allocator);
     defer env.deinit(allocator);
 
@@ -67,7 +71,7 @@ pub fn main() !void {
 
     const cdp_thread = blk: {
         const address = try std.net.Address.parseIp("127.0.0.1", 9583);
-        const thread = try std.Thread.spawn(.{}, serveCDP, .{ allocator, address, &loop });
+        const thread = try std.Thread.spawn(.{}, serveCDP, .{ allocator, address, &loop, &app });
         break :blk thread;
     };
     defer cdp_thread.join();
@@ -349,9 +353,9 @@ fn serveHTTP(address: std.net.Address) !void {
     }
 }
 
-fn serveCDP(allocator: Allocator, address: std.net.Address, loop: *jsruntime.Loop) !void {
+fn serveCDP(allocator: Allocator, address: std.net.Address, loop: *jsruntime.Loop, app: *App) !void {
     const server = @import("server.zig");
-    server.run(allocator, address, std.time.ns_per_s * 2, loop) catch |err| {
+    server.run(allocator, address, std.time.ns_per_s * 2, loop, app) catch |err| {
         std.debug.print("CDP server error: {}", .{err});
         return err;
     };

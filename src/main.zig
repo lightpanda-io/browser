@@ -54,9 +54,6 @@ pub fn main() !void {
         _ = gpa.detectLeaks();
     };
 
-    var app = try @import("app.zig").App.init(alloc);
-    defer app.deinit();
-
     var args_arena = std.heap.ArenaAllocator.init(alloc);
     defer args_arena.deinit();
     const args = try parseArgs(args_arena.allocator());
@@ -68,7 +65,6 @@ pub fn main() !void {
             return std.process.cleanExit();
         },
         .serve => |opts| {
-            app.telemetry.record(.{ .run = .{ .mode = .serve, .version = version } });
             const address = std.net.Address.parseIp4(opts.host, opts.port) catch |err| {
                 log.err("address (host:port) {any}\n", .{err});
                 return args.printUsageAndExit(false);
@@ -77,23 +73,30 @@ pub fn main() !void {
             var loop = try jsruntime.Loop.init(alloc);
             defer loop.deinit();
 
+            var app = try @import("app.zig").App.init(alloc, &loop);
+            defer app.deinit();
+            app.telemetry.record(.{ .run = .{ .mode = .serve, .version = version } });
+
             const timeout = std.time.ns_per_s * @as(u64, opts.timeout);
-            server.run(alloc, address, timeout, &loop) catch |err| {
+            server.run(alloc, address, timeout, &loop, &app) catch |err| {
                 log.err("Server error", .{});
                 return err;
             };
         },
         .fetch => |opts| {
-            app.telemetry.record(.{ .run = .{ .mode = .fetch, .version = version } });
             log.debug("Fetch mode: url {s}, dump {any}", .{ opts.url, opts.dump });
-
-            // vm
-            const vm = jsruntime.VM.init();
-            defer vm.deinit();
 
             // loop
             var loop = try jsruntime.Loop.init(alloc);
             defer loop.deinit();
+
+            var app = try @import("app.zig").App.init(alloc, &loop);
+            defer app.deinit();
+            app.telemetry.record(.{ .run = .{ .mode = .fetch, .version = version } });
+
+            // vm
+            const vm = jsruntime.VM.init();
+            defer vm.deinit();
 
             // browser
             var browser = Browser.init(alloc, &loop);
