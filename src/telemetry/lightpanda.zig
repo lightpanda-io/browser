@@ -30,7 +30,10 @@ pub const Lightpanda = struct {
     }
 
     pub fn send(self: *Lightpanda, iid: ?[]const u8, eid: []const u8, events: []Event) !void {
-        std.debug.print("SENDING: {s} {s} {d}", .{iid, eid, events.len})
+        _ = self;
+        _ = iid;
+        _ = eid;
+        _ = events;
         // defer _ = self.arena.reset(.{ .retain_capacity = {} });
         // const body = try std.json.stringifyAlloc(self.arena.allocator(), PlausibleEvent{ .event = event }, .{});
 
@@ -57,31 +60,31 @@ pub const Lightpanda = struct {
 };
 
 // wraps a telemetry event so that we can serialize it to plausible's event endpoint
-const PlausibleEvent = struct {
-    event: Event,
+// const PlausibleEvent = struct {
+//     event: Event,
 
-    pub fn jsonStringify(self: PlausibleEvent, jws: anytype) !void {
-        try jws.beginObject();
-        try jws.objectField("name");
-        try jws.write(@tagName(self.event));
-        try jws.objectField("url");
-        try jws.write(EVENT_URL);
-        try jws.objectField("domain");
-        try jws.write(DOMAIN_KEY);
-        try jws.objectField("props");
-        switch (self.event) {
-            inline else => |props| try jws.write(props),
-        }
-        try jws.endObject();
-    }
-};
+//     pub fn jsonStringify(self: PlausibleEvent, jws: anytype) !void {
+//         try jws.beginObject();
+//         try jws.objectField("name");
+//         try jws.write(@tagName(self.event));
+//         try jws.objectField("url");
+//         try jws.write(EVENT_URL);
+//         try jws.objectField("domain");
+//         try jws.write(DOMAIN_KEY);
+//         try jws.objectField("props");
+//         switch (self.event) {
+//             inline else => |props| try jws.write(props),
+//         }
+//         try jws.endObject();
+//     }
+// };
 
-const testing = std.testing;
-test "plausible: json event" {
-    const json = try std.json.stringifyAlloc(testing.allocator, PlausibleEvent{ .event = .{ .run = .{ .mode = .serve, .version = "over 9000!" } } }, .{});
-    defer testing.allocator.free(json);
+// const testing = std.testing;
+// test "plausible: json event" {
+//     const json = try std.json.stringifyAlloc(testing.allocator, PlausibleEvent{ .event = .{ .run = .{ .mode = .serve, .version = "over 9000!" } } }, .{});
+//     defer testing.allocator.free(json);
 
-    try testing.expectEqualStrings(
-        \\{"name":"run","url":"https://lightpanda.io/browser-stats","domain":"localhost","props":{"version":"over 9000!","mode":"serve"}}
-    , json);
-}
+//     try testing.expectEqualStrings(
+//         \\{"name":"run","url":"https://lightpanda.io/browser-stats","domain":"localhost","props":{"version":"over 9000!","mode":"serve"}}
+//     , json);
+// }

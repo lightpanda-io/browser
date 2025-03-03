@@ -66,7 +66,7 @@ pub fn Incrementing(comptime T: type, comptime prefix: []const u8) type {
     };
 }
 
-fn uuidv4(hex: []u8) void {
+pub fn uuidv4(hex: []u8) void {
     std.debug.assert(hex.len == 36);
 
     var bin: [16]u8 = undefined;

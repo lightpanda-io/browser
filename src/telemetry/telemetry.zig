@@ -12,7 +12,7 @@ const ID_FILE = "lightpanda.id";
 
 pub const Telemetry = TelemetryT(blk: {
     if (builtin.mode == .Debug or builtin.is_test) break :blk NoopProvider;
-    break :blk @import("ligtpanda.zig").Lightpanda;
+    break :blk @import("lightpanda.zig").Lightpanda;
 });
 
 fn TelemetryT(comptime P: type) type {
@@ -36,11 +36,13 @@ fn TelemetryT(comptime P: type) type {
             const disabled = std.process.hasEnvVarConstant("LIGHTPANDA_DISABLE_TELEMETRY");
 
             var eid: [36]u8 = undefined;
-            uuidv4(&eid)
+            uuidv4(&eid);
 
             return .{
-                .eid = eid,
                 .iid = if (disabled) null else getOrCreateId(),
+                .eid = eid,
+                .count = 0,
+                .pending = undefined,
                 .disabled = disabled,
                 .provider = try P.init(allocator),
             };
@@ -62,7 +64,7 @@ fn TelemetryT(comptime P: type) type {
                 return;
             }
 
-            const iid = if (self.iid) |*iid| *iid else null;
+            const iid: ?[]const u8 = if (self.iid) |*iid| iid else null;
             self.provider.send(iid, &self.eid, &self.pending) catch |err| {
                 log.warn("failed to record event: {}", .{err});
             };
@@ -73,22 +75,22 @@ fn TelemetryT(comptime P: type) type {
 
 fn getOrCreateId() ?[36]u8 {
     var buf: [37]u8 = undefined;
-    const data = std.fs.cwd().readFile(ID_FILE, &buf) catch |err| switch (err) blk: {
-        error.FileNotFound => break :bkl &.{},
+    const data = std.fs.cwd().readFile(ID_FILE, &buf) catch |err| switch (err) {
+        error.FileNotFound => &.{},
         else => {
             log.warn("failed to open id file: {}", .{err});
-            return null,
+            return null;
         },
-    }
+    };
 
     var id: [36]u8 = undefined;
     if (data.len == 36) {
-        @memcpy(id[0..36], data)
+        @memcpy(id[0..36], data);
         return id;
     }
 
     uuidv4(&id);
-    std.fs.cwd().writeFile(.{.sub_path = ID_FILE, .data = buf[0..36]}) catch |err| {
+    std.fs.cwd().writeFile(.{ .sub_path = ID_FILE, .data = &id }) catch |err| {
         log.warn("failed to write to id file: {}", .{err});
         return null;
     };
@@ -97,6 +99,7 @@ fn getOrCreateId() ?[36]u8 {
 
 pub const Event = union(enum) {
     run: Run,
+    flag: []const u8, // used for testing
 
     const Run = struct {
         version: []const u8,
@@ -114,7 +117,7 @@ const NoopProvider = struct {
         return .{};
     }
     fn deinit(_: NoopProvider) void {}
-    pub fn record(_: NoopProvider, _: Event) !void {}
+    pub fn send(_: NoopProvider, _: ?[]const u8, _: []const u8, _: []Event) !void {}
 };
 
 extern fn setenv(name: [*:0]u8, value: [*:0]u8, override: c_int) c_int;
@@ -129,7 +132,7 @@ test "telemetry: disabled by environment" {
             return .{};
         }
         fn deinit(_: @This()) void {}
-        pub fn record(_: @This(), _: Event) !void {
+        pub fn send(_: @This(), _: ?[]const u8, _: []const u8, _: []Event) !void {
             unreachable;
         }
     };
@@ -138,3 +141,76 @@ test "telemetry: disabled by environment" {
     defer telemetry.deinit();
     telemetry.record(.{ .run = .{ .mode = .serve, .version = "123" } });
 }
+
+test "telemetry: getOrCreateId" {
+    defer std.fs.cwd().deleteFile(ID_FILE) catch {};
+
+    std.fs.cwd().deleteFile(ID_FILE) catch {};
+
+    const id1 = getOrCreateId().?;
+    const id2 = getOrCreateId().?;
+    try testing.expectEqualStrings(&id1, &id2);
+
+    std.fs.cwd().deleteFile(ID_FILE) catch {};
+    const id3 = getOrCreateId().?;
+    try testing.expectEqual(false, std.mem.eql(u8, &id1, &id3));
+}
+
+test "telemetry: sends batch" {
+    defer std.fs.cwd().deleteFile(ID_FILE) catch {};
+    std.fs.cwd().deleteFile(ID_FILE) catch {};
+
+    var telemetry = TelemetryT(MockProvider).init(testing.allocator);
+    defer telemetry.deinit();
+    const mock = &telemetry.provider;
+
+    telemetry.record(.{ .flag = "1" });
+    telemetry.record(.{ .flag = "2" });
+    telemetry.record(.{ .flag = "3" });
+    telemetry.record(.{ .flag = "4" });
+    try testing.expectEqual(0, mock.events.items.len);
+    telemetry.record(.{ .flag = "5" });
+    try testing.expectEqual(5, mock.events.items.len);
+
+    telemetry.record(.{ .flag = "6" });
+    telemetry.record(.{ .flag = "7" });
+    telemetry.record(.{ .flag = "8" });
+    telemetry.record(.{ .flag = "9" });
+    try testing.expectEqual(5, mock.events.items.len);
+    telemetry.record(.{ .flag = "a" });
+    try testing.expectEqual(10, mock.events.items.len);
+
+    for (mock.events.items, 0..) |event, i| {
+        try testing.expectEqual(i + 1, std.fmt.parseInt(usize, event.flag, 16));
+    }
+}
+
+const MockProvider = struct {
+    iid: ?[]const u8,
+    eid: ?[]const u8,
+    allocator: Allocator,
+    events: std.ArrayListUnmanaged(Event),
+
+    fn init(allocator: Allocator) !@This() {
+        return .{
+            .iid = null,
+            .eid = null,
+            .events = .{},
+            .allocator = allocator,
+        };
+    }
+    fn deinit(self: *MockProvider) void {
+        self.events.deinit(self.allocator);
+    }
+    pub fn send(self: *MockProvider, iid: ?[]const u8, eid: []const u8, events: []Event) !void {
+        if (self.iid == null) {
+            try testing.expectEqual(null, self.eid);
+            self.iid = iid.?;
+            self.eid = eid;
+        } else {
+            try testing.expectEqualStrings(self.iid.?, iid.?);
+            try testing.expectEqualStrings(self.eid.?, eid);
+        }
+        try self.events.appendSlice(self.allocator, events);
+    }
+};

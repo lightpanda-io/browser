@@ -3,3 +3,4 @@ zig-cache
 zig-out
 /vendor/netsurf/out
 /vendor/libiconv/
+lightpanda.id
