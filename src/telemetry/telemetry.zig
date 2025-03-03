@@ -10,7 +10,7 @@ const log = std.log.scoped(.telemetry);
 const ID_FILE = "lightpanda.id";
 
 pub const Telemetry = TelemetryT(blk: {
-    // if (builtin.mode == .Debug or builtin.is_test) break :blk NoopProvider;
+    if (builtin.mode == .Debug or builtin.is_test) break :blk NoopProvider;
     break :blk @import("lightpanda.zig").LightPanda;
 });
 

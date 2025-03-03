@@ -33,6 +33,7 @@ const Loop = jsruntime.Loop;
 const Env = jsruntime.Env;
 const Module = jsruntime.Module;
 
+const App = @import("../app.zig").App;
 const apiweb = @import("../apiweb.zig");
 
 const Window = @import("../html/window.zig").Window;
@@ -59,7 +60,7 @@ pub const user_agent = "Lightpanda/1.0";
 // A browser contains only one session.
 // TODO allow multiple sessions per browser.
 pub const Browser = struct {
-    loop: *Loop,
+    app: *App,
     session: ?*Session,
     allocator: Allocator,
     http_client: HttpClient,
@@ -68,9 +69,10 @@ pub const Browser = struct {
 
     const SessionPool = std.heap.MemoryPool(Session);
 
-    pub fn init(allocator: Allocator, loop: *Loop) Browser {
+    pub fn init(app: *App) Browser {
+        const allocator = app.allocator;
         return .{
-            .loop = loop,
+            .app = app,
             .session = null,
             .allocator = allocator,
             .http_client = .{ .allocator = allocator },
@@ -109,6 +111,8 @@ pub const Browser = struct {
 // You can create successively multiple pages for a session, but you must
 // deinit a page before running another one.
 pub const Session = struct {
+    app: *App,
+
     browser: *Browser,
 
     // The arena is used only to bound the js env init b/c it leaks memory.
@@ -133,8 +137,10 @@ pub const Session = struct {
     jstypes: [Types.len]usize = undefined,
 
     fn init(self: *Session, browser: *Browser, ctx: anytype) !void {
-        const allocator = browser.allocator;
+        const app = browser.app;
+        const allocator = app.allocator;
         self.* = .{
+            .app = app,
             .env = undefined,
             .browser = browser,
             .inspector = undefined,
@@ -145,7 +151,7 @@ pub const Session = struct {
         };
 
         const arena = self.arena.allocator();
-        Env.init(&self.env, arena, browser.loop, null);
+        Env.init(&self.env, arena, app.loop, null);
         errdefer self.env.deinit();
         try self.env.load(&self.jstypes);
 
@@ -238,7 +244,7 @@ pub const Session = struct {
         std.debug.assert(self.page != null);
 
         // Reset all existing callbacks.
-        self.browser.loop.reset();
+        self.app.loop.reset();
 
         self.env.stop();
         // TODO unload document: https://html.spec.whatwg.org/#unloading-documents
@@ -333,6 +339,7 @@ pub const Page = struct {
     // see Inspector.contextCreated
     pub fn navigate(self: *Page, uri: []const u8, aux_data: ?[]const u8) !void {
         const arena = self.arena;
+        self.session.app.telemetry.record(.{ .navigate = {} });
 
         log.debug("starting GET {s}", .{uri});
 

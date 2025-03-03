@@ -20,7 +20,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const json = std.json;
 
-const Loop = @import("jsruntime").Loop;
+const App = @import("../app.zig").App;
 const asUint = @import("../str/parser.zig").asUint;
 const Incrementing = @import("../id.zig").Incrementing;
 
@@ -34,7 +34,6 @@ pub const TimestampEvent = struct {
 };
 
 pub const CDP = CDPT(struct {
-    const Loop = *@import("jsruntime").Loop;
     const Client = *@import("../server.zig").Client;
     const Browser = @import("../browser/browser.zig").Browser;
     const Session = @import("../browser/browser.zig").Session;
@@ -47,8 +46,6 @@ const BrowserContextIdGen = Incrementing(u32, "BID");
 // Generic so that we can inject mocks into it.
 pub fn CDPT(comptime TypeProvider: type) type {
     return struct {
-        loop: TypeProvider.Loop,
-
         // Used for sending message to the client and closing on error
         client: TypeProvider.Client,
 
@@ -73,13 +70,13 @@ pub fn CDPT(comptime TypeProvider: type) type {
         pub const Browser = TypeProvider.Browser;
         pub const Session = TypeProvider.Session;
 
-        pub fn init(allocator: Allocator, client: TypeProvider.Client, loop: TypeProvider.Loop) Self {
+        pub fn init(app: *App, client: TypeProvider.Client) Self {
+            const allocator = app.allocator;
             return .{
-                .loop = loop,
                 .client = client,
                 .allocator = allocator,
                 .browser_context = null,
-                .browser = Browser.init(allocator, loop),
+                .browser = Browser.init(app),
                 .message_arena = std.heap.ArenaAllocator.init(allocator),
                 .browser_context_pool = std.heap.MemoryPool(BrowserContext(Self)).init(allocator),
             };

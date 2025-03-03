@@ -45,10 +45,7 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    var loop = try jsruntime.Loop.init(allocator);
-    defer loop.deinit();
-
-    var app = try App.init(allocator, &loop);
+    var app = try App.init(allocator);
     defer app.deinit();
 
     const env = Env.init(allocator);
@@ -71,7 +68,10 @@ pub fn main() !void {
 
     const cdp_thread = blk: {
         const address = try std.net.Address.parseIp("127.0.0.1", 9583);
-        const thread = try std.Thread.spawn(.{}, serveCDP, .{ allocator, address, &loop, &app });
+        const thread = try std.Thread.spawn(.{}, serveCDP, .{
+            &app,
+            address,
+        });
         break :blk thread;
     };
     defer cdp_thread.join();
@@ -353,9 +353,9 @@ fn serveHTTP(address: std.net.Address) !void {
     }
 }
 
-fn serveCDP(allocator: Allocator, address: std.net.Address, loop: *jsruntime.Loop, app: *App) !void {
+fn serveCDP(app: *App, address: std.net.Address) !void {
     const server = @import("server.zig");
-    server.run(allocator, address, std.time.ns_per_s * 2, loop, app) catch |err| {
+    server.run(app, address, std.time.ns_per_s * 2) catch |err| {
         std.debug.print("CDP server error: {}", .{err});
         return err;
     };
