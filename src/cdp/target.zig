@@ -231,21 +231,25 @@ fn getTargetInfo(cmd: anytype) !void {
         }
 
         return cmd.sendResult(.{
-            .targetId = target_id,
-            .type = "page",
-            .title = "",
-            .url = "",
-            .attached = true,
-            .canAccessOpener = false,
+            .targetInfo = .{
+                .targetId = target_id,
+                .type = "page",
+                .title = "",
+                .url = "",
+                .attached = true,
+                .canAccessOpener = false,
+            },
         }, .{ .include_session_id = false });
     }
 
     return cmd.sendResult(.{
-        .type = "browser",
-        .title = "",
-        .url = "",
-        .attached = true,
-        .canAccessOpener = false,
+        .targetInfo = .{
+            .type = "browser",
+            .title = "",
+            .url = "",
+            .attached = true,
+            .canAccessOpener = false,
+        },
     }, .{ .include_session_id = false });
 }
 
@@ -546,5 +550,56 @@ test "cdp.target: attachToTarget" {
         const session_id = bc.session_id.?;
         try ctx.expectSentResult(.{ .sessionId = session_id }, .{ .id = 11 });
         try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = session_id, .targetInfo = .{ .url = "chrome://newtab/", .title = "about:blank", .attached = true, .type = "page", .canAccessOpener = false, .browserContextId = "BID-9", .targetId = bc.target_id.? } }, .{});
+    }
+}
+
+test "cdp.target: getTargetInfo" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    {
+        try ctx.processMessage(.{ .id = 9, .method = "Target.getTargetInfo" });
+        try ctx.expectSentResult(.{
+            .targetInfo = .{
+                .type = "browser",
+                .title = "",
+                .url = "",
+                .attached = true,
+                .canAccessOpener = false,
+            },
+        }, .{ .id = 9 });
+    }
+
+    {
+        try testing.expectError(error.BrowserContextNotLoaded, ctx.processMessage(.{ .id = 10, .method = "Target.getTargetInfo", .params = .{ .targetId = "X" } }));
+        try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 10 });
+    }
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-9" });
+    {
+        try testing.expectError(error.TargetNotLoaded, ctx.processMessage(.{ .id = 10, .method = "Target.getTargetInfo", .params = .{ .targetId = "TID-8" } }));
+        try ctx.expectSentError(-31998, "TargetNotLoaded", .{ .id = 10 });
+    }
+
+    // pretend we createdTarget first
+    _ = try bc.session.createPage();
+    bc.target_id = "TID-A";
+    {
+        try testing.expectError(error.UnknownTargetId, ctx.processMessage(.{ .id = 10, .method = "Target.getTargetInfo", .params = .{ .targetId = "TID-8" } }));
+        try ctx.expectSentError(-31998, "UnknownTargetId", .{ .id = 10 });
+    }
+
+    {
+        try ctx.processMessage(.{ .id = 11, .method = "Target.getTargetInfo", .params = .{ .targetId = "TID-A" } });
+        try ctx.expectSentResult(.{
+            .targetInfo = .{
+                .targetId = "TID-A",
+                .type = "page",
+                .title = "",
+                .url = "",
+                .attached = true,
+                .canAccessOpener = false,
+            },
+        }, .{ .id = 11 });
     }
 }
