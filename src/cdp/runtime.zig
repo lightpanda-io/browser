@@ -57,10 +57,6 @@ fn sendInspector(cmd: anytype, action: anytype) !void {
     }
 
     bc.session.callInspector(cmd.input.json);
-
-    if (cmd.input.id != null) {
-        return cmd.sendResult(null, .{});
-    }
 }
 
 pub const ExecutionContextCreated = struct {
