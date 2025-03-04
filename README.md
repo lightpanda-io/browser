@@ -25,8 +25,6 @@ Fast web automation for AI agents, LLM training, scraping and testing:
 - Ultra-low memory footprint (9x less than Chrome)
 - Exceptionally fast execution (11x faster than Chrome)
 - Instant startup
-<br />
-<br />
 
 [<img width="350px" src="https://cdn.lightpanda.io/assets/images/github/execution-time.svg">
 ](https://github.com/lightpanda-io/demo)
