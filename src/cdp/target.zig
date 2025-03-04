@@ -134,10 +134,6 @@ fn createTarget(cmd: anytype) !void {
     );
     try page.start(aux_data);
 
-    try cmd.sendResult(.{
-        .targetId = target_id,
-    }, .{});
-
     // send targetCreated event
     // TODO: should this only be sent when Target.setDiscoverTargets
     // has been enabled?
@@ -154,6 +150,10 @@ fn createTarget(cmd: anytype) !void {
     // only if setAutoAttach is true?
     try doAttachtoTarget(cmd, target_id);
     bc.target_id = target_id;
+
+    try cmd.sendResult(.{
+        .targetId = target_id,
+    }, .{});
 }
 
 fn attachToTarget(cmd: anytype) !void {
