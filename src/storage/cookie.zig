@@ -57,7 +57,7 @@ pub const Jar = struct {
         request_time: i64,
         origin_uri: ?Uri,
         target_uri: Uri,
-        navitation: bool,
+        navigation: bool,
     ) !CookieList {
         const target_path = target_uri.path.percent_encoded;
         const target_host = (target_uri.host orelse return error.InvalidURI).percent_encoded;
@@ -93,7 +93,7 @@ pub const Jar = struct {
                 // and cookie.same_site == .lax
                 switch (cookie.same_site) {
                     .strict => continue,
-                    .lax => if (navitation == false) continue,
+                    .lax => if (navigation == false) continue,
                     .none => {},
                 }
             }
@@ -101,14 +101,17 @@ pub const Jar = struct {
             {
                 const domain = cookie.domain;
                 if (domain[0] == '.') {
-                    // when explicitly set, the domain
-                    //  1 - always starts with a .
-                    //  2 - always is a suffix match (or examlpe)
+                    // When a Set-Cookie header has a Domain attribute
+                    // Then we will _always_ prefix it with a dot, extending its
+                    // availability to all subdomains (yes, setting the Domain
+                    // attributes EXPANDS the domains which the cookie will be
+                    // sent to, to always include all subdomains).
                     if (std.mem.eql(u8, target_host, domain[1..]) == false and std.mem.endsWith(u8, target_host, domain) == false) {
                         continue;
                     }
                 } else if (std.mem.eql(u8, target_host, domain) == false) {
-                    // when Domain=XYX isn't specified, it's an exact match only
+                    // When the Domain attribute isn't specific, then the cookie
+                    // is only sent on an exact match.
                     continue;
                 }
             }
@@ -116,8 +119,9 @@ pub const Jar = struct {
             {
                 const path = cookie.path;
                 if (path[path.len - 1] == '/') {
-                    // If our cookie path is doc/
-                    // Then we can only match if the target path starts with doc/
+                    // If our cookie has a trailing slash, we can only match is
+                    // the target path is a perfix. I.e., if our path is
+                    // /doc/  we can only match /doc/*
                     if (std.mem.startsWith(u8, target_path, path) == false) {
                         continue;
                     }
@@ -504,7 +508,7 @@ test "Jar: forRequest" {
     }
 
     try jar.add(try Cookie.parse(testing.allocator, test_uri, "global1=1"), now);
-    try jar.add(try Cookie.parse(testing.allocator, test_uri, "global2=2;Max-Age=30"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_uri, "global2=2;Max-Age=30;domain=lightpanda.io"), now);
     try jar.add(try Cookie.parse(testing.allocator, test_uri, "path1=3;Path=/about"), now);
     try jar.add(try Cookie.parse(testing.allocator, test_uri, "path2=4;Path=/docs/"), now);
     try jar.add(try Cookie.parse(testing.allocator, test_uri, "secure=5;Secure"), now);
@@ -517,6 +521,19 @@ test "Jar: forRequest" {
         // nothing fancy here
         var matches = try jar.forRequest(testing.allocator, now, test_uri, test_uri, true);
         try expectCookies(&.{ "global1", "global2" }, &matches);
+    }
+
+    {
+        // We have a cookie where Domain=lightpanda.io
+        // This should _not_ match xyxlightpanda.io
+        var matches = try jar.forRequest(
+            testing.allocator,
+            now,
+            test_uri,
+            try std.Uri.parse("http://anothersitelightpanda.io/"),
+            true,
+        );
+        try expectCookies(&.{}, &matches);
     }
 
     {
@@ -664,7 +681,7 @@ test "Jar: forRequest" {
     }
 
     {
-        // exact domain match
+        // exact domain match + suffix
         var matches = try jar.forRequest(
             testing.allocator,
             now,
@@ -672,11 +689,11 @@ test "Jar: forRequest" {
             try std.Uri.parse("http://test.lightpanda.io/"),
             true,
         );
-        try expectCookies(&.{"domain1"}, &matches);
+        try expectCookies(&.{ "global2", "domain1" }, &matches);
     }
 
     {
-        // domain suffix match
+        // domain suffix match + suffix
         var matches = try jar.forRequest(
             testing.allocator,
             now,
@@ -684,7 +701,7 @@ test "Jar: forRequest" {
             try std.Uri.parse("http://1.test.lightpanda.io/"),
             true,
         );
-        try expectCookies(&.{"domain1"}, &matches);
+        try expectCookies(&.{ "global2", "domain1" }, &matches);
     }
 
     {
@@ -696,7 +713,7 @@ test "Jar: forRequest" {
             try std.Uri.parse("http://other.lightpanda.io/"),
             true,
         );
-        try expectCookies(&.{}, &matches);
+        try expectCookies(&.{"global2"}, &matches);
     }
 
     {
