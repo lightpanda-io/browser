@@ -26,7 +26,7 @@ pub fn processMessage(cmd: anytype) !void {
         setFocusEmulationEnabled,
         setDeviceMetricsOverride,
         setTouchEmulationEnabled,
-    }, cmd.action) orelse return error.UnknownMethod;
+    }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
         .setEmulatedMedia => return setEmulatedMedia(cmd),

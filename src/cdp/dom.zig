@@ -29,7 +29,7 @@ pub fn processMessage(cmd: anytype) !void {
         performSearch,
         getSearchResults,
         discardSearchResults,
-    }, cmd.action) orelse return error.UnknownMethod;
+    }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
         .enable => return cmd.sendResult(null, .{}),
@@ -133,14 +133,13 @@ fn getDocument(cmd: anytype) !void {
     //     pierce: ?bool = null,
     // })) orelse return error.InvalidParams;
 
-    // retrieve the root node
-    const page = cmd.session.page orelse return error.NoPage;
-    const doc = page.doc orelse return error.NoDocument;
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const doc = page.doc orelse return error.DocumentNotLoaded;
 
-    const state = cmd.cdp;
     const node = parser.documentToNode(doc);
-    var n = try Node.init(node, &state.node_list);
-    _ = try n.initChildren(cmd.arena, node, &state.node_list);
+    var n = try Node.init(node, &bc.node_list);
+    _ = try n.initChildren(cmd.arena, node, &bc.node_list);
 
     return cmd.sendResult(.{
         .root = n,
@@ -184,21 +183,20 @@ fn performSearch(cmd: anytype) !void {
         includeUserAgentShadowDOM: ?bool = null,
     })) orelse return error.InvalidParams;
 
-    // retrieve the root node
-    const page = cmd.session.page orelse return error.NoPage;
-    const doc = page.doc orelse return error.NoDocument;
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const doc = page.doc orelse return error.DocumentNotLoaded;
 
     const list = try css.querySelectorAll(cmd.cdp.allocator, parser.documentToNode(doc), params.query);
     const ln = list.nodes.items.len;
     var ns = try NodeSearch.initCapacity(cmd.cdp.allocator, ln);
 
-    var state = cmd.cdp;
     for (list.nodes.items) |n| {
-        const id = try state.node_list.set(n);
+        const id = try bc.node_list.set(n);
         try ns.append(id);
     }
 
-    try state.node_search_list.append(ns);
+    try bc.node_search_list.append(ns);
 
     return cmd.sendResult(.{
         .searchId = ns.name,
@@ -212,13 +210,14 @@ fn discardSearchResults(cmd: anytype) !void {
         searchId: []const u8,
     })) orelse return error.InvalidParams;
 
-    var state = cmd.cdp;
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
     // retrieve the search from context
-    for (state.node_search_list.items, 0..) |*s, i| {
+    for (bc.node_search_list.items, 0..) |*s, i| {
         if (!std.mem.eql(u8, s.name, params.searchId)) continue;
 
         s.deinit();
-        _ = state.node_search_list.swapRemove(i);
+        _ = bc.node_search_list.swapRemove(i);
         break;
     }
 
@@ -237,10 +236,11 @@ fn getSearchResults(cmd: anytype) !void {
         return error.BadIndices;
     }
 
-    const state = cmd.cdp;
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
     // retrieve the search from context
     var ns: ?*const NodeSearch = undefined;
-    for (state.node_search_list.items) |s| {
+    for (bc.node_search_list.items) |s| {
         if (!std.mem.eql(u8, s.name, params.searchId)) continue;
         ns = &s;
         break;
