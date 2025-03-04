@@ -218,9 +218,10 @@ fn closeTarget(cmd: anytype) !void {
 }
 
 fn getTargetInfo(cmd: anytype) !void {
-    const params = (try cmd.params(struct {
+    const Params = struct {
         targetId: ?[]const u8 = null,
-    })) orelse return error.InvalidParams;
+    };
+    const params = (try cmd.params(Params)) orelse Params{};
 
     if (params.targetId) |param_target_id| {
         const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
