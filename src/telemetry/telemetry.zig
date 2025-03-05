@@ -52,7 +52,7 @@ fn TelemetryT(comptime P: type) type {
                 return;
             }
             const iid: ?[]const u8 = if (self.iid) |*iid| iid else null;
-            self.provider.send(iid, self.run_mode, &event) catch |err| {
+            self.provider.send(iid, self.run_mode, event) catch |err| {
                 log.warn("failed to record event: {}", .{err});
             };
         }
@@ -94,7 +94,7 @@ const NoopProvider = struct {
         return .{};
     }
     fn deinit(_: NoopProvider) void {}
-    pub fn send(_: NoopProvider, _: ?[]const u8, _: RunMode, _: *const Event) !void {}
+    pub fn send(_: NoopProvider, _: ?[]const u8, _: RunMode, _: Event) !void {}
 };
 
 extern fn setenv(name: [*:0]u8, value: [*:0]u8, override: c_int) c_int;
@@ -110,7 +110,7 @@ test "telemetry: disabled by environment" {
             return .{};
         }
         fn deinit(_: @This()) void {}
-        pub fn send(_: @This(), _: ?[]const u8, _: RunMode, _: *const Event) !void {
+        pub fn send(_: @This(), _: ?[]const u8, _: RunMode, _: Event) !void {
             unreachable;
         }
     };
@@ -169,7 +169,7 @@ const MockProvider = struct {
     fn deinit(self: *MockProvider) void {
         self.events.deinit(self.allocator);
     }
-    pub fn send(self: *MockProvider, iid: ?[]const u8, run_mode: RunMode, events: *const Event) !void {
+    pub fn send(self: *MockProvider, iid: ?[]const u8, run_mode: RunMode, events: Event) !void {
         if (self.iid == null) {
             try testing.expectEqual(null, self.run_mode);
             self.iid = iid.?;
@@ -178,6 +178,6 @@ const MockProvider = struct {
             try testing.expectEqualStrings(self.iid.?, iid.?);
             try testing.expectEqual(self.run_mode.?, run_mode);
         }
-        try self.events.append(self.allocator, events.*);
+        try self.events.append(self.allocator, events);
     }
 };
