@@ -5,6 +5,7 @@ const Allocator = std.mem.Allocator;
 
 const Loop = @import("jsruntime").Loop;
 const uuidv4 = @import("../id.zig").uuidv4;
+const RunMode = @import("../app.zig").RunMode;
 
 const log = std.log.scoped(.telemetry);
 const ID_FILE = "lightpanda.id";
@@ -20,24 +21,21 @@ fn TelemetryT(comptime P: type) type {
         // null on IO error
         iid: ?[36]u8,
 
-        // a "execution" id is an id that represents this specific run
-        eid: [36]u8,
         provider: P,
 
         disabled: bool,
 
+        run_mode: RunMode,
+
         const Self = @This();
 
-        pub fn init(allocator: Allocator, loop: *Loop) Self {
+        pub fn init(allocator: Allocator, loop: *Loop, run_mode: RunMode) Self {
             const disabled = std.process.hasEnvVarConstant("LIGHTPANDA_DISABLE_TELEMETRY");
 
-            var eid: [36]u8 = undefined;
-            uuidv4(&eid);
-
             return .{
-                .iid = if (disabled) null else getOrCreateId(),
-                .eid = eid,
                 .disabled = disabled,
+                .run_mode = run_mode,
+                .iid = if (disabled) null else getOrCreateId(),
                 .provider = try P.init(allocator, loop),
             };
         }
@@ -51,7 +49,7 @@ fn TelemetryT(comptime P: type) type {
                 return;
             }
             const iid: ?[]const u8 = if (self.iid) |*iid| iid else null;
-            self.provider.send(iid, &self.eid, &event) catch |err| {
+            self.provider.send(iid, self.run_mode, &event) catch |err| {
                 log.warn("failed to record event: {}", .{err});
             };
         }
@@ -83,19 +81,9 @@ fn getOrCreateId() ?[36]u8 {
 }
 
 pub const Event = union(enum) {
-    run: Run,
+    run: void,
     navigate: void,
     flag: []const u8, // used for testing
-
-    const Run = struct {
-        version: []const u8,
-        mode: RunMode,
-
-        const RunMode = enum {
-            fetch,
-            serve,
-        };
-    };
 };
 
 const NoopProvider = struct {
@@ -103,11 +91,12 @@ const NoopProvider = struct {
         return .{};
     }
     fn deinit(_: NoopProvider) void {}
-    pub fn send(_: NoopProvider, _: ?[]const u8, _: []const u8, _: anytype) !void {}
+    pub fn send(_: NoopProvider, _: ?[]const u8, _: RunMode, _: *const Event) !void {}
 };
 
 extern fn setenv(name: [*:0]u8, value: [*:0]u8, override: c_int) c_int;
 extern fn unsetenv(name: [*:0]u8) c_int;
+
 const testing = std.testing;
 test "telemetry: disabled by environment" {
     _ = setenv(@constCast("LIGHTPANDA_DISABLE_TELEMETRY"), @constCast(""), 0);
@@ -118,14 +107,14 @@ test "telemetry: disabled by environment" {
             return .{};
         }
         fn deinit(_: @This()) void {}
-        pub fn send(_: @This(), _: ?[]const u8, _: []const u8, _: anytype) !void {
+        pub fn send(_: @This(), _: ?[]const u8, _: RunMode, _: *const Event) !void {
             unreachable;
         }
     };
 
-    var telemetry = TelemetryT(FailingProvider).init(testing.allocator, undefined);
+    var telemetry = TelemetryT(FailingProvider).init(testing.allocator, undefined, .serve);
     defer telemetry.deinit();
-    telemetry.record(.{ .run = .{ .mode = .serve, .version = "123" } });
+    telemetry.record(.{ .run = {} });
 }
 
 test "telemetry: getOrCreateId" {
@@ -146,7 +135,7 @@ test "telemetry: sends event to provider" {
     defer std.fs.cwd().deleteFile(ID_FILE) catch {};
     std.fs.cwd().deleteFile(ID_FILE) catch {};
 
-    var telemetry = TelemetryT(MockProvider).init(testing.allocator, undefined);
+    var telemetry = TelemetryT(MockProvider).init(testing.allocator, undefined, .serve);
     defer telemetry.deinit();
     const mock = &telemetry.provider;
 
@@ -162,14 +151,14 @@ test "telemetry: sends event to provider" {
 
 const MockProvider = struct {
     iid: ?[]const u8,
-    eid: ?[]const u8,
+    run_mode: ?RunMode,
     allocator: Allocator,
     events: std.ArrayListUnmanaged(Event),
 
     fn init(allocator: Allocator, _: *Loop) !@This() {
         return .{
             .iid = null,
-            .eid = null,
+            .run_mode = null,
             .events = .{},
             .allocator = allocator,
         };
@@ -177,14 +166,14 @@ const MockProvider = struct {
     fn deinit(self: *MockProvider) void {
         self.events.deinit(self.allocator);
     }
-    pub fn send(self: *MockProvider, iid: ?[]const u8, eid: []const u8, events: *const Event) !void {
+    pub fn send(self: *MockProvider, iid: ?[]const u8, run_mode: RunMode, events: *const Event) !void {
         if (self.iid == null) {
-            try testing.expectEqual(null, self.eid);
+            try testing.expectEqual(null, self.run_mode);
             self.iid = iid.?;
-            self.eid = eid;
+            self.run_mode = run_mode;
         } else {
             try testing.expectEqualStrings(self.iid.?, iid.?);
-            try testing.expectEqualStrings(self.eid.?, eid);
+            try testing.expectEqual(self.run_mode.?, run_mode);
         }
         try self.events.append(self.allocator, events.*);
     }

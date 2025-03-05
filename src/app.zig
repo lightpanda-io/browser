@@ -4,6 +4,11 @@ const Loop = @import("jsruntime").Loop;
 const Allocator = std.mem.Allocator;
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
 
+pub const RunMode = enum {
+    serve,
+    fetch,
+};
+
 // Container for global state / objects that various parts of the system
 // might need.
 pub const App = struct {
@@ -11,14 +16,14 @@ pub const App = struct {
     allocator: Allocator,
     telemetry: Telemetry,
 
-    pub fn init(allocator: Allocator) !App {
+    pub fn init(allocator: Allocator, run_mode: RunMode) !App {
         const loop = try allocator.create(Loop);
         errdefer allocator.destroy(loop);
 
         loop.* = try Loop.init(allocator);
         errdefer loop.deinit();
 
-        const telemetry = Telemetry.init(allocator, loop);
+        const telemetry = Telemetry.init(allocator, loop, run_mode);
         errdefer telemetry.deinit();
 
         return .{

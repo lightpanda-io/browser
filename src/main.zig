@@ -70,9 +70,9 @@ pub fn main() !void {
                 return args.printUsageAndExit(false);
             };
 
-            var app = try @import("app.zig").App.init(alloc);
+            var app = try @import("app.zig").App.init(alloc, .serve);
             defer app.deinit();
-            app.telemetry.record(.{ .run = .{ .mode = .serve, .version = version } });
+            app.telemetry.record(.{ .run = {} });
 
             const timeout = std.time.ns_per_s * @as(u64, opts.timeout);
             server.run(&app, address, timeout) catch |err| {
@@ -83,9 +83,9 @@ pub fn main() !void {
         .fetch => |opts| {
             log.debug("Fetch mode: url {s}, dump {any}", .{ opts.url, opts.dump });
 
-            var app = try @import("app.zig").App.init(alloc);
+            var app = try @import("app.zig").App.init(alloc, .fetch);
             defer app.deinit();
-            app.telemetry.record(.{ .run = .{ .mode = .fetch, .version = version } });
+            app.telemetry.record(.{ .run = {} });
 
             // vm
             const vm = jsruntime.VM.init();

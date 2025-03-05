@@ -45,7 +45,7 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    var app = try App.init(allocator);
+    var app = try App.init(allocator, .serve);
     defer app.deinit();
 
     const env = Env.init(allocator);
