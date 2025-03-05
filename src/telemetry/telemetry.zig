@@ -31,6 +31,9 @@ fn TelemetryT(comptime P: type) type {
 
         pub fn init(allocator: Allocator, loop: *Loop, run_mode: RunMode) Self {
             const disabled = std.process.hasEnvVarConstant("LIGHTPANDA_DISABLE_TELEMETRY");
+            if (builtin.mode != .Debug and builtin.is_test == false) {
+                log.info("telemetry {s}", .{if (disabled) "disabled" else "enabled"});
+            }
 
             return .{
                 .disabled = disabled,
