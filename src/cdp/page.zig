@@ -28,7 +28,7 @@ pub fn processMessage(cmd: anytype) !void {
         addScriptToEvaluateOnNewDocument,
         createIsolatedWorld,
         navigate,
-    }, cmd.action) orelse return error.UnknownMethod;
+    }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
         .enable => return cmd.sendResult(null, .{}),
@@ -56,43 +56,16 @@ const Frame = struct {
 };
 
 fn getFrameTree(cmd: anytype) !void {
-    // output
-    const FrameTree = struct {
-        frameTree: struct {
-            frame: Frame,
-        },
-        childFrames: ?[]@This() = null,
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-        pub fn format(
-            self: @This(),
-            comptime _: []const u8,
-            options: std.fmt.FormatOptions,
-            writer: anytype,
-        ) !void {
-            try writer.writeAll("cdp.page.getFrameTree { ");
-            try writer.writeAll(".frameTree = { ");
-            try writer.writeAll(".frame = { ");
-
-            const frame = self.frameTree.frame;
-            try writer.writeAll(".id = ");
-            try std.fmt.formatText(frame.id, "s", options, writer);
-            try writer.writeAll(", .loaderId = ");
-            try std.fmt.formatText(frame.loaderId, "s", options, writer);
-            try writer.writeAll(", .url = ");
-            try std.fmt.formatText(frame.url, "s", options, writer);
-            try writer.writeAll(" } } }");
-        }
-    };
-
-    const state = cmd.cdp;
-    return cmd.sendResult(FrameTree{
+    return cmd.sendResult(.{
         .frameTree = .{
-            .frame = .{
-                .id = state.frame_id,
-                .url = state.url,
-                .securityOrigin = state.security_origin,
-                .secureContextType = state.secure_context_type,
-                .loaderId = state.loader_id,
+            .frame = Frame{
+                .url = bc.url,
+                .id = bc.frame_id,
+                .loaderId = bc.loader_id,
+                .securityOrigin = bc.security_origin,
+                .secureContextType = bc.secure_context_type,
             },
         },
     }, .{});
@@ -103,7 +76,8 @@ fn setLifecycleEventsEnabled(cmd: anytype) !void {
     //     enabled: bool,
     // })) orelse return error.InvalidParams;
 
-    cmd.cdp.page_life_cycle_events = true;
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    bc.page_life_cycle_events = true;
     return cmd.sendResult(null, .{});
 }
 
@@ -116,27 +90,16 @@ fn addScriptToEvaluateOnNewDocument(cmd: anytype) !void {
     //     runImmediately: bool = false,
     // })) orelse return error.InvalidParams;
 
-    const Response = struct {
-        identifier: []const u8 = "1",
-
-        pub fn format(
-            self: @This(),
-            comptime _: []const u8,
-            options: std.fmt.FormatOptions,
-            writer: anytype,
-        ) !void {
-            try writer.writeAll("cdp.page.addScriptToEvaluateOnNewDocument { ");
-            try writer.writeAll(".identifier = ");
-            try std.fmt.formatText(self.identifier, "s", options, writer);
-            try writer.writeAll(" }");
-        }
-    };
-    return cmd.sendResult(Response{}, .{});
+    return cmd.sendResult(.{
+        .identifier = "1",
+    }, .{});
 }
 
 // TODO: hard coded method
 fn createIsolatedWorld(cmd: anytype) !void {
-    const session_id = cmd.session_id orelse return error.SessionIdRequired;
+    _ = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    const session_id = cmd.input.session_id orelse return error.SessionIdRequired;
 
     const params = (try cmd.params(struct {
         frameId: []const u8,
@@ -166,7 +129,16 @@ fn createIsolatedWorld(cmd: anytype) !void {
 }
 
 fn navigate(cmd: anytype) !void {
-    const session_id = cmd.session_id orelse return error.SessionIdRequired;
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    // didn't create?
+    _ = bc.target_id orelse return error.TargetIdNotLoaded;
+
+    // didn't attach?
+    const session_id = bc.session_id orelse return error.SessionIdNotLoaded;
+
+    // if we have a target_id we have to have a page;
+    std.debug.assert(bc.session.page != null);
 
     const params = (try cmd.params(struct {
         url: []const u8,
@@ -177,12 +149,11 @@ fn navigate(cmd: anytype) !void {
     })) orelse return error.InvalidParams;
 
     // change state
-    var state = cmd.cdp;
-    state.reset();
-    state.url = params.url;
+    bc.reset();
+    bc.url = params.url;
 
     // TODO: hard coded ID
-    state.loader_id = "AF8667A203C5392DBE9AC290044AA4C2";
+    bc.loader_id = "AF8667A203C5392DBE9AC290044AA4C2";
 
     const LifecycleEvent = struct {
         frameId: []const u8,
@@ -192,8 +163,8 @@ fn navigate(cmd: anytype) !void {
     };
 
     var life_event = LifecycleEvent{
-        .frameId = state.frame_id,
-        .loaderId = state.loader_id,
+        .frameId = bc.frame_id,
+        .loaderId = bc.loader_id,
         .name = "init",
         .timestamp = 343721.796037,
     };
@@ -201,39 +172,17 @@ fn navigate(cmd: anytype) !void {
     // frameStartedLoading event
     // TODO: event partially hard coded
     try cmd.sendEvent("Page.frameStartedLoading", .{
-        .frameId = state.frame_id,
+        .frameId = bc.frame_id,
     }, .{ .session_id = session_id });
 
-    if (state.page_life_cycle_events) {
+    if (bc.page_life_cycle_events) {
         try cmd.sendEvent("Page.lifecycleEvent", life_event, .{ .session_id = session_id });
     }
 
     // output
-    const Response = struct {
-        frameId: []const u8,
-        loaderId: ?[]const u8,
-        errorText: ?[]const u8 = null,
-
-        pub fn format(
-            self: @This(),
-            comptime _: []const u8,
-            options: std.fmt.FormatOptions,
-            writer: anytype,
-        ) !void {
-            try writer.writeAll("cdp.page.navigate.Resp { ");
-            try writer.writeAll(".frameId = ");
-            try std.fmt.formatText(self.frameId, "s", options, writer);
-            if (self.loaderId) |loaderId| {
-                try writer.writeAll(", .loaderId = '");
-                try std.fmt.formatText(loaderId, "s", options, writer);
-            }
-            try writer.writeAll(" }");
-        }
-    };
-
-    try cmd.sendResult(Response{
-        .frameId = state.frame_id,
-        .loaderId = state.loader_id,
+    try cmd.sendResult(.{
+        .frameId = bc.frame_id,
+        .loaderId = bc.loader_id,
     }, .{});
 
     // TODO: at this point do we need async the following actions to be async?
@@ -242,24 +191,21 @@ fn navigate(cmd: anytype) !void {
     // TODO: noop event, we have no env context at this point, is it necesarry?
     try cmd.sendEvent("Runtime.executionContextsCleared", null, .{ .session_id = session_id });
 
-    // Launch navigate, the page must have been created by a
-    // target.createTarget.
-    var p = cmd.session.currentPage() orelse return error.NoPage;
-    state.execution_context_id += 1;
-
     const aux_data = try std.fmt.allocPrint(
         cmd.arena,
         // NOTE: we assume this is the default web page
         "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}",
-        .{state.frame_id},
+        .{bc.frame_id},
     );
-    try p.navigate(params.url, aux_data);
+
+    var page = bc.session.currentPage().?;
+    try page.navigate(params.url, aux_data);
 
     // Events
 
     // lifecycle init event
     // TODO: partially hard coded
-    if (state.page_life_cycle_events) {
+    if (bc.page_life_cycle_events) {
         life_event.name = "init";
         life_event.timestamp = 343721.796037;
         try cmd.sendEvent("Page.lifecycleEvent", life_event, .{ .session_id = session_id });
@@ -271,11 +217,11 @@ fn navigate(cmd: anytype) !void {
     try cmd.sendEvent("Page.frameNavigated", .{
         .type = "Navigation",
         .frame = Frame{
-            .id = state.frame_id,
-            .url = state.url,
-            .securityOrigin = state.security_origin,
-            .secureContextType = state.secure_context_type,
-            .loaderId = state.loader_id,
+            .id = bc.frame_id,
+            .url = bc.url,
+            .securityOrigin = bc.security_origin,
+            .secureContextType = bc.secure_context_type,
+            .loaderId = bc.loader_id,
         },
     }, .{ .session_id = session_id });
 
@@ -289,7 +235,7 @@ fn navigate(cmd: anytype) !void {
 
     // lifecycle DOMContentLoaded event
     // TODO: partially hard coded
-    if (state.page_life_cycle_events) {
+    if (bc.page_life_cycle_events) {
         life_event.name = "DOMContentLoaded";
         life_event.timestamp = 343721.803338;
         try cmd.sendEvent("Page.lifecycleEvent", life_event, .{ .session_id = session_id });
@@ -305,7 +251,7 @@ fn navigate(cmd: anytype) !void {
 
     // lifecycle DOMContentLoaded event
     // TODO: partially hard coded
-    if (state.page_life_cycle_events) {
+    if (bc.page_life_cycle_events) {
         life_event.name = "load";
         life_event.timestamp = 343721.824655;
         try cmd.sendEvent("Page.lifecycleEvent", life_event, .{ .session_id = session_id });
@@ -313,6 +259,6 @@ fn navigate(cmd: anytype) !void {
 
     // frameStoppedLoading
     return cmd.sendEvent("Page.frameStoppedLoading", .{
-        .frameId = state.frame_id,
+        .frameId = bc.frame_id,
     }, .{ .session_id = session_id });
 }
