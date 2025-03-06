@@ -260,7 +260,7 @@ pub const Tag = enum(u8) {
 
     pub fn all() []Tag {
         comptime {
-            const info = @typeInfo(Tag).Enum;
+            const info = @typeInfo(Tag).@"enum";
             var l: [info.fields.len]Tag = undefined;
             for (info.fields, 0..) |field, i| {
                 l[i] = @as(Tag, @enumFromInt(field.value));
@@ -804,7 +804,7 @@ pub fn eventTargetDispatchEvent(et: *EventTarget, event: *Event) !bool {
 pub fn eventTargetTBaseFieldName(comptime T: type) ?[]const u8 {
     std.debug.assert(@inComptime());
     switch (@typeInfo(T)) {
-        .Struct => |ti| {
+        .@"struct" => |ti| {
             for (ti.fields) |f| {
                 if (f.type == EventTargetTBase) return f.name;
             }

@@ -20,7 +20,7 @@ pub fn testExecFn(
     alloc: std.mem.Allocator,
     js_env: *jsruntime.Env,
 ) anyerror!void {
-    try @import("polyfill.zig").load(alloc, js_env.*);
+    try @import("polyfill.zig").load(alloc, js_env);
 
     var fetch = [_]Case{
         .{

@@ -57,13 +57,6 @@ const Server = struct {
     listener: posix.socket_t,
     timeout: u64,
 
-    // A memory poor for our Clients. Because we only allow 1 client to be
-    // connected at a time, and because of the way we accept, we don't need
-    // a lock for this, since the creation of a new client cannot happen at the
-    // same time as the destruction of a client.
-    client_pool: std.heap.MemoryPool(Client),
-    client_pool_lock: std.Thread.Mutex = .{},
-
     // I/O fields
     accept_completion: Completion,
 
@@ -71,7 +64,7 @@ const Server = struct {
     json_version_response: []const u8,
 
     fn deinit(self: *Server) void {
-        self.client_pool.deinit();
+        _ = self;
     }
 
     fn queueAccept(self: *Server) void {
@@ -102,28 +95,14 @@ const Server = struct {
         result: AcceptError!posix.socket_t,
     ) !void {
         const socket = try result;
-
-        const client = blk: {
-            self.client_pool_lock.lock();
-            defer self.client_pool_lock.unlock();
-            break :blk try self.client_pool.create();
-        };
-
-        errdefer {
-            self.client_pool_lock.lock();
-            self.client_pool.destroy(client);
-            self.client_pool_lock.unlock();
-        }
-
+        const client = try self.allocator.create(Client);
         client.* = Client.init(socket, self);
         client.start();
         log.info("client connected", .{});
     }
 
     fn releaseClient(self: *Server, client: *Client) void {
-        self.client_pool_lock.lock();
-        self.client_pool.destroy(client);
-        self.client_pool_lock.unlock();
+        self.allocator.destroy(client);
     }
 };
 
@@ -1053,7 +1032,6 @@ pub fn run(
         .allocator = allocator,
         .accept_completion = undefined,
         .json_version_response = json_version_response,
-        .client_pool = std.heap.MemoryPool(Client).init(allocator),
     };
     defer server.deinit();
 
@@ -1488,8 +1466,8 @@ fn createTestClient() !TestClient {
     const stream = try std.net.tcpConnectToAddress(address);
 
     const timeout = std.mem.toBytes(posix.timeval{
-        .tv_sec = 2,
-        .tv_usec = 0,
+        .sec = 2,
+        .usec = 0,
     });
     try posix.setsockopt(stream.handle, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeout);
     try posix.setsockopt(stream.handle, posix.SOL.SOCKET, posix.SO.SNDTIMEO, &timeout);

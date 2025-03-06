@@ -140,7 +140,7 @@ You can also follow the progress of our Javascript support in our dedicated [zig
 
 ### Prerequisites
 
-Lightpanda is written with [Zig](https://ziglang.org/) `0.13.0`. You have to
+Lightpanda is written with [Zig](https://ziglang.org/) `0.14.0`. You have to
 install it with the right version in order to build the project.
 
 Lightpanda also depends on
