@@ -151,9 +151,9 @@ pub const Session = struct {
 
         const ContextT = @TypeOf(ctx);
         const InspectorContainer = switch (@typeInfo(ContextT)) {
-            .Struct => ContextT,
-            .Pointer => |ptr| ptr.child,
-            .Void => NoopInspector,
+            .@"struct" => ContextT,
+            .pointer => |ptr| ptr.child,
+            .void => NoopInspector,
             else => @compileError("invalid context type"),
         };
 
@@ -650,9 +650,8 @@ pub const Page = struct {
 
             return .{
                 .element = e,
-                .kind = kind(try parser.elementGetAttribute(e, "type")),
+                .kind = parseKind(try parser.elementGetAttribute(e, "type")),
                 .is_async = try parser.elementGetAttribute(e, "async") != null,
-
                 .src = try parser.elementGetAttribute(e, "src") orelse "inline",
             };
         }
@@ -662,7 +661,7 @@ pub const Page = struct {
         // > type indicates that the script is a "classic script", containing
         // > JavaScript code.
         // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#attribute_is_not_set_default_an_empty_string_or_a_javascript_mime_type
-        fn kind(stype: ?[]const u8) Kind {
+        fn parseKind(stype: ?[]const u8) Kind {
             if (stype == null or stype.?.len == 0) return .javascript;
             if (std.mem.eql(u8, stype.?, "application/javascript")) return .javascript;
             if (std.mem.eql(u8, stype.?, "module")) return .module;

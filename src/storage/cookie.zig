@@ -922,7 +922,7 @@ fn expectAttribute(expected: anytype, url: ?[]const u8, set_cookie: []const u8) 
     var cookie = try Cookie.parse(testing.allocator, uri, set_cookie);
     defer cookie.deinit();
 
-    inline for (@typeInfo(@TypeOf(expected)).Struct.fields) |f| {
+    inline for (@typeInfo(@TypeOf(expected)).@"struct".fields) |f| {
         if (comptime std.mem.eql(u8, f.name, "expires")) {
             try testing.expectDelta(expected.expires, cookie.expires, 1);
         } else {
