@@ -9,29 +9,29 @@ pub const expectString = std.testing.expectEqualStrings;
 // exactly how to assert equality
 pub fn expectEqual(expected: anytype, actual: anytype) !void {
     switch (@typeInfo(@TypeOf(actual))) {
-        .Array => |arr| if (arr.child == u8) {
+        .array => |arr| if (arr.child == u8) {
             return std.testing.expectEqualStrings(expected, &actual);
         },
-        .Pointer => |ptr| if (ptr.child == u8) {
+        .pointer => |ptr| if (ptr.child == u8) {
             return std.testing.expectEqualStrings(expected, actual);
         } else if (comptime isStringArray(ptr.child)) {
             return std.testing.expectEqualStrings(expected, actual);
         } else if (ptr.child == []u8 or ptr.child == []const u8) {
             return expectString(expected, actual);
         },
-        .Struct => |structType| {
+        .@"struct" => |structType| {
             inline for (structType.fields) |field| {
                 try expectEqual(@field(expected, field.name), @field(actual, field.name));
             }
             return;
         },
-        .Optional => {
+        .optional => {
             if (actual == null) {
                 return std.testing.expectEqual(null, expected);
             }
             return expectEqual(expected, actual.?);
         },
-        .Union => |union_info| {
+        .@"union" => |union_info| {
             if (union_info.tag_type == null) {
                 @compileError("Unable to compare untagged union values");
             }
@@ -55,12 +55,12 @@ pub fn expectEqual(expected: anytype, actual: anytype) !void {
 }
 
 pub fn expectDelta(expected: anytype, actual: anytype, delta: anytype) !void {
-    if (@typeInfo(@TypeOf(expected)) == .Null) {
+    if (@typeInfo(@TypeOf(expected)) == .null) {
         return std.testing.expectEqual(null, actual);
     }
 
     switch (@typeInfo(@TypeOf(actual))) {
-        .Optional => {
+        .optional => {
             if (actual) |value| {
                 return expectDelta(expected, value, delta);
             }
@@ -70,7 +70,7 @@ pub fn expectDelta(expected: anytype, actual: anytype, delta: anytype) !void {
     }
 
     switch (@typeInfo(@TypeOf(expected))) {
-        .Optional => {
+        .optional => {
             if (expected) |value| {
                 return expectDelta(value, actual, delta);
             }
@@ -120,7 +120,7 @@ pub fn isPtrTo(comptime id: std.builtin.TypeId) TraitFn {
 
 pub fn isSingleItemPtr(comptime T: type) bool {
     if (comptime is(.pointer)(T)) {
-        return @typeInfo(T).Pointer.size == .one;
+        return @typeInfo(T).pointer.size == .one;
     }
     return false;
 }

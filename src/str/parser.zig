@@ -66,7 +66,7 @@ pub fn asUint(comptime string: anytype) AsUintReturn(string) {
 
 fn AsUintReturn(comptime string: anytype) type {
     return @Type(.{
-        .Int = .{
+        .int = .{
             .bits = @bitSizeOf(@TypeOf(string.*)) - 8, // (- 8) to exclude sentinel 0
             .signedness = .unsigned,
         },

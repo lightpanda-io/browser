@@ -245,7 +245,7 @@ pub const Mime = struct {
         const bit_len = @bitSizeOf(@TypeOf(target.*)) - 8;
         const byte_len = bit_len / 8;
 
-        const T = @Type(.{ .Int = .{
+        const T = @Type(.{ .int = .{
             .bits = bit_len,
             .signedness = .unsigned,
         } });

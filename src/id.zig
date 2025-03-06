@@ -27,7 +27,7 @@ pub fn Incrementing(comptime T: type, comptime prefix: []const u8) type {
         break :blk b;
     };
 
-    const PrefixIntType = @Type(.{ .Int = .{
+    const PrefixIntType = @Type(.{ .int = .{
         .bits = NUMERIC_START * 8,
         .signedness = .unsigned,
     } });

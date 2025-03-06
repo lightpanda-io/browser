@@ -1,6 +1,7 @@
 [submodule "vendor/zig-js-runtime"]
 	path = vendor/zig-js-runtime
 	url = https://github.com/lightpanda-io/zig-js-runtime.git/
+	branch = zig-0.14
 [submodule "vendor/netsurf/libwapcaplet"]
 	path = vendor/netsurf/libwapcaplet
 	url = https://github.com/lightpanda-io/libwapcaplet.git/
@@ -28,3 +29,4 @@
 [submodule "vendor/zig-async-io"]
 	path = vendor/zig-async-io
 	url = https://github.com/lightpanda-io/zig-async-io.git/
+	branch = zig-0.14

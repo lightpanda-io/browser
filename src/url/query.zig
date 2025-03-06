@@ -420,7 +420,7 @@ fn testParseQuery(expected: anytype, query: []const u8) !void {
     defer values.deinit();
 
     var count: usize = 0;
-    inline for (@typeInfo(@TypeOf(expected)).Struct.fields) |f| {
+    inline for (@typeInfo(@TypeOf(expected)).@"struct".fields) |f| {
         const actual = values.get(f.name);
         const expect = @field(expected, f.name);
         try testing.expectEqual(expect.len, actual.len);

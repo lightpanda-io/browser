@@ -63,7 +63,7 @@ pub fn Union(interfaces: anytype) type {
         .decls = &.{},
         .is_exhaustive = true,
     };
-    const enum_T = @Type(.{ .Enum = enum_info });
+    const enum_T = @Type(.{ .@"enum" = enum_info });
 
     // third iteration to generate union type
     var union_fields: [fields.len]Type.UnionField = undefined;
@@ -79,7 +79,7 @@ pub fn Union(interfaces: anytype) type {
         };
     }
 
-    return @Type(.{ .Union = .{
+    return @Type(.{ .@"union" = .{
         .layout = .auto,
         .tag_type = enum_T,
         .fields = &union_fields,
@@ -115,12 +115,12 @@ pub fn Tuple(args: anytype) type {
             // has to be true in order to properly capture the default value
             .is_comptime = true,
             .alignment = @alignOf(type),
-            .default_value = @ptrCast(&interfaces[i]),
+            .default_value_ptr = @ptrCast(&interfaces[i]),
         };
         field_index += 1;
     }
 
-    return @Type(.{ .Struct = .{
+    return @Type(.{ .@"struct" = .{
         .layout = .auto,
         .fields = &fields,
         .decls = &.{},
@@ -130,7 +130,7 @@ pub fn Tuple(args: anytype) type {
 
 fn countInterfaces(args: anytype, count: usize) usize {
     var new_count = count;
-    for (@typeInfo(@TypeOf(args)).Struct.fields) |f| {
+    for (@typeInfo(@TypeOf(args)).@"struct".fields) |f| {
         const member = @field(args, f.name);
         if (@TypeOf(member) == type) {
             new_count += 1;
@@ -143,7 +143,7 @@ fn countInterfaces(args: anytype, count: usize) usize {
 
 fn flattenInterfaces(args: anytype, interfaces: []type, index: usize) usize {
     var new_index = index;
-    for (@typeInfo(@TypeOf(args)).Struct.fields) |f| {
+    for (@typeInfo(@TypeOf(args)).@"struct".fields) |f| {
         const member = @field(args, f.name);
         if (@TypeOf(member) == type) {
             interfaces[new_index] = member;
@@ -186,7 +186,7 @@ test "generate.Union" {
     };
 
     const value = Union(.{ Astruct, Bstruct, .{Cstruct} });
-    const ti = @typeInfo(value).Union;
+    const ti = @typeInfo(value).@"union";
     try std.testing.expectEqual(3, ti.fields.len);
     try std.testing.expectEqualStrings("*generate.test.generate.Union.Astruct.Other", @typeName(ti.fields[0].type));
     try std.testing.expectEqualStrings(ti.fields[0].name, "Astruct");
@@ -209,7 +209,7 @@ test "generate.Tuple" {
 
     {
         const tuple = Tuple(.{ Astruct, Bstruct }){};
-        const ti = @typeInfo(@TypeOf(tuple)).Struct;
+        const ti = @typeInfo(@TypeOf(tuple)).@"struct";
         try std.testing.expectEqual(true, ti.is_tuple);
         try std.testing.expectEqual(2, ti.fields.len);
         try std.testing.expectEqual(Astruct, tuple.@"0");
@@ -219,7 +219,7 @@ test "generate.Tuple" {
     {
         // dedupe
         const tuple = Tuple(.{ Cstruct, Astruct, .{Astruct}, Bstruct, .{ Astruct, .{ Astruct, Bstruct } } }){};
-        const ti = @typeInfo(@TypeOf(tuple)).Struct;
+        const ti = @typeInfo(@TypeOf(tuple)).@"struct";
         try std.testing.expectEqual(true, ti.is_tuple);
         try std.testing.expectEqual(3, ti.fields.len);
         try std.testing.expectEqual(Cstruct, tuple.@"0");

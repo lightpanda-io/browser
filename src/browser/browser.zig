@@ -157,16 +157,16 @@ pub const Session = struct {
 
         const ContextT = @TypeOf(ctx);
         const InspectorContainer = switch (@typeInfo(ContextT)) {
-            .Struct => ContextT,
-            .Pointer => |ptr| ptr.child,
-            .Void => NoopInspector,
+            .@"struct" => ContextT,
+            .pointer => |ptr| ptr.child,
+            .void => NoopInspector,
             else => @compileError("invalid context type"),
         };
 
         // const ctx_opaque = @as(*anyopaque, @ptrCast(ctx));
         self.inspector = try jsruntime.Inspector.init(
             arena,
-            self.env, // TODO: change to 'env' when https://github.com/lightpanda-io/zig-js-runtime/pull/285 lands
+            &self.env,
             if (@TypeOf(ctx) == void) @constCast(@ptrCast(&{})) else ctx,
             InspectorContainer.onInspectorResponse,
             InspectorContainer.onInspectorEvent,
@@ -232,7 +232,7 @@ pub const Session = struct {
 
         // load polyfills
         // TODO: change to 'env' when https://github.com/lightpanda-io/zig-js-runtime/pull/285 lands
-        try polyfill.load(self.arena.allocator(), self.env);
+        try polyfill.load(self.arena.allocator(), &self.env);
 
         // inspector
         self.contextCreated(page, aux_data);
@@ -265,7 +265,7 @@ pub const Session = struct {
 
     fn contextCreated(self: *Session, page: *Page, aux_data: ?[]const u8) void {
         log.debug("inspector context created", .{});
-        self.inspector.contextCreated(self.env, "", page.origin orelse "://", aux_data);
+        self.inspector.contextCreated(&self.env, "", page.origin orelse "://", aux_data);
     }
 };
 
@@ -317,7 +317,7 @@ pub const Page = struct {
     pub fn wait(self: *Page) !void {
         // try catch
         var try_catch: jsruntime.TryCatch = undefined;
-        try_catch.init(self.session.env);
+        try_catch.init(&self.session.env);
         defer try_catch.deinit();
 
         self.session.env.wait() catch |err| {
@@ -325,7 +325,7 @@ pub const Page = struct {
             if (err == error.EnvNotStarted) return;
 
             const arena = self.arena;
-            if (try try_catch.err(arena, self.session.env)) |msg| {
+            if (try try_catch.err(arena, &self.session.env)) |msg| {
                 defer arena.free(msg);
                 log.info("wait error: {s}", .{msg});
                 return;
@@ -592,9 +592,7 @@ pub const Page = struct {
         // TODO handle charset attribute
         const opt_text = try parser.nodeTextContent(parser.elementToNode(s.element));
         if (opt_text) |text| {
-            // TODO: change to &self.session.env when
-            // https://github.com/lightpanda-io/zig-js-runtime/pull/285 lands
-            try s.eval(self.arena, self.session.env, text);
+            try s.eval(self.arena, &self.session.env, text);
             return;
         }
 
@@ -657,11 +655,8 @@ pub const Page = struct {
     // received.
     fn fetchScript(self: *const Page, s: *const Script) !void {
         const arena = self.arena;
-
         const body = try self.fetchData(arena, s.src, null);
-        // TODO: change to &self.session.env when
-        // https://github.com/lightpanda-io/zig-js-runtime/pull/285 lands
-        try s.eval(arena, self.session.env, body);
+        try s.eval(arena, &self.session.env, body);
     }
 
     const Script = struct {
@@ -684,9 +679,8 @@ pub const Page = struct {
 
             return .{
                 .element = e,
-                .kind = kind(try parser.elementGetAttribute(e, "type")),
+                .kind = parseKind(try parser.elementGetAttribute(e, "type")),
                 .is_async = try parser.elementGetAttribute(e, "async") != null,
-
                 .src = try parser.elementGetAttribute(e, "src") orelse "inline",
             };
         }
@@ -696,7 +690,7 @@ pub const Page = struct {
         // > type indicates that the script is a "classic script", containing
         // > JavaScript code.
         // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#attribute_is_not_set_default_an_empty_string_or_a_javascript_mime_type
-        fn kind(stype: ?[]const u8) Kind {
+        fn parseKind(stype: ?[]const u8) Kind {
             if (stype == null or stype.?.len == 0) return .javascript;
             if (std.mem.eql(u8, stype.?, "application/javascript")) return .javascript;
             if (std.mem.eql(u8, stype.?, "module")) return .module;
@@ -704,7 +698,7 @@ pub const Page = struct {
             return .unknown;
         }
 
-        fn eval(self: Script, arena: Allocator, env: Env, body: []const u8) !void {
+        fn eval(self: Script, arena: Allocator, env: *const Env, body: []const u8) !void {
             var try_catch: jsruntime.TryCatch = undefined;
             try_catch.init(env);
             defer try_catch.deinit();

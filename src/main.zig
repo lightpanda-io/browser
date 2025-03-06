@@ -35,7 +35,7 @@ const version = @import("build_info").git_commit;
 
 const log = std.log.scoped(.cli);
 
-pub const std_options = .{
+pub const std_options = std.Options{
     // Set the log level to info
     .log_level = .debug,
 
@@ -344,7 +344,7 @@ fn parseFetchArgs(
 var verbose: bool = builtin.mode == .Debug; // In debug mode, force verbose.
 fn logFn(
     comptime level: std.log.Level,
-    comptime scope: @Type(.EnumLiteral),
+    comptime scope: @Type(.enum_literal),
     comptime format: []const u8,
     args: anytype,
 ) void {
