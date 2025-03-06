@@ -151,7 +151,7 @@ fn LogT(comptime Out: type, comptime enhanced_readability: bool) type {
                 buffer.appendSliceAssumeCapacity(inject);
             }
 
-            inline for (@typeInfo(@TypeOf(data)).Struct.fields) |f| {
+            inline for (@typeInfo(@TypeOf(data)).@"struct".fields) |f| {
                 // + 2 for the leading space and the equal sign
                 // + 5 to save space for null/false/true common values
                 const key_len = f.name.len + 7;
@@ -179,30 +179,30 @@ fn LogT(comptime Out: type, comptime enhanced_readability: bool) type {
 fn writeValue(allocator: Allocator, buffer: *std.ArrayListUnmanaged(u8), value: anytype) !void {
     const T = @TypeOf(value);
     switch (@typeInfo(T)) {
-        .Optional => {
+        .optional => {
             if (value) |v| {
                 return writeValue(allocator, buffer, v);
             }
             // in _log, we reserved space for a value of up to 5 bytes.
             return buffer.appendSliceAssumeCapacity("null");
         },
-        .ComptimeInt, .Int, .ComptimeFloat, .Float => {
+        .comptime_int, .int, .comptime_float, .float => {
             return std.fmt.format(buffer.writer(allocator), "{d}", .{value});
         },
-        .Bool => {
+        .bool => {
             // in _log, we reserved space for a value of up to 5 bytes.
             return buffer.appendSliceAssumeCapacity(if (value) "true" else "false");
         },
-        .ErrorSet => return buffer.appendSlice(allocator, @errorName(value)),
-        .Enum => return buffer.appendSlice(allocator, @tagName(value)),
-        .Array => return writeValue(allocator, buffer, &value),
-        .Pointer => |ptr| switch (ptr.size) {
-            .Slice => switch (ptr.child) {
+        .error_set => return buffer.appendSlice(allocator, @errorName(value)),
+        .@"enum" => return buffer.appendSlice(allocator, @tagName(value)),
+        .array => return writeValue(allocator, buffer, &value),
+        .pointer => |ptr| switch (ptr.size) {
+            .slice => switch (ptr.child) {
                 u8 => return writeString(allocator, buffer, value),
                 else => {},
             },
-            .One => switch (@typeInfo(ptr.child)) {
-                .Array => |arr| if (arr.child == u8) {
+            .one => switch (@typeInfo(ptr.child)) {
+                .array => |arr| if (arr.child == u8) {
                     return writeString(allocator, buffer, value);
                 },
                 else => return false,
