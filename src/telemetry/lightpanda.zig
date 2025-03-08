@@ -13,15 +13,16 @@ const log = std.log.scoped(.telemetry);
 const URL = "https://telemetry.lightpanda.io";
 
 pub const LightPanda = struct {
+    loop: *Loop,
     uri: std.Uri,
-    io: Client.IO,
     allocator: Allocator,
     sending_pool: std.heap.MemoryPool(Sending),
 
     pub fn init(allocator: Allocator, loop: *Loop) !LightPanda {
+        std.debug.print("{s}\n", .{@typeName(Client.IO)});
         return .{
+            .loop = loop,
             .allocator = allocator,
-            .io = Client.IO.init(loop),
             .uri = std.Uri.parse(URL) catch unreachable,
             .sending_pool = std.heap.MemoryPool(Sending).init(allocator),
         };
@@ -55,6 +56,7 @@ pub const LightPanda = struct {
             .ctx = undefined,
             .lightpanda = self,
             .request = undefined,
+            .io = Client.IO.init(self.loop),
             .client = .{ .allocator = self.allocator },
         };
         sending.request = try sending.client.create(.POST, self.uri, .{
@@ -62,7 +64,7 @@ pub const LightPanda = struct {
         });
         errdefer sending.request.deinit();
 
-        sending.ctx = try Client.Ctx.init(&self.io, &sending.request);
+        sending.ctx = try Client.Ctx.init(&sending.io, &sending.request);
         errdefer sending.ctx.deinit();
 
         try sending.client.async_open(
@@ -134,6 +136,7 @@ pub const LightPanda = struct {
 };
 
 const Sending = struct {
+    io: Client.IO,
     ctx: Client.Ctx,
     client: Client,
     body: []const u8,
