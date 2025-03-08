@@ -21,8 +21,7 @@ const Allocator = std.mem.Allocator;
 const json = std.json;
 
 const dom = @import("dom.zig");
-const Loop = @import("jsruntime").Loop;
-// const Client = @import("../server.zig").Client;
+const App = @import("../app.zig").App;
 const asUint = @import("../str/parser.zig").asUint;
 
 const log = std.log.scoped(.cdp);
@@ -78,10 +77,11 @@ pub fn CDPT(comptime TypeProvider: type) type {
         pub const Browser = TypeProvider.Browser;
         pub const Session = TypeProvider.Session;
 
-        pub fn init(allocator: Allocator, client: *TypeProvider.Client, loop: anytype) Self {
+        pub fn init(app: *App, client: *TypeProvider.Client) Self {
+            const allocator = app.allocator;
             return .{
                 .client = client,
-                .browser = Browser.init(allocator, loop),
+                .browser = Browser.init(app),
                 .session = null,
                 .allocator = allocator,
                 .url = URL_BASE,

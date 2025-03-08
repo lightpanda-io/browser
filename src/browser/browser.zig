@@ -33,6 +33,7 @@ const Loop = jsruntime.Loop;
 const Env = jsruntime.Env;
 const Module = jsruntime.Module;
 
+const App = @import("../app.zig").App;
 const apiweb = @import("../apiweb.zig");
 
 const Window = @import("../html/window.zig").Window;
@@ -59,21 +60,19 @@ pub const user_agent = "Lightpanda/1.0";
 // A browser contains only one session.
 // TODO allow multiple sessions per browser.
 pub const Browser = struct {
-    loop: *Loop,
+    app: *App,
     session: ?*Session,
-    allocator: Allocator,
     session_pool: SessionPool,
 
     const SessionPool = std.heap.MemoryPool(Session);
 
     const uri = "about:blank";
 
-    pub fn init(allocator: Allocator, loop: *Loop) Browser {
+    pub fn init(app: *App) Browser {
         return .{
-            .loop = loop,
+            .app = app,
             .session = null,
-            .allocator = allocator,
-            .session_pool = SessionPool.init(allocator),
+            .session_pool = SessionPool.init(app.allocator),
         };
     }
 
@@ -86,7 +85,7 @@ pub const Browser = struct {
         self.closeSession();
 
         const session = try self.session_pool.create();
-        try Session.init(session, self.allocator, ctx, self.loop, uri);
+        try Session.init(session, self.app, ctx, uri);
         self.session = session;
         return session;
     }
@@ -111,6 +110,8 @@ pub const Browser = struct {
 // You can create successively multiple pages for a session, but you must
 // deinit a page before running another one.
 pub const Session = struct {
+    app: *App,
+
     // allocator used to init the arena.
     allocator: Allocator,
 
@@ -138,8 +139,10 @@ pub const Session = struct {
 
     jstypes: [Types.len]usize = undefined,
 
-    fn init(self: *Session, allocator: Allocator, ctx: anytype, loop: *Loop, uri: []const u8) !void {
+    fn init(self: *Session, app: *App, ctx: anytype, uri: []const u8) !void {
+        const allocator = app.allocator;
         self.* = .{
+            .app = app,
             .uri = uri,
             .env = undefined,
             .inspector = undefined,
@@ -153,7 +156,7 @@ pub const Session = struct {
 
         const arena = self.arena.allocator();
 
-        Env.init(&self.env, arena, loop, null);
+        Env.init(&self.env, arena, app.loop, null);
         errdefer self.env.deinit();
         try self.env.load(&self.jstypes);
 
@@ -339,6 +342,7 @@ pub const Page = struct {
     // - auxData: extra data forwarded to the Inspector
     // see Inspector.contextCreated
     pub fn navigate(self: *Page, uri: []const u8, auxData: ?[]const u8) !void {
+        self.session.app.telemetry.record(.{ .navigate = {} });
         const alloc = self.arena.allocator();
 
         log.debug("starting GET {s}", .{uri});

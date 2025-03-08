@@ -64,6 +64,7 @@ jobs:
     env:
       MAX_MEMORY: 28000
       MAX_AVG_DURATION: 24
+      LIGHTPANDA_DISABLE_TELEMETRY: true
 
     runs-on: ubuntu-latest
 

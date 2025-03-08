@@ -34,6 +34,7 @@ const CloseError = jsruntime.IO.CloseError;
 const CancelError = jsruntime.IO.CancelOneError;
 const TimeoutError = jsruntime.IO.TimeoutError;
 
+const App = @import("app.zig").App;
 const CDP = @import("cdp/cdp.zig").CDP;
 
 const TimeoutCheck = std.time.ns_per_ms * 100;
@@ -50,6 +51,7 @@ const MAX_MESSAGE_SIZE = 256 * 1024 + 14;
 pub const Client = ClientT(*Server, CDP);
 
 const Server = struct {
+    app: *App,
     allocator: Allocator,
     loop: *jsruntime.Loop,
     current_client_id: usize = 0,
@@ -78,7 +80,6 @@ const Server = struct {
         self.send_pool.deinit();
         self.client_pool.deinit();
         self.completion_state_pool.deinit();
-        self.allocator.free(self.json_version_response);
     }
 
     fn queueAccept(self: *Server) void {
@@ -595,7 +596,7 @@ fn ClientT(comptime S: type, comptime C: type) type {
             };
 
             self.mode = .websocket;
-            self.cdp = C.init(self.server.allocator, self, self.server.loop);
+            self.cdp = C.init(self.server.app, self);
             return self.sendAlloc(arena, response);
         }
 
@@ -1024,10 +1025,9 @@ fn websocketHeader(buf: []u8, op_code: OpCode, payload_len: usize) []const u8 {
 }
 
 pub fn run(
-    allocator: Allocator,
+    app: *App,
     address: net.Address,
     timeout: u64,
-    loop: *jsruntime.Loop,
 ) !void {
     // create socket
     const flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK;
@@ -1050,13 +1050,17 @@ pub fn run(
     const vm = jsruntime.VM.init();
     defer vm.deinit();
 
+    var loop = app.loop;
+    const allocator = app.allocator;
     const json_version_response = try buildJSONVersionResponse(allocator, address);
+    defer allocator.free(json_version_response);
 
     var server = Server{
+        .app = app,
         .loop = loop,
         .timeout = timeout,
         .listener = listener,
-        .allocator = allocator,
+        .allocator = app.allocator,
         .close_completion = undefined,
         .accept_completion = undefined,
         .json_version_response = json_version_response,
@@ -1735,7 +1739,7 @@ fn assertWebSocketMessage(
 }
 
 const MockServer = struct {
-    loop: *jsruntime.Loop = undefined,
+    app: *App = undefined,
     closed: bool = false,
 
     // record the messages we sent to the client
@@ -1778,8 +1782,8 @@ const MockCDP = struct {
 
     allocator: Allocator = testing.allocator,
 
-    fn init(_: Allocator, client: anytype, loop: *jsruntime.Loop) MockCDP {
-        _ = loop;
+    fn init(app: *App, client: anytype) MockCDP {
+        _ = app;
         _ = client;
         return .{};
     }
