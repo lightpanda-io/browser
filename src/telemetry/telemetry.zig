@@ -8,7 +8,7 @@ const uuidv4 = @import("../id.zig").uuidv4;
 const RunMode = @import("../app.zig").RunMode;
 
 const log = std.log.scoped(.telemetry);
-const ID_FILE = "lightpanda.id";
+const IID_FILE = "iid";
 
 pub const Telemetry = TelemetryT(blk: {
     if (builtin.mode == .Debug or builtin.is_test) break :blk NoopProvider;
@@ -29,7 +29,7 @@ fn TelemetryT(comptime P: type) type {
 
         const Self = @This();
 
-        pub fn init(allocator: Allocator, run_mode: RunMode) Self {
+        pub fn init(allocator: Allocator, run_mode: RunMode, app_dir_path: ?[]const u8) Self {
             const disabled = std.process.hasEnvVarConstant("LIGHTPANDA_DISABLE_TELEMETRY");
             if (builtin.mode != .Debug and builtin.is_test == false) {
                 log.info("telemetry {s}", .{if (disabled) "disabled" else "enabled"});
@@ -39,7 +39,7 @@ fn TelemetryT(comptime P: type) type {
                 .disabled = disabled,
                 .run_mode = run_mode,
                 .provider = try P.init(allocator),
-                .iid = if (disabled) null else getOrCreateId(),
+                .iid = if (disabled) null else getOrCreateId(app_dir_path),
             };
         }
 
@@ -59,9 +59,17 @@ fn TelemetryT(comptime P: type) type {
     };
 }
 
-fn getOrCreateId() ?[36]u8 {
+fn getOrCreateId(app_dir_path_: ?[]const u8) ?[36]u8 {
+    const app_dir_path = app_dir_path_ orelse return null;
+
     var buf: [37]u8 = undefined;
-    const data = std.fs.cwd().readFile(ID_FILE, &buf) catch |err| switch (err) {
+    var dir = std.fs.openDirAbsolute(app_dir_path, .{}) catch |err| {
+        log.warn("failed to open data directory '{s}': {}", .{ app_dir_path, err });
+        return null;
+    };
+    defer dir.close();
+
+    const data = dir.readFile(IID_FILE, &buf) catch |err| switch (err) {
         error.FileNotFound => &.{},
         else => {
             log.warn("failed to open id file: {}", .{err});
@@ -76,7 +84,7 @@ fn getOrCreateId() ?[36]u8 {
     }
 
     uuidv4(&id);
-    std.fs.cwd().writeFile(.{ .sub_path = ID_FILE, .data = &id }) catch |err| {
+    dir.writeFile(.{ .sub_path = IID_FILE, .data = &id }) catch |err| {
         log.warn("failed to write to id file: {}", .{err});
         return null;
     };
@@ -115,30 +123,27 @@ test "telemetry: disabled by environment" {
         }
     };
 
-    var telemetry = TelemetryT(FailingProvider).init(testing.allocator, .serve);
+    var telemetry = TelemetryT(FailingProvider).init(testing.allocator, .serve, null);
     defer telemetry.deinit();
     telemetry.record(.{ .run = {} });
 }
 
 test "telemetry: getOrCreateId" {
-    defer std.fs.cwd().deleteFile(ID_FILE) catch {};
+    defer std.fs.cwd().deleteFile("/tmp/" ++ IID_FILE) catch {};
 
-    std.fs.cwd().deleteFile(ID_FILE) catch {};
+    std.fs.cwd().deleteFile("/tmp/" ++ IID_FILE) catch {};
 
-    const id1 = getOrCreateId().?;
-    const id2 = getOrCreateId().?;
+    const id1 = getOrCreateId("/tmp/").?;
+    const id2 = getOrCreateId("/tmp/").?;
     try testing.expectEqualStrings(&id1, &id2);
 
-    std.fs.cwd().deleteFile(ID_FILE) catch {};
-    const id3 = getOrCreateId().?;
+    std.fs.cwd().deleteFile("/tmp/" ++ IID_FILE) catch {};
+    const id3 = getOrCreateId("/tmp/").?;
     try testing.expectEqual(false, std.mem.eql(u8, &id1, &id3));
 }
 
 test "telemetry: sends event to provider" {
-    defer std.fs.cwd().deleteFile(ID_FILE) catch {};
-    std.fs.cwd().deleteFile(ID_FILE) catch {};
-
-    var telemetry = TelemetryT(MockProvider).init(testing.allocator, .serve);
+    var telemetry = TelemetryT(MockProvider).init(testing.allocator, .serve, "/tmp/");
     defer telemetry.deinit();
     const mock = &telemetry.provider;
 
