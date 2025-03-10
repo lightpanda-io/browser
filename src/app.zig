@@ -23,7 +23,7 @@ pub const App = struct {
         loop.* = try Loop.init(allocator);
         errdefer loop.deinit();
 
-        const telemetry = Telemetry.init(allocator, loop, run_mode);
+        const telemetry = Telemetry.init(allocator, run_mode);
         errdefer telemetry.deinit();
 
         return .{
