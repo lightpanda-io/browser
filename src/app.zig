@@ -61,7 +61,7 @@ fn getAndMakeAppDir(allocator: Allocator) ?[]const u8 {
             allocator.free(app_dir_path);
             log.warn("failed to create lightpanda data dir: {}", .{err});
             return null;
-        }
+        },
     };
     return app_dir_path;
 }
