@@ -7,6 +7,7 @@ const Testing = @This();
 
 const cdp = @import("cdp.zig");
 const parser = @import("netsurf");
+const App = @import("../app.zig").App;
 
 pub const expectEqual = std.testing.expectEqual;
 pub const expectError = std.testing.expectError;
@@ -15,8 +16,8 @@ pub const expectString = std.testing.expectEqualStrings;
 const Browser = struct {
     session: ?Session = null,
 
-    pub fn init(_: Allocator, loop: anytype) Browser {
-        _ = loop;
+    pub fn init(app: *App) Browser {
+        _ = app;
         return .{};
     }
 
@@ -90,6 +91,7 @@ const TestCDP = cdp.CDPT(struct {
 });
 
 const TestContext = struct {
+    app: App,
     client: ?Client = null,
     cdp_: ?TestCDP = null,
     arena: std.heap.ArenaAllocator,
@@ -98,6 +100,7 @@ const TestContext = struct {
         if (self.cdp_) |*c| {
             c.deinit();
         }
+        self.app.deinit();
         self.arena.deinit();
     }
 
@@ -106,7 +109,7 @@ const TestContext = struct {
             self.client = Client.init(self.arena.allocator());
             // Don't use the arena here. We want to detect leaks in CDP.
             // The arena is only for test-specific stuff
-            self.cdp_ = TestCDP.init(std.testing.allocator, &self.client.?, "dummy-loop");
+            self.cdp_ = TestCDP.init(&self.app, &self.client.?);
         }
         return &self.cdp_.?;
     }
@@ -165,6 +168,7 @@ const TestContext = struct {
 
 pub fn context() TestContext {
     return .{
+        .app = App.init(std.testing.allocator, .serve) catch unreachable,
         .arena = std.heap.ArenaAllocator.init(std.testing.allocator),
     };
 }
