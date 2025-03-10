@@ -57,8 +57,8 @@ jobs:
             zig-out/bin/lightpanda
           retention-days: 1
 
-  puppeteer:
-    name: puppeteer
+  puppeteer-perf:
+    name: puppeteer-perf
     needs: zig-build-release
 
     env:
@@ -105,3 +105,35 @@ jobs:
           echo "puppeteer avg duration: $PUPPETEER_AVG_DURATION"
           test "$PUPPETEER_AVG_DURATION" -le "$MAX_AVG_DURATION"
 
+  demo-scripts:
+    name: demo-scripts
+    needs: zig-build-release
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: 'lightpanda-io/demo'
+          fetch-depth: 0
+
+      - run: npm install
+
+      - name: download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lightpanda-build-release
+
+      - run: chmod a+x ./lightpanda
+
+      - name: run puppeteer links
+        run: |
+          ./lightpanda serve & echo $! > LPD.pid
+          node puppeteer/links.js || exit 1
+          kill `cat LPD.pid`
+
+      - name: run puppeteer dump
+        run: |
+          ./lightpanda serve & echo $! > LPD.pid
+          node puppeteer/dump.js || exit 1
+          kill `cat LPD.pid`
