@@ -90,7 +90,7 @@ pub const Event = union(enum) {
 };
 
 const NoopProvider = struct {
-    fn init(_: Allocator, _: *Loop) !NoopProvider {
+    fn init(_: Allocator) !NoopProvider {
         return .{};
     }
     fn deinit(_: NoopProvider) void {}
@@ -106,7 +106,7 @@ test "telemetry: disabled by environment" {
     defer _ = unsetenv(@constCast("LIGHTPANDA_DISABLE_TELEMETRY"));
 
     const FailingProvider = struct {
-        fn init(_: Allocator, _: *Loop) !@This() {
+        fn init(_: Allocator) !@This() {
             return .{};
         }
         fn deinit(_: @This()) void {}
@@ -115,7 +115,7 @@ test "telemetry: disabled by environment" {
         }
     };
 
-    var telemetry = TelemetryT(FailingProvider).init(testing.allocator, undefined, .serve);
+    var telemetry = TelemetryT(FailingProvider).init(testing.allocator, .serve);
     defer telemetry.deinit();
     telemetry.record(.{ .run = {} });
 }
@@ -138,7 +138,7 @@ test "telemetry: sends event to provider" {
     defer std.fs.cwd().deleteFile(ID_FILE) catch {};
     std.fs.cwd().deleteFile(ID_FILE) catch {};
 
-    var telemetry = TelemetryT(MockProvider).init(testing.allocator, undefined, .serve);
+    var telemetry = TelemetryT(MockProvider).init(testing.allocator, .serve);
     defer telemetry.deinit();
     const mock = &telemetry.provider;
 
@@ -158,7 +158,7 @@ const MockProvider = struct {
     allocator: Allocator,
     events: std.ArrayListUnmanaged(Event),
 
-    fn init(allocator: Allocator, _: *Loop) !@This() {
+    fn init(allocator: Allocator) !@This() {
         return .{
             .iid = null,
             .run_mode = null,
