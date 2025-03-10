@@ -29,7 +29,7 @@ fn TelemetryT(comptime P: type) type {
 
         const Self = @This();
 
-        pub fn init(allocator: Allocator, loop: *Loop, run_mode: RunMode) Self {
+        pub fn init(allocator: Allocator, run_mode: RunMode) Self {
             const disabled = std.process.hasEnvVarConstant("LIGHTPANDA_DISABLE_TELEMETRY");
             if (builtin.mode != .Debug and builtin.is_test == false) {
                 log.info("telemetry {s}", .{if (disabled) "disabled" else "enabled"});
@@ -38,8 +38,8 @@ fn TelemetryT(comptime P: type) type {
             return .{
                 .disabled = disabled,
                 .run_mode = run_mode,
+                .provider = try P.init(allocator),
                 .iid = if (disabled) null else getOrCreateId(),
-                .provider = try P.init(allocator, loop),
             };
         }
 
