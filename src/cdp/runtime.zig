@@ -56,6 +56,7 @@ fn sendInspector(cmd: anytype, action: anytype) !void {
         }
     }
 
+    // the result to return is handled directly by the inspector.
     bc.session.callInspector(cmd.input.json);
 }
 
