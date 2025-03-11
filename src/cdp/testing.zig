@@ -147,6 +147,7 @@ const TestContext = struct {
 
     const BrowserContextOpts = struct {
         id: ?[]const u8 = null,
+        target_id: ?[]const u8 = null,
         session_id: ?[]const u8 = null,
     };
     pub fn loadBrowserContext(self: *TestContext, opts: BrowserContextOpts) !*main.BrowserContext(TestCDP) {
@@ -161,6 +162,10 @@ const TestContext = struct {
 
         if (opts.id) |id| {
             bc.id = id;
+        }
+
+        if (opts.target_id) |tid| {
+            bc.target_id = tid;
         }
 
         if (opts.session_id) |sid| {

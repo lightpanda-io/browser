@@ -274,13 +274,13 @@ test "cdp.page: getFrameTree" {
         try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 10 });
     }
 
-    const bc = try ctx.loadBrowserContext(.{ .id = "BID-9" });
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .target_id = "TID-3" });
     {
         try ctx.processMessage(.{ .id = 11, .method = "Page.getFrameTree" });
         try ctx.expectSentResult(.{
             .frameTree = .{
                 .frame = .{
-                    .id = bc.frame_id,
+                    .id = "TID-3",
                     .loaderId = bc.loader_id,
                     .url = bc.url,
                     .domainAndRegistry = "",
