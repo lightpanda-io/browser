@@ -57,12 +57,13 @@ const Frame = struct {
 
 fn getFrameTree(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const target_id = bc.target_id orelse return error.TargetNotLoaded;
 
     return cmd.sendResult(.{
         .frameTree = .{
             .frame = Frame{
                 .url = bc.url,
-                .id = bc.frame_id,
+                .id = target_id,
                 .loaderId = bc.loader_id,
                 .securityOrigin = bc.security_origin,
                 .secureContextType = bc.secure_context_type,
@@ -132,7 +133,7 @@ fn navigate(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     // didn't create?
-    _ = bc.target_id orelse return error.TargetIdNotLoaded;
+    const target_id = bc.target_id orelse return error.TargetIdNotLoaded;
 
     // didn't attach?
     const session_id = bc.session_id orelse return error.SessionIdNotLoaded;
@@ -163,7 +164,7 @@ fn navigate(cmd: anytype) !void {
     };
 
     var life_event = LifecycleEvent{
-        .frameId = bc.frame_id,
+        .frameId = target_id,
         .loaderId = bc.loader_id,
         .name = "init",
         .timestamp = 343721.796037,
@@ -172,7 +173,7 @@ fn navigate(cmd: anytype) !void {
     // frameStartedLoading event
     // TODO: event partially hard coded
     try cmd.sendEvent("Page.frameStartedLoading", .{
-        .frameId = bc.frame_id,
+        .frameId = target_id,
     }, .{ .session_id = session_id });
 
     if (bc.page_life_cycle_events) {
@@ -181,7 +182,7 @@ fn navigate(cmd: anytype) !void {
 
     // output
     try cmd.sendResult(.{
-        .frameId = bc.frame_id,
+        .frameId = target_id,
         .loaderId = bc.loader_id,
     }, .{});
 
@@ -195,7 +196,7 @@ fn navigate(cmd: anytype) !void {
         cmd.arena,
         // NOTE: we assume this is the default web page
         "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}",
-        .{bc.frame_id},
+        .{target_id},
     );
 
     var page = bc.session.currentPage().?;
@@ -217,7 +218,7 @@ fn navigate(cmd: anytype) !void {
     try cmd.sendEvent("Page.frameNavigated", .{
         .type = "Navigation",
         .frame = Frame{
-            .id = bc.frame_id,
+            .id = target_id,
             .url = bc.url,
             .securityOrigin = bc.security_origin,
             .secureContextType = bc.secure_context_type,
@@ -259,7 +260,7 @@ fn navigate(cmd: anytype) !void {
 
     // frameStoppedLoading
     return cmd.sendEvent("Page.frameStoppedLoading", .{
-        .frameId = bc.frame_id,
+        .frameId = target_id,
     }, .{ .session_id = session_id });
 }
 
