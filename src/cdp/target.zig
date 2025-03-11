@@ -231,7 +231,7 @@ fn getTargetInfo(cmd: anytype) !void {
         }
 
         return cmd.sendResult(.{
-            .targetInfo = .{
+            .targetInfo = TargetInfo{
                 .targetId = target_id,
                 .type = "page",
                 .title = "",
@@ -243,7 +243,8 @@ fn getTargetInfo(cmd: anytype) !void {
     }
 
     return cmd.sendResult(.{
-        .targetInfo = .{
+        .targetInfo = TargetInfo{
+            .targetId = "TID-STARTUP-B",
             .type = "browser",
             .title = "",
             .url = "",
@@ -342,9 +343,9 @@ fn setAutoAttach(cmd: anytype) !void {
     try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
         .sessionId = "STARTUP",
         .targetInfo = TargetInfo{
-            .type = "browser",
-            .targetId = "TID-STARTUP",
-            .title = "about:blank",
+            .type = "page",
+            .targetId = "TID-STARTUP-P",
+            .title = "New Private Tab",
             .url = "chrome://newtab/",
             .browserContextId = "BID-STARTUP",
         },
@@ -382,7 +383,7 @@ const TargetInfo = struct {
     attached: bool = true,
     type: []const u8 = "page",
     canAccessOpener: bool = false,
-    browserContextId: []const u8,
+    browserContextId: ?[]const u8 = null,
 };
 
 const testing = @import("testing.zig");

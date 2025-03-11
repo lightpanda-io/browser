@@ -70,7 +70,7 @@ pub const ExecutionContextCreated = struct {
     pub const AuxData = struct {
         isDefault: bool = true,
         type: []const u8 = "default",
-        frameId: []const u8 = cdp.FRAME_ID,
+        frameId: []const u8,
     };
 };
 

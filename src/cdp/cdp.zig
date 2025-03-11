@@ -28,7 +28,6 @@ const log = std.log.scoped(.cdp);
 
 pub const URL_BASE = "chrome://newtab/";
 pub const LOADER_ID = "LOADERID24DD2FD56CF1EF33C965C79C";
-pub const FRAME_ID = "FRAMEIDD8AED408A0467AC93100BCDBE";
 
 pub const TimestampEvent = struct {
     timestamp: f64,
@@ -282,7 +281,6 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         // State
         url: []const u8,
-        frame_id: []const u8,
         loader_id: []const u8,
         security_origin: []const u8,
         page_life_cycle_events: bool,
@@ -301,7 +299,6 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .target_id = null,
                 .session_id = null,
                 .url = URL_BASE,
-                .frame_id = FRAME_ID,
                 .security_origin = URL_BASE,
                 .secure_context_type = "Secure", // TODO = enum
                 .loader_id = LOADER_ID,
