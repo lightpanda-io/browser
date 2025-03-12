@@ -56,15 +56,19 @@ const Session = struct {
         return &(self.page orelse return null);
     }
 
-    pub fn createPage(self: *Session) !*Page {
+    pub fn createPage(self: *Session, aux_data: ?[]const u8) !*Page {
         if (self.page != null) {
             return error.MockBrowserPageAlreadyExists;
         }
         self.page = .{
             .session = self,
-            .allocator = self.allocator,
+            .aux_data = try self.allocator.dupe(u8, aux_data orelse ""),
         };
         return &self.page.?;
+    }
+
+    pub fn removePage(self: *Session) void {
+        self.page = null;
     }
 
     pub fn callInspector(self: *Session, msg: []const u8) void {
@@ -75,7 +79,6 @@ const Session = struct {
 
 const Page = struct {
     session: *Session,
-    allocator: Allocator,
     aux_data: []const u8 = "",
     doc: ?*parser.Document = null,
 
@@ -83,14 +86,6 @@ const Page = struct {
         _ = self;
         _ = url;
         _ = aux_data;
-    }
-
-    pub fn start(self: *Page, aux_data: []const u8) !void {
-        self.aux_data = try self.allocator.dupe(u8, aux_data);
-    }
-
-    pub fn end(self: *Page) void {
-        self.session.page = null;
     }
 };
 
@@ -152,13 +147,15 @@ const TestContext = struct {
     };
     pub fn loadBrowserContext(self: *TestContext, opts: BrowserContextOpts) !*main.BrowserContext(TestCDP) {
         var c = self.cdp();
-        if (c.browser_context) |*bc| {
+        c.browser.session = null;
+
+        if (c.browser_context) |bc| {
             bc.deinit();
             c.browser_context = null;
         }
 
         _ = try c.createBrowserContext();
-        var bc = &c.browser_context.?;
+        var bc = c.browser_context.?;
 
         if (opts.id) |id| {
             bc.id = id;

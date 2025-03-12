@@ -116,14 +116,7 @@ fn createTarget(cmd: anytype) !void {
     // if target_id is null, we should never have a session_id
     std.debug.assert(bc.session_id == null);
 
-    const page = try bc.session.createPage();
     const target_id = cmd.cdp.target_id_gen.next();
-
-    // change CDP state
-    bc.url = "about:blank";
-    bc.security_origin = "://";
-    bc.secure_context_type = "InsecureScheme";
-    bc.loader_id = LOADER_ID;
 
     // start the js env
     const aux_data = try std.fmt.allocPrint(
@@ -132,7 +125,13 @@ fn createTarget(cmd: anytype) !void {
         "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}",
         .{target_id},
     );
-    try page.start(aux_data);
+    _ = try bc.session.createPage(aux_data);
+
+    // change CDP state
+    bc.url = "about:blank";
+    bc.security_origin = "://";
+    bc.secure_context_type = "InsecureScheme";
+    bc.loader_id = LOADER_ID;
 
     // send targetCreated event
     // TODO: should this only be sent when Target.setDiscoverTargets
@@ -213,7 +212,7 @@ fn closeTarget(cmd: anytype) !void {
         bc.session_id = null;
     }
 
-    bc.session.currentPage().?.end();
+    bc.session.removePage();
     bc.target_id = null;
 }
 
@@ -508,7 +507,7 @@ test "cdp.target: closeTarget" {
     }
 
     // pretend we createdTarget first
-    _ = try bc.session.createPage();
+    _ = try bc.session.createPage(null);
     bc.target_id = "TID-A";
     {
         try testing.expectError(error.UnknownTargetId, ctx.processMessage(.{ .id = 10, .method = "Target.closeTarget", .params = .{ .targetId = "TID-8" } }));
@@ -539,7 +538,7 @@ test "cdp.target: attachToTarget" {
     }
 
     // pretend we createdTarget first
-    _ = try bc.session.createPage();
+    _ = try bc.session.createPage(null);
     bc.target_id = "TID-B";
     {
         try testing.expectError(error.UnknownTargetId, ctx.processMessage(.{ .id = 10, .method = "Target.attachToTarget", .params = .{ .targetId = "TID-8" } }));
@@ -583,7 +582,7 @@ test "cdp.target: getTargetInfo" {
     }
 
     // pretend we createdTarget first
-    _ = try bc.session.createPage();
+    _ = try bc.session.createPage(null);
     bc.target_id = "TID-A";
     {
         try testing.expectError(error.UnknownTargetId, ctx.processMessage(.{ .id = 10, .method = "Target.getTargetInfo", .params = .{ .targetId = "TID-8" } }));

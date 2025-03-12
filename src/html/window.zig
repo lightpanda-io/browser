@@ -58,17 +58,17 @@ pub const Window = struct {
     navigator: Navigator,
 
     pub fn create(target: ?[]const u8, navigator: ?Navigator) Window {
-        return Window{
+        return .{
             .target = target orelse "",
             .navigator = navigator orelse .{},
         };
     }
 
-    pub fn replaceLocation(self: *Window, loc: *Location) !void {
-        self.location = loc;
+    pub fn replaceLocation(self: *Window, loc: ?*Location) !void {
+        self.location = loc orelse &emptyLocation;
 
-        if (self.document != null) {
-            try parser.documentHTMLSetLocation(Location, self.document.?, self.location);
+        if (self.document) |doc| {
+            try parser.documentHTMLSetLocation(Location, doc, self.location);
         }
     }
 
