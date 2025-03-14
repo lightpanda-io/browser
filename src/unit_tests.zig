@@ -60,7 +60,7 @@ pub fn main() !void {
 
     const http_thread = blk: {
         const address = try std.net.Address.parseIp("127.0.0.1", 9582);
-        const thread = try std.Thread.spawn(.{}, serveHTTP, .{address});
+        const thread = try std.Thread.spawn(.{}, serveHTTP, .{ allocator, address });
         break :blk thread;
     };
     defer http_thread.join();
@@ -323,12 +323,18 @@ fn isUnnamed(t: std.builtin.TestFn) bool {
     return true;
 }
 
-fn serveHTTP(address: std.net.Address) !void {
+fn serveHTTP(allocator: Allocator, address: std.net.Address) !void {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
     var listener = try address.listen(.{ .reuse_address = true });
     defer listener.deinit();
 
     var read_buffer: [1024]u8 = undefined;
     ACCEPT: while (true) {
+        defer _ = arena.reset(.{ .retain_with_limit = 1024 });
+        const aa = arena.allocator();
+
         var conn = try listener.accept();
         defer conn.stream.close();
         var server = std.http.Server.init(conn, &read_buffer);
@@ -344,8 +350,23 @@ fn serveHTTP(address: std.net.Address) !void {
 
             const path = request.head.target;
             if (std.mem.eql(u8, path, "/loader")) {
-                try writeResponse(&request, .{
-                    .body = "Hello!",
+                try request.respond("Hello!", .{});
+            } else if (std.mem.eql(u8, path, "/http_client/simple")) {
+                try request.respond("", .{});
+            } else if (std.mem.eql(u8, path, "/http_client/body")) {
+                var headers: std.ArrayListUnmanaged(std.http.Header) = .{};
+
+                var it = request.iterateHeaders();
+                while (it.next()) |hdr| {
+                    try headers.append(aa, .{
+                        .name = try std.fmt.allocPrint(aa, "_{s}", .{hdr.name}),
+                        .value = hdr.value,
+                    });
+                }
+
+                try request.respond("over 9000!", .{
+                    .status = .created,
+                    .extra_headers = headers.items,
                 });
             }
         }
@@ -360,26 +381,16 @@ fn serveCDP(app: *App, address: std.net.Address) !void {
     };
 }
 
-const Response = struct {
-    body: []const u8 = "",
-    status: std.http.Status = .ok,
-};
-
-fn writeResponse(req: *std.http.Server.Request, res: Response) !void {
-    try req.respond(res.body, .{ .status = res.status });
-}
-
 test {
     std.testing.refAllDecls(@import("url/query.zig"));
     std.testing.refAllDecls(@import("browser/dump.zig"));
-    std.testing.refAllDecls(@import("browser/loader.zig"));
     std.testing.refAllDecls(@import("browser/mime.zig"));
     std.testing.refAllDecls(@import("css/css.zig"));
     std.testing.refAllDecls(@import("css/libdom_test.zig"));
     std.testing.refAllDecls(@import("css/match_test.zig"));
     std.testing.refAllDecls(@import("css/parser.zig"));
     std.testing.refAllDecls(@import("generate.zig"));
-    std.testing.refAllDecls(@import("http/Client.zig"));
+    std.testing.refAllDecls(@import("http/client.zig"));
     std.testing.refAllDecls(@import("storage/storage.zig"));
     std.testing.refAllDecls(@import("storage/cookie.zig"));
     std.testing.refAllDecls(@import("iterator/iterator.zig"));
@@ -388,4 +399,5 @@ test {
     std.testing.refAllDecls(@import("log.zig"));
     std.testing.refAllDecls(@import("datetime.zig"));
     std.testing.refAllDecls(@import("telemetry/telemetry.zig"));
+    std.testing.refAllDecls(@import("http/client.zig"));
 }
