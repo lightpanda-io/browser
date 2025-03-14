@@ -1,0 +1,12 @@
+.{
+  .name = .browser,
+  .paths = .{""},
+  .version = "0.0.0",
+  .fingerprint = 0xda130f3af836cea0,
+  .dependencies = .{
+    .tls = .{
+      .url = "https://github.com/karlseguin/tls.zig/archive/e39d40150f10464992da11352fb3955b3345272f.tar.gz",
+      .hash = "122039cd3abe387b69d23930bf12154c2c84fc894874e10129a1fc5e8ac75ca0ddc0"
+    },
+  },
+}
