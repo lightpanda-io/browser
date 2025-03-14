@@ -26,8 +26,8 @@ pub fn expectEqual(expected: anytype, actual: anytype) !void {
             return;
         },
         .optional => {
-            if (actual == null) {
-                return std.testing.expectEqual(null, expected);
+            if (@typeInfo(@TypeOf(expected)) == .null) {
+                return std.testing.expectEqual(null, actual);
             }
             return expectEqual(expected, actual.?);
         },
@@ -132,3 +132,35 @@ pub fn print(comptime fmt: []const u8, args: anytype) void {
         std.debug.print(fmt, args);
     }
 }
+
+pub const Random = struct {
+    var instance: ?std.Random.DefaultPrng = null;
+
+    pub fn fill(buf: []u8) void {
+        var r = random();
+        r.bytes(buf);
+    }
+
+    pub fn fillAtLeast(buf: []u8, min: usize) []u8 {
+        var r = random();
+        const l = r.intRangeAtMost(usize, min, buf.len);
+        r.bytes(buf[0..l]);
+        return buf;
+    }
+
+    pub fn intRange(comptime T: type, min: T, max: T) T {
+        var r = random();
+        return r.intRangeAtMost(T, min, max);
+    }
+
+    pub fn random() std.Random {
+        if (instance == null) {
+            var seed: u64 = undefined;
+            std.posix.getrandom(std.mem.asBytes(&seed)) catch unreachable;
+            instance = std.Random.DefaultPrng.init(seed);
+            // instance = std.Random.DefaultPrng.init(0);
+
+        }
+        return instance.?.random();
+    }
+};
