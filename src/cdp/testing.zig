@@ -17,7 +17,7 @@ const Browser = struct {
     session: ?*Session = null,
     arena: std.heap.ArenaAllocator,
 
-    pub fn init(app: *App) Browser {
+    pub fn init(app: *App) !Browser {
         return .{
             .arena = std.heap.ArenaAllocator.init(app.allocator),
         };

@@ -24,7 +24,6 @@ const Allocator = std.mem.Allocator;
 const Types = @import("root").Types;
 
 const parser = @import("netsurf");
-const Loader = @import("loader.zig").Loader;
 const Dump = @import("dump.zig");
 const Mime = @import("mime.zig").Mime;
 
@@ -44,10 +43,8 @@ const Location = @import("../html/location.zig").Location;
 
 const storage = @import("../storage/storage.zig");
 
-const FetchResult = @import("../http/Client.zig").Client.FetchResult;
-
+const http = @import("../http/client.zig");
 const UserContext = @import("../user_context.zig").UserContext;
-const HttpClient = @import("asyncio").Client;
 
 const polyfill = @import("../polyfill/polyfill.zig");
 
@@ -63,20 +60,21 @@ pub const Browser = struct {
     app: *App,
     session: ?*Session,
     allocator: Allocator,
-    http_client: *HttpClient,
+    http_client: *http.Client,
     session_pool: SessionPool,
     page_arena: std.heap.ArenaAllocator,
 
     const SessionPool = std.heap.MemoryPool(Session);
 
-    pub fn init(app: *App) Browser {
+    pub fn init(app: *App) !Browser {
         const allocator = app.allocator;
         return .{
             .app = app,
             .session = null,
             .allocator = allocator,
-            .http_client = @ptrCast(&app.http_client),
+            .http_client = &app.http_client,
             .session_pool = SessionPool.init(allocator),
+            .http_client = try http.Client.init(allocator, 5),
             .page_arena = std.heap.ArenaAllocator.init(allocator),
         };
     }
@@ -121,9 +119,6 @@ pub const Session = struct {
     // all others Session deps use directly self.alloc and not the arena.
     arena: std.heap.ArenaAllocator,
 
-    // TODO handle proxy
-    loader: Loader,
-
     env: Env,
     inspector: jsruntime.Inspector,
 
@@ -132,6 +127,7 @@ pub const Session = struct {
     // TODO move the shed to the browser?
     storage_shed: storage.Shed,
     page: ?Page = null,
+    http_client: *http.Client,
 
     jstypes: [Types.len]usize = undefined,
 
@@ -143,7 +139,7 @@ pub const Session = struct {
             .env = undefined,
             .browser = browser,
             .inspector = undefined,
-            .loader = Loader.init(allocator),
+            .http_client = &browser.http_client,
             .storage_shed = storage.Shed.init(allocator),
             .arena = std.heap.ArenaAllocator.init(allocator),
             .window = Window.create(null, .{ .agent = user_agent }),
@@ -181,7 +177,6 @@ pub const Session = struct {
         }
         self.env.deinit();
         self.arena.deinit();
-        self.loader.deinit();
         self.storage_shed.deinit();
     }
 
@@ -370,32 +365,14 @@ pub const Page = struct {
         } });
 
         // load the data
-        var resp = try self.session.loader.get(arena, self.uri);
-        defer resp.deinit();
+        var request = try self.session.http_client.request(.GET, self.uri);
+        defer request.deinit();
+        var response = try request.sendSync(.{});
 
-        const req = resp.req;
+        const header = response.header;
+        log.info("GET {any} {d}", .{ self.uri, header.status });
 
-        log.info("GET {any} {d}", .{ self.uri, @intFromEnum(req.response.status) });
-
-        // TODO handle redirection
-        log.debug("{?} {d} {s}", .{
-            req.response.version,
-            @intFromEnum(req.response.status),
-            req.response.reason,
-            // TODO log headers
-        });
-
-        // TODO handle charset
-        // https://html.spec.whatwg.org/#content-type
-        var it = req.response.iterateHeaders();
-        var ct_: ?[]const u8 = null;
-        while (true) {
-            const h = it.next() orelse break;
-            if (std.ascii.eqlIgnoreCase(h.name, "Content-Type")) {
-                ct_ = try arena.dupe(u8, h.value);
-            }
-        }
-        const ct = ct_ orelse {
+        const ct = response.header.get("content-type") orelse {
             // no content type in HTTP headers.
             // TODO try to sniff mime type from the body.
             log.info("no content-type HTTP header", .{});
@@ -404,14 +381,18 @@ pub const Page = struct {
 
         log.debug("header content-type: {s}", .{ct});
         var mime = try Mime.parse(arena, ct);
+        defer mime.deinit();
 
         if (mime.isHTML()) {
-            try self.loadHTMLDoc(req.reader(), mime.charset orelse "utf-8", aux_data);
+            try self.loadHTMLDoc(&response, mime.charset orelse "utf-8", aux_data);
         } else {
             log.info("non-HTML document: {s}", .{ct});
-
+            var arr: std.ArrayListUnmanaged(u8) = .{};
+            while (try response.next()) |data| {
+                try arr.appendSlice(arena, try arena.dupe(u8, data));
+            }
             // save the body into the page.
-            self.raw_data = try req.reader().readAllAlloc(arena, 16 * 1024 * 1024);
+            self.raw_data = arr.items;
         }
     }
 
@@ -453,7 +434,7 @@ pub const Page = struct {
         // replace the user context document with the new one.
         try session.env.setUserContext(.{
             .document = html_doc,
-            .httpClient = self.session.browser.http_client,
+            .http_client = self.session.browser.http_client,
         });
 
         // browse the DOM tree to retrieve scripts
@@ -628,30 +609,32 @@ pub const Page = struct {
 
         const u = try std.Uri.resolve_inplace(self.uri, res_src, &b);
 
-        var fetchres = try self.session.loader.get(arena, u);
-        defer fetchres.deinit();
+        var request = try self.session.http_client.request(.GET, u);
+        defer request.deinit();
+        var response = try request.sendSync(.{});
 
-        const resp = fetchres.req.response;
+        log.info("fetch {any}: {d}", .{ u, response.header.status });
 
-        log.info("fetch {any}: {d}", .{ u, resp.status });
-
-        if (resp.status != .ok) {
+        if (response.header.status != 200) {
             return FetchError.BadStatusCode;
         }
 
+        var arr: std.ArrayListUnmanaged(u8) = .{};
+        while (try response.next()) |data| {
+            try arr.appendSlice(arena, try arena.dupe(u8, data));
+        }
+
         // TODO check content-type
-        const body = try fetchres.req.reader().readAllAlloc(arena, 16 * 1024 * 1024);
 
         // check no body
-        if (body.len == 0) {
+        if (arr.items.len == 0) {
             return FetchError.NoBody;
         }
 
-        return body;
+        return arr.items;
     }
 
-    // fetchScript senf a GET request to the src and execute the script
-    // received.
+
     fn fetchScript(self: *const Page, s: *const Script) !void {
         const arena = self.arena;
         const body = try self.fetchData(arena, s.src, null);
