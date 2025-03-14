@@ -194,7 +194,11 @@ pub const Session = struct {
         // Use the page_arena for this, which has a more appropriate lifetime
         // and which has more retained memory between sessions and pages.
         const arena = self.browser.page_arena.allocator();
-        const body = try self.page.?.fetchData(arena, specifier);
+        const body = try self.page.?.fetchData(
+            arena,
+            specifier,
+            if (self.page.?.current_script) |s| s.src else null,
+        );
         return self.env.compileModule(body, specifier);
     }
 
@@ -282,6 +286,10 @@ pub const Page = struct {
     location: Location = .{},
 
     raw_data: ?[]const u8 = null,
+
+    // current_script is the script currently evaluated by the page.
+    // current_script could by fetch module to resolve module's url to fetch.
+    current_script: ?*const Script = null,
 
     fn init(session: *Session) Page {
         return .{
@@ -546,6 +554,9 @@ pub const Page = struct {
     // if no src is present, we evaluate the text source.
     // https://html.spec.whatwg.org/multipage/scripting.html#script-processing-model
     fn evalScript(self: *Page, s: Script) !void {
+        self.current_script = &s;
+        defer self.current_script = null;
+
         // https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-classic-script
         const opt_src = try parser.elementGetAttribute(s.element, "src");
         if (opt_src) |src| {
@@ -590,13 +601,27 @@ pub const Page = struct {
         JsErr,
     };
 
+    // fetchData returns the data corresponding to the src target.
+    // It resolves src using the page's uri.
+    // If a base path is given, src is resolved according to the base first.
     // the caller owns the returned string
-    fn fetchData(self: *Page, arena: Allocator, src: []const u8) ![]const u8 {
+    fn fetchData(self: *Page, arena: Allocator, src: []const u8, base: ?[]const u8) ![]const u8 {
         log.debug("starting fetch {s}", .{src});
 
         var buffer: [1024]u8 = undefined;
         var b: []u8 = buffer[0..];
-        const u = try std.Uri.resolve_inplace(self.uri, src, &b);
+
+        var res_src = src;
+
+        // if a base path is given, we resolve src using base.
+        if (base) |_base| {
+            const dir = std.fs.path.dirname(_base);
+            if (dir) |_dir| {
+                res_src = try std.fs.path.resolve(arena, &.{ _dir, src });
+            }
+        }
+
+        const u = try std.Uri.resolve_inplace(self.uri, res_src, &b);
 
         var fetchres = try self.session.loader.get(arena, u);
         defer fetchres.deinit();
@@ -624,7 +649,7 @@ pub const Page = struct {
     // received.
     fn fetchScript(self: *Page, s: Script) !void {
         const arena = self.arena;
-        const body = try self.fetchData(arena, s.src);
+        const body = try self.fetchData(arena, s.src, null);
         // TODO: change to &self.session.env when
         // https://github.com/lightpanda-io/zig-js-runtime/pull/285 lands
         try s.eval(arena, self.session.env, body);
