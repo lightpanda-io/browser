@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const builtin = @import("builtin");
 const std = @import("std");
 const cdp = @import("cdp.zig");
 
@@ -37,7 +38,7 @@ pub fn processMessage(cmd: anytype) !void {
 
 fn sendInspector(cmd: anytype, action: anytype) !void {
     // save script in file at debug mode
-    if (std.log.defaultLogEnabled(.debug)) {
+    if (builtin.mode == .Debug) {
         try logInspector(cmd, action);
     }
 
@@ -108,7 +109,7 @@ fn logInspector(cmd: anytype, action: anytype) !void {
     const id = cmd.input.id orelse return error.RequiredId;
     const name = try std.fmt.allocPrint(cmd.arena, "id_{d}.js", .{id});
 
-    var dir = try std.fs.cwd().makeOpenPath("zig-cache/tmp", .{});
+    var dir = try std.fs.cwd().makeOpenPath(".zig-cache/tmp", .{});
     defer dir.close();
 
     const f = try dir.createFile(name, .{});
