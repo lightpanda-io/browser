@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 ARG ZIG=0.13.0
 ARG ZIG_MINISIG=RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
@@ -60,14 +60,14 @@ RUN make install-libiconv && \
     make install-mimalloc
 
 # download and install v8
-RUN curl -L -o libc_v8.a https://github.com/lightpanda-io/zig-v8-fork/releases/download/${ZIG_V8}/libc_v8_${V8}_${OS}_${ARCH}.a && \
-    mkdir -p vendor/zig-js-runtime/vendor/v8/${ARCH}-${OS}/release && \
-    mv libc_v8.a vendor/zig-js-runtime/vendor/v8/${ARCH}-${OS}/release/libc_v8.a
+RUN curl -L -o libc_v8.a https://github.com/lightpanda-io/zig-v8-fork/releases/download/${ZIG_V8}/libc_v8_${V8}_linux_${ARCH}.a && \
+    mkdir -p vendor/zig-js-runtime/vendor/v8/${ARCH}-linux/release && \
+    mv libc_v8.a vendor/zig-js-runtime/vendor/v8/${ARCH}-linux/release/libc_v8.a
 
 # build release
 RUN make build
 
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 # copy ca certificates
 COPY --from=0 /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
