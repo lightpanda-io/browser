@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const builtin = @import("builtin");
 const std = @import("std");
 const cdp = @import("cdp.zig");
 
@@ -37,7 +38,7 @@ pub fn processMessage(cmd: anytype) !void {
 
 fn sendInspector(cmd: anytype, action: anytype) !void {
     // save script in file at debug mode
-    if (std.log.defaultLogEnabled(.debug)) {
+    if (builtin.mode == .Debug) {
         try logInspector(cmd, action);
     }
 
