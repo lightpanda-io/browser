@@ -109,7 +109,7 @@ fn logInspector(cmd: anytype, action: anytype) !void {
     const id = cmd.input.id orelse return error.RequiredId;
     const name = try std.fmt.allocPrint(cmd.arena, "id_{d}.js", .{id});
 
-    var dir = try std.fs.cwd().makeOpenPath("zig-cache/tmp", .{});
+    var dir = try std.fs.cwd().makeOpenPath(".zig-cache/tmp", .{});
     defer dir.close();
 
     const f = try dir.createFile(name, .{});
