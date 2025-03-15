@@ -26,9 +26,44 @@ jobs:
           submodules: recursive
 
       - uses: ./.github/actions/install
+        with:
+          os: ${{env.OS}}
+          arch: ${{env.ARCH}}
 
       - name: zig build
         run: zig build --release=safe -Doptimize=ReleaseSafe -Dengine=v8 -Dcpu=x86_64 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
+
+      - name: Rename binary
+        run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
+
+      - name: Upload the build
+        uses: ncipollo/release-action@v1
+        with:
+          allowUpdates: true
+          artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          tag: nightly
+
+  build-linux-aarch64:
+    env:
+      ARCH: aarch64
+      OS: linux
+
+    runs-on: ubuntu-22.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # fetch submodules recusively, to get zig-js-runtime submodules also.
+          submodules: recursive
+
+      - uses: ./.github/actions/install
+        with:
+          os: ${{env.OS}}
+          arch: ${{env.ARCH}}
+
+      - name: zig build
+        run: zig build --release=safe -Doptimize=ReleaseSafe -Dengine=v8 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
 
       - name: Rename binary
         run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
