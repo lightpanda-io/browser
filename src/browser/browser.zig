@@ -24,7 +24,6 @@ const Allocator = std.mem.Allocator;
 const Types = @import("root").Types;
 
 const parser = @import("netsurf");
-const Loader = @import("loader.zig").Loader;
 const Dump = @import("dump.zig");
 const Mime = @import("mime.zig").Mime;
 
@@ -43,10 +42,8 @@ const Location = @import("../html/location.zig").Location;
 
 const storage = @import("../storage/storage.zig");
 
-const FetchResult = @import("../http/Client.zig").Client.FetchResult;
-
+const http = @import("../http/client.zig");
 const UserContext = @import("../user_context.zig").UserContext;
-const HttpClient = @import("asyncio").Client;
 
 const polyfill = @import("../polyfill/polyfill.zig");
 
@@ -117,9 +114,6 @@ pub const Session = struct {
 
     uri: []const u8,
 
-    // TODO handle proxy
-    loader: Loader,
-
     env: Env,
     loop: *Loop,
     inspector: jsruntime.Inspector,
@@ -129,7 +123,7 @@ pub const Session = struct {
     // TODO move the shed to the browser?
     storageShed: storage.Shed,
     page: ?Page = null,
-    httpClient: HttpClient,
+    http_client: http.Client,
 
     jstypes: [Types.len]usize = undefined,
 
@@ -139,8 +133,7 @@ pub const Session = struct {
             .env = undefined,
             .inspector = undefined,
             .allocator = allocator,
-            .loader = Loader.init(allocator),
-            .httpClient = .{ .allocator = allocator },
+            .http_client = try http.Client.init(allocator, 5),
             .storageShed = storage.Shed.init(allocator),
             .arena = std.heap.ArenaAllocator.init(allocator),
             .window = Window.create(null, .{ .agent = user_agent }),
@@ -179,8 +172,7 @@ pub const Session = struct {
 
         self.env.deinit();
         self.arena.deinit();
-        self.httpClient.deinit();
-        self.loader.deinit();
+        self.http_client.deinit();
         self.storageShed.deinit();
     }
 
@@ -367,50 +359,34 @@ pub const Page = struct {
         // TODO handle fragment in url.
 
         // load the data
-        var resp = try self.session.loader.get(alloc, self.uri);
-        defer resp.deinit();
+        var request = try self.session.http_client.request(.GET, self.uri);
+        defer request.deinit();
+        var response = try request.sendSync(.{});
 
-        const req = resp.req;
+        const header = response.header;
+        log.info("GET {any} {d}", .{ self.uri, header.status });
 
-        log.info("GET {any} {d}", .{ self.uri, @intFromEnum(req.response.status) });
-
-        // TODO handle redirection
-        log.debug("{?} {d} {s}", .{
-            req.response.version,
-            @intFromEnum(req.response.status),
-            req.response.reason,
-            // TODO log headers
-        });
-
-        // TODO handle charset
-        // https://html.spec.whatwg.org/#content-type
-        var it = req.response.iterateHeaders();
-        var ct: ?[]const u8 = null;
-        while (true) {
-            const h = it.next() orelse break;
-            if (std.ascii.eqlIgnoreCase(h.name, "Content-Type")) {
-                ct = try alloc.dupe(u8, h.value);
-            }
-        }
-        if (ct == null) {
+        const ct = response.header.get("content-type") orelse {
             // no content type in HTTP headers.
             // TODO try to sniff mime type from the body.
             log.info("no content-type HTTP header", .{});
             return;
-        }
-        defer alloc.free(ct.?);
+        };
 
-        log.debug("header content-type: {s}", .{ct.?});
-        var mime = try Mime.parse(alloc, ct.?);
+        log.debug("header content-type: {s}", .{ct});
+        var mime = try Mime.parse(alloc, ct);
         defer mime.deinit();
 
         if (mime.isHTML()) {
-            try self.loadHTMLDoc(req.reader(), mime.charset orelse "utf-8", auxData);
+            try self.loadHTMLDoc(&response, mime.charset orelse "utf-8", auxData);
         } else {
-            log.info("non-HTML document: {s}", .{ct.?});
-
+            log.info("non-HTML document: {s}", .{ct});
+            var arr: std.ArrayListUnmanaged(u8) = .{};
+            while (try response.next()) |data| {
+                try arr.appendSlice(alloc, try alloc.dupe(u8, data));
+            }
             // save the body into the page.
-            self.raw_data = try req.reader().readAllAlloc(alloc, 16 * 1024 * 1024);
+            self.raw_data = arr.items;
         }
     }
 
@@ -453,7 +429,7 @@ pub const Page = struct {
         // replace the user context document with the new one.
         try self.session.env.setUserContext(.{
             .document = html_doc,
-            .httpClient = &self.session.httpClient,
+            .http_client = @ptrCast(&self.session.http_client),
         });
 
         // browse the DOM tree to retrieve scripts
@@ -614,22 +590,29 @@ pub const Page = struct {
         var b: []u8 = buffer[0..];
         const u = try std.Uri.resolve_inplace(self.uri, src, &b);
 
-        var fetchres = try self.session.loader.get(alloc, u);
-        defer fetchres.deinit();
+        var request = try self.session.http_client.request(.GET, u);
+        defer request.deinit();
+        var response = try request.sendSync(.{});
 
-        const resp = fetchres.req.response;
+        log.info("fetch {any}: {d}", .{ u, response.header.status });
 
-        log.info("fetch {any}: {d}", .{ u, resp.status });
+        if (response.header.status != 200) {
+            return FetchError.BadStatusCode;
+        }
 
-        if (resp.status != .ok) return FetchError.BadStatusCode;
+        var arr: std.ArrayListUnmanaged(u8) = .{};
+        while (try response.next()) |data| {
+            try arr.appendSlice(alloc, try alloc.dupe(u8, data));
+        }
 
         // TODO check content-type
-        const body = try fetchres.req.reader().readAllAlloc(alloc, 16 * 1024 * 1024);
 
         // check no body
-        if (body.len == 0) return FetchError.NoBody;
+        if (arr.items.len == 0) {
+            return FetchError.NoBody;
+        }
 
-        return body;
+        return arr.items;
     }
 
     // fetchScript senf a GET request to the src and execute the script
@@ -638,7 +621,6 @@ pub const Page = struct {
         const alloc = self.arena.allocator();
         const body = try self.fetchData(alloc, s.src);
         defer alloc.free(body);
-
         try s.eval(alloc, self.session.env, body);
     }
 

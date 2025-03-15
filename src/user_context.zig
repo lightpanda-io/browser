@@ -1,8 +1,8 @@
 const std = @import("std");
 const parser = @import("netsurf");
-const Client = @import("asyncio").Client;
+const Client = @import("http/client.zig").Client;
 
 pub const UserContext = struct {
     document: *parser.DocumentHTML,
-    httpClient: *Client,
+    http_client: *Client,
 };

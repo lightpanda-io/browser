@@ -177,6 +177,9 @@ fn common(
     options: jsruntime.Options,
 ) !void {
     const target = step.root_module.resolved_target.?;
+    const optimize = step.root_module.optimize.?;
+    const dep_opts = .{ .target = target, .optimize = optimize };
+
     const jsruntimemod = try jsruntime_pkgs.module(
         b,
         options,
@@ -189,15 +192,7 @@ fn common(
     netsurf.addImport("jsruntime", jsruntimemod);
     step.root_module.addImport("netsurf", netsurf);
 
-    const asyncio = b.addModule("asyncio", .{
-        .root_source_file = b.path("vendor/zig-async-io/src/lib.zig"),
-    });
-    step.root_module.addImport("asyncio", asyncio);
-
-    const tlsmod = b.addModule("tls", .{
-        .root_source_file = b.path("vendor/tls.zig/src/root.zig"),
-    });
-    step.root_module.addImport("tls", tlsmod);
+    step.root_module.addImport("tls", b.dependency("tls", dep_opts).module("tls"));
 }
 
 fn moduleNetSurf(b: *std.Build, target: std.Build.ResolvedTarget) !*std.Build.Module {
