@@ -26,6 +26,9 @@ jobs:
           submodules: recursive
 
       - uses: ./.github/actions/install
+        with:
+          os: ${{env.OS}}
+          arch: ${{env.ARCH}}
 
       - name: zig build
         run: zig build --release=safe -Doptimize=ReleaseSafe -Dengine=v8 -Dcpu=x86_64 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
@@ -55,6 +58,9 @@ jobs:
           submodules: recursive
 
       - uses: ./.github/actions/install
+        with:
+          os: ${{env.OS}}
+          arch: ${{env.ARCH}}
 
       - name: zig build
         run: zig build --release=safe -Doptimize=ReleaseSafe -Dengine=v8 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
