@@ -512,7 +512,7 @@ pub const Page = struct {
             // > page.
             // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#notes
             try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(e));
-            self.evalScript(script) catch |err| log.warn("evaljs: {any}", .{err});
+            self.evalScript(&script) catch |err| log.warn("evaljs: {any}", .{err});
             try parser.documentHTMLSetCurrentScript(html_doc, null);
         }
 
@@ -531,7 +531,7 @@ pub const Page = struct {
         // eval async scripts.
         for (sasync.items) |s| {
             try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(s.element));
-            self.evalScript(s) catch |err| log.warn("evaljs: {any}", .{err});
+            self.evalScript(&s) catch |err| log.warn("evaljs: {any}", .{err});
             try parser.documentHTMLSetCurrentScript(html_doc, null);
         }
 
@@ -553,8 +553,8 @@ pub const Page = struct {
     // evalScript evaluates the src in priority.
     // if no src is present, we evaluate the text source.
     // https://html.spec.whatwg.org/multipage/scripting.html#script-processing-model
-    fn evalScript(self: *Page, s: Script) !void {
-        self.current_script = &s;
+    fn evalScript(self: *Page, s: *const Script) !void {
+        self.current_script = s;
         defer self.current_script = null;
 
         // https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-classic-script
@@ -647,8 +647,9 @@ pub const Page = struct {
 
     // fetchScript senf a GET request to the src and execute the script
     // received.
-    fn fetchScript(self: *Page, s: Script) !void {
+    fn fetchScript(self: *Page, s: *const Script) !void {
         const arena = self.arena;
+
         const body = try self.fetchData(arena, s.src, null);
         // TODO: change to &self.session.env when
         // https://github.com/lightpanda-io/zig-js-runtime/pull/285 lands
