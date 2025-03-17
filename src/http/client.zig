@@ -205,17 +205,19 @@ pub const Request = struct {
                 return error.ConnectionResetByPeer;
             }
             const result = try reader.process(buf[0..n]);
-            if (result.header) {
+            const response = reader.response;
+            if (response.status > 0) {
                 std.debug.assert(result.done or reader.body_reader != null);
+                std.debug.assert(result.data == null);
                 return .{
                     ._buf = buf,
                     ._request = self,
                     ._reader = reader,
                     ._done = result.done,
                     ._tls_conn = tls_conn,
-                    ._data = result.data,
+                    ._data = result.unprocessed,
                     ._socket = self._socket.?,
-                    .header = reader.response,
+                    .header = response,
                 };
             }
         }
@@ -316,6 +318,12 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
         handler: H,
         request: *Request,
         read_buf: []u8,
+
+        // When we're using TLS, we'll probably need to keep read_buf intact
+        // until we get a ful TLS record. `read_pos` is the position into `read_buf`
+        // that we have valid, but unprocessed, data up to.
+        read_pos: usize = 0,
+
         socket: posix.socket_t,
         read_completion: IO.Completion = undefined,
         send_completion: IO.Completion = undefined,
@@ -352,6 +360,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
         }
 
         fn connected(self: *Self, _: *IO.Completion, result: IO.ConnectError!void) void {
+            self.loop.onConnect(result);
             result catch |err| return self.handleError("Connection failed", err);
 
             if (self.tls_conn) |*tls_conn| {
@@ -395,10 +404,10 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
         }
 
         fn sent(self: *Self, _: *IO.Completion, n_: IO.SendError!usize) void {
+            self.loop.onSend(n_);
             const n = n_ catch |err| {
                 return self.handleError("Write error", err);
             };
-
             const node = self.send_queue.popFirst().?;
             const data = node.data;
             if (n < data.len) {
@@ -450,8 +459,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                             self.send(body);
                         }
                     } else if (self.tls_conn == null) {
-                        // There is no body, and we aren't using TLS. That means
-                        // our receive loop hasn't been started. Time to start.
+                        // start receiving the reply
                         self.receive();
                     }
                 },
@@ -469,11 +477,12 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                 &self.read_completion,
                 Self.received,
                 self.socket,
-                self.read_buf,
+                self.read_buf[self.read_pos..],
             );
         }
 
         fn received(self: *Self, _: *IO.Completion, n_: IO.RecvError!usize) void {
+            self.loop.onRecv(n_);
             const n = n_ catch |err| {
                 return self.handleError("Read error", err);
             };
@@ -483,42 +492,71 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
             }
 
             if (self.tls_conn) |*tls_conn| {
-                _ = tls_conn.onRecv(self.read_buf[0..n]) catch |err| {
-                    self.handleError("TLS decrypt", err);
-                    return;
+                const pos = self.read_pos;
+                const end = pos + n;
+                const used = tls_conn.onRecv(self.read_buf[0..end]) catch |err| switch (err) {
+                    error.Done => return self.deinit(),
+                    else => {
+                        self.handleError("TLS decrypt", err);
+                        return;
+                    },
                 };
+                if (used == end) {
+                    self.read_pos = 0;
+                } else if (used == 0) {
+                    self.read_pos = end;
+                } else {
+                    const extra = end - used;
+                    std.mem.copyForwards(u8, self.read_buf, self.read_buf[extra..end]);
+                    self.read_pos = extra;
+                }
+                self.receive();
                 return;
             }
 
-            self.processData(self.read_buf[0..n]);
+            if (self.processData(self.read_buf[0..n]) == false) {
+                // we're done
+                self.deinit();
+            } else {
+                // we're not done, need more data
+                self.receive();
+            }
         }
 
-        fn processData(self: *Self, data: []u8) void {
-            // If result.header is true, and this is true, then this is the
-            // first time we're emitting a progress result
-            const would_be_first = self.reader.response.status == 0;
+        fn processData(self: *Self, d: []u8) bool {
+            const reader = &self.reader;
 
-            const result = self.reader.process(data) catch |err| {
-                return self.handleError("Invalid server response", err);
-            };
+            var data = d;
+            while (true) {
+                const would_be_first = reader.response.status == 0;
+                const result = reader.process(data) catch |err| {
+                    self.handleError("Invalid server response", err);
+                    return false;
+                };
+                const done = result.done;
 
-            const done = result.done;
-            if (result.header) {
-                // if we have a header, then we always emit an event, even if
-                // there's no data
-                self.handler.onHttpResponse(.{
-                    .first = would_be_first,
-                    .done = done,
-                    .data = result.data,
-                    .header = self.reader.response,
-                }) catch return self.deinit();
+                if (result.data != null or done or (would_be_first and reader.response.status > 0)) {
+                    // If we have data. Or if the request is done. Or if this is the
+                    // first time we have a complete header. Emit the chunk.
+                    self.handler.onHttpResponse(.{
+                        .done = done,
+                        .data = result.data,
+                        .first = would_be_first,
+                        .header = reader.response,
+                    }) catch return false;
+                }
+
+                if (done == true) {
+                    return false;
+                }
+
+                // With chunked-encoding, it's possible that we we've only
+                // partially processed the data. So we need to keep processing
+                // any unprocessed data. It would be nice if we could just glue
+                // this all together, but that would require copying bytes around
+                data = result.unprocessed orelse break;
             }
-
-            if (done == true) {
-                return self.deinit();
-            }
-
-            self.receive();
+            return true;
         }
 
         fn handleError(self: *Self, comptime msg: []const u8, err: anyerror) void {
@@ -551,7 +589,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                 return self.handler.send(data);
             }
 
-            // tls.zig received data, it's givingit to us in plaintext
+            // tls.zig received data, it's giving it to us in plaintext
             pub fn onRecv(self: TLSHandler, data: []u8) !void {
                 if (self.handler.state != .body) {
                     // We should not receive application-level data (which is the
@@ -560,8 +598,9 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                     self.handler.handleError("Premature server response", error.InvalidServerResonse);
                     return error.InvalidServerResonse;
                 }
-
-                self.handler.processData(data);
+                if (self.handler.processData(data) == false) {
+                    return error.Done;
+                }
             }
         };
     };
@@ -611,6 +650,7 @@ const Reader = struct {
         // When header_done == true, then this is part (or all) of the body
         // When header_done == false, then this is a header line that we didn't
         // have enough data for.
+        var done = false;
         var unprocessed = data;
 
         // Data from a previous call to process that we weren't able to parse
@@ -631,7 +671,7 @@ const Reader = struct {
                 }
                 self.pos = end;
                 @memcpy(self.header_buf[pos..end], data);
-                return .{ .done = false, .data = null, .header = false };
+                return .{ .done = false, .data = null, .unprocessed = null };
             }) + 1;
 
             const end = pos + line_end;
@@ -640,7 +680,7 @@ const Reader = struct {
             }
 
             @memcpy(header_buf[pos..end], data[0..line_end]);
-            const done, unprocessed = try self.parseHeader(header_buf[0..end]);
+            done, unprocessed = try self.parseHeader(header_buf[0..end]);
 
             // we gave parseHeader exactly 1 header line, there should be no leftovers
             std.debug.assert(unprocessed.len == 0);
@@ -651,38 +691,56 @@ const Reader = struct {
             // We still [probably] have data to process which was not part of
             // the previously unparsed header line
             unprocessed = data[line_end..];
-
-            if (done) {
-                return self.prepareForBody(unprocessed);
-            }
         }
-
-        // If we're here it means that
-        // 1 - Had no unparsed data, and skipped the entire block above
-        // 2 - Had unparsed data, but we managed to "complete" it. AND, the
-        //     unparsed data didn't represent the end of the header
-        //     We're now trying to parse the rest of the `data` which was not
-        //     parsed of the unparsed (unprocessed.len could be 0 here).
-        const done, unprocessed = try self.parseHeader(unprocessed);
         if (done == false) {
-            const p = self.pos; // don't use pos, self.pos might have been altered
-            const end = p + unprocessed.len;
-            if (end > header_buf.len) {
-                return error.HeaderTooLarge;
+            // If we're here it means that
+            // 1 - Had no unparsed data, and skipped the entire block above
+            // 2 - Had unparsed data, but we managed to "complete" it. AND, the
+            //     unparsed data didn't represent the end of the header
+            //     We're now trying to parse the rest of the `data` which was not
+            //     parsed of the unparsed (unprocessed.len could be 0 here).
+            done, unprocessed = try self.parseHeader(unprocessed);
+            if (done == false) {
+                const p = self.pos; // don't use pos, self.pos might have been altered
+                const end = p + unprocessed.len;
+                if (end > header_buf.len) {
+                    return error.HeaderTooLarge;
+                }
+                @memcpy(header_buf[p..end], unprocessed);
+                self.pos = end;
+                return .{ .done = false, .data = null, .unprocessed = null };
             }
-            @memcpy(header_buf[p..end], unprocessed);
-            self.pos = end;
-            return .{ .done = false, .data = null, .header = false };
         }
 
-        return self.prepareForBody(unprocessed);
+        var result = try self.prepareForBody();
+        if (unprocessed.len > 0) {
+            if (result.done == true) {
+                // We think we're done reading the body, but we still have data
+                // We'll return what we have as-is, but close the connection
+                // because we don't know what state it's in.
+                self.response.keepalive = false;
+            } else {
+                result.unprocessed = unprocessed;
+            }
+        }
+        return result;
     }
 
-    // We're done parsing the header, and we need to (maybe) setup the
-    // BodyReader. `data` represents data that we have leftover after reading
-    // the header which, presumably, belongs to the body.
-    fn prepareForBody(self: *Reader, data: []u8) !Result {
+    // We're done parsing the header, and we need to (maybe) setup the BodyReader
+    fn prepareForBody(self: *Reader) !Result {
         const response = &self.response;
+        if (response.get("transfer-encoding")) |te| {
+            if (std.ascii.indexOfIgnoreCase(te, "chunked") != null) {
+                self.body_reader = .{ .chunked = .{
+                    .size = null,
+                    .missing = 0,
+                    .scrap_len = 0,
+                    .scrap = undefined,
+                } };
+                return .{ .done = false, .data = null, .unprocessed = null };
+            }
+        }
+
         const content_length = blk: {
             const cl = response.get("content-length") orelse break :blk 0;
             break :blk std.fmt.parseInt(u32, cl, 10) catch {
@@ -691,23 +749,15 @@ const Reader = struct {
         };
 
         if (content_length == 0) {
-            if (data.len > 0) {
-                // If the content-length is 0, then we should not extra data
-                // If we did, this connection is in a weird state
-                response.keepalive = false;
-            }
             return .{
                 .done = true,
                 .data = null,
-                .header = true,
+                .unprocessed = null,
             };
         }
 
         self.body_reader = .{ .content_length = .{ .len = content_length, .read = 0 } };
-
-        // recursive, go we want to process whatever leftover data we have through
-        // our newly setup body_reader
-        return self.process(data);
+        return .{ .done = false, .data = null, .unprocessed = null };
     }
 
     fn parseHeader(self: *Reader, data: []u8) !struct { bool, []u8 } {
@@ -778,9 +828,11 @@ const Reader = struct {
     }
 
     const BodyReader = union(enum) {
+        chunked: Chunked,
         content_length: ContentLength,
 
         fn process(self: *BodyReader, data: []u8) !struct { bool, Result } {
+            std.debug.assert(data.len > 0);
             switch (self.*) {
                 inline else => |*br| return br.process(data),
             }
@@ -808,8 +860,130 @@ const Reader = struct {
                 return .{ valid, .{
                     .done = read == len,
                     .data = if (data.len == 0) null else data,
-                    .header = true,
+                    .unprocessed = null,
                 } };
+            }
+        };
+
+        const Chunked = struct {
+            // size of the current chunk
+            size: ?u32,
+
+            // the amount of data we're missing in the current chunk, not
+            // including the tailing end-chunk marker (\r\n)
+            missing: usize,
+
+            // Our chunk reader will emit data as it becomes available, even
+            // if it isn't a complete chunk. So, ideally, we don't need much state
+            // But we might also get partial meta-data, like part of the chunk
+            // length. For example, imagine we get data that looks like:
+            //    over 9000!\r\n32
+            //
+            // Now, if we assume that "over 9000!" completes the current chunk
+            // (which is to say that missing == 12), then the "32" would
+            // indicate _part_ of the length of the next chunk. But, is the next
+            // chunk 32, or is it 3293 or ??? So we need to keep the "32" around
+            // to figure it out.
+            scrap: [64]u8,
+            scrap_len: usize,
+
+            fn process(self: *Chunked, d: []u8) !struct { bool, Result } {
+                var data = d;
+
+                const scrap = &self.scrap;
+                const scrap_len = self.scrap_len;
+                const free_scrap = scrap.len - scrap_len;
+
+                if (self.size == null) {
+                    // we don't know the size of the next chunk
+                    const data_header_end = std.mem.indexOfScalarPos(u8, data, 0, '\n') orelse {
+                        // the data that we were given doesn't have a complete header
+                        if (data.len > free_scrap) {
+                            // How big can a chunk reasonably be?
+                            return error.InvalidChunk;
+                        }
+                        const end = scrap_len + data.len;
+                        // we still don't have the end of the chunk header
+                        @memcpy(scrap[scrap_len..end], data);
+                        self.scrap_len = end;
+                        return .{ true, .{ .done = false, .data = null, .unprocessed = null } };
+                    };
+
+                    var header = data[0..data_header_end];
+                    if (scrap_len > 0) {
+                        const end = scrap_len + data_header_end;
+                        @memcpy(scrap[scrap_len..end], data[0..data_header_end]);
+                        self.scrap_len = 0;
+                        header = scrap[0..end];
+                    }
+
+                    const next_size = try readChunkSize(header);
+                    self.scrap_len = 0;
+                    self.size = next_size;
+                    self.missing = next_size + 2; // include the footer
+                    data = data[data_header_end + 1 ..];
+                }
+
+                if (data.len == 0) {
+                    return .{ true, .{ .data = null, .done = false, .unprocessed = null } };
+                }
+
+                const size = self.size.?;
+                const missing = self.missing;
+                if (data.len >= missing) {
+                    // we have a complete chunk;
+                    var chunk: ?[]u8 = data;
+                    if (missing == 1) {
+                        const last = missing - 1;
+                        if (data[last] != '\n') {
+                            return error.InvalidChunk;
+                        }
+                        chunk = null;
+                    } else {
+                        const last = missing - 2;
+                        if (data[last] != '\r' or data[missing - 1] != '\n') {
+                            return error.InvalidChunk;
+                        }
+                        chunk = if (last == 0) null else data[0..last];
+                    }
+                    self.size = null;
+                    self.missing = 0;
+
+                    const unprocessed = data[missing..];
+
+                    return .{ true, .{
+                        .data = chunk,
+                        .done = size == 0,
+                        .unprocessed = if (unprocessed.len == 0) null else unprocessed,
+                    } };
+                }
+
+                const still_missing = missing - data.len;
+                if (still_missing == 1) {
+                    const last = data.len - 1;
+                    if (data[last] != '\r') {
+                        return error.InvalidChunk;
+                    }
+                    data = data[0..last];
+                }
+                self.missing = still_missing;
+
+                return .{ true, .{
+                    .data = data,
+                    .done = false,
+                    .unprocessed = null,
+                } };
+            }
+
+            fn readChunkSize(data: []const u8) !u32 {
+                std.debug.assert(data.len > 1);
+
+                if (data[data.len - 1] != '\r') {
+                    return error.InvalidChunk;
+                }
+                // ignore chunk extensions for now
+                const str_len = std.mem.indexOfScalarPos(u8, data, 0, ';') orelse data.len - 1;
+                return std.fmt.parseInt(u32, data[0..str_len], 16) catch return error.InvalidChunk;
             }
         };
     };
@@ -817,9 +991,7 @@ const Reader = struct {
     const Result = struct {
         done: bool,
         data: ?[]u8,
-        header: bool,
-
-        const NeedData = Result{ .done = true, .data = null };
+        unprocessed: ?[]u8 = null,
     };
 
     const ProcessError = error{
@@ -828,6 +1000,7 @@ const Reader = struct {
         InvalidHeader,
         InvalidStatusLine,
         InvalidContentLength,
+        InvalidChunk,
     };
 };
 
@@ -880,23 +1053,14 @@ pub const Response = struct {
     header: ResponseHeader,
 
     pub fn next(self: *Response) !?[]u8 {
-        if (self._data) |data| {
-            self._data = null;
-            return data;
-        }
-
-        if (self._done) {
-            return null;
-        }
-
         var buf = self._buf;
-        var reader = &self._reader;
-        std.debug.assert(reader.body_reader != null);
-
         while (true) {
-            // Some content encoding might have data that doesn't result in a
-            // chunk of information meaningful for the application.
-            // So we loop
+            if (try self.processData()) |data| {
+                return data;
+            }
+            if (self._done) {
+                return null;
+            }
 
             var n: usize = 0;
             if (self._tls_conn) |*tls_conn| {
@@ -904,20 +1068,21 @@ pub const Response = struct {
             } else {
                 n = try posix.read(self._socket, buf);
             }
-
             if (n == 0) {
                 self._done = true;
                 return null;
             }
-            const result = try reader.process(buf[0..n]);
-            self._done = result.done;
-            if (result.data) |d| {
-                return d;
-            }
-            if (self._done) {
-                return null;
-            }
+            self._data = buf[0..n];
         }
+    }
+
+    fn processData(self: *Response) !?[]u8 {
+        const data = self._data orelse return null;
+        const result = try self._reader.process(data);
+        self._done = result
+            .done;
+        self._data = result.unprocessed; // for the next call
+        return result.data;
     }
 };
 
@@ -1066,6 +1231,9 @@ test "HttpClient Reader: fuzz" {
         try testing.expectError(error.InvalidStatusLine, testReader(&state, &res, "HTTP/1.1 20A \n"));
         try testing.expectError(error.InvalidHeader, testReader(&state, &res, "HTTP/1.1 200 \r\nA\r\nB:1\r\n"));
 
+        try testing.expectError(error.InvalidChunk, testReader(&state, &res, "HTTP/1.1 200 \r\nTransfer-Encoding: chunked\r\n\r\n abc\r\n"));
+        try testing.expectError(error.InvalidChunk, testReader(&state, &res, "HTTP/1.1 200 \r\nTransfer-Encoding: chunked\r\n\r\n 123\n"));
+
         {
             res.reset();
             try testReader(&state, &res, "HTTP/1.1 200 \r\n\r\n");
@@ -1091,6 +1259,33 @@ test "HttpClient Reader: fuzz" {
             try testing.expectEqual(true, res.keepalive);
             try testing.expectEqual("Over 9000!!!", res.body.items);
             try res.assertHeaders(&.{ "set-cookie", "a32;max-age=60", "content-length", "12" });
+        }
+
+        {
+            res.reset();
+            try testReader(&state, &res, "HTTP/1.1 200 \r\nTransFEr-ENcoding:  chunked  \r\n\r\n0\r\n\r\n");
+            try testing.expectEqual(200, res.status);
+            try testing.expectEqual(true, res.keepalive);
+            try testing.expectEqual("", res.body.items);
+            try res.assertHeaders(&.{ "transfer-encoding", "chunked" });
+        }
+
+        {
+            res.reset();
+            try testReader(&state, &res, "HTTP/1.1 200 \r\nTransFEr-ENcoding:  chunked  \r\n\r\n0\r\n\r\n");
+            try testing.expectEqual(200, res.status);
+            try testing.expectEqual(true, res.keepalive);
+            try testing.expectEqual("", res.body.items);
+            try res.assertHeaders(&.{ "transfer-encoding", "chunked" });
+        }
+
+        {
+            res.reset();
+            try testReader(&state, &res, "HTTP/1.1 200 \r\nTransFEr-ENcoding:  chunked  \r\n\r\nE\r\nHello World!!!\r\n2eE;opts\r\n" ++ ("abc" ** 250) ++ "\r\n0\r\n\r\n");
+            try testing.expectEqual(200, res.status);
+            try testing.expectEqual(true, res.keepalive);
+            try testing.expectEqual("Hello World!!!" ++ ("abc" ** 250), res.body.items);
+            try res.assertHeaders(&.{ "transfer-encoding", "chunked" });
         }
     }
 
@@ -1127,7 +1322,7 @@ test "HttpClient: sync connect error" {
     var client = try Client.init(testing.allocator, 2);
     defer client.deinit();
 
-    var req = try client.request(.GET, "HTTP://localhost:9920");
+    var req = try client.request(.GET, "HTTP://127.0.0.1:9920");
     try testing.expectError(error.ConnectionRefused, req.sendSync(.{}));
 }
 
@@ -1135,7 +1330,7 @@ test "HttpClient: sync no body" {
     var client = try Client.init(testing.allocator, 2);
     defer client.deinit();
 
-    var req = try client.request(.GET, "http://locaLhost:9582/http_client/simple");
+    var req = try client.request(.GET, "http://127.0.0.1:9582/http_client/simple");
     var res = try req.sendSync(.{});
 
     try testing.expectEqual(null, try res.next());
@@ -1168,7 +1363,7 @@ test "HttpClient: async connect error" {
     var client = try Client.init(testing.allocator, 2);
     defer client.deinit();
 
-    var req = try client.request(.GET, "HTTP://localhost:9920");
+    var req = try client.request(.GET, "HTTP://127.0.0.1:9920");
     try req.sendAsync(&loop, Handler{ .reset = &reset }, .{});
     try loop.io.run_for_ns(std.time.ns_per_ms);
     try reset.timedWait(std.time.ns_per_s);
@@ -1184,7 +1379,7 @@ test "HttpClient: async no body" {
     var loop = try jsruntime.Loop.init(testing.allocator);
     defer loop.deinit();
 
-    var req = try client.request(.GET, "HTTP://localhost:9582/http_client/simple");
+    var req = try client.request(.GET, "HTTP://127.0.0.1:9582/http_client/simple");
     try req.sendAsync(&handler.loop, &handler, .{});
     try handler.loop.io.run_for_ns(std.time.ns_per_ms);
     try handler.reset.timedWait(std.time.ns_per_s);
@@ -1202,7 +1397,7 @@ test "HttpClient: async with body" {
     var handler = try CaptureHandler.init();
     defer handler.deinit();
 
-    var req = try client.request(.GET, "HTTP://localhost:9582/http_client/body");
+    var req = try client.request(.GET, "HTTP://127.0.0.1:9582/http_client/body");
     try req.sendAsync(&handler.loop, &handler, .{});
     try handler.loop.io.run_for_ns(std.time.ns_per_ms);
     try handler.reset.timedWait(std.time.ns_per_s);
@@ -1213,7 +1408,7 @@ test "HttpClient: async with body" {
     try res.assertHeaders(&.{
         "connection",     "close",
         "content-length", "10",
-        "_host",          "localhost",
+        "_host",          "127.0.0.1",
         "_connection",    "Close",
     });
 }
@@ -1322,27 +1517,30 @@ fn testReader(state: *State, res: *TestResponse, data: []const u8) !void {
     while (unsent.len > 0) {
         // send part of the response
         const to_send = testing.Random.intRange(usize, 1, unsent.len);
-        const result = try r.process(unsent[0..to_send]);
+        var to_process = unsent[0..to_send];
+        while (true) {
+            const result = try r.process(to_process);
 
-        if (status == 0) {
-            if (result.header) {
-                status = r.response.status;
+            if (status == 0) {
+                if (r.response.status > 0) {
+                    status = r.response.status;
+                }
+            } else {
+                // once set, it should not change
+                try testing.expectEqual(status, r.response.status);
             }
-        } else {
-            // once set, it should not change
-            try testing.expectEqual(status, r.response.status);
-        }
 
-        if (result.data) |d| {
-            try testing.expectEqual(true, result.header);
-            try res.body.appendSlice(res.arena.allocator(), d);
-        }
+            if (result.data) |d| {
+                try res.body.appendSlice(res.arena.allocator(), d);
+            }
 
-        if (result.done) {
-            res.status = status;
-            res.headers = r.response.headers;
-            res.keepalive = r.response.keepalive;
-            return;
+            if (result.done) {
+                res.status = status;
+                res.headers = r.response.headers;
+                res.keepalive = r.response.keepalive;
+                return;
+            }
+            to_process = result.unprocessed orelse break;
         }
         unsent = unsent[to_send..];
     }

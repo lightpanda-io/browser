@@ -224,6 +224,7 @@ pub fn main() !void {
                 // main_test doesn't do.
                 continue;
             }
+
             try parser.init();
             defer parser.deinit();
 
