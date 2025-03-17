@@ -184,20 +184,17 @@ pub const Session = struct {
         _ = referrer;
 
         const self: *Session = @ptrCast(@alignCast(ctx));
-
-        if (self.page == null) {
-            return error.NoPage;
-        }
+        const page = &(self.page orelse return error.NoPage);
 
         log.debug("fetch module: specifier: {s}", .{specifier});
         // fetchModule is called within the context of processing a page.
         // Use the page_arena for this, which has a more appropriate lifetime
         // and which has more retained memory between sessions and pages.
         const arena = self.browser.page_arena.allocator();
-        const body = try self.page.?.fetchData(
+        const body = try page.fetchData(
             arena,
             specifier,
-            if (self.page.?.current_script) |s| s.src else null,
+            if (page.current_script) |s| s.src else null,
         );
         return self.env.compileModule(body, specifier);
     }
@@ -605,7 +602,7 @@ pub const Page = struct {
     // It resolves src using the page's uri.
     // If a base path is given, src is resolved according to the base first.
     // the caller owns the returned string
-    fn fetchData(self: *Page, arena: Allocator, src: []const u8, base: ?[]const u8) ![]const u8 {
+    fn fetchData(self: *const Page, arena: Allocator, src: []const u8, base: ?[]const u8) ![]const u8 {
         log.debug("starting fetch {s}", .{src});
 
         var buffer: [1024]u8 = undefined;
@@ -647,7 +644,7 @@ pub const Page = struct {
 
     // fetchScript senf a GET request to the src and execute the script
     // received.
-    fn fetchScript(self: *Page, s: *const Script) !void {
+    fn fetchScript(self: *const Page, s: *const Script) !void {
         const arena = self.arena;
 
         const body = try self.fetchData(arena, s.src, null);
