@@ -98,7 +98,6 @@ pub const LightPanda = struct {
         try std.json.stringify(event, .{ .emit_null_optional_fields = false }, arr.writer(self.allocator));
 
         var response_header_buffer: [2048]u8 = undefined;
-
         const result = try client.fetch(.{
             .method = .POST,
             .payload = arr.items,

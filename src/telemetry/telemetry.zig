@@ -99,6 +99,7 @@ pub const Event = union(enum) {
     const Navigate = struct {
         tls: bool,
         proxy: bool,
+        driver: []const u8 = "cdp",
     };
 };
 
