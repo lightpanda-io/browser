@@ -100,7 +100,11 @@ fn createTarget(cmd: anytype) !void {
         // forTab: ?bool = null,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = cmd.browser_context orelse cmd.createBrowserContext() catch |err| switch (err) {
+        error.AlreadyExists => unreachable,
+        else => return err,
+    };
+
     if (bc.target_id != null) {
         return error.TargetAlreadyLoaded;
     }
@@ -459,18 +463,19 @@ test "cdp.target: disposeBrowserContext" {
 }
 
 test "cdp.target: createTarget" {
-    var ctx = testing.context();
-    defer ctx.deinit();
-
     {
-        try testing.expectError(error.BrowserContextNotLoaded, ctx.processMessage(.{
-            .id = 10,
-            .method = "Target.createTarget",
-            .params = struct {}{},
-        }));
-        try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 10 });
+        var ctx = testing.context();
+        defer ctx.deinit();
+        try ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .url = "about/blank" } });
+
+        // should create a browser context
+        const bc = ctx.cdp().browser_context.?;
+        try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "about:blank", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.target_id.? } }, .{});
+        try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = bc.session_id.?, .targetInfo = .{ .url = "chrome://newtab/", .title = "about:blank", .attached = true, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.target_id.? } }, .{});
     }
 
+    var ctx = testing.context();
+    defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-9" });
     {
         try testing.expectError(error.UnknownBrowserContextId, ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .browserContextId = "BID-8" } }));
