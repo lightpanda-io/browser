@@ -50,12 +50,8 @@ pub const LightPanda = struct {
     pub fn send(self: *LightPanda, iid: ?[]const u8, run_mode: RunMode, raw_event: telemetry.Event) !void {
         const event = LightPandaEvent{
             .iid = iid,
-            .driver = if (std.meta.activeTag(raw_event) == .navigate) "cdp" else null,
             .mode = run_mode,
-            .os = builtin.os.tag,
-            .arch = builtin.cpu.arch,
-            .version = build_info.git_commit,
-            .event = @tagName(std.meta.activeTag(raw_event)),
+            .event = raw_event,
         };
 
         self.mutex.lock();
@@ -119,9 +115,42 @@ pub const LightPanda = struct {
 const LightPandaEvent = struct {
     iid: ?[]const u8,
     mode: RunMode,
-    driver: ?[]const u8,
-    os: std.Target.Os.Tag,
-    arch: std.Target.Cpu.Arch,
-    version: []const u8,
-    event: []const u8,
+    event: telemetry.Event,
+
+    pub fn jsonStringify(self: *const LightPandaEvent, writer: anytype) !void {
+        try writer.beginObject();
+
+        try writer.objectField("iid");
+        try writer.write(self.iid);
+
+        try writer.objectField("mode");
+        try writer.write(self.mode);
+
+        try writer.objectField("os");
+        try writer.write(builtin.os.tag);
+
+        try writer.objectField("arch");
+        try writer.write(builtin.cpu.arch);
+
+        try writer.objectField("version");
+        try writer.write(build_info.git_commit);
+
+        try writer.objectField("event");
+        try writer.write(@tagName(std.meta.activeTag(self.event)));
+
+        inline for (@typeInfo(telemetry.Event).Union.fields) |union_field| {
+            if (self.event == @field(telemetry.Event, union_field.name)) {
+                const inner = @field(self.event, union_field.name);
+                const TI = @typeInfo(@TypeOf(inner));
+                if (TI == .Struct) {
+                    inline for (TI.Struct.fields) |field| {
+                        try writer.objectField(field.name);
+                        try writer.write(@field(inner, field.name));
+                    }
+                }
+            }
+        }
+
+        try writer.endObject();
+    }
 };

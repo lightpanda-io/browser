@@ -339,7 +339,6 @@ pub const Page = struct {
     // see Inspector.contextCreated
     pub fn navigate(self: *Page, uri: []const u8, aux_data: ?[]const u8) !void {
         const arena = self.arena;
-        self.session.app.telemetry.record(.{ .navigate = {} });
 
         log.debug("starting GET {s}", .{uri});
 
@@ -365,6 +364,11 @@ pub const Page = struct {
         self.origin = buf.items;
 
         // TODO handle fragment in url.
+
+        self.session.app.telemetry.record(.{ .navigate = .{
+            .proxy = false,
+            .tls = std.ascii.eqlIgnoreCase(self.uri.scheme, "https"),
+        } });
 
         // load the data
         var resp = try self.session.loader.get(arena, self.uri);

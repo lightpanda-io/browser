@@ -93,8 +93,13 @@ fn getOrCreateId(app_dir_path_: ?[]const u8) ?[36]u8 {
 
 pub const Event = union(enum) {
     run: void,
-    navigate: void,
+    navigate: Navigate,
     flag: []const u8, // used for testing
+
+    const Navigate = struct {
+        tls: bool,
+        proxy: bool,
+    };
 };
 
 const NoopProvider = struct {
