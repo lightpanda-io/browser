@@ -634,7 +634,6 @@ pub const Page = struct {
         return arr.items;
     }
 
-
     fn fetchScript(self: *const Page, s: *const Script) !void {
         const arena = self.arena;
         const body = try self.fetchData(arena, s.src, null);
