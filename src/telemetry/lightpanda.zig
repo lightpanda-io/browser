@@ -137,12 +137,12 @@ const LightPandaEvent = struct {
         try writer.objectField("event");
         try writer.write(@tagName(std.meta.activeTag(self.event)));
 
-        inline for (@typeInfo(telemetry.Event).Union.fields) |union_field| {
+        inline for (@typeInfo(telemetry.Event).@"union".fields) |union_field| {
             if (self.event == @field(telemetry.Event, union_field.name)) {
                 const inner = @field(self.event, union_field.name);
                 const TI = @typeInfo(@TypeOf(inner));
-                if (TI == .Struct) {
-                    inline for (TI.Struct.fields) |field| {
+                if (TI == .@"struct") {
+                    inline for (TI.@"struct".fields) |field| {
                         try writer.objectField(field.name);
                         try writer.write(@field(inner, field.name));
                     }
