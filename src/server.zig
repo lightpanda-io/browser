@@ -34,6 +34,7 @@ const CloseError = jsruntime.IO.CloseError;
 const CancelError = jsruntime.IO.CancelOneError;
 const TimeoutError = jsruntime.IO.TimeoutError;
 
+const App = @import("app.zig").App;
 const CDP = @import("cdp/cdp.zig").CDP;
 
 const TimeoutCheck = std.time.ns_per_ms * 100;
@@ -48,6 +49,7 @@ const MAX_HTTP_REQUEST_SIZE = 2048;
 const MAX_MESSAGE_SIZE = 256 * 1024 + 14;
 
 const Server = struct {
+    app: *App,
     allocator: Allocator,
     loop: *jsruntime.Loop,
 
@@ -70,7 +72,6 @@ const Server = struct {
 
     fn deinit(self: *Server) void {
         self.client_pool.deinit();
-        self.allocator.free(self.json_version_response);
     }
 
     fn queueAccept(self: *Server) void {
@@ -465,7 +466,7 @@ pub const Client = struct {
         };
 
         self.mode = .websocket;
-        self.cdp = CDP.init(self.server.allocator, self, self.server.loop);
+        self.cdp = CDP.init(self.server.app, self);
         return self.send(arena, response);
     }
 
@@ -1014,10 +1015,9 @@ fn websocketHeader(buf: []u8, op_code: OpCode, payload_len: usize) []const u8 {
 }
 
 pub fn run(
-    allocator: Allocator,
+    app: *App,
     address: net.Address,
     timeout: u64,
-    loop: *jsruntime.Loop,
 ) !void {
     // create socket
     const flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK;
@@ -1040,9 +1040,13 @@ pub fn run(
     const vm = jsruntime.VM.init();
     defer vm.deinit();
 
+    var loop = app.loop;
+    const allocator = app.allocator;
     const json_version_response = try buildJSONVersionResponse(allocator, address);
+    defer allocator.free(json_version_response);
 
     var server = Server{
+        .app = app,
         .loop = loop,
         .timeout = timeout,
         .listener = listener,

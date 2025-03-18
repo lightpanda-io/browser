@@ -31,6 +31,7 @@ const apiweb = @import("apiweb.zig");
 pub const Types = jsruntime.reflect(apiweb.Interfaces);
 pub const UserContext = apiweb.UserContext;
 pub const IO = @import("asyncio").Wrapper(jsruntime.Loop);
+const version = @import("build_info").git_commit;
 
 const log = std.log.scoped(.cli);
 
@@ -60,7 +61,7 @@ pub fn main() !void {
     switch (args.mode) {
         .help => args.printUsageAndExit(args.mode.help),
         .version => {
-            std.debug.print("{s}\n", .{@import("build_info").git_commit});
+            std.debug.print("{s}\n", .{version});
             return std.process.cleanExit();
         },
         .serve => |opts| {
@@ -69,11 +70,12 @@ pub fn main() !void {
                 return args.printUsageAndExit(false);
             };
 
-            var loop = try jsruntime.Loop.init(alloc);
-            defer loop.deinit();
+            var app = try @import("app.zig").App.init(alloc, .serve);
+            defer app.deinit();
+            app.telemetry.record(.{ .run = {} });
 
             const timeout = std.time.ns_per_s * @as(u64, opts.timeout);
-            server.run(alloc, address, timeout, &loop) catch |err| {
+            server.run(&app, address, timeout) catch |err| {
                 log.err("Server error", .{});
                 return err;
             };
@@ -81,16 +83,16 @@ pub fn main() !void {
         .fetch => |opts| {
             log.debug("Fetch mode: url {s}, dump {any}", .{ opts.url, opts.dump });
 
+            var app = try @import("app.zig").App.init(alloc, .fetch);
+            defer app.deinit();
+            app.telemetry.record(.{ .run = {} });
+
             // vm
             const vm = jsruntime.VM.init();
             defer vm.deinit();
 
-            // loop
-            var loop = try jsruntime.Loop.init(alloc);
-            defer loop.deinit();
-
             // browser
-            var browser = Browser.init(alloc, &loop);
+            var browser = Browser.init(&app);
             defer browser.deinit();
 
             var session = try browser.newSession({});

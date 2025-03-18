@@ -111,6 +111,9 @@ await context.close();
 await browser.disconnect();
 ```
 
+### Telemetry
+By default, Lightpanda collects and sends usage telemetry. This can be disabled by setting an environment variable `LIGHTPANDA_DISABLE_TELEMETRY=true`. You can read Lightpanda's privacy policy at: [https://lightpanda.io/privacy-policy](https://lightpanda.io/privacy-policy).
+
 ## Status
 
 Lightpanda is still a work in progress and is currently at a Beta stage.
