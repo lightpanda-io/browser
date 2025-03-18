@@ -92,7 +92,7 @@ pub fn main() !void {
             defer vm.deinit();
 
             // browser
-            var browser = Browser.init(&app);
+            var browser = try Browser.init(&app);
             defer browser.deinit();
 
             var session = try browser.newSession({});

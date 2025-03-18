@@ -434,7 +434,7 @@ pub const Page = struct {
         // replace the user context document with the new one.
         try session.env.setUserContext(.{
             .document = html_doc,
-            .http_client = @ptrCast(&self.session.http_client),
+            .http_client = @ptrCast(self.session.http_client),
         });
 
         // browse the DOM tree to retrieve scripts
@@ -633,7 +633,6 @@ pub const Page = struct {
 
         return arr.items;
     }
-
 
     fn fetchScript(self: *const Page, s: *const Script) !void {
         const arena = self.arena;
