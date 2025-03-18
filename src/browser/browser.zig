@@ -606,7 +606,6 @@ pub const Page = struct {
                 res_src = try std.fs.path.resolve(arena, &.{ _dir, src });
             }
         }
-
         const u = try std.Uri.resolve_inplace(self.uri, res_src, &b);
 
         var request = try self.session.http_client.request(.GET, u);

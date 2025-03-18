@@ -353,7 +353,12 @@ fn serveHTTP(allocator: Allocator, address: std.net.Address) !void {
                 try request.respond("Hello!", .{});
             } else if (std.mem.eql(u8, path, "/http_client/simple")) {
                 try request.respond("", .{});
-            } else if (std.mem.eql(u8, path, "/http_client/body")) {
+            } else if (std.mem.eql(u8, path, "/http_client/redirect")) {
+                try request.respond("", .{
+                    .status = .moved_permanently,
+                    .extra_headers = &.{.{ .name = "LOCATION", .value = "../http_client/echo" }},
+                });
+            } else if (std.mem.eql(u8, path, "/http_client/echo")) {
                 var headers: std.ArrayListUnmanaged(std.http.Header) = .{};
 
                 var it = request.iterateHeaders();
