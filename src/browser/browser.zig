@@ -166,7 +166,7 @@ pub const Session = struct {
         // const ctx_opaque = @as(*anyopaque, @ptrCast(ctx));
         self.inspector = try jsruntime.Inspector.init(
             arena,
-            self.env, // TODO: change to 'env' when https://github.com/lightpanda-io/zig-js-runtime/pull/285 lands
+            &self.env,
             if (@TypeOf(ctx) == void) @constCast(@ptrCast(&{})) else ctx,
             InspectorContainer.onInspectorResponse,
             InspectorContainer.onInspectorEvent,
@@ -231,8 +231,7 @@ pub const Session = struct {
         }
 
         // load polyfills
-        // TODO: change to 'env' when https://github.com/lightpanda-io/zig-js-runtime/pull/285 lands
-        try polyfill.load(self.arena.allocator(), self.env);
+        try polyfill.load(self.arena.allocator(), &self.env);
 
         // inspector
         self.contextCreated(page, aux_data);
@@ -265,7 +264,7 @@ pub const Session = struct {
 
     fn contextCreated(self: *Session, page: *Page, aux_data: ?[]const u8) void {
         log.debug("inspector context created", .{});
-        self.inspector.contextCreated(self.env, "", page.origin orelse "://", aux_data);
+        self.inspector.contextCreated(&self.env, "", page.origin orelse "://", aux_data);
     }
 };
 
@@ -317,7 +316,7 @@ pub const Page = struct {
     pub fn wait(self: *Page) !void {
         // try catch
         var try_catch: jsruntime.TryCatch = undefined;
-        try_catch.init(self.session.env);
+        try_catch.init(&self.session.env);
         defer try_catch.deinit();
 
         self.session.env.wait() catch |err| {
@@ -325,7 +324,7 @@ pub const Page = struct {
             if (err == error.EnvNotStarted) return;
 
             const arena = self.arena;
-            if (try try_catch.err(arena, self.session.env)) |msg| {
+            if (try try_catch.err(arena, &self.session.env)) |msg| {
                 defer arena.free(msg);
                 log.info("wait error: {s}", .{msg});
                 return;
@@ -592,8 +591,6 @@ pub const Page = struct {
         // TODO handle charset attribute
         const opt_text = try parser.nodeTextContent(parser.elementToNode(s.element));
         if (opt_text) |text| {
-            // TODO: change to &self.session.env when
-            // https://github.com/lightpanda-io/zig-js-runtime/pull/285 lands
             try s.eval(self.arena, self.session.env, text);
             return;
         }
@@ -659,8 +656,6 @@ pub const Page = struct {
         const arena = self.arena;
 
         const body = try self.fetchData(arena, s.src, null);
-        // TODO: change to &self.session.env when
-        // https://github.com/lightpanda-io/zig-js-runtime/pull/285 lands
         try s.eval(arena, self.session.env, body);
     }
 
@@ -704,24 +699,24 @@ pub const Page = struct {
             return .unknown;
         }
 
-        fn eval(self: Script, arena: Allocator, env: Env, body: []const u8) !void {
+        fn eval(self: Script, arena: Allocator, env: Env, body: []const u8) !void { // TODO use an *const Env
             var try_catch: jsruntime.TryCatch = undefined;
-            try_catch.init(env);
+            try_catch.init(&env);
             defer try_catch.deinit();
 
             const res = switch (self.kind) {
                 .unknown => return error.UnknownScript,
-                .javascript => env.exec(body, self.src),
-                .module => env.module(body, self.src),
+                .javascript => env.exec(body, self.src), // TODO use an *const Env
+                .module => env.module(body, self.src), // TODO use an *const Env
             } catch {
-                if (try try_catch.err(arena, env)) |msg| {
+                if (try try_catch.err(arena, &env)) |msg| {
                     log.info("eval script {s}: {s}", .{ self.src, msg });
                 }
                 return FetchError.JsErr;
             };
 
             if (builtin.mode == .Debug) {
-                const msg = try res.toString(arena, env);
+                const msg = try res.toString(arena, &env);
                 log.debug("eval script {s}: {s}", .{ self.src, msg });
             }
         }

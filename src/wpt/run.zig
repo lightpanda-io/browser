@@ -77,11 +77,11 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     defer js_env.stop();
 
     // load polyfills
-    try polyfill.load(alloc, js_env);
+    try polyfill.load(alloc, &js_env);
 
     // display console logs
     defer {
-        const res = evalJS(js_env, alloc, "console.join('\\n');", "console") catch unreachable;
+        const res = evalJS(&js_env, alloc, "console.join('\\n');", "console") catch unreachable;
         defer res.deinit(alloc);
 
         if (res.msg != null and res.msg.?.len > 0) {
@@ -104,7 +104,7 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
         \\  console.push("debug", ...arguments);
         \\};
     ;
-    var res = try evalJS(js_env, alloc, init, "init");
+    var res = try evalJS(&js_env, alloc, init, "init");
     if (!res.ok) return res;
     res.deinit(alloc);
 
@@ -123,14 +123,14 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
                 path = try fspath.join(alloc, &.{ "/", dirname, path });
             }
 
-            res = try evalJS(js_env, alloc, try loader.get(path), src);
+            res = try evalJS(&js_env, alloc, try loader.get(path), src);
             if (!res.ok) return res;
             res.deinit(alloc);
         }
 
         // If the script as a source text, execute it.
         const src = try parser.nodeTextContent(s) orelse continue;
-        res = try evalJS(js_env, alloc, src, "");
+        res = try evalJS(&js_env, alloc, src, "");
         if (!res.ok) return res;
         res.deinit(alloc);
     }
@@ -147,22 +147,22 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
 
     // wait for all async executions
     var try_catch: jsruntime.TryCatch = undefined;
-    try_catch.init(js_env);
+    try_catch.init(&js_env);
     defer try_catch.deinit();
     js_env.wait() catch {
         return .{
             .ok = false,
-            .msg = try try_catch.err(alloc, js_env),
+            .msg = try try_catch.err(alloc, &js_env),
         };
     };
 
     // Check the final test status.
-    res = try evalJS(js_env, alloc, "report.status;", "teststatus");
+    res = try evalJS(&js_env, alloc, "report.status;", "teststatus");
     if (!res.ok) return res;
     res.deinit(alloc);
 
     // return the detailed result.
-    return try evalJS(js_env, alloc, "report.log", "teststatus");
+    return try evalJS(&js_env, alloc, "report.log", "teststatus");
 }
 
 pub const Res = struct {
@@ -176,7 +176,7 @@ pub const Res = struct {
     }
 };
 
-fn evalJS(env: jsruntime.Env, alloc: std.mem.Allocator, script: []const u8, name: ?[]const u8) !Res {
+fn evalJS(env: *const jsruntime.Env, alloc: std.mem.Allocator, script: []const u8, name: ?[]const u8) !Res {
     var try_catch: jsruntime.TryCatch = undefined;
     try_catch.init(env);
     defer try_catch.deinit();

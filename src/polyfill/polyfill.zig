@@ -33,7 +33,7 @@ const modules = [_]struct {
     .{ .name = "polyfill-fetch", .source = @import("fetch.zig").source },
 };
 
-pub fn load(alloc: std.mem.Allocator, env: Env) !void {
+pub fn load(alloc: std.mem.Allocator, env: *const Env) !void {
     var try_catch: jsruntime.TryCatch = undefined;
     try_catch.init(env);
     defer try_catch.deinit();
