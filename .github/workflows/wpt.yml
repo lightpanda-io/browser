@@ -62,6 +62,23 @@ jobs:
         # TODO remove the continue-on-error when tests will pass.
         continue-on-error: true
 
+  wpt-json:
+    name: web platform tests json output
+
+    # Don't execute on PR
+    if: github.event_name != 'pull_request'
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # fetch submodules recusively, to get zig-js-runtime submodules also.
+          submodules: recursive
+
+      - uses: ./.github/actions/install
+
       - name: json output
         run: zig build wpt -Dengine=v8 -- --safe --json > wpt.json
 
@@ -80,7 +97,7 @@ jobs:
 
   perf-fmt:
     name: perf-fmt
-    needs: wpt
+    needs: wpt-json
 
     # Don't execute on PR
     if: github.event_name != 'pull_request'
