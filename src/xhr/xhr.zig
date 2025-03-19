@@ -510,7 +510,7 @@ pub const XMLHttpRequest = struct {
         try request.sendAsync(loop, self, .{});
     }
 
-    pub fn onHttpResponse(self: *XMLHttpRequest, progress_: http.AsyncError!http.Progress) !void {
+    pub fn onHttpResponse(self: *XMLHttpRequest, progress_: anyerror!http.Progress) !void {
         const progress = progress_ catch |err| {
             self.onErr(err);
             return err;
