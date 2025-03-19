@@ -60,7 +60,7 @@ pub const LightPanda = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
         if (self.thread == null) {
-            self.thread = try std.Thread.spawn(.{ .stack_size = 1024 * 1024 * 4 }, run, .{self});
+            self.thread = try std.Thread.spawn(.{}, run, .{self});
         }
 
         const node = try self.node_pool.create();
