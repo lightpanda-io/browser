@@ -26,7 +26,6 @@ const App = @import("app.zig").App;
 const jsruntime = @import("jsruntime");
 pub const Types = jsruntime.reflect(@import("generate.zig").Tuple(.{}){});
 pub const UserContext = @import("user_context.zig").UserContext;
-// pub const IO = @import("asyncio").Wrapper(jsruntime.Loop);
 
 pub const std_options = std.Options{
     .log_level = .err,
@@ -69,7 +68,7 @@ pub fn main() !void {
     const cdp_thread = blk: {
         const address = try std.net.Address.parseIp("127.0.0.1", 9583);
         const thread = try std.Thread.spawn(.{}, serveCDP, .{
-            &app,
+            app,
             address,
         });
         break :blk thread;

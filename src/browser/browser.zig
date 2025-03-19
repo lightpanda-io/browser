@@ -63,7 +63,7 @@ pub const Browser = struct {
     app: *App,
     session: ?*Session,
     allocator: Allocator,
-    http_client: HttpClient,
+    http_client: *HttpClient,
     session_pool: SessionPool,
     page_arena: std.heap.ArenaAllocator,
 
@@ -75,7 +75,7 @@ pub const Browser = struct {
             .app = app,
             .session = null,
             .allocator = allocator,
-            .http_client = .{ .allocator = allocator },
+            .http_client = @ptrCast(&app.http_client),
             .session_pool = SessionPool.init(allocator),
             .page_arena = std.heap.ArenaAllocator.init(allocator),
         };
@@ -83,7 +83,6 @@ pub const Browser = struct {
 
     pub fn deinit(self: *Browser) void {
         self.closeSession();
-        self.http_client.deinit();
         self.session_pool.deinit();
         self.page_arena.deinit();
     }
@@ -454,7 +453,7 @@ pub const Page = struct {
         // replace the user context document with the new one.
         try session.env.setUserContext(.{
             .document = html_doc,
-            .httpClient = &self.session.browser.http_client,
+            .httpClient = self.session.browser.http_client,
         });
 
         // browse the DOM tree to retrieve scripts

@@ -5,8 +5,8 @@ const build_info = @import("build_info");
 const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
 
+const App = @import("../app.zig").App;
 const telemetry = @import("telemetry.zig");
-const RunMode = @import("../app.zig").RunMode;
 
 const log = std.log.scoped(.telemetry);
 const URL = "https://telemetry.lightpanda.io";
@@ -19,11 +19,13 @@ pub const LightPanda = struct {
     allocator: Allocator,
     mutex: std.Thread.Mutex,
     cond: Thread.Condition,
+    client: *std.http.Client,
     node_pool: std.heap.MemoryPool(List.Node),
 
     const List = std.DoublyLinkedList(LightPandaEvent);
 
-    pub fn init(allocator: Allocator) !LightPanda {
+    pub fn init(app: *App) !LightPanda {
+        const allocator = app.allocator;
         return .{
             .cond = .{},
             .mutex = .{},
@@ -31,6 +33,7 @@ pub const LightPanda = struct {
             .thread = null,
             .running = true,
             .allocator = allocator,
+            .client = @ptrCast(&app.http_client),
             .uri = std.Uri.parse(URL) catch unreachable,
             .node_pool = std.heap.MemoryPool(List.Node).init(allocator),
         };
@@ -47,7 +50,7 @@ pub const LightPanda = struct {
         self.node_pool.deinit();
     }
 
-    pub fn send(self: *LightPanda, iid: ?[]const u8, run_mode: RunMode, raw_event: telemetry.Event) !void {
+    pub fn send(self: *LightPanda, iid: ?[]const u8, run_mode: App.RunMode, raw_event: telemetry.Event) !void {
         const event = LightPandaEvent{
             .iid = iid,
             .mode = run_mode,
@@ -57,7 +60,7 @@ pub const LightPanda = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
         if (self.thread == null) {
-            self.thread = try std.Thread.spawn(.{}, run, .{self});
+            self.thread = try std.Thread.spawn(.{ .stack_size = 1024 * 1024 * 4 }, run, .{self});
         }
 
         const node = try self.node_pool.create();
@@ -68,19 +71,16 @@ pub const LightPanda = struct {
     }
 
     fn run(self: *LightPanda) void {
+        const client = self.client;
         var arr: std.ArrayListUnmanaged(u8) = .{};
-        var client = std.http.Client{ .allocator = self.allocator };
 
-        defer {
-            arr.deinit(self.allocator);
-            client.deinit();
-        }
+        defer arr.deinit(self.allocator);
 
         self.mutex.lock();
         while (true) {
             while (self.pending.popFirst()) |node| {
                 self.mutex.unlock();
-                self.postEvent(&node.data, &client, &arr) catch |err| {
+                self.postEvent(&node.data, client, &arr) catch |err| {
                     log.warn("Telementry reporting error: {}", .{err});
                 };
                 self.mutex.lock();
@@ -113,7 +113,7 @@ pub const LightPanda = struct {
 
 const LightPandaEvent = struct {
     iid: ?[]const u8,
-    mode: RunMode,
+    mode: App.RunMode,
     event: telemetry.Event,
 
     pub fn jsonStringify(self: *const LightPandaEvent, writer: anytype) !void {

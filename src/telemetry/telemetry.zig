@@ -3,9 +3,9 @@ const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
 
+const App = @import("../app.zig").App;
 const Loop = @import("jsruntime").Loop;
 const uuidv4 = @import("../id.zig").uuidv4;
-const RunMode = @import("../app.zig").RunMode;
 
 const log = std.log.scoped(.telemetry);
 const IID_FILE = "iid";
@@ -25,11 +25,11 @@ fn TelemetryT(comptime P: type) type {
 
         disabled: bool,
 
-        run_mode: RunMode,
+        run_mode: App.RunMode,
 
         const Self = @This();
 
-        pub fn init(allocator: Allocator, run_mode: RunMode, app_dir_path: ?[]const u8) Self {
+        pub fn init(app: *App, run_mode: App.RunMode) Self {
             const disabled = std.process.hasEnvVarConstant("LIGHTPANDA_DISABLE_TELEMETRY");
             if (builtin.mode != .Debug and builtin.is_test == false) {
                 log.info("telemetry {s}", .{if (disabled) "disabled" else "enabled"});
@@ -38,8 +38,8 @@ fn TelemetryT(comptime P: type) type {
             return .{
                 .disabled = disabled,
                 .run_mode = run_mode,
-                .provider = try P.init(allocator),
-                .iid = if (disabled) null else getOrCreateId(app_dir_path),
+                .provider = try P.init(app),
+                .iid = if (disabled) null else getOrCreateId(app.app_dir_path),
             };
         }
 
@@ -104,32 +104,32 @@ pub const Event = union(enum) {
 };
 
 const NoopProvider = struct {
-    fn init(_: Allocator) !NoopProvider {
+    fn init(_: *App) !NoopProvider {
         return .{};
     }
     fn deinit(_: NoopProvider) void {}
-    pub fn send(_: NoopProvider, _: ?[]const u8, _: RunMode, _: Event) !void {}
+    pub fn send(_: NoopProvider, _: ?[]const u8, _: App.RunMode, _: Event) !void {}
 };
 
 extern fn setenv(name: [*:0]u8, value: [*:0]u8, override: c_int) c_int;
 extern fn unsetenv(name: [*:0]u8) c_int;
 
-const testing = std.testing;
+const testing = @import("../testing.zig");
 test "telemetry: disabled by environment" {
     _ = setenv(@constCast("LIGHTPANDA_DISABLE_TELEMETRY"), @constCast(""), 0);
     defer _ = unsetenv(@constCast("LIGHTPANDA_DISABLE_TELEMETRY"));
 
     const FailingProvider = struct {
-        fn init(_: Allocator) !@This() {
+        fn init(_: *App) !@This() {
             return .{};
         }
         fn deinit(_: @This()) void {}
-        pub fn send(_: @This(), _: ?[]const u8, _: RunMode, _: Event) !void {
+        pub fn send(_: @This(), _: ?[]const u8, _: App.RunMode, _: Event) !void {
             unreachable;
         }
     };
 
-    var telemetry = TelemetryT(FailingProvider).init(testing.allocator, .serve, null);
+    var telemetry = TelemetryT(FailingProvider).init(undefined, .serve);
     defer telemetry.deinit();
     telemetry.record(.{ .run = {} });
 }
@@ -141,7 +141,7 @@ test "telemetry: getOrCreateId" {
 
     const id1 = getOrCreateId("/tmp/").?;
     const id2 = getOrCreateId("/tmp/").?;
-    try testing.expectEqualStrings(&id1, &id2);
+    try testing.expectEqual(&id1, &id2);
 
     std.fs.cwd().deleteFile("/tmp/" ++ IID_FILE) catch {};
     const id3 = getOrCreateId("/tmp/").?;
@@ -149,7 +149,10 @@ test "telemetry: getOrCreateId" {
 }
 
 test "telemetry: sends event to provider" {
-    var telemetry = TelemetryT(MockProvider).init(testing.allocator, .serve, "/tmp/");
+    var app = testing.app(.{});
+    defer app.deinit();
+
+    var telemetry = TelemetryT(MockProvider).init(app, .serve);
     defer telemetry.deinit();
     const mock = &telemetry.provider;
 
@@ -165,28 +168,28 @@ test "telemetry: sends event to provider" {
 
 const MockProvider = struct {
     iid: ?[]const u8,
-    run_mode: ?RunMode,
+    run_mode: ?App.RunMode,
     allocator: Allocator,
     events: std.ArrayListUnmanaged(Event),
 
-    fn init(allocator: Allocator) !@This() {
+    fn init(app: *App) !@This() {
         return .{
             .iid = null,
             .run_mode = null,
             .events = .{},
-            .allocator = allocator,
+            .allocator = app.allocator,
         };
     }
     fn deinit(self: *MockProvider) void {
         self.events.deinit(self.allocator);
     }
-    pub fn send(self: *MockProvider, iid: ?[]const u8, run_mode: RunMode, events: Event) !void {
+    pub fn send(self: *MockProvider, iid: ?[]const u8, run_mode: App.RunMode, events: Event) !void {
         if (self.iid == null) {
             try testing.expectEqual(null, self.run_mode);
             self.iid = iid.?;
             self.run_mode = run_mode;
         } else {
-            try testing.expectEqualStrings(self.iid.?, iid.?);
+            try testing.expectEqual(self.iid.?, iid.?);
             try testing.expectEqual(self.run_mode.?, run_mode);
         }
         try self.events.append(self.allocator, events);
