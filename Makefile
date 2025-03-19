@@ -11,6 +11,9 @@ kernel = $(shell uname -ms)
 ifeq ($(kernel), Darwin arm64)
 	OS := macos
 	ARCH := aarch64
+else ifeq ($(kernel), Darwin x86_64)
+	OS := macos
+	ARCH := x86_64
 else ifeq ($(kernel), Linux aarch64)
 	OS := linux
 	ARCH := aarch64
