@@ -4,6 +4,8 @@ pub const allocator = std.testing.allocator;
 pub const expectError = std.testing.expectError;
 pub const expectString = std.testing.expectEqualStrings;
 
+const App = @import("app.zig").App;
+
 // Merged std.testing.expectEqual and std.testing.expectString
 // can be useful when testing fields of an anytype an you don't know
 // exactly how to assert equality
@@ -12,12 +14,14 @@ pub fn expectEqual(expected: anytype, actual: anytype) !void {
         .Array => |arr| if (arr.child == u8) {
             return std.testing.expectEqualStrings(expected, &actual);
         },
-        .Pointer => |ptr| if (ptr.child == u8) {
-            return std.testing.expectEqualStrings(expected, actual);
-        } else if (comptime isStringArray(ptr.child)) {
-            return std.testing.expectEqualStrings(expected, actual);
-        } else if (ptr.child == []u8 or ptr.child == []const u8) {
-            return expectString(expected, actual);
+        .Pointer => |ptr| {
+            if (ptr.child == u8) {
+                return std.testing.expectEqualStrings(expected, actual);
+            } else if (comptime isStringArray(ptr.child)) {
+                return std.testing.expectEqualStrings(expected, actual);
+            } else if (ptr.child == []u8 or ptr.child == []const u8) {
+                return expectString(expected, actual);
+            }
         },
         .Struct => |structType| {
             inline for (structType.fields) |field| {
@@ -92,7 +96,7 @@ pub fn expectDelta(expected: anytype, actual: anytype, delta: anytype) !void {
 }
 
 fn isStringArray(comptime T: type) bool {
-    if (!is(.array)(T) and !isPtrTo(.array)(T)) {
+    if (!is(.Array)(T) and !isPtrTo(.Array)(T)) {
         return false;
     }
     return std.meta.Elem(T) == u8;
@@ -131,4 +135,9 @@ pub fn print(comptime fmt: []const u8, args: anytype) void {
     } else {
         std.debug.print(fmt, args);
     }
+}
+
+// dummy opts incase we want to add something, and not have to break all the callers
+pub fn app(_: anytype) *App {
+    return App.init(allocator, .serve) catch unreachable;
 }
