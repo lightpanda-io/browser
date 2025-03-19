@@ -150,8 +150,11 @@ fn createTarget(cmd: anytype) !void {
         },
     }, .{});
 
-    // only if setAutoAttach is true?
-    try doAttachtoTarget(cmd, target_id);
+    // attach to the target only if auto attach is set.
+    if (cmd.cdp.target_auto_attach) {
+        try doAttachtoTarget(cmd, target_id);
+    }
+
     bc.target_id = target_id;
 
     try cmd.sendResult(.{
@@ -313,17 +316,24 @@ fn setDiscoverTargets(cmd: anytype) !void {
 }
 
 fn setAutoAttach(cmd: anytype) !void {
-    // const params = (try cmd.params(struct {
-    //     autoAttach: bool,
-    //     waitForDebuggerOnStart: bool,
-    //     flatten: bool = true,
-    //     filter: ?[]TargetFilter = null,
-    // })) orelse return error.InvalidParams;
+    const params = (try cmd.params(struct {
+        autoAttach: bool,
+        waitForDebuggerOnStart: bool,
+        flatten: bool = true,
+        // filter: ?[]TargetFilter = null,
+    })) orelse return error.InvalidParams;
 
-    // TODO: should set a flag to send Target.attachedToTarget events
+    // set a flag to send Target.attachedToTarget events
+    cmd.cdp.target_auto_attach = params.autoAttach;
 
     try cmd.sendResult(null, .{});
 
+    if (cmd.cdp.target_auto_attach == false) {
+        // TODO: detach from all currently attached targets.
+        return;
+    }
+
+    // autoAttach is set to true, we must attach to all existing targets.
     if (cmd.browser_context) |bc| {
         if (bc.target_id == null) {
             // hasn't attached  yet
@@ -471,6 +481,18 @@ test "cdp.target: createTarget" {
         // should create a browser context
         const bc = ctx.cdp().browser_context.?;
         try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "about:blank", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.target_id.? } }, .{});
+    }
+
+    {
+        var ctx = testing.context();
+        defer ctx.deinit();
+        // active auto attach to get the Target.attachedToTarget event.
+        try ctx.processMessage(.{ .id = 9, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
+        try ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .url = "about/blank" } });
+
+        // should create a browser context
+        const bc = ctx.cdp().browser_context.?;
+        try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "about:blank", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.target_id.? } }, .{});
         try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = bc.session_id.?, .targetInfo = .{ .url = "chrome://newtab/", .title = "about:blank", .attached = true, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.target_id.? } }, .{});
     }
 
@@ -491,8 +513,6 @@ test "cdp.target: createTarget" {
 
         try ctx.expectSentResult(.{ .targetId = bc.target_id.? }, .{ .id = 10 });
         try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "about:blank", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = "BID-9", .targetId = bc.target_id.? } }, .{});
-
-        try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = bc.session_id.?, .targetInfo = .{ .url = "chrome://newtab/", .title = "about:blank", .attached = true, .type = "page", .canAccessOpener = false, .browserContextId = "BID-9", .targetId = bc.target_id.? } }, .{});
     }
 }
 

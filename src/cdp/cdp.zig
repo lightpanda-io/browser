@@ -54,6 +54,9 @@ pub fn CDPT(comptime TypeProvider: type) type {
         // The active browser
         browser: Browser,
 
+        // when true, any target creation must be attached.
+        target_auto_attach: bool = false,
+
         target_id_gen: TargetIdGen = .{},
         session_id_gen: SessionIdGen = .{},
         browser_context_id_gen: BrowserContextIdGen = .{},
