@@ -1358,7 +1358,7 @@ pub fn connectTcp(client: *Client, host: []const u8, port: u16, protocol: Connec
 
         conn.data.tls_client.* = tls23.client(stream, .{
             .host = host,
-            .root_ca = client.ca_bundle,
+            .root_ca = .{ .bundle = client.ca_bundle },
         }) catch return error.TlsInitializationFailed;
     }
 

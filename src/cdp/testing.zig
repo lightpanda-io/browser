@@ -174,8 +174,8 @@ const TestContext = struct {
 
     pub fn processMessage(self: *TestContext, msg: anytype) !void {
         var json_message: []const u8 = undefined;
-        if (@typeInfo(@TypeOf(msg)) != .Pointer) {
-            json_message = try json.stringifyAlloc(self.arena.allocator(), msg, .{});
+        if (@typeInfo(@TypeOf(msg)) != .pointer) {
+            json_message = try std.json.stringifyAlloc(self.arena.allocator(), msg, .{});
         } else {
             // assume this is a string we want to send as-is, if it isn't, we'll
             // get a compile error, so no big deal.
@@ -196,7 +196,7 @@ const TestContext = struct {
     pub fn expectSentResult(self: *TestContext, expected: anytype, opts: ExpectResultOpts) !void {
         const expected_result = .{
             .id = opts.id,
-            .result = if (comptime @typeInfo(@TypeOf(expected)) == .Null) struct {}{} else expected,
+            .result = if (comptime @typeInfo(@TypeOf(expected)) == .null) struct {}{} else expected,
             .sessionId = opts.session_id,
         };
 
@@ -210,7 +210,7 @@ const TestContext = struct {
     pub fn expectSentEvent(self: *TestContext, method: []const u8, params: anytype, opts: ExpectEventOpts) !void {
         const expected_event = .{
             .method = method,
-            .params = if (comptime @typeInfo(@TypeOf(params)) == .Null) struct {}{} else params,
+            .params = if (comptime @typeInfo(@TypeOf(params)) == .null) struct {}{} else params,
             .sessionId = opts.session_id,
         };
 
@@ -323,96 +323,3 @@ fn compareJsonValues(a: std.json.Value, b: std.json.Value) bool {
         },
     }
 }
-
-// fn compareAnyToJsonValue(expected: anytype, actual: json.Value) bool {
-//     switch (@typeInfo(@TypeOf(expected))) {
-//         .Optional => {
-//             if (expected) |e| {
-//                 return compareAnyToJsonValue(e, actual);
-//             }
-//             return actual == .null;
-//         },
-//         .Int, .ComptimeInt => {
-//             if (actual != .integer) {
-//                 return false;
-//             }
-//             return expected == actual.integer;
-//         },
-//         .Float, .ComptimeFloat => {
-//             if (actual != .float) {
-//                 return false;
-//             }
-//             return expected == actual.float;
-//         },
-//         .Bool => {
-//             if (actual != .bool) {
-//                 return false;
-//             }
-//             return expected == actual.bool;
-//         },
-//        .Pointer => |ptr| switch (ptr.size) {
-//             .One => switch (@typeInfo(ptr.child)) {
-//                 .Struct => return compareAnyToJsonValue(expected.*, actual),
-//                 .Array => |arr| if (arr.child == u8) {
-//                     if (actual != .string) {
-//                         return false;
-//                     }
-//                     return std.mem.eql(u8, expected, actual.string);
-//                 },
-//                 else => {},
-//             },
-//             .Slice => switch (ptr.child) {
-//                 u8 => {
-//                     if (actual != .string) {
-//                         return false;
-//                     }
-//                     return std.mem.eql(u8, expected, actual.string);
-//                 },
-//                 else => {},
-//             },
-//             else => {},
-//         },
-//         .Struct => |s| {
-//             if (s.is_tuple) {
-//                 // how an array might look in an anytype
-//                 if (actual != .array) {
-//                     return false;
-//                 }
-//                 if (s.fields.len != actual.array.items.len) {
-//                     return false;
-//                 }
-
-//                 inline for (s.fields, 0..) |f, i| {
-//                     const e = @field(expected, f.name);
-//                     if (compareAnyToJsonValue(e, actual.array.items[i]) == false) {
-//                         return false;
-//                     }
-//                 }
-//                 return true;
-//             }
-
-//             if (s.fields.len == 0) {
-//                 return (actual == .array and actual.array.items.len == 0);
-//             }
-
-//             if (actual != .object) {
-//                 return false;
-//             }
-//             inline for (s.fields) |f| {
-//                 const e = @field(expected, f.name);
-//                 if (actual.object.get(f.name)) |a| {
-//                     if (compareAnyToJsonValue(e, a) == false) {
-//                         return false;
-//                     }
-//                 } else if (@typeInfo(f.type) != .Optional or e != null) {
-//                     // We don't JSON serialize nulls. So if we're expecting
-//                     // a null, that should show up as a missing field.
-//                     return false;
-//                 }
-//             }
-//             return true;
-//         },
-//         else => {},
-//     }
-//     @compileError("Can't compare " ++ @typeName(@TypeOf(expected)));
-// }
