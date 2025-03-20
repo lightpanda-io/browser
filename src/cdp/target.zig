@@ -305,8 +305,18 @@ fn sendMessageToTarget(cmd: anytype) !void {
     }, .{});
 }
 
-// noop
 fn detachFromTarget(cmd: anytype) !void {
+    // TODO check if sessionId/targetId match.
+    // const params = (try cmd.params(struct {
+    //     sessionId: ?[]const u8,
+    //     targetId: ?[]const u8,
+    // })) orelse return error.InvalidParams;
+
+    if (cmd.browser_context) |bc| {
+        bc.session_id = null;
+        // TODO should we send a Target.detachedFromTarget event?
+    }
+
     return cmd.sendResult(null, .{});
 }
 
@@ -329,7 +339,11 @@ fn setAutoAttach(cmd: anytype) !void {
     try cmd.sendResult(null, .{});
 
     if (cmd.cdp.target_auto_attach == false) {
-        // TODO: detach from all currently attached targets.
+        // detach from all currently attached targets.
+        if (cmd.browser_context) |bc| {
+            bc.session_id = null;
+            // TODO should we send a Target.detachedFromTarget event?
+        }
         return;
     }
 
@@ -641,5 +655,26 @@ test "cdp.target: issue#474: attach to just created target" {
         try ctx.processMessage(.{ .id = 11, .method = "Target.attachToTarget", .params = .{ .targetId = bc.target_id.? } });
         const session_id = bc.session_id.?;
         try ctx.expectSentResult(.{ .sessionId = session_id }, .{ .id = 11 });
+    }
+}
+
+test "cdp.target: detachFromTarget" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-9" });
+    {
+        try ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .browserContextId = "BID-9" } });
+        try testing.expectEqual(true, bc.target_id != null);
+        try ctx.expectSentResult(.{ .targetId = bc.target_id.? }, .{ .id = 10 });
+
+        try ctx.processMessage(.{ .id = 11, .method = "Target.attachToTarget", .params = .{ .targetId = bc.target_id.? } });
+        try ctx.expectSentResult(.{ .sessionId = bc.session_id.? }, .{ .id = 11 });
+
+        try ctx.processMessage(.{ .id = 12, .method = "Target.detachFromTarget", .params = .{ .targetId = bc.target_id.? } });
+        try testing.expectEqual(null, bc.session_id);
+        try ctx.expectSentResult(null, .{ .id = 12 });
+
+        try ctx.processMessage(.{ .id = 13, .method = "Target.attachToTarget", .params = .{ .targetId = bc.target_id.? } });
+        try ctx.expectSentResult(.{ .sessionId = bc.session_id.? }, .{ .id = 13 });
     }
 }
