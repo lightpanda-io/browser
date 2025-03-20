@@ -88,7 +88,7 @@ fn testExecFn(
         std.debug.print("documentHTMLClose error: {s}\n", .{@errorName(err)});
     };
 
-    var http_client = try @import("http/client.zig").Client.init(alloc, 5);
+    var http_client = try @import("http/client.zig").Client.init(alloc, 5, null);
     defer http_client.deinit();
 
     try js_env.setUserContext(.{

@@ -74,7 +74,7 @@ pub const Browser = struct {
             .allocator = allocator,
             .http_client = &app.http_client,
             .session_pool = SessionPool.init(allocator),
-            .http_client = try http.Client.init(allocator, 5),
+            .http_client = try http.Client.init(allocator, 5, null),
             .page_arena = std.heap.ArenaAllocator.init(allocator),
         };
     }

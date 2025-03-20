@@ -133,8 +133,8 @@ pub fn build(b: *std.Build) !void {
 
     // compile
     const unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/unit_tests.zig"),
-        .test_runner = .{ .path = b.path("src/unit_tests.zig"), .mode = .simple },
+        .root_source_file = b.path("src/main_unit_tests.zig"),
+        .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple },
         .target = target,
         .optimize = mode,
     });

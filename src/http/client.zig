@@ -1,3 +1,20 @@
+// Copyright (C) 2023-2024  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -30,8 +47,9 @@ pub const Client = struct {
     state_pool: StatePool,
     root_ca: tls.config.CertBundle,
 
-    pub fn init(allocator: Allocator, max_concurrent: usize) !Client {
-        var root_ca = try tls.config.CertBundle.fromSystem(allocator);
+    // we only allow passing in a root_ca for testing
+    pub fn init(allocator: Allocator, max_concurrent: usize, root_ca_: ?tls.config.CertBundle) !Client {
+        var root_ca = root_ca_ orelse try tls.config.CertBundle.fromSystem(allocator);
         errdefer root_ca.deinit(allocator);
 
         const state_pool = try StatePool.init(allocator, max_concurrent);
@@ -1420,8 +1438,7 @@ pub const Response = struct {
     fn processData(self: *Response) !?[]u8 {
         const data = self._data orelse return null;
         const result = try self._reader.process(data);
-        self._done = result
-            .done;
+        self._done = result.done;
         self._data = result.unprocessed; // for the next call
         return result.data;
     }
@@ -1631,13 +1648,13 @@ test "HttpClient Reader: fuzz" {
 }
 
 test "HttpClient: invalid url" {
-    var client = try Client.init(testing.allocator, 1);
+    var client = try testClient();
     defer client.deinit();
     try testing.expectError(error.UriMissingHost, client.request(.GET, "http:///"));
 }
 
 test "HttpClient: sync connect error" {
-    var client = try Client.init(testing.allocator, 2);
+    var client = try testClient();
     defer client.deinit();
 
     var req = try client.request(.GET, "HTTP://127.0.0.1:9920");
@@ -1645,7 +1662,7 @@ test "HttpClient: sync connect error" {
 }
 
 test "HttpClient: sync no body" {
-    var client = try Client.init(testing.allocator, 2);
+    var client = try testClient();
     defer client.deinit();
 
     var req = try client.request(.GET, "http://127.0.0.1:9582/http_client/simple");
@@ -1658,8 +1675,24 @@ test "HttpClient: sync no body" {
     try testing.expectEqual("0", res.header.get("content-length"));
 }
 
+test "HttpClient: sync tls no body" {
+    // https://github.com/ianic/tls.zig/issues/10
+    for (0..1) |_| {
+        var client = try testClient();
+        defer client.deinit();
+
+        var req = try client.request(.GET, "https://127.0.0.1:9581/http_client/simple");
+        var res = try req.sendSync(.{});
+
+        try testing.expectEqual(null, try res.next());
+        try testing.expectEqual(200, res.header.status);
+        try testing.expectEqual(1, res.header.count());
+        try testing.expectEqual("0", res.header.get("content-length"));
+    }
+}
+
 test "HttpClient: sync with body" {
-    var client = try Client.init(testing.allocator, 2);
+    var client = try testClient();
     defer client.deinit();
 
     var req = try client.request(.GET, "http://127.0.0.1:9582/http_client/echo");
@@ -1674,8 +1707,84 @@ test "HttpClient: sync with body" {
     try testing.expectEqual("Close", res.header.get("_connection"));
 }
 
+test "HttpClient: sync tls with body" {
+    var arr: std.ArrayListUnmanaged(u8) = .{};
+    defer arr.deinit(testing.allocator);
+    try arr.ensureTotalCapacity(testing.allocator, 20);
+
+    // https://github.com/ianic/tls.zig/issues/10
+    for (0..1) |_| {
+        defer arr.clearRetainingCapacity();
+        var client = try testClient();
+        defer client.deinit();
+
+        var req = try client.request(.GET, "https://127.0.0.1:9581/http_client/body");
+        var res = try req.sendSync(.{});
+
+        while (try res.next()) |data| {
+            arr.appendSliceAssumeCapacity(data);
+        }
+        try testing.expectEqual("1234567890abcdefhijk", arr.items);
+        try testing.expectEqual(201, res.header.status);
+        try testing.expectEqual(2, res.header.count());
+        try testing.expectEqual("20", res.header.get("content-length"));
+        try testing.expectEqual("HEaDer", res.header.get("another"));
+    }
+}
+
+test "HttpClient: sync redirect from TLS to Plaintext" {
+    var arr: std.ArrayListUnmanaged(u8) = .{};
+    defer arr.deinit(testing.allocator);
+    try arr.ensureTotalCapacity(testing.allocator, 20);
+
+    // https://github.com/ianic/tls.zig/issues/10
+    for (0..1) |_| {
+        defer arr.clearRetainingCapacity();
+        var client = try testClient();
+        defer client.deinit();
+
+        var req = try client.request(.GET, "https://127.0.0.1:9581/http_client/redirect/insecure");
+        var res = try req.sendSync(.{});
+
+        while (try res.next()) |data| {
+            arr.appendSliceAssumeCapacity(data);
+        }
+        try testing.expectEqual(201, res.header.status);
+        try testing.expectEqual(4, res.header.count());
+        try testing.expectEqual("close", res.header.get("connection"));
+        try testing.expectEqual("10", res.header.get("content-length"));
+        try testing.expectEqual("127.0.0.1", res.header.get("_host"));
+        try testing.expectEqual("Close", res.header.get("_connection"));
+    }
+}
+
+test "HttpClient: sync redirect plaintext to TLS" {
+    var arr: std.ArrayListUnmanaged(u8) = .{};
+    defer arr.deinit(testing.allocator);
+    try arr.ensureTotalCapacity(testing.allocator, 20);
+
+    // https://github.com/ianic/tls.zig/issues/10
+    for (0..1) |_| {
+        defer arr.clearRetainingCapacity();
+        var client = try testClient();
+        defer client.deinit();
+
+        var req = try client.request(.GET, "http://127.0.0.1:9582/http_client/redirect/secure");
+        var res = try req.sendSync(.{});
+
+        while (try res.next()) |data| {
+            arr.appendSliceAssumeCapacity(data);
+        }
+        try testing.expectEqual(201, res.header.status);
+        try testing.expectEqual("1234567890abcdefhijk", arr.items);
+        try testing.expectEqual(2, res.header.count());
+        try testing.expectEqual("20", res.header.get("content-length"));
+        try testing.expectEqual("HEaDer", res.header.get("another"));
+    }
+}
+
 test "HttpClient: sync GET redirect" {
-    var client = try Client.init(testing.allocator, 2);
+    var client = try testClient();
     defer client.deinit();
 
     var req = try client.request(.GET, "http://127.0.0.1:9582/http_client/redirect");
@@ -1710,7 +1819,7 @@ test "HttpClient: async connect error" {
     };
 
     var reset: Thread.ResetEvent = .{};
-    var client = try Client.init(testing.allocator, 2);
+    var client = try testClient();
     defer client.deinit();
 
     var req = try client.request(.GET, "HTTP://127.0.0.1:9920");
@@ -1720,7 +1829,7 @@ test "HttpClient: async connect error" {
 }
 
 test "HttpClient: async no body" {
-    var client = try Client.init(testing.allocator, 2);
+    var client = try testClient();
     defer client.deinit();
 
     var handler = try CaptureHandler.init();
@@ -1731,8 +1840,7 @@ test "HttpClient: async no body" {
 
     var req = try client.request(.GET, "HTTP://127.0.0.1:9582/http_client/simple");
     try req.sendAsync(&handler.loop, &handler, .{});
-    try handler.loop.io.run_for_ns(std.time.ns_per_ms);
-    try handler.reset.timedWait(std.time.ns_per_s);
+    try handler.waitUntilDone();
 
     const res = handler.response;
     try testing.expectEqual("", res.body.items);
@@ -1740,8 +1848,28 @@ test "HttpClient: async no body" {
     try res.assertHeaders(&.{ "connection", "close", "content-length", "0" });
 }
 
+// test "HttpClient: async tls no body" {
+//     var client = try testClient();
+//     defer client.deinit();
+
+//     var handler = try CaptureHandler.init();
+//     defer handler.deinit();
+
+//     var loop = try jsruntime.Loop.init(testing.allocator);
+//     defer loop.deinit();
+
+//     var req = try client.request(.GET, "HTTPs://127.0.0.1:9581/http_client/simple");
+//     try req.sendAsync(&handler.loop, &handler, .{});
+//     try handler.waitUntilDone();
+
+//     const res = handler.response;
+//     try testing.expectEqual("", res.body.items);
+//     try testing.expectEqual(200, res.status);
+//     try res.assertHeaders(&.{ "connection", "close", "content-length", "0" });
+// }
+
 test "HttpClient: async with body" {
-    var client = try Client.init(testing.allocator, 2);
+    var client = try testClient();
     defer client.deinit();
 
     var handler = try CaptureHandler.init();
@@ -1749,8 +1877,7 @@ test "HttpClient: async with body" {
 
     var req = try client.request(.GET, "HTTP://127.0.0.1:9582/http_client/echo");
     try req.sendAsync(&handler.loop, &handler, .{});
-    try handler.loop.io.run_for_ns(std.time.ns_per_ms);
-    try handler.reset.timedWait(std.time.ns_per_s);
+    try handler.waitUntilDone();
 
     const res = handler.response;
     try testing.expectEqual("over 9000!", res.body.items);
@@ -1764,7 +1891,7 @@ test "HttpClient: async with body" {
 }
 
 test "HttpClient: async redirect" {
-    var client = try Client.init(testing.allocator, 2);
+    var client = try testClient();
     defer client.deinit();
 
     var handler = try CaptureHandler.init();
@@ -1781,8 +1908,7 @@ test "HttpClient: async redirect" {
     // start to requeue events (from the redirected request), so we need the
     //loop to process those also.
     try handler.loop.io.run_for_ns(std.time.ns_per_ms);
-    try handler.loop.io.run_for_ns(std.time.ns_per_ms);
-    try handler.reset.timedWait(std.time.ns_per_s);
+    try handler.waitUntilDone();
 
     const res = handler.response;
     try testing.expectEqual("over 9000!", res.body.items);
@@ -1885,6 +2011,11 @@ const CaptureHandler = struct {
             self.reset.set();
         }
     }
+
+    fn waitUntilDone(self: *CaptureHandler) !void {
+        try self.loop.io.run_for_ns(std.time.ns_per_ms);
+        try self.reset.timedWait(std.time.ns_per_s);
+    }
 };
 
 fn testReader(state: *State, res: *TestResponse, data: []const u8) !void {
@@ -1927,4 +2058,10 @@ fn testReader(state: *State, res: *TestResponse, data: []const u8) !void {
         unsent = unsent[to_send..];
     }
     return error.NeverDone;
+}
+
+fn testClient() !Client {
+    const test_dir = try std.fs.cwd().openDir("tests", .{});
+    const root_ca = try tls.config.CertBundle.fromFile(testing.allocator, test_dir, "test_cert.pem");
+    return try Client.init(testing.allocator, 1, root_ca);
 }
