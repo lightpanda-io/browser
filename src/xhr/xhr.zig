@@ -108,6 +108,7 @@ pub const XMLHttpRequest = struct {
     headers: Headers,
     sync: bool = true,
     err: ?anyerror = null,
+    last_dispatch: i64 = 0,
 
     // TODO uncomment this field causes casting issue with
     // XMLHttpRequestEventTarget. I think it's dueto an alignement issue, but
@@ -142,8 +143,6 @@ pub const XMLHttpRequest = struct {
     response_mime: ?Mime = null,
     response_obj: ?ResponseObj = null,
     send_flag: bool = false,
-
-    payload: ?[]const u8 = null,
 
     pub const prototype = *XMLHttpRequestEventTarget;
     pub const mem_guarantied = true;
@@ -297,9 +296,6 @@ pub const XMLHttpRequest = struct {
     pub fn reset(self: *XMLHttpRequest, alloc: std.mem.Allocator) void {
         if (self.url) |v| alloc.free(v);
         self.url = null;
-
-        if (self.payload) |v| alloc.free(v);
-        self.payload = null;
 
         if (self.response_obj) |v| v.deinit();
 
@@ -472,41 +468,30 @@ pub const XMLHttpRequest = struct {
         if (self.state != .opened) return DOMError.InvalidState;
         if (self.send_flag) return DOMError.InvalidState;
 
-        //  The body argument provides the request body, if any, and is ignored
-        //  if the request method is GET or HEAD.
-        //  https://xhr.spec.whatwg.org/#the-send()-method
-        // var used_body: ?XMLHttpRequestBodyInit = null;
-        if (body != null and self.method != .GET and self.method != .HEAD) {
-            // TODO If body is a Document, then set this’s request body to body, serialized, converted, and UTF-8 encoded.
-
-            const body_init = XMLHttpRequestBodyInit{ .String = body.? };
-
-            // keep the user content type from request headers.
-            if (self.headers.has("Content-Type")) {
-                // https://fetch.spec.whatwg.org/#bodyinit-safely-extract
-                try self.headers.append("Content-Type", try body_init.contentType());
-            }
-
-            // copy the payload
-            if (self.payload) |v| alloc.free(v);
-            self.payload = try body_init.dupe(alloc);
-        }
-
         log.debug("{any} {any}", .{ self.method, self.uri });
 
         self.send_flag = true;
-
         self.priv_state = .open;
 
         self.request = try self.client.request(self.method, self.uri);
-
         var request = &self.request.?;
         errdefer request.deinit();
 
         for (self.headers.list.items) |hdr| {
             try request.addHeader(hdr.name, hdr.value, .{});
         }
-        request.body = self.payload;
+
+        //  The body argument provides the request body, if any, and is ignored
+        //  if the request method is GET or HEAD.
+        //  https://xhr.spec.whatwg.org/#the-send()-method
+        // var used_body: ?XMLHttpRequestBodyInit = null;
+        if (body) |b| {
+            if (self.method != .GET and self.method != .HEAD) {
+                request.body = try alloc.dupe(u8, b);
+                try request.addHeader("Content-Type", "text/plain; charset=UTF-8", .{});
+            }
+        }
+
         try request.sendAsync(loop, self, .{});
     }
 
@@ -540,22 +525,22 @@ pub const XMLHttpRequest = struct {
             self.dispatchProgressEvent("loadstart", .{ .loaded = 0, .total = 0 });
 
             self.state = .loading;
+            self.dispatchEvt("readystatechange");
         }
 
         if (progress.data) |data| {
-            const buf = &self.response_bytes;
+            try self.response_bytes.appendSlice(self.alloc, data);
+        }
 
-            try buf.appendSlice(self.alloc, data);
-            const total_len = buf.items.len;
-
-            // TODO: don't dispatch this more than once every 50ms
-            // dispatch a progress event progress.
-            self.dispatchEvt("readystatechange");
-
+        const loaded = self.response_bytes.items.len;
+        const now = std.time.milliTimestamp();
+        if (now - self.last_dispatch > 50) {
+            // don't send this more than once every 50ms
             self.dispatchProgressEvent("progress", .{
-                .total = total_len,
-                .loaded = total_len,
+                .total = loaded,
+                .loaded = loaded,
             });
+            self.last_dispatch = now;
         }
 
         if (progress.done == false) {
@@ -566,11 +551,10 @@ pub const XMLHttpRequest = struct {
         self.send_flag = false;
         self.dispatchEvt("readystatechange");
 
-        const total_len = self.response_bytes.items.len;
         // dispatch a progress event load.
-        self.dispatchProgressEvent("load", .{ .loaded = total_len, .total = total_len });
+        self.dispatchProgressEvent("load", .{ .loaded = loaded, .total = loaded });
         // dispatch a progress event loadend.
-        self.dispatchProgressEvent("loadend", .{ .loaded = total_len, .total = total_len });
+        self.dispatchProgressEvent("loadend", .{ .loaded = loaded, .total = loaded });
     }
 
     fn onErr(self: *XMLHttpRequest, err: anyerror) void {
@@ -863,59 +847,59 @@ pub fn testExecFn(
     };
     try checkCases(js_env, &send);
 
-    // var document = [_]Case{
-    //     .{ .src = "const req2 = new XMLHttpRequest()", .ex = "undefined" },
-    //     .{ .src = "req2.open('GET', 'https://httpbin.io/html')", .ex = "undefined" },
-    //     .{ .src = "req2.responseType = 'document'", .ex = "document" },
+    var document = [_]Case{
+        .{ .src = "const req2 = new XMLHttpRequest()", .ex = "undefined" },
+        .{ .src = "req2.open('GET', 'https://httpbin.io/html')", .ex = "undefined" },
+        .{ .src = "req2.responseType = 'document'", .ex = "document" },
 
-    //     .{ .src = "req2.send()", .ex = "undefined" },
+        .{ .src = "req2.send()", .ex = "undefined" },
 
-    //     // Each case executed waits for all loop callaback calls.
-    //     // So the url has been retrieved.
-    //     .{ .src = "req2.status", .ex = "200" },
-    //     .{ .src = "req2.statusText", .ex = "OK" },
-    //     .{ .src = "req2.response instanceof Document", .ex = "true" },
-    //     .{ .src = "req2.responseXML instanceof Document", .ex = "true" },
-    // };
-    // try checkCases(js_env, &document);
+        // Each case executed waits for all loop callaback calls.
+        // So the url has been retrieved.
+        .{ .src = "req2.status", .ex = "200" },
+        .{ .src = "req2.statusText", .ex = "OK" },
+        .{ .src = "req2.response instanceof Document", .ex = "true" },
+        .{ .src = "req2.responseXML instanceof Document", .ex = "true" },
+    };
+    try checkCases(js_env, &document);
 
-    // var json = [_]Case{
-    //     .{ .src = "const req3 = new XMLHttpRequest()", .ex = "undefined" },
-    //     .{ .src = "req3.open('GET', 'https://httpbin.io/json')", .ex = "undefined" },
-    //     .{ .src = "req3.responseType = 'json'", .ex = "json" },
+    var json = [_]Case{
+        .{ .src = "const req3 = new XMLHttpRequest()", .ex = "undefined" },
+        .{ .src = "req3.open('GET', 'https://httpbin.io/json')", .ex = "undefined" },
+        .{ .src = "req3.responseType = 'json'", .ex = "json" },
 
-    //     .{ .src = "req3.send()", .ex = "undefined" },
+        .{ .src = "req3.send()", .ex = "undefined" },
 
-    //     // Each case executed waits for all loop callaback calls.
-    //     // So the url has been retrieved.
-    //     .{ .src = "req3.status", .ex = "200" },
-    //     .{ .src = "req3.statusText", .ex = "OK" },
-    //     .{ .src = "req3.response.slideshow.author", .ex = "Yours Truly" },
-    // };
-    // try checkCases(js_env, &json);
+        // Each case executed waits for all loop callaback calls.
+        // So the url has been retrieved.
+        .{ .src = "req3.status", .ex = "200" },
+        .{ .src = "req3.statusText", .ex = "OK" },
+        .{ .src = "req3.response.slideshow.author", .ex = "Yours Truly" },
+    };
+    try checkCases(js_env, &json);
 
-    // var post = [_]Case{
-    //     .{ .src = "const req4 = new XMLHttpRequest()", .ex = "undefined" },
-    //     .{ .src = "req4.open('POST', 'https://httpbin.io/post')", .ex = "undefined" },
-    //     .{ .src = "req4.send('foo')", .ex = "undefined" },
+    var post = [_]Case{
+        .{ .src = "const req4 = new XMLHttpRequest()", .ex = "undefined" },
+        .{ .src = "req4.open('POST', 'https://httpbin.io/post')", .ex = "undefined" },
+        .{ .src = "req4.send('foo')", .ex = "undefined" },
 
-    //     // Each case executed waits for all loop callaback calls.
-    //     // So the url has been retrieved.
-    //     .{ .src = "req4.status", .ex = "200" },
-    //     .{ .src = "req4.statusText", .ex = "OK" },
-    //     .{ .src = "req4.responseText.length > 64", .ex = "true" },
-    // };
-    // try checkCases(js_env, &post);
+        // Each case executed waits for all loop callaback calls.
+        // So the url has been retrieved.
+        .{ .src = "req4.status", .ex = "200" },
+        .{ .src = "req4.statusText", .ex = "OK" },
+        .{ .src = "req4.responseText.length > 64", .ex = "true" },
+    };
+    try checkCases(js_env, &post);
 
-    // var cbk = [_]Case{
-    //     .{ .src = "const req5 = new XMLHttpRequest()", .ex = "undefined" },
-    //     .{ .src = "req5.open('GET', 'https://httpbin.io/json')", .ex = "undefined" },
-    //     .{ .src = "var status = 0; req5.onload = function () { status = this.status };", .ex = "function () { status = this.status }" },
-    //     .{ .src = "req5.send()", .ex = "undefined" },
+    var cbk = [_]Case{
+        .{ .src = "const req5 = new XMLHttpRequest()", .ex = "undefined" },
+        .{ .src = "req5.open('GET', 'https://httpbin.io/json')", .ex = "undefined" },
+        .{ .src = "var status = 0; req5.onload = function () { status = this.status };", .ex = "function () { status = this.status }" },
+        .{ .src = "req5.send()", .ex = "undefined" },
 
-    //     // Each case executed waits for all loop callaback calls.
-    //     // So the url has been retrieved.
-    //     .{ .src = "status", .ex = "200" },
-    // };
-    // try checkCases(js_env, &cbk);
+        // Each case executed waits for all loop callaback calls.
+        // So the url has been retrieved.
+        .{ .src = "status", .ex = "200" },
+    };
+    try checkCases(js_env, &cbk);
 }
