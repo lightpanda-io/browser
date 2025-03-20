@@ -445,7 +445,7 @@ pub const Client = struct {
         };
 
         self.mode = .websocket;
-        self.cdp = try CDP.init(self.server.app, self);
+        self.cdp = CDP.init(self.server.app, self);
         return self.send(arena, response);
     }
 

@@ -43,7 +43,7 @@ const Location = @import("../html/location.zig").Location;
 
 const storage = @import("../storage/storage.zig");
 
-const http = @import("../http/client.zig");
+const HttpClient = @import("../http/client.zig").Client;
 const UserContext = @import("../user_context.zig").UserContext;
 
 const polyfill = @import("../polyfill/polyfill.zig");
@@ -60,13 +60,13 @@ pub const Browser = struct {
     app: *App,
     session: ?*Session,
     allocator: Allocator,
-    http_client: *http.Client,
+    http_client: *HttpClient,
     session_pool: SessionPool,
     page_arena: std.heap.ArenaAllocator,
 
     const SessionPool = std.heap.MemoryPool(Session);
 
-    pub fn init(app: *App) !Browser {
+    pub fn init(app: *App) Browser {
         const allocator = app.allocator;
         return .{
             .app = app,
@@ -74,7 +74,6 @@ pub const Browser = struct {
             .allocator = allocator,
             .http_client = &app.http_client,
             .session_pool = SessionPool.init(allocator),
-            .http_client = try http.Client.init(allocator, 5, null),
             .page_arena = std.heap.ArenaAllocator.init(allocator),
         };
     }
@@ -127,7 +126,7 @@ pub const Session = struct {
     // TODO move the shed to the browser?
     storage_shed: storage.Shed,
     page: ?Page = null,
-    http_client: *http.Client,
+    http_client: *HttpClient,
 
     jstypes: [Types.len]usize = undefined,
 
@@ -139,7 +138,7 @@ pub const Session = struct {
             .env = undefined,
             .browser = browser,
             .inspector = undefined,
-            .http_client = &browser.http_client,
+            .http_client = browser.http_client,
             .storage_shed = storage.Shed.init(allocator),
             .arena = std.heap.ArenaAllocator.init(allocator),
             .window = Window.create(null, .{ .agent = user_agent }),
@@ -434,7 +433,7 @@ pub const Page = struct {
         // replace the user context document with the new one.
         try session.env.setUserContext(.{
             .document = html_doc,
-            .http_client = self.session.browser.http_client,
+            .http_client = @ptrCast(self.session.http_client),
         });
 
         // browse the DOM tree to retrieve scripts

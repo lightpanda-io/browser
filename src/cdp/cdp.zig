@@ -73,13 +73,13 @@ pub fn CDPT(comptime TypeProvider: type) type {
         pub const Browser = TypeProvider.Browser;
         pub const Session = TypeProvider.Session;
 
-        pub fn init(app: *App, client: TypeProvider.Client) !Self {
+        pub fn init(app: *App, client: TypeProvider.Client) Self {
             const allocator = app.allocator;
             return .{
                 .client = client,
                 .allocator = allocator,
                 .browser_context = null,
-                .browser = try Browser.init(app),
+                .browser = Browser.init(app),
                 .message_arena = std.heap.ArenaAllocator.init(allocator),
                 .browser_context_pool = std.heap.MemoryPool(BrowserContext(Self)).init(allocator),
             };
