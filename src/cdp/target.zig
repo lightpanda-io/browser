@@ -608,3 +608,18 @@ test "cdp.target: getTargetInfo" {
         }, .{ .id = 11 });
     }
 }
+
+test "cdp.target: issue#474: attach to just created target" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-9" });
+    {
+        try ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .browserContextId = "BID-9" } });
+        try testing.expectEqual(true, bc.target_id != null);
+        try ctx.expectSentResult(.{ .targetId = bc.target_id.? }, .{ .id = 10 });
+
+        try ctx.processMessage(.{ .id = 11, .method = "Target.attachToTarget", .params = .{ .targetId = bc.target_id.? } });
+        const session_id = bc.session_id.?;
+        try ctx.expectSentResult(.{ .sessionId = session_id }, .{ .id = 11 });
+    }
+}
