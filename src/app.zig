@@ -38,7 +38,7 @@ pub const App = struct {
             .allocator = allocator,
             .telemetry = undefined,
             .app_dir_path = app_dir_path,
-            .http_client = try HttpClient.init(allocator, 5, null),
+            .http_client = try HttpClient.init(allocator, 5),
         };
         app.telemetry = Telemetry.init(app, run_mode);
 

@@ -28,7 +28,7 @@ const Loop = jsruntime.Loop;
 const Env = jsruntime.Env;
 const Window = @import("../html/window.zig").Window;
 const storage = @import("../storage/storage.zig");
-const Client = @import("asyncio").Client;
+const HttpClient = @import("../http/client.zig").Client;
 
 const Types = @import("../main_wpt.zig").Types;
 const UserContext = @import("../main_wpt.zig").UserContext;
@@ -55,13 +55,13 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     var loop = try Loop.init(alloc);
     defer loop.deinit();
 
-    var cli = Client{ .allocator = alloc };
-    defer cli.deinit();
+    var http_client = try HttpClient.init(alloc, 2);
+    defer http_client.deinit();
 
     var js_env: Env = undefined;
     Env.init(&js_env, alloc, &loop, UserContext{
         .document = html_doc,
-        .httpClient = &cli,
+        .http_client = &http_client,
     });
     defer js_env.deinit();
 

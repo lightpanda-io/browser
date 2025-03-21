@@ -52,13 +52,13 @@ test "tests:beforeAll" {
 
     {
         const address = try std.net.Address.parseIp("127.0.0.1", 9582);
-        const thread = try std.Thread.spawn(.{}, serveHTTP, .{ address });
+        const thread = try std.Thread.spawn(.{}, serveHTTP, .{address});
         thread.detach();
     }
 
     {
         const address = try std.net.Address.parseIp("127.0.0.1", 9581);
-        const thread = try std.Thread.spawn(.{}, serveHTTPS, .{ address });
+        const thread = try std.Thread.spawn(.{}, serveHTTPS, .{address});
         thread.detach();
     }
 
@@ -67,6 +67,7 @@ test "tests:beforeAll" {
         const thread = try std.Thread.spawn(.{}, serveCDP, .{address});
         thread.detach();
     }
+
     // need to wait for the servers to be listening, else tests will fail because
     // they aren't able to connect.
     wg.wait();
@@ -144,11 +145,6 @@ fn serveHTTP(address: std.net.Address) !void {
 // isn't a jerk.
 fn serveHTTPS(address: std.net.Address) !void {
     const allocator = gpa.allocator();
-    const test_dir = try std.fs.cwd().openDir("tests", .{});
-
-    // openssl req -x509 -newkey rsa:4096 -keyout tests/test_key.pem -out tests/test_cert.pem -sha256 -days 3650 -nodes -subj "/CN=127.0.0.1"
-    var auth = try tls.config.CertKeyPair.load(allocator, test_dir, "test_cert.pem", "test_key.pem");
-    defer auth.deinit(allocator);
 
     var listener = try address.listen(.{ .reuse_address = true });
     defer listener.deinit();
@@ -174,7 +170,7 @@ fn serveHTTPS(address: std.net.Address) !void {
         };
         defer stream.close();
 
-        var conn = try tls.server(stream, .{ .auth = &auth });
+        var conn = try tls.server(stream, .{ .auth = null });
         defer conn.close() catch {};
 
         var pos: usize = 0;
@@ -208,7 +204,7 @@ fn serveHTTPS(address: std.net.Address) !void {
                 const to_send = rand.intRangeAtMost(usize, 1, unsent.len);
                 const sent = try conn.write(unsent[0..to_send]);
                 unsent = unsent[sent..];
-                // std.time.sleep(std.time.ns_per_us * 5);
+                std.time.sleep(std.time.ns_per_us * 5);
             }
             break;
         }

@@ -48,8 +48,8 @@ pub const Client = struct {
     root_ca: tls.config.CertBundle,
 
     // we only allow passing in a root_ca for testing
-    pub fn init(allocator: Allocator, max_concurrent: usize, root_ca_: ?tls.config.CertBundle) !Client {
-        var root_ca = root_ca_ orelse try tls.config.CertBundle.fromSystem(allocator);
+    pub fn init(allocator: Allocator, max_concurrent: usize) !Client {
+        var root_ca = try tls.config.CertBundle.fromSystem(allocator);
         errdefer root_ca.deinit(allocator);
 
         const state_pool = try StatePool.init(allocator, max_concurrent);
@@ -122,6 +122,9 @@ pub const Request = struct {
     // Whether the Host header has been set via `request.addHeader()`. If not
     // we'll set it based on `uri` before issuing the request.
     _has_host_header: bool,
+
+    // Whether or not we should verify that the host matches the certificate CN
+    _tls_verify_host: bool = true,
 
     pub const Method = enum {
         GET,
@@ -202,9 +205,12 @@ pub const Request = struct {
     }
 
     // TODO timeout
-    const SendSyncOpts = struct {};
+    const SendSyncOpts = struct {
+        tls_verify_host: bool = true,
+    };
     // Makes an synchronous request
-    pub fn sendSync(self: *Request, _: SendSyncOpts) anyerror!Response {
+    pub fn sendSync(self: *Request, opts: SendSyncOpts) anyerror!Response {
+        self._tls_verify_host = opts.tls_verify_host;
         try self.prepareInitialSend();
         return self.doSendSync();
     }
@@ -224,9 +230,12 @@ pub const Request = struct {
         };
     }
 
-    const SendAsyncOpts = struct {};
+    const SendAsyncOpts = struct {
+        tls_verify_host: bool = true,
+    };
     // Makes an asynchronous request
-    pub fn sendAsync(self: *Request, loop: anytype, handler: anytype, _: SendAsyncOpts) !void {
+    pub fn sendAsync(self: *Request, loop: anytype, handler: anytype, opts: SendAsyncOpts) !void {
+        self._tls_verify_host = opts.tls_verify_host;
         try self.prepareInitialSend();
         return self.doSendAsync(loop, handler);
     }
@@ -236,8 +245,7 @@ pub const Request = struct {
     }
 
     fn doSendAsync(self: *Request, loop: anytype, handler: anytype) !void {
-        // TODO: change this to nonblocking (false) when we have promise resolution
-        const socket, const address = try self.createSocket(true);
+        const socket, const address = try self.createSocket(false);
         const AsyncHandlerT = AsyncHandler(@TypeOf(handler), @TypeOf(loop));
         const async_handler = try self.arena.create(AsyncHandlerT);
 
@@ -256,6 +264,7 @@ pub const Request = struct {
                 .tls_client = try tls.asyn.Client(AsyncHandlerT.TLSHandler).init(self.arena, .{ .handler = async_handler }, .{
                     .host = self.host(),
                     .root_ca = self._client.root_ca,
+                    .insecure_skip_verify = self._tls_verify_host == false,
                     // .key_log_callback = tls.config.key_log.callback
                 }),
             };
@@ -367,6 +376,7 @@ pub const Request = struct {
         if (@hasDecl(posix.TCP, "NODELAY")) {
             try posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
         }
+
         self._socket = socket;
         return .{ socket, address };
     }
@@ -544,7 +554,6 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
             const n = n_ catch |err| {
                 return self.handleError("Read error", err);
             };
-
             if (n == 0) {
                 return self.handleError("Connection closed", error.ConnectionResetByPeer);
             }
@@ -662,12 +671,12 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
 
                 switch (self.protocol) {
                     .tls_client => |*tls_client| {
+                        handler.receive();
                         try tls_client.onConnect();
                         // when TLS is active, from a network point of view
                         // it's no longer a strict REQ->RES. We pretty much
                         // have to constantly receive data (e.g. to process
                         // the handshake)
-                        handler.receive();
                     },
                     .plain => {
                         // queue everything up
@@ -847,6 +856,7 @@ const SyncHandler = struct {
                 .tls = try tls.client(std.net.Stream{ .handle = socket }, .{
                     .host = request.host(),
                     .root_ca = request._client.root_ca,
+                    .insecure_skip_verify = request._tls_verify_host == false,
                     // .key_log_callback = tls.config.key_log.callback,
                 }),
             };
@@ -1704,13 +1714,12 @@ test "HttpClient: sync no body" {
 }
 
 test "HttpClient: sync tls no body" {
-    // https://github.com/ianic/tls.zig/issues/10
-    for (0..1) |_| {
+    for (0..5) |_| {
         var client = try testClient();
         defer client.deinit();
 
         var req = try client.request(.GET, "https://127.0.0.1:9581/http_client/simple");
-        var res = try req.sendSync(.{});
+        var res = try req.sendSync(.{ .tls_verify_host = false });
 
         try testing.expectEqual(null, try res.next());
         try testing.expectEqual(200, res.header.status);
@@ -1741,14 +1750,13 @@ test "HttpClient: sync tls with body" {
     defer arr.deinit(testing.allocator);
     try arr.ensureTotalCapacity(testing.allocator, 20);
 
-    // https://github.com/ianic/tls.zig/issues/10
-    for (0..1) |_| {
+    for (0..5) |_| {
         defer arr.clearRetainingCapacity();
         var client = try testClient();
         defer client.deinit();
 
         var req = try client.request(.GET, "https://127.0.0.1:9581/http_client/body");
-        var res = try req.sendSync(.{});
+        var res = try req.sendSync(.{ .tls_verify_host = false });
 
         while (try res.next()) |data| {
             arr.appendSliceAssumeCapacity(data);
@@ -1766,14 +1774,13 @@ test "HttpClient: sync redirect from TLS to Plaintext" {
     defer arr.deinit(testing.allocator);
     try arr.ensureTotalCapacity(testing.allocator, 20);
 
-    // https://github.com/ianic/tls.zig/issues/10
-    for (0..1) |_| {
+    for (0..5) |_| {
         defer arr.clearRetainingCapacity();
         var client = try testClient();
         defer client.deinit();
 
         var req = try client.request(.GET, "https://127.0.0.1:9581/http_client/redirect/insecure");
-        var res = try req.sendSync(.{});
+        var res = try req.sendSync(.{ .tls_verify_host = false });
 
         while (try res.next()) |data| {
             arr.appendSliceAssumeCapacity(data);
@@ -1793,14 +1800,13 @@ test "HttpClient: sync redirect plaintext to TLS" {
     defer arr.deinit(testing.allocator);
     try arr.ensureTotalCapacity(testing.allocator, 20);
 
-    // https://github.com/ianic/tls.zig/issues/10
-    for (0..1) |_| {
+    for (0..5) |_| {
         defer arr.clearRetainingCapacity();
         var client = try testClient();
         defer client.deinit();
 
         var req = try client.request(.GET, "http://127.0.0.1:9582/http_client/redirect/secure");
-        var res = try req.sendSync(.{});
+        var res = try req.sendSync(.{ .tls_verify_host = false });
 
         while (try res.next()) |data| {
             arr.appendSliceAssumeCapacity(data);
@@ -1818,7 +1824,7 @@ test "HttpClient: sync GET redirect" {
     defer client.deinit();
 
     var req = try client.request(.GET, "http://127.0.0.1:9582/http_client/redirect");
-    var res = try req.sendSync(.{});
+    var res = try req.sendSync(.{ .tls_verify_host = false });
 
     try testing.expectEqual("over 9000!", try res.next());
     try testing.expectEqual(201, res.header.status);
@@ -1866,9 +1872,6 @@ test "HttpClient: async no body" {
     var handler = try CaptureHandler.init();
     defer handler.deinit();
 
-    var loop = try jsruntime.Loop.init(testing.allocator);
-    defer loop.deinit();
-
     var req = try client.request(.GET, "HTTP://127.0.0.1:9582/http_client/simple");
     try req.sendAsync(&handler.loop, &handler, .{});
     try handler.waitUntilDone();
@@ -1886,11 +1889,8 @@ test "HttpClient: async no body" {
 //     var handler = try CaptureHandler.init();
 //     defer handler.deinit();
 
-//     var loop = try jsruntime.Loop.init(testing.allocator);
-//     defer loop.deinit();
-
 //     var req = try client.request(.GET, "HTTPs://127.0.0.1:9581/http_client/simple");
-//     try req.sendAsync(&handler.loop, &handler, .{});
+//     try req.sendAsync(&handler.loop, &handler, .{ .tls_verify_host = false });
 //     try handler.waitUntilDone();
 
 //     const res = handler.response;
@@ -1928,9 +1928,6 @@ test "HttpClient: async redirect" {
 
     var handler = try CaptureHandler.init();
     defer handler.deinit();
-
-    var loop = try jsruntime.Loop.init(testing.allocator);
-    defer loop.deinit();
 
     var req = try client.request(.GET, "HTTP://127.0.0.1:9582/http_client/redirect");
     try req.sendAsync(&handler.loop, &handler, .{});
@@ -2094,7 +2091,5 @@ fn testReader(state: *State, res: *TestResponse, data: []const u8) !void {
 }
 
 fn testClient() !Client {
-    const test_dir = try std.fs.cwd().openDir("tests", .{});
-    const root_ca = try tls.config.CertBundle.fromFile(testing.allocator, test_dir, "test_cert.pem");
-    return try Client.init(testing.allocator, 1, root_ca);
+    return try Client.init(testing.allocator, 1);
 }
