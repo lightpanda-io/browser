@@ -18,34 +18,31 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const parser = @import("netsurf");
 
 const Allocator = std.mem.Allocator;
-
-const App = @import("app.zig").App;
-const jsruntime = @import("jsruntime");
-pub const Types = jsruntime.reflect(@import("generate.zig").Tuple(.{}){});
-pub const UserContext = @import("user_context.zig").UserContext;
-
-pub const std_options = std.Options{
-    .log_level = .err,
-    .http_disable_tls = true,
-};
 
 const BORDER = "=" ** 80;
 
 // use in custom panic handler
 var current_test: ?[]const u8 = null;
 
+const jsruntime = @import("jsruntime");
+pub const Types = jsruntime.reflect(@import("generate.zig").Tuple(.{}){});
+pub const UserContext = @import("user_context.zig").UserContext;
+
+pub const std_options = std.Options{
+    .log_level = .warn,
+
+    // Crypto in Zig is generally slow, but it's particularly slow in debug mode
+    // this helps a lot (but it's still slow). Not safe to do this in non-test!
+    .side_channels_mitigations = .none,
+};
+
 pub fn main() !void {
-    try parser.init();
-    defer parser.deinit();
+    var mem: [8192]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&mem);
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-
-    var app = try App.init(allocator, .serve);
-    defer app.deinit();
+    const allocator = fba.allocator();
 
     const env = Env.init(allocator);
     defer env.deinit(allocator);
@@ -58,30 +55,20 @@ pub fn main() !void {
     var skip: usize = 0;
     var leak: usize = 0;
 
-    const http_thread = blk: {
-        const address = try std.net.Address.parseIp("127.0.0.1", 9582);
-        const thread = try std.Thread.spawn(.{}, serveHTTP, .{address});
-        break :blk thread;
-    };
-    defer http_thread.join();
-
-    const cdp_thread = blk: {
-        const address = try std.net.Address.parseIp("127.0.0.1", 9583);
-        const thread = try std.Thread.spawn(.{}, serveCDP, .{
-            app,
-            address,
-        });
-        break :blk thread;
-    };
-    defer cdp_thread.join();
-
     const printer = Printer.init();
     printer.fmt("\r\x1b[0K", .{}); // beginning of line and clear to end of line
 
     for (builtin.test_functions) |t| {
-        if (std.mem.eql(u8, t.name, "unit_tests.test_0")) {
-            // don't display anything for this test
-            try t.func();
+        if (isSetup(t)) {
+            t.func() catch |err| {
+                printer.status(.fail, "\nsetup \"{s}\" failed: {}\n", .{ t.name, err });
+                return err;
+            };
+        }
+    }
+
+    for (builtin.test_functions) |t| {
+        if (isSetup(t) or isTeardown(t)) {
             continue;
         }
 
@@ -148,6 +135,15 @@ pub fn main() !void {
             } else {
                 printer.status(status, ".", .{});
             }
+        }
+    }
+
+    for (builtin.test_functions) |t| {
+        if (isTeardown(t)) {
+            t.func() catch |err| {
+                printer.status(.fail, "\nteardown \"{s}\" failed: {}\n", .{ t.name, err });
+                return err;
+            };
         }
     }
 
@@ -315,6 +311,15 @@ const Env = struct {
     }
 };
 
+pub const panic = std.debug.FullPanic(struct {
+    pub fn panicFn(msg: []const u8, first_trace_addr: ?usize) noreturn {
+        if (current_test) |ct| {
+            std.debug.print("\x1b[31m{s}\npanic running \"{s}\"\n{s}\x1b[0m\n", .{ BORDER, ct, BORDER });
+        }
+        std.debug.defaultPanic(msg, first_trace_addr);
+    }
+}.panicFn);
+
 fn isUnnamed(t: std.builtin.TestFn) bool {
     const marker = ".test_";
     const test_name = t.name;
@@ -323,69 +328,10 @@ fn isUnnamed(t: std.builtin.TestFn) bool {
     return true;
 }
 
-fn serveHTTP(address: std.net.Address) !void {
-    var listener = try address.listen(.{ .reuse_address = true });
-    defer listener.deinit();
-
-    var read_buffer: [1024]u8 = undefined;
-    ACCEPT: while (true) {
-        var conn = try listener.accept();
-        defer conn.stream.close();
-        var server = std.http.Server.init(conn, &read_buffer);
-
-        while (server.state == .ready) {
-            var request = server.receiveHead() catch |err| switch (err) {
-                error.HttpConnectionClosing => continue :ACCEPT,
-                else => {
-                    std.debug.print("Test HTTP Server error: {}\n", .{err});
-                    return err;
-                },
-            };
-
-            const path = request.head.target;
-            if (std.mem.eql(u8, path, "/loader")) {
-                try writeResponse(&request, .{
-                    .body = "Hello!",
-                });
-            }
-        }
-    }
+fn isSetup(t: std.builtin.TestFn) bool {
+    return std.mem.endsWith(u8, t.name, "tests:beforeAll");
 }
 
-fn serveCDP(app: *App, address: std.net.Address) !void {
-    const server = @import("server.zig");
-    server.run(app, address, std.time.ns_per_s * 2) catch |err| {
-        std.debug.print("CDP server error: {}", .{err});
-        return err;
-    };
-}
-
-const Response = struct {
-    body: []const u8 = "",
-    status: std.http.Status = .ok,
-};
-
-fn writeResponse(req: *std.http.Server.Request, res: Response) !void {
-    try req.respond(res.body, .{ .status = res.status });
-}
-
-test {
-    std.testing.refAllDecls(@import("url/query.zig"));
-    std.testing.refAllDecls(@import("browser/dump.zig"));
-    std.testing.refAllDecls(@import("browser/loader.zig"));
-    std.testing.refAllDecls(@import("browser/mime.zig"));
-    std.testing.refAllDecls(@import("css/css.zig"));
-    std.testing.refAllDecls(@import("css/libdom_test.zig"));
-    std.testing.refAllDecls(@import("css/match_test.zig"));
-    std.testing.refAllDecls(@import("css/parser.zig"));
-    std.testing.refAllDecls(@import("generate.zig"));
-    std.testing.refAllDecls(@import("http/Client.zig"));
-    std.testing.refAllDecls(@import("storage/storage.zig"));
-    std.testing.refAllDecls(@import("storage/cookie.zig"));
-    std.testing.refAllDecls(@import("iterator/iterator.zig"));
-    std.testing.refAllDecls(@import("server.zig"));
-    std.testing.refAllDecls(@import("cdp/cdp.zig"));
-    std.testing.refAllDecls(@import("log.zig"));
-    std.testing.refAllDecls(@import("datetime.zig"));
-    std.testing.refAllDecls(@import("telemetry/telemetry.zig"));
+fn isTeardown(t: std.builtin.TestFn) bool {
+    return std.mem.endsWith(u8, t.name, "tests:afterAll");
 }

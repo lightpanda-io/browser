@@ -31,7 +31,6 @@ const storage = @import("storage/storage.zig");
 const url = @import("url/url.zig");
 const URL = url.URL;
 const urlquery = @import("url/query.zig");
-const Client = @import("asyncio").Client;
 const Location = @import("html/location.zig").Location;
 
 const documentTestExecFn = @import("dom/document.zig").testExecFn;
@@ -89,12 +88,12 @@ fn testExecFn(
         std.debug.print("documentHTMLClose error: {s}\n", .{@errorName(err)});
     };
 
-    var cli = Client{ .allocator = alloc };
-    defer cli.deinit();
+    var http_client = try @import("http/client.zig").Client.init(alloc, 5);
+    defer http_client.deinit();
 
     try js_env.setUserContext(.{
         .document = doc,
-        .httpClient = &cli,
+        .http_client = &http_client,
     });
 
     // alias global as self and window
@@ -220,6 +219,12 @@ pub fn main() !void {
     if (run == .all or run == .unit) {
         std.debug.print("\n", .{});
         for (builtin.test_functions) |test_fn| {
+            if (std.mem.startsWith(u8, test_fn.name, "http.client.test")) {
+                // covered by unit test, needs a dummy server started, which
+                // main_test doesn't do.
+                continue;
+            }
+
             try parser.init();
             defer parser.deinit();
 

@@ -31,7 +31,7 @@ const XMLHttpRequestEventTarget = @import("event_target.zig").XMLHttpRequestEven
 const Mime = @import("../browser/mime.zig").Mime;
 
 const Loop = jsruntime.Loop;
-const Client = @import("asyncio").Client;
+const http = @import("../http/client.zig");
 
 const parser = @import("netsurf");
 
@@ -95,14 +95,12 @@ pub const XMLHttpRequestBodyInit = union(XMLHttpRequestBodyInitTag) {
 pub const XMLHttpRequest = struct {
     proto: XMLHttpRequestEventTarget = XMLHttpRequestEventTarget{},
     alloc: std.mem.Allocator,
-    cli: *Client,
-    io: Client.IO,
+    client: *http.Client,
+    request: ?http.Request = null,
 
     priv_state: PrivState = .new,
-    req: ?Client.Request = null,
-    ctx: ?Client.Ctx = null,
 
-    method: std.http.Method,
+    method: http.Request.Method,
     state: State,
     url: ?[]const u8,
     uri: std.Uri,
@@ -110,6 +108,7 @@ pub const XMLHttpRequest = struct {
     headers: Headers,
     sync: bool = true,
     err: ?anyerror = null,
+    last_dispatch: i64 = 0,
 
     // TODO uncomment this field causes casting issue with
     // XMLHttpRequestEventTarget. I think it's dueto an alignement issue, but
@@ -125,7 +124,7 @@ pub const XMLHttpRequest = struct {
 
     withCredentials: bool = false,
     // TODO: response readonly attribute any response;
-    response_bytes: ?[]const u8 = null,
+    response_bytes: std.ArrayListUnmanaged(u8) = .{},
     response_type: ResponseType = .Empty,
     response_headers: Headers,
 
@@ -133,7 +132,7 @@ pub const XMLHttpRequest = struct {
     // use 16KB for headers buffer size.
     response_header_buffer: [1024 * 16]u8 = undefined,
 
-    response_status: u10 = 0,
+    response_status: u16 = 0,
 
     // TODO uncomment this field causes casting issue with
     // XMLHttpRequestEventTarget. I think it's dueto an alignement issue, but
@@ -144,8 +143,6 @@ pub const XMLHttpRequest = struct {
     response_mime: ?Mime = null,
     response_obj: ?ResponseObj = null,
     send_flag: bool = false,
-
-    payload: ?[]const u8 = null,
 
     pub const prototype = *XMLHttpRequestEventTarget;
     pub const mem_guarantied = true;
@@ -246,13 +243,6 @@ pub const XMLHttpRequest = struct {
         fn all(self: Headers) []std.http.Header {
             return self.list.items;
         }
-
-        fn load(self: *Headers, it: *std.http.HeaderIterator) !void {
-            while (true) {
-                const h = it.next() orelse break;
-                _ = try self.append(h.name, h.value);
-            }
-        }
     };
 
     const Response = union(ResponseType) {
@@ -290,17 +280,16 @@ pub const XMLHttpRequest = struct {
 
     const min_delay: u64 = 50000000; // 50ms
 
-    pub fn constructor(alloc: std.mem.Allocator, loop: *Loop, userctx: UserContext) !XMLHttpRequest {
+    pub fn constructor(alloc: std.mem.Allocator, userctx: UserContext) !XMLHttpRequest {
         return .{
             .alloc = alloc,
             .headers = Headers.init(alloc),
             .response_headers = Headers.init(alloc),
-            .io = Client.IO.init(loop),
             .method = undefined,
             .url = null,
             .uri = undefined,
             .state = .unsent,
-            .cli = userctx.httpClient,
+            .client = userctx.http_client,
         };
     }
 
@@ -308,10 +297,6 @@ pub const XMLHttpRequest = struct {
         if (self.url) |v| alloc.free(v);
         self.url = null;
 
-        if (self.payload) |v| alloc.free(v);
-        self.payload = null;
-
-        if (self.response_bytes) |v| alloc.free(v);
         if (self.response_obj) |v| v.deinit();
 
         self.response_obj = null;
@@ -329,12 +314,6 @@ pub const XMLHttpRequest = struct {
         self.send_flag = false;
 
         self.priv_state = .new;
-
-        if (self.ctx) |*c| c.deinit();
-        self.ctx = null;
-
-        if (self.req) |*r| r.deinit();
-        self.req = null;
     }
 
     pub fn deinit(self: *XMLHttpRequest, alloc: std.mem.Allocator) void {
@@ -449,7 +428,7 @@ pub const XMLHttpRequest = struct {
     }
 
     const methods = [_]struct {
-        tag: std.http.Method,
+        tag: http.Request.Method,
         name: []const u8,
     }{
         .{ .tag = .DELETE, .name = "DELETE" },
@@ -461,7 +440,7 @@ pub const XMLHttpRequest = struct {
     };
     const methods_forbidden = [_][]const u8{ "CONNECT", "TRACE", "TRACK" };
 
-    pub fn validMethod(m: []const u8) DOMError!std.http.Method {
+    pub fn validMethod(m: []const u8) DOMError!http.Request.Method {
         for (methods) |method| {
             if (std.ascii.eqlIgnoreCase(method.name, m)) {
                 return method.tag;
@@ -485,183 +464,97 @@ pub const XMLHttpRequest = struct {
     }
 
     // TODO body can be either a XMLHttpRequestBodyInit or a document
-    pub fn _send(self: *XMLHttpRequest, alloc: std.mem.Allocator, body: ?[]const u8) !void {
+    pub fn _send(self: *XMLHttpRequest, loop: *Loop, alloc: std.mem.Allocator, body: ?[]const u8) !void {
         if (self.state != .opened) return DOMError.InvalidState;
         if (self.send_flag) return DOMError.InvalidState;
+
+        log.debug("{any} {any}", .{ self.method, self.uri });
+
+        self.send_flag = true;
+        self.priv_state = .open;
+
+        self.request = try self.client.request(self.method, self.uri);
+        var request = &self.request.?;
+        errdefer request.deinit();
+
+        for (self.headers.list.items) |hdr| {
+            try request.addHeader(hdr.name, hdr.value, .{});
+        }
 
         //  The body argument provides the request body, if any, and is ignored
         //  if the request method is GET or HEAD.
         //  https://xhr.spec.whatwg.org/#the-send()-method
         // var used_body: ?XMLHttpRequestBodyInit = null;
-        if (body != null and self.method != .GET and self.method != .HEAD) {
-            // TODO If body is a Document, then set this’s request body to body, serialized, converted, and UTF-8 encoded.
-
-            const body_init = XMLHttpRequestBodyInit{ .String = body.? };
-
-            // keep the user content type from request headers.
-            if (self.headers.has("Content-Type")) {
-                // https://fetch.spec.whatwg.org/#bodyinit-safely-extract
-                try self.headers.append("Content-Type", try body_init.contentType());
+        if (body) |b| {
+            if (self.method != .GET and self.method != .HEAD) {
+                request.body = try alloc.dupe(u8, b);
+                try request.addHeader("Content-Type", "text/plain; charset=UTF-8", .{});
             }
-
-            // copy the payload
-            if (self.payload) |v| alloc.free(v);
-            self.payload = try body_init.dupe(alloc);
         }
 
-        log.debug("{any} {any}", .{ self.method, self.uri });
-
-        self.send_flag = true;
-
-        self.priv_state = .open;
-
-        self.req = try self.cli.create(self.method, self.uri, .{
-            .server_header_buffer = &self.response_header_buffer,
-            .extra_headers = self.headers.all(),
-        });
-        errdefer {
-            self.req.?.deinit();
-            self.req = null;
-        }
-
-        self.ctx = try Client.Ctx.init(&self.io, &self.req.?);
-        errdefer {
-            self.ctx.?.deinit();
-            self.ctx = null;
-        }
-        self.ctx.?.userData = self;
-
-        try self.cli.async_open(
-            self.method,
-            self.uri,
-            .{ .server_header_buffer = &self.response_header_buffer },
-            &self.ctx.?,
-            onRequestConnect,
-        );
+        try request.sendAsync(loop, self, .{});
     }
 
-    fn onRequestWait(ctx: *Client.Ctx, res: anyerror!void) !void {
-        var self = selfCtx(ctx);
-        res catch |err| return self.onErr(err);
+    pub fn onHttpResponse(self: *XMLHttpRequest, progress_: anyerror!http.Progress) !void {
+        const progress = progress_ catch |err| {
+            self.onErr(err);
+            return err;
+        };
 
-        log.info("{any} {any} {d}", .{ self.method, self.uri, self.req.?.response.status });
+        if (progress.first) {
+            const header = progress.header;
+            log.info("{any} {any} {d}", .{ self.method, self.uri, header.status });
 
-        self.priv_state = .done;
-        var it = self.req.?.response.iterateHeaders();
-        self.response_headers.load(&it) catch |e| return self.onErr(e);
+            self.priv_state = .done;
 
-        // extract a mime type from headers.
-        const ct = self.response_headers.getFirstValue("Content-Type") orelse "text/xml";
-        self.response_mime = Mime.parse(self.alloc, ct) catch |e| return self.onErr(e);
+            for (header.headers.items) |hdr| {
+                try self.response_headers.append(hdr.name, hdr.value);
+            }
 
-        // TODO handle override mime type
+            // extract a mime type from headers.
+            const ct = header.get("content-type") orelse "text/xml";
+            self.response_mime = Mime.parse(self.alloc, ct) catch |e| return self.onErr(e);
 
-        self.state = .headers_received;
-        self.dispatchEvt("readystatechange");
+            // TODO handle override mime type
+            self.state = .headers_received;
+            self.dispatchEvt("readystatechange");
 
-        self.response_status = @intFromEnum(self.req.?.response.status);
+            self.response_status = header.status;
 
-        var buf: std.ArrayListUnmanaged(u8) = .{};
-
-        // TODO set correct length
-        const total = 0;
-        var loaded: u64 = 0;
-
-        // dispatch a progress event loadstart.
-        self.dispatchProgressEvent("loadstart", .{ .loaded = loaded, .total = total });
-
-        // TODO read async
-        const reader = self.req.?.reader();
-        var buffer: [1024]u8 = undefined;
-        var ln = buffer.len;
-        var prev_dispatch: ?std.time.Instant = null;
-        while (ln > 0) {
-            ln = reader.read(&buffer) catch |e| {
-                buf.deinit(self.alloc);
-                return self.onErr(e);
-            };
-            buf.appendSlice(self.alloc, buffer[0..ln]) catch |e| {
-                buf.deinit(self.alloc);
-                return self.onErr(e);
-            };
-            loaded = loaded + ln;
-
-            // Dispatch only if 50ms have passed.
-            const now = std.time.Instant.now() catch |e| {
-                buf.deinit(self.alloc);
-                return self.onErr(e);
-            };
-            if (prev_dispatch != null and now.since(prev_dispatch.?) < min_delay) continue;
-            defer prev_dispatch = now;
+            // TODO correct total
+            self.dispatchProgressEvent("loadstart", .{ .loaded = 0, .total = 0 });
 
             self.state = .loading;
             self.dispatchEvt("readystatechange");
-
-            // dispatch a progress event progress.
-            self.dispatchProgressEvent("progress", .{
-                .loaded = loaded,
-                .total = total,
-            });
         }
-        self.response_bytes = buf.items;
-        self.send_flag = false;
+
+        if (progress.data) |data| {
+            try self.response_bytes.appendSlice(self.alloc, data);
+        }
+
+        const loaded = self.response_bytes.items.len;
+        const now = std.time.milliTimestamp();
+        if (now - self.last_dispatch > 50) {
+            // don't send this more than once every 50ms
+            self.dispatchProgressEvent("progress", .{
+                .total = loaded,
+                .loaded = loaded,
+            });
+            self.last_dispatch = now;
+        }
+
+        if (progress.done == false) {
+            return;
+        }
 
         self.state = .done;
+        self.send_flag = false;
         self.dispatchEvt("readystatechange");
 
         // dispatch a progress event load.
-        self.dispatchProgressEvent("load", .{ .loaded = loaded, .total = total });
+        self.dispatchProgressEvent("load", .{ .loaded = loaded, .total = loaded });
         // dispatch a progress event loadend.
-        self.dispatchProgressEvent("loadend", .{ .loaded = loaded, .total = total });
-
-        if (self.ctx) |*c| c.deinit();
-        self.ctx = null;
-
-        if (self.req) |*r| r.deinit();
-        self.req = null;
-    }
-
-    fn onRequestFinish(ctx: *Client.Ctx, res: anyerror!void) !void {
-        var self = selfCtx(ctx);
-        res catch |err| return self.onErr(err);
-
-        self.priv_state = .wait;
-        return ctx.req.async_wait(ctx, onRequestWait) catch |e| return self.onErr(e);
-    }
-
-    fn onRequestSend(ctx: *Client.Ctx, res: anyerror!void) !void {
-        var self = selfCtx(ctx);
-        res catch |err| return self.onErr(err);
-
-        if (self.payload) |payload| {
-            self.priv_state = .write;
-            return ctx.req.async_writeAll(payload, ctx, onRequestWrite) catch |e| return self.onErr(e);
-        }
-
-        self.priv_state = .finish;
-        return ctx.req.async_finish(ctx, onRequestFinish) catch |e| return self.onErr(e);
-    }
-
-    fn onRequestWrite(ctx: *Client.Ctx, res: anyerror!void) !void {
-        var self = selfCtx(ctx);
-        res catch |err| return self.onErr(err);
-        self.priv_state = .finish;
-        return ctx.req.async_finish(ctx, onRequestFinish) catch |e| return self.onErr(e);
-    }
-
-    fn onRequestConnect(ctx: *Client.Ctx, res: anyerror!void) anyerror!void {
-        var self = selfCtx(ctx);
-        res catch |err| return self.onErr(err);
-
-        // prepare payload transfert.
-        if (self.payload) |v| self.req.?.transfer_encoding = .{ .content_length = v.len };
-
-        self.priv_state = .send;
-        return ctx.req.async_send(ctx, onRequestSend) catch |err| return self.onErr(err);
-    }
-
-    fn selfCtx(ctx: *Client.Ctx) *XMLHttpRequest {
-        return @ptrCast(@alignCast(ctx.userData));
+        self.dispatchProgressEvent("loadend", .{ .loaded = loaded, .total = loaded });
     }
 
     fn onErr(self: *XMLHttpRequest, err: anyerror) void {
@@ -675,12 +568,6 @@ pub const XMLHttpRequest = struct {
         self.dispatchProgressEvent("loadend", .{});
 
         log.debug("{any} {any} {any}", .{ self.method, self.uri, self.err });
-
-        if (self.ctx) |*c| c.deinit();
-        self.ctx = null;
-
-        if (self.req) |*r| r.deinit();
-        self.req = null;
     }
 
     pub fn _abort(self: *XMLHttpRequest) void {
@@ -803,7 +690,7 @@ pub const XMLHttpRequest = struct {
         }
 
         if (self.response_type == .JSON) {
-            if (self.response_bytes == null) return null;
+            if (self.response_bytes.items.len == 0) return null;
 
             // TODO Let jsonObject be the result of running parse JSON from bytes
             // on this’s received bytes. If that threw an exception, then return
@@ -841,7 +728,7 @@ pub const XMLHttpRequest = struct {
         };
         defer alloc.free(ccharset);
 
-        var fbs = std.io.fixedBufferStream(self.response_bytes.?);
+        var fbs = std.io.fixedBufferStream(self.response_bytes.items);
         const doc = parser.documentHTMLParse(fbs.reader(), ccharset) catch {
             self.response_obj = .{ .Failure = true };
             return;
@@ -862,7 +749,7 @@ pub const XMLHttpRequest = struct {
         const p = std.json.parseFromSlice(
             JSONValue,
             alloc,
-            self.response_bytes.?,
+            self.response_bytes.items,
             .{},
         ) catch |e| {
             log.err("parse JSON: {}", .{e});
@@ -875,8 +762,7 @@ pub const XMLHttpRequest = struct {
 
     pub fn get_responseText(self: *XMLHttpRequest) ![]const u8 {
         if (self.response_type != .Empty and self.response_type != .Text) return DOMError.InvalidState;
-
-        return if (self.response_bytes) |v| v else "";
+        return self.response_bytes.items;
     }
 
     pub fn _getResponseHeader(self: *XMLHttpRequest, name: []const u8) ?[]const u8 {

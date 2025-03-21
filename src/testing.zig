@@ -1,3 +1,21 @@
+// Copyright (C) 2023-2024  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 const std = @import("std");
 
 pub const allocator = std.testing.allocator;
@@ -30,8 +48,8 @@ pub fn expectEqual(expected: anytype, actual: anytype) !void {
             return;
         },
         .optional => {
-            if (actual == null) {
-                return std.testing.expectEqual(null, expected);
+            if (@typeInfo(@TypeOf(expected)) == .null) {
+                return std.testing.expectEqual(null, actual);
             }
             return expectEqual(expected, actual.?);
         },
@@ -141,3 +159,34 @@ pub fn print(comptime fmt: []const u8, args: anytype) void {
 pub fn app(_: anytype) *App {
     return App.init(allocator, .serve) catch unreachable;
 }
+
+pub const Random = struct {
+    var instance: ?std.Random.DefaultPrng = null;
+
+    pub fn fill(buf: []u8) void {
+        var r = random();
+        r.bytes(buf);
+    }
+
+    pub fn fillAtLeast(buf: []u8, min: usize) []u8 {
+        var r = random();
+        const l = r.intRangeAtMost(usize, min, buf.len);
+        r.bytes(buf[0..l]);
+        return buf;
+    }
+
+    pub fn intRange(comptime T: type, min: T, max: T) T {
+        var r = random();
+        return r.intRangeAtMost(T, min, max);
+    }
+
+    pub fn random() std.Random {
+        if (instance == null) {
+            var seed: u64 = undefined;
+            std.posix.getrandom(std.mem.asBytes(&seed)) catch unreachable;
+            instance = std.Random.DefaultPrng.init(seed);
+            // instance = std.Random.DefaultPrng.init(0);
+        }
+        return instance.?.random();
+    }
+};
