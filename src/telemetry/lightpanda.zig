@@ -10,6 +10,7 @@ const telemetry = @import("telemetry.zig");
 
 const log = std.log.scoped(.telemetry);
 const URL = "https://telemetry.lightpanda.io";
+const MAX_BATCH_SIZE = 20;
 
 pub const LightPanda = struct {
     uri: std.Uri,
@@ -73,18 +74,18 @@ pub const LightPanda = struct {
     fn run(self: *LightPanda) void {
         const client = self.client;
         var arr: std.ArrayListUnmanaged(u8) = .{};
-
         defer arr.deinit(self.allocator);
 
+        var batch: [MAX_BATCH_SIZE]LightPandaEvent = undefined;
         self.mutex.lock();
         while (true) {
-            while (self.pending.popFirst()) |node| {
+            while (self.pending.first != null) {
+                const b = self.collectBatch(&batch);
                 self.mutex.unlock();
-                self.postEvent(&node.data, client, &arr) catch |err| {
+                self.postEvent(b, client, &arr) catch |err| {
                     log.warn("Telementry reporting error: {}", .{err});
                 };
                 self.mutex.lock();
-                self.node_pool.destroy(node);
             }
             if (self.running == false) {
                 return;
@@ -93,9 +94,13 @@ pub const LightPanda = struct {
         }
     }
 
-    fn postEvent(self: *const LightPanda, event: *const LightPandaEvent, client: *std.http.Client, arr: *std.ArrayListUnmanaged(u8)) !void {
+    fn postEvent(self: *const LightPanda, events: []LightPandaEvent, client: *std.http.Client, arr: *std.ArrayListUnmanaged(u8)) !void {
         defer arr.clearRetainingCapacity();
-        try std.json.stringify(event, .{ .emit_null_optional_fields = false }, arr.writer(self.allocator));
+        var writer = arr.writer(self.allocator);
+        for (events) |event| {
+            try std.json.stringify(event, .{ .emit_null_optional_fields = false }, writer);
+            try writer.writeByte('\n');
+        }
 
         var response_header_buffer: [2048]u8 = undefined;
         const result = try client.fetch(.{
@@ -108,6 +113,21 @@ pub const LightPanda = struct {
         if (result.status != .ok) {
             log.warn("server error status: {}", .{result.status});
         }
+    }
+
+    fn collectBatch(self: *LightPanda, into: []LightPandaEvent) []LightPandaEvent {
+        var i: usize = 0;
+        const node_pool = &self.node_pool;
+        while (self.pending.popFirst()) |node| {
+            into[i] = node.data;
+            node_pool.destroy(node);
+
+            i += 1;
+            if (i == MAX_BATCH_SIZE) {
+                break;
+            }
+        }
+        return into[0..i];
     }
 };
 
