@@ -67,7 +67,7 @@ fn getAndMakeAppDir(allocator: Allocator) ?[]const u8 {
         return null;
     };
 
-    std.fs.makeDirAbsolute(app_dir_path) catch |err| switch (err) {
+    std.fs.cwd().makePath(app_dir_path) catch |err| switch (err) {
         error.PathAlreadyExists => return app_dir_path,
         else => {
             allocator.free(app_dir_path);
