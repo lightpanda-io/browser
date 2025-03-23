@@ -555,6 +555,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
             if (self.is_receiving) {
                 return;
             }
+
             self.is_receiving = true;
             return self.loop.recv(
                 Self,
@@ -736,6 +737,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                             } else if (tls_client.isConnected()) {
                                 // if we're done our handshake, there should be
                                 // no unused data
+                                handler.read_pos = 0;
                                 std.debug.assert(used == data.len);
                                 try self.sendSecureHeader(secure);
                                 return .wait;
