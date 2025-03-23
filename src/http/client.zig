@@ -422,6 +422,13 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
         // that we have valid, but unprocessed, data up to.
         read_pos: usize = 0,
 
+        // Depending on which version of TLS, there are different places during
+        // the handshake that we want to start receiving from. We can't have
+        // overlapping receives (works fine on MacOS (kqueue) but not Linux (
+        // io_uring)). Using this boolean as a guard, to make sure we only have
+        // 1 in-flight receive is easier than trying to understand TLS.
+        is_receiving: bool = false,
+
         // need a separate read and write buf because, with TLS, messages are
         // not strictly req->resp.
         write_buf: []u8,
@@ -545,6 +552,10 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
         // while handshaking and potentially while sending data. So we're always
         // receiving.
         fn receive(self: *Self) void {
+            if (self.is_receiving) {
+                return;
+            }
+            self.is_receiving = true;
             return self.loop.recv(
                 Self,
                 self,
@@ -557,6 +568,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
 
         fn received(self: *Self, _: *IO.Completion, n_: IO.RecvError!usize) void {
             self.loop.onRecv(n_);
+            self.is_receiving = false;
             const n = n_ catch |err| {
                 return self.handleError("Read error", err);
             };
@@ -2109,8 +2121,13 @@ const CaptureHandler = struct {
     }
 
     fn waitUntilDone(self: *CaptureHandler) !void {
-        try self.loop.io.run_for_ns(std.time.ns_per_ms * 25);
-        try self.reset.timedWait(std.time.ns_per_s);
+        for (0..20) |_| {
+            try self.loop.io.run_for_ns(std.time.ns_per_ms * 25);
+            if (self.reset.isSet()) {
+                return;
+            }
+        }
+        return error.TimeoutWaitingForRequestToComplete;
     }
 };
 
