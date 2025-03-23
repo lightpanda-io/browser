@@ -5,8 +5,8 @@
     .fingerprint = 0xda130f3af836cea0,
     .dependencies = .{
         .tls = .{
-            .url = "https://github.com/ianic/tls.zig/archive/96b923fcdaa6371617154857cef7b8337778cbe2.tar.gz",
-            .hash = "122031f94565d7420a155b6eaec65aaa02acc80e75e6f0947899be2106bc3055b1ec",
+            .url = "https://github.com/ianic/tls.zig/archive/b29a8b45fc59fc2d202769c4f54509bb9e17d0a2.tar.gz",
+            .hash = "1220e6fd39920dd6e28b2bc06688787a39430f8856f0597cd77c44ca868c6c54fb86",
         },
     },
 }

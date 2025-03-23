@@ -32,11 +32,10 @@ const Loop = jsruntime.Loop;
 
 const log = std.log.scoped(.http_client);
 
+const BUFFER_LEN = 32 * 1024;
+
 // The longest individual header line that we support
 const MAX_HEADER_LINE_LEN = 4096;
-
-// tls.max_ciphertext_record_len which isn't exposed
-const BUFFER_LEN = (1 << 14) + 256 + 5;
 
 const HeaderList = std.ArrayListUnmanaged(std.http.Header);
 
@@ -254,19 +253,22 @@ pub const Request = struct {
             .socket = socket,
             .request = self,
             .handler = handler,
-            .read_buf = self._state.buf,
+            .read_buf = self._state.read_buf,
+            .write_buf = self._state.write_buf,
             .reader = Reader.init(self._state),
             .connection = .{ .handler = async_handler, .protocol = .{ .plain = {} } },
         };
 
         if (self.secure) {
             async_handler.connection.protocol = .{
-                .tls_client = try tls.asyn.Client(AsyncHandlerT.TLSHandler).init(self.arena, .{ .handler = async_handler }, .{
-                    .host = self.host(),
-                    .root_ca = self._client.root_ca,
-                    .insecure_skip_verify = self._tls_verify_host == false,
-                    // .key_log_callback = tls.config.key_log.callback
-                }),
+                .secure = .{
+                    .tls_client = try tls.nb.Client().init(self.arena, .{
+                        .host = self.host(),
+                        .root_ca = self._client.root_ca,
+                        .insecure_skip_verify = self._tls_verify_host == false,
+                        // .key_log_callback = tls.config.key_log.callback
+                    }),
+                },
             };
         }
 
@@ -420,6 +422,10 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
         // that we have valid, but unprocessed, data up to.
         read_pos: usize = 0,
 
+        // need a separate read and write buf because, with TLS, messages are
+        // not strictly req->resp.
+        write_buf: []u8,
+
         socket: posix.socket_t,
         read_completion: IO.Completion = undefined,
         send_completion: IO.Completion = undefined,
@@ -456,8 +462,8 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
         };
 
         const ProcessStatus = enum {
-            done,
             wait,
+            done,
             need_more,
         };
 
@@ -530,7 +536,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
             }
 
             self.connection.sent() catch |err| {
-                self.handleError("Processing sent data", err);
+                self.handleError("send handling", err);
             };
         }
 
@@ -558,17 +564,13 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                 return self.handleError("Connection closed", error.ConnectionResetByPeer);
             }
 
-            const status = self.connection.received(n) catch |err| {
+            const status = self.connection.received(self.read_buf[0 .. self.read_pos + n]) catch |err| {
                 self.handleError("data processing", err);
                 return;
             };
 
             switch (status) {
-                .wait => {
-                    // Happens when we're transitioning from handshaking to
-                    // sending the request. Don't continue the read loop. Let
-                    // the request get sent before we try to read again.
-                },
+                .wait => {},
                 .need_more => self.receive(),
                 .done => {
                     const redirect = self.redirect orelse {
@@ -656,13 +658,24 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
 
             const Protocol = union(enum) {
                 plain: void,
-                tls_client: tls.asyn.Client(TLSHandler),
+                secure: Secure,
+
+                const Secure = struct {
+                    tls_client: tls.nb.Client(),
+                    state: SecureState = .handshake,
+
+                    const SecureState = enum {
+                        handshake,
+                        header,
+                        body,
+                    };
+                };
             };
 
             fn deinit(self: *Connection) void {
                 switch (self.protocol) {
                     .plain => {},
-                    .tls_client => |*tls_client| tls_client.deinit(),
+                    .secure => |*secure| secure.tls_client.deinit(),
                 }
             }
 
@@ -670,14 +683,6 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                 const handler = self.handler;
 
                 switch (self.protocol) {
-                    .tls_client => |*tls_client| {
-                        handler.receive();
-                        try tls_client.onConnect();
-                        // when TLS is active, from a network point of view
-                        // it's no longer a strict REQ->RES. We pretty much
-                        // have to constantly receive data (e.g. to process
-                        // the handshake)
-                    },
                     .plain => {
                         // queue everything up
                         handler.state = .body;
@@ -688,61 +693,73 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                         }
                         handler.receive();
                     },
+                    .secure => |*secure| {
+                        // initiate the handshake
+                        _, const i = try secure.tls_client.handshake(handler.read_buf[0..0], handler.write_buf);
+                        handler.send(handler.write_buf[0..i]);
+                        handler.receive();
+                    },
                 }
             }
 
-            fn received(self: *Connection, n: usize) !ProcessStatus {
+            fn received(self: *Connection, data: []u8) !ProcessStatus {
                 const handler = self.handler;
-                const read_buf = handler.read_buf;
                 switch (self.protocol) {
-                    .tls_client => |*tls_client| {
-                        // The read on TLS is stateful, since we need a full
-                        // TLS record to get cleartext data.
-                        const pos = handler.read_pos;
-                        const end = pos + n;
+                    .plain => return handler.processData(data),
+                    .secure => |*secure| {
+                        var used: usize = 0;
+                        var closed = false;
+                        var cleartext_pos: usize = 0;
+                        var status = ProcessStatus.need_more;
+                        var tls_client = &secure.tls_client;
 
-                        const is_handshaking = handler.state == .handshake;
-
-                        const used = tls_client.onRecv(read_buf[0..end]) catch |err| switch (err) {
-                            // https://github.com/ianic/tls.zig/pull/9
-                            // we currently have no way to break out of the TLS handling
-                            // loop, except for returning an error.
-                            error.TLSHandlerDone => return .done,
-                            error.EndOfFile => return .done, // TLS close
-                            else => return err,
-                        };
-
-                        // When we tell our TLS client that we've received data
-                        // there are three possibilities:
-
-                        if (used == end) {
-                            // 1 - It used up all the data that we gave it
-                            handler.read_pos = 0;
-                            if (is_handshaking and handler.state == .header) {
-                                // we're transitioning from handshaking to
-                                // sending the request. We should not be
-                                // receiving data right now. This is particularly
-                                // important becuase our socket is currently in
-                                // blocking mode (until promise resolution is
-                                // complete). If we try to receive now, we'll
-                                // block the loop
+                        if (tls_client.isConnected()) {
+                            used, cleartext_pos, closed = try tls_client.decrypt(data);
+                        } else {
+                            std.debug.assert(secure.state == .handshake);
+                            // process handshake data
+                            used, const i = try tls_client.handshake(data, handler.write_buf);
+                            if (i > 0) {
+                                handler.send(handler.write_buf[0..i]);
+                            } else if (tls_client.isConnected()) {
+                                // if we're done our handshake, there should be
+                                // no unused data
+                                std.debug.assert(used == data.len);
+                                try self.sendSecureHeader(secure);
                                 return .wait;
                             }
-                            // If we're here, we're either still handshaking
-                            // (in which case we need more data), or we
-                            // we're reading the response and we need more data
-                            // (else we would have gotten TLSHandlerDone)
-                            return .need_more;
                         }
 
                         if (used == 0) {
-                            // 2 - It didn't use any of the data (i.e there
-                            // wasn't a full record)
-                            handler.read_pos = end;
-                            return .need_more;
+                            // if nothing was used, there should have been
+                            // no cleartext data to process;
+                            std.debug.assert(cleartext_pos == 0);
+
+                            // if we need more data, then it needs to be
+                            // appended to the end of our existing data to
+                            // build up a complete record
+                            handler.read_pos = data.len;
+                            return if (closed) .done else .need_more;
                         }
 
-                        // 3 - It used some of the data, but had leftover
+                        if (cleartext_pos > 0) {
+                            status = handler.processData(data[0..cleartext_pos]);
+                        }
+
+                        if (closed) {
+                            return .done;
+                        }
+
+                        if (used == data.len) {
+                            // We used up all the data that we were given. We must
+                            // reset read_pos to 0 because (a) that's more
+                            // efficient and (b) we need all the available space
+                            // to make sure we get a full TLS record next time
+                            handler.read_pos = 0;
+                            return status;
+                        }
+
+                        // We used some of the data, but have some leftover
                         // (i.e. there was 1+ full records AND an incomplete
                         // record). We need to maintain the "leftover" data
                         // for subsequent reads.
@@ -751,91 +768,62 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                         // record size. So as long as we make sure that the start
                         // of a record is at read_buf[0], we know that we'll
                         // always have enough space for 1 record.
-                        const unused = end - used;
-                        std.mem.copyForwards(u8, read_buf, read_buf[unused..end]);
+                        const unused = data.len - used;
+                        std.mem.copyForwards(u8, handler.read_buf, data[unused..]);
                         handler.read_pos = unused;
 
                         // an incomplete record means there must be more data
                         return .need_more;
                     },
-                    .plain => return handler.processData(read_buf[0..n]),
                 }
             }
 
             fn sent(self: *Connection) !void {
                 switch (self.protocol) {
-                    .tls_client => |*tls_client| {
-                        const handler = self.handler;
-                        switch (handler.state) {
-                            .handshake => {
-                                // Our send is complete, but it was part of the
-                                // TLS handshake. This isn't data we need to
-                                // worry about.
-                            },
+                    .plain => {},
+                    .secure => |*secure| {
+                        if (secure.tls_client.isConnected() == false) {
+                            std.debug.assert(secure.state == .handshake);
+                            // still handshaking, nothing to do
+                            return;
+                        }
+                        switch (secure.state) {
+                            .handshake => return self.sendSecureHeader(secure),
                             .header => {
-                                // we WERE sending the header, but that's done
-                                handler.state = .body;
-                                if (handler.request.body) |body| {
-                                    try tls_client.send(body);
-                                } else {
-                                    // no body to send, start receiving the response
+                                secure.state = .body;
+                                const handler = self.handler;
+                                const body = handler.request.body orelse {
+                                    // We've sent the haeder, and there's no body
+                                    // start receiving the response
                                     handler.receive();
-                                }
+                                    return;
+                                };
+                                const used, const i = try secure.tls_client.encrypt(body, handler.write_buf);
+                                std.debug.assert(body.len == used);
+                                handler.send(handler.write_buf[0..i]);
                             },
-                            .body => handler.receive(),
+                            .body => {
+                                // We've sent the body, start receiving the
+                                // response
+                                self.handler.receive();
+                            },
                         }
                     },
-                    .plain => {
-                        // For plain, we already queued the header, the body
-                        // and the reader!
-                    },
                 }
             }
-        };
 
-        // Separate struct just to keep it a bit cleaner. tls.zig requires
-        // callbacks like "onConnect" and "send" which is a bit generic and
-        // is confusing with the AsyncHandler which has similar concepts.
-        const TLSHandler = struct {
-            // reference back to the AsyncHandler
-            handler: *Self,
-
-            // Callback from tls.zig indicating that the handshake is complete
-            pub fn onConnect(self: TLSHandler) void {
-                var handler = self.handler;
-                handler.state = .header;
-
-                const header = handler.request.buildHeader() catch |err| {
-                    return handler.handleError("out of memory", err);
-                };
-
-                const tls_client = &handler.connection.protocol.tls_client;
-                tls_client.send(header) catch |err| {
-                    return handler.handleError("TLS send header", err);
-                };
-            }
-
-            // tls.zig wants us to send this data
-            pub fn send(self: TLSHandler, data: []const u8) !void {
-                return self.handler.send(data);
-            }
-
-            // tls.zig received data, it's giving it to us in plaintext
-            pub fn onRecv(self: TLSHandler, data: []u8) !void {
+            // This can be called from two places because, I think, of differences
+            // between TLS 1.2 and 1.3. TLS 1.3 requires 1 fewer round trip, and
+            // as soon as we've written our handshake, we consider the connection
+            // "connected". TLS 1.2 requires a extra round trip, and thus is
+            // only connected after we receive response from the server.
+            fn sendSecureHeader(self: Connection, secure: *Protocol.Secure) !void {
+                secure.state = .header;
                 const handler = self.handler;
-                if (handler.state != .body) {
-                    // We should not receive application-level data (which is the
-                    // only data tls.zig will give us), if our handler hasn't sent
-                    // the body.
-                    handler.handleError("Premature server response", error.InvalidServerResonse);
-                    return error.InvalidServerResonse;
-                }
-
-                switch (handler.processData(data)) {
-                    .wait => unreachable, // processData never returns this
-                    .need_more => {},
-                    .done => return error.TLSHandlerDone, // https://github.com/ianic/tls.zig/pull/9
-                }
+                const header = try handler.request.buildHeader();
+                const used, const i = try secure.tls_client.encrypt(header, handler.write_buf);
+                std.debug.assert(header.len == used);
+                handler.send(handler.write_buf[0..i]);
             }
         };
     };
@@ -869,7 +857,7 @@ const SyncHandler = struct {
 
         const state = request._state;
 
-        var buf = state.buf;
+        var buf = state.read_buf;
         var reader = Reader.init(state);
 
         while (true) {
@@ -911,7 +899,7 @@ const SyncHandler = struct {
             }
         }
 
-        var buf = self.request._state.buf;
+        var buf = self.request._state.read_buf;
         while (true) {
             const n = try connection.read(buf);
             const result = try reader.process(buf[0..n]);
@@ -941,7 +929,6 @@ const SyncHandler = struct {
                         };
                         return writeAllIOVec(socket, &vec);
                     }
-
                     return writeAll(socket, header);
                 },
             }
@@ -1485,25 +1472,34 @@ pub const Response = struct {
 // Pooled and re-used when creating a request
 const State = struct {
     // used for reading chunks of payload data.
-    buf: []u8,
+    read_buf: []u8,
+
+    // use for writing data. If you're wondering why BOTH a read_buf and a
+    // write_buf, even though HTTP is req -> resp, it's for TLS, which has
+    // bidirectional data.
+    write_buf: []u8,
 
     // Used for keeping any unparsed header line until more data is received
     // At most, this represents 1 line in the header.
     header_buf: []u8,
 
-    // Used extensively bu the TLS library. Used to optionally clone request
-    // headers, and always used to clone response headers.
+    // Used to optionally clone request headers, and always used to clone
+    // response headers.
     arena: ArenaAllocator,
 
     fn init(allocator: Allocator, header_size: usize, buf_size: usize) !State {
-        const buf = try allocator.alloc(u8, buf_size);
-        errdefer allocator.free(buf);
+        const read_buf = try allocator.alloc(u8, buf_size);
+        errdefer allocator.free(read_buf);
+
+        const write_buf = try allocator.alloc(u8, buf_size);
+        errdefer allocator.free(write_buf);
 
         const header_buf = try allocator.alloc(u8, header_size);
         errdefer allocator.free(header_buf);
 
         return .{
-            .buf = buf,
+            .read_buf = read_buf,
+            .write_buf = write_buf,
             .header_buf = header_buf,
             .arena = std.heap.ArenaAllocator.init(allocator),
         };
@@ -1515,7 +1511,8 @@ const State = struct {
 
     fn deinit(self: *State) void {
         const allocator = self.arena.child_allocator;
-        allocator.free(self.buf);
+        allocator.free(self.read_buf);
+        allocator.free(self.write_buf);
         allocator.free(self.header_buf);
         self.arena.deinit();
     }
@@ -1786,6 +1783,7 @@ test "HttpClient: sync redirect from TLS to Plaintext" {
             arr.appendSliceAssumeCapacity(data);
         }
         try testing.expectEqual(201, res.header.status);
+        try testing.expectEqual("over 9000!", arr.items);
         try testing.expectEqual(5, res.header.count());
         try testing.expectEqual("close", res.header.get("connection"));
         try testing.expectEqual("10", res.header.get("content-length"));
@@ -1882,23 +1880,6 @@ test "HttpClient: async no body" {
     try res.assertHeaders(&.{ "connection", "close", "content-length", "0" });
 }
 
-// test "HttpClient: async tls no body" {
-//     var client = try testClient();
-//     defer client.deinit();
-
-//     var handler = try CaptureHandler.init();
-//     defer handler.deinit();
-
-//     var req = try client.request(.GET, "HTTPs://127.0.0.1:9581/http_client/simple");
-//     try req.sendAsync(&handler.loop, &handler, .{ .tls_verify_host = false });
-//     try handler.waitUntilDone();
-
-//     const res = handler.response;
-//     try testing.expectEqual("", res.body.items);
-//     try testing.expectEqual(200, res.status);
-//     try res.assertHeaders(&.{ "connection", "close", "content-length", "0" });
-// }
-
 test "HttpClient: async with body" {
     var client = try testClient();
     defer client.deinit();
@@ -1949,6 +1930,91 @@ test "HttpClient: async redirect" {
         "_user-agent",    "Lightpanda/1.0",
         "_connection",    "Close",
     });
+}
+
+test "HttpClient: async tls no body" {
+    for (0..5) |_| {
+        var client = try testClient();
+        defer client.deinit();
+
+        var handler = try CaptureHandler.init();
+        defer handler.deinit();
+
+        var req = try client.request(.GET, "HTTPs://127.0.0.1:9581/http_client/simple");
+        try req.sendAsync(&handler.loop, &handler, .{ .tls_verify_host = false });
+        try handler.waitUntilDone();
+
+        const res = handler.response;
+        try testing.expectEqual("", res.body.items);
+        try testing.expectEqual(200, res.status);
+        try res.assertHeaders(&.{ "content-length", "0" });
+    }
+}
+
+test "HttpClient: async tls with body" {
+    for (0..5) |_| {
+        var client = try testClient();
+        defer client.deinit();
+
+        var handler = try CaptureHandler.init();
+        defer handler.deinit();
+
+        var req = try client.request(.GET, "HTTPs://127.0.0.1:9581/http_client/body");
+        try req.sendAsync(&handler.loop, &handler, .{ .tls_verify_host = false });
+        try handler.waitUntilDone();
+
+        const res = handler.response;
+        try testing.expectEqual("1234567890abcdefhijk", res.body.items);
+        try testing.expectEqual(201, res.status);
+        try res.assertHeaders(&.{ "content-length", "20", "another", "HEaDer" });
+    }
+}
+
+test "HttpClient: async redirect from TLS to Plaintext" {
+    var arr: std.ArrayListUnmanaged(u8) = .{};
+    defer arr.deinit(testing.allocator);
+    try arr.ensureTotalCapacity(testing.allocator, 20);
+
+    for (0..5) |_| {
+        defer arr.clearRetainingCapacity();
+        var client = try testClient();
+        defer client.deinit();
+
+        var handler = try CaptureHandler.init();
+        defer handler.deinit();
+
+        var req = try client.request(.GET, "https://127.0.0.1:9581/http_client/redirect/insecure");
+        try req.sendAsync(&handler.loop, &handler, .{ .tls_verify_host = false });
+        try handler.waitUntilDone();
+
+        const res = handler.response;
+        try testing.expectEqual(201, res.status);
+        try testing.expectEqual("over 9000!", res.body.items);
+        try res.assertHeaders(&.{ "connection", "close", "content-length", "10", "_host", "127.0.0.1", "_user-agent", "Lightpanda/1.0", "_connection", "Close" });
+    }
+}
+
+test "HttpClient: async redirect plaintext to TLS" {
+    var arr: std.ArrayListUnmanaged(u8) = .{};
+    defer arr.deinit(testing.allocator);
+    try arr.ensureTotalCapacity(testing.allocator, 20);
+
+    for (0..5) |_| {
+        defer arr.clearRetainingCapacity();
+        var client = try testClient();
+        defer client.deinit();
+        var handler = try CaptureHandler.init();
+        defer handler.deinit();
+
+        var req = try client.request(.GET, "http://127.0.0.1:9582/http_client/redirect/secure");
+        try req.sendAsync(&handler.loop, &handler, .{ .tls_verify_host = false });
+        try handler.waitUntilDone();
+
+        const res = handler.response;
+        try testing.expectEqual(201, res.status);
+        try testing.expectEqual("1234567890abcdefhijk", res.body.items);
+        try res.assertHeaders(&.{ "content-length", "20", "another", "HEaDer" });
+    }
 }
 
 const TestResponse = struct {
@@ -2020,7 +2086,7 @@ const CaptureHandler = struct {
 
     fn onHttpResponse(self: *CaptureHandler, progress_: anyerror!Progress) !void {
         self.process(progress_) catch |err| {
-            std.debug.print("error: {}\n", .{err});
+            std.debug.print("capture handler error: {}\n", .{err});
         };
     }
 
@@ -2043,7 +2109,7 @@ const CaptureHandler = struct {
     }
 
     fn waitUntilDone(self: *CaptureHandler) !void {
-        try self.loop.io.run_for_ns(std.time.ns_per_ms);
+        try self.loop.io.run_for_ns(std.time.ns_per_ms * 25);
         try self.reset.timedWait(std.time.ns_per_s);
     }
 };
