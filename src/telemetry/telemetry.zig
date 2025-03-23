@@ -60,7 +60,11 @@ fn TelemetryT(comptime P: type) type {
 }
 
 fn getOrCreateId(app_dir_path_: ?[]const u8) ?[36]u8 {
-    const app_dir_path = app_dir_path_ orelse return null;
+    const app_dir_path = app_dir_path_ orelse {
+        var id: [36]u8 = undefined;
+        uuidv4(&id);
+        return id;
+    };
 
     var buf: [37]u8 = undefined;
     var dir = std.fs.openDirAbsolute(app_dir_path, .{}) catch |err| {
@@ -146,6 +150,10 @@ test "telemetry: getOrCreateId" {
     std.fs.cwd().deleteFile("/tmp/" ++ IID_FILE) catch {};
     const id3 = getOrCreateId("/tmp/").?;
     try testing.expectEqual(false, std.mem.eql(u8, &id1, &id3));
+
+    const id4 = getOrCreateId(null).?;
+    try testing.expectEqual(false, std.mem.eql(u8, &id1, &id4));
+    try testing.expectEqual(false, std.mem.eql(u8, &id3, &id4));
 }
 
 test "telemetry: sends event to provider" {
