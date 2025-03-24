@@ -100,6 +100,13 @@ pub const Browser = struct {
             self.session = null;
         }
     }
+
+    pub fn runMicrotasks(self: *const Browser) void {
+        // if no session exists, there is nothing to do.
+        if (self.session == null) return;
+
+        return self.session.?.env.runMicrotasks();
+    }
 };
 
 // Session is like a browser's tab.
