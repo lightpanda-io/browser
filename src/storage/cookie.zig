@@ -65,7 +65,7 @@ pub const Jar = struct {
         const same_site = try areSameSite(origin_uri, target_host);
         const is_secure = std.mem.eql(u8, target_uri.scheme, "https");
 
-        var matching: std.ArrayListUnmanaged(*Cookie) = .{};
+        var matching: std.ArrayListUnmanaged(*const Cookie) = .{};
 
         var i: usize = 0;
         var cookies = self.cookies.items;
@@ -146,14 +146,40 @@ pub const Jar = struct {
 };
 
 pub const CookieList = struct {
-    _cookies: std.ArrayListUnmanaged(*Cookie),
+    _cookies: std.ArrayListUnmanaged(*const Cookie) = .{},
 
     pub fn deinit(self: *CookieList, allocator: Allocator) void {
         self._cookies.deinit(allocator);
     }
 
-    pub fn cookies(self: *const CookieList) []*Cookie {
+    pub fn cookies(self: *const CookieList) []*const Cookie {
         return self._cookies.items;
+    }
+
+    pub fn len(self: *const CookieList) usize {
+        return self._cookies.items.len;
+    }
+
+    pub fn write(self: *const CookieList, writer: anytype) !void {
+        const all = self._cookies.items;
+        if (all.len == 0) {
+            return;
+        }
+        try writeCookie(all[0], writer);
+        for (all[1..]) |cookie| {
+            try writer.writeAll("; ");
+            try writeCookie(cookie, writer);
+        }
+    }
+
+    fn writeCookie(cookie: *const Cookie, writer: anytype) !void {
+        if (cookie.name.len > 0) {
+            try writer.writeAll(cookie.name);
+            try writer.writeByte('=');
+        }
+        if (cookie.value.len > 0) {
+            try writer.writeAll(cookie.value);
+        }
     }
 };
 
@@ -726,6 +752,40 @@ test "Jar: forRequest" {
 
     // If you add more cases after this point, note that the above test removes
     // the 'global2' cookie
+}
+
+test "CookieList: write" {
+    var arr: std.ArrayListUnmanaged(u8) = .{};
+    defer arr.deinit(testing.allocator);
+
+    var cookie_list = CookieList{};
+    defer cookie_list.deinit(testing.allocator);
+
+    const c1 = try Cookie.parse(testing.allocator, test_uri, "cookie_name=cookie_value");
+    defer c1.deinit();
+    {
+        try cookie_list._cookies.append(testing.allocator, &c1);
+        try cookie_list.write(arr.writer(testing.allocator));
+        try testing.expectEqual("cookie_name=cookie_value", arr.items);
+    }
+
+    const c2 = try Cookie.parse(testing.allocator, test_uri, "x84");
+    defer c2.deinit();
+    {
+        arr.clearRetainingCapacity();
+        try cookie_list._cookies.append(testing.allocator, &c2);
+        try cookie_list.write(arr.writer(testing.allocator));
+        try testing.expectEqual("cookie_name=cookie_value; x84", arr.items);
+    }
+
+    const c3 = try Cookie.parse(testing.allocator, test_uri, "nope=");
+    defer c3.deinit();
+    {
+        arr.clearRetainingCapacity();
+        try cookie_list._cookies.append(testing.allocator, &c3);
+        try cookie_list.write(arr.writer(testing.allocator));
+        try testing.expectEqual("cookie_name=cookie_value; x84; nope=", arr.items);
+    }
 }
 
 test "Cookie: parse key=value" {
