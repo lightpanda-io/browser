@@ -26,7 +26,7 @@ jobs:
           path-to-document: 'https://github.com/lightpanda-io/browser/blob/main/CLA.md'
           # branch should not be protected
           branch: 'main'
-          allowlist: krichprollsch,francisbouvier,katie-lpd
+          allowlist: krichprollsch,francisbouvier,katie-lpd,sjorsdonkers
 
           remote-organization-name: lightpanda-io
           remote-repository-name: cla
