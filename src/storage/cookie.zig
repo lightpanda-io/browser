@@ -3,8 +3,13 @@ const Uri = std.Uri;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
+const http = @import("../http/client.zig");
 const DateTime = @import("../datetime.zig").DateTime;
 const public_suffix_list = @import("../data/public_suffix_list.zig").lookup;
+
+const log = std.log.scoped(.cookie);
+
+pub const LookupOpts = struct { request_time: ?i64 = null, origin_uri: ?Uri = null, navigation: bool = true };
 
 pub const Jar = struct {
     allocator: Allocator,
@@ -51,24 +56,19 @@ pub const Jar = struct {
         }
     }
 
-    pub fn forRequest(
-        self: *Jar,
-        allocator: Allocator,
-        request_time: i64,
-        origin_uri: ?Uri,
-        target_uri: Uri,
-        navigation: bool,
-    ) !CookieList {
+    pub fn forRequest(self: *Jar, target_uri: Uri, writer: anytype, opts: LookupOpts) !void {
         const target_path = target_uri.path.percent_encoded;
         const target_host = (target_uri.host orelse return error.InvalidURI).percent_encoded;
 
-        const same_site = try areSameSite(origin_uri, target_host);
+        const same_site = try areSameSite(opts.origin_uri, target_host);
         const is_secure = std.mem.eql(u8, target_uri.scheme, "https");
-
-        var matching: std.ArrayListUnmanaged(*const Cookie) = .{};
 
         var i: usize = 0;
         var cookies = self.cookies.items;
+        const navigation = opts.navigation;
+        const request_time = opts.request_time orelse std.time.timestamp();
+
+        var first = true;
         while (i < cookies.len) {
             const cookie = &cookies[i];
 
@@ -138,10 +138,35 @@ pub const Jar = struct {
                 }
             }
             // we have a match!
-            try matching.append(allocator, cookie);
+            if (first) {
+                first = false;
+            } else {
+                try writer.writeAll(", ");
+            }
+            try writeCookie(cookie, writer);
         }
+    }
 
-        return .{ ._cookies = matching };
+    pub fn populateFromResponse(self: *Jar, uri: Uri, header: *const http.ResponseHeader) !void {
+        const now = std.time.timestamp();
+        var it = header.iterate("set-cookie");
+        while (it.next()) |set_cookie| {
+            const c = Cookie.parse(self.allocator, uri, set_cookie) catch |err| {
+                log.warn("Couldn't parse cookie '{s}': {}\n", .{ set_cookie, err });
+                continue;
+            };
+            try self.add(c, now);
+        }
+    }
+
+    fn writeCookie(cookie: *const Cookie, writer: anytype) !void {
+        if (cookie.name.len > 0) {
+            try writer.writeAll(cookie.name);
+            try writer.writeByte('=');
+        }
+        if (cookie.value.len > 0) {
+            try writer.writeAll(cookie.value);
+        }
     }
 };
 
@@ -503,20 +528,11 @@ test "Jar: add" {
 
 test "Jar: forRequest" {
     const expectCookies = struct {
-        fn expect(expected: []const []const u8, list: *CookieList) !void {
-            defer list.deinit(testing.allocator);
-            const acutal_cookies = list._cookies.items;
-
-            try testing.expectEqual(expected.len, acutal_cookies.len);
-            LOOP: for (expected) |e| {
-                for (acutal_cookies) |c| {
-                    if (std.mem.eql(u8, e, c.name)) {
-                        continue :LOOP;
-                    }
-                }
-                std.debug.print("Cookie '{s}' not found", .{e});
-                return error.CookieNotFound;
-            }
+        fn expect(expected: []const u8, jar: *Jar, target_uri: Uri, opts: LookupOpts) !void {
+            var arr: std.ArrayListUnmanaged(u8) = .{};
+            defer arr.deinit(testing.allocator);
+            try jar.forRequest(target_uri, arr.writer(testing.allocator), opts);
+            try testing.expectEqual(expected, arr.items);
         }
     }.expect;
 
@@ -529,8 +545,7 @@ test "Jar: forRequest" {
 
     {
         // test with no cookies
-        var matches = try jar.forRequest(testing.allocator, now, test_uri, test_uri, true);
-        try expectCookies(&.{}, &matches);
+        try expectCookies("", &jar, test_uri, .{});
     }
 
     try jar.add(try Cookie.parse(testing.allocator, test_uri, "global1=1"), now);
@@ -543,212 +558,100 @@ test "Jar: forRequest" {
     try jar.add(try Cookie.parse(testing.allocator, test_uri, "sitestrict=8;SameSite=Strict;Path=/x/"), now);
     try jar.add(try Cookie.parse(testing.allocator, test_uri_2, "domain1=9;domain=test.lightpanda.io"), now);
 
-    {
-        // nothing fancy here
-        var matches = try jar.forRequest(testing.allocator, now, test_uri, test_uri, true);
-        try expectCookies(&.{ "global1", "global2" }, &matches);
-    }
+    // nothing fancy here
+    try expectCookies("global1=1, global2=2", &jar, test_uri, .{});
+    try expectCookies("global1=1, global2=2", &jar, test_uri, .{ .origin_uri = test_uri, .navigation = false });
 
-    {
-        // We have a cookie where Domain=lightpanda.io
-        // This should _not_ match xyxlightpanda.io
-        var matches = try jar.forRequest(
-            testing.allocator,
-            now,
-            test_uri,
-            try std.Uri.parse("http://anothersitelightpanda.io/"),
-            true,
-        );
-        try expectCookies(&.{}, &matches);
-    }
+    // We have a cookie where Domain=lightpanda.io
+    // This should _not_ match xyxlightpanda.io
+    try expectCookies("", &jar, try std.Uri.parse("http://anothersitelightpanda.io/"), .{
+        .origin_uri = test_uri,
+    });
 
-    {
-        // matching path without trailing /
-        var matches = try jar.forRequest(
-            testing.allocator,
-            now,
-            test_uri,
-            try std.Uri.parse("http://lightpanda.io/about"),
-            true,
-        );
-        try expectCookies(&.{ "global1", "global2", "path1" }, &matches);
-    }
+    // matching path without trailing /
+    try expectCookies("global1=1, global2=2, path1=3", &jar, try std.Uri.parse("http://lightpanda.io/about"), .{
+        .origin_uri = test_uri,
+    });
 
-    {
-        // incomplete prefix path
-        var matches = try jar.forRequest(
-            testing.allocator,
-            now,
-            test_uri,
-            try std.Uri.parse("http://lightpanda.io/abou"),
-            true,
-        );
-        try expectCookies(&.{ "global1", "global2" }, &matches);
-    }
+    // incomplete prefix path
+    try expectCookies("global1=1, global2=2", &jar, try std.Uri.parse("http://lightpanda.io/abou"), .{
+        .origin_uri = test_uri,
+    });
 
-    {
-        // path doesn't match
-        var matches = try jar.forRequest(
-            testing.allocator,
-            now,
-            test_uri,
-            try std.Uri.parse("http://lightpanda.io/aboutus"),
-            true,
-        );
-        try expectCookies(&.{ "global1", "global2" }, &matches);
-    }
+    // path doesn't match
+    try expectCookies("global1=1, global2=2", &jar, try std.Uri.parse("http://lightpanda.io/aboutus"), .{
+        .origin_uri = test_uri,
+    });
 
-    {
-        // path doesn't match cookie directory
-        var matches = try jar.forRequest(
-            testing.allocator,
-            now,
-            test_uri,
-            try std.Uri.parse("http://lightpanda.io/docs"),
-            true,
-        );
-        try expectCookies(&.{ "global1", "global2" }, &matches);
-    }
+    // path doesn't match cookie directory
+    try expectCookies("global1=1, global2=2", &jar, try std.Uri.parse("http://lightpanda.io/docs"), .{
+        .origin_uri = test_uri,
+    });
 
-    {
-        // exact directory match
-        var matches = try jar.forRequest(
-            testing.allocator,
-            now,
-            test_uri,
-            try std.Uri.parse("http://lightpanda.io/docs/"),
-            true,
-        );
-        try expectCookies(&.{ "global1", "global2", "path2" }, &matches);
-    }
+    // exact directory match
+    try expectCookies("global1=1, global2=2, path2=4", &jar, try std.Uri.parse("http://lightpanda.io/docs/"), .{
+        .origin_uri = test_uri,
+    });
 
-    {
-        // sub directory match
-        var matches = try jar.forRequest(
-            testing.allocator,
-            now,
-            test_uri,
-            try std.Uri.parse("http://lightpanda.io/docs/more"),
-            true,
-        );
-        try expectCookies(&.{ "global1", "global2", "path2" }, &matches);
-    }
+    // sub directory match
+    try expectCookies("global1=1, global2=2, path2=4", &jar, try std.Uri.parse("http://lightpanda.io/docs/more"), .{
+        .origin_uri = test_uri,
+    });
 
-    {
-        // secure
-        var matches = try jar.forRequest(
-            testing.allocator,
-            now,
-            test_uri,
-            try std.Uri.parse("https://lightpanda.io/"),
-            true,
-        );
-        try expectCookies(&.{ "global1", "global2", "secure" }, &matches);
-    }
+    // secure
+    try expectCookies("global1=1, global2=2, secure=5", &jar, try std.Uri.parse("https://lightpanda.io/"), .{
+        .origin_uri = test_uri,
+    });
 
-    {
-        // navigational cross domain, secure
-        var matches = try jar.forRequest(
-            testing.allocator,
-            now,
-            try std.Uri.parse("https://example.com/"),
-            try std.Uri.parse("https://lightpanda.io/x/"),
-            true,
-        );
-        try expectCookies(&.{ "global1", "global2", "sitenone", "sitelax", "secure" }, &matches);
-    }
+    // navigational cross domain, secure
+    try expectCookies("global1=1, global2=2, secure=5, sitenone=6, sitelax=7", &jar, try std.Uri.parse("https://lightpanda.io/x/"), .{
+        .origin_uri = try std.Uri.parse("https://example.com/"),
+    });
 
-    {
-        // navigational cross domain, insecure
-        var matches = try jar.forRequest(
-            testing.allocator,
-            now,
-            try std.Uri.parse("http://example.com/"),
-            try std.Uri.parse("http://lightpanda.io/x/"),
-            true,
-        );
-        try expectCookies(&.{ "global1", "global2", "sitelax" }, &matches);
-    }
+    // navigational cross domain, insecure
+    try expectCookies("global1=1, global2=2, sitelax=7", &jar, try std.Uri.parse("http://lightpanda.io/x/"), .{
+        .origin_uri = try std.Uri.parse("https://example.com/"),
+    });
 
-    {
-        // non-navigational cross domain, insecure
-        var matches = try jar.forRequest(
-            testing.allocator,
-            now,
-            try std.Uri.parse("http://example.com/"),
-            try std.Uri.parse("http://lightpanda.io/x/"),
-            false,
-        );
-        try expectCookies(&.{}, &matches);
-    }
+    // non-navigational cross domain, insecure
+    try expectCookies("", &jar, try std.Uri.parse("http://lightpanda.io/x/"), .{
+        .origin_uri = try std.Uri.parse("https://example.com/"),
+        .navigation = false,
+    });
 
-    {
-        // non-navigational cross domain, secure
-        var matches = try jar.forRequest(
-            testing.allocator,
-            now,
-            try std.Uri.parse("https://example.com/"),
-            try std.Uri.parse("https://lightpanda.io/x/"),
-            false,
-        );
-        try expectCookies(&.{"sitenone"}, &matches);
-    }
+    // non-navigational cross domain, secure
+    try expectCookies("sitenone=6", &jar, try std.Uri.parse("https://lightpanda.io/x/"), .{
+        .origin_uri = try std.Uri.parse("https://example.com/"),
+        .navigation = false,
+    });
 
-    {
-        // non-navigational same origin
-        var matches = try jar.forRequest(
-            testing.allocator,
-            now,
-            try std.Uri.parse("http://lightpanda.io/"),
-            try std.Uri.parse("http://lightpanda.io/x/"),
-            false,
-        );
-        try expectCookies(&.{ "global1", "global2", "sitelax", "sitestrict" }, &matches);
-    }
+    // non-navigational same origin
+    try expectCookies("global1=1, global2=2, sitelax=7, sitestrict=8", &jar, try std.Uri.parse("http://lightpanda.io/x/"), .{
+        .origin_uri = try std.Uri.parse("https://lightpanda.io/"),
+        .navigation = false,
+    });
 
-    {
-        // exact domain match + suffix
-        var matches = try jar.forRequest(
-            testing.allocator,
-            now,
-            test_uri,
-            try std.Uri.parse("http://test.lightpanda.io/"),
-            true,
-        );
-        try expectCookies(&.{ "global2", "domain1" }, &matches);
-    }
+    // exact domain match + suffix
+    try expectCookies("global2=2, domain1=9", &jar, try std.Uri.parse("http://test.lightpanda.io/"), .{
+        .origin_uri = test_uri,
+    });
 
-    {
-        // domain suffix match + suffix
-        var matches = try jar.forRequest(
-            testing.allocator,
-            now,
-            test_uri,
-            try std.Uri.parse("http://1.test.lightpanda.io/"),
-            true,
-        );
-        try expectCookies(&.{ "global2", "domain1" }, &matches);
-    }
+    // domain suffix match + suffix
+    try expectCookies("global2=2, domain1=9", &jar, try std.Uri.parse("http://1.test.lightpanda.io/"), .{
+        .origin_uri = test_uri,
+    });
 
-    {
-        // non-matching domain
-        var matches = try jar.forRequest(
-            testing.allocator,
-            now,
-            test_uri,
-            try std.Uri.parse("http://other.lightpanda.io/"),
-            true,
-        );
-        try expectCookies(&.{"global2"}, &matches);
-    }
+    // non-matching domain
+    try expectCookies("global2=2", &jar, try std.Uri.parse("http://other.lightpanda.io/"), .{
+        .origin_uri = test_uri,
+    });
 
-    {
-        // cookie has expired
-        const l = jar.cookies.items.len;
-        var matches = try jar.forRequest(testing.allocator, now + 100, test_uri, test_uri, true);
-        try expectCookies(&.{"global1"}, &matches);
-        try testing.expectEqual(l - 1, jar.cookies.items.len);
-    }
+    const l = jar.cookies.items.len;
+    try expectCookies("global1=1", &jar, test_uri, .{
+        .request_time = now + 100,
+        .origin_uri = test_uri,
+    });
+    try testing.expectEqual(l - 1, jar.cookies.items.len);
 
     // If you add more cases after this point, note that the above test removes
     // the 'global2' cookie

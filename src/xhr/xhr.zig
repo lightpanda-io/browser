@@ -35,6 +35,7 @@ const http = @import("../http/client.zig");
 
 const parser = @import("netsurf");
 
+const CookieJar = @import("../storage/storage.zig").CookieJar;
 const UserContext = @import("../user_context.zig").UserContext;
 
 const log = std.log.scoped(.xhr);
@@ -109,6 +110,10 @@ pub const XMLHttpRequest = struct {
     sync: bool = true,
     err: ?anyerror = null,
     last_dispatch: i64 = 0,
+
+    cookie_jar: *CookieJar,
+    // the URI of the page where this request is originating from
+    origin_uri: std.Uri,
 
     // TODO uncomment this field causes casting issue with
     // XMLHttpRequestEventTarget. I think it's dueto an alignement issue, but
@@ -289,7 +294,9 @@ pub const XMLHttpRequest = struct {
             .url = null,
             .uri = undefined,
             .state = .unsent,
+            .origin_uri = userctx.uri,
             .client = userctx.http_client,
+            .cookie_jar = userctx.cookie_jar,
         };
     }
 
@@ -481,6 +488,18 @@ pub const XMLHttpRequest = struct {
             try request.addHeader(hdr.name, hdr.value, .{});
         }
 
+        {
+            var arr: std.ArrayListUnmanaged(u8) = .{};
+            try self.cookie_jar.forRequest(self.uri, arr.writer(alloc), .{
+                .navigation = false,
+                .origin_uri = self.origin_uri,
+            });
+
+            if (arr.items.len > 0) {
+                try request.addHeader("Cookie", arr.items, .{});
+            }
+        }
+
         //  The body argument provides the request body, if any, and is ignored
         //  if the request method is GET or HEAD.
         //  https://xhr.spec.whatwg.org/#the-send()-method
@@ -526,6 +545,8 @@ pub const XMLHttpRequest = struct {
 
             self.state = .loading;
             self.dispatchEvt("readystatechange");
+
+            try self.cookie_jar.populateFromResponse(self.uri, &header);
         }
 
         if (progress.data) |data| {
