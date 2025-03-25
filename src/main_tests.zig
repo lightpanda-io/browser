@@ -28,8 +28,7 @@ const apiweb = @import("apiweb.zig");
 const Window = @import("html/window.zig").Window;
 const xhr = @import("xhr/xhr.zig");
 const storage = @import("storage/storage.zig");
-const url = @import("url/url.zig");
-const URL = url.URL;
+const URL = @import("url/url.zig").URL;
 const urlquery = @import("url/query.zig");
 const Location = @import("html/location.zig").Location;
 
@@ -54,7 +53,7 @@ const EventTestExecFn = @import("events/event.zig").testExecFn;
 const XHRTestExecFn = xhr.testExecFn;
 const ProgressEventTestExecFn = @import("xhr/progress_event.zig").testExecFn;
 const StorageTestExecFn = storage.testExecFn;
-const URLTestExecFn = url.testExecFn;
+const URLTestExecFn = @import("url/url.zig").testExecFn;
 const HTMLElementTestExecFn = @import("html/elements.zig").testExecFn;
 const MutationObserverTestExecFn = @import("dom/mutation_observer.zig").testExecFn;
 
@@ -91,16 +90,23 @@ fn testExecFn(
     var http_client = try @import("http/client.zig").Client.init(alloc, 5, .{});
     defer http_client.deinit();
 
-    try js_env.setUserContext(.{
-        .document = doc,
-        .http_client = &http_client,
-    });
-
     // alias global as self and window
     var window = Window.create(null, null);
 
-    var u = try URL.constructor(alloc, "https://lightpanda.io/opensource-browser/", null);
+    const url = "https://lightpanda.io/opensource-browser/";
+    var u = try URL.constructor(alloc, url, null);
     defer u.deinit(alloc);
+
+    var cookie_jar = storage.CookieJar.init(alloc);
+    defer cookie_jar.deinit();
+
+    try js_env.setUserContext(.{
+        .uri = try std.Uri.parse(url),
+        .document = doc,
+        .cookie_jar = &cookie_jar,
+        .http_client = &http_client,
+    });
+
     var location = Location{ .url = &u };
     try window.replaceLocation(&location);
 

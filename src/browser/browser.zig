@@ -380,7 +380,7 @@ pub const Page = struct {
 
         var response = try request.sendSync(.{});
         const header = response.header;
-        try self.processHTTPResponse(self.uri, &header);
+        try self.session.cookie_jar.populateFromResponse(self.uri, &header);
 
         log.info("GET {any} {d}", .{ self.uri, header.status });
 
@@ -445,7 +445,9 @@ pub const Page = struct {
 
         // replace the user context document with the new one.
         try session.env.setUserContext(.{
+            .uri = self.uri,
             .document = html_doc,
+            .cookie_jar = @ptrCast(&self.session.cookie_jar),
             .http_client = @ptrCast(self.session.http_client),
         });
 
@@ -621,14 +623,14 @@ pub const Page = struct {
         const u = try std.Uri.resolve_inplace(self.uri, res_src, &b);
 
         var request = try self.newHTTPRequest(.GET, u, .{
-            .origin = self.uri,
+            .origin_uri = self.uri,
             .navigation = false,
         });
         defer request.deinit();
 
         var response = try request.sendSync(.{});
         var header = response.header;
-        try self.processHTTPResponse(u, &header);
+        try self.session.cookie_jar.populateFromResponse(u, &header);
 
         log.info("fetch {any}: {d}", .{ u, header.status });
 
@@ -657,44 +659,19 @@ pub const Page = struct {
         try s.eval(arena, &self.session.env, body);
     }
 
-    const RequestOpts = struct {
-        origin: ?std.Uri = null,
-        navigation: bool = true,
-    };
-    fn newHTTPRequest(self: *const Page, method: http.Request.Method, uri: std.Uri, opts: RequestOpts) !http.Request {
+    fn newHTTPRequest(self: *const Page, method: http.Request.Method, uri: std.Uri, opts: storage.cookie.LookupOpts) !http.Request {
         const session = self.session;
         var request = try session.http_client.request(method, uri);
         errdefer request.deinit();
 
-        var cookies = try session.cookie_jar.forRequest(
-            self.arena,
-            std.time.timestamp(),
-            opts.origin,
-            uri,
-            opts.navigation,
-        );
-        defer cookies.deinit(self.arena);
+        var arr: std.ArrayListUnmanaged(u8) = .{};
+        try session.cookie_jar.forRequest(uri, arr.writer(self.arena), opts);
 
-        if (cookies.len() > 0) {
-            var arr: std.ArrayListUnmanaged(u8) = .{};
-            try cookies.write(arr.writer(self.arena));
+        if (arr.items.len > 0) {
             try request.addHeader("Cookie", arr.items, .{});
         }
 
         return request;
-    }
-
-    fn processHTTPResponse(self: *const Page, uri: std.Uri, header: *const http.ResponseHeader) !void {
-        const session = self.session;
-        const now = std.time.timestamp();
-        var it = header.iterate("set-cookie");
-        while (it.next()) |set_cookie| {
-            const c = storage.Cookie.parse(self.arena, uri, set_cookie) catch |err| {
-                log.warn("Couldn't parse cookie '{s}': {}\n", .{ set_cookie, err });
-                continue;
-            };
-            try session.cookie_jar.add(c, now);
-        }
     }
 
     const Script = struct {
