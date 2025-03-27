@@ -45,9 +45,13 @@ pub const Client = struct {
     allocator: Allocator,
     state_pool: StatePool,
     root_ca: tls.config.CertBundle,
+    tls_verify_host: bool = true,
 
-    // we only allow passing in a root_ca for testing
-    pub fn init(allocator: Allocator, max_concurrent: usize) !Client {
+    const Opts = struct {
+        tls_verify_host: bool = true,
+    };
+
+    pub fn init(allocator: Allocator, max_concurrent: usize, opts: Opts) !Client {
         var root_ca = try tls.config.CertBundle.fromSystem(allocator);
         errdefer root_ca.deinit(allocator);
 
@@ -58,6 +62,7 @@ pub const Client = struct {
             .root_ca = root_ca,
             .allocator = allocator,
             .state_pool = state_pool,
+            .tls_verify_host = opts.tls_verify_host,
         };
     }
 
@@ -123,7 +128,7 @@ pub const Request = struct {
     _has_host_header: bool,
 
     // Whether or not we should verify that the host matches the certificate CN
-    _tls_verify_host: bool = true,
+    _tls_verify_host: bool,
 
     pub const Method = enum {
         GET,
@@ -167,6 +172,7 @@ pub const Request = struct {
             ._client = client,
             ._redirect_count = 0,
             ._has_host_header = false,
+            ._tls_verify_host = client.tls_verify_host,
         };
     }
 
@@ -205,11 +211,13 @@ pub const Request = struct {
 
     // TODO timeout
     const SendSyncOpts = struct {
-        tls_verify_host: bool = true,
+        tls_verify_host: ?bool = null,
     };
     // Makes an synchronous request
     pub fn sendSync(self: *Request, opts: SendSyncOpts) anyerror!Response {
-        self._tls_verify_host = opts.tls_verify_host;
+        if (opts.tls_verify_host) |override| {
+            self._tls_verify_host = override;
+        }
         try self.prepareInitialSend();
         return self.doSendSync();
     }
@@ -230,11 +238,13 @@ pub const Request = struct {
     }
 
     const SendAsyncOpts = struct {
-        tls_verify_host: bool = true,
+        tls_verify_host: ?bool = null,
     };
     // Makes an asynchronous request
     pub fn sendAsync(self: *Request, loop: anytype, handler: anytype, opts: SendAsyncOpts) !void {
-        self._tls_verify_host = opts.tls_verify_host;
+        if (opts.tls_verify_host) |override| {
+            self._tls_verify_host = override;
+        }
         try self.prepareInitialSend();
         return self.doSendAsync(loop, handler);
     }
@@ -2176,5 +2186,5 @@ fn testReader(state: *State, res: *TestResponse, data: []const u8) !void {
 }
 
 fn testClient() !Client {
-    return try Client.init(testing.allocator, 1);
+    return try Client.init(testing.allocator, 1, .{});
 }

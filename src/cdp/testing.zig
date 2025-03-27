@@ -281,7 +281,7 @@ const TestContext = struct {
 
 pub fn context() TestContext {
     return .{
-        .app = App.init(std.testing.allocator, .serve) catch unreachable,
+        .app = App.init(std.testing.allocator, .{ .run_mode = .serve }) catch unreachable,
         .arena = std.heap.ArenaAllocator.init(std.testing.allocator),
     };
 }
