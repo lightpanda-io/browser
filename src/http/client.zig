@@ -620,13 +620,13 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
 
                 // at this point, If `would_be_first == true`, then
                 // `would_be_first` should be thought of as `is_first` because
-
+                // we now have a complete header for the first time.
                 if (reader.redirect()) |redirect| {
                     // We don't redirect until we've drained the body (because,
                     // if we ever add keepalive, we'll re-use the connection).
                     // Calling `reader.redirect()` over and over again might not
                     // be the most efficient (it's a very simple function though),
-                    // but for a redirect resposne, chances are we slurped up
+                    // but for a redirect response, chances are we slurped up
                     // the header and body in a single go.
                     if (result.done == false) {
                         return .need_more;
@@ -660,7 +660,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
         }
 
         fn handleError(self: *Self, comptime msg: []const u8, err: anyerror) void {
-            log.warn(msg ++ ": {any} ({any} {any})", .{ err, self.request.method, self.request.uri });
+            log.err(msg ++ ": {any} ({any} {any})", .{ err, self.request.method, self.request.uri });
             self.handler.onHttpResponse(err) catch {};
             self.deinit();
         }
@@ -807,7 +807,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                                 secure.state = .body;
                                 const handler = self.handler;
                                 const body = handler.request.body orelse {
-                                    // We've sent the haeder, and there's no body
+                                    // We've sent the header, and there's no body
                                     // start receiving the response
                                     handler.receive();
                                     return;
