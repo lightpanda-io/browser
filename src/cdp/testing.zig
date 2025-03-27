@@ -64,6 +64,8 @@ const Browser = struct {
         const session = self.session orelse return false;
         return std.mem.eql(u8, session.id, session_id);
     }
+
+    pub fn runMicrotasks(_: *const Browser) void {}
 };
 
 const Session = struct {

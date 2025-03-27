@@ -44,21 +44,11 @@ fn sendInspector(cmd: anytype, action: anytype) !void {
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-    // remove awaitPromise true params
-    // TODO: delete when Promise are correctly handled by zig-js-runtime
-    if (action == .callFunctionOn or action == .evaluate) {
-        const json = cmd.input.json;
-        if (std.mem.indexOf(u8, json, "\"awaitPromise\":true")) |_| {
-            // +1 because we'll be turning a true -> false
-            const buf = try cmd.arena.alloc(u8, json.len + 1);
-            _ = std.mem.replace(u8, json, "\"awaitPromise\":true", "\"awaitPromise\":false", buf);
-            bc.session.callInspector(buf);
-            return;
-        }
-    }
-
     // the result to return is handled directly by the inspector.
     bc.session.callInspector(cmd.input.json);
+
+    // force running micro tasks after send input to the inspector.
+    cmd.cdp.browser.runMicrotasks();
 }
 
 pub const ExecutionContextCreated = struct {
