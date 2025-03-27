@@ -157,7 +157,7 @@ pub fn print(comptime fmt: []const u8, args: anytype) void {
 
 // dummy opts incase we want to add something, and not have to break all the callers
 pub fn app(_: anytype) *App {
-    return App.init(allocator, .{.run_mode = .serve}) catch unreachable;
+    return App.init(allocator, .{ .run_mode = .serve }) catch unreachable;
 }
 
 pub const Random = struct {
