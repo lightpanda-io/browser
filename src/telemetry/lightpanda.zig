@@ -7,6 +7,7 @@ const Allocator = std.mem.Allocator;
 
 const App = @import("../app.zig").App;
 const telemetry = @import("telemetry.zig");
+const HttpClient = @import("../http/client.zig").Client;
 
 const log = std.log.scoped(.telemetry);
 const URL = "https://telemetry.lightpanda.io";
@@ -20,7 +21,7 @@ pub const LightPanda = struct {
     allocator: Allocator,
     mutex: std.Thread.Mutex,
     cond: Thread.Condition,
-    client: *std.http.Client,
+    client: *HttpClient,
     node_pool: std.heap.MemoryPool(List.Node),
 
     const List = std.DoublyLinkedList(LightPandaEvent);
@@ -34,7 +35,7 @@ pub const LightPanda = struct {
             .thread = null,
             .running = true,
             .allocator = allocator,
-            .client = @ptrCast(&app.http_client),
+            .client = &app.http_client,
             .uri = std.Uri.parse(URL) catch unreachable,
             .node_pool = std.heap.MemoryPool(List.Node).init(allocator),
         };
@@ -72,7 +73,6 @@ pub const LightPanda = struct {
     }
 
     fn run(self: *LightPanda) void {
-        const client = self.client;
         var arr: std.ArrayListUnmanaged(u8) = .{};
         defer arr.deinit(self.allocator);
 
@@ -82,7 +82,7 @@ pub const LightPanda = struct {
             while (self.pending.first != null) {
                 const b = self.collectBatch(&batch);
                 self.mutex.unlock();
-                self.postEvent(b, client, &arr) catch |err| {
+                self.postEvent(b, &arr) catch |err| {
                     log.warn("Telementry reporting error: {}", .{err});
                 };
                 self.mutex.lock();
@@ -94,7 +94,7 @@ pub const LightPanda = struct {
         }
     }
 
-    fn postEvent(self: *const LightPanda, events: []LightPandaEvent, client: *std.http.Client, arr: *std.ArrayListUnmanaged(u8)) !void {
+    fn postEvent(self: *const LightPanda, events: []LightPandaEvent, arr: *std.ArrayListUnmanaged(u8)) !void {
         defer arr.clearRetainingCapacity();
         var writer = arr.writer(self.allocator);
         for (events) |event| {
@@ -102,16 +102,15 @@ pub const LightPanda = struct {
             try writer.writeByte('\n');
         }
 
-        var response_header_buffer: [2048]u8 = undefined;
-        const result = try client.fetch(.{
-            .method = .POST,
-            .payload = arr.items,
-            .response_storage = .ignore,
-            .location = .{ .uri = self.uri },
-            .server_header_buffer = &response_header_buffer,
-        });
-        if (result.status != .ok) {
-            log.warn("server error status: {}", .{result.status});
+        var req = try self.client.request(.POST, self.uri);
+        defer req.deinit();
+        req.body = arr.items;
+
+        // drain the response
+        var res = try req.sendSync(.{});
+        while (try res.next()) |_| {}
+        if (res.header.status != 200) {
+            log.warn("server error status: {d}", .{res.header.status});
         }
     }
 

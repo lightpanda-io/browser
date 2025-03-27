@@ -10,7 +10,6 @@ The default license for this project is [AGPL-3.0-only](LICENSE).
 The following files are licensed under MIT:
 
 ```
-src/http/Client.zig
 src/polyfill/fetch.js
 ```
 

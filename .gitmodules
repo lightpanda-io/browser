@@ -23,10 +23,3 @@
 [submodule "vendor/mimalloc"]
 	path = vendor/mimalloc
 	url = https://github.com/microsoft/mimalloc.git/
-[submodule "vendor/tls.zig"]
-	path = vendor/tls.zig
-	url = https://github.com/ianic/tls.zig.git/
-[submodule "vendor/zig-async-io"]
-	path = vendor/zig-async-io
-	url = https://github.com/lightpanda-io/zig-async-io.git/
-	branch = zig-0.14

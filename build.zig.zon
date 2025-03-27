@@ -1,0 +1,12 @@
+.{
+    .name = .browser,
+    .paths = .{""},
+    .version = "0.0.0",
+    .fingerprint = 0xda130f3af836cea0,
+    .dependencies = .{
+        .tls = .{
+            .url = "https://github.com/ianic/tls.zig/archive/b29a8b45fc59fc2d202769c4f54509bb9e17d0a2.tar.gz",
+            .hash = "1220e6fd39920dd6e28b2bc06688787a39430f8856f0597cd77c44ca868c6c54fb86",
+        },
+    },
+}

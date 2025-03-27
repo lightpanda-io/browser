@@ -2,7 +2,7 @@ const std = @import("std");
 
 const Loop = @import("jsruntime").Loop;
 const Allocator = std.mem.Allocator;
-const HttpClient = @import("http/Client.zig");
+const HttpClient = @import("http/client.zig").Client;
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
 
 const log = std.log.scoped(.app);
@@ -38,7 +38,7 @@ pub const App = struct {
             .allocator = allocator,
             .telemetry = undefined,
             .app_dir_path = app_dir_path,
-            .http_client = .{ .allocator = allocator },
+            .http_client = try HttpClient.init(allocator, 5),
         };
         app.telemetry = Telemetry.init(app, run_mode);
 
