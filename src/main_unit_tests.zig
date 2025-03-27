@@ -213,7 +213,7 @@ fn serveHTTPS(address: std.net.Address) !void {
 
 fn serveCDP(address: std.net.Address) !void {
     const App = @import("app.zig").App;
-    var app = try App.init(gpa.allocator(), .serve);
+    var app = try App.init(gpa.allocator(), .{ .run_mode = .serve });
     defer app.deinit();
 
     const server = @import("server.zig");

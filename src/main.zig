@@ -22,6 +22,7 @@ const Allocator = std.mem.Allocator;
 
 const jsruntime = @import("jsruntime");
 
+const App = @import("app.zig").App;
 const Browser = @import("browser/browser.zig").Browser;
 const server = @import("server.zig");
 
@@ -69,9 +70,12 @@ pub fn main() !void {
                 log.err("address (host:port) {any}\n", .{err});
                 return args.printUsageAndExit(false);
             };
-
-            var app = try @import("app.zig").App.init(alloc, .serve);
+            var app = try App.init(alloc, .{
+                .run_mode = args.mode,
+                .tls_verify_host = opts.tls_verify_host,
+            });
             defer app.deinit();
+
             app.telemetry.record(.{ .run = {} });
 
             const timeout = std.time.ns_per_s * @as(u64, opts.timeout);
@@ -83,7 +87,10 @@ pub fn main() !void {
         .fetch => |opts| {
             log.debug("Fetch mode: url {s}, dump {any}", .{ opts.url, opts.dump });
 
-            var app = try @import("app.zig").App.init(alloc, .fetch);
+            var app = try App.init(alloc, .{
+                .run_mode = args.mode,
+                .tls_verify_host = opts.tls_verify_host,
+            });
             defer app.deinit();
             app.telemetry.record(.{ .run = {} });
 
@@ -125,14 +132,7 @@ const Command = struct {
     mode: Mode,
     exec_name: []const u8,
 
-    const ModeType = enum {
-        help,
-        fetch,
-        serve,
-        version,
-    };
-
-    const Mode = union(ModeType) {
+    const Mode = union(App.RunMode) {
         help: bool, // false when being printed because of an error
         fetch: Fetch,
         serve: Serve,
@@ -143,11 +143,13 @@ const Command = struct {
         host: []const u8,
         port: u16,
         timeout: u16,
+        tls_verify_host: bool,
     };
 
     const Fetch = struct {
         url: []const u8,
         dump: bool = false,
+        tls_verify_host: bool,
     };
 
     fn printUsageAndExit(self: *const Command, success: bool) void {
@@ -164,6 +166,12 @@ const Command = struct {
             \\--dump          Dumps document to stdout.
             \\                Defaults to false.
             \\
+            \\--insecure_disable_tls_host_verification
+            \\                Disables host verification on all HTTP requests.
+            \\                This is an advanced option which should only be
+            \\                set if you understand and accept the risk of
+            \\                disabling host verification.
+            \\
             \\serve command
             \\Starts a websocket CDP server
             \\Example: {s} serve --host 127.0.0.1 --port 9222
@@ -178,11 +186,18 @@ const Command = struct {
             \\--timeout       Inactivity timeout in seconds before disconnecting clients
             \\                Defaults to 3 (seconds)
             \\
+            \\--insecure_disable_tls_host_verification
+            \\                Disables host verification on all HTTP requests.
+            \\                This is an advanced option which should only be
+            \\                set if you understand and accept the risk of
+            \\                disabling host verification.
+            \\
             \\version command
             \\Displays the version of {s}
             \\
             \\help command
             \\Displays this message
+            \\
         ;
         std.debug.print(usage, .{ self.exec_name, self.exec_name, self.exec_name, self.exec_name });
         if (success) {
@@ -204,7 +219,7 @@ fn parseArgs(allocator: Allocator) !Command {
     };
 
     const mode_string = args.next() orelse "";
-    const mode = std.meta.stringToEnum(Command.ModeType, mode_string) orelse blk: {
+    const mode = std.meta.stringToEnum(App.RunMode, mode_string) orelse blk: {
         const inferred_mode = inferMode(mode_string) orelse return cmd;
         // "command" wasn't a command but an option. We can't reset args, but
         // we can create a new one. Not great, but this fallback is temporary
@@ -227,7 +242,7 @@ fn parseArgs(allocator: Allocator) !Command {
     return cmd;
 }
 
-fn inferMode(opt: []const u8) ?Command.ModeType {
+fn inferMode(opt: []const u8) ?App.RunMode {
     if (opt.len == 0) {
         return .serve;
     }
@@ -260,6 +275,7 @@ fn parseServeArgs(
     var host: []const u8 = "127.0.0.1";
     var port: u16 = 9222;
     var timeout: u16 = 3;
+    var tls_verify_host = true;
 
     while (args.next()) |opt| {
         if (std.mem.eql(u8, "--host", opt)) {
@@ -297,6 +313,11 @@ fn parseServeArgs(
             continue;
         }
 
+        if (std.mem.eql(u8, "--insecure_tls_verify_host", opt)) {
+            tls_verify_host = false;
+            continue;
+        }
+
         log.err("Unknown option to serve command: '{s}'", .{opt});
         return error.UnkownOption;
     }
@@ -305,6 +326,7 @@ fn parseServeArgs(
         .host = host,
         .port = port,
         .timeout = timeout,
+        .tls_verify_host = tls_verify_host,
     };
 }
 
@@ -314,10 +336,16 @@ fn parseFetchArgs(
 ) !Command.Fetch {
     var dump: bool = false;
     var url: ?[]const u8 = null;
+    var tls_verify_host = true;
 
     while (args.next()) |opt| {
         if (std.mem.eql(u8, "--dump", opt)) {
             dump = true;
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--insecure_disable_tls_host_verification", opt)) {
+            tls_verify_host = false;
             continue;
         }
 
@@ -338,7 +366,11 @@ fn parseFetchArgs(
         return error.MissingURL;
     }
 
-    return .{ .url = url.?, .dump = dump };
+    return .{
+        .url = url.?,
+        .dump = dump,
+        .tls_verify_host = tls_verify_host,
+    };
 }
 
 var verbose: bool = builtin.mode == .Debug; // In debug mode, force verbose.

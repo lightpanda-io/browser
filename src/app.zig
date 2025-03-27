@@ -17,11 +17,18 @@ pub const App = struct {
     app_dir_path: ?[]const u8,
 
     pub const RunMode = enum {
-        serve,
+        help,
         fetch,
+        serve,
+        version,
     };
 
-    pub fn init(allocator: Allocator, run_mode: RunMode) !*App {
+    pub const Config = struct {
+        tls_verify_host: bool = true,
+        run_mode: RunMode,
+    };
+
+    pub fn init(allocator: Allocator, config: Config) !*App {
         const app = try allocator.create(App);
         errdefer allocator.destroy(app);
 
@@ -38,9 +45,11 @@ pub const App = struct {
             .allocator = allocator,
             .telemetry = undefined,
             .app_dir_path = app_dir_path,
-            .http_client = try HttpClient.init(allocator, 5),
+            .http_client = try HttpClient.init(allocator, 5, .{
+                .tls_verify_host = config.tls_verify_host,
+            }),
         };
-        app.telemetry = Telemetry.init(app, run_mode);
+        app.telemetry = Telemetry.init(app, config.run_mode);
 
         return app;
     }
