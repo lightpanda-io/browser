@@ -244,7 +244,7 @@ pub const Session = struct {
         std.debug.assert(self.page != null);
 
         // Reset all existing callbacks.
-        self.app.loop.reset();
+        self.app.loop.resetJS();
 
         self.env.stop();
         // TODO unload document: https://html.spec.whatwg.org/#unloading-documents
