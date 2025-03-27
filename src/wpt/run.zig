@@ -55,7 +55,7 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     var loop = try Loop.init(alloc);
     defer loop.deinit();
 
-    var http_client = try HttpClient.init(alloc, 2);
+    var http_client = try HttpClient.init(alloc, 2, .{});
     defer http_client.deinit();
 
     var js_env: Env = undefined;
