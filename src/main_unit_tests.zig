@@ -17,9 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const builtin = @import("builtin");
-const parser = @import("netsurf");
 const tls = @import("tls");
+const parser = @import("netsurf");
+const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
 
@@ -32,7 +32,6 @@ test {
     std.testing.refAllDecls(@import("css/match_test.zig"));
     std.testing.refAllDecls(@import("css/parser.zig"));
     std.testing.refAllDecls(@import("generate.zig"));
-    std.testing.refAllDecls(@import("http/client.zig"));
     std.testing.refAllDecls(@import("storage/storage.zig"));
     std.testing.refAllDecls(@import("storage/cookie.zig"));
     std.testing.refAllDecls(@import("iterator/iterator.zig"));

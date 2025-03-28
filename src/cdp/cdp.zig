@@ -29,10 +29,6 @@ const log = std.log.scoped(.cdp);
 pub const URL_BASE = "chrome://newtab/";
 pub const LOADER_ID = "LOADERID24DD2FD56CF1EF33C965C79C";
 
-pub const TimestampEvent = struct {
-    timestamp: f64,
-};
-
 pub const CDP = CDPT(struct {
     const Client = *@import("../server.zig").Client;
     const Browser = @import("../browser/browser.zig").Browser;
@@ -176,40 +172,40 @@ pub fn CDPT(comptime TypeProvider: type) type {
 
             switch (domain.len) {
                 3 => switch (@as(u24, @bitCast(domain[0..3].*))) {
-                    asUint("DOM") => return @import("dom.zig").processMessage(command),
-                    asUint("Log") => return @import("log.zig").processMessage(command),
-                    asUint("CSS") => return @import("css.zig").processMessage(command),
+                    asUint("DOM") => return @import("domains/dom.zig").processMessage(command),
+                    asUint("Log") => return @import("domains/log.zig").processMessage(command),
+                    asUint("CSS") => return @import("domains/css.zig").processMessage(command),
                     else => {},
                 },
                 4 => switch (@as(u32, @bitCast(domain[0..4].*))) {
-                    asUint("Page") => return @import("page.zig").processMessage(command),
+                    asUint("Page") => return @import("domains/page.zig").processMessage(command),
                     else => {},
                 },
                 5 => switch (@as(u40, @bitCast(domain[0..5].*))) {
-                    asUint("Fetch") => return @import("fetch.zig").processMessage(command),
+                    asUint("Fetch") => return @import("domains/fetch.zig").processMessage(command),
                     else => {},
                 },
                 6 => switch (@as(u48, @bitCast(domain[0..6].*))) {
-                    asUint("Target") => return @import("target.zig").processMessage(command),
+                    asUint("Target") => return @import("domains/target.zig").processMessage(command),
                     else => {},
                 },
                 7 => switch (@as(u56, @bitCast(domain[0..7].*))) {
-                    asUint("Browser") => return @import("browser.zig").processMessage(command),
-                    asUint("Runtime") => return @import("runtime.zig").processMessage(command),
-                    asUint("Network") => return @import("network.zig").processMessage(command),
+                    asUint("Browser") => return @import("domains/browser.zig").processMessage(command),
+                    asUint("Runtime") => return @import("domains/runtime.zig").processMessage(command),
+                    asUint("Network") => return @import("domains/network.zig").processMessage(command),
                     else => {},
                 },
                 8 => switch (@as(u64, @bitCast(domain[0..8].*))) {
-                    asUint("Security") => return @import("security.zig").processMessage(command),
+                    asUint("Security") => return @import("domains/security.zig").processMessage(command),
                     else => {},
                 },
                 9 => switch (@as(u72, @bitCast(domain[0..9].*))) {
-                    asUint("Emulation") => return @import("emulation.zig").processMessage(command),
-                    asUint("Inspector") => return @import("inspector.zig").processMessage(command),
+                    asUint("Emulation") => return @import("domains/emulation.zig").processMessage(command),
+                    asUint("Inspector") => return @import("domains/inspector.zig").processMessage(command),
                     else => {},
                 },
                 11 => switch (@as(u88, @bitCast(domain[0..11].*))) {
-                    asUint("Performance") => return @import("performance.zig").processMessage(command),
+                    asUint("Performance") => return @import("domains/performance.zig").processMessage(command),
                     else => {},
                 },
                 else => {},
@@ -258,7 +254,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
 }
 
 pub fn BrowserContext(comptime CDP_T: type) type {
-    const dom = @import("dom.zig");
+    const Node = @import("Node.zig");
 
     return struct {
         id: []const u8,
@@ -291,12 +287,17 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         security_origin: []const u8,
         page_life_cycle_events: bool,
         secure_context_type: []const u8,
-        node_list: dom.NodeList,
-        node_search_list: dom.NodeSearchList,
+        node_registry: Node.Registry,
+        node_search_list: Node.Search.List,
 
         const Self = @This();
 
         fn init(self: *Self, id: []const u8, cdp: *CDP_T) !void {
+            const allocator = cdp.allocator;
+
+            var registry = Node.Registry.init(allocator);
+            errdefer registry.deinit();
+
             self.* = .{
                 .id = id,
                 .cdp = cdp,
@@ -308,27 +309,20 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .loader_id = LOADER_ID,
                 .session = try cdp.browser.newSession(self),
                 .page_life_cycle_events = false, // TODO; Target based value
-                .node_list = dom.NodeList.init(cdp.allocator),
-                .node_search_list = dom.NodeSearchList.init(cdp.allocator),
+                .node_registry = registry,
+                .node_search_list = undefined,
             };
+            self.node_search_list = Node.Search.List.init(allocator, &self.node_registry);
         }
 
         pub fn deinit(self: *Self) void {
-            self.node_list.deinit();
-            for (self.node_search_list.items) |*s| {
-                s.deinit();
-            }
+            self.node_registry.deinit();
             self.node_search_list.deinit();
         }
 
         pub fn reset(self: *Self) void {
-            self.node_list.reset();
-
-            // deinit all node searches.
-            for (self.node_search_list.items) |*s| {
-                s.deinit();
-            }
-            self.node_search_list.clearAndFree();
+            self.node_registry.reset();
+            self.node_search_list.reset();
         }
 
         pub fn onInspectorResponse(ctx: *anyopaque, _: u32, msg: []const u8) void {

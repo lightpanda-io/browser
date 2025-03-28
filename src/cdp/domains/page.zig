@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const cdp = @import("cdp.zig");
 const runtime = @import("runtime.zig");
 
 pub fn processMessage(cmd: anytype) !void {
@@ -230,7 +229,7 @@ fn navigate(cmd: anytype) !void {
     // TODO: partially hard coded
     try cmd.sendEvent(
         "Page.domContentEventFired",
-        cdp.TimestampEvent{ .timestamp = 343721.803338 },
+        .{ .timestamp = 343721.803338 },
         .{ .session_id = session_id },
     );
 
@@ -246,7 +245,7 @@ fn navigate(cmd: anytype) !void {
     // TODO: partially hard coded
     try cmd.sendEvent(
         "Page.loadEventFired",
-        cdp.TimestampEvent{ .timestamp = 343721.824655 },
+        .{ .timestamp = 343721.824655 },
         .{ .session_id = session_id },
     );
 
@@ -264,7 +263,7 @@ fn navigate(cmd: anytype) !void {
     }, .{ .session_id = session_id });
 }
 
-const testing = @import("testing.zig");
+const testing = @import("../testing.zig");
 test "cdp.page: getFrameTree" {
     var ctx = testing.context();
     defer ctx.deinit();
