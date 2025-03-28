@@ -58,10 +58,15 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     var http_client = try HttpClient.init(alloc, 2, .{});
     defer http_client.deinit();
 
+    var cookie_jar = storage.CookieJar.init(alloc);
+    defer cookie_jar.deinit();
+
     var js_env: Env = undefined;
     Env.init(&js_env, alloc, &loop, UserContext{
         .document = html_doc,
+        .cookie_jar = &cookie_jar,
         .http_client = &http_client,
+        .uri = try std.Uri.parse("https://lightpanda.io"),
     });
     defer js_env.deinit();
 
