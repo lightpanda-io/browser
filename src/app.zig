@@ -28,10 +28,7 @@ pub const App = struct {
         run_mode: RunMode,
     };
 
-    pub fn init(allocator: Allocator, config: Config) !*App {
-        const app = try allocator.create(App);
-        errdefer allocator.destroy(app);
-
+    pub fn init(allocator: Allocator, config: Config) !App {
         const loop = try allocator.create(Loop);
         errdefer allocator.destroy(loop);
 
@@ -40,7 +37,7 @@ pub const App = struct {
 
         const app_dir_path = getAndMakeAppDir(allocator);
 
-        app.* = .{
+        var app: App = .{
             .loop = loop,
             .allocator = allocator,
             .telemetry = undefined,
@@ -49,7 +46,7 @@ pub const App = struct {
                 .tls_verify_host = config.tls_verify_host,
             }),
         };
-        app.telemetry = Telemetry.init(app, config.run_mode);
+        app.telemetry = Telemetry.init(&app, config.run_mode);
 
         return app;
     }
@@ -63,7 +60,6 @@ pub const App = struct {
         self.loop.deinit();
         allocator.destroy(self.loop);
         self.http_client.deinit();
-        allocator.destroy(self);
     }
 };
 

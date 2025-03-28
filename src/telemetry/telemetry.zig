@@ -160,7 +160,7 @@ test "telemetry: sends event to provider" {
     var app = testing.app(.{});
     defer app.deinit();
 
-    var telemetry = TelemetryT(MockProvider).init(app, .serve);
+    var telemetry = TelemetryT(MockProvider).init(&app, .serve);
     defer telemetry.deinit();
     const mock = &telemetry.provider;
 

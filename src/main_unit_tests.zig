@@ -218,7 +218,7 @@ fn serveCDP(address: std.net.Address) !void {
 
     const server = @import("server.zig");
     wg.finish();
-    server.run(app, address, std.time.ns_per_s * 2) catch |err| {
+    server.run(&app, address, std.time.ns_per_s * 2) catch |err| {
         std.debug.print("CDP server error: {}", .{err});
         return err;
     };

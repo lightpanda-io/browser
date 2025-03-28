@@ -138,7 +138,7 @@ const TestCDP = main.CDPT(struct {
 });
 
 const TestContext = struct {
-    app: *App,
+    app: App,
     client: ?Client = null,
     cdp_: ?TestCDP = null,
     arena: std.heap.ArenaAllocator,
@@ -156,7 +156,7 @@ const TestContext = struct {
             self.client = Client.init(self.arena.allocator());
             // Don't use the arena here. We want to detect leaks in CDP.
             // The arena is only for test-specific stuff
-            self.cdp_ = TestCDP.init(self.app, &self.client.?);
+            self.cdp_ = TestCDP.init(&self.app, &self.client.?);
         }
         return &self.cdp_.?;
     }

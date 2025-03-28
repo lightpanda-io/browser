@@ -79,7 +79,7 @@ pub fn main() !void {
             app.telemetry.record(.{ .run = {} });
 
             const timeout = std.time.ns_per_s * @as(u64, opts.timeout);
-            server.run(app, address, timeout) catch |err| {
+            server.run(&app, address, timeout) catch |err| {
                 log.err("Server error", .{});
                 return err;
             };
@@ -99,7 +99,7 @@ pub fn main() !void {
             defer vm.deinit();
 
             // browser
-            var browser = Browser.init(app);
+            var browser = Browser.init(&app);
             defer browser.deinit();
 
             var session = try browser.newSession({});
