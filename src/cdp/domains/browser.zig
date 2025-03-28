@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const cdp = @import("cdp.zig");
 
 // TODO: hard coded data
 const PROTOCOL_VERSION = "1.3";
@@ -81,7 +80,7 @@ fn setWindowBounds(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
-const testing = @import("testing.zig");
+const testing = @import("../testing.zig");
 test "cdp.browser: getVersion" {
     var ctx = testing.context();
     defer ctx.deinit();

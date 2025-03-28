@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-
 const json = std.json;
 const Allocator = std.mem.Allocator;
 
@@ -27,9 +26,13 @@ const main = @import("cdp.zig");
 const parser = @import("netsurf");
 const App = @import("../app.zig").App;
 
-pub const expectEqual = std.testing.expectEqual;
-pub const expectError = std.testing.expectError;
-pub const expectString = std.testing.expectEqualStrings;
+pub const allocator = @import("../testing.zig").allocator;
+
+pub const expectEqual = @import("../testing.zig").expectEqual;
+pub const expectError = @import("../testing.zig").expectError;
+pub const expectEqualSlices = @import("../testing.zig").expectEqualSlices;
+
+pub const Document = @import("../testing.zig").Document;
 
 const Browser = struct {
     session: ?*Session = null,
@@ -51,11 +54,11 @@ const Browser = struct {
             return error.MockBrowserSessionAlreadyExists;
         }
 
-        const allocator = self.arena.allocator();
-        self.session = try allocator.create(Session);
+        const arena = self.arena.allocator();
+        self.session = try arena.create(Session);
         self.session.?.* = .{
             .page = null,
-            .allocator = allocator,
+            .arena = arena,
         };
         return self.session.?;
     }
@@ -70,7 +73,7 @@ const Browser = struct {
 
 const Session = struct {
     page: ?Page = null,
-    allocator: Allocator,
+    arena: Allocator,
 
     pub fn currentPage(self: *Session) ?*Page {
         return &(self.page orelse return null);
@@ -82,7 +85,7 @@ const Session = struct {
         }
         self.page = .{
             .session = self,
-            .aux_data = try self.allocator.dupe(u8, aux_data orelse ""),
+            .aux_data = try self.arena.dupe(u8, aux_data orelse ""),
         };
         return &self.page.?;
     }
@@ -114,9 +117,9 @@ const Client = struct {
     sent: std.ArrayListUnmanaged(json.Value) = .{},
     serialized: std.ArrayListUnmanaged([]const u8) = .{},
 
-    fn init(allocator: Allocator) Client {
+    fn init(alloc: Allocator) Client {
         return .{
-            .allocator = allocator,
+            .allocator = alloc,
         };
     }
 
@@ -165,6 +168,7 @@ const TestContext = struct {
         id: ?[]const u8 = null,
         target_id: ?[]const u8 = null,
         session_id: ?[]const u8 = null,
+        html: ?[]const u8 = null,
     };
     pub fn loadBrowserContext(self: *TestContext, opts: BrowserContextOpts) !*main.BrowserContext(TestCDP) {
         var c = self.cdp();
@@ -188,6 +192,13 @@ const TestContext = struct {
 
         if (opts.session_id) |sid| {
             bc.session_id = sid;
+        }
+
+        if (opts.html) |html| {
+            parser.deinit();
+            try parser.init();
+            const page = try bc.session.createPage(null);
+            page.doc = (try Document.init(html)).doc;
         }
         return bc;
     }

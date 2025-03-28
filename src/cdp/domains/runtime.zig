@@ -16,9 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const builtin = @import("builtin");
 const std = @import("std");
-const cdp = @import("cdp.zig");
+const builtin = @import("builtin");
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {

@@ -413,7 +413,7 @@ const TargetInfo = struct {
     browserContextId: ?[]const u8 = null,
 };
 
-const testing = @import("testing.zig");
+const testing = @import("../testing.zig");
 test "cdp.target: getBrowserContexts" {
     var ctx = testing.context();
     defer ctx.deinit();
@@ -521,7 +521,7 @@ test "cdp.target: createTarget" {
     {
         try ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .browserContextId = "BID-9" } });
         try testing.expectEqual(true, bc.target_id != null);
-        try testing.expectString(
+        try testing.expectEqual(
             \\{"isDefault":true,"type":"default","frameId":"TID-1"}
         , bc.session.page.?.aux_data);
 

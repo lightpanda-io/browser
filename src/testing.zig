@@ -17,10 +17,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const parser = @import("netsurf");
 
 pub const allocator = std.testing.allocator;
 pub const expectError = std.testing.expectError;
 pub const expectString = std.testing.expectEqualStrings;
+pub const expectEqualSlices = std.testing.expectEqualSlices;
 
 const App = @import("app.zig").App;
 
@@ -188,5 +190,39 @@ pub const Random = struct {
             // instance = std.Random.DefaultPrng.init(0);
         }
         return instance.?.random();
+    }
+};
+
+pub const Document = struct {
+    doc: *parser.Document,
+    arena: std.heap.ArenaAllocator,
+
+    pub fn init(html: []const u8) !Document {
+        parser.deinit();
+        try parser.init();
+
+        var fbs = std.io.fixedBufferStream(html);
+        const html_doc = try parser.documentHTMLParse(fbs.reader(), "utf-8");
+
+        return .{
+            .arena = std.heap.ArenaAllocator.init(allocator),
+            .doc = parser.documentHTMLToDocument(html_doc),
+        };
+    }
+
+    pub fn deinit(self: *Document) void {
+        parser.deinit();
+        self.arena.deinit();
+    }
+
+    pub fn querySelectorAll(self: *Document, selector: []const u8) ![]const *parser.Node {
+        const css = @import("dom/css.zig");
+        const node_list = try css.querySelectorAll(self.arena.allocator(), parser.documentToNode(self.doc), selector);
+        return node_list.nodes.items;
+    }
+
+    pub fn querySelector(self: *Document, selector: []const u8) !?*parser.Node {
+        const css = @import("dom/css.zig");
+        return css.querySelector(self.arena.allocator(), parser.documentToNode(self.doc), selector);
     }
 };
