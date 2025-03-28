@@ -52,7 +52,7 @@ pub fn main() !void {
     const alloc = if (builtin.mode == .Debug) gpa.allocator() else std.heap.c_allocator;
 
     defer if (builtin.mode == .Debug) {
-        _ = gpa.detectLeaks();
+        if (gpa.detectLeaks()) std.posix.exit(1);
     };
 
     var args_arena = std.heap.ArenaAllocator.init(alloc);
