@@ -128,7 +128,7 @@ pub const Window = struct {
         if (self.timeoutid >= self.timeoutids.len) return error.TooMuchTimeout;
 
         const ddelay: u63 = delay orelse 0;
-        const id = loop.timeout(ddelay * std.time.ns_per_ms, cbk);
+        const id = try loop.timeout(ddelay * std.time.ns_per_ms, cbk);
 
         self.timeoutids[self.timeoutid] = id;
         defer self.timeoutid += 1;
@@ -136,12 +136,12 @@ pub const Window = struct {
         return self.timeoutid;
     }
 
-    pub fn _clearTimeout(self: *Window, loop: *Loop, id: u32) void {
+    pub fn _clearTimeout(self: *Window, loop: *Loop, id: u32) !void {
         // I do would prefer return an error in this case, but it seems some JS
         // uses invalid id, in particular id 0.
         // So we silently ignore invalid id for now.
         if (id >= self.timeoutid) return;
 
-        loop.cancel(self.timeoutids[id], null);
+        try loop.cancel(self.timeoutids[id], null);
     }
 };
