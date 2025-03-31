@@ -346,7 +346,15 @@ pub const Client = struct {
         }
 
         if (std.mem.eql(u8, url, "/json/version")) {
-            return self.send(null, self.server.json_version_response);
+            try self.send(null, self.server.json_version_response);
+            // Chromedp (a Go driver) does an http request to /json/version
+            // then to / (websocket upgrade) using a different connection.
+            // Since we only allow 1 connection at a time, the 2nd one (the
+            // websocket upgrade) blocks until the first one times out.
+            // We can avoid that by closing the connection. json_version_response
+            // has a Connection: Close header too.
+            try posix.shutdown(self.socket, .recv);
+            return;
         }
 
         return error.NotFound;
@@ -1059,9 +1067,16 @@ fn buildJSONVersionResponse(
     const body_format = "{{\"webSocketDebuggerUrl\": \"ws://{}/\"}}";
     const body_len = std.fmt.count(body_format, .{address});
 
+    // We send a Connection: Close (and actually close the connection)
+    // because chromedp (Go driver) sends a request to /json/version and then
+    // does an upgrade request, on a different connection. Since we only allow
+    // 1 connection at a time, the upgrade connection doesn't proceed until we
+    // timeout the /json/version. So, instead of waiting for that, we just
+    // always close HTTP requests.
     const response_format =
         "HTTP/1.1 200 OK\r\n" ++
         "Content-Length: {d}\r\n" ++
+        "Connection: Close\r\n" ++
         "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
         body_format;
     return try std.fmt.allocPrint(allocator, response_format, .{ body_len, address });
@@ -1122,6 +1137,7 @@ test "server: buildJSONVersionResponse" {
 
     try testing.expectEqualStrings("HTTP/1.1 200 OK\r\n" ++
         "Content-Length: 48\r\n" ++
+        "Connection: Close\r\n" ++
         "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
         "{\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9001/\"}", res);
 }
@@ -1357,6 +1373,7 @@ test "server: get /json/version" {
     const expected_response =
         "HTTP/1.1 200 OK\r\n" ++
         "Content-Length: 48\r\n" ++
+        "Connection: Close\r\n" ++
         "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
         "{\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9583/\"}";
 
@@ -1366,11 +1383,7 @@ test "server: get /json/version" {
         defer c.deinit();
 
         const res1 = try c.httpRequest("GET /json/version HTTP/1.1\r\n\r\n");
-        try testing.expectEqualStrings(expected_response, res1);
-
-        const res2 = try c.httpRequest("GET /json/version HTTP/1.1\r\n\r\n");
-        try testing.expectEqualStrings(expected_response, res2);
-    }
+        try testing.expectEqualStrings(expected_response, res1);    }
 
     {
         // again on a new connection
@@ -1379,9 +1392,6 @@ test "server: get /json/version" {
 
         const res1 = try c.httpRequest("GET /json/version HTTP/1.1\r\n\r\n");
         try testing.expectEqualStrings(expected_response, res1);
-
-        const res2 = try c.httpRequest("GET /json/version HTTP/1.1\r\n\r\n");
-        try testing.expectEqualStrings(expected_response, res2);
     }
 }
 
