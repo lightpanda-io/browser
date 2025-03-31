@@ -282,7 +282,7 @@ pub const Request = struct {
             };
         }
 
-        loop.connect(AsyncHandlerT, async_handler, &async_handler.read_completion, AsyncHandlerT.connected, socket, address);
+        try loop.connect(AsyncHandlerT, async_handler, &async_handler.read_completion, AsyncHandlerT.connected, socket, address);
     }
 
     // Does additional setup of the request for the firsts (i.e. non-redirect) call.
@@ -490,7 +490,6 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
         }
 
         fn connected(self: *Self, _: *IO.Completion, result: IO.ConnectError!void) void {
-            self.loop.onConnect(result);
             result catch |err| return self.handleError("Connection failed", err);
             self.connection.connected() catch |err| {
                 self.handleError("connected handler error", err);
@@ -518,11 +517,12 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                 sent,
                 self.socket,
                 node.data,
-            );
+            ) catch |err| {
+                self.handleError("loop send error", err);
+            };
         }
 
         fn sent(self: *Self, _: *IO.Completion, n_: IO.SendError!usize) void {
-            self.loop.onSend(n_);
             const n = n_ catch |err| {
                 return self.handleError("Write error", err);
             };
@@ -548,7 +548,9 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                     sent,
                     self.socket,
                     next_.data,
-                );
+                ) catch |err| {
+                    self.handleError("loop send error", err);
+                };
                 return;
             }
 
@@ -567,18 +569,19 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
             }
 
             self.is_receiving = true;
-            return self.loop.recv(
+            self.loop.recv(
                 Self,
                 self,
                 &self.read_completion,
                 Self.received,
                 self.socket,
                 self.read_buf[self.read_pos..],
-            );
+            ) catch |err| {
+                self.handleError("loop recv error", err);
+            };
         }
 
         fn received(self: *Self, _: *IO.Completion, n_: IO.RecvError!usize) void {
-            self.loop.onRecv(n_);
             self.is_receiving = false;
             const n = n_ catch |err| {
                 return self.handleError("Read error", err);
