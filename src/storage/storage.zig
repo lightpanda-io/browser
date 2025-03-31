@@ -25,6 +25,10 @@ const DOMError = @import("netsurf").DOMError;
 
 const log = std.log.scoped(.storage);
 
+pub const cookie = @import("cookie.zig");
+pub const Cookie = cookie.Cookie;
+pub const CookieJar = cookie.Jar;
+
 pub const Interfaces = .{
     Bottle,
 };

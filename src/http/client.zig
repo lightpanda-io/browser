@@ -1443,6 +1443,33 @@ pub const ResponseHeader = struct {
     pub fn count(self: *const ResponseHeader) usize {
         return self.headers.items.len;
     }
+
+    pub fn iterate(self: *const ResponseHeader, name: []const u8) HeaderIterator {
+        return .{
+            .index = 0,
+            .name = name,
+            .headers = self.headers,
+        };
+    }
+};
+
+const HeaderIterator = struct {
+    index: usize,
+    name: []const u8,
+    headers: HeaderList,
+
+    pub fn next(self: *HeaderIterator) ?[]const u8 {
+        const name = self.name;
+        const index = self.index;
+        for (self.headers.items[index..], index..) |h, i| {
+            if (std.mem.eql(u8, name, h.name)) {
+                self.index = i + 1;
+                return h.value;
+            }
+        }
+        self.index = self.headers.items.len;
+        return null;
+    }
 };
 
 // What we emit from the AsyncHandler
@@ -2041,6 +2068,52 @@ test "HttpClient: async redirect plaintext to TLS" {
         try testing.expectEqual(201, res.status);
         try testing.expectEqual("1234567890abcdefhijk", res.body.items);
         try res.assertHeaders(&.{ "content-length", "20", "another", "HEaDer" });
+    }
+}
+
+test "HttpClient: HeaderIterator" {
+    var header = ResponseHeader{};
+    defer header.headers.deinit(testing.allocator);
+
+    {
+        var it = header.iterate("nope");
+        try testing.expectEqual(null, it.next());
+        try testing.expectEqual(null, it.next());
+    }
+
+    try header.headers.append(testing.allocator, .{ .name = "h1", .value = "value1" });
+    try header.headers.append(testing.allocator, .{ .name = "h2", .value = "value2" });
+    try header.headers.append(testing.allocator, .{ .name = "h3", .value = "value3" });
+    try header.headers.append(testing.allocator, .{ .name = "h1", .value = "value4" });
+    try header.headers.append(testing.allocator, .{ .name = "h1", .value = "value5" });
+
+    {
+        var it = header.iterate("nope");
+        try testing.expectEqual(null, it.next());
+        try testing.expectEqual(null, it.next());
+    }
+
+    {
+        var it = header.iterate("h2");
+        try testing.expectEqual("value2", it.next());
+        try testing.expectEqual(null, it.next());
+        try testing.expectEqual(null, it.next());
+    }
+
+    {
+        var it = header.iterate("h3");
+        try testing.expectEqual("value3", it.next());
+        try testing.expectEqual(null, it.next());
+        try testing.expectEqual(null, it.next());
+    }
+
+    {
+        var it = header.iterate("h1");
+        try testing.expectEqual("value1", it.next());
+        try testing.expectEqual("value4", it.next());
+        try testing.expectEqual("value5", it.next());
+        try testing.expectEqual(null, it.next());
+        try testing.expectEqual(null, it.next());
     }
 }
 

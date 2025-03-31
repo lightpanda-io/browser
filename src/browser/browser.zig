@@ -43,7 +43,7 @@ const Location = @import("../html/location.zig").Location;
 
 const storage = @import("../storage/storage.zig");
 
-const HttpClient = @import("../http/client.zig").Client;
+const http = @import("../http/client.zig");
 const UserContext = @import("../user_context.zig").UserContext;
 
 const polyfill = @import("../polyfill/polyfill.zig");
@@ -60,7 +60,7 @@ pub const Browser = struct {
     app: *App,
     session: ?*Session,
     allocator: Allocator,
-    http_client: *HttpClient,
+    http_client: *http.Client,
     session_pool: SessionPool,
     page_arena: std.heap.ArenaAllocator,
 
@@ -130,10 +130,12 @@ pub const Session = struct {
 
     window: Window,
 
-    // TODO move the shed to the browser?
+    // TODO move the shed/jar to the browser?
     storage_shed: storage.Shed,
+    cookie_jar: storage.CookieJar,
+
     page: ?Page = null,
-    http_client: *HttpClient,
+    http_client: *http.Client,
 
     jstypes: [Types.len]usize = undefined,
 
@@ -148,6 +150,7 @@ pub const Session = struct {
             .http_client = browser.http_client,
             .storage_shed = storage.Shed.init(allocator),
             .arena = std.heap.ArenaAllocator.init(allocator),
+            .cookie_jar = storage.CookieJar.init(allocator),
             .window = Window.create(null, .{ .agent = user_agent }),
         };
 
@@ -183,6 +186,7 @@ pub const Session = struct {
         }
         self.env.deinit();
         self.arena.deinit();
+        self.cookie_jar.deinit();
         self.storage_shed.deinit();
     }
 
@@ -371,14 +375,16 @@ pub const Page = struct {
         } });
 
         // load the data
-        var request = try self.session.http_client.request(.GET, self.uri);
+        var request = try self.newHTTPRequest(.GET, self.uri, .{ .navigation = true });
         defer request.deinit();
-        var response = try request.sendSync(.{});
 
+        var response = try request.sendSync(.{});
         const header = response.header;
+        try self.session.cookie_jar.populateFromResponse(self.uri, &header);
+
         log.info("GET {any} {d}", .{ self.uri, header.status });
 
-        const ct = response.header.get("content-type") orelse {
+        const ct = header.get("content-type") orelse {
             // no content type in HTTP headers.
             // TODO try to sniff mime type from the body.
             log.info("no content-type HTTP header", .{});
@@ -439,7 +445,9 @@ pub const Page = struct {
 
         // replace the user context document with the new one.
         try session.env.setUserContext(.{
+            .uri = self.uri,
             .document = html_doc,
+            .cookie_jar = @ptrCast(&self.session.cookie_jar),
             .http_client = @ptrCast(self.session.http_client),
         });
 
@@ -614,13 +622,19 @@ pub const Page = struct {
         }
         const u = try std.Uri.resolve_inplace(self.uri, res_src, &b);
 
-        var request = try self.session.http_client.request(.GET, u);
+        var request = try self.newHTTPRequest(.GET, u, .{
+            .origin_uri = self.uri,
+            .navigation = false,
+        });
         defer request.deinit();
+
         var response = try request.sendSync(.{});
+        var header = response.header;
+        try self.session.cookie_jar.populateFromResponse(u, &header);
 
-        log.info("fetch {any}: {d}", .{ u, response.header.status });
+        log.info("fetch {any}: {d}", .{ u, header.status });
 
-        if (response.header.status != 200) {
+        if (header.status != 200) {
             return FetchError.BadStatusCode;
         }
 
@@ -643,6 +657,21 @@ pub const Page = struct {
         const arena = self.arena;
         const body = try self.fetchData(arena, s.src, null);
         try s.eval(arena, &self.session.env, body);
+    }
+
+    fn newHTTPRequest(self: *const Page, method: http.Request.Method, uri: std.Uri, opts: storage.cookie.LookupOpts) !http.Request {
+        const session = self.session;
+        var request = try session.http_client.request(method, uri);
+        errdefer request.deinit();
+
+        var arr: std.ArrayListUnmanaged(u8) = .{};
+        try session.cookie_jar.forRequest(uri, arr.writer(self.arena), opts);
+
+        if (arr.items.len > 0) {
+            try request.addHeader("Cookie", arr.items, .{});
+        }
+
+        return request;
     }
 
     const Script = struct {
