@@ -1383,7 +1383,8 @@ test "server: get /json/version" {
         defer c.deinit();
 
         const res1 = try c.httpRequest("GET /json/version HTTP/1.1\r\n\r\n");
-        try testing.expectEqualStrings(expected_response, res1);    }
+        try testing.expectEqualStrings(expected_response, res1);
+    }
 
     {
         // again on a new connection
