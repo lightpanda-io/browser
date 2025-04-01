@@ -106,10 +106,16 @@ const Page = struct {
     aux_data: []const u8 = "",
     doc: ?*parser.Document = null,
 
-    pub fn navigate(self: *Page, url: []const u8, aux_data: []const u8) !void {
-        _ = self;
+    pub fn navigate(_: *Page, url: []const u8, aux_data: []const u8) !void {
         _ = url;
         _ = aux_data;
+    }
+
+    const ClickResult = @import("../browser/browser.zig").Page.ClickResult;
+    pub fn click(_: *Page, _: Allocator, x: u32, y: u32) !?ClickResult {
+        _ = x;
+        _ = y;
+        return null;
     }
 };
 

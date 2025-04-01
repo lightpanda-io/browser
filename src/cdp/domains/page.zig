@@ -129,6 +129,18 @@ fn createIsolatedWorld(cmd: anytype) !void {
 }
 
 fn navigate(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        url: []const u8,
+        // referrer: ?[]const u8 = null,
+        // transitionType: ?[]const u8 = null, // TODO: enum
+        // frameId: ?[]const u8 = null,
+        // referrerPolicy: ?[]const u8 = null, // TODO: enum
+    })) orelse return error.InvalidParams;
+
+    return navigateToUrl(cmd, params.url, true);
+}
+
+pub fn navigateToUrl(cmd: anytype, url: []const u8, send_result: bool) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     // didn't create?
@@ -140,20 +152,10 @@ fn navigate(cmd: anytype) !void {
     // if we have a target_id we have to have a page;
     std.debug.assert(bc.session.page != null);
 
-    const params = (try cmd.params(struct {
-        url: []const u8,
-        referrer: ?[]const u8 = null,
-        transitionType: ?[]const u8 = null, // TODO: enum
-        frameId: ?[]const u8 = null,
-        referrerPolicy: ?[]const u8 = null, // TODO: enum
-    })) orelse return error.InvalidParams;
-
     // change state
     bc.reset();
-    bc.url = params.url;
-
-    // TODO: hard coded ID
-    bc.loader_id = "AF8667A203C5392DBE9AC290044AA4C2";
+    bc.url = url;
+    bc.loader_id = cmd.cdp.loader_id_gen.next();
 
     const LifecycleEvent = struct {
         frameId: []const u8,
@@ -180,10 +182,12 @@ fn navigate(cmd: anytype) !void {
     }
 
     // output
-    try cmd.sendResult(.{
-        .frameId = target_id,
-        .loaderId = bc.loader_id,
-    }, .{});
+    if (send_result) {
+        try cmd.sendResult(.{
+            .frameId = target_id,
+            .loaderId = bc.loader_id,
+        }, .{});
+    }
 
     // TODO: at this point do we need async the following actions to be async?
 
@@ -199,7 +203,7 @@ fn navigate(cmd: anytype) !void {
     );
 
     var page = bc.session.currentPage().?;
-    try page.navigate(params.url, aux_data);
+    try page.navigate(url, aux_data);
 
     // Events
 
@@ -218,7 +222,7 @@ fn navigate(cmd: anytype) !void {
         .type = "Navigation",
         .frame = Frame{
             .id = target_id,
-            .url = bc.url,
+            .url = url,
             .securityOrigin = bc.security_origin,
             .secureContextType = bc.secure_context_type,
             .loaderId = bc.loader_id,
