@@ -17,14 +17,15 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const cdp = @import("cdp.zig");
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
-        disable,
+        enable,
+        setCacheDisabled,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
-        .disable => return cmd.sendResult(null, .{}),
+        .enable => return cmd.sendResult(null, .{}),
+        .setCacheDisabled => return cmd.sendResult(null, .{}),
     }
 }

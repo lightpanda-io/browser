@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const cdp = @import("cdp.zig");
 const Runtime = @import("runtime.zig");
 
 pub fn processMessage(cmd: anytype) !void {
