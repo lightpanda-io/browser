@@ -17,14 +17,15 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const parser = @import("netsurf");
 
+const parser = @import("netsurf");
 pub const allocator = std.testing.allocator;
 pub const expectError = std.testing.expectError;
 pub const expectString = std.testing.expectEqualStrings;
 pub const expectEqualSlices = std.testing.expectEqualSlices;
 
 const App = @import("app.zig").App;
+const Allocator = std.mem.Allocator;
 
 // Merged std.testing.expectEqual and std.testing.expectString
 // can be useful when testing fields of an anytype an you don't know
@@ -217,12 +218,93 @@ pub const Document = struct {
 
     pub fn querySelectorAll(self: *Document, selector: []const u8) ![]const *parser.Node {
         const css = @import("dom/css.zig");
-        const node_list = try css.querySelectorAll(self.arena.allocator(), parser.documentToNode(self.doc), selector);
+        const node_list = try css.querySelectorAll(self.arena.allocator(), self.asNode(), selector);
         return node_list.nodes.items;
     }
 
     pub fn querySelector(self: *Document, selector: []const u8) !?*parser.Node {
         const css = @import("dom/css.zig");
-        return css.querySelector(self.arena.allocator(), parser.documentToNode(self.doc), selector);
+        return css.querySelector(self.arena.allocator(), self.asNode(), selector);
+    }
+
+    pub fn asNode(self: *const Document) *parser.Node {
+        return parser.documentToNode(self.doc);
     }
 };
+
+pub fn expectJson(a: anytype, b: anytype) !void {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const aa = arena.allocator();
+
+    const a_value = try convertToJson(aa, a);
+    const b_value = try convertToJson(aa, b);
+
+    errdefer {
+        const a_json = std.json.stringifyAlloc(aa, a_value, .{ .whitespace = .indent_2 }) catch unreachable;
+        const b_json = std.json.stringifyAlloc(aa, b_value, .{ .whitespace = .indent_2 }) catch unreachable;
+        std.debug.print("== Expected ==\n{s}\n\n== Actual ==\n{s}", .{ a_json, b_json });
+    }
+
+    try expectJsonValue(a_value, b_value);
+}
+
+pub fn isEqualJson(a: anytype, b: anytype) !bool {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const aa = arena.allocator();
+    const a_value = try convertToJson(aa, a);
+    const b_value = try convertToJson(aa, b);
+    expectJsonValue(a_value, b_value) catch return false;
+    return true;
+}
+
+fn convertToJson(arena: Allocator, value: anytype) !std.json.Value {
+    const T = @TypeOf(value);
+    if (T == std.json.Value) {
+        return value;
+    }
+
+    var str: []const u8 = undefined;
+    if (T == []u8 or T == []const u8 or comptime isStringArray(T)) {
+        str = value;
+    } else {
+        str = try std.json.stringifyAlloc(arena, value, .{});
+    }
+    return std.json.parseFromSliceLeaky(std.json.Value, arena, str, .{});
+}
+
+fn expectJsonValue(a: std.json.Value, b: std.json.Value) !void {
+    try expectEqual(@tagName(a), @tagName(b));
+
+    // at this point, we know that if a is an int, b must also be an int
+    switch (a) {
+        .null => return,
+        .bool => try expectEqual(a.bool, b.bool),
+        .integer => try expectEqual(a.integer, b.integer),
+        .float => try expectEqual(a.float, b.float),
+        .number_string => try expectEqual(a.number_string, b.number_string),
+        .string => try expectEqual(a.string, b.string),
+        .array => {
+            const a_len = a.array.items.len;
+            const b_len = b.array.items.len;
+            try expectEqual(a_len, b_len);
+            for (a.array.items, b.array.items) |a_item, b_item| {
+                try expectJsonValue(a_item, b_item);
+            }
+        },
+        .object => {
+            var it = a.object.iterator();
+            while (it.next()) |entry| {
+                const key = entry.key_ptr.*;
+                if (b.object.get(key)) |b_item| {
+                    try expectJsonValue(entry.value_ptr.*, b_item);
+                } else {
+                    return error.MissingKey;
+                }
+            }
+        },
+    }
+}

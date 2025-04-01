@@ -51,9 +51,7 @@ fn getDocument(cmd: anytype) !void {
     const doc = page.doc orelse return error.DocumentNotLoaded;
 
     const node = try bc.node_registry.register(parser.documentToNode(doc));
-    return cmd.sendResult(.{
-        .root = node,
-    }, .{});
+    return cmd.sendResult(.{ .root = node.writer(.{}) }, .{});
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-performSearch
@@ -118,6 +116,7 @@ fn getSearchResults(cmd: anytype) !void {
 }
 
 const testing = @import("../testing.zig");
+
 test "cdp.dom: getSearchResults unknown search id" {
     var ctx = testing.context();
     defer ctx.deinit();
@@ -149,7 +148,7 @@ test "cdp.dom: search flow" {
             .method = "DOM.getSearchResults",
             .params = .{ .searchId = "0", .fromIndex = 0, .toIndex = 2 },
         });
-        try ctx.expectSentResult(.{ .nodeIds = &.{ 0, 1 } }, .{ .id = 13 });
+        try ctx.expectSentResult(.{ .nodeIds = &.{ 0, 2 } }, .{ .id = 13 });
 
         // different fromIndex
         try ctx.processMessage(.{
@@ -157,7 +156,7 @@ test "cdp.dom: search flow" {
             .method = "DOM.getSearchResults",
             .params = .{ .searchId = "0", .fromIndex = 1, .toIndex = 2 },
         });
-        try ctx.expectSentResult(.{ .nodeIds = &.{1} }, .{ .id = 14 });
+        try ctx.expectSentResult(.{ .nodeIds = &.{2} }, .{ .id = 14 });
 
         // different toIndex
         try ctx.processMessage(.{

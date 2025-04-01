@@ -44,50 +44,8 @@ const CompatibilityMode = enum {
     NoQuirksMode,
 };
 
-pub fn jsonStringify(self: *const Node, writer: anytype) !void {
-    try writer.beginObject();
-    try writer.objectField("nodeId");
-    try writer.write(self.id);
-
-    try writer.objectField("parentId");
-    try writer.write(self.parent_id);
-
-    try writer.objectField("backendNodeId");
-    try writer.write(self.backend_node_id);
-
-    try writer.objectField("nodeType");
-    try writer.write(self.node_type);
-
-    try writer.objectField("nodeName");
-    try writer.write(self.node_name);
-
-    try writer.objectField("localName");
-    try writer.write(self.local_name);
-
-    try writer.objectField("nodeValue");
-    try writer.write(self.node_value);
-
-    try writer.objectField("childNodeCount");
-    try writer.write(self.child_node_count);
-
-    try writer.objectField("children");
-    try writer.write(self.children);
-
-    try writer.objectField("documentURL");
-    try writer.write(self.document_url);
-
-    try writer.objectField("baseURL");
-    try writer.write(self.base_url);
-
-    try writer.objectField("xmlVersion");
-    try writer.write(self.xml_version);
-
-    try writer.objectField("compatibilityMode");
-    try writer.write(self.compatibility_mode);
-
-    try writer.objectField("isScrollable");
-    try writer.write(self.is_scrollable);
-    try writer.endObject();
+pub fn writer(self: *const Node, opts: Writer.Opts) Writer {
+    return .{ .node = self, .opts = opts };
 }
 
 // Whenever we send a node to the client, we register it here for future lookup.
@@ -95,6 +53,7 @@ pub fn jsonStringify(self: *const Node, writer: anytype) !void {
 pub const Registry = struct {
     node_id: u32,
     allocator: Allocator,
+    arena: std.heap.ArenaAllocator,
     node_pool: std.heap.MemoryPool(Node),
     lookup_by_id: std.AutoHashMapUnmanaged(Id, *Node),
     lookup_by_node: std.HashMapUnmanaged(*parser.Node, *Node, NodeContext, std.hash_map.default_max_load_percentage),
@@ -102,9 +61,10 @@ pub const Registry = struct {
     pub fn init(allocator: Allocator) Registry {
         return .{
             .node_id = 0,
-            .allocator = allocator,
             .lookup_by_id = .{},
             .lookup_by_node = .{},
+            .allocator = allocator,
+            .arena = std.heap.ArenaAllocator.init(allocator),
             .node_pool = std.heap.MemoryPool(Node).init(allocator),
         };
     }
@@ -114,12 +74,14 @@ pub const Registry = struct {
         self.lookup_by_id.deinit(allocator);
         self.lookup_by_node.deinit(allocator);
         self.node_pool.deinit();
+        self.arena.deinit();
     }
 
     pub fn reset(self: *Registry) void {
         self.lookup_by_id.clearRetainingCapacity();
         self.lookup_by_node.clearRetainingCapacity();
-        _ = self.node_pool.reset(.{ .retain_capacity = {} });
+        _ = self.arena.reset(.{ .retain_with_limit = 1024 });
+        _ = self.node_pool.reset(.{ .retain_with_limit = 1024 });
     }
 
     pub fn register(self: *Registry, n: *parser.Node) !*Node {
@@ -132,11 +94,10 @@ pub const Registry = struct {
         // but, just in case, let's try to keep things tidy.
         errdefer _ = self.lookup_by_node.remove(n);
 
-        const children = try parser.nodeGetChildNodes(n);
-        const children_count = try parser.nodeListLength(children);
-
         const id = self.node_id;
-        defer self.node_id = id + 1;
+        self.node_id = id + 1;
+
+        const child_nodes = try self.registerChildNodes(n);
 
         const node = try self.node_pool.create();
         errdefer self.node_pool.destroy(node);
@@ -146,12 +107,12 @@ pub const Registry = struct {
             .id = id,
             .parent_id = null, // TODO
             .backend_node_id = id, // ??
-            .node_name = try parser.nodeName(n),
-            .local_name = try parser.nodeLocalName(n),
-            .node_value = try parser.nodeValue(n) orelse "",
-            .node_type = @intFromEnum(try parser.nodeType(n)),
-            .child_node_count = children_count,
-            .children = &.{}, // TODO
+            .node_name = parser.nodeName(n) catch return error.NodeNameError,
+            .local_name = parser.nodeLocalName(n) catch return error.NodeLocalNameError,
+            .node_value = (parser.nodeValue(n) catch return error.NameValueError) orelse "",
+            .node_type = @intFromEnum(parser.nodeType(n) catch return error.NodeTypeError),
+            .child_node_count = @intCast(child_nodes.len),
+            .children = child_nodes,
             .document_url = null,
             .base_url = null,
             .xml_version = "",
@@ -168,6 +129,31 @@ pub const Registry = struct {
         try self.lookup_by_id.putNoClobber(self.allocator, id, node);
         return node;
     }
+
+    pub fn registerChildNodes(self: *Registry, n: *parser.Node) RegisterError![]*Node {
+        const node_list = parser.nodeGetChildNodes(n) catch return error.GetChildNodeError;
+        const count = parser.nodeListLength(node_list) catch return error.NodeListLengthError;
+
+        var arr = try self.arena.allocator().alloc(*Node, count);
+        var i: usize = 0;
+        for (0..count) |_| {
+            const child = (parser.nodeListItem(node_list, @intCast(i)) catch return error.NodeListItemError) orelse continue;
+            arr[i] = try self.register(child);
+            i += 1;
+        }
+        return arr[0..i];
+    }
+};
+
+const RegisterError = error{
+    OutOfMemory,
+    GetChildNodeError,
+    NodeListLengthError,
+    NodeListItemError,
+    NodeNameError,
+    NodeLocalNameError,
+    NameValueError,
+    NodeTypeError,
 };
 
 const NodeContext = struct {
@@ -271,8 +257,76 @@ pub const Search = struct {
     };
 };
 
+// Need a custom writer, because we can't just serialize the node as-is.
+// Sometimes we want to serializ the node without chidren, sometimes with just
+// its direct children, and sometimes the entire tree.
+// (For now, we only support direct children)
+pub const Writer = struct {
+    opts: Opts,
+    node: *const Node,
+
+    pub const Opts = struct {};
+
+    pub fn jsonStringify(self: *const Writer, w: anytype) !void {
+        try w.beginObject();
+        try writeCommon(self.node, w);
+        try w.objectField("children");
+        try w.beginArray();
+        for (self.node.children) |node| {
+            try w.beginObject();
+            try writeCommon(node, w);
+            try w.endObject();
+        }
+        try w.endArray();
+        try w.endObject();
+    }
+
+    fn writeCommon(node: *const Node, w: anytype) !void {
+        try w.objectField("nodeId");
+        try w.write(node.id);
+
+        if (node.parent_id) |pid| {
+            try w.objectField("parentId");
+            try w.write(pid);
+        }
+
+        try w.objectField("backendNodeId");
+        try w.write(node.backend_node_id);
+
+        try w.objectField("nodeType");
+        try w.write(node.node_type);
+
+        try w.objectField("nodeName");
+        try w.write(node.node_name);
+
+        try w.objectField("localName");
+        try w.write(node.local_name);
+
+        try w.objectField("nodeValue");
+        try w.write(node.node_value);
+
+        try w.objectField("childNodeCount");
+        try w.write(node.child_node_count);
+
+        try w.objectField("documentURL");
+        try w.write(node.document_url);
+
+        try w.objectField("baseURL");
+        try w.write(node.base_url);
+
+        try w.objectField("xmlVersion");
+        try w.write(node.xml_version);
+
+        try w.objectField("compatibilityMode");
+        try w.write(node.compatibility_mode);
+
+        try w.objectField("isScrollable");
+        try w.write(node.is_scrollable);
+    }
+};
+
 const testing = @import("testing.zig");
-test "CDP Node: Registry register" {
+test "cdp Node: Registry register" {
     var registry = Registry.init(testing.allocator);
     defer registry.deinit();
 
@@ -298,7 +352,8 @@ test "CDP Node: Registry register" {
         try testing.expectEqual("a", node.local_name);
         try testing.expectEqual("", node.node_value);
         try testing.expectEqual(1, node.child_node_count);
-        try testing.expectEqual(0, node.children.len);
+        try testing.expectEqual(1, node.children.len);
+        try testing.expectEqual(1, node.children[0].id);
         try testing.expectEqual(null, node.document_url);
         try testing.expectEqual(null, node.base_url);
         try testing.expectEqual("", node.xml_version);
@@ -310,20 +365,21 @@ test "CDP Node: Registry register" {
     {
         const n = (try doc.querySelector("p")).?;
         const node = try registry.register(n);
-        const n1b = registry.lookup_by_id.get(1).?;
+        const n1b = registry.lookup_by_id.get(2).?;
         const n1c = registry.lookup_by_node.get(node._node).?;
         try testing.expectEqual(node, n1b);
         try testing.expectEqual(node, n1c);
 
-        try testing.expectEqual(1, node.id);
+        try testing.expectEqual(2, node.id);
         try testing.expectEqual(null, node.parent_id);
         try testing.expectEqual(1, node.node_type);
-        try testing.expectEqual(1, node.backend_node_id);
+        try testing.expectEqual(2, node.backend_node_id);
         try testing.expectEqual("P", node.node_name);
         try testing.expectEqual("p", node.local_name);
         try testing.expectEqual("", node.node_value);
         try testing.expectEqual(1, node.child_node_count);
-        try testing.expectEqual(0, node.children.len);
+        try testing.expectEqual(1, node.children.len);
+        try testing.expectEqual(3, node.children[0].id);
         try testing.expectEqual(null, node.document_url);
         try testing.expectEqual(null, node.base_url);
         try testing.expectEqual("", node.xml_version);
@@ -333,7 +389,7 @@ test "CDP Node: Registry register" {
     }
 }
 
-test "CDP Node: search list" {
+test "cdp Node: search list" {
     var registry = Registry.init(testing.allocator);
     defer registry.deinit();
 
@@ -381,5 +437,29 @@ test "CDP Node: search list" {
 
         try testing.expectEqual(2, registry.lookup_by_id.count());
         try testing.expectEqual(2, registry.lookup_by_node.count());
+    }
+}
+
+test "cdp Node: Writer" {
+    var registry = Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    var doc = try testing.Document.init("<a id=a1></a><a id=a2></a>");
+    defer doc.deinit();
+
+    {
+        const node = try registry.register(doc.asNode());
+        const json = try std.json.stringifyAlloc(testing.allocator, node.writer(.{}), .{});
+        defer testing.allocator.free(json);
+
+        try testing.expectJson(.{ .nodeId = 0, .backendNodeId = 0, .nodeType = 9, .nodeName = "#document", .localName = "", .nodeValue = "", .documentURL = null, .baseURL = null, .xmlVersion = "", .isScrollable = false, .compatibilityMode = "NoQuirksMode", .childNodeCount = 1, .children = &.{.{ .nodeId = 1, .backendNodeId = 1, .nodeType = 1, .nodeName = "HTML", .localName = "html", .nodeValue = "", .childNodeCount = 2, .documentURL = null, .baseURL = null, .xmlVersion = "", .compatibilityMode = "NoQuirksMode", .isScrollable = false }} }, json);
+    }
+
+    {
+        const node = registry.lookup_by_id.get(1).?;
+        const json = try std.json.stringifyAlloc(testing.allocator, node.writer(.{}), .{});
+        defer testing.allocator.free(json);
+
+        try testing.expectJson(.{ .nodeId = 1, .backendNodeId = 1, .nodeType = 1, .nodeName = "HTML", .localName = "html", .nodeValue = "", .childNodeCount = 2, .documentURL = null, .baseURL = null, .xmlVersion = "", .compatibilityMode = "NoQuirksMode", .isScrollable = false, .children = &.{ .{ .nodeId = 2, .backendNodeId = 2, .nodeType = 1, .nodeName = "HEAD", .localName = "head", .nodeValue = "", .childNodeCount = 0, .documentURL = null, .baseURL = null, .xmlVersion = "", .compatibilityMode = "NoQuirksMode", .isScrollable = false }, .{ .nodeId = 3, .backendNodeId = 3, .nodeType = 1, .nodeName = "BODY", .localName = "body", .nodeValue = "", .childNodeCount = 2, .documentURL = null, .baseURL = null, .xmlVersion = "", .compatibilityMode = "NoQuirksMode", .isScrollable = false } } }, json);
     }
 }
