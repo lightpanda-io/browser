@@ -56,7 +56,7 @@ curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download
 chmod a+x ./lightpanda
 ```
 
-### Dump an URL
+### Dump a URL
 
 ```console
 ./lightpanda fetch --dump https://lightpanda.io
