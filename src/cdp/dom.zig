@@ -29,6 +29,7 @@ pub fn processMessage(cmd: anytype) !void {
         performSearch,
         getSearchResults,
         discardSearchResults,
+        resolveNode,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -37,6 +38,7 @@ pub fn processMessage(cmd: anytype) !void {
         .performSearch => return performSearch(cmd),
         .getSearchResults => return getSearchResults(cmd),
         .discardSearchResults => return discardSearchResults(cmd),
+        .resolveNode => return resolveNode(cmd),
     }
 }
 
@@ -74,6 +76,8 @@ pub const NodeList = struct {
 };
 
 const NodeId = u32;
+
+var glob_node: ?*parser.Node = null; // libdom node
 
 const Node = struct {
     nodeId: NodeId,
@@ -113,6 +117,7 @@ const Node = struct {
         const ln = try parser.nodeListLength(children);
         self.childNodeCount = ln;
 
+        glob_node = n;
         var list = try std.ArrayList(Node).initCapacity(alloc, ln);
 
         for (0..ln) |i| {
@@ -256,4 +261,24 @@ fn getSearchResults(cmd: anytype) !void {
     if (params.toIndex > items.len) return error.BadToIndex;
 
     return cmd.sendResult(.{ .nodeIds = ns.?.coll.items[params.fromIndex..params.toIndex] }, .{});
+}
+
+fn resolveNode(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        nodeId: NodeId, // TODO this is optional
+        // TODO other optionals
+    })) orelse return error.InvalidParams;
+
+    std.debug.print("resolveNode: {d}\n", .{params.nodeId});
+    const node_ptr = glob_node.?; // TODO lookup Node from register
+    std.debug.print("resolveNode - middle\n", .{});
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const remote_object = try bc.session.inspector.wrapObject(bc.session.env, node_ptr);
+
+    // // force running micro tasks after send input to the inspector.
+    // cmd.cdp.browser.runMicrotasks();
+
+    _ = remote_object;
+    return cmd.sendResult(.{ .object = .{ .type = "object", .subtype = "node", .className = "HTMLHtmlElement", .description = "html", .objectId = "7693673593267895234.1.1" } }, .{});
 }

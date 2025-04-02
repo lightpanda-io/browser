@@ -71,6 +71,8 @@ const Browser = struct {
 const Session = struct {
     page: ?Page = null,
     allocator: Allocator,
+    env: Env = Env{},
+    inspector: Inspector = Inspector{},
 
     pub fn currentPage(self: *Session) ?*Page {
         return &(self.page orelse return null);
@@ -130,6 +132,17 @@ const Client = struct {
         try self.sent.append(self.allocator, value);
     }
 };
+
+const Inspector = struct {
+    pub fn wrapObject(self: Inspector, env: Env, node_ptr: anytype) !void {
+        _ = self;
+        _ = env;
+        _ = node_ptr;
+        return;
+    }
+};
+
+const Env = struct {};
 
 const TestCDP = main.CDPT(struct {
     pub const Browser = Testing.Browser;
