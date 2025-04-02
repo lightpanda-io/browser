@@ -1,7 +1,8 @@
 const std = @import("std");
-
-const Loop = @import("jsruntime").Loop;
 const Allocator = std.mem.Allocator;
+
+const js = @import("runtime/js.zig");
+const Loop = @import("runtime/loop.zig").Loop;
 const HttpClient = @import("http/client.zig").Client;
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
 
@@ -11,6 +12,7 @@ const log = std.log.scoped(.app);
 // might need.
 pub const App = struct {
     loop: *Loop,
+    config: Config,
     allocator: Allocator,
     telemetry: Telemetry,
     http_client: HttpClient,
@@ -24,8 +26,9 @@ pub const App = struct {
     };
 
     pub const Config = struct {
-        tls_verify_host: bool = true,
         run_mode: RunMode,
+        gc_hints: bool = false,
+        tls_verify_host: bool = true,
     };
 
     pub fn init(allocator: Allocator, config: Config) !*App {
@@ -48,6 +51,7 @@ pub const App = struct {
             .http_client = try HttpClient.init(allocator, 5, .{
                 .tls_verify_host = config.tls_verify_host,
             }),
+            .config = config,
         };
         app.telemetry = Telemetry.init(app, config.run_mode);
 

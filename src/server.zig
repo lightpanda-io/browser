@@ -25,14 +25,15 @@ const posix = std.posix;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
-const jsruntime = @import("jsruntime");
-const Completion = jsruntime.IO.Completion;
-const AcceptError = jsruntime.IO.AcceptError;
-const RecvError = jsruntime.IO.RecvError;
-const SendError = jsruntime.IO.SendError;
-const CloseError = jsruntime.IO.CloseError;
-const CancelError = jsruntime.IO.CancelOneError;
-const TimeoutError = jsruntime.IO.TimeoutError;
+const IO = @import("runtime/loop.zig").IO;
+const Completion = IO.Completion;
+const AcceptError = IO.AcceptError;
+const RecvError = IO.RecvError;
+const SendError = IO.SendError;
+const CloseError = IO.CloseError;
+const CancelError = IO.CancelOneError;
+const TimeoutError = IO.TimeoutError;
+const Loop = @import("runtime/loop.zig").Loop;
 
 const App = @import("app.zig").App;
 const CDP = @import("cdp/cdp.zig").CDP;
@@ -51,7 +52,7 @@ const MAX_MESSAGE_SIZE = 256 * 1024 + 14;
 const Server = struct {
     app: *App,
     allocator: Allocator,
-    loop: *jsruntime.Loop,
+    loop: *Loop,
 
     // internal fields
     listener: posix.socket_t,
@@ -453,7 +454,7 @@ pub const Client = struct {
         };
 
         self.mode = .websocket;
-        self.cdp = CDP.init(self.server.app, self);
+        self.cdp = try CDP.init(self.server.app, self);
         return self.send(arena, response);
     }
 
@@ -1023,10 +1024,6 @@ pub fn run(
     try posix.bind(listener, &address.any, address.getOsSockLen());
     try posix.listen(listener, 1);
 
-    // create v8 vm
-    const vm = jsruntime.VM.init();
-    defer vm.deinit();
-
     var loop = app.loop;
     const allocator = app.allocator;
     const json_version_response = try buildJSONVersionResponse(allocator, address);
@@ -1451,7 +1448,7 @@ const MockCDP = struct {
 
     allocator: Allocator = testing.allocator,
 
-    fn init(_: Allocator, client: anytype, loop: *jsruntime.Loop) MockCDP {
+    fn init(_: Allocator, client: anytype, loop: *Loop) MockCDP {
         _ = loop;
         _ = client;
         return .{};

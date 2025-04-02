@@ -18,14 +18,10 @@
 
 const std = @import("std");
 
-const jsruntime = @import("jsruntime");
-
-const Suite = @import("wpt/testcase.zig").Suite;
-const FileLoader = @import("wpt/fileloader.zig").FileLoader;
 const wpt = @import("wpt/run.zig");
-
-const apiweb = @import("apiweb.zig");
-const HTMLElem = @import("html/elements.zig");
+const Suite = @import("wpt/testcase.zig").Suite;
+const Platform = @import("runtime/js.zig").Platform;
+const FileLoader = @import("wpt/fileloader.zig").FileLoader;
 
 const wpt_dir = "tests/wpt";
 
@@ -47,10 +43,10 @@ const Out = enum {
     text,
 };
 
-pub const Types = jsruntime.reflect(apiweb.Interfaces);
-pub const GlobalType = apiweb.GlobalType;
-pub const UserContext = apiweb.UserContext;
-pub const IO = @import("asyncio").Wrapper(jsruntime.Loop);
+pub const std_options = std.Options{
+    // Set the log level to info
+    .log_level = .info,
+};
 
 // TODO For now the WPT tests run is specific to WPT.
 // It manually load js framwork libs, and run the first script w/ js content in
@@ -122,8 +118,8 @@ pub fn main() !void {
     }
 
     // initialize VM JS lib.
-    const vm = jsruntime.VM.init();
-    defer vm.deinit();
+    const platform = Platform.init();
+    defer platform.deinit();
 
     // prepare libraries to load on each test case.
     var loader = FileLoader.init(alloc, wpt_dir);
@@ -142,7 +138,7 @@ pub fn main() !void {
         var arena = std.heap.ArenaAllocator.init(alloc);
         defer arena.deinit();
 
-        const res = wpt.run(&arena, wpt_dir, tc, &loader) catch |err| {
+        const res = wpt.run(arena.allocator(), wpt_dir, tc, &loader) catch |err| {
             const suite = try Suite.init(alloc, tc, false, @errorName(err));
             try results.append(suite);
 
@@ -152,9 +148,8 @@ pub fn main() !void {
             failures += 1;
             continue;
         };
-        defer res.deinit(arena.allocator());
 
-        const suite = try Suite.init(alloc, tc, res.ok, res.msg orelse "");
+        const suite = try Suite.init(alloc, tc, true, res);
         try results.append(suite);
 
         if (out == .json) {

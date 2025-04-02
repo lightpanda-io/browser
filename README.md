@@ -216,17 +216,19 @@ Note: when Mimalloc is built in dev mode, you can dump memory stats with the
 env var `MIMALLOC_SHOW_STATS=1`. See
 [https://microsoft.github.io/mimalloc/environment.html](https://microsoft.github.io/mimalloc/environment.html).
 
-**zig-js-runtime**
+**v8**
 
-Our own Zig/Javascript runtime, which includes the v8 Javascript engine.
-
-This build task is very long and cpu consuming, as you will build v8 from sources.
+First, get the tools necessary for building V8, as well as the V8 source code:
 
 ```
-make install-zig-js-runtime
+zig build get-v8
 ```
 
-For dev env, use `make install-zig-js-runtime-dev`.
+Next, build v8. This build task is very long and cpu consuming, as you will build v8 from sources. 
+
+```
+zig build build-v8
+```
 
 ## Test
 

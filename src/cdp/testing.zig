@@ -23,9 +23,9 @@ const Allocator = std.mem.Allocator;
 const Testing = @This();
 
 const main = @import("cdp.zig");
-const parser = @import("netsurf");
 const URL = @import("../url.zig").URL;
 const App = @import("../app.zig").App;
+const parser = @import("../browser/netsurf.zig");
 
 const base = @import("../testing.zig");
 pub const allocator = base.allocator;
@@ -40,7 +40,7 @@ const Browser = struct {
     session: ?*Session = null,
     arena: std.heap.ArenaAllocator,
 
-    pub fn init(app: *App) Browser {
+    pub fn init(app: *App) !Browser {
         return .{
             .arena = std.heap.ArenaAllocator.init(app.allocator),
         };
@@ -61,8 +61,8 @@ const Browser = struct {
         self.session.?.* = .{
             .page = null,
             .arena = arena,
-            .env = Env{},
-            .inspector = Inspector{},
+            .executor = .{},
+            .inspector = .{},
         };
         return self.session.?;
     }
@@ -78,7 +78,7 @@ const Browser = struct {
 const Session = struct {
     page: ?Page = null,
     arena: Allocator,
-    env: Env,
+    executor: Executor,
     inspector: Inspector,
 
     pub fn currentPage(self: *Session) ?*Page {
@@ -107,19 +107,19 @@ const Session = struct {
     }
 };
 
-const Env = struct {
-    pub fn findOrAddValue(self: *Env, value: anytype) !@TypeOf(value) { // ?
-        _ = self;
-        return value;
-    }
-};
+const Executor = struct {};
 
 const Inspector = struct {
-    pub fn getRemoteObject(self: Inspector, env: *Env, jsValue: anytype, groupName: []const u8) !RemoteObject {
+    pub fn getRemoteObject(
+        self: *const Inspector,
+        executor: Executor,
+        group: []const u8,
+        value: anytype,
+    ) !RemoteObject {
         _ = self;
-        _ = env;
-        _ = jsValue;
-        _ = groupName;
+        _ = executor;
+        _ = group;
+        _ = value;
         return RemoteObject{};
     }
 };
@@ -217,7 +217,7 @@ const TestContext = struct {
             self.client = Client.init(self.arena.allocator());
             // Don't use the arena here. We want to detect leaks in CDP.
             // The arena is only for test-specific stuff
-            self.cdp_ = TestCDP.init(self.app, &self.client.?);
+            self.cdp_ = try TestCDP.init(self.app, &self.client.?);
         }
         return &self.cdp_.?;
     }

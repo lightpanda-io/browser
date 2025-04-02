@@ -17,16 +17,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-
 const builtin = @import("builtin");
-
-const jsruntime_path = "vendor/zig-js-runtime/";
-const jsruntime = @import("vendor/zig-js-runtime/build.zig");
-const jsruntime_pkgs = jsruntime.packages(jsruntime_path);
 
 /// Do not rename this constant. It is scanned by some scripts to determine
 /// which zig version to install.
-const recommended_zig_version = jsruntime.recommended_zig_version;
+const recommended_zig_version = "0.14.0";
 
 pub fn build(b: *std.Build) !void {
     switch (comptime builtin.zig_version.order(std.SemanticVersion.parse(recommended_zig_version) catch unreachable)) {
@@ -42,193 +37,190 @@ pub fn build(b: *std.Build) !void {
         },
     }
 
+    var opts = b.addOptions();
+    opts.addOption(
+        []const u8,
+        "git_commit",
+        b.option([]const u8, "git_commit", "Current git commit") orelse "dev",
+    );
+
     const target = b.standardTargetOptions(.{});
-    const mode = b.standardOptimizeOption(.{});
+    const optimize = b.standardOptimizeOption(.{});
 
-    const options = jsruntime.buildOptions(b);
-
-    // browser
-    // -------
-
-    // compile and install
-    const exe = b.addExecutable(.{
-        .name = "lightpanda",
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = mode,
-    });
-    try common(b, exe, options);
     {
-        var opt = b.addOptions();
-        opt.addOption(
-            []const u8,
-            "git_commit",
-            b.option([]const u8, "git_commit", "Current git commit") orelse "dev",
-        );
-        exe.root_module.addImport("build_info", opt.createModule());
-    }
-    b.installArtifact(exe);
+        // browser
+        // -------
 
-    // run
-    const run_cmd = b.addRunArtifact(exe);
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+        // compile and install
+        const exe = b.addExecutable(.{
+            .name = "lightpanda",
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("src/main.zig"),
+        });
 
-    // step
-    const run_step = b.step("run", "Run the app");
-    run_step.dependOn(&run_cmd.step);
+        try common(b, opts, exe);
+        b.installArtifact(exe);
 
-    // shell
-    // -----
+        // run
+        const run_cmd = b.addRunArtifact(exe);
+        if (b.args) |args| {
+            run_cmd.addArgs(args);
+        }
 
-    // compile and install
-    const shell = b.addExecutable(.{
-        .name = "lightpanda-shell",
-        .root_source_file = b.path("src/main_shell.zig"),
-        .target = target,
-        .optimize = mode,
-    });
-    try common(b, shell, options);
-    try jsruntime_pkgs.add_shell(shell);
-
-    // run
-    const shell_cmd = b.addRunArtifact(shell);
-    if (b.args) |args| {
-        shell_cmd.addArgs(args);
+        // step
+        const run_step = b.step("run", "Run the app");
+        run_step.dependOn(&run_cmd.step);
     }
 
-    // step
-    const shell_step = b.step("shell", "Run JS shell");
-    shell_step.dependOn(&shell_cmd.step);
-
-    // test
-    // ----
-
-    // compile
-    const tests = b.addTest(.{
-        .root_source_file = b.path("src/main_tests.zig"),
-        .test_runner = .{ .path = b.path("src/main_tests.zig"), .mode = .simple },
-        .target = target,
-        .optimize = mode,
-    });
-    try common(b, tests, options);
-
-    // add jsruntime pretty deps
-    tests.root_module.addAnonymousImport("pretty", .{
-        .root_source_file = b.path("vendor/zig-js-runtime/src/pretty.zig"),
-    });
-
-    const run_tests = b.addRunArtifact(tests);
-    if (b.args) |args| {
-        run_tests.addArgs(args);
+    {
+        // get v8
+        // -------
+        const v8 = b.dependency("v8", .{.target = target, .optimize = optimize});
+        const get_v8 = b.addRunArtifact(v8.artifact("get-v8"));
+        const get_step = b.step("get-v8", "Get v8");
+        get_step.dependOn(&get_v8.step);
     }
 
-    // step
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_tests.step);
-
-    // unittest
-    // ----
-
-    // compile
-    const unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/main_unit_tests.zig"),
-        .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple },
-        .target = target,
-        .optimize = mode,
-    });
-    try common(b, unit_tests, options);
-
-    const run_unit_tests = b.addRunArtifact(unit_tests);
-    if (b.args) |args| {
-        run_unit_tests.addArgs(args);
+    {
+        // build v8
+        // -------
+        const v8 = b.dependency("v8", .{.target = target, .optimize = optimize});
+        const build_v8 = b.addRunArtifact(v8.artifact("build-v8"));
+        const build_step = b.step("build-v8", "Build v8");
+        build_step.dependOn(&build_v8.step);
     }
 
-    // step
-    const unit_test_step = b.step("unittest", "Run unit tests");
-    unit_test_step.dependOn(&run_unit_tests.step);
+    {
+        // tests
+        // ----
 
-    // wpt
-    // -----
+        // compile
+        const tests = b.addTest(.{
+            .root_source_file = b.path("src/main.zig"),
+            .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple },
+            .target = target,
+            .optimize = optimize,
+        });
+        try common(b, opts, tests);
 
-    // compile and install
-    const wpt = b.addExecutable(.{
-        .name = "lightpanda-wpt",
-        .root_source_file = b.path("src/main_wpt.zig"),
-        .target = target,
-        .optimize = mode,
-    });
-    try common(b, wpt, options);
+        const run_tests = b.addRunArtifact(tests);
+        if (b.args) |args| {
+            run_tests.addArgs(args);
+        }
 
-    // run
-    const wpt_cmd = b.addRunArtifact(wpt);
-    if (b.args) |args| {
-        wpt_cmd.addArgs(args);
+        // step
+        const tests_step = b.step("test", "Run unit tests");
+        tests_step.dependOn(&run_tests.step);
     }
-    // step
-    const wpt_step = b.step("wpt", "WPT tests");
-    wpt_step.dependOn(&wpt_cmd.step);
+
+    {
+        // wpt
+        // -----
+
+        // compile and install
+        const wpt = b.addExecutable(.{
+            .name = "lightpanda-wpt",
+            .root_source_file = b.path("src/main_wpt.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        try common(b, opts, wpt);
+
+        // run
+        const wpt_cmd = b.addRunArtifact(wpt);
+        if (b.args) |args| {
+            wpt_cmd.addArgs(args);
+        }
+        // step
+        const wpt_step = b.step("wpt", "WPT tests");
+        wpt_step.dependOn(&wpt_cmd.step);
+    }
 }
 
-fn common(
-    b: *std.Build,
-    step: *std.Build.Step.Compile,
-    options: jsruntime.Options,
-) !void {
-    const target = step.root_module.resolved_target.?;
-    const optimize = step.root_module.optimize.?;
+fn common(b: *std.Build, opts: *std.Build.Step.Options, step: *std.Build.Step.Compile) !void {
+    const mod = step.root_module;
+    const target = mod.resolved_target.?;
+    const optimize = mod.optimize.?;
     const dep_opts = .{ .target = target, .optimize = optimize };
 
-    const jsruntimemod = try jsruntime_pkgs.module(
-        b,
-        options,
-        step.root_module.optimize.?,
-        target,
+    try moduleNetSurf(b, step, target);
+    mod.addImport("tls", b.dependency("tls", dep_opts).module("tls"));
+    mod.addImport("tigerbeetle-io", b.dependency("tigerbeetle_io", .{}).module("tigerbeetle_io"));
+
+    {
+        // v8
+        const v8_opts = b.addOptions();
+        v8_opts.addOption(bool, "inspector_subtype", false);
+
+        const v8_mod = b.dependency("v8", dep_opts).module("v8");
+        v8_mod.addOptions("default_exports", v8_opts);
+        mod.addImport("v8", v8_mod);
+    }
+
+    const mode_str: []const u8 = if (mod.optimize.? == .Debug) "debug" else "release";
+
+    // FIXME: we are tied to native v8 builds, currently:
+    // - aarch64-macos
+    // - x86_64-linux
+    const os = target.result.os.tag;
+    const arch = target.result.cpu.arch;
+    switch (os) {
+        .macos => {},
+        .linux => {
+            // TODO: why do we need it? It should be linked already when we built v8
+            mod.link_libcpp = true;
+        },
+        else => return error.OsNotSupported,
+    }
+
+    const lib_path = try std.fmt.allocPrint(
+        mod.owner.allocator,
+        "v8/build/{s}-{s}/{s}/ninja/obj/zig/libc_v8.a",
+        .{ @tagName(arch), @tagName(os), mode_str },
     );
-    step.root_module.addImport("jsruntime", jsruntimemod);
-
-    const netsurf = try moduleNetSurf(b, target);
-    netsurf.addImport("jsruntime", jsruntimemod);
-    step.root_module.addImport("netsurf", netsurf);
-
-    step.root_module.addImport("tls", b.dependency("tls", dep_opts).module("tls"));
+    mod.addObjectFile(mod.owner.path(lib_path));
+    mod.addImport("build_info", opts.createModule());
 }
 
-fn moduleNetSurf(b: *std.Build, target: std.Build.ResolvedTarget) !*std.Build.Module {
-    const mod = b.addModule("netsurf", .{
-        .root_source_file = b.path("src/netsurf/netsurf.zig"),
-        .target = target,
-    });
-
+fn moduleNetSurf(b: *std.Build, step: *std.Build.Step.Compile, target: std.Build.ResolvedTarget) !void {
     const os = target.result.os.tag;
     const arch = target.result.cpu.arch;
 
     // iconv
     const libiconv_lib_path = try std.fmt.allocPrint(
-        mod.owner.allocator,
+        b.allocator,
         "vendor/libiconv/out/{s}-{s}/lib/libiconv.a",
         .{ @tagName(os), @tagName(arch) },
     );
     const libiconv_include_path = try std.fmt.allocPrint(
-        mod.owner.allocator,
+        b.allocator,
         "vendor/libiconv/out/{s}-{s}/lib/libiconv.a",
         .{ @tagName(os), @tagName(arch) },
     );
-    mod.addObjectFile(b.path(libiconv_lib_path));
-    mod.addIncludePath(b.path(libiconv_include_path));
+    step.addObjectFile(b.path(libiconv_lib_path));
+    step.addIncludePath(b.path(libiconv_include_path));
 
-    // mimalloc
-    mod.addImport("mimalloc", (try moduleMimalloc(b, target)));
+    {
+        // mimalloc
+        const mimalloc = "vendor/mimalloc";
+        const lib_path = try std.fmt.allocPrint(
+            b.allocator,
+            mimalloc ++ "/out/{s}-{s}/lib/libmimalloc.a",
+            .{ @tagName(os), @tagName(arch) },
+        );
+        step.addObjectFile(b.path(lib_path));
+        step.addIncludePath(b.path(mimalloc ++ "/include"));
+    }
 
     // netsurf libs
     const ns = "vendor/netsurf";
     const ns_include_path = try std.fmt.allocPrint(
-        mod.owner.allocator,
+        b.allocator,
         ns ++ "/out/{s}-{s}/include",
         .{ @tagName(os), @tagName(arch) },
     );
-    mod.addIncludePath(b.path(ns_include_path));
+    step.addIncludePath(b.path(ns_include_path));
 
     const libs: [4][]const u8 = .{
         "libdom",
@@ -238,34 +230,11 @@ fn moduleNetSurf(b: *std.Build, target: std.Build.ResolvedTarget) !*std.Build.Mo
     };
     inline for (libs) |lib| {
         const ns_lib_path = try std.fmt.allocPrint(
-            mod.owner.allocator,
+            b.allocator,
             ns ++ "/out/{s}-{s}/lib/" ++ lib ++ ".a",
             .{ @tagName(os), @tagName(arch) },
         );
-        mod.addObjectFile(b.path(ns_lib_path));
-        mod.addIncludePath(b.path(ns ++ "/" ++ lib ++ "/src"));
+        step.addObjectFile(b.path(ns_lib_path));
+        step.addIncludePath(b.path(ns ++ "/" ++ lib ++ "/src"));
     }
-
-    return mod;
-}
-
-fn moduleMimalloc(b: *std.Build, target: std.Build.ResolvedTarget) !*std.Build.Module {
-    const mod = b.addModule("mimalloc", .{
-        .root_source_file = b.path("src/mimalloc/mimalloc.zig"),
-        .target = target,
-    });
-
-    const os = target.result.os.tag;
-    const arch = target.result.cpu.arch;
-
-    const mimalloc = "vendor/mimalloc";
-    const lib_path = try std.fmt.allocPrint(
-        mod.owner.allocator,
-        mimalloc ++ "/out/{s}-{s}/lib/libmimalloc.a",
-        .{ @tagName(os), @tagName(arch) },
-    );
-    mod.addObjectFile(b.path(lib_path));
-    mod.addIncludePath(b.path(mimalloc ++ "/include"));
-
-    return mod;
 }
