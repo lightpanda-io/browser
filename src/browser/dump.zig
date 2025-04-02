@@ -19,8 +19,8 @@
 const std = @import("std");
 const File = std.fs.File;
 
-const parser = @import("netsurf");
-const Walker = @import("../dom/walker.zig").WalkerChildren;
+const parser = @import("netsurf.zig");
+const Walker = @import("dom/walker.zig").WalkerChildren;
 
 // writer must be a std.io.Writer
 pub fn writeHTML(doc: *parser.Document, writer: anytype) !void {

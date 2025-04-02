@@ -2,7 +2,7 @@ const std = @import("std");
 
 const Uri = std.Uri;
 const Allocator = std.mem.Allocator;
-const WebApiURL = @import("url/url.zig").URL;
+const WebApiURL = @import("browser/url/url.zig").URL;
 
 pub const URL = struct {
     uri: Uri,

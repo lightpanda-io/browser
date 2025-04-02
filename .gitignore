@@ -4,3 +4,4 @@ zig-out
 /vendor/netsurf/out
 /vendor/libiconv/
 lightpanda.id
+v8/

@@ -26,10 +26,6 @@ const BORDER = "=" ** 80;
 // use in custom panic handler
 var current_test: ?[]const u8 = null;
 
-const jsruntime = @import("jsruntime");
-pub const Types = jsruntime.reflect(@import("generate.zig").Tuple(.{}){});
-pub const UserContext = @import("user_context.zig").UserContext;
-
 pub const std_options = std.Options{
     .log_level = .warn,
 

@@ -6,7 +6,17 @@
     .dependencies = .{
         .tls = .{
             .url = "https://github.com/ianic/tls.zig/archive/b29a8b45fc59fc2d202769c4f54509bb9e17d0a2.tar.gz",
-            .hash = "1220e6fd39920dd6e28b2bc06688787a39430f8856f0597cd77c44ca868c6c54fb86",
+            .hash = "tls-0.1.0-ER2e0uAxBQDm_TmSDdbiiyvAZoh4ejlDD4hW8Fl813xE",
         },
+        .tigerbeetle_io = .{
+            .url = "https://github.com/lightpanda-io/tigerbeetle-io/archive/61d9652f1a957b7f4db723ea6aa0ce9635e840ce.tar.gz",
+            .hash = "tigerbeetle_io-0.0.0-ViLgxpyRBAB5BMfIcj3KMXfbJzwARs9uSl8aRy2OXULd",
+        },
+        .v8 = .{
+            .url = "https://github.com/karlseguin/zig-v8-fork/archive/508f25e9e4f78763a30590370aeb14763ce72998.tar.gz",
+            .hash = "v8-0.0.0-xddH6wPYIADmtOi_cczeBDRPvnYuSr3wtrRkeNrDRXYI",
+        },
+        //.v8 = .{ .path = "../zig-v8-fork" },
+        //.tigerbeetle_io = .{ .path = "../tigerbeetle-io" },
     },
 }
