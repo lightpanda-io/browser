@@ -285,6 +285,7 @@ const TestContext = struct {
             _ = self.client.?.serialized.orderedRemove(i);
             return;
         }
+
         std.debug.print("Error not found. Expecting:\n{s}\n\nGot:\n", .{serialized});
         for (self.client.?.serialized.items, 0..) |sent, i| {
             std.debug.print("#{d}\n{s}\n\n", .{ i, sent });

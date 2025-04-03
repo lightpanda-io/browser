@@ -257,8 +257,7 @@ pub fn isEqualJson(a: anytype, b: anytype) !bool {
     const aa = arena.allocator();
     const a_value = try convertToJson(aa, a);
     const b_value = try convertToJson(aa, b);
-    expectJsonValue(a_value, b_value) catch return false;
-    return true;
+    return isJsonValue(a_value, b_value);
 }
 
 fn convertToJson(arena: Allocator, value: anytype) !std.json.Value {
@@ -305,6 +304,49 @@ fn expectJsonValue(a: std.json.Value, b: std.json.Value) !void {
                     return error.MissingKey;
                 }
             }
+        },
+    }
+}
+
+fn isJsonValue(a: std.json.Value, b: std.json.Value) bool {
+    if (std.mem.eql(u8, @tagName(a), @tagName(b)) == false) {
+        return false;
+    }
+
+    // at this point, we know that if a is an int, b must also be an int
+    switch (a) {
+        .null => return true,
+        .bool => return a.bool == b.bool,
+        .integer => return a.integer == b.integer,
+        .float => return a.float == b.float,
+        .number_string => return std.mem.eql(u8, a.number_string, b.number_string),
+        .string => return std.mem.eql(u8, a.string, b.string),
+        .array => {
+            const a_len = a.array.items.len;
+            const b_len = b.array.items.len;
+            if (a_len != b_len) {
+                return false;
+            }
+            for (a.array.items, b.array.items) |a_item, b_item| {
+                if (isJsonValue(a_item, b_item) == false) {
+                    return false;
+                }
+            }
+            return true;
+        },
+        .object => {
+            var it = a.object.iterator();
+            while (it.next()) |entry| {
+                const key = entry.key_ptr.*;
+                if (b.object.get(key)) |b_item| {
+                    if (isJsonValue(entry.value_ptr.*, b_item) == false) {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            }
+            return true;
         },
     }
 }
