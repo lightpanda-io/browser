@@ -351,23 +351,7 @@ pub const Page = struct {
             return;
         }
 
-        // own the url
-        self.rawuri = try arena.dupe(u8, uri);
-        self.uri = std.Uri.parse(self.rawuri.?) catch try std.Uri.parseAfterScheme("", self.rawuri.?);
-
-        self.url = try URL.constructor(arena, self.rawuri.?, null);
-        self.location.url = &self.url.?;
-        try self.session.window.replaceLocation(&self.location);
-
-        // prepare origin value.
-        var buf: std.ArrayListUnmanaged(u8) = .{};
-        try self.uri.writeToStream(.{
-            .scheme = true,
-            .authority = true,
-        }, buf.writer(arena));
-        self.origin = buf.items;
-
-        // TODO handle fragment in url.
+        self.uri = std.Uri.parse(uri) catch try std.Uri.parseAfterScheme("", uri);
 
         self.session.app.telemetry.record(.{ .navigate = .{
             .proxy = false,
@@ -380,7 +364,37 @@ pub const Page = struct {
 
         var response = try request.sendSync(.{});
         const header = response.header;
-        try self.session.cookie_jar.populateFromResponse(self.uri, &header);
+        try self.session.cookie_jar.populateFromResponse(request.uri, &header);
+
+        // update uri after eventual redirection
+        var buf: std.ArrayListUnmanaged(u8) = .{};
+        defer buf.deinit(arena);
+
+        buf.clearRetainingCapacity();
+        try request.uri.writeToStream(.{
+            .scheme = true,
+            .authentication = true,
+            .authority = true,
+            .path = true,
+            .query = true,
+            .fragment = true,
+        }, buf.writer(arena));
+        self.rawuri = try buf.toOwnedSlice(arena);
+
+        self.uri = try std.Uri.parse(self.rawuri.?);
+
+        // TODO handle fragment in url.
+        self.url = try URL.constructor(arena, self.rawuri.?, null);
+        self.location.url = &self.url.?;
+        try self.session.window.replaceLocation(&self.location);
+
+        // prepare origin value.
+        buf.clearRetainingCapacity();
+        try request.uri.writeToStream(.{
+            .scheme = true,
+            .authority = true,
+        }, buf.writer(arena));
+        self.origin = try buf.toOwnedSlice(arena);
 
         log.info("GET {any} {d}", .{ self.uri, header.status });
 
