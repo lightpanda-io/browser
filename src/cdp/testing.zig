@@ -26,11 +26,12 @@ const main = @import("cdp.zig");
 const parser = @import("netsurf");
 const App = @import("../app.zig").App;
 
-pub const allocator = @import("../testing.zig").allocator;
-
-pub const expectEqual = @import("../testing.zig").expectEqual;
-pub const expectError = @import("../testing.zig").expectError;
-pub const expectEqualSlices = @import("../testing.zig").expectEqualSlices;
+const base = @import("../testing.zig");
+pub const allocator = base.allocator;
+pub const expectJson = base.expectJson;
+pub const expectEqual = base.expectEqual;
+pub const expectError = base.expectError;
+pub const expectEqualSlices = base.expectEqualSlices;
 
 pub const Document = @import("../testing.zig").Document;
 
@@ -284,6 +285,7 @@ const TestContext = struct {
             _ = self.client.?.serialized.orderedRemove(i);
             return;
         }
+
         std.debug.print("Error not found. Expecting:\n{s}\n\nGot:\n", .{serialized});
         for (self.client.?.serialized.items, 0..) |sent, i| {
             std.debug.print("#{d}\n{s}\n\n", .{ i, sent });
@@ -310,47 +312,5 @@ pub fn context() TestContext {
 fn compareExpectedToSent(expected: []const u8, actual: json.Value) !bool {
     const expected_value = try std.json.parseFromSlice(json.Value, std.testing.allocator, expected, .{});
     defer expected_value.deinit();
-    return compareJsonValues(expected_value.value, actual);
-}
-
-fn compareJsonValues(a: std.json.Value, b: std.json.Value) bool {
-    if (!std.mem.eql(u8, @tagName(a), @tagName(b))) {
-        return false;
-    }
-
-    switch (a) {
-        .null => return true,
-        .bool => return a.bool == b.bool,
-        .integer => return a.integer == b.integer,
-        .float => return a.float == b.float,
-        .number_string => return std.mem.eql(u8, a.number_string, b.number_string),
-        .string => return std.mem.eql(u8, a.string, b.string),
-        .array => {
-            const a_len = a.array.items.len;
-            const b_len = b.array.items.len;
-            if (a_len != b_len) {
-                return false;
-            }
-            for (a.array.items, b.array.items) |a_item, b_item| {
-                if (compareJsonValues(a_item, b_item) == false) {
-                    return false;
-                }
-            }
-            return true;
-        },
-        .object => {
-            var it = a.object.iterator();
-            while (it.next()) |entry| {
-                const key = entry.key_ptr.*;
-                if (b.object.get(key)) |b_item| {
-                    if (compareJsonValues(entry.value_ptr.*, b_item) == false) {
-                        return false;
-                    }
-                } else {
-                    return false;
-                }
-            }
-            return true;
-        },
-    }
+    return base.isEqualJson(expected_value.value, actual);
 }
