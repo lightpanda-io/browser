@@ -37,6 +37,7 @@ pub const CDP = CDPT(struct {
 
 const SessionIdGen = Incrementing(u32, "SID");
 const TargetIdGen = Incrementing(u32, "TID");
+const LoaderIdGen = Incrementing(u32, "LID");
 const BrowserContextIdGen = Incrementing(u32, "BID");
 
 // Generic so that we can inject mocks into it.
@@ -54,6 +55,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
         target_auto_attach: bool = false,
 
         target_id_gen: TargetIdGen = .{},
+        loader_id_gen: LoaderIdGen = .{},
         session_id_gen: SessionIdGen = .{},
         browser_context_id_gen: BrowserContextIdGen = .{},
 
@@ -183,6 +185,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
                 },
                 5 => switch (@as(u40, @bitCast(domain[0..5].*))) {
                     asUint("Fetch") => return @import("domains/fetch.zig").processMessage(command),
+                    asUint("Input") => return @import("domains/input.zig").processMessage(command),
                     else => {},
                 },
                 6 => switch (@as(u48, @bitCast(domain[0..6].*))) {
