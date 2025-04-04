@@ -325,6 +325,14 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             self.node_search_list.reset();
         }
 
+        pub fn nodeWriter(self: *Self, node: *const Node, opts: Node.Writer.Opts) Node.Writer {
+            return .{
+                .node = node,
+                .opts = opts,
+                .registry = &self.node_registry,
+            };
+        }
+
         pub fn onInspectorResponse(ctx: *anyopaque, _: u32, msg: []const u8) void {
             if (std.log.defaultLogEnabled(.debug)) {
                 // msg should be {"id":<id>,...
