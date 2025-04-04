@@ -368,9 +368,6 @@ pub const Page = struct {
 
         // update uri after eventual redirection
         var buf: std.ArrayListUnmanaged(u8) = .{};
-        defer buf.deinit(arena);
-
-        buf.clearRetainingCapacity();
         try request.uri.writeToStream(.{
             .scheme = true,
             .authentication = true,
@@ -379,7 +376,7 @@ pub const Page = struct {
             .query = true,
             .fragment = true,
         }, buf.writer(arena));
-        self.rawuri = try buf.toOwnedSlice(arena);
+        self.rawuri = buf.items;
 
         self.uri = try std.Uri.parse(self.rawuri.?);
 
@@ -389,12 +386,12 @@ pub const Page = struct {
         try self.session.window.replaceLocation(&self.location);
 
         // prepare origin value.
-        buf.clearRetainingCapacity();
+        buf = .{};
         try request.uri.writeToStream(.{
             .scheme = true,
             .authority = true,
         }, buf.writer(arena));
-        self.origin = try buf.toOwnedSlice(arena);
+        self.origin = buf.items;
 
         log.info("GET {any} {d}", .{ self.uri, header.status });
 
