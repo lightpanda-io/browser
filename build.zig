@@ -76,7 +76,7 @@ pub fn build(b: *std.Build) !void {
     {
         // get v8
         // -------
-        const v8 = b.dependency("v8", .{.target = target, .optimize = optimize});
+        const v8 = b.dependency("v8", .{ .target = target, .optimize = optimize });
         const get_v8 = b.addRunArtifact(v8.artifact("get-v8"));
         const get_step = b.step("get-v8", "Get v8");
         get_step.dependOn(&get_v8.step);
@@ -85,7 +85,7 @@ pub fn build(b: *std.Build) !void {
     {
         // build v8
         // -------
-        const v8 = b.dependency("v8", .{.target = target, .optimize = optimize});
+        const v8 = b.dependency("v8", .{ .target = target, .optimize = optimize });
         const build_v8 = b.addRunArtifact(v8.artifact("build-v8"));
         const build_step = b.step("build-v8", "Build v8");
         build_step.dependOn(&build_v8.step);

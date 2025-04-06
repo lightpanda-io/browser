@@ -227,6 +227,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                     // Hey, look! This is our first real usage of the TYPE_LOOKUP.
                     // Just like we said above, given a type, we can get its
                     // template index.
+
                     const proto_index = @field(TYPE_LOOKUP, proto_name);
                     templates[i].inherit(templates[proto_index]);
                 }
@@ -366,7 +367,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         // FunctionTemplate of the isolate (in startExecutor)
         fn attachClass(self: *Self, comptime Struct: type, template: v8.FunctionTemplate) void {
             const template_proto = template.getPrototypeTemplate();
-
             inline for (@typeInfo(Struct).@"struct".decls) |declaration| {
                 const name = declaration.name;
                 if (comptime name[0] == '_') {

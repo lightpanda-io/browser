@@ -3,7 +3,7 @@
 
 ZIG := zig
 BC := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
-# option test filter make unittest F="server"
+# option test filter make test F="server"
 F=
 
 # OS and ARCH
@@ -47,7 +47,7 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-dev run run-release shell test bench download-zig wpt unittest data
+.PHONY: build build-dev run run-release shell test bench download-zig wpt data
 
 zig_version = $(shell grep 'recommended_zig_version = "' "vendor/zig-js-runtime/build.zig" | cut -d'"' -f2)
 
@@ -62,13 +62,13 @@ download-zig:
 ## Build in release-safe mode
 build:
 	@printf "\e[36mBuilding (release safe)...\e[0m\n"
-	$(ZIG) build -Doptimize=ReleaseSafe -Dengine=v8 -Dgit_commit=$$(git rev-parse --short HEAD) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+	$(ZIG) build -Doptimize=ReleaseSafe -Dgit_commit=$$(git rev-parse --short HEAD) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 	@printf "\e[33mBuild OK\e[0m\n"
 
 ## Build in debug mode
 build-dev:
 	@printf "\e[36mBuilding (debug)...\e[0m\n"
-	@$(ZIG) build -Dengine=v8 -Dgit_commit=$$(git rev-parse --short HEAD) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+	@$(ZIG) build -Dgit_commit=$$(git rev-parse --short HEAD) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 	@printf "\e[33mBuild OK\e[0m\n"
 
 ## Run the server in debug mode
@@ -79,16 +79,16 @@ run: build
 ## Run a JS shell in debug mode
 shell:
 	@printf "\e[36mBuilding shell...\e[0m\n"
-	@$(ZIG) build shell -Dengine=v8 || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+	@$(ZIG) build shell || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 
 ## Run WPT tests
 wpt:
 	@printf "\e[36mBuilding wpt...\e[0m\n"
-	@$(ZIG) build wpt -Dengine=v8 -- --safe $(filter-out $@,$(MAKECMDGOALS)) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+	@$(ZIG) build wpt -- --safe $(filter-out $@,$(MAKECMDGOALS)) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 
 wpt-summary:
 	@printf "\e[36mBuilding wpt...\e[0m\n"
-	@$(ZIG) build wpt -Dengine=v8 -- --safe --summary $(filter-out $@,$(MAKECMDGOALS)) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+	@$(ZIG) build wpt -- --safe --summary $(filter-out $@,$(MAKECMDGOALS)) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 
 ## Test
 test:
