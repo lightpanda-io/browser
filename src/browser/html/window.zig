@@ -33,7 +33,6 @@ const storage = @import("../storage/storage.zig");
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#window
 pub const Window = struct {
     pub const prototype = *EventTarget;
-    pub const global_type = true;
 
     // Extend libdom event target for pure zig struct.
     base: parser.EventTargetTBase = parser.EventTargetTBase{},
@@ -57,6 +56,7 @@ pub const Window = struct {
             .navigator = navigator orelse .{},
         };
     }
+
 
     pub fn replaceLocation(self: *Window, loc: Location) !void {
         self.location = loc;

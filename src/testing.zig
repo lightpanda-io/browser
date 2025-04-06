@@ -17,14 +17,15 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const parser = @import("browser/netsurf.zig");
+const Allocator = std.mem.Allocator;
+
 pub const allocator = std.testing.allocator;
 pub const expectError = std.testing.expectError;
 pub const expectString = std.testing.expectEqualStrings;
 pub const expectEqualSlices = std.testing.expectEqualSlices;
 
 const App = @import("app.zig").App;
-const Allocator = std.mem.Allocator;
+const parser = @import("browser/netsurf.zig");
 
 // Merged std.testing.expectEqual and std.testing.expectString
 // can be useful when testing fields of an anytype an you don't know
@@ -388,10 +389,8 @@ pub const JsRunner = struct {
         errdefer runner.env.deinit();
 
         runner.url = try URL.parse("https://lightpanda.io/opensource-browser/", null);
-        errdefer runner.env.deinit();
 
         runner.renderer = Renderer.init(arena);
-
         runner.cookie_jar = storage.CookieJar.init(arena);
         runner.loop = try Loop.init(arena);
         errdefer runner.loop.deinit();
