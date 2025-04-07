@@ -395,11 +395,15 @@ pub const Page = struct {
 
         log.info("GET {any} {d}", .{ self.uri, header.status });
 
-        const ct = header.get("content-type") orelse {
-            // no content type in HTTP headers.
-            // TODO try to sniff mime type from the body.
-            log.info("no content-type HTTP header", .{});
-            return;
+        const ct = blk: {
+            break :blk header.get("content-type") orelse {
+                // no content type in HTTP headers.
+                // TODO try to sniff mime type from the body.
+                log.info("no content-type HTTP header", .{});
+
+                // Assume it's HTML for now.
+                break :blk "text/html; charset=utf-8";
+            };
         };
 
         log.debug("header content-type: {s}", .{ct});
