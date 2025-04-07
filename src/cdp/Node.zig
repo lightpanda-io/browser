@@ -228,7 +228,7 @@ pub const Writer = struct {
             try w.objectField("children");
             try w.beginArray();
             for (0..child_count) |_| {
-                const child = (try parser.nodeListItem(child_nodes, @intCast(i))) orelse continue;
+                const child = (try parser.nodeListItem(child_nodes, @intCast(i))) orelse break;
                 const child_node = try registry.register(child);
                 try w.beginObject();
                 try writeCommon(child_node, true, w);
