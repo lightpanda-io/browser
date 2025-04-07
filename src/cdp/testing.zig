@@ -85,6 +85,7 @@ const Session = struct {
             return error.MockBrowserPageAlreadyExists;
         }
         self.page = .{
+            .rawuri = "",
             .session = self,
             .aux_data = try self.arena.dupe(u8, aux_data orelse ""),
         };
@@ -103,6 +104,7 @@ const Session = struct {
 
 const Page = struct {
     session: *Session,
+    rawuri: []const u8,
     aux_data: []const u8 = "",
     doc: ?*parser.Document = null,
 
@@ -111,10 +113,9 @@ const Page = struct {
         _ = aux_data;
     }
 
+    const MouseEvent = @import("../browser/browser.zig").Page.MouseEvent;
     const ClickResult = @import("../browser/browser.zig").Page.ClickResult;
-    pub fn click(_: *Page, _: Allocator, x: u32, y: u32) !?ClickResult {
-        _ = x;
-        _ = y;
+    pub fn mouseEvent(_: *Page, _: Allocator, _: MouseEvent) !?ClickResult {
         return null;
     }
 };

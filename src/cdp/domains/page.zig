@@ -61,10 +61,10 @@ fn getFrameTree(cmd: anytype) !void {
     return cmd.sendResult(.{
         .frameTree = .{
             .frame = Frame{
-                .url = bc.url,
                 .id = target_id,
                 .loaderId = bc.loader_id,
                 .securityOrigin = bc.security_origin,
+                .url = bc.getURL() orelse "about:blank",
                 .secureContextType = bc.secure_context_type,
             },
         },
@@ -154,7 +154,6 @@ pub fn navigateToUrl(cmd: anytype, url: []const u8, send_result: bool) !void {
 
     // change state
     bc.reset();
-    bc.url = url;
     bc.loader_id = cmd.cdp.loader_id_gen.next();
 
     const LifecycleEvent = struct {
@@ -285,7 +284,7 @@ test "cdp.page: getFrameTree" {
                 .frame = .{
                     .id = "TID-3",
                     .loaderId = bc.loader_id,
-                    .url = bc.url,
+                    .url = "about:blank",
                     .domainAndRegistry = "",
                     .securityOrigin = bc.security_origin,
                     .mimeType = "text/html",
