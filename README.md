@@ -184,6 +184,14 @@ To init or update the submodules in the `vendor/` directory:
 make install-submodule
 ```
 
+**iconv**
+
+libiconv is an internationalization library used by Netsurf.
+
+```
+make install-libiconv
+```
+
 **Netsurf libs**
 
 Netsurf libs are used for HTML parsing and DOM tree generation.
