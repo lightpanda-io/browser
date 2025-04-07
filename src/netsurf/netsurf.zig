@@ -802,18 +802,9 @@ pub fn eventTargetDispatchEvent(et: *EventTarget, event: *Event) !bool {
     return res;
 }
 
-const DispatchOpts = struct {
-    type: []const u8,
-    bubbles: bool = true,
-    cancelable: bool = true,
-};
-pub fn elementDispatchEvent(element: *Element, opts: DispatchOpts) !bool {
-    const event = try eventCreate();
-    defer eventDestroy(event);
-    try eventInit(event, opts.type, .{ .bubbles = opts.bubbles, .cancelable = opts.cancelable });
-
-    const et: *EventTarget = @ptrCast(element);
-    return eventTargetDispatchEvent(et, event);
+pub fn elementDispatchEvent(element: *Element, event: *Event) !bool {
+    const et: *EventTarget = toEventTarget(Element, element);
+    return eventTargetDispatchEvent(et, @ptrCast(event));
 }
 
 pub fn eventTargetTBaseFieldName(comptime T: type) ?[]const u8 {

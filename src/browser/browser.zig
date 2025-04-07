@@ -451,13 +451,14 @@ pub const Page = struct {
 
         const event = try parser.mouseEventCreate();
         defer parser.mouseEventDestroy(event);
-
         try parser.mouseEventInit(event, "click", .{
             .bubbles = true,
             .cancelable = true,
             .x = me.x,
             .y = me.y,
         });
+        _ = try parser.elementDispatchEvent(element, @ptrCast(event));
+
         if ((try parser.mouseEventDefaultPrevented(event)) == true) {
             return null;
         }
