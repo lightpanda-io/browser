@@ -431,14 +431,34 @@ pub const Page = struct {
         navigate: std.Uri,
     };
 
-    pub fn click(self: *Page, allocator: Allocator, x: u32, y: u32) !?ClickResult {
-        const element = self.renderer.getElementAtPosition(x, y) orelse return null;
+    pub const MouseEvent = struct {
+        x: i32,
+        y: i32,
+        type: Type,
 
-        const event = try parser.eventCreate();
-        defer parser.eventDestroy(event);
+        const Type = enum {
+            pressed,
+            released,
+        };
+    };
 
-        try parser.eventInit(event, "click", .{ .bubbles = true, .cancelable = true });
-        if ((try parser.eventDefaultPrevented(event)) == true) {
+    pub fn mouseEvent(self: *Page, allocator: Allocator, me: MouseEvent) !?ClickResult {
+        if (me.type != .pressed) {
+            return null;
+        }
+
+        const element = self.renderer.getElementAtPosition(me.x, me.y) orelse return null;
+
+        const event = try parser.mouseEventCreate();
+        defer parser.mouseEventDestroy(event);
+
+        try parser.mouseEventInit(event, "click", .{
+            .bubbles = true,
+            .cancelable = true,
+            .x = me.x,
+            .y = me.y,
+        });
+        if ((try parser.mouseEventDefaultPrevented(event)) == true) {
             return null;
         }
 
@@ -838,13 +858,13 @@ const FlatRenderer = struct {
         return 1;
     }
 
-    pub fn getElementAtPosition(self: *const FlatRenderer, x: u32, y: u32) ?*parser.Element {
-        if (y > 1) {
+    pub fn getElementAtPosition(self: *const FlatRenderer, x: i32, y: i32) ?*parser.Element {
+        if (y != 1 or x < 0) {
             return null;
         }
 
         const elements = self.elements.items;
-        return if (x < elements.len) @ptrFromInt(elements[x]) else null;
+        return if (x < elements.len) @ptrFromInt(elements[@intCast(x)]) else null;
     }
 };
 

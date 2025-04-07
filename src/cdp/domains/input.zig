@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const Page = @import("../../browser/browser.zig").Page;
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -31,20 +32,39 @@ pub fn processMessage(cmd: anytype) !void {
 // https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-dispatchMouseEvent
 fn dispatchMouseEvent(cmd: anytype) !void {
     const params = (try cmd.params(struct {
-        type: []const u8,
-        x: u32,
-        y: u32,
+        x: i32,
+        y: i32,
+        type: Type,
+
+        const Type = enum {
+            mousePressed,
+            mouseReleased,
+            mouseMoved,
+            mouseWheel,
+        };
     })) orelse return error.InvalidParams;
 
     try cmd.sendResult(null, .{});
 
-    if (std.ascii.eqlIgnoreCase(params.type, "mousePressed") == false) {
-        return;
+    // quickly ignore types we know we don't handle
+    switch (params.type) {
+        .mouseMoved, .mouseWheel => return,
+        else => {},
     }
 
     const bc = cmd.browser_context orelse return;
     const page = bc.session.currentPage() orelse return;
-    const click_result = (try page.click(cmd.arena, params.x, params.y)) orelse return;
+
+    const mouse_event = Page.MouseEvent{
+        .x = params.x,
+        .y = params.y,
+        .type = switch (params.type) {
+            .mousePressed => .pressed,
+            .mouseReleased => .released,
+            else => unreachable,
+        },
+    };
+    const click_result = (try page.mouseEvent(cmd.arena, mouse_event)) orelse return;
 
     switch (click_result) {
         .navigate => |uri| try clickNavigate(cmd, uri),
