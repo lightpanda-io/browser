@@ -723,6 +723,7 @@ pub const Page = struct {
         fn parseKind(stype: ?[]const u8) Kind {
             if (stype == null or stype.?.len == 0) return .javascript;
             if (std.mem.eql(u8, stype.?, "application/javascript")) return .javascript;
+            if (std.mem.eql(u8, stype.?, "text/javascript")) return .javascript;
             if (std.mem.eql(u8, stype.?, "module")) return .module;
 
             return .unknown;
