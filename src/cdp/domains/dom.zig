@@ -28,6 +28,7 @@ pub fn processMessage(cmd: anytype) !void {
         performSearch,
         getSearchResults,
         discardSearchResults,
+        resolveNode,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -36,6 +37,7 @@ pub fn processMessage(cmd: anytype) !void {
         .performSearch => return performSearch(cmd),
         .getSearchResults => return getSearchResults(cmd),
         .discardSearchResults => return discardSearchResults(cmd),
+        .resolveNode => return resolveNode(cmd),
     }
 }
 
@@ -113,6 +115,113 @@ fn getSearchResults(cmd: anytype) !void {
     if (params.toIndex > node_ids.len) return error.BadToIndex;
 
     return cmd.sendResult(.{ .nodeIds = node_ids[params.fromIndex..params.toIndex] }, .{});
+}
+
+fn resolveNode(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        nodeId: ?Node.Id = null,
+        backendNodeId: ?u32 = null,
+        objectGroup: ?[]const u8 = null,
+        executionContextId: ?u32 = null,
+    })) orelse return error.InvalidParams;
+    if (params.nodeId == null or params.backendNodeId != null or params.objectGroup != null or params.executionContextId != null) {
+        return error.NotYetImplementedParams;
+    }
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const node = bc.node_registry.lookup_by_id.get(params.nodeId.?).?;
+
+    // How best to do this? Create a functions that takes a functions(wrapObject), does all the switching at every level and applies the given function to the leav object?
+    const remote_object = try switch (try parser.nodeType(node._node)) {
+        .element => blk: {
+            const elem: *align(@alignOf(*parser.Element)) parser.Element = @alignCast(@as(*parser.Element, @ptrCast(node._node)));
+            const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(elem)));
+            break :blk switch (tag) {
+                .abbr, .acronym, .address, .article, .aside, .b, .basefont, .bdi, .bdo, .bgsound, .big, .center, .cite, .code, .dd, .details, .dfn, .dt, .em, .figcaption, .figure, .footer, .header, .hgroup, .i, .isindex, .keygen, .kbd, .main, .mark, .marquee, .menu, .menuitem, .nav, .nobr, .noframes, .noscript, .rp, .rt, .ruby, .s, .samp, .section, .small, .spacer, .strike, .strong, .sub, .summary, .sup, .tt, .u, .wbr, ._var => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.ElementHTML, @ptrCast(elem))),
+                .a => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Anchor, @ptrCast(elem))),
+                .applet => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Applet, @ptrCast(elem))),
+                .area => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Area, @ptrCast(elem))),
+                .audio => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Audio, @ptrCast(elem))),
+                .base => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Base, @ptrCast(elem))),
+                .body => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Body, @ptrCast(elem))),
+                .br => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.BR, @ptrCast(elem))),
+                .button => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Button, @ptrCast(elem))),
+                .canvas => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Canvas, @ptrCast(elem))),
+                .dl => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.DList, @ptrCast(elem))),
+                .data => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Data, @ptrCast(elem))),
+                .datalist => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.DataList, @ptrCast(elem))),
+                .dialog => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Dialog, @ptrCast(elem))),
+                .dir => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Directory, @ptrCast(elem))),
+                .div => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Div, @ptrCast(elem))),
+                .embed => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Embed, @ptrCast(elem))),
+                .fieldset => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.FieldSet, @ptrCast(elem))),
+                .font => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Font, @ptrCast(elem))),
+                .form => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Form, @ptrCast(elem))),
+                .frame => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Frame, @ptrCast(elem))),
+                .frameset => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.FrameSet, @ptrCast(elem))),
+                .hr => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.HR, @ptrCast(elem))),
+                .head => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Head, @ptrCast(elem))),
+                .h1, .h2, .h3, .h4, .h5, .h6 => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Heading, @ptrCast(elem))),
+                .html => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Html, @ptrCast(elem))),
+                .iframe => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.IFrame, @ptrCast(elem))),
+                .img => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Image, @ptrCast(elem))),
+                .input => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Input, @ptrCast(elem))),
+                .li => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.LI, @ptrCast(elem))),
+                .label => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Label, @ptrCast(elem))),
+                .legend => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Legend, @ptrCast(elem))),
+                .link => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Link, @ptrCast(elem))),
+                .map => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Map, @ptrCast(elem))),
+                .meta => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Meta, @ptrCast(elem))),
+                .meter => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Meter, @ptrCast(elem))),
+                .ins, .del => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Mod, @ptrCast(elem))),
+                .ol => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.OList, @ptrCast(elem))),
+                .object => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Object, @ptrCast(elem))),
+                .optgroup => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.OptGroup, @ptrCast(elem))),
+                .option => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Option, @ptrCast(elem))),
+                .output => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Output, @ptrCast(elem))),
+                .p => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Paragraph, @ptrCast(elem))),
+                .param => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Param, @ptrCast(elem))),
+                .picture => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Picture, @ptrCast(elem))),
+                .pre => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Pre, @ptrCast(elem))),
+                .progress => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Progress, @ptrCast(elem))),
+                .blockquote, .q => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Quote, @ptrCast(elem))),
+                .script => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Script, @ptrCast(elem))),
+                .select => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Select, @ptrCast(elem))),
+                .source => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Source, @ptrCast(elem))),
+                .span => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Span, @ptrCast(elem))),
+                .style => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Style, @ptrCast(elem))),
+                .table => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Table, @ptrCast(elem))),
+                .caption => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.TableCaption, @ptrCast(elem))),
+                .th, .td => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.TableCell, @ptrCast(elem))),
+                .col, .colgroup => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.TableCol, @ptrCast(elem))),
+                .tr => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.TableRow, @ptrCast(elem))),
+                .thead, .tbody, .tfoot => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.TableSection, @ptrCast(elem))),
+                .template => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Template, @ptrCast(elem))),
+                .textarea => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.TextArea, @ptrCast(elem))),
+                .time => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Time, @ptrCast(elem))),
+                .title => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Title, @ptrCast(elem))),
+                .track => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Track, @ptrCast(elem))),
+                .ul => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.UList, @ptrCast(elem))),
+                .video => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Video, @ptrCast(elem))),
+                .undef => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Unknown, @ptrCast(elem))),
+            };
+        },
+        .comment => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Comment, @ptrCast(node._node))), // TODO sub types
+        .text => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Text, @ptrCast(node._node))),
+        .cdata_section => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.CDATASection, @ptrCast(node._node))),
+        .processing_instruction => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.ProcessingInstruction, @ptrCast(node._node))),
+        .document => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.DocumentHTML, @ptrCast(node._node))),
+        .document_type => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.DocumentType, @ptrCast(node._node))),
+        .attribute => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.Attribute, @ptrCast(node._node))),
+        .document_fragment => bc.session.inspector.wrapObject(&bc.session.env, @as(*parser.DocumentFragment, @ptrCast(node._node))),
+        else => @panic("node type not handled"),
+    };
+    defer remote_object.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(cmd.cdp.allocator);
+    const alloc = arena.allocator();
+    defer arena.deinit();
+    return cmd.sendResult(.{ .object = .{ .type = try remote_object.getType(alloc), .subtype = try remote_object.getSubtype(alloc), .className = try remote_object.getClassName(alloc), .description = try remote_object.getDescription(alloc), .objectId = try remote_object.getObjectId(alloc) } }, .{});
 }
 
 const testing = @import("../testing.zig");
