@@ -1342,24 +1342,38 @@ const Reader = struct {
 
                 const size = self.size.?;
                 const missing = self.missing;
+
                 if (data.len >= missing) {
-                    // we have a complete chunk;
-                    var chunk: ?[]u8 = data;
-                    if (missing == 1) {
-                        const last = missing - 1;
-                        if (data[last] != '\n') {
-                            return error.InvalidChunk;
-                        }
-                        chunk = null;
-                    } else {
-                        const last = missing - 2;
-                        if (data[last] != '\r' or data[missing - 1] != '\n') {
-                            return error.InvalidChunk;
-                        }
-                        chunk = if (last == 0) null else data[0..last];
-                    }
                     self.size = null;
                     self.missing = 0;
+                    if (missing == 1) {
+                        if (data[0] != '\n') {
+                            return error.InvalidChunk;
+                        }
+                        if (data.len == 1) {
+                            return .{ true, .{ .data = null, .done = size == 0, .unprocessed = null } };
+                        }
+                        return self.process(data[1..]);
+                    }
+
+                    if (missing == 2) {
+                        if (data[0] != '\r' or data[1] != '\n') {
+                            return error.InvalidChunk;
+                        }
+
+                        if (data.len == 2) {
+                            return .{ true, .{ .data = null, .done = size == 0, .unprocessed = null } };
+                        }
+                        return self.process(data[2..]);
+                    }
+
+                    // we have a complete chunk;
+                    var chunk: ?[]u8 = data;
+                    const last = missing - 2;
+                    if (data[last] != '\r' or data[missing - 1] != '\n') {
+                        return error.InvalidChunk;
+                    }
+                    chunk = if (last == 0) null else data[0..last];
 
                     const unprocessed = data[missing..];
 
