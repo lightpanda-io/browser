@@ -37,6 +37,7 @@ pub const CDP = CDPT(struct {
 
 const SessionIdGen = Incrementing(u32, "SID");
 const TargetIdGen = Incrementing(u32, "TID");
+const LoaderIdGen = Incrementing(u32, "LID");
 const BrowserContextIdGen = Incrementing(u32, "BID");
 
 // Generic so that we can inject mocks into it.
@@ -54,6 +55,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
         target_auto_attach: bool = false,
 
         target_id_gen: TargetIdGen = .{},
+        loader_id_gen: LoaderIdGen = .{},
         session_id_gen: SessionIdGen = .{},
         browser_context_id_gen: BrowserContextIdGen = .{},
 
@@ -183,6 +185,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
                 },
                 5 => switch (@as(u40, @bitCast(domain[0..5].*))) {
                     asUint("Fetch") => return @import("domains/fetch.zig").processMessage(command),
+                    asUint("Input") => return @import("domains/input.zig").processMessage(command),
                     else => {},
                 },
                 6 => switch (@as(u48, @bitCast(domain[0..6].*))) {
@@ -281,8 +284,6 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         // we should reject it.
         session_id: ?[]const u8,
 
-        // State
-        url: []const u8,
         loader_id: []const u8,
         security_origin: []const u8,
         page_life_cycle_events: bool,
@@ -303,7 +304,6 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .cdp = cdp,
                 .target_id = null,
                 .session_id = null,
-                .url = URL_BASE,
                 .security_origin = URL_BASE,
                 .secure_context_type = "Secure", // TODO = enum
                 .loader_id = LOADER_ID,
@@ -331,6 +331,11 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .opts = opts,
                 .registry = &self.node_registry,
             };
+        }
+
+        pub fn getURL(self: *const Self) ?[]const u8 {
+            const page = self.session.currentPage() orelse return null;
+            return page.rawuri;
         }
 
         pub fn onInspectorResponse(ctx: *anyopaque, _: u32, msg: []const u8) void {

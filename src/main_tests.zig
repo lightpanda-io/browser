@@ -25,6 +25,7 @@ const pretty = @import("pretty");
 
 const parser = @import("netsurf");
 const apiweb = @import("apiweb.zig");
+const browser = @import("browser/browser.zig");
 const Window = @import("html/window.zig").Window;
 const xhr = @import("xhr/xhr.zig");
 const storage = @import("storage/storage.zig");
@@ -100,9 +101,14 @@ fn testExecFn(
     var cookie_jar = storage.CookieJar.init(alloc);
     defer cookie_jar.deinit();
 
+    var renderer = browser.Renderer.init(alloc);
+    defer renderer.elements.deinit(alloc);
+    defer renderer.positions.deinit(alloc);
+
     try js_env.setUserContext(.{
         .uri = try std.Uri.parse(url),
         .document = doc,
+        .renderer = &renderer,
         .cookie_jar = &cookie_jar,
         .http_client = &http_client,
     });

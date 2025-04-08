@@ -24,6 +24,7 @@ const c = @cImport({
     @cInclude("dom/bindings/hubbub/parser.h");
     @cInclude("events/event_target.h");
     @cInclude("events/event.h");
+    @cInclude("events/mouse_event.h");
 });
 
 const mimalloc = @import("mimalloc");
@@ -801,6 +802,11 @@ pub fn eventTargetDispatchEvent(et: *EventTarget, event: *Event) !bool {
     return res;
 }
 
+pub fn elementDispatchEvent(element: *Element, event: *Event) !bool {
+    const et: *EventTarget = toEventTarget(Element, element);
+    return eventTargetDispatchEvent(et, @ptrCast(event));
+}
+
 pub fn eventTargetTBaseFieldName(comptime T: type) ?[]const u8 {
     std.debug.assert(@inComptime());
     switch (@typeInfo(T)) {
@@ -859,6 +865,61 @@ pub const EventTargetTBase = extern struct {
         return c._dom_event_target_iter_event_listener(self.eti, t, capture, cur, next, l);
     }
 };
+
+// MouseEvent
+
+pub const MouseEvent = c.dom_mouse_event;
+
+pub fn mouseEventCreate() !*MouseEvent {
+    var evt: ?*MouseEvent = undefined;
+    const err = c._dom_mouse_event_create(&evt);
+    try DOMErr(err);
+    return evt.?;
+}
+
+pub fn mouseEventDestroy(evt: *MouseEvent) void {
+    c._dom_mouse_event_destroy(evt);
+}
+
+const MouseEventOpts = struct {
+    x: i32,
+    y: i32,
+    bubbles: bool = false,
+    cancelable: bool = false,
+    ctrl: bool = false,
+    alt: bool = false,
+    shift: bool = false,
+    meta: bool = false,
+    button: u16 = 0,
+    click_count: u16 = 1,
+};
+
+pub fn mouseEventInit(evt: *MouseEvent, typ: []const u8, opts: MouseEventOpts) !void {
+    const s = try strFromData(typ);
+    const err = c._dom_mouse_event_init(
+        evt,
+        s,
+        opts.bubbles,
+        opts.cancelable,
+        null, // dom_abstract_view* ?
+        opts.click_count, // details
+        opts.x, // screen_x
+        opts.y, // screen_y
+        opts.x, // client_x
+        opts.y, // client_y
+        opts.ctrl,
+        opts.alt,
+        opts.shift,
+        opts.meta,
+        opts.button,
+        null, // related target
+    );
+    try DOMErr(err);
+}
+
+pub fn mouseEventDefaultPrevented(evt: *MouseEvent) !bool {
+    return eventDefaultPrevented(@ptrCast(evt));
+}
 
 // NodeType
 

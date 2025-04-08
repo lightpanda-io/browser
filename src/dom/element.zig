@@ -33,6 +33,7 @@ const Node = @import("node.zig").Node;
 const Walker = @import("walker.zig").WalkerDepthFirst;
 const NodeList = @import("nodelist.zig").NodeList;
 const HTMLElem = @import("../html/elements.zig");
+const UserContext = @import("../user_context.zig").UserContext;
 pub const Union = @import("../html/elements.zig").Union;
 
 const DOMException = @import("exceptions.zig").DOMException;
@@ -42,6 +43,13 @@ pub const Element = struct {
     pub const Self = parser.Element;
     pub const prototype = *Node;
     pub const mem_guarantied = true;
+
+    pub const DOMRect = struct {
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    };
 
     pub fn toInterface(e: *parser.Element) !Union {
         return try HTMLElem.toInterface(Union, e);
@@ -339,6 +347,18 @@ pub const Element = struct {
         return Node.replaceChildren(parser.elementToNode(self), nodes);
     }
 
+    pub fn _getBoundingClientRect(self: *parser.Element, user_context: UserContext) !DOMRect {
+        return user_context.renderer.getRect(self);
+    }
+
+    pub fn get_clientWidth(_: *parser.Element, user_context: UserContext) u32 {
+        return user_context.renderer.width();
+    }
+
+    pub fn get_clientHeight(_: *parser.Element, user_context: UserContext) u32 {
+        return user_context.renderer.height();
+    }
+
     pub fn deinit(_: *parser.Element, _: std.mem.Allocator) void {}
 };
 
@@ -484,5 +504,33 @@ pub fn testExecFn(
     var outerHTML = [_]Case{
         .{ .src = "document.getElementById('para').outerHTML", .ex = "<p id=\"para\"> And</p>" },
     };
+
+    var getBoundingClientRect = [_]Case{
+        .{ .src = "document.getElementById('para').clientWidth", .ex = "0" },
+        .{ .src = "document.getElementById('para').clientHeight", .ex = "1" },
+
+        .{ .src = "let r1 = document.getElementById('para').getBoundingClientRect()", .ex = "undefined" },
+        .{ .src = "r1.x", .ex = "1" },
+        .{ .src = "r1.y", .ex = "0" },
+        .{ .src = "r1.width", .ex = "1" },
+        .{ .src = "r1.height", .ex = "1" },
+
+        .{ .src = "let r2 = document.getElementById('content').getBoundingClientRect()", .ex = "undefined" },
+        .{ .src = "r2.x", .ex = "2" },
+        .{ .src = "r2.y", .ex = "0" },
+        .{ .src = "r2.width", .ex = "1" },
+        .{ .src = "r2.height", .ex = "1" },
+
+        .{ .src = "let r3 = document.getElementById('para').getBoundingClientRect()", .ex = "undefined" },
+        .{ .src = "r3.x", .ex = "1" },
+        .{ .src = "r3.y", .ex = "0" },
+        .{ .src = "r3.width", .ex = "1" },
+        .{ .src = "r3.height", .ex = "1" },
+
+        .{ .src = "document.getElementById('para').clientWidth", .ex = "2" },
+        .{ .src = "document.getElementById('para').clientHeight", .ex = "1" },
+    };
+    try checkCases(js_env, &getBoundingClientRect);
+
     try checkCases(js_env, &outerHTML);
 }

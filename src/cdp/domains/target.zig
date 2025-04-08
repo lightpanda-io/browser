@@ -132,7 +132,6 @@ fn createTarget(cmd: anytype) !void {
     _ = try bc.session.createPage(aux_data);
 
     // change CDP state
-    bc.url = "about:blank";
     bc.security_origin = "://";
     bc.secure_context_type = "InsecureScheme";
     bc.loader_id = LOADER_ID;
@@ -142,11 +141,11 @@ fn createTarget(cmd: anytype) !void {
     // has been enabled?
     try cmd.sendEvent("Target.targetCreated", .{
         .targetInfo = TargetInfo{
-            .url = bc.url,
+            .attached = false,
             .targetId = target_id,
             .title = "about:blank",
             .browserContextId = bc.id,
-            .attached = false,
+            .url = "about:blank",
         },
     }, .{});
 

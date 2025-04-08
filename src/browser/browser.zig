@@ -298,10 +298,14 @@ pub const Page = struct {
     // current_script could by fetch module to resolve module's url to fetch.
     current_script: ?*const Script = null,
 
+    renderer: FlatRenderer,
+
     fn init(session: *Session) Page {
+        const arena = session.browser.page_arena.allocator();
         return .{
+            .arena = arena,
             .session = session,
-            .arena = session.browser.page_arena.allocator(),
+            .renderer = FlatRenderer.init(arena),
         };
     }
 
@@ -423,6 +427,53 @@ pub const Page = struct {
         }
     }
 
+    pub const ClickResult = union(enum) {
+        navigate: std.Uri,
+    };
+
+    pub const MouseEvent = struct {
+        x: i32,
+        y: i32,
+        type: Type,
+
+        const Type = enum {
+            pressed,
+            released,
+        };
+    };
+
+    pub fn mouseEvent(self: *Page, allocator: Allocator, me: MouseEvent) !?ClickResult {
+        if (me.type != .pressed) {
+            return null;
+        }
+
+        const element = self.renderer.getElementAtPosition(me.x, me.y) orelse return null;
+
+        const event = try parser.mouseEventCreate();
+        defer parser.mouseEventDestroy(event);
+        try parser.mouseEventInit(event, "click", .{
+            .bubbles = true,
+            .cancelable = true,
+            .x = me.x,
+            .y = me.y,
+        });
+        _ = try parser.elementDispatchEvent(element, @ptrCast(event));
+
+        if ((try parser.mouseEventDefaultPrevented(event)) == true) {
+            return null;
+        }
+
+        const node = parser.elementToNode(element);
+        const tag = try parser.nodeName(node);
+        if (std.ascii.eqlIgnoreCase(tag, "a")) {
+            const href = (try parser.elementGetAttribute(element, "href")) orelse return null;
+            var buf = try allocator.alloc(u8, 1024);
+            return .{ .navigate = try std.Uri.resolve_inplace(self.uri, href, &buf) };
+        }
+
+        return null;
+    }
+
     // https://html.spec.whatwg.org/#read-html
     fn loadHTMLDoc(self: *Page, reader: anytype, charset: []const u8, aux_data: ?[]const u8) !void {
         const arena = self.arena;
@@ -462,6 +513,7 @@ pub const Page = struct {
         try session.env.setUserContext(.{
             .uri = self.uri,
             .document = html_doc,
+            .renderer = @ptrCast(&self.renderer),
             .cookie_jar = @ptrCast(&self.session.cookie_jar),
             .http_client = @ptrCast(self.session.http_client),
         });
@@ -751,6 +803,70 @@ pub const Page = struct {
             }
         }
     };
+};
+
+// provide very poor abstration to the rest of the code. In theory, we can change
+// the FlatRendere to a different implementation, and it'll all just work.
+pub const Renderer = FlatRenderer;
+
+// This "renderer" positions elements in a single row in an unspecified order.
+// The important thing is that elements have a consistent position/index within
+// that row, which can be turned into a rectangle.
+const FlatRenderer = struct {
+    allocator: Allocator,
+
+    // key is a @ptrFromInt of the element
+    // value is the index position
+    positions: std.AutoHashMapUnmanaged(u64, u32),
+
+    // given an index, get the element
+    elements: std.ArrayListUnmanaged(u64),
+
+    const Element = @import("../dom/element.zig").Element;
+
+    // we expect allocator to be an arena
+    pub fn init(allocator: Allocator) FlatRenderer {
+        return .{
+            .elements = .{},
+            .positions = .{},
+            .allocator = allocator,
+        };
+    }
+
+    pub fn getRect(self: *FlatRenderer, e: *parser.Element) !Element.DOMRect {
+        var elements = &self.elements;
+        const gop = try self.positions.getOrPut(self.allocator, @intFromPtr(e));
+        var x: u32 = gop.value_ptr.*;
+        if (gop.found_existing == false) {
+            try elements.append(self.allocator, @intFromPtr(e));
+            x = @intCast(elements.items.len);
+            gop.value_ptr.* = x;
+        }
+
+        return .{
+            .x = @floatFromInt(x),
+            .y = 0.0,
+            .width = 1.0,
+            .height = 1.0,
+        };
+    }
+
+    pub fn width(self: *const FlatRenderer) u32 {
+        return @intCast(self.elements.items.len);
+    }
+
+    pub fn height(_: *const FlatRenderer) u32 {
+        return 1;
+    }
+
+    pub fn getElementAtPosition(self: *const FlatRenderer, x: i32, y: i32) ?*parser.Element {
+        if (y != 1 or x < 0) {
+            return null;
+        }
+
+        const elements = self.elements.items;
+        return if (x < elements.len) @ptrFromInt(elements[@intCast(x)]) else null;
+    }
 };
 
 const NoopInspector = struct {
