@@ -130,6 +130,24 @@ pub const HTMLElement = struct {
         // attach the text node.
         _ = try parser.nodeAppendChild(n, @as(*parser.Node, @ptrCast(t)));
     }
+
+    pub fn _click(e: *parser.ElementHTML) !void {
+        _ = e;
+        // TODO needs: https://github.com/lightpanda-io/browser/pull/501
+        // TODO: when the above is merged, should we get the element coordinates?
+
+        // const event = try parser.mouseEventCreate();
+        // defer parser.mouseEventDestroy(event);
+        // try parser.mouseEventInit(event, "click", .{
+        //     .bubbles = true,
+        //     .cancelable = true,
+        //
+        //     // get the coordinates?
+        //     .x = 0,
+        //     .y = 0,
+        // });
+        // _ = try parser.elementDispatchEvent(@ptrCast(e), @ptrCast(event));
+    }
 };
 
 // Deprecated HTMLElements in Chrome (2023/03/15)
