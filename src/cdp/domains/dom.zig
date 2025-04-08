@@ -51,9 +51,7 @@ fn getDocument(cmd: anytype) !void {
     const doc = page.doc orelse return error.DocumentNotLoaded;
 
     const node = try bc.node_registry.register(parser.documentToNode(doc));
-    return cmd.sendResult(.{
-        .root = node,
-    }, .{});
+    return cmd.sendResult(.{ .root = bc.nodeWriter(node, .{}) }, .{});
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-performSearch
@@ -118,6 +116,7 @@ fn getSearchResults(cmd: anytype) !void {
 }
 
 const testing = @import("../testing.zig");
+
 test "cdp.dom: getSearchResults unknown search id" {
     var ctx = testing.context();
     defer ctx.deinit();
