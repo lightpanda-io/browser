@@ -170,6 +170,7 @@ pub const Session = struct {
             .cookie_jar = storage.CookieJar.init(allocator),
             .window = Window.create(null, .{ .agent = user_agent }),
         };
+        errdefer self.arena.deinit();
 
         const arena = self.arena.allocator();
         Env.init(&self.env, arena, app.loop, null);
@@ -481,6 +482,16 @@ pub const Page = struct {
         // save a document's pointer in the page.
         self.doc = doc;
 
+        const document_element = (try parser.documentGetDocumentElement(doc)) orelse return error.DocumentElementError;
+        try parser.eventTargetAddZigListener(
+            parser.toEventTarget(parser.Element, document_element),
+            arena,
+            "click",
+            windowClicked,
+            self,
+            false,
+        );
+
         // TODO set document.readyState to interactive
         // https://html.spec.whatwg.org/#reporting-document-loading-status
 
@@ -727,6 +738,29 @@ pub const Page = struct {
         }
 
         return request;
+    }
+
+    fn windowClicked(ctx: *anyopaque, event: *parser.Event) void {
+        const self: *Page = @alignCast(@ptrCast(ctx));
+        self._windowClicked(event) catch |err| {
+            log.err("window click handler: {}", .{err});
+        };
+    }
+
+    fn _windowClicked(self: *Page, event: *parser.Event) !void {
+        _ = self;
+
+        const target = (try parser.eventTarget(event)) orelse return;
+
+        const node = parser.eventTargetToNode(target);
+        if (try parser.nodeType(node) != .element) {
+            return;
+        }
+
+        const element: *parser.ElementHTML = @ptrCast(node);
+        const tag_name = try parser.elementHTMLGetTagType(element);
+        // TODO https://github.com/lightpanda-io/browser/pull/501
+        _ = tag_name;
     }
 
     const Script = struct {
