@@ -26,6 +26,7 @@ const parser = @import("netsurf");
 const jsruntime = @import("jsruntime");
 const Loop = jsruntime.Loop;
 const Env = jsruntime.Env;
+const URL = @import("../url.zig").URL;
 const browser = @import("../browser/browser.zig");
 const Window = @import("../html/window.zig").Window;
 const storage = @import("../storage/storage.zig");
@@ -66,12 +67,14 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
     defer renderer.elements.deinit(alloc);
     defer renderer.positions.deinit(alloc);
 
+    const url = try URL.parse("https://lightpanda.io", null);
+
     var js_env: Env = undefined;
     Env.init(&js_env, alloc, &loop, UserContext{
+        .url = &url,
         .document = html_doc,
         .cookie_jar = &cookie_jar,
         .http_client = &http_client,
-        .uri = try std.Uri.parse("https://lightpanda.io"),
         .renderer = &renderer,
     });
     defer js_env.deinit();
