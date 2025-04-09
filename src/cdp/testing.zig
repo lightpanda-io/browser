@@ -60,6 +60,8 @@ const Browser = struct {
         self.session.?.* = .{
             .page = null,
             .arena = arena,
+            .env = Env{},
+            .inspector = Inspector{},
         };
         return self.session.?;
     }
@@ -75,6 +77,8 @@ const Browser = struct {
 const Session = struct {
     page: ?Page = null,
     arena: Allocator,
+    env: Env,
+    inspector: Inspector,
 
     pub fn currentPage(self: *Session) ?*Page {
         return &(self.page orelse return null);
@@ -99,6 +103,54 @@ const Session = struct {
     pub fn callInspector(self: *Session, msg: []const u8) void {
         _ = self;
         _ = msg;
+    }
+};
+
+const Env = struct {
+    pub fn findOrAddValue(self: *Env, value: anytype) !@TypeOf(value) { // ?
+        _ = self;
+        return value;
+    }
+};
+
+const Inspector = struct {
+    pub fn getRemoteObject(self: Inspector, env: *Env, jsValue: anytype, groupName: []const u8) !RemoteObject {
+        _ = self;
+        _ = env;
+        _ = jsValue;
+        _ = groupName;
+        return RemoteObject{};
+    }
+};
+
+const RemoteObject = struct {
+    pub fn deinit(self: RemoteObject) void {
+        _ = self;
+    }
+    pub fn getType(self: RemoteObject, alloc: std.mem.Allocator) ![:0]const u8 {
+        _ = self;
+        _ = alloc;
+        return "TheType";
+    }
+    pub fn getSubtype(self: RemoteObject, alloc: std.mem.Allocator) ![:0]const u8 {
+        _ = self;
+        _ = alloc;
+        return "TheSubtype";
+    }
+    pub fn getClassName(self: RemoteObject, alloc: std.mem.Allocator) ![:0]const u8 {
+        _ = self;
+        _ = alloc;
+        return "TheClassName";
+    }
+    pub fn getDescription(self: RemoteObject, alloc: std.mem.Allocator) ![:0]const u8 {
+        _ = self;
+        _ = alloc;
+        return "TheDescription";
+    }
+    pub fn getObjectId(self: RemoteObject, alloc: std.mem.Allocator) ![:0]const u8 {
+        _ = self;
+        _ = alloc;
+        return "TheObjectId";
     }
 };
 
