@@ -20,6 +20,7 @@ const std = @import("std");
 const parser = @import("netsurf");
 const Node = @import("../Node.zig");
 const css = @import("../../dom/css.zig");
+const dom_node = @import("../../dom/node.zig");
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -28,6 +29,7 @@ pub fn processMessage(cmd: anytype) !void {
         performSearch,
         getSearchResults,
         discardSearchResults,
+        resolveNode,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -36,6 +38,7 @@ pub fn processMessage(cmd: anytype) !void {
         .performSearch => return performSearch(cmd),
         .getSearchResults => return getSearchResults(cmd),
         .discardSearchResults => return discardSearchResults(cmd),
+        .resolveNode => return resolveNode(cmd),
     }
 }
 
@@ -113,6 +116,36 @@ fn getSearchResults(cmd: anytype) !void {
     if (params.toIndex > node_ids.len) return error.BadToIndex;
 
     return cmd.sendResult(.{ .nodeIds = node_ids[params.fromIndex..params.toIndex] }, .{});
+}
+
+fn resolveNode(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        nodeId: ?Node.Id = null,
+        backendNodeId: ?u32 = null,
+        objectGroup: ?[]const u8 = null,
+        executionContextId: ?u32 = null,
+    })) orelse return error.InvalidParams;
+    if (params.nodeId == null or params.backendNodeId != null or params.executionContextId != null) {
+        return error.NotYetImplementedParams;
+    }
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const node = bc.node_registry.lookup_by_id.get(params.nodeId.?) orelse return error.UnknownNode;
+
+    // node._node is a *parser.Node we need this to be able to find its most derived type e.g. Node -> Element -> HTMLElement
+    // So we use the Node.Union when retrieve the value from the environment
+    const jsValue = try bc.session.env.findOrAddValue(try dom_node.Node.toInterface(node._node));
+    const remoteObject = try bc.session.inspector.getRemoteObject(&bc.session.env, jsValue, params.objectGroup orelse "");
+    defer remoteObject.deinit();
+
+    const arena = cmd.arena;
+    return cmd.sendResult(.{ .object = .{
+        .type = try remoteObject.getType(arena),
+        .subtype = try remoteObject.getSubtype(arena),
+        .className = try remoteObject.getClassName(arena),
+        .description = try remoteObject.getDescription(arena),
+        .objectId = try remoteObject.getObjectId(arena),
+    } }, .{});
 }
 
 const testing = @import("../testing.zig");
