@@ -132,7 +132,7 @@ fn resolveNode(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const node = bc.node_registry.lookup_by_id.get(params.nodeId.?) orelse return error.UnknownNode;
 
-    // node._node is a *parder.Node we need this to be able to find its most derived type e.g. Node -> Element -> HTMLElement
+    // node._node is a *parser.Node we need this to be able to find its most derived type e.g. Node -> Element -> HTMLElement
     // So we use the Node.Union when retrieve the value from the environment
     const jsValue = try bc.session.env.findOrAddValue(try dom_node.Node.toInterface(node._node));
     const remoteObject = try bc.session.inspector.getRemoteObject(&bc.session.env, jsValue, params.objectGroup orelse "");
