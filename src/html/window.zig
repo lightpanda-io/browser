@@ -24,14 +24,13 @@ const Callback = jsruntime.Callback;
 const CallbackArg = jsruntime.CallbackArg;
 const Loop = jsruntime.Loop;
 
+const URL = @import("../../../url.zig").URL;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const Navigator = @import("navigator.zig").Navigator;
 const History = @import("history.zig").History;
 const Location = @import("location.zig").Location;
 
 const storage = @import("../storage/storage.zig");
-
-var emptyLocation = Location{};
 
 // https://dom.spec.whatwg.org/#interface-window-extensions
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#window
@@ -46,9 +45,8 @@ pub const Window = struct {
     document: ?*parser.DocumentHTML = null,
     target: []const u8,
     history: History = .{},
-    location: *Location = &emptyLocation,
-
-    storageShelf: ?*storage.Shelf = null,
+    location: Location = .{},
+    storage_shelf: ?*storage.Shelf = null,
 
     // store a map between internal timeouts ids and pointers to uint.
     // the maximum number of possible timeouts is fixed.
@@ -64,21 +62,20 @@ pub const Window = struct {
         };
     }
 
-    pub fn replaceLocation(self: *Window, loc: ?*Location) !void {
-        self.location = loc orelse &emptyLocation;
-
+    pub fn replaceLocation(self: *Window, loc: Location) !void {
+        self.location = loc;
         if (self.document) |doc| {
-            try parser.documentHTMLSetLocation(Location, doc, self.location);
+            try parser.documentHTMLSetLocation(Location, doc, &self.location);
         }
     }
 
     pub fn replaceDocument(self: *Window, doc: *parser.DocumentHTML) !void {
         self.document = doc;
-        try parser.documentHTMLSetLocation(Location, doc, self.location);
+        try parser.documentHTMLSetLocation(Location, doc, &self.location);
     }
 
     pub fn setStorageShelf(self: *Window, shelf: *storage.Shelf) void {
-        self.storageShelf = shelf;
+        self.storage_shelf = shelf;
     }
 
     pub fn get_window(self: *Window) *Window {
@@ -90,7 +87,7 @@ pub const Window = struct {
     }
 
     pub fn get_location(self: *Window) *Location {
-        return self.location;
+        return &self.location;
     }
 
     pub fn get_self(self: *Window) *Window {
@@ -114,13 +111,13 @@ pub const Window = struct {
     }
 
     pub fn get_localStorage(self: *Window) !*storage.Bottle {
-        if (self.storageShelf == null) return parser.DOMError.NotSupported;
-        return &self.storageShelf.?.bucket.local;
+        if (self.storage_shelf == null) return parser.DOMError.NotSupported;
+        return &self.storage_shelf.?.bucket.local;
     }
 
     pub fn get_sessionStorage(self: *Window) !*storage.Bottle {
-        if (self.storageShelf == null) return parser.DOMError.NotSupported;
-        return &self.storageShelf.?.bucket.session;
+        if (self.storage_shelf == null) return parser.DOMError.NotSupported;
+        return &self.storage_shelf.?.bucket.session;
     }
 
     // TODO handle callback arguments.

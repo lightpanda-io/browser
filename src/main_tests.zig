@@ -29,9 +29,7 @@ const browser = @import("browser/browser.zig");
 const Window = @import("html/window.zig").Window;
 const xhr = @import("xhr/xhr.zig");
 const storage = @import("storage/storage.zig");
-const URL = @import("url/url.zig").URL;
-const urlquery = @import("url/query.zig");
-const Location = @import("html/location.zig").Location;
+const URL = @import("url.zig").URL;
 
 const documentTestExecFn = @import("dom/document.zig").testExecFn;
 const HTMLDocumentTestExecFn = @import("html/document.zig").testExecFn;
@@ -94,9 +92,7 @@ fn testExecFn(
     // alias global as self and window
     var window = Window.create(null, null);
 
-    const url = "https://lightpanda.io/opensource-browser/";
-    var u = try URL.constructor(alloc, url, null);
-    defer u.deinit(alloc);
+    const url = try URL.parse("https://lightpanda.io/opensource-browser/", null);
 
     var cookie_jar = storage.CookieJar.init(alloc);
     defer cookie_jar.deinit();
@@ -106,15 +102,14 @@ fn testExecFn(
     defer renderer.positions.deinit(alloc);
 
     try js_env.setUserContext(.{
-        .uri = try std.Uri.parse(url),
+        .url = &url,
         .document = doc,
         .renderer = &renderer,
         .cookie_jar = &cookie_jar,
         .http_client = &http_client,
     });
 
-    var location = Location{ .url = &u };
-    try window.replaceLocation(&location);
+    try window.replaceLocation(.{ .url = try url.toWebApi(alloc) });
 
     try window.replaceDocument(doc);
     window.setStorageShelf(&storageShelf);

@@ -44,25 +44,24 @@ pub const Interfaces = .{
 // 2. The other way would bu to copy the `std.Uri` code to ahve a dedicated
 // parser including the characters we want for the web API.
 pub const URL = struct {
-    rawuri: []const u8,
     uri: std.Uri,
     search_params: URLSearchParams,
 
     pub const mem_guarantied = true;
 
-    pub fn constructor(alloc: std.mem.Allocator, url: []const u8, base: ?[]const u8) !URL {
-        const raw = try std.mem.concat(alloc, u8, &[_][]const u8{ url, base orelse "" });
-        errdefer alloc.free(raw);
+    pub fn constructor(arena: std.mem.Allocator, url: []const u8, base: ?[]const u8) !URL {
+        const raw = try std.mem.concat(arena, u8, &[_][]const u8{ url, base orelse "" });
+        errdefer arena.free(raw);
 
-        const uri = std.Uri.parse(raw) catch {
-            return error.TypeError;
-        };
+        const uri = std.Uri.parse(raw) catch return error.TypeError;
+        return init(arena, uri);
+    }
 
+    pub fn init(arena: std.mem.Allocator, uri: std.Uri) !URL {
         return .{
-            .rawuri = raw,
             .uri = uri,
             .search_params = try URLSearchParams.constructor(
-                alloc,
+                arena,
                 uriComponentNullStr(uri.query),
             ),
         };
@@ -70,7 +69,6 @@ pub const URL = struct {
 
     pub fn deinit(self: *URL, alloc: std.mem.Allocator) void {
         self.search_params.deinit(alloc);
-        alloc.free(self.rawuri);
     }
 
     // the caller must free the returned string.

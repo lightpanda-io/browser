@@ -102,7 +102,7 @@ pub const LightPanda = struct {
             try writer.writeByte('\n');
         }
 
-        var req = try self.client.request(.POST, self.uri);
+        var req = try self.client.request(.POST, &self.uri);
         defer req.deinit();
         req.body = arr.items;
 

@@ -20,6 +20,7 @@ const builtin = @import("builtin");
 
 const os = std.os;
 const posix = std.posix;
+const Uri = std.Uri;
 const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
 const MemoryPool = std.heap.MemoryPool;
@@ -72,7 +73,7 @@ pub const Client = struct {
         self.state_pool.deinit(allocator);
     }
 
-    pub fn request(self: *Client, method: Request.Method, url: anytype) !Request {
+    pub fn request(self: *Client, method: Request.Method, uri: *const Uri) !Request {
         const state = self.state_pool.acquire();
 
         errdefer {
@@ -80,7 +81,7 @@ pub const Client = struct {
             self.state_pool.release(state);
         }
 
-        return Request.init(self, state, method, url);
+        return Request.init(self, state, method, uri);
     }
 };
 
@@ -97,7 +98,11 @@ pub const Request = struct {
     method: Method,
 
     // The URI we're requested
-    uri: std.Uri,
+    uri: *const Uri,
+
+    // If we're redirecting, this is where we're redirecting to. The only reason
+    // we really have this is so that we can set self.uri = &self.redirect_url.?
+    redirect_uri: ?Uri = null,
 
     // Optional body
     body: ?[]const u8,
@@ -143,19 +148,7 @@ pub const Request = struct {
         }
     };
 
-    // url can either be a `[]const u8`, in which case we'll clone + parse, or a std.Uri
-    fn init(client: *Client, state: *State, method: Method, url: anytype) !Request {
-        var arena = state.arena.allocator();
-
-        var uri: std.Uri = undefined;
-
-        if (@TypeOf(url) == std.Uri) {
-            uri = url;
-        } else {
-            const owned = try arena.dupe(u8, url);
-            uri = try std.Uri.parse(owned);
-        }
-
+    fn init(client: *Client, state: *State, method: Method, uri: *const Uri) !Request {
         if (uri.host == null) {
             return error.UriMissingHost;
         }
@@ -166,7 +159,7 @@ pub const Request = struct {
             .method = method,
             .body = null,
             .headers = .{},
-            .arena = arena,
+            .arena = state.arena.allocator(),
             ._socket = null,
             ._state = state,
             ._client = client,
@@ -320,7 +313,9 @@ pub const Request = struct {
         var buf = try self.arena.alloc(u8, 1024);
 
         const previous_host = self.host();
-        self.uri = try self.uri.resolve_inplace(redirect.location, &buf);
+        self.redirect_uri = try self.uri.resolve_inplace(redirect.location, &buf);
+
+        self.uri = &self.redirect_uri.?;
         try self.verifyUri();
 
         if (redirect.use_get) {
@@ -1753,14 +1748,16 @@ test "HttpClient Reader: fuzz" {
 test "HttpClient: invalid url" {
     var client = try testClient();
     defer client.deinit();
-    try testing.expectError(error.UriMissingHost, client.request(.GET, "http:///"));
+    const uri = try Uri.parse("http:///");
+    try testing.expectError(error.UriMissingHost, client.request(.GET, &uri));
 }
 
 test "HttpClient: sync connect error" {
     var client = try testClient();
     defer client.deinit();
 
-    var req = try client.request(.GET, "HTTP://127.0.0.1:9920");
+    const uri = try Uri.parse("HTTP://127.0.0.1:9920");
+    var req = try client.request(.GET, &uri);
     try testing.expectError(error.ConnectionRefused, req.sendSync(.{}));
 }
 
@@ -1768,7 +1765,8 @@ test "HttpClient: sync no body" {
     var client = try testClient();
     defer client.deinit();
 
-    var req = try client.request(.GET, "http://127.0.0.1:9582/http_client/simple");
+    const uri = try Uri.parse("http://127.0.0.1:9582/http_client/simple");
+    var req = try client.request(.GET, &uri);
     var res = try req.sendSync(.{});
 
     try testing.expectEqual(null, try res.next());
@@ -1783,7 +1781,8 @@ test "HttpClient: sync tls no body" {
         var client = try testClient();
         defer client.deinit();
 
-        var req = try client.request(.GET, "https://127.0.0.1:9581/http_client/simple");
+        const uri = try Uri.parse("https://127.0.0.1:9581/http_client/simple");
+        var req = try client.request(.GET, &uri);
         var res = try req.sendSync(.{ .tls_verify_host = false });
 
         try testing.expectEqual(null, try res.next());
@@ -1797,7 +1796,8 @@ test "HttpClient: sync with body" {
     var client = try testClient();
     defer client.deinit();
 
-    var req = try client.request(.GET, "http://127.0.0.1:9582/http_client/echo");
+    const uri = try Uri.parse("http://127.0.0.1:9582/http_client/echo");
+    var req = try client.request(.GET, &uri);
     var res = try req.sendSync(.{});
 
     try testing.expectEqual("over 9000!", try res.next());
@@ -1820,7 +1820,8 @@ test "HttpClient: sync tls with body" {
         var client = try testClient();
         defer client.deinit();
 
-        var req = try client.request(.GET, "https://127.0.0.1:9581/http_client/body");
+        const uri = try Uri.parse("https://127.0.0.1:9581/http_client/body");
+        var req = try client.request(.GET, &uri);
         var res = try req.sendSync(.{ .tls_verify_host = false });
 
         while (try res.next()) |data| {
@@ -1844,7 +1845,8 @@ test "HttpClient: sync redirect from TLS to Plaintext" {
         var client = try testClient();
         defer client.deinit();
 
-        var req = try client.request(.GET, "https://127.0.0.1:9581/http_client/redirect/insecure");
+        const uri = try Uri.parse("https://127.0.0.1:9581/http_client/redirect/insecure");
+        var req = try client.request(.GET, &uri);
         var res = try req.sendSync(.{ .tls_verify_host = false });
 
         while (try res.next()) |data| {
@@ -1871,7 +1873,8 @@ test "HttpClient: sync redirect plaintext to TLS" {
         var client = try testClient();
         defer client.deinit();
 
-        var req = try client.request(.GET, "http://127.0.0.1:9582/http_client/redirect/secure");
+        const uri = try Uri.parse("http://127.0.0.1:9582/http_client/redirect/secure");
+        var req = try client.request(.GET, &uri);
         var res = try req.sendSync(.{ .tls_verify_host = false });
 
         while (try res.next()) |data| {
@@ -1889,7 +1892,8 @@ test "HttpClient: sync GET redirect" {
     var client = try testClient();
     defer client.deinit();
 
-    var req = try client.request(.GET, "http://127.0.0.1:9582/http_client/redirect");
+    const uri = try Uri.parse("http://127.0.0.1:9582/http_client/redirect");
+    var req = try client.request(.GET, &uri);
     var res = try req.sendSync(.{ .tls_verify_host = false });
 
     try testing.expectEqual("over 9000!", try res.next());
@@ -1925,7 +1929,8 @@ test "HttpClient: async connect error" {
     var client = try testClient();
     defer client.deinit();
 
-    var req = try client.request(.GET, "HTTP://127.0.0.1:9920");
+    const uri = try Uri.parse("HTTP://127.0.0.1:9920");
+    var req = try client.request(.GET, &uri);
     try req.sendAsync(&loop, Handler{ .reset = &reset }, .{});
     try loop.io.run_for_ns(std.time.ns_per_ms);
     try reset.timedWait(std.time.ns_per_s);
@@ -1938,7 +1943,8 @@ test "HttpClient: async no body" {
     var handler = try CaptureHandler.init();
     defer handler.deinit();
 
-    var req = try client.request(.GET, "HTTP://127.0.0.1:9582/http_client/simple");
+    const uri = try Uri.parse("HTTP://127.0.0.1:9582/http_client/simple");
+    var req = try client.request(.GET, &uri);
     try req.sendAsync(&handler.loop, &handler, .{});
     try handler.waitUntilDone();
 
@@ -1955,7 +1961,8 @@ test "HttpClient: async with body" {
     var handler = try CaptureHandler.init();
     defer handler.deinit();
 
-    var req = try client.request(.GET, "HTTP://127.0.0.1:9582/http_client/echo");
+    const uri = try Uri.parse("HTTP://127.0.0.1:9582/http_client/echo");
+    var req = try client.request(.GET, &uri);
     try req.sendAsync(&handler.loop, &handler, .{});
     try handler.waitUntilDone();
 
@@ -1978,7 +1985,8 @@ test "HttpClient: async redirect" {
     var handler = try CaptureHandler.init();
     defer handler.deinit();
 
-    var req = try client.request(.GET, "HTTP://127.0.0.1:9582/http_client/redirect");
+    const uri = try Uri.parse("HTTP://127.0.0.1:9582/http_client/redirect");
+    var req = try client.request(.GET, &uri);
     try req.sendAsync(&handler.loop, &handler, .{});
 
     // Called twice on purpose. The initial GET resutls in the # of pending
@@ -2008,7 +2016,8 @@ test "HttpClient: async tls no body" {
         var handler = try CaptureHandler.init();
         defer handler.deinit();
 
-        var req = try client.request(.GET, "HTTPs://127.0.0.1:9581/http_client/simple");
+        const uri = try Uri.parse("HTTPs://127.0.0.1:9581/http_client/simple");
+        var req = try client.request(.GET, &uri);
         try req.sendAsync(&handler.loop, &handler, .{ .tls_verify_host = false });
         try handler.waitUntilDone();
 
@@ -2027,7 +2036,8 @@ test "HttpClient: async tls with body" {
         var handler = try CaptureHandler.init();
         defer handler.deinit();
 
-        var req = try client.request(.GET, "HTTPs://127.0.0.1:9581/http_client/body");
+        const uri = try Uri.parse("HTTPs://127.0.0.1:9581/http_client/body");
+        var req = try client.request(.GET, &uri);
         try req.sendAsync(&handler.loop, &handler, .{ .tls_verify_host = false });
         try handler.waitUntilDone();
 
@@ -2051,7 +2061,8 @@ test "HttpClient: async redirect from TLS to Plaintext" {
         var handler = try CaptureHandler.init();
         defer handler.deinit();
 
-        var req = try client.request(.GET, "https://127.0.0.1:9581/http_client/redirect/insecure");
+        const uri = try Uri.parse("https://127.0.0.1:9581/http_client/redirect/insecure");
+        var req = try client.request(.GET, &uri);
         try req.sendAsync(&handler.loop, &handler, .{ .tls_verify_host = false });
         try handler.waitUntilDone();
 
@@ -2074,7 +2085,8 @@ test "HttpClient: async redirect plaintext to TLS" {
         var handler = try CaptureHandler.init();
         defer handler.deinit();
 
-        var req = try client.request(.GET, "http://127.0.0.1:9582/http_client/redirect/secure");
+        const uri = try Uri.parse("http://127.0.0.1:9582/http_client/redirect/secure");
+        var req = try client.request(.GET, &uri);
         try req.sendAsync(&handler.loop, &handler, .{ .tls_verify_host = false });
         try handler.waitUntilDone();
 

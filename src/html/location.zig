@@ -30,60 +30,60 @@ const checkCases = jsruntime.test_utils.checkCases;
 pub const Location = struct {
     pub const mem_guarantied = true;
 
-    url: ?*URL = null,
+    url: ?URL = null,
 
     pub fn deinit(_: *Location, _: std.mem.Allocator) void {}
 
     pub fn get_href(self: *Location, alloc: std.mem.Allocator) ![]const u8 {
-        if (self.url) |u| return u.get_href(alloc);
+        if (self.url) |*u| return u.get_href(alloc);
 
         return "";
     }
 
     pub fn get_protocol(self: *Location, alloc: std.mem.Allocator) ![]const u8 {
-        if (self.url) |u| return u.get_protocol(alloc);
+        if (self.url) |*u| return u.get_protocol(alloc);
 
         return "";
     }
 
     pub fn get_host(self: *Location, alloc: std.mem.Allocator) ![]const u8 {
-        if (self.url) |u| return u.get_host(alloc);
+        if (self.url) |*u| return u.get_host(alloc);
 
         return "";
     }
 
     pub fn get_hostname(self: *Location) []const u8 {
-        if (self.url) |u| return u.get_hostname();
+        if (self.url) |*u| return u.get_hostname();
 
         return "";
     }
 
     pub fn get_port(self: *Location, alloc: std.mem.Allocator) ![]const u8 {
-        if (self.url) |u| return u.get_port(alloc);
+        if (self.url) |*u| return u.get_port(alloc);
 
         return "";
     }
 
     pub fn get_pathname(self: *Location) []const u8 {
-        if (self.url) |u| return u.get_pathname();
+        if (self.url) |*u| return u.get_pathname();
 
         return "";
     }
 
     pub fn get_search(self: *Location, alloc: std.mem.Allocator) ![]const u8 {
-        if (self.url) |u| return u.get_search(alloc);
+        if (self.url) |*u| return u.get_search(alloc);
 
         return "";
     }
 
     pub fn get_hash(self: *Location, alloc: std.mem.Allocator) ![]const u8 {
-        if (self.url) |u| return u.get_hash(alloc);
+        if (self.url) |*u| return u.get_hash(alloc);
 
         return "";
     }
 
     pub fn get_origin(self: *Location, alloc: std.mem.Allocator) ![]const u8 {
-        if (self.url) |u| return u.get_origin(alloc);
+        if (self.url) |*u| return u.get_origin(alloc);
 
         return "";
     }
