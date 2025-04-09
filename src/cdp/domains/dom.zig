@@ -125,7 +125,7 @@ fn resolveNode(cmd: anytype) !void {
         objectGroup: ?[]const u8 = null,
         executionContextId: ?u32 = null,
     })) orelse return error.InvalidParams;
-    if (params.nodeId == null or params.backendNodeId != null or params.objectGroup != null or params.executionContextId != null) {
+    if (params.nodeId == null or params.backendNodeId != null or params.executionContextId != null) {
         return error.NotYetImplementedParams;
     }
 
@@ -135,12 +135,17 @@ fn resolveNode(cmd: anytype) !void {
     // node._node is a *parder.Node we need this to be able to find its most derived type e.g. Node -> Element -> HTMLElement
     // So we use the Node.Union when retrieve the value from the environment
     const jsValue = try bc.session.env.findOrAddValue(try dom_node.Node.toInterface(node._node));
-    const groupName = "AGroupName"; // Temporary default, most likely the same as objectGroup
-    const remoteObject = try bc.session.inspector.getRemoteObject(&bc.session.env, jsValue, groupName);
+    const remoteObject = try bc.session.inspector.getRemoteObject(&bc.session.env, jsValue, params.objectGroup orelse "");
     defer remoteObject.deinit();
 
     const arena = cmd.arena;
-    return cmd.sendResult(.{ .object = .{ .type = try remoteObject.getType(arena), .subtype = try remoteObject.getSubtype(arena), .className = try remoteObject.getClassName(arena), .description = try remoteObject.getDescription(arena), .objectId = try remoteObject.getObjectId(arena) } }, .{});
+    return cmd.sendResult(.{ .object = .{
+        .type = try remoteObject.getType(arena),
+        .subtype = try remoteObject.getSubtype(arena),
+        .className = try remoteObject.getClassName(arena),
+        .description = try remoteObject.getDescription(arena),
+        .objectId = try remoteObject.getObjectId(arena),
+    } }, .{});
 }
 
 const testing = @import("../testing.zig");
