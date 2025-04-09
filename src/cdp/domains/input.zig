@@ -64,11 +64,7 @@ fn dispatchMouseEvent(cmd: anytype) !void {
             else => unreachable,
         },
     };
-    const click_result = (try page.mouseEvent(cmd.arena, mouse_event)) orelse return;
-
-    switch (click_result) {
-        .navigate => |uri| try clickNavigate(cmd, uri),
-    }
+    try page.mouseEvent(mouse_event);
     // result already sent
 }
 

@@ -335,7 +335,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         pub fn getURL(self: *const Self) ?[]const u8 {
             const page = self.session.currentPage() orelse return null;
-            return page.rawuri;
+            return if (page.url) |*url| url.raw else null;
         }
 
         pub fn onInspectorResponse(ctx: *anyopaque, _: u32, msg: []const u8) void {

@@ -24,6 +24,7 @@ const Testing = @This();
 
 const main = @import("cdp.zig");
 const parser = @import("netsurf");
+const URL = @import("../url.zig").URL;
 const App = @import("../app.zig").App;
 
 const base = @import("../testing.zig");
@@ -85,8 +86,8 @@ const Session = struct {
             return error.MockBrowserPageAlreadyExists;
         }
         self.page = .{
-            .rawuri = "",
             .session = self,
+            .url = URL.parse("https://lightpanda.io/", null) catch unreachable,
             .aux_data = try self.arena.dupe(u8, aux_data orelse ""),
         };
         return &self.page.?;
@@ -104,7 +105,7 @@ const Session = struct {
 
 const Page = struct {
     session: *Session,
-    rawuri: []const u8,
+    url: ?URL = null,
     aux_data: []const u8 = "",
     doc: ?*parser.Document = null,
 
@@ -114,10 +115,7 @@ const Page = struct {
     }
 
     const MouseEvent = @import("../browser/browser.zig").Page.MouseEvent;
-    const ClickResult = @import("../browser/browser.zig").Page.ClickResult;
-    pub fn mouseEvent(_: *Page, _: Allocator, _: MouseEvent) !?ClickResult {
-        return null;
-    }
+    pub fn mouseEvent(_: *Page, _: MouseEvent) !void {}
 };
 
 const Client = struct {

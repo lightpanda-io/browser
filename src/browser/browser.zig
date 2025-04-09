@@ -38,9 +38,7 @@ const apiweb = @import("../apiweb.zig");
 const Window = @import("../html/window.zig").Window;
 const Walker = @import("../dom/walker.zig").WalkerDepthFirst;
 
-const URL = @import("../url/url.zig").URL;
-const Location = @import("../html/location.zig").Location;
-
+const URL = @import("../url.zig").URL;
 const storage = @import("../storage/storage.zig");
 
 const http = @import("../http/client.zig");
@@ -253,7 +251,7 @@ pub const Session = struct {
         self.env.stop();
         // TODO unload document: https://html.spec.whatwg.org/#unloading-documents
 
-        self.window.replaceLocation(null) catch |e| {
+        self.window.replaceLocation(.{ .url = null }) catch |e| {
             log.err("reset window location: {any}", .{e});
         };
 
@@ -269,7 +267,7 @@ pub const Session = struct {
 
     fn contextCreated(self: *Session, page: *Page, aux_data: ?[]const u8) void {
         log.debug("inspector context created", .{});
-        self.inspector.contextCreated(&self.env, "", page.origin orelse "://", aux_data);
+        self.inspector.contextCreated(&self.env, "", (page.origin() catch "://") orelse "://", aux_data);
     }
 };
 
@@ -283,14 +281,8 @@ pub const Page = struct {
     session: *Session,
     doc: ?*parser.Document = null,
 
-    // handle url
-    rawuri: ?[]const u8 = null,
-    uri: std.Uri = undefined,
-    origin: ?[]const u8 = null,
-
-    // html url and location
+    // The URL of the page
     url: ?URL = null,
-    location: Location = .{},
 
     raw_data: ?[]const u8 = null,
 
@@ -342,62 +334,52 @@ pub const Page = struct {
         log.debug("wait: OK", .{});
     }
 
+    fn origin(self: *const Page) !?[]const u8 {
+        const url = &(self.url orelse return null);
+        var arr: std.ArrayListUnmanaged(u8) = .{};
+        try url.origin(arr.writer(self.arena));
+        return arr.items;
+    }
+
     // spec reference: https://html.spec.whatwg.org/#document-lifecycle
     // - aux_data: extra data forwarded to the Inspector
     // see Inspector.contextCreated
-    pub fn navigate(self: *Page, uri: []const u8, aux_data: ?[]const u8) !void {
+    pub fn navigate(self: *Page, url_string: []const u8, aux_data: ?[]const u8) !void {
         const arena = self.arena;
 
-        log.debug("starting GET {s}", .{uri});
+        log.debug("starting GET {s}", .{url_string});
 
-        // if the uri is about:blank, nothing to do.
-        if (std.mem.eql(u8, "about:blank", uri)) {
+        // if the url is about:blank, nothing to do.
+        if (std.mem.eql(u8, "about:blank", url_string)) {
             return;
         }
 
-        self.uri = std.Uri.parse(uri) catch try std.Uri.parseAfterScheme("", uri);
-
+        // we don't clone url_string, because we're going to replace self.url
+        // later in this function, with the final request url (since we might
+        // redirect)
+        self.url = try URL.parse(url_string, "https");
         self.session.app.telemetry.record(.{ .navigate = .{
             .proxy = false,
-            .tls = std.ascii.eqlIgnoreCase(self.uri.scheme, "https"),
+            .tls = std.ascii.eqlIgnoreCase(self.url.?.scheme(), "https"),
         } });
 
         // load the data
-        var request = try self.newHTTPRequest(.GET, self.uri, .{ .navigation = true });
+        var request = try self.newHTTPRequest(.GET, &self.url.?, .{ .navigation = true });
         defer request.deinit();
 
         var response = try request.sendSync(.{});
+
+        // would be different than self.url in the case of a redirect
+        self.url = try URL.fromURI(arena, request.uri);
+
+        const url = &self.url.?;
         const header = response.header;
-        try self.session.cookie_jar.populateFromResponse(request.uri, &header);
-
-        // update uri after eventual redirection
-        var buf: std.ArrayListUnmanaged(u8) = .{};
-        try request.uri.writeToStream(.{
-            .scheme = true,
-            .authentication = true,
-            .authority = true,
-            .path = true,
-            .query = true,
-            .fragment = true,
-        }, buf.writer(arena));
-        self.rawuri = buf.items;
-
-        self.uri = try std.Uri.parse(self.rawuri.?);
+        try self.session.cookie_jar.populateFromResponse(&url.uri, &header);
 
         // TODO handle fragment in url.
-        self.url = try URL.constructor(arena, self.rawuri.?, null);
-        self.location.url = &self.url.?;
-        try self.session.window.replaceLocation(&self.location);
+        try self.session.window.replaceLocation(.{ .url = try url.toWebApi(arena) });
 
-        // prepare origin value.
-        buf = .{};
-        try request.uri.writeToStream(.{
-            .scheme = true,
-            .authority = true,
-        }, buf.writer(arena));
-        self.origin = buf.items;
-
-        log.info("GET {any} {d}", .{ self.uri, header.status });
+        log.info("GET {any} {d}", .{ url, header.status });
 
         const ct = blk: {
             break :blk header.get("content-type") orelse {
@@ -442,12 +424,12 @@ pub const Page = struct {
         };
     };
 
-    pub fn mouseEvent(self: *Page, allocator: Allocator, me: MouseEvent) !?ClickResult {
+    pub fn mouseEvent(self: *Page, me: MouseEvent) !void {
         if (me.type != .pressed) {
-            return null;
+            return;
         }
 
-        const element = self.renderer.getElementAtPosition(me.x, me.y) orelse return null;
+        const element = self.renderer.getElementAtPosition(me.x, me.y) orelse return;
 
         const event = try parser.mouseEventCreate();
         defer parser.mouseEventDestroy(event);
@@ -458,20 +440,6 @@ pub const Page = struct {
             .y = me.y,
         });
         _ = try parser.elementDispatchEvent(element, @ptrCast(event));
-
-        if ((try parser.mouseEventDefaultPrevented(event)) == true) {
-            return null;
-        }
-
-        const node = parser.elementToNode(element);
-        const tag = try parser.nodeName(node);
-        if (std.ascii.eqlIgnoreCase(tag, "a")) {
-            const href = (try parser.elementGetAttribute(element, "href")) orelse return null;
-            var buf = try allocator.alloc(u8, 1024);
-            return .{ .navigate = try std.Uri.resolve_inplace(self.uri, href, &buf) };
-        }
-
-        return null;
     }
 
     // https://html.spec.whatwg.org/#read-html
@@ -495,13 +463,13 @@ pub const Page = struct {
         // https://html.spec.whatwg.org/#reporting-document-loading-status
 
         // inject the URL to the document including the fragment.
-        try parser.documentSetDocumentURI(doc, self.rawuri orelse "about:blank");
+        try parser.documentSetDocumentURI(doc, if (self.url) |*url| url.raw else "about:blank");
 
         const session = self.session;
         // TODO set the referrer to the document.
         try session.window.replaceDocument(html_doc);
         session.window.setStorageShelf(
-            try session.storage_shed.getOrPut(self.origin orelse "null"),
+            try session.storage_shed.getOrPut((try self.origin()) orelse "null"),
         );
 
         // https://html.spec.whatwg.org/#read-html
@@ -511,7 +479,7 @@ pub const Page = struct {
 
         // replace the user context document with the new one.
         try session.env.setUserContext(.{
-            .uri = self.uri,
+            .url = @ptrCast(&self.url.?),
             .document = html_doc,
             .renderer = @ptrCast(&self.renderer),
             .cookie_jar = @ptrCast(&self.session.cookie_jar),
@@ -675,9 +643,6 @@ pub const Page = struct {
     fn fetchData(self: *const Page, arena: Allocator, src: []const u8, base: ?[]const u8) ![]const u8 {
         log.debug("starting fetch {s}", .{src});
 
-        var buffer: [1024]u8 = undefined;
-        var b: []u8 = buffer[0..];
-
         var res_src = src;
 
         // if a base path is given, we resolve src using base.
@@ -687,19 +652,20 @@ pub const Page = struct {
                 res_src = try std.fs.path.resolve(arena, &.{ _dir, src });
             }
         }
-        const u = try std.Uri.resolve_inplace(self.uri, res_src, &b);
+        var origin_url = &self.url.?;
+        const url = try origin_url.resolve(arena, res_src);
 
-        var request = try self.newHTTPRequest(.GET, u, .{
-            .origin_uri = self.uri,
+        var request = try self.newHTTPRequest(.GET, &url, .{
+            .origin_uri = &origin_url.uri,
             .navigation = false,
         });
         defer request.deinit();
 
         var response = try request.sendSync(.{});
         var header = response.header;
-        try self.session.cookie_jar.populateFromResponse(u, &header);
+        try self.session.cookie_jar.populateFromResponse(&url.uri, &header);
 
-        log.info("fetch {any}: {d}", .{ u, header.status });
+        log.info("fetch {any}: {d}", .{ url, header.status });
 
         if (header.status != 200) {
             return FetchError.BadStatusCode;
@@ -726,13 +692,13 @@ pub const Page = struct {
         try s.eval(arena, &self.session.env, body);
     }
 
-    fn newHTTPRequest(self: *const Page, method: http.Request.Method, uri: std.Uri, opts: storage.cookie.LookupOpts) !http.Request {
+    fn newHTTPRequest(self: *const Page, method: http.Request.Method, url: *const URL, opts: storage.cookie.LookupOpts) !http.Request {
         const session = self.session;
-        var request = try session.http_client.request(method, uri);
+        var request = try session.http_client.request(method, &url.uri);
         errdefer request.deinit();
 
         var arr: std.ArrayListUnmanaged(u8) = .{};
-        try session.cookie_jar.forRequest(uri, arr.writer(self.arena), opts);
+        try session.cookie_jar.forRequest(&url.uri, arr.writer(self.arena), opts);
 
         if (arr.items.len > 0) {
             try request.addHeader("Cookie", arr.items, .{});

@@ -31,6 +31,7 @@ const XMLHttpRequestEventTarget = @import("event_target.zig").XMLHttpRequestEven
 const Mime = @import("../browser/mime.zig").Mime;
 
 const Loop = jsruntime.Loop;
+const URL = @import("../url.zig").URL;
 const http = @import("../http/client.zig");
 
 const parser = @import("netsurf");
@@ -103,8 +104,9 @@ pub const XMLHttpRequest = struct {
 
     method: http.Request.Method,
     state: State,
-    url: ?[]const u8,
-    uri: std.Uri,
+    url: ?URL = null,
+    origin_url: *const URL,
+
     // request headers
     headers: Headers,
     sync: bool = true,
@@ -113,7 +115,6 @@ pub const XMLHttpRequest = struct {
 
     cookie_jar: *CookieJar,
     // the URI of the page where this request is originating from
-    origin_uri: std.Uri,
 
     // TODO uncomment this field causes casting issue with
     // XMLHttpRequestEventTarget. I think it's dueto an alignement issue, but
@@ -291,17 +292,15 @@ pub const XMLHttpRequest = struct {
             .headers = Headers.init(alloc),
             .response_headers = Headers.init(alloc),
             .method = undefined,
-            .url = null,
-            .uri = undefined,
             .state = .unsent,
-            .origin_uri = userctx.uri,
+            .url = null,
+            .origin_url = userctx.url,
             .client = userctx.http_client,
             .cookie_jar = userctx.cookie_jar,
         };
     }
 
-    pub fn reset(self: *XMLHttpRequest, alloc: std.mem.Allocator) void {
-        if (self.url) |v| alloc.free(v);
+    pub fn reset(self: *XMLHttpRequest) void {
         self.url = null;
 
         if (self.response_obj) |v| v.deinit();
@@ -379,13 +378,9 @@ pub const XMLHttpRequest = struct {
 
         self.method = try validMethod(method);
 
-        self.reset(alloc);
+        self.reset();
 
-        self.url = try alloc.dupe(u8, url);
-        self.uri = std.Uri.parse(self.url.?) catch |err| {
-            log.debug("parse url ({s}): {any}", .{ self.url.?, err });
-            return DOMError.Syntax;
-        };
+        self.url = try self.origin_url.resolve(alloc, url);
         log.debug("open url ({s})", .{self.url.?});
         self.sync = if (asyn) |b| !b else false;
 
@@ -475,12 +470,12 @@ pub const XMLHttpRequest = struct {
         if (self.state != .opened) return DOMError.InvalidState;
         if (self.send_flag) return DOMError.InvalidState;
 
-        log.debug("{any} {any}", .{ self.method, self.uri });
+        log.debug("{any} {any}", .{ self.method, self.url });
 
         self.send_flag = true;
         self.priv_state = .open;
 
-        self.request = try self.client.request(self.method, self.uri);
+        self.request = try self.client.request(self.method, &self.url.?.uri);
         var request = &self.request.?;
         errdefer request.deinit();
 
@@ -490,9 +485,9 @@ pub const XMLHttpRequest = struct {
 
         {
             var arr: std.ArrayListUnmanaged(u8) = .{};
-            try self.cookie_jar.forRequest(self.uri, arr.writer(alloc), .{
+            try self.cookie_jar.forRequest(&self.url.?.uri, arr.writer(alloc), .{
                 .navigation = false,
-                .origin_uri = self.origin_uri,
+                .origin_uri = &self.origin_url.uri,
             });
 
             if (arr.items.len > 0) {
@@ -522,7 +517,7 @@ pub const XMLHttpRequest = struct {
 
         if (progress.first) {
             const header = progress.header;
-            log.info("{any} {any} {d}", .{ self.method, self.uri, header.status });
+            log.info("{any} {any} {d}", .{ self.method, self.url, header.status });
 
             self.priv_state = .done;
 
@@ -546,7 +541,7 @@ pub const XMLHttpRequest = struct {
             self.state = .loading;
             self.dispatchEvt("readystatechange");
 
-            try self.cookie_jar.populateFromResponse(self.uri, &header);
+            try self.cookie_jar.populateFromResponse(self.request.?.uri, &header);
         }
 
         if (progress.data) |data| {
@@ -588,7 +583,7 @@ pub const XMLHttpRequest = struct {
         self.dispatchProgressEvent("error", .{});
         self.dispatchProgressEvent("loadend", .{});
 
-        log.debug("{any} {any} {any}", .{ self.method, self.uri, self.err });
+        log.debug("{any} {any} {any}", .{ self.method, self.url, self.err });
     }
 
     pub fn _abort(self: *XMLHttpRequest) void {
@@ -637,7 +632,8 @@ pub const XMLHttpRequest = struct {
 
     // TODO retrieve the redirected url
     pub fn get_responseURL(self: *XMLHttpRequest) ?[]const u8 {
-        return self.url;
+        const url = &(self.url orelse return null);
+        return url.raw;
     }
 
     pub fn get_responseXML(self: *XMLHttpRequest, alloc: std.mem.Allocator) !?Response {
