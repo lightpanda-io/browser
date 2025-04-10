@@ -86,6 +86,7 @@ pub fn main() !void {
         },
         .fetch => |opts| {
             log.debug("Fetch mode: url {s}, dump {any}", .{ opts.url, opts.dump });
+            const url = try @import("url.zig").URL.parse(opts.url, null);
 
             var app = try App.init(alloc, .{
                 .run_mode = args.mode,
@@ -107,13 +108,13 @@ pub fn main() !void {
             // page
             const page = try session.createPage(null);
 
-            _ = page.navigate(opts.url, null) catch |err| switch (err) {
+            _ = page.navigate(url, null) catch |err| switch (err) {
                 error.UnsupportedUriScheme, error.UriMissingHost => {
-                    log.err("'{s}' is not a valid URL ({any})\n", .{ opts.url, err });
+                    log.err("'{s}' is not a valid URL ({any})\n", .{ url, err });
                     return args.printUsageAndExit(false);
                 },
                 else => {
-                    log.err("'{s}' fetching error ({any})\n", .{ opts.url, err });
+                    log.err("'{s}' fetching error ({any})\n", .{ url, err });
                     return err;
                 },
             };

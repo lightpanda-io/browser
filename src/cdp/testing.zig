@@ -161,7 +161,7 @@ const Page = struct {
     aux_data: []const u8 = "",
     doc: ?*parser.Document = null,
 
-    pub fn navigate(_: *Page, url: []const u8, aux_data: []const u8) !void {
+    pub fn navigate(_: *Page, url: URL, aux_data: []const u8) !void {
         _ = url;
         _ = aux_data;
     }
