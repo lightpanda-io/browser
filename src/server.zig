@@ -37,7 +37,7 @@ const TimeoutError = jsruntime.IO.TimeoutError;
 const App = @import("app.zig").App;
 const CDP = @import("cdp/cdp.zig").CDP;
 
-const TimeoutCheck = std.time.ns_per_ms * 100;
+const TimeoutCheck = std.time.s_per_min * 60;
 
 const log = std.log.scoped(.server);
 
