@@ -13,7 +13,14 @@ pub const URL = struct {
     // In most cases though, we assume the caller will just dupe the string URL
     // into an arena
     pub fn parse(str: []const u8, default_scheme: ?[]const u8) !URL {
-        const uri = Uri.parse(str) catch try Uri.parseAfterScheme(default_scheme orelse "https", str);
+        var uri = Uri.parse(str) catch try Uri.parseAfterScheme(default_scheme orelse "https", str);
+
+        // special case, url scheme is about, like about:blank.
+        // Use an empty string as host.
+        if (std.mem.eql(u8, uri.scheme, "about")) {
+            uri.host = .{ .percent_encoded = "" };
+        }
+
         if (uri.host == null) {
             return error.MissingHost;
         }
