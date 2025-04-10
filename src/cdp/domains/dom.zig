@@ -166,7 +166,7 @@ fn describeNode(cmd: anytype) !void {
 
     if (params.nodeId != null) {
         const node = bc.node_registry.lookup_by_id.get(params.nodeId.?) orelse return error.NodeNotFound;
-        return cmd.sendResult(.{ .root = bc.nodeWriter(node, .{}) }, .{});
+        return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{}) }, .{});
     } else if (params.objectId != null) {
         const jsValue = try bc.session.inspector.getValueByObjectId(cmd.arena, params.objectId.?);
         const entry = jsValue.externalEntry().?;
@@ -176,7 +176,7 @@ fn describeNode(cmd: anytype) !void {
             return error.ObjectIdIsNotANode;
         }
         const node = try bc.node_registry.register(@ptrCast(entry.ptr));
-        return cmd.sendResult(.{ .root = bc.nodeWriter(node, .{}) }, .{});
+        return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{}) }, .{});
     }
     return error.MissingParams;
 }
