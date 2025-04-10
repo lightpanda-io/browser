@@ -23,6 +23,7 @@ const json = std.json;
 const App = @import("../app.zig").App;
 const asUint = @import("../str/parser.zig").asUint;
 const Incrementing = @import("../id.zig").Incrementing;
+const Notification = @import("../notification.zig").Notification;
 
 const log = std.log.scoped(.cdp);
 
@@ -248,6 +249,17 @@ pub fn CDPT(comptime TypeProvider: type) type {
             return true;
         }
 
+        const SendEventOpts = struct {
+            session_id: ?[]const u8 = null,
+        };
+        pub fn sendEvent(self: *Self, method: []const u8, p: anytype, opts: SendEventOpts) !void {
+            return self.sendJSON(.{
+                .method = method,
+                .params = if (comptime @typeInfo(@TypeOf(p)) == .null) struct {}{} else p,
+                .sessionId = opts.session_id,
+            });
+        }
+
         fn sendJSON(self: *Self, message: anytype) !void {
             return self.client.sendJSON(message, .{
                 .emit_null_optional_fields = false,
@@ -336,6 +348,15 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         pub fn getURL(self: *const Self) ?[]const u8 {
             const page = self.session.currentPage() orelse return null;
             return if (page.url) |*url| url.raw else null;
+        }
+
+        pub fn notify(ctx: *anyopaque, notification: *const Notification) !void {
+            const self: *Self = @alignCast(@ptrCast(ctx));
+
+            switch (notification.*) {
+                .page_navigate => |*pn| return @import("domains/page.zig").pageNavigate(self, pn),
+                .page_navigated => |*pn| return @import("domains/page.zig").pageNavigated(self, pn),
+            }
         }
 
         pub fn onInspectorResponse(ctx: *anyopaque, _: u32, msg: []const u8) void {
@@ -472,13 +493,9 @@ pub fn Command(comptime CDP_T: type, comptime Sender: type) type {
         const SendEventOpts = struct {
             session_id: ?[]const u8 = null,
         };
-        pub fn sendEvent(self: *Self, method: []const u8, p: anytype, opts: SendEventOpts) !void {
+        pub fn sendEvent(self: *Self, method: []const u8, p: anytype, opts: CDP_T.SendEventOpts) !void {
             // Events ALWAYS go to the client. self.sender should not be used
-            return self.cdp.sendJSON(.{
-                .method = method,
-                .params = if (comptime @typeInfo(@TypeOf(p)) == .null) struct {}{} else p,
-                .sessionId = opts.session_id,
-            });
+            return self.cdp.sendEvent(method, p, opts);
         }
 
         pub fn sendError(self: *Self, code: i32, message: []const u8) !void {

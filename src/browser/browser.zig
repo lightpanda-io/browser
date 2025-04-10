@@ -40,6 +40,7 @@ const Walker = @import("../dom/walker.zig").WalkerDepthFirst;
 
 const URL = @import("../url.zig").URL;
 const storage = @import("../storage/storage.zig");
+const Notification = @import("../notification.zig").Notification;
 
 const http = @import("../http/client.zig");
 const UserContext = @import("../user_context.zig").UserContext;
@@ -137,14 +138,32 @@ pub const Session = struct {
 
     jstypes: [Types.len]usize = undefined,
 
+    // recipient of notification, passed as the first parameter to notify
+    ctx: *anyopaque,
+    notify_func: *const fn (ctx: *anyopaque, notification: *const Notification) anyerror!void,
+
     fn init(self: *Session, browser: *Browser, ctx: anytype) !void {
+        const ContextT = @TypeOf(ctx);
+        const ContextStruct = switch (@typeInfo(ContextT)) {
+            .@"struct" => ContextT,
+            .pointer => |ptr| ptr.child,
+            .void => NoopContext,
+            else => @compileError("invalid context type"),
+        };
+
+        // ctx can be void, to be able to store it in our *anyopaque field, we
+        // need to play a little game.
+        const any_ctx: *anyopaque = if (@TypeOf(ctx) == void) @constCast(@ptrCast(&{})) else ctx;
+
         const app = browser.app;
         const allocator = app.allocator;
         self.* = .{
             .app = app,
+            .ctx = any_ctx,
             .env = undefined,
             .browser = browser,
             .inspector = undefined,
+            .notify_func = ContextStruct.notify,
             .http_client = browser.http_client,
             .storage_shed = storage.Shed.init(allocator),
             .arena = std.heap.ArenaAllocator.init(allocator),
@@ -157,24 +176,15 @@ pub const Session = struct {
         errdefer self.env.deinit();
         try self.env.load(&self.jstypes);
 
-        const ContextT = @TypeOf(ctx);
-        const InspectorContainer = switch (@typeInfo(ContextT)) {
-            .@"struct" => ContextT,
-            .pointer => |ptr| ptr.child,
-            .void => NoopInspector,
-            else => @compileError("invalid context type"),
-        };
-
         // const ctx_opaque = @as(*anyopaque, @ptrCast(ctx));
         self.inspector = try jsruntime.Inspector.init(
             arena,
             &self.env,
-            if (@TypeOf(ctx) == void) @constCast(@ptrCast(&{})) else ctx,
-            InspectorContainer.onInspectorResponse,
-            InspectorContainer.onInspectorEvent,
+            any_ctx,
+            ContextStruct.onInspectorResponse,
+            ContextStruct.onInspectorEvent,
         );
         self.env.setInspector(self.inspector);
-
         try self.env.setModuleLoadFn(self, Session.fetchModule);
     }
 
@@ -269,6 +279,12 @@ pub const Session = struct {
         log.debug("inspector context created", .{});
         self.inspector.contextCreated(&self.env, "", (page.origin() catch "://") orelse "://", aux_data);
     }
+
+    fn notify(self: *const Session, notification: *const Notification) void {
+        self.notify_func(self.ctx, notification) catch |err| {
+            log.err("notify {}: {}", .{ std.meta.activeTag(notification.*), err });
+        };
+    }
 };
 
 // Page navigates to an url.
@@ -344,37 +360,41 @@ pub const Page = struct {
     // spec reference: https://html.spec.whatwg.org/#document-lifecycle
     // - aux_data: extra data forwarded to the Inspector
     // see Inspector.contextCreated
-    pub fn navigate(self: *Page, url_string: []const u8, aux_data: ?[]const u8) !void {
+    pub fn navigate(self: *Page, request_url: URL, aux_data: ?[]const u8) !void {
         const arena = self.arena;
+        const session = self.session;
 
-        log.debug("starting GET {s}", .{url_string});
+        log.debug("starting GET {s}", .{request_url});
 
         // if the url is about:blank, nothing to do.
-        if (std.mem.eql(u8, "about:blank", url_string)) {
+        if (std.mem.eql(u8, "about:blank", request_url.raw)) {
             return;
         }
 
-        // we don't clone url_string, because we're going to replace self.url
+        // we don't clone url, because we're going to replace self.url
         // later in this function, with the final request url (since we might
         // redirect)
-        self.url = try URL.parse(url_string, "https");
-        self.session.app.telemetry.record(.{ .navigate = .{
+        self.url = request_url;
+        var url = &self.url.?;
+
+        session.app.telemetry.record(.{ .navigate = .{
             .proxy = false,
-            .tls = std.ascii.eqlIgnoreCase(self.url.?.scheme(), "https"),
+            .tls = std.ascii.eqlIgnoreCase(url.scheme(), "https"),
         } });
 
         // load the data
-        var request = try self.newHTTPRequest(.GET, &self.url.?, .{ .navigation = true });
+        var request = try self.newHTTPRequest(.GET, url, .{ .navigation = true });
         defer request.deinit();
 
+        session.notify(&.{ .page_navigate = .{ .url = url, .ts = timestamp() } });
         var response = try request.sendSync(.{});
 
         // would be different than self.url in the case of a redirect
         self.url = try URL.fromURI(arena, request.uri);
+        url = &self.url.?;
 
-        const url = &self.url.?;
         const header = response.header;
-        try self.session.cookie_jar.populateFromResponse(&url.uri, &header);
+        try session.cookie_jar.populateFromResponse(&url.uri, &header);
 
         // TODO handle fragment in url.
         try self.session.window.replaceLocation(.{ .url = try url.toWebApi(arena) });
@@ -407,6 +427,8 @@ pub const Page = struct {
             // save the body into the page.
             self.raw_data = arr.items;
         }
+
+        session.notify(&.{ .page_navigated = .{ .url = url, .ts = timestamp() } });
     }
 
     pub const ClickResult = union(enum) {
@@ -835,7 +857,13 @@ const FlatRenderer = struct {
     }
 };
 
-const NoopInspector = struct {
+const NoopContext = struct {
     pub fn onInspectorResponse(_: *anyopaque, _: u32, _: []const u8) void {}
     pub fn onInspectorEvent(_: *anyopaque, _: []const u8) void {}
+    pub fn notify(_: *anyopaque, _: *const Notification) !void {}
 };
+
+fn timestamp() u32 {
+    const ts = std.posix.clock_gettime(std.posix.CLOCK.MONOTONIC) catch unreachable;
+    return @intCast(ts.sec);
+}

@@ -18,6 +18,8 @@
 
 const std = @import("std");
 const runtime = @import("runtime.zig");
+const URL = @import("../../url.zig").URL;
+const Notification = @import("../../notification.zig").Notification;
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -137,62 +139,17 @@ fn navigate(cmd: anytype) !void {
         // referrerPolicy: ?[]const u8 = null, // TODO: enum
     })) orelse return error.InvalidParams;
 
-    return navigateToUrl(cmd, params.url, true);
-}
-
-pub fn navigateToUrl(cmd: anytype, url: []const u8, send_result: bool) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     // didn't create?
     const target_id = bc.target_id orelse return error.TargetIdNotLoaded;
 
     // didn't attach?
-    const session_id = bc.session_id orelse return error.SessionIdNotLoaded;
-
-    // if we have a target_id we have to have a page;
-    std.debug.assert(bc.session.page != null);
-
-    // change state
-    bc.reset();
-    bc.loader_id = cmd.cdp.loader_id_gen.next();
-
-    const LifecycleEvent = struct {
-        frameId: []const u8,
-        loaderId: ?[]const u8,
-        name: []const u8,
-        timestamp: f32,
-    };
-
-    var life_event = LifecycleEvent{
-        .frameId = target_id,
-        .loaderId = bc.loader_id,
-        .name = "init",
-        .timestamp = 343721.796037,
-    };
-
-    // frameStartedLoading event
-    // TODO: event partially hard coded
-    try cmd.sendEvent("Page.frameStartedLoading", .{
-        .frameId = target_id,
-    }, .{ .session_id = session_id });
-
-    if (bc.page_life_cycle_events) {
-        try cmd.sendEvent("Page.lifecycleEvent", life_event, .{ .session_id = session_id });
+    if (bc.session_id == null) {
+        return error.SessionIdNotLoaded;
     }
 
-    // output
-    if (send_result) {
-        try cmd.sendResult(.{
-            .frameId = target_id,
-            .loaderId = bc.loader_id,
-        }, .{});
-    }
-
-    // TODO: at this point do we need async the following actions to be async?
-
-    // Send Runtime.executionContextsCleared event
-    // TODO: noop event, we have no env context at this point, is it necesarry?
-    try cmd.sendEvent("Runtime.executionContextsCleared", null, .{ .session_id = session_id });
+    const url = try URL.parse(params.url, "https");
 
     const aux_data = try std.fmt.allocPrint(
         cmd.arena,
@@ -204,67 +161,117 @@ pub fn navigateToUrl(cmd: anytype, url: []const u8, send_result: bool) !void {
     var page = bc.session.currentPage().?;
     try page.navigate(url, aux_data);
 
-    // Events
+    bc.loader_id = bc.cdp.loader_id_gen.next();
+    try cmd.sendResult(.{
+        .frameId = target_id,
+        .loaderId = bc.loader_id,
+    }, .{});
+}
 
-    // lifecycle init event
-    // TODO: partially hard coded
+pub fn pageNavigate(bc: anytype, event: *const Notification.PageEvent) !void {
+    // I don't think it's possible that we get these notifications and don't
+    // have these things setup.
+    std.debug.assert(bc.session.page != null);
+
+    var cdp = bc.cdp;
+    const loader_id = bc.loader_id;
+    const target_id = bc.target_id orelse unreachable;
+    const session_id = bc.session_id orelse unreachable;
+
+    bc.reset();
+
+    // frameStartedLoading event
+    try cdp.sendEvent("Page.frameStartedLoading", .{
+        .frameId = target_id,
+    }, .{ .session_id = session_id });
+
     if (bc.page_life_cycle_events) {
-        life_event.name = "init";
-        life_event.timestamp = 343721.796037;
-        try cmd.sendEvent("Page.lifecycleEvent", life_event, .{ .session_id = session_id });
+        try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
+            .name = "init",
+            .frameId = target_id,
+            .loaderId = loader_id,
+            .timestamp = event.ts,
+        }, .{ .session_id = session_id });
     }
 
-    try cmd.sendEvent("DOM.documentUpdated", null, .{ .session_id = session_id });
+    // Send Runtime.executionContextsCleared event
+    // TODO: noop event, we have no env context at this point, is it necesarry?
+    try cdp.sendEvent("Runtime.executionContextsCleared", null, .{ .session_id = session_id });
+}
+
+pub fn pageNavigated(bc: anytype, event: *const Notification.PageEvent) !void {
+    // I don't think it's possible that we get these notifications and don't
+    // have these things setup.
+    std.debug.assert(bc.session.page != null);
+
+    var cdp = bc.cdp;
+    const ts = event.ts;
+    const loader_id = bc.loader_id;
+    const target_id = bc.target_id orelse unreachable;
+    const session_id = bc.session_id orelse unreachable;
+
+    try cdp.sendEvent("DOM.documentUpdated", null, .{ .session_id = session_id });
 
     // frameNavigated event
-    try cmd.sendEvent("Page.frameNavigated", .{
+    try cdp.sendEvent("Page.frameNavigated", .{
         .type = "Navigation",
         .frame = Frame{
             .id = target_id,
-            .url = url,
+            .url = event.url.raw,
+            .loaderId = bc.loader_id,
             .securityOrigin = bc.security_origin,
             .secureContextType = bc.secure_context_type,
-            .loaderId = bc.loader_id,
         },
     }, .{ .session_id = session_id });
 
     // domContentEventFired event
     // TODO: partially hard coded
-    try cmd.sendEvent(
+    try cdp.sendEvent(
         "Page.domContentEventFired",
-        .{ .timestamp = 343721.803338 },
+        .{ .timestamp = ts },
         .{ .session_id = session_id },
     );
 
     // lifecycle DOMContentLoaded event
     // TODO: partially hard coded
     if (bc.page_life_cycle_events) {
-        life_event.name = "DOMContentLoaded";
-        life_event.timestamp = 343721.803338;
-        try cmd.sendEvent("Page.lifecycleEvent", life_event, .{ .session_id = session_id });
+        try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
+            .timestamp = ts,
+            .name = "DOMContentLoaded",
+            .frameId = target_id,
+            .loaderId = loader_id,
+        }, .{ .session_id = session_id });
     }
 
     // loadEventFired event
-    // TODO: partially hard coded
-    try cmd.sendEvent(
+    try cdp.sendEvent(
         "Page.loadEventFired",
-        .{ .timestamp = 343721.824655 },
+        .{ .timestamp = ts },
         .{ .session_id = session_id },
     );
 
     // lifecycle DOMContentLoaded event
-    // TODO: partially hard coded
     if (bc.page_life_cycle_events) {
-        life_event.name = "load";
-        life_event.timestamp = 343721.824655;
-        try cmd.sendEvent("Page.lifecycleEvent", life_event, .{ .session_id = session_id });
+        try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
+            .timestamp = ts,
+            .name = "load",
+            .frameId = target_id,
+            .loaderId = loader_id,
+        }, .{ .session_id = session_id });
     }
 
     // frameStoppedLoading
-    return cmd.sendEvent("Page.frameStoppedLoading", .{
+    return cdp.sendEvent("Page.frameStoppedLoading", .{
         .frameId = target_id,
     }, .{ .session_id = session_id });
 }
+
+const LifecycleEvent = struct {
+    frameId: []const u8,
+    loaderId: ?[]const u8,
+    name: []const u8,
+    timestamp: u32,
+};
 
 const testing = @import("../testing.zig");
 test "cdp.page: getFrameTree" {
