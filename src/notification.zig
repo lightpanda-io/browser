@@ -5,7 +5,7 @@ pub const Notification = union(enum) {
     page_navigated: PageEvent,
 
     pub const PageEvent = struct {
-        ts: u32,
+        timestamp: u32,
         url: *const URL,
     };
 };

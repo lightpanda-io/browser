@@ -198,7 +198,7 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageEvent) !void {
             .name = "init",
             .frameId = target_id,
             .loaderId = loader_id,
-            .timestamp = event.ts,
+            .timestamp = event.timestamp,
         }, .{ .session_id = session_id });
     }
 
@@ -213,7 +213,7 @@ pub fn pageNavigated(bc: anytype, event: *const Notification.PageEvent) !void {
     std.debug.assert(bc.session.page != null);
 
     var cdp = bc.cdp;
-    const ts = event.ts;
+    const timestamp = event.timestamp;
     const loader_id = bc.loader_id;
     const target_id = bc.target_id orelse unreachable;
     const session_id = bc.session_id orelse unreachable;
@@ -236,7 +236,7 @@ pub fn pageNavigated(bc: anytype, event: *const Notification.PageEvent) !void {
     // TODO: partially hard coded
     try cdp.sendEvent(
         "Page.domContentEventFired",
-        .{ .timestamp = ts },
+        .{ .timestamp = timestamp },
         .{ .session_id = session_id },
     );
 
@@ -244,7 +244,7 @@ pub fn pageNavigated(bc: anytype, event: *const Notification.PageEvent) !void {
     // TODO: partially hard coded
     if (bc.page_life_cycle_events) {
         try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
-            .timestamp = ts,
+            .timestamp = timestamp,
             .name = "DOMContentLoaded",
             .frameId = target_id,
             .loaderId = loader_id,
@@ -254,14 +254,14 @@ pub fn pageNavigated(bc: anytype, event: *const Notification.PageEvent) !void {
     // loadEventFired event
     try cdp.sendEvent(
         "Page.loadEventFired",
-        .{ .timestamp = ts },
+        .{ .timestamp = timestamp },
         .{ .session_id = session_id },
     );
 
     // lifecycle DOMContentLoaded event
     if (bc.page_life_cycle_events) {
         try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
-            .timestamp = ts,
+            .timestamp = timestamp,
             .name = "load",
             .frameId = target_id,
             .loaderId = loader_id,

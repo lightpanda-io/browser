@@ -139,7 +139,7 @@ pub const Session = struct {
     jstypes: [Types.len]usize = undefined,
 
     // recipient of notification, passed as the first parameter to notify
-    ctx: *anyopaque,
+    notify_ctx: *anyopaque,
     notify_func: *const fn (ctx: *anyopaque, notification: *const Notification) anyerror!void,
 
     fn init(self: *Session, browser: *Browser, ctx: anytype) !void {
@@ -159,9 +159,9 @@ pub const Session = struct {
         const allocator = app.allocator;
         self.* = .{
             .app = app,
-            .ctx = any_ctx,
             .env = undefined,
             .browser = browser,
+            .notify_ctx = any_ctx,
             .inspector = undefined,
             .notify_func = ContextStruct.notify,
             .http_client = browser.http_client,
@@ -281,7 +281,7 @@ pub const Session = struct {
     }
 
     fn notify(self: *const Session, notification: *const Notification) void {
-        self.notify_func(self.ctx, notification) catch |err| {
+        self.notify_func(self.notify_ctx, notification) catch |err| {
             log.err("notify {}: {}", .{ std.meta.activeTag(notification.*), err });
         };
     }
@@ -386,7 +386,7 @@ pub const Page = struct {
         var request = try self.newHTTPRequest(.GET, url, .{ .navigation = true });
         defer request.deinit();
 
-        session.notify(&.{ .page_navigate = .{ .url = url, .ts = timestamp() } });
+        session.notify(&.{ .page_navigate = .{ .url = url, .timestamp = timestamp() } });
         var response = try request.sendSync(.{});
 
         // would be different than self.url in the case of a redirect
@@ -428,7 +428,7 @@ pub const Page = struct {
             self.raw_data = arr.items;
         }
 
-        session.notify(&.{ .page_navigated = .{ .url = url, .ts = timestamp() } });
+        session.notify(&.{ .page_navigated = .{ .url = url, .timestamp = timestamp() } });
     }
 
     pub const ClickResult = union(enum) {
