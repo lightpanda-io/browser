@@ -159,13 +159,13 @@ fn navigate(cmd: anytype) !void {
     );
 
     var page = bc.session.currentPage().?;
-    try page.navigate(url, aux_data);
-
     bc.loader_id = bc.cdp.loader_id_gen.next();
     try cmd.sendResult(.{
         .frameId = target_id,
         .loaderId = bc.loader_id,
     }, .{});
+
+    try page.navigate(url, aux_data);
 }
 
 pub fn pageNavigate(bc: anytype, event: *const Notification.PageEvent) !void {
@@ -179,6 +179,14 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageEvent) !void {
     const session_id = bc.session_id orelse unreachable;
 
     bc.reset();
+
+    // frameStartedNavigating event
+    try cdp.sendEvent("Page.frameStartedNavigating", .{
+        .frameId = target_id,
+        .url = event.url.raw,
+        .loaderId = loader_id,
+        .navigationType = "differentDocument",
+    }, .{ .session_id = session_id });
 
     // frameStartedLoading event
     try cdp.sendEvent("Page.frameStartedLoading", .{
