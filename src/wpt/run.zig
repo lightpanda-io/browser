@@ -78,7 +78,6 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
         .renderer = &renderer,
     });
     defer js_env.deinit();
-    errdefer js_env.wait() catch unreachable;
 
     var storageShelf = storage.Shelf.init(alloc);
     defer storageShelf.deinit();
