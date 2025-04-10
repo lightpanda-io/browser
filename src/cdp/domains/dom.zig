@@ -30,6 +30,7 @@ pub fn processMessage(cmd: anytype) !void {
         getSearchResults,
         discardSearchResults,
         resolveNode,
+        describeNode,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -39,6 +40,7 @@ pub fn processMessage(cmd: anytype) !void {
         .getSearchResults => return getSearchResults(cmd),
         .discardSearchResults => return discardSearchResults(cmd),
         .resolveNode => return resolveNode(cmd),
+        .describeNode => return describeNode(cmd),
     }
 }
 
@@ -146,6 +148,37 @@ fn resolveNode(cmd: anytype) !void {
         .description = try remoteObject.getDescription(arena),
         .objectId = try remoteObject.getObjectId(arena),
     } }, .{});
+}
+
+fn describeNode(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        nodeId: ?Node.Id = null,
+        backendNodeId: ?Node.Id = null,
+        objectId: ?[]const u8 = null,
+        depth: ?u32 = null,
+        pierce: ?bool = null,
+    })) orelse return error.InvalidParams;
+    if (params.backendNodeId != null or params.depth != null or params.pierce != null) {
+        return error.NotYetImplementedParams;
+    }
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    if (params.nodeId != null) {
+        const node = bc.node_registry.lookup_by_id.get(params.nodeId.?) orelse return error.NodeNotFound;
+        return cmd.sendResult(.{ .root = bc.nodeWriter(node, .{}) }, .{});
+    } else if (params.objectId != null) {
+        const jsValue = try bc.session.inspector.getValueByObjectId(cmd.arena, params.objectId.?);
+        const entry = jsValue.externalEntry().?;
+        const sub_type = entry.sub_type.?;
+
+        if (!std.mem.eql(u8, sub_type[0..std.mem.len(sub_type)], "node")) {
+            return error.ObjectIdIsNotANode;
+        }
+        const node = try bc.node_registry.register(@ptrCast(entry.ptr));
+        return cmd.sendResult(.{ .root = bc.nodeWriter(node, .{}) }, .{});
+    }
+    return error.MissingParams;
 }
 
 const testing = @import("../testing.zig");
