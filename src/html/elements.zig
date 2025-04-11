@@ -136,6 +136,18 @@ pub const HTMLElement = struct {
         // attach the text node.
         _ = try parser.nodeAppendChild(n, @as(*parser.Node, @ptrCast(t)));
     }
+
+    pub fn _click(e: *parser.ElementHTML) !void {
+        const event = try parser.mouseEventCreate();
+        defer parser.mouseEventDestroy(event);
+        try parser.mouseEventInit(event, "click", .{
+            .x = 0,
+            .y = 0,
+            .bubbles = true,
+            .cancelable = true,
+        });
+        _ = try parser.elementDispatchEvent(@ptrCast(e), @ptrCast(event));
+    }
 };
 
 // Deprecated HTMLElements in Chrome (2023/03/15)
@@ -1095,4 +1107,13 @@ pub fn testExecFn(
         .{ .src = "document.getElementById('content').innerHTML = backup; true;", .ex = "true" },
     };
     try checkCases(js_env, &innertext);
+
+    var click = [_]Case{
+        .{ .src = "let click_count = 0;", .ex = "undefined" },
+        .{ .src = "let clickCbk = function() { click_count++ }", .ex = "undefined" },
+        .{ .src = "document.getElementById('content').addEventListener('click', clickCbk);", .ex = "undefined" },
+        .{ .src = "document.getElementById('content').click()", .ex = "undefined" },
+        .{ .src = "click_count", .ex = "1" },
+    };
+    try checkCases(js_env, &click);
 }

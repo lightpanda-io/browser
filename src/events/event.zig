@@ -241,7 +241,7 @@ pub fn testExecFn(
 }
 
 pub const EventHandler = struct {
-    fn handle(event: ?*parser.Event, data: parser.EventHandlerData) void {
+    fn handle(event: ?*parser.Event, data: *const parser.JSEventHandlerData) void {
         // TODO get the allocator by another way?
         var res = CallbackResult.init(data.cbk.nat_ctx.alloc);
         defer res.deinit();
