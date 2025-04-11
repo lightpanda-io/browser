@@ -2,7 +2,7 @@
   <a href="https://lightpanda.io"><img src="https://cdn.lightpanda.io/assets/images/logo/lpd-logo.png" alt="Logo" height=170></a>
 </p>
 
-<h1 align="center">Lightpanda Browser</h1>
+<h1 align="center">Lightpanda Browser</h1> 
 
 <p align="center"><a href="https://lightpanda.io/">lightpanda.io</a></p>
 
