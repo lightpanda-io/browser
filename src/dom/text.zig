@@ -38,6 +38,7 @@ pub const Text = struct {
     pub const Self = parser.Text;
     pub const prototype = *CharacterData;
     pub const mem_guarantied = true;
+    pub const sub_type = "node";
 
     pub fn constructor(userctx: UserContext, data: ?[]const u8) !*parser.Text {
         return parser.documentCreateTextNode(

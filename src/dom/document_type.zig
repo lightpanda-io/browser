@@ -27,6 +27,7 @@ pub const DocumentType = struct {
     pub const Self = parser.DocumentType;
     pub const prototype = *Node;
     pub const mem_guarantied = true;
+    pub const sub_type = "node";
 
     pub fn get_name(self: *parser.DocumentType) ![]const u8 {
         return try parser.documentTypeGetName(self);

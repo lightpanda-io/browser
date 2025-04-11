@@ -29,6 +29,7 @@ const checkCases = jsruntime.test_utils.checkCases;
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#the-location-interface
 pub const Location = struct {
     pub const mem_guarantied = true;
+    pub const sub_type = "node";
 
     url: ?URL = null,
 

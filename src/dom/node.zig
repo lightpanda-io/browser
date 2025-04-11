@@ -67,6 +67,7 @@ pub const Node = struct {
     pub const Self = parser.Node;
     pub const prototype = *EventTarget;
     pub const mem_guarantied = true;
+    pub const sub_type = "node";
 
     pub fn toInterface(node: *parser.Node) !Union {
         return switch (try parser.nodeType(node)) {

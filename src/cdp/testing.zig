@@ -107,10 +107,22 @@ const Session = struct {
     }
 };
 
-const Env = struct {
-    pub fn findOrAddValue(self: *Env, value: anytype) !@TypeOf(value) { // ?
+const Value = struct {
+    pub fn externalEntry(self: Value) ?*ExternalEntry {
         _ = self;
-        return value;
+        return allocator.create(ExternalEntry) catch unreachable;
+    }
+};
+const ExternalEntry = struct {
+    ptr: *anyopaque,
+    sub_type: [*c]const u8 = null,
+};
+
+const Env = struct {
+    pub fn findOrAddValue(self: *Env, value: anytype) !Value {
+        _ = self;
+        _ = value;
+        return .{};
     }
 };
 
@@ -121,6 +133,12 @@ const Inspector = struct {
         _ = jsValue;
         _ = groupName;
         return RemoteObject{};
+    }
+    pub fn getValueByObjectId(self: Inspector, alloc: std.mem.Allocator, object_id: []const u8) !Value {
+        _ = self;
+        _ = alloc;
+        _ = object_id;
+        return .{};
     }
 };
 

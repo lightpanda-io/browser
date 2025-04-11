@@ -43,6 +43,7 @@ pub const CharacterData = struct {
     pub const Self = parser.CharacterData;
     pub const prototype = *Node;
     pub const mem_guarantied = true;
+    pub const sub_type = "node";
 
     // JS funcs
     // --------
