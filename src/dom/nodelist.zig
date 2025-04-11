@@ -122,8 +122,8 @@ pub const NodeList = struct {
         self.nodes.deinit(alloc);
     }
 
-    pub fn append(self: *NodeList, alloc: std.mem.Allocator, node: *parser.Node) !void {
-        try self.nodes.append(alloc, node);
+    pub fn append(self: *NodeList, arena: std.mem.Allocator, node: *parser.Node) !void {
+        try self.nodes.append(arena, node);
     }
 
     pub fn get_length(self: *NodeList) u32 {
@@ -139,9 +139,8 @@ pub const NodeList = struct {
         return try Node.toInterface(n);
     }
 
-    pub fn _forEach(self: *NodeList, alloc: std.mem.Allocator, cbk: Callback) !void { // TODO handle thisArg
-        var res = CallbackResult.init(alloc);
-        defer res.deinit();
+    pub fn _forEach(self: *NodeList, arena: std.mem.Allocator, cbk: Callback) !void { // TODO handle thisArg
+        var res = CallbackResult.init(arena);
 
         for (self.nodes.items, 0..) |n, i| {
             const ii: u32 = @intCast(i);
@@ -172,12 +171,12 @@ pub const NodeList = struct {
 
     // TODO entries() https://developer.mozilla.org/en-US/docs/Web/API/NodeList/entries
 
-    pub fn postAttach(self: *NodeList, alloc: std.mem.Allocator, js_obj: jsruntime.JSObject) !void {
+    pub fn postAttach(self: *NodeList, arena: std.mem.Allocator, js_obj: jsruntime.JSObject) !void {
         const ln = self.get_length();
         var i: u32 = 0;
         while (i < ln) {
             defer i += 1;
-            const k = try std.fmt.allocPrint(alloc, "{d}", .{i});
+            const k = try std.fmt.allocPrint(arena, "{d}", .{i});
 
             const node = try self._item(i) orelse unreachable;
             try js_obj.set(k, node);

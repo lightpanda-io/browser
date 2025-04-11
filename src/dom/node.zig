@@ -262,13 +262,12 @@ pub const Node = struct {
         return try parser.nodeHasChildNodes(self);
     }
 
-    pub fn get_childNodes(self: *parser.Node, alloc: std.mem.Allocator) !NodeList {
+    pub fn get_childNodes(self: *parser.Node, arena: std.mem.Allocator) !NodeList {
         var list = NodeList.init();
-        errdefer list.deinit(alloc);
 
         var n = try parser.nodeFirstChild(self) orelse return list;
         while (true) {
-            try list.append(alloc, n);
+            try list.append(arena, n);
             n = try parser.nodeNextSibling(n) orelse return list;
         }
     }

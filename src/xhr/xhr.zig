@@ -362,7 +362,7 @@ pub const XMLHttpRequest = struct {
 
     pub fn _open(
         self: *XMLHttpRequest,
-        alloc: std.mem.Allocator,
+        arena: std.mem.Allocator,
         method: []const u8,
         url: []const u8,
         asyn: ?bool,
@@ -380,7 +380,7 @@ pub const XMLHttpRequest = struct {
 
         self.reset();
 
-        self.url = try self.origin_url.resolve(alloc, url);
+        self.url = try self.origin_url.resolve(arena, url);
         log.debug("open url ({s})", .{self.url.?});
         self.sync = if (asyn) |b| !b else false;
 
@@ -466,7 +466,7 @@ pub const XMLHttpRequest = struct {
     }
 
     // TODO body can be either a XMLHttpRequestBodyInit or a document
-    pub fn _send(self: *XMLHttpRequest, loop: *Loop, alloc: std.mem.Allocator, body: ?[]const u8) !void {
+    pub fn _send(self: *XMLHttpRequest, loop: *Loop, arena: std.mem.Allocator, body: ?[]const u8) !void {
         if (self.state != .opened) return DOMError.InvalidState;
         if (self.send_flag) return DOMError.InvalidState;
 
@@ -485,7 +485,7 @@ pub const XMLHttpRequest = struct {
 
         {
             var arr: std.ArrayListUnmanaged(u8) = .{};
-            try self.cookie_jar.forRequest(&self.url.?.uri, arr.writer(alloc), .{
+            try self.cookie_jar.forRequest(&self.url.?.uri, arr.writer(arena), .{
                 .navigation = false,
                 .origin_uri = &self.origin_url.uri,
             });
@@ -501,7 +501,7 @@ pub const XMLHttpRequest = struct {
         // var used_body: ?XMLHttpRequestBodyInit = null;
         if (body) |b| {
             if (self.method != .GET and self.method != .HEAD) {
-                request.body = try alloc.dupe(u8, b);
+                request.body = try arena.dupe(u8, b);
                 try request.addHeader("Content-Type", "text/plain; charset=UTF-8", .{});
             }
         }
@@ -636,7 +636,7 @@ pub const XMLHttpRequest = struct {
         return url.raw;
     }
 
-    pub fn get_responseXML(self: *XMLHttpRequest, alloc: std.mem.Allocator) !?Response {
+    pub fn get_responseXML(self: *XMLHttpRequest, arena: std.mem.Allocator) !?Response {
         if (self.response_type != .Empty and self.response_type != .Document) {
             return DOMError.InvalidState;
         }
@@ -652,7 +652,7 @@ pub const XMLHttpRequest = struct {
             };
         }
 
-        self.setResponseObjDocument(alloc);
+        self.setResponseObjDocument(arena);
 
         if (self.response_obj) |obj| {
             return switch (obj) {
@@ -665,7 +665,7 @@ pub const XMLHttpRequest = struct {
     }
 
     // https://xhr.spec.whatwg.org/#the-response-attribute
-    pub fn get_response(self: *XMLHttpRequest, alloc: std.mem.Allocator) !?Response {
+    pub fn get_response(self: *XMLHttpRequest, arena: std.mem.Allocator) !?Response {
         if (self.response_type == .Empty or self.response_type == .Text) {
             if (self.state == .loading or self.state == .done) {
                 return .{ .Text = try self.get_responseText() };
@@ -703,7 +703,7 @@ pub const XMLHttpRequest = struct {
         // Otherwise, if this’s response type is "document", set a
         // document response for this.
         if (self.response_type == .Document) {
-            self.setResponseObjDocument(alloc);
+            self.setResponseObjDocument(arena);
         }
 
         if (self.response_type == .JSON) {
@@ -712,7 +712,7 @@ pub const XMLHttpRequest = struct {
             // TODO Let jsonObject be the result of running parse JSON from bytes
             // on this’s received bytes. If that threw an exception, then return
             // null.
-            self.setResponseObjJSON(alloc);
+            self.setResponseObjJSON(arena);
         }
 
         if (self.response_obj) |obj| {
@@ -731,7 +731,7 @@ pub const XMLHttpRequest = struct {
     // If the par sing fails, a Failure is stored in response_obj.
     // TODO parse XML.
     // https://xhr.spec.whatwg.org/#response-object
-    fn setResponseObjDocument(self: *XMLHttpRequest, alloc: std.mem.Allocator) void {
+    fn setResponseObjDocument(self: *XMLHttpRequest, arena: std.mem.Allocator) void {
         const response_mime = &self.response_mime.?;
         const isHTML = response_mime.isHTML();
 
@@ -739,11 +739,10 @@ pub const XMLHttpRequest = struct {
         // return.
         if (!isHTML) return;
 
-        const ccharset = alloc.dupeZ(u8, response_mime.charset orelse "utf-8") catch {
+        const ccharset = arena.dupeZ(u8, response_mime.charset orelse "utf-8") catch {
             self.response_obj = .{ .Failure = true };
             return;
         };
-        defer alloc.free(ccharset);
 
         var fbs = std.io.fixedBufferStream(self.response_bytes.items);
         const doc = parser.documentHTMLParse(fbs.reader(), ccharset) catch {
@@ -760,12 +759,12 @@ pub const XMLHttpRequest = struct {
     }
 
     // setResponseObjJSON parses the received bytes as a std.json.Value.
-    fn setResponseObjJSON(self: *XMLHttpRequest, alloc: std.mem.Allocator) void {
+    fn setResponseObjJSON(self: *XMLHttpRequest, arena: std.mem.Allocator) void {
         // TODO should we use parseFromSliceLeaky if we expect the allocator is
         // already an arena?
         const p = std.json.parseFromSlice(
             JSONValue,
-            alloc,
+            arena,
             self.response_bytes.items,
             .{},
         ) catch |e| {
@@ -786,18 +785,13 @@ pub const XMLHttpRequest = struct {
         return self.response_headers.getFirstValue(name);
     }
 
-    // The caller owns the string returned.
-    // TODO change the return type to express the string ownership and let
-    // jsruntime free the string once copied to v8.
-    // see https://github.com/lightpanda-io/jsruntime-lib/issues/195
-    pub fn _getAllResponseHeaders(self: *XMLHttpRequest, alloc: std.mem.Allocator) ![]const u8 {
+    pub fn _getAllResponseHeaders(self: *XMLHttpRequest, arena: std.mem.Allocator) ![]const u8 {
         if (self.response_headers.list.items.len == 0) return "";
         self.response_headers.sort();
 
         var buf: std.ArrayListUnmanaged(u8) = .{};
-        errdefer buf.deinit(alloc);
 
-        const w = buf.writer(alloc);
+        const w = buf.writer(arena);
 
         for (self.response_headers.list.items) |entry| {
             if (entry.value.len == 0) continue;

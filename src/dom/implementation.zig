@@ -36,41 +36,34 @@ pub const DOMImplementation = struct {
 
     pub fn _createDocumentType(
         _: *DOMImplementation,
-        alloc: std.mem.Allocator,
+        arena: std.mem.Allocator,
         qname: []const u8,
         publicId: []const u8,
         systemId: []const u8,
     ) !*parser.DocumentType {
-        const cqname = try alloc.dupeZ(u8, qname);
-        defer alloc.free(cqname);
-
-        const cpublicId = try alloc.dupeZ(u8, publicId);
-        defer alloc.free(cpublicId);
-
-        const csystemId = try alloc.dupeZ(u8, systemId);
-        defer alloc.free(csystemId);
+        const cqname = try arena.dupeZ(u8, qname);
+        const cpublicId = try arena.dupeZ(u8, publicId);
+        const csystemId = try arena.dupeZ(u8, systemId);
 
         return try parser.domImplementationCreateDocumentType(cqname, cpublicId, csystemId);
     }
 
     pub fn _createDocument(
         _: *DOMImplementation,
-        alloc: std.mem.Allocator,
+        arena: std.mem.Allocator,
         namespace: ?[]const u8,
         qname: ?[]const u8,
         doctype: ?*parser.DocumentType,
     ) !*parser.Document {
         var cnamespace: ?[:0]const u8 = null;
         if (namespace) |ns| {
-            cnamespace = try alloc.dupeZ(u8, ns);
+            cnamespace = try arena.dupeZ(u8, ns);
         }
-        defer if (cnamespace) |v| alloc.free(v);
 
         var cqname: ?[:0]const u8 = null;
         if (qname) |qn| {
-            cqname = try alloc.dupeZ(u8, qn);
+            cqname = try arena.dupeZ(u8, qn);
         }
-        defer if (cqname) |v| alloc.free(v);
 
         return try parser.domImplementationCreateDocument(cnamespace, cqname, doctype);
     }

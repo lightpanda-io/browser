@@ -61,19 +61,18 @@ pub const DOMException = struct {
     pub const _INVALID_NODE_TYPE_ERR = 24;
     pub const _DATA_CLONE_ERR = 25;
 
-    // TODO: deinit
-    pub fn init(alloc: std.mem.Allocator, err: anyerror, callerName: []const u8) anyerror!DOMException {
+    pub fn init(arena: std.mem.Allocator, err: anyerror, callerName: []const u8) anyerror!DOMException {
         const errCast = @as(parser.DOMError, @errorCast(err));
         const errName = DOMException.name(errCast);
         const str = switch (errCast) {
             error.HierarchyRequest => try allocPrint(
-                alloc,
+                arena,
                 "{s}: Failed to execute '{s}' on 'Node': The new child element contains the parent.",
                 .{ errName, callerName },
             ),
             error.NoError => unreachable,
             else => try allocPrint(
-                alloc,
+                arena,
                 "{s}: TODO message", // TODO: implement other messages
                 .{DOMException.name(errCast)},
             ),

@@ -100,44 +100,43 @@ pub const HTMLDocument = struct {
         return v;
     }
 
-    pub fn _getElementsByName(self: *parser.DocumentHTML, alloc: std.mem.Allocator, name: []const u8) !NodeList {
+    pub fn _getElementsByName(self: *parser.DocumentHTML, arena: std.mem.Allocator, name: []const u8) !NodeList {
         var list = NodeList.init();
-        errdefer list.deinit(alloc);
 
         if (name.len == 0) return list;
 
         const root = parser.documentHTMLToNode(self);
-        var c = try collection.HTMLCollectionByName(alloc, root, name, false);
+        var c = try collection.HTMLCollectionByName(arena, root, name, false);
 
         const ln = try c.get_length();
         var i: u32 = 0;
         while (i < ln) {
             const n = try c.item(i) orelse break;
-            try list.append(alloc, n);
+            try list.append(arena, n);
             i += 1;
         }
 
         return list;
     }
 
-    pub fn get_images(self: *parser.DocumentHTML, alloc: std.mem.Allocator) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(alloc, parser.documentHTMLToNode(self), "img", false);
+    pub fn get_images(self: *parser.DocumentHTML, arena: std.mem.Allocator) !collection.HTMLCollection {
+        return try collection.HTMLCollectionByTagName(arena, parser.documentHTMLToNode(self), "img", false);
     }
 
-    pub fn get_embeds(self: *parser.DocumentHTML, alloc: std.mem.Allocator) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(alloc, parser.documentHTMLToNode(self), "embed", false);
+    pub fn get_embeds(self: *parser.DocumentHTML, arena: std.mem.Allocator) !collection.HTMLCollection {
+        return try collection.HTMLCollectionByTagName(arena, parser.documentHTMLToNode(self), "embed", false);
     }
 
-    pub fn get_plugins(self: *parser.DocumentHTML, alloc: std.mem.Allocator) !collection.HTMLCollection {
-        return get_embeds(self, alloc);
+    pub fn get_plugins(self: *parser.DocumentHTML, arena: std.mem.Allocator) !collection.HTMLCollection {
+        return get_embeds(self, arena);
     }
 
-    pub fn get_forms(self: *parser.DocumentHTML, alloc: std.mem.Allocator) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(alloc, parser.documentHTMLToNode(self), "form", false);
+    pub fn get_forms(self: *parser.DocumentHTML, arena: std.mem.Allocator) !collection.HTMLCollection {
+        return try collection.HTMLCollectionByTagName(arena, parser.documentHTMLToNode(self), "form", false);
     }
 
-    pub fn get_scripts(self: *parser.DocumentHTML, alloc: std.mem.Allocator) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(alloc, parser.documentHTMLToNode(self), "script", false);
+    pub fn get_scripts(self: *parser.DocumentHTML, arena: std.mem.Allocator) !collection.HTMLCollection {
+        return try collection.HTMLCollectionByTagName(arena, parser.documentHTMLToNode(self), "script", false);
     }
 
     pub fn get_applets(_: *parser.DocumentHTML) !collection.HTMLCollection {
