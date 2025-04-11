@@ -106,24 +106,16 @@ pub const Element = struct {
         return try parser.nodeGetAttributes(parser.elementToNode(self));
     }
 
-    pub fn get_innerHTML(self: *parser.Element, alloc: std.mem.Allocator) ![]const u8 {
-        var buf = std.ArrayList(u8).init(alloc);
-        defer buf.deinit();
-
+    pub fn get_innerHTML(self: *parser.Element, arena: std.mem.Allocator) ![]const u8 {
+        var buf = std.ArrayList(u8).init(arena);
         try dump.writeChildren(parser.elementToNode(self), buf.writer());
-        // TODO express the caller owned the slice.
-        // https://github.com/lightpanda-io/jsruntime-lib/issues/195
-        return buf.toOwnedSlice();
+        return buf.items;
     }
 
-    pub fn get_outerHTML(self: *parser.Element, alloc: std.mem.Allocator) ![]const u8 {
-        var buf = std.ArrayList(u8).init(alloc);
-        defer buf.deinit();
-
+    pub fn get_outerHTML(self: *parser.Element, arena: std.mem.Allocator) ![]const u8 {
+        var buf = std.ArrayList(u8).init(arena);
         try dump.writeNode(parser.elementToNode(self), buf.writer());
-        // TODO express the caller owned the slice.
-        // https://github.com/lightpanda-io/jsruntime-lib/issues/195
-        return buf.toOwnedSlice();
+        return buf.items;
     }
 
     pub fn set_innerHTML(self: *parser.Element, str: []const u8) !void {
@@ -232,11 +224,11 @@ pub const Element = struct {
 
     pub fn _getElementsByTagName(
         self: *parser.Element,
-        alloc: std.mem.Allocator,
+        arena: std.mem.Allocator,
         tag_name: []const u8,
     ) !collection.HTMLCollection {
         return try collection.HTMLCollectionByTagName(
-            alloc,
+            arena,
             parser.elementToNode(self),
             tag_name,
             false,
@@ -245,11 +237,11 @@ pub const Element = struct {
 
     pub fn _getElementsByClassName(
         self: *parser.Element,
-        alloc: std.mem.Allocator,
+        arena: std.mem.Allocator,
         classNames: []const u8,
     ) !collection.HTMLCollection {
         return try collection.HTMLCollectionByClassName(
-            alloc,
+            arena,
             parser.elementToNode(self),
             classNames,
             false,
@@ -312,18 +304,18 @@ pub const Element = struct {
         }
     }
 
-    pub fn _querySelector(self: *parser.Element, alloc: std.mem.Allocator, selector: []const u8) !?Union {
+    pub fn _querySelector(self: *parser.Element, arena: std.mem.Allocator, selector: []const u8) !?Union {
         if (selector.len == 0) return null;
 
-        const n = try css.querySelector(alloc, parser.elementToNode(self), selector);
+        const n = try css.querySelector(arena, parser.elementToNode(self), selector);
 
         if (n == null) return null;
 
         return try toInterface(parser.nodeToElement(n.?));
     }
 
-    pub fn _querySelectorAll(self: *parser.Element, alloc: std.mem.Allocator, selector: []const u8) !NodeList {
-        return css.querySelectorAll(alloc, parser.elementToNode(self), selector);
+    pub fn _querySelectorAll(self: *parser.Element, arena: std.mem.Allocator, selector: []const u8) !NodeList {
+        return css.querySelectorAll(arena, parser.elementToNode(self), selector);
     }
 
     // TODO according with https://dom.spec.whatwg.org/#parentnode, the

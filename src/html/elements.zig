@@ -218,47 +218,34 @@ pub const HTMLAnchorElement = struct {
         return try parser.nodeSetTextContent(parser.anchorToNode(self), v);
     }
 
-    inline fn url(self: *parser.Anchor, alloc: std.mem.Allocator) !URL {
+    inline fn url(self: *parser.Anchor, arena: std.mem.Allocator) !URL {
         const href = try parser.anchorGetHref(self);
-        return URL.constructor(alloc, href, null); // TODO inject base url
+        return URL.constructor(arena, href, null); // TODO inject base url
     }
 
-    // TODO return a disposable string
-    pub fn get_origin(self: *parser.Anchor, alloc: std.mem.Allocator) ![]const u8 {
-        var u = try url(self, alloc);
-        defer u.deinit(alloc);
-
-        return try u.get_origin(alloc);
+    pub fn get_origin(self: *parser.Anchor, arena: std.mem.Allocator) ![]const u8 {
+        var u = try url(self, arena);
+        return try u.get_origin(arena);
     }
 
-    // TODO return a disposable string
-    pub fn get_protocol(self: *parser.Anchor, alloc: std.mem.Allocator) ![]const u8 {
-        var u = try url(self, alloc);
-        defer u.deinit(alloc);
-
-        return u.get_protocol(alloc);
+    pub fn get_protocol(self: *parser.Anchor, arena: std.mem.Allocator) ![]const u8 {
+        var u = try url(self, arena);
+        return u.get_protocol(arena);
     }
 
-    pub fn set_protocol(self: *parser.Anchor, alloc: std.mem.Allocator, v: []const u8) !void {
-        var u = try url(self, alloc);
-        defer u.deinit(alloc);
-
+    pub fn set_protocol(self: *parser.Anchor, arena: std.mem.Allocator, v: []const u8) !void {
+        var u = try url(self, arena);
         u.uri.scheme = v;
-        const href = try u.format(alloc);
-        defer alloc.free(href);
-
+        const href = try u.format(arena);
         try parser.anchorSetHref(self, href);
     }
 
-    // TODO return a disposable string
-    pub fn get_host(self: *parser.Anchor, alloc: std.mem.Allocator) ![]const u8 {
-        var u = try url(self, alloc);
-        defer u.deinit(alloc);
-
-        return try u.get_host(alloc);
+    pub fn get_host(self: *parser.Anchor, arena: std.mem.Allocator) ![]const u8 {
+        var u = try url(self, arena);
+        return try u.get_host(arena);
     }
 
-    pub fn set_host(self: *parser.Anchor, alloc: std.mem.Allocator, v: []const u8) !void {
+    pub fn set_host(self: *parser.Anchor, arena: std.mem.Allocator, v: []const u8) !void {
         // search : separator
         var p: ?u16 = null;
         var h: []const u8 = undefined;
@@ -270,9 +257,7 @@ pub const HTMLAnchorElement = struct {
             }
         }
 
-        var u = try url(self, alloc);
-        defer u.deinit(alloc);
-
+        var u = try url(self, arena);
         if (p) |pp| {
             u.uri.host = .{ .raw = h };
             u.uri.port = pp;
@@ -281,160 +266,118 @@ pub const HTMLAnchorElement = struct {
             u.uri.port = null;
         }
 
-        const href = try u.format(alloc);
-        defer alloc.free(href);
-
+        const href = try u.format(arena);
         try parser.anchorSetHref(self, href);
     }
 
-    // TODO return a disposable string
-    pub fn get_hostname(self: *parser.Anchor, alloc: std.mem.Allocator) ![]const u8 {
-        var u = try url(self, alloc);
-        defer u.deinit(alloc);
-
-        return try alloc.dupe(u8, u.get_hostname());
+    pub fn get_hostname(self: *parser.Anchor, arena: std.mem.Allocator) ![]const u8 {
+        var u = try url(self, arena);
+        return try arena.dupe(u8, u.get_hostname());
     }
 
-    pub fn set_hostname(self: *parser.Anchor, alloc: std.mem.Allocator, v: []const u8) !void {
-        var u = try url(self, alloc);
-        defer u.deinit(alloc);
-
+    pub fn set_hostname(self: *parser.Anchor, arena: std.mem.Allocator, v: []const u8) !void {
+        var u = try url(self, arena);
         u.uri.host = .{ .raw = v };
-        const href = try u.format(alloc);
+        const href = try u.format(arena);
         try parser.anchorSetHref(self, href);
     }
 
-    // TODO return a disposable string
-    pub fn get_port(self: *parser.Anchor, alloc: std.mem.Allocator) ![]const u8 {
-        var u = try url(self, alloc);
-        defer u.deinit(alloc);
-
-        return try u.get_port(alloc);
+    pub fn get_port(self: *parser.Anchor, arena: std.mem.Allocator) ![]const u8 {
+        var u = try url(self, arena);
+        return try u.get_port(arena);
     }
 
-    pub fn set_port(self: *parser.Anchor, alloc: std.mem.Allocator, v: ?[]const u8) !void {
-        var u = try url(self, alloc);
-        defer u.deinit(alloc);
-
+    pub fn set_port(self: *parser.Anchor, arena: std.mem.Allocator, v: ?[]const u8) !void {
+        var u = try url(self, arena);
         if (v != null and v.?.len > 0) {
             u.uri.port = try std.fmt.parseInt(u16, v.?, 10);
         } else {
             u.uri.port = null;
         }
 
-        const href = try u.format(alloc);
-        defer alloc.free(href);
-
+        const href = try u.format(arena);
         try parser.anchorSetHref(self, href);
     }
 
-    // TODO return a disposable string
-    pub fn get_username(self: *parser.Anchor, alloc: std.mem.Allocator) ![]const u8 {
-        var u = try url(self, alloc);
-        defer u.deinit(alloc);
-
-        return try alloc.dupe(u8, u.get_username());
+    pub fn get_username(self: *parser.Anchor, arena: std.mem.Allocator) ![]const u8 {
+        var u = try url(self, arena);
+        return try arena.dupe(u8, u.get_username());
     }
 
-    pub fn set_username(self: *parser.Anchor, alloc: std.mem.Allocator, v: ?[]const u8) !void {
-        var u = try url(self, alloc);
-        defer u.deinit(alloc);
-
+    pub fn set_username(self: *parser.Anchor, arena: std.mem.Allocator, v: ?[]const u8) !void {
+        var u = try url(self, arena);
         if (v) |vv| {
             u.uri.user = .{ .raw = vv };
         } else {
             u.uri.user = null;
         }
-        const href = try u.format(alloc);
-        defer alloc.free(href);
-
+        const href = try u.format(arena);
         try parser.anchorSetHref(self, href);
     }
 
-    // TODO return a disposable string
-    pub fn get_password(self: *parser.Anchor, alloc: std.mem.Allocator) ![]const u8 {
-        var u = try url(self, alloc);
-        defer u.deinit(alloc);
-
-        return try alloc.dupe(u8, u.get_password());
+    pub fn get_password(self: *parser.Anchor, arena: std.mem.Allocator) ![]const u8 {
+        var u = try url(self, arena);
+        return try arena.dupe(u8, u.get_password());
     }
 
-    pub fn set_password(self: *parser.Anchor, alloc: std.mem.Allocator, v: ?[]const u8) !void {
-        var u = try url(self, alloc);
-        defer u.deinit(alloc);
+    pub fn set_password(self: *parser.Anchor, arena: std.mem.Allocator, v: ?[]const u8) !void {
+        var u = try url(self, arena);
 
         if (v) |vv| {
             u.uri.password = .{ .raw = vv };
         } else {
             u.uri.password = null;
         }
-        const href = try u.format(alloc);
-        defer alloc.free(href);
-
+        const href = try u.format(arena);
         try parser.anchorSetHref(self, href);
     }
 
-    // TODO return a disposable string
-    pub fn get_pathname(self: *parser.Anchor, alloc: std.mem.Allocator) ![]const u8 {
-        var u = try url(self, alloc);
-        defer u.deinit(alloc);
+    pub fn get_pathname(self: *parser.Anchor, arena: std.mem.Allocator) ![]const u8 {
+        var u = try url(self, arena);
+        defer u.deinit(arena);
 
-        return try alloc.dupe(u8, u.get_pathname());
+        return try arena.dupe(u8, u.get_pathname());
     }
 
-    pub fn set_pathname(self: *parser.Anchor, alloc: std.mem.Allocator, v: []const u8) !void {
-        var u = try url(self, alloc);
-        defer u.deinit(alloc);
+    pub fn set_pathname(self: *parser.Anchor, arena: std.mem.Allocator, v: []const u8) !void {
+        var u = try url(self, arena);
 
         u.uri.path = .{ .raw = v };
-        const href = try u.format(alloc);
-        defer alloc.free(href);
+        const href = try u.format(arena);
 
         try parser.anchorSetHref(self, href);
     }
 
-    // TODO return a disposable string
-    pub fn get_search(self: *parser.Anchor, alloc: std.mem.Allocator) ![]const u8 {
-        var u = try url(self, alloc);
-        defer u.deinit(alloc);
-
-        return try u.get_search(alloc);
+    pub fn get_search(self: *parser.Anchor, arena: std.mem.Allocator) ![]const u8 {
+        var u = try url(self, arena);
+        return try u.get_search(arena);
     }
 
-    pub fn set_search(self: *parser.Anchor, alloc: std.mem.Allocator, v: ?[]const u8) !void {
-        var u = try url(self, alloc);
-        defer u.deinit(alloc);
-
+    pub fn set_search(self: *parser.Anchor, arena: std.mem.Allocator, v: ?[]const u8) !void {
+        var u = try url(self, arena);
         if (v) |vv| {
             u.uri.query = .{ .raw = vv };
         } else {
             u.uri.query = null;
         }
-        const href = try u.format(alloc);
-        defer alloc.free(href);
+        const href = try u.format(arena);
 
         try parser.anchorSetHref(self, href);
     }
 
-    // TODO return a disposable string
-    pub fn get_hash(self: *parser.Anchor, alloc: std.mem.Allocator) ![]const u8 {
-        var u = try url(self, alloc);
-        defer u.deinit(alloc);
-
-        return try u.get_hash(alloc);
+    pub fn get_hash(self: *parser.Anchor, arena: std.mem.Allocator) ![]const u8 {
+        var u = try url(self, arena);
+        return try u.get_hash(arena);
     }
 
-    pub fn set_hash(self: *parser.Anchor, alloc: std.mem.Allocator, v: ?[]const u8) !void {
-        var u = try url(self, alloc);
-        defer u.deinit(alloc);
-
+    pub fn set_hash(self: *parser.Anchor, arena: std.mem.Allocator, v: ?[]const u8) !void {
+        var u = try url(self, arena);
         if (v) |vv| {
             u.uri.fragment = .{ .raw = vv };
         } else {
             u.uri.fragment = null;
         }
-        const href = try u.format(alloc);
-        defer alloc.free(href);
+        const href = try u.format(arena);
 
         try parser.anchorSetHref(self, href);
     }

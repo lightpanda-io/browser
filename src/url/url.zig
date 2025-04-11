@@ -71,12 +71,8 @@ pub const URL = struct {
         self.search_params.deinit(alloc);
     }
 
-    // the caller must free the returned string.
-    // TODO return a disposable string
-    // https://github.com/lightpanda-io/jsruntime-lib/issues/195
-    pub fn get_origin(self: *URL, alloc: std.mem.Allocator) ![]const u8 {
-        var buf = std.ArrayList(u8).init(alloc);
-        defer buf.deinit();
+    pub fn get_origin(self: *URL, arena: std.mem.Allocator) ![]const u8 {
+        var buf = std.ArrayList(u8).init(arena);
 
         try self.uri.writeToStream(.{
             .scheme = true,
@@ -91,26 +87,20 @@ pub const URL = struct {
 
     // get_href returns the URL by writing all its components.
     // The query is replaced by a dump of search params.
-    //
-    // the caller must free the returned string.
-    // TODO return a disposable string
-    // https://github.com/lightpanda-io/jsruntime-lib/issues/195
-    pub fn get_href(self: *URL, alloc: std.mem.Allocator) ![]const u8 {
+    pub fn get_href(self: *URL, arena: std.mem.Allocator) ![]const u8 {
         // retrieve the query search from search_params.
         const cur = self.uri.query;
         defer self.uri.query = cur;
-        var q = std.ArrayList(u8).init(alloc);
-        defer q.deinit();
+        var q = std.ArrayList(u8).init(arena);
         try self.search_params.values.encode(q.writer());
         self.uri.query = .{ .percent_encoded = q.items };
 
-        return try self.format(alloc);
+        return try self.format(arena);
     }
 
     // format the url with all its components.
-    pub fn format(self: *URL, alloc: std.mem.Allocator) ![]const u8 {
-        var buf = std.ArrayList(u8).init(alloc);
-        defer buf.deinit();
+    pub fn format(self: *URL, arena: std.mem.Allocator) ![]const u8 {
+        var buf = std.ArrayList(u8).init(arena);
 
         try self.uri.writeToStream(.{
             .scheme = true,
@@ -123,11 +113,8 @@ pub const URL = struct {
         return try buf.toOwnedSlice();
     }
 
-    // the caller must free the returned string.
-    // TODO return a disposable string
-    // https://github.com/lightpanda-io/jsruntime-lib/issues/195
-    pub fn get_protocol(self: *URL, alloc: std.mem.Allocator) ![]const u8 {
-        return try std.mem.concat(alloc, u8, &[_][]const u8{ self.uri.scheme, ":" });
+    pub fn get_protocol(self: *URL, arena: std.mem.Allocator) ![]const u8 {
+        return try std.mem.concat(arena, u8, &[_][]const u8{ self.uri.scheme, ":" });
     }
 
     pub fn get_username(self: *URL) []const u8 {
@@ -138,12 +125,8 @@ pub const URL = struct {
         return uriComponentNullStr(self.uri.password);
     }
 
-    // the caller must free the returned string.
-    // TODO return a disposable string
-    // https://github.com/lightpanda-io/jsruntime-lib/issues/195
-    pub fn get_host(self: *URL, alloc: std.mem.Allocator) ![]const u8 {
-        var buf = std.ArrayList(u8).init(alloc);
-        defer buf.deinit();
+    pub fn get_host(self: *URL, arena: std.mem.Allocator) ![]const u8 {
+        var buf = std.ArrayList(u8).init(arena);
 
         try self.uri.writeToStream(.{
             .scheme = false,
@@ -153,24 +136,20 @@ pub const URL = struct {
             .query = false,
             .fragment = false,
         }, buf.writer());
-        return try buf.toOwnedSlice();
+        return buf.items;
     }
 
     pub fn get_hostname(self: *URL) []const u8 {
         return uriComponentNullStr(self.uri.host);
     }
 
-    // the caller must free the returned string.
-    // TODO return a disposable string
-    // https://github.com/lightpanda-io/jsruntime-lib/issues/195
-    pub fn get_port(self: *URL, alloc: std.mem.Allocator) ![]const u8 {
-        if (self.uri.port == null) return try alloc.dupe(u8, "");
+    pub fn get_port(self: *URL, arena: std.mem.Allocator) ![]const u8 {
+        if (self.uri.port == null) return "";
 
-        var buf = std.ArrayList(u8).init(alloc);
-        defer buf.deinit();
+        var buf = std.ArrayList(u8).init(arena);
 
         try std.fmt.formatInt(self.uri.port.?, 10, .lower, .{}, buf.writer());
-        return try buf.toOwnedSlice();
+        return buf.items;
     }
 
     pub fn get_pathname(self: *URL) []const u8 {
@@ -178,35 +157,28 @@ pub const URL = struct {
         return uriComponentStr(self.uri.path);
     }
 
-    // the caller must free the returned string.
-    // TODO return a disposable string
-    // https://github.com/lightpanda-io/jsruntime-lib/issues/195
-    pub fn get_search(self: *URL, alloc: std.mem.Allocator) ![]const u8 {
-        if (self.search_params.get_size() == 0) return try alloc.dupe(u8, "");
+    pub fn get_search(self: *URL, arena: std.mem.Allocator) ![]const u8 {
+        if (self.search_params.get_size() == 0) return "";
 
         var buf: std.ArrayListUnmanaged(u8) = .{};
-        defer buf.deinit(alloc);
 
-        try buf.append(alloc, '?');
-        try self.search_params.values.encode(buf.writer(alloc));
-        return buf.toOwnedSlice(alloc);
+        try buf.append(arena, '?');
+        try self.search_params.values.encode(buf.writer(arena));
+        return buf.items;
     }
 
-    // the caller must free the returned string.
-    // TODO return a disposable string
-    // https://github.com/lightpanda-io/jsruntime-lib/issues/195
-    pub fn get_hash(self: *URL, alloc: std.mem.Allocator) ![]const u8 {
-        if (self.uri.fragment == null) return try alloc.dupe(u8, "");
+    pub fn get_hash(self: *URL, arena: std.mem.Allocator) ![]const u8 {
+        if (self.uri.fragment == null) return "";
 
-        return try std.mem.concat(alloc, u8, &[_][]const u8{ "#", uriComponentNullStr(self.uri.fragment) });
+        return try std.mem.concat(arena, u8, &[_][]const u8{ "#", uriComponentNullStr(self.uri.fragment) });
     }
 
     pub fn get_searchParams(self: *URL) *URLSearchParams {
         return &self.search_params;
     }
 
-    pub fn _toJSON(self: *URL, alloc: std.mem.Allocator) ![]const u8 {
-        return try self.get_href(alloc);
+    pub fn _toJSON(self: *URL, arena: std.mem.Allocator) ![]const u8 {
+        return try self.get_href(arena);
     }
 };
 

@@ -145,18 +145,18 @@ pub const Document = struct {
     // HTMLCollection in zig here.
     pub fn _getElementsByTagName(
         self: *parser.Document,
-        alloc: std.mem.Allocator,
+        arena: std.mem.Allocator,
         tag_name: []const u8,
     ) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(alloc, parser.documentToNode(self), tag_name, true);
+        return try collection.HTMLCollectionByTagName(arena, parser.documentToNode(self), tag_name, true);
     }
 
     pub fn _getElementsByClassName(
         self: *parser.Document,
-        alloc: std.mem.Allocator,
+        arena: std.mem.Allocator,
         classNames: []const u8,
     ) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByClassName(alloc, parser.documentToNode(self), classNames, true);
+        return try collection.HTMLCollectionByClassName(arena, parser.documentToNode(self), classNames, true);
     }
 
     pub fn _createDocumentFragment(self: *parser.Document) !*parser.DocumentFragment {
@@ -218,18 +218,18 @@ pub const Document = struct {
         return 1;
     }
 
-    pub fn _querySelector(self: *parser.Document, alloc: std.mem.Allocator, selector: []const u8) !?ElementUnion {
+    pub fn _querySelector(self: *parser.Document, arena: std.mem.Allocator, selector: []const u8) !?ElementUnion {
         if (selector.len == 0) return null;
 
-        const n = try css.querySelector(alloc, parser.documentToNode(self), selector);
+        const n = try css.querySelector(arena, parser.documentToNode(self), selector);
 
         if (n == null) return null;
 
         return try Element.toInterface(parser.nodeToElement(n.?));
     }
 
-    pub fn _querySelectorAll(self: *parser.Document, alloc: std.mem.Allocator, selector: []const u8) !NodeList {
-        return css.querySelectorAll(alloc, parser.documentToNode(self), selector);
+    pub fn _querySelectorAll(self: *parser.Document, arena: std.mem.Allocator, selector: []const u8) !NodeList {
+        return css.querySelectorAll(arena, parser.documentToNode(self), selector);
     }
 
     // TODO according with https://dom.spec.whatwg.org/#parentnode, the

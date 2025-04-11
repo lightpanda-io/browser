@@ -41,18 +41,15 @@ pub const XMLSerializer = struct {
 
     pub fn deinit(_: *XMLSerializer, _: std.mem.Allocator) void {}
 
-    pub fn _serializeToString(_: XMLSerializer, alloc: std.mem.Allocator, root: *parser.Node) ![]const u8 {
-        var buf = std.ArrayList(u8).init(alloc);
-        defer buf.deinit();
+    pub fn _serializeToString(_: XMLSerializer, arena: std.mem.Allocator, root: *parser.Node) ![]const u8 {
+        var buf = std.ArrayList(u8).init(arena);
 
         if (try parser.nodeType(root) == .document) {
             try dump.writeHTML(@as(*parser.Document, @ptrCast(root)), buf.writer());
         } else {
             try dump.writeNode(root, buf.writer());
         }
-        // TODO express the caller owned the slice.
-        // https://github.com/lightpanda-io/jsruntime-lib/issues/195
-        return try buf.toOwnedSlice();
+        return buf.items;
     }
 };
 

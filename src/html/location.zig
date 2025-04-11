@@ -34,20 +34,20 @@ pub const Location = struct {
 
     pub fn deinit(_: *Location, _: std.mem.Allocator) void {}
 
-    pub fn get_href(self: *Location, alloc: std.mem.Allocator) ![]const u8 {
-        if (self.url) |*u| return u.get_href(alloc);
+    pub fn get_href(self: *Location, arena: std.mem.Allocator) ![]const u8 {
+        if (self.url) |*u| return u.get_href(arena);
 
         return "";
     }
 
-    pub fn get_protocol(self: *Location, alloc: std.mem.Allocator) ![]const u8 {
-        if (self.url) |*u| return u.get_protocol(alloc);
+    pub fn get_protocol(self: *Location, arena: std.mem.Allocator) ![]const u8 {
+        if (self.url) |*u| return u.get_protocol(arena);
 
         return "";
     }
 
-    pub fn get_host(self: *Location, alloc: std.mem.Allocator) ![]const u8 {
-        if (self.url) |*u| return u.get_host(alloc);
+    pub fn get_host(self: *Location, arena: std.mem.Allocator) ![]const u8 {
+        if (self.url) |*u| return u.get_host(arena);
 
         return "";
     }
@@ -58,8 +58,8 @@ pub const Location = struct {
         return "";
     }
 
-    pub fn get_port(self: *Location, alloc: std.mem.Allocator) ![]const u8 {
-        if (self.url) |*u| return u.get_port(alloc);
+    pub fn get_port(self: *Location, arena: std.mem.Allocator) ![]const u8 {
+        if (self.url) |*u| return u.get_port(arena);
 
         return "";
     }
@@ -70,20 +70,20 @@ pub const Location = struct {
         return "";
     }
 
-    pub fn get_search(self: *Location, alloc: std.mem.Allocator) ![]const u8 {
-        if (self.url) |*u| return u.get_search(alloc);
+    pub fn get_search(self: *Location, arena: std.mem.Allocator) ![]const u8 {
+        if (self.url) |*u| return u.get_search(arena);
 
         return "";
     }
 
-    pub fn get_hash(self: *Location, alloc: std.mem.Allocator) ![]const u8 {
-        if (self.url) |*u| return u.get_hash(alloc);
+    pub fn get_hash(self: *Location, arena: std.mem.Allocator) ![]const u8 {
+        if (self.url) |*u| return u.get_hash(arena);
 
         return "";
     }
 
-    pub fn get_origin(self: *Location, alloc: std.mem.Allocator) ![]const u8 {
-        if (self.url) |*u| return u.get_origin(alloc);
+    pub fn get_origin(self: *Location, arena: std.mem.Allocator) ![]const u8 {
+        if (self.url) |*u| return u.get_origin(arena);
 
         return "";
     }
@@ -101,8 +101,8 @@ pub const Location = struct {
     // TODO
     pub fn _reload(_: *Location) !void {}
 
-    pub fn _toString(self: *Location, alloc: std.mem.Allocator) ![]const u8 {
-        return try self.get_href(alloc);
+    pub fn _toString(self: *Location, arena: std.mem.Allocator) ![]const u8 {
+        return try self.get_href(arena);
     }
 };
 
