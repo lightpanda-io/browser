@@ -155,10 +155,10 @@ fn describeNode(cmd: anytype) !void {
         nodeId: ?Node.Id = null,
         backendNodeId: ?Node.Id = null,
         objectId: ?[]const u8 = null,
-        depth: ?u32 = null,
-        pierce: ?bool = null,
+        depth: u32 = 1,
+        pierce: bool = false,
     })) orelse return error.InvalidParams;
-    if (params.backendNodeId != null or params.depth != null or params.pierce != null) {
+    if (params.backendNodeId != null or params.depth != 1 or params.pierce) {
         return error.NotYetImplementedParams;
     }
 
@@ -169,12 +169,11 @@ fn describeNode(cmd: anytype) !void {
         return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{}) }, .{});
     } else if (params.objectId != null) {
         const jsValue = try bc.session.inspector.getValueByObjectId(cmd.arena, params.objectId.?);
-        const entry = jsValue.externalEntry().?;
-        const sub_type = entry.sub_type.?;
 
-        if (!std.mem.eql(u8, sub_type[0..std.mem.len(sub_type)], "node")) {
-            return error.ObjectIdIsNotANode;
-        }
+        const entry = jsValue.externalEntry() orelse return error.ObjectIdIsNotANode;
+        const sub_type = entry.sub_type orelse return error.ObjectIdIsNotANode;
+        if (!std.mem.eql(u8, sub_type[0..std.mem.len(sub_type)], "node")) return error.ObjectIdIsNotANode;
+
         const node = try bc.node_registry.register(@ptrCast(entry.ptr));
         return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{}) }, .{});
     }
