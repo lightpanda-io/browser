@@ -132,21 +132,15 @@ pub const HTMLElement = struct {
     }
 
     pub fn _click(e: *parser.ElementHTML) !void {
-        _ = e;
-        // TODO needs: https://github.com/lightpanda-io/browser/pull/501
-        // TODO: when the above is merged, should we get the element coordinates?
-
-        // const event = try parser.mouseEventCreate();
-        // defer parser.mouseEventDestroy(event);
-        // try parser.mouseEventInit(event, "click", .{
-        //     .bubbles = true,
-        //     .cancelable = true,
-        //
-        //     // get the coordinates?
-        //     .x = 0,
-        //     .y = 0,
-        // });
-        // _ = try parser.elementDispatchEvent(@ptrCast(e), @ptrCast(event));
+        const event = try parser.mouseEventCreate();
+        defer parser.mouseEventDestroy(event);
+        try parser.mouseEventInit(event, "click", .{
+            .x = 0,
+            .y = 0,
+            .bubbles = true,
+            .cancelable = true,
+        });
+        _ = try parser.elementDispatchEvent(@ptrCast(e), @ptrCast(event));
     }
 };
 
@@ -999,5 +993,13 @@ test "Browser.HTML.Element" {
         .{ "document.getElementById('content').innerText = 'foo';", "foo" },
         .{ "document.getElementById('content').innerText", "foo" },
         .{ "document.getElementById('content').innerHTML = backup; true;", "true" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "let click_count = 0;", "undefined" },
+        .{ "let clickCbk = function() { click_count++ }", "undefined" },
+        .{ "document.getElementById('content').addEventListener('click', clickCbk);", "undefined" },
+        .{ "document.getElementById('content').click()", "undefined" },
+        .{ "click_count", "1" },
     }, .{});
 }

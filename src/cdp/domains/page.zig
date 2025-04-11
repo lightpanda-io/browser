@@ -151,13 +151,6 @@ fn navigate(cmd: anytype) !void {
 
     const url = try URL.parse(params.url, "https");
 
-    const aux_data = try std.fmt.allocPrint(
-        cmd.arena,
-        // NOTE: we assume this is the default web page
-        "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}",
-        .{target_id},
-    );
-
     var page = bc.session.currentPage().?;
     bc.loader_id = bc.cdp.loader_id_gen.next();
     try cmd.sendResult(.{
@@ -165,10 +158,13 @@ fn navigate(cmd: anytype) !void {
         .loaderId = bc.loader_id,
     }, .{});
 
-    try page.navigate(url, aux_data);
+    std.debug.print("page: {s}\n", .{target_id});
+    try page.navigate(url, .{
+        .reason = .address_bar,
+    });
 }
 
-pub fn pageNavigate(bc: anytype, event: *const Notification.PageEvent) !void {
+pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void {
     // I don't think it's possible that we get these notifications and don't
     // have these things setup.
     std.debug.assert(bc.session.page != null);
@@ -179,6 +175,22 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageEvent) !void {
     const session_id = bc.session_id orelse unreachable;
 
     bc.reset();
+
+    if (event.reason == .anchor) {
+        try cdp.sendEvent("Page.frameScheduledNavigation", .{
+            .frameId = target_id,
+            .delay = 0,
+            .reason = "anchorClick",
+            .url = event.url.raw,
+        }, .{ .session_id = session_id });
+
+        try cdp.sendEvent("Page.frameRequestedNavigation", .{
+            .frameId = target_id,
+            .reason = "anchorClick",
+            .url = event.url.raw,
+            .disposition = "currentTab",
+        }, .{ .session_id = session_id });
+    }
 
     // frameStartedNavigating event
     try cdp.sendEvent("Page.frameStartedNavigating", .{
@@ -202,12 +214,18 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageEvent) !void {
         }, .{ .session_id = session_id });
     }
 
+    if (event.reason == .anchor) {
+        try cdp.sendEvent("Page.frameClearedScheduledNavigation", .{
+            .frameId = target_id,
+        }, .{ .session_id = session_id });
+    }
+
     // Send Runtime.executionContextsCleared event
     // TODO: noop event, we have no env context at this point, is it necesarry?
     try cdp.sendEvent("Runtime.executionContextsCleared", null, .{ .session_id = session_id });
 }
 
-pub fn pageNavigated(bc: anytype, event: *const Notification.PageEvent) !void {
+pub fn pageNavigated(bc: anytype, event: *const Notification.PageNavigated) !void {
     // I don't think it's possible that we get these notifications and don't
     // have these things setup.
     std.debug.assert(bc.session.page != null);
