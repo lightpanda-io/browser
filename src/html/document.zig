@@ -90,8 +90,12 @@ pub const HTMLDocument = struct {
         return buf.items;
     }
 
-    pub fn set_cookie(_: *parser.DocumentHTML, arena: std.mem.Allocator, userctx: UserContext, cookie_str: []const u8) ![]const u8 {
-        const c = try Cookie.parse(arena, &userctx.url.uri, cookie_str);
+    pub fn set_cookie(_: *parser.DocumentHTML, userctx: UserContext, cookie_str: []const u8) ![]const u8 {
+        // we use the cookie jar's allocator to parse the cookie because it
+        // outlives the page's arena.
+        const c = try Cookie.parse(userctx.cookie_jar.allocator, &userctx.url.uri, cookie_str);
+        errdefer c.deinit();
+
         try userctx.cookie_jar.add(c, std.time.timestamp());
 
         return cookie_str;
