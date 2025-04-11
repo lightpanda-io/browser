@@ -138,21 +138,15 @@ pub const HTMLElement = struct {
     }
 
     pub fn _click(e: *parser.ElementHTML) !void {
-        _ = e;
-        // TODO needs: https://github.com/lightpanda-io/browser/pull/501
-        // TODO: when the above is merged, should we get the element coordinates?
-
-        // const event = try parser.mouseEventCreate();
-        // defer parser.mouseEventDestroy(event);
-        // try parser.mouseEventInit(event, "click", .{
-        //     .bubbles = true,
-        //     .cancelable = true,
-        //
-        //     // get the coordinates?
-        //     .x = 0,
-        //     .y = 0,
-        // });
-        // _ = try parser.elementDispatchEvent(@ptrCast(e), @ptrCast(event));
+        const event = try parser.mouseEventCreate();
+        defer parser.mouseEventDestroy(event);
+        try parser.mouseEventInit(event, "click", .{
+            .x = 0,
+            .y = 0,
+            .bubbles = true,
+            .cancelable = true,
+        });
+        _ = try parser.elementDispatchEvent(@ptrCast(e), @ptrCast(event));
     }
 };
 
@@ -1113,4 +1107,13 @@ pub fn testExecFn(
         .{ .src = "document.getElementById('content').innerHTML = backup; true;", .ex = "true" },
     };
     try checkCases(js_env, &innertext);
+
+    var click = [_]Case{
+        .{ .src = "let click_count = 0;", .ex = "undefined" },
+        .{ .src = "let clickCbk = function() { click_count++ }", .ex = "undefined" },
+        .{ .src = "document.getElementById('content').addEventListener('click', clickCbk);", .ex = "undefined" },
+        .{ .src = "document.getElementById('content').click()", .ex = "undefined" },
+        .{ .src = "click_count", .ex = "1" },
+    };
+    try checkCases(js_env, &click);
 }

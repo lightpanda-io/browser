@@ -48,7 +48,7 @@ pub const URL = struct {
         return parse(buf.items, null);
     }
 
-    // Above, in `parse, we error if a host doesn't exist
+    // Above, in `parse`, we error if a host doesn't exist
     // In other words, we can't have a URL with a null host.
     pub fn host(self: *const URL) []const u8 {
         return self.uri.host.?.percent_encoded;

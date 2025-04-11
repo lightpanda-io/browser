@@ -133,6 +133,10 @@ pub const Session = struct {
     storage_shed: storage.Shed,
     cookie_jar: storage.CookieJar,
 
+    // arbitrary that we pass to the inspector, which the inspector will include
+    // in any response/event that it emits.
+    aux_data: ?[]const u8 = null,
+
     page: ?Page = null,
     http_client: *http.Client,
 
@@ -160,6 +164,7 @@ pub const Session = struct {
         self.* = .{
             .app = app,
             .env = undefined,
+            .aux_data = null,
             .browser = browser,
             .notify_ctx = any_ctx,
             .inspector = undefined,
@@ -247,8 +252,12 @@ pub const Session = struct {
         // TODO: change to 'env' when https://github.com/lightpanda-io/zig-js-runtime/pull/285 lands
         try polyfill.load(self.arena.allocator(), &self.env);
 
+        if (aux_data) |ad| {
+            self.aux_data = try self.arena.allocator().dupe(u8, ad);
+        }
+
         // inspector
-        self.contextCreated(page, aux_data);
+        self.contextCreated(page);
 
         return page;
     }
@@ -276,9 +285,28 @@ pub const Session = struct {
         return &(self.page orelse return null);
     }
 
-    fn contextCreated(self: *Session, page: *Page, aux_data: ?[]const u8) void {
+    fn pageNavigate(self: *Session, url_string: []const u8) !void {
+        // currently, this is only called from the page, so let's hope
+        // it isn't null!
+        std.debug.assert(self.page != null);
+
+        // can't use the page arena, because we're about to reset it
+        // and don't want to use the session's arena, because that'll start to
+        // look like a leak if we navigate from page to page a lot.
+        var buf: [1024]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&buf);
+        const url = try self.page.?.url.?.resolve(fba.allocator(), url_string);
+
+        self.removePage();
+        var page = try self.createPage(null);
+        return page.navigate(url, .{
+            .reason = .anchor,
+        });
+    }
+
+    fn contextCreated(self: *Session, page: *Page) void {
         log.debug("inspector context created", .{});
-        self.inspector.contextCreated(&self.env, "", (page.origin() catch "://") orelse "://", aux_data);
+        self.inspector.contextCreated(&self.env, "", (page.origin() catch "://") orelse "://", self.aux_data);
     }
 
     fn notify(self: *const Session, notification: *const Notification) void {
@@ -361,7 +389,7 @@ pub const Page = struct {
     // spec reference: https://html.spec.whatwg.org/#document-lifecycle
     // - aux_data: extra data forwarded to the Inspector
     // see Inspector.contextCreated
-    pub fn navigate(self: *Page, request_url: URL, aux_data: ?[]const u8) !void {
+    pub fn navigate(self: *Page, request_url: URL, opts: NavigateOpts) !void {
         const arena = self.arena;
         const session = self.session;
 
@@ -387,7 +415,12 @@ pub const Page = struct {
         var request = try self.newHTTPRequest(.GET, url, .{ .navigation = true });
         defer request.deinit();
 
-        session.notify(&.{ .page_navigate = .{ .url = url, .timestamp = timestamp() } });
+        session.notify(&.{ .page_navigate = .{
+            .url = url,
+            .reason = opts.reason,
+            .timestamp = timestamp(),
+        } });
+
         var response = try request.sendSync(.{});
 
         // would be different than self.url in the case of a redirect
@@ -418,7 +451,7 @@ pub const Page = struct {
         defer mime.deinit();
 
         if (mime.isHTML()) {
-            try self.loadHTMLDoc(&response, mime.charset orelse "utf-8", aux_data);
+            try self.loadHTMLDoc(&response, mime.charset orelse "utf-8");
         } else {
             log.info("non-HTML document: {s}", .{ct});
             var arr: std.ArrayListUnmanaged(u8) = .{};
@@ -429,44 +462,14 @@ pub const Page = struct {
             self.raw_data = arr.items;
         }
 
-        session.notify(&.{ .page_navigated = .{ .url = url, .timestamp = timestamp() } });
-    }
-
-    pub const ClickResult = union(enum) {
-        navigate: std.Uri,
-    };
-
-    pub const MouseEvent = struct {
-        x: i32,
-        y: i32,
-        type: Type,
-
-        const Type = enum {
-            pressed,
-            released,
-        };
-    };
-
-    pub fn mouseEvent(self: *Page, me: MouseEvent) !void {
-        if (me.type != .pressed) {
-            return;
-        }
-
-        const element = self.renderer.getElementAtPosition(me.x, me.y) orelse return;
-
-        const event = try parser.mouseEventCreate();
-        defer parser.mouseEventDestroy(event);
-        try parser.mouseEventInit(event, "click", .{
-            .bubbles = true,
-            .cancelable = true,
-            .x = me.x,
-            .y = me.y,
-        });
-        _ = try parser.elementDispatchEvent(element, @ptrCast(event));
+        session.notify(&.{ .page_navigated = .{
+            .url = url,
+            .timestamp = timestamp(),
+        } });
     }
 
     // https://html.spec.whatwg.org/#read-html
-    fn loadHTMLDoc(self: *Page, reader: anytype, charset: []const u8, aux_data: ?[]const u8) !void {
+    fn loadHTMLDoc(self: *Page, reader: anytype, charset: []const u8) !void {
         const arena = self.arena;
 
         // start netsurf memory arena.
@@ -508,7 +511,7 @@ pub const Page = struct {
         // https://html.spec.whatwg.org/#read-html
 
         // inspector
-        session.contextCreated(self, aux_data);
+        session.contextCreated(self);
 
         // replace the user context document with the new one.
         try session.env.setUserContext(.{
@@ -740,6 +743,35 @@ pub const Page = struct {
         return request;
     }
 
+    pub const MouseEvent = struct {
+        x: i32,
+        y: i32,
+        type: Type,
+
+        const Type = enum {
+            pressed,
+            released,
+        };
+    };
+
+    pub fn mouseEvent(self: *Page, me: MouseEvent) !void {
+        if (me.type != .pressed) {
+            return;
+        }
+
+        const element = self.renderer.getElementAtPosition(me.x, me.y) orelse return;
+
+        const event = try parser.mouseEventCreate();
+        defer parser.mouseEventDestroy(event);
+        try parser.mouseEventInit(event, "click", .{
+            .bubbles = true,
+            .cancelable = true,
+            .x = me.x,
+            .y = me.y,
+        });
+        _ = try parser.elementDispatchEvent(element, @ptrCast(event));
+    }
+
     fn windowClicked(ctx: *anyopaque, event: *parser.Event) void {
         const self: *Page = @alignCast(@ptrCast(ctx));
         self._windowClicked(event) catch |err| {
@@ -748,8 +780,6 @@ pub const Page = struct {
     }
 
     fn _windowClicked(self: *Page, event: *parser.Event) !void {
-        _ = self;
-
         const target = (try parser.eventTarget(event)) orelse return;
 
         const node = parser.eventTargetToNode(target);
@@ -757,10 +787,15 @@ pub const Page = struct {
             return;
         }
 
-        const element: *parser.ElementHTML = @ptrCast(node);
-        const tag_name = try parser.elementHTMLGetTagType(element);
-        // TODO https://github.com/lightpanda-io/browser/pull/501
-        _ = tag_name;
+        const html_element: *parser.ElementHTML = @ptrCast(node);
+        switch (try parser.elementHTMLGetTagType(html_element)) {
+            .a => {
+                const element: *parser.Element = @ptrCast(node);
+                const href = (try parser.elementGetAttribute(element, "href")) orelse return;
+                return self.session.pageNavigate(href);
+            },
+            else => {},
+        }
     }
 
     const Script = struct {
@@ -827,8 +862,17 @@ pub const Page = struct {
     };
 };
 
+pub const NavigateReason = enum {
+    anchor,
+    address_bar,
+};
+
+const NavigateOpts = struct {
+    reason: NavigateReason = .address_bar,
+};
+
 // provide very poor abstration to the rest of the code. In theory, we can change
-// the FlatRendere to a different implementation, and it'll all just work.
+// the FlatRenderer to a different implementation, and it'll all just work.
 pub const Renderer = FlatRenderer;
 
 // This "renderer" positions elements in a single row in an unspecified order.
