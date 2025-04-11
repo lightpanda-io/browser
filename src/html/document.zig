@@ -84,15 +84,14 @@ pub const HTMLDocument = struct {
         }
     }
 
-    pub fn get_cookie(_: *parser.DocumentHTML, allocator: std.mem.Allocator, userctx: UserContext) ![]const u8 {
+    pub fn get_cookie(_: *parser.DocumentHTML, arena: std.mem.Allocator, userctx: UserContext) ![]const u8 {
         var buf: std.ArrayListUnmanaged(u8) = .{};
-        defer buf.deinit(allocator);
-        try userctx.cookie_jar.forRequest(&userctx.url.uri, buf.writer(allocator), .{ .navigation = true });
-        return buf.toOwnedSlice(allocator);
+        try userctx.cookie_jar.forRequest(&userctx.url.uri, buf.writer(arena), .{ .navigation = true });
+        return buf.items;
     }
 
-    pub fn set_cookie(_: *parser.DocumentHTML, allocator: std.mem.Allocator, userctx: UserContext, cookie_str: []const u8) ![]const u8 {
-        const c = try Cookie.parse(allocator, &userctx.url.uri, cookie_str);
+    pub fn set_cookie(_: *parser.DocumentHTML, arena: std.mem.Allocator, userctx: UserContext, cookie_str: []const u8) ![]const u8 {
+        const c = try Cookie.parse(arena, &userctx.url.uri, cookie_str);
         try userctx.cookie_jar.add(c, std.time.timestamp());
 
         return cookie_str;
