@@ -56,7 +56,7 @@ jobs:
       - uses: ./.github/actions/install
 
       - name: zig build debug
-        run: zig build -Dengine=v8
+        run: zig build
 
       - name: upload artifact
         uses: actions/upload-artifact@v4
@@ -102,11 +102,8 @@ jobs:
 
       - uses: ./.github/actions/install
 
-      - name: zig build unittest
-        run: zig build unittest -freference-trace --summary all
-
       - name: zig build test
-        run: zig build test -Dengine=v8 -- --json > bench.json
+        run: zig build test -- --json > bench.json
 
       - name: write commit
         run: |

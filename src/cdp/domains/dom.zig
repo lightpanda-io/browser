@@ -17,10 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const parser = @import("netsurf");
 const Node = @import("../Node.zig");
-const css = @import("../../dom/css.zig");
-const dom_node = @import("../../dom/node.zig");
+const css = @import("../../browser/dom/css.zig");
+const parser = @import("../../browser/netsurf.zig");
+const dom_node = @import("../../browser/dom/node.zig");
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -134,17 +134,20 @@ fn resolveNode(cmd: anytype) !void {
 
     // node._node is a *parser.Node we need this to be able to find its most derived type e.g. Node -> Element -> HTMLElement
     // So we use the Node.Union when retrieve the value from the environment
-    const jsValue = try bc.session.env.findOrAddValue(try dom_node.Node.toInterface(node._node));
-    const remoteObject = try bc.session.inspector.getRemoteObject(&bc.session.env, jsValue, params.objectGroup orelse "");
-    defer remoteObject.deinit();
+    const remote_object = try bc.session.inspector.getRemoteObject(
+        bc.session.executor,
+        params.objectGroup orelse "",
+        try dom_node.Node.toInterface(node._node),
+    );
+    defer remote_object.deinit();
 
     const arena = cmd.arena;
     return cmd.sendResult(.{ .object = .{
-        .type = try remoteObject.getType(arena),
-        .subtype = try remoteObject.getSubtype(arena),
-        .className = try remoteObject.getClassName(arena),
-        .description = try remoteObject.getDescription(arena),
-        .objectId = try remoteObject.getObjectId(arena),
+        .type = try remote_object.getType(arena),
+        .subtype = try remote_object.getSubtype(arena),
+        .className = try remote_object.getClassName(arena),
+        .description = try remote_object.getDescription(arena),
+        .objectId = try remote_object.getObjectId(arena),
     } }, .{});
 }
 
