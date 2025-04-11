@@ -613,7 +613,6 @@ pub const HTMLHtmlElement = struct {
     pub const prototype = *HTMLElement;
     pub const mem_guarantied = true;
     pub const sub_type = "node";
-    pub const sub_type = "node";
 };
 
 pub const HTMLIFrameElement = struct {
