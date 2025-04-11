@@ -37,6 +37,7 @@ const storage = @import("../storage/storage.zig");
 pub const Window = struct {
     pub const prototype = *EventTarget;
     pub const mem_guarantied = true;
+    pub const sub_type = "node";
     pub const global_type = true;
 
     // Extend libdom event target for pure zig struct.

@@ -27,4 +27,5 @@ pub const CDATASection = struct {
     pub const Self = parser.CDATASection;
     pub const prototype = *Text;
     pub const mem_guarantied = true;
+    pub const sub_type = "node";
 };

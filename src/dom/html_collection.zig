@@ -280,6 +280,7 @@ pub fn HTMLCollectionByAnchors(
 
 pub const HTMLCollectionIterator = struct {
     pub const mem_guarantied = true;
+    pub const sub_type = "node";
 
     coll: *HTMLCollection,
     index: u32 = 0,
@@ -312,6 +313,7 @@ pub const HTMLCollectionIterator = struct {
 // But we wanted a dynamically comparison here, according to the match tagname.
 pub const HTMLCollection = struct {
     pub const mem_guarantied = true;
+    pub const sub_type = "node";
 
     matcher: Matcher,
     walker: Walker,

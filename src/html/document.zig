@@ -38,7 +38,6 @@ pub const HTMLDocument = struct {
     pub const Self = parser.DocumentHTML;
     pub const prototype = *Document;
     pub const mem_guarantied = true;
-
     pub const sub_type = "node";
 
     // JS funcs

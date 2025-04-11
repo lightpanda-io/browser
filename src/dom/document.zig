@@ -46,6 +46,7 @@ pub const Document = struct {
     pub const Self = parser.Document;
     pub const prototype = *Node;
     pub const mem_guarantied = true;
+    pub const sub_type = "node";
 
     pub fn constructor(userctx: UserContext) !*parser.DocumentHTML {
         const doc = try parser.documentCreateDocument(

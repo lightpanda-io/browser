@@ -32,6 +32,7 @@ pub const Comment = struct {
     pub const Self = parser.Comment;
     pub const prototype = *CharacterData;
     pub const mem_guarantied = true;
+    pub const sub_type = "node";
 
     pub fn constructor(userctx: UserContext, data: ?[]const u8) !*parser.Comment {
         return parser.documentCreateComment(

@@ -33,6 +33,7 @@ pub const DocumentFragment = struct {
     pub const Self = parser.DocumentFragment;
     pub const prototype = *Node;
     pub const mem_guarantied = true;
+    pub const sub_type = "node";
 
     pub fn constructor(userctx: UserContext) !*parser.DocumentFragment {
         return parser.documentCreateDocumentFragment(

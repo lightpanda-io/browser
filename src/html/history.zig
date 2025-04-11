@@ -27,6 +27,7 @@ const checkCases = jsruntime.test_utils.checkCases;
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#the-history-interface
 pub const History = struct {
     pub const mem_guarantied = true;
+    pub const sub_type = "node";
 
     const ScrollRestorationMode = enum {
         auto,

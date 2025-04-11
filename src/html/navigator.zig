@@ -27,6 +27,7 @@ const checkCases = jsruntime.test_utils.checkCases;
 // https://html.spec.whatwg.org/multipage/system-state.html#navigator
 pub const Navigator = struct {
     pub const mem_guarantied = true;
+    pub const sub_type = "node";
 
     agent: []const u8 = "Lightpanda/1.0",
     version: []const u8 = "1.0",

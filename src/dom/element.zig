@@ -43,6 +43,7 @@ pub const Element = struct {
     pub const Self = parser.Element;
     pub const prototype = *Node;
     pub const mem_guarantied = true;
+    pub const sub_type = "node";
 
     pub const DOMRect = struct {
         x: f64,
