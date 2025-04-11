@@ -33,6 +33,9 @@ const Location = @import("location.zig").Location;
 const collection = @import("../dom/html_collection.zig");
 const Walker = @import("../dom/walker.zig").WalkerDepthFirst;
 
+const UserContext = @import("../user_context.zig").UserContext;
+const Cookie = @import("../storage/cookie.zig").Cookie;
+
 // WEB IDL https://html.spec.whatwg.org/#the-document-object
 pub const HTMLDocument = struct {
     pub const Self = parser.DocumentHTML;
@@ -81,14 +84,18 @@ pub const HTMLDocument = struct {
         }
     }
 
-    // TODO: not implemented by libdom
-    pub fn get_cookie(_: *parser.DocumentHTML) ![]const u8 {
-        return error.NotImplemented;
+    pub fn get_cookie(_: *parser.DocumentHTML, allocator: std.mem.Allocator, userctx: UserContext) ![]const u8 {
+        var buf: std.ArrayListUnmanaged(u8) = .{};
+        defer buf.deinit(allocator);
+        try userctx.cookie_jar.forRequest(&userctx.url.uri, buf.writer(allocator), .{ .navigation = true });
+        return buf.toOwnedSlice(allocator);
     }
 
-    // TODO: not implemented by libdom
-    pub fn set_cookie(_: *parser.DocumentHTML, _: []const u8) ![]const u8 {
-        return error.NotImplemented;
+    pub fn set_cookie(_: *parser.DocumentHTML, allocator: std.mem.Allocator, userctx: UserContext, cookie_str: []const u8) ![]const u8 {
+        const c = try Cookie.parse(allocator, &userctx.url.uri, cookie_str);
+        try userctx.cookie_jar.add(c, std.time.timestamp());
+
+        return cookie_str;
     }
 
     pub fn get_title(self: *parser.DocumentHTML) ![]const u8 {
@@ -258,4 +265,12 @@ pub fn testExecFn(
         .{ .src = "list.length", .ex = "1" },
     };
     try checkCases(js_env, &getElementsByName);
+
+    var cookie = [_]Case{
+        .{ .src = "document.cookie", .ex = "" },
+        .{ .src = "document.cookie = 'name=Oeschger; SameSite=None; Secure'", .ex = "name=Oeschger; SameSite=None; Secure" },
+        .{ .src = "document.cookie = 'favorite_food=tripe; SameSite=None; Secure'", .ex = "favorite_food=tripe; SameSite=None; Secure" },
+        .{ .src = "document.cookie", .ex = "name=Oeschger; favorite_food=tripe" },
+    };
+    try checkCases(js_env, &cookie);
 }
