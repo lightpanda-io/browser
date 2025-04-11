@@ -145,7 +145,7 @@ pub const Jar = struct {
             if (first) {
                 first = false;
             } else {
-                try writer.writeAll(", ");
+                try writer.writeAll("; ");
             }
             try writeCookie(cookie, writer);
         }
@@ -563,8 +563,8 @@ test "Jar: forRequest" {
     try jar.add(try Cookie.parse(testing.allocator, &test_uri_2, "domain1=9;domain=test.lightpanda.io"), now);
 
     // nothing fancy here
-    try expectCookies("global1=1, global2=2", &jar, test_uri, .{});
-    try expectCookies("global1=1, global2=2", &jar, test_uri, .{ .origin_uri = &test_uri, .navigation = false });
+    try expectCookies("global1=1; global2=2", &jar, test_uri, .{});
+    try expectCookies("global1=1; global2=2", &jar, test_uri, .{ .origin_uri = &test_uri, .navigation = false });
 
     // We have a cookie where Domain=lightpanda.io
     // This should _not_ match xyxlightpanda.io
@@ -573,47 +573,47 @@ test "Jar: forRequest" {
     });
 
     // matching path without trailing /
-    try expectCookies("global1=1, global2=2, path1=3", &jar, try std.Uri.parse("http://lightpanda.io/about"), .{
+    try expectCookies("global1=1; global2=2; path1=3", &jar, try std.Uri.parse("http://lightpanda.io/about"), .{
         .origin_uri = &test_uri,
     });
 
     // incomplete prefix path
-    try expectCookies("global1=1, global2=2", &jar, try std.Uri.parse("http://lightpanda.io/abou"), .{
+    try expectCookies("global1=1; global2=2", &jar, try std.Uri.parse("http://lightpanda.io/abou"), .{
         .origin_uri = &test_uri,
     });
 
     // path doesn't match
-    try expectCookies("global1=1, global2=2", &jar, try std.Uri.parse("http://lightpanda.io/aboutus"), .{
+    try expectCookies("global1=1; global2=2", &jar, try std.Uri.parse("http://lightpanda.io/aboutus"), .{
         .origin_uri = &test_uri,
     });
 
     // path doesn't match cookie directory
-    try expectCookies("global1=1, global2=2", &jar, try std.Uri.parse("http://lightpanda.io/docs"), .{
+    try expectCookies("global1=1; global2=2", &jar, try std.Uri.parse("http://lightpanda.io/docs"), .{
         .origin_uri = &test_uri,
     });
 
     // exact directory match
-    try expectCookies("global1=1, global2=2, path2=4", &jar, try std.Uri.parse("http://lightpanda.io/docs/"), .{
+    try expectCookies("global1=1; global2=2; path2=4", &jar, try std.Uri.parse("http://lightpanda.io/docs/"), .{
         .origin_uri = &test_uri,
     });
 
     // sub directory match
-    try expectCookies("global1=1, global2=2, path2=4", &jar, try std.Uri.parse("http://lightpanda.io/docs/more"), .{
+    try expectCookies("global1=1; global2=2; path2=4", &jar, try std.Uri.parse("http://lightpanda.io/docs/more"), .{
         .origin_uri = &test_uri,
     });
 
     // secure
-    try expectCookies("global1=1, global2=2, secure=5", &jar, try std.Uri.parse("https://lightpanda.io/"), .{
+    try expectCookies("global1=1; global2=2; secure=5", &jar, try std.Uri.parse("https://lightpanda.io/"), .{
         .origin_uri = &test_uri,
     });
 
     // navigational cross domain, secure
-    try expectCookies("global1=1, global2=2, secure=5, sitenone=6, sitelax=7", &jar, try std.Uri.parse("https://lightpanda.io/x/"), .{
+    try expectCookies("global1=1; global2=2; secure=5; sitenone=6; sitelax=7", &jar, try std.Uri.parse("https://lightpanda.io/x/"), .{
         .origin_uri = &(try std.Uri.parse("https://example.com/")),
     });
 
     // navigational cross domain, insecure
-    try expectCookies("global1=1, global2=2, sitelax=7", &jar, try std.Uri.parse("http://lightpanda.io/x/"), .{
+    try expectCookies("global1=1; global2=2; sitelax=7", &jar, try std.Uri.parse("http://lightpanda.io/x/"), .{
         .origin_uri = &(try std.Uri.parse("https://example.com/")),
     });
 
@@ -630,18 +630,18 @@ test "Jar: forRequest" {
     });
 
     // non-navigational same origin
-    try expectCookies("global1=1, global2=2, sitelax=7, sitestrict=8", &jar, try std.Uri.parse("http://lightpanda.io/x/"), .{
+    try expectCookies("global1=1; global2=2; sitelax=7; sitestrict=8", &jar, try std.Uri.parse("http://lightpanda.io/x/"), .{
         .origin_uri = &(try std.Uri.parse("https://lightpanda.io/")),
         .navigation = false,
     });
 
     // exact domain match + suffix
-    try expectCookies("global2=2, domain1=9", &jar, try std.Uri.parse("http://test.lightpanda.io/"), .{
+    try expectCookies("global2=2; domain1=9", &jar, try std.Uri.parse("http://test.lightpanda.io/"), .{
         .origin_uri = &test_uri,
     });
 
     // domain suffix match + suffix
-    try expectCookies("global2=2, domain1=9", &jar, try std.Uri.parse("http://1.test.lightpanda.io/"), .{
+    try expectCookies("global2=2; domain1=9", &jar, try std.Uri.parse("http://1.test.lightpanda.io/"), .{
         .origin_uri = &test_uri,
     });
 
