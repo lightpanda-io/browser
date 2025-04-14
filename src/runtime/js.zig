@@ -21,7 +21,6 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 
 const log = std.log.scoped(.js);
 
-
 // Global, should only be initialized once.
 pub const Platform = struct {
     inner: v8.Platform,
@@ -453,7 +452,11 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 }
             }.callback);
 
-            template.getInstanceTemplate().setInternalFieldCount(1);
+            if (comptime isEmpty(Receiver(Struct)) == false) {
+                // If the struct is empty, we won't store a Zig reference inside
+                // the JS object, so we don't need to set the internal field count
+                template.getInstanceTemplate().setInternalFieldCount(1);
+            }
 
             const class_name = v8.String.initUtf8(self.isolate, comptime classNameForStruct(Struct));
             template.setClassName(class_name);
@@ -973,19 +976,28 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                             else => @compileError("mapZigInstanceToJs requires a v8.Object (constructors) or v8.FunctionTemplate, got: " ++ @typeName(@TypeOf(js_obj_or_template))),
                         };
 
-                        // The TAO contains the pointer ot our Zig instance as
-                        // well as any meta data we'll need to use it later.
-                        // See the TaggedAnyOpaque struct for more details.
-                        const tao = try scope_arena.create(TaggedAnyOpaque);
-                        tao.* = .{
-                            .ptr = value,
-                            .index = @field(TYPE_LOOKUP, @typeName(ptr.child)),
-                            .sub_type = if (@hasDecl(ptr.child, "sub_type")) ptr.child.sub_type else null,
-                            .offset = if (@typeInfo(ptr.child) != .@"opaque" and @hasField(ptr.child, "proto")) @offsetOf(ptr.child, "proto") else -1,
-                        };
-
                         const isolate = self.isolate;
-                        js_obj.setInternalField(0, v8.External.init(isolate, tao));
+
+                        if (isEmpty(ptr.child) == false) {
+                            // The TAO contains the pointer ot our Zig instance as
+                            // well as any meta data we'll need to use it later.
+                            // See the TaggedAnyOpaque struct for more details.
+                            const tao = try scope_arena.create(TaggedAnyOpaque);
+                            tao.* = .{
+                                .ptr = value,
+                                .index = @field(TYPE_LOOKUP, @typeName(ptr.child)),
+                                .sub_type = if (@hasDecl(ptr.child, "sub_type")) ptr.child.sub_type else null,
+                                .offset = if (@typeInfo(ptr.child) != .@"opaque" and @hasField(ptr.child, "proto")) @offsetOf(ptr.child, "proto") else -1,
+                            };
+
+                            js_obj.setInternalField(0, v8.External.init(isolate, tao));
+                        } else {
+                            // If the struct is empty, we don't need to do all
+                            // the TOA stuff and setting the internal data.
+                            // When we try to map this from JS->Zig, in
+                            // typeTaggedAnyOpaque, we'll also know there that
+                            // the type is empty and can create an empty instance.
+                        }
                         const js_persistent = PersistentObject.init(isolate, js_obj);
                         gop.value_ptr.* = js_persistent;
                         return js_persistent;
@@ -1267,7 +1279,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
 
         // Reverses the mapZigInstanceToJs, making sure that our TaggedAnyOpaque
         // contains a ptr to the correct type.
-        fn typeTaggedAnyOpaque(comptime named_function: anytype, comptime R: type, op: ?*anyopaque) !R {
+        fn typeTaggedAnyOpaque(comptime named_function: anytype, comptime R: type, js_obj: v8.Object) !R {
             const ti = @typeInfo(R);
             if (ti != .pointer) {
                 @compileError(std.fmt.comptimePrint(
@@ -1276,7 +1288,15 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 ));
             }
 
-            const type_name = @typeName(ti.pointer.child);
+            const T = ti.pointer.child;
+            if (comptime isEmpty(T)) {
+                // Empty structs aren't stored as TOAs and there's no data
+                // stored in the JSObject's IntenrnalField. Why bother when
+                // we can just return an empty struct here?
+                return @constCast(@as(*const T, &.{}));
+            }
+
+            const type_name = @typeName(T);
             if (@hasField(TypeLookup, type_name) == false) {
                 @compileError(std.fmt.comptimePrint(
                     "{s} has an unknown Zig type: {s}",
@@ -1284,8 +1304,9 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 ));
             }
 
+            const op = js_obj.getInternalField(0).castTo(v8.External).get();
             const toa: *TaggedAnyOpaque = @alignCast(@ptrCast(op));
-            const expected_type_index = @field(TYPE_LOOKUP, @typeName(ti.pointer.child));
+            const expected_type_index = @field(TYPE_LOOKUP, type_name);
 
             var type_index = toa.index;
             if (type_index == expected_type_index) {
@@ -1317,6 +1338,10 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             }
         }
     };
+}
+
+fn isEmpty(comptime T: type) bool {
+    return @typeInfo(T) != .@"opaque" and @sizeOf(T) == 0;
 }
 
 // Responsible for calling Zig functions from JS invokations. This could
@@ -1380,8 +1405,7 @@ fn Caller(comptime E: type) type {
             comptime assertSelfReceiver(named_function);
 
             var args = try self.getArgs(named_function, 1, info);
-            const external = info.getThis().getInternalField(0).castTo(v8.External);
-            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(S), external.get());
+            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(S), info.getThis());
 
             // inject 'self' as the first parameter
             @field(args, "0") = zig_instance;
@@ -1402,8 +1426,7 @@ fn Caller(comptime E: type) type {
             switch (arg_fields.len) {
                 0 => {}, // getters _can_ be parameterless
                 1, 2 => {
-                    const external = info.getThis().getInternalField(0).castTo(v8.External);
-                    const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(S), external.get());
+                    const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(S), info.getThis());
                     comptime assertSelfReceiver(named_function);
                     @field(args, "0") = zig_instance;
                     if (comptime arg_fields.len == 2) {
@@ -1421,8 +1444,7 @@ fn Caller(comptime E: type) type {
             const S = named_function.S;
             comptime assertSelfReceiver(named_function);
 
-            const external = info.getThis().getInternalField(0).castTo(v8.External);
-            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(S), external.get());
+            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(S), info.getThis());
 
             const Setter = @TypeOf(named_function.func);
             var args: ParamterTypes(Setter) = undefined;
@@ -1464,8 +1486,7 @@ fn Caller(comptime E: type) type {
             switch (arg_fields.len) {
                 0, 1, 2 => @compileError(named_function.full_name ++ " must take at least a u32 and *bool parameter"),
                 3, 4 => {
-                    const external = info.getThis().getInternalField(0).castTo(v8.External);
-                    const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(S), external.get());
+                    const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(S), info.getThis());
                     comptime assertSelfReceiver(named_function);
                     @field(args, "0") = zig_instance;
                     @field(args, "1") = idx;
@@ -1492,8 +1513,7 @@ fn Caller(comptime E: type) type {
             const S = named_function.S;
             comptime assertSelfReceiver(named_function);
 
-            const external = info.getThis().getInternalField(0).castTo(v8.External);
-            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(S), external.get());
+            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(S), info.getThis());
 
             const IndexedSet = @TypeOf(named_function.func);
             var args: ParamterTypes(IndexedSet) = undefined;
@@ -1537,8 +1557,7 @@ fn Caller(comptime E: type) type {
             switch (arg_fields.len) {
                 0, 1, 2 => @compileError(named_function.full_name ++ " must take at least a u32 and *bool parameter"),
                 3, 4 => {
-                    const external = info.getThis().getInternalField(0).castTo(v8.External);
-                    const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(S), external.get());
+                    const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(S), info.getThis());
                     comptime assertSelfReceiver(named_function);
                     @field(args, "0") = zig_instance;
                     @field(args, "1") = try self.nameToString(name);
@@ -1565,8 +1584,7 @@ fn Caller(comptime E: type) type {
             const S = named_function.S;
             comptime assertSelfReceiver(named_function);
 
-            const external = info.getThis().getInternalField(0).castTo(v8.External);
-            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(S), external.get());
+            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(S), info.getThis());
 
             const IndexedSet = @TypeOf(named_function.func);
             var args: ParamterTypes(IndexedSet) = undefined;
@@ -1749,14 +1767,17 @@ fn Caller(comptime E: type) type {
                     const corresponding_js_index = last_parameter_index - adjusted_offset;
                     const corresponding_js_value = info.getArg(@as(u32, @intCast(corresponding_js_index)));
                     if (corresponding_js_value.isArray() == false and slice_type != u8) {
-                        const arr = try self.call_allocator.alloc(last_parameter_type_info.pointer.child, js_parameter_count - expected_js_parameters + 1);
-                        for (arr, corresponding_js_index..) |*a, i| {
-                            const js_value = info.getArg(@as(u32, @intCast(i)));
-                            a.* = try self.jsValueToZig(named_function, slice_type, js_value);
-                        }
-
                         is_variadic = true;
-                        @field(args, tupleFieldName(last_parameter_index)) = arr;
+                        if (js_parameter_count == 0) {
+                            @field(args, tupleFieldName(last_parameter_index)) = &.{};
+                        } else {
+                            const arr = try self.call_allocator.alloc(last_parameter_type_info.pointer.child, js_parameter_count - expected_js_parameters + 1);
+                            for (arr, corresponding_js_index..) |*a, i| {
+                                const js_value = info.getArg(@as(u32, @intCast(i)));
+                                a.* = try self.jsValueToZig(named_function, slice_type, js_value);
+                            }
+                            @field(args, tupleFieldName(last_parameter_index)) = arr;
+                        }
                     }
                 }
             }
@@ -1773,7 +1794,7 @@ fn Caller(comptime E: type) type {
                     @compileError("State must be the 2nd parameter: " ++ named_function.full_name);
                 } else if (i >= js_parameter_count) {
                     if (@typeInfo(param.type.?) != .optional) {
-                        return error.TypeError;
+                        return error.InvalidArgument;
                     }
                     @field(args, tupleFieldName(field_index)) = null;
                 } else {
@@ -1812,7 +1833,7 @@ fn Caller(comptime E: type) type {
                             if (obj.internalFieldCount() == 0) {
                                 return error.InvalidArgument;
                             }
-                            return E.typeTaggedAnyOpaque(named_function, *Receiver(ptr.child), obj.getInternalField(0).castTo(v8.External).get());
+                            return E.typeTaggedAnyOpaque(named_function, *Receiver(ptr.child), obj);
                         }
                     },
                     .slice => {
@@ -2270,4 +2291,9 @@ fn getTaggedAnyOpaque(value: v8.Value) ?*TaggedAnyOpaque {
 
     const external_data = obj.getInternalField(0).castTo(v8.External).get().?;
     return @alignCast(@ptrCast(external_data));
+}
+
+test {
+    std.testing.refAllDecls(@import("test_primitive_types.zig"));
+    std.testing.refAllDecls(@import("test_complex_types.zig"));
 }
