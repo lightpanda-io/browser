@@ -488,7 +488,6 @@ pub const JsRunner = struct {
     }
 };
 
-
 const RunnerOpts = struct {
     html: []const u8 =
         \\ <div id="content">
@@ -506,4 +505,3 @@ const RunnerOpts = struct {
 pub fn jsRunner(alloc: Allocator, opts: RunnerOpts) !*JsRunner {
     return JsRunner.init(alloc, opts);
 }
-

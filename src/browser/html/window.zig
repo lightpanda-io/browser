@@ -57,7 +57,6 @@ pub const Window = struct {
         };
     }
 
-
     pub fn replaceLocation(self: *Window, loc: Location) !void {
         self.location = loc;
         if (self.document) |doc| {

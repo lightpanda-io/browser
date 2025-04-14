@@ -21,6 +21,8 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 
 const log = std.log.scoped(.js);
 
+
+// Global, should only be initialized once.
 pub const Platform = struct {
     inner: v8.Platform,
 
@@ -38,6 +40,12 @@ pub const Platform = struct {
     }
 };
 
+// The Env maps to a V8 isolate, which represents a isolated sandbox for
+// executing JavaScript. The Env is where we'll define our V8 <-> Zig bindings,
+// and it's where we'll start Executors, which actually execute JavaScript.
+// The `S` parameter is arbitrary state. When we start an Executor, an instance
+// of S must be given. This instance is available to any Zig binding.
+// The `types` parameter is a tuple of Zig structures we want to bind to V8.
 pub fn Env(comptime S: type, comptime types: anytype) type {
     const Types = @typeInfo(@TypeOf(types)).@"struct".fields;
 
@@ -47,7 +55,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
     //        return self.owner;
     //    }
     //
-    // When we're execute caller.getter, we'll end up doing something like:
+    // When we execute caller.getter, we'll end up doing something like:
     //   const res = @call(.auto, Cat.get_owner, .{cat_instance});
     //
     // How do we turn `res`, which is an *Owner, into something we can return
@@ -55,10 +63,10 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
     // get that? Well, we store all the ObjectTemplates in an array that's
     // tied to env. So we do something like:
     //
-    //    env.templates[index_id_of_owner].initInstance(...);
+    //    env.templates[index_of_owner].initInstance(...);
     //
-    // But how do we get that `index_id_of_owner` ??
-    // This is where `type_lookup` comes from. We create a struct that looks like:
+    // But how do we get that `index_of_owner`? `TypeLookup` is a struct
+    // that looks like:
     //
     // const TypeLookup = struct {
     //     comptime cat: usize = 0,
@@ -66,7 +74,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
     //     ...
     // }
     //
-    // With this type, which is passed into callProperty, we can do:
+    // So to get the template index of `owner`, we can do:
     //
     //  const index_id = @field(type_lookup, @typeName(@TypeOf(res));
     //
@@ -76,12 +84,13 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
 
             // This prototype type check has nothing to do with building our
             // TypeLookup. But we put it here, early, so that the rest of the
-            // code doesn't have to worry about checking if Struct.Prototype is
+            // code doesn't have to worry about checking if Struct.prototype is
             // a pointer.
             const Struct = @field(types, s.name);
             if (@hasDecl(Struct, "prototype") and @typeInfo(Struct.prototype) != .pointer) {
                 @compileError(std.fmt.comptimePrint("Prototype '{s}' for type '{s} must be a pointer", .{ @typeName(Struct.prototype), @typeName(Struct) }));
             }
+
             const R = Receiver(@field(types, s.name));
             fields[i] = .{
                 .name = @typeName(R),
@@ -137,10 +146,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         // the global isolate
         isolate: v8.Isolate,
 
-        // When we create JS objects/methods/properties we can associate
-        // abitrary data. It'll be this value.
-        callback_data: v8.BigInt,
-
         // this is the global scope that all our classes are defined in
         global_scope: v8.HandleScope,
 
@@ -163,7 +168,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         // Sessions are cheap, we mostly do this so we can get a stable pointer
         executor_pool: std.heap.MemoryPool(Executor),
 
-        // Send a LowMemory
+        // Send a lowMemoryNotification whenever we stop an executor
         gc_hints: bool,
 
         const Self = @This();
@@ -202,7 +207,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 .global_scope = global_scope,
                 .prototype_lookup = undefined,
                 .executor_pool = std.heap.MemoryPool(Executor).init(allocator),
-                .callback_data = isolate.initBigIntU64(@intCast(@intFromPtr(env))),
             };
 
             // Populate our templates lookup. generateClass creates the
@@ -215,7 +219,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             }
 
             // Above, we've created all our our FunctionTemplates. Now that we
-            // have them all, we can hookup the prototype.
+            // have them all, we can hook up the prototypes.
             inline for (Types, 0..) |s, i| {
                 const Struct = @field(types, s.name);
                 if (@hasDecl(Struct, "prototype")) {
@@ -253,22 +257,32 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             const isolate = self.isolate;
             const templates = &self.templates;
 
+            // Acts like an Arena. Most things V8 has to allocate from this point
+            // on will be tied to this handle_scope - which we deinit in
+            // stopExecutor
             var handle_scope: v8.HandleScope = undefined;
             v8.HandleScope.init(&handle_scope, isolate);
 
+            // The global FunctionTemplate (i.e. Window).
             const globals = v8.FunctionTemplate.initDefault(isolate);
 
             const global_template = globals.getInstanceTemplate();
             global_template.setInternalFieldCount(1);
             self.attachClass(Global, globals);
 
+            // All the FunctionTemplates that we created and setup in Env.init
+            // are now going to get associated with our global instance.
             inline for (Types, 0..) |s, i| {
                 const Struct = @field(types, s.name);
                 const class_name = v8.String.initUtf8(isolate, comptime classNameForStruct(Struct));
                 global_template.set(class_name.toName(), templates[i], v8.PropertyAttribute.None);
             }
 
-            // The global is its own Object and has to have its prototype chain setup.
+            // The global object (Window) has already been hooked into the v8
+            // engine when the Env was initialized - like every other type. But
+            // But the V8 global is its own FunctionTemplate instance so even
+            // though it's also a Window, we need to set the prototype for this
+            // specific instance of the the Window.
             if (@hasDecl(Global, "prototype")) {
                 const proto_type = Receiver(@typeInfo(Global.prototype).pointer.child);
                 const proto_name = @typeName(proto_type);
@@ -344,6 +358,11 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             return executor;
         }
 
+        // In startExecutor we started a V8.Context. Here, we're going to
+        // deinit it. But V8 doesn't immediately free memory associated with
+        // a Context, it's managed by the garbage collector. So, when the
+        // `gc_hints` option is enabled, we'll use the `lowMemoryNotification`
+        // call on the isolate to encourage v8 to free the context.
         pub fn stopExecutor(self: *Self, executor: *Executor) void {
             executor.deinit();
             self.executor_pool.destroy(executor);
@@ -352,6 +371,10 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             }
         }
 
+        // Give it a Zig struct, get back a v8.FunctionTemplate.
+        // The FunctionTemplate is a bit like a struct container - it's where
+        // we'll attach functions/getters/setters and where we'll "inherit" a
+        // prototype type (if there is any)
         fn generateClass(self: *Self, comptime Struct: type) v8.FunctionTemplate {
             const template = self.generateConstructor(Struct);
             self.attachClass(Struct, template);
@@ -396,28 +419,39 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             self.generateNamedIndexer(Struct, template_proto);
         }
 
+        // Even if a struct doesn't have a `constructor` function, we still
+        // `generateConstructor`, because this is how we create our
+        // FunctionTemplate. Such classes exist, but they can't be instantiated
+        // via `new ClassName()` - but they could, for example, be created in
+        // Zig and returned from a function call, which is why we need the
+        // FunctionTemplate.
         fn generateConstructor(self: *Self, comptime Struct: type) v8.FunctionTemplate {
-            const template = v8.FunctionTemplate.initCallbackData(self.isolate, struct {
+            const template = v8.FunctionTemplate.initCallback(self.isolate, struct {
                 fn callback(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
                     const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
                     var caller = Caller(Self).init(info);
                     defer caller.deinit();
 
+                    // See comment above. We generateConstructor on all types
+                    // in order to create the FunctionTemplate, but there might
+                    // not be an actual "constructor" function. So if someone
+                    // does `new ClassName()` where ClassName doesn't have
+                    // a constructor function, we'll return an error.
                     if (@hasDecl(Struct, "constructor") == false) {
-                        // handle this early, so we can create a named_function without
-                        // hassling over whether the constructor actually exists
                         const isolate = caller.isolate;
                         const js_exception = isolate.throwException(createException(isolate, "illegal constructor"));
                         info.getReturnValue().set(js_exception);
                         return;
                     }
 
+                    // Safe to call now, because if Struct.constructor didn't
+                    // exist, the above if block would have returned.
                     const named_function = NamedFunction(Struct, Struct.constructor, "constructor"){};
                     caller.constructor(named_function, info) catch |err| {
                         caller.handleError(named_function, err, info);
                     };
                 }
-            }.callback, self.callback_data);
+            }.callback);
 
             template.getInstanceTemplate().setInternalFieldCount(1);
 
@@ -433,7 +467,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             } else {
                 js_name = v8.String.initUtf8(self.isolate, name[1..]).toName();
             }
-            const function_template = v8.FunctionTemplate.initCallbackData(self.isolate, struct {
+            const function_template = v8.FunctionTemplate.initCallback(self.isolate, struct {
                 fn callback(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
                     const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
                     var caller = Caller(Self).init(info);
@@ -444,7 +478,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                         caller.handleError(named_function, err, info);
                     };
                 }
-            }.callback, self.callback_data);
+            }.callback);
             template_proto.set(js_name, function_template, v8.PropertyAttribute.None);
         }
 
@@ -490,7 +524,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
 
             const setter_name = "set_" ++ name;
             if (@hasDecl(Struct, setter_name) == false) {
-                template_proto.setGetterData(js_name, getter_callback, self.callback_data);
+                template_proto.setGetter(js_name, getter_callback);
                 return;
             }
 
@@ -508,10 +542,10 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                     };
                 }
             }.callback;
-            template_proto.setGetterAndSetterData(js_name, getter_callback, setter_callback, self.callback_data);
+            template_proto.setGetterAndSetter(js_name, getter_callback, setter_callback);
         }
 
-        fn generateIndexer(self: *Self, comptime Struct: type, template_proto: v8.ObjectTemplate) void {
+        fn generateIndexer(_: *Self, comptime Struct: type, template_proto: v8.ObjectTemplate) void {
             var has_one = false;
             var configuration = v8.IndexedPropertyHandlerConfiguration{};
 
@@ -549,15 +583,15 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             }
 
             if (has_one) {
-                template_proto.setIndexedProperty(configuration, self.callback_data);
+                template_proto.setIndexedProperty(configuration, null);
             }
         }
 
-        fn generateNamedIndexer(self: *Self, comptime Struct: type, template_proto: v8.ObjectTemplate) void {
+        fn generateNamedIndexer(_: *Self, comptime Struct: type, template_proto: v8.ObjectTemplate) void {
             var has_one = false;
             var configuration = v8.NamedPropertyHandlerConfiguration{
                 // This is really cool. Without this, we'd intercept _all_ properties
-                // even those explictly set. So, node.length for example would get routed
+                // even those explicitly set. So, node.length for example would get routed
                 // to our `named_get`, rather than a `get_length`. This might be
                 // useful if we run into a type that we can't model properly in Zig.
                 .flags = v8.PropertyHandlerFlags.OnlyInterceptStrings | v8.PropertyHandlerFlags.NonMasking,
@@ -597,7 +631,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             }
 
             if (has_one) {
-                template_proto.setNamedProperty(configuration, self.callback_data);
+                template_proto.setNamedProperty(configuration, null);
             }
         }
 
@@ -608,18 +642,18 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             context: v8.Context,
             value: anytype,
         ) anyerror!v8.Value {
-            // Check if it's a "simple" type. This is extractd so that it can be
+            // Check if it's a "simple" type. This is extracted so that it can be
             // reused by other parts of the code. "simple" types only require an
-            // isolate to create
+            // isolate to create (specifically, they don't our templates array)
             if (simpleZigValueToJs(isolate, value, false)) |js_value| {
                 return js_value;
             }
+
             const T = @TypeOf(value);
             switch (@typeInfo(T)) {
                 .void, .bool, .int, .comptime_int, .float, .comptime_float, .array => {
                     // Need to do this to keep the compiler happy
-                    // If this was the case, simpleZigValueToJs would
-                    // have handled it
+                    // simpleZigValueToJs handles all of these cases.
                     unreachable;
                 },
                 .pointer => |ptr| switch (ptr.size) {
@@ -638,7 +672,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                             // have handled it
                             unreachable;
                         }
-                        @compileLog(T);
                     },
                     .slice => {
                         if (ptr.child == u8) {
@@ -714,6 +747,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         const PersistentObject = v8.Persistent(v8.Object);
         const PersistentFunction = v8.Persistent(v8.Function);
 
+        // This is capable of executing JavaScript.
         pub const Executor = struct {
             state: State,
             isolate: v8.Isolate,
@@ -750,9 +784,12 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             // grouped together helps keep things clean.
             scope: ?Scope = null,
 
+            // refernces the Env.template array
             templates: []v8.FunctionTemplate,
 
             const ModuleLoader = struct { ptr: *anyopaque, func: *const fn (ptr: *anyopaque, specifier: []const u8) anyerror![]const u8 };
+
+            // no init, must be initialized via env.startExecutor()
 
             // not public, must be destroyed via env.stopExecutor()
             fn deinit(self: *Executor) void {
@@ -765,6 +802,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 self.scope_arena.deinit();
             }
 
+            // Executes the src
             pub fn exec(self: *Executor, src: []const u8, name: ?[]const u8) !Value {
                 const isolate = self.isolate;
                 const context = self.context;
@@ -841,6 +879,12 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 ) catch return error.CompilationError;
             }
 
+            // Our scope maps to a "browser.Page".
+            // A v8.HandleScope is like an arena. Once created, any "Local" that
+            // v8 creates will be released (or at least, releasable by the v8 GC)
+            // when the handle_scope is freed.
+            // We also maintain our own "scope_arena" which allows us to have
+            // all page related memory easily managed.
             pub fn startScope(self: *Executor, global: anytype) !void {
                 std.debug.assert(self.scope == null);
 
@@ -857,9 +901,11 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             pub fn endScope(self: *Executor) void {
                 self.scope.?.deinit();
                 self.scope = null;
-                _ = self.scope_arena.reset(.{ .retain_with_limit = 1024 * 16 });
+                _ = self.scope_arena.reset(.{ .retain_with_limit = 1024 * 64 });
             }
 
+            // Wrap a v8.Value, largely so that we can provide a convenient
+            // toString function
             fn createValue(self: *const Executor, value: v8.Value) Value {
                 return .{
                     .value = value,
@@ -871,14 +917,28 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 return Self.zigValueToJs(self.templates, self.isolate, self.context, value);
             }
 
-            // An instance of the exeuctor is stored in the execution context.
-            // Code that only has the context can call this function, which
-            // will extract the executor to map the Zig instance to an JS value.
+            // See _mapZigInstanceToJs, this is wrapper that can be called
+            // without an Executor. This is possible because we store our
+            // executor in the EmbedderData of the v8.Context. So, as long as
+            // we have a v8.Context, we can get the executor.
             fn mapZigInstanceToJs(context: v8.Context, js_obj_or_template: anytype, value: anytype) !PersistentObject {
                 const executor: *Executor = @ptrFromInt(context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
                 return executor._mapZigInstanceToJs(js_obj_or_template, value);
             }
 
+            // To turn a Zig instance into a v8 object, we need to do a number of things.
+            // First, if it's a struct, we need to put it on the heap
+            // Second, if we've alrady returned this instance, we should return
+            // the same object. Hence, our executor maintains a map of Zig objects
+            // to v8.PersistentObject (the "identity_map").
+            // Finally, if this is the first time we've seen this instance, we need to:
+            //  1 - get the FunctionTemplate (from our templates slice)
+            //  2 - Create the TaggedAnyOpaque so that, if needed, we can do the reverse
+            //      (i.e. js -> zig)
+            //  3 - Create a v8.PersistentObject (because Zig owns this object, not v8)
+            //  4 - Store our TaggedAnyOpaque into the persistent object
+            //  5 - Update our identity_map (so that, if we return this same instance again,
+            //      we can just grab it from the identity_map)
             fn _mapZigInstanceToJs(self: *Executor, js_obj_or_template: anytype, value: anytype) !PersistentObject {
                 const scope = &self.scope.?;
                 const context = self.context;
@@ -887,6 +947,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 const T = @TypeOf(value);
                 switch (@typeInfo(T)) {
                     .@"struct" => {
+                        // Struct, has to be placed on the heap
                         const heap = try scope_arena.create(T);
                         heap.* = value;
                         return self._mapZigInstanceToJs(js_obj_or_template, heap);
@@ -894,15 +955,27 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                     .pointer => |ptr| {
                         const gop = try scope.identity_map.getOrPut(scope_arena, @intFromPtr(value));
                         if (gop.found_existing) {
+                            // we've seen this instance before, return the same
+                            // PersistentObject.
                             return gop.value_ptr.*;
                         }
 
+                        // Sometimes we're creating a new v8.Object, like when
+                        // we're returning a value from a function. In those cases
+                        // we have the FunctionTemplate, and we can get an object
+                        // by calling initInstance its InstanceTemplate.
+                        // Sometimes though we already have the v8.Objct to bind to
+                        // for example, when we're executing a constructor, v8 has
+                        // already created the "this" object.
                         const js_obj = switch (@TypeOf(js_obj_or_template)) {
                             v8.Object => js_obj_or_template,
                             v8.FunctionTemplate => js_obj_or_template.getInstanceTemplate().initInstance(context),
                             else => @compileError("mapZigInstanceToJs requires a v8.Object (constructors) or v8.FunctionTemplate, got: " ++ @typeName(@TypeOf(js_obj_or_template))),
                         };
 
+                        // The TAO contains the pointer ot our Zig instance as
+                        // well as any meta data we'll need to use it later.
+                        // See the TaggedAnyOpaque struct for more details.
                         const tao = try scope_arena.create(TaggedAnyOpaque);
                         tao.* = .{
                             .ptr = value,
@@ -921,6 +994,8 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 }
             }
 
+            // Callback from V8, asking us to load a module. The "specifier" is
+            // the src of the module to load.
             fn resolveModuleCallback(
                 c_context: ?*const v8.C_Context,
                 c_specifier: ?*const v8.C_String,
@@ -999,6 +1074,11 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             this: ?v8.Object = null,
             func: PersistentFunction,
 
+            // We use this when mapping a JS value to a Zig object. We can't
+            // Say we have a Zig function that takes a Callback, we can't just
+            // check param.type == Callback, because Callback is a generic.
+            // So, as a quick hack, we can determine if the Zig type is a
+            // callback by checking @hasDecl(T, "_CALLBACK_ID_KLUDGE")
             const _CALLBACK_ID_KLUDGE = true;
 
             pub const Result = struct {
@@ -1239,13 +1319,16 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
     };
 }
 
+// Responsible for calling Zig functions from JS invokations. This could
+// probably just contained in Executor, but having this specific logic, which
+// is somewhat repetitive between constructors, functions, getters, etc contained
+// here does feel like it makes it clenaer.
 fn Caller(comptime E: type) type {
     const State = E.State;
     const TYPE_LOOKUP = E.TYPE_LOOKUP;
     const TypeLookup = @TypeOf(TYPE_LOOKUP);
 
     return struct {
-        env: *E,
         context: v8.Context,
         isolate: v8.Isolate,
         executor: *E.Executor,
@@ -1253,15 +1336,15 @@ fn Caller(comptime E: type) type {
 
         const Self = @This();
 
+        // info is a v8.PropertyCallbackInfo or a v8.FunctionCallback
+        // All we really want from it is the isolate.
+        // executor = Isolate -> getCurrentContext -> getEmbedderData()
         fn init(info: anytype) Self {
             const isolate = info.getIsolate();
-            const env: *E = @ptrFromInt(info.getData().castTo(v8.BigInt).getUint64());
-
             const context = isolate.getCurrentContext();
             const executor: *E.Executor = @ptrFromInt(context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
 
             return .{
-                .env = env,
                 .isolate = isolate,
                 .context = context,
                 .executor = executor,
@@ -1547,16 +1630,6 @@ fn Caller(comptime E: type) type {
                 error.InvalidArgument => createTypeException(isolate, "invalid argument"),
                 error.OutOfMemory => createException(isolate, "out of memory"),
                 else => blk: {
-                    // if (@typeInfo(@TypeOf(func)) == .void) {
-                    //     // func will be void in the case of a type without a
-                    //     // constructor. In such cases the error will always
-                    //     // be error.IllegalConstructor, which the above case
-                    //     // will handle. So it should be impossible for us to
-                    //     // get here.
-                    //     // We add this code to satisfy the compiler.
-                    //     unreachable;
-                    // }
-
                     const return_type = @typeInfo(@TypeOf(named_function.func)).@"fn".return_type orelse {
                         // void return type;
                         break :blk null;
@@ -2058,7 +2131,7 @@ fn classNameForStruct(comptime Struct: type) []const u8 {
 //   var cat = new Cat();
 //   cat.setOwner(new Cat());
 //
-// The zig _setOwner method expects the 2nd paramter to be an *Owner, but
+// The zig _setOwner method expects the 2nd parameter to be an *Owner, but
 // the JS code passed a *Cat.
 //
 // To solve this issue, we tag every returned value so that we can check what
@@ -2079,7 +2152,7 @@ fn classNameForStruct(comptime Struct: type) []const u8 {
 //
 // One of the prototype mechanisms that we support is via composition. Owner
 // can have a "proto: *Person" field. For this reason, we also store the offset
-// of the proto field, so that, given an intFromPtr(*Owner) we can access it's
+// of the proto field, so that, given an intFromPtr(*Owner) we can access its
 // proto field.
 //
 // The other prototype mechanism that we support is for netsurf, where we just
@@ -2094,17 +2167,19 @@ const TaggedAnyOpaque = struct {
     // If this type has composition-based prototype, represents the byte-offset
     // from ptr where the `proto` field is located. The value -1 represents
     // unsafe prototype where we can just cast ptr to the destination type
-    // (this is used extensively with netsuf.)
+    // (this is used extensively with netsurf)
     offset: i32,
 
-    // Ptr to the Zig instance. We'll know its possible type based on the context
-    // where it's called, but it's exact type might be
+    // Ptr to the Zig instance. Between the context where it's called (i.e.
+    // we have the comptime parameter info for all functions), and the index field
+    // we can figure out what type this is.
     ptr: *anyopaque,
 
     // When we're asked to describe an object via the Inspector, we _must_ include
     // the proper subtype (and description) fields in the returned JSON.
     // V8 will give us a Value and ask us for the subtype. From the v8.Value we
-    // can get a v8.Object, and from the v8.Object, we can get out TaggedAnyOpque
+    // can get a v8.Object, and from the v8.Object, we can get out TaggedAnyOpaque
+    // which is where we store the subtype.
     sub_type: ?[*c]const u8,
 };
 
@@ -2117,18 +2192,6 @@ fn valueToString(allocator: Allocator, value: v8.Value, isolate: v8.Isolate, con
     return buf;
 }
 
-pub const ObjectId = struct {
-    id: usize,
-
-    pub fn set(obj: v8.Object) ObjectId {
-        return .{ .id = obj.getIdentityHash() };
-    }
-
-    pub fn get(self: ObjectId) usize {
-        return self.id;
-    }
-};
-
 const NoopInspector = struct {
     pub fn onInspectorResponse(_: *anyopaque, _: u32, _: []const u8) void {}
     pub fn onInspectorEvent(_: *anyopaque, _: []const u8) void {}
@@ -2138,7 +2201,7 @@ const NoopInspector = struct {
 // const Cat = struct {
 //    pub fn meow(self: *Cat) void { ... }
 // }
-// The obviously, the receiver of its methods are going to be a *Cat (or *const Cat)
+// Then obviously, the receiver of its methods are going to be a *Cat (or *const Cat)
 //
 // However, we can also do:
 // const Cat = struct {
@@ -2153,7 +2216,10 @@ fn Receiver(comptime S: type) type {
 // We want the function name, or more precisely, the "Struct.function" for
 // displaying helpful @compileError.
 // However, there's no way to get the name from a std.Builtin.Fn,
-// so we capture it early, when we iterate through the declarations.
+// so we capture it early and mostly pass around this NamedFunction instance
+// whenever we're trying to bind a function/getter/setter/etc so that we always
+// have the main data (struct + function) along with the meta data for displaying
+// better errors.
 fn NamedFunction(comptime S: type, comptime function: anytype, comptime name: []const u8) type {
     const full_name = @typeName(S) ++ "." ++ name;
     const js_name = if (name[0] == '_') name[1..] else name;
@@ -2165,6 +2231,9 @@ fn NamedFunction(comptime S: type, comptime function: anytype, comptime name: []
     };
 }
 
+// This is called from V8. Whenever the v8 inspector has to describe a value
+// it'll call this function to gets its [optional] subtype - which, from V8's
+// point of view, is an arbitrary string.
 pub export fn v8_inspector__Client__IMPL__valueSubtype(
     _: *v8.c.InspectorClientImpl,
     c_value: *const v8.C_Value,
@@ -2173,6 +2242,10 @@ pub export fn v8_inspector__Client__IMPL__valueSubtype(
     return if (external_entry.sub_type) |st| st else null;
 }
 
+// Same as valueSubType above, but for the optional description field.
+// From what I can tell, some drivers _need_ the description field to be
+// present, even if it's empty. So if we have a subType for the value, we'll
+// put an empty description.
 pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
     _: *v8.c.InspectorClientImpl,
     context: *const v8.C_Context,
