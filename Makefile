@@ -47,7 +47,7 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-dev run run-release shell test bench download-zig wpt data
+.PHONY: build build-dev run run-release shell test bench download-zig wpt data get-v8 build-v8 build-v8-dev
 
 zig_version = $(shell grep 'recommended_zig_version = "' "vendor/zig-js-runtime/build.zig" | cut -d'"' -f2)
 
@@ -93,6 +93,19 @@ wpt-summary:
 ## Test
 test:
 	@TEST_FILTER='${F}' $(ZIG) build test -freference-trace --summary all
+
+## v8
+get-v8:
+	@printf "\e[36mGetting v8 source...\e[0m\n"
+	@$(ZIG) build get-v8
+
+build-v8-dev:
+	@printf "\e[36mBuilding v8 (dev)...\e[0m\n"
+	@$(ZIG) build build-v8
+
+build-v8:
+	@printf "\e[36mBuilding v8...\e[0m\n"
+	@$(ZIG) build -Doptimize=ReleaseSafe build-v8
 
 # Install and build required dependencies commands
 # ------------

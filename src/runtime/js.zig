@@ -129,7 +129,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             var prototype_index = i;
             const Struct = @field(types, s.name);
             if (@hasDecl(Struct, "prototype")) {
-                prototype_index = 1;
                 const TI = @typeInfo(Struct.prototype);
                 const proto_name = @typeName(Receiver(TI.pointer.child));
                 prototype_index = @field(TYPE_LOOKUP, proto_name);
@@ -776,8 +775,8 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             scope_arena: ArenaAllocator,
 
             // When we need to load a resource (i.e. an external script), we call
-            // this function to get the source. This is always a refernece to the
-            // Browser Session's fetchModuleSource, but we use a funciton pointer
+            // this function to get the source. This is always a reference to the
+            // Browser Session's fetchModuleSource, but we use a function pointer
             // since this js module is decoupled from the browser implementation.
             module_loader: ModuleLoader,
 
@@ -931,7 +930,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
 
             // To turn a Zig instance into a v8 object, we need to do a number of things.
             // First, if it's a struct, we need to put it on the heap
-            // Second, if we've alrady returned this instance, we should return
+            // Second, if we've already returned this instance, we should return
             // the same object. Hence, our executor maintains a map of Zig objects
             // to v8.PersistentObject (the "identity_map").
             // Finally, if this is the first time we've seen this instance, we need to:

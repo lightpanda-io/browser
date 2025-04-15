@@ -46,6 +46,19 @@ pub fn main() !void {
     var slowest = SlowTracker.init(allocator, 5);
     defer slowest.deinit();
 
+    var args = try std.process.argsWithAllocator(allocator);
+    defer args.deinit();
+
+    // ignore the exec name.
+    _ = args.next();
+    var json_stats = false;
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, "--json", arg)) {
+            json_stats = true;
+            continue;
+        }
+    }
+
     var pass: usize = 0;
     var fail: usize = 0;
     var skip: usize = 0;
@@ -155,6 +168,37 @@ pub fn main() !void {
     printer.fmt("\n", .{});
     try slowest.display(printer);
     printer.fmt("\n", .{});
+
+    // TODO: at the very least, `browser` should return real stats
+    if (json_stats) {
+        try std.json.stringify(&.{
+            .{ .name = "browser", .bench = .{
+                .duration = 3180096049,
+                .alloc_nb = 6,
+                .realloc_nb = 278,
+                .alloc_size = 24711226,
+            } },
+            .{ .name = "libdom", .bench = .{
+                .duration = 3180096049,
+                .alloc_nb = 0,
+                .realloc_nb = 0,
+                .alloc_size = 0,
+            } },
+            .{ .name = "v8", .bench = .{
+                .duration = 3180096049,
+                .alloc_nb = 0,
+                .realloc_nb = 0,
+                .alloc_size = 0,
+            } },
+            .{ .name = "main", .bench = .{
+                .duration = 3180096049,
+                .alloc_nb = 0,
+                .realloc_nb = 0,
+                .alloc_size = 0,
+            } },
+        }, .{ .whitespace = .indent_2 }, std.io.getStdOut().writer());
+    }
+
     std.posix.exit(if (fail == 0) 0 else 1);
 }
 

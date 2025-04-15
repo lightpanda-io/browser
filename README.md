@@ -221,14 +221,16 @@ env var `MIMALLOC_SHOW_STATS=1`. See
 First, get the tools necessary for building V8, as well as the V8 source code:
 
 ```
-zig build get-v8
+make get-v8
 ```
 
 Next, build v8. This build task is very long and cpu consuming, as you will build v8 from sources. 
 
 ```
-zig build build-v8
+make build-v8-dev
 ```
+
+For dev env, use `make build-v8-dev`.
 
 ## Test
 

@@ -61,8 +61,8 @@ RUN make install-libiconv && \
 
 # download and install v8
 RUN curl --fail -L -o libc_v8.a https://github.com/lightpanda-io/zig-v8-fork/releases/download/${ZIG_V8}/libc_v8_${V8}_linux_${ARCH}.a && \
-    mkdir -p vendor/zig-js-runtime/vendor/v8/${ARCH}-linux/release && \
-    mv libc_v8.a vendor/zig-js-runtime/vendor/v8/${ARCH}-linux/release/libc_v8.a
+    mkdir -p v8/build/${ARCH}-linux/release/ninja/obj/zig/ && \
+    mv libc_v8.a v8/build/${ARCH}-linux/release/ninja/obj/zig/libc_v8.a
 
 # build release
 RUN make build
