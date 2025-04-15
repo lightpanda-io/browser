@@ -913,7 +913,7 @@ pub fn toInterface(comptime T: type, e: *parser.Element) !T {
 
 const testing = @import("../../testing.zig");
 test "Browser.HTML.Element" {
-    var runner = try testing.jsRunner(testing.allocator, .{});
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
     defer runner.deinit();
 
     try runner.testCases(&.{

@@ -167,7 +167,7 @@ pub const DOMException = struct {
 
 const testing = @import("../../testing.zig");
 test "Browser.DOM.Exception" {
-    var runner = try testing.jsRunner(testing.allocator, .{});
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
     defer runner.deinit();
 
     const err = "Failed to execute 'appendChild' on 'Node': The new child element contains the parent.";

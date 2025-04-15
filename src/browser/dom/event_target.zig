@@ -115,7 +115,7 @@ pub const EventTarget = struct {
 
 const testing = @import("../../testing.zig");
 test "Browser.DOM.EventTarget" {
-    var runner = try testing.jsRunner(testing.allocator, .{});
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
     defer runner.deinit();
 
     try runner.testCases(&.{

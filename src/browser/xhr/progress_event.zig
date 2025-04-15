@@ -69,7 +69,7 @@ pub const ProgressEvent = struct {
 
 const testing = @import("../../testing.zig");
 test "Browser.XHR.ProgressEvent" {
-    var runner = try testing.jsRunner(testing.allocator, .{});
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
     defer runner.deinit();
 
     try runner.testCases(&.{

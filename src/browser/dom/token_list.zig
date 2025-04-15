@@ -107,7 +107,7 @@ pub const DOMTokenList = struct {
 
 const testing = @import("../../testing.zig");
 test "Browser.DOM.TokenList" {
-    var runner = try testing.jsRunner(testing.allocator, .{});
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
     defer runner.deinit();
 
     try runner.testCases(&.{

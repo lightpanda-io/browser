@@ -351,6 +351,7 @@ fn isJsonValue(a: std.json.Value, b: std.json.Value) bool {
     }
 }
 
+pub const tracking_allocator = @import("root").tracking_allocator.allocator();
 pub const JsRunner = struct {
     const URL = @import("url.zig").URL;
     const Env = @import("browser/env.zig").Env;
@@ -443,6 +444,8 @@ pub const JsRunner = struct {
     const RunOpts = struct {};
     pub const Case = std.meta.Tuple(&.{ []const u8, []const u8 });
     pub fn testCases(self: *JsRunner, cases: []const Case, _: RunOpts) !void {
+        const start = try std.time.Instant.now();
+
         for (cases, 0..) |case, i| {
             var try_catch: Env.TryCatch = undefined;
             try_catch.init(self.executor);
@@ -455,6 +458,7 @@ pub const JsRunner = struct {
                 return err;
             };
             try self.loop.run();
+            @import("root").js_runner_duration += std.time.Instant.since(try std.time.Instant.now(), start);
 
             const actual = try value.toString(self.arena);
             if (std.mem.eql(u8, case.@"1", actual) == false) {

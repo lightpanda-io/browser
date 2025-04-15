@@ -14,7 +14,7 @@ pub const source = @embedFile("fetch.js");
 
 const testing = @import("../../testing.zig");
 test "Browser.fetch" {
-    var runner = try testing.jsRunner(testing.allocator, .{});
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
     defer runner.deinit();
 
     try @import("polyfill.zig").load(testing.allocator, runner.executor);

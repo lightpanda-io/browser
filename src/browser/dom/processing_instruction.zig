@@ -49,7 +49,7 @@ pub const ProcessingInstruction = struct {
 
 const testing = @import("../../testing.zig");
 test "Browser.DOM.ProcessingInstruction" {
-    var runner = try testing.jsRunner(testing.allocator, .{});
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
     defer runner.deinit();
 
     try runner.testCases(&.{
