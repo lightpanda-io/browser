@@ -561,13 +561,16 @@ fn serveHTTPS(address: std.net.Address) !void {
             _ = it.next() orelse unreachable; // method
             const path = it.next() orelse unreachable;
 
-            std.debug.print("http server: {s} ", .{path});
+            var fragment = false;
             var response: []const u8 = undefined;
             if (std.mem.eql(u8, path, "/http_client/simple")) {
+                fragment = true;
                 response = "HTTP/1.1 200 \r\nContent-Length: 0\r\n\r\n";
             } else if (std.mem.eql(u8, path, "/http_client/body")) {
+                fragment = true;
                 response = "HTTP/1.1 201 CREATED\r\nContent-Length: 20\r\n   Another :  HEaDer  \r\n\r\n1234567890abcdefhijk";
             } else if (std.mem.eql(u8, path, "/http_client/redirect/insecure")) {
+                fragment = true;
                 response = "HTTP/1.1 307 GOTO\r\nLocation: http://127.0.0.1:9582/http_client/redirect\r\n\r\n";
             } else if (std.mem.eql(u8, path, "/xhr")) {
                 response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 100\r\n\r\n" ++ ("1234567890" ** 10);
@@ -580,13 +583,11 @@ fn serveHTTPS(address: std.net.Address) !void {
 
             var unsent = response;
             while (unsent.len > 0) {
-                const to_send = rand.intRangeAtMost(usize, 1, unsent.len);
-                std.debug.print(" {d} ", .{to_send});
+                const to_send = if (fragment) rand.intRangeAtMost(usize, 1, unsent.len) else unsent.len;
                 const sent = try conn.write(unsent[0..to_send]);
                 unsent = unsent[sent..];
                 std.time.sleep(std.time.ns_per_us * 5);
             }
-            std.debug.print("\n", .{});
             break;
         }
     }
