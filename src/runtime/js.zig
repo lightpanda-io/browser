@@ -1,16 +1,20 @@
-// Copyright 2023-2024 Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2024  Lightpanda (Selecy SAS)
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
 //
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -548,12 +552,11 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         }
 
         fn generateIndexer(_: *Self, comptime Struct: type, template_proto: v8.ObjectTemplate) void {
-            var has_one = false;
-            var configuration = v8.IndexedPropertyHandlerConfiguration{};
-
-            if (@hasDecl(Struct, "indexed_get")) {
-                has_one = true;
-                configuration.getter = struct {
+            if (@hasDecl(Struct, "indexed_get") == false) {
+                return;
+            }
+            const configuration = v8.IndexedPropertyHandlerConfiguration{
+                .getter = struct {
                     fn callback(idx: u32, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) void {
                         const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
                         var caller = Caller(Self).init(info);
@@ -564,44 +567,25 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                             caller.handleError(named_function, err, info);
                         };
                     }
-                }.callback;
-            }
+                }.callback,
+            };
 
-            if (@hasDecl(Struct, "indexed_set")) {
-                has_one = true;
-                configuration.setter = struct {
-                    fn callback(idx: u32, raw_value: ?*const v8.C_Value, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) void {
-                        const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
-                        var caller = Caller(Self).init(info);
-                        defer caller.deinit();
-
-                        const js_value = v8.Value{ .handle = raw_value.? };
-                        const named_function = NamedFunction(Struct, Struct.indexed_set, "indexed_set"){};
-                        caller.setIndex(named_function, idx, js_value, info) catch |err| {
-                            caller.handleError(named_function, err, info);
-                        };
-                    }
-                }.callback;
-            }
-
-            if (has_one) {
-                template_proto.setIndexedProperty(configuration, null);
-            }
+            // If you're trying to implement setter, read:
+            // https://groups.google.com/g/v8-users/c/8tahYBsHpgY/m/IteS7Wn2AAAJ
+            // The issue I had was
+            // (a) where to attache it: does it go ont he instance_template
+            //     instead of the prototype?
+            // (b) defining the getter or query to respond with the
+            //     PropertyAttribute to indicate if the property can be set
+            template_proto.setIndexedProperty(configuration, null);
         }
 
         fn generateNamedIndexer(_: *Self, comptime Struct: type, template_proto: v8.ObjectTemplate) void {
-            var has_one = false;
-            var configuration = v8.NamedPropertyHandlerConfiguration{
-                // This is really cool. Without this, we'd intercept _all_ properties
-                // even those explicitly set. So, node.length for example would get routed
-                // to our `named_get`, rather than a `get_length`. This might be
-                // useful if we run into a type that we can't model properly in Zig.
-                .flags = v8.PropertyHandlerFlags.OnlyInterceptStrings | v8.PropertyHandlerFlags.NonMasking,
-            };
-
-            if (@hasDecl(Struct, "named_get")) {
-                has_one = true;
-                configuration.getter = struct {
+            if (@hasDecl(Struct, "named_get") == false) {
+                return;
+            }
+            const configuration = v8.NamedPropertyHandlerConfiguration{
+                .getter = struct {
                     fn callback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) void {
                         const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
                         var caller = Caller(Self).init(info);
@@ -612,29 +596,23 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                             caller.handleError(named_function, err, info);
                         };
                     }
-                }.callback;
-            }
+                }.callback,
 
-            if (@hasDecl(Struct, "named_set")) {
-                has_one = true;
-                configuration.setter = struct {
-                    fn callback(c_name: ?*const v8.C_Name, raw_value: ?*const v8.C_Value, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) void {
-                        const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
-                        var caller = Caller(Self).init(info);
-                        defer caller.deinit();
+                // This is really cool. Without this, we'd intercept _all_ properties
+                // even those explicitly set. So, node.length for example would get routed
+                // to our `named_get`, rather than a `get_length`. This might be
+                // useful if we run into a type that we can't model properly in Zig.
+                .flags = v8.PropertyHandlerFlags.OnlyInterceptStrings | v8.PropertyHandlerFlags.NonMasking,
+            };
 
-                        const js_value = v8.Value{ .handle = raw_value.? };
-                        const named_function = NamedFunction(Struct, Struct.named_set, "named_set"){};
-                        caller.setNamedIndex(named_function, .{ .handle = c_name.? }, js_value, info) catch |err| {
-                            caller.handleError(named_function, err, info);
-                        };
-                    }
-                }.callback;
-            }
-
-            if (has_one) {
-                template_proto.setNamedProperty(configuration, null);
-            }
+            // If you're trying to implement setter, read:
+            // https://groups.google.com/g/v8-users/c/8tahYBsHpgY/m/IteS7Wn2AAAJ
+            // The issue I had was
+            // (a) where to attache it: does it go ont he instance_template
+            //     instead of the prototype?
+            // (b) defining the getter or query to respond with the
+            //     PropertyAttribute to indicate if the property can be set
+            template_proto.setNamedProperty(configuration, null);
         }
 
         // Turns a Zig value into a JS one.
@@ -1508,41 +1486,6 @@ fn Caller(comptime E: type) type {
             }
         }
 
-        fn setIndex(self: *Self, comptime named_function: anytype, idx: u32, js_value: v8.Value, info: v8.PropertyCallbackInfo) !void {
-            const S = named_function.S;
-            comptime assertSelfReceiver(named_function);
-
-            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(S), info.getThis());
-
-            const IndexedSet = @TypeOf(named_function.func);
-            var args: ParamterTypes(IndexedSet) = undefined;
-            const arg_fields = @typeInfo(@TypeOf(args)).@"struct".fields;
-            switch (arg_fields.len) {
-                0, 1, 2 => @compileError(named_function.full_name ++ " must take at least a u32 parameter and a value"),
-                3, 4 => {
-                    @field(args, "0") = zig_instance;
-                    @field(args, "1") = idx;
-                    @field(args, "2") = try self.jsValueToZig(named_function, arg_fields[2].type, js_value);
-                    if (comptime arg_fields.len == 4) {
-                        comptime assertIsStateArg(named_function, 3);
-                        @field(args, "3") = self.executor.state;
-                    }
-                },
-                else => @compileError(named_function.full_name ++ " has too many parmaters"),
-            }
-
-            switch (@typeInfo(@typeInfo(IndexedSet).@"fn".return_type.?)) {
-                .error_union => |eu| {
-                    if (eu.payload == void) {
-                        return @call(.auto, S.indexed_set, args);
-                    }
-                },
-                .void => return @call(.auto, S.indexed_set, args),
-                else => {},
-            }
-            @compileError(named_function.full_name ++ " cannot have a return type");
-        }
-
         fn getNamedIndex(self: *Self, comptime named_function: anytype, name: v8.Name, info: v8.PropertyCallbackInfo) !void {
             const S = named_function.S;
             const NamedGet = @TypeOf(named_function.func);
@@ -1577,41 +1520,6 @@ fn Caller(comptime E: type) type {
             } else {
                 info.getReturnValue().set(try self.zigValueToJs(res));
             }
-        }
-
-        fn setNamedIndex(self: *Self, comptime named_function: anytype, name: v8.Name, js_value: v8.Value, info: v8.PropertyCallbackInfo) !void {
-            const S = named_function.S;
-            comptime assertSelfReceiver(named_function);
-
-            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(S), info.getThis());
-
-            const IndexedSet = @TypeOf(named_function.func);
-            var args: ParamterTypes(IndexedSet) = undefined;
-            const arg_fields = @typeInfo(@TypeOf(args)).@"struct".fields;
-            switch (arg_fields.len) {
-                0, 1, 2 => @compileError(named_function.full_name ++ " must take at least an u32 parameter and a value"),
-                3, 4 => {
-                    @field(args, "0") = zig_instance;
-                    @field(args, "1") = try self.nameToString(name);
-                    @field(args, "2") = try self.jsValueToZig(named_function, arg_fields[2].type, js_value);
-                    if (comptime arg_fields.len == 4) {
-                        comptime assertIsStateArg(named_function, 3);
-                        @field(args, "3") = self.executor.state;
-                    }
-                },
-                else => @compileError(named_function.full_name ++ " has too many parmaters"),
-            }
-
-            switch (@typeInfo(@typeInfo(IndexedSet).@"fn".return_type.?)) {
-                .error_union => |eu| {
-                    if (eu.payload == void) {
-                        return @call(.auto, S.named_set, args);
-                    }
-                },
-                .void => return @call(.auto, S.named_set, args),
-                else => {},
-            }
-            @compileError(named_function.full_name ++ " cannot have a return type");
         }
 
         fn nameToString(self: *Self, name: v8.Name) ![]const u8 {
@@ -2295,4 +2203,5 @@ fn getTaggedAnyOpaque(value: v8.Value) ?*TaggedAnyOpaque {
 test {
     std.testing.refAllDecls(@import("test_primitive_types.zig"));
     std.testing.refAllDecls(@import("test_complex_types.zig"));
+    std.testing.refAllDecls(@import("test_object_types.zig"));
 }
