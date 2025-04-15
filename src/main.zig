@@ -561,6 +561,7 @@ fn serveHTTPS(address: std.net.Address) !void {
             _ = it.next() orelse unreachable; // method
             const path = it.next() orelse unreachable;
 
+            std.debug.print("http server: {s} ", .{path});
             var response: []const u8 = undefined;
             if (std.mem.eql(u8, path, "/http_client/simple")) {
                 response = "HTTP/1.1 200 \r\nContent-Length: 0\r\n\r\n";
@@ -580,10 +581,12 @@ fn serveHTTPS(address: std.net.Address) !void {
             var unsent = response;
             while (unsent.len > 0) {
                 const to_send = rand.intRangeAtMost(usize, 1, unsent.len);
+                std.debug.print(" {d} ", .{to_send});
                 const sent = try conn.write(unsent[0..to_send]);
                 unsent = unsent[sent..];
                 std.time.sleep(std.time.ns_per_us * 5);
             }
+            std.debug.print("\n", .{});
             break;
         }
     }
