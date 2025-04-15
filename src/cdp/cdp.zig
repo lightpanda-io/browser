@@ -303,6 +303,9 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         node_registry: Node.Registry,
         node_search_list: Node.Search.List,
 
+        // Holds the data to be able recreate the fake isolated world, see: @isolated_world
+        fake_isolatedworld: ?@import("domains/runtime.zig").ExecutionContextCreated,
+
         const Self = @This();
 
         fn init(self: *Self, id: []const u8, cdp: *CDP_T) !void {
@@ -323,6 +326,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .page_life_cycle_events = false, // TODO; Target based value
                 .node_registry = registry,
                 .node_search_list = undefined,
+                .fake_isolatedworld = null,
             };
             self.node_search_list = Node.Search.List.init(allocator, &self.node_registry);
         }

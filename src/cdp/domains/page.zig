@@ -98,35 +98,46 @@ fn addScriptToEvaluateOnNewDocument(cmd: anytype) !void {
 }
 
 // TODO: hard coded method
+/// @isolated_world The current understanding is that an isolated world should be a separate isolate and context
+/// that would live in the BrowserContext. We think Puppetee creates this to be able to create variables
+/// that are not interfering with the normal namespace of he webpage.
+/// Similar to the main context we need to pretend to recreate it after a executionContextsCleared event
+/// which happens when navigating to a new page.
+/// Since we do not actually create an isolated context operations on this context are still performed
+/// in the main context, we suspect this may lead to unexpected variables and value overwrites.
 fn createIsolatedWorld(cmd: anytype) !void {
-    _ = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-
-    const session_id = cmd.input.session_id orelse return error.SessionIdRequired;
-
     const params = (try cmd.params(struct {
         frameId: []const u8,
         worldName: []const u8,
         grantUniveralAccess: bool,
     })) orelse return error.InvalidParams;
 
-    // noop executionContextCreated event
-    try cmd.sendEvent("Runtime.executionContextCreated", .{
-        .context = runtime.ExecutionContextCreated{
-            .id = 0,
-            .origin = "",
-            .name = params.worldName,
-            // TODO: hard coded ID
-            .uniqueId = "7102379147004877974.3265385113993241162",
-            .auxData = .{
-                .isDefault = false,
-                .type = "isolated",
-                .frameId = params.frameId,
-            },
-        },
-    }, .{ .session_id = session_id });
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const session_id = cmd.input.session_id orelse return error.SessionIdRequired;
 
-    return cmd.sendResult(.{
-        .executionContextId = 0,
+    const name_copy = try bc.session.arena.allocator().dupe(u8, params.worldName);
+    const frame_id_copy = try bc.session.arena.allocator().dupe(u8, params.frameId);
+    const fake_id = 0;
+
+    bc.fake_isolatedworld = .{
+        .id = fake_id,
+        .origin = "", // The 2nd time chrome sends this it is "://"
+        .name = name_copy,
+        // TODO: hard coded ID, should change when context is recreated
+        .uniqueId = "7102379147004877974.3265385113993241162",
+        .auxData = .{
+            .isDefault = false,
+            .type = "isolated",
+            .frameId = frame_id_copy,
+        },
+    };
+
+    // Inform the client of the creation of the isolated world and its ID.
+    // Note: Puppeteer uses the ID from this event and actually ignores the executionContextId return value
+    try cmd.sendEvent("Runtime.executionContextCreated", .{ .context = bc.fake_isolatedworld }, .{ .session_id = session_id });
+
+    try cmd.sendResult(.{
+        .executionContextId = fake_id,
     }, .{});
 }
 
@@ -202,9 +213,14 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageEvent) !void {
         }, .{ .session_id = session_id });
     }
 
-    // Send Runtime.executionContextsCleared event
     // TODO: noop event, we have no env context at this point, is it necesarry?
+    // Sending this events will tell make the client drop its contexts and wait for new ones to be created.
     try cdp.sendEvent("Runtime.executionContextsCleared", null, .{ .session_id = session_id });
+
+    // When the execution contexts are cleared the client expect us to send executionContextCreated events with the new ID for each context.
+    // Since we do not actually maintain an isolated context we just send the same message as we did initially.
+    // The contextCreated message is send for the main context by the session by calling the inspector.contextCreated when navigating.
+    if (bc.fake_isolatedworld) |isolatedworld| try cdp.sendEvent("Runtime.executionContextCreated", .{ .context = isolatedworld }, .{ .session_id = session_id });
 }
 
 pub fn pageNavigated(bc: anytype, event: *const Notification.PageEvent) !void {
