@@ -408,15 +408,12 @@ pub const TrackingAllocator = struct {
     }
 
     pub fn allocator(self: *TrackingAllocator) Allocator {
-        return .{
-            .ptr = self,
-            .vtable = &.{
-                .alloc = alloc,
-                .resize = resize,
-                .free = free,
-                .remap = remap,
-            }
-        };
+        return .{ .ptr = self, .vtable = &.{
+            .alloc = alloc,
+            .resize = resize,
+            .free = free,
+            .remap = remap,
+        } };
     }
 
     fn alloc(

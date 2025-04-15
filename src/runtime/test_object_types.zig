@@ -40,17 +40,19 @@ pub const MyObject = struct {
     val: bool,
 
     pub fn constructor(do_set: bool) MyObject {
-        return .{.val = do_set,};
+        return .{
+            .val = do_set,
+        };
     }
 
     pub fn named_get(_: *const MyObject, name: []const u8, has_value: *bool) ?OtherUnion {
         if (std.mem.eql(u8, name, "a")) {
             has_value.* = true;
-            return .{.Other = .{.val = 4}};
+            return .{ .Other = .{ .val = 4 } };
         }
         if (std.mem.eql(u8, name, "c")) {
             has_value.* = true;
-            return .{.Bool = true};
+            return .{ .Bool = true };
         }
         has_value.* = false;
         return null;
