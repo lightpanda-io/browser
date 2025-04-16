@@ -44,7 +44,7 @@ You can download the last binary from the [nightly
 builds](https://github.com/lightpanda-io/browser/releases/tag/nightly) for
 Linux x86_64 and MacOS aarch64.
 
-*For linux*
+*For Linux*
 ```console
 curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux && \
 chmod a+x ./lightpanda
@@ -55,6 +55,11 @@ chmod a+x ./lightpanda
 curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-aarch64-macos && \
 chmod a+x ./lightpanda
 ```
+
+*For Windows + WSL2*
+
+The Lightpandabrowser is compatible to run on windows inside WSL. Follow the Linux instruction for installation from a WSL terminal.
+It is recommended to install clients like Puppeteer on the Windows host.
 
 ### Dump a URL
 
