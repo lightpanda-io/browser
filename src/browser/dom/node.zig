@@ -411,14 +411,17 @@ test "Browser.DOM.node" {
     var runner = try testing.jsRunner(testing.tracking_allocator, .{});
     defer runner.deinit();
 
-    try runner.exec(
-        \\ function trimAndReplace(str) {
-        \\   str = str.replace(/(\r\n|\n|\r)/gm,'');
-        \\   str = str.replace(/\s+/g, ' ');
-        \\   str = str.trim();
-        \\   return str;
-        \\ }
-    );
+    {
+        var err_out: ?[]const u8 = null;
+        try runner.exec(
+            \\ function trimAndReplace(str) {
+            \\   str = str.replace(/(\r\n|\n|\r)/gm,'');
+            \\   str = str.replace(/\s+/g, ' ');
+            \\   str = str.trim();
+            \\   return str;
+            \\ }
+        , &err_out);
+    }
 
     try runner.testCases(&.{
         .{ "document.body.compareDocumentPosition(document.firstChild); ", "10" },

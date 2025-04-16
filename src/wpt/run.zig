@@ -30,7 +30,7 @@ const polyfill = @import("../browser/polyfill/polyfill.zig");
 // runWPT parses the given HTML file, starts a js env and run the first script
 // tags containing javascript sources.
 // It loads first the js libs files.
-pub fn run(arena: Allocator, comptime dir: []const u8, f: []const u8, loader: *FileLoader, msg_out: *?[]const u8) ![]const u8 {
+pub fn run(arena: Allocator, comptime dir: []const u8, f: []const u8, loader: *FileLoader, err_msg: *?[]const u8) ![]const u8 {
     // document
     const html = blk: {
         const file = try std.fs.cwd().openFile(f, .{});
@@ -48,7 +48,7 @@ pub fn run(arena: Allocator, comptime dir: []const u8, f: []const u8, loader: *F
 
     // display console logs
     defer {
-        const res = runner.eval("console.join('\\n');") catch unreachable;
+        const res = runner.eval("console.join('\\n');", err_msg) catch unreachable;
         const log = res.toString(arena) catch unreachable;
         if (log.len > 0) {
             std.debug.print("-- CONSOLE LOG\n{s}\n--\n", .{log});
@@ -63,7 +63,7 @@ pub fn run(arena: Allocator, comptime dir: []const u8, f: []const u8, loader: *F
         \\  console.debug = function () {
         \\    console.push("debug", ...arguments);
         \\  };
-    );
+    , err_msg);
 
     // loop over the scripts.
     const doc = parser.documentHTMLToDocument(runner.state.document.?);
@@ -79,12 +79,12 @@ pub fn run(arena: Allocator, comptime dir: []const u8, f: []const u8, loader: *F
                 // no need to free path, thanks to the arena.
                 path = try fspath.join(arena, &.{ "/", dirname, path });
             }
-            try runner.exec(try loader.get(path));
+            try runner.exec(try loader.get(path), err_msg);
         }
 
         // If the script as a source text, execute it.
         const src = try parser.nodeTextContent(s) orelse continue;
-        try runner.exec(src);
+        try runner.exec(src, err_msg);
     }
 
     // Mark tests as ready to run.
@@ -104,17 +104,17 @@ pub fn run(arena: Allocator, comptime dir: []const u8, f: []const u8, loader: *F
         defer try_catch.deinit();
         runner.loop.run() catch |err| {
             if (try try_catch.err(arena)) |msg| {
-                msg_out.* = msg;
+                err_msg.* = msg;
             }
             return err;
         };
     }
 
     // Check the final test status.
-    try runner.exec("report.status;");
+    try runner.exec("report.status;", err_msg);
 
     // return the detailed result.
-    const res = try runner.eval("report.log");
+    const res = try runner.eval("report.log", err_msg);
     return res.toString(arena);
 }
 

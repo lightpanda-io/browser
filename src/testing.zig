@@ -468,17 +468,18 @@ pub const JsRunner = struct {
         }
     }
 
-    pub fn exec(self: *JsRunner, src: []const u8) !void {
-        _ = try self.eval(src);
+    pub fn exec(self: *JsRunner, src: []const u8, err_msg: *?[]const u8) !void {
+        _ = try self.eval(src, err_msg);
     }
 
-    pub fn eval(self: *JsRunner, src: []const u8) !Env.Value {
+    pub fn eval(self: *JsRunner, src: []const u8, err_msg: *?[]const u8) !Env.Value {
         var try_catch: Env.TryCatch = undefined;
         try_catch.init(self.executor);
         defer try_catch.deinit();
 
         return self.executor.exec(src, null) catch |err| {
             if (try try_catch.err(self.arena)) |msg| {
+                err_msg.* = msg;
                 std.debug.print("Error runnign script: {s}\n", .{msg});
             }
             return err;
