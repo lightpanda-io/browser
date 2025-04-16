@@ -30,7 +30,7 @@ const polyfill = @import("../browser/polyfill/polyfill.zig");
 // runWPT parses the given HTML file, starts a js env and run the first script
 // tags containing javascript sources.
 // It loads first the js libs files.
-pub fn run(arena: Allocator, comptime dir: []const u8, f: []const u8, loader: *FileLoader) ![]const u8 {
+pub fn run(arena: Allocator, comptime dir: []const u8, f: []const u8, loader: *FileLoader, msg_out: *?[]const u8) ![]const u8 {
     // document
     const html = blk: {
         const file = try std.fs.cwd().openFile(f, .{});
@@ -98,7 +98,17 @@ pub fn run(arena: Allocator, comptime dir: []const u8, f: []const u8, loader: *F
     );
 
     // wait for all async executions
-    try runner.loop.run();
+    {
+        var try_catch: Env.TryCatch = undefined;
+        try_catch.init(runner.executor);
+        defer try_catch.deinit();
+        runner.loop.run() catch |err| {
+            if (try try_catch.err(arena)) |msg| {
+                msg_out.* = msg;
+            }
+            return err;
+        };
+    }
 
     // Check the final test status.
     try runner.exec("report.status;");

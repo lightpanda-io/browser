@@ -138,8 +138,9 @@ pub fn main() !void {
         var arena = std.heap.ArenaAllocator.init(alloc);
         defer arena.deinit();
 
-        const res = wpt.run(arena.allocator(), wpt_dir, tc, &loader) catch |err| {
-            const suite = try Suite.init(alloc, tc, false, @errorName(err));
+        var msg_out: ?[]const u8 = null;
+        const res = wpt.run(arena.allocator(), wpt_dir, tc, &loader, &msg_out) catch |err| {
+            const suite = try Suite.init(alloc, tc, false, if (msg_out) |msg| msg else @errorName(err));
             try results.append(suite);
 
             if (out == .text) {
