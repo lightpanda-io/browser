@@ -58,7 +58,7 @@ chmod a+x ./lightpanda
 
 *For Windows + WSL2*
 
-The Lightpandabrowser is compatible to run on windows inside WSL. Follow the Linux instruction for installation from a WSL terminal.
+The Lightpanda browser is compatible to run on windows inside WSL. Follow the Linux instruction for installation from a WSL terminal.
 It is recommended to install clients like Puppeteer on the Windows host.
 
 ### Dump a URL
