@@ -1439,7 +1439,7 @@ pub const ResponseHeader = struct {
 
     // Stored header has already been lower-cased
     // `name` parameter should be passed in lower-cased
-    pub fn get(self: *const ResponseHeader, name: []const u8) ?[]const u8 {
+    pub fn get(self: *const ResponseHeader, name: []const u8) ?[]u8 {
         for (self.headers.items) |h| {
             if (std.mem.eql(u8, name, h.name)) {
                 return h.value;
