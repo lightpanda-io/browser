@@ -227,7 +227,7 @@ make get-v8
 Next, build v8. This build task is very long and cpu consuming, as you will build v8 from sources. 
 
 ```
-make build-v8-dev
+make build-v8
 ```
 
 For dev env, use `make build-v8-dev`.
