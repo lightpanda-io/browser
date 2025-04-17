@@ -127,21 +127,8 @@ jobs:
 
       - run: chmod a+x ./lightpanda
 
-      - name: run puppeteer links
+      - name: run end to end tests
         run: |
           ./lightpanda serve & echo $! > LPD.pid
-          node puppeteer/links.js || exit 1
+          go run runner/main.go --verbose
           kill `cat LPD.pid`
-
-      - name: run puppeteer dump
-        run: |
-          ./lightpanda serve & echo $! > LPD.pid
-          node puppeteer/dump.js || exit 1
-          kill `cat LPD.pid`
-
-      - name: run playwright connect
-        run: |
-          python3 -m http.server 1234 -d ./public & echo $! > PYTHON.pid
-          ./lightpanda serve & echo $! > LPD.pid
-          node playwright/connect.js || exit 1
-          kill `cat LPD.pid` `cat PYTHON.pid`
