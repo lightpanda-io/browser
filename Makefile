@@ -3,7 +3,7 @@
 
 ZIG := zig
 BC := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
-# option test filter make unittest F="server"
+# option test filter make test F="server"
 F=
 
 # OS and ARCH
@@ -47,7 +47,7 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-dev run run-release shell test bench download-zig wpt unittest data
+.PHONY: build build-dev run run-release shell test bench download-zig wpt data get-v8 build-v8 build-v8-dev
 
 zig_version = $(shell grep 'recommended_zig_version = "' "vendor/zig-js-runtime/build.zig" | cut -d'"' -f2)
 
@@ -62,13 +62,13 @@ download-zig:
 ## Build in release-safe mode
 build:
 	@printf "\e[36mBuilding (release safe)...\e[0m\n"
-	$(ZIG) build -Doptimize=ReleaseSafe -Dengine=v8 -Dgit_commit=$$(git rev-parse --short HEAD) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+	$(ZIG) build -Doptimize=ReleaseSafe -Dgit_commit=$$(git rev-parse --short HEAD) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 	@printf "\e[33mBuild OK\e[0m\n"
 
 ## Build in debug mode
 build-dev:
 	@printf "\e[36mBuilding (debug)...\e[0m\n"
-	@$(ZIG) build -Dengine=v8 -Dgit_commit=$$(git rev-parse --short HEAD) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+	@$(ZIG) build -Dgit_commit=$$(git rev-parse --short HEAD) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 	@printf "\e[33mBuild OK\e[0m\n"
 
 ## Run the server in debug mode
@@ -79,39 +79,47 @@ run: build
 ## Run a JS shell in debug mode
 shell:
 	@printf "\e[36mBuilding shell...\e[0m\n"
-	@$(ZIG) build shell -Dengine=v8 || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+	@$(ZIG) build shell || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 
 ## Run WPT tests
 wpt:
 	@printf "\e[36mBuilding wpt...\e[0m\n"
-	@$(ZIG) build wpt -Dengine=v8 -- --safe $(filter-out $@,$(MAKECMDGOALS)) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+	@$(ZIG) build wpt -- --safe $(filter-out $@,$(MAKECMDGOALS)) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 
 wpt-summary:
 	@printf "\e[36mBuilding wpt...\e[0m\n"
-	@$(ZIG) build wpt -Dengine=v8 -- --safe --summary $(filter-out $@,$(MAKECMDGOALS)) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+	@$(ZIG) build wpt -- --safe --summary $(filter-out $@,$(MAKECMDGOALS)) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 
 ## Test
 test:
-	@printf "\e[36mTesting...\e[0m\n"
-	@$(ZIG) build test -Dengine=v8 || (printf "\e[33mTest ERROR\e[0m\n"; exit 1;)
-	@printf "\e[33mTest OK\e[0m\n"
+	@TEST_FILTER='${F}' $(ZIG) build test -freference-trace --summary all
 
-unittest:
-	@TEST_FILTER='${F}' $(ZIG) build unittest -freference-trace --summary all
+## v8
+get-v8:
+	@printf "\e[36mGetting v8 source...\e[0m\n"
+	@$(ZIG) build get-v8
+
+build-v8-dev:
+	@printf "\e[36mBuilding v8 (dev)...\e[0m\n"
+	@$(ZIG) build build-v8
+
+build-v8:
+	@printf "\e[36mBuilding v8...\e[0m\n"
+	@$(ZIG) build -Doptimize=ReleaseSafe build-v8
 
 # Install and build required dependencies commands
 # ------------
 .PHONY: install-submodule
-.PHONY: install-zig-js-runtime install-zig-js-runtime-dev install-libiconv
+.PHONY: install-libiconv
 .PHONY: _install-netsurf install-netsurf clean-netsurf test-netsurf install-netsurf-dev
 .PHONY: install-mimalloc install-mimalloc-dev clean-mimalloc
 .PHONY: install-dev install
 
 ## Install and build dependencies for release
-install: install-submodule install-zig-js-runtime install-libiconv install-netsurf install-mimalloc
+install: install-submodule install-libiconv install-netsurf install-mimalloc
 
 ## Install and build dependencies for dev
-install-dev: install-submodule install-zig-js-runtime-dev install-libiconv install-netsurf-dev install-mimalloc-dev
+install-dev: install-submodule install-libiconv install-netsurf-dev install-mimalloc-dev
 
 install-netsurf-dev: _install-netsurf
 install-netsurf-dev: OPTCFLAGS := -O0 -g -DNDEBUG
@@ -193,14 +201,6 @@ ifneq ("$(wildcard vendor/libiconv/libiconv-1.17/Makefile)","")
 	@cd vendor/libiconv/libiconv-1.17 && \
 	make clean
 endif
-
-install-zig-js-runtime-dev:
-	@cd vendor/zig-js-runtime && \
-	make install-dev
-
-install-zig-js-runtime:
-	@cd vendor/zig-js-runtime && \
-	make install
 
 data:
 	cd src/data && go run public_suffix_list_gen.go > public_suffix_list.zig

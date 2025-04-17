@@ -17,15 +17,15 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
-const parser = @import("netsurf");
 pub const allocator = std.testing.allocator;
 pub const expectError = std.testing.expectError;
 pub const expectString = std.testing.expectEqualStrings;
 pub const expectEqualSlices = std.testing.expectEqualSlices;
 
 const App = @import("app.zig").App;
-const Allocator = std.mem.Allocator;
+const parser = @import("browser/netsurf.zig");
 
 // Merged std.testing.expectEqual and std.testing.expectString
 // can be useful when testing fields of an anytype an you don't know
@@ -217,13 +217,13 @@ pub const Document = struct {
     }
 
     pub fn querySelectorAll(self: *Document, selector: []const u8) ![]const *parser.Node {
-        const css = @import("dom/css.zig");
+        const css = @import("browser/dom/css.zig");
         const node_list = try css.querySelectorAll(self.arena.allocator(), self.asNode(), selector);
         return node_list.nodes.items;
     }
 
     pub fn querySelector(self: *Document, selector: []const u8) !?*parser.Node {
-        const css = @import("dom/css.zig");
+        const css = @import("browser/dom/css.zig");
         return css.querySelector(self.arena.allocator(), self.asNode(), selector);
     }
 
@@ -349,4 +349,164 @@ fn isJsonValue(a: std.json.Value, b: std.json.Value) bool {
             return true;
         },
     }
+}
+
+pub const tracking_allocator = @import("root").tracking_allocator.allocator();
+pub const JsRunner = struct {
+    const URL = @import("url.zig").URL;
+    const Env = @import("browser/env.zig").Env;
+    const Loop = @import("runtime/loop.zig").Loop;
+    const HttpClient = @import("http/client.zig").Client;
+    const storage = @import("browser/storage/storage.zig");
+    const Window = @import("browser/html/window.zig").Window;
+    const Renderer = @import("browser/browser.zig").Renderer;
+    const SessionState = @import("browser/env.zig").SessionState;
+
+    url: URL,
+    env: *Env,
+    loop: Loop,
+    window: Window,
+    state: SessionState,
+    arena: Allocator,
+    renderer: Renderer,
+    http_client: HttpClient,
+    executor: *Env.Executor,
+    storage_shelf: storage.Shelf,
+    cookie_jar: storage.CookieJar,
+
+    fn init(parent_allocator: Allocator, opts: RunnerOpts) !*JsRunner {
+        parser.deinit();
+        try parser.init();
+
+        const aa = try parent_allocator.create(std.heap.ArenaAllocator);
+        aa.* = std.heap.ArenaAllocator.init(parent_allocator);
+        errdefer aa.deinit();
+
+        const arena = aa.allocator();
+        const runner = try arena.create(JsRunner);
+        runner.arena = arena;
+
+        runner.env = try Env.init(arena, .{});
+        errdefer runner.env.deinit();
+
+        runner.url = try URL.parse("https://lightpanda.io/opensource-browser/", null);
+
+        runner.renderer = Renderer.init(arena);
+        runner.cookie_jar = storage.CookieJar.init(arena);
+        runner.loop = try Loop.init(arena);
+        errdefer runner.loop.deinit();
+
+        var html = std.io.fixedBufferStream(opts.html);
+        const document = try parser.documentHTMLParse(html.reader(), "UTF-8");
+
+        runner.state = .{
+            .arena = arena,
+            .loop = &runner.loop,
+            .document = document,
+            .url = &runner.url,
+            .renderer = &runner.renderer,
+            .cookie_jar = &runner.cookie_jar,
+            .http_client = &runner.http_client,
+        };
+
+        runner.window = .{};
+        try runner.window.replaceDocument(document);
+        try runner.window.replaceLocation(.{
+            .url = try runner.url.toWebApi(arena),
+        });
+
+        runner.storage_shelf = storage.Shelf.init(arena);
+        runner.window.setStorageShelf(&runner.storage_shelf);
+
+        runner.http_client = try HttpClient.init(arena, 1, .{
+            .tls_verify_host = false,
+        });
+
+        runner.executor = try runner.env.startExecutor(Window, &runner.state, runner);
+        errdefer runner.env.stopExecutor(runner.executor);
+
+        try runner.executor.startScope(&runner.window);
+        return runner;
+    }
+
+    pub fn deinit(self: *JsRunner) void {
+        self.loop.deinit();
+        self.executor.endScope();
+        self.env.deinit();
+        self.http_client.deinit();
+        self.storage_shelf.deinit();
+
+        const arena: *std.heap.ArenaAllocator = @ptrCast(@alignCast(self.arena.ptr));
+        arena.deinit();
+        arena.child_allocator.destroy(arena);
+    }
+
+    const RunOpts = struct {};
+    pub const Case = std.meta.Tuple(&.{ []const u8, []const u8 });
+    pub fn testCases(self: *JsRunner, cases: []const Case, _: RunOpts) !void {
+        const start = try std.time.Instant.now();
+
+        for (cases, 0..) |case, i| {
+            var try_catch: Env.TryCatch = undefined;
+            try_catch.init(self.executor);
+            defer try_catch.deinit();
+
+            const value = self.executor.exec(case.@"0", null) catch |err| {
+                if (try try_catch.err(self.arena)) |msg| {
+                    std.debug.print("{s}\n\nCase: {d}\n{s}\n", .{ msg, i + 1, case.@"0" });
+                }
+                return err;
+            };
+            try self.loop.run();
+            @import("root").js_runner_duration += std.time.Instant.since(try std.time.Instant.now(), start);
+
+            const actual = try value.toString(self.arena);
+            if (std.mem.eql(u8, case.@"1", actual) == false) {
+                std.debug.print("Expected:\n{s}\n\nGot:\n{s}\n\nCase: {d}\n{s}\n", .{ case.@"1", actual, i + 1, case.@"0" });
+                return error.UnexpectedResult;
+            }
+        }
+    }
+
+    pub fn exec(self: *JsRunner, src: []const u8, name: ?[]const u8, err_msg: *?[]const u8) !void {
+        _ = try self.eval(src, name, err_msg);
+    }
+
+    pub fn eval(self: *JsRunner, src: []const u8, name: ?[]const u8, err_msg: *?[]const u8) !Env.Value {
+        var try_catch: Env.TryCatch = undefined;
+        try_catch.init(self.executor);
+        defer try_catch.deinit();
+
+        return self.executor.exec(src, name) catch |err| {
+            if (try try_catch.err(self.arena)) |msg| {
+                err_msg.* = msg;
+                std.debug.print("Error running script: {s}\n", .{msg});
+            }
+            return err;
+        };
+    }
+
+    pub fn fetchModuleSource(ctx: *anyopaque, specifier: []const u8) ![]const u8 {
+        _ = ctx;
+        _ = specifier;
+        return error.DummyModuleLoader;
+    }
+};
+
+const RunnerOpts = struct {
+    html: []const u8 =
+        \\ <div id="content">
+        \\   <a id="link" href="foo" class="ok">OK</a>
+        \\   <p id="para-empty" class="ok empty">
+        \\     <span id="para-empty-child"></span>
+        \\   </p>
+        \\   <p id="para"> And</p>
+        \\   <!--comment-->
+        \\ </div>
+        \\
+    ,
+};
+
+pub fn jsRunner(alloc: Allocator, opts: RunnerOpts) !*JsRunner {
+    return JsRunner.init(alloc, opts);
 }

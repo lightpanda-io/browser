@@ -21,31 +21,26 @@ const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
 
-const Types = @import("root").Types;
-
-const parser = @import("netsurf");
 const Dump = @import("dump.zig");
 const Mime = @import("mime.zig").Mime;
+const parser = @import("netsurf.zig");
 
-const jsruntime = @import("jsruntime");
-const Loop = jsruntime.Loop;
-const Env = jsruntime.Env;
-const Module = jsruntime.Module;
+const Window = @import("html/window.zig").Window;
+const Walker = @import("dom/walker.zig").WalkerDepthFirst;
 
+const Env = @import("env.zig").Env;
 const App = @import("../app.zig").App;
-const apiweb = @import("../apiweb.zig");
-
-const Window = @import("../html/window.zig").Window;
-const Walker = @import("../dom/walker.zig").WalkerDepthFirst;
 
 const URL = @import("../url.zig").URL;
-const storage = @import("../storage/storage.zig");
-const Notification = @import("../notification.zig").Notification;
 
 const http = @import("../http/client.zig");
-const UserContext = @import("../user_context.zig").UserContext;
+const storage = @import("storage/storage.zig");
+const Loop = @import("../runtime/loop.zig").Loop;
+const SessionState = @import("env.zig").SessionState;
+const HttpClient = @import("../http/client.zig").Client;
+const Notification = @import("../notification.zig").Notification;
 
-const polyfill = @import("../polyfill/polyfill.zig");
+const polyfill = @import("polyfill/polyfill.zig");
 
 const log = std.log.scoped(.browser);
 
@@ -56,6 +51,7 @@ pub const user_agent = "Lightpanda/1.0";
 // A browser contains only one session.
 // TODO allow multiple sessions per browser.
 pub const Browser = struct {
+    env: *Env,
     app: *App,
     session: ?*Session,
     allocator: Allocator,
@@ -65,10 +61,17 @@ pub const Browser = struct {
 
     const SessionPool = std.heap.MemoryPool(Session);
 
-    pub fn init(app: *App) Browser {
+    pub fn init(app: *App) !Browser {
         const allocator = app.allocator;
+
+        const env = try Env.init(allocator, .{
+            .gc_hints = app.config.gc_hints,
+        });
+        errdefer env.deinit();
+
         return .{
             .app = app,
+            .env = env,
             .session = null,
             .allocator = allocator,
             .http_client = &app.http_client,
@@ -79,6 +82,7 @@ pub const Browser = struct {
 
     pub fn deinit(self: *Browser) void {
         self.closeSession();
+        self.env.deinit();
         self.session_pool.deinit();
         self.page_arena.deinit();
     }
@@ -101,10 +105,7 @@ pub const Browser = struct {
     }
 
     pub fn runMicrotasks(self: *const Browser) void {
-        // if no session exists, there is nothing to do.
-        if (self.session == null) return;
-
-        return self.session.?.env.runMicrotasks();
+        return self.env.runMicrotasks();
     }
 };
 
@@ -113,8 +114,11 @@ pub const Browser = struct {
 // You can create successively multiple pages for a session, but you must
 // deinit a page before running another one.
 pub const Session = struct {
-    app: *App,
+    state: SessionState,
+    executor: *Env.Executor,
+    inspector: Env.Inspector,
 
+    app: *App,
     browser: *Browser,
 
     // The arena is used only to bound the js env init b/c it leaks memory.
@@ -124,9 +128,6 @@ pub const Session = struct {
     // all others Session deps use directly self.alloc and not the arena.
     arena: std.heap.ArenaAllocator,
 
-    env: Env,
-    inspector: jsruntime.Inspector,
-
     window: Window,
 
     // TODO move the shed/jar to the browser?
@@ -135,8 +136,6 @@ pub const Session = struct {
 
     page: ?Page = null,
     http_client: *http.Client,
-
-    jstypes: [Types.len]usize = undefined,
 
     // recipient of notification, passed as the first parameter to notify
     notify_ctx: *anyopaque,
@@ -159,48 +158,59 @@ pub const Session = struct {
         const allocator = app.allocator;
         self.* = .{
             .app = app,
-            .env = undefined,
             .browser = browser,
             .notify_ctx = any_ctx,
             .inspector = undefined,
             .notify_func = ContextStruct.notify,
             .http_client = browser.http_client,
+            .executor = undefined,
             .storage_shed = storage.Shed.init(allocator),
             .arena = std.heap.ArenaAllocator.init(allocator),
             .cookie_jar = storage.CookieJar.init(allocator),
             .window = Window.create(null, .{ .agent = user_agent }),
+            .state = .{
+                .loop = app.loop,
+                .document = null,
+                .http_client = browser.http_client,
+
+                // we'll set this immediately after
+                .cookie_jar = undefined,
+
+                // nothing should be used on the state until we have a page
+                // at which point we'll set these fields
+                .renderer = undefined,
+                .url = undefined,
+                .arena = undefined,
+            },
         };
+        self.state.cookie_jar = &self.cookie_jar;
+        errdefer self.arena.deinit();
 
-        const arena = self.arena.allocator();
-        Env.init(&self.env, arena, app.loop, null);
-        errdefer self.env.deinit();
-        try self.env.load(&self.jstypes);
+        self.executor = try browser.env.startExecutor(Window, &self.state, self);
+        errdefer browser.env.stopExecutor(self.executor);
+        self.inspector = try Env.Inspector.init(self.arena.allocator(), self.executor, ctx);
 
-        // const ctx_opaque = @as(*anyopaque, @ptrCast(ctx));
-        self.inspector = try jsruntime.Inspector.init(
-            arena,
-            &self.env,
-            any_ctx,
-            ContextStruct.onInspectorResponse,
-            ContextStruct.onInspectorEvent,
-        );
-        self.env.setInspector(self.inspector);
-        try self.env.setModuleLoadFn(self, Session.fetchModule);
+        self.microtaskLoop();
     }
 
     fn deinit(self: *Session) void {
+        self.app.loop.resetZig();
         if (self.page != null) {
             self.removePage();
         }
-        self.env.deinit();
+        self.inspector.deinit();
         self.arena.deinit();
         self.cookie_jar.deinit();
         self.storage_shed.deinit();
+        self.browser.env.stopExecutor(self.executor);
     }
 
-    fn fetchModule(ctx: *anyopaque, referrer: ?jsruntime.Module, specifier: []const u8) !jsruntime.Module {
-        _ = referrer;
+    fn microtaskLoop(self: *Session) void {
+        self.browser.runMicrotasks();
+        self.app.loop.zigTimeout(1 * std.time.ns_per_ms, *Session, self, microtaskLoop);
+    }
 
+    pub fn fetchModuleSource(ctx: *anyopaque, specifier: []const u8) ![]const u8 {
         const self: *Session = @ptrCast(@alignCast(ctx));
         const page = &(self.page orelse return error.NoPage);
 
@@ -209,16 +219,15 @@ pub const Session = struct {
         // Use the page_arena for this, which has a more appropriate lifetime
         // and which has more retained memory between sessions and pages.
         const arena = self.browser.page_arena.allocator();
-        const body = try page.fetchData(
+        return try page.fetchData(
             arena,
             specifier,
             if (page.current_script) |s| s.src else null,
         );
-        return self.env.compileModule(body, specifier);
     }
 
-    pub fn callInspector(self: *Session, msg: []const u8) void {
-        self.inspector.send(self.env, msg);
+    pub fn callInspector(self: *const Session, msg: []const u8) void {
+        self.inspector.send(msg);
     }
 
     // NOTE: the caller is not the owner of the returned value,
@@ -232,19 +241,14 @@ pub const Session = struct {
         const page = &self.page.?;
 
         // start JS env
-        log.debug("start js env", .{});
-        try self.env.start();
+        log.debug("start new js scope", .{});
+        self.state.arena = self.browser.page_arena.allocator();
+        errdefer self.state.arena = undefined;
 
-        if (comptime builtin.is_test == false) {
-            // By not loading this during tests, we aren't required to load
-            // all of the interfaces into zig-js-runtime.
-            log.debug("setup global env", .{});
-            try self.env.bindGlobal(&self.window);
-        }
+        try self.executor.startScope(&self.window);
 
         // load polyfills
-        // TODO: change to 'env' when https://github.com/lightpanda-io/zig-js-runtime/pull/285 lands
-        try polyfill.load(self.arena.allocator(), &self.env);
+        try polyfill.load(self.arena.allocator(), self.executor);
 
         // inspector
         self.contextCreated(page, aux_data);
@@ -254,11 +258,10 @@ pub const Session = struct {
 
     pub fn removePage(self: *Session) void {
         std.debug.assert(self.page != null);
-
         // Reset all existing callbacks.
         self.app.loop.resetJS();
+        self.executor.endScope();
 
-        self.env.stop();
         // TODO unload document: https://html.spec.whatwg.org/#unloading-documents
 
         self.window.replaceLocation(.{ .url = null }) catch |e| {
@@ -267,6 +270,7 @@ pub const Session = struct {
 
         // clear netsurf memory arena.
         parser.deinit();
+        self.state.arena = undefined;
 
         self.page = null;
     }
@@ -277,7 +281,7 @@ pub const Session = struct {
 
     fn contextCreated(self: *Session, page: *Page, aux_data: ?[]const u8) void {
         log.debug("inspector context created", .{});
-        self.inspector.contextCreated(&self.env, "", (page.origin() catch "://") orelse "://", aux_data);
+        self.inspector.contextCreated(self.executor, "", (page.origin() catch "://") orelse "://", aux_data);
     }
 
     fn notify(self: *const Session, notification: *const Notification) void {
@@ -332,19 +336,16 @@ pub const Page = struct {
 
     pub fn wait(self: *Page) !void {
         // try catch
-        var try_catch: jsruntime.TryCatch = undefined;
-        try_catch.init(&self.session.env);
+        var try_catch: Env.TryCatch = undefined;
+        try_catch.init(self.session.executor);
         defer try_catch.deinit();
 
-        self.session.env.wait() catch |err| {
-            // the js env could not be started if the document wasn't an HTML.
-            if (err == error.EnvNotStarted) return;
-
-            const arena = self.arena;
-            if (try try_catch.err(arena, &self.session.env)) |msg| {
-                defer arena.free(msg);
+        self.session.app.loop.run() catch |err| {
+            if (try try_catch.err(self.arena)) |msg| {
                 log.info("wait error: {s}", .{msg});
                 return;
+            } else {
+                log.info("wait error: {any}", .{err});
             }
         };
         log.debug("wait: OK", .{});
@@ -397,7 +398,7 @@ pub const Page = struct {
         try session.cookie_jar.populateFromResponse(&url.uri, &header);
 
         // TODO handle fragment in url.
-        try self.session.window.replaceLocation(.{ .url = try url.toWebApi(arena) });
+        try session.window.replaceLocation(.{ .url = try url.toWebApi(arena) });
 
         log.info("GET {any} {d}", .{ url, header.status });
 
@@ -414,7 +415,6 @@ pub const Page = struct {
 
         log.debug("header content-type: {s}", .{ct});
         var mime = try Mime.parse(arena, ct);
-        defer mime.deinit();
 
         if (mime.isHTML()) {
             try self.loadHTMLDoc(&response, mime.charset orelse "utf-8", aux_data);
@@ -485,7 +485,7 @@ pub const Page = struct {
         // https://html.spec.whatwg.org/#reporting-document-loading-status
 
         // inject the URL to the document including the fragment.
-        try parser.documentSetDocumentURI(doc, if (self.url) |*url| url.raw else "about:blank");
+        try parser.documentSetDocumentURI(doc, self.url.?.raw);
 
         const session = self.session;
         // TODO set the referrer to the document.
@@ -499,14 +499,13 @@ pub const Page = struct {
         // inspector
         session.contextCreated(self, aux_data);
 
-        // replace the user context document with the new one.
-        try session.env.setUserContext(.{
-            .url = @ptrCast(&self.url.?),
-            .document = html_doc,
-            .renderer = @ptrCast(&self.renderer),
-            .cookie_jar = @ptrCast(&self.session.cookie_jar),
-            .http_client = @ptrCast(self.session.http_client),
-        });
+        {
+            // update the sessions state
+            const state = &session.state;
+            state.url = &self.url.?;
+            state.document = html_doc;
+            state.renderer = &self.renderer;
+        }
 
         // browse the DOM tree to retrieve scripts
         // TODO execute the synchronous scripts during the HTL parsing.
@@ -643,7 +642,7 @@ pub const Page = struct {
         // TODO handle charset attribute
         const opt_text = try parser.nodeTextContent(parser.elementToNode(s.element));
         if (opt_text) |text| {
-            try s.eval(self.arena, &self.session.env, text);
+            try s.eval(self.arena, self.session, text);
             return;
         }
 
@@ -711,7 +710,7 @@ pub const Page = struct {
     fn fetchScript(self: *const Page, s: *const Script) !void {
         const arena = self.arena;
         const body = try self.fetchData(arena, s.src, null);
-        try s.eval(arena, &self.session.env, body);
+        try s.eval(arena, self.session, body);
     }
 
     fn newHTTPRequest(self: *const Page, method: http.Request.Method, url: *const URL, opts: storage.cookie.LookupOpts) !http.Request {
@@ -769,24 +768,24 @@ pub const Page = struct {
             return .unknown;
         }
 
-        fn eval(self: Script, arena: Allocator, env: *const Env, body: []const u8) !void {
-            var try_catch: jsruntime.TryCatch = undefined;
-            try_catch.init(env);
+        fn eval(self: Script, arena: Allocator, session: *Session, body: []const u8) !void {
+            var try_catch: Env.TryCatch = undefined;
+            try_catch.init(session.executor);
             defer try_catch.deinit();
 
             const res = switch (self.kind) {
                 .unknown => return error.UnknownScript,
-                .javascript => env.exec(body, self.src),
-                .module => env.module(body, self.src),
+                .javascript => session.executor.exec(body, self.src),
+                .module => session.executor.module(body, self.src),
             } catch {
-                if (try try_catch.err(arena, env)) |msg| {
+                if (try try_catch.err(arena)) |msg| {
                     log.info("eval script {s}: {s}", .{ self.src, msg });
                 }
                 return FetchError.JsErr;
             };
 
             if (builtin.mode == .Debug) {
-                const msg = try res.toString(arena, env);
+                const msg = try res.toString(arena);
                 log.debug("eval script {s}: {s}", .{ self.src, msg });
             }
         }
@@ -810,7 +809,7 @@ const FlatRenderer = struct {
     // given an index, get the element
     elements: std.ArrayListUnmanaged(u64),
 
-    const Element = @import("../dom/element.zig").Element;
+    const Element = @import("dom/element.zig").Element;
 
     // we expect allocator to be an arena
     pub fn init(allocator: Allocator) FlatRenderer {

@@ -26,10 +26,6 @@ const BORDER = "=" ** 80;
 // use in custom panic handler
 var current_test: ?[]const u8 = null;
 
-const jsruntime = @import("jsruntime");
-pub const Types = jsruntime.reflect(@import("generate.zig").Tuple(.{}){});
-pub const UserContext = @import("user_context.zig").UserContext;
-
 pub const std_options = std.Options{
     .log_level = .warn,
 
@@ -37,6 +33,9 @@ pub const std_options = std.Options{
     // this helps a lot (but it's still slow). Not safe to do this in non-test!
     .side_channels_mitigations = .none,
 };
+
+pub var js_runner_duration: usize = 0;
+pub var tracking_allocator = TrackingAllocator.init(std.testing.allocator);
 
 pub fn main() !void {
     var mem: [8192]u8 = undefined;
@@ -49,6 +48,19 @@ pub fn main() !void {
 
     var slowest = SlowTracker.init(allocator, 5);
     defer slowest.deinit();
+
+    var args = try std.process.argsWithAllocator(allocator);
+    defer args.deinit();
+
+    // ignore the exec name.
+    _ = args.next();
+    var json_stats = false;
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, "--json", arg)) {
+            json_stats = true;
+            continue;
+        }
+    }
 
     var pass: usize = 0;
     var fail: usize = 0;
@@ -159,6 +171,38 @@ pub fn main() !void {
     printer.fmt("\n", .{});
     try slowest.display(printer);
     printer.fmt("\n", .{});
+
+    // TODO: at the very least, `browser` should return real stats
+    if (json_stats) {
+        const stats = tracking_allocator.stats();
+        try std.json.stringify(&.{
+            .{ .name = "browser", .bench = .{
+                .duration = js_runner_duration,
+                .alloc_nb = stats.allocation_count,
+                .realloc_nb = stats.reallocation_count,
+                .alloc_size = stats.allocated_bytes,
+            } },
+            .{ .name = "libdom", .bench = .{
+                .duration = js_runner_duration,
+                .alloc_nb = 0,
+                .realloc_nb = 0,
+                .alloc_size = 0,
+            } },
+            .{ .name = "v8", .bench = .{
+                .duration = js_runner_duration,
+                .alloc_nb = 0,
+                .realloc_nb = 0,
+                .alloc_size = 0,
+            } },
+            .{ .name = "main", .bench = .{
+                .duration = js_runner_duration,
+                .alloc_nb = 0,
+                .realloc_nb = 0,
+                .alloc_size = 0,
+            } },
+        }, .{ .whitespace = .indent_2 }, std.io.getStdOut().writer());
+    }
+
     std.posix.exit(if (fail == 0) 0 else 1);
 }
 
@@ -335,3 +379,90 @@ fn isSetup(t: std.builtin.TestFn) bool {
 fn isTeardown(t: std.builtin.TestFn) bool {
     return std.mem.endsWith(u8, t.name, "tests:afterAll");
 }
+
+pub const TrackingAllocator = struct {
+    parent_allocator: Allocator,
+    free_count: usize = 0,
+    allocated_bytes: usize = 0,
+    allocation_count: usize = 0,
+    reallocation_count: usize = 0,
+
+    const Stats = struct {
+        allocated_bytes: usize,
+        allocation_count: usize,
+        reallocation_count: usize,
+    };
+
+    fn init(parent_allocator: Allocator) TrackingAllocator {
+        return .{
+            .parent_allocator = parent_allocator,
+        };
+    }
+
+    pub fn stats(self: *const TrackingAllocator) Stats {
+        return .{
+            .allocated_bytes = self.allocated_bytes,
+            .allocation_count = self.allocation_count,
+            .reallocation_count = self.reallocation_count,
+        };
+    }
+
+    pub fn allocator(self: *TrackingAllocator) Allocator {
+        return .{ .ptr = self, .vtable = &.{
+            .alloc = alloc,
+            .resize = resize,
+            .free = free,
+            .remap = remap,
+        } };
+    }
+
+    fn alloc(
+        ctx: *anyopaque,
+        len: usize,
+        alignment: std.mem.Alignment,
+        return_address: usize,
+    ) ?[*]u8 {
+        const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
+        const result = self.parent_allocator.rawAlloc(len, alignment, return_address);
+        self.allocation_count += 1;
+        self.allocated_bytes += len;
+        return result;
+    }
+
+    fn resize(
+        ctx: *anyopaque,
+        old_mem: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        ra: usize,
+    ) bool {
+        const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
+        const result = self.parent_allocator.rawResize(old_mem, alignment, new_len, ra);
+        self.reallocation_count += 1; // TODO: only if result is not null?
+        return result;
+    }
+
+    fn free(
+        ctx: *anyopaque,
+        old_mem: []u8,
+        alignment: std.mem.Alignment,
+        ra: usize,
+    ) void {
+        const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
+        self.parent_allocator.rawFree(old_mem, alignment, ra);
+        self.free_count += 1;
+    }
+
+    fn remap(
+        ctx: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        ret_addr: usize,
+    ) ?[*]u8 {
+        const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
+        const result = self.parent_allocator.rawRemap(memory, alignment, new_len, ret_addr);
+        self.reallocation_count += 1; // TODO: only if result is not null?
+        return result;
+    }
+};

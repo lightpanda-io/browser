@@ -18,112 +18,55 @@
 
 const std = @import("std");
 const fspath = std.fs.path;
+const Allocator = std.mem.Allocator;
 
+const Env = @import("../browser/env.zig").Env;
 const FileLoader = @import("fileloader.zig").FileLoader;
+const Window = @import("../browser/html/window.zig").Window;
 
-const parser = @import("netsurf");
-
-const jsruntime = @import("jsruntime");
-const Loop = jsruntime.Loop;
-const Env = jsruntime.Env;
-const URL = @import("../url.zig").URL;
-const browser = @import("../browser/browser.zig");
-const Window = @import("../html/window.zig").Window;
-const storage = @import("../storage/storage.zig");
-const HttpClient = @import("../http/client.zig").Client;
-
-const Types = @import("../main_wpt.zig").Types;
-const UserContext = @import("../main_wpt.zig").UserContext;
-
-const polyfill = @import("../polyfill/polyfill.zig");
+const parser = @import("../browser/netsurf.zig");
+const polyfill = @import("../browser/polyfill/polyfill.zig");
 
 // runWPT parses the given HTML file, starts a js env and run the first script
 // tags containing javascript sources.
 // It loads first the js libs files.
-pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const u8, loader: *FileLoader) !Res {
-    const alloc = arena.allocator();
-    try parser.init();
-    defer parser.deinit();
-
+pub fn run(arena: Allocator, comptime dir: []const u8, f: []const u8, loader: *FileLoader, err_msg: *?[]const u8) ![]const u8 {
     // document
-    const file = try std.fs.cwd().openFile(f, .{});
-    defer file.close();
-
-    const html_doc = try parser.documentHTMLParse(file.reader(), "UTF-8");
+    const html = blk: {
+        const file = try std.fs.cwd().openFile(f, .{});
+        defer file.close();
+        break :blk try file.readToEndAlloc(arena, 128 * 1024);
+    };
 
     const dirname = fspath.dirname(f[dir.len..]) orelse unreachable;
 
-    // create JS env
-    var loop = try Loop.init(alloc);
-    defer loop.deinit();
-
-    var http_client = try HttpClient.init(alloc, 2, .{});
-    defer http_client.deinit();
-
-    var cookie_jar = storage.CookieJar.init(alloc);
-    defer cookie_jar.deinit();
-
-    var renderer = browser.Renderer.init(alloc);
-    defer renderer.elements.deinit(alloc);
-    defer renderer.positions.deinit(alloc);
-
-    const url = try URL.parse("https://lightpanda.io", null);
-
-    var js_env: Env = undefined;
-    Env.init(&js_env, alloc, &loop, UserContext{
-        .url = &url,
-        .document = html_doc,
-        .cookie_jar = &cookie_jar,
-        .http_client = &http_client,
-        .renderer = &renderer,
+    var runner = try @import("../testing.zig").jsRunner(arena, .{
+        .html = html,
     });
-    defer js_env.deinit();
-
-    var storageShelf = storage.Shelf.init(alloc);
-    defer storageShelf.deinit();
-
-    // load user-defined types in JS env
-    var js_types: [Types.len]usize = undefined;
-    try js_env.load(&js_types);
-
-    // start JS env
-    try js_env.start();
-    defer js_env.stop();
-
-    // load polyfills
-    try polyfill.load(alloc, &js_env);
+    defer runner.deinit();
+    try polyfill.load(arena, runner.executor);
 
     // display console logs
     defer {
-        const res = evalJS(&js_env, alloc, "console.join('\\n');", "console") catch unreachable;
-        defer res.deinit(alloc);
-
-        if (res.msg != null and res.msg.?.len > 0) {
-            std.debug.print("-- CONSOLE LOG\n{s}\n--\n", .{res.msg.?});
+        const res = runner.eval("console.join('\\n');", "console", err_msg) catch unreachable;
+        const log = res.toString(arena) catch unreachable;
+        if (log.len > 0) {
+            std.debug.print("-- CONSOLE LOG\n{s}\n--\n", .{log});
         }
     }
 
-    // setup global env vars.
-    var window = Window.create(null, null);
-    try window.replaceDocument(html_doc);
-    window.setStorageShelf(&storageShelf);
-    try js_env.bindGlobal(&window);
+    try runner.exec(
+        \\  console = [];
+        \\  console.log = function () {
+        \\    console.push(...arguments);
+        \\  };
+        \\  console.debug = function () {
+        \\    console.push("debug", ...arguments);
+        \\  };
+    , "init", err_msg);
 
-    const init =
-        \\console = [];
-        \\console.log = function () {
-        \\  console.push(...arguments);
-        \\};
-        \\console.debug = function () {
-        \\  console.push("debug", ...arguments);
-        \\};
-    ;
-    var res = try evalJS(&js_env, alloc, init, "init");
-    if (!res.ok) return res;
-    res.deinit(alloc);
-
-    // loop hover the scripts.
-    const doc = parser.documentHTMLToDocument(html_doc);
+    // loop over the scripts.
+    const doc = parser.documentHTMLToDocument(runner.state.document.?);
     const scripts = try parser.documentGetElementsByTagName(doc, "script");
     const slen = try parser.nodeListLength(scripts);
     for (0..slen) |i| {
@@ -134,19 +77,14 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
             var path = src;
             if (!std.mem.startsWith(u8, src, "/")) {
                 // no need to free path, thanks to the arena.
-                path = try fspath.join(alloc, &.{ "/", dirname, path });
+                path = try fspath.join(arena, &.{ "/", dirname, path });
             }
-
-            res = try evalJS(&js_env, alloc, try loader.get(path), src);
-            if (!res.ok) return res;
-            res.deinit(alloc);
+            try runner.exec(try loader.get(path), src, err_msg);
         }
 
         // If the script as a source text, execute it.
         const src = try parser.nodeTextContent(s) orelse continue;
-        res = try evalJS(&js_env, alloc, src, "");
-        if (!res.ok) return res;
-        res.deinit(alloc);
+        try runner.exec(src, null, err_msg);
     }
 
     // Mark tests as ready to run.
@@ -155,57 +93,29 @@ pub fn run(arena: *std.heap.ArenaAllocator, comptime dir: []const u8, f: []const
 
     try parser.eventInit(loadevt, "load", .{});
     _ = try parser.eventTargetDispatchEvent(
-        parser.toEventTarget(Window, &window),
+        parser.toEventTarget(@TypeOf(runner.window), &runner.window),
         loadevt,
     );
 
     // wait for all async executions
-    var try_catch: jsruntime.TryCatch = undefined;
-    try_catch.init(&js_env);
-    defer try_catch.deinit();
-    js_env.wait() catch {
-        return .{
-            .ok = false,
-            .msg = try try_catch.err(alloc, &js_env),
+    {
+        var try_catch: Env.TryCatch = undefined;
+        try_catch.init(runner.executor);
+        defer try_catch.deinit();
+        runner.loop.run() catch |err| {
+            if (try try_catch.err(arena)) |msg| {
+                err_msg.* = msg;
+            }
+            return err;
         };
-    };
+    }
 
     // Check the final test status.
-    res = try evalJS(&js_env, alloc, "report.status;", "teststatus");
-    if (!res.ok) return res;
-    res.deinit(alloc);
+    try runner.exec("report.status", "teststatus", err_msg);
 
     // return the detailed result.
-    return try evalJS(&js_env, alloc, "report.log", "teststatus");
-}
-
-pub const Res = struct {
-    ok: bool,
-    msg: ?[]const u8,
-
-    pub fn deinit(res: Res, alloc: std.mem.Allocator) void {
-        if (res.msg) |msg| {
-            alloc.free(msg);
-        }
-    }
-};
-
-fn evalJS(env: *const jsruntime.Env, alloc: std.mem.Allocator, script: []const u8, name: ?[]const u8) !Res {
-    var try_catch: jsruntime.TryCatch = undefined;
-    try_catch.init(env);
-    defer try_catch.deinit();
-
-    const v = env.exec(script, name) catch {
-        return .{
-            .ok = false,
-            .msg = try try_catch.err(alloc, env),
-        };
-    };
-
-    return .{
-        .ok = true,
-        .msg = try v.toString(alloc, env),
-    };
+    const res = try runner.eval("report.log", "report", err_msg);
+    return res.toString(arena);
 }
 
 // browse the path to find the tests list.

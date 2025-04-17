@@ -17,8 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const parser = @import("netsurf");
 const Allocator = std.mem.Allocator;
+
+const parser = @import("../browser/netsurf.zig");
 
 pub const Id = u32;
 

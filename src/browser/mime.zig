@@ -23,7 +23,6 @@ pub const Mime = struct {
     content_type: ContentType,
     params: []const u8 = "",
     charset: ?[]const u8 = null,
-    arena: std.heap.ArenaAllocator,
 
     pub const ContentTypeEnum = enum {
         text_xml,
@@ -39,19 +38,15 @@ pub const Mime = struct {
         other: struct { type: []const u8, sub_type: []const u8 },
     };
 
-    pub fn parse(allocator: Allocator, input: []const u8) !Mime {
+    pub fn parse(arena: Allocator, input: []const u8) !Mime {
         if (input.len > 255) {
             return error.TooBig;
         }
-
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        errdefer arena.deinit();
-
         var trimmed = trim(input);
 
         const content_type, const type_len = try parseContentType(trimmed);
         if (type_len >= trimmed.len) {
-            return .{ .arena = arena, .content_type = content_type };
+            return .{ .content_type = content_type };
         }
 
         const params = trimLeft(trimmed[type_len..]);
@@ -70,22 +65,17 @@ pub const Mime = struct {
 
             switch (name.len) {
                 7 => if (isCaseEqual("charset", name)) {
-                    charset = try parseValue(arena.allocator(), value);
+                    charset = try parseValue(arena, value);
                 },
                 else => {},
             }
         }
 
         return .{
-            .arena = arena,
             .params = params,
             .charset = charset,
             .content_type = content_type,
         };
-    }
-
-    pub fn deinit(self: *Mime) void {
-        self.arena.deinit();
     }
 
     pub fn isHTML(self: *const Mime) bool {
@@ -158,7 +148,7 @@ pub const Mime = struct {
         break :blk v;
     };
 
-    fn parseValue(allocator: Allocator, value: []const u8) ![]const u8 {
+    fn parseValue(arena: Allocator, value: []const u8) ![]const u8 {
         if (value[0] != '"') {
             return value;
         }
@@ -191,7 +181,7 @@ pub const Mime = struct {
         }
 
         value_pos = 1;
-        const owned = try allocator.alloc(u8, unescaped_len);
+        const owned = try arena.alloc(u8, unescaped_len);
         for (0..unescaped_len) |i| {
             switch (value[value_pos]) {
                 '"' => break,
@@ -344,8 +334,9 @@ test "Mime: parse charset" {
 test "Mime: isHTML" {
     const isHTML = struct {
         fn isHTML(expected: bool, input: []const u8) !void {
-            var mime = try Mime.parse(testing.allocator, input);
-            defer mime.deinit();
+            var arena = std.heap.ArenaAllocator.init(testing.allocator);
+            defer arena.deinit();
+            var mime = try Mime.parse(arena.allocator(), input);
             try testing.expectEqual(expected, mime.isHTML());
         }
     }.isHTML;
@@ -364,8 +355,10 @@ const Expectation = struct {
 };
 
 fn expect(expected: Expectation, input: []const u8) !void {
-    var actual = try Mime.parse(testing.allocator, input);
-    defer actual.deinit();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const actual = try Mime.parse(arena.allocator(), input);
 
     try testing.expectEqual(
         std.meta.activeTag(expected.content_type),
