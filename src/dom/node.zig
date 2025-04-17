@@ -69,6 +69,8 @@ pub const Node = struct {
     pub const mem_guarantied = true;
     pub const sub_type = "node";
 
+    pub const _ELEMENT_NODE = 1;
+
     pub fn toInterface(node: *parser.Node) !Union {
         return switch (try parser.nodeType(node)) {
             .element => try HTMLElem.toInterface(
@@ -419,6 +421,10 @@ pub fn testExecFn(
     alloc: std.mem.Allocator,
     js_env: *jsruntime.Env,
 ) anyerror!void {
+    var constant_Attributes = [_]Case{
+        .{ .src = "Node.ELEMENT_NODE", .ex = "1" },
+    };
+    try checkCases(js_env, &constant_Attributes);
 
     // helper functions
     const trim_and_replace =

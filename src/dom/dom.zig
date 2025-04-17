@@ -35,4 +35,11 @@ pub const Interfaces = .{
     Nod.Node,
     Nod.Interfaces,
     MutationObserver.Interfaces,
+    SVGElement,
+};
+
+pub const SVGElement = struct {
+    pub const prototype = *@import("element.zig").Element;
+    pub const mem_guarantied = true;
+    pub const sub_type = "node";
 };

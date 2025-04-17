@@ -129,6 +129,7 @@ fn createIsolatedWorld(cmd: anytype) !void {
     );
 
     try bc.session.env.init_isolated_world(name_copy);
+
     bc.session.env.isolated_world.?.js_ctx.enter();
 
     //
@@ -141,7 +142,8 @@ fn createIsolatedWorld(cmd: anytype) !void {
         try bc.session.storage_shed.getOrPut("null"), //(try self.origin()) orelse "null"),
     );
     try bc.session.env.isolatedBindGlobal(window);
-    bc.session.env.js_ctx.?.exit();
+
+    bc.session.env.isolated_world.?.js_ctx.exit();
 
     //
 
