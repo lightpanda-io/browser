@@ -35,7 +35,7 @@ pub fn run(arena: Allocator, comptime dir: []const u8, f: []const u8, loader: *F
     const html = blk: {
         const file = try std.fs.cwd().openFile(f, .{});
         defer file.close();
-        break :blk try file.readToEndAlloc(arena, 16 * 1024);
+        break :blk try file.readToEndAlloc(arena, 128 * 1024);
     };
 
     const dirname = fspath.dirname(f[dir.len..]) orelse unreachable;

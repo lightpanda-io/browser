@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const MemoryPool = std.heap.MemoryPool;
 
 pub const IO = @import("tigerbeetle-io").IO;
@@ -35,8 +36,12 @@ const log = std.log.scoped(.loop);
 pub const Loop = struct {
     alloc: std.mem.Allocator, // TODO: unmanaged version ?
     io: IO,
+
+    // both events_nb are used to track how many callbacks are to be called.
+    // We use these counters to wait until all the events are finished.
     js_events_nb: usize,
     zig_events_nb: usize,
+
     cbk_error: bool = false,
 
     // js_ctx_id is incremented each time the loop is reset for JS.
@@ -50,6 +55,11 @@ pub const Loop = struct {
     // If a ctx is outdated, the callback is ignored.
     // This is a weak way to cancel all future Zig callbacks.
     zig_ctx_id: u32 = 0,
+
+    // The MacOS event loop doesn't support cancellation. We use this to track
+    // cancellation ids and, on the timeout callback, we can can check here
+    // to see if it's been cancelled.
+    cancelled: std.AutoHashMapUnmanaged(usize, void),
 
     cancel_pool: MemoryPool(ContextCancel),
     timeout_pool: MemoryPool(ContextTimeout),
@@ -65,6 +75,7 @@ pub const Loop = struct {
     pub fn init(alloc: std.mem.Allocator) !Self {
         return Self{
             .alloc = alloc,
+            .cancelled = .{},
             .io = try IO.init(32, 0),
             .js_events_nb = 0,
             .zig_events_nb = 0,
@@ -75,6 +86,12 @@ pub const Loop = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        // first disable callbacks for existing events.
+        // We don't want a callback re-create a setTimeout, it could create an
+        // infinite loop on wait for events.
+        self.resetJS();
+        self.resetZig();
+
         // run tail events. We do run the tail events to ensure all the
         // contexts are correcly free.
         while (self.eventsNb(.js) > 0 or self.eventsNb(.zig) > 0) {
@@ -83,11 +100,14 @@ pub const Loop = struct {
                 break;
             };
         }
-        self.cancelAll();
+        if (comptime CANCEL_SUPPORTED) {
+            self.io.cancel_all();
+        }
         self.io.deinit();
         self.cancel_pool.deinit();
         self.timeout_pool.deinit();
         self.event_callback_pool.deinit();
+        self.cancelled.deinit(self.alloc);
     }
 
     // Retrieve all registred I/O events completed by OS kernel,
@@ -131,9 +151,6 @@ pub const Loop = struct {
     fn eventsNb(self: *Self, comptime event: Event) usize {
         return @atomicLoad(usize, self.eventsPtr(event), .seq_cst);
     }
-    fn resetEvents(self: *Self, comptime event: Event) void {
-        @atomicStore(usize, self.eventsPtr(event), 0, .unordered);
-    }
 
     // JS callbacks APIs
     // -----------------
@@ -158,6 +175,12 @@ pub const Loop = struct {
             loop.alloc.destroy(completion);
         }
 
+        if (comptime CANCEL_SUPPORTED == false) {
+            if (loop.cancelled.remove(@intFromPtr(completion))) {
+                return;
+            }
+        }
+
         // If the loop's context id has changed, don't call the js callback
         // function. The callback's memory has already be cleaned and the
         // events nb reset.
@@ -175,7 +198,7 @@ pub const Loop = struct {
         // js callback
         if (ctx.js_cbk) |*js_cbk| {
             js_cbk.call(null) catch {
-                ctx.loop.cbk_error = true;
+                loop.cbk_error = true;
             };
         }
     }
@@ -234,19 +257,26 @@ pub const Loop = struct {
         // js callback
         if (ctx.js_cbk) |*js_cbk| {
             js_cbk.call(null) catch {
-                ctx.loop.cbk_error = true;
+                loop.cbk_error = true;
             };
         }
     }
 
     pub fn cancel(self: *Self, id: usize, js_cbk: ?JSCallback) !void {
-        if (IO.supports_cancel == false) {
+        const alloc = self.alloc;
+        if (comptime CANCEL_SUPPORTED == false) {
+            try self.cancelled.put(alloc, id, {});
+            if (js_cbk) |cbk| {
+                cbk.call(null) catch {
+                    self.cbk_error = true;
+                };
+            }
             return;
         }
         const comp_cancel: *IO.Completion = @ptrFromInt(id);
 
-        const completion = try self.alloc.create(Completion);
-        errdefer self.alloc.destroy(completion);
+        const completion = try alloc.create(Completion);
+        errdefer alloc.destroy(completion);
         completion.* = undefined;
 
         const ctx = self.alloc.create(ContextCancel) catch unreachable;
@@ -260,18 +290,17 @@ pub const Loop = struct {
         self.io.cancel_one(*ContextCancel, ctx, cancelCallback, completion, comp_cancel);
     }
 
-    fn cancelAll(self: *Self) void {
-        self.resetEvents(.js);
-        self.resetEvents(.zig);
-        self.io.cancel_all();
-    }
-
     // Reset all existing JS callbacks.
+    // The existing events will happen and their memory will be cleanup but the
+    // corresponding callbacks will not be called.
     pub fn resetJS(self: *Self) void {
         self.js_ctx_id += 1;
+        self.cancelled.clearRetainingCapacity();
     }
 
     // Reset all existing Zig callbacks.
+    // The existing events will happen and their memory will be cleanup but the
+    // corresponding callbacks will not be called.
     pub fn resetZig(self: *Self) void {
         self.zig_ctx_id += 1;
     }
@@ -365,6 +394,7 @@ pub const Loop = struct {
     const ContextZigTimeout = struct {
         loop: *Self,
         zig_ctx_id: u32,
+
         context: *anyopaque,
         callback: *const fn (
             context: ?*anyopaque,
@@ -430,4 +460,10 @@ pub const Loop = struct {
 const EventCallbackContext = struct {
     ctx: *anyopaque,
     loop: *Loop,
+};
+
+const CANCEL_SUPPORTED = switch (builtin.target.os.tag) {
+    .linux => true,
+    .macos, .tvos, .watchos, .ios => false,
+    else => @compileError("IO is not supported for platform"),
 };

@@ -873,7 +873,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 self.scope = Scope{
                     .handle_scope = handle_scope,
                     .arena = self.scope_arena.allocator(),
-                    .call_arena = self.call_arena.allocator(),
+                    .call_arena = self.scope_arena.allocator(),
                 };
                 _ = try self._mapZigInstanceToJs(self.context.getGlobal(), global);
             }
@@ -1128,7 +1128,19 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 inline for (fields, 0..) |f, i| {
                     js_args[i] = try executor.zigValueToJs(@field(aargs, f.name));
                 }
-                _ = self.func.castToFunction().call(executor.context, js_this, &js_args);
+
+                const result = self.func.castToFunction().call(executor.context, js_this, &js_args);
+                if (result == null) {
+                    return error.JSExecCallback;
+                }
+            }
+
+            // debug/helper to print the source of the JS callback
+            fn printFunc(self: *const @This()) !void {
+                const executor = self.executor;
+                const value = self.func.castToFunction().toValue();
+                const src = try valueToString(executor.call_arena.allocator(), value, executor.isolate, executor.context);
+                std.debug.print("{s}\n", .{src});
             }
         };
 
@@ -1405,7 +1417,8 @@ fn Caller(comptime E: type) type {
         }
 
         fn deinit(self: *Self) void {
-            _ = self.executor.call_arena.reset(.{ .retain_with_limit = 4096 });
+            _ = self;
+            // _ = self.executor.call_arena.reset(.{ .retain_with_limit = 4096 });
         }
 
         fn constructor(self: *Self, comptime named_function: anytype, info: v8.FunctionCallbackInfo) !void {
