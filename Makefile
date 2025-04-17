@@ -60,13 +60,13 @@ download-zig:
 	@printf "\e[33mDownloaded $(dest)\e[0m\n"
 
 ## Build in release-safe mode
-build:
+build: build-v8
 	@printf "\e[36mBuilding (release safe)...\e[0m\n"
 	$(ZIG) build -Doptimize=ReleaseSafe -Dgit_commit=$$(git rev-parse --short HEAD) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 	@printf "\e[33mBuild OK\e[0m\n"
 
 ## Build in debug mode
-build-dev:
+build-dev: build-v8-dev
 	@printf "\e[36mBuilding (debug)...\e[0m\n"
 	@$(ZIG) build -Dgit_commit=$$(git rev-parse --short HEAD) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 	@printf "\e[33mBuild OK\e[0m\n"
@@ -116,10 +116,10 @@ build-v8:
 .PHONY: install-dev install
 
 ## Install and build dependencies for release
-install: install-submodule install-libiconv install-netsurf install-mimalloc
+install: install-submodule install-libiconv install-netsurf install-mimalloc get-v8
 
 ## Install and build dependencies for dev
-install-dev: install-submodule install-libiconv install-netsurf-dev install-mimalloc-dev
+install-dev: install-submodule install-libiconv install-netsurf-dev install-mimalloc-dev get-v8
 
 install-netsurf-dev: _install-netsurf
 install-netsurf-dev: OPTCFLAGS := -O0 -g -DNDEBUG
