@@ -415,7 +415,7 @@ test "Browser.DOM.node" {
             \\   str = str.trim();
             \\   return str;
             \\ }
-        , &err_out);
+        , "trimAndReplace", &err_out);
     }
 
     try runner.testCases(&.{

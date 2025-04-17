@@ -48,7 +48,7 @@ pub fn run(arena: Allocator, comptime dir: []const u8, f: []const u8, loader: *F
 
     // display console logs
     defer {
-        const res = runner.eval("console.join('\\n');", err_msg) catch unreachable;
+        const res = runner.eval("console.join('\\n');", "console", err_msg) catch unreachable;
         const log = res.toString(arena) catch unreachable;
         if (log.len > 0) {
             std.debug.print("-- CONSOLE LOG\n{s}\n--\n", .{log});
@@ -63,7 +63,7 @@ pub fn run(arena: Allocator, comptime dir: []const u8, f: []const u8, loader: *F
         \\  console.debug = function () {
         \\    console.push("debug", ...arguments);
         \\  };
-    , err_msg);
+    , "init", err_msg);
 
     // loop over the scripts.
     const doc = parser.documentHTMLToDocument(runner.state.document.?);
@@ -79,12 +79,12 @@ pub fn run(arena: Allocator, comptime dir: []const u8, f: []const u8, loader: *F
                 // no need to free path, thanks to the arena.
                 path = try fspath.join(arena, &.{ "/", dirname, path });
             }
-            try runner.exec(try loader.get(path), err_msg);
+            try runner.exec(try loader.get(path), src, err_msg);
         }
 
         // If the script as a source text, execute it.
         const src = try parser.nodeTextContent(s) orelse continue;
-        try runner.exec(src, err_msg);
+        try runner.exec(src, null, err_msg);
     }
 
     // Mark tests as ready to run.
@@ -111,10 +111,10 @@ pub fn run(arena: Allocator, comptime dir: []const u8, f: []const u8, loader: *F
     }
 
     // Check the final test status.
-    try runner.exec("report.status;", err_msg);
+    try runner.exec("report.status", "teststatus", err_msg);
 
     // return the detailed result.
-    const res = try runner.eval("report.log", err_msg);
+    const res = try runner.eval("report.log", "report", err_msg);
     return res.toString(arena);
 }
 
