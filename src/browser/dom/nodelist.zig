@@ -20,10 +20,9 @@ const std = @import("std");
 
 const parser = @import("../netsurf.zig");
 
-const jsruntime = @import("jsruntime");
+const JsObject = @import("../env.zig").JsObject;
 const Callback = @import("../env.zig").Callback;
-const Case = jsruntime.test_utils.Case;
-const checkCases = jsruntime.test_utils.checkCases;
+const SessionState = @import("../env.zig").SessionState;
 
 const NodeUnion = @import("node.zig").Union;
 const Node = @import("node.zig").Node;
@@ -133,13 +132,22 @@ pub const NodeList = struct {
         return try Node.toInterface(n);
     }
 
-    // TODO entries() https://developer.mozilla.org/en-US/docs/Web/API/NodeList/entries
-    pub fn indexed_get(self: *const NodeList, index: u32, has_value: *bool) !?NodeUnion {
-        return (try self._item(index)) orelse {
-            has_value.* = false;
-            return null;
-        };
-    }
+    // This code works, but it's _MUCH_ slower than using postAttach. The benefit
+    // of this version, is that it's "live"..but we're talking many orders of
+    // magnitude slower.
+    //
+    // You can test it by commenting out `postAttach`, uncommenting this and
+    // running:
+    //    zig build wpt --  tests/wpt/dom/nodes/NodeList-static-length-getter-tampered-indexOf-1.html
+    //
+    // I think this _is_ the right way to do it, but I must be doing something
+    // wrong to make it so slow.
+    // pub fn indexed_get(self: *const NodeList, index: u32, has_value: *bool) !?NodeUnion {
+    //     return (try self._item(index)) orelse {
+    //         has_value.* = false;
+    //         return null;
+    //     };
+    // }
 
     pub fn _forEach(self: *NodeList, cbk: Callback) !void { // TODO handle thisArg
         for (self.nodes.items, 0..) |n, i| {
@@ -166,6 +174,15 @@ pub const NodeList = struct {
 
     pub fn _symbol_iterator(self: *NodeList) NodeListIterator {
         return self._values();
+    }
+
+    // TODO entries() https://developer.mozilla.org/en-US/docs/Web/API/NodeList/entries
+    pub fn postAttach(self: *NodeList, js_obj: JsObject) !void {
+        const len = self.get_length();
+        for (0..len) |i| {
+            const node = try self._item(@intCast(i)) orelse unreachable;
+            try js_obj.setIndex(i, node);
+        }
     }
 };
 

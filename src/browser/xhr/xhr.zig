@@ -451,7 +451,7 @@ pub const XMLHttpRequest = struct {
     }
 
     // TODO body can be either a XMLHttpRequestBodyInit or a document
-    pub fn _send(self: *XMLHttpRequest, session_state: *SessionState, body: ?[]const u8) !void {
+    pub fn _send(self: *XMLHttpRequest, body: ?[]const u8, session_state: *SessionState) !void {
         if (self.state != .opened) return DOMError.InvalidState;
         if (self.send_flag) return DOMError.InvalidState;
 

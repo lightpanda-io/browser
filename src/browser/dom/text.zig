@@ -33,7 +33,7 @@ pub const Text = struct {
     pub const Self = parser.Text;
     pub const prototype = *CharacterData;
 
-    pub fn constructor(state: *const SessionState, data: ?[]const u8) !*parser.Text {
+    pub fn constructor(data: ?[]const u8, state: *const SessionState) !*parser.Text {
         return parser.documentCreateTextNode(
             parser.documentHTMLToDocument(state.document.?),
             data orelse "",

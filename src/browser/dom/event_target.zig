@@ -46,10 +46,10 @@ pub const EventTarget = struct {
 
     pub fn _addEventListener(
         self: *parser.EventTarget,
-        state: *SessionState,
         eventType: []const u8,
         cbk: Env.Callback,
         capture: ?bool,
+        state: *SessionState,
         // TODO: hanle EventListenerOptions
         // see #https://github.com/lightpanda-io/jsruntime-lib/issues/114
     ) !void {
@@ -76,10 +76,10 @@ pub const EventTarget = struct {
 
     pub fn _removeEventListener(
         self: *parser.EventTarget,
-        state: *SessionState,
         eventType: []const u8,
         cbk: Env.Callback,
         capture: ?bool,
+        state: *SessionState,
         // TODO: hanle EventListenerOptions
         // see #https://github.com/lightpanda-io/jsruntime-lib/issues/114
     ) !void {

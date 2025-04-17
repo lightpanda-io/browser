@@ -22,7 +22,7 @@ const Allocator = std.mem.Allocator;
 const MyList = struct {
     items: []u8,
 
-    pub fn constructor(state: State, elem1: u8, elem2: u8, elem3: u8) MyList {
+    pub fn constructor(elem1: u8, elem2: u8, elem3: u8, state: State) MyList {
         var items = state.arena.alloc(u8, 3) catch unreachable;
         items[0] = elem1;
         items[1] = elem2;

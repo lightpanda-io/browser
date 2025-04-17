@@ -24,6 +24,8 @@ const utils = @import("utils.z");
 const Element = @import("element.zig").Element;
 const Union = @import("element.zig").Union;
 
+const JsObject = @import("../env.zig").JsObject;
+
 const Walker = @import("walker.zig").Walker;
 const WalkerDepthFirst = @import("walker.zig").WalkerDepthFirst;
 const WalkerChildren = @import("walker.zig").WalkerChildren;
@@ -318,10 +320,6 @@ pub const HTMLCollection = struct {
     cur_idx: ?u32 = undefined,
     cur_node: ?*parser.Node = undefined,
 
-    // array_like_keys is used to keep reference to array like interface implementation.
-    // the collection generates keys string which must be free on deinit.
-    array_like_keys: std.ArrayListUnmanaged([]u8) = .{},
-
     // start returns the first node to walk on.
     fn start(self: HTMLCollection) !?*parser.Node {
         if (self.root == null) return null;
@@ -403,13 +401,6 @@ pub const HTMLCollection = struct {
         return try Element.toInterface(e);
     }
 
-    pub fn indexed_get(self: *HTMLCollection, index: u32, has_value: *bool) !?Union {
-        return (try self._item(index)) orelse {
-            has_value.* = false;
-            return null;
-        };
-    }
-
     pub fn _namedItem(self: *const HTMLCollection, name: []const u8) !?Union {
         if (self.root == null) return null;
         if (name.len == 0) return null;
@@ -441,13 +432,6 @@ pub const HTMLCollection = struct {
         return null;
     }
 
-    pub fn named_get(self: *HTMLCollection, name: []const u8, has_value: *bool) !?Union {
-        return (try self._namedItem(name)) orelse {
-            has_value.* = false;
-            return null;
-        };
-    }
-
     fn item_name(elt: *parser.Element) !?[]const u8 {
         if (try parser.elementGetAttribute(elt, "id")) |v| {
             return v;
@@ -459,10 +443,17 @@ pub const HTMLCollection = struct {
         return null;
     }
 
-    pub fn deinit(self: *HTMLCollection, alloc: std.mem.Allocator) void {
-        for (self.array_like_keys_) |k| alloc.free(k);
-        self.array_like_keys.deinit(alloc);
-        self.matcher.deinit(alloc);
+    pub fn postAttach(self: *HTMLCollection, js_obj: JsObject) !void {
+        const len = try self.get_length();
+        for (0..len) |i| {
+            const node = try self.item(@intCast(i)) orelse unreachable;
+            const e = @as(*parser.Element, @ptrCast(node));
+            try js_obj.setIndex(@intCast(i), e);
+
+            if (try item_name(e)) |name| {
+                try js_obj.set(name, e);
+            }
+        }
     }
 };
 

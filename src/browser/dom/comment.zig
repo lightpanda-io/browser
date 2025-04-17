@@ -28,7 +28,7 @@ pub const Comment = struct {
     pub const Self = parser.Comment;
     pub const prototype = *CharacterData;
 
-    pub fn constructor(state: *const SessionState, data: ?[]const u8) !*parser.Comment {
+    pub fn constructor(data: ?[]const u8, state: *const SessionState) !*parser.Comment {
         return parser.documentCreateComment(
             parser.documentHTMLToDocument(state.document.?),
             data orelse "",

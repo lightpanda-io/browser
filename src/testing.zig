@@ -480,7 +480,7 @@ pub const JsRunner = struct {
         return self.executor.exec(src, null) catch |err| {
             if (try try_catch.err(self.arena)) |msg| {
                 err_msg.* = msg;
-                std.debug.print("Error runnign script: {s}\n", .{msg});
+                std.debug.print("Error running script: {s}\n", .{msg});
             }
             return err;
         };

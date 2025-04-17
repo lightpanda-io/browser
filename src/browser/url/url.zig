@@ -44,7 +44,11 @@ pub const URL = struct {
     uri: std.Uri,
     search_params: URLSearchParams,
 
-    pub fn constructor(state: *SessionState, url: []const u8, base: ?[]const u8) !URL {
+    pub fn constructor(
+        url: []const u8,
+        base: ?[]const u8,
+        state: *SessionState,
+    ) !URL {
         const arena = state.arena;
         const raw = try std.mem.concat(arena, u8, &[_][]const u8{ url, base orelse "" });
         errdefer arena.free(raw);
@@ -63,13 +67,8 @@ pub const URL = struct {
         };
     }
 
-    // the caller must free the returned string.
-    // TODO return a disposable string
-    // https://github.com/lightpanda-io/jsruntime-lib/issues/195
     pub fn get_origin(self: *URL, state: *SessionState) ![]const u8 {
         var buf = std.ArrayList(u8).init(state.arena);
-        defer buf.deinit();
-
         try self.uri.writeToStream(.{
             .scheme = true,
             .authentication = false,
@@ -78,32 +77,27 @@ pub const URL = struct {
             .query = false,
             .fragment = false,
         }, buf.writer());
-        return try buf.toOwnedSlice();
+        return buf.items;
     }
 
     // get_href returns the URL by writing all its components.
     // The query is replaced by a dump of search params.
     //
-    // the caller must free the returned string.
-    // TODO return a disposable string
-    // https://github.com/lightpanda-io/jsruntime-lib/issues/195
     pub fn get_href(self: *URL, state: *SessionState) ![]const u8 {
         const arena = state.arena;
         // retrieve the query search from search_params.
         const cur = self.uri.query;
         defer self.uri.query = cur;
         var q = std.ArrayList(u8).init(arena);
-        defer q.deinit();
         try self.search_params.values.encode(q.writer());
         self.uri.query = .{ .percent_encoded = q.items };
 
-        return try self.format(arena);
+        return try self.toString(arena);
     }
 
     // format the url with all its components.
-    pub fn format(self: *URL, arena: std.mem.Allocator) ![]const u8 {
+    pub fn toString(self: *URL, arena: std.mem.Allocator) ![]const u8 {
         var buf = std.ArrayList(u8).init(arena);
-        defer buf.deinit();
 
         try self.uri.writeToStream(.{
             .scheme = true,
@@ -113,12 +107,9 @@ pub const URL = struct {
             .query = uriComponentNullStr(self.uri.query).len > 0,
             .fragment = uriComponentNullStr(self.uri.fragment).len > 0,
         }, buf.writer());
-        return try buf.toOwnedSlice();
+        return buf.items;
     }
 
-    // the caller must free the returned string.
-    // TODO return a disposable string
-    // https://github.com/lightpanda-io/jsruntime-lib/issues/195
     pub fn get_protocol(self: *URL, state: *SessionState) ![]const u8 {
         return try std.mem.concat(state.arena, u8, &[_][]const u8{ self.uri.scheme, ":" });
     }
@@ -131,12 +122,8 @@ pub const URL = struct {
         return uriComponentNullStr(self.uri.password);
     }
 
-    // the caller must free the returned string.
-    // TODO return a disposable string
-    // https://github.com/lightpanda-io/jsruntime-lib/issues/195
     pub fn get_host(self: *URL, state: *SessionState) ![]const u8 {
         var buf = std.ArrayList(u8).init(state.arena);
-        defer buf.deinit();
 
         try self.uri.writeToStream(.{
             .scheme = false,
@@ -146,25 +133,20 @@ pub const URL = struct {
             .query = false,
             .fragment = false,
         }, buf.writer());
-        return try buf.toOwnedSlice();
+        return buf.items;
     }
 
     pub fn get_hostname(self: *URL) []const u8 {
         return uriComponentNullStr(self.uri.host);
     }
 
-    // the caller must free the returned string.
-    // TODO return a disposable string
-    // https://github.com/lightpanda-io/jsruntime-lib/issues/195
     pub fn get_port(self: *URL, state: *SessionState) ![]const u8 {
         const arena = state.arena;
         if (self.uri.port == null) return try arena.dupe(u8, "");
 
         var buf = std.ArrayList(u8).init(arena);
-        defer buf.deinit();
-
         try std.fmt.formatInt(self.uri.port.?, 10, .lower, .{}, buf.writer());
-        return try buf.toOwnedSlice();
+        return buf.items;
     }
 
     pub fn get_pathname(self: *URL) []const u8 {
@@ -172,24 +154,17 @@ pub const URL = struct {
         return uriComponentStr(self.uri.path);
     }
 
-    // the caller must free the returned string.
-    // TODO return a disposable string
-    // https://github.com/lightpanda-io/jsruntime-lib/issues/195
     pub fn get_search(self: *URL, state: *SessionState) ![]const u8 {
         const arena = state.arena;
         if (self.search_params.get_size() == 0) return try arena.dupe(u8, "");
 
         var buf: std.ArrayListUnmanaged(u8) = .{};
-        defer buf.deinit(arena);
 
         try buf.append(arena, '?');
         try self.search_params.values.encode(buf.writer(arena));
-        return buf.toOwnedSlice(arena);
+        return buf.items;
     }
 
-    // the caller must free the returned string.
-    // TODO return a disposable string
-    // https://github.com/lightpanda-io/jsruntime-lib/issues/195
     pub fn get_hash(self: *URL, state: *SessionState) ![]const u8 {
         const arena = state.arena;
         if (self.uri.fragment == null) return try arena.dupe(u8, "");
@@ -226,7 +201,7 @@ fn uriComponentStr(c: std.Uri.Component) []const u8 {
 pub const URLSearchParams = struct {
     values: query.Values,
 
-    pub fn constructor(state: *SessionState, qs: ?[]const u8) !URLSearchParams {
+    pub fn constructor(qs: ?[]const u8, state: *SessionState) !URLSearchParams {
         return init(state.arena, qs);
     }
 

@@ -21,12 +21,8 @@ const std = @import("std");
 const SessionState = @import("../env.zig").SessionState;
 
 const builtin = @import("builtin");
-const jsruntime = @import("jsruntime");
 
 const URL = @import("../url/url.zig").URL;
-
-const Case = jsruntime.test_utils.Case;
-const checkCases = jsruntime.test_utils.checkCases;
 
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#the-location-interface
 pub const Location = struct {

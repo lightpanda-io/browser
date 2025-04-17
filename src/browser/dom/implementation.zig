@@ -31,10 +31,10 @@ pub const DOMImplementation = struct {
 
     pub fn _createDocumentType(
         _: *DOMImplementation,
-        state: *SessionState,
         qname: []const u8,
         publicId: []const u8,
         systemId: []const u8,
+        state: *SessionState,
     ) !*parser.DocumentType {
         const allocator = state.arena;
         const cqname = try allocator.dupeZ(u8, qname);
@@ -51,10 +51,10 @@ pub const DOMImplementation = struct {
 
     pub fn _createDocument(
         _: *DOMImplementation,
-        state: *SessionState,
         namespace: ?[]const u8,
         qname: ?[]const u8,
         doctype: ?*parser.DocumentType,
+        state: *SessionState,
     ) !*parser.Document {
         const allocator = state.arena;
         var cnamespace: ?[:0]const u8 = null;

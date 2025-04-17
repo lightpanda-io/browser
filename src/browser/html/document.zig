@@ -102,7 +102,7 @@ pub const HTMLDocument = struct {
         return v;
     }
 
-    pub fn _getElementsByName(self: *parser.DocumentHTML, state: *SessionState, name: []const u8) !NodeList {
+    pub fn _getElementsByName(self: *parser.DocumentHTML, name: []const u8, state: *SessionState) !NodeList {
         const arena = state.arena;
         var list = NodeList.init();
         errdefer list.deinit(arena);

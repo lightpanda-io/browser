@@ -34,7 +34,7 @@ pub const XMLSerializer = struct {
         return .{};
     }
 
-    pub fn _serializeToString(_: *const XMLSerializer, state: *SessionState, root: *parser.Node) ![]const u8 {
+    pub fn _serializeToString(_: *const XMLSerializer, root: *parser.Node, state: *SessionState) ![]const u8 {
         var buf = std.ArrayList(u8).init(state.arena);
         if (try parser.nodeType(root) == .document) {
             try dump.writeHTML(@as(*parser.Document, @ptrCast(root)), buf.writer());

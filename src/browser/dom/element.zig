@@ -226,8 +226,8 @@ pub const Element = struct {
 
     pub fn _getElementsByTagName(
         self: *parser.Element,
-        state: *SessionState,
         tag_name: []const u8,
+        state: *SessionState,
     ) !collection.HTMLCollection {
         return try collection.HTMLCollectionByTagName(
             state.arena,
@@ -239,8 +239,8 @@ pub const Element = struct {
 
     pub fn _getElementsByClassName(
         self: *parser.Element,
-        state: *SessionState,
         classNames: []const u8,
+        state: *SessionState,
     ) !collection.HTMLCollection {
         return try collection.HTMLCollectionByClassName(
             state.arena,
@@ -306,7 +306,7 @@ pub const Element = struct {
         }
     }
 
-    pub fn _querySelector(self: *parser.Element, state: *SessionState, selector: []const u8) !?Union {
+    pub fn _querySelector(self: *parser.Element, selector: []const u8, state: *SessionState) !?Union {
         if (selector.len == 0) return null;
 
         const n = try css.querySelector(state.arena, parser.elementToNode(self), selector);
@@ -316,7 +316,7 @@ pub const Element = struct {
         return try toInterface(parser.nodeToElement(n.?));
     }
 
-    pub fn _querySelectorAll(self: *parser.Element, state: *SessionState, selector: []const u8) !NodeList {
+    pub fn _querySelectorAll(self: *parser.Element, selector: []const u8, state: *SessionState) !NodeList {
         return css.querySelectorAll(state.arena, parser.elementToNode(self), selector);
     }
 

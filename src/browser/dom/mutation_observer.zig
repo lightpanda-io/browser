@@ -22,6 +22,7 @@ const parser = @import("../netsurf.zig");
 const SessionState = @import("../env.zig").SessionState;
 
 const Env = @import("../env.zig").Env;
+const JsObject = @import("../env.zig").JsObject;
 const NodeList = @import("nodelist.zig").NodeList;
 
 pub const Interfaces = .{
@@ -84,7 +85,7 @@ pub const MutationObserver = struct {
         return opt orelse .{};
     }
 
-    pub fn _observe(self: *MutationObserver, state: *SessionState, node: *parser.Node, options: ?MutationObserverInit) !void {
+    pub fn _observe(self: *MutationObserver, node: *parser.Node, options: ?MutationObserverInit, state: *SessionState) !void {
         const arena = state.arena;
         const o = try arena.create(Observer);
         o.* = .{
@@ -182,6 +183,11 @@ pub const MutationRecords = struct {
             has_value.* = false;
             return null;
         };
+    }
+    pub fn postAttach(self: *const MutationRecords, js_obj: JsObject) !void {
+        if (self.first) |mr| {
+            try js_obj.set("0", mr);
+        }
     }
 };
 

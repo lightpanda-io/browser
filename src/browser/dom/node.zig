@@ -18,11 +18,6 @@
 
 const std = @import("std");
 
-const jsruntime = @import("jsruntime");
-const Case = jsruntime.test_utils.Case;
-const checkCases = jsruntime.test_utils.checkCases;
-const runScript = jsruntime.test_utils.runScript;
-
 const parser = @import("../netsurf.zig");
 const generate = @import("../../runtime/generate.zig");
 

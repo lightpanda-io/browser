@@ -975,8 +975,23 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                             // typeTaggedAnyOpaque, we'll also know there that
                             // the type is empty and can create an empty instance.
                         }
+
+                        // Do not move this _AFTER_ the postAttach code.
+                        // postAttach is likely to call back into this function
+                        // mutating our identity_map, and making the gop pointers
+                        // invalid.
                         const js_persistent = PersistentObject.init(isolate, js_obj);
                         gop.value_ptr.* = js_persistent;
+
+                        if (@hasDecl(ptr.child, "postAttach")) {
+                            const obj_wrap = JsObject{ .js_obj = js_obj, .executor = self };
+                            switch (@typeInfo(@TypeOf(ptr.child.postAttach)).@"fn".params.len) {
+                                2 => try value.postAttach(obj_wrap),
+                                3 => try value.postAttach(self.state, obj_wrap),
+                                else => @compileError(@typeName(ptr.child) ++ ".postAttach must take 2 or 3 parameters"),
+                            }
+                        }
+
                         return js_persistent;
                     },
                     else => @compileError("Expected a struct or pointer, got " ++ @typeName(T) ++ " (constructors must return struct or pointers)"),
@@ -1114,6 +1129,41 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                     js_args[i] = try executor.zigValueToJs(@field(aargs, f.name));
                 }
                 _ = self.func.castToFunction().call(executor.context, js_this, &js_args);
+            }
+        };
+
+        pub const JsObject = struct {
+            js_obj: v8.Object,
+            executor: *Executor,
+
+            // If a Zig struct wants the Object parameter, it'll declare a
+            // function like:
+            //    fn _length(self: *const NodeList, js_obj: Env.Object) usize
+            //
+            // When we're trying to call this function, we can't just do
+            //    if (params[i].type.? == Object)
+            // Because there is _no_ object, there's only an Env.Object, where
+            // Env is a generic.
+            // We could probably figure out a way to do this, but simply checking
+            // for this declaration is _a lot_ easier.
+            const _JSOBJECT_ID_KLUDGE = true;
+
+            pub fn setIndex(self: JsObject, index: usize, value: anytype) !void {
+                const key = switch (index) {
+                    inline 0...1000 => |i| std.fmt.comptimePrint("{d}", .{i}),
+                    else => try std.fmt.allocPrint(self.executor.scope_arena.allocator(), "{d}", .{index}),
+                };
+                return self.set(key, value);
+            }
+
+            pub fn set(self: JsObject, key: []const u8, value: anytype) !void {
+                const executor = self.executor;
+
+                const js_key = v8.String.initUtf8(executor.isolate, key);
+                const js_value = try executor.zigValueToJs(value);
+                if (!self.js_obj.setValue(executor.context, js_key, js_value)) {
+                    return error.FailedToSet;
+                }
             }
         };
 
@@ -1641,64 +1691,93 @@ fn Caller(comptime E: type) type {
         // parameters into the array.
         fn getArgs(self: *const Self, comptime named_function: anytype, comptime offset: usize, info: anytype) !ParamterTypes(@TypeOf(named_function.func)) {
             const F = @TypeOf(named_function.func);
-            const zig_function_parameters = @typeInfo(F).@"fn".params;
-
             var args: ParamterTypes(F) = undefined;
-            if (zig_function_parameters.len == 0) {
+
+            const params = @typeInfo(F).@"fn".params[offset..];
+            // Except for the constructor, the first parameter is always `self`
+            // This isn't something we'll bind from JS, so skip it.
+            const params_to_map = blk: {
+                if (params.len == 0) {
+                    return args;
+                }
+
+                // If the last parameter is the State, set it, and exclude it
+                // from our params slice, because we don't want to bind it to
+                // a JS argument
+                if (comptime isState(params[params.len - 1].type.?)) {
+                    @field(args, std.fmt.comptimePrint("{d}", .{params.len - 1 + offset})) = self.executor.state;
+                    break :blk params[0 .. params.len - 1];
+                }
+
+                // If the last parameter is a JsObject, set it, and exclude it
+                // from our params slice, because we don't want to bind it to
+                // a JS argument
+                if (comptime isJsObject(params[params.len - 1].type.?)) {
+                    @field(args, std.fmt.comptimePrint("{d}", .{params.len - 1 + offset})) = .{
+                        .handle = info.getThis(),
+                        .executor = self.executor,
+                    };
+
+                    // AND the 2nd last parameter is state
+                    if (params.len > 1 and comptime isState(params[params.len - 2].type.?)) {
+                        @field(args, std.fmt.comptimePrint("{d}", .{params.len - 2 + offset})) = self.executor.state;
+                        break :blk params[0 .. params.len - 2];
+                    }
+
+                    break :blk params[0 .. params.len - 1];
+                }
+
+                // we have neither a State nor a JsObject. All params must be
+                // bound to a JavaScript value.
+                break :blk params;
+            };
+
+            if (params_to_map.len == 0) {
                 return args;
             }
 
-            const adjusted_offset = blk: {
-                if (zig_function_parameters.len > offset and comptime isState(zig_function_parameters[offset].type.?)) {
-                    @field(args, std.fmt.comptimePrint("{d}", .{offset})) = self.executor.state;
-                    break :blk offset + 1;
-                } else {
-                    break :blk offset;
-                }
-            };
-
             const js_parameter_count = info.length();
-            const expected_js_parameters = zig_function_parameters.len - adjusted_offset;
-
+            const last_js_parameter = params_to_map.len - 1;
             var is_variadic = false;
-            const last_parameter_index = zig_function_parameters.len - 1;
+
             {
                 // This is going to get complicated. If the last Zig paremeter
                 // is a slice AND the corresponding javascript parameter is
                 // NOT an an array, then we'll treat it as a variadic.
 
-                const last_parameter_type = zig_function_parameters[last_parameter_index].type.?;
+                const last_parameter_type = params_to_map[params_to_map.len - 1].type.?;
                 const last_parameter_type_info = @typeInfo(last_parameter_type);
                 if (last_parameter_type_info == .pointer and last_parameter_type_info.pointer.size == .slice) {
                     const slice_type = last_parameter_type_info.pointer.child;
-                    const corresponding_js_index = last_parameter_index - adjusted_offset;
-                    const corresponding_js_value = info.getArg(@as(u32, @intCast(corresponding_js_index)));
+                    const corresponding_js_value = info.getArg(@as(u32, @intCast(last_js_parameter)));
                     if (corresponding_js_value.isArray() == false and slice_type != u8) {
                         is_variadic = true;
                         if (js_parameter_count == 0) {
-                            @field(args, tupleFieldName(last_parameter_index)) = &.{};
+                            @field(args, tupleFieldName(params_to_map.len + offset - 1)) = &.{};
                         } else {
-                            const arr = try self.call_allocator.alloc(last_parameter_type_info.pointer.child, js_parameter_count - expected_js_parameters + 1);
-                            for (arr, corresponding_js_index..) |*a, i| {
+                            const arr = try self.call_allocator.alloc(last_parameter_type_info.pointer.child, js_parameter_count - params_to_map.len + 1);
+                            for (arr, last_js_parameter..) |*a, i| {
                                 const js_value = info.getArg(@as(u32, @intCast(i)));
                                 a.* = try self.jsValueToZig(named_function, slice_type, js_value);
                             }
-                            @field(args, tupleFieldName(last_parameter_index)) = arr;
+                            @field(args, tupleFieldName(params_to_map.len + offset - 1)) = arr;
                         }
                     }
                 }
             }
 
-            inline for (zig_function_parameters[adjusted_offset..], 0..) |param, i| {
-                const field_index = comptime i + adjusted_offset;
-                if (comptime field_index == last_parameter_index) {
+            inline for (params_to_map, 0..) |param, i| {
+                const field_index = comptime i + offset;
+                if (comptime i == params_to_map.len - 1) {
                     if (is_variadic) {
                         break;
                     }
                 }
 
                 if (comptime isState(param.type.?)) {
-                    @compileError("State must be the 2nd parameter: " ++ named_function.full_name);
+                    @compileError("State must be the last parameter (or 2nd last if there's a JsObject): " ++ named_function.full_name);
+                } else if (comptime isJsObject(param.type.?)) {
+                    @compileError("JsObject must be the last parameter: " ++ named_function.full_name);
                 } else if (i >= js_parameter_count) {
                     if (@typeInfo(param.type.?) != .optional) {
                         return error.InvalidArgument;
@@ -1881,6 +1960,10 @@ fn Caller(comptime E: type) type {
             const ti = @typeInfo(State);
             const Const_State = if (ti == .pointer) *const ti.pointer.child else State;
             return T == State or T == Const_State;
+        }
+
+        fn isJsObject(comptime T: type) bool {
+            return @typeInfo(T) == .@"struct" and @hasDecl(T, "_JSOBJECT_ID_KLUDGE");
         }
     };
 }

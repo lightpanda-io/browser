@@ -19,10 +19,6 @@
 const std = @import("std");
 
 const builtin = @import("builtin");
-const jsruntime = @import("jsruntime");
-
-const Case = jsruntime.test_utils.Case;
-const checkCases = jsruntime.test_utils.checkCases;
 
 // https://html.spec.whatwg.org/multipage/system-state.html#navigator
 pub const Navigator = struct {

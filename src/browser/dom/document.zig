@@ -138,16 +138,16 @@ pub const Document = struct {
     // HTMLCollection in zig here.
     pub fn _getElementsByTagName(
         self: *parser.Document,
-        state: *SessionState,
         tag_name: []const u8,
+        state: *SessionState,
     ) !collection.HTMLCollection {
         return try collection.HTMLCollectionByTagName(state.arena, parser.documentToNode(self), tag_name, true);
     }
 
     pub fn _getElementsByClassName(
         self: *parser.Document,
-        state: *SessionState,
         classNames: []const u8,
+        state: *SessionState,
     ) !collection.HTMLCollection {
         const allocator = state.arena;
         return try collection.HTMLCollectionByClassName(allocator, parser.documentToNode(self), classNames, true);
@@ -212,7 +212,7 @@ pub const Document = struct {
         return 1;
     }
 
-    pub fn _querySelector(self: *parser.Document, state: *SessionState, selector: []const u8) !?ElementUnion {
+    pub fn _querySelector(self: *parser.Document, selector: []const u8, state: *SessionState) !?ElementUnion {
         if (selector.len == 0) return null;
 
         const allocator = state.arena;
@@ -223,7 +223,7 @@ pub const Document = struct {
         return try Element.toInterface(parser.nodeToElement(n.?));
     }
 
-    pub fn _querySelectorAll(self: *parser.Document, state: *SessionState, selector: []const u8) !NodeList {
+    pub fn _querySelectorAll(self: *parser.Document, selector: []const u8, state: *SessionState) !NodeList {
         const allocator = state.arena;
         return css.querySelectorAll(allocator, parser.documentToNode(self), selector);
     }

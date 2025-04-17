@@ -211,7 +211,7 @@ pub const HTMLAnchorElement = struct {
 
     inline fn url(self: *parser.Anchor, state: *SessionState) !URL {
         const href = try parser.anchorGetHref(self);
-        return URL.constructor(state, href, null); // TODO inject base url
+        return URL.constructor(href, null, state); // TODO inject base url
     }
 
     // TODO return a disposable string
@@ -231,9 +231,7 @@ pub const HTMLAnchorElement = struct {
         var u = try url(self, state);
 
         u.uri.scheme = v;
-        const href = try u.format(arena);
-        defer arena.free(href);
-
+        const href = try u.toString(arena);
         try parser.anchorSetHref(self, href);
     }
 
@@ -266,8 +264,7 @@ pub const HTMLAnchorElement = struct {
             u.uri.port = null;
         }
 
-        const href = try u.format(arena);
-        defer arena.free(href);
+        const href = try u.toString(arena);
         try parser.anchorSetHref(self, href);
     }
 
@@ -281,7 +278,7 @@ pub const HTMLAnchorElement = struct {
         const arena = state.arena;
         var u = try url(self, state);
         u.uri.host = .{ .raw = v };
-        const href = try u.format(arena);
+        const href = try u.toString(arena);
         try parser.anchorSetHref(self, href);
     }
 
@@ -301,8 +298,7 @@ pub const HTMLAnchorElement = struct {
             u.uri.port = null;
         }
 
-        const href = try u.format(arena);
-        defer arena.free(href);
+        const href = try u.toString(arena);
         try parser.anchorSetHref(self, href);
     }
 
@@ -321,8 +317,7 @@ pub const HTMLAnchorElement = struct {
         } else {
             u.uri.user = null;
         }
-        const href = try u.format(arena);
-        defer arena.free(href);
+        const href = try u.toString(arena);
 
         try parser.anchorSetHref(self, href);
     }
@@ -342,8 +337,7 @@ pub const HTMLAnchorElement = struct {
         } else {
             u.uri.password = null;
         }
-        const href = try u.format(arena);
-        defer arena.free(href);
+        const href = try u.toString(arena);
 
         try parser.anchorSetHref(self, href);
     }
@@ -358,8 +352,7 @@ pub const HTMLAnchorElement = struct {
         const arena = state.arena;
         var u = try url(self, state);
         u.uri.path = .{ .raw = v };
-        const href = try u.format(arena);
-        defer arena.free(href);
+        const href = try u.toString(arena);
 
         try parser.anchorSetHref(self, href);
     }
@@ -379,8 +372,7 @@ pub const HTMLAnchorElement = struct {
         } else {
             u.uri.query = null;
         }
-        const href = try u.format(arena);
-        defer arena.free(href);
+        const href = try u.toString(arena);
 
         try parser.anchorSetHref(self, href);
     }
@@ -400,8 +392,7 @@ pub const HTMLAnchorElement = struct {
         } else {
             u.uri.fragment = null;
         }
-        const href = try u.format(arena);
-        defer arena.free(href);
+        const href = try u.toString(arena);
 
         try parser.anchorSetHref(self, href);
     }

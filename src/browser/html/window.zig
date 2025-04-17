@@ -116,7 +116,7 @@ pub const Window = struct {
     }
 
     // TODO handle callback arguments.
-    pub fn _setTimeout(self: *Window, state: *SessionState, cbk: Callback, delay: ?u32) !u32 {
+    pub fn _setTimeout(self: *Window, cbk: Callback, delay: ?u32, state: *SessionState) !u32 {
         if (self.timeoutid >= self.timeoutids.len) return error.TooMuchTimeout;
 
         const ddelay: u63 = delay orelse 0;
@@ -128,7 +128,7 @@ pub const Window = struct {
         return self.timeoutid;
     }
 
-    pub fn _clearTimeout(self: *Window, state: *SessionState, id: u32) !void {
+    pub fn _clearTimeout(self: *Window, id: u32, state: *SessionState) !void {
         // I do would prefer return an error in this case, but it seems some JS
         // uses invalid id, in particular id 0.
         // So we silently ignore invalid id for now.
