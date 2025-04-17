@@ -37,8 +37,6 @@ const BUFFER_LEN = 32 * 1024;
 // The longest individual header line that we support
 const MAX_HEADER_LINE_LEN = 4096;
 
-const HeaderList = std.ArrayListUnmanaged(std.http.Header);
-
 // Thread-safe. Holds our root certificate, connection pool and state pool
 // Used to create Requests.
 pub const Client = struct {
@@ -114,7 +112,7 @@ pub const Request = struct {
     arena: Allocator,
 
     // List of request headers
-    headers: HeaderList,
+    headers: std.ArrayListUnmanaged(std.http.Header),
 
     // Used to limit the # of redirects we'll follow
     _redirect_count: u16,
@@ -1438,10 +1436,11 @@ const Reader = struct {
 pub const ResponseHeader = struct {
     status: u16 = 0,
     keepalive: bool = false,
-    headers: HeaderList = .{},
+    headers: std.ArrayListUnmanaged(Header) = .{},
 
-    // Stored header has already been lower-cased, we expect name to be lowercased
-    pub fn get(self: *const ResponseHeader, name: []const u8) ?[]const u8 {
+    // Stored header has already been lower-cased
+    // `name` parameter should be passed in lower-cased
+    pub fn get(self: *const ResponseHeader, name: []const u8) ?[]u8 {
         for (self.headers.items) |h| {
             if (std.mem.eql(u8, name, h.name)) {
                 return h.value;
@@ -1463,12 +1462,23 @@ pub const ResponseHeader = struct {
     }
 };
 
+// We don't want to use std.http.Header, because the value is `[]const u8`.
+// We _could_ use it and @constCast, but this gives us more safety.
+// The main reason we want to do this is that a caller could lower-case the
+// value in-place.
+// The value (and key) are both safe to mutate because they're cloned from
+// the byte stream by our arena.
+const Header = struct {
+    name: []const u8,
+    value: []u8,
+};
+
 const HeaderIterator = struct {
     index: usize,
     name: []const u8,
-    headers: HeaderList,
+    headers: std.ArrayListUnmanaged(Header),
 
-    pub fn next(self: *HeaderIterator) ?[]const u8 {
+    pub fn next(self: *HeaderIterator) ?[]u8 {
         const name = self.name;
         const index = self.index;
         for (self.headers.items[index..], index..) |h, i| {
@@ -2108,11 +2118,13 @@ test "HttpClient: HeaderIterator" {
         try testing.expectEqual(null, it.next());
     }
 
-    try header.headers.append(testing.allocator, .{ .name = "h1", .value = "value1" });
-    try header.headers.append(testing.allocator, .{ .name = "h2", .value = "value2" });
-    try header.headers.append(testing.allocator, .{ .name = "h3", .value = "value3" });
-    try header.headers.append(testing.allocator, .{ .name = "h1", .value = "value4" });
-    try header.headers.append(testing.allocator, .{ .name = "h1", .value = "value5" });
+    // @constCast is totally unsafe here, but it's just a test, and we know
+    // nothing is going to write to it, so it works.
+    try header.headers.append(testing.allocator, .{ .name = "h1", .value = @constCast("value1") });
+    try header.headers.append(testing.allocator, .{ .name = "h2", .value = @constCast("value2") });
+    try header.headers.append(testing.allocator, .{ .name = "h3", .value = @constCast("value3") });
+    try header.headers.append(testing.allocator, .{ .name = "h1", .value = @constCast("value4") });
+    try header.headers.append(testing.allocator, .{ .name = "h1", .value = @constCast("value5") });
 
     {
         var it = header.iterate("nope");
@@ -2149,7 +2161,7 @@ const TestResponse = struct {
     keepalive: ?bool,
     arena: std.heap.ArenaAllocator,
     body: std.ArrayListUnmanaged(u8),
-    headers: std.ArrayListUnmanaged(std.http.Header),
+    headers: std.ArrayListUnmanaged(Header),
 
     fn init() TestResponse {
         return .{
