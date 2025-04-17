@@ -97,6 +97,8 @@ fn addScriptToEvaluateOnNewDocument(cmd: anytype) !void {
     }, .{});
 }
 
+const parser = @import("netsurf");
+
 // TODO: hard coded method
 /// @isolated_world The current understanding is that an isolated world should be a separate isolate and context
 /// that would live in the BrowserContext. We think Puppetee creates this to be able to create variables
@@ -113,31 +115,59 @@ fn createIsolatedWorld(cmd: anytype) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const session_id = cmd.input.session_id orelse return error.SessionIdRequired;
+    // const session_id = cmd.input.session_id orelse return error.SessionIdRequired;
 
     const name_copy = try bc.session.arena.allocator().dupe(u8, params.worldName);
-    const frame_id_copy = try bc.session.arena.allocator().dupe(u8, params.frameId);
-    const fake_id = 0;
+    // const frame_id_copy = try bc.session.arena.allocator().dupe(u8, params.frameId);
+    // const fake_id = 0;
 
-    bc.fake_isolatedworld = .{
-        .id = fake_id,
-        .origin = "", // The 2nd time chrome sends this it is "://"
-        .name = name_copy,
-        // TODO: hard coded ID, should change when context is recreated
-        .uniqueId = "7102379147004877974.3265385113993241162",
-        .auxData = .{
-            .isDefault = false,
-            .type = "isolated",
-            .frameId = frame_id_copy,
-        },
-    };
+    // Create the auxdata json from
+    const aux_json = try std.fmt.allocPrint(
+        cmd.arena,
+        "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}",
+        .{params.frameId},
+    );
+
+    try bc.session.env.init_isolated_world(name_copy);
+    bc.session.env.isolated_world.?.js_ctx.enter();
+
+    //
+
+    const user_agent = "Lightpanda/1.0";
+    var window = @import("../../html/window.zig").Window.create(null, .{ .agent = user_agent });
+    // const doc = @as(*parser.DocumentHTML, @ptrCast(bc.session.page.?.doc.?));
+    // try window.replaceDocument(doc);
+    window.setStorageShelf(
+        try bc.session.storage_shed.getOrPut("null"), //(try self.origin()) orelse "null"),
+    );
+    try bc.session.env.isolatedBindGlobal(window);
+    bc.session.env.js_ctx.?.exit();
+
+    //
+
+    bc.session.inspector.contextCreated(
+        &bc.session.env,
+        "",
+        "",
+        aux_json,
+        false,
+    );
+
+    // bc.fake_isolatedworld = .{
+    //     .id = fake_id,
+    //     .origin = "", // The 2nd time chrome sends this it is "://"
+    //     .name = name_copy,
+    //     // TODO: hard coded ID, should change when context is recreated
+    //     .uniqueId = "7102379147004877974.3265385113993241162",
+    //     .auxData = ,
+    // };
 
     // Inform the client of the creation of the isolated world and its ID.
     // Note: Puppeteer uses the ID from this event and actually ignores the executionContextId return value
-    try cmd.sendEvent("Runtime.executionContextCreated", .{ .context = bc.fake_isolatedworld }, .{ .session_id = session_id });
+    // try cmd.sendEvent("Runtime.executionContextCreated", .{ .context = bc.fake_isolatedworld }, .{ .session_id = session_id });
 
     try cmd.sendResult(.{
-        .executionContextId = fake_id,
+        .executionContextId = bc.session.env.isolated_world.?.js_ctx.debugContextId(),
     }, .{});
 }
 
@@ -220,7 +250,23 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageEvent) !void {
     // When the execution contexts are cleared the client expect us to send executionContextCreated events with the new ID for each context.
     // Since we do not actually maintain an isolated context we just send the same message as we did initially.
     // The contextCreated message is send for the main context by the session by calling the inspector.contextCreated when navigating.
-    if (bc.fake_isolatedworld) |isolatedworld| try cdp.sendEvent("Runtime.executionContextCreated", .{ .context = isolatedworld }, .{ .session_id = session_id });
+    // if (bc.fake_isolatedworld) |isolatedworld| try cdp.sendEvent("Runtime.executionContextCreated", .{ .context = isolatedworld }, .{ .session_id = session_id });
+
+    if (bc.session.env.isolated_world != null) {
+        const aux_json = try std.fmt.allocPrint(
+            bc.session.arena.allocator(), // TODO change this
+            "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}",
+            .{bc.target_id.?}, // TODO check this
+        );
+
+        bc.session.inspector.contextCreated(
+            &bc.session.env,
+            "",
+            "",
+            aux_json,
+            false,
+        );
+    }
 }
 
 pub fn pageNavigated(bc: anytype, event: *const Notification.PageEvent) !void {

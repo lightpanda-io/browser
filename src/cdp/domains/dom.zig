@@ -127,17 +127,22 @@ fn resolveNode(cmd: anytype) !void {
         objectGroup: ?[]const u8 = null,
         executionContextId: ?u32 = null,
     })) orelse return error.InvalidParams;
-    if (params.nodeId == null or params.backendNodeId != null or params.executionContextId != null) {
-        return error.NotYetImplementedParams;
-    }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const node = bc.node_registry.lookup_by_id.get(params.nodeId.?) orelse return error.UnknownNode;
+    // if (params.executionContextId) |context_id| {
+    //     if (context_id == 0) {
+    //         std.debug.print("resolveNode: executionContextId is 0, we do not yet maintain an isolated world", .{});
+    //     } else std.debug.assert(bc.session.env.js_ctx.?.debugContextId() == context_id);
+    // }
+    const use_default = if (params.executionContextId) |context_id| bc.session.env.js_ctx.?.debugContextId() == context_id else false;
+    const input_node_id = if (params.nodeId) |node_id| node_id else params.backendNodeId orelse return error.InvalidParams;
+
+    const node = bc.node_registry.lookup_by_id.get(input_node_id) orelse return error.UnknownNode;
 
     // node._node is a *parser.Node we need this to be able to find its most derived type e.g. Node -> Element -> HTMLElement
     // So we use the Node.Union when retrieve the value from the environment
-    const jsValue = try bc.session.env.findOrAddValue(try dom_node.Node.toInterface(node._node));
-    const remoteObject = try bc.session.inspector.getRemoteObject(&bc.session.env, jsValue, params.objectGroup orelse "");
+    const jsValue = try bc.session.env.findOrAddValue(try dom_node.Node.toInterface(node._node), use_default);
+    const remoteObject = try bc.session.inspector.getRemoteObject(&bc.session.env, jsValue, params.objectGroup orelse "", use_default);
     defer remoteObject.deinit();
 
     const arena = cmd.arena;
