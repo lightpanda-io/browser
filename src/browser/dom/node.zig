@@ -91,6 +91,11 @@ pub const Node = struct {
     pub const _DOCUMENT_TYPE_NODE = @intFromEnum(parser.NodeType.document_type);
     pub const _DOCUMENT_FRAGMENT_NODE = @intFromEnum(parser.NodeType.document_fragment);
 
+    // These 3 are deprecated, but both Chrome and Firefox still expose them
+    pub const _ENTITY_REFERENCE_NODE = @intFromEnum(parser.NodeType.entity_reference);
+    pub const _ENTITY_NODE = @intFromEnum(parser.NodeType.entity);
+    pub const _NOTATION_NODE = @intFromEnum(parser.NodeType.notation);
+
     // JS funcs
     // --------
 
@@ -612,5 +617,8 @@ test "Browser.DOM.node" {
         .{ "Node.DOCUMENT_NODE", "9" },
         .{ "Node.DOCUMENT_TYPE_NODE", "10" },
         .{ "Node.DOCUMENT_FRAGMENT_NODE", "11" },
+        .{ "Node.ENTITY_REFERENCE_NODE", "5"},
+        .{ "Node.ENTITY_NODE", "6"},
+        .{ "Node.NOTATION_NODE", "12"},
     }, .{});
 }
