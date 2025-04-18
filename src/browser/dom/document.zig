@@ -39,7 +39,7 @@ const DOMImplementation = @import("implementation.zig").DOMImplementation;
 pub const Document = struct {
     pub const Self = parser.Document;
     pub const prototype = *Node;
-    pub const subtype = "node";
+    pub const subtype = .node;
 
     pub fn constructor(state: *const SessionState) !*parser.DocumentHTML {
         const doc = try parser.documentCreateDocument(

@@ -96,9 +96,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 @compileError(std.fmt.comptimePrint("Prototype '{s}' for type '{s} must be a pointer", .{ @typeName(Struct.prototype), @typeName(Struct) }));
             }
 
-            @setEvalBranchQuota(40_000); // The number of branches increases as we get more structs with the subtype field
-            const subtype: ?SubType =
-                if (@hasDecl(Struct, "subtype")) std.meta.stringToEnum(SubType, Struct.subtype) else null;
+            const subtype: ?SubType = if (@hasDecl(Struct, "subtype")) Struct.subtype else null;
 
             const R = Receiver(@field(types, s.name));
             fields[i] = .{
