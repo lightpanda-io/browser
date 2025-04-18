@@ -27,6 +27,7 @@ const SessionState = @import("../env.zig").SessionState;
 pub const Comment = struct {
     pub const Self = parser.Comment;
     pub const prototype = *CharacterData;
+    pub const subtype = "node";
 
     pub fn constructor(data: ?[]const u8, state: *const SessionState) !*parser.Comment {
         return parser.documentCreateComment(

@@ -28,6 +28,7 @@ pub const ProcessingInstruction = struct {
     // TODO for libdom processing instruction inherit from node.
     // But the spec says it must inherit from CDATA.
     pub const prototype = *Node;
+    pub const subtype = "node";
 
     pub fn get_target(self: *parser.ProcessingInstruction) ![]const u8 {
         // libdom stores the ProcessingInstruction target in the node's name.

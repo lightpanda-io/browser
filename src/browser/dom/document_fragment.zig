@@ -27,6 +27,7 @@ const Node = @import("node.zig").Node;
 pub const DocumentFragment = struct {
     pub const Self = parser.DocumentFragment;
     pub const prototype = *Node;
+    pub const subtype = "node";
 
     pub fn constructor(state: *const SessionState) !*parser.DocumentFragment {
         return parser.documentCreateDocumentFragment(
