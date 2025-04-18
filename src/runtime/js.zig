@@ -1369,6 +1369,15 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                     generate_preview,
                 );
             }
+
+            // Gets a value by object ID regardless of which context it is in.
+            // unwrapping the object also tells us the context, for now we assume it is always the default one.
+            // The executor argument is likely to change to somthing to allow us to find the right Executer with the given context
+            pub fn getValueByObjectId(self: Inspector, allocator: std.mem.Allocator, executor: *const Executor, object_id: []const u8) !Value {
+                const unwrapped = try self.session.unwrapObject(allocator, object_id);
+                // std.debug.assert(executor.context.handle == unwrapped.context.handle);
+                return .{ .value = unwrapped.value, .executor = executor }; // The values context and groupId are not used here
+            }
         };
 
         pub const RemoteObject = v8.RemoteObject;
@@ -1381,6 +1390,10 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             pub fn toString(self: Value, allocator: Allocator) ![]const u8 {
                 const executor = self.executor;
                 return valueToString(allocator, self.value, executor.isolate, executor.context);
+            }
+
+            pub fn taggedAnyOpaque(self: Value) ?*TaggedAnyOpaque {
+                return getTaggedAnyOpaque(self.value);
             }
         };
 
