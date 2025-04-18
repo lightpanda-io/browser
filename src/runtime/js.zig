@@ -1359,14 +1359,23 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 self.session.dispatchProtocolMessage(self.isolate, msg);
             }
 
+            // From CDP docs
+            // https://chromedevtools.github.io/devtools-protocol/tot/Runtime/#type-ExecutionContextDescription
+            // ----
+            // - name: Human readable name describing given context.
+            // - origin: Execution context origin (ie. URL who initialised the request)
+            // - auxData: Embedder-specific auxiliary data likely matching
+            // {isDefault: boolean, type: 'default'|'isolated'|'worker', frameId: string}
+            // - is_default_context: Whether the execution context is default, should match the auxData
             pub fn contextCreated(
                 self: *const Inspector,
                 executor: *const Executor,
                 name: []const u8,
                 origin: []const u8,
                 aux_data: ?[]const u8,
+                is_default_context: bool,
             ) void {
-                self.inner.contextCreated(executor.context, name, origin, aux_data);
+                self.inner.contextCreated(executor.context, name, origin, aux_data, is_default_context);
             }
 
             // Retrieves the RemoteObject for a given value.
