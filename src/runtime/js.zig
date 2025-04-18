@@ -691,6 +691,19 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                         return value.func.toValue();
                     }
 
+                    if (s.is_tuple) {
+                        // return the tuple struct as an array
+                        var js_arr = v8.Array.init(isolate, @intCast(s.fields.len));
+                        var js_obj = js_arr.castTo(v8.Object);
+                        inline for (s.fields, 0..) |f, i| {
+                            const js_val = try zigValueToJs(templates, isolate, context, @field(value, f.name));
+                            if (js_obj.setValueAtIndex(context, @intCast(i), js_val) == false) {
+                                return error.FailedToCreateArray;
+                            }
+                        }
+                        return js_obj.toValue();
+                    }
+
                     // return the struct as a JS object
                     const js_obj = v8.Object.init(isolate);
                     inline for (s.fields) |f| {

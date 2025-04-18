@@ -20,7 +20,7 @@ const DOMException = @import("exceptions.zig").DOMException;
 const EventTarget = @import("event_target.zig").EventTarget;
 const DOMImplementation = @import("implementation.zig").DOMImplementation;
 const NamedNodeMap = @import("namednodemap.zig").NamedNodeMap;
-const DOMTokenList = @import("token_list.zig").DOMTokenList;
+const DOMTokenList = @import("token_list.zig");
 const NodeList = @import("nodelist.zig");
 const Node = @import("node.zig");
 const MutationObserver = @import("mutation_observer.zig");
@@ -30,7 +30,7 @@ pub const Interfaces = .{
     EventTarget,
     DOMImplementation,
     NamedNodeMap,
-    DOMTokenList,
+    DOMTokenList.Interfaces,
     NodeList.Interfaces,
     Node.Node,
     Node.Interfaces,
