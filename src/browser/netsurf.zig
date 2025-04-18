@@ -1697,6 +1697,11 @@ pub fn tokenListGetValue(l: *TokenList) !?[]const u8 {
     return strToData(res.?);
 }
 
+pub fn tokenListSetValue(l: *TokenList, value: []const u8) !void {
+    const err = c.dom_tokenlist_set_value(l, try strFromData(value));
+    try DOMErr(err);
+}
+
 // ElementHTML
 pub const ElementHTML = c.dom_html_element;
 

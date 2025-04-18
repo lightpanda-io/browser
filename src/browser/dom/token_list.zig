@@ -19,8 +19,21 @@
 const std = @import("std");
 
 const parser = @import("../netsurf.zig");
+const iterator = @import("../iterator/iterator.zig");
 
+const Callback = @import("../env.zig").Callback;
+const JsObject = @import("../env.zig").JsObject;
+const SessionState = @import("../env.zig").SessionState;
 const DOMException = @import("exceptions.zig").DOMException;
+
+const log = std.log.scoped(.token_list);
+
+pub const Interfaces = .{
+    DOMTokenList,
+    DOMTokenListIterable,
+    TokenListEntriesIterator,
+    TokenListEntriesIterator.Iterable,
+};
 
 // https://dom.spec.whatwg.org/#domtokenlist
 pub const DOMTokenList = struct {
@@ -98,7 +111,60 @@ pub const DOMTokenList = struct {
     }
 
     pub fn get_value(self: *parser.TokenList) !?[]const u8 {
-        return try parser.tokenListGetValue(self);
+        return (try parser.tokenListGetValue(self)) orelse "";
+    }
+
+    pub fn set_value(self: *parser.TokenList, value: []const u8) !void {
+        return parser.tokenListSetValue(self, value);
+    }
+
+    pub fn _toString(self: *parser.TokenList) ![]const u8 {
+        return (try get_value(self)) orelse "";
+    }
+
+    pub fn _keys(self: *parser.TokenList) !iterator.U32Iterator {
+        return .{ .length = try get_length(self) };
+    }
+
+    pub fn _values(self: *parser.TokenList) DOMTokenListIterable {
+        return DOMTokenListIterable.init(.{ .token_list = self });
+    }
+
+    pub fn _entries(self: *parser.TokenList) TokenListEntriesIterator {
+        return TokenListEntriesIterator.init(.{ .token_list = self });
+    }
+
+    pub fn _symbol_iterator(self: *parser.TokenList) DOMTokenListIterable {
+        return _values(self);
+    }
+
+    // TODO handle thisArg
+    pub fn _forEach(self: *parser.TokenList, cbk: Callback, this_arg: JsObject) !void {
+        var entries = _entries(self);
+        while (try entries._next()) |entry| {
+            var result: Callback.Result = undefined;
+            cbk.tryCallWithThis(this_arg, .{ entry.@"1", entry.@"0", self }, &result) catch {
+                log.err("callback error: {s}", .{result.exception});
+                log.debug("stack:\n{s}", .{result.stack orelse "???"});
+            };
+        }
+    }
+};
+
+const DOMTokenListIterable = iterator.Iterable(Iterator, "DOMTokenListIterable");
+const TokenListEntriesIterator = iterator.NumericEntries(Iterator, "TokenListEntriesIterator");
+
+pub const Iterator = struct {
+    index: u32 = 0,
+    token_list: *parser.TokenList,
+
+    // used when wrapped in an iterator.NumericEntries
+    pub const Error = parser.DOMError;
+
+    pub fn _next(self: *Iterator) !?[]const u8 {
+        const index = self.index;
+        self.index = index + 1;
+        return DOMTokenList._item(self.token_list, index);
     }
 };
 
@@ -149,5 +215,30 @@ test "Browser.DOM.TokenList" {
         .{ "cl4.value", "empty nok" },
         .{ "cl4.replace('nok', 'ok')", "true" },
         .{ "cl4.value", "empty ok" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "let cl5 = gs.classList", "undefined" },
+        .{ "let keys = [...cl5.keys()]", "undefined" },
+        .{ "keys.length", "2" },
+        .{ "keys[0]", "0" },
+        .{ "keys[1]", "1" },
+
+        .{ "let values = [...cl5.values()]", "undefined" },
+        .{ "values.length", "2" },
+        .{ "values[0]", "empty" },
+        .{ "values[1]", "ok" },
+
+        .{ "let entries = [...cl5.entries()]", "undefined" },
+        .{ "entries.length", "2" },
+        .{ "entries[0]", "0,empty" },
+        .{ "entries[1]", "1,ok" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "let cl6 = gs.classList", "undefined" },
+        .{ "cl6.value = 'a  b  ccc'", "a  b  ccc" },
+        .{ "cl6.value", "a  b  ccc" },
+        .{ "cl6.toString()", "a  b  ccc" },
     }, .{});
 }
