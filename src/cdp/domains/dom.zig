@@ -30,6 +30,7 @@ pub fn processMessage(cmd: anytype) !void {
         getSearchResults,
         discardSearchResults,
         resolveNode,
+        describeNode,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -39,6 +40,7 @@ pub fn processMessage(cmd: anytype) !void {
         .getSearchResults => return getSearchResults(cmd),
         .discardSearchResults => return discardSearchResults(cmd),
         .resolveNode => return resolveNode(cmd),
+        .describeNode => return describeNode(cmd),
     }
 }
 
@@ -149,6 +151,37 @@ fn resolveNode(cmd: anytype) !void {
         .description = try remote_object.getDescription(arena),
         .objectId = try remote_object.getObjectId(arena),
     } }, .{});
+}
+
+fn describeNode(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        nodeId: ?Node.Id = null,
+        backendNodeId: ?Node.Id = null,
+        objectId: ?[]const u8 = null,
+        depth: u32 = 1,
+        pierce: bool = false,
+    })) orelse return error.InvalidParams;
+    if (params.backendNodeId != null or params.depth != 1 or params.pierce) {
+        return error.NotYetImplementedParams;
+    }
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    if (params.nodeId != null) {
+        const node = bc.node_registry.lookup_by_id.get(params.nodeId.?) orelse return error.NodeNotFound;
+        return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{}) }, .{});
+    } else if (params.objectId != null) {
+
+        // Retrieve the object from which ever context it is in.
+        const js_value = try bc.session.inspector.getValueByObjectId(cmd.arena, bc.session.executor, params.objectId.?);
+        const entry = js_value.taggedAnyOpaque() orelse return error.ObjectIdIsNotANode;
+        const subtype = entry.subtype orelse return error.ObjectIdIsNotANode;
+        if (subtype != .node) return error.ObjectIdIsNotANode;
+
+        const node = try bc.node_registry.register(@ptrCast(entry.ptr));
+        return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{}) }, .{});
+    }
+    return error.MissingParams;
 }
 
 const testing = @import("../testing.zig");
