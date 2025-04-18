@@ -60,7 +60,7 @@ pub const Union = generate.Union(Interfaces);
 pub const Node = struct {
     pub const Self = parser.Node;
     pub const prototype = *EventTarget;
-    pub const subtype = "node";
+    pub const subtype = .node;
 
     pub fn toInterface(node: *parser.Node) !Union {
         return switch (try parser.nodeType(node)) {

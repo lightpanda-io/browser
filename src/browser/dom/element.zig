@@ -37,7 +37,7 @@ const DOMException = @import("exceptions.zig").DOMException;
 pub const Element = struct {
     pub const Self = parser.Element;
     pub const prototype = *Node;
-    pub const subtype = "node";
+    pub const subtype = .node;
 
     pub const DOMRect = struct {
         x: f64,

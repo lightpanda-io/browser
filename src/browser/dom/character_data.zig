@@ -38,7 +38,7 @@ pub const Interfaces = .{
 pub const CharacterData = struct {
     pub const Self = parser.CharacterData;
     pub const prototype = *Node;
-    pub const subtype = "node";
+    pub const subtype = .node;
 
     // JS funcs
     // --------
