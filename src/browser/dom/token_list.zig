@@ -22,6 +22,7 @@ const parser = @import("../netsurf.zig");
 const iterator = @import("../iterator/iterator.zig");
 
 const Callback = @import("../env.zig").Callback;
+const JsObject = @import("../env.zig").JsObject;
 const SessionState = @import("../env.zig").SessionState;
 const DOMException = @import("exceptions.zig").DOMException;
 
@@ -138,11 +139,11 @@ pub const DOMTokenList = struct {
     }
 
     // TODO handle thisArg
-    pub fn _forEach(self: *parser.TokenList, cbk: Callback) !void {
+    pub fn _forEach(self: *parser.TokenList, cbk: Callback, this_arg: JsObject) !void {
         var entries = _entries(self);
         while (try entries._next()) |entry| {
             var result: Callback.Result = undefined;
-            cbk.tryCall(.{ entry.@"1", entry.@"0", self }, &result) catch {
+            cbk.tryCallWithThis(this_arg, .{ entry.@"1", entry.@"0", self }, &result) catch {
                 log.err("callback error: {s}", .{result.exception});
                 log.debug("stack:\n{s}", .{result.stack orelse "???"});
             };

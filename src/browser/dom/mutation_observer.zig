@@ -22,7 +22,7 @@ const parser = @import("../netsurf.zig");
 const SessionState = @import("../env.zig").SessionState;
 
 const Env = @import("../env.zig").Env;
-const JsObject = @import("../env.zig").JsObject;
+const JsThis = @import("../env.zig").JsThis;
 const NodeList = @import("nodelist.zig").NodeList;
 
 pub const Interfaces = .{
@@ -184,9 +184,9 @@ pub const MutationRecords = struct {
             return null;
         };
     }
-    pub fn postAttach(self: *const MutationRecords, js_obj: JsObject) !void {
+    pub fn postAttach(self: *const MutationRecords, js_this: JsThis) !void {
         if (self.first) |mr| {
-            try js_obj.set("0", mr);
+            try js_this.set("0", mr);
         }
     }
 };

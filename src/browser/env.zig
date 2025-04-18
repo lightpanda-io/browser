@@ -21,6 +21,7 @@ const Interfaces = generate.Tuple(.{
     @import("xmlserializer/xmlserializer.zig").Interfaces,
 });
 
+pub const JsThis = Env.JsThis;
 pub const JsObject = Env.JsObject;
 pub const Callback = Env.Callback;
 pub const Env = js.Env(*SessionState, Interfaces{});

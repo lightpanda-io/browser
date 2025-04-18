@@ -902,6 +902,27 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 _ = self.scope_arena.reset(.{ .retain_with_limit = 1024 * 64 });
             }
 
+            // Given an anytype, turns it into a v8.Object. The anytype could be:
+            // 1 - A V8.object already
+            // 2 - Our this JsObject wrapper around a V8.Object
+            // 3 - A zig instance that has previously been given to V8
+            //     (i.e., the value has to be known to the executor)
+            fn valueToExistingObject(self: *const Executor, value: anytype) !v8.Object {
+                if (@TypeOf(value) == v8.Object) {
+                    return value;
+                }
+
+                if (@TypeOf(value) == JsObject) {
+                    return value.js_obj;
+                }
+
+                const persistent_object = self.scope.?.identity_map.get(@intFromPtr(value)) orelse {
+                    return error.InvalidThisForCallback;
+                };
+
+                return persistent_object.castToObject();
+            }
+
             // Wrap a v8.Value, largely so that we can provide a convenient
             // toString function
             fn createValue(self: *const Executor, value: v8.Value) Value {
@@ -1003,7 +1024,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                         gop.value_ptr.* = js_persistent;
 
                         if (@hasDecl(ptr.child, "postAttach")) {
-                            const obj_wrap = JsObject{ .js_obj = js_obj, .executor = self };
+                            const obj_wrap = JsThis{ .obj = .{ .js_obj = js_obj, .executor = self } };
                             switch (@typeInfo(@TypeOf(ptr.child.postAttach)).@"fn".params.len) {
                                 2 => try value.postAttach(obj_wrap),
                                 3 => try value.postAttach(self.state, obj_wrap),
@@ -1094,7 +1115,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         pub const Callback = struct {
             id: usize,
             executor: *Executor,
-            this: ?v8.Object = null,
+            _this: ?v8.Object = null,
             func: PersistentFunction,
 
             // We use this when mapping a JS value to a Zig object. We can't
@@ -1110,22 +1131,23 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             };
 
             pub fn setThis(self: *Callback, value: anytype) !void {
-                const persistent_object = self.executor.scope.?.identity_map.get(@intFromPtr(value)) orelse {
-                    return error.InvalidThisForCallback;
-                };
-                self.this = persistent_object.castToObject();
+                self._this = try self.executor.valueToExistingObject(value);
             }
 
             pub fn call(self: *const Callback, args: anytype) !void {
-                return self.callWithThis(self.this orelse self.executor.context.getGlobal(), args);
+                return self.callWithThis(self.getThis(), args);
             }
 
             pub fn tryCall(self: *const Callback, args: anytype, result: *Result) !void {
+                return self.tryCallWithThis(self.getThis(), args, result);
+            }
+
+            pub fn tryCallWithThis(self: *const Callback, this: anytype, args: anytype, result: *Result) !void {
                 var try_catch: TryCatch = undefined;
                 try_catch.init(self.executor);
                 defer try_catch.deinit();
 
-                self.call(args) catch |err| {
+                self.callWithThis(this, args) catch |err| {
                     if (try_catch.hasCaught()) {
                         const allocator = self.executor.scope.?.call_arena;
                         result.stack = try_catch.stack(allocator) catch null;
@@ -1138,8 +1160,10 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 };
             }
 
-            fn callWithThis(self: *const @This(), js_this: v8.Object, args: anytype) !void {
+            pub fn callWithThis(self: *const Callback, this: anytype, args: anytype) !void {
                 const executor = self.executor;
+
+                const js_this = try executor.valueToExistingObject(this);
 
                 const aargs = if (comptime @typeInfo(@TypeOf(args)) == .null) struct {}{} else args;
                 const fields = @typeInfo(@TypeOf(aargs)).@"struct".fields;
@@ -1154,8 +1178,12 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 }
             }
 
+            fn getThis(self: *const Callback) v8.Object {
+                return self._this orelse self.executor.context.getGlobal();
+            }
+
             // debug/helper to print the source of the JS callback
-            fn printFunc(self: *const @This()) !void {
+            fn printFunc(self: Callback) !void {
                 const executor = self.executor;
                 const value = self.func.castToFunction().toValue();
                 const src = try valueToString(executor.call_arena.allocator(), value, executor.isolate, executor.context);
@@ -1195,6 +1223,28 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 if (!self.js_obj.setValue(executor.context, js_key, js_value)) {
                     return error.FailedToSet;
                 }
+            }
+        };
+
+        // This only exists so that we know whether a function wants the opaque
+        // JS argument (JsObject), or if it wants the receiver as an opaque
+        // value.
+        // JsObject is normally used when a method wants an opaque JS object
+        // that it'll pass into a callback.
+        // JsThis is used when the function wants to do advanced manipulation
+        // of the v8.Object bound to the instance. For example, postAttach is an
+        // example of using JsThis.
+        pub const JsThis = struct {
+            obj: JsObject,
+
+            const _JSTHIS_ID_KLUDGE = true;
+
+            pub fn setIndex(self: JsThis, index: usize, value: anytype) !void {
+                return self.obj.setIndex(index, value);
+            }
+
+            pub fn set(self: JsThis, key: []const u8, value: anytype) !void {
+                return self.obj.set(key, value);
             }
         };
 
@@ -1761,14 +1811,14 @@ fn Caller(comptime E: type) type {
                     break :blk params[0 .. params.len - 1];
                 }
 
-                // If the last parameter is a JsObject, set it, and exclude it
+                // If the last parameter is a special JsThis, set it, and exclude it
                 // from our params slice, because we don't want to bind it to
                 // a JS argument
-                if (comptime isJsObject(params[params.len - 1].type.?)) {
-                    @field(args, std.fmt.comptimePrint("{d}", .{params.len - 1 + offset})) = .{
-                        .handle = info.getThis(),
+                if (comptime isJsThis(params[params.len - 1].type.?)) {
+                    @field(args, std.fmt.comptimePrint("{d}", .{params.len - 1 + offset})) = .{ .obj = .{
+                        .js_obj = info.getThis(),
                         .executor = self.executor,
-                    };
+                    } };
 
                     // AND the 2nd last parameter is state
                     if (params.len > 1 and comptime isState(params[params.len - 2].type.?)) {
@@ -1827,9 +1877,9 @@ fn Caller(comptime E: type) type {
                 }
 
                 if (comptime isState(param.type.?)) {
-                    @compileError("State must be the last parameter (or 2nd last if there's a JsObject): " ++ named_function.full_name);
-                } else if (comptime isJsObject(param.type.?)) {
-                    @compileError("JsObject must be the last parameter: " ++ named_function.full_name);
+                    @compileError("State must be the last parameter (or 2nd last if there's a JsThis): " ++ named_function.full_name);
+                } else if (comptime isJsThis(param.type.?)) {
+                    @compileError("JsThis must be the last parameter: " ++ named_function.full_name);
                 } else if (i >= js_parameter_count) {
                     if (@typeInfo(param.type.?) != .optional) {
                         return error.InvalidArgument;
@@ -1929,9 +1979,20 @@ fn Caller(comptime E: type) type {
                     if (!js_value.isObject()) {
                         return error.InvalidArgument;
                     }
+
+                    const js_obj = js_value.castTo(v8.Object);
+
+                    if (comptime isJsObject(T)) {
+                        // Caller wants an opaque JsObject. Probably a parameter
+                        // that it needs to pass back into a callback
+                        return E.JsObject{
+                            .js_obj = js_obj,
+                            .executor = self.executor,
+                        };
+                    }
+
                     const context = self.context;
                     const isolate = self.isolate;
-                    const js_obj = js_value.castTo(v8.Object);
 
                     var value: T = undefined;
                     inline for (s.fields) |field| {
@@ -2016,6 +2077,10 @@ fn Caller(comptime E: type) type {
 
         fn isJsObject(comptime T: type) bool {
             return @typeInfo(T) == .@"struct" and @hasDecl(T, "_JSOBJECT_ID_KLUDGE");
+        }
+
+        fn isJsThis(comptime T: type) bool {
+            return @typeInfo(T) == .@"struct" and @hasDecl(T, "_JSTHIS_ID_KLUDGE");
         }
     };
 }
