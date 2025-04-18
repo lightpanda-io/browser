@@ -104,7 +104,7 @@ pub const MutationObserver = struct {
                 arena,
                 "DOMNodeInserted",
                 EventHandler,
-                .{ .cbk = self.cbk, .data = o, .deinitFunc = deinitFunc },
+                .{ .cbk = self.cbk, .ctx = o, .deinitFunc = deinitFunc },
                 false,
             );
             try parser.eventTargetAddEventListener(
@@ -112,7 +112,7 @@ pub const MutationObserver = struct {
                 arena,
                 "DOMNodeRemoved",
                 EventHandler,
-                .{ .cbk = self.cbk, .data = o, .deinitFunc = deinitFunc },
+                .{ .cbk = self.cbk, .ctx = o, .deinitFunc = deinitFunc },
                 false,
             );
         }
@@ -122,7 +122,7 @@ pub const MutationObserver = struct {
                 arena,
                 "DOMAttrModified",
                 EventHandler,
-                .{ .cbk = self.cbk, .data = o, .deinitFunc = deinitFunc },
+                .{ .cbk = self.cbk, .ctx = o, .deinitFunc = deinitFunc },
                 false,
             );
         }
@@ -132,7 +132,7 @@ pub const MutationObserver = struct {
                 arena,
                 "DOMCharacterDataModified",
                 EventHandler,
-                .{ .cbk = self.cbk, .data = o, .deinitFunc = deinitFunc },
+                .{ .cbk = self.cbk, .ctx = o, .deinitFunc = deinitFunc },
                 false,
             );
         }
@@ -142,7 +142,7 @@ pub const MutationObserver = struct {
                 arena,
                 "DOMSubtreeModified",
                 EventHandler,
-                .{ .cbk = self.cbk, .data = o, .deinitFunc = deinitFunc },
+                .{ .cbk = self.cbk, .ctx = o, .deinitFunc = deinitFunc },
                 false,
             );
         }
@@ -261,7 +261,7 @@ const EventHandler = struct {
         return false;
     }
 
-    fn handle(evt: ?*parser.Event, data: parser.EventHandlerData) void {
+    fn handle(evt: ?*parser.Event, data: *const parser.JSEventHandlerData) void {
         if (evt == null) return;
 
         var mrs: MutationRecords = .{};
@@ -277,7 +277,7 @@ const EventHandler = struct {
         const node = parser.eventTargetToNode(et);
 
         // retrieve the observer from the data.
-        const o: *MutationObserver.Observer = @ptrCast(@alignCast(data.data));
+        const o: *MutationObserver.Observer = @ptrCast(@alignCast(data.ctx));
 
         if (!apply(o, node)) return;
 

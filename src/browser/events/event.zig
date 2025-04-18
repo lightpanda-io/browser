@@ -136,7 +136,7 @@ pub const Event = struct {
 };
 
 pub const EventHandler = struct {
-    fn handle(event: ?*parser.Event, data: parser.EventHandlerData) void {
+    fn handle(event: ?*parser.Event, data: *const parser.JSEventHandlerData) void {
         var result: Callback.Result = undefined;
         data.cbk.tryCall(.{if (event) |evt| Event.toInterface(evt) catch unreachable else null}, &result) catch {
             log.err("event handler error: {s}", .{result.exception});

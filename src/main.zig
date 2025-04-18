@@ -102,7 +102,7 @@ pub fn main() !void {
             // page
             const page = try session.createPage(null);
 
-            _ = page.navigate(url, null) catch |err| switch (err) {
+            _ = page.navigate(url, .{}) catch |err| switch (err) {
                 error.UnsupportedUriScheme, error.UriMissingHost => {
                     log.err("'{s}' is not a valid URL ({any})\n", .{ url, err });
                     return args.printUsageAndExit(false);
