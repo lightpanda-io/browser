@@ -127,12 +127,18 @@ fn resolveNode(cmd: anytype) !void {
         objectGroup: ?[]const u8 = null,
         executionContextId: ?u32 = null,
     })) orelse return error.InvalidParams;
-    if (params.nodeId == null or params.backendNodeId != null or params.executionContextId != null) {
-        return error.NotYetImplementedParams;
-    }
-
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const node = bc.node_registry.lookup_by_id.get(params.nodeId.?) orelse return error.UnknownNode;
+
+    var executor = bc.session.executor;
+    if (params.executionContextId) |context_id| {
+        if (executor.context.debugContextId() != context_id) {
+            const isolated_world = bc.isolated_world orelse return error.ContextNotFound;
+            executor = isolated_world.executor;
+            if (executor.context.debugContextId() != context_id) return error.ContextNotFound;
+        }
+    }
+    const input_node_id = if (params.nodeId) |node_id| node_id else params.backendNodeId orelse return error.InvalidParams;
+    const node = bc.node_registry.lookup_by_id.get(input_node_id) orelse return error.UnknownNode;
 
     // node._node is a *parser.Node we need this to be able to find its most derived type e.g. Node -> Element -> HTMLElement
     // So we use the Node.Union when retrieve the value from the environment
