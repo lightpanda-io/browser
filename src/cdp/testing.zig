@@ -55,13 +55,13 @@ const Browser = struct {
         if (self.session != null) {
             return error.MockBrowserSessionAlreadyExists;
         }
-
         const arena = self.arena.allocator();
+        const executor = arena.create(Executor) catch unreachable;
         self.session = try arena.create(Session);
         self.session.?.* = .{
             .page = null,
             .arena = arena,
-            .executor = .{},
+            .executor = executor,
             .inspector = .{},
         };
         return self.session.?;
@@ -78,7 +78,7 @@ const Browser = struct {
 const Session = struct {
     page: ?Page = null,
     arena: Allocator,
-    executor: Executor,
+    executor: *Executor,
     inspector: Inspector,
 
     pub fn currentPage(self: *Session) ?*Page {
@@ -112,7 +112,7 @@ const Executor = struct {};
 const Inspector = struct {
     pub fn getRemoteObject(
         self: *const Inspector,
-        executor: Executor,
+        executor: *Executor,
         group: []const u8,
         value: anytype,
     ) !RemoteObject {
@@ -122,6 +122,27 @@ const Inspector = struct {
         _ = value;
         return RemoteObject{};
     }
+    pub fn getValueByObjectId(self: Inspector, alloc: std.mem.Allocator, executor: *const Executor, object_id: []const u8) !Value {
+        _ = self;
+        _ = alloc;
+        _ = executor;
+        _ = object_id;
+        return .{};
+    }
+};
+const Value = struct {
+    pub fn taggedAnyOpaque(self: Value) ?*TaggedAnyOpaque {
+        _ = self;
+        return null;
+    }
+};
+const TaggedAnyOpaque = struct {
+    ptr: *anyopaque,
+    subtype: ?SubType = .node,
+};
+
+const SubType = enum {
+    node,
 };
 
 const RemoteObject = struct {
