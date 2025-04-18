@@ -710,8 +710,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                     if (un.tag_type) |UnionTagType| {
                         inline for (un.fields) |field| {
                             if (value == @field(UnionTagType, field.name)) {
-                                const tname = @typeName(@TypeOf(value));
-                                _ = tname;
                                 return zigValueToJs(templates, isolate, context, @field(value, field.name));
                             }
                         }
@@ -911,8 +909,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             // we have a v8.Context, we can get the executor.
             fn mapZigInstanceToJs(context: v8.Context, js_obj_or_template: anytype, value: anytype) !PersistentObject {
                 const executor: *Executor = @ptrFromInt(context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
-                const tname = @typeName(@TypeOf(value));
-                _ = tname;
                 return executor._mapZigInstanceToJs(js_obj_or_template, value);
             }
 
@@ -966,8 +962,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                         const isolate = self.isolate;
 
                         if (isEmpty(ptr.child) == false) {
-                            const tname = @typeName(T);
-                            _ = tname;
                             // The TAO contains the pointer ot our Zig instance as
                             // well as any meta data we'll need to use it later.
                             // See the TaggedAnyOpaque struct for more details.
