@@ -20,6 +20,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const v8 = @import("v8");
 
+const SubType = @import("subtype.zig").SubType;
+
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
@@ -72,14 +74,14 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
     // that looks like:
     //
     // const TypeLookup = struct {
-    //     comptime cat: usize = 0,
-    //     comptime owner: usize = 1,
+    //     comptime cat: usize = TypeMeta{.index = 0, ...},
+    //     comptime owner: usize = TypeMeta{.index = 1, ...},
     //     ...
     // }
     //
     // So to get the template index of `owner`, we can do:
     //
-    //  const index_id = @field(type_lookup, @typeName(@TypeOf(res));
+    //  const index_id = @field(type_lookup, @typeName(@TypeOf(res)).index;
     //
     const TypeLookup = comptime blk: {
         var fields: [Types.len]std.builtin.Type.StructField = undefined;
@@ -94,13 +96,16 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 @compileError(std.fmt.comptimePrint("Prototype '{s}' for type '{s} must be a pointer", .{ @typeName(Struct.prototype), @typeName(Struct) }));
             }
 
+            const subtype: ?SubType =
+                if (@hasDecl(Struct, "subtype")) std.meta.stringToEnum(SubType, Struct.subtype) else null;
+
             const R = Receiver(@field(types, s.name));
             fields[i] = .{
                 .name = @typeName(R),
-                .type = usize,
+                .type = TypeMeta,
                 .is_comptime = true,
                 .alignment = @alignOf(usize),
-                .default_value_ptr = @ptrCast(&i),
+                .default_value_ptr = &TypeMeta{ .index = i, .subtype = subtype },
             };
         }
         break :blk @Type(.{ .@"struct" = .{
@@ -135,7 +140,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             if (@hasDecl(Struct, "prototype")) {
                 const TI = @typeInfo(Struct.prototype);
                 const proto_name = @typeName(Receiver(TI.pointer.child));
-                prototype_index = @field(TYPE_LOOKUP, proto_name);
+                prototype_index = @field(TYPE_LOOKUP, proto_name).index;
             }
             table[i] = prototype_index;
         }
@@ -158,7 +163,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         // access to its TunctionTemplate (the thing we need to create an instance
         // of it)
         // I.e.:
-        // const index = @field(TYPE_LOOKUP, @typeName(type_name))
+        // const index = @field(TYPE_LOOKUP, @typeName(type_name)).index
         // const template = templates[index];
         templates: [Types.len]v8.FunctionTemplate,
 
@@ -214,7 +219,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             // Populate our templates lookup. generateClass creates the
             // v8.FunctionTemplate, which we store in our env.templates.
             // The ordering doesn't matter. What matters is that, given a type
-            // we can get its index via: @field(TYPE_LOOKUP, type_name)
+            // we can get its index via: @field(TYPE_LOOKUP, type_name).index
             const templates = &env.templates;
             inline for (Types, 0..) |s, i| {
                 templates[i] = env.generateClass(@field(types, s.name));
@@ -234,7 +239,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                     // Just like we said above, given a type, we can get its
                     // template index.
 
-                    const proto_index = @field(TYPE_LOOKUP, proto_name);
+                    const proto_index = @field(TYPE_LOOKUP, proto_name).index;
                     templates[i].inherit(templates[proto_index]);
                 }
             }
@@ -288,7 +293,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             if (@hasDecl(Global, "prototype")) {
                 const proto_type = Receiver(@typeInfo(Global.prototype).pointer.child);
                 const proto_name = @typeName(proto_type);
-                const proto_index = @field(TYPE_LOOKUP, proto_name);
+                const proto_index = @field(TYPE_LOOKUP, proto_name).index;
                 globals.inherit(templates[proto_index]);
             }
 
@@ -309,7 +314,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                         @compileError("Type '" ++ @typeName(Struct) ++ "' defines an unknown prototype: " ++ proto_name);
                     }
 
-                    const proto_index = @field(TYPE_LOOKUP, proto_name);
+                    const proto_index = @field(TYPE_LOOKUP, proto_name).index;
                     const proto_obj = templates[proto_index].getFunction(context).toObject();
 
                     const self_obj = templates[i].getFunction(context).toObject();
@@ -640,7 +645,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                     .one => {
                         const type_name = @typeName(ptr.child);
                         if (@hasField(TypeLookup, type_name)) {
-                            const template = templates[@field(TYPE_LOOKUP, type_name)];
+                            const template = templates[@field(TYPE_LOOKUP, type_name).index];
                             const js_obj = try Executor.mapZigInstanceToJs(context, template, value);
                             return js_obj.toValue();
                         }
@@ -676,7 +681,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 .@"struct" => |s| {
                     const type_name = @typeName(T);
                     if (@hasField(TypeLookup, type_name)) {
-                        const template = templates[@field(TYPE_LOOKUP, type_name)];
+                        const template = templates[@field(TYPE_LOOKUP, type_name).index];
                         const js_obj = try Executor.mapZigInstanceToJs(context, template, value);
                         return js_obj.toValue();
                     }
@@ -960,10 +965,11 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                             // well as any meta data we'll need to use it later.
                             // See the TaggedAnyOpaque struct for more details.
                             const tao = try scope_arena.create(TaggedAnyOpaque);
+                            const meta = @field(TYPE_LOOKUP, @typeName(ptr.child));
                             tao.* = .{
                                 .ptr = value,
-                                .index = @field(TYPE_LOOKUP, @typeName(ptr.child)),
-                                .sub_type = if (@hasDecl(ptr.child, "sub_type")) ptr.child.sub_type else null,
+                                .index = meta.index,
+                                .subtype = meta.subtype,
                                 .offset = if (@typeInfo(ptr.child) != .@"opaque" and @hasField(ptr.child, "proto")) @offsetOf(ptr.child, "proto") else -1,
                             };
 
@@ -1345,7 +1351,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
 
             const op = js_obj.getInternalField(0).castTo(v8.External).get();
             const toa: *TaggedAnyOpaque = @alignCast(@ptrCast(op));
-            const expected_type_index = @field(TYPE_LOOKUP, type_name);
+            const expected_type_index = @field(TYPE_LOOKUP, type_name).index;
 
             var type_index = toa.index;
             if (type_index == expected_type_index) {
@@ -1378,6 +1384,26 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         }
     };
 }
+
+// We'll create a struct with all the types we want to bind to JavaScript. The
+// fields for this struct will be the type names. The values, will be an
+// instance of this struct.
+// const TypeLookup = struct {
+//     comptime cat: usize = TypeMeta{.index = 0, subtype = null},
+//     comptime owner: usize = TypeMeta{.index = 1, subtype = .array}.
+//     ...
+// }
+// This is essentially meta data for each type.
+const TypeMeta = struct {
+    // Every type is given a unique index. That index is used to lookup various
+    // things, i.e. the prototype chain.
+    index: usize,
+
+    // We store the type's subtype here, so that when we create an instance of
+    // the type, and bind it to JavaScript, we can store the subtype along with
+    // the created TaggedAnyOpaque.s
+    subtype: ?SubType,
+};
 
 fn isEmpty(comptime T: type) bool {
     return @typeInfo(T) != .@"opaque" and @sizeOf(T) == 0;
@@ -2204,7 +2230,7 @@ const TaggedAnyOpaque = struct {
     // V8 will give us a Value and ask us for the subtype. From the v8.Value we
     // can get a v8.Object, and from the v8.Object, we can get out TaggedAnyOpaque
     // which is where we store the subtype.
-    sub_type: ?[*c]const u8,
+    subtype: ?SubType,
 };
 
 fn valueToString(allocator: Allocator, value: v8.Value, isolate: v8.Isolate, context: v8.Context) ![]u8 {
@@ -2263,7 +2289,7 @@ pub export fn v8_inspector__Client__IMPL__valueSubtype(
     c_value: *const v8.C_Value,
 ) callconv(.C) [*c]const u8 {
     const external_entry = getTaggedAnyOpaque(.{ .handle = c_value }) orelse return null;
-    return if (external_entry.sub_type) |st| st else null;
+    return if (external_entry.subtype) |st| @tagName(st) else null;
 }
 
 // Same as valueSubType above, but for the optional description field.
@@ -2280,7 +2306,7 @@ pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
     // We _must_ include a non-null description in order for the subtype value
     // to be included. Besides that, I don't know if the value has any meaning
     const external_entry = getTaggedAnyOpaque(.{ .handle = c_value }) orelse return null;
-    return if (external_entry.sub_type == null) null else "";
+    return if (external_entry.subtype == null) null else "";
 }
 
 fn getTaggedAnyOpaque(value: v8.Value) ?*TaggedAnyOpaque {
