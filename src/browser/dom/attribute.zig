@@ -27,6 +27,7 @@ const DOMException = @import("exceptions.zig").DOMException;
 pub const Attr = struct {
     pub const Self = parser.Attribute;
     pub const prototype = *Node;
+    pub const subtype = "node";
 
     pub fn get_namespaceURI(self: *parser.Attribute) !?[]const u8 {
         return try parser.nodeGetNamespace(parser.attributeToNode(self));

@@ -32,6 +32,7 @@ pub const Interfaces = .{
 pub const Text = struct {
     pub const Self = parser.Text;
     pub const prototype = *CharacterData;
+    pub const subtype = "node";
 
     pub fn constructor(data: ?[]const u8, state: *const SessionState) !*parser.Text {
         return parser.documentCreateTextNode(

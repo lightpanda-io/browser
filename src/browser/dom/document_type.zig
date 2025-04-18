@@ -26,6 +26,7 @@ const Node = @import("node.zig").Node;
 pub const DocumentType = struct {
     pub const Self = parser.DocumentType;
     pub const prototype = *Node;
+    pub const subtype = "node";
 
     pub fn get_name(self: *parser.DocumentType) ![]const u8 {
         return try parser.documentTypeGetName(self);

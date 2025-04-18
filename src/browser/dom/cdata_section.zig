@@ -26,4 +26,5 @@ const Text = @import("text.zig").Text;
 pub const CDATASection = struct {
     pub const Self = parser.CDATASection;
     pub const prototype = *Text;
+    pub const subtype = "node";
 };
