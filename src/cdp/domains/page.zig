@@ -97,36 +97,27 @@ fn addScriptToEvaluateOnNewDocument(cmd: anytype) !void {
     }, .{});
 }
 
-// TODO: hard coded method
 fn createIsolatedWorld(cmd: anytype) !void {
-    _ = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-
-    const session_id = cmd.input.session_id orelse return error.SessionIdRequired;
-
     const params = (try cmd.params(struct {
         frameId: []const u8,
         worldName: []const u8,
         grantUniveralAccess: bool,
     })) orelse return error.InvalidParams;
+    if (!params.grantUniveralAccess) {
+        std.debug.print("grantUniveralAccess == false is not yet implemented", .{});
+        // When grantUniveralAccess == false and the client attempts to resolve
+        // or otherwise access a DOM or other JS Object from another context that should fail.
+    }
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-    // noop executionContextCreated event
-    try cmd.sendEvent("Runtime.executionContextCreated", .{
-        .context = runtime.ExecutionContextCreated{
-            .id = 0,
-            .origin = "",
-            .name = params.worldName,
-            // TODO: hard coded ID
-            .uniqueId = "7102379147004877974.3265385113993241162",
-            .auxData = .{
-                .isDefault = false,
-                .type = "isolated",
-                .frameId = params.frameId,
-            },
-        },
-    }, .{ .session_id = session_id });
+    try bc.createIsolatedWorld(params.worldName, params.grantUniveralAccess); // orelse return error.IsolatedWorldAlreadyExists;
+
+    // Create the auxdata json from
+    const aux_json = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{params.frameId});
+    bc.session.inspector.contextCreated(bc.isolated_world.?.executor, bc.isolated_world.?.name, "", aux_json, false);
 
     return cmd.sendResult(.{
-        .executionContextId = 0,
+        .executionContextId = bc.isolated_world.?.executor.context.debugContextId(),
     }, .{});
 }
 
@@ -222,7 +213,24 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void 
 
     // Send Runtime.executionContextsCleared event
     // TODO: noop event, we have no env context at this point, is it necesarry?
+    // When we actually recreated the context we should have the inspector send this event, see:  resetContextGroup
     try cdp.sendEvent("Runtime.executionContextsCleared", null, .{ .session_id = session_id });
+
+    if (bc.isolated_world != null) {
+        const aux_json = try std.fmt.allocPrint(
+            bc.session.arena.allocator(), // TODO change this
+            "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}",
+            .{bc.target_id.?}, // TODO check this
+        );
+
+        bc.session.inspector.contextCreated(
+            bc.isolated_world.?.executor,
+            bc.isolated_world.?.name,
+            "://",
+            aux_json,
+            false,
+        );
+    }
 }
 
 pub fn pageNavigated(bc: anytype, event: *const Notification.PageNavigated) !void {

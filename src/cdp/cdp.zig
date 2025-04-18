@@ -306,6 +306,26 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         node_registry: Node.Registry,
         node_search_list: Node.Search.List,
 
+        isolated_world: ?IsolatedWorld,
+
+        pub fn createIsolatedWorld(
+            self: *Self,
+            world_name: []const u8,
+            grant_universal_access: bool,
+        ) !void {
+            if (self.isolated_world != null) return error.AlreadyExists;
+
+            const executor = try self.cdp.browser.env.startExecutor(@import("../browser/html/window.zig").Window, &self.session.state, self.session);
+            errdefer self.cdp.browser.env.stopExecutor(executor);
+            executor.context.exit();
+
+            self.isolated_world = .{
+                .name = try self.session.arena.allocator().dupe(u8, world_name), // TODO allocator
+                .grant_universal_access = grant_universal_access,
+                .executor = executor,
+            };
+        }
+
         const Self = @This();
 
         fn init(self: *Self, id: []const u8, cdp: *CDP_T) !void {
@@ -326,6 +346,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .page_life_cycle_events = false, // TODO; Target based value
                 .node_registry = registry,
                 .node_search_list = undefined,
+                .isolated_world = null,
             };
             self.node_search_list = Node.Search.List.init(allocator, &self.node_registry);
         }
@@ -436,6 +457,20 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         }
     };
 }
+
+/// The current understanding. An isolated world lives in the same isolate, but a separated context.
+/// Clients creates this to be able to create variables and run code without interfering
+/// with the normal namespace and values of the webpage. Similar to the main context we need to pretend to recreate it after
+/// a executionContextsCleared event which happens when navigating to a new page. A client can have a command be executed
+/// in the isolated world by using its Context ID or the worldName.
+/// grantUniveralAccess Indecated whether the isolated world has access to objects like the DOM or other JS Objects.
+/// Generally the client needs to resolve a node into the isolated world to be able to work with it.
+/// An object id is unique across all contexts, different object ids can refer to the same Node in different contexts.
+pub const IsolatedWorld = struct {
+    name: []const u8,
+    grant_universal_access: bool,
+    executor: *@import("../browser/env.zig").Env.Executor,
+};
 
 // This is a generic because when we send a result we have two different
 // behaviors. Normally, we're sending the result to the client. But in some cases
