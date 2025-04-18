@@ -79,6 +79,23 @@ pub const Node = struct {
         };
     }
 
+    // class attributes
+
+    pub const _ELEMENT_NODE = @intFromEnum(parser.NodeType.element);
+    pub const _ATTRIBUTE_NODE = @intFromEnum(parser.NodeType.attribute);
+    pub const _TEXT_NODE = @intFromEnum(parser.NodeType.text);
+    pub const _CDATA_SECTION_NODE = @intFromEnum(parser.NodeType.cdata_section);
+    pub const _PROCESSING_INSTRUCTION_NODE = @intFromEnum(parser.NodeType.processing_instruction);
+    pub const _COMMENT_NODE = @intFromEnum(parser.NodeType.comment);
+    pub const _DOCUMENT_NODE = @intFromEnum(parser.NodeType.document);
+    pub const _DOCUMENT_TYPE_NODE = @intFromEnum(parser.NodeType.document_type);
+    pub const _DOCUMENT_FRAGMENT_NODE = @intFromEnum(parser.NodeType.document_fragment);
+
+    // These 3 are deprecated, but both Chrome and Firefox still expose them
+    pub const _ENTITY_REFERENCE_NODE = @intFromEnum(parser.NodeType.entity_reference);
+    pub const _ENTITY_NODE = @intFromEnum(parser.NodeType.entity);
+    pub const _NOTATION_NODE = @intFromEnum(parser.NodeType.notation);
+
     // JS funcs
     // --------
 
@@ -588,5 +605,20 @@ test "Browser.DOM.node" {
     try runner.testCases(&.{
         .{ "let replace = document.createElement('div')", "undefined" },
         .{ "link.replaceChild(replace, insertBefore) !== undefined", "true" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "Node.ELEMENT_NODE", "1" },
+        .{ "Node.ATTRIBUTE_NODE", "2" },
+        .{ "Node.TEXT_NODE", "3" },
+        .{ "Node.CDATA_SECTION_NODE", "4" },
+        .{ "Node.PROCESSING_INSTRUCTION_NODE", "7" },
+        .{ "Node.COMMENT_NODE", "8" },
+        .{ "Node.DOCUMENT_NODE", "9" },
+        .{ "Node.DOCUMENT_TYPE_NODE", "10" },
+        .{ "Node.DOCUMENT_FRAGMENT_NODE", "11" },
+        .{ "Node.ENTITY_REFERENCE_NODE", "5" },
+        .{ "Node.ENTITY_NODE", "6" },
+        .{ "Node.NOTATION_NODE", "12" },
     }, .{});
 }
