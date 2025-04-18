@@ -48,6 +48,7 @@ help:
 # $(ZIG) commands
 # ------------
 .PHONY: build build-dev run run-release shell test bench download-zig wpt data get-v8 build-v8 build-v8-dev
+.PHONY: end2end
 
 zig_version = $(shell grep 'recommended_zig_version = "' "vendor/zig-js-runtime/build.zig" | cut -d'"' -f2)
 
@@ -93,6 +94,11 @@ wpt-summary:
 ## Test
 test:
 	@TEST_FILTER='${F}' $(ZIG) build test -freference-trace --summary all
+
+## Run demo/runner end to end tests
+end2end:
+	@test -d ../demo
+	cd ../demo && go run runner/main.go
 
 ## v8
 get-v8:

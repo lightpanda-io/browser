@@ -229,7 +229,7 @@ First, get the tools necessary for building V8, as well as the V8 source code:
 make get-v8
 ```
 
-Next, build v8. This build task is very long and cpu consuming, as you will build v8 from sources. 
+Next, build v8. This build task is very long and cpu consuming, as you will build v8 from sources.
 
 ```
 make build-v8
@@ -242,6 +242,20 @@ For dev env, use `make build-v8-dev`.
 ### Unit Tests
 
 You can test Lightpanda by running `make test`.
+
+### End to end tests
+
+To run end to end tests, you need to clone the [demo
+repository](https://github.com/lightpanda-io/demo) into `../demo` dir.
+
+You have to install the [demo's node
+requirements](https://github.com/lightpanda-io/demo?tab=readme-ov-file#dependencies-1)
+
+You also need to install [Go](https://go.dev) > v1.24.
+
+```
+make end2end
+```
 
 ### Web Platform Tests
 
