@@ -96,6 +96,14 @@ const Primitives = struct {
     pub fn _checkOptionalReturnString(_: *const Primitives) ?[]const u8 {
         return "ok";
     }
+
+    pub fn _echoString(_: *const Primitives, a: []const u8) []const u8 {
+        return a;
+    }
+
+    pub fn _echoStringZ(_: *const Primitives, a: [:0]const u8) []const u8 {
+        return a;
+    }
 };
 
 const testing = @import("testing.zig");
@@ -172,5 +180,9 @@ test "JS: primitive types" {
         .{ "p.checkOptionalReturn() === true;", "true" },
         .{ "p.checkOptionalReturnNull() === null;", "true" },
         .{ "p.checkOptionalReturnString() === 'ok';", "true" },
+
+        // strings
+        .{ "p.echoString('over 9000!');", "over 9000!" },
+        .{ "p.echoStringZ('Teg');", "Teg" },
     }, .{});
 }
