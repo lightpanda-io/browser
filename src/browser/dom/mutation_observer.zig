@@ -284,7 +284,7 @@ const EventHandler = struct {
         const muevt = parser.eventToMutationEvent(evt.?);
 
         // TODO get the allocator by another way?
-        const alloc = data.cbk.executor.call_arena.allocator();
+        const alloc = data.cbk.executor.scope_arena;
 
         if (std.mem.eql(u8, t, "DOMAttrModified")) {
             mrs.first = .{
