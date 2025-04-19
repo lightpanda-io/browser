@@ -70,6 +70,13 @@ pub const NamedNodeMap = struct {
     ) !*parser.Attribute {
         return try parser.namedNodeMapRemoveNamedItemNS(self, namespace, localname);
     }
+
+    pub fn indexed_get(self: *parser.NamedNodeMap, index: u32, has_value: *bool) !*parser.Attribute {
+        return (try NamedNodeMap._item(self, index)) orelse {
+            has_value.* = false;
+            return undefined;
+        };
+    }
 };
 
 // Tests
