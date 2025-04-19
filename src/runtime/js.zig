@@ -1862,7 +1862,13 @@ fn Caller(comptime E: type) type {
                     },
                     .slice => {
                         if (ptr.child == u8) {
-                            return valueToString(self.call_allocator, js_value, self.isolate, self.context);
+                            if (ptr.sentinel()) |s| {
+                                if (comptime s == 0) {
+                                    return valueToStringZ(self.call_allocator, js_value, self.isolate, self.context);
+                                }
+                            } else {
+                                return valueToString(self.call_allocator, js_value, self.isolate, self.context);
+                            }
                         }
 
                         // TODO: TypedArray
@@ -2239,6 +2245,16 @@ fn valueToString(allocator: Allocator, value: v8.Value, isolate: v8.Isolate, con
     const n = str.writeUtf8(isolate, buf);
     std.debug.assert(n == len);
     return buf;
+}
+
+fn valueToStringZ(allocator: Allocator, value: v8.Value, isolate: v8.Isolate, context: v8.Context) ![:0]u8 {
+    const str = try value.toString(context);
+    const len = str.lenUtf8(isolate);
+    const buf = try allocator.alloc(u8, len + 1);
+    const n = str.writeUtf8(isolate, buf[0..len]);
+    std.debug.assert(n == len);
+    buf[len] = 0;
+    return buf[0..len :0];
 }
 
 const NoopInspector = struct {
