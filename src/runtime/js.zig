@@ -2250,11 +2250,10 @@ fn valueToString(allocator: Allocator, value: v8.Value, isolate: v8.Isolate, con
 fn valueToStringZ(allocator: Allocator, value: v8.Value, isolate: v8.Isolate, context: v8.Context) ![:0]u8 {
     const str = try value.toString(context);
     const len = str.lenUtf8(isolate);
-    const buf = try allocator.alloc(u8, len + 1);
-    const n = str.writeUtf8(isolate, buf[0..len]);
+    const buf = try allocator.allocSentinel(u8, len, 0);
+    const n = str.writeUtf8(isolate, buf);
     std.debug.assert(n == len);
-    buf[len] = 0;
-    return buf[0..len :0];
+    return buf;
 }
 
 const NoopInspector = struct {
