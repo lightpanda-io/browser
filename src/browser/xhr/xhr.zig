@@ -48,15 +48,7 @@ pub const XMLHttpRequestUpload = struct {
     proto: XMLHttpRequestEventTarget = XMLHttpRequestEventTarget{},
 };
 
-pub const XMLHttpRequestBodyInitTag = enum {
-    Blob,
-    BufferSource,
-    FormData,
-    URLSearchParams,
-    String,
-};
-
-pub const XMLHttpRequestBodyInit = union(XMLHttpRequestBodyInitTag) {
+const XMLHttpRequestBodyInit = union(enum) {
     Blob: []const u8,
     BufferSource: []const u8,
     FormData: []const u8,
@@ -173,11 +165,6 @@ pub const XMLHttpRequest = struct {
             };
         }
 
-        fn deinit(self: *Headers) void {
-            self.free();
-            self.list.deinit(self.arena);
-        }
-
         fn append(self: *Headers, k: []const u8, v: []const u8) !void {
             // duplicate strings
             const kk = try self.arena.dupe(u8, k);
@@ -185,17 +172,8 @@ pub const XMLHttpRequest = struct {
             try self.list.append(self.arena, .{ .name = kk, .value = vv });
         }
 
-        // free all strings allocated.
-        fn free(self: *Headers) void {
-            for (self.list.items) |h| {
-                self.arena.free(h.name);
-                self.arena.free(h.value);
-            }
-        }
-
-        fn clearAndFree(self: *Headers) void {
-            self.free();
-            self.list.clearAndFree(self.arena);
+        fn reset(self: *Headers) void {
+            self.list.clearRetainingCapacity();
         }
 
         fn has(self: Headers, k: []const u8) bool {
@@ -222,9 +200,7 @@ pub const XMLHttpRequest = struct {
         fn set(self: *Headers, k: []const u8, v: []const u8) !void {
             for (self.list.items, 0..) |h, i| {
                 if (std.ascii.eqlIgnoreCase(k, h.name)) {
-                    const hh = self.list.swapRemove(i);
-                    self.arena.free(hh.name);
-                    self.arena.free(hh.value);
+                    _ = self.list.swapRemove(i);
                 }
             }
             self.append(k, v);
@@ -247,25 +223,19 @@ pub const XMLHttpRequest = struct {
         JSON: JSONValue,
     };
 
-    const ResponseObjTag = enum {
-        Document,
-        Failure,
-        JSON,
-    };
-    const ResponseObj = union(ResponseObjTag) {
+    const ResponseObj = union(enum) {
         Document: *parser.Document,
         Failure: void,
-        JSON: std.json.Parsed(JSONValue),
+        JSON: JSONValue,
 
         fn deinit(self: ResponseObj) void {
-            return switch (self) {
+            switch (self) {
+                .JSON, .Failure => {},
                 .Document => |d| {
                     const doc = @as(*parser.DocumentHTML, @ptrCast(d));
                     parser.documentHTMLClose(doc) catch {};
                 },
-                .JSON => |p| p.deinit(),
-                .Failure => {},
-            };
+            }
         }
     };
 
@@ -291,15 +261,17 @@ pub const XMLHttpRequest = struct {
     pub fn reset(self: *XMLHttpRequest) void {
         self.url = null;
 
-        if (self.response_obj) |v| v.deinit();
+        if (self.response_obj) |v| {
+            v.deinit();
+        }
 
         self.response_obj = null;
         self.response_type = .Empty;
         self.response_mime = null;
 
         // TODO should we clearRetainingCapacity instead?
-        self.headers.clearAndFree();
-        self.response_headers.clearAndFree();
+        self.headers.reset();
+        self.response_headers.reset();
         self.response_status = 0;
 
         self.send_flag = false;
@@ -308,13 +280,9 @@ pub const XMLHttpRequest = struct {
     }
 
     pub fn deinit(self: *XMLHttpRequest, alloc: Allocator) void {
-        self.reset();
-        self.headers.deinit();
-        self.response_headers.deinit();
-        if (self.response_mime) |*mime| {
-            mime.deinit();
+        if (self.response_obj) |v| {
+            v.deinit();
         }
-
         self.proto.deinit(alloc);
     }
 
@@ -666,7 +634,7 @@ pub const XMLHttpRequest = struct {
             return switch (obj) {
                 .Failure => null,
                 .Document => |v| .{ .Document = v },
-                .JSON => |v| .{ .JSON = v.value },
+                .JSON => |v| .{ .JSON = v },
             };
         }
 
@@ -707,7 +675,7 @@ pub const XMLHttpRequest = struct {
             return switch (obj) {
                 .Failure => null,
                 .Document => |v| .{ .Document = v },
-                .JSON => |v| .{ .JSON = v.value },
+                .JSON => |v| .{ .JSON = v },
             };
         }
 
@@ -753,7 +721,7 @@ pub const XMLHttpRequest = struct {
     fn setResponseObjJSON(self: *XMLHttpRequest) void {
         // TODO should we use parseFromSliceLeaky if we expect the allocator is
         // already an arena?
-        const p = std.json.parseFromSlice(
+        const p = std.json.parseFromSliceLeaky(
             JSONValue,
             self.arena,
             self.response_bytes.items,

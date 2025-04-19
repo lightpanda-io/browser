@@ -45,13 +45,6 @@ pub const MutationObserver = struct {
         options: MutationObserverInit,
     };
 
-    const deinitFunc = struct {
-        fn deinit(ctx: ?*anyopaque, allocator: std.mem.Allocator) void {
-            const o: *Observer = @ptrCast(@alignCast(ctx));
-            allocator.destroy(o);
-        }
-    }.deinit;
-
     const Observers = std.ArrayListUnmanaged(*Observer);
 
     pub const MutationObserverInit = struct {
@@ -104,7 +97,7 @@ pub const MutationObserver = struct {
                 arena,
                 "DOMNodeInserted",
                 EventHandler,
-                .{ .cbk = self.cbk, .ctx = o, .deinitFunc = deinitFunc },
+                .{ .cbk = self.cbk, .ctx = o },
                 false,
             );
             try parser.eventTargetAddEventListener(
@@ -112,7 +105,7 @@ pub const MutationObserver = struct {
                 arena,
                 "DOMNodeRemoved",
                 EventHandler,
-                .{ .cbk = self.cbk, .ctx = o, .deinitFunc = deinitFunc },
+                .{ .cbk = self.cbk, .ctx = o },
                 false,
             );
         }
@@ -122,7 +115,7 @@ pub const MutationObserver = struct {
                 arena,
                 "DOMAttrModified",
                 EventHandler,
-                .{ .cbk = self.cbk, .ctx = o, .deinitFunc = deinitFunc },
+                .{ .cbk = self.cbk, .ctx = o },
                 false,
             );
         }
@@ -132,7 +125,7 @@ pub const MutationObserver = struct {
                 arena,
                 "DOMCharacterDataModified",
                 EventHandler,
-                .{ .cbk = self.cbk, .ctx = o, .deinitFunc = deinitFunc },
+                .{ .cbk = self.cbk, .ctx = o },
                 false,
             );
         }
@@ -142,7 +135,7 @@ pub const MutationObserver = struct {
                 arena,
                 "DOMSubtreeModified",
                 EventHandler,
-                .{ .cbk = self.cbk, .ctx = o, .deinitFunc = deinitFunc },
+                .{ .cbk = self.cbk, .ctx = o },
                 false,
             );
         }
@@ -151,15 +144,6 @@ pub const MutationObserver = struct {
     // TODO
     pub fn _disconnect(_: *MutationObserver) !void {
         // TODO unregister listeners.
-    }
-
-    pub fn deinit(self: *MutationObserver, state: *SessionState) void {
-        const arena = state.arena;
-        // TODO unregister listeners.
-        for (self.observers.items) |o| {
-            arena.destroy(o);
-        }
-        self.observers.deinit(arena);
     }
 
     // TODO
