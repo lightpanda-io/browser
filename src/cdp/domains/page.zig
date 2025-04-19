@@ -158,7 +158,6 @@ fn navigate(cmd: anytype) !void {
         .loaderId = bc.loader_id,
     }, .{});
 
-    std.debug.print("page: {s}\n", .{target_id});
     try page.navigate(url, .{
         .reason = .address_bar,
     });
