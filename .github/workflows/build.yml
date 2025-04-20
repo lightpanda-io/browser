@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # fetch submodules recusively, to get zig-js-runtime submodules also.
+          # fetch submodules recursively, to get zig-js-runtime submodules also.
           submodules: recursive
 
       - uses: ./.github/actions/install
@@ -54,7 +54,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # fetch submodules recusively, to get zig-js-runtime submodules also.
+          # fetch submodules recursively, to get zig-js-runtime submodules also.
           submodules: recursive
 
       - uses: ./.github/actions/install
@@ -86,7 +86,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # fetch submodules recusively, to get zig-js-runtime submodules also.
+          # fetch submodules recursively, to get zig-js-runtime submodules also.
           submodules: recursive
 
       - uses: ./.github/actions/install
@@ -118,7 +118,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # fetch submodules recusively, to get zig-js-runtime submodules also.
+          # fetch submodules recursively, to get zig-js-runtime submodules also.
           submodules: recursive
 
       - uses: ./.github/actions/install
