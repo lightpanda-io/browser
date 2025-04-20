@@ -23,7 +23,9 @@ RUN cat <<EOF > /root/.gitconfig
     insteadOf="git@github.com:"
 EOF
 
-RUN git clone --recursive https://github.com/lightpanda-io/browser.git /browser
+COPY . /browser
+WORKDIR /browser
+RUN git submodule update --init --recursive
 
 # Stage 2: Download V8
 FROM base AS v8_download
