@@ -11,12 +11,28 @@ permissions:
   contents: write
 
 jobs:
-  build-linux-x86_64:
-    env:
-      ARCH: x86_64
-      OS: linux
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: x86_64
+            runner: ubuntu-22.04
+          - os: linux
+            arch: aarch64
+            runner: ubuntu-latest # Use a runner that supports ARM64, like ubuntu-latest or a self-hosted one
+          - os: macos
+            arch: aarch64
+            runner: macos-latest # macos-latest is typically ARM64
+          - os: macos
+            arch: x86_64
+            runner: macos-13 # Specify an x86_64 runner if needed
 
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.runner }}
+    env:
+      ARCH: ${{ matrix.arch }}
+      OS: ${{ matrix.os }}
+      ARTIFACT_NAME: lightpanda-${{ matrix.arch }}-${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
@@ -27,114 +43,46 @@ jobs:
 
       - uses: ./.github/actions/install
         with:
-          os: ${{env.OS}}
-          arch: ${{env.ARCH}}
+          os: ${{ env.OS }}
+          arch: ${{ env.ARCH }}
+
+      - name: Set Git SHA Short Env Var
+        id: vars
+        run: echo "GIT_SHA_SHORT=$(git rev-parse --short ${{ github.sha }})" >> $GITHUB_ENV
 
       - name: zig build
-        run: zig build --release=safe -Doptimize=ReleaseSafe -Dcpu=x86_64 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
+        run: zig build --release=safe -Doptimize=ReleaseSafe -Dgit_commit=${{ env.GIT_SHA_SHORT }}
 
       - name: Rename binary
-        run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
+        run: mv zig-out/bin/lightpanda ${{ env.ARTIFACT_NAME }}
 
-      - name: Upload the build
-        uses: ncipollo/release-action@v1
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
         with:
-          allowUpdates: true
-          artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
-          tag: nightly
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.ARTIFACT_NAME }}
 
-  build-linux-aarch64:
-    env:
-      ARCH: aarch64
-      OS: linux
-
-    runs-on: ubuntu-24.04-arm
-
+  release:
+    needs: build
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
         with:
-          fetch-depth: 0
-          # fetch submodules recursively, to get zig-js-runtime submodules also.
-          submodules: recursive
+          path: artifacts # Downloads all artifacts into the 'artifacts' directory
 
-      - uses: ./.github/actions/install
-        with:
-          os: ${{env.OS}}
-          arch: ${{env.ARCH}}
+      - name: Generate checksums
+        working-directory: artifacts
+        # Find all artifact directories (one per build job) and checksum the file inside each
+        run: find . -mindepth 2 -type f -exec sha256sum {} + | tee checksums.txt
 
-      - name: zig build
-        run: zig build --release=safe -Doptimize=ReleaseSafe -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
-
-      - name: Rename binary
-        run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
-
-      - name: Upload the build
+      - name: Upload binaries and checksums to release
         uses: ncipollo/release-action@v1
         with:
           allowUpdates: true
-          artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          # List all expected artifact files plus the checksum file
+          artifacts: artifacts/*/lightpanda-*, artifacts/checksums.txt
+          # If download-artifact@v4 downloads directly without subfolders:
+          # artifacts: artifacts/lightpanda-*, artifacts/checksums.txt
           tag: nightly
-
-  build-macos-aarch64:
-    env:
-      ARCH: aarch64
-      OS: macos
-
-    runs-on: macos-latest
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          # fetch submodules recursively, to get zig-js-runtime submodules also.
-          submodules: recursive
-
-      - uses: ./.github/actions/install
-        with:
-          os: ${{env.OS}}
-          arch: ${{env.ARCH}}
-
-      - name: zig build
-        run: zig build --release=safe -Doptimize=ReleaseSafe -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
-
-      - name: Rename binary
-        run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
-
-      - name: Upload the build
-        uses: ncipollo/release-action@v1
-        with:
-          allowUpdates: true
-          artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
-          tag: nightly
-
-  build-macos-x86_64:
-    env:
-      ARCH: x86_64
-      OS: macos
-
-    runs-on: macos-13
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          # fetch submodules recursively, to get zig-js-runtime submodules also.
-          submodules: recursive
-
-      - uses: ./.github/actions/install
-        with:
-          os: ${{env.OS}}
-          arch: ${{env.ARCH}}
-
-      - name: zig build
-        run: zig build --release=safe -Doptimize=ReleaseSafe -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
-
-      - name: Rename binary
-        run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
-
-      - name: Upload the build
-        uses: ncipollo/release-action@v1
-        with:
-          allowUpdates: true
-          artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
-          tag: nightly
+          token: ${{ secrets.GITHUB_TOKEN }} # Explicitly pass token
