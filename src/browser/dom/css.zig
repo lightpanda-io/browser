@@ -49,7 +49,7 @@ const MatchAll = struct {
     fn init(alloc: std.mem.Allocator) MatchAll {
         return .{
             .alloc = alloc,
-            .nl = NodeList.init(),
+            .nl = .{},
         };
     }
 
@@ -62,7 +62,8 @@ const MatchAll = struct {
     }
 
     fn toOwnedList(m: *MatchAll) NodeList {
-        defer m.nl = NodeList.init();
+        // reset it.
+        defer m.nl = .{};
         return m.nl;
     }
 };

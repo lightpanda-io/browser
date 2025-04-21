@@ -99,16 +99,9 @@ pub const NodeListEntriesIterator = struct {
 // see https://dom.spec.whatwg.org/#old-style-collections
 pub const NodeList = struct {
     pub const Exception = DOMException;
-
     const NodesArrayList = std.ArrayListUnmanaged(*parser.Node);
 
-    nodes: NodesArrayList,
-
-    pub fn init() NodeList {
-        return NodeList{
-            .nodes = NodesArrayList{},
-        };
-    }
+    nodes: NodesArrayList = .{},
 
     pub fn deinit(self: *NodeList, alloc: std.mem.Allocator) void {
         // TODO unref all nodes

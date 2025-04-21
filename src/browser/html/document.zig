@@ -103,8 +103,7 @@ pub const HTMLDocument = struct {
 
     pub fn _getElementsByName(self: *parser.DocumentHTML, name: []const u8, state: *SessionState) !NodeList {
         const arena = state.arena;
-        var list = NodeList.init();
-        errdefer list.deinit(arena);
+        var list: NodeList = .{};
 
         if (name.len == 0) return list;
 
