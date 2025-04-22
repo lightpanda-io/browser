@@ -309,10 +309,8 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             }
 
             const context = v8.Context.init(isolate, global_template, null);
-            if (kind == .main) {
-                context.enter();
-                errdefer context.exit();
-            }
+            if (kind == .main) context.enter();
+            errdefer if (kind == .main) context.exit();
 
             // This shouldn't be necessary, but it is:
             // https://groups.google.com/g/v8-users/c/qAQQBmbi--8
