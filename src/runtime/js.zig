@@ -183,11 +183,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         // Used in debug mode to assert that we only have one executor at a time
         has_executor: if (builtin.mode == .Debug) bool else void = if (builtin.mode == .Debug) false else {},
 
-        // See the Executor's call_arena and scope_arena allocators. Having these
-        // here allows the arena to be re-used by different executors.
-        call_arena: ArenaAllocator,
-        scope_arena: ArenaAllocator,
-
         const Self = @This();
 
         const State = S;
@@ -223,8 +218,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 .gc_hints = opts.gc_hints,
                 .global_scope = global_scope,
                 .prototype_lookup = undefined,
-                .call_arena = ArenaAllocator.init(allocator),
-                .scope_arena = ArenaAllocator.init(allocator),
                 .executor_pool = std.heap.MemoryPool(Executor).init(allocator),
             };
 
@@ -260,8 +253,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         }
 
         pub fn deinit(self: *Self) void {
-            self.call_arena.deinit();
-            self.scope_arena.deinit();
             self.global_scope.deinit();
             self.isolate.exit();
             self.isolate.deinit();
@@ -357,13 +348,21 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 .isolate = isolate,
                 .templates = templates,
                 .handle_scope = handle_scope,
-                .call_arena = self.call_arena.allocator(),
-                .scope_arena = self.scope_arena.allocator(),
+                .call_arena = undefined,
+                .scope_arena = undefined,
+                ._call_arena_instance = std.heap.ArenaAllocator.init(self.allocator),
+                ._scope_arena_instance = std.heap.ArenaAllocator.init(self.allocator),
                 .module_loader = .{
                     .ptr = @ptrCast(module_loader),
                     .func = @TypeOf(module_loader.*).fetchModuleSource,
                 },
             };
+
+            // We do it this way, just to present a slightly nicer API. Many
+            // things want one of these two allocator from the executor. Now they
+            // can do `executor.call_arena`  instead of `executor.call_arena.allocator`.
+            executor.call_arena = executor._call_arena_instance.allocator();
+            executor.scope_arena = executor._scope_arena_instance.allocator();
 
             errdefer self.stopExecutor(executor);
 
@@ -397,8 +396,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 std.debug.assert(self.has_executor == true);
                 self.has_executor = false;
             }
-            _ = self.call_arena.reset(.{ .retain_with_limit = CALL_ARENA_RETAIN });
-            _ = self.scope_arena.reset(.{ .retain_with_limit = SCOPE_ARENA_RETAIN });
         }
 
         // Give it a Zig struct, get back a v8.FunctionTemplate.
@@ -791,6 +788,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             // arena itself is owned by the Executor so that we can re-use it
             // from scope to scope.
             call_arena: Allocator,
+            _call_arena_instance: std.heap.ArenaAllocator,
 
             // Arena whose lifetime is for a single page load, aka a Scope. Where
             // the call_arena lives for a single function call, the scope_arena
@@ -798,6 +796,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             // owned by the Scope, but the arena itself is owned by the Executor
             // so that we can re-use it from scope to scope.
             scope_arena: Allocator,
+            _scope_arena_instance: std.heap.ArenaAllocator,
 
             // When we need to load a resource (i.e. an external script), we call
             // this function to get the source. This is always a reference to the
@@ -825,6 +824,9 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 }
                 self.context.exit();
                 self.handle_scope.deinit();
+
+                self._call_arena_instance.deinit();
+                self._scope_arena_instance.deinit();
             }
 
             // Executes the src
@@ -925,8 +927,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             pub fn endScope(self: *Executor) void {
                 self.scope.?.deinit();
                 self.scope = null;
-                const scope_arena: *std.heap.ArenaAllocator = @ptrCast(@alignCast(self.scope_arena.ptr));
-                _ = scope_arena.reset(.{ .retain_with_limit = SCOPE_ARENA_RETAIN });
+                _ = self._scope_arena_instance.reset(.{ .retain_with_limit = SCOPE_ARENA_RETAIN });
             }
 
             // Given an anytype, turns it into a v8.Object. The anytype could be:
@@ -1540,8 +1541,9 @@ fn Caller(comptime E: type) type {
         }
 
         fn deinit(self: *Self) void {
-            const call_depth = self.executor.call_depth - 1;
-            self.executor.call_depth = call_depth;
+            const executor = self.executor;
+            const call_depth = executor.call_depth - 1;
+            executor.call_depth = call_depth;
 
             // Because of callbacks, calls can be nested. Because of this, we
             // can't clear the call_arena after _every_ call. Imagine we have
@@ -1555,8 +1557,7 @@ fn Caller(comptime E: type) type {
             // Therefore, we keep a call_depth, and only reset the call_arena
             // when a top-level (call_depth == 0) function ends.
             if (call_depth == 0) {
-                const call_arena: *std.heap.ArenaAllocator = @ptrCast(@alignCast(self.call_arena.ptr));
-                _ = call_arena.reset(.{ .retain_with_limit = CALL_ARENA_RETAIN });
+                _ = executor._call_arena_instance.reset(.{ .retain_with_limit = CALL_ARENA_RETAIN });
             }
         }
 
