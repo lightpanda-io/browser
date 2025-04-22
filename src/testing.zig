@@ -24,6 +24,17 @@ pub const expectError = std.testing.expectError;
 pub const expectString = std.testing.expectEqualStrings;
 pub const expectEqualSlices = std.testing.expectEqualSlices;
 
+// sometimes it's super useful to have an arena you don't really care about
+// in a test. Like, you need a mutable string, so you just want to dupe a
+// string literal. It has nothing to do with the code under test, it's just
+// infrastructure for the test itself.
+pub var arena_instance = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+pub const arena_allocator = arena_instance.allocator();
+
+pub fn reset() void {
+    _ = arena_instance.reset(.{ .retain_capacity = {} });
+}
+
 const App = @import("app.zig").App;
 const parser = @import("browser/netsurf.zig");
 
