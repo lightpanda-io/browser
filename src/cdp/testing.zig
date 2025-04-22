@@ -39,10 +39,13 @@ pub const Document = @import("../testing.zig").Document;
 const Browser = struct {
     session: ?*Session = null,
     arena: std.heap.ArenaAllocator,
+    env: Env,
+    pub const EnvType = Env;
 
     pub fn init(app: *App) !Browser {
         return .{
             .arena = std.heap.ArenaAllocator.init(app.allocator),
+            .env = Env{},
         };
     }
 
@@ -56,13 +59,14 @@ const Browser = struct {
             return error.MockBrowserSessionAlreadyExists;
         }
         const arena = self.arena.allocator();
-        const executor = arena.create(Executor) catch unreachable;
+        const executor = arena.create(Env.Executor) catch unreachable;
         self.session = try arena.create(Session);
         self.session.?.* = .{
             .page = null,
-            .arena = arena,
+            .arena = self.arena,
             .executor = executor,
             .inspector = .{},
+            .state = 0,
         };
         return self.session.?;
     }
@@ -77,9 +81,10 @@ const Browser = struct {
 
 const Session = struct {
     page: ?Page = null,
-    arena: Allocator,
-    executor: *Executor,
+    arena: std.heap.ArenaAllocator,
+    executor: *Env.Executor,
     inspector: Inspector,
+    state: i32,
 
     pub fn currentPage(self: *Session) ?*Page {
         return &(self.page orelse return null);
@@ -92,7 +97,7 @@ const Session = struct {
         self.page = .{
             .session = self,
             .url = URL.parse("https://lightpanda.io/", null) catch unreachable,
-            .aux_data = try self.arena.dupe(u8, aux_data orelse ""),
+            .aux_data = try self.arena.allocator().dupe(u8, aux_data orelse ""),
         };
         return &self.page.?;
     }
@@ -107,12 +112,43 @@ const Session = struct {
     }
 };
 
-const Executor = struct {};
+const Env = struct {
+    pub const Executor = MockExecutor;
+    pub fn startExecutor(self: *Env, comptime Global: type, state: anytype, module_loader: anytype, kind: anytype) !*Executor {
+        _ = self;
+        _ = Global;
+        _ = state;
+        _ = module_loader;
+        _ = kind;
+        return error.MockExecutor;
+    }
+    pub fn stopExecutor(self: *Env, executor: *Executor) void {
+        _ = self;
+        _ = executor;
+    }
+};
+const MockExecutor = struct {
+    context: Context,
+
+    pub fn startScope(self: *MockExecutor, global: anytype) !void {
+        _ = self;
+        _ = global;
+    }
+    pub fn endScope(self: *MockExecutor) void {
+        _ = self;
+    }
+};
+const Context = struct {
+    pub fn debugContextId(self: Context) i32 {
+        _ = self;
+        return 0;
+    }
+};
 
 const Inspector = struct {
     pub fn getRemoteObject(
         self: *const Inspector,
-        executor: *Executor,
+        executor: *Env.Executor,
         group: []const u8,
         value: anytype,
     ) !RemoteObject {
@@ -126,6 +162,19 @@ const Inspector = struct {
         _ = self;
         _ = object_id;
         return try alloc.create(i32);
+    }
+    pub fn contextCreated(self: *const Inspector,
+                executor: *const Env.Executor,
+                name: []const u8,
+                origin: []const u8,
+                aux_data: ?[]const u8,
+                is_default_context: bool,) void {
+        _ = self;
+        _ = executor;
+        _ = name;
+        _ = origin;
+        _ = aux_data;
+        _ = is_default_context;
     }
 };
 

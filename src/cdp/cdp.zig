@@ -309,7 +309,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         node_registry: Node.Registry,
         node_search_list: Node.Search.List,
 
-        isolated_world: ?IsolatedWorld,
+        isolated_world: ?IsolatedWorld(CDP_T.Browser.EnvType),
 
         const Self = @This();
 
@@ -481,11 +481,13 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 /// An isolated world has it's own instance of globals like Window.
 /// Generally the client needs to resolve a node into the isolated world to be able to work with it.
 /// An object id is unique across all contexts, different object ids can refer to the same Node in different contexts.
-pub const IsolatedWorld = struct {
-    name: []const u8,
-    grant_universal_access: bool,
-    executor: *@import("../browser/env.zig").Env.Executor,
-};
+pub fn IsolatedWorld(comptime E: type) type {
+    return struct {
+        name: []const u8,
+        grant_universal_access: bool,
+        executor: *E.Executor,
+    };
+}
 
 // This is a generic because when we send a result we have two different
 // behaviors. Normally, we're sending the result to the client. But in some cases
