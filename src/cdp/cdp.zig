@@ -341,7 +341,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         pub fn deinit(self: *Self) void {
             if (self.isolated_world) |isolated_world| {
                 isolated_world.executor.endScope();
-                self.cdp.browser.env.stopExecutor(isolated_world.executor, false);
+                self.cdp.browser.env.stopExecutor(isolated_world.executor);
                 self.isolated_world = null;
             }
             self.node_registry.deinit();
@@ -360,14 +360,12 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         ) !void {
             if (self.isolated_world != null) return error.CurrentlyOnly1IsolatedWorldSupported;
 
-            const executor = try self.cdp.browser.env.startExecutor(@import("../browser/html/window.zig").Window, &self.session.state, self.session);
-            errdefer self.cdp.browser.env.stopExecutor(executor, true);
+            const executor = try self.cdp.browser.env.startExecutor(@import("../browser/html/window.zig").Window, &self.session.state, self.session, .isolated);
+            errdefer self.cdp.browser.env.stopExecutor(executor);
 
             // TBD should we endScope on removePage and re-startScope on createPage?
             // Window will be refactored into the executor so we leave it ugly here for now as a reminder.
             try executor.startScope(@import("../browser/html/window.zig").Window{});
-
-            executor.context.exit(); // The default context should remain open
 
             self.isolated_world = .{
                 .name = try self.arena.dupe(u8, world_name),
