@@ -433,7 +433,7 @@ pub const JsRunner = struct {
             .tls_verify_host = false,
         });
 
-        runner.executor = try runner.env.startExecutor(Window, &runner.state, runner);
+        runner.executor = try runner.env.startExecutor(Window, &runner.state, runner, .main);
         errdefer runner.env.stopExecutor(runner.executor);
 
         try runner.executor.startScope(&runner.window);

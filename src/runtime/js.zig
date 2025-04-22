@@ -265,10 +265,12 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             self.isolate.performMicrotasksCheckpoint();
         }
 
-        pub fn startExecutor(self: *Self, comptime Global: type, state: State, module_loader: anytype) !*Executor {
+        pub fn startExecutor(self: *Self, comptime Global: type, state: State, module_loader: anytype, kind: WorldKind) !*Executor {
             if (comptime builtin.mode == .Debug) {
-                std.debug.assert(self.has_executor == false);
-                self.has_executor = true;
+                if (kind == .main) {
+                    std.debug.assert(self.has_executor == false);
+                    self.has_executor = true;
+                }
             }
             const isolate = self.isolate;
             const templates = &self.templates;
@@ -307,8 +309,10 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             }
 
             const context = v8.Context.init(isolate, global_template, null);
-            context.enter();
-            errdefer context.exit();
+            if (kind == .main) {
+                context.enter();
+                errdefer context.exit();
+            }
 
             // This shouldn't be necessary, but it is:
             // https://groups.google.com/g/v8-users/c/qAQQBmbi--8
@@ -344,8 +348,9 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
 
             executor.* = .{
                 .state = state,
-                .context = context,
                 .isolate = isolate,
+                .kind = kind,
+                .context = context,
                 .templates = templates,
                 .handle_scope = handle_scope,
                 .call_arena = undefined,
@@ -364,7 +369,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             executor.call_arena = executor._call_arena_instance.allocator();
             executor.scope_arena = executor._scope_arena_instance.allocator();
 
-            errdefer self.stopExecutor(executor, false); // Note: This likely has issues as context.exit() is errdefered as well
+            errdefer self.stopExecutor(executor); // Note: This likely has issues as context.exit() is errdefered as well
 
             // Custom exception
             // NOTE: there is no way in v8 to subclass the Error built-in type
@@ -385,16 +390,18 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         // a Context, it's managed by the garbage collector. So, when the
         // `gc_hints` option is enabled, we'll use the `lowMemoryNotification`
         // call on the isolate to encourage v8 to free the context.
-        pub fn stopExecutor(self: *Self, executor: *Executor, exit_context: bool) void {
-            executor.deinit(exit_context);
+        pub fn stopExecutor(self: *Self, executor: *Executor) void {
+            executor.deinit();
             self.executor_pool.destroy(executor);
             if (self.gc_hints) {
                 self.isolate.lowMemoryNotification();
             }
 
             if (comptime builtin.mode == .Debug) {
-                std.debug.assert(self.has_executor == true);
-                self.has_executor = false;
+                if (executor.kind == .main) {
+                    std.debug.assert(self.has_executor == true);
+                    self.has_executor = false;
+                }
             }
         }
 
@@ -415,7 +422,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         // object (i.e. the Window), which gets attached not only to the Window
         // constructor/FunctionTemplate as normal, but also through the default
         // FunctionTemplate of the isolate (in startExecutor)
-        fn attachClass(self: *Self, comptime Struct: type, template: v8.FunctionTemplate) void {
+        fn attachClass(self: *const Self, comptime Struct: type, template: v8.FunctionTemplate) void {
             const template_proto = template.getPrototypeTemplate();
             inline for (@typeInfo(Struct).@"struct".decls) |declaration| {
                 const name = declaration.name;
@@ -491,7 +498,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             return template;
         }
 
-        fn generateMethod(self: *Self, comptime Struct: type, comptime name: []const u8, template_proto: v8.ObjectTemplate) void {
+        fn generateMethod(self: *const Self, comptime Struct: type, comptime name: []const u8, template_proto: v8.ObjectTemplate) void {
             var js_name: v8.Name = undefined;
             if (comptime std.mem.eql(u8, name, "_symbol_iterator")) {
                 js_name = v8.Symbol.getIterator(self.isolate).toName();
@@ -513,7 +520,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             template_proto.set(js_name, function_template, v8.PropertyAttribute.None);
         }
 
-        fn generateAttribute(self: *Self, comptime Struct: type, comptime name: []const u8, template: v8.FunctionTemplate, template_proto: v8.ObjectTemplate) void {
+        fn generateAttribute(self: *const Self, comptime Struct: type, comptime name: []const u8, template: v8.FunctionTemplate, template_proto: v8.ObjectTemplate) void {
             const zig_value = @field(Struct, name);
             const js_value = simpleZigValueToJs(self.isolate, zig_value, true);
 
@@ -526,7 +533,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             template_proto.set(js_name, js_value, v8.PropertyAttribute.ReadOnly + v8.PropertyAttribute.DontDelete);
         }
 
-        fn generateProperty(self: *Self, comptime Struct: type, comptime name: []const u8, template_proto: v8.ObjectTemplate) void {
+        fn generateProperty(self: *const Self, comptime Struct: type, comptime name: []const u8, template_proto: v8.ObjectTemplate) void {
             const getter = @field(Struct, "get_" ++ name);
             const param_count = @typeInfo(@TypeOf(getter)).@"fn".params.len;
 
@@ -576,7 +583,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             template_proto.setGetterAndSetter(js_name, getter_callback, setter_callback);
         }
 
-        fn generateIndexer(_: *Self, comptime Struct: type, template_proto: v8.ObjectTemplate) void {
+        fn generateIndexer(_: *const Self, comptime Struct: type, template_proto: v8.ObjectTemplate) void {
             if (@hasDecl(Struct, "indexed_get") == false) {
                 return;
             }
@@ -605,7 +612,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             template_proto.setIndexedProperty(configuration, null);
         }
 
-        fn generateNamedIndexer(_: *Self, comptime Struct: type, template_proto: v8.ObjectTemplate) void {
+        fn generateNamedIndexer(_: *const Self, comptime Struct: type, template_proto: v8.ObjectTemplate) void {
             if (@hasDecl(Struct, "named_get") == false) {
                 return;
             }
@@ -765,10 +772,17 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         const PersistentObject = v8.Persistent(v8.Object);
         const PersistentFunction = v8.Persistent(v8.Function);
 
+        const WorldKind = enum {
+            main,
+            isolated,
+            worker,
+        };
+
         // This is capable of executing JavaScript.
         pub const Executor = struct {
             state: State,
             isolate: v8.Isolate,
+            kind: WorldKind,
 
             handle_scope: v8.HandleScope,
 
@@ -819,9 +833,9 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
 
             // not public, must be destroyed via env.stopExecutor()
 
-            fn deinit(self: *Executor, exit_context: bool) void {
+            fn deinit(self: *Executor) void {
                 if (self.scope != null) self.endScope();
-                if (exit_context) self.context.exit();
+                if (self.kind == .main) self.context.exit();
                 self.handle_scope.deinit();
 
                 self._call_arena_instance.deinit();

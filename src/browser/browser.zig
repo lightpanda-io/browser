@@ -192,8 +192,8 @@ pub const Session = struct {
         self.state.cookie_jar = &self.cookie_jar;
         errdefer self.arena.deinit();
 
-        self.executor = try browser.env.startExecutor(Window, &self.state, self);
-        errdefer browser.env.stopExecutor(self.executor, true);
+        self.executor = try browser.env.startExecutor(Window, &self.state, self, .main);
+        errdefer browser.env.stopExecutor(self.executor);
         self.inspector = try Env.Inspector.init(self.arena.allocator(), self.executor, ctx);
 
         self.microtaskLoop();
@@ -208,7 +208,7 @@ pub const Session = struct {
         self.arena.deinit();
         self.cookie_jar.deinit();
         self.storage_shed.deinit();
-        self.browser.env.stopExecutor(self.executor, true);
+        self.browser.env.stopExecutor(self.executor);
     }
 
     fn microtaskLoop(self: *Session) void {
