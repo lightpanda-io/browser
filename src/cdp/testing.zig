@@ -122,27 +122,11 @@ const Inspector = struct {
         _ = value;
         return RemoteObject{};
     }
-    pub fn getValueByObjectId(self: Inspector, alloc: std.mem.Allocator, executor: *const Executor, object_id: []const u8) !Value {
+    pub fn getNodePtr(self: Inspector, alloc: std.mem.Allocator, object_id: []const u8) !?*anyopaque {
         _ = self;
-        _ = alloc;
-        _ = executor;
         _ = object_id;
-        return .{};
+        return try alloc.create(i32);
     }
-};
-const Value = struct {
-    pub fn taggedAnyOpaque(self: Value) ?*TaggedAnyOpaque {
-        _ = self;
-        return null;
-    }
-};
-const TaggedAnyOpaque = struct {
-    ptr: *anyopaque,
-    subtype: ?SubType = .node,
-};
-
-const SubType = enum {
-    node,
 };
 
 const RemoteObject = struct {
