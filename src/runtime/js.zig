@@ -1403,6 +1403,13 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 return @constCast(@as(*const T, &.{}));
             }
 
+            // if it isn't an empty struct, then the v8.Object should have an
+            // InternalFieldCount > 0, since our toa pointer should be embedded
+            // at index 0 of the internal field count.
+            if (js_obj.internalFieldCount() == 0) {
+                return error.InvalidArgument;
+            }
+
             const type_name = @typeName(T);
             if (@hasField(TypeLookup, type_name) == false) {
                 @compileError(std.fmt.comptimePrint(
