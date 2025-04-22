@@ -117,8 +117,8 @@ fn createIsolatedWorld(cmd: anytype) !void {
 
     // Create the auxdata json for the contextCreated event
     // Calling contextCreated will assign a Id to the context and send the contextCreated event
-    const aux_json = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{params.frameId});
-    bc.session.inspector.contextCreated(world.executor, world.name, "", aux_json, false);
+    const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{params.frameId});
+    bc.session.inspector.contextCreated(world.executor, world.name, "", aux_data, false);
 
     return cmd.sendResult(.{ .executionContextId = world.executor.context.debugContextId() }, .{});
 }
@@ -213,16 +213,14 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void 
         }, .{ .session_id = session_id });
     }
 
-    // Send Runtime.executionContextsCleared event
-    // TODO: noop event, we have no env context at this point, is it necesarry?
     // When we actually recreated the context we should have the inspector send this event, see: resetContextGroup
     // Sending this event will tell the client that the context ids they had are invalid and the context shouls be dropped
     // The client will expect us to send new contextCreated events, such that the client has new id's for the active contexts.
     try cdp.sendEvent("Runtime.executionContextsCleared", null, .{ .session_id = session_id });
 
     if (bc.isolated_world) |*isolated_world| {
-        // TODO change the allocator
-        const aux_json = try std.fmt.allocPrint(bc.session.arena.allocator(), "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{bc.target_id.?});
+        var buffer: [256]u8 = undefined;
+        const aux_json = try std.fmt.bufPrint(&buffer, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{bc.target_id.?});
 
         // Calling contextCreated will assign a new Id to the context and send the contextCreated event
         bc.session.inspector.contextCreated(

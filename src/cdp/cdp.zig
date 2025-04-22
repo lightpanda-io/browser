@@ -284,6 +284,9 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         // RELATION TO SESSION_ID
         session: *CDP_T.Session,
 
+        // Points to the session arena
+        arena: Allocator,
+
         // Maps to our Page. (There are other types of targets, but we only
         // deal with "pages" for now). Since we only allow 1 open page at a
         // time, we only have 1 target_id.
@@ -316,6 +319,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             var registry = Node.Registry.init(allocator);
             errdefer registry.deinit();
 
+            const session = try cdp.browser.newSession(self);
             self.* = .{
                 .id = id,
                 .cdp = cdp,
@@ -324,7 +328,8 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .security_origin = URL_BASE,
                 .secure_context_type = "Secure", // TODO = enum
                 .loader_id = LOADER_ID,
-                .session = try cdp.browser.newSession(self),
+                .session = session,
+                .arena = session.arena.allocator(),
                 .page_life_cycle_events = false, // TODO; Target based value
                 .node_registry = registry,
                 .node_search_list = undefined,
@@ -365,7 +370,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             executor.context.exit(); // The default context should remain open
 
             self.isolated_world = .{
-                .name = try self.session.arena.allocator().dupe(u8, world_name), // TODO allocator
+                .name = try self.arena.dupe(u8, world_name),
                 .grant_universal_access = grant_universal_access,
                 .executor = executor,
             };
@@ -468,6 +473,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
     };
 }
 
+/// see: https://chromium.googlesource.com/chromium/src/+/master/third_party/blink/renderer/bindings/core/v8/V8BindingDesign.md#world
 /// The current understanding. An isolated world lives in the same isolate, but a separated context.
 /// Clients create this to be able to create variables and run code without interfering with the
 /// normal namespace and values of the webpage. Similar to the main context we need to pretend to recreate it after

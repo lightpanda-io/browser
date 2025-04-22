@@ -126,6 +126,7 @@ pub const Session = struct {
     //
     // The arena is initialised with self.alloc allocator.
     // all others Session deps use directly self.alloc and not the arena.
+    // The arena is also used in the BrowserContext
     arena: std.heap.ArenaAllocator,
 
     window: Window,
