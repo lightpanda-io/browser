@@ -27,6 +27,9 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 
 const log = std.log.scoped(.js);
 
+const CALL_ARENA_RETAIN = 1024 * 16;
+const SCOPE_ARENA_RETAIN = 1024 * 64;
+
 // Global, should only be initialized once.
 pub const Platform = struct {
     inner: v8.Platform,
@@ -177,6 +180,9 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         // Send a lowMemoryNotification whenever we stop an executor
         gc_hints: bool,
 
+        // Used in debug mode to assert that we only have one executor at a time
+        has_executor: if (builtin.mode == .Debug) bool else void = if (builtin.mode == .Debug) false else {},
+
         const Self = @This();
 
         const State = S;
@@ -260,6 +266,10 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         }
 
         pub fn startExecutor(self: *Self, comptime Global: type, state: State, module_loader: anytype) !*Executor {
+            if (comptime builtin.mode == .Debug) {
+                std.debug.assert(self.has_executor == false);
+                self.has_executor = true;
+            }
             const isolate = self.isolate;
             const templates = &self.templates;
 
@@ -332,21 +342,27 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 context.setEmbedderData(1, data);
             }
 
-            const allocator = self.allocator;
-
             executor.* = .{
                 .state = state,
                 .context = context,
                 .isolate = isolate,
                 .templates = templates,
                 .handle_scope = handle_scope,
-                .call_arena = ArenaAllocator.init(allocator),
-                .scope_arena = ArenaAllocator.init(allocator),
+                .call_arena = undefined,
+                .scope_arena = undefined,
+                ._call_arena_instance = std.heap.ArenaAllocator.init(self.allocator),
+                ._scope_arena_instance = std.heap.ArenaAllocator.init(self.allocator),
                 .module_loader = .{
                     .ptr = @ptrCast(module_loader),
                     .func = @TypeOf(module_loader.*).fetchModuleSource,
                 },
             };
+
+            // We do it this way, just to present a slightly nicer API. Many
+            // things want one of these two allocator from the executor. Now they
+            // can do `executor.call_arena`  instead of `executor.call_arena.allocator`.
+            executor.call_arena = executor._call_arena_instance.allocator();
+            executor.scope_arena = executor._scope_arena_instance.allocator();
 
             errdefer self.stopExecutor(executor);
 
@@ -374,6 +390,11 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             self.executor_pool.destroy(executor);
             if (self.gc_hints) {
                 self.isolate.lowMemoryNotification();
+            }
+
+            if (comptime builtin.mode == .Debug) {
+                std.debug.assert(self.has_executor == true);
+                self.has_executor = false;
             }
         }
 
@@ -755,19 +776,27 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             // a context, we can always get the Executor back.
             context: v8.Context,
 
+            // Because calls can be nested (i.e.a function calling a callback),
+            // we can only reset the call_arena when call_depth == 0. If we were
+            // to reset it within a callback, it would invalidate the data of
+            // the call which is calling the callback.
+            call_depth: usize = 0,
+
             // Arena whose lifetime is for a single getter/setter/function/etc.
             // Largely used to get strings out of V8, like a stack trace from
             // a TryCatch. The allocator will be owned by the Scope, but the
             // arena itself is owned by the Executor so that we can re-use it
             // from scope to scope.
-            call_arena: ArenaAllocator,
+            call_arena: Allocator,
+            _call_arena_instance: std.heap.ArenaAllocator,
 
             // Arena whose lifetime is for a single page load, aka a Scope. Where
             // the call_arena lives for a single function call, the scope_arena
             // lives for the lifetime of the entire page. The allocator will be
             // owned by the Scope, but the arena itself is owned by the Executor
             // so that we can re-use it from scope to scope.
-            scope_arena: ArenaAllocator,
+            scope_arena: Allocator,
+            _scope_arena_instance: std.heap.ArenaAllocator,
 
             // When we need to load a resource (i.e. an external script), we call
             // this function to get the source. This is always a reference to the
@@ -790,13 +819,14 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
 
             // not public, must be destroyed via env.stopExecutor()
             fn deinit(self: *Executor) void {
-                if (self.scope) |*s| {
-                    s.deinit();
+                if (self.scope != null) {
+                    self.endScope();
                 }
                 self.context.exit();
                 self.handle_scope.deinit();
-                self.call_arena.deinit();
-                self.scope_arena.deinit();
+
+                self._call_arena_instance.deinit();
+                self._scope_arena_instance.deinit();
             }
 
             // Executes the src
@@ -889,8 +919,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 v8.HandleScope.init(&handle_scope, self.isolate);
                 self.scope = Scope{
                     .handle_scope = handle_scope,
-                    .arena = self.scope_arena.allocator(),
-                    .call_arena = self.scope_arena.allocator(),
+                    .arena = self.scope_arena,
                 };
                 _ = try self._mapZigInstanceToJs(self.context.getGlobal(), global);
             }
@@ -898,7 +927,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             pub fn endScope(self: *Executor) void {
                 self.scope.?.deinit();
                 self.scope = null;
-                _ = self.scope_arena.reset(.{ .retain_with_limit = 1024 * 64 });
+                _ = self._scope_arena_instance.reset(.{ .retain_with_limit = SCOPE_ARENA_RETAIN });
             }
 
             // Given an anytype, turns it into a v8.Object. The anytype could be:
@@ -1090,7 +1119,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         // in executor, rather than having one for each of these.
         pub const Scope = struct {
             arena: Allocator,
-            call_arena: Allocator,
             handle_scope: v8.HandleScope,
             callbacks: std.ArrayListUnmanaged(v8.Persistent(v8.Function)) = .{},
             identity_map: std.AutoHashMapUnmanaged(usize, PersistentObject) = .{},
@@ -1148,7 +1176,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
 
                 self.callWithThis(this, args) catch |err| {
                     if (try_catch.hasCaught()) {
-                        const allocator = self.executor.scope.?.call_arena;
+                        const allocator = self.executor.call_arena;
                         result.stack = try_catch.stack(allocator) catch null;
                         result.exception = (try_catch.exception(allocator) catch @errorName(err)) orelse @errorName(err);
                     } else {
@@ -1185,7 +1213,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             fn printFunc(self: Callback) !void {
                 const executor = self.executor;
                 const value = self.func.castToFunction().toValue();
-                const src = try valueToString(executor.call_arena.allocator(), value, executor.isolate, executor.context);
+                const src = try valueToString(executor.call_arena, value, executor.isolate, executor.context);
                 std.debug.print("{s}\n", .{src});
             }
         };
@@ -1209,7 +1237,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             pub fn setIndex(self: JsObject, index: usize, value: anytype) !void {
                 const key = switch (index) {
                     inline 0...1000 => |i| std.fmt.comptimePrint("{d}", .{i}),
-                    else => try std.fmt.allocPrint(self.executor.scope_arena.allocator(), "{d}", .{index}),
+                    else => try std.fmt.allocPrint(self.executor.scope_arena, "{d}", .{index}),
                 };
                 return self.set(key, value);
             }
@@ -1500,7 +1528,7 @@ fn Caller(comptime E: type) type {
         context: v8.Context,
         isolate: v8.Isolate,
         executor: *E.Executor,
-        call_allocator: Allocator,
+        call_arena: Allocator,
 
         const Self = @This();
 
@@ -1512,17 +1540,34 @@ fn Caller(comptime E: type) type {
             const context = isolate.getCurrentContext();
             const executor: *E.Executor = @ptrFromInt(context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
 
+            executor.call_depth += 1;
             return .{
                 .isolate = isolate,
                 .context = context,
                 .executor = executor,
-                .call_allocator = executor.scope.?.call_arena,
+                .call_arena = executor.call_arena,
             };
         }
 
         fn deinit(self: *Self) void {
-            _ = self;
-            // _ = self.executor.call_arena.reset(.{ .retain_with_limit = 4096 });
+            const executor = self.executor;
+            const call_depth = executor.call_depth - 1;
+            executor.call_depth = call_depth;
+
+            // Because of callbacks, calls can be nested. Because of this, we
+            // can't clear the call_arena after _every_ call. Imagine we have
+            //    arr.forEach((i) => { console.log(i); }
+            //
+            // First we call forEach. Inside of our forEach call,
+            // we call console.log. If we reset the call_arena after this call,
+            // it'll reset it for the `forEach` call after, which might still
+            // need the data.
+            //
+            // Therefore, we keep a call_depth, and only reset the call_arena
+            // when a top-level (call_depth == 0) function ends.
+            if (call_depth == 0) {
+                _ = executor._call_arena_instance.reset(.{ .retain_with_limit = CALL_ARENA_RETAIN });
+            }
         }
 
         fn constructor(self: *Self, comptime named_function: anytype, info: v8.FunctionCallbackInfo) !void {
@@ -1690,7 +1735,7 @@ fn Caller(comptime E: type) type {
         }
 
         fn nameToString(self: *Self, name: v8.Name) ![]const u8 {
-            return valueToString(self.call_allocator, .{ .handle = name.handle }, self.isolate, self.context);
+            return valueToString(self.call_arena, .{ .handle = name.handle }, self.isolate, self.context);
         }
 
         fn assertSelfReceiver(comptime named_function: anytype) void {
@@ -1739,7 +1784,7 @@ fn Caller(comptime E: type) type {
 
                     const Exception = comptime getCustomException(named_function.S) orelse break :blk null;
                     if (function_error_set == Exception or isErrorSetException(Exception, err)) {
-                        const custom_exception = Exception.init(self.call_allocator, err, named_function.js_name) catch |init_err| {
+                        const custom_exception = Exception.init(self.call_arena, err, named_function.js_name) catch |init_err| {
                             switch (init_err) {
                                 // if a custom exceptions' init wants to return a
                                 // different error, we need to think about how to
@@ -1872,7 +1917,7 @@ fn Caller(comptime E: type) type {
                         if (js_parameter_count == 0) {
                             @field(args, tupleFieldName(params_to_map.len + offset - 1)) = &.{};
                         } else {
-                            const arr = try self.call_allocator.alloc(last_parameter_type_info.pointer.child, js_parameter_count - params_to_map.len + 1);
+                            const arr = try self.call_arena.alloc(last_parameter_type_info.pointer.child, js_parameter_count - params_to_map.len + 1);
                             for (arr, last_js_parameter..) |*a, i| {
                                 const js_value = info.getArg(@as(u32, @intCast(i)));
                                 a.* = try self.jsValueToZig(named_function, slice_type, js_value);
@@ -1943,10 +1988,10 @@ fn Caller(comptime E: type) type {
                         if (ptr.child == u8) {
                             if (ptr.sentinel()) |s| {
                                 if (comptime s == 0) {
-                                    return valueToStringZ(self.call_allocator, js_value, self.isolate, self.context);
+                                    return valueToStringZ(self.call_arena, js_value, self.isolate, self.context);
                                 }
                             } else {
-                                return valueToString(self.call_allocator, js_value, self.isolate, self.context);
+                                return valueToString(self.call_arena, js_value, self.isolate, self.context);
                             }
                         }
 
@@ -1972,7 +2017,7 @@ fn Caller(comptime E: type) type {
 
                         // Newer version of V8 appear to have an optimized way
                         // to do this (V8::Array has an iterate method on it)
-                        const arr = try self.call_allocator.alloc(ptr.child, js_arr.length());
+                        const arr = try self.call_arena.alloc(ptr.child, js_arr.length());
                         for (arr, 0..) |*a, i| {
                             a.* = try self.jsValueToZig(named_function, ptr.child, try js_obj.getAtIndex(context, @intCast(i)));
                         }
