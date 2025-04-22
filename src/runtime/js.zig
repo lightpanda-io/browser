@@ -364,7 +364,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             executor.call_arena = executor._call_arena_instance.allocator();
             executor.scope_arena = executor._scope_arena_instance.allocator();
 
-            errdefer self.stopExecutor(executor);
+            errdefer self.stopExecutor(executor, false); // Note: This likely has issues as context.exit() is errdefered as well
 
             // Custom exception
             // NOTE: there is no way in v8 to subclass the Error built-in type
@@ -385,8 +385,8 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         // a Context, it's managed by the garbage collector. So, when the
         // `gc_hints` option is enabled, we'll use the `lowMemoryNotification`
         // call on the isolate to encourage v8 to free the context.
-        pub fn stopExecutor(self: *Self, executor: *Executor) void {
-            executor.deinit();
+        pub fn stopExecutor(self: *Self, executor: *Executor, exit_context: bool) void {
+            executor.deinit(exit_context);
             self.executor_pool.destroy(executor);
             if (self.gc_hints) {
                 self.isolate.lowMemoryNotification();
@@ -818,11 +818,10 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             // no init, must be initialized via env.startExecutor()
 
             // not public, must be destroyed via env.stopExecutor()
-            fn deinit(self: *Executor) void {
-                if (self.scope != null) {
-                    self.endScope();
-                }
-                self.context.exit();
+
+            fn deinit(self: *Executor, exit_context: bool) void {
+                if (self.scope != null) self.endScope();
+                if (exit_context) self.context.exit();
                 self.handle_scope.deinit();
 
                 self._call_arena_instance.deinit();
