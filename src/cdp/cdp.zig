@@ -469,11 +469,12 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 }
 
 /// The current understanding. An isolated world lives in the same isolate, but a separated context.
-/// Clients creates this to be able to create variables and run code without interfering
-/// with the normal namespace and values of the webpage. Similar to the main context we need to pretend to recreate it after
+/// Clients create this to be able to create variables and run code without interfering with the
+/// normal namespace and values of the webpage. Similar to the main context we need to pretend to recreate it after
 /// a executionContextsCleared event which happens when navigating to a new page. A client can have a command be executed
 /// in the isolated world by using its Context ID or the worldName.
-/// grantUniveralAccess Indecated whether the isolated world has access to objects like the DOM or other JS Objects.
+/// grantUniveralAccess Indecated whether the isolated world can reference objects like the DOM or other JS Objects.
+/// An isolated world has it's own instance of globals like Window.
 /// Generally the client needs to resolve a node into the isolated world to be able to work with it.
 /// An object id is unique across all contexts, different object ids can refer to the same Node in different contexts.
 pub const IsolatedWorld = struct {
