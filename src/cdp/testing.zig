@@ -55,13 +55,13 @@ const Browser = struct {
         if (self.session != null) {
             return error.MockBrowserSessionAlreadyExists;
         }
-
         const arena = self.arena.allocator();
+        const executor = arena.create(Executor) catch unreachable;
         self.session = try arena.create(Session);
         self.session.?.* = .{
             .page = null,
             .arena = arena,
-            .executor = .{},
+            .executor = executor,
             .inspector = .{},
         };
         return self.session.?;
@@ -78,7 +78,7 @@ const Browser = struct {
 const Session = struct {
     page: ?Page = null,
     arena: Allocator,
-    executor: Executor,
+    executor: *Executor,
     inspector: Inspector,
 
     pub fn currentPage(self: *Session) ?*Page {
@@ -112,7 +112,7 @@ const Executor = struct {};
 const Inspector = struct {
     pub fn getRemoteObject(
         self: *const Inspector,
-        executor: Executor,
+        executor: *Executor,
         group: []const u8,
         value: anytype,
     ) !RemoteObject {
@@ -121,6 +121,11 @@ const Inspector = struct {
         _ = group;
         _ = value;
         return RemoteObject{};
+    }
+    pub fn getNodePtr(self: Inspector, alloc: std.mem.Allocator, object_id: []const u8) !?*anyopaque {
+        _ = self;
+        _ = object_id;
+        return try alloc.create(i32);
     }
 };
 

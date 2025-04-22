@@ -1369,6 +1369,15 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                     generate_preview,
                 );
             }
+
+            // Gets a value by object ID regardless of which context it is in.
+            pub fn getNodePtr(self: *const Inspector, allocator: Allocator, object_id: []const u8) !?*anyopaque {
+                const unwrapped = try self.session.unwrapObject(allocator, object_id);
+                // The values context and groupId are not used here
+                const toa = getTaggedAnyOpaque(unwrapped.value) orelse return null;
+                if (toa.subtype == null or toa.subtype != .node) return error.ObjectIdIsNotANode;
+                return toa.ptr;
+            }
         };
 
         pub const RemoteObject = v8.RemoteObject;

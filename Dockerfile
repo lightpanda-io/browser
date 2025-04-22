@@ -5,7 +5,7 @@ ARG ZIG=0.14.0
 ARG ZIG_MINISIG=RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
 ARG ARCH=x86_64
 ARG V8=11.1.134
-ARG ZIG_V8=v0.1.16
+ARG ZIG_V8=v0.1.18
 
 RUN apt-get update -yq && \
     apt-get install -yq xz-utils \
@@ -49,10 +49,6 @@ WORKDIR /browser
 
 # install deps
 RUN git submodule init && \
-    git submodule update --recursive
-
-RUN cd vendor/zig-js-runtime && \
-    git submodule init && \
     git submodule update --recursive
 
 RUN make install-libiconv && \
