@@ -308,24 +308,6 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         isolated_world: ?IsolatedWorld,
 
-        pub fn createIsolatedWorld(
-            self: *Self,
-            world_name: []const u8,
-            grant_universal_access: bool,
-        ) !void {
-            if (self.isolated_world != null) return error.AlreadyExists;
-
-            const executor = try self.cdp.browser.env.startExecutor(@import("../browser/html/window.zig").Window, &self.session.state, self.session);
-            errdefer self.cdp.browser.env.stopExecutor(executor);
-            executor.context.exit();
-
-            self.isolated_world = .{
-                .name = try self.session.arena.allocator().dupe(u8, world_name), // TODO allocator
-                .grant_universal_access = grant_universal_access,
-                .executor = executor,
-            };
-        }
-
         const Self = @This();
 
         fn init(self: *Self, id: []const u8, cdp: *CDP_T) !void {
@@ -352,6 +334,11 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         }
 
         pub fn deinit(self: *Self) void {
+            if (self.isolated_world) |isolated_world| {
+                isolated_world.executor.endScope();
+                self.cdp.browser.env.stopExecutor(isolated_world.executor, false);
+                self.isolated_world = null;
+            }
             self.node_registry.deinit();
             self.node_search_list.deinit();
         }
@@ -359,6 +346,29 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         pub fn reset(self: *Self) void {
             self.node_registry.reset();
             self.node_search_list.reset();
+        }
+
+        pub fn createIsolatedWorld(
+            self: *Self,
+            world_name: []const u8,
+            grant_universal_access: bool,
+        ) !void {
+            if (self.isolated_world != null) return error.CurrentlyOnly1IsolatedWorldSupported;
+
+            const executor = try self.cdp.browser.env.startExecutor(@import("../browser/html/window.zig").Window, &self.session.state, self.session);
+            errdefer self.cdp.browser.env.stopExecutor(executor, true);
+
+            // TBD should we endScope on removePage and re-startScope on createPage?
+            // Window will be refactored into the executor so we leave it ugly here for now as a reminder.
+            try executor.startScope(@import("../browser/html/window.zig").Window{});
+
+            executor.context.exit(); // The default context should remain open
+
+            self.isolated_world = .{
+                .name = try self.session.arena.allocator().dupe(u8, world_name), // TODO allocator
+                .grant_universal_access = grant_universal_access,
+                .executor = executor,
+            };
         }
 
         pub fn nodeWriter(self: *Self, node: *const Node, opts: Node.Writer.Opts) Node.Writer {

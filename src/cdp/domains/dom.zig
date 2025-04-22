@@ -134,6 +134,7 @@ fn resolveNode(cmd: anytype) !void {
         if (executor.context.debugContextId() != context_id) {
             const isolated_world = bc.isolated_world orelse return error.ContextNotFound;
             executor = isolated_world.executor;
+
             if (executor.context.debugContextId() != context_id) return error.ContextNotFound;
         }
     }
@@ -143,7 +144,7 @@ fn resolveNode(cmd: anytype) !void {
     // node._node is a *parser.Node we need this to be able to find its most derived type e.g. Node -> Element -> HTMLElement
     // So we use the Node.Union when retrieve the value from the environment
     const remote_object = try bc.session.inspector.getRemoteObject(
-        bc.session.executor,
+        executor,
         params.objectGroup orelse "",
         try dom_node.Node.toInterface(node._node),
     );

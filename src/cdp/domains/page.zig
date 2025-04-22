@@ -84,6 +84,8 @@ fn setLifecycleEventsEnabled(cmd: anytype) !void {
 }
 
 // TODO: hard coded method
+// With the command we receive a script we need to store and run for each new document.
+// Note that the worldName refers to the name given to the isolated world.
 fn addScriptToEvaluateOnNewDocument(cmd: anytype) !void {
     // const params = (try cmd.params(struct {
     //     source: []const u8,
@@ -110,9 +112,10 @@ fn createIsolatedWorld(cmd: anytype) !void {
     }
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-    try bc.createIsolatedWorld(params.worldName, params.grantUniveralAccess); // orelse return error.IsolatedWorldAlreadyExists;
+    try bc.createIsolatedWorld(params.worldName, params.grantUniveralAccess);
 
-    // Create the auxdata json from
+    // Create the auxdata json for the contextCreated event
+    // Calling contextCreated will assign a Id to the context and send the contextCreated event
     const aux_json = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{params.frameId});
     bc.session.inspector.contextCreated(bc.isolated_world.?.executor, bc.isolated_world.?.name, "", aux_json, false);
 
@@ -213,16 +216,19 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void 
 
     // Send Runtime.executionContextsCleared event
     // TODO: noop event, we have no env context at this point, is it necesarry?
-    // When we actually recreated the context we should have the inspector send this event, see:  resetContextGroup
+    // When we actually recreated the context we should have the inspector send this event, see: resetContextGroup
+    // Sending this event will tell the client that the context ids they had are invalid and the context shouls be dropped
+    // The client will expect us to send new contextCreated events, such that the client has new id's for the active contexts.
     try cdp.sendEvent("Runtime.executionContextsCleared", null, .{ .session_id = session_id });
 
     if (bc.isolated_world != null) {
         const aux_json = try std.fmt.allocPrint(
             bc.session.arena.allocator(), // TODO change this
             "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}",
-            .{bc.target_id.?}, // TODO check this
+            .{bc.target_id.?},
         );
 
+        // Calling contextCreated will assign a new Id to the context and send the contextCreated event
         bc.session.inspector.contextCreated(
             bc.isolated_world.?.executor,
             bc.isolated_world.?.name,
