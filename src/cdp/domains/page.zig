@@ -113,15 +113,14 @@ fn createIsolatedWorld(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     try bc.createIsolatedWorld(params.worldName, params.grantUniveralAccess);
+    const world = &bc.isolated_world.?;
 
     // Create the auxdata json for the contextCreated event
     // Calling contextCreated will assign a Id to the context and send the contextCreated event
     const aux_json = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{params.frameId});
-    bc.session.inspector.contextCreated(bc.isolated_world.?.executor, bc.isolated_world.?.name, "", aux_json, false);
+    bc.session.inspector.contextCreated(world.executor, world.name, "", aux_json, false);
 
-    return cmd.sendResult(.{
-        .executionContextId = bc.isolated_world.?.executor.context.debugContextId(),
-    }, .{});
+    return cmd.sendResult(.{ .executionContextId = world.executor.context.debugContextId() }, .{});
 }
 
 fn navigate(cmd: anytype) !void {
@@ -221,17 +220,14 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void 
     // The client will expect us to send new contextCreated events, such that the client has new id's for the active contexts.
     try cdp.sendEvent("Runtime.executionContextsCleared", null, .{ .session_id = session_id });
 
-    if (bc.isolated_world != null) {
-        const aux_json = try std.fmt.allocPrint(
-            bc.session.arena.allocator(), // TODO change this
-            "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}",
-            .{bc.target_id.?},
-        );
+    if (bc.isolated_world) |*isolated_world| {
+        // TODO change the allocator
+        const aux_json = try std.fmt.allocPrint(bc.session.arena.allocator(), "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{bc.target_id.?});
 
         // Calling contextCreated will assign a new Id to the context and send the contextCreated event
         bc.session.inspector.contextCreated(
-            bc.isolated_world.?.executor,
-            bc.isolated_world.?.name,
+            isolated_world.executor,
+            isolated_world.name,
             "://",
             aux_json,
             false,
