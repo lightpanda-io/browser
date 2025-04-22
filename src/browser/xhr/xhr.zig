@@ -254,7 +254,7 @@ pub const XMLHttpRequest = struct {
     };
     const ResponseObj = union(ResponseObjTag) {
         Document: *parser.Document,
-        Failure: bool,
+        Failure: void,
         JSON: std.json.Parsed(JSONValue),
 
         fn deinit(self: ResponseObj) void {
@@ -511,12 +511,8 @@ pub const XMLHttpRequest = struct {
             }
 
             // extract a mime type from headers.
-            {
-                var raw: []const u8 = "text/xml";
-                if (header.get("content-type")) |ct| {
-                    raw = try self.arena.dupe(u8, ct);
-                }
-                self.response_mime = Mime.parse(self.arena, raw) catch |e| {
+            if (header.get("content-type")) |ct| {
+                self.response_mime = Mime.parse(self.arena, ct) catch |e| {
                     return self.onErr(e);
                 };
             }
@@ -724,26 +720,24 @@ pub const XMLHttpRequest = struct {
     // TODO parse XML.
     // https://xhr.spec.whatwg.org/#response-object
     fn setResponseObjDocument(self: *XMLHttpRequest) void {
-        const response_mime = &self.response_mime.?;
-        const isHTML = response_mime.isHTML();
-
-        // TODO If finalMIME is not an HTML MIME type or an XML MIME type, then
-        // return.
-        if (!isHTML) {
+        const mime = self.response_mime orelse return;
+        if (mime.isHTML() == false) {
             return;
         }
 
         var ccharset: [:0]const u8 = "utf-8";
-        if (response_mime.charset) |rc| {
-            ccharset = self.arena.dupeZ(u8, rc) catch {
-                self.response_obj = .{ .Failure = true };
-                return;
-            };
+        if (mime.charset) |rc| {
+            if (std.mem.eql(u8, rc, "utf-8") == false) {
+                ccharset = self.arena.dupeZ(u8, rc) catch {
+                    self.response_obj = .{ .Failure = {} };
+                    return;
+                };
+            }
         }
 
         var fbs = std.io.fixedBufferStream(self.response_bytes.items);
         const doc = parser.documentHTMLParse(fbs.reader(), ccharset) catch {
-            self.response_obj = .{ .Failure = true };
+            self.response_obj = .{ .Failure = {} };
             return;
         };
 
@@ -766,7 +760,7 @@ pub const XMLHttpRequest = struct {
             .{},
         ) catch |e| {
             log.err("parse JSON: {}", .{e});
-            self.response_obj = .{ .Failure = true };
+            self.response_obj = .{ .Failure = {} };
             return;
         };
 

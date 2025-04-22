@@ -435,24 +435,19 @@ pub const Page = struct {
 
         log.info("GET {any} {d}", .{ url, header.status });
 
-        const ct = blk: {
-            break :blk header.get("content-type") orelse {
-                // no content type in HTTP headers.
-                // TODO try to sniff mime type from the body.
-                log.info("no content-type HTTP header", .{});
+        const content_type = header.get("content-type");
 
-                // Assume it's HTML for now.
-                break :blk "text/html; charset=utf-8";
-            };
-        };
-
-        log.debug("header content-type: {s}", .{ct});
-        var mime = try Mime.parse(arena, ct);
+        const mime: Mime = blk: {
+            if (content_type) |ct| {
+                break :blk try Mime.parse(arena, ct);
+            }
+            break :blk Mime.sniff(try response.peek());
+        } orelse .unknown;
 
         if (mime.isHTML()) {
             try self.loadHTMLDoc(&response, mime.charset orelse "utf-8");
         } else {
-            log.info("non-HTML document: {s}", .{ct});
+            log.info("non-HTML document: {s}", .{content_type orelse "null"});
             var arr: std.ArrayListUnmanaged(u8) = .{};
             while (try response.next()) |data| {
                 try arr.appendSlice(arena, try arena.dupe(u8, data));
