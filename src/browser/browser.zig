@@ -309,7 +309,7 @@ pub const Session = struct {
 
     fn contextCreated(self: *Session, page: *Page) void {
         log.debug("inspector context created", .{});
-        self.inspector.contextCreated(self.executor, "", (page.origin() catch "://") orelse "://", aux_data, true);
+        self.inspector.contextCreated(self.executor, "", (page.origin() catch "://") orelse "://", self.aux_data, true);
     }
 
     fn notify(self: *const Session, notification: *const Notification) void {
