@@ -31,45 +31,20 @@ pub const DOMImplementation = struct {
 
     pub fn _createDocumentType(
         _: *DOMImplementation,
-        qname: []const u8,
-        publicId: []const u8,
-        systemId: []const u8,
-        state: *SessionState,
+        qname: [:0]const u8,
+        publicId: [:0]const u8,
+        systemId: [:0]const u8,
     ) !*parser.DocumentType {
-        const allocator = state.arena;
-        const cqname = try allocator.dupeZ(u8, qname);
-        defer allocator.free(cqname);
-
-        const cpublicId = try allocator.dupeZ(u8, publicId);
-        defer allocator.free(cpublicId);
-
-        const csystemId = try allocator.dupeZ(u8, systemId);
-        defer allocator.free(csystemId);
-
-        return try parser.domImplementationCreateDocumentType(cqname, cpublicId, csystemId);
+        return try parser.domImplementationCreateDocumentType(qname, publicId, systemId);
     }
 
     pub fn _createDocument(
         _: *DOMImplementation,
-        namespace: ?[]const u8,
-        qname: ?[]const u8,
+        namespace: ?[:0]const u8,
+        qname: ?[:0]const u8,
         doctype: ?*parser.DocumentType,
-        state: *SessionState,
     ) !*parser.Document {
-        const allocator = state.arena;
-        var cnamespace: ?[:0]const u8 = null;
-        if (namespace) |ns| {
-            cnamespace = try allocator.dupeZ(u8, ns);
-        }
-        defer if (cnamespace) |v| allocator.free(v);
-
-        var cqname: ?[:0]const u8 = null;
-        if (qname) |qn| {
-            cqname = try allocator.dupeZ(u8, qn);
-        }
-        defer if (cqname) |v| allocator.free(v);
-
-        return try parser.domImplementationCreateDocument(cnamespace, cqname, doctype);
+        return try parser.domImplementationCreateDocument(namespace, qname, doctype);
     }
 
     pub fn _createHTMLDocument(_: *DOMImplementation, title: ?[]const u8) !*parser.DocumentHTML {
@@ -79,8 +54,6 @@ pub const DOMImplementation = struct {
     pub fn _hasFeature(_: *DOMImplementation) bool {
         return true;
     }
-
-    pub fn deinit(_: *DOMImplementation, _: std.mem.Allocator) void {}
 };
 
 // Tests
