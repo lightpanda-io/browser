@@ -30,13 +30,19 @@ const polyfill = @import("../browser/polyfill/polyfill.zig");
 // runWPT parses the given HTML file, starts a js env and run the first script
 // tags containing javascript sources.
 // It loads first the js libs files.
-pub fn run(arena: Allocator, comptime dir: []const u8, f: []const u8, loader: *FileLoader, err_msg: *?[]const u8) ![]const u8 {
+pub fn run(arena: Allocator, comptime dir: []const u8, f: []const u8, loader: *FileLoader, err_msg: *?[]const u8) !?[]const u8 {
     // document
     const html = blk: {
         const file = try std.fs.cwd().openFile(f, .{});
         defer file.close();
         break :blk try file.readToEndAlloc(arena, 128 * 1024);
     };
+
+    if (std.mem.indexOf(u8, html, "testharness.js") == null) {
+        // This isn't a test. A lot of files are helpers/content for tests to
+        // make use of.
+        return null;
+    }
 
     const dirname = fspath.dirname(f[dir.len..]) orelse unreachable;
 
@@ -115,11 +121,11 @@ pub fn run(arena: Allocator, comptime dir: []const u8, f: []const u8, loader: *F
 
     // return the detailed result.
     const res = try runner.eval("report.log", "report", err_msg);
-    return res.toString(arena);
+    return try res.toString(arena);
 }
 
 // browse the path to find the tests list.
-pub fn find(allocator: std.mem.Allocator, comptime path: []const u8, list: *std.ArrayList([]const u8)) !void {
+pub fn find(allocator: Allocator, comptime path: []const u8, list: *std.ArrayList([]const u8)) !void {
     var dir = try std.fs.cwd().openDir(path, .{ .iterate = true, .no_follow = true });
     defer dir.close();
 
@@ -130,6 +136,12 @@ pub fn find(allocator: std.mem.Allocator, comptime path: []const u8, list: *std.
         if (entry.kind != .file) {
             continue;
         }
+
+        if (std.mem.startsWith(u8, entry.path, "resources/")) {
+            // resources for running the tests themselves, not actual tests
+            continue;
+        }
+
         if (!std.mem.endsWith(u8, entry.basename, ".html") and !std.mem.endsWith(u8, entry.basename, ".htm")) {
             continue;
         }

@@ -148,6 +148,10 @@ pub fn main() !void {
             }
             failures += 1;
             continue;
+        } orelse {
+            // This test should _not_ have been run.
+            run -= 1;
+            continue;
         };
 
         const suite = try Suite.init(alloc, tc, true, res);
