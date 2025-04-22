@@ -20,7 +20,7 @@ const std = @import("std");
 
 const parser = @import("../netsurf.zig");
 
-const JsObject = @import("../env.zig").JsObject;
+const JsThis = @import("../env.zig").JsThis;
 const Callback = @import("../env.zig").Callback;
 const SessionState = @import("../env.zig").SessionState;
 
@@ -177,11 +177,11 @@ pub const NodeList = struct {
     }
 
     // TODO entries() https://developer.mozilla.org/en-US/docs/Web/API/NodeList/entries
-    pub fn postAttach(self: *NodeList, js_obj: JsObject) !void {
+    pub fn postAttach(self: *NodeList, js_this: JsThis) !void {
         const len = self.get_length();
         for (0..len) |i| {
             const node = try self._item(@intCast(i)) orelse unreachable;
-            try js_obj.setIndex(i, node);
+            try js_this.setIndex(i, node);
         }
     }
 };

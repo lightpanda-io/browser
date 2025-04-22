@@ -24,7 +24,7 @@ const utils = @import("utils.z");
 const Element = @import("element.zig").Element;
 const Union = @import("element.zig").Union;
 
-const JsObject = @import("../env.zig").JsObject;
+const JsThis = @import("../env.zig").JsThis;
 
 const Walker = @import("walker.zig").Walker;
 const WalkerDepthFirst = @import("walker.zig").WalkerDepthFirst;
@@ -443,15 +443,15 @@ pub const HTMLCollection = struct {
         return null;
     }
 
-    pub fn postAttach(self: *HTMLCollection, js_obj: JsObject) !void {
+    pub fn postAttach(self: *HTMLCollection, js_this: JsThis) !void {
         const len = try self.get_length();
         for (0..len) |i| {
             const node = try self.item(@intCast(i)) orelse unreachable;
             const e = @as(*parser.Element, @ptrCast(node));
-            try js_obj.setIndex(@intCast(i), e);
+            try js_this.setIndex(@intCast(i), e);
 
             if (try item_name(e)) |name| {
-                try js_obj.set(name, e);
+                try js_this.set(name, e);
             }
         }
     }
