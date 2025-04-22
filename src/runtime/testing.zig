@@ -43,7 +43,7 @@ pub fn Runner(comptime State: type, comptime Global: type, comptime types: anyty
 
             const G = if (Global == void) DefaultGlobal else Global;
 
-            runner.executor = try runner.env.startExecutor(G, state, runner);
+            runner.executor = try runner.env.startExecutor(G, state, runner, .main);
             errdefer runner.env.stopExecutor(runner.executor);
 
             try runner.executor.startScope(if (Global == void) &default_global else global);
