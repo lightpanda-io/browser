@@ -441,15 +441,8 @@ pub const Page = struct {
             if (content_type) |ct| {
                 break :blk try Mime.parse(arena, ct);
             }
-
-            // FIX-ME: we have a bug with response.peek()
-            //break :blk Mime.sniff(try response.peek());
-
-            break :blk Mime{
-                .content_type = .{ .text_html = {} },
-                .charset = "utf-8",
-            };
-        };
+            break :blk Mime.sniff(try response.peek());
+        } orelse .unknown;
 
         if (mime.isHTML()) {
             try self.loadHTMLDoc(&response, mime.charset orelse "utf-8");
