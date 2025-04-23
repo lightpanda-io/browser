@@ -50,20 +50,6 @@ fn sendInspector(cmd: anytype, action: anytype) !void {
     cmd.cdp.browser.runMicrotasks();
 }
 
-pub const ExecutionContextCreated = struct {
-    id: u64,
-    origin: []const u8,
-    name: []const u8,
-    uniqueId: []const u8,
-    auxData: ?AuxData = null,
-
-    pub const AuxData = struct {
-        isDefault: bool = true,
-        type: []const u8 = "default",
-        frameId: []const u8,
-    };
-};
-
 fn logInspector(cmd: anytype, action: anytype) !void {
     const script = switch (action) {
         .evaluate => blk: {
