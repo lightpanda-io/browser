@@ -46,6 +46,36 @@ pub const ProcessingInstruction = struct {
     pub fn set_data(self: *parser.ProcessingInstruction, data: []u8) !void {
         try parser.nodeSetValue(parser.processingInstructionToNode(self), data);
     }
+
+    // netsurf's ProcessInstruction doesn't implement the dom_node_get_attributes
+    // and thus will crash if we try to call nodeIsEqualNode.
+    pub fn _isEqualNode(self: *parser.ProcessingInstruction, other_node: *parser.Node) !bool {
+        if (try parser.nodeType(other_node) != .processing_instruction) {
+            return false;
+        }
+
+        const other: *parser.ProcessingInstruction = @ptrCast(other_node);
+
+        if (std.mem.eql(u8, try get_target(self), try get_target(other)) == false) {
+            return false;
+        }
+
+        {
+            const self_data = try get_data(self);
+            const other_data = try get_data(other);
+            if (self_data == null and other_data != null) {
+                return false;
+            }
+            if (self_data != null and other_data == null) {
+                return false;
+            }
+            if (std.mem.eql(u8, self_data.?, other_data.?) == false) {
+                return false;
+            }
+        }
+
+        return true;
+    }
 };
 
 const testing = @import("../../testing.zig");
@@ -61,5 +91,17 @@ test "Browser.DOM.ProcessingInstruction" {
         .{ "pi.data", "foo" },
 
         .{ "let pi2 = pi.cloneNode()", "undefined" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "let pi11 = document.createProcessingInstruction('target1', 'data1');", "undefined" },
+        .{ "let pi12 = document.createProcessingInstruction('target2', 'data2');", "undefined" },
+        .{ "let pi13 = document.createProcessingInstruction('target1', 'data1');", "undefined" },
+        .{ "pi11.isEqualNode(pi11)", "true" },
+        .{ "pi11.isEqualNode(pi13)", "true" },
+        .{ "pi11.isEqualNode(pi12)", "false" },
+        .{ "pi12.isEqualNode(pi13)", "false" },
+        .{ "pi11.isEqualNode(document)", "false" },
+        .{ "document.isEqualNode(pi11)", "false" },
     }, .{});
 }
