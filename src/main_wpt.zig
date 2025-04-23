@@ -118,7 +118,7 @@ pub fn main() !void {
     }
 
     // initialize VM JS lib.
-    const platform = Platform.init();
+    const platform = try Platform.init();
     defer platform.deinit();
 
     // prepare libraries to load on each test case.

@@ -65,7 +65,7 @@ pub fn main() !void {
         else => {},
     }
 
-    const platform = Platform.init();
+    const platform = try Platform.init();
     defer platform.deinit();
 
     var app = try App.init(alloc, .{
@@ -423,7 +423,7 @@ var test_wg: std.Thread.WaitGroup = .{};
 test "tests:beforeAll" {
     try parser.init();
     test_wg.startMany(3);
-    _ = Platform.init();
+    _ = try Platform.init();
 
     {
         const address = try std.net.Address.parseIp("127.0.0.1", 9582);

@@ -34,7 +34,10 @@ const SCOPE_ARENA_RETAIN = 1024 * 64;
 pub const Platform = struct {
     inner: v8.Platform,
 
-    pub fn init() Platform {
+    pub fn init() !Platform {
+        if (v8.initV8ICU() == false) {
+            return error.FailedToInitializeICU;
+        }
         const platform = v8.Platform.initDefault(0, true);
         v8.initV8Platform(platform);
         v8.initV8();

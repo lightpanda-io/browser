@@ -940,3 +940,14 @@ fn timestamp() u32 {
     const ts = std.posix.clock_gettime(std.posix.CLOCK.MONOTONIC) catch unreachable;
     return @intCast(ts.sec);
 }
+
+const testing = @import("../testing.zig");
+test "Browser" {
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
+    defer runner.deinit();
+
+    // this will crash if ICU isn't properly configured / ininitialized
+    try runner.testCases(&.{
+        .{ "new Intl.DateTimeFormat()", "[object Intl.DateTimeFormat]" },
+    }, .{});
+}
