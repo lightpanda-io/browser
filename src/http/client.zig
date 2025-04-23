@@ -1576,6 +1576,19 @@ pub const Response = struct {
     }
 
     pub fn peek(self: *Response) ![]u8 {
+        if (try self.processData()) |data| {
+            // We already have some or all of the body. This happens because
+            // we always read as much as we can, so getting the header and
+            // part/all of the body is normal.
+            if (data.len > 100) {
+                self._peek_buf = data;
+                self._peek_len = data.len;
+                return data;
+            }
+            @memcpy(self._peek_buf[0..data.len], data);
+            self._peek_len = data.len;
+        }
+
         while (true) {
             var peek_buf = self._peek_buf;
             const peek_len = self._peek_len;
