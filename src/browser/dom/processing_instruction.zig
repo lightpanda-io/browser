@@ -20,6 +20,7 @@ const std = @import("std");
 
 const parser = @import("../netsurf.zig");
 const Node = @import("node.zig").Node;
+const SessionState = @import("../env.zig").SessionState;
 
 // https://dom.spec.whatwg.org/#processinginstruction
 pub const ProcessingInstruction = struct {
@@ -35,8 +36,15 @@ pub const ProcessingInstruction = struct {
         return try parser.nodeName(parser.processingInstructionToNode(self));
     }
 
-    pub fn _cloneNode(self: *parser.ProcessingInstruction, _: ?bool) !*parser.ProcessingInstruction {
-        return try parser.processInstructionCopy(self);
+    // There's something wrong when we try to clone a ProcessInstruction normally.
+    // The resulting object can't be cast back into a node (it crashes). This is
+    // a simple workaround.
+    pub fn _cloneNode(self: *parser.ProcessingInstruction, _: ?bool, state: *SessionState) !*parser.ProcessingInstruction {
+        return try parser.documentCreateProcessingInstruction(
+            @ptrCast(state.document),
+            try get_target(self),
+            (try get_data(self)) orelse "",
+        );
     }
 
     pub fn get_data(self: *parser.ProcessingInstruction) !?[]const u8 {
@@ -91,6 +99,7 @@ test "Browser.DOM.ProcessingInstruction" {
         .{ "pi.data", "foo" },
 
         .{ "let pi2 = pi.cloneNode()", "undefined" },
+        .{ "pi2.nodeType", "7" },
     }, .{});
 
     try runner.testCases(&.{
