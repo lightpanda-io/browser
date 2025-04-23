@@ -97,6 +97,21 @@ pub const CharacterData = struct {
     pub fn _substringData(self: *parser.CharacterData, offset: u32, count: u32) ![]const u8 {
         return try parser.characterDataSubstringData(self, offset, count);
     }
+
+    // netsurf's CharacterData (text, comment) doesn't implement the
+    // dom_node_get_attributes and thus will crash if we try to call nodeIsEqualNode.
+    pub fn _isEqualNode(self: *parser.CharacterData, other_node: *parser.Node) !bool {
+        if (try parser.nodeType(@ptrCast(self)) != try parser.nodeType(other_node)) {
+            return false;
+        }
+
+        const other: *parser.CharacterData = @ptrCast(other_node);
+        if (std.mem.eql(u8, try get_data(self), try get_data(other)) == false) {
+            return false;
+        }
+
+        return true;
+    }
 };
 
 // Tests
@@ -157,6 +172,11 @@ test "Browser.DOM.CharacterData" {
     try runner.testCases(&.{
         .{ "cdata.replaceData('OK'.length-1, 'modified'.length, 'replaced')", "undefined" },
         .{ "cdata.data == 'OreplacedK'", "true" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "cdata.substringData('OK'.length-1, 'replaced'.length) == 'replaced'", "true" },
+        .{ "cdata.substringData('OK'.length-1, 0) == ''", "true" },
     }, .{});
 
     try runner.testCases(&.{

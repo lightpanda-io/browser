@@ -34,6 +34,15 @@ pub const DocumentFragment = struct {
             parser.documentHTMLToDocument(state.document.?),
         );
     }
+
+    pub fn _isEqualNode(self: *parser.DocumentFragment, other_node: *parser.Node) !bool {
+        const other_type = try parser.nodeType(other_node);
+        if (other_type != .document_fragment) {
+            return false;
+        }
+        _ = self;
+        return true;
+    }
 };
 
 const testing = @import("../../testing.zig");
@@ -44,5 +53,12 @@ test "Browser.DOM.DocumentFragment" {
     try runner.testCases(&.{
         .{ "const dc = new DocumentFragment()", "undefined" },
         .{ "dc.constructor.name", "DocumentFragment" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "const dc1 = new DocumentFragment()", "undefined" },
+        .{ "const dc2 = new DocumentFragment()", "undefined" },
+        .{ "dc1.isEqualNode(dc1)", "true" },
+        .{ "dc1.isEqualNode(dc2)", "true" },
     }, .{});
 }
