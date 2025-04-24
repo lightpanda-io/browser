@@ -97,7 +97,7 @@ pub fn main() !void {
             var browser = try Browser.init(app);
             defer browser.deinit();
 
-            var session = try browser.newSession({});
+            var session = try browser.newSession();
 
             // page
             const page = try session.createPage();

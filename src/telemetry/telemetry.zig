@@ -5,8 +5,9 @@ const Allocator = std.mem.Allocator;
 
 const App = @import("../app.zig").App;
 const Loop = @import("jsruntime").Loop;
-const uuidv4 = @import("../id.zig").uuidv4;
+const Notification = @import("../notification.zig").Notification;
 
+const uuidv4 = @import("../id.zig").uuidv4;
 const log = std.log.scoped(.telemetry);
 const IID_FILE = "iid";
 
@@ -55,6 +56,32 @@ fn TelemetryT(comptime P: type) type {
             self.provider.send(iid, self.run_mode, event) catch |err| {
                 log.warn("failed to record event: {}", .{err});
             };
+        }
+
+        // Called outside of `init` because we need a stable pointer for self.
+        // We care page_navigate events, but those happen on a Browser's
+        // notification. This doesn't exist yet, and there isn't only going to
+        // be 1, browsers come and go.
+        // What we can do is register for the `notification_created` event.
+        // In the callback for that, `onNotificationCreated`, we can then register
+        // for the browser-events that we care about.
+        pub fn register(self: *Self, notification: *Notification) !void {
+            if (self.disabled) {
+                return;
+            }
+            try notification.register(.notification_created, self, onNotificationCreated);
+        }
+
+        fn onNotificationCreated(ctx: *anyopaque, new: *Notification) !void {
+            return new.register(.page_navigate, ctx, onPageNavigate);
+        }
+
+        fn onPageNavigate(ctx: *anyopaque, data: *const Notification.PageNavigate) !void {
+            const self: *Self = @alignCast(@ptrCast(ctx));
+            self.record(.{ .navigate = .{
+                .proxy = false,
+                .tls = std.ascii.eqlIgnoreCase(data.url.scheme(), "https"),
+            } });
         }
     };
 }

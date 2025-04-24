@@ -58,6 +58,7 @@ pub const Browser = struct {
     allocator: Allocator,
     http_client: *http.Client,
     page_arena: ArenaAllocator,
+    notification: *Notification,
 
     pub fn init(app: *App) !Browser {
         const allocator = app.allocator;
@@ -67,11 +68,15 @@ pub const Browser = struct {
         });
         errdefer env.deinit();
 
+        const notification = try Notification.init(allocator, app.notification);
+        errdefer notification.deinit();
+
         return .{
             .app = app,
             .env = env,
             .session = null,
             .allocator = allocator,
+            .notification = notification,
             .http_client = &app.http_client,
             .page_arena = ArenaAllocator.init(allocator),
         };
@@ -81,13 +86,14 @@ pub const Browser = struct {
         self.closeSession();
         self.env.deinit();
         self.page_arena.deinit();
+        self.notification.deinit();
     }
 
-    pub fn newSession(self: *Browser, ctx: anytype) !*Session {
+    pub fn newSession(self: *Browser) !*Session {
         self.closeSession();
         self.session = @as(Session, undefined);
         const session = &self.session.?;
-        try Session.init(session, self, ctx);
+        try Session.init(session, self);
         return session;
     }
 
@@ -119,23 +125,7 @@ pub const Session = struct {
 
     page: ?Page = null,
 
-    // recipient of notification, passed as the first parameter to notify
-    notify_ctx: *anyopaque,
-    notify_func: *const fn (ctx: *anyopaque, notification: *const Notification) anyerror!void,
-
-    fn init(self: *Session, browser: *Browser, ctx: anytype) !void {
-        const ContextT = @TypeOf(ctx);
-        const ContextStruct = switch (@typeInfo(ContextT)) {
-            .@"struct" => ContextT,
-            .pointer => |ptr| ptr.child,
-            .void => NoopContext,
-            else => @compileError("invalid context type"),
-        };
-
-        // ctx can be void, to be able to store it in our *anyopaque field, we
-        // need to play a little game.
-        const any_ctx: *anyopaque = if (@TypeOf(ctx) == void) @constCast(@ptrCast(&{})) else ctx;
-
+    fn init(self: *Session, browser: *Browser) !void {
         var executor = try browser.env.newExecutor();
         errdefer executor.deinit();
 
@@ -143,8 +133,6 @@ pub const Session = struct {
         self.* = .{
             .browser = browser,
             .executor = executor,
-            .notify_ctx = any_ctx,
-            .notify_func = ContextStruct.notify,
             .arena = ArenaAllocator.init(allocator),
             .storage_shed = storage.Shed.init(allocator),
             .cookie_jar = storage.CookieJar.init(allocator),
@@ -212,12 +200,6 @@ pub const Session = struct {
         return page.navigate(url, .{
             .reason = .anchor,
         });
-    }
-
-    fn notify(self: *const Session, notification: *const Notification) void {
-        self.notify_func(self.notify_ctx, notification) catch |err| {
-            log.err("notify {}: {}", .{ std.meta.activeTag(notification.*), err });
-        };
     }
 };
 
@@ -350,20 +332,15 @@ pub const Page = struct {
         // redirect)
         self.url = request_url;
 
-        session.browser.app.telemetry.record(.{ .navigate = .{
-            .proxy = false,
-            .tls = std.ascii.eqlIgnoreCase(request_url.scheme(), "https"),
-        } });
-
         // load the data
         var request = try self.newHTTPRequest(.GET, &self.url, .{ .navigation = true });
         defer request.deinit();
 
-        session.notify(&.{ .page_navigate = .{
+        session.browser.notification.dispatch(.page_navigate, &.{
             .url = &self.url,
             .reason = opts.reason,
             .timestamp = timestamp(),
-        } });
+        });
 
         var response = try request.sendSync(.{});
 
@@ -399,10 +376,10 @@ pub const Page = struct {
             self.raw_data = arr.items;
         }
 
-        session.notify(&.{ .page_navigated = .{
+        session.browser.notification.dispatch(.page_navigated, &.{
             .url = &self.url,
             .timestamp = timestamp(),
-        } });
+        });
     }
 
     // https://html.spec.whatwg.org/#read-html
