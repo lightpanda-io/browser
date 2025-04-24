@@ -163,12 +163,14 @@ const Inspector = struct {
         _ = object_id;
         return try alloc.create(i32);
     }
-    pub fn contextCreated(self: *const Inspector,
-                executor: *const Env.Executor,
-                name: []const u8,
-                origin: []const u8,
-                aux_data: ?[]const u8,
-                is_default_context: bool,) void {
+    pub fn contextCreated(
+        self: *const Inspector,
+        executor: *const Env.Executor,
+        name: []const u8,
+        origin: []const u8,
+        aux_data: ?[]const u8,
+        is_default_context: bool,
+    ) void {
         _ = self;
         _ = executor;
         _ = name;

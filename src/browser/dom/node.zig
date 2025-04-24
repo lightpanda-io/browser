@@ -289,8 +289,7 @@ pub const Node = struct {
         return try parser.nodeInsertBefore(self, new_node, ref_node);
     }
 
-    pub fn _isDefaultNamespace(self: *parser.Node, namespace: []const u8) !bool {
-        // TODO: namespace is not an optional parameter, but can be null.
+    pub fn _isDefaultNamespace(self: *parser.Node, namespace: ?[]const u8) !bool {
         return try parser.nodeIsDefaultNamespace(self, namespace);
     }
 
