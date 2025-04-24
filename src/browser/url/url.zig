@@ -51,7 +51,6 @@ pub const URL = struct {
     ) !URL {
         const arena = state.arena;
         const raw = try std.mem.concat(arena, u8, &[_][]const u8{ url, base orelse "" });
-        errdefer arena.free(raw);
 
         const uri = std.Uri.parse(raw) catch return error.TypeError;
         return init(arena, uri);

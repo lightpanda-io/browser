@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 const parser = @import("../netsurf.zig");
 
@@ -42,25 +43,11 @@ const Matcher = union(enum) {
 
     pub fn match(self: Matcher, node: *parser.Node) !bool {
         switch (self) {
-            inline .matchTrue => return true,
-            inline .matchFalse => return false,
-            inline .matchByTagName => |case| return case.match(node),
-            inline .matchByClassName => |case| return case.match(node),
-            inline .matchByName => |case| return case.match(node),
-            inline .matchByLinks => return MatchByLinks.match(node),
-            inline .matchByAnchors => return MatchByAnchors.match(node),
-        }
-    }
-
-    pub fn deinit(self: Matcher, alloc: std.mem.Allocator) void {
-        switch (self) {
-            inline .matchTrue => return,
-            inline .matchFalse => return,
-            inline .matchByTagName => |case| return case.deinit(alloc),
-            inline .matchByClassName => |case| return case.deinit(alloc),
-            inline .matchByName => |case| return case.deinit(alloc),
-            inline .matchByLinks => return,
-            inline .matchByAnchors => return,
+            .matchTrue => return true,
+            .matchFalse => return false,
+            .matchByLinks => return MatchByLinks.match(node),
+            .matchByAnchors => return MatchByAnchors.match(node),
+            inline else => |m| return m.match(node),
         }
     }
 };
@@ -71,54 +58,49 @@ pub const MatchByTagName = struct {
     tag: []const u8,
     is_wildcard: bool,
 
-    fn init(alloc: std.mem.Allocator, tag_name: []const u8) !MatchByTagName {
-        const tag_name_alloc = try alloc.alloc(u8, tag_name.len);
-        @memcpy(tag_name_alloc, tag_name);
-        return MatchByTagName{
-            .tag = tag_name_alloc,
-            .is_wildcard = std.mem.eql(u8, tag_name, "*"),
+    fn init(arena: Allocator, tag_name: []const u8) !MatchByTagName {
+        if (std.mem.eql(u8, tag_name, "*")) {
+            return .{ .tag = "*", .is_wildcard = true };
+        }
+
+        return .{
+            .tag = try arena.dupe(u8, tag_name),
+            .is_wildcard = false,
         };
     }
 
     pub fn match(self: MatchByTagName, node: *parser.Node) !bool {
         return self.is_wildcard or std.ascii.eqlIgnoreCase(self.tag, try parser.nodeName(node));
     }
-
-    fn deinit(self: MatchByTagName, alloc: std.mem.Allocator) void {
-        alloc.free(self.tag);
-    }
 };
 
 pub fn HTMLCollectionByTagName(
-    alloc: std.mem.Allocator,
+    arena: Allocator,
     root: ?*parser.Node,
     tag_name: []const u8,
     include_root: bool,
 ) !HTMLCollection {
     return HTMLCollection{
         .root = root,
-        .walker = Walker{ .walkerDepthFirst = .{} },
-        .matcher = Matcher{
-            .matchByTagName = try MatchByTagName.init(alloc, tag_name),
-        },
+        .walker = .{ .walkerDepthFirst = .{} },
+        .matcher = .{ .matchByTagName = try MatchByTagName.init(arena, tag_name) },
         .include_root = include_root,
     };
 }
 
 pub const MatchByClassName = struct {
-    classNames: []const u8,
+    class_names: []const u8,
 
-    fn init(alloc: std.mem.Allocator, classNames: []const u8) !MatchByClassName {
-        const class_names_alloc = try alloc.alloc(u8, classNames.len);
-        @memcpy(class_names_alloc, classNames);
-        return MatchByClassName{
-            .classNames = class_names_alloc,
+    fn init(arena: Allocator, class_names: []const u8) !MatchByClassName {
+        return .{
+            .class_names = try arena.dupe(u8, class_names),
         };
     }
 
     pub fn match(self: MatchByClassName, node: *parser.Node) !bool {
-        var it = std.mem.splitAny(u8, self.classNames, " ");
         const e = parser.nodeToElement(node);
+
+        var it = std.mem.splitScalar(u8, self.class_names, ' ');
         while (it.next()) |c| {
             if (!try parser.elementHasClass(e, c)) {
                 return false;
@@ -127,24 +109,18 @@ pub const MatchByClassName = struct {
 
         return true;
     }
-
-    fn deinit(self: MatchByClassName, alloc: std.mem.Allocator) void {
-        alloc.free(self.classNames);
-    }
 };
 
 pub fn HTMLCollectionByClassName(
-    alloc: std.mem.Allocator,
+    arena: Allocator,
     root: ?*parser.Node,
     classNames: []const u8,
     include_root: bool,
 ) !HTMLCollection {
     return HTMLCollection{
         .root = root,
-        .walker = Walker{ .walkerDepthFirst = .{} },
-        .matcher = Matcher{
-            .matchByClassName = try MatchByClassName.init(alloc, classNames),
-        },
+        .walker = .{ .walkerDepthFirst = .{} },
+        .matcher = .{ .matchByClassName = try MatchByClassName.init(arena, classNames) },
         .include_root = include_root,
     };
 }
@@ -152,11 +128,9 @@ pub fn HTMLCollectionByClassName(
 pub const MatchByName = struct {
     name: []const u8,
 
-    fn init(alloc: std.mem.Allocator, name: []const u8) !MatchByName {
-        const names_alloc = try alloc.alloc(u8, name.len);
-        @memcpy(names_alloc, name);
-        return MatchByName{
-            .name = names_alloc,
+    fn init(arena: Allocator, name: []const u8) !MatchByName {
+        return .{
+            .name = try arena.dupe(u8, name),
         };
     }
 
@@ -165,24 +139,18 @@ pub const MatchByName = struct {
         const nname = try parser.elementGetAttribute(e, "name") orelse return false;
         return std.mem.eql(u8, self.name, nname);
     }
-
-    fn deinit(self: MatchByName, alloc: std.mem.Allocator) void {
-        alloc.free(self.name);
-    }
 };
 
 pub fn HTMLCollectionByName(
-    alloc: std.mem.Allocator,
+    arena: Allocator,
     root: ?*parser.Node,
     name: []const u8,
     include_root: bool,
 ) !HTMLCollection {
     return HTMLCollection{
         .root = root,
-        .walker = Walker{ .walkerDepthFirst = .{} },
-        .matcher = Matcher{
-            .matchByName = try MatchByName.init(alloc, name),
-        },
+        .walker = .{ .walkerDepthFirst = .{} },
+        .matcher = .{ .matchByName = try MatchByName.init(arena, name) },
         .include_root = include_root,
     };
 }
@@ -193,8 +161,8 @@ pub fn HTMLCollectionAll(
 ) !HTMLCollection {
     return HTMLCollection{
         .root = root,
-        .walker = Walker{ .walkerDepthFirst = .{} },
-        .matcher = Matcher{ .matchTrue = .{} },
+        .walker = .{ .walkerDepthFirst = .{} },
+        .matcher = .{ .matchTrue = .{} },
         .include_root = include_root,
     };
 }
@@ -205,8 +173,8 @@ pub fn HTMLCollectionChildren(
 ) !HTMLCollection {
     return HTMLCollection{
         .root = root,
-        .walker = Walker{ .walkerChildren = .{} },
-        .matcher = Matcher{ .matchTrue = .{} },
+        .walker = .{ .walkerChildren = .{} },
+        .matcher = .{ .matchTrue = .{} },
         .include_root = include_root,
     };
 }
@@ -214,8 +182,8 @@ pub fn HTMLCollectionChildren(
 pub fn HTMLCollectionEmpty() !HTMLCollection {
     return HTMLCollection{
         .root = null,
-        .walker = Walker{ .walkerNone = .{} },
-        .matcher = Matcher{ .matchFalse = .{} },
+        .walker = .{ .walkerNone = .{} },
+        .matcher = .{ .matchFalse = .{} },
         .include_root = false,
     };
 }
@@ -240,10 +208,8 @@ pub fn HTMLCollectionByLinks(
 ) !HTMLCollection {
     return HTMLCollection{
         .root = root,
-        .walker = Walker{ .walkerDepthFirst = .{} },
-        .matcher = Matcher{
-            .matchByLinks = MatchByLinks{},
-        },
+        .walker = .{ .walkerDepthFirst = .{} },
+        .matcher = .{ .matchByLinks = MatchByLinks{} },
         .include_root = include_root,
     };
 }
@@ -267,10 +233,8 @@ pub fn HTMLCollectionByAnchors(
 ) !HTMLCollection {
     return HTMLCollection{
         .root = root,
-        .walker = Walker{ .walkerDepthFirst = .{} },
-        .matcher = Matcher{
-            .matchByAnchors = MatchByAnchors{},
-        },
+        .walker = .{ .walkerDepthFirst = .{} },
+        .matcher = .{ .matchByAnchors = MatchByAnchors{} },
         .include_root = include_root,
     };
 }
@@ -321,7 +285,7 @@ pub const HTMLCollection = struct {
     cur_node: ?*parser.Node = undefined,
 
     // start returns the first node to walk on.
-    fn start(self: HTMLCollection) !?*parser.Node {
+    fn start(self: *const HTMLCollection) !?*parser.Node {
         if (self.root == null) return null;
 
         if (self.include_root) {
