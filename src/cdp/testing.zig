@@ -114,12 +114,11 @@ const Session = struct {
 
 const Env = struct {
     pub const Executor = MockExecutor;
-    pub fn startExecutor(self: *Env, comptime Global: type, state: anytype, module_loader: anytype, kind: anytype) !*Executor {
+    pub fn startExecutor(self: *Env, comptime Global: type, state: anytype, module_loader: anytype) !*Executor {
         _ = self;
         _ = Global;
         _ = state;
         _ = module_loader;
-        _ = kind;
         return error.MockExecutor;
     }
     pub fn stopExecutor(self: *Env, executor: *Executor) void {

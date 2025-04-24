@@ -193,7 +193,7 @@ pub const Session = struct {
         self.state.cookie_jar = &self.cookie_jar;
         errdefer self.arena.deinit();
 
-        self.executor = try browser.env.startExecutor(Window, &self.state, self, .main);
+        self.executor = try browser.env.startExecutor(Window, &self.state, self);
         errdefer browser.env.stopExecutor(self.executor);
         self.inspector = try Env.Inspector.init(self.arena.allocator(), self.executor, ctx);
 

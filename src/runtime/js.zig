@@ -180,9 +180,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         // Send a lowMemoryNotification whenever we stop an executor
         gc_hints: bool,
 
-        // Used in debug mode to assert that we only have one executor at a time
-        has_executor: if (builtin.mode == .Debug) bool else void = if (builtin.mode == .Debug) false else {},
-
         const Self = @This();
 
         const State = S;
@@ -265,21 +262,9 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             self.isolate.performMicrotasksCheckpoint();
         }
 
-        pub fn startExecutor(self: *Self, comptime Global: type, state: State, module_loader: anytype, kind: WorldKind) !*Executor {
-            if (comptime builtin.mode == .Debug) {
-                if (kind == .main) {
-                    std.debug.assert(self.has_executor == false);
-                    self.has_executor = true;
-                }
-            }
+        pub fn startExecutor(self: *Self, comptime Global: type, state: State, module_loader: anytype) !*Executor {
             const isolate = self.isolate;
             const templates = &self.templates;
-
-            // Acts like an Arena. Most things V8 has to allocate from this point
-            // on will be tied to this handle_scope - which we deinit in
-            // stopExecutor
-            var handle_scope: v8.HandleScope = undefined;
-            v8.HandleScope.init(&handle_scope, isolate);
 
             // The global FunctionTemplate (i.e. Window).
             const globals = v8.FunctionTemplate.initDefault(isolate);
@@ -309,8 +294,8 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             }
 
             const context = v8.Context.init(isolate, global_template, null);
-            if (kind == .main) context.enter();
-            errdefer if (kind == .main) context.exit();
+            context.enter();
+            errdefer context.exit();
 
             // This shouldn't be necessary, but it is:
             // https://groups.google.com/g/v8-users/c/qAQQBmbi--8
@@ -347,10 +332,8 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             executor.* = .{
                 .state = state,
                 .isolate = isolate,
-                .kind = kind,
                 .context = context,
                 .templates = templates,
-                .handle_scope = handle_scope,
                 .call_arena = undefined,
                 .scope_arena = undefined,
                 ._call_arena_instance = std.heap.ArenaAllocator.init(self.allocator),
@@ -389,13 +372,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         // `gc_hints` option is enabled, we'll use the `lowMemoryNotification`
         // call on the isolate to encourage v8 to free the context.
         pub fn stopExecutor(self: *Self, executor: *Executor) void {
-            if (comptime builtin.mode == .Debug) {
-                if (executor.kind == .main) {
-                    std.debug.assert(self.has_executor == true);
-                    self.has_executor = false;
-                }
-            }
-
             executor.deinit();
             self.executor_pool.destroy(executor);
             if (self.gc_hints) {
@@ -770,19 +746,10 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         const PersistentObject = v8.Persistent(v8.Object);
         const PersistentFunction = v8.Persistent(v8.Function);
 
-        const WorldKind = enum {
-            main,
-            isolated,
-            worker,
-        };
-
         // This is capable of executing JavaScript.
         pub const Executor = struct {
             state: State,
             isolate: v8.Isolate,
-            kind: WorldKind,
-
-            handle_scope: v8.HandleScope,
 
             // @intFromPtr of our Executor is stored in this context, so given
             // a context, we can always get the Executor back.
@@ -833,8 +800,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
 
             fn deinit(self: *Executor) void {
                 if (self.scope != null) self.endScope();
-                if (self.kind == .main) self.context.exit();
-                self.handle_scope.deinit();
+                self.context.exit();
 
                 self._call_arena_instance.deinit();
                 self._scope_arena_instance.deinit();
@@ -926,10 +892,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             pub fn startScope(self: *Executor, global: anytype) !void {
                 std.debug.assert(self.scope == null);
 
-                var handle_scope: v8.HandleScope = undefined;
-                v8.HandleScope.init(&handle_scope, self.isolate);
                 self.scope = Scope{
-                    .handle_scope = handle_scope,
                     .arena = self.scope_arena,
                 };
                 _ = try self._mapZigInstanceToJs(self.context.getGlobal(), global);
@@ -1130,7 +1093,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         // in executor, rather than having one for each of these.
         pub const Scope = struct {
             arena: Allocator,
-            handle_scope: v8.HandleScope,
             callbacks: std.ArrayListUnmanaged(v8.Persistent(v8.Function)) = .{},
             identity_map: std.AutoHashMapUnmanaged(usize, PersistentObject) = .{},
 
@@ -1142,7 +1104,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 for (self.callbacks.items) |*cb| {
                     cb.deinit();
                 }
-                self.handle_scope.deinit();
             }
 
             fn trackCallback(self: *Scope, pf: PersistentFunction) !void {
