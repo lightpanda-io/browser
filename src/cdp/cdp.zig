@@ -21,6 +21,7 @@ const Allocator = std.mem.Allocator;
 const json = std.json;
 
 const App = @import("../app.zig").App;
+const Env = @import("../browser/env.zig").Env;
 const asUint = @import("../str/parser.zig").asUint;
 const Browser = @import("../browser/browser.zig").Browser;
 const Session = @import("../browser/browser.zig").Session;
@@ -308,7 +309,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         node_registry: Node.Registry,
         node_search_list: Node.Search.List,
 
-        isolated_world: ?IsolatedWorld(Browser.EnvType),
+        isolated_world: ?IsolatedWorld(Env),
 
         const Self = @This();
 
