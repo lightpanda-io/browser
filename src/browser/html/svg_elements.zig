@@ -16,22 +16,16 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const HTMLDocument = @import("document.zig").HTMLDocument;
-const HTMLElem = @import("elements.zig");
-const SVGElem = @import("svg_elements.zig");
-const Window = @import("window.zig").Window;
-const Navigator = @import("navigator.zig").Navigator;
-const History = @import("history.zig").History;
-const Location = @import("location.zig").Location;
+const Element = @import("../dom/element.zig").Element;
 
-pub const Interfaces = .{
-    HTMLDocument,
-    HTMLElem.HTMLElement,
-    HTMLElem.HTMLMediaElement,
-    HTMLElem.Interfaces,
-    SVGElem.SVGElement,
-    Window,
-    Navigator,
-    History,
-    Location,
+// Support for SVGElements is very limited, this is a dummy implementation.
+// This is here no to be able to support `element instanceof SVGElement;` in JavaScript.
+// https://developer.mozilla.org/en-US/docs/Web/API/SVGElement
+pub const SVGElement = struct {
+    // Currently the prototype chain is not implemented (will not be returned by toInterface())
+    // For that we need parser.SvgElement and the derived types with tags in the v-table.
+    pub const prototype = *Element;
+    // While this is a Node, could consider not exposing the subtype untill we have
+    // a Self type to cast to.
+    pub const subtype = .node;
 };
