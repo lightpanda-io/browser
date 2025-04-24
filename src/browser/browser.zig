@@ -97,7 +97,7 @@ pub const Browser = struct {
         return session;
     }
 
-    fn closeSession(self: *Browser) void {
+    pub fn closeSession(self: *Browser) void {
         if (self.session) |session| {
             session.deinit();
             self.session_pool.destroy(session);

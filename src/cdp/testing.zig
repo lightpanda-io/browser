@@ -19,6 +19,7 @@
 const std = @import("std");
 const json = std.json;
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 
 const Testing = @This();
 
@@ -35,196 +36,6 @@ pub const expectError = base.expectError;
 pub const expectEqualSlices = base.expectEqualSlices;
 
 pub const Document = @import("../testing.zig").Document;
-
-const Browser = struct {
-    session: ?*Session = null,
-    arena: std.heap.ArenaAllocator,
-    env: Env,
-    pub const EnvType = Env;
-
-    pub fn init(app: *App) !Browser {
-        return .{
-            .arena = std.heap.ArenaAllocator.init(app.allocator),
-            .env = Env{},
-        };
-    }
-
-    pub fn deinit(self: *Browser) void {
-        self.arena.deinit();
-    }
-
-    pub fn newSession(self: *Browser, ctx: anytype) !*Session {
-        _ = ctx;
-        if (self.session != null) {
-            return error.MockBrowserSessionAlreadyExists;
-        }
-        const arena = self.arena.allocator();
-        const executor = arena.create(Env.Executor) catch unreachable;
-        self.session = try arena.create(Session);
-        self.session.?.* = .{
-            .page = null,
-            .arena = self.arena,
-            .executor = executor,
-            .inspector = .{},
-            .state = 0,
-        };
-        return self.session.?;
-    }
-
-    pub fn hasSession(self: *const Browser, session_id: []const u8) bool {
-        const session = self.session orelse return false;
-        return std.mem.eql(u8, session.id, session_id);
-    }
-
-    pub fn runMicrotasks(_: *const Browser) void {}
-};
-
-const Session = struct {
-    page: ?Page = null,
-    arena: std.heap.ArenaAllocator,
-    executor: *Env.Executor,
-    inspector: Inspector,
-    state: i32,
-
-    pub fn currentPage(self: *Session) ?*Page {
-        return &(self.page orelse return null);
-    }
-
-    pub fn createPage(self: *Session, aux_data: ?[]const u8) !*Page {
-        if (self.page != null) {
-            return error.MockBrowserPageAlreadyExists;
-        }
-        self.page = .{
-            .session = self,
-            .url = URL.parse("https://lightpanda.io/", null) catch unreachable,
-            .aux_data = try self.arena.allocator().dupe(u8, aux_data orelse ""),
-        };
-        return &self.page.?;
-    }
-
-    pub fn removePage(self: *Session) void {
-        self.page = null;
-    }
-
-    pub fn callInspector(self: *Session, msg: []const u8) void {
-        _ = self;
-        _ = msg;
-    }
-};
-
-const Env = struct {
-    pub const Executor = MockExecutor;
-    pub fn startExecutor(self: *Env, comptime Global: type, state: anytype, module_loader: anytype, kind: anytype) !*Executor {
-        _ = self;
-        _ = Global;
-        _ = state;
-        _ = module_loader;
-        _ = kind;
-        return error.MockExecutor;
-    }
-    pub fn stopExecutor(self: *Env, executor: *Executor) void {
-        _ = self;
-        _ = executor;
-    }
-};
-const MockExecutor = struct {
-    context: Context,
-
-    pub fn startScope(self: *MockExecutor, global: anytype) !void {
-        _ = self;
-        _ = global;
-    }
-    pub fn endScope(self: *MockExecutor) void {
-        _ = self;
-    }
-};
-const Context = struct {
-    pub fn debugContextId(self: Context) i32 {
-        _ = self;
-        return 0;
-    }
-};
-
-const Inspector = struct {
-    pub fn getRemoteObject(
-        self: *const Inspector,
-        executor: *Env.Executor,
-        group: []const u8,
-        value: anytype,
-    ) !RemoteObject {
-        _ = self;
-        _ = executor;
-        _ = group;
-        _ = value;
-        return RemoteObject{};
-    }
-    pub fn getNodePtr(self: Inspector, alloc: std.mem.Allocator, object_id: []const u8) !?*anyopaque {
-        _ = self;
-        _ = object_id;
-        return try alloc.create(i32);
-    }
-    pub fn contextCreated(
-        self: *const Inspector,
-        executor: *const Env.Executor,
-        name: []const u8,
-        origin: []const u8,
-        aux_data: ?[]const u8,
-        is_default_context: bool,
-    ) void {
-        _ = self;
-        _ = executor;
-        _ = name;
-        _ = origin;
-        _ = aux_data;
-        _ = is_default_context;
-    }
-};
-
-const RemoteObject = struct {
-    pub fn deinit(self: RemoteObject) void {
-        _ = self;
-    }
-    pub fn getType(self: RemoteObject, alloc: std.mem.Allocator) ![:0]const u8 {
-        _ = self;
-        _ = alloc;
-        return "TheType";
-    }
-    pub fn getSubtype(self: RemoteObject, alloc: std.mem.Allocator) ![:0]const u8 {
-        _ = self;
-        _ = alloc;
-        return "TheSubtype";
-    }
-    pub fn getClassName(self: RemoteObject, alloc: std.mem.Allocator) ![:0]const u8 {
-        _ = self;
-        _ = alloc;
-        return "TheClassName";
-    }
-    pub fn getDescription(self: RemoteObject, alloc: std.mem.Allocator) ![:0]const u8 {
-        _ = self;
-        _ = alloc;
-        return "TheDescription";
-    }
-    pub fn getObjectId(self: RemoteObject, alloc: std.mem.Allocator) ![:0]const u8 {
-        _ = self;
-        _ = alloc;
-        return "TheObjectId";
-    }
-};
-
-const Page = struct {
-    session: *Session,
-    url: ?URL = null,
-    aux_data: []const u8 = "",
-    doc: ?*parser.Document = null,
-
-    pub fn navigate(_: *Page, url: URL, opts: anytype) !void {
-        _ = url;
-        _ = opts;
-    }
-
-    const MouseEvent = @import("../browser/browser.zig").Page.MouseEvent;
-    pub fn mouseEvent(_: *Page, _: MouseEvent) !void {}
-};
 
 const Client = struct {
     allocator: Allocator,
@@ -246,11 +57,14 @@ const Client = struct {
         const value = try json.parseFromSliceLeaky(json.Value, self.allocator, serialized, .{});
         try self.sent.append(self.allocator, value);
     }
+
+    pub fn sendJSONRaw(self: *Client, _: ArenaAllocator, buf: std.ArrayListUnmanaged(u8)) !void {
+        const value = try json.parseFromSliceLeaky(json.Value, self.allocator, buf.items, .{});
+        try self.sent.append(self.allocator, value);
+    }
 };
 
 const TestCDP = main.CDPT(struct {
-    pub const Browser = Testing.Browser;
-    pub const Session = Testing.Session;
     pub const Client = *Testing.Client;
 });
 
@@ -258,7 +72,7 @@ const TestContext = struct {
     app: *App,
     client: ?Client = null,
     cdp_: ?TestCDP = null,
-    arena: std.heap.ArenaAllocator,
+    arena: ArenaAllocator,
 
     pub fn deinit(self: *TestContext) void {
         if (self.cdp_) |*c| {
@@ -273,7 +87,7 @@ const TestContext = struct {
             self.client = Client.init(self.arena.allocator());
             // Don't use the arena here. We want to detect leaks in CDP.
             // The arena is only for test-specific stuff
-            self.cdp_ = try TestCDP.init(self.app, &self.client.?);
+            self.cdp_ = TestCDP.init(self.app, &self.client.?) catch unreachable;
         }
         return &self.cdp_.?;
     }
@@ -286,11 +100,8 @@ const TestContext = struct {
     };
     pub fn loadBrowserContext(self: *TestContext, opts: BrowserContextOpts) !*main.BrowserContext(TestCDP) {
         var c = self.cdp();
-        c.browser.session = null;
-
         if (c.browser_context) |bc| {
-            bc.deinit();
-            c.browser_context = null;
+            _ = c.disposeBrowserContext(bc.id);
         }
 
         _ = try c.createBrowserContext();
@@ -410,7 +221,7 @@ const TestContext = struct {
 pub fn context() TestContext {
     return .{
         .app = App.init(std.testing.allocator, .{ .run_mode = .serve }) catch unreachable,
-        .arena = std.heap.ArenaAllocator.init(std.testing.allocator),
+        .arena = ArenaAllocator.init(std.testing.allocator),
     };
 }
 
@@ -420,7 +231,7 @@ pub fn context() TestContext {
 // json and check if the two are equal.
 // Except serializing to JSON isn't deterministic.
 // So we serialize the JSON then we deserialize to json.Value. And then we can
-// compare our anytype expection with the json.Value that we captured
+// compare our anytype expectation with the json.Value that we captured
 
 fn compareExpectedToSent(expected: []const u8, actual: json.Value) !bool {
     const expected_value = try std.json.parseFromSlice(json.Value, std.testing.allocator, expected, .{});

@@ -522,7 +522,7 @@ test "cdp.target: createTarget" {
         try testing.expectEqual(true, bc.target_id != null);
         try testing.expectEqual(
             \\{"isDefault":true,"type":"default","frameId":"TID-1"}
-        , bc.session.page.?.aux_data);
+        , bc.session.aux_data);
 
         try ctx.expectSentResult(.{ .targetId = bc.target_id.? }, .{ .id = 10 });
         try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "about:blank", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = "BID-9", .targetId = bc.target_id.? } }, .{});
