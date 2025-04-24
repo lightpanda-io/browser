@@ -389,17 +389,17 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         // `gc_hints` option is enabled, we'll use the `lowMemoryNotification`
         // call on the isolate to encourage v8 to free the context.
         pub fn stopExecutor(self: *Self, executor: *Executor) void {
-            executor.deinit();
-            self.executor_pool.destroy(executor);
-            if (self.gc_hints) {
-                self.isolate.lowMemoryNotification();
-            }
-
             if (comptime builtin.mode == .Debug) {
                 if (executor.kind == .main) {
                     std.debug.assert(self.has_executor == true);
                     self.has_executor = false;
                 }
+            }
+
+            executor.deinit();
+            self.executor_pool.destroy(executor);
+            if (self.gc_hints) {
+                self.isolate.lowMemoryNotification();
             }
         }
 
