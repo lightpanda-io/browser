@@ -1273,8 +1273,8 @@ pub fn nodeInsertBefore(node: *Node, new_node: *Node, ref_node: *Node) !*Node {
     return res.?;
 }
 
-pub fn nodeIsDefaultNamespace(node: *Node, namespace: []const u8) !bool {
-    const s = try strFromData(namespace);
+pub fn nodeIsDefaultNamespace(node: *Node, namespace_: ?[]const u8) !bool {
+    const s = if (namespace_) |n| try strFromData(n) else null;
     var res: bool = undefined;
     const err = nodeVtable(node).dom_node_is_default_namespace.?(node, s, &res);
     try DOMErr(err);
@@ -1303,9 +1303,10 @@ pub fn nodeLookupPrefix(node: *Node, namespace: []const u8) !?[]const u8 {
     return strToData(s.?);
 }
 
-pub fn nodeLookupNamespaceURI(node: *Node, prefix: ?[]const u8) !?[]const u8 {
+pub fn nodeLookupNamespaceURI(node: *Node, prefix_: ?[]const u8) !?[]const u8 {
     var s: ?*String = undefined;
-    const err = nodeVtable(node).dom_node_lookup_namespace.?(node, try strFromData(prefix.?), &s);
+    const prefix: ?*String = if (prefix_) |p| try strFromData(p) else null;
+    const err = nodeVtable(node).dom_node_lookup_namespace.?(node, prefix, &s);
     try DOMErr(err);
     if (s == null) return null;
     return strToData(s.?);
