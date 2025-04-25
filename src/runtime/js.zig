@@ -1935,7 +1935,7 @@ fn Caller(comptime E: type) type {
                 if (last_parameter_type_info == .pointer and last_parameter_type_info.pointer.size == .slice) {
                     const slice_type = last_parameter_type_info.pointer.child;
                     const corresponding_js_value = info.getArg(@as(u32, @intCast(last_js_parameter)));
-                    if (corresponding_js_value.isArray() == false and slice_type != u8) {
+                    if (corresponding_js_value.isArray() == false and corresponding_js_value.isTypedArray() == false and slice_type != u8) {
                         is_variadic = true;
                         if (js_parameter_count == 0) {
                             @field(args, tupleFieldName(params_to_map.len + offset - 1)) = &.{};
@@ -2008,6 +2008,70 @@ fn Caller(comptime E: type) type {
                         }
                     },
                     .slice => {
+                        if (js_value.isTypedArray()) {
+                            const buffer_view = js_value.castTo(v8.ArrayBufferView);
+                            const buffer = buffer_view.getBuffer();
+                            const backing_store = v8.BackingStore.sharedPtrGet(&buffer.getBackingStore());
+                            const data = backing_store.getData();
+                            const byte_len = backing_store.getByteLength();
+
+                            switch (ptr.child) {
+                                u8 => {
+                                    // need this sentinel check to keep the compiler happy
+                                    if (ptr.sentinel() == null) {
+                                        if (js_value.isUint8Array() or js_value.isUint8ClampedArray()) {
+                                            const arr_ptr = @as([*]u8, @alignCast(@ptrCast(data)));
+                                            return arr_ptr[0..byte_len];
+                                        }
+                                    }
+                                },
+                                i8 => {
+                                    if (js_value.isInt8Array()) {
+                                        const arr_ptr = @as([*]i8, @alignCast(@ptrCast(data)));
+                                        return arr_ptr[0..byte_len];
+                                    }
+                                },
+                                u16 => {
+                                    if (js_value.isUint16Array()) {
+                                        const arr_ptr = @as([*]u16, @alignCast(@ptrCast(data)));
+                                        return arr_ptr[0 .. byte_len / 2];
+                                    }
+                                },
+                                i16 => {
+                                    if (js_value.isInt16Array()) {
+                                        const arr_ptr = @as([*]i16, @alignCast(@ptrCast(data)));
+                                        return arr_ptr[0 .. byte_len / 2];
+                                    }
+                                },
+                                u32 => {
+                                    if (js_value.isUint32Array()) {
+                                        const arr_ptr = @as([*]u32, @alignCast(@ptrCast(data)));
+                                        return arr_ptr[0 .. byte_len / 4];
+                                    }
+                                },
+                                i32 => {
+                                    if (js_value.isInt32Array()) {
+                                        const arr_ptr = @as([*]i32, @alignCast(@ptrCast(data)));
+                                        return arr_ptr[0 .. byte_len / 4];
+                                    }
+                                },
+                                u64 => {
+                                    if (js_value.isBigUint64Array()) {
+                                        const arr_ptr = @as([*]u64, @alignCast(@ptrCast(data)));
+                                        return arr_ptr[0 .. byte_len / 8];
+                                    }
+                                },
+                                i64 => {
+                                    if (js_value.isBigInt64Array()) {
+                                        const arr_ptr = @as([*]i64, @alignCast(@ptrCast(data)));
+                                        return arr_ptr[0 .. byte_len / 8];
+                                    }
+                                },
+                                else => {},
+                            }
+                            return error.InvalidArgument;
+                        }
+
                         if (ptr.child == u8) {
                             if (ptr.sentinel()) |s| {
                                 if (comptime s == 0) {
@@ -2017,18 +2081,6 @@ fn Caller(comptime E: type) type {
                                 return valueToString(self.call_arena, js_value, self.isolate, self.context);
                             }
                         }
-
-                        // TODO: TypedArray
-                        // if (js_value.isArrayBufferView()) {
-                        //     const abv = js_value.castTo(v8.ArrayBufferView);
-                        //     const ab = abv.getBuffer();
-                        //     const bs = v8.BackingStore.sharedPtrGet(&ab.getBackingStore());
-                        //     const data = bs.getData();
-                        //     var arr = @as([*]i32, @alignCast(@ptrCast(data)))[0..2];
-                        //     std.debug.print("{d} {d} {d}\n", .{arr[0], arr[1], bs.getByteLength()});
-                        //     arr[1] = 3333;
-                        //     return &.{};
-                        // }
 
                         if (!js_value.isArray()) {
                             return error.InvalidArgument;
@@ -2104,7 +2156,7 @@ fn Caller(comptime E: type) type {
                 else => {},
             }
 
-            @compileError(std.fmt.comptimePrint("{s} has an unsupported parameter type: {s}", .{ named_function.full_name, @typeName(T) }));
+            @compileError(named_function.full_name ++ " has an unsupported parameter type: " ++ @typeName(T));
         }
 
         fn jsIntToZig(comptime T: type, js_value: v8.Value, context: v8.Context) !T {

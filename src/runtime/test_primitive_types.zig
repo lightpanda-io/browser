@@ -104,6 +104,54 @@ const Primitives = struct {
     pub fn _echoStringZ(_: *const Primitives, a: [:0]const u8) []const u8 {
         return a;
     }
+
+    pub fn _int8(_: *const Primitives, arr: []i8) void {
+        for (arr) |*a| {
+            a.* -= @intCast(arr.len);
+        }
+    }
+
+    pub fn _uint8(_: *const Primitives, arr: []u8) void {
+        for (arr) |*a| {
+            a.* += @intCast(arr.len);
+        }
+    }
+
+    pub fn _int16(_: *const Primitives, arr: []i16) void {
+        for (arr) |*a| {
+            a.* -= @intCast(arr.len);
+        }
+    }
+
+    pub fn _uint16(_: *const Primitives, arr: []u16) void {
+        for (arr) |*a| {
+            a.* += @intCast(arr.len);
+        }
+    }
+
+    pub fn _int32(_: *const Primitives, arr: []i32) void {
+        for (arr) |*a| {
+            a.* -= @intCast(arr.len);
+        }
+    }
+
+    pub fn _uint32(_: *const Primitives, arr: []u32) void {
+        for (arr) |*a| {
+            a.* += @intCast(arr.len);
+        }
+    }
+
+    pub fn _int64(_: *const Primitives, arr: []i64) void {
+        for (arr) |*a| {
+            a.* -= @intCast(arr.len);
+        }
+    }
+
+    pub fn _uint64(_: *const Primitives, arr: []u64) void {
+        for (arr) |*a| {
+            a.* += @intCast(arr.len);
+        }
+    }
 };
 
 const testing = @import("testing.zig");
@@ -184,5 +232,56 @@ test "JS: primitive types" {
         // strings
         .{ "p.echoString('over 9000!');", "over 9000!" },
         .{ "p.echoStringZ('Teg');", "Teg" },
+    }, .{});
+
+    // typed arrays
+    try runner.testCases(&.{
+        .{ "let arr_i8 = new Int8Array([-10, -20, -30]);", "undefined" },
+        .{ "p.int8(arr_i8)", "undefined" },
+        .{ "arr_i8;", "-13,-23,-33" },
+
+        .{ "let arr_u8 = new Uint8Array([10, 20, 30]);", "undefined" },
+        .{ "p.uint8(arr_u8)", "undefined" },
+        .{ "arr_u8;", "13,23,33" },
+
+        .{ "let arr_i16 = new Int16Array([-1000, -2000, -3000]);", "undefined" },
+        .{ "p.int16(arr_i16)", "undefined" },
+        .{ "arr_i16;", "-1003,-2003,-3003" },
+
+        .{ "let arr_u16 = new Uint16Array([1000, 2000, 3000]);", "undefined" },
+        .{ "p.uint16(arr_u16)", "undefined" },
+        .{ "arr_u16;", "1003,2003,3003" },
+
+        .{ "let arr_i32 = new Int32Array([-1000000, -2000000, -3000000]);", "undefined" },
+        .{ "p.int32(arr_i32)", "undefined" },
+        .{ "arr_i32;", "-1000003,-2000003,-3000003" },
+
+        .{ "let arr_u32 = new Uint32Array([1000000, 2000000, 3000000]);", "undefined" },
+        .{ "p.uint32(arr_u32)", "undefined" },
+        .{ "arr_u32;", "1000003,2000003,3000003" },
+
+        .{ "let arr_i64 = new BigInt64Array([-1000000000n, -2000000000n, -3000000000n]);", "undefined" },
+        .{ "p.int64(arr_i64)", "undefined" },
+        .{ "arr_i64;", "-1000000003,-2000000003,-3000000003" },
+
+        .{ "let arr_u64 = new BigUint64Array([1000000000n, 2000000000n, 3000000000n]);", "undefined" },
+        .{ "p.uint64(arr_u64)", "undefined" },
+        .{ "arr_u64;", "1000000003,2000000003,3000000003" },
+
+        .{ "try { p.int8(arr_u8) } catch(e) { e instanceof TypeError; }", "true" },
+        .{ "try { p.intu8(arr_i8) } catch(e) { e instanceof TypeError; }", "true" },
+        .{ "try { p.intu8(arr_u32) } catch(e) { e instanceof TypeError; }", "true" },
+
+        .{ "try { p.int16(arr_u8) } catch(e) { e instanceof TypeError; }", "true" },
+        .{ "try { p.intu16(arr_i16) } catch(e) { e instanceof TypeError; }", "true" },
+        .{ "try { p.int16(arr_i64) } catch(e) { e instanceof TypeError; }", "true" },
+
+        .{ "try { p.int32(arr_u32) } catch(e) { e instanceof TypeError; }", "true" },
+        .{ "try { p.intu32(arr_i32) } catch(e) { e instanceof TypeError; }", "true" },
+        .{ "try { p.intu32(arr_u32) } catch(e) { e instanceof TypeError; }", "true" },
+
+        .{ "try { p.int64(arr_u64) } catch(e) { e instanceof TypeError; }", "true" },
+        .{ "try { p.intu64(arr_i64) } catch(e) { e instanceof TypeError; }", "true" },
+        .{ "try { p.intu64(arr_u32) } catch(e) { e instanceof TypeError; }", "true" },
     }, .{});
 }
