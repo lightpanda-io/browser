@@ -218,7 +218,7 @@ const Observer = struct {
     record: ?MutationRecord = null,
 
     // reference back to the MutationObserver so that we can access the arena
-    // and batch the mutation record.s
+    // and batch the mutation records.
     mutation_observer: *MutationObserver,
 
     fn appliesTo(o: *const Observer, target: *parser.Node) bool {
