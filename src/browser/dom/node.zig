@@ -275,8 +275,7 @@ pub const Node = struct {
 
     pub fn get_childNodes(self: *parser.Node, state: *SessionState) !NodeList {
         const allocator = state.arena;
-        var list = NodeList.init();
-        errdefer list.deinit(allocator);
+        var list: NodeList = .{};
 
         var n = try parser.nodeFirstChild(self) orelse return list;
         while (true) {

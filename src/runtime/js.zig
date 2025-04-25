@@ -664,10 +664,21 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
 
             const T = @TypeOf(value);
             switch (@typeInfo(T)) {
-                .void, .bool, .int, .comptime_int, .float, .comptime_float, .array => {
+                .void, .bool, .int, .comptime_int, .float, .comptime_float => {
                     // Need to do this to keep the compiler happy
                     // simpleZigValueToJs handles all of these cases.
                     unreachable;
+                },
+                .array => {
+                    var js_arr = v8.Array.init(isolate, value.len);
+                    var js_obj = js_arr.castTo(v8.Object);
+                    for (value, 0..) |v, i| {
+                        const js_val = try zigValueToJs(templates, isolate, context, v);
+                        if (js_obj.setValueAtIndex(context, @intCast(i), js_val) == false) {
+                            return error.FailedToCreateArray;
+                        }
+                    }
+                    return js_obj.toValue();
                 },
                 .pointer => |ptr| switch (ptr.size) {
                     .one => {
@@ -1021,6 +1032,10 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                             return gop.value_ptr.*;
                         }
 
+                        if (comptime @hasDecl(ptr.child, "jsScopeEnd")) {
+                            try scope.scope_end_callbacks.append(scope_arena, ScopeEndCallback.init(value));
+                        }
+
                         // Sometimes we're creating a new v8.Object, like when
                         // we're returning a value from a function. In those cases
                         // we have the FunctionTemplate, and we can get an object
@@ -1134,6 +1149,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         pub const Scope = struct {
             arena: Allocator,
             handle_scope: v8.HandleScope,
+            scope_end_callbacks: std.ArrayListUnmanaged(ScopeEndCallback) = .{},
             callbacks: std.ArrayListUnmanaged(v8.Persistent(v8.Function)) = .{},
             identity_map: std.AutoHashMapUnmanaged(usize, PersistentObject) = .{},
 
@@ -1150,6 +1166,34 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
 
             fn trackCallback(self: *Scope, pf: PersistentFunction) !void {
                 return self.callbacks.append(self.arena, pf);
+            }
+        };
+
+        // An interface for types that want to their jsScopeEnd function to be
+        // called when the scope ends
+        const ScopeEndCallback = struct {
+            ptr: *anyopaque,
+            scopeEndFn: *const fn (ptr: *anyopaque, executor: *Executor) void,
+
+            fn init(ptr: anytype) ScopeEndCallback {
+                const T = @TypeOf(ptr);
+                const ptr_info = @typeInfo(T);
+
+                const gen = struct {
+                    pub fn scopeEnd(pointer: *anyopaque, executor: *Executor) void {
+                        const self: T = @ptrCast(@alignCast(pointer));
+                        return ptr_info.pointer.child.jsScopeEnd(self, executor);
+                    }
+                };
+
+                return .{
+                    .ptr = ptr,
+                    .scopeEndFn = gen.scopeEnd,
+                };
+            }
+
+            pub fn scopeEnd(self: ScopeEndCallback, executor: *Executor) void {
+                self.scopeEndFn(self.ptr, executor);
             }
         };
 
@@ -1575,7 +1619,6 @@ fn Caller(comptime E: type) type {
         fn deinit(self: *Self) void {
             const executor = self.executor;
             const call_depth = executor.call_depth - 1;
-            executor.call_depth = call_depth;
 
             // Because of callbacks, calls can be nested. Because of this, we
             // can't clear the call_arena after _every_ call. Imagine we have
@@ -1588,9 +1631,20 @@ fn Caller(comptime E: type) type {
             //
             // Therefore, we keep a call_depth, and only reset the call_arena
             // when a top-level (call_depth == 0) function ends.
+
             if (call_depth == 0) {
+                const scope = &self.executor.scope.?;
+                for (scope.scope_end_callbacks.items) |cb| {
+                    cb.scopeEnd(executor);
+                }
+
                 _ = executor._call_arena_instance.reset(.{ .retain_with_limit = CALL_ARENA_RETAIN });
             }
+
+            // Set this _after_ we've executed the above code, so that if the
+            // above code executes any callbacks, they aren't being executed
+            // at scope 0, which would be wrong.
+            executor.call_depth = call_depth;
         }
 
         fn constructor(self: *Self, comptime named_function: anytype, info: v8.FunctionCallbackInfo) !void {
