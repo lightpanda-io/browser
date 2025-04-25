@@ -1,0 +1,99 @@
+# This file is used by the GN meta build system to find the root of the source
+# tree and to set startup options. For documentation on the values set in this
+# file, run "gn help dotfile" at the command line.
+
+# Use the default python3 so gn succeeds. Not sure why deno requires python2 atm.
+script_executable = "python3"
+
+# The location of the build configuration file.
+buildconfig = "//build/config/BUILDCONFIG.gn"
+
+# These are the targets to check headers for by default. The files in targets
+# matching these patterns (see "gn help label_pattern" for format) will have
+# their includes checked for proper dependencies when you run either
+# "gn check" or "gn gen --check".
+check_targets = []
+
+# The secondary source root is a parallel directory tree where
+# GN build files are placed when they can not be placed directly
+# in the source tree, e.g. for third party source trees.
+secondary_source = "//v8/"
+
+default_args = {
+  clang_use_chrome_plugins = false
+  is_component_build = false
+  linux_use_bundled_binutils = false
+  use_dummy_lastchange = true
+  use_sysroot = false
+  simple_template_names = false
+
+  # Minimize size of debuginfo in distributed static library.
+  line_tables_only = true
+  no_inline_line_tables = true
+  symbol_level = 1
+  use_debug_fission = false
+
+  v8_embedder_string = "-lightpanda"
+
+  v8_enable_sandbox = false
+  v8_enable_javascript_promise_hooks = true
+  v8_promise_internal_field_count = 1
+  v8_use_external_startup_data = false
+
+  v8_enable_pointer_compression = true
+
+  v8_imminent_deprecation_warnings = false
+
+  # This flag speeds up the performance of fork/execve on Linux systems for
+  # embedders which use it (like Node.js). It works by marking the pages that
+  # V8 allocates as MADV_DONTFORK. Without MADV_DONTFORK, the Linux kernel
+  # spends a long time manipulating page mappings on fork and exec which the
+  # child process doesn't generally need to access.
+  v8_enable_private_mapping_fork_optimization = true
+
+  # We prefer embedders to bring their own compression
+  v8_use_zlib = false
+  v8_enable_snapshot_compression = false
+
+  # Disable handle zapping for performance
+  v8_enable_handle_zapping = false
+  # Ensure allocation of typed arrays and arraybuffers always goes through
+  # the embedder's ArrayBufferAllocator, otherwise small buffers get moved
+  # around by the garbage collector but embedders normally want them to have
+  # fixed addresses.
+  v8_typed_array_max_size_in_heap = 0
+
+  # Historically these always had 2 slots. Keep for compat.
+  v8_array_buffer_internal_field_count = 2
+  v8_array_buffer_view_internal_field_count = 2
+
+  # Enabling the shared read-only heap comes with a restriction that all
+  # isolates running at the same time must be created from the same snapshot.
+  # This is problematic for Deno, which has separate "runtime" and "typescript
+  # compiler" snapshots, and sometimes uses them both at the same time.
+  v8_enable_shared_ro_heap = false
+
+  # V8 11.6 hardcoded an assumption in `mksnapshot` that shared RO heap
+  # is enabled. In our case it's disabled so without this flag we can't
+  # compile.
+  v8_enable_verify_heap = false
+
+  # Enable V8 object print for debugging.
+  # v8_enable_object_print = true
+
+  # V8 12.3 added google/fuzztest as a third party dependency.
+  # https://chromium.googlesource.com/v8/v8.git/+/d5acece0c9b89b18716c177d1fcc8f734191e1e2%5E%21/#F4
+  #
+  # This flag disables it.
+  v8_enable_fuzztest = false
+
+  # Disable v8::HandleScope LIFO checks.
+  # https://chromium-review.googlesource.com/c/v8/v8/+/5110566
+  #
+  # rusty_v8 scopes are not on the stack.
+  v8_enable_v8_checks = false
+
+  use_relative_vtables_abi = false
+
+  icu_use_data_file = false
+}

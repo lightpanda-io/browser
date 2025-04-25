@@ -74,24 +74,6 @@ pub fn build(b: *std.Build) !void {
     }
 
     {
-        // get v8
-        // -------
-        const v8 = b.dependency("v8", .{ .target = target, .optimize = optimize });
-        const get_v8 = b.addRunArtifact(v8.artifact("get-v8"));
-        const get_step = b.step("get-v8", "Get v8");
-        get_step.dependOn(&get_v8.step);
-    }
-
-    {
-        // build v8
-        // -------
-        const v8 = b.dependency("v8", .{ .target = target, .optimize = optimize });
-        const build_v8 = b.addRunArtifact(v8.artifact("build-v8"));
-        const build_step = b.step("build-v8", "Build v8");
-        build_step.dependOn(&build_v8.step);
-    }
-
-    {
         // tests
         // ----
 
@@ -148,39 +130,27 @@ fn common(b: *std.Build, opts: *std.Build.Step.Options, step: *std.Build.Step.Co
     mod.addImport("tls", b.dependency("tls", dep_opts).module("tls"));
     mod.addImport("tigerbeetle-io", b.dependency("tigerbeetle_io", .{}).module("tigerbeetle_io"));
 
-    {
-        // v8
-        const v8_opts = b.addOptions();
-        v8_opts.addOption(bool, "inspector_subtype", false);
-
-        const v8_mod = b.dependency("v8", dep_opts).module("v8");
-        v8_mod.addOptions("default_exports", v8_opts);
-        mod.addImport("v8", v8_mod);
-    }
-
-    const mode_str: []const u8 = if (mod.optimize.? == .Debug) "debug" else "release";
-
-    // FIXME: we are tied to native v8 builds, currently:
-    // - aarch64-macos
-    // - x86_64-linux
-    const os = target.result.os.tag;
-    const arch = target.result.cpu.arch;
-    switch (os) {
-        .macos => {},
-        .linux => {
-            // TODO: why do we need it? It should be linked already when we built v8
-            mod.link_libcpp = true;
-        },
-        else => return error.OsNotSupported,
-    }
+    const mode: []const u8 = if (mod.optimize.? == .Debug) "debug" else "release";
 
     const lib_path = try std.fmt.allocPrint(
         mod.owner.allocator,
-        "v8/build/{s}-{s}/{s}/ninja/obj/zig/libc_v8.a",
-        .{ @tagName(arch), @tagName(os), mode_str },
+        "v8/out/{s}/obj/zig/libc_v8.a",
+        .{ mode },
     );
+    mod.link_libcpp = true;
     mod.addObjectFile(mod.owner.path(lib_path));
+    mod.addIncludePath(b.path("src/runtime/v8"));
     mod.addImport("build_info", opts.createModule());
+
+
+    switch (target.result.os.tag) {
+        .macos => {
+            // v8 has a dependency, abseil-cpp, which, on Mac, uses CoreFoundation
+            mod.addSystemFrameworkPath(.{ .cwd_relative = "/System/Library/Frameworks" });
+            mod.linkFramework("CoreFoundation", .{});
+        },
+        else => {},
+    }
 }
 
 fn moduleNetSurf(b: *std.Build, step: *std.Build.Step.Compile, target: std.Build.ResolvedTarget) !void {

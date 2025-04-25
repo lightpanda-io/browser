@@ -1,0 +1,46 @@
+# Copyright 2018-2019 the Deno authors. All rights reserved. MIT license.
+# Based on https://github.com/denoland/rusty_v8/blob/main/BUILD.gn
+
+static_library("c_v8") {
+  complete_static_lib = true
+
+  sources = [ "../binding.cpp" ]
+  deps = [
+    "//build/config:shared_library_deps",
+    "//:v8",
+    "//:v8_libbase",
+    "//:v8_libplatform",
+  ]
+  configs -= [
+    "//build/config/compiler:default_init_stack_vars",
+    "//build/config/compiler:thin_archive",
+  ]
+  configs += [ ":c_v8_config" ]
+}
+
+config("c_v8_config") {
+  configs = [
+    "//:external_config",
+    "//:toolchain",
+    "//:features",
+  ]
+  cflags = []
+
+  # We need these directories in the search path to be able to include some
+  # internal V8 headers.
+  include_dirs = [
+    "v8",
+    "$target_gen_dir/v8",
+  ]
+
+  if (is_debug) {
+    defines = [ "DEBUG" ]
+  }
+
+  if (is_clang) {
+    cflags += [
+      "-fcolor-diagnostics",
+      "-fansi-escape-codes",
+    ]
+  }
+}

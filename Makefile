@@ -103,15 +103,15 @@ end2end:
 ## v8
 get-v8:
 	@printf "\e[36mGetting v8 source...\e[0m\n"
-	@$(ZIG) build get-v8
+	cd v8 && bash get_tools.sh && bash get_v8.sh
 
 build-v8-dev:
 	@printf "\e[36mBuilding v8 (dev)...\e[0m\n"
-	@$(ZIG) build build-v8
+	cd v8 && bash build_v8.sh debug
 
 build-v8:
 	@printf "\e[36mBuilding v8...\e[0m\n"
-	@$(ZIG) build -Doptimize=ReleaseSafe build-v8
+	cd v8 && bash build_v8.sh release
 
 # Install and build required dependencies commands
 # ------------

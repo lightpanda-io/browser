@@ -18,7 +18,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const v8 = @import("v8");
+const v8 = @import("v8/v8.zig");
 
 const SubType = @import("subtype.zig").SubType;
 
@@ -542,7 +542,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 var origin: ?v8.ScriptOrigin = null;
                 if (name) |n| {
                     const scr_name = v8.String.initUtf8(isolate, n);
-                    origin = v8.ScriptOrigin.initDefault(self.isolate, scr_name.toValue());
+                    origin = v8.ScriptOrigin.initDefault(scr_name.toValue());
                 }
                 const scr_js = v8.String.initUtf8(isolate, src);
                 const scr = v8.Script.compile(context, scr_js, origin) catch {
@@ -1038,7 +1038,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             const script_source = v8.String.initUtf8(isolate, src);
 
             const origin = v8.ScriptOrigin.init(
-                isolate,
                 script_name.toValue(),
                 0, // resource_line_offset
                 0, // resource_column_offset
@@ -1098,7 +1097,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 // If this WAS defined, then we would have created it in generateProperty.
                 // But if it isn't, we create a default one
                 const key = v8.Symbol.getToStringTag(isolate).toName();
-                template_proto.setGetter(key, struct {
+                template_proto.setNativeGetter(key, struct {
                     fn stringTag(_: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) void {
                         const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
                         const class_name = v8.String.initUtf8(info.getIsolate(), comptime classNameForStruct(Struct));
@@ -1191,6 +1190,59 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             template_proto.set(js_name, js_value, v8.PropertyAttribute.ReadOnly + v8.PropertyAttribute.DontDelete);
         }
 
+        // fn generateProperty(comptime Struct: type, comptime name: []const u8, isolate: v8.Isolate, template_proto: v8.ObjectTemplate) void {
+        // TODO (KARL): v8 upgrade, two types of properties. Do we ever need to
+        // set a NativeProperty?
+        // fn generateProperty(self: *const Self, comptime Struct: type, comptime name: []const u8, template_proto: v8.ObjectTemplate) void {
+        //     const getter = @field(Struct, "get_" ++ name);
+        //     const param_count = @typeInfo(@TypeOf(getter)).@"fn".params.len;
+
+        //     var js_name: v8.Name = undefined;
+        //     if (comptime std.mem.eql(u8, name, "symbol_toStringTag")) {
+        //         if (param_count != 0) {
+        //             @compileError(@typeName(Struct) ++ ".get_symbol_toStringTag() cannot take any parameters");
+        //         }
+        //         js_name = v8.Symbol.getToStringTag(self.isolate).toName();
+        //     } else {
+        //         js_name = v8.String.initUtf8(self.isolate, name).toName();
+        //     }
+
+        //     const getter_callback = struct {
+        //         fn callback(_: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) void {
+        //             const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
+        //             var caller = Caller(Self).init(info);
+        //             defer caller.deinit();
+
+        //             const named_function = NamedFunction(Struct, getter, "get_" ++ name){};
+        //             caller.getter(named_function, info) catch |err| {
+        //                 caller.handleError(named_function, err, info);
+        //             };
+        //         }
+        //     }.callback;
+
+        //     const setter_name = "set_" ++ name;
+        //     if (@hasDecl(Struct, setter_name) == false) {
+        //         template_proto.setNativeGetter(js_name, getter_callback);
+        //         return;
+        //     }
+
+        //     const setter = @field(Struct, setter_name);
+        //     const setter_callback = struct {
+        //         fn callback(_: ?*const v8.C_Name, raw_value: ?*const v8.C_Value, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) void {
+        //             const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
+        //             var caller = Caller(Self).init(info);
+        //             defer caller.deinit();
+
+        //             const js_value = v8.Value{ .handle = raw_value.? };
+        //             const named_function = NamedFunction(Struct, setter, "set_" ++ name){};
+        //             caller.setter(named_function, js_value, info) catch |err| {
+        //                 caller.handleError(named_function, err, info);
+        //             };
+        //         }
+        //     }.callback;
+        //     template_proto.setNativeGetterAndSetter(js_name, getter_callback, setter_callback);
+        // }
+
         fn generateProperty(comptime Struct: type, comptime name: []const u8, isolate: v8.Isolate, template_proto: v8.ObjectTemplate) void {
             const getter = @field(Struct, "get_" ++ name);
             const param_count = @typeInfo(@TypeOf(getter)).@"fn".params.len;
@@ -1205,9 +1257,9 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 js_name = v8.String.initUtf8(isolate, name).toName();
             }
 
-            const getter_callback = struct {
-                fn callback(_: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) void {
-                    const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
+            const getter_callback = v8.FunctionTemplate.initCallback(isolate, struct {
+                fn callback(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
+                    const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
                     var caller = Caller(Self).init(info);
                     defer caller.deinit();
 
@@ -1216,29 +1268,31 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                         caller.handleError(named_function, err, info);
                     };
                 }
-            }.callback;
+            }.callback);
 
             const setter_name = "set_" ++ name;
             if (@hasDecl(Struct, setter_name) == false) {
-                template_proto.setGetter(js_name, getter_callback);
+                template_proto.setAccessorGetter(js_name, getter_callback);
                 return;
             }
 
             const setter = @field(Struct, setter_name);
-            const setter_callback = struct {
-                fn callback(_: ?*const v8.C_Name, raw_value: ?*const v8.C_Value, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) void {
-                    const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
+            const setter_callback = v8.FunctionTemplate.initCallback(isolate, struct {
+                fn callback(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
+                    const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
                     var caller = Caller(Self).init(info);
                     defer caller.deinit();
 
-                    const js_value = v8.Value{ .handle = raw_value.? };
+                    std.debug.assert(info.length() == 1);
+                    const js_value = info.getArg(0);
                     const named_function = NamedFunction(Struct, setter, "set_" ++ name){};
                     caller.setter(named_function, js_value, info) catch |err| {
                         caller.handleError(named_function, err, info);
                     };
                 }
-            }.callback;
-            template_proto.setGetterAndSetter(js_name, getter_callback, setter_callback);
+            }.callback);
+
+            template_proto.setAccessorGetterAndSetter(js_name, getter_callback, setter_callback);
         }
 
         fn generateIndexer(comptime Struct: type, template_proto: v8.ObjectTemplate) void {
@@ -1437,6 +1491,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             @compileLog(@typeInfo(T));
             @compileError("A function returns an unsupported type: " ++ @typeName(T));
         }
+
         // Reverses the mapZigInstanceToJs, making sure that our TaggedAnyOpaque
         // contains a ptr to the correct type.
         fn typeTaggedAnyOpaque(comptime named_function: anytype, comptime R: type, js_obj: v8.Object) !R {
@@ -1656,7 +1711,7 @@ fn Caller(comptime E: type) type {
             info.getReturnValue().set(try self.zigValueToJs(res));
         }
 
-        fn getter(self: *Self, comptime named_function: anytype, info: v8.PropertyCallbackInfo) !void {
+        fn getter(self: *Self, comptime named_function: anytype, info: v8.FunctionCallbackInfo) !void {
             const S = named_function.S;
             const Getter = @TypeOf(named_function.func);
             if (@typeInfo(Getter).@"fn".return_type == null) {
@@ -1682,7 +1737,7 @@ fn Caller(comptime E: type) type {
             info.getReturnValue().set(try self.zigValueToJs(res));
         }
 
-        fn setter(self: *Self, comptime named_function: anytype, js_value: v8.Value, info: v8.PropertyCallbackInfo) !void {
+        fn setter(self: *Self, comptime named_function: anytype, js_value: v8.Value, info: v8.FunctionCallbackInfo) !void {
             const S = named_function.S;
             comptime assertSelfReceiver(named_function);
 
@@ -2545,35 +2600,7 @@ fn NamedFunction(comptime S: type, comptime function: anytype, comptime name: []
     };
 }
 
-// This is called from V8. Whenever the v8 inspector has to describe a value
-// it'll call this function to gets its [optional] subtype - which, from V8's
-// point of view, is an arbitrary string.
-pub export fn v8_inspector__Client__IMPL__valueSubtype(
-    _: *v8.c.InspectorClientImpl,
-    c_value: *const v8.C_Value,
-) callconv(.C) [*c]const u8 {
-    const external_entry = getTaggedAnyOpaque(.{ .handle = c_value }) orelse return null;
-    return if (external_entry.subtype) |st| @tagName(st) else null;
-}
-
-// Same as valueSubType above, but for the optional description field.
-// From what I can tell, some drivers _need_ the description field to be
-// present, even if it's empty. So if we have a subType for the value, we'll
-// put an empty description.
-pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
-    _: *v8.c.InspectorClientImpl,
-    context: *const v8.C_Context,
-    c_value: *const v8.C_Value,
-) callconv(.C) [*c]const u8 {
-    _ = context;
-
-    // We _must_ include a non-null description in order for the subtype value
-    // to be included. Besides that, I don't know if the value has any meaning
-    const external_entry = getTaggedAnyOpaque(.{ .handle = c_value }) orelse return null;
-    return if (external_entry.subtype == null) null else "";
-}
-
-fn getTaggedAnyOpaque(value: v8.Value) ?*TaggedAnyOpaque {
+pub fn getTaggedAnyOpaque(value: v8.Value) ?*TaggedAnyOpaque {
     if (value.isObject() == false) {
         return null;
     }
