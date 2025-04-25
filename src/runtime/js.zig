@@ -155,9 +155,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         // the global isolate
         isolate: v8.Isolate,
 
-        // this is the global scope that all our classes are defined in
-        global_scope: v8.HandleScope,
-
         // just kept around because we need to free it on deinit
         isolate_params: v8.CreateParams,
 
@@ -200,9 +197,9 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             isolate.enter();
             errdefer isolate.exit();
 
-            var global_scope: v8.HandleScope = undefined;
-            v8.HandleScope.init(&global_scope, isolate);
-            errdefer global_scope.deinit();
+            var temp_scope: v8.HandleScope = undefined;
+            v8.HandleScope.init(&temp_scope, isolate);
+            defer temp_scope.deinit();
 
             const env = try allocator.create(Self);
             errdefer allocator.destroy(env);
@@ -213,7 +210,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 .allocator = allocator,
                 .isolate_params = params,
                 .gc_hints = opts.gc_hints,
-                .global_scope = global_scope,
                 .prototype_lookup = undefined,
                 .executor_pool = std.heap.MemoryPool(Executor).init(allocator),
             };
@@ -224,7 +220,9 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             // we can get its index via: @field(TYPE_LOOKUP, type_name).index
             const templates = &env.templates;
             inline for (Types, 0..) |s, i| {
-                templates[i] = env.generateClass(@field(types, s.name));
+                @setEvalBranchQuota(10_000);
+                // TODO kinda shot deinit, however these live for the livetime of the isolate anyways
+                templates[i] = v8.Persistent(v8.FunctionTemplate).init(isolate, env.generateClass(@field(types, s.name))).castToFunctionTemplate();
             }
 
             // Above, we've created all our our FunctionTemplates. Now that we
@@ -250,7 +248,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         }
 
         pub fn deinit(self: *Self) void {
-            self.global_scope.deinit();
             self.isolate.exit();
             self.isolate.deinit();
             self.executor_pool.deinit();
@@ -267,9 +264,10 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             const templates = &self.templates;
 
             // The global FunctionTemplate (i.e. Window).
-            const globals = v8.FunctionTemplate.initDefault(isolate);
+            // env.generateClass(@field(types, s.name))
+            const globals = v8.Persistent(v8.FunctionTemplate).init(isolate, v8.FunctionTemplate.initDefault(isolate)).castToFunctionTemplate();
 
-            const global_template = globals.getInstanceTemplate();
+            const global_template = v8.Persistent(v8.ObjectTemplate).init(isolate, globals.getInstanceTemplate()).castToObjectTemplate();
             global_template.setInternalFieldCount(1);
             self.attachClass(Global, globals);
 
@@ -293,7 +291,8 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 globals.inherit(templates[proto_index]);
             }
 
-            const context = v8.Context.init(isolate, global_template, null);
+            const context_local = v8.Context.init(isolate, global_template, null);
+            const context = v8.Persistent(v8.Context).init(isolate, context_local).castToContext();
             context.enter();
             errdefer context.exit();
 
@@ -895,6 +894,8 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 self.scope = Scope{
                     .arena = self.scope_arena,
                 };
+
+                // DO we still need this?
                 _ = try self._mapZigInstanceToJs(self.context.getGlobal(), global);
             }
 
@@ -1134,10 +1135,18 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             }
 
             pub fn call(self: *const Callback, args: anytype) !void {
+                // const v8 = @import("v8");
+                var temp_scope: v8.HandleScope = undefined;
+                v8.HandleScope.init(&temp_scope, self.executor.isolate);
+                defer temp_scope.deinit();
                 return self.callWithThis(self.getThis(), args);
             }
 
             pub fn tryCall(self: *const Callback, args: anytype, result: *Result) !void {
+                // const v8 = @import("v8");
+                var temp_scope: v8.HandleScope = undefined;
+                v8.HandleScope.init(&temp_scope, self.executor.isolate);
+                defer temp_scope.deinit();
                 return self.tryCallWithThis(self.getThis(), args, result);
             }
 

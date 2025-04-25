@@ -168,6 +168,11 @@ pub fn CDPT(comptime TypeProvider: type) type {
         }
 
         fn dispatchCommand(command: anytype, method: []const u8) !void {
+            const v8 = @import("v8");
+            var temp_scope: v8.HandleScope = undefined;
+            v8.HandleScope.init(&temp_scope, command.cdp.browser.env.isolate);
+            defer temp_scope.deinit();
+
             const domain = blk: {
                 const i = std.mem.indexOfScalarPos(u8, method, 0, '.') orelse {
                     return error.InvalidMethod;
