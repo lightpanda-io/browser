@@ -243,8 +243,6 @@ pub fn pageNavigated(bc: anytype, event: *const Notification.PageNavigated) !voi
     const target_id = bc.target_id orelse unreachable;
     const session_id = bc.session_id orelse unreachable;
 
-    try cdp.sendEvent("DOM.documentUpdated", null, .{ .session_id = session_id });
-
     // frameNavigated event
     try cdp.sendEvent("Page.frameNavigated", .{
         .type = "Navigation",
@@ -256,6 +254,11 @@ pub fn pageNavigated(bc: anytype, event: *const Notification.PageNavigated) !voi
             .secureContextType = bc.secure_context_type,
         },
     }, .{ .session_id = session_id });
+
+    // The DOM.documentUpdated event must be send after the frameNavigated one.
+    // chromedp client expects to receive the events is this order.
+    // see https://github.com/chromedp/chromedp/issues/1558
+    try cdp.sendEvent("DOM.documentUpdated", null, .{ .session_id = session_id });
 
     // domContentEventFired event
     // TODO: partially hard coded
