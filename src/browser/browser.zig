@@ -58,7 +58,6 @@ pub const Browser = struct {
     http_client: *http.Client,
     session_pool: SessionPool,
     page_arena: std.heap.ArenaAllocator,
-    pub const EnvType = Env;
 
     const SessionPool = std.heap.MemoryPool(Session);
 
@@ -97,7 +96,7 @@ pub const Browser = struct {
         return session;
     }
 
-    fn closeSession(self: *Browser) void {
+    pub fn closeSession(self: *Browser) void {
         if (self.session) |session| {
             session.deinit();
             self.session_pool.destroy(session);

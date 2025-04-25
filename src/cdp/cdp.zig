@@ -21,7 +21,10 @@ const Allocator = std.mem.Allocator;
 const json = std.json;
 
 const App = @import("../app.zig").App;
+const Env = @import("../browser/env.zig").Env;
 const asUint = @import("../str/parser.zig").asUint;
+const Browser = @import("../browser/browser.zig").Browser;
+const Session = @import("../browser/browser.zig").Session;
 const Incrementing = @import("../id.zig").Incrementing;
 const Notification = @import("../notification.zig").Notification;
 
@@ -32,8 +35,6 @@ pub const LOADER_ID = "LOADERID24DD2FD56CF1EF33C965C79C";
 
 pub const CDP = CDPT(struct {
     const Client = *@import("../server.zig").Client;
-    const Browser = @import("../browser/browser.zig").Browser;
-    const Session = @import("../browser/browser.zig").Session;
 });
 
 const SessionIdGen = Incrementing(u32, "SID");
@@ -69,8 +70,6 @@ pub fn CDPT(comptime TypeProvider: type) type {
         message_arena: std.heap.ArenaAllocator,
 
         const Self = @This();
-        pub const Browser = TypeProvider.Browser;
-        pub const Session = TypeProvider.Session;
 
         pub fn init(app: *App, client: TypeProvider.Client) !Self {
             const allocator = app.allocator;
@@ -247,6 +246,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
                 return false;
             }
             bc.deinit();
+            self.browser.closeSession();
             self.browser_context_pool.destroy(bc);
             self.browser_context = null;
             return true;
@@ -282,7 +282,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         // all intents and purpose, from CDP's point of view our Browser and
         // our Session more or less maps to a BrowserContext. THIS HAS ZERO
         // RELATION TO SESSION_ID
-        session: *CDP_T.Session,
+        session: *Session,
 
         // Points to the session arena
         arena: Allocator,
@@ -309,7 +309,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         node_registry: Node.Registry,
         node_search_list: Node.Search.List,
 
-        isolated_world: ?IsolatedWorld(CDP_T.Browser.EnvType),
+        isolated_world: ?IsolatedWorld(Env),
 
         const Self = @This();
 
