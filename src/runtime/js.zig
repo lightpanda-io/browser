@@ -264,10 +264,9 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             const templates = &self.templates;
 
             // The global FunctionTemplate (i.e. Window).
-            // env.generateClass(@field(types, s.name))
-            const globals = v8.Persistent(v8.FunctionTemplate).init(isolate, v8.FunctionTemplate.initDefault(isolate)).castToFunctionTemplate();
+            const globals = v8.FunctionTemplate.initDefault(isolate);
 
-            const global_template = v8.Persistent(v8.ObjectTemplate).init(isolate, globals.getInstanceTemplate()).castToObjectTemplate();
+            const global_template = globals.getInstanceTemplate();
             global_template.setInternalFieldCount(1);
             self.attachClass(Global, globals);
 
@@ -752,6 +751,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
 
             // @intFromPtr of our Executor is stored in this context, so given
             // a context, we can always get the Executor back.
+            // This context is a persistent object. The persistent needs to be recovered and reset.
             context: v8.Context,
 
             // Because calls can be nested (i.e.a function calling a callback),
@@ -800,6 +800,8 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             fn deinit(self: *Executor) void {
                 if (self.scope != null) self.endScope();
                 self.context.exit();
+                var presistent_context = v8.Persistent(v8.Context).recoverCast(self.context);
+                presistent_context.deinit();
 
                 self._call_arena_instance.deinit();
                 self._scope_arena_instance.deinit();
