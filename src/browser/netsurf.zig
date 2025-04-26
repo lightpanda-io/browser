@@ -29,9 +29,6 @@ const c = @cImport({
 
 const mimalloc = @import("mimalloc.zig");
 
-const Callback = @import("env.zig").Callback;
-const SessionState = @import("env.zig").SessionState;
-
 // init initializes netsurf lib.
 // init starts a mimalloc heap arena for the netsurf session. The caller must
 // call deinit() to free the arena memory.
@@ -587,11 +584,61 @@ pub inline fn toEventTarget(comptime T: type, v: *T) *EventTarget {
     return @as(*EventTarget, @ptrCast(et_aligned));
 }
 
+// The way we implement events is a lot like how Zig implements linked lists.
+// A Zig struct contains an `EventNode` field, i.e.:
+//    node: parser.EventNode,
+//
+// When eventTargetAddEventListener is called, we pass in `&self.node`.
+// This is the pointer that's stored in the netsurf listener and it's the data
+// we can get back from the listener. We can call the node's `func` function,
+// passing the node itself, and the receiving function will know how to turn
+// that node into the our "self", i..e by using @fieldParentPtr.
+// https://www.openmymind.net/Zigs-New-LinkedList-API/
+pub const EventNode = struct {
+    // Event id, used for removing. Internal Zig events won't have an id.
+    // This is normally set to the callback.id for a JavaScript event.
+    id: ?usize = null,
+
+    func: *const fn (node: *EventNode, event: *Event) void,
+
+    fn idFromListener(lst: *EventListener) ?usize {
+        const ctx = eventListenerGetData(lst) orelse return null;
+        const node: *EventNode = @alignCast(@ptrCast(ctx));
+        return node.id;
+    }
+};
+
+pub fn eventTargetAddEventListener(
+    et: *EventTarget,
+    typ: []const u8,
+    node: *EventNode,
+    capture: bool,
+) !void {
+    const event_handler = struct {
+        fn handle(event_: ?*Event, ptr_: ?*anyopaque) callconv(.C) void {
+            const ptr = ptr_ orelse return;
+            const event = event_ orelse return;
+
+            const node_: *EventNode = @alignCast(@ptrCast(ptr));
+            node_.func(node_, event);
+        }
+    }.handle;
+
+    var listener: ?*EventListener = undefined;
+    const errLst = c.dom_event_listener_create(event_handler, node, &listener);
+    try DOMErr(errLst);
+    defer c.dom_event_listener_unref(listener);
+
+    const s = try strFromData(typ);
+    const err = eventTargetVtable(et).add_event_listener.?(et, s, listener, capture);
+    try DOMErr(err);
+}
+
 pub fn eventTargetHasListener(
     et: *EventTarget,
     typ: []const u8,
     capture: bool,
-    cbk_id: usize,
+    id: usize,
 ) !?*EventListener {
     const str = try strFromData(typ);
 
@@ -616,12 +663,9 @@ pub fn eventTargetHasListener(
             // and capture property,
             // let's check if the callback handler is the same
             defer c.dom_event_listener_unref(listener);
-            if (EventHandlerData.fromListener(listener)) |ehd| {
-                switch (ehd.*) {
-                    .js => |js| if (cbk_id == js.data.cbk.id) {
-                        return lst;
-                    },
-                    .zig => {},
+            if (EventNode.idFromListener(listener)) |node_id| {
+                if (node_id == id) {
+                    return lst;
                 }
             }
         }
@@ -638,144 +682,18 @@ pub fn eventTargetHasListener(
     return null;
 }
 
-// The *anyopque that get stored in the libdom listener, which we'll retrieve
-// when then event is dispatched so that we can execute the JS or Zig callback.
-const EventHandlerData = union(enum) {
-    js: JS,
-    zig: Zig,
-
-    const JS = struct {
-        data: JSEventHandlerData,
-        func: JSEventHandlerFunc,
-    };
-
-    const Zig = struct {
-        ctx: *anyopaque,
-        func: ZigEventHandlerFunc,
-    };
-
-    // retrieve a EventHandlerDataInternal from a listener.
-    fn fromListener(lst: *EventListener) ?*EventHandlerData {
-        const ctx = eventListenerGetData(lst) orelse return null;
-        const ehd: *EventHandlerData = @alignCast(@ptrCast(ctx));
-        return ehd;
-    }
-
-    pub fn deinit(self: *EventHandlerData, alloc: std.mem.Allocator) void {
-        switch (self.*) {
-            .js => |*js| {
-                const js_data = &js.data;
-                if (js_data.deinitFunc) |df| {
-                    df(js_data.ctx, alloc);
-                }
-            },
-            .zig => {},
-        }
-        alloc.destroy(self);
-    }
-
-    pub fn handle(self: *EventHandlerData, event: ?*Event) void {
-        switch (self.*) {
-            .js => |*js| js.func(event, &js.data),
-            .zig => |zig| zig.func(zig.ctx, event.?),
-        }
-    }
-};
-
-pub const JSEventHandlerData = struct {
-    cbk: Callback,
-    ctx: ?*anyopaque = null,
-    // deinitFunc implements the data deinitialization.
-    deinitFunc: ?DeinitFunc = null,
-
-    pub const DeinitFunc = *const fn (data: ?*anyopaque, alloc: std.mem.Allocator) void;
-};
-
-const JSEventHandlerFunc = *const fn (event: ?*Event, data: *JSEventHandlerData) void;
-const ZigEventHandlerFunc = *const fn (ctx: *anyopaque, event: *Event) void;
-
-pub fn eventTargetAddEventListener(
-    et: *EventTarget,
-    alloc: std.mem.Allocator,
-    typ: []const u8,
-    func: JSEventHandlerFunc,
-    data: JSEventHandlerData,
-    capture: bool,
-) !void {
-    // this allocation will be removed either on
-    // eventTargetRemoveEventListener or eventTargetRemoveAllEventListeners
-    const ehd = try alloc.create(EventHandlerData);
-    errdefer alloc.destroy(ehd);
-    ehd.* = .{ .js = .{ .data = data, .func = func } };
-    errdefer ehd.deinit(alloc);
-
-    // When a function is used as an event handler, its this parameter is bound
-    // to the DOM element on which the listener is placed.
-    // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/this#this_in_dom_event_handlers
-    try ehd.js.data.cbk.setThis(et);
-
-    return addEventTargetListener(et, typ, ehd, capture);
-}
-
-pub fn eventTargetAddZigListener(
-    et: *EventTarget,
-    alloc: std.mem.Allocator,
-    typ: []const u8,
-    func: ZigEventHandlerFunc,
-    ctx: *anyopaque,
-    capture: bool,
-) !void {
-    const ehd = try alloc.create(EventHandlerData);
-    errdefer alloc.destroy(ehd);
-    ehd.* = .{ .zig = .{ .ctx = ctx, .func = func } };
-    return addEventTargetListener(et, typ, ehd, capture);
-}
-
-fn addEventTargetListener(et: *EventTarget, typ: []const u8, data: *anyopaque, capture: bool) !void {
-    // event_handler implements the function exposed in C and called by libdom.
-    // It retrieves the EventHandler and calls the appropriate (JS or Zig)
-    // handler function with the corresponding data.
-    const event_handler = struct {
-        fn handle(event: ?*Event, ptr_: ?*anyopaque) callconv(.C) void {
-            const ptr = ptr_ orelse return;
-            @as(*EventHandlerData, @alignCast(@ptrCast(ptr))).handle(event);
-            // NOTE: we can not call func.deinit here
-            // b/c the handler can be called several times
-            // either on this dispatch event or in anoter one
-        }
-    }.handle;
-
-    var listener: ?*EventListener = undefined;
-    const errLst = c.dom_event_listener_create(event_handler, data, &listener);
-    try DOMErr(errLst);
-    defer c.dom_event_listener_unref(listener);
-
-    const s = try strFromData(typ);
-    const err = eventTargetVtable(et).add_event_listener.?(et, s, listener, capture);
-    try DOMErr(err);
-}
-
 pub fn eventTargetRemoveEventListener(
     et: *EventTarget,
-    alloc: std.mem.Allocator,
     typ: []const u8,
     lst: *EventListener,
     capture: bool,
 ) !void {
-    // free data allocation made on eventTargetAddEventListener
-    if (EventHandlerData.fromListener(lst)) |ehd| {
-        ehd.deinit(alloc);
-    }
-
     const s = try strFromData(typ);
     const err = eventTargetVtable(et).remove_event_listener.?(et, s, lst, capture);
     try DOMErr(err);
 }
 
-pub fn eventTargetRemoveAllEventListeners(
-    et: *EventTarget,
-    alloc: std.mem.Allocator,
-) !void {
+pub fn eventTargetRemoveAllEventListeners(et: *EventTarget) !void {
     var next: ?*EventListenerEntry = undefined;
     var lst: ?*EventListener = undefined;
 
@@ -792,15 +710,8 @@ pub fn eventTargetRemoveAllEventListeners(
         try DOMErr(errIter);
 
         if (lst) |listener| {
-            defer c.dom_event_listener_unref(listener);
-
-            if (EventHandlerData.fromListener(listener)) |ehd| {
-                if (ehd.* == .zig) {
-                    // we don't remove Zig listeners
-                    continue;
-                }
-
-                ehd.deinit(alloc);
+            if (EventNode.idFromListener(listener) != null) {
+                defer c.dom_event_listener_unref(listener);
                 const err = eventTargetVtable(et).remove_event_listener.?(
                     et,
                     null,

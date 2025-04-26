@@ -1200,7 +1200,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         pub const Callback = struct {
             id: usize,
             executor: *Executor,
-            _this: ?v8.Object = null,
+            this: ?v8.Object = null,
             func: PersistentFunction,
 
             // We use this when mapping a JS value to a Zig object. We can't
@@ -1215,8 +1215,13 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 exception: []const u8,
             };
 
-            pub fn setThis(self: *Callback, value: anytype) !void {
-                self._this = try self.executor.valueToExistingObject(value);
+            pub fn withThis(self: *const Callback, value: anytype) !Callback {
+                return .{
+                    .id = self.id,
+                    .func = self.func,
+                    .executor = self.executor,
+                    .this = try self.executor.valueToExistingObject(value),
+                };
             }
 
             pub fn call(self: *const Callback, args: anytype) !void {
@@ -1264,7 +1269,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             }
 
             fn getThis(self: *const Callback) v8.Object {
-                return self._this orelse self.executor.context.getGlobal();
+                return self.this orelse self.executor.context.getGlobal();
             }
 
             // debug/helper to print the source of the JS callback

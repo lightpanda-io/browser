@@ -59,56 +59,45 @@ pub const MutationObserver = struct {
             .node = node,
             .options = options,
             .mutation_observer = self,
+            .event_node = .{ .id = self.cbk.id, .func = Observer.handle },
         };
-
-        const arena = self.arena;
 
         // register node's events
         if (options.childList or options.subtree) {
-            try parser.eventTargetAddZigListener(
+            try parser.eventTargetAddEventListener(
                 parser.toEventTarget(parser.Node, node),
-                arena,
                 "DOMNodeInserted",
-                Observer.handle,
-                observer,
+                &observer.event_node,
                 false,
             );
-            try parser.eventTargetAddZigListener(
+            try parser.eventTargetAddEventListener(
                 parser.toEventTarget(parser.Node, node),
-                arena,
                 "DOMNodeRemoved",
-                Observer.handle,
-                observer,
+                &observer.event_node,
                 false,
             );
         }
         if (options.attr()) {
-            try parser.eventTargetAddZigListener(
+            try parser.eventTargetAddEventListener(
                 parser.toEventTarget(parser.Node, node),
-                arena,
                 "DOMAttrModified",
-                Observer.handle,
-                observer,
+                &observer.event_node,
                 false,
             );
         }
         if (options.cdata()) {
-            try parser.eventTargetAddZigListener(
+            try parser.eventTargetAddEventListener(
                 parser.toEventTarget(parser.Node, node),
-                arena,
                 "DOMCharacterDataModified",
-                Observer.handle,
-                observer,
+                &observer.event_node,
                 false,
             );
         }
         if (options.subtree) {
-            try parser.eventTargetAddZigListener(
+            try parser.eventTargetAddEventListener(
                 parser.toEventTarget(parser.Node, node),
-                arena,
                 "DOMSubtreeModified",
-                Observer.handle,
-                observer,
+                &observer.event_node,
                 false,
             );
         }
@@ -221,6 +210,8 @@ const Observer = struct {
     // and batch the mutation records.
     mutation_observer: *MutationObserver,
 
+    event_node: parser.EventNode,
+
     fn appliesTo(o: *const Observer, target: *parser.Node) bool {
         // mutation on any target is always ok.
         if (o.options.subtree) {
@@ -250,9 +241,9 @@ const Observer = struct {
         return false;
     }
 
-    fn handle(ctx: *anyopaque, event: *parser.Event) void {
-        // retrieve the observer from the data.
-        var self: *Observer = @alignCast(@ptrCast(ctx));
+    fn handle(en: *parser.EventNode, event: *parser.Event) void {
+        const self: *Observer = @fieldParentPtr("event_node", en);
+
         var mutation_observer = self.mutation_observer;
 
         const node = blk: {
