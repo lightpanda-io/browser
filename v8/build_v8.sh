@@ -18,11 +18,6 @@ esac
 MODE=${1:-"debug"}
 OUT=out/${MODE}
 
-if [[ ${OS} == "mac" && ${ARCH} == "arm64" ]] then
-  # there's something wrong with the debug build of MacOS on ARM
-  MODE=release
-fi
-
 if [[ ${MODE} == "release" ]] then
   IS_DEBUG="false"
   SYMBOL_LEVEL="0"
