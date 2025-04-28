@@ -25,6 +25,7 @@ const Env = @import("../browser/env.zig").Env;
 const asUint = @import("../str/parser.zig").asUint;
 const Browser = @import("../browser/browser.zig").Browser;
 const Session = @import("../browser/browser.zig").Session;
+const Inspector = @import("../browser/env.zig").Env.Inspector;
 const Incrementing = @import("../id.zig").Incrementing;
 const Notification = @import("../notification.zig").Notification;
 
@@ -309,40 +310,51 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         node_registry: Node.Registry,
         node_search_list: Node.Search.List,
 
-        isolated_world: ?IsolatedWorld(Env),
+        inspector: Inspector,
+        isolated_world: ?IsolatedWorld,
 
         const Self = @This();
 
         fn init(self: *Self, id: []const u8, cdp: *CDP_T) !void {
             const allocator = cdp.allocator;
 
+            const session = try cdp.browser.newSession(self);
+            const arena = session.arena.allocator();
+
+            const inspector = try cdp.browser.env.newInspector(arena, self);
+
             var registry = Node.Registry.init(allocator);
             errdefer registry.deinit();
 
-            const session = try cdp.browser.newSession(self);
             self.* = .{
                 .id = id,
                 .cdp = cdp,
+                .arena = arena,
                 .target_id = null,
                 .session_id = null,
+                .session = session,
                 .security_origin = URL_BASE,
                 .secure_context_type = "Secure", // TODO = enum
                 .loader_id = LOADER_ID,
-                .session = session,
-                .arena = session.arena.allocator(),
                 .page_life_cycle_events = false, // TODO; Target based value
                 .node_registry = registry,
                 .node_search_list = undefined,
                 .isolated_world = null,
+                .inspector = inspector,
             };
             self.node_search_list = Node.Search.List.init(allocator, &self.node_registry);
         }
 
         pub fn deinit(self: *Self) void {
-            if (self.isolated_world) |isolated_world| {
-                isolated_world.executor.endScope();
-                self.cdp.browser.env.stopExecutor(isolated_world.executor);
-                self.isolated_world = null;
+            self.inspector.deinit();
+
+            // If the session has a page, we need to clear it first. The page
+            // context is always nested inside of the isolated world context,
+            // so we need to shutdown the page one first.
+            self.cdp.browser.closeSession();
+
+            if (self.isolated_world) |*world| {
+                world.deinit();
             }
             self.node_registry.deinit();
             self.node_search_list.deinit();
@@ -353,25 +365,25 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             self.node_search_list.reset();
         }
 
-        pub fn createIsolatedWorld(
-            self: *Self,
-            world_name: []const u8,
-            grant_universal_access: bool,
-        ) !void {
-            if (self.isolated_world != null) return error.CurrentlyOnly1IsolatedWorldSupported;
+        pub fn createIsolatedWorld(self: *Self) !void {
+            if (self.isolated_world != null) {
+                return error.CurrentlyOnly1IsolatedWorldSupported;
+            }
 
-            const executor = try self.cdp.browser.env.startExecutor(@import("../browser/html/window.zig").Window, &self.session.state, self.session, .isolated);
-            errdefer self.cdp.browser.env.stopExecutor(executor);
-
-            // TBD should we endScope on removePage and re-startScope on createPage?
-            // Window will be refactored into the executor so we leave it ugly here for now as a reminder.
-            try executor.startScope(@import("../browser/html/window.zig").Window{});
+            var executor = try self.cdp.browser.env.newExecutor();
+            errdefer executor.deinit();
 
             self.isolated_world = .{
-                .name = try self.arena.dupe(u8, world_name),
-                .grant_universal_access = grant_universal_access,
+                .name = "",
+                .global = .{},
+                .scope = undefined,
                 .executor = executor,
+                .grant_universal_access = false,
             };
+            var world = &self.isolated_world.?;
+
+            // TODO: can we do something better than passing `undefined` for the state?
+            world.scope = try world.executor.startScope(&world.global, undefined, {});
         }
 
         pub fn nodeWriter(self: *Self, node: *const Node, opts: Node.Writer.Opts) Node.Writer {
@@ -384,16 +396,33 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         pub fn getURL(self: *const Self) ?[]const u8 {
             const page = self.session.currentPage() orelse return null;
-            return if (page.url) |*url| url.raw else null;
+            const raw_url = page.url.raw;
+            return if (raw_url.len == 0) null else raw_url;
         }
 
         pub fn notify(ctx: *anyopaque, notification: *const Notification) !void {
             const self: *Self = @alignCast(@ptrCast(ctx));
 
             switch (notification.*) {
+                .context_created => |cc| {
+                    const aux_data = try std.fmt.allocPrint(self.arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{self.target_id.?});
+                    self.inspector.contextCreated(
+                        self.session.page.?.scope,
+                        "",
+                        cc.origin,
+                        aux_data,
+                        true,
+                    );
+                },
                 .page_navigate => |*pn| return @import("domains/page.zig").pageNavigate(self, pn),
                 .page_navigated => |*pn| return @import("domains/page.zig").pageNavigated(self, pn),
             }
+        }
+
+        pub fn callInspector(self: *const Self, msg: []const u8) void {
+            self.inspector.send(msg);
+            // force running micro tasks after send input to the inspector.
+            self.cdp.browser.runMicrotasks();
         }
 
         pub fn onInspectorResponse(ctx: *anyopaque, _: u32, msg: []const u8) void {
@@ -481,13 +510,17 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 /// An isolated world has it's own instance of globals like Window.
 /// Generally the client needs to resolve a node into the isolated world to be able to work with it.
 /// An object id is unique across all contexts, different object ids can refer to the same Node in different contexts.
-pub fn IsolatedWorld(comptime E: type) type {
-    return struct {
-        name: []const u8,
-        grant_universal_access: bool,
-        executor: *E.Executor,
-    };
-}
+const IsolatedWorld = struct {
+    name: []const u8,
+    scope: *Env.Scope,
+    executor: Env.Executor,
+    grant_universal_access: bool,
+    global: @import("../browser/html/window.zig").Window,
+
+    pub fn deinit(self: *IsolatedWorld) void {
+        self.executor.deinit();
+    }
+};
 
 // This is a generic because when we send a result we have two different
 // behaviors. Normally, we're sending the result to the client. But in some cases

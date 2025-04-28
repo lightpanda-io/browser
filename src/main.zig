@@ -100,7 +100,7 @@ pub fn main() !void {
             var session = try browser.newSession({});
 
             // page
-            const page = try session.createPage(null);
+            const page = try session.createPage();
 
             _ = page.navigate(url, .{}) catch |err| switch (err) {
                 error.UnsupportedUriScheme, error.UriMissingHost => {

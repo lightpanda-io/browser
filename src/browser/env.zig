@@ -25,6 +25,7 @@ pub const JsThis = Env.JsThis;
 pub const JsObject = Env.JsObject;
 pub const Callback = Env.Callback;
 pub const Env = js.Env(*SessionState, Interfaces{});
+pub const Global = @import("html/window.zig").Window;
 
 pub const SessionState = struct {
     loop: *Loop,

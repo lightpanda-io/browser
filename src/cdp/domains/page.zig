@@ -112,15 +112,15 @@ fn createIsolatedWorld(cmd: anytype) !void {
     }
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-    try bc.createIsolatedWorld(params.worldName, params.grantUniveralAccess);
     const world = &bc.isolated_world.?;
-
+    world.name = try bc.arena.dupe(u8, params.worldName);
+    world.grant_universal_access = params.grantUniveralAccess;
     // Create the auxdata json for the contextCreated event
     // Calling contextCreated will assign a Id to the context and send the contextCreated event
     const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{params.frameId});
-    bc.session.inspector.contextCreated(world.executor, world.name, "", aux_data, false);
+    bc.inspector.contextCreated(world.scope, world.name, "", aux_data, false);
 
-    return cmd.sendResult(.{ .executionContextId = world.executor.context.debugContextId() }, .{});
+    return cmd.sendResult(.{ .executionContextId = world.scope.context.debugContextId() }, .{});
 }
 
 fn navigate(cmd: anytype) !void {
@@ -222,8 +222,8 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void 
         const aux_json = try std.fmt.bufPrint(&buffer, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{bc.target_id.?});
 
         // Calling contextCreated will assign a new Id to the context and send the contextCreated event
-        bc.session.inspector.contextCreated(
-            isolated_world.executor,
+        bc.inspector.contextCreated(
+            isolated_world.scope,
             isolated_world.name,
             "://",
             aux_json,
