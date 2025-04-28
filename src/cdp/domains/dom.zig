@@ -127,24 +127,27 @@ fn resolveNode(cmd: anytype) !void {
         objectGroup: ?[]const u8 = null,
         executionContextId: ?u32 = null,
     })) orelse return error.InvalidParams;
+
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
-    var executor = bc.session.executor;
+    var scope = page.scope;
     if (params.executionContextId) |context_id| {
-        if (executor.context.debugContextId() != context_id) {
+        if (scope.context.debugContextId() != context_id) {
             const isolated_world = bc.isolated_world orelse return error.ContextNotFound;
-            executor = isolated_world.executor;
+            scope = isolated_world.scope;
 
-            if (executor.context.debugContextId() != context_id) return error.ContextNotFound;
+            if (scope.context.debugContextId() != context_id) return error.ContextNotFound;
         }
     }
-    const input_node_id = if (params.nodeId) |node_id| node_id else params.backendNodeId orelse return error.InvalidParams;
+
+    const input_node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
     const node = bc.node_registry.lookup_by_id.get(input_node_id) orelse return error.UnknownNode;
 
     // node._node is a *parser.Node we need this to be able to find its most derived type e.g. Node -> Element -> HTMLElement
     // So we use the Node.Union when retrieve the value from the environment
-    const remote_object = try bc.session.inspector.getRemoteObject(
-        executor,
+    const remote_object = try bc.inspector.getRemoteObject(
+        scope,
         params.objectGroup orelse "",
         try dom_node.Node.toInterface(node._node),
     );
@@ -163,28 +166,61 @@ fn resolveNode(cmd: anytype) !void {
 fn describeNode(cmd: anytype) !void {
     const params = (try cmd.params(struct {
         nodeId: ?Node.Id = null,
-        backendNodeId: ?Node.Id = null,
-        objectId: ?[]const u8 = null,
-        depth: u32 = 1,
-        pierce: bool = false,
+        backendNodeId: ?u32 = null,
+        objectGroup: ?[]const u8 = null,
+        executionContextId: ?u32 = null,
     })) orelse return error.InvalidParams;
-    if (params.backendNodeId != null or params.depth != 1 or params.pierce) {
+
+    if (params.nodeId == null or params.backendNodeId != null or params.executionContextId != null) {
         return error.NotYetImplementedParams;
     }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const node = bc.node_registry.lookup_by_id.get(params.nodeId.?) orelse return error.UnknownNode;
 
-    if (params.nodeId != null) {
-        const node = bc.node_registry.lookup_by_id.get(params.nodeId.?) orelse return error.NodeNotFound;
-        return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{}) }, .{});
-    }
-    if (params.objectId != null) {
-        // Retrieve the object from which ever context it is in.
-        const parser_node = try bc.session.inspector.getNodePtr(cmd.arena, params.objectId.?);
-        const node = try bc.node_registry.register(@ptrCast(parser_node));
-        return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{}) }, .{});
-    }
-    return error.MissingParams;
+    // node._node is a *parser.Node we need this to be able to find its most derived type e.g. Node -> Element -> HTMLElement
+    // So we use the Node.Union when retrieve the value from the environment
+    const remote_object = try bc.inspector.getRemoteObject(
+        page.scope,
+        params.objectGroup orelse "",
+        try dom_node.Node.toInterface(node._node),
+    );
+    defer remote_object.deinit();
+
+    const arena = cmd.arena;
+    return cmd.sendResult(.{ .object = .{
+        .type = try remote_object.getType(arena),
+        .subtype = try remote_object.getSubtype(arena),
+        .className = try remote_object.getClassName(arena),
+        .description = try remote_object.getDescription(arena),
+        .objectId = try remote_object.getObjectId(arena),
+    } }, .{});
+
+    // const params = (try cmd.params(struct {
+    //     nodeId: ?Node.Id = null,
+    //     backendNodeId: ?Node.Id = null,
+    //     objectId: ?[]const u8 = null,
+    //     depth: u32 = 1,
+    //     pierce: bool = false,
+    // })) orelse return error.InvalidParams;
+    // if (params.backendNodeId != null or params.depth != 1 or params.pierce) {
+    //     return error.NotYetImplementedParams;
+    // }
+
+    // const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    // if (params.nodeId != null) {
+    //     const node = bc.node_registry.lookup_by_id.get(params.nodeId.?) orelse return error.NodeNotFound;
+    //     return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{}) }, .{});
+    // }
+    // if (params.objectId != null) {
+    //     // Retrieve the object from which ever context it is in.
+    //     const parser_node = try bc.session.inspector.getNodePtr(cmd.arena, params.objectId.?);
+    //     const node = try bc.node_registry.register(@ptrCast(parser_node));
+    //     return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{}) }, .{});
+    // }
+    // return error.MissingParams;
 }
 
 const testing = @import("../testing.zig");

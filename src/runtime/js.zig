@@ -162,7 +162,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         global_scope: v8.HandleScope,
 
         // just kept around because we need to free it on deinit
-        isolate_params: v8.CreateParams,
+        isolate_params: *v8.CreateParams,
 
         // Given a type, we can lookup its index in TYPE_LOOKUP and then have
         // access to its TunctionTemplate (the thing we need to create an instance
@@ -177,14 +177,8 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         // index.
         prototype_lookup: [Types.len]u16,
 
-        // Sessions are cheap, we mostly do this so we can get a stable pointer
-        executor_pool: std.heap.MemoryPool(Executor),
-
         // Send a lowMemoryNotification whenever we stop an executor
         gc_hints: bool,
-
-        // Used in debug mode to assert that we only have one executor at a time
-        has_executor: if (builtin.mode == .Debug) bool else void = if (builtin.mode == .Debug) false else {},
 
         const Self = @This();
 
@@ -196,11 +190,16 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         };
 
         pub fn init(allocator: Allocator, opts: Opts) !*Self {
-            var params = v8.initCreateParams();
+            // var params = v8.initCreateParams();
+            var params = try allocator.create(v8.CreateParams);
+            errdefer allocator.destroy(params);
+
+            v8.c.v8__Isolate__CreateParams__CONSTRUCT(params);
+
             params.array_buffer_allocator = v8.createDefaultArrayBufferAllocator();
             errdefer v8.destroyArrayBufferAllocator(params.array_buffer_allocator.?);
 
-            var isolate = v8.Isolate.init(&params);
+            var isolate = v8.Isolate.init(params);
             errdefer isolate.deinit();
 
             isolate.enter();
@@ -221,7 +220,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 .gc_hints = opts.gc_hints,
                 .global_scope = global_scope,
                 .prototype_lookup = undefined,
-                .executor_pool = std.heap.MemoryPool(Executor).init(allocator),
             };
 
             // Populate our templates lookup. generateClass creates the
@@ -230,7 +228,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             // we can get its index via: @field(TYPE_LOOKUP, type_name).index
             const templates = &env.templates;
             inline for (Types, 0..) |s, i| {
-                templates[i] = env.generateClass(@field(types, s.name));
+                templates[i] = generateClass(@field(types, s.name), isolate);
             }
 
             // Above, we've created all our our FunctionTemplates. Now that we
@@ -259,160 +257,819 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             self.global_scope.deinit();
             self.isolate.exit();
             self.isolate.deinit();
-            self.executor_pool.deinit();
             v8.destroyArrayBufferAllocator(self.isolate_params.array_buffer_allocator.?);
+            self.allocator.destroy(self.isolate_params);
             self.allocator.destroy(self);
+        }
+
+        pub fn newInspector(self: *Self, arena: Allocator, ctx: anytype) !Inspector {
+            return Inspector.init(arena, self.isolate, ctx);
         }
 
         pub fn runMicrotasks(self: *const Self) void {
             self.isolate.performMicrotasksCheckpoint();
         }
 
-        pub fn startExecutor(self: *Self, comptime Global: type, state: State, module_loader: anytype, kind: WorldKind) !*Executor {
-            if (comptime builtin.mode == .Debug) {
-                if (kind == .main) {
-                    std.debug.assert(self.has_executor == false);
-                    self.has_executor = true;
-                }
-            }
-            const isolate = self.isolate;
-            const templates = &self.templates;
-
-            // Acts like an Arena. Most things V8 has to allocate from this point
-            // on will be tied to this handle_scope - which we deinit in
-            // stopExecutor
-            var handle_scope: v8.HandleScope = undefined;
-            v8.HandleScope.init(&handle_scope, isolate);
-
-            // The global FunctionTemplate (i.e. Window).
-            const globals = v8.FunctionTemplate.initDefault(isolate);
-
-            const global_template = globals.getInstanceTemplate();
-            global_template.setInternalFieldCount(1);
-            self.attachClass(Global, globals);
-
-            // All the FunctionTemplates that we created and setup in Env.init
-            // are now going to get associated with our global instance.
-            inline for (Types, 0..) |s, i| {
-                const Struct = @field(types, s.name);
-                const class_name = v8.String.initUtf8(isolate, comptime classNameForStruct(Struct));
-                global_template.set(class_name.toName(), templates[i], v8.PropertyAttribute.None);
-            }
-
-            // The global object (Window) has already been hooked into the v8
-            // engine when the Env was initialized - like every other type. But
-            // But the V8 global is its own FunctionTemplate instance so even
-            // though it's also a Window, we need to set the prototype for this
-            // specific instance of the the Window.
-            if (@hasDecl(Global, "prototype")) {
-                const proto_type = Receiver(@typeInfo(Global.prototype).pointer.child);
-                const proto_name = @typeName(proto_type);
-                const proto_index = @field(TYPE_LOOKUP, proto_name).index;
-                globals.inherit(templates[proto_index]);
-            }
-
-            const context = v8.Context.init(isolate, global_template, null);
-            if (kind == .main) context.enter();
-            errdefer if (kind == .main) context.exit();
-
-            // This shouldn't be necessary, but it is:
-            // https://groups.google.com/g/v8-users/c/qAQQBmbi--8
-            // TODO: see if newer V8 engines have a way around this.
-            inline for (Types, 0..) |s, i| {
-                const Struct = @field(types, s.name);
-
-                if (@hasDecl(Struct, "prototype")) {
-                    const proto_type = Receiver(@typeInfo(Struct.prototype).pointer.child);
-                    const proto_name = @typeName(proto_type);
-                    if (@hasField(TypeLookup, proto_name) == false) {
-                        @compileError("Type '" ++ @typeName(Struct) ++ "' defines an unknown prototype: " ++ proto_name);
-                    }
-
-                    const proto_index = @field(TYPE_LOOKUP, proto_name).index;
-                    const proto_obj = templates[proto_index].getFunction(context).toObject();
-
-                    const self_obj = templates[i].getFunction(context).toObject();
-                    _ = self_obj.setPrototype(context, proto_obj);
-                }
-            }
-
-            const executor = try self.executor_pool.create();
-            errdefer self.executor_pool.destroy(executor);
-
-            {
-                // Given a context, we can get our executor.
-                // (we store a pointer to our executor in the context's
-                // embeddeder data)
-                const data = isolate.initBigIntU64(@intCast(@intFromPtr(executor)));
-                context.setEmbedderData(1, data);
-            }
-
-            executor.* = .{
-                .state = state,
-                .isolate = isolate,
-                .kind = kind,
-                .context = context,
-                .templates = templates,
-                .handle_scope = handle_scope,
-                .call_arena = undefined,
-                .scope_arena = undefined,
-                ._call_arena_instance = std.heap.ArenaAllocator.init(self.allocator),
-                ._scope_arena_instance = std.heap.ArenaAllocator.init(self.allocator),
-                .module_loader = .{
-                    .ptr = @ptrCast(module_loader),
-                    .func = @TypeOf(module_loader.*).fetchModuleSource,
-                },
+        pub fn newExecutor(self: *Self) !Executor {
+            return .{
+                .env = self,
+                .scope = null,
+                .call_arena = ArenaAllocator.init(self.allocator),
+                .scope_arena = ArenaAllocator.init(self.allocator),
             };
-
-            // We do it this way, just to present a slightly nicer API. Many
-            // things want one of these two allocator from the executor. Now they
-            // can do `executor.call_arena`  instead of `executor.call_arena.allocator`.
-            executor.call_arena = executor._call_arena_instance.allocator();
-            executor.scope_arena = executor._scope_arena_instance.allocator();
-
-            errdefer self.stopExecutor(executor); // Note: This likely has issues as context.exit() is errdefered as well
-
-            // Custom exception
-            // NOTE: there is no way in v8 to subclass the Error built-in type
-            // TODO: this is an horrible hack
-            inline for (Types) |s| {
-                const Struct = @field(types, s.name);
-                if (@hasDecl(Struct, "ErrorSet")) {
-                    const script = comptime classNameForStruct(Struct) ++ ".prototype.__proto__ = Error.prototype";
-                    _ = try executor.exec(script, "errorSubclass");
-                }
-            }
-
-            return executor;
         }
 
-        // In startExecutor we started a V8.Context. Here, we're going to
-        // deinit it. But V8 doesn't immediately free memory associated with
-        // a Context, it's managed by the garbage collector. So, when the
-        // `gc_hints` option is enabled, we'll use the `lowMemoryNotification`
-        // call on the isolate to encourage v8 to free the context.
-        pub fn stopExecutor(self: *Self, executor: *Executor) void {
-            if (comptime builtin.mode == .Debug) {
-                if (executor.kind == .main) {
-                    std.debug.assert(self.has_executor == true);
-                    self.has_executor = false;
+        pub const Executor = struct {
+            env: *Self,
+
+            // Arena whose lifetime is for a single getter/setter/function/etc.
+            // Largely used to get strings out of V8, like a stack trace from
+            // a TryCatch. The allocator will be owned by the Scope, but the
+            // arena itself is owned by the Executor so that we can re-use it
+            // from scope to scope.
+            call_arena: ArenaAllocator,
+
+            // Arena whose lifetime is for a single page load, aka a Scope. Where
+            // the call_arena lives for a single function call, the scope_arena
+            // lives for the lifetime of the entire page. The allocator will be
+            // owned by the Scope, but the arena itself is owned by the Executor
+            // so that we can re-use it from scope to scope.
+            scope_arena: ArenaAllocator,
+
+            // A Scope maps to a Browser's Page. Here though, it's only a
+            // mechanism to organization page-specific memory. The Executor
+            // does all the work, but having all page-specific data structures
+            // grouped together helps keep things clean.
+            scope: ?Scope = null,
+
+            // no init, must be initialized via env.newExecutor()
+
+            pub fn deinit(self: *Executor) void {
+                if (self.scope != null) {
+                    self.endScope();
+                }
+                self.call_arena.deinit();
+                self.scope_arena.deinit();
+
+                // V8 doesn't immediately free memory associated with
+                // a Context, it's managed by the garbage collector. So, when the
+                // `gc_hints` option is enabled, we'll use the `lowMemoryNotification`
+                // call on the isolate to encourage v8 to free any contexts which
+                // have been freed.
+                if (self.env.gc_hints) {
+                    self.env.isolate.lowMemoryNotification();
                 }
             }
 
-            executor.deinit();
-            self.executor_pool.destroy(executor);
-            if (self.gc_hints) {
-                self.isolate.lowMemoryNotification();
+            // Our scope maps to a "browser.Page".
+            // A v8.HandleScope is like an arena. Once created, any "Local" that
+            // v8 creates will be released (or at least, releasable by the v8 GC)
+            // when the handle_scope is freed.
+            // We also maintain our own "scope_arena" which allows us to have
+            // all page related memory easily managed.
+            pub fn startScope(self: *Executor, global: anytype, state: State, module_loader: anytype) !*Scope {
+                std.debug.assert(self.scope == null);
+
+                const ModuleLoader = switch (@typeInfo(@TypeOf(module_loader))) {
+                    .@"struct" => @TypeOf(module_loader),
+                    .pointer => |ptr| ptr.child,
+                    .void => ErrorModuleLoader,
+                    else => @compileError("invalid module_loader"),
+                };
+
+                // If necessary, turn a void context into something we can safely ptrCast
+                const safe_module_loader: *anyopaque = if (ModuleLoader == ErrorModuleLoader) @constCast(@ptrCast(&{})) else module_loader;
+
+                const env = self.env;
+                const isolate = env.isolate;
+                const Global = @TypeOf(global.*);
+
+                const js_global = v8.FunctionTemplate.initDefault(isolate);
+                attachClass(Global, isolate, js_global);
+
+                const global_template = js_global.getInstanceTemplate();
+                global_template.setInternalFieldCount(1);
+
+                // All the FunctionTemplates that we created and setup in Env.init
+                // are now going to get associated with our global instance.
+                const templates = &self.env.templates;
+                inline for (Types, 0..) |s, i| {
+                    const Struct = @field(types, s.name);
+                    const class_name = v8.String.initUtf8(isolate, comptime classNameForStruct(Struct));
+                    global_template.set(class_name.toName(), templates[i], v8.PropertyAttribute.None);
+                }
+
+                // The global object (Window) has already been hooked into the v8
+                // engine when the Env was initialized - like every other type.
+                // But the V8 global is its own FunctionTemplate instance so even
+                // though it's also a Window, we need to set the prototype for this
+                // specific instance of the the Window.
+                if (@hasDecl(Global, "prototype")) {
+                    const proto_type = Receiver(@typeInfo(Global.prototype).pointer.child);
+                    const proto_name = @typeName(proto_type);
+                    const proto_index = @field(TYPE_LOOKUP, proto_name).index;
+                    js_global.inherit(templates[proto_index]);
+                }
+
+                var handle_scope: v8.HandleScope = undefined;
+                v8.HandleScope.init(&handle_scope, isolate);
+                errdefer handle_scope.deinit();
+
+                const context = v8.Context.init(isolate, global_template, null);
+                context.enter();
+                errdefer context.exit();
+
+                // This shouldn't be necessary, but it is:
+                // https://groups.google.com/g/v8-users/c/qAQQBmbi--8
+                // TODO: see if newer V8 engines have a way around this.
+                inline for (Types, 0..) |s, i| {
+                    const Struct = @field(types, s.name);
+
+                    if (@hasDecl(Struct, "prototype")) {
+                        const proto_type = Receiver(@typeInfo(Struct.prototype).pointer.child);
+                        const proto_name = @typeName(proto_type);
+                        if (@hasField(TypeLookup, proto_name) == false) {
+                            @compileError("Type '" ++ @typeName(Struct) ++ "' defines an unknown prototype: " ++ proto_name);
+                        }
+
+                        const proto_index = @field(TYPE_LOOKUP, proto_name).index;
+                        const proto_obj = templates[proto_index].getFunction(context).toObject();
+
+                        const self_obj = templates[i].getFunction(context).toObject();
+                        _ = self_obj.setPrototype(context, proto_obj);
+                    }
+                }
+
+                self.scope = Scope{
+                    .state = state,
+                    .isolate = isolate,
+                    .context = context,
+                    .templates = &env.templates,
+                    .handle_scope = handle_scope,
+                    .call_arena = self.call_arena.allocator(),
+                    .scope_arena = self.scope_arena.allocator(),
+                    .module_loader = .{
+                        .ptr = safe_module_loader,
+                        .func = ModuleLoader.fetchModuleSource,
+                    },
+                };
+
+                var scope = &self.scope.?;
+                {
+                    // Given a context, we can get our executor.
+                    // (we store a pointer to our executor in the context's
+                    // embeddeder data)
+                    const data = isolate.initBigIntU64(@intCast(@intFromPtr(scope)));
+                    context.setEmbedderData(1, data);
+                }
+
+                // Custom exception
+                // NOTE: there is no way in v8 to subclass the Error built-in type
+                // TODO: this is an horrible hack
+                inline for (Types) |s| {
+                    const Struct = @field(types, s.name);
+                    if (@hasDecl(Struct, "ErrorSet")) {
+                        const script = comptime classNameForStruct(Struct) ++ ".prototype.__proto__ = Error.prototype";
+                        _ = try scope.exec(script, "errorSubclass");
+                    }
+                }
+
+                _ = try scope._mapZigInstanceToJs(context.getGlobal(), global);
+                return scope;
             }
+
+            pub fn endScope(self: *Executor) void {
+                self.scope.?.deinit();
+                self.scope = null;
+                _ = self.scope_arena.reset(.{ .retain_with_limit = SCOPE_ARENA_RETAIN });
+            }
+        };
+
+        const PersistentObject = v8.Persistent(v8.Object);
+        const PersistentFunction = v8.Persistent(v8.Function);
+
+        // Loosely maps to a Browser Page.
+        pub const Scope = struct {
+            state: State,
+            isolate: v8.Isolate,
+            context: v8.Context,
+            handle_scope: v8.HandleScope,
+
+            // references the Env.template array
+            templates: []v8.FunctionTemplate,
+
+            // An arena for the lifetime of a call-group. Gets reset whenever
+            // call_depth reaches 0.
+            call_arena: Allocator,
+
+            // An arena for the lifetime of the scope
+            scope_arena: Allocator,
+
+            // Because calls can be nested (i.e.a function calling a callback),
+            // we can only reset the call_arena when call_depth == 0. If we were
+            // to reset it within a callback, it would invalidate the data of
+            // the call which is calling the callback.
+            call_depth: usize = 0,
+
+            // Callbacks are PesistendObjects. When the scope ends, we need
+            // to free every callback we created.
+            callbacks: std.ArrayListUnmanaged(v8.Persistent(v8.Function)) = .{},
+
+            // Serves two purposes. Like `callbacks` above, this is used to free
+            // every PeristentObjet we've created during the lifetime of the scope.
+            // More importantly, it serves as an identity map - for a given Zig
+            // instance, we map it to the same PersistentObject.
+            identity_map: std.AutoHashMapUnmanaged(usize, PersistentObject) = .{},
+
+            // When we need to load a resource (i.e. an external script), we call
+            // this function to get the source. This is always a reference to the
+            // Page's fetchModuleSource, but we use a function pointer
+            // since this js module is decoupled from the browser implementation.
+            module_loader: ModuleLoader,
+
+            // Some Zig types have code to execute when the call scope ends
+            call_scope_end_callbacks: std.ArrayListUnmanaged(CallScopeEndCallback) = .{},
+
+            const ModuleLoader = struct {
+                ptr: *anyopaque,
+                func: *const fn (ptr: *anyopaque, specifier: []const u8) anyerror![]const u8,
+            };
+
+            // no init, started with executor.startScope()
+
+            fn deinit(self: *Scope) void {
+                var it = self.identity_map.valueIterator();
+                while (it.next()) |p| {
+                    p.deinit();
+                }
+                for (self.callbacks.items) |*cb| {
+                    cb.deinit();
+                }
+                self.context.exit();
+                self.handle_scope.deinit();
+            }
+
+            fn trackCallback(self: *Scope, pf: PersistentFunction) !void {
+                return self.callbacks.append(self.scope_arena, pf);
+            }
+
+            // Given an anytype, turns it into a v8.Object. The anytype could be:
+            // 1 - A V8.object already
+            // 2 - Our this JsObject wrapper around a V8.Object
+            // 3 - A zig instance that has previously been given to V8
+            //     (i.e., the value has to be known to the executor)
+            fn valueToExistingObject(self: *const Scope, value: anytype) !v8.Object {
+                if (@TypeOf(value) == v8.Object) {
+                    return value;
+                }
+
+                if (@TypeOf(value) == JsObject) {
+                    return value.js_obj;
+                }
+
+                const persistent_object = self.identity_map.get(@intFromPtr(value)) orelse {
+                    return error.InvalidThisForCallback;
+                };
+
+                return persistent_object.castToObject();
+            }
+
+            // Executes the src
+            pub fn exec(self: *Scope, src: []const u8, name: ?[]const u8) !Value {
+                const isolate = self.isolate;
+                const context = self.context;
+
+                var origin: ?v8.ScriptOrigin = null;
+                if (name) |n| {
+                    const scr_name = v8.String.initUtf8(isolate, n);
+                    origin = v8.ScriptOrigin.initDefault(self.isolate, scr_name.toValue());
+                }
+                const scr_js = v8.String.initUtf8(isolate, src);
+                const scr = v8.Script.compile(context, scr_js, origin) catch {
+                    return error.CompilationError;
+                };
+
+                const value = scr.run(context) catch {
+                    return error.ExecutionError;
+                };
+
+                return self.createValue(value);
+            }
+
+            // compile and eval a JS module
+            // It doesn't wait for callbacks execution
+            pub fn module(self: *Scope, src: []const u8, name: []const u8) !Value {
+                const context = self.context;
+                const m = try compileModule(self.isolate, src, name);
+
+                // instantiate
+                // TODO handle ResolveModuleCallback parameters to load module's
+                // dependencies.
+                const ok = m.instantiate(context, resolveModuleCallback) catch {
+                    return error.ExecutionError;
+                };
+
+                if (!ok) {
+                    return error.ModuleInstantiationError;
+                }
+
+                // evaluate
+                const value = m.evaluate(context) catch return error.ExecutionError;
+                return self.createValue(value);
+            }
+
+            // Wrap a v8.Value, largely so that we can provide a convenient
+            // toString function
+            fn createValue(self: *const Scope, value: v8.Value) Value {
+                return .{
+                    .value = value,
+                    .scope = self,
+                };
+            }
+
+            fn zigValueToJs(self: *const Scope, value: anytype) !v8.Value {
+                return Self.zigValueToJs(self.templates, self.isolate, self.context, value);
+            }
+
+            // See _mapZigInstanceToJs, this is wrapper that can be called
+            // without a Scope. This is possible because we store our
+            // scope in the EmbedderData of the v8.Context. So, as long as
+            // we have a v8.Context, we can get the scope.
+            fn mapZigInstanceToJs(context: v8.Context, js_obj_or_template: anytype, value: anytype) !PersistentObject {
+                const scope: *Scope = @ptrFromInt(context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
+                return scope._mapZigInstanceToJs(js_obj_or_template, value);
+            }
+
+            // To turn a Zig instance into a v8 object, we need to do a number of things.
+            // First, if it's a struct, we need to put it on the heap
+            // Second, if we've already returned this instance, we should return
+            // the same object. Hence, our executor maintains a map of Zig objects
+            // to v8.PersistentObject (the "identity_map").
+            // Finally, if this is the first time we've seen this instance, we need to:
+            //  1 - get the FunctionTemplate (from our templates slice)
+            //  2 - Create the TaggedAnyOpaque so that, if needed, we can do the reverse
+            //      (i.e. js -> zig)
+            //  3 - Create a v8.PersistentObject (because Zig owns this object, not v8)
+            //  4 - Store our TaggedAnyOpaque into the persistent object
+            //  5 - Update our identity_map (so that, if we return this same instance again,
+            //      we can just grab it from the identity_map)
+            fn _mapZigInstanceToJs(self: *Scope, js_obj_or_template: anytype, value: anytype) !PersistentObject {
+                const context = self.context;
+                const scope_arena = self.scope_arena;
+
+                const T = @TypeOf(value);
+                switch (@typeInfo(T)) {
+                    .@"struct" => {
+                        // Struct, has to be placed on the heap
+                        const heap = try scope_arena.create(T);
+                        heap.* = value;
+                        return self._mapZigInstanceToJs(js_obj_or_template, heap);
+                    },
+                    .pointer => |ptr| {
+                        const gop = try self.identity_map.getOrPut(scope_arena, @intFromPtr(value));
+                        if (gop.found_existing) {
+                            // we've seen this instance before, return the same
+                            // PersistentObject.
+                            return gop.value_ptr.*;
+                        }
+
+                        if (comptime @hasDecl(ptr.child, "jsCallScopeEnd")) {
+                            try self.call_scope_end_callbacks.append(scope_arena, CallScopeEndCallback.init(value));
+                        }
+
+                        // Sometimes we're creating a new v8.Object, like when
+                        // we're returning a value from a function. In those cases
+                        // we have the FunctionTemplate, and we can get an object
+                        // by calling initInstance its InstanceTemplate.
+                        // Sometimes though we already have the v8.Objct to bind to
+                        // for example, when we're executing a constructor, v8 has
+                        // already created the "this" object.
+                        const js_obj = switch (@TypeOf(js_obj_or_template)) {
+                            v8.Object => js_obj_or_template,
+                            v8.FunctionTemplate => js_obj_or_template.getInstanceTemplate().initInstance(context),
+                            else => @compileError("mapZigInstanceToJs requires a v8.Object (constructors) or v8.FunctionTemplate, got: " ++ @typeName(@TypeOf(js_obj_or_template))),
+                        };
+
+                        const isolate = self.isolate;
+
+                        if (isEmpty(ptr.child) == false) {
+                            // The TAO contains the pointer ot our Zig instance as
+                            // well as any meta data we'll need to use it later.
+                            // See the TaggedAnyOpaque struct for more details.
+                            const tao = try scope_arena.create(TaggedAnyOpaque);
+                            const meta = @field(TYPE_LOOKUP, @typeName(ptr.child));
+                            tao.* = .{
+                                .ptr = value,
+                                .index = meta.index,
+                                .subtype = meta.subtype,
+                                .offset = if (@typeInfo(ptr.child) != .@"opaque" and @hasField(ptr.child, "proto")) @offsetOf(ptr.child, "proto") else -1,
+                            };
+
+                            js_obj.setInternalField(0, v8.External.init(isolate, tao));
+                        } else {
+                            // If the struct is empty, we don't need to do all
+                            // the TOA stuff and setting the internal data.
+                            // When we try to map this from JS->Zig, in
+                            // typeTaggedAnyOpaque, we'll also know there that
+                            // the type is empty and can create an empty instance.
+                        }
+
+                        // Do not move this _AFTER_ the postAttach code.
+                        // postAttach is likely to call back into this function
+                        // mutating our identity_map, and making the gop pointers
+                        // invalid.
+                        const js_persistent = PersistentObject.init(isolate, js_obj);
+                        gop.value_ptr.* = js_persistent;
+
+                        if (@hasDecl(ptr.child, "postAttach")) {
+                            const obj_wrap = JsThis{ .obj = .{ .js_obj = js_obj, .scope = self } };
+                            switch (@typeInfo(@TypeOf(ptr.child.postAttach)).@"fn".params.len) {
+                                2 => try value.postAttach(obj_wrap),
+                                3 => try value.postAttach(self.state, obj_wrap),
+                                else => @compileError(@typeName(ptr.child) ++ ".postAttach must take 2 or 3 parameters"),
+                            }
+                        }
+
+                        return js_persistent;
+                    },
+                    else => @compileError("Expected a struct or pointer, got " ++ @typeName(T) ++ " (constructors must return struct or pointers)"),
+                }
+            }
+
+            // Callback from V8, asking us to load a module. The "specifier" is
+            // the src of the module to load.
+            fn resolveModuleCallback(
+                c_context: ?*const v8.C_Context,
+                c_specifier: ?*const v8.C_String,
+                import_attributes: ?*const v8.C_FixedArray,
+                referrer: ?*const v8.C_Module,
+            ) callconv(.C) ?*const v8.C_Module {
+                _ = import_attributes;
+                _ = referrer;
+
+                std.debug.assert(c_context != null);
+                const context = v8.Context{ .handle = c_context.? };
+
+                const self: *Scope = @ptrFromInt(context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
+
+                var buf: [1024]u8 = undefined;
+                var fba = std.heap.FixedBufferAllocator.init(&buf);
+
+                // build the specifier value.
+                const specifier = valueToString(
+                    fba.allocator(),
+                    .{ .handle = c_specifier.? },
+                    self.isolate,
+                    context,
+                ) catch |e| {
+                    log.err("resolveModuleCallback: get ref str: {any}", .{e});
+                    return null;
+                };
+
+                // not currently needed
+                // const referrer_module = if (referrer) |ref| v8.Module{ .handle = ref } else null;
+                const module_loader = self.module_loader;
+                const source = module_loader.func(module_loader.ptr, specifier) catch |err| {
+                    log.err("fetchModuleSource for '{s}' fetch error: {}", .{ specifier, err });
+                    return null;
+                };
+
+                const m = compileModule(self.isolate, source, specifier) catch |err| {
+                    log.err("fetchModuleSource for '{s}' compile error: {}", .{ specifier, err });
+                    return null;
+                };
+                return m.handle;
+            }
+        };
+
+        pub const Callback = struct {
+            id: usize,
+            scope: *Scope,
+            _this: ?v8.Object = null,
+            func: PersistentFunction,
+
+            // We use this when mapping a JS value to a Zig object. We can't
+            // Say we have a Zig function that takes a Callback, we can't just
+            // check param.type == Callback, because Callback is a generic.
+            // So, as a quick hack, we can determine if the Zig type is a
+            // callback by checking @hasDecl(T, "_CALLBACK_ID_KLUDGE")
+            const _CALLBACK_ID_KLUDGE = true;
+
+            pub const Result = struct {
+                stack: ?[]const u8,
+                exception: []const u8,
+            };
+
+            pub fn setThis(self: *Callback, value: anytype) !void {
+                self._this = try self.scope.valueToExistingObject(value);
+            }
+
+            pub fn call(self: *const Callback, args: anytype) !void {
+                return self.callWithThis(self.getThis(), args);
+            }
+
+            pub fn tryCall(self: *const Callback, args: anytype, result: *Result) !void {
+                return self.tryCallWithThis(self.getThis(), args, result);
+            }
+
+            pub fn tryCallWithThis(self: *const Callback, this: anytype, args: anytype, result: *Result) !void {
+                var try_catch: TryCatch = undefined;
+                try_catch.init(self.scope);
+                defer try_catch.deinit();
+
+                self.callWithThis(this, args) catch |err| {
+                    if (try_catch.hasCaught()) {
+                        const allocator = self.scope.call_arena;
+                        result.stack = try_catch.stack(allocator) catch null;
+                        result.exception = (try_catch.exception(allocator) catch @errorName(err)) orelse @errorName(err);
+                    } else {
+                        result.stack = null;
+                        result.exception = @errorName(err);
+                    }
+                    return err;
+                };
+            }
+
+            pub fn callWithThis(self: *const Callback, this: anytype, args: anytype) !void {
+                const scope = self.scope;
+
+                const js_this = try scope.valueToExistingObject(this);
+
+                const aargs = if (comptime @typeInfo(@TypeOf(args)) == .null) struct {}{} else args;
+                const fields = @typeInfo(@TypeOf(aargs)).@"struct".fields;
+                var js_args: [fields.len]v8.Value = undefined;
+                inline for (fields, 0..) |f, i| {
+                    js_args[i] = try scope.zigValueToJs(@field(aargs, f.name));
+                }
+
+                const result = self.func.castToFunction().call(scope.context, js_this, &js_args);
+                if (result == null) {
+                    return error.JSExecCallback;
+                }
+            }
+
+            fn getThis(self: *const Callback) v8.Object {
+                return self._this orelse self.scope.context.getGlobal();
+            }
+
+            // debug/helper to print the source of the JS callback
+            fn printFunc(self: Callback) !void {
+                const scope = self.scope;
+                const value = self.func.castToFunction().toValue();
+                const src = try valueToString(scope.call_arena, value, scope.isolate, scope.context);
+                std.debug.print("{s}\n", .{src});
+            }
+        };
+
+        pub const JsObject = struct {
+            scope: *Scope,
+            js_obj: v8.Object,
+
+            // If a Zig struct wants the Object parameter, it'll declare a
+            // function like:
+            //    fn _length(self: *const NodeList, js_obj: Env.Object) usize
+            //
+            // When we're trying to call this function, we can't just do
+            //    if (params[i].type.? == Object)
+            // Because there is _no_ object, there's only an Env.Object, where
+            // Env is a generic.
+            // We could probably figure out a way to do this, but simply checking
+            // for this declaration is _a lot_ easier.
+            const _JSOBJECT_ID_KLUDGE = true;
+
+            pub fn setIndex(self: JsObject, index: usize, value: anytype) !void {
+                const key = switch (index) {
+                    inline 0...1000 => |i| std.fmt.comptimePrint("{d}", .{i}),
+                    else => try std.fmt.allocPrint(self.scope.scope_arena, "{d}", .{index}),
+                };
+                return self.set(key, value);
+            }
+
+            pub fn set(self: JsObject, key: []const u8, value: anytype) !void {
+                const scope = self.scope;
+
+                const js_key = v8.String.initUtf8(scope.isolate, key);
+                const js_value = try scope.zigValueToJs(value);
+                if (!self.js_obj.setValue(scope.context, js_key, js_value)) {
+                    return error.FailedToSet;
+                }
+            }
+        };
+
+        // This only exists so that we know whether a function wants the opaque
+        // JS argument (JsObject), or if it wants the receiver as an opaque
+        // value.
+        // JsObject is normally used when a method wants an opaque JS object
+        // that it'll pass into a callback.
+        // JsThis is used when the function wants to do advanced manipulation
+        // of the v8.Object bound to the instance. For example, postAttach is an
+        // example of using JsThis.
+        pub const JsThis = struct {
+            obj: JsObject,
+
+            const _JSTHIS_ID_KLUDGE = true;
+
+            pub fn setIndex(self: JsThis, index: usize, value: anytype) !void {
+                return self.obj.setIndex(index, value);
+            }
+
+            pub fn set(self: JsThis, key: []const u8, value: anytype) !void {
+                return self.obj.set(key, value);
+            }
+        };
+
+        pub const TryCatch = struct {
+            inner: v8.TryCatch,
+            scope: *const Scope,
+
+            pub fn init(self: *TryCatch, scope: *const Scope) void {
+                self.scope = scope;
+                self.inner.init(scope.isolate);
+            }
+
+            pub fn hasCaught(self: TryCatch) bool {
+                return self.inner.hasCaught();
+            }
+
+            // the caller needs to deinit the string returned
+            pub fn exception(self: TryCatch, allocator: Allocator) !?[]const u8 {
+                const msg = self.inner.getException() orelse return null;
+                const scope = self.scope;
+                return try valueToString(allocator, msg, scope.isolate, scope.context);
+            }
+
+            // the caller needs to deinit the string returned
+            pub fn stack(self: TryCatch, allocator: Allocator) !?[]const u8 {
+                const scope = self.scope;
+                const s = self.inner.getStackTrace(scope.context) orelse return null;
+                return try valueToString(allocator, s, scope.isolate, scope.context);
+            }
+
+            // a shorthand method to return either the entire stack message
+            // or just the exception message
+            // - in Debug mode return the stack if available
+            // - otherwhise return the exception if available
+            // the caller needs to deinit the string returned
+            pub fn err(self: TryCatch, allocator: Allocator) !?[]const u8 {
+                if (builtin.mode == .Debug) {
+                    if (try self.stack(allocator)) |msg| {
+                        return msg;
+                    }
+                }
+                return try self.exception(allocator);
+            }
+
+            pub fn deinit(self: *TryCatch) void {
+                self.inner.deinit();
+            }
+        };
+
+        pub const Inspector = struct {
+            isolate: v8.Isolate,
+            inner: *v8.Inspector,
+            session: v8.InspectorSession,
+
+            // We expect allocator to be an arena
+            pub fn init(allocator: Allocator, isolate: v8.Isolate, ctx: anytype) !Inspector {
+                const ContextT = @TypeOf(ctx);
+
+                const InspectorContainer = switch (@typeInfo(ContextT)) {
+                    .@"struct" => ContextT,
+                    .pointer => |ptr| ptr.child,
+                    .void => NoopInspector,
+                    else => @compileError("invalid context type"),
+                };
+
+                // If necessary, turn a void context into something we can safely ptrCast
+                const safe_context: *anyopaque = if (ContextT == void) @constCast(@ptrCast(&{})) else ctx;
+
+                const channel = v8.InspectorChannel.init(safe_context, InspectorContainer.onInspectorResponse, InspectorContainer.onInspectorEvent, isolate);
+
+                const client = v8.InspectorClient.init();
+
+                const inner = try allocator.create(v8.Inspector);
+                v8.Inspector.init(inner, client, channel, isolate);
+                return .{ .inner = inner, .isolate = isolate, .session = inner.connect() };
+            }
+
+            pub fn deinit(self: *const Inspector) void {
+                self.session.deinit();
+                self.inner.deinit();
+            }
+
+            pub fn send(self: *const Inspector, msg: []const u8) void {
+                self.session.dispatchProtocolMessage(self.isolate, msg);
+            }
+
+            // From CDP docs
+            // https://chromedevtools.github.io/devtools-protocol/tot/Runtime/#type-ExecutionContextDescription
+            // ----
+            // - name: Human readable name describing given context.
+            // - origin: Execution context origin (ie. URL who initialised the request)
+            // - auxData: Embedder-specific auxiliary data likely matching
+            // {isDefault: boolean, type: 'default'|'isolated'|'worker', frameId: string}
+            // - is_default_context: Whether the execution context is default, should match the auxData
+            pub fn contextCreated(
+                self: *const Inspector,
+                scope: *const Scope,
+                name: []const u8,
+                origin: []const u8,
+                aux_data: ?[]const u8,
+                is_default_context: bool,
+            ) void {
+                self.inner.contextCreated(scope.context, name, origin, aux_data, is_default_context);
+            }
+
+            // Retrieves the RemoteObject for a given value.
+            // The value is loaded through the Executor's mapZigInstanceToJs function,
+            // just like a method return value. Therefore, if we've mapped this
+            // value before, we'll get the existing JS PersistedObject and if not
+            // we'll create it and track it for cleanup when the scope ends.
+            pub fn getRemoteObject(
+                self: *const Inspector,
+                scope: *const Scope,
+                group: []const u8,
+                value: anytype,
+            ) !RemoteObject {
+                const js_value = try zigValueToJs(
+                    scope.templates,
+                    scope.isolate,
+                    scope.context,
+                    value,
+                );
+
+                // We do not want to expose this as a parameter for now
+                const generate_preview = false;
+                return self.session.wrapObject(
+                    scope.isolate,
+                    scope.context,
+                    js_value,
+                    group,
+                    generate_preview,
+                );
+            }
+
+            // Gets a value by object ID regardless of which context it is in.
+            pub fn getNodePtr(self: *const Inspector, allocator: Allocator, object_id: []const u8) !?*anyopaque {
+                const unwrapped = try self.session.unwrapObject(allocator, object_id);
+                // The values context and groupId are not used here
+                const toa = getTaggedAnyOpaque(unwrapped.value) orelse return null;
+                if (toa.subtype == null or toa.subtype != .node) return error.ObjectIdIsNotANode;
+                return toa.ptr;
+            }
+        };
+
+        pub const RemoteObject = v8.RemoteObject;
+
+        pub const Value = struct {
+            value: v8.Value,
+            scope: *const Scope,
+
+            // the caller needs to deinit the string returned
+            pub fn toString(self: Value, allocator: Allocator) ![]const u8 {
+                const scope = self.scope;
+                return valueToString(allocator, self.value, scope.isolate, scope.context);
+            }
+        };
+
+        fn compileModule(isolate: v8.Isolate, src: []const u8, name: []const u8) !v8.Module {
+            // compile
+            const script_name = v8.String.initUtf8(isolate, name);
+            const script_source = v8.String.initUtf8(isolate, src);
+
+            const origin = v8.ScriptOrigin.init(
+                isolate,
+                script_name.toValue(),
+                0, // resource_line_offset
+                0, // resource_column_offset
+                false, // resource_is_shared_cross_origin
+                -1, // script_id
+                null, // source_map_url
+                false, // resource_is_opaque
+                false, // is_wasm
+                true, // is_module
+                null, // host_defined_options
+            );
+
+            var script_comp_source: v8.ScriptCompilerSource = undefined;
+            v8.ScriptCompilerSource.init(&script_comp_source, script_source, origin, null);
+            defer script_comp_source.deinit();
+
+            return v8.ScriptCompiler.compileModule(
+                isolate,
+                &script_comp_source,
+                .kNoCompileOptions,
+                .kNoCacheNoReason,
+            ) catch return error.CompilationError;
         }
 
         // Give it a Zig struct, get back a v8.FunctionTemplate.
         // The FunctionTemplate is a bit like a struct container - it's where
         // we'll attach functions/getters/setters and where we'll "inherit" a
         // prototype type (if there is any)
-        fn generateClass(self: *Self, comptime Struct: type) v8.FunctionTemplate {
-            const template = self.generateConstructor(Struct);
-            self.attachClass(Struct, template);
+        fn generateClass(comptime Struct: type, isolate: v8.Isolate) v8.FunctionTemplate {
+            const template = generateConstructor(Struct, isolate);
+            attachClass(Struct, isolate, template);
             return template;
         }
 
@@ -422,25 +1079,25 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         // But it's extracted from generateClass because we also have 1 global
         // object (i.e. the Window), which gets attached not only to the Window
         // constructor/FunctionTemplate as normal, but also through the default
-        // FunctionTemplate of the isolate (in startExecutor)
-        fn attachClass(self: *const Self, comptime Struct: type, template: v8.FunctionTemplate) void {
+        // FunctionTemplate of the isolate (in startScope)
+        fn attachClass(comptime Struct: type, isolate: v8.Isolate, template: v8.FunctionTemplate) void {
             const template_proto = template.getPrototypeTemplate();
             inline for (@typeInfo(Struct).@"struct".decls) |declaration| {
                 const name = declaration.name;
                 if (comptime name[0] == '_') {
                     switch (@typeInfo(@TypeOf(@field(Struct, name)))) {
-                        .@"fn" => self.generateMethod(Struct, name, template_proto),
-                        else => self.generateAttribute(Struct, name, template, template_proto),
+                        .@"fn" => generateMethod(Struct, name, isolate, template_proto),
+                        else => generateAttribute(Struct, name, isolate, template, template_proto),
                     }
                 } else if (comptime std.mem.startsWith(u8, name, "get_")) {
-                    self.generateProperty(Struct, name[4..], template_proto);
+                    generateProperty(Struct, name[4..], isolate, template_proto);
                 }
             }
 
             if (@hasDecl(Struct, "get_symbol_toStringTag") == false) {
                 // If this WAS defined, then we would have created it in generateProperty.
                 // But if it isn't, we create a default one
-                const key = v8.Symbol.getToStringTag(self.isolate).toName();
+                const key = v8.Symbol.getToStringTag(isolate).toName();
                 template_proto.setGetter(key, struct {
                     fn stringTag(_: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) void {
                         const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
@@ -450,8 +1107,8 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 }.stringTag);
             }
 
-            self.generateIndexer(Struct, template_proto);
-            self.generateNamedIndexer(Struct, template_proto);
+            generateIndexer(Struct, template_proto);
+            generateNamedIndexer(Struct, template_proto);
         }
 
         // Even if a struct doesn't have a `constructor` function, we still
@@ -460,8 +1117,8 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         // via `new ClassName()` - but they could, for example, be created in
         // Zig and returned from a function call, which is why we need the
         // FunctionTemplate.
-        fn generateConstructor(self: *Self, comptime Struct: type) v8.FunctionTemplate {
-            const template = v8.FunctionTemplate.initCallback(self.isolate, struct {
+        fn generateConstructor(comptime Struct: type, isolate: v8.Isolate) v8.FunctionTemplate {
+            const template = v8.FunctionTemplate.initCallback(isolate, struct {
                 fn callback(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
                     const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
                     var caller = Caller(Self).init(info);
@@ -473,8 +1130,8 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                     // does `new ClassName()` where ClassName doesn't have
                     // a constructor function, we'll return an error.
                     if (@hasDecl(Struct, "constructor") == false) {
-                        const isolate = caller.isolate;
-                        const js_exception = isolate.throwException(createException(isolate, "illegal constructor"));
+                        const iso = caller.isolate;
+                        const js_exception = iso.throwException(createException(iso, "illegal constructor"));
                         info.getReturnValue().set(js_exception);
                         return;
                     }
@@ -494,19 +1151,19 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 template.getInstanceTemplate().setInternalFieldCount(1);
             }
 
-            const class_name = v8.String.initUtf8(self.isolate, comptime classNameForStruct(Struct));
+            const class_name = v8.String.initUtf8(isolate, comptime classNameForStruct(Struct));
             template.setClassName(class_name);
             return template;
         }
 
-        fn generateMethod(self: *const Self, comptime Struct: type, comptime name: []const u8, template_proto: v8.ObjectTemplate) void {
+        fn generateMethod(comptime Struct: type, comptime name: []const u8, isolate: v8.Isolate, template_proto: v8.ObjectTemplate) void {
             var js_name: v8.Name = undefined;
             if (comptime std.mem.eql(u8, name, "_symbol_iterator")) {
-                js_name = v8.Symbol.getIterator(self.isolate).toName();
+                js_name = v8.Symbol.getIterator(isolate).toName();
             } else {
-                js_name = v8.String.initUtf8(self.isolate, name[1..]).toName();
+                js_name = v8.String.initUtf8(isolate, name[1..]).toName();
             }
-            const function_template = v8.FunctionTemplate.initCallback(self.isolate, struct {
+            const function_template = v8.FunctionTemplate.initCallback(isolate, struct {
                 fn callback(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
                     const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
                     var caller = Caller(Self).init(info);
@@ -521,11 +1178,11 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             template_proto.set(js_name, function_template, v8.PropertyAttribute.None);
         }
 
-        fn generateAttribute(self: *const Self, comptime Struct: type, comptime name: []const u8, template: v8.FunctionTemplate, template_proto: v8.ObjectTemplate) void {
+        fn generateAttribute(comptime Struct: type, comptime name: []const u8, isolate: v8.Isolate, template: v8.FunctionTemplate, template_proto: v8.ObjectTemplate) void {
             const zig_value = @field(Struct, name);
-            const js_value = simpleZigValueToJs(self.isolate, zig_value, true);
+            const js_value = simpleZigValueToJs(isolate, zig_value, true);
 
-            const js_name = v8.String.initUtf8(self.isolate, name[1..]).toName();
+            const js_name = v8.String.initUtf8(isolate, name[1..]).toName();
 
             // apply it both to the type itself
             template.set(js_name, js_value, v8.PropertyAttribute.ReadOnly + v8.PropertyAttribute.DontDelete);
@@ -534,7 +1191,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             template_proto.set(js_name, js_value, v8.PropertyAttribute.ReadOnly + v8.PropertyAttribute.DontDelete);
         }
 
-        fn generateProperty(self: *const Self, comptime Struct: type, comptime name: []const u8, template_proto: v8.ObjectTemplate) void {
+        fn generateProperty(comptime Struct: type, comptime name: []const u8, isolate: v8.Isolate, template_proto: v8.ObjectTemplate) void {
             const getter = @field(Struct, "get_" ++ name);
             const param_count = @typeInfo(@TypeOf(getter)).@"fn".params.len;
 
@@ -543,9 +1200,9 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 if (param_count != 0) {
                     @compileError(@typeName(Struct) ++ ".get_symbol_toStringTag() cannot take any parameters");
                 }
-                js_name = v8.Symbol.getToStringTag(self.isolate).toName();
+                js_name = v8.Symbol.getToStringTag(isolate).toName();
             } else {
-                js_name = v8.String.initUtf8(self.isolate, name).toName();
+                js_name = v8.String.initUtf8(isolate, name).toName();
             }
 
             const getter_callback = struct {
@@ -584,7 +1241,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             template_proto.setGetterAndSetter(js_name, getter_callback, setter_callback);
         }
 
-        fn generateIndexer(_: *const Self, comptime Struct: type, template_proto: v8.ObjectTemplate) void {
+        fn generateIndexer(comptime Struct: type, template_proto: v8.ObjectTemplate) void {
             if (@hasDecl(Struct, "indexed_get") == false) {
                 return;
             }
@@ -613,7 +1270,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             template_proto.setIndexedProperty(configuration, null);
         }
 
-        fn generateNamedIndexer(_: *const Self, comptime Struct: type, template_proto: v8.ObjectTemplate) void {
+        fn generateNamedIndexer(comptime Struct: type, template_proto: v8.ObjectTemplate) void {
             if (@hasDecl(Struct, "named_get") == false) {
                 return;
             }
@@ -685,7 +1342,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                         const type_name = @typeName(ptr.child);
                         if (@hasField(TypeLookup, type_name)) {
                             const template = templates[@field(TYPE_LOOKUP, type_name).index];
-                            const js_obj = try Executor.mapZigInstanceToJs(context, template, value);
+                            const js_obj = try Scope.mapZigInstanceToJs(context, template, value);
                             return js_obj.toValue();
                         }
 
@@ -721,7 +1378,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                     const type_name = @typeName(T);
                     if (@hasField(TypeLookup, type_name)) {
                         const template = templates[@field(TYPE_LOOKUP, type_name).index];
-                        const js_obj = try Executor.mapZigInstanceToJs(context, template, value);
+                        const js_obj = try Scope.mapZigInstanceToJs(context, template, value);
                         return js_obj.toValue();
                     }
 
@@ -780,714 +1437,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             @compileLog(@typeInfo(T));
             @compileError("A function returns an unsupported type: " ++ @typeName(T));
         }
-
-        const PersistentObject = v8.Persistent(v8.Object);
-        const PersistentFunction = v8.Persistent(v8.Function);
-
-        const WorldKind = enum {
-            main,
-            isolated,
-            worker,
-        };
-
-        // This is capable of executing JavaScript.
-        pub const Executor = struct {
-            state: State,
-            isolate: v8.Isolate,
-            kind: WorldKind,
-
-            handle_scope: v8.HandleScope,
-
-            // @intFromPtr of our Executor is stored in this context, so given
-            // a context, we can always get the Executor back.
-            context: v8.Context,
-
-            // Because calls can be nested (i.e.a function calling a callback),
-            // we can only reset the call_arena when call_depth == 0. If we were
-            // to reset it within a callback, it would invalidate the data of
-            // the call which is calling the callback.
-            call_depth: usize = 0,
-
-            // Arena whose lifetime is for a single getter/setter/function/etc.
-            // Largely used to get strings out of V8, like a stack trace from
-            // a TryCatch. The allocator will be owned by the Scope, but the
-            // arena itself is owned by the Executor so that we can re-use it
-            // from scope to scope.
-            call_arena: Allocator,
-            _call_arena_instance: std.heap.ArenaAllocator,
-
-            // Arena whose lifetime is for a single page load, aka a Scope. Where
-            // the call_arena lives for a single function call, the scope_arena
-            // lives for the lifetime of the entire page. The allocator will be
-            // owned by the Scope, but the arena itself is owned by the Executor
-            // so that we can re-use it from scope to scope.
-            scope_arena: Allocator,
-            _scope_arena_instance: std.heap.ArenaAllocator,
-
-            // When we need to load a resource (i.e. an external script), we call
-            // this function to get the source. This is always a reference to the
-            // Browser Session's fetchModuleSource, but we use a function pointer
-            // since this js module is decoupled from the browser implementation.
-            module_loader: ModuleLoader,
-
-            // A Scope maps to a Browser's Page. Here though, it's only a
-            // mechanism to organization page-specific memory. The Executor
-            // does all the work, but having all page-specific data structures
-            // grouped together helps keep things clean.
-            scope: ?Scope = null,
-
-            // refernces the Env.template array
-            templates: []v8.FunctionTemplate,
-
-            const ModuleLoader = struct { ptr: *anyopaque, func: *const fn (ptr: *anyopaque, specifier: []const u8) anyerror![]const u8 };
-
-            // no init, must be initialized via env.startExecutor()
-
-            // not public, must be destroyed via env.stopExecutor()
-
-            fn deinit(self: *Executor) void {
-                if (self.scope != null) self.endScope();
-                if (self.kind == .main) self.context.exit();
-                self.handle_scope.deinit();
-
-                self._call_arena_instance.deinit();
-                self._scope_arena_instance.deinit();
-            }
-
-            // Executes the src
-            pub fn exec(self: *Executor, src: []const u8, name: ?[]const u8) !Value {
-                const isolate = self.isolate;
-                const context = self.context;
-
-                var origin: ?v8.ScriptOrigin = null;
-                if (name) |n| {
-                    const scr_name = v8.String.initUtf8(isolate, n);
-                    origin = v8.ScriptOrigin.initDefault(isolate, scr_name.toValue());
-                }
-                const scr_js = v8.String.initUtf8(isolate, src);
-                const scr = v8.Script.compile(context, scr_js, origin) catch {
-                    return error.CompilationError;
-                };
-
-                const value = scr.run(context) catch {
-                    return error.ExecutionError;
-                };
-
-                return self.createValue(value);
-            }
-
-            // compile and eval a JS module
-            // It doesn't wait for callbacks execution
-            pub fn module(self: *Executor, src: []const u8, name: []const u8) !Value {
-                const context = self.context;
-                const m = try self.compileModule(src, name);
-
-                // instantiate
-                // TODO handle ResolveModuleCallback parameters to load module's
-                // dependencies.
-                const ok = m.instantiate(context, resolveModuleCallback) catch {
-                    return error.ExecutionError;
-                };
-
-                if (!ok) {
-                    return error.ModuleInstantiationError;
-                }
-
-                // evaluate
-                const value = m.evaluate(context) catch return error.ExecutionError;
-                return self.createValue(value);
-            }
-
-            fn compileModule(self: *Executor, src: []const u8, name: []const u8) !v8.Module {
-                const isolate = self.isolate;
-
-                // compile
-                const script_name = v8.String.initUtf8(isolate, name);
-                const script_source = v8.String.initUtf8(isolate, src);
-
-                const origin = v8.ScriptOrigin.init(
-                    self.isolate,
-                    script_name.toValue(),
-                    0, // resource_line_offset
-                    0, // resource_column_offset
-                    false, // resource_is_shared_cross_origin
-                    -1, // script_id
-                    null, // source_map_url
-                    false, // resource_is_opaque
-                    false, // is_wasm
-                    true, // is_module
-                    null, // host_defined_options
-                );
-
-                var script_comp_source: v8.ScriptCompilerSource = undefined;
-                v8.ScriptCompilerSource.init(&script_comp_source, script_source, origin, null);
-                defer script_comp_source.deinit();
-
-                return v8.ScriptCompiler.compileModule(
-                    isolate,
-                    &script_comp_source,
-                    .kNoCompileOptions,
-                    .kNoCacheNoReason,
-                ) catch return error.CompilationError;
-            }
-
-            // Our scope maps to a "browser.Page".
-            // A v8.HandleScope is like an arena. Once created, any "Local" that
-            // v8 creates will be released (or at least, releasable by the v8 GC)
-            // when the handle_scope is freed.
-            // We also maintain our own "scope_arena" which allows us to have
-            // all page related memory easily managed.
-            pub fn startScope(self: *Executor, global: anytype) !void {
-                std.debug.assert(self.scope == null);
-
-                var handle_scope: v8.HandleScope = undefined;
-                v8.HandleScope.init(&handle_scope, self.isolate);
-                self.scope = Scope{
-                    .handle_scope = handle_scope,
-                    .arena = self.scope_arena,
-                };
-                _ = try self._mapZigInstanceToJs(self.context.getGlobal(), global);
-            }
-
-            pub fn endScope(self: *Executor) void {
-                self.scope.?.deinit();
-                self.scope = null;
-                _ = self._scope_arena_instance.reset(.{ .retain_with_limit = SCOPE_ARENA_RETAIN });
-            }
-
-            // Given an anytype, turns it into a v8.Object. The anytype could be:
-            // 1 - A V8.object already
-            // 2 - Our this JsObject wrapper around a V8.Object
-            // 3 - A zig instance that has previously been given to V8
-            //     (i.e., the value has to be known to the executor)
-            fn valueToExistingObject(self: *const Executor, value: anytype) !v8.Object {
-                if (@TypeOf(value) == v8.Object) {
-                    return value;
-                }
-
-                if (@TypeOf(value) == JsObject) {
-                    return value.js_obj;
-                }
-
-                const persistent_object = self.scope.?.identity_map.get(@intFromPtr(value)) orelse {
-                    return error.InvalidThisForCallback;
-                };
-
-                return persistent_object.castToObject();
-            }
-
-            // Wrap a v8.Value, largely so that we can provide a convenient
-            // toString function
-            fn createValue(self: *const Executor, value: v8.Value) Value {
-                return .{
-                    .value = value,
-                    .executor = self,
-                };
-            }
-
-            fn zigValueToJs(self: *const Executor, value: anytype) !v8.Value {
-                return Self.zigValueToJs(self.templates, self.isolate, self.context, value);
-            }
-
-            // See _mapZigInstanceToJs, this is wrapper that can be called
-            // without an Executor. This is possible because we store our
-            // executor in the EmbedderData of the v8.Context. So, as long as
-            // we have a v8.Context, we can get the executor.
-            fn mapZigInstanceToJs(context: v8.Context, js_obj_or_template: anytype, value: anytype) !PersistentObject {
-                const executor: *Executor = @ptrFromInt(context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
-                return executor._mapZigInstanceToJs(js_obj_or_template, value);
-            }
-
-            // To turn a Zig instance into a v8 object, we need to do a number of things.
-            // First, if it's a struct, we need to put it on the heap
-            // Second, if we've already returned this instance, we should return
-            // the same object. Hence, our executor maintains a map of Zig objects
-            // to v8.PersistentObject (the "identity_map").
-            // Finally, if this is the first time we've seen this instance, we need to:
-            //  1 - get the FunctionTemplate (from our templates slice)
-            //  2 - Create the TaggedAnyOpaque so that, if needed, we can do the reverse
-            //      (i.e. js -> zig)
-            //  3 - Create a v8.PersistentObject (because Zig owns this object, not v8)
-            //  4 - Store our TaggedAnyOpaque into the persistent object
-            //  5 - Update our identity_map (so that, if we return this same instance again,
-            //      we can just grab it from the identity_map)
-            fn _mapZigInstanceToJs(self: *Executor, js_obj_or_template: anytype, value: anytype) !PersistentObject {
-                const scope = &self.scope.?;
-                const context = self.context;
-                const scope_arena = scope.arena;
-
-                const T = @TypeOf(value);
-                switch (@typeInfo(T)) {
-                    .@"struct" => {
-                        // Struct, has to be placed on the heap
-                        const heap = try scope_arena.create(T);
-                        heap.* = value;
-                        return self._mapZigInstanceToJs(js_obj_or_template, heap);
-                    },
-                    .pointer => |ptr| {
-                        const gop = try scope.identity_map.getOrPut(scope_arena, @intFromPtr(value));
-                        if (gop.found_existing) {
-                            // we've seen this instance before, return the same
-                            // PersistentObject.
-                            return gop.value_ptr.*;
-                        }
-
-                        if (comptime @hasDecl(ptr.child, "jsScopeEnd")) {
-                            try scope.scope_end_callbacks.append(scope_arena, ScopeEndCallback.init(value));
-                        }
-
-                        // Sometimes we're creating a new v8.Object, like when
-                        // we're returning a value from a function. In those cases
-                        // we have the FunctionTemplate, and we can get an object
-                        // by calling initInstance its InstanceTemplate.
-                        // Sometimes though we already have the v8.Objct to bind to
-                        // for example, when we're executing a constructor, v8 has
-                        // already created the "this" object.
-                        const js_obj = switch (@TypeOf(js_obj_or_template)) {
-                            v8.Object => js_obj_or_template,
-                            v8.FunctionTemplate => js_obj_or_template.getInstanceTemplate().initInstance(context),
-                            else => @compileError("mapZigInstanceToJs requires a v8.Object (constructors) or v8.FunctionTemplate, got: " ++ @typeName(@TypeOf(js_obj_or_template))),
-                        };
-
-                        const isolate = self.isolate;
-
-                        if (isEmpty(ptr.child) == false) {
-                            // The TAO contains the pointer ot our Zig instance as
-                            // well as any meta data we'll need to use it later.
-                            // See the TaggedAnyOpaque struct for more details.
-                            const tao = try scope_arena.create(TaggedAnyOpaque);
-                            const meta = @field(TYPE_LOOKUP, @typeName(ptr.child));
-                            tao.* = .{
-                                .ptr = value,
-                                .index = meta.index,
-                                .subtype = meta.subtype,
-                                .offset = if (@typeInfo(ptr.child) != .@"opaque" and @hasField(ptr.child, "proto")) @offsetOf(ptr.child, "proto") else -1,
-                            };
-
-                            js_obj.setInternalField(0, v8.External.init(isolate, tao));
-                        } else {
-                            // If the struct is empty, we don't need to do all
-                            // the TOA stuff and setting the internal data.
-                            // When we try to map this from JS->Zig, in
-                            // typeTaggedAnyOpaque, we'll also know there that
-                            // the type is empty and can create an empty instance.
-                        }
-
-                        // Do not move this _AFTER_ the postAttach code.
-                        // postAttach is likely to call back into this function
-                        // mutating our identity_map, and making the gop pointers
-                        // invalid.
-                        const js_persistent = PersistentObject.init(isolate, js_obj);
-                        gop.value_ptr.* = js_persistent;
-
-                        if (@hasDecl(ptr.child, "postAttach")) {
-                            const obj_wrap = JsThis{ .obj = .{ .js_obj = js_obj, .executor = self } };
-                            switch (@typeInfo(@TypeOf(ptr.child.postAttach)).@"fn".params.len) {
-                                2 => try value.postAttach(obj_wrap),
-                                3 => try value.postAttach(self.state, obj_wrap),
-                                else => @compileError(@typeName(ptr.child) ++ ".postAttach must take 2 or 3 parameters"),
-                            }
-                        }
-
-                        return js_persistent;
-                    },
-                    else => @compileError("Expected a struct or pointer, got " ++ @typeName(T) ++ " (constructors must return struct or pointers)"),
-                }
-            }
-
-            // Callback from V8, asking us to load a module. The "specifier" is
-            // the src of the module to load.
-            fn resolveModuleCallback(
-                c_context: ?*const v8.C_Context,
-                c_specifier: ?*const v8.C_String,
-                import_attributes: ?*const v8.C_FixedArray,
-                referrer: ?*const v8.C_Module,
-            ) callconv(.C) ?*const v8.C_Module {
-                _ = import_attributes;
-                _ = referrer;
-
-                std.debug.assert(c_context != null);
-                const context = v8.Context{ .handle = c_context.? };
-
-                const self: *Executor = @ptrFromInt(context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
-
-                var buf: [1024]u8 = undefined;
-                var fba = std.heap.FixedBufferAllocator.init(&buf);
-
-                // build the specifier value.
-                const specifier = valueToString(
-                    fba.allocator(),
-                    .{ .handle = c_specifier.? },
-                    self.isolate,
-                    context,
-                ) catch |e| {
-                    log.err("resolveModuleCallback: get ref str: {any}", .{e});
-                    return null;
-                };
-
-                // not currently needed
-                // const referrer_module = if (referrer) |ref| v8.Module{ .handle = ref } else null;
-                const module_loader = self.module_loader;
-                const source = module_loader.func(module_loader.ptr, specifier) catch |err| {
-                    log.err("fetchModuleSource for '{s}' fetch error: {}", .{ specifier, err });
-                    return null;
-                };
-
-                const m = self.compileModule(source, specifier) catch |err| {
-                    log.err("fetchModuleSource for '{s}' compile error: {}", .{ specifier, err });
-                    return null;
-                };
-                return m.handle;
-            }
-        };
-
-        // Loosely maps to a Browser Page. Executor does all the work, this just
-        // contains all the data structures / memory we need for a page. It helps
-        // to keep things organized. I.e. we have a single nullable,
-        //   scope: ?Scope = null
-        // in executor, rather than having one for each of these.
-        pub const Scope = struct {
-            arena: Allocator,
-            handle_scope: v8.HandleScope,
-            scope_end_callbacks: std.ArrayListUnmanaged(ScopeEndCallback) = .{},
-            callbacks: std.ArrayListUnmanaged(v8.Persistent(v8.Function)) = .{},
-            identity_map: std.AutoHashMapUnmanaged(usize, PersistentObject) = .{},
-
-            fn deinit(self: *Scope) void {
-                var it = self.identity_map.valueIterator();
-                while (it.next()) |p| {
-                    p.deinit();
-                }
-                for (self.callbacks.items) |*cb| {
-                    cb.deinit();
-                }
-                self.handle_scope.deinit();
-            }
-
-            fn trackCallback(self: *Scope, pf: PersistentFunction) !void {
-                return self.callbacks.append(self.arena, pf);
-            }
-        };
-
-        // An interface for types that want to their jsScopeEnd function to be
-        // called when the scope ends
-        const ScopeEndCallback = struct {
-            ptr: *anyopaque,
-            scopeEndFn: *const fn (ptr: *anyopaque, executor: *Executor) void,
-
-            fn init(ptr: anytype) ScopeEndCallback {
-                const T = @TypeOf(ptr);
-                const ptr_info = @typeInfo(T);
-
-                const gen = struct {
-                    pub fn scopeEnd(pointer: *anyopaque, executor: *Executor) void {
-                        const self: T = @ptrCast(@alignCast(pointer));
-                        return ptr_info.pointer.child.jsScopeEnd(self, executor);
-                    }
-                };
-
-                return .{
-                    .ptr = ptr,
-                    .scopeEndFn = gen.scopeEnd,
-                };
-            }
-
-            pub fn scopeEnd(self: ScopeEndCallback, executor: *Executor) void {
-                self.scopeEndFn(self.ptr, executor);
-            }
-        };
-
-        pub const Callback = struct {
-            id: usize,
-            executor: *Executor,
-            _this: ?v8.Object = null,
-            func: PersistentFunction,
-
-            // We use this when mapping a JS value to a Zig object. We can't
-            // Say we have a Zig function that takes a Callback, we can't just
-            // check param.type == Callback, because Callback is a generic.
-            // So, as a quick hack, we can determine if the Zig type is a
-            // callback by checking @hasDecl(T, "_CALLBACK_ID_KLUDGE")
-            const _CALLBACK_ID_KLUDGE = true;
-
-            pub const Result = struct {
-                stack: ?[]const u8,
-                exception: []const u8,
-            };
-
-            pub fn setThis(self: *Callback, value: anytype) !void {
-                self._this = try self.executor.valueToExistingObject(value);
-            }
-
-            pub fn call(self: *const Callback, args: anytype) !void {
-                return self.callWithThis(self.getThis(), args);
-            }
-
-            pub fn tryCall(self: *const Callback, args: anytype, result: *Result) !void {
-                return self.tryCallWithThis(self.getThis(), args, result);
-            }
-
-            pub fn tryCallWithThis(self: *const Callback, this: anytype, args: anytype, result: *Result) !void {
-                var try_catch: TryCatch = undefined;
-                try_catch.init(self.executor);
-                defer try_catch.deinit();
-
-                self.callWithThis(this, args) catch |err| {
-                    if (try_catch.hasCaught()) {
-                        const allocator = self.executor.call_arena;
-                        result.stack = try_catch.stack(allocator) catch null;
-                        result.exception = (try_catch.exception(allocator) catch @errorName(err)) orelse @errorName(err);
-                    } else {
-                        result.stack = null;
-                        result.exception = @errorName(err);
-                    }
-                    return err;
-                };
-            }
-
-            pub fn callWithThis(self: *const Callback, this: anytype, args: anytype) !void {
-                const executor = self.executor;
-
-                const js_this = try executor.valueToExistingObject(this);
-
-                const aargs = if (comptime @typeInfo(@TypeOf(args)) == .null) struct {}{} else args;
-                const fields = @typeInfo(@TypeOf(aargs)).@"struct".fields;
-                var js_args: [fields.len]v8.Value = undefined;
-                inline for (fields, 0..) |f, i| {
-                    js_args[i] = try executor.zigValueToJs(@field(aargs, f.name));
-                }
-
-                const result = self.func.castToFunction().call(executor.context, js_this, &js_args);
-                if (result == null) {
-                    return error.JSExecCallback;
-                }
-            }
-
-            fn getThis(self: *const Callback) v8.Object {
-                return self._this orelse self.executor.context.getGlobal();
-            }
-
-            // debug/helper to print the source of the JS callback
-            fn printFunc(self: Callback) !void {
-                const executor = self.executor;
-                const value = self.func.castToFunction().toValue();
-                const src = try valueToString(executor.call_arena, value, executor.isolate, executor.context);
-                std.debug.print("{s}\n", .{src});
-            }
-        };
-
-        pub const JsObject = struct {
-            js_obj: v8.Object,
-            executor: *Executor,
-
-            // If a Zig struct wants the Object parameter, it'll declare a
-            // function like:
-            //    fn _length(self: *const NodeList, js_obj: Env.Object) usize
-            //
-            // When we're trying to call this function, we can't just do
-            //    if (params[i].type.? == Object)
-            // Because there is _no_ object, there's only an Env.Object, where
-            // Env is a generic.
-            // We could probably figure out a way to do this, but simply checking
-            // for this declaration is _a lot_ easier.
-            const _JSOBJECT_ID_KLUDGE = true;
-
-            pub fn setIndex(self: JsObject, index: usize, value: anytype) !void {
-                const key = switch (index) {
-                    inline 0...1000 => |i| std.fmt.comptimePrint("{d}", .{i}),
-                    else => try std.fmt.allocPrint(self.executor.scope_arena, "{d}", .{index}),
-                };
-                return self.set(key, value);
-            }
-
-            pub fn set(self: JsObject, key: []const u8, value: anytype) !void {
-                const executor = self.executor;
-
-                const js_key = v8.String.initUtf8(executor.isolate, key);
-                const js_value = try executor.zigValueToJs(value);
-                if (!self.js_obj.setValue(executor.context, js_key, js_value)) {
-                    return error.FailedToSet;
-                }
-            }
-        };
-
-        // This only exists so that we know whether a function wants the opaque
-        // JS argument (JsObject), or if it wants the receiver as an opaque
-        // value.
-        // JsObject is normally used when a method wants an opaque JS object
-        // that it'll pass into a callback.
-        // JsThis is used when the function wants to do advanced manipulation
-        // of the v8.Object bound to the instance. For example, postAttach is an
-        // example of using JsThis.
-        pub const JsThis = struct {
-            obj: JsObject,
-
-            const _JSTHIS_ID_KLUDGE = true;
-
-            pub fn setIndex(self: JsThis, index: usize, value: anytype) !void {
-                return self.obj.setIndex(index, value);
-            }
-
-            pub fn set(self: JsThis, key: []const u8, value: anytype) !void {
-                return self.obj.set(key, value);
-            }
-        };
-
-        pub const TryCatch = struct {
-            inner: v8.TryCatch,
-            executor: *const Executor,
-
-            pub fn init(self: *TryCatch, executor: *const Executor) void {
-                self.executor = executor;
-                self.inner.init(executor.isolate);
-            }
-
-            pub fn hasCaught(self: TryCatch) bool {
-                return self.inner.hasCaught();
-            }
-
-            // the caller needs to deinit the string returned
-            pub fn exception(self: TryCatch, allocator: Allocator) !?[]const u8 {
-                const msg = self.inner.getException() orelse return null;
-                const executor = self.executor;
-                return try valueToString(allocator, msg, executor.isolate, executor.context);
-            }
-
-            // the caller needs to deinit the string returned
-            pub fn stack(self: TryCatch, allocator: Allocator) !?[]const u8 {
-                const executor = self.executor;
-                const s = self.inner.getStackTrace(executor.context) orelse return null;
-                return try valueToString(allocator, s, executor.isolate, executor.context);
-            }
-
-            // a shorthand method to return either the entire stack message
-            // or just the exception message
-            // - in Debug mode return the stack if available
-            // - otherwhise return the exception if available
-            // the caller needs to deinit the string returned
-            pub fn err(self: TryCatch, allocator: Allocator) !?[]const u8 {
-                if (builtin.mode == .Debug) {
-                    if (try self.stack(allocator)) |msg| {
-                        return msg;
-                    }
-                }
-                return try self.exception(allocator);
-            }
-
-            pub fn deinit(self: *TryCatch) void {
-                self.inner.deinit();
-            }
-        };
-
-        pub const Inspector = struct {
-            isolate: v8.Isolate,
-            inner: *v8.Inspector,
-            session: v8.InspectorSession,
-
-            // We expect allocator to be an arena
-            pub fn init(allocator: Allocator, executor: *const Executor, ctx: anytype) !Inspector {
-                const ContextT = @TypeOf(ctx);
-
-                const InspectorContainer = switch (@typeInfo(ContextT)) {
-                    .@"struct" => ContextT,
-                    .pointer => |ptr| ptr.child,
-                    .void => NoopInspector,
-                    else => @compileError("invalid context type"),
-                };
-
-                // If necessary, turn a void context into something we can safely ptrCast
-                const safe_context: *anyopaque = if (ContextT == void) @constCast(@ptrCast(&{})) else ctx;
-
-                const isolate = executor.isolate;
-                const channel = v8.InspectorChannel.init(safe_context, InspectorContainer.onInspectorResponse, InspectorContainer.onInspectorEvent, isolate);
-
-                const client = v8.InspectorClient.init();
-
-                const inner = try allocator.create(v8.Inspector);
-                v8.Inspector.init(inner, client, channel, isolate);
-                return .{ .inner = inner, .isolate = isolate, .session = inner.connect() };
-            }
-
-            pub fn deinit(self: *const Inspector) void {
-                self.session.deinit();
-                self.inner.deinit();
-            }
-
-            pub fn send(self: *const Inspector, msg: []const u8) void {
-                self.session.dispatchProtocolMessage(self.isolate, msg);
-            }
-
-            // From CDP docs
-            // https://chromedevtools.github.io/devtools-protocol/tot/Runtime/#type-ExecutionContextDescription
-            // ----
-            // - name: Human readable name describing given context.
-            // - origin: Execution context origin (ie. URL who initialised the request)
-            // - auxData: Embedder-specific auxiliary data likely matching
-            // {isDefault: boolean, type: 'default'|'isolated'|'worker', frameId: string}
-            // - is_default_context: Whether the execution context is default, should match the auxData
-            pub fn contextCreated(
-                self: *const Inspector,
-                executor: *const Executor,
-                name: []const u8,
-                origin: []const u8,
-                aux_data: ?[]const u8,
-                is_default_context: bool,
-            ) void {
-                self.inner.contextCreated(executor.context, name, origin, aux_data, is_default_context);
-            }
-
-            // Retrieves the RemoteObject for a given value.
-            // The value is loaded through the Executor's mapZigInstanceToJs function,
-            // just like a method return value. Therefore, if we've mapped this
-            // value before, we'll get the existing JS PersistedObject and if not
-            // we'll create it and track it for cleanup when the scope ends.
-            pub fn getRemoteObject(
-                self: *const Inspector,
-                executor: *const Executor,
-                group: []const u8,
-                value: anytype,
-            ) !RemoteObject {
-                const js_value = try zigValueToJs(
-                    executor.templates,
-                    executor.isolate,
-                    executor.context,
-                    value,
-                );
-
-                // We do not want to expose this as a parameter for now
-                const generate_preview = false;
-                return self.session.wrapObject(
-                    executor.isolate,
-                    executor.context,
-                    js_value,
-                    group,
-                    generate_preview,
-                );
-            }
-
-            // Gets a value by object ID regardless of which context it is in.
-            pub fn getNodePtr(self: *const Inspector, allocator: Allocator, object_id: []const u8) !?*anyopaque {
-                const unwrapped = try self.session.unwrapObject(allocator, object_id);
-                // The values context and groupId are not used here
-                const toa = getTaggedAnyOpaque(unwrapped.value) orelse return null;
-                if (toa.subtype == null or toa.subtype != .node) return error.ObjectIdIsNotANode;
-                return toa.ptr;
-            }
-        };
-
-        pub const RemoteObject = v8.RemoteObject;
-
-        pub const Value = struct {
-            value: v8.Value,
-            executor: *const Executor,
-
-            // the caller needs to deinit the string returned
-            pub fn toString(self: Value, allocator: Allocator) ![]const u8 {
-                const executor = self.executor;
-                return valueToString(allocator, self.value, executor.isolate, executor.context);
-            }
-        };
-
         // Reverses the mapZigInstanceToJs, making sure that our TaggedAnyOpaque
         // contains a ptr to the correct type.
         fn typeTaggedAnyOpaque(comptime named_function: anytype, comptime R: type, js_obj: v8.Object) !R {
@@ -1555,6 +1504,34 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 type_index = prototype_index;
             }
         }
+
+        // An interface for types that want to their jsScopeEnd function to be
+        // called when the call scope ends
+        const CallScopeEndCallback = struct {
+            ptr: *anyopaque,
+            callScopeEndFn: *const fn (ptr: *anyopaque, scope: *Scope) void,
+
+            fn init(ptr: anytype) CallScopeEndCallback {
+                const T = @TypeOf(ptr);
+                const ptr_info = @typeInfo(T);
+
+                const gen = struct {
+                    pub fn callScopeEnd(pointer: *anyopaque, scope: *Scope) void {
+                        const self: T = @ptrCast(@alignCast(pointer));
+                        return ptr_info.pointer.child.jsCallScopeEnd(self, scope);
+                    }
+                };
+
+                return .{
+                    .ptr = ptr,
+                    .callScopeEndFn = gen.callScopeEnd,
+                };
+            }
+
+            pub fn callScopeEnd(self: CallScopeEndCallback, scope: *Scope) void {
+                self.callScopeEndFn(self.ptr, scope);
+            }
+        };
     };
 }
 
@@ -1592,9 +1569,9 @@ fn Caller(comptime E: type) type {
     const TypeLookup = @TypeOf(TYPE_LOOKUP);
 
     return struct {
+        scope: *E.Scope,
         context: v8.Context,
         isolate: v8.Isolate,
-        executor: *E.Executor,
         call_arena: Allocator,
 
         const Self = @This();
@@ -1605,20 +1582,20 @@ fn Caller(comptime E: type) type {
         fn init(info: anytype) Self {
             const isolate = info.getIsolate();
             const context = isolate.getCurrentContext();
-            const executor: *E.Executor = @ptrFromInt(context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
+            const scope: *E.Scope = @ptrFromInt(context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
 
-            executor.call_depth += 1;
+            scope.call_depth += 1;
             return .{
+                .scope = scope,
                 .isolate = isolate,
                 .context = context,
-                .executor = executor,
-                .call_arena = executor.call_arena,
+                .call_arena = scope.call_arena,
             };
         }
 
         fn deinit(self: *Self) void {
-            const executor = self.executor;
-            const call_depth = executor.call_depth - 1;
+            const scope = self.scope;
+            const call_depth = scope.call_depth - 1;
 
             // Because of callbacks, calls can be nested. Because of this, we
             // can't clear the call_arena after _every_ call. Imagine we have
@@ -1631,20 +1608,19 @@ fn Caller(comptime E: type) type {
             //
             // Therefore, we keep a call_depth, and only reset the call_arena
             // when a top-level (call_depth == 0) function ends.
-
             if (call_depth == 0) {
-                const scope = &self.executor.scope.?;
-                for (scope.scope_end_callbacks.items) |cb| {
-                    cb.scopeEnd(executor);
+                for (scope.call_scope_end_callbacks.items) |cb| {
+                    cb.callScopeEnd(scope);
                 }
 
-                _ = executor._call_arena_instance.reset(.{ .retain_with_limit = CALL_ARENA_RETAIN });
+                const arena: *ArenaAllocator = @alignCast(@ptrCast(scope.call_arena.ptr));
+                _ = arena.reset(.{ .retain_with_limit = CALL_ARENA_RETAIN });
             }
 
             // Set this _after_ we've executed the above code, so that if the
             // above code executes any callbacks, they aren't being executed
             // at scope 0, which would be wrong.
-            executor.call_depth = call_depth;
+            scope.call_depth = call_depth;
         }
 
         fn constructor(self: *Self, comptime named_function: anytype, info: v8.FunctionCallbackInfo) !void {
@@ -1659,9 +1635,9 @@ fn Caller(comptime E: type) type {
             const this = info.getThis();
             if (@typeInfo(ReturnType) == .error_union) {
                 const non_error_res = res catch |err| return err;
-                _ = try E.Executor.mapZigInstanceToJs(self.context, this, non_error_res);
+                _ = try E.Scope.mapZigInstanceToJs(self.context, this, non_error_res);
             } else {
-                _ = try E.Executor.mapZigInstanceToJs(self.context, this, res);
+                _ = try E.Scope.mapZigInstanceToJs(self.context, this, res);
             }
             info.getReturnValue().set(this);
         }
@@ -1697,7 +1673,7 @@ fn Caller(comptime E: type) type {
                     @field(args, "0") = zig_instance;
                     if (comptime arg_fields.len == 2) {
                         comptime assertIsStateArg(named_function, 1);
-                        @field(args, "1") = self.executor.state;
+                        @field(args, "1") = self.scope.state;
                     }
                 },
                 else => @compileError(named_function.full_name + " has too many parmaters: " ++ @typeName(named_function.func)),
@@ -1723,7 +1699,7 @@ fn Caller(comptime E: type) type {
                     @field(args, "1") = try self.jsValueToZig(named_function, arg_fields[1].type, js_value);
                     if (comptime arg_fields.len == 3) {
                         comptime assertIsStateArg(named_function, 2);
-                        @field(args, "2") = self.executor.state;
+                        @field(args, "2") = self.scope.state;
                     }
                 },
                 else => @compileError(named_function.full_name ++ " setter with more than 3 parameters, why?"),
@@ -1759,7 +1735,7 @@ fn Caller(comptime E: type) type {
                     @field(args, "2") = &has_value;
                     if (comptime arg_fields.len == 4) {
                         comptime assertIsStateArg(named_function, 3);
-                        @field(args, "3") = self.executor.state;
+                        @field(args, "3") = self.scope.state;
                     }
                 },
                 else => @compileError(named_function.full_name ++ " has too many parmaters"),
@@ -1795,7 +1771,7 @@ fn Caller(comptime E: type) type {
                     @field(args, "2") = &has_value;
                     if (comptime arg_fields.len == 4) {
                         comptime assertIsStateArg(named_function, 3);
-                        @field(args, "3") = self.executor.state;
+                        @field(args, "3") = self.scope.state;
                     }
                 },
                 else => @compileError(named_function.full_name ++ " has too many parmaters"),
@@ -1944,7 +1920,7 @@ fn Caller(comptime E: type) type {
                 // from our params slice, because we don't want to bind it to
                 // a JS argument
                 if (comptime isState(params[params.len - 1].type.?)) {
-                    @field(args, std.fmt.comptimePrint("{d}", .{params.len - 1 + offset})) = self.executor.state;
+                    @field(args, std.fmt.comptimePrint("{d}", .{params.len - 1 + offset})) = self.scope.state;
                     break :blk params[0 .. params.len - 1];
                 }
 
@@ -1959,7 +1935,7 @@ fn Caller(comptime E: type) type {
 
                     // AND the 2nd last parameter is state
                     if (params.len > 1 and comptime isState(params[params.len - 2].type.?)) {
-                        @field(args, std.fmt.comptimePrint("{d}", .{params.len - 2 + offset})) = self.executor.state;
+                        @field(args, std.fmt.comptimePrint("{d}", .{params.len - 2 + offset})) = self.scope.state;
                         break :blk params[0 .. params.len - 2];
                     }
 
@@ -2160,13 +2136,13 @@ fn Caller(comptime E: type) type {
                             return error.InvalidArgument;
                         }
 
-                        const executor = self.executor;
                         const func = v8.Persistent(v8.Function).init(self.isolate, js_value.castTo(v8.Function));
-                        try executor.scope.?.trackCallback(func);
+                        const scope = self.scope;
+                        try scope.trackCallback(func);
 
                         return .{
                             .func = func,
-                            .executor = executor,
+                            .scope = scope,
                             .id = js_value.castTo(v8.Object).getIdentityHash(),
                         };
                     }
@@ -2182,7 +2158,7 @@ fn Caller(comptime E: type) type {
                         // that it needs to pass back into a callback
                         return E.JsObject{
                             .js_obj = js_obj,
-                            .executor = self.executor,
+                            .scope = self.scope,
                         };
                     }
 
@@ -2261,7 +2237,7 @@ fn Caller(comptime E: type) type {
         }
 
         fn zigValueToJs(self: *const Self, value: anytype) !v8.Value {
-            return self.executor.zigValueToJs(value);
+            return self.scope.zigValueToJs(value);
         }
 
         fn isState(comptime T: type) bool {
@@ -2527,6 +2503,12 @@ fn valueToStringZ(allocator: Allocator, value: v8.Value, isolate: v8.Isolate, co
 const NoopInspector = struct {
     pub fn onInspectorResponse(_: *anyopaque, _: u32, _: []const u8) void {}
     pub fn onInspectorEvent(_: *anyopaque, _: []const u8) void {}
+};
+
+const ErrorModuleLoader = struct {
+    pub fn fetchModuleSource(_: *anyopaque, _: []const u8) ![]const u8 {
+        return error.NoModuleLoadConfigured;
+    }
 };
 
 // If we have a struct:

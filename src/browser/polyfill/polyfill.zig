@@ -31,13 +31,13 @@ const modules = [_]struct {
     .{ .name = "polyfill-fetch", .source = @import("fetch.zig").source },
 };
 
-pub fn load(allocator: Allocator, executor: *Env.Executor) !void {
+pub fn load(allocator: Allocator, scope: *Env.Scope) !void {
     var try_catch: Env.TryCatch = undefined;
-    try_catch.init(executor);
+    try_catch.init(scope);
     defer try_catch.deinit();
 
     for (modules) |m| {
-        const res = executor.exec(m.source, m.name) catch |err| {
+        const res = scope.exec(m.source, m.name) catch |err| {
             if (try try_catch.err(allocator)) |msg| {
                 defer allocator.free(msg);
                 log.err("load {s}: {s}", .{ m.name, msg });

@@ -122,7 +122,7 @@ const TestContext = struct {
         if (opts.html) |html| {
             parser.deinit();
             try parser.init();
-            const page = try bc.session.createPage(null);
+            const page = try bc.session.createPage();
             page.doc = (try Document.init(html)).doc;
         }
         return bc;
