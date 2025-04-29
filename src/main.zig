@@ -97,6 +97,11 @@ pub fn main() !void {
             var browser = try Browser.init(app);
             defer browser.deinit();
 
+            const v8 = @import("v8");
+            var temp_scope: v8.HandleScope = undefined;
+            v8.HandleScope.init(&temp_scope, browser.env.isolate);
+            defer temp_scope.deinit();
+
             var session = try browser.newSession({});
 
             // page

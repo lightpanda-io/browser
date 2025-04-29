@@ -1137,22 +1137,26 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             }
 
             pub fn call(self: *const Callback, args: anytype) !void {
-                // const v8 = @import("v8");
                 var temp_scope: v8.HandleScope = undefined;
                 v8.HandleScope.init(&temp_scope, self.executor.isolate);
                 defer temp_scope.deinit();
+
                 return self.callWithThis(self.getThis(), args);
             }
 
             pub fn tryCall(self: *const Callback, args: anytype, result: *Result) !void {
-                // const v8 = @import("v8");
                 var temp_scope: v8.HandleScope = undefined;
                 v8.HandleScope.init(&temp_scope, self.executor.isolate);
                 defer temp_scope.deinit();
+
                 return self.tryCallWithThis(self.getThis(), args, result);
             }
 
             pub fn tryCallWithThis(self: *const Callback, this: anytype, args: anytype, result: *Result) !void {
+                var temp_scope: v8.HandleScope = undefined;
+                v8.HandleScope.init(&temp_scope, self.executor.isolate);
+                defer temp_scope.deinit();
+
                 var try_catch: TryCatch = undefined;
                 try_catch.init(self.executor);
                 defer try_catch.deinit();
@@ -1171,6 +1175,10 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             }
 
             pub fn callWithThis(self: *const Callback, this: anytype, args: anytype) !void {
+                var temp_scope: v8.HandleScope = undefined;
+                v8.HandleScope.init(&temp_scope, self.executor.isolate);
+                defer temp_scope.deinit();
+
                 const executor = self.executor;
 
                 const js_this = try executor.valueToExistingObject(this);
