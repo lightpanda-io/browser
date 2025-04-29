@@ -158,9 +158,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         // the global isolate
         isolate: v8.Isolate,
 
-        // this is the global scope that all our classes are defined in
-        global_scope: v8.HandleScope,
-
         // just kept around because we need to free it on deinit
         isolate_params: *v8.CreateParams,
 
@@ -205,9 +202,9 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             isolate.enter();
             errdefer isolate.exit();
 
-            var global_scope: v8.HandleScope = undefined;
-            v8.HandleScope.init(&global_scope, isolate);
-            errdefer global_scope.deinit();
+            var temp_scope: v8.HandleScope = undefined;
+            v8.HandleScope.init(&temp_scope, isolate);
+            defer temp_scope.deinit();
 
             const env = try allocator.create(Self);
             errdefer allocator.destroy(env);
@@ -218,7 +215,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 .allocator = allocator,
                 .isolate_params = params,
                 .gc_hints = opts.gc_hints,
-                .global_scope = global_scope,
                 .prototype_lookup = undefined,
             };
 
@@ -228,7 +224,8 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             // we can get its index via: @field(TYPE_LOOKUP, type_name).index
             const templates = &env.templates;
             inline for (Types, 0..) |s, i| {
-                templates[i] = generateClass(@field(types, s.name), isolate);
+                @setEvalBranchQuota(10_000);
+                templates[i] = v8.Persistent(v8.FunctionTemplate).init(isolate, generateClass(@field(types, s.name), isolate)).castToFunctionTemplate();
             }
 
             // Above, we've created all our our FunctionTemplates. Now that we
@@ -254,7 +251,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         }
 
         pub fn deinit(self: *Self) void {
-            self.global_scope.deinit();
             self.isolate.exit();
             self.isolate.deinit();
             v8.destroyArrayBufferAllocator(self.isolate_params.array_buffer_allocator.?);
@@ -305,20 +301,25 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             // no init, must be initialized via env.newExecutor()
 
             pub fn deinit(self: *Executor) void {
-                if (self.scope != null) {
+                if (self.scope) |scope| {
+                    const isolate = scope.isolate;
                     self.endScope();
+
+                    // V8 doesn't immediately free memory associated with
+                    // a Context, it's managed by the garbage collector. So, when the
+                    // `gc_hints` option is enabled, we'll use the `lowMemoryNotification`
+                    // call on the isolate to encourage v8 to free any contexts which
+                    // have been freed.
+                    if (self.env.gc_hints) {
+                        var handle_scope: v8.HandleScope = undefined;
+                        v8.HandleScope.init(&handle_scope, isolate);
+                        defer handle_scope.deinit();
+
+                        self.env.isolate.lowMemoryNotification();
+                    }
                 }
                 self.call_arena.deinit();
                 self.scope_arena.deinit();
-
-                // V8 doesn't immediately free memory associated with
-                // a Context, it's managed by the garbage collector. So, when the
-                // `gc_hints` option is enabled, we'll use the `lowMemoryNotification`
-                // call on the isolate to encourage v8 to free any contexts which
-                // have been freed.
-                if (self.env.gc_hints) {
-                    self.env.isolate.lowMemoryNotification();
-                }
             }
 
             // Our scope maps to a "browser.Page".
@@ -343,6 +344,10 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 const env = self.env;
                 const isolate = env.isolate;
                 const Global = @TypeOf(global.*);
+
+                var handle_scope: v8.HandleScope = undefined;
+                v8.HandleScope.init(&handle_scope, isolate);
+                errdefer handle_scope.deinit();
 
                 const js_global = v8.FunctionTemplate.initDefault(isolate);
                 attachClass(Global, isolate, js_global);
@@ -370,10 +375,6 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                     const proto_index = @field(TYPE_LOOKUP, proto_name).index;
                     js_global.inherit(templates[proto_index]);
                 }
-
-                var handle_scope: v8.HandleScope = undefined;
-                v8.HandleScope.init(&handle_scope, isolate);
-                errdefer handle_scope.deinit();
 
                 const context = v8.Context.init(isolate, global_template, null);
                 context.enter();
