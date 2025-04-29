@@ -85,7 +85,7 @@ pub const Browser = struct {
 
     pub fn newSession(self: *Browser, ctx: anytype) !*Session {
         self.closeSession();
-        self.session = undefined;
+        self.session = @as(Session, undefined);
         const session = &self.session.?;
         try Session.init(session, self, ctx);
         return session;
@@ -169,7 +169,7 @@ pub const Session = struct {
         const page_arena = &self.browser.page_arena;
         _ = page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
 
-        self.page = undefined;
+        self.page = @as(Page, undefined);
         const page = &self.page.?;
         try Page.init(page, page_arena.allocator(), self);
 

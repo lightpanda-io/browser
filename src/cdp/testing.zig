@@ -105,7 +105,7 @@ const TestContext = struct {
         }
 
         _ = try c.createBrowserContext();
-        var bc = c.browser_context.?;
+        var bc = &c.browser_context.?;
 
         if (opts.id) |id| {
             bc.id = id;

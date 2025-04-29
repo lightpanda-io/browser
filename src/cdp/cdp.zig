@@ -62,9 +62,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
         session_id_gen: SessionIdGen = .{},
         browser_context_id_gen: BrowserContextIdGen = .{},
 
-        browser_context: ?*BrowserContext(Self),
-
-        browser_context_pool: std.heap.MemoryPool(BrowserContext(Self)),
+        browser_context: ?BrowserContext(Self),
 
         // Re-used arena for processing a message. We're assuming that we're getting
         // 1 message at a time.
@@ -83,17 +81,15 @@ pub fn CDPT(comptime TypeProvider: type) type {
                 .allocator = allocator,
                 .browser_context = null,
                 .message_arena = std.heap.ArenaAllocator.init(allocator),
-                .browser_context_pool = std.heap.MemoryPool(BrowserContext(Self)).init(allocator),
             };
         }
 
         pub fn deinit(self: *Self) void {
-            if (self.browser_context) |bc| {
+            if (self.browser_context) |*bc| {
                 bc.deinit();
             }
             self.browser.deinit();
             self.message_arena.deinit();
-            self.browser_context_pool.deinit();
         }
 
         pub fn handleMessage(self: *Self, msg: []const u8) bool {
@@ -127,7 +123,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
                 .cdp = self,
                 .arena = arena,
                 .sender = sender,
-                .browser_context = if (self.browser_context) |bc| bc else null,
+                .browser_context = if (self.browser_context) |*bc| bc else null,
             };
 
             // See dispatchStartupCommand for more info on this.
@@ -222,7 +218,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
         }
 
         fn isValidSessionId(self: *const Self, input_session_id: []const u8) bool {
-            const browser_context = self.browser_context orelse return false;
+            const browser_context = &(self.browser_context orelse return false);
             const session_id = browser_context.session_id orelse return false;
             return std.mem.eql(u8, session_id, input_session_id);
         }
@@ -231,24 +227,22 @@ pub fn CDPT(comptime TypeProvider: type) type {
             if (self.browser_context != null) {
                 return error.AlreadyExists;
             }
-            const browser_context_id = self.browser_context_id_gen.next();
+            const id = self.browser_context_id_gen.next();
 
-            const browser_context = try self.browser_context_pool.create();
-            errdefer self.browser_context_pool.destroy(browser_context);
+            self.browser_context = @as(BrowserContext(Self), undefined);
+            const browser_context = &self.browser_context.?;
 
-            try BrowserContext(Self).init(browser_context, browser_context_id, self);
-            self.browser_context = browser_context;
-            return browser_context_id;
+            try BrowserContext(Self).init(browser_context, id, self);
+            return id;
         }
 
         pub fn disposeBrowserContext(self: *Self, browser_context_id: []const u8) bool {
-            const bc = self.browser_context orelse return false;
+            const bc = &(self.browser_context orelse return false);
             if (std.mem.eql(u8, bc.id, browser_context_id) == false) {
                 return false;
             }
             bc.deinit();
             self.browser.closeSession();
-            self.browser_context_pool.destroy(bc);
             self.browser_context = null;
             return true;
         }
@@ -563,7 +557,7 @@ pub fn Command(comptime CDP_T: type, comptime Sender: type) type {
 
         pub fn createBrowserContext(self: *Self) !*BrowserContext(CDP_T) {
             _ = try self.cdp.createBrowserContext();
-            self.browser_context = self.cdp.browser_context.?;
+            self.browser_context = &(self.cdp.browser_context.?);
             return self.browser_context.?;
         }
 
