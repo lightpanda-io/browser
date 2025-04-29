@@ -127,24 +127,27 @@ fn resolveNode(cmd: anytype) !void {
         objectGroup: ?[]const u8 = null,
         executionContextId: ?u32 = null,
     })) orelse return error.InvalidParams;
+
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
-    var executor = bc.session.executor;
+    var scope = page.scope;
     if (params.executionContextId) |context_id| {
-        if (executor.context.debugContextId() != context_id) {
+        if (scope.context.debugContextId() != context_id) {
             const isolated_world = bc.isolated_world orelse return error.ContextNotFound;
-            executor = isolated_world.executor;
+            scope = isolated_world.scope;
 
-            if (executor.context.debugContextId() != context_id) return error.ContextNotFound;
+            if (scope.context.debugContextId() != context_id) return error.ContextNotFound;
         }
     }
-    const input_node_id = if (params.nodeId) |node_id| node_id else params.backendNodeId orelse return error.InvalidParams;
+
+    const input_node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
     const node = bc.node_registry.lookup_by_id.get(input_node_id) orelse return error.UnknownNode;
 
     // node._node is a *parser.Node we need this to be able to find its most derived type e.g. Node -> Element -> HTMLElement
     // So we use the Node.Union when retrieve the value from the environment
-    const remote_object = try bc.session.inspector.getRemoteObject(
-        executor,
+    const remote_object = try bc.inspector.getRemoteObject(
+        scope,
         params.objectGroup orelse "",
         try dom_node.Node.toInterface(node._node),
     );
@@ -180,7 +183,7 @@ fn describeNode(cmd: anytype) !void {
     }
     if (params.objectId != null) {
         // Retrieve the object from which ever context it is in.
-        const parser_node = try bc.session.inspector.getNodePtr(cmd.arena, params.objectId.?);
+        const parser_node = try bc.inspector.getNodePtr(cmd.arena, params.objectId.?);
         const node = try bc.node_registry.register(@ptrCast(parser_node));
         return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{}) }, .{});
     }

@@ -50,7 +50,7 @@ pub fn run(arena: Allocator, comptime dir: []const u8, f: []const u8, loader: *F
         .html = html,
     });
     defer runner.deinit();
-    try polyfill.load(arena, runner.executor);
+    try polyfill.load(arena, runner.scope);
 
     // display console logs
     defer {
@@ -106,7 +106,7 @@ pub fn run(arena: Allocator, comptime dir: []const u8, f: []const u8, loader: *F
     // wait for all async executions
     {
         var try_catch: Env.TryCatch = undefined;
-        try_catch.init(runner.executor);
+        try_catch.init(runner.scope);
         defer try_catch.deinit();
         runner.loop.run() catch |err| {
             if (try try_catch.err(arena)) |msg| {
