@@ -437,7 +437,7 @@ pub const JsRunner = struct {
         self.executor = try self.env.newExecutor();
         errdefer self.executor.deinit();
 
-        self.scope = try self.executor.startScope(&self.window, &self.state, {});
+        self.scope = try self.executor.startScope(&self.window, &self.state, {}, true);
         return self;
     }
 

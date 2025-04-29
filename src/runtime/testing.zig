@@ -49,6 +49,7 @@ pub fn Runner(comptime State: type, comptime Global: type, comptime types: anyty
                 if (Global == void) &default_global else global,
                 state,
                 {},
+                true,
             );
             return self;
         }
