@@ -127,6 +127,13 @@ fn createTarget(cmd: anytype) !void {
 
     const page = try bc.session.createPage();
 
+    // The isolate world must share at least some of the state with the related page, specifically the DocumentHTML
+    // (assuming grantUniveralAccess will be set to True!).
+    // We just created the world and the page. The page's state lives in the session, but is update on navigation.
+    // This also means this pointer becomes invalid after removePage untill a new page is created.
+    // Currently we have only 1 page/frame and thus also only 1 state in the isolate world.
+    bc.isolated_world.?.scope.state = &page.state;
+
     {
         const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
         bc.inspector.contextCreated(
