@@ -173,6 +173,10 @@ pub const Session = struct {
         const page = &self.page.?;
         try Page.init(page, page_arena.allocator(), self);
 
+        self.notify(&.{ .context_created = .{
+            .origin = try page.origin(),
+        } });
+
         // start JS env
         log.debug("start new js scope", .{});
 

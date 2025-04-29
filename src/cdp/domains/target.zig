@@ -123,6 +123,7 @@ fn createTarget(cmd: anytype) !void {
     const target_id = cmd.cdp.target_id_gen.next();
 
     try bc.createIsolatedWorld();
+    bc.target_id = target_id;
 
     _ = try bc.session.createPage();
 
@@ -148,8 +149,6 @@ fn createTarget(cmd: anytype) !void {
     if (cmd.cdp.target_auto_attach) {
         try doAttachtoTarget(cmd, target_id);
     }
-
-    bc.target_id = target_id;
 
     try cmd.sendResult(.{
         .targetId = target_id,
