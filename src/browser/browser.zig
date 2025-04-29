@@ -173,10 +173,6 @@ pub const Session = struct {
         const page = &self.page.?;
         try Page.init(page, page_arena.allocator(), self);
 
-        self.notify(&.{ .context_created = .{
-            .origin = try page.origin(),
-        } });
-
         // start JS env
         log.debug("start new js scope", .{});
 
@@ -331,9 +327,9 @@ pub const Page = struct {
         log.debug("wait: OK", .{});
     }
 
-    fn origin(self: *const Page) ![]const u8 {
+    pub fn origin(self: *const Page, arena: Allocator) ![]const u8 {
         var arr: std.ArrayListUnmanaged(u8) = .{};
-        try self.url.origin(arr.writer(self.arena));
+        try self.url.origin(arr.writer(arena));
         return arr.items;
     }
 
@@ -367,10 +363,6 @@ pub const Page = struct {
             .url = &self.url,
             .reason = opts.reason,
             .timestamp = timestamp(),
-        } });
-
-        session.notify(&.{ .context_created = .{
-            .origin = try self.origin(),
         } });
 
         var response = try request.sendSync(.{});
@@ -449,7 +441,7 @@ pub const Page = struct {
         // TODO set the referrer to the document.
         try self.window.replaceDocument(html_doc);
         self.window.setStorageShelf(
-            try self.session.storage_shed.getOrPut(try self.origin()),
+            try self.session.storage_shed.getOrPut(try self.origin(self.arena)),
         );
 
         // https://html.spec.whatwg.org/#read-html

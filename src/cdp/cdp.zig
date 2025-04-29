@@ -398,16 +398,6 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             const self: *Self = @alignCast(@ptrCast(ctx));
 
             switch (notification.*) {
-                .context_created => |cc| if (self.target_id) |target_id| {
-                    const aux_data = try std.fmt.allocPrint(self.arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
-                    self.inspector.contextCreated(
-                        self.session.page.?.scope,
-                        "",
-                        cc.origin,
-                        aux_data,
-                        true,
-                    );
-                },
                 .page_navigate => |*pn| return @import("domains/page.zig").pageNavigate(self, pn),
                 .page_navigated => |*pn| return @import("domains/page.zig").pageNavigated(self, pn),
             }

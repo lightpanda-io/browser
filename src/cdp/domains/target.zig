@@ -125,7 +125,18 @@ fn createTarget(cmd: anytype) !void {
     try bc.createIsolatedWorld();
     bc.target_id = target_id;
 
-    _ = try bc.session.createPage();
+    const page = try bc.session.createPage();
+
+    {
+        const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
+        bc.inspector.contextCreated(
+            page.scope,
+            "",
+            try page.origin(cmd.arena),
+            aux_data,
+            true,
+        );
+    }
 
     // change CDP state
     bc.security_origin = "://";
