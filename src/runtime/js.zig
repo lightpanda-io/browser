@@ -416,6 +416,16 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 }
                 errdefer if (enter) handle_scope.?.deinit();
 
+                {
+                    // If we want to overwrite the built-in console, we have to
+                    // delete the built-in one.
+                    const js_obj = context.getGlobal();
+                    const console_key = v8.String.initUtf8(isolate, "console");
+                    if (js_obj.deleteValue(context, console_key) == false) {
+                        return error.ConsoleDeleteError;
+                    }
+                }
+
                 self.scope = Scope{
                     .state = state,
                     .isolate = isolate,
@@ -437,6 +447,16 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                     // embeddeder data)
                     const data = isolate.initBigIntU64(@intCast(@intFromPtr(scope)));
                     context.setEmbedderData(1, data);
+                }
+
+                {
+                    // Not the prettiest but we want to make the `call_arena`
+                    // optionally available to the WebAPIs. If `state` has a
+                    // call_arena field, fill-it in now.
+                    const state_type_info = @typeInfo(@TypeOf(state));
+                    if (state_type_info == .pointer and @hasField(state_type_info.pointer.child, "call_arena")) {
+                        scope.state.call_arena = scope.call_arena;
+                    }
                 }
 
                 // Custom exception
@@ -874,6 +894,21 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 if (!self.js_obj.setValue(scope.context, js_key, js_value)) {
                     return error.FailedToSet;
                 }
+            }
+
+            pub fn isTruthy(self: JsObject) bool {
+                const js_value = self.js_obj.toValue();
+                return js_value.toBool(self.scope.isolate);
+            }
+
+            pub fn toString(self: JsObject) ![]const u8 {
+                const scope = self.scope;
+                const js_value = self.js_obj.toValue();
+                return valueToString(scope.call_arena, js_value, scope.isolate, scope.context);
+            }
+
+            pub fn format(self: JsObject, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+                return writer.writeAll(try self.toString());
             }
         };
 
@@ -1990,13 +2025,15 @@ fn Caller(comptime E: type) type {
                         is_variadic = true;
                         if (js_parameter_count == 0) {
                             @field(args, tupleFieldName(params_to_map.len + offset - 1)) = &.{};
-                        } else {
+                        } else if (js_parameter_count >= params_to_map.len) {
                             const arr = try self.call_arena.alloc(last_parameter_type_info.pointer.child, js_parameter_count - params_to_map.len + 1);
                             for (arr, last_js_parameter..) |*a, i| {
                                 const js_value = info.getArg(@as(u32, @intCast(i)));
                                 a.* = try self.jsValueToZig(named_function, slice_type, js_value);
                             }
                             @field(args, tupleFieldName(params_to_map.len + offset - 1)) = arr;
+                        } else {
+                            @field(args, tupleFieldName(params_to_map.len + offset - 1)) = &.{};
                         }
                     }
                 }
@@ -2168,10 +2205,6 @@ fn Caller(comptime E: type) type {
                         };
                     }
 
-                    if (!js_value.isObject()) {
-                        return error.InvalidArgument;
-                    }
-
                     const js_obj = js_value.castTo(v8.Object);
 
                     if (comptime isJsObject(T)) {
@@ -2181,6 +2214,10 @@ fn Caller(comptime E: type) type {
                             .js_obj = js_obj,
                             .scope = self.scope,
                         };
+                    }
+
+                    if (!js_value.isObject()) {
+                        return error.InvalidArgument;
                     }
 
                     const context = self.context;
