@@ -76,6 +76,23 @@ fn performSearch(cmd: anytype) !void {
 
     const search = try bc.node_search_list.create(list.nodes.items);
 
+    // dispatch setChildNodesEvents to inform the client of the subpart of node
+    // tree covering the results.
+    for (list.nodes.items) |n| {
+        // retrieve the node's parent
+        if (try parser.nodeParentNode(n)) |p| {
+            // Register the parent and send the node.
+            const parent_node = try bc.node_registry.register(p);
+            const node = bc.node_registry.lookup_by_node.get(n) orelse unreachable;
+            // Should-we return one DOM.setChildNodes event per parentId
+            // containing all its children in the nodes array?
+            try cmd.sendEvent("DOM.setChildNodes", .{
+                .parentId = parent_node.id,
+                .nodes = .{bc.nodeWriter(node, .{})},
+            }, .{});
+        }
+    }
+
     return cmd.sendResult(.{
         .searchId = search.name,
         .resultCount = @as(u32, @intCast(search.node_ids.len)),
