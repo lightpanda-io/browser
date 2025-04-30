@@ -260,6 +260,19 @@ pub const Writer = struct {
             try w.write(parent_node.id);
         }
 
+        const _map = try parser.nodeGetAttributes(n);
+        if (_map) |map| {
+            const attr_count = try parser.namedNodeMapGetLength(map);
+            try w.objectField("attributes");
+            try w.beginArray();
+            for (0..attr_count) |i| {
+                const attr = try parser.namedNodeMapItem(map, @intCast(i)) orelse continue;
+                try w.write(try parser.attributeGetName(attr));
+                try w.write(try parser.attributeGetValue(attr) orelse continue);
+            }
+            try w.endArray();
+        }
+
         try w.objectField("nodeType");
         try w.write(@intFromEnum(try parser.nodeType(n)));
 
