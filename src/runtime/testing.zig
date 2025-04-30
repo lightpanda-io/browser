@@ -30,29 +30,32 @@ pub fn Runner(comptime State: type, comptime Global: type, comptime types: anyty
 
     return struct {
         env: *Env,
-        executor: *Env.Executor,
+        scope: *Env.Scope,
+        executor: Env.Executor,
 
         const Self = @This();
 
         pub fn init(state: State, global: Global) !*Self {
-            const runner = try allocator.create(Self);
-            errdefer allocator.destroy(runner);
+            const self = try allocator.create(Self);
+            errdefer allocator.destroy(self);
 
-            runner.env = try Env.init(allocator, .{});
-            errdefer runner.env.deinit();
+            self.env = try Env.init(allocator, .{});
+            errdefer self.env.deinit();
 
-            const G = if (Global == void) DefaultGlobal else Global;
+            self.executor = try self.env.newExecutor();
+            errdefer self.executor.deinit();
 
-            runner.executor = try runner.env.startExecutor(G, state, runner, .main);
-            errdefer runner.env.stopExecutor(runner.executor);
-
-            try runner.executor.startScope(if (Global == void) &default_global else global);
-            return runner;
+            self.scope = try self.executor.startScope(
+                if (Global == void) &default_global else global,
+                state,
+                {},
+                true,
+            );
+            return self;
         }
 
         pub fn deinit(self: *Self) void {
-            self.executor.endScope();
-            self.env.stopExecutor(self.executor);
+            self.executor.deinit();
             self.env.deinit();
             allocator.destroy(self);
         }
@@ -62,10 +65,10 @@ pub fn Runner(comptime State: type, comptime Global: type, comptime types: anyty
         pub fn testCases(self: *Self, cases: []const Case, _: RunOpts) !void {
             for (cases, 0..) |case, i| {
                 var try_catch: Env.TryCatch = undefined;
-                try_catch.init(self.executor);
+                try_catch.init(self.scope);
                 defer try_catch.deinit();
 
-                const value = self.executor.exec(case.@"0", null) catch |err| {
+                const value = self.scope.exec(case.@"0", null) catch |err| {
                     if (try try_catch.err(allocator)) |msg| {
                         defer allocator.free(msg);
                         if (isExpectedTypeError(case.@"1", msg)) {
@@ -83,12 +86,6 @@ pub fn Runner(comptime State: type, comptime Global: type, comptime types: anyty
                     return error.UnexpectedResult;
                 }
             }
-        }
-
-        pub fn fetchModuleSource(ctx: *anyopaque, specifier: []const u8) ![]const u8 {
-            _ = ctx;
-            _ = specifier;
-            return error.DummyModuleLoader;
         }
     };
 }

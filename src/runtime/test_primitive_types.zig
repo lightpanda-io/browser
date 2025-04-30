@@ -84,7 +84,6 @@ const Primitives = struct {
         return v;
     }
     pub fn _checkNonOptional(_: *const Primitives, v: u8) u8 {
-        std.debug.print("x: {d}\n", .{v});
         return v;
     }
     pub fn _checkOptionalReturn(_: *const Primitives) ?bool {

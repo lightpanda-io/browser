@@ -103,7 +103,7 @@ pub const MutationObserver = struct {
         }
     }
 
-    pub fn jsScopeEnd(self: *MutationObserver, _: anytype) void {
+    pub fn jsCallScopeEnd(self: *MutationObserver, _: anytype) void {
         const record = self.observed.items;
         if (record.len == 0) {
             return;

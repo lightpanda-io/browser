@@ -8,6 +8,8 @@ pub const URL = struct {
     uri: Uri,
     raw: []const u8,
 
+    pub const empty = URL{ .uri = .{ .scheme = "" }, .raw = "" };
+
     // We assume str will last as long as the URL
     // In some cases, this is safe to do, because we know the URL is short lived.
     // In most cases though, we assume the caller will just dupe the string URL

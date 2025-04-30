@@ -122,14 +122,21 @@ fn createTarget(cmd: anytype) !void {
 
     const target_id = cmd.cdp.target_id_gen.next();
 
-    // start the js env
-    const aux_data = try std.fmt.allocPrint(
-        cmd.arena,
-        // NOTE: we assume this is the default web page
-        "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}",
-        .{target_id},
-    );
-    _ = try bc.session.createPage(aux_data);
+    bc.target_id = target_id;
+
+    var page = try bc.session.createPage();
+    try bc.createIsolatedWorld(page);
+
+    {
+        const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
+        bc.inspector.contextCreated(
+            page.scope,
+            "",
+            try page.origin(cmd.arena),
+            aux_data,
+            true,
+        );
+    }
 
     // change CDP state
     bc.security_origin = "://";
@@ -153,8 +160,6 @@ fn createTarget(cmd: anytype) !void {
     if (cmd.cdp.target_auto_attach) {
         try doAttachtoTarget(cmd, target_id);
     }
-
-    bc.target_id = target_id;
 
     try cmd.sendResult(.{
         .targetId = target_id,
@@ -219,6 +224,10 @@ fn closeTarget(cmd: anytype) !void {
     }
 
     bc.session.removePage();
+    if (bc.isolated_world) |*world| {
+        world.deinit();
+        bc.isolated_world = null;
+    }
     bc.target_id = null;
 }
 
@@ -520,10 +529,6 @@ test "cdp.target: createTarget" {
     {
         try ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .browserContextId = "BID-9" } });
         try testing.expectEqual(true, bc.target_id != null);
-        try testing.expectEqual(
-            \\{"isDefault":true,"type":"default","frameId":"TID-1"}
-        , bc.session.aux_data);
-
         try ctx.expectSentResult(.{ .targetId = bc.target_id.? }, .{ .id = 10 });
         try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "about:blank", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = "BID-9", .targetId = bc.target_id.? } }, .{});
     }
@@ -545,7 +550,7 @@ test "cdp.target: closeTarget" {
     }
 
     // pretend we createdTarget first
-    _ = try bc.session.createPage(null);
+    _ = try bc.session.createPage();
     bc.target_id = "TID-A";
     {
         try testing.expectError(error.UnknownTargetId, ctx.processMessage(.{ .id = 10, .method = "Target.closeTarget", .params = .{ .targetId = "TID-8" } }));
@@ -576,7 +581,7 @@ test "cdp.target: attachToTarget" {
     }
 
     // pretend we createdTarget first
-    _ = try bc.session.createPage(null);
+    _ = try bc.session.createPage();
     bc.target_id = "TID-B";
     {
         try testing.expectError(error.UnknownTargetId, ctx.processMessage(.{ .id = 10, .method = "Target.attachToTarget", .params = .{ .targetId = "TID-8" } }));
@@ -620,7 +625,7 @@ test "cdp.target: getTargetInfo" {
     }
 
     // pretend we createdTarget first
-    _ = try bc.session.createPage(null);
+    _ = try bc.session.createPage();
     bc.target_id = "TID-A";
     {
         try testing.expectError(error.UnknownTargetId, ctx.processMessage(.{ .id = 10, .method = "Target.getTargetInfo", .params = .{ .targetId = "TID-8" } }));

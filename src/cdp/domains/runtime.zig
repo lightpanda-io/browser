@@ -44,10 +44,7 @@ fn sendInspector(cmd: anytype, action: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     // the result to return is handled directly by the inspector.
-    bc.session.callInspector(cmd.input.json);
-
-    // force running micro tasks after send input to the inspector.
-    cmd.cdp.browser.runMicrotasks();
+    bc.callInspector(cmd.input.json);
 }
 
 fn logInspector(cmd: anytype, action: anytype) !void {

@@ -48,6 +48,7 @@ pub const Element = struct {
 
     pub fn toInterface(e: *parser.Element) !Union {
         return try HTMLElem.toInterface(Union, e);
+        // SVGElement and MathML are not supported yet.
     }
 
     // JS funcs

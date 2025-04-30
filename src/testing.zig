@@ -381,7 +381,8 @@ pub const JsRunner = struct {
     arena: Allocator,
     renderer: Renderer,
     http_client: HttpClient,
-    executor: *Env.Executor,
+    scope: *Env.Scope,
+    executor: Env.Executor,
     storage_shelf: storage.Shelf,
     cookie_jar: storage.CookieJar,
 
@@ -394,55 +395,55 @@ pub const JsRunner = struct {
         errdefer aa.deinit();
 
         const arena = aa.allocator();
-        const runner = try arena.create(JsRunner);
-        runner.arena = arena;
+        const self = try arena.create(JsRunner);
+        self.arena = arena;
 
-        runner.env = try Env.init(arena, .{});
-        errdefer runner.env.deinit();
+        self.env = try Env.init(arena, .{});
+        errdefer self.env.deinit();
 
-        runner.url = try URL.parse("https://lightpanda.io/opensource-browser/", null);
+        self.url = try URL.parse("https://lightpanda.io/opensource-browser/", null);
 
-        runner.renderer = Renderer.init(arena);
-        runner.cookie_jar = storage.CookieJar.init(arena);
-        runner.loop = try Loop.init(arena);
-        errdefer runner.loop.deinit();
+        self.renderer = Renderer.init(arena);
+        self.cookie_jar = storage.CookieJar.init(arena);
+        self.loop = try Loop.init(arena);
+        errdefer self.loop.deinit();
 
         var html = std.io.fixedBufferStream(opts.html);
         const document = try parser.documentHTMLParse(html.reader(), "UTF-8");
 
-        runner.state = .{
+        self.state = .{
             .arena = arena,
-            .loop = &runner.loop,
+            .loop = &self.loop,
             .document = document,
-            .url = &runner.url,
-            .renderer = &runner.renderer,
-            .cookie_jar = &runner.cookie_jar,
-            .http_client = &runner.http_client,
+            .url = &self.url,
+            .renderer = &self.renderer,
+            .cookie_jar = &self.cookie_jar,
+            .http_client = &self.http_client,
         };
 
-        runner.window = .{};
-        try runner.window.replaceDocument(document);
-        try runner.window.replaceLocation(.{
-            .url = try runner.url.toWebApi(arena),
+        self.window = .{};
+        try self.window.replaceDocument(document);
+        try self.window.replaceLocation(.{
+            .url = try self.url.toWebApi(arena),
         });
 
-        runner.storage_shelf = storage.Shelf.init(arena);
-        runner.window.setStorageShelf(&runner.storage_shelf);
+        self.storage_shelf = storage.Shelf.init(arena);
+        self.window.setStorageShelf(&self.storage_shelf);
 
-        runner.http_client = try HttpClient.init(arena, 1, .{
+        self.http_client = try HttpClient.init(arena, 1, .{
             .tls_verify_host = false,
         });
 
-        runner.executor = try runner.env.startExecutor(Window, &runner.state, runner, .main);
-        errdefer runner.env.stopExecutor(runner.executor);
+        self.executor = try self.env.newExecutor();
+        errdefer self.executor.deinit();
 
-        try runner.executor.startScope(&runner.window);
-        return runner;
+        self.scope = try self.executor.startScope(&self.window, &self.state, {}, true);
+        return self;
     }
 
     pub fn deinit(self: *JsRunner) void {
         self.loop.deinit();
-        self.executor.endScope();
+        self.executor.deinit();
         self.env.deinit();
         self.http_client.deinit();
         self.storage_shelf.deinit();
@@ -459,10 +460,10 @@ pub const JsRunner = struct {
 
         for (cases, 0..) |case, i| {
             var try_catch: Env.TryCatch = undefined;
-            try_catch.init(self.executor);
+            try_catch.init(self.scope);
             defer try_catch.deinit();
 
-            const value = self.executor.exec(case.@"0", null) catch |err| {
+            const value = self.scope.exec(case.@"0", null) catch |err| {
                 if (try try_catch.err(self.arena)) |msg| {
                     std.debug.print("{s}\n\nCase: {d}\n{s}\n", .{ msg, i + 1, case.@"0" });
                 }
@@ -485,22 +486,16 @@ pub const JsRunner = struct {
 
     pub fn eval(self: *JsRunner, src: []const u8, name: ?[]const u8, err_msg: *?[]const u8) !Env.Value {
         var try_catch: Env.TryCatch = undefined;
-        try_catch.init(self.executor);
+        try_catch.init(self.scope);
         defer try_catch.deinit();
 
-        return self.executor.exec(src, name) catch |err| {
+        return self.scope.exec(src, name) catch |err| {
             if (try try_catch.err(self.arena)) |msg| {
                 err_msg.* = msg;
                 std.debug.print("Error running script: {s}\n", .{msg});
             }
             return err;
         };
-    }
-
-    pub fn fetchModuleSource(ctx: *anyopaque, specifier: []const u8) ![]const u8 {
-        _ = ctx;
-        _ = specifier;
-        return error.DummyModuleLoader;
     }
 };
 

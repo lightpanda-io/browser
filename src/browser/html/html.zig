@@ -18,6 +18,7 @@
 
 const HTMLDocument = @import("document.zig").HTMLDocument;
 const HTMLElem = @import("elements.zig");
+const SVGElem = @import("svg_elements.zig");
 const Window = @import("window.zig").Window;
 const Navigator = @import("navigator.zig").Navigator;
 const History = @import("history.zig").History;
@@ -28,6 +29,7 @@ pub const Interfaces = .{
     HTMLElem.HTMLElement,
     HTMLElem.HTMLMediaElement,
     HTMLElem.Interfaces,
+    SVGElem.SVGElement,
     Window,
     Navigator,
     History,
