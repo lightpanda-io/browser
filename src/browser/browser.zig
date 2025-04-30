@@ -272,7 +272,7 @@ pub const Page = struct {
                 .cookie_jar = &session.cookie_jar,
                 .http_client = browser.http_client,
             },
-            .scope = try session.executor.startScope(&self.window, &self.state, self),
+            .scope = try session.executor.startScope(&self.window, &self.state, self, true),
         };
 
         // load polyfills

@@ -25,6 +25,7 @@ const Env = @import("../browser/env.zig").Env;
 const asUint = @import("../str/parser.zig").asUint;
 const Browser = @import("../browser/browser.zig").Browser;
 const Session = @import("../browser/browser.zig").Session;
+const Page = @import("../browser/browser.zig").Page;
 const Inspector = @import("../browser/env.zig").Env.Inspector;
 const Incrementing = @import("../id.zig").Incrementing;
 const Notification = @import("../notification.zig").Notification;
@@ -359,7 +360,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             self.node_search_list.reset();
         }
 
-        pub fn createIsolatedWorld(self: *Self) !void {
+        pub fn createIsolatedWorld(self: *Self, page: *Page) !void {
             if (self.isolated_world != null) {
                 return error.CurrentlyOnly1IsolatedWorldSupported;
             }
@@ -369,15 +370,18 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
             self.isolated_world = .{
                 .name = "",
-                .global = .{},
                 .scope = undefined,
                 .executor = executor,
-                .grant_universal_access = false,
+                .grant_universal_access = true,
             };
             var world = &self.isolated_world.?;
 
-            // TODO: can we do something better than passing `undefined` for the state?
-            world.scope = try world.executor.startScope(&world.global, undefined, {});
+            // The isolate world must share at least some of the state with the related page, specifically the DocumentHTML
+            // (assuming grantUniveralAccess will be set to True!).
+            // We just created the world and the page. The page's state lives in the session, but is update on navigation.
+            // This also means this pointer becomes invalid after removePage untill a new page is created.
+            // Currently we have only 1 page/frame and thus also only 1 state in the isolate world.
+            world.scope = try world.executor.startScope(&page.window, &page.state, {}, false);
         }
 
         pub fn nodeWriter(self: *Self, node: *const Node, opts: Node.Writer.Opts) Node.Writer {
@@ -499,7 +503,6 @@ const IsolatedWorld = struct {
     scope: *Env.Scope,
     executor: Env.Executor,
     grant_universal_access: bool,
-    global: @import("../browser/html/window.zig").Window,
 
     pub fn deinit(self: *IsolatedWorld) void {
         self.executor.deinit();
