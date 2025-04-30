@@ -345,8 +345,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 const isolate = env.isolate;
                 const Global = @TypeOf(global.*);
 
-                var context: v8.Context = undefined;
-                {
+                var context: v8.Context = blk: {
                     var handle_scope: v8.HandleScope = undefined;
                     v8.HandleScope.init(&handle_scope, isolate);
                     defer handle_scope.deinit();
@@ -379,7 +378,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                     }
 
                     const context_local = v8.Context.init(isolate, global_template, null);
-                    context = v8.Persistent(v8.Context).init(isolate, context_local).castToContext();
+                    const context = v8.Persistent(v8.Context).init(isolate, context_local).castToContext();
                     context.enter();
                     errdefer if (enter) context.exit();
                     defer if (!enter) context.exit();
@@ -404,8 +403,12 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                             _ = self_obj.setPrototype(context, proto_obj);
                         }
                     }
-                }
+                    break :blk context;
+                };
 
+                // For a Page we only create one HandleScope, it is stored in the main World (enter==true). A page can have multple contexts, 1 for each World.
+                // The main Context/Scope that enters and holds the HandleScope should therefore always be created first. Following other worlds for this page
+                // like isolated Worlds, will thereby place their objects on the main page's HandleScope. Note: In the furure the number of context will multiply multiple frames support
                 var handle_scope: ?v8.HandleScope = null;
                 if (enter) {
                     handle_scope = @as(v8.HandleScope, undefined);
