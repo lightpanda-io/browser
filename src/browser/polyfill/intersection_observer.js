@@ -50,15 +50,15 @@
   /**
    * A local reference to the root document.
    */
-  var document = (function(startDoc) {
-    var doc = startDoc;
-    var frame = getFrameElement(doc);
-    while (frame) {
-      doc = frame.ownerDocument;
-      frame = getFrameElement(doc);
-    }
-    return doc;
-  })(window.document);
+  // var document = (function(startDoc) {
+  //   var doc = startDoc;
+  //   var frame = getFrameElement(doc);
+  //   while (frame) {
+  //     doc = frame.ownerDocument;
+  //     frame = getFrameElement(doc);
+  //   }
+  //   return doc;
+  // })(window.document);
   
   /**
    * An IntersectionObserver registry. This registry exists to hold a strong
@@ -631,10 +631,6 @@
    * @private
    */
   IntersectionObserver.prototype._getRootRect = function() {
-    console.log('window.document: '+ window.document);
-    console.log('document: '+ document);
-    console.log('window.self: '+ window.self);
-    console.log('window: '+ window);
     var rootRect;
     if (this.root && !isDoc(this.root)) {
       rootRect = getBoundingClientRect(this.root);

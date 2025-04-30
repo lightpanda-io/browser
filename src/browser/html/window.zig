@@ -115,6 +115,11 @@ pub const Window = struct {
         return &self.storage_shelf.?.bucket.session;
     }
 
+    const Env = @import("../env.zig");
+    pub fn _getComputedStyle(_: *Window, _: *parser.Element) Env.CSSStyleDeclaration {
+        return .{};
+    }
+
     // TODO handle callback arguments.
     pub fn _setTimeout(self: *Window, cbk: Callback, delay: ?u32, state: *SessionState) !u32 {
         if (self.timeoutid >= self.timeoutids.len) return error.TooMuchTimeout;

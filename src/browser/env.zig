@@ -19,7 +19,14 @@ const Interfaces = generate.Tuple(.{
     @import("url/url.zig").Interfaces,
     @import("xhr/xhr.zig").Interfaces,
     @import("xmlserializer/xmlserializer.zig").Interfaces,
+    CSSStyleDeclaration,
 });
+
+pub const CSSStyleDeclaration = struct {
+    pub fn get_display(_: *CSSStyleDeclaration) []const u8 {
+        return "anythingbutnotnone";
+    }
+};
 
 pub const JsThis = Env.JsThis;
 pub const JsObject = Env.JsObject;
