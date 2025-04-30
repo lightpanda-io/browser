@@ -218,7 +218,7 @@ pub const Writer = struct {
 
     fn toJSON(self: *const Writer, w: anytype) !void {
         try w.beginObject();
-        try writeCommon(self.node, false, w);
+        try self.writeCommon(self.node, false, w);
 
         {
             var registry = self.registry;
@@ -232,7 +232,7 @@ pub const Writer = struct {
                 const child = (try parser.nodeListItem(child_nodes, @intCast(i))) orelse break;
                 const child_node = try registry.register(child);
                 try w.beginObject();
-                try writeCommon(child_node, true, w);
+                try self.writeCommon(child_node, true, w);
                 try w.endObject();
                 i += 1;
             }
@@ -245,7 +245,7 @@ pub const Writer = struct {
         try w.endObject();
     }
 
-    fn writeCommon(node: *const Node, include_child_count: bool, w: anytype) !void {
+    fn writeCommon(self: *const Writer, node: *const Node, include_child_count: bool, w: anytype) !void {
         try w.objectField("nodeId");
         try w.write(node.id);
 
@@ -254,9 +254,11 @@ pub const Writer = struct {
 
         const n = node._node;
 
-        // TODO:
-        // try w.objectField("parentId");
-        // try w.write(pid);
+        if (try parser.nodeParentNode(n)) |p| {
+            const parent_node = try self.registry.register(p);
+            try w.objectField("parentId");
+            try w.write(parent_node.id);
+        }
 
         try w.objectField("nodeType");
         try w.write(@intFromEnum(try parser.nodeType(n)));
@@ -461,6 +463,7 @@ test "cdp Node: Writer" {
                 .xmlVersion = "",
                 .compatibilityMode = "NoQuirksMode",
                 .isScrollable = false,
+                .parentId = 1,
             }, .{
                 .nodeId = 3,
                 .backendNodeId = 3,
@@ -474,6 +477,7 @@ test "cdp Node: Writer" {
                 .xmlVersion = "",
                 .compatibilityMode = "NoQuirksMode",
                 .isScrollable = false,
+                .parentId = 1,
             } },
         }, json);
     }
