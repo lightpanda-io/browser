@@ -382,6 +382,9 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             // This also means this pointer becomes invalid after removePage untill a new page is created.
             // Currently we have only 1 page/frame and thus also only 1 state in the isolate world.
             world.scope = try world.executor.startScope(&page.window, &page.state, {}, false);
+
+            const polyfill = @import("../browser/polyfill/polyfill.zig");
+            try polyfill.load(self.arena, world.scope);
         }
 
         pub fn nodeWriter(self: *Self, node: *const Node, opts: Node.Writer.Opts) Node.Writer {

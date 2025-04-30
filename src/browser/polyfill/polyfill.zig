@@ -29,6 +29,7 @@ const modules = [_]struct {
     source: []const u8,
 }{
     .{ .name = "polyfill-fetch", .source = @import("fetch.zig").source },
+    .{ .name = "polyfill-intersection-observer", .source = @import("intersection_observer.zig").source },
 };
 
 pub fn load(allocator: Allocator, scope: *Env.Scope) !void {
