@@ -519,6 +519,7 @@ pub fn eventSetInternalType(evt: *Event, internal_type: EventType) !void {
 pub const EventType = enum(u8) {
     event = 0,
     progress_event = 1,
+    custom_event = 2,
 };
 
 pub const MutationEvent = c.dom_mutation_event;
