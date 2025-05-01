@@ -313,7 +313,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         fn init(self: *Self, id: []const u8, cdp: *CDP_T) !void {
             const allocator = cdp.allocator;
 
-            const session = try cdp.browser.newSession(self);
+            const session = try cdp.browser.newSession();
             const arena = session.arena.allocator();
 
             const inspector = try cdp.browser.env.newInspector(arena, self);
@@ -338,6 +338,10 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .inspector = inspector,
             };
             self.node_search_list = Node.Search.List.init(allocator, &self.node_registry);
+            errdefer self.deinit();
+
+            try cdp.browser.notification.register(.page_navigate, self, onPageNavigate);
+            try cdp.browser.notification.register(.page_navigated, self, onPageNavigated);
         }
 
         pub fn deinit(self: *Self) void {
@@ -353,6 +357,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             }
             self.node_registry.deinit();
             self.node_search_list.deinit();
+            self.cdp.browser.notification.unregisterAll(self);
         }
 
         pub fn reset(self: *Self) void {
@@ -398,13 +403,14 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             return if (raw_url.len == 0) null else raw_url;
         }
 
-        pub fn notify(ctx: *anyopaque, notification: *const Notification) !void {
+        pub fn onPageNavigate(ctx: *anyopaque, data: *const Notification.PageNavigate) !void {
             const self: *Self = @alignCast(@ptrCast(ctx));
+            return @import("domains/page.zig").pageNavigate(self, data);
+        }
 
-            switch (notification.*) {
-                .page_navigate => |*pn| return @import("domains/page.zig").pageNavigate(self, pn),
-                .page_navigated => |*pn| return @import("domains/page.zig").pageNavigated(self, pn),
-            }
+        pub fn onPageNavigated(ctx: *anyopaque, data: *const Notification.PageNavigated) !void {
+            const self: *Self = @alignCast(@ptrCast(ctx));
+            return @import("domains/page.zig").pageNavigated(self, data);
         }
 
         pub fn callInspector(self: *const Self, msg: []const u8) void {

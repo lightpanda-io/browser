@@ -5,6 +5,7 @@ const js = @import("runtime/js.zig");
 const Loop = @import("runtime/loop.zig").Loop;
 const HttpClient = @import("http/client.zig").Client;
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
+const Notification = @import("notification.zig").Notification;
 
 const log = std.log.scoped(.app);
 
@@ -17,6 +18,7 @@ pub const App = struct {
     telemetry: Telemetry,
     http_client: HttpClient,
     app_dir_path: ?[]const u8,
+    notification: *Notification,
 
     pub const RunMode = enum {
         help,
@@ -41,6 +43,9 @@ pub const App = struct {
         loop.* = try Loop.init(allocator);
         errdefer loop.deinit();
 
+        const notification = try Notification.init(allocator, null);
+        errdefer notification.deinit();
+
         const app_dir_path = getAndMakeAppDir(allocator);
 
         app.* = .{
@@ -48,12 +53,14 @@ pub const App = struct {
             .allocator = allocator,
             .telemetry = undefined,
             .app_dir_path = app_dir_path,
+            .notification = notification,
             .http_client = try HttpClient.init(allocator, 5, .{
                 .tls_verify_host = config.tls_verify_host,
             }),
             .config = config,
         };
         app.telemetry = Telemetry.init(app, config.run_mode);
+        try app.telemetry.register(app.notification);
 
         return app;
     }
@@ -67,6 +74,7 @@ pub const App = struct {
         self.loop.deinit();
         allocator.destroy(self.loop);
         self.http_client.deinit();
+        self.notification.deinit();
         allocator.destroy(self);
     }
 };
