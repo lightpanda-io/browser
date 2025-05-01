@@ -27,6 +27,7 @@ const DOMException = @import("../dom/exceptions.zig").DOMException;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const EventTargetUnion = @import("../dom/event_target.zig").Union;
 
+const CustomEvent = @import("custom_event.zig").CustomEvent;
 const ProgressEvent = @import("../xhr/progress_event.zig").ProgressEvent;
 
 const log = std.log.scoped(.events);
@@ -34,6 +35,7 @@ const log = std.log.scoped(.events);
 // Event interfaces
 pub const Interfaces = .{
     Event,
+    CustomEvent,
     ProgressEvent,
 };
 
@@ -56,13 +58,14 @@ pub const Event = struct {
     pub fn toInterface(evt: *parser.Event) !Union {
         return switch (try parser.eventGetInternalType(evt)) {
             .event => .{ .Event = evt },
+            .custom_event => .{ .CustomEvent = @as(*CustomEvent, @ptrCast(evt)).* },
             .progress_event => .{ .ProgressEvent = @as(*ProgressEvent, @ptrCast(evt)).* },
         };
     }
 
-    pub fn constructor(eventType: []const u8, opts: ?EventInit) !*parser.Event {
+    pub fn constructor(event_type: []const u8, opts: ?EventInit) !*parser.Event {
         const event = try parser.eventCreate();
-        try parser.eventInit(event, eventType, opts orelse EventInit{});
+        try parser.eventInit(event, event_type, opts orelse EventInit{});
         return event;
     }
 

@@ -516,7 +516,16 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             // every PeristentObjet we've created during the lifetime of the scope.
             // More importantly, it serves as an identity map - for a given Zig
             // instance, we map it to the same PersistentObject.
+            // The key is the @intFromPtr of the Zig value
             identity_map: std.AutoHashMapUnmanaged(usize, PersistentObject) = .{},
+
+            // Similar to the identity map, but used much less frequently. Some
+            // web APIs have to manage opaque values. Ideally, they use an
+            // JsObject, but the JsObject has no lifetime guarantee beyond the
+            // current call. They can call .persist() on their JsObject to get
+            // a `*PersistentObject()`. We need to track these to free them.
+            // The key is the @intFromPtr of the v8.Object.handle.
+            js_object_map: std.AutoHashMapUnmanaged(usize, PersistentObject) = .{},
 
             // When we need to load a resource (i.e. an external script), we call
             // this function to get the source. This is always a reference to the
@@ -535,10 +544,20 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             // no init, started with executor.startScope()
 
             fn deinit(self: *Scope) void {
-                var it = self.identity_map.valueIterator();
-                while (it.next()) |p| {
-                    p.deinit();
+                {
+                    var it = self.identity_map.valueIterator();
+                    while (it.next()) |p| {
+                        p.deinit();
+                    }
                 }
+
+                {
+                    var it = self.js_object_map.valueIterator();
+                    while (it.next()) |p| {
+                        p.deinit();
+                    }
+                }
+
                 for (self.callbacks.items) |*cb| {
                     cb.deinit();
                 }
@@ -871,13 +890,13 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             scope: *Scope,
             js_obj: v8.Object,
 
-            // If a Zig struct wants the Object parameter, it'll declare a
+            // If a Zig struct wants the JsObject parameter, it'll declare a
             // function like:
-            //    fn _length(self: *const NodeList, js_obj: Env.Object) usize
+            //    fn _length(self: *const NodeList, js_obj: Env.JsObject) usize
             //
             // When we're trying to call this function, we can't just do
-            //    if (params[i].type.? == Object)
-            // Because there is _no_ object, there's only an Env.Object, where
+            //    if (params[i].type.? == JsObject)
+            // Because there is _no_ JsObject, there's only an Env.JsObject, where
             // Env is a generic.
             // We could probably figure out a way to do this, but simply checking
             // for this declaration is _a lot_ easier.
@@ -914,6 +933,22 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
 
             pub fn format(self: JsObject, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
                 return writer.writeAll(try self.toString());
+            }
+
+            pub fn persist(self: JsObject) !JsObject {
+                var scope = self.scope;
+                const js_obj = self.js_obj;
+                const handle = js_obj.handle;
+
+                const gop = try scope.js_object_map.getOrPut(scope.scope_arena, @intFromPtr(handle));
+                if (gop.found_existing == false) {
+                    gop.value_ptr.* = PersistentObject.init(scope.isolate, js_obj);
+                }
+
+                return .{
+                    .scope = scope,
+                    .js_obj = gop.value_ptr.castToObject(),
+                };
             }
         };
 
@@ -1448,6 +1483,11 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                         return value.func.toValue();
                     }
 
+                    if (T == JsObject) {
+                        // we're returning a v8.Object
+                        return value.js_obj.toValue();
+                    }
+
                     if (s.is_tuple) {
                         // return the tuple struct as an array
                         var js_arr = v8.Array.init(isolate, @intCast(s.fields.len));
@@ -1495,7 +1535,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 .error_union => return zigValueToJs(templates, isolate, context, value catch |err| return err),
                 else => {},
             }
-            @compileLog(@typeInfo(T));
+
             @compileError("A function returns an unsupported type: " ++ @typeName(T));
         }
         // Reverses the mapZigInstanceToJs, making sure that our TaggedAnyOpaque
