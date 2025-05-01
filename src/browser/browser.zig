@@ -229,6 +229,8 @@ pub const Page = struct {
 
     renderer: FlatRenderer,
 
+    window_clicked_event_node: parser.EventNode,
+
     scope: *Env.Scope,
 
     // current_script is the script currently evaluated by the page.
@@ -245,6 +247,7 @@ pub const Page = struct {
             .url = URL.empty,
             .session = session,
             .renderer = FlatRenderer.init(arena),
+             .window_clicked_event_node = .{ .func = windowClicked },
             .state = .{
                 .arena = arena,
                 .document = null,
@@ -400,12 +403,10 @@ pub const Page = struct {
         self.doc = doc;
 
         const document_element = (try parser.documentGetDocumentElement(doc)) orelse return error.DocumentElementError;
-        try parser.eventTargetAddZigListener(
+        try parser.eventTargetAddEventListener(
             parser.toEventTarget(parser.Element, document_element),
-            arena,
             "click",
-            windowClicked,
-            self,
+            &self.window_clicked_event_node,
             false,
         );
 
@@ -675,8 +676,8 @@ pub const Page = struct {
         _ = try parser.elementDispatchEvent(element, @ptrCast(event));
     }
 
-    fn windowClicked(ctx: *anyopaque, event: *parser.Event) void {
-        const self: *Page = @alignCast(@ptrCast(ctx));
+    fn windowClicked(node: *parser.EventNode, event: *parser.Event) void {
+        const self: *Page = @fieldParentPtr("window_clicked_event_node", node);
         self._windowClicked(event) catch |err| {
             log.err("window click handler: {}", .{err});
         };

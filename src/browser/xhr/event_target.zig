@@ -48,25 +48,25 @@ pub const XMLHttpRequestEventTarget = struct {
         typ: []const u8,
         cbk: Callback,
     ) !void {
+        const target = @as(*parser.EventTarget, @ptrCast(self));
+        const eh = try EventHandler.init(alloc, try cbk.withThis(target));
         try parser.eventTargetAddEventListener(
-            @as(*parser.EventTarget, @ptrCast(self)),
-            alloc,
+            target,
             typ,
-            EventHandler,
-            .{ .cbk = cbk },
+            &eh.node,
             false,
         );
     }
-    fn unregister(self: *XMLHttpRequestEventTarget, alloc: std.mem.Allocator, typ: []const u8, cbk: Callback) !void {
+    fn unregister(self: *XMLHttpRequestEventTarget, typ: []const u8, cbk_id: usize) !void {
         const et = @as(*parser.EventTarget, @ptrCast(self));
         // check if event target has already this listener
-        const lst = try parser.eventTargetHasListener(et, typ, false, cbk.id);
+        const lst = try parser.eventTargetHasListener(et, typ, false, cbk_id);
         if (lst == null) {
             return;
         }
 
         // remove listener
-        try parser.eventTargetRemoveEventListener(et, alloc, typ, lst.?, false);
+        try parser.eventTargetRemoveEventListener(et, typ, lst.?, false);
     }
 
     pub fn get_onloadstart(self: *XMLHttpRequestEventTarget) ?Callback {
@@ -89,39 +89,33 @@ pub const XMLHttpRequestEventTarget = struct {
     }
 
     pub fn set_onloadstart(self: *XMLHttpRequestEventTarget, handler: Callback, state: *SessionState) !void {
-        const arena = state.arena;
-        if (self.onloadstart_cbk) |cbk| try self.unregister(arena, "loadstart", cbk);
-        try self.register(arena, "loadstart", handler);
+        if (self.onloadstart_cbk) |cbk| try self.unregister("loadstart", cbk.id);
+        try self.register(state.arena, "loadstart", handler);
         self.onloadstart_cbk = handler;
     }
     pub fn set_onprogress(self: *XMLHttpRequestEventTarget, handler: Callback, state: *SessionState) !void {
-        const arena = state.arena;
-        if (self.onprogress_cbk) |cbk| try self.unregister(arena, "progress", cbk);
-        try self.register(arena, "progress", handler);
+        if (self.onprogress_cbk) |cbk| try self.unregister("progress", cbk.id);
+        try self.register(state.arena, "progress", handler);
         self.onprogress_cbk = handler;
     }
     pub fn set_onabort(self: *XMLHttpRequestEventTarget, handler: Callback, state: *SessionState) !void {
-        const arena = state.arena;
-        if (self.onabort_cbk) |cbk| try self.unregister(arena, "abort", cbk);
-        try self.register(arena, "abort", handler);
+        if (self.onabort_cbk) |cbk| try self.unregister("abort", cbk.id);
+        try self.register(state.arena, "abort", handler);
         self.onabort_cbk = handler;
     }
     pub fn set_onload(self: *XMLHttpRequestEventTarget, handler: Callback, state: *SessionState) !void {
-        const arena = state.arena;
-        if (self.onload_cbk) |cbk| try self.unregister(arena, "load", cbk);
-        try self.register(arena, "load", handler);
+        if (self.onload_cbk) |cbk| try self.unregister("load", cbk.id);
+        try self.register(state.arena, "load", handler);
         self.onload_cbk = handler;
     }
     pub fn set_ontimeout(self: *XMLHttpRequestEventTarget, handler: Callback, state: *SessionState) !void {
-        const arena = state.arena;
-        if (self.ontimeout_cbk) |cbk| try self.unregister(arena, "timeout", cbk);
-        try self.register(arena, "timeout", handler);
+        if (self.ontimeout_cbk) |cbk| try self.unregister("timeout", cbk.id);
+        try self.register(state.arena, "timeout", handler);
         self.ontimeout_cbk = handler;
     }
     pub fn set_onloadend(self: *XMLHttpRequestEventTarget, handler: Callback, state: *SessionState) !void {
-        const arena = state.arena;
-        if (self.onloadend_cbk) |cbk| try self.unregister(arena, "loadend", cbk);
-        try self.register(arena, "loadend", handler);
+        if (self.onloadend_cbk) |cbk| try self.unregister("loadend", cbk.id);
+        try self.register(state.arena, "loadend", handler);
         self.onloadend_cbk = handler;
     }
 

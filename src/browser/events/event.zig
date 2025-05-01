@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 const parser = @import("../netsurf.zig");
 const Callback = @import("../env.zig").Callback;
@@ -136,14 +137,35 @@ pub const Event = struct {
 };
 
 pub const EventHandler = struct {
-    fn handle(event: ?*parser.Event, data: *const parser.JSEventHandlerData) void {
+    callback: Callback,
+    node: parser.EventNode,
+
+    pub fn init(allocator: Allocator, callback: Callback) !*EventHandler {
+        const eh = try allocator.create(EventHandler);
+        eh.* = .{
+            .callback = callback,
+            .node = .{
+                .id = callback.id,
+                .func = handle,
+            },
+        };
+        return eh;
+    }
+
+    fn handle(node: *parser.EventNode, event: *parser.Event) void {
+        const ievent = Event.toInterface(event) catch |err| {
+            log.err("Event.toInterface: {}", .{err});
+            return;
+        };
+
+        const self: *EventHandler = @fieldParentPtr("node", node);
         var result: Callback.Result = undefined;
-        data.cbk.tryCall(.{if (event) |evt| Event.toInterface(evt) catch unreachable else null}, &result) catch {
+        self.callback.tryCall(.{ievent}, &result) catch {
             log.err("event handler error: {s}", .{result.exception});
             log.debug("stack:\n{s}", .{result.stack orelse "???"});
         };
     }
-}.handle;
+};
 
 const testing = @import("../../testing.zig");
 test "Browser.Event" {

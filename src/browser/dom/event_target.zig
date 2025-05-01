@@ -46,7 +46,7 @@ pub const EventTarget = struct {
 
     pub fn _addEventListener(
         self: *parser.EventTarget,
-        eventType: []const u8,
+        typ: []const u8,
         cbk: Env.Callback,
         capture: ?bool,
         state: *SessionState,
@@ -56,7 +56,7 @@ pub const EventTarget = struct {
         // check if event target has already this listener
         const lst = try parser.eventTargetHasListener(
             self,
-            eventType,
+            typ,
             capture orelse false,
             cbk.id,
         );
@@ -64,29 +64,28 @@ pub const EventTarget = struct {
             return;
         }
 
+        const eh = try EventHandler.init(state.arena, try cbk.withThis(self));
+
         try parser.eventTargetAddEventListener(
             self,
-            state.arena,
-            eventType,
-            EventHandler,
-            .{ .cbk = cbk },
+            typ,
+            &eh.node,
             capture orelse false,
         );
     }
 
     pub fn _removeEventListener(
         self: *parser.EventTarget,
-        eventType: []const u8,
+        typ: []const u8,
         cbk: Env.Callback,
         capture: ?bool,
-        state: *SessionState,
         // TODO: hanle EventListenerOptions
         // see #https://github.com/lightpanda-io/jsruntime-lib/issues/114
     ) !void {
         // check if event target has already this listener
         const lst = try parser.eventTargetHasListener(
             self,
-            eventType,
+            typ,
             capture orelse false,
             cbk.id,
         );
@@ -97,8 +96,7 @@ pub const EventTarget = struct {
         // remove listener
         try parser.eventTargetRemoveEventListener(
             self,
-            state.arena,
-            eventType,
+            typ,
             lst.?,
             capture orelse false,
         );

@@ -766,7 +766,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         pub const Callback = struct {
             id: usize,
             scope: *Scope,
-            _this: ?v8.Object = null,
+            this: ?v8.Object = null,
             func: PersistentFunction,
 
             // We use this when mapping a JS value to a Zig object. We can't
@@ -781,8 +781,13 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 exception: []const u8,
             };
 
-            pub fn setThis(self: *Callback, value: anytype) !void {
-                self._this = try self.scope.valueToExistingObject(value);
+            pub fn withThis(self: *const Callback, value: anytype) !Callback {
+                return .{
+                    .id = self.id,
+                    .func = self.func,
+                    .scope = self.scope,
+                    .this = try self.scope.valueToExistingObject(value),
+                };
             }
 
             pub fn call(self: *const Callback, args: anytype) !void {
@@ -830,7 +835,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             }
 
             fn getThis(self: *const Callback) v8.Object {
-                return self._this orelse self.scope.context.getGlobal();
+                return self.this orelse self.scope.context.getGlobal();
             }
 
             // debug/helper to print the source of the JS callback
