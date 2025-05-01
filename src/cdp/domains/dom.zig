@@ -78,27 +78,84 @@ fn performSearch(cmd: anytype) !void {
 
     // dispatch setChildNodesEvents to inform the client of the subpart of node
     // tree covering the results.
-    for (list.nodes.items) |n| {
-        // retrieve the node's parent
-        if (try parser.nodeParentNode(n)) |p| {
-            // Register the parent and send the node.
-            const parent_node = try bc.node_registry.register(p);
-            const node = bc.node_registry.lookup_by_node.get(n) orelse unreachable;
-            // Should-we return one DOM.setChildNodes event per parentId
-            // containing all its children in the nodes array?
-            try cmd.sendEvent("DOM.setChildNodes", .{
-                .parentId = parent_node.id,
-                .nodes = .{bc.nodeWriter(node, .{})},
-            }, .{
-                .session_id = bc.session_id.?,
-            });
-        }
-    }
+    try dispatchSetChildNodes(cmd, list.nodes.items);
 
     return cmd.sendResult(.{
         .searchId = search.name,
         .resultCount = @as(u32, @intCast(search.node_ids.len)),
     }, .{});
+}
+
+// dispatchSetChildNodes send the setChildNodes event for the whole DOM tree
+// hierarchy of each nodes.
+// If a parent has already been registred, we don't re-send a setChildNodes
+// event anymore.
+// We dispatch event in the reverse order: from the top level to the direct parents.
+fn dispatchSetChildNodes(cmd: anytype, nodes: []*parser.Node) !void {
+    const arena = cmd.arena;
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    var parents: std.ArrayListUnmanaged(*parser.Node) = .{};
+    for (nodes) |_n| {
+        var n = _n;
+        while (true) {
+            const p = try parser.nodeParentNode(n) orelse break;
+            // If the parent exists in he registry, don't send the event.
+            // In this case we stop browsing the tree, b/c parents must have
+            // been sent already.
+            if (bc.node_registry.lookup_by_node.contains(p)) {
+                break;
+            }
+            try parents.append(arena, p);
+
+            n = p;
+        }
+    }
+
+    const plen = parents.items.len;
+    if (plen == 0) return;
+
+    var i: usize = plen;
+    while (i > 0) {
+        i -= 1;
+        const n = parents.items[i];
+        // If the parent exists in he registry, don't send the event.
+        // Indeed the parent can be twice in the array.
+        if (bc.node_registry.lookup_by_node.contains(n)) {
+            continue;
+        }
+
+        // If the node has no parent, it's the root node.
+        // We don't dispatch event for it because we assume the root node is
+        // dispatched via the DOM.getDocument command.
+        const p = try parser.nodeParentNode(n) orelse break;
+        // Register the node.
+        const node = try bc.node_registry.register(n);
+        // Retrieve the parent from the registry.
+        const parent_node = bc.node_registry.lookup_by_node.get(p) orelse unreachable;
+
+        try cmd.sendEvent("DOM.setChildNodes", .{
+            .parentId = parent_node.id,
+            .nodes = .{bc.nodeWriter(node, .{})},
+        }, .{
+            .session_id = bc.session_id.?,
+        });
+    }
+
+    // now dispatch the event for the node list.
+    for (nodes) |n| {
+        const node = bc.node_registry.lookup_by_node.get(n) orelse unreachable;
+        const p = try parser.nodeParentNode(n) orelse continue;
+        // Retrieve the parent from the registry.
+        const parent_node = bc.node_registry.lookup_by_node.get(p) orelse unreachable;
+
+        try cmd.sendEvent("DOM.setChildNodes", .{
+            .parentId = parent_node.id,
+            .nodes = .{bc.nodeWriter(node, .{})},
+        }, .{
+            .session_id = bc.session_id.?,
+        });
+    }
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-discardSearchResults
