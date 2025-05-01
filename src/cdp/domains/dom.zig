@@ -89,7 +89,9 @@ fn performSearch(cmd: anytype) !void {
             try cmd.sendEvent("DOM.setChildNodes", .{
                 .parentId = parent_node.id,
                 .nodes = .{bc.nodeWriter(node, .{})},
-            }, .{});
+            }, .{
+                .session_id = bc.session_id.?,
+            });
         }
     }
 
