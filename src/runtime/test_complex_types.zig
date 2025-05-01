@@ -163,6 +163,30 @@ const MyTypeWithException = struct {
     }
 };
 
+const MyUnionType = struct {
+    pub const Choices = union(enum) {
+        color: []const u8,
+        number: usize,
+        boolean: bool,
+        obj1: *MyList,
+        obj2: MyUnionType,
+    };
+
+    pub fn constructor() MyUnionType {
+        return .{};
+    }
+
+    pub fn _choices(_: *const MyUnionType, u: Choices) Choices {
+        return switch (u) {
+            .color => .{ .color = "nice" },
+            .number => |n| .{ .number = n + 10 },
+            .boolean => |b| .{ .boolean = !b },
+            .obj1 => |l| .{ .number = l.items.len },
+            .obj2 => .{ .color = "meta" },
+        };
+    }
+};
+
 const IterableU8 = Iterable(u8);
 
 pub fn Iterable(comptime T: type) type {
@@ -209,6 +233,7 @@ test "JS: complex types" {
         MyErrorUnion,
         MyException,
         MyTypeWithException,
+        MyUnionType,
     }).init(.{ .arena = arena.allocator() }, {});
 
     defer runner.deinit();
@@ -256,5 +281,15 @@ test "JS: complex types" {
         .{ "myCustomError instanceof Error", "true" },
         .{ "var mySuperError = ''; try {myTypeWithException.superSetError()} catch (error) {mySuperError = error}", "MyCustomError: Some custom message." },
         .{ "var oomError = ''; try {myTypeWithException.outOfMemory()} catch (error) {oomError = error}; oomError", "Error: out of memory" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "var mut = new MyUnionType()", "undefined" },
+        .{ "mut.choices(3)", "13" },
+        .{ "mut.choices('blue')", "nice" },
+        .{ "mut.choices(true)", "false" },
+        .{ "mut.choices(false)", "true" },
+        .{ "mut.choices(mut)", "meta" },
+        .{ "mut.choices(myList)", "3" },
     }, .{});
 }
