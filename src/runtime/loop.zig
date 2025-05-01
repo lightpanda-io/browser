@@ -56,12 +56,10 @@ pub const Loop = struct {
     // This is a weak way to cancel all future Zig callbacks.
     zig_ctx_id: u32 = 0,
 
-    // The MacOS event loop doesn't support cancellation. We use this to track
-    // cancellation ids and, on the timeout callback, we can can check here
-    // to see if it's been cancelled.
+    // We use this to track cancellation ids and, on the timeout callback,
+    // we can can check here to see if it's been cancelled.
     cancelled: std.AutoHashMapUnmanaged(usize, void),
 
-    cancel_pool: MemoryPool(ContextCancel),
     timeout_pool: MemoryPool(ContextTimeout),
     event_callback_pool: MemoryPool(EventCallbackContext),
 
@@ -79,7 +77,6 @@ pub const Loop = struct {
             .io = try IO.init(32, 0),
             .js_events_nb = 0,
             .zig_events_nb = 0,
-            .cancel_pool = MemoryPool(ContextCancel).init(alloc),
             .timeout_pool = MemoryPool(ContextTimeout).init(alloc),
             .event_callback_pool = MemoryPool(EventCallbackContext).init(alloc),
         };
@@ -104,7 +101,6 @@ pub const Loop = struct {
             self.io.cancel_all();
         }
         self.io.deinit();
-        self.cancel_pool.deinit();
         self.timeout_pool.deinit();
         self.event_callback_pool.deinit();
         self.cancelled.deinit(self.alloc);
@@ -175,10 +171,8 @@ pub const Loop = struct {
             loop.alloc.destroy(completion);
         }
 
-        if (comptime CANCEL_SUPPORTED == false) {
-            if (loop.cancelled.remove(@intFromPtr(completion))) {
-                return;
-            }
+        if (loop.cancelled.remove(@intFromPtr(completion))) {
+            return;
         }
 
         // If the loop's context id has changed, don't call the js callback
@@ -221,73 +215,13 @@ pub const Loop = struct {
         return @intFromPtr(completion);
     }
 
-    const ContextCancel = struct {
-        loop: *Self,
-        js_cbk: ?JSCallback,
-        js_ctx_id: u32,
-    };
-
-    fn cancelCallback(
-        ctx: *ContextCancel,
-        completion: *IO.Completion,
-        result: IO.CancelOneError!void,
-    ) void {
-        const loop = ctx.loop;
-
-        defer {
-            loop.removeEvent(.js);
-            loop.cancel_pool.destroy(ctx);
-            loop.alloc.destroy(completion);
-        }
-
-        // If the loop's context id has changed, don't call the js callback
-        // function. The callback's memory has already be cleaned and the
-        // events nb reset.
-        if (ctx.js_ctx_id != loop.js_ctx_id) return;
-
-        // TODO: return the error to the callback
-        result catch |err| {
-            switch (err) {
-                error.NotFound => log.debug("cancel callback: {any}", .{err}),
-                else => log.err("cancel callback: {any}", .{err}),
-            }
-            return;
-        };
-
-        // js callback
-        if (ctx.js_cbk) |*js_cbk| {
-            js_cbk.call(null) catch {
-                loop.cbk_error = true;
+    pub fn cancel(self: *Self, id: usize, js_cbk: ?JSCallback) !void {
+        try self.cancelled.put(self.alloc, id, {});
+        if (js_cbk) |cbk| {
+            cbk.call(null) catch {
+                self.cbk_error = true;
             };
         }
-    }
-
-    pub fn cancel(self: *Self, id: usize, js_cbk: ?JSCallback) !void {
-        const alloc = self.alloc;
-        if (comptime CANCEL_SUPPORTED == false) {
-            try self.cancelled.put(alloc, id, {});
-            if (js_cbk) |cbk| {
-                cbk.call(null) catch {
-                    self.cbk_error = true;
-                };
-            }
-            return;
-        }
-        const comp_cancel: *IO.Completion = @ptrFromInt(id);
-
-        const completion = try alloc.create(Completion);
-        errdefer alloc.destroy(completion);
-        completion.* = undefined;
-
-        const ctx = self.alloc.create(ContextCancel) catch unreachable;
-        ctx.* = ContextCancel{
-            .loop = self,
-            .js_cbk = js_cbk,
-            .js_ctx_id = self.js_ctx_id,
-        };
-
-        self.addEvent(.js);
-        self.io.cancel_one(*ContextCancel, ctx, cancelCallback, completion, comp_cancel);
     }
 
     // Reset all existing JS callbacks.
