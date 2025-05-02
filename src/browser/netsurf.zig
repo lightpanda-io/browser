@@ -1626,6 +1626,14 @@ pub fn elementHTMLGetTagType(elem_html: *ElementHTML) !Tag {
     var tag_type: c.dom_html_element_type = undefined;
     const err = elementHTMLVtable(elem_html).dom_html_element_get_tag_type.?(elem_html, &tag_type);
     try DOMErr(err);
+
+    if (tag_type >= @intFromEnum(Tag.undef)) {
+        // This is questionable, but std.meta.intToEnum has more overhead
+        // Added this because this WPT test started to fail once we
+        // introduced an SVGElement:
+        //   html/dom/documents/dom-tree-accessors/document.title-09.html
+        return Tag.undef;
+    }
     return @as(Tag, @enumFromInt(tag_type));
 }
 
