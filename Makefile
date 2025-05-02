@@ -85,11 +85,11 @@ shell:
 ## Run WPT tests
 wpt:
 	@printf "\e[36mBuilding wpt...\e[0m\n"
-	@$(ZIG) build wpt -- --safe $(filter-out $@,$(MAKECMDGOALS)) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+	@$(ZIG) build wpt -- $(filter-out $@,$(MAKECMDGOALS)) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 
 wpt-summary:
 	@printf "\e[36mBuilding wpt...\e[0m\n"
-	@$(ZIG) build wpt -- --safe --summary $(filter-out $@,$(MAKECMDGOALS)) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+	@$(ZIG) build wpt -- --summary $(filter-out $@,$(MAKECMDGOALS)) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 
 ## Test
 test:
