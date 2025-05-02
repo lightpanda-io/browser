@@ -1627,7 +1627,7 @@ pub fn elementHTMLGetTagType(elem_html: *ElementHTML) !Tag {
     const err = elementHTMLVtable(elem_html).dom_html_element_get_tag_type.?(elem_html, &tag_type);
     try DOMErr(err);
 
-    if (tag_type >= @intFromEnum(Tag.undef)) {
+    if (tag_type >= 255) {
         // This is questionable, but std.meta.intToEnum has more overhead
         // Added this because this WPT test started to fail once we
         // introduced an SVGElement:
