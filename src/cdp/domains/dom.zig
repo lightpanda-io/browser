@@ -94,6 +94,7 @@ fn performSearch(cmd: anytype) !void {
 fn dispatchSetChildNodes(cmd: anytype, nodes: []*parser.Node) !void {
     const arena = cmd.arena;
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const session_id = bc.session_id orelse return error.SessionIdNotLoaded;
 
     var parents: std.ArrayListUnmanaged(*parser.Node) = .{};
     for (nodes) |_n| {
@@ -125,35 +126,41 @@ fn dispatchSetChildNodes(cmd: anytype, nodes: []*parser.Node) !void {
             continue;
         }
 
+        // Register the node.
+        const node = try bc.node_registry.register(n);
         // If the node has no parent, it's the root node.
         // We don't dispatch event for it because we assume the root node is
         // dispatched via the DOM.getDocument command.
-        const p = try parser.nodeParentNode(n) orelse break;
-        // Register the node.
-        const node = try bc.node_registry.register(n);
+        const p = try parser.nodeParentNode(n) orelse continue;
+
         // Retrieve the parent from the registry.
-        const parent_node = bc.node_registry.lookup_by_node.get(p) orelse unreachable;
+        const parent_node = try bc.node_registry.register(p);
 
         try cmd.sendEvent("DOM.setChildNodes", .{
             .parentId = parent_node.id,
             .nodes = .{bc.nodeWriter(node, .{})},
         }, .{
-            .session_id = bc.session_id.?,
+            .session_id = session_id,
         });
     }
 
     // now dispatch the event for the node list.
     for (nodes) |n| {
-        const node = bc.node_registry.lookup_by_node.get(n) orelse unreachable;
+        // Register the node.
+        const node = try bc.node_registry.register(n);
+        // If the node has no parent, it's the root node.
+        // We don't dispatch event for it because we assume the root node is
+        // dispatched via the DOM.getDocument command.
         const p = try parser.nodeParentNode(n) orelse continue;
+
         // Retrieve the parent from the registry.
-        const parent_node = bc.node_registry.lookup_by_node.get(p) orelse unreachable;
+        const parent_node = try bc.node_registry.register(p);
 
         try cmd.sendEvent("DOM.setChildNodes", .{
             .parentId = parent_node.id,
             .nodes = .{bc.nodeWriter(node, .{})},
         }, .{
-            .session_id = bc.session_id.?,
+            .session_id = session_id,
         });
     }
 }
