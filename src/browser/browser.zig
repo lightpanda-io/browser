@@ -247,7 +247,7 @@ pub const Page = struct {
             .url = URL.empty,
             .session = session,
             .renderer = FlatRenderer.init(arena),
-             .window_clicked_event_node = .{ .func = windowClicked },
+            .window_clicked_event_node = .{ .func = windowClicked },
             .state = .{
                 .arena = arena,
                 .document = null,
