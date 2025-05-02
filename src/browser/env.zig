@@ -10,6 +10,7 @@ const HttpClient = @import("../http/client.zig").Client;
 const Renderer = @import("browser.zig").Renderer;
 
 const Interfaces = generate.Tuple(.{
+    @import("crypto/crypto.zig").Crypto,
     @import("console/console.zig").Console,
     @import("dom/dom.zig").Interfaces,
     @import("events/event.zig").Interfaces,
