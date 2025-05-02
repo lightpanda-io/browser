@@ -203,7 +203,12 @@ const Writer = struct {
 
     fn finalize(self: *Writer) !void {
         if (self.format == .json) {
-            try self.out.writeByte(']');
+            // When we write a test output, we add a trailing comma to act as
+            // a separator for the next test. We need to add this dummy entry
+            // to make it valid json.
+            // Better option could be to change the formatter to work on JSONL:
+            // https://github.com/lightpanda-io/perf-fmt/blob/main/wpt/wpt.go
+            try self.out.writeAll("{\"name\":\"trailing-hack\",\"pass\": true}]");
         } else {
             try self.out.print("\n==Summary==\nTests: {d}/{d}\nCases: {d}/{d}\n", .{
                 self.pass_count,
@@ -298,6 +303,8 @@ const Writer = struct {
                     .name = test_file,
                     .cases = cases.items,
                 }, .{ .whitespace = .indent_2 }, self.out);
+                // separator, see `finalize` for the hack we use to terminate this
+                try self.out.writeByte(',');
             },
         }
     }
