@@ -55,7 +55,7 @@ jobs:
 
       - uses: ./.github/actions/install
 
-      - run: zig build wpt -- --safe --summary
+      - run: zig build wpt -- --summary
 
         # For now WPT tests doesn't pass at all.
         # We accept then to continue the job on failure.
@@ -80,7 +80,7 @@ jobs:
       - uses: ./.github/actions/install
 
       - name: json output
-        run: zig build wpt -- --safe --json > wpt.json
+        run: zig build wpt -- --json > wpt.json
 
       - name: write commit
         run: |
