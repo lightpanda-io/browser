@@ -225,11 +225,14 @@ const Writer = struct {
             switch (self.format) {
                 .text => return self.out.print("Fail\t{s}\n\t{s}\n", .{ test_file, err }),
                 .summary => return self.out.print("Fail 0/0\t{s}\n", .{test_file}),
-                .json => return std.json.stringify(Test{
-                    .pass = false,
-                    .name = test_file,
-                    .cases = &.{},
-                }, .{ .whitespace = .indent_2 }, self.out),
+                .json => {
+                    try std.json.stringify(Test{
+                        .pass = false,
+                        .name = test_file,
+                        .cases = &.{},
+                    }, .{ .whitespace = .indent_2 }, self.out);
+                    return self.out.writeByte(',');
+                },
             }
             // just make sure we didn't fall through by mistake
             unreachable;
