@@ -367,7 +367,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             self.node_search_list.reset();
         }
 
-        pub fn createIsolatedWorld(self: *Self, page: *Page, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
+        pub fn createIsolatedWorld(self: *Self, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
             if (self.isolated_world != null) {
                 return error.CurrentlyOnly1IsolatedWorldSupported;
             }
@@ -381,9 +381,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .executor = executor,
                 .grant_universal_access = grant_universal_access,
             };
-            const world = &self.isolated_world.?;
-            try world.createContext(page);
-            return world;
+            return &self.isolated_world.?;
         }
 
         pub fn nodeWriter(self: *Self, node: *const Node, opts: Node.Writer.Opts) Node.Writer {

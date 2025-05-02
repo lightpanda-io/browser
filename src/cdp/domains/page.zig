@@ -113,8 +113,9 @@ fn createIsolatedWorld(cmd: anytype) !void {
     }
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
+    const world = try bc.createIsolatedWorld(params.worldName, params.grantUniveralAccess);
     const page = bc.session.currentPage().?;
-    const world = try bc.createIsolatedWorld(page, params.worldName, params.grantUniveralAccess);
+    try pageCreated(bc, page);
     const scope = world.scope.?;
 
     // Create the auxdata json for the contextCreated event
