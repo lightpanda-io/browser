@@ -163,11 +163,16 @@ pub const Session = struct {
 
         // start JS env
         log.debug("start new js scope", .{});
+        // Inform CDP the main page has been created such that additional context for other Worlds can be created as well
+        self.browser.notification.dispatch(.page_created, page);
 
         return page;
     }
 
     pub fn removePage(self: *Session) void {
+        // Inform CDP the page is going to be removed, allowing other worlds to remove themselves before the main one
+        self.browser.notification.dispatch(.page_remove, .{});
+
         std.debug.assert(self.page != null);
         // Reset all existing callbacks.
         self.browser.app.loop.resetJS();

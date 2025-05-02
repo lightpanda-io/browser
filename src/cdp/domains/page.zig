@@ -20,6 +20,7 @@ const std = @import("std");
 const runtime = @import("runtime.zig");
 const URL = @import("../../url.zig").URL;
 const Notification = @import("../../notification.zig").Notification;
+const Page = @import("../../browser/browser.zig").Page;
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -112,15 +113,16 @@ fn createIsolatedWorld(cmd: anytype) !void {
     }
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-    const world = &bc.isolated_world.?;
-    world.name = try bc.arena.dupe(u8, params.worldName);
-    world.grant_universal_access = params.grantUniveralAccess;
+    const page = bc.session.currentPage().?;
+    const world = try bc.createIsolatedWorld(page, params.worldName, params.grantUniveralAccess);
+    const scope = world.scope.?;
+
     // Create the auxdata json for the contextCreated event
     // Calling contextCreated will assign a Id to the context and send the contextCreated event
     const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{params.frameId});
-    bc.inspector.contextCreated(world.scope, world.name, "", aux_data, false);
+    bc.inspector.contextCreated(scope, world.name, "", aux_data, false);
 
-    return cmd.sendResult(.{ .executionContextId = world.scope.context.debugContextId() }, .{});
+    return cmd.sendResult(.{ .executionContextId = scope.context.debugContextId() }, .{});
 }
 
 fn navigate(cmd: anytype) !void {
@@ -230,17 +232,33 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void 
             true,
         );
     }
-
     if (bc.isolated_world) |*isolated_world| {
         const aux_json = try std.fmt.bufPrint(&buffer, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{target_id});
         // Calling contextCreated will assign a new Id to the context and send the contextCreated event
         bc.inspector.contextCreated(
-            isolated_world.scope,
+            isolated_world.scope.?,
             isolated_world.name,
             "://",
             aux_json,
             false,
         );
+    }
+}
+
+pub fn pageRemove(bc: anytype) !void {
+    // The main page is going to be removed, we need to remove contexts from other worlds first.
+    if (bc.isolated_world) |*isolated_world| {
+        isolated_world.removeContext();
+    }
+}
+
+pub fn pageCreated(bc: anytype, page: *Page) !void {
+    if (bc.isolated_world) |*isolated_world| {
+        // We need to recreate the isolated world context
+        try isolated_world.createContext(page);
+
+        const polyfill = @import("../../browser/polyfill/polyfill.zig");
+        try polyfill.load(bc.arena, isolated_world.scope.?);
     }
 }
 
