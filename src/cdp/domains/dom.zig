@@ -88,27 +88,22 @@ fn performSearch(cmd: anytype) !void {
 
 // dispatchSetChildNodes send the setChildNodes event for the whole DOM tree
 // hierarchy of each nodes.
-// If a parent has already been registred, we don't re-send a setChildNodes
-// event anymore.
 // We dispatch event in the reverse order: from the top level to the direct parents.
+// TODO we should dispatch a node only if it has never been sent.
 fn dispatchSetChildNodes(cmd: anytype, nodes: []*parser.Node) !void {
     const arena = cmd.arena;
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const session_id = bc.session_id orelse return error.SessionIdNotLoaded;
 
-    var parents: std.ArrayListUnmanaged(*parser.Node) = .{};
+    var parents: std.ArrayListUnmanaged(*Node) = .{};
     for (nodes) |_n| {
         var n = _n;
         while (true) {
             const p = try parser.nodeParentNode(n) orelse break;
-            // If the parent exists in he registry, don't send the event.
-            // In this case we stop browsing the tree, b/c parents must have
-            // been sent already.
-            if (bc.node_registry.lookup_by_node.contains(p)) {
-                break;
-            }
-            try parents.append(arena, p);
 
+            // Register the node.
+            const node = try bc.node_registry.register(p);
+            try parents.append(arena, node);
             n = p;
         }
     }
@@ -116,42 +111,21 @@ fn dispatchSetChildNodes(cmd: anytype, nodes: []*parser.Node) !void {
     const plen = parents.items.len;
     if (plen == 0) return;
 
+    var uniq: std.AutoHashMapUnmanaged(Node.Id, bool) = .{};
     var i: usize = plen;
     while (i > 0) {
         i -= 1;
-        const n = parents.items[i];
-        // If the parent exists in he registry, don't send the event.
-        // Indeed the parent can be twice in the array.
-        if (bc.node_registry.lookup_by_node.contains(n)) {
+        const node = parents.items[i];
+
+        if (uniq.contains(node.id)) continue;
+        try uniq.putNoClobber(arena, node.id, true);
+
+        // If the node has no parent, it's the root node.
+        // We don't dispatch event for it because we assume the root node is
+        // dispatched via the DOM.getDocument command.
+        const p = try parser.nodeParentNode(node._node) orelse {
             continue;
-        }
-
-        // Register the node.
-        const node = try bc.node_registry.register(n);
-        // If the node has no parent, it's the root node.
-        // We don't dispatch event for it because we assume the root node is
-        // dispatched via the DOM.getDocument command.
-        const p = try parser.nodeParentNode(n) orelse continue;
-
-        // Retrieve the parent from the registry.
-        const parent_node = try bc.node_registry.register(p);
-
-        try cmd.sendEvent("DOM.setChildNodes", .{
-            .parentId = parent_node.id,
-            .nodes = .{bc.nodeWriter(node, .{})},
-        }, .{
-            .session_id = session_id,
-        });
-    }
-
-    // now dispatch the event for the node list.
-    for (nodes) |n| {
-        // Register the node.
-        const node = try bc.node_registry.register(n);
-        // If the node has no parent, it's the root node.
-        // We don't dispatch event for it because we assume the root node is
-        // dispatched via the DOM.getDocument command.
-        const p = try parser.nodeParentNode(n) orelse continue;
+        };
 
         // Retrieve the parent from the registry.
         const parent_node = try bc.node_registry.register(p);
