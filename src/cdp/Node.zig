@@ -29,6 +29,7 @@ const Node = @This();
 
 id: Id,
 _node: *parser.Node,
+set_child_nodes_event: bool,
 
 // Whenever we send a node to the client, we register it here for future lookup.
 // We maintain a node -> id and id -> node lookup.
@@ -85,6 +86,7 @@ pub const Registry = struct {
         node.* = .{
             ._node = n,
             .id = id,
+            .set_child_nodes_event = false,
         };
 
         node_lookup_gop.value_ptr.* = node;

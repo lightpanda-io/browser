@@ -89,7 +89,7 @@ fn performSearch(cmd: anytype) !void {
 // dispatchSetChildNodes send the setChildNodes event for the whole DOM tree
 // hierarchy of each nodes.
 // We dispatch event in the reverse order: from the top level to the direct parents.
-// TODO we should dispatch a node only if it has never been sent.
+// We should dispatch a node only if it has never been sent.
 fn dispatchSetChildNodes(cmd: anytype, nodes: []*parser.Node) !void {
     const arena = cmd.arena;
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
@@ -103,6 +103,7 @@ fn dispatchSetChildNodes(cmd: anytype, nodes: []*parser.Node) !void {
 
             // Register the node.
             const node = try bc.node_registry.register(p);
+            if (node.set_child_nodes_event) break;
             try parents.append(arena, node);
             n = p;
         }
@@ -111,14 +112,13 @@ fn dispatchSetChildNodes(cmd: anytype, nodes: []*parser.Node) !void {
     const plen = parents.items.len;
     if (plen == 0) return;
 
-    var uniq: std.AutoHashMapUnmanaged(Node.Id, bool) = .{};
     var i: usize = plen;
     while (i > 0) {
         i -= 1;
         const node = parents.items[i];
+        if (node.set_child_nodes_event) continue;
 
-        if (uniq.contains(node.id)) continue;
-        try uniq.putNoClobber(arena, node.id, true);
+        node.set_child_nodes_event = true;
 
         // If the node has no parent, it's the root node.
         // We don't dispatch event for it because we assume the root node is
