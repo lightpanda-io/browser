@@ -355,7 +355,12 @@ pub const Element = struct {
         return state.renderer.height();
     }
 
-    pub fn deinit(_: *parser.Element, _: std.mem.Allocator) void {}
+    pub fn _matches(self: *parser.Element, selectors: []const u8, state: *SessionState) !bool {
+        const cssParse = @import("../css/css.zig").parse;
+        const CssNodeWrap = @import("../css/libdom.zig").Node;
+        const s = try cssParse(state.call_arena, selectors, .{});
+        return s.match(CssNodeWrap{ .node = parser.elementToNode(self) });
+    }
 };
 
 // Tests
@@ -517,5 +522,14 @@ test "Browser.DOM.Element" {
 
         .{ "document.getElementById('para').clientWidth", "2" },
         .{ "document.getElementById('para').clientHeight", "1" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "const el = document.createElement('div');", "undefined" },
+        .{ "el.id = 'matches'; el.className = 'ok';", "ok" },
+        .{ "el.matches('#matches')", "true" },
+        .{ "el.matches('.ok')", "true" },
+        .{ "el.matches('#9000')", "false" },
+        .{ "el.matches('.notok')", "false" },
     }, .{});
 }
