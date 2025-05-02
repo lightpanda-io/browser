@@ -301,22 +301,21 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             // no init, must be initialized via env.newExecutor()
 
             pub fn deinit(self: *Executor) void {
-                if (self.scope) |scope| {
-                    const isolate = scope.isolate;
+                if (self.scope != null) {
                     self.endScope();
+                }
 
-                    // V8 doesn't immediately free memory associated with
-                    // a Context, it's managed by the garbage collector. So, when the
-                    // `gc_hints` option is enabled, we'll use the `lowMemoryNotification`
-                    // call on the isolate to encourage v8 to free any contexts which
-                    // have been freed.
-                    if (self.env.gc_hints) {
-                        var handle_scope: v8.HandleScope = undefined;
-                        v8.HandleScope.init(&handle_scope, isolate);
-                        defer handle_scope.deinit();
+                // V8 doesn't immediately free memory associated with
+                // a Context, it's managed by the garbage collector. So, when the
+                // `gc_hints` option is enabled, we'll use the `lowMemoryNotification`
+                // call on the isolate to encourage v8 to free any contexts which
+                // have been freed.
+                if (self.env.gc_hints) {
+                    var handle_scope: v8.HandleScope = undefined;
+                    v8.HandleScope.init(&handle_scope, self.env.isolate);
+                    defer handle_scope.deinit();
 
-                        self.env.isolate.lowMemoryNotification();
-                    }
+                    self.env.isolate.lowMemoryNotification(); // TODO we only need to call this for the main World Executor
                 }
                 self.call_arena.deinit();
                 self.scope_arena.deinit();
