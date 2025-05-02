@@ -104,7 +104,8 @@ fn run(arena: Allocator, test_file: []const u8, loader: *FileLoader, err_out: *?
         return null;
     }
 
-    const dirname = std.fs.path.dirname(test_file) orelse unreachable;
+    // this returns null for the success.html test in the root of tests/wpt
+    const dirname = std.fs.path.dirname(test_file) orelse "";
 
     var runner = try @import("testing.zig").jsRunner(arena, .{
         .html = html,
