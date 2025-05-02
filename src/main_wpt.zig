@@ -203,6 +203,13 @@ const Writer = struct {
     fn finalize(self: *Writer) !void {
         if (self.format == .json) {
             try self.out.writeByte(']');
+        } else {
+            try self.out.print("\n==Summary==\nTests: {d}/{d}\nCases: {d}/{d}\n", .{
+                self.pass_count,
+                self.pass_count + self.fail_count,
+                self.case_pass_count,
+                self.case_pass_count + self.case_fail_count,
+            });
         }
     }
 
