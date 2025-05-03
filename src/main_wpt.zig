@@ -208,7 +208,7 @@ const Writer = struct {
             // to make it valid json.
             // Better option could be to change the formatter to work on JSONL:
             // https://github.com/lightpanda-io/perf-fmt/blob/main/wpt/wpt.go
-            try self.out.writeAll("{\"name\":\"trailing-hack\",\"pass\": true}]");
+            try self.out.writeAll("{\"name\":\"empty\",\"pass\": true, \"cases\": []}]");
         } else {
             try self.out.print("\n==Summary==\nTests: {d}/{d}\nCases: {d}/{d}\n", .{
                 self.pass_count,
