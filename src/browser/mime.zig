@@ -33,6 +33,7 @@ pub const Mime = struct {
     pub const ContentTypeEnum = enum {
         text_xml,
         text_html,
+        text_javascript,
         text_plain,
         unknown,
         other,
@@ -41,6 +42,7 @@ pub const Mime = struct {
     pub const ContentType = union(ContentTypeEnum) {
         text_xml: void,
         text_html: void,
+        text_javascript: void,
         text_plain: void,
         unknown: void,
         other: struct { type: []const u8, sub_type: []const u8 },
@@ -172,11 +174,17 @@ pub const Mime = struct {
         if (std.meta.stringToEnum(enum {
             @"text/xml",
             @"text/html",
+
+            @"text/javascript",
+            @"application/javascript",
+            @"application/x-javascript",
+
             @"text/plain",
         }, type_name)) |known_type| {
             const ct: ContentType = switch (known_type) {
                 .@"text/xml" => .{ .text_xml = {} },
                 .@"text/html" => .{ .text_html = {} },
+                .@"text/javascript", .@"application/javascript", .@"application/x-javascript" => .{ .text_javascript = {} },
                 .@"text/plain" => .{ .text_plain = {} },
             };
             return .{ ct, attribute_start };
@@ -337,22 +345,26 @@ test "Mime: parse common" {
     try expect(.{ .content_type = .{ .text_xml = {} } }, " TeXT/xml");
     try expect(.{ .content_type = .{ .text_html = {} } }, "teXt/HtML  ;");
     try expect(.{ .content_type = .{ .text_plain = {} } }, "tExT/PlAiN;");
+
+    try expect(.{ .content_type = .{ .text_javascript = {} } }, "text/javascript");
+    try expect(.{ .content_type = .{ .text_javascript = {} } }, "Application/JavaScript");
+    try expect(.{ .content_type = .{ .text_javascript = {} } }, "application/x-javascript");
 }
 
 test "Mime: parse uncommon" {
     defer testing.reset();
 
-    const text_javascript = Expectation{
-        .content_type = .{ .other = .{ .type = "text", .sub_type = "javascript" } },
+    const text_csv = Expectation{
+        .content_type = .{ .other = .{ .type = "text", .sub_type = "csv" } },
     };
-    try expect(text_javascript, "text/javascript");
-    try expect(text_javascript, "text/javascript;");
-    try expect(text_javascript, "  text/javascript\t  ");
-    try expect(text_javascript, "  text/javascript\t  ;");
+    try expect(text_csv, "text/csv");
+    try expect(text_csv, "text/csv;");
+    try expect(text_csv, "  text/csv\t  ");
+    try expect(text_csv, "  text/csv\t  ;");
 
     try expect(
-        .{ .content_type = .{ .other = .{ .type = "text", .sub_type = "javascript" } } },
-        "Text/Javascript",
+        .{ .content_type = .{ .other = .{ .type = "text", .sub_type = "csv" } } },
+        "Text/CSV",
     );
 }
 
