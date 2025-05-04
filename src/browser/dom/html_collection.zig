@@ -281,8 +281,8 @@ pub const HTMLCollection = struct {
     include_root: bool = false,
 
     // save a state for the collection to improve the _item speed.
-    cur_idx: ?u32 = undefined,
-    cur_node: ?*parser.Node = undefined,
+    cur_idx: ?u32 = null,
+    cur_node: ?*parser.Node = null,
 
     // start returns the first node to walk on.
     fn start(self: *const HTMLCollection) !?*parser.Node {
