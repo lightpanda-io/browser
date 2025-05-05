@@ -377,7 +377,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
             self.isolated_world = .{
                 .name = try self.arena.dupe(u8, world_name),
-                .scope = undefined,
+                .scope = null,
                 .executor = executor,
                 .grant_universal_access = grant_universal_access,
             };
@@ -519,7 +519,8 @@ const IsolatedWorld = struct {
         self.executor.deinit();
         self.scope = null;
     }
-    pub fn removeContext(self: *IsolatedWorld) void {
+    pub fn removeContext(self: *IsolatedWorld) !void {
+        if (self.scope == null) return error.NoIsolatedContextToRemove;
         self.executor.endScope();
         self.scope = null;
     }
@@ -530,6 +531,7 @@ const IsolatedWorld = struct {
     // This also means this pointer becomes invalid after removePage untill a new page is created.
     // Currently we have only 1 page/frame and thus also only 1 state in the isolate world.
     pub fn createContext(self: *IsolatedWorld, page: *Page) !void {
+        if (self.scope != null) return error.Only1IsolatedContextSupported;
         self.scope = try self.executor.startScope(&page.window, &page.state, {}, false);
     }
 };

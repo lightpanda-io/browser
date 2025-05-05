@@ -114,7 +114,7 @@ fn createIsolatedWorld(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     const world = try bc.createIsolatedWorld(params.worldName, params.grantUniveralAccess);
-    const page = bc.session.currentPage().?;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
     try pageCreated(bc, page);
     const scope = world.scope.?;
 
@@ -147,7 +147,7 @@ fn navigate(cmd: anytype) !void {
 
     const url = try URL.parse(params.url, "https");
 
-    var page = bc.session.currentPage().?;
+    var page = bc.session.currentPage() orelse return error.PageNotLoaded;
     bc.loader_id = bc.cdp.loader_id_gen.next();
     try cmd.sendResult(.{
         .frameId = target_id,
@@ -223,7 +223,7 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void 
     var buffer: [512]u8 = undefined;
     {
         var fba = std.heap.FixedBufferAllocator.init(&buffer);
-        const page = bc.session.currentPage().?;
+        const page = bc.session.currentPage() orelse return error.PageNotLoaded;
         const aux_data = try std.fmt.allocPrint(fba.allocator(), "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
         bc.inspector.contextCreated(
             page.scope,
@@ -249,7 +249,7 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void 
 pub fn pageRemove(bc: anytype) !void {
     // The main page is going to be removed, we need to remove contexts from other worlds first.
     if (bc.isolated_world) |*isolated_world| {
-        isolated_world.removeContext();
+        try isolated_world.removeContext();
     }
 }
 
