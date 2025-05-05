@@ -113,9 +113,14 @@ fn dispatchSetChildNodes(cmd: anytype, nodes: []*parser.Node) !void {
     if (plen == 0) return;
 
     var i: usize = plen;
+    // We're going to iterate in reverse order from how we added them.
+    // This ensures that we're emitting the tree of nodes top-down.
     while (i > 0) {
         i -= 1;
         const node = parents.items[i];
+        // Although our above loop won't add an already-sent node to `parents`
+        // this can still be true because two nodes can share the same parent node
+        // so we might have just sent the node a previous iteration of this loop
         if (node.set_child_nodes_event) continue;
 
         node.set_child_nodes_event = true;
