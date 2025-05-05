@@ -57,8 +57,8 @@ pub const Platform = struct {
 // The `S` parameter is arbitrary state. When we start an Executor, an instance
 // of S must be given. This instance is available to any Zig binding.
 // The `types` parameter is a tuple of Zig structures we want to bind to V8.
-pub fn Env(comptime S: type, comptime types: anytype) type {
-    const Types = @typeInfo(@TypeOf(types)).@"struct".fields;
+pub fn Env(comptime S: type, comptime WebApis: type) type {
+    const Types = @typeInfo(WebApis.Interfaces).@"struct".fields;
 
     // Imagine we have a type Cat which has a getter:
     //
@@ -97,14 +97,14 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             // TypeLookup. But we put it here, early, so that the rest of the
             // code doesn't have to worry about checking if Struct.prototype is
             // a pointer.
-            const Struct = @field(types, s.name);
+            const Struct = s.defaultValue().?;
             if (@hasDecl(Struct, "prototype") and @typeInfo(Struct.prototype) != .pointer) {
                 @compileError(std.fmt.comptimePrint("Prototype '{s}' for type '{s} must be a pointer", .{ @typeName(Struct.prototype), @typeName(Struct) }));
             }
 
             const subtype: ?SubType = if (@hasDecl(Struct, "subtype")) Struct.subtype else null;
 
-            const R = Receiver(@field(types, s.name));
+            const R = Receiver(Struct);
             fields[i] = .{
                 .name = @typeName(R),
                 .type = TypeMeta,
@@ -141,7 +141,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
         const TYPE_LOOKUP = TypeLookup{};
         for (Types, 0..) |s, i| {
             var prototype_index = i;
-            const Struct = @field(types, s.name);
+            const Struct = s.defaultValue().?;
             if (@hasDecl(Struct, "prototype")) {
                 const TI = @typeInfo(Struct.prototype);
                 const proto_name = @typeName(Receiver(TI.pointer.child));
@@ -225,13 +225,13 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
             const templates = &env.templates;
             inline for (Types, 0..) |s, i| {
                 @setEvalBranchQuota(10_000);
-                templates[i] = v8.Persistent(v8.FunctionTemplate).init(isolate, generateClass(@field(types, s.name), isolate)).castToFunctionTemplate();
+                templates[i] = v8.Persistent(v8.FunctionTemplate).init(isolate, generateClass(s.defaultValue().?, isolate)).castToFunctionTemplate();
             }
 
             // Above, we've created all our our FunctionTemplates. Now that we
             // have them all, we can hook up the prototypes.
             inline for (Types, 0..) |s, i| {
-                const Struct = @field(types, s.name);
+                const Struct = s.defaultValue().?;
                 if (@hasDecl(Struct, "prototype")) {
                     const TI = @typeInfo(Struct.prototype);
                     const proto_name = @typeName(Receiver(TI.pointer.child));
@@ -359,7 +359,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                     // are now going to get associated with our global instance.
                     const templates = &self.env.templates;
                     inline for (Types, 0..) |s, i| {
-                        const Struct = @field(types, s.name);
+                        const Struct = s.defaultValue().?;
                         const class_name = v8.String.initUtf8(isolate, comptime classNameForStruct(Struct));
                         global_template.set(class_name.toName(), templates[i], v8.PropertyAttribute.None);
                     }
@@ -386,7 +386,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                     // https://groups.google.com/g/v8-users/c/qAQQBmbi--8
                     // TODO: see if newer V8 engines have a way around this.
                     inline for (Types, 0..) |s, i| {
-                        const Struct = @field(types, s.name);
+                        const Struct = s.defaultValue().?;
 
                         if (@hasDecl(Struct, "prototype")) {
                             const proto_type = Receiver(@typeInfo(Struct.prototype).pointer.child);
@@ -462,7 +462,7 @@ pub fn Env(comptime S: type, comptime types: anytype) type {
                 // NOTE: there is no way in v8 to subclass the Error built-in type
                 // TODO: this is an horrible hack
                 inline for (Types) |s| {
-                    const Struct = @field(types, s.name);
+                    const Struct = s.defaultValue().?;
                     if (@hasDecl(Struct, "ErrorSet")) {
                         const script = comptime classNameForStruct(Struct) ++ ".prototype.__proto__ = Error.prototype";
                         _ = try scope.exec(script, "errorSubclass");
