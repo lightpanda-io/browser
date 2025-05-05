@@ -76,10 +76,72 @@ fn performSearch(cmd: anytype) !void {
 
     const search = try bc.node_search_list.create(list.nodes.items);
 
+    // dispatch setChildNodesEvents to inform the client of the subpart of node
+    // tree covering the results.
+    try dispatchSetChildNodes(cmd, list.nodes.items);
+
     return cmd.sendResult(.{
         .searchId = search.name,
         .resultCount = @as(u32, @intCast(search.node_ids.len)),
     }, .{});
+}
+
+// dispatchSetChildNodes send the setChildNodes event for the whole DOM tree
+// hierarchy of each nodes.
+// We dispatch event in the reverse order: from the top level to the direct parents.
+// We should dispatch a node only if it has never been sent.
+fn dispatchSetChildNodes(cmd: anytype, nodes: []*parser.Node) !void {
+    const arena = cmd.arena;
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const session_id = bc.session_id orelse return error.SessionIdNotLoaded;
+
+    var parents: std.ArrayListUnmanaged(*Node) = .{};
+    for (nodes) |_n| {
+        var n = _n;
+        while (true) {
+            const p = try parser.nodeParentNode(n) orelse break;
+
+            // Register the node.
+            const node = try bc.node_registry.register(p);
+            if (node.set_child_nodes_event) break;
+            try parents.append(arena, node);
+            n = p;
+        }
+    }
+
+    const plen = parents.items.len;
+    if (plen == 0) return;
+
+    var i: usize = plen;
+    // We're going to iterate in reverse order from how we added them.
+    // This ensures that we're emitting the tree of nodes top-down.
+    while (i > 0) {
+        i -= 1;
+        const node = parents.items[i];
+        // Although our above loop won't add an already-sent node to `parents`
+        // this can still be true because two nodes can share the same parent node
+        // so we might have just sent the node a previous iteration of this loop
+        if (node.set_child_nodes_event) continue;
+
+        node.set_child_nodes_event = true;
+
+        // If the node has no parent, it's the root node.
+        // We don't dispatch event for it because we assume the root node is
+        // dispatched via the DOM.getDocument command.
+        const p = try parser.nodeParentNode(node._node) orelse {
+            continue;
+        };
+
+        // Retrieve the parent from the registry.
+        const parent_node = try bc.node_registry.register(p);
+
+        try cmd.sendEvent("DOM.setChildNodes", .{
+            .parentId = parent_node.id,
+            .nodes = .{bc.nodeWriter(node, .{})},
+        }, .{
+            .session_id = session_id,
+        });
+    }
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-discardSearchResults

@@ -1250,11 +1250,11 @@ pub fn nodeHasAttributes(node: *Node) !bool {
     return res;
 }
 
-pub fn nodeGetAttributes(node: *Node) !*NamedNodeMap {
+pub fn nodeGetAttributes(node: *Node) !?*NamedNodeMap {
     var res: ?*NamedNodeMap = undefined;
     const err = nodeVtable(node).dom_node_get_attributes.?(node, &res);
     try DOMErr(err);
-    return res.?;
+    return res;
 }
 
 pub fn nodeGetNamespace(node: *Node) !?[]const u8 {

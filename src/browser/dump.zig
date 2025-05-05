@@ -38,18 +38,18 @@ pub fn writeNode(node: *parser.Node, writer: anytype) anyerror!void {
             try writer.writeAll(tag);
 
             // write the attributes
-            const map = try parser.nodeGetAttributes(node);
-            const ln = try parser.namedNodeMapGetLength(map);
-            var i: u32 = 0;
-            while (i < ln) {
-                const attr = try parser.namedNodeMapItem(map, i) orelse break;
-                try writer.writeAll(" ");
-                try writer.writeAll(try parser.attributeGetName(attr));
-                try writer.writeAll("=\"");
-                const attribute_value = try parser.attributeGetValue(attr) orelse "";
-                try writeEscapedAttributeValue(writer, attribute_value);
-                try writer.writeAll("\"");
-                i += 1;
+            const _map = try parser.nodeGetAttributes(node);
+            if (_map) |map| {
+                const ln = try parser.namedNodeMapGetLength(map);
+                for (0..ln) |i| {
+                    const attr = try parser.namedNodeMapItem(map, @intCast(i)) orelse break;
+                    try writer.writeAll(" ");
+                    try writer.writeAll(try parser.attributeGetName(attr));
+                    try writer.writeAll("=\"");
+                    const attribute_value = try parser.attributeGetValue(attr) orelse "";
+                    try writeEscapedAttributeValue(writer, attribute_value);
+                    try writer.writeAll("\"");
+                }
             }
 
             try writer.writeAll(">");

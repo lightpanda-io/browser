@@ -29,6 +29,7 @@ const Node = @This();
 
 id: Id,
 _node: *parser.Node,
+set_child_nodes_event: bool,
 
 // Whenever we send a node to the client, we register it here for future lookup.
 // We maintain a node -> id and id -> node lookup.
@@ -85,6 +86,7 @@ pub const Registry = struct {
         node.* = .{
             ._node = n,
             .id = id,
+            .set_child_nodes_event = false,
         };
 
         node_lookup_gop.value_ptr.* = node;
@@ -218,7 +220,7 @@ pub const Writer = struct {
 
     fn toJSON(self: *const Writer, w: anytype) !void {
         try w.beginObject();
-        try writeCommon(self.node, false, w);
+        try self.writeCommon(self.node, false, w);
 
         {
             var registry = self.registry;
@@ -232,7 +234,7 @@ pub const Writer = struct {
                 const child = (try parser.nodeListItem(child_nodes, @intCast(i))) orelse break;
                 const child_node = try registry.register(child);
                 try w.beginObject();
-                try writeCommon(child_node, true, w);
+                try self.writeCommon(child_node, true, w);
                 try w.endObject();
                 i += 1;
             }
@@ -245,7 +247,7 @@ pub const Writer = struct {
         try w.endObject();
     }
 
-    fn writeCommon(node: *const Node, include_child_count: bool, w: anytype) !void {
+    fn writeCommon(self: *const Writer, node: *const Node, include_child_count: bool, w: anytype) !void {
         try w.objectField("nodeId");
         try w.write(node.id);
 
@@ -254,9 +256,24 @@ pub const Writer = struct {
 
         const n = node._node;
 
-        // TODO:
-        // try w.objectField("parentId");
-        // try w.write(pid);
+        if (try parser.nodeParentNode(n)) |p| {
+            const parent_node = try self.registry.register(p);
+            try w.objectField("parentId");
+            try w.write(parent_node.id);
+        }
+
+        const _map = try parser.nodeGetAttributes(n);
+        if (_map) |map| {
+            const attr_count = try parser.namedNodeMapGetLength(map);
+            try w.objectField("attributes");
+            try w.beginArray();
+            for (0..attr_count) |i| {
+                const attr = try parser.namedNodeMapItem(map, @intCast(i)) orelse continue;
+                try w.write(try parser.attributeGetName(attr));
+                try w.write(try parser.attributeGetValue(attr) orelse continue);
+            }
+            try w.endArray();
+        }
 
         try w.objectField("nodeType");
         try w.write(@intFromEnum(try parser.nodeType(n)));
@@ -461,6 +478,7 @@ test "cdp Node: Writer" {
                 .xmlVersion = "",
                 .compatibilityMode = "NoQuirksMode",
                 .isScrollable = false,
+                .parentId = 1,
             }, .{
                 .nodeId = 3,
                 .backendNodeId = 3,
@@ -474,6 +492,7 @@ test "cdp Node: Writer" {
                 .xmlVersion = "",
                 .compatibilityMode = "NoQuirksMode",
                 .isScrollable = false,
+                .parentId = 1,
             } },
         }, json);
     }

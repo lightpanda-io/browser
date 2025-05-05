@@ -99,7 +99,8 @@ pub const Element = struct {
     }
 
     pub fn get_attributes(self: *parser.Element) !*parser.NamedNodeMap {
-        return try parser.nodeGetAttributes(parser.elementToNode(self));
+        // An element must have non-nil attributes.
+        return try parser.nodeGetAttributes(parser.elementToNode(self)) orelse unreachable;
     }
 
     pub fn get_innerHTML(self: *parser.Element, state: *SessionState) ![]const u8 {
