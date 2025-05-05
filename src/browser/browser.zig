@@ -24,6 +24,7 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 
 const Dump = @import("dump.zig");
 const Mime = @import("mime.zig").Mime;
+const DataURI = @import("datauri.zig").DataURI;
 const parser = @import("netsurf.zig");
 
 const Window = @import("html/window.zig").Window;
@@ -585,6 +586,12 @@ pub const Page = struct {
         log.debug("starting fetch {s}", .{src});
 
         const arena = self.arena;
+
+        // Handle data URIs.
+        if (try DataURI.parse(arena, src)) |data_uri| {
+            return data_uri.data;
+        }
+
         var res_src = src;
 
         // if a base path is given, we resolve src using base.
