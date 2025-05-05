@@ -346,6 +346,14 @@ pub const Element = struct {
         return state.renderer.getRect(self);
     }
 
+    // returns a collection of DOMRect objects that indicate the bounding rectangles for each CSS border box in a client.
+    // We do not render so just always return the element's rect.
+    pub fn _getClientRects(self: *parser.Element, state: *SessionState) ![]DOMRect {
+        var heap = try state.arena.create(DOMRect);
+        heap.* = try state.renderer.getRect(self);
+        return heap[0..1];
+    }
+
     pub fn get_clientWidth(_: *parser.Element, state: *SessionState) u32 {
         return state.renderer.width();
     }

@@ -829,7 +829,7 @@ const FlatRenderer = struct {
     }
 
     pub fn width(self: *const FlatRenderer) u32 {
-        return @intCast(self.elements.items.len);
+        return @intCast(self.elements.items.len + 1); // +1 since x starts at 1 (use len after append)
     }
 
     pub fn height(_: *const FlatRenderer) u32 {
