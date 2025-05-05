@@ -51,12 +51,16 @@ pub const IntersectionObserver = struct {
     // new IntersectionObserver(callback)
     // new IntersectionObserver(callback, options) [not supported yet]
     pub fn constructor(callback: Env.Callback, options_: ?IntersectionObserverOptions, state: *SessionState) !IntersectionObserver {
-        if (options_ != null) return error.IntersectionObserverOptionsNotYetSupported;
-        const options = IntersectionObserverOptions{
+        var options = IntersectionObserverOptions{
             .root = parser.documentToNode(parser.documentHTMLToDocument(state.document.?)),
             .rootMargin = "0px 0px 0px 0px",
-            .threshold = &[_]f32{0.0},
+            .threshold = &default_threshold,
         };
+        if (options_) |*o| {
+            if (o.root) |root| {
+                options.root = root;
+            } // Other properties are not used due to the way we render
+        }
 
         return .{
             .callback = callback,
@@ -103,6 +107,7 @@ const IntersectionObserverOptions = struct {
     rootMargin: ?[]const u8,
     threshold: ?[]const f32,
 };
+const default_threshold = [_]f32{0.0};
 
 // https://developer.mozilla.org/en-US/docs/Web/API/IntersectionObserverEntry
 // https://w3c.github.io/IntersectionObserver/#intersection-observer-entry
@@ -127,14 +132,25 @@ pub const IntersectionObserverEntry = struct {
     }
 
     // A Boolean value which is true if the target element intersects with the intersection observer's root. If this is true, then, the IntersectionObserverEntry describes a transition into a state of intersection; if it's false, then you know the transition is from intersecting to not-intersecting.
-    pub fn isIntersecting(_: *const IntersectionObserverEntry) bool {
+    pub fn get_isIntersecting(_: *const IntersectionObserverEntry) bool {
         return true;
     }
 
     // Returns a DOMRectReadOnly for the intersection observer's root.
     pub fn get_rootBounds(self: *const IntersectionObserverEntry) !Element.DOMRect {
-        // TODO self.options.root can be an Element or a Document when Options are supported
-        const element = (try parser.documentGetDocumentElement(parser.documentHTMLToDocument(self.state.document.?))).?;
+        const root = self.options.root.?;
+        const root_type = try parser.nodeType(root);
+
+        var element: *parser.Element = undefined;
+        switch (root_type) {
+            .element => element = parser.nodeToElement(root),
+            .document => {
+                const doc = parser.nodeToDocument(root);
+                element = (try parser.documentGetDocumentElement(doc)).?;
+            },
+            else => return error.InvalidState,
+        }
+
         return try self.state.renderer.getRect(element);
     }
 
@@ -142,4 +158,100 @@ pub const IntersectionObserverEntry = struct {
     pub fn get_target(self: *const IntersectionObserverEntry) *parser.Element {
         return self.target;
     }
+
+    // TODO: pub fn get_time(self: *const IntersectionObserverEntry)
 };
+
+const testing = @import("../../testing.zig");
+test "Browser.DOM.IntersectionObserver" {
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
+    defer runner.deinit();
+
+    try runner.testCases(&.{
+        .{ "new IntersectionObserver(() => {}).observe(document.documentElement);", "undefined" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "let count_a = 0;", "undefined" },
+        .{ "const a1 = document.createElement('div');", "undefined" },
+        .{ "new IntersectionObserver(entries => {count_a += 1;}).observe(a1);", "undefined" },
+        .{ "count_a;", "1" },
+    }, .{});
+
+    // This test is documenting current behavior, not correct behavior.
+    // Currently every time observe is called, the callback is called with all entries. 1 + 2 = 3
+    try runner.testCases(&.{
+        .{ "let count_b = 0;", "undefined" },
+        .{ "let observer_b = new IntersectionObserver(entries => {count_b = entries.length;});", "undefined" },
+        .{ "const b1 = document.createElement('div');", "undefined" },
+        .{ "observer_b.observe(b1);", "undefined" },
+        .{ "count_b;", "1" },
+        .{ "const b2 = document.createElement('div');", "undefined" },
+        .{ "observer_b.observe(b2);", "undefined" },
+        .{ "count_b;", "2" },
+    }, .{});
+
+    // Unobserve
+    try runner.testCases(&.{
+        .{ "let count_c = 0;", "undefined" },
+        .{ "let observer_c = new IntersectionObserver(entries => { count_c = entries.length;});", "undefined" },
+        .{ "const c1 = document.createElement('div');", "undefined" },
+        .{ "observer_c.observe(c1);", "undefined" },
+        .{ "count_c;", "1" },
+        .{ "observer_c.unobserve(c1);", "undefined" },
+        .{ "const c2 = document.createElement('div');", "undefined" },
+        .{ "observer_c.observe(c2);", "undefined" },
+        .{ "count_c;", "1" },
+    }, .{});
+
+    // Disconnect
+    try runner.testCases(&.{
+        .{ "let observer_d = new IntersectionObserver(entries => {});", "undefined" },
+        .{ "let d1 = document.createElement('div');", "undefined" },
+        .{ "observer_d.observe(d1);", "undefined" },
+        .{ "observer_d.disconnect();", "undefined" },
+        .{ "observer_d.takeRecords().length;", "0" },
+    }, .{});
+
+    // takeRecords
+    try runner.testCases(&.{
+        .{ "let observer_e = new IntersectionObserver(entries => {});", "undefined" },
+        .{ "let e1 = document.createElement('div');", "undefined" },
+        .{ "observer_e.observe(e1);", "undefined" },
+        .{ "const e2 = document.createElement('div');", "undefined" },
+        .{ "observer_e.observe(e2);", "undefined" },
+        .{ "observer_e.takeRecords().length;", "2" },
+    }, .{});
+
+    // Entry
+    try runner.testCases(&.{
+        .{ "let entry;", "undefined" },
+        .{ "new IntersectionObserver(entries => { entry = entries[0]; }).observe(document.createElement('div'));", "undefined" },
+        .{ "entry.boundingClientRect.x;", "1" },
+        .{ "entry.intersectionRatio;", "1" },
+        .{ "entry.intersectionRect.x;", "1" },
+        .{ "entry.intersectionRect.y;", "0" },
+        .{ "entry.intersectionRect.width;", "1" },
+        .{ "entry.intersectionRect.height;", "1" },
+        .{ "entry.isIntersecting;", "true" },
+        .{ "entry.rootBounds.x;", "2" }, // This is not the prefered behaviour, the Window rect should wrap all elements so x -> 0
+        .{ "entry.rootBounds.width;", "1" }, // width -> clientWidth
+        .{ "entry.rootBounds.height;", "1" },
+        .{ "entry.target;", "[object HTMLDivElement]" },
+    }, .{});
+
+    // Options
+    try runner.testCases(&.{
+        .{ "const new_root = document.createElement('span');", "undefined" },
+        .{ "let new_entry;", "undefined" },
+        .{
+            \\ const new_observer = new IntersectionObserver(
+            \\ entries => { new_entry = entries[0]; },
+            \\ {root: new_root, rootMargin: '0px 0px 0px 0px', threshold: [0]});
+            ,
+            "undefined",
+        },
+        .{ "new_observer.observe(document.createElement('div'));", "undefined" },
+        .{ "new_entry.rootBounds.x;", "3" },
+    }, .{});
+}

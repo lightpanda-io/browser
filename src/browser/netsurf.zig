@@ -1278,6 +1278,11 @@ pub inline fn nodeToElement(node: *Node) *Element {
     return @as(*Element, @ptrCast(node));
 }
 
+// nodeToDocument is an helper to convert a node to an document.
+pub inline fn nodeToDocument(node: *Node) *Document {
+    return @as(*Document, @ptrCast(node));
+}
+
 // CharacterData
 pub const CharacterData = c.dom_characterdata;
 

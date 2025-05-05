@@ -506,7 +506,7 @@ test "Browser.DOM.Element" {
     }, .{});
 
     try runner.testCases(&.{
-        .{ "document.getElementById('para').clientWidth", "0" },
+        .{ "document.getElementById('para').clientWidth", "1" },
         .{ "document.getElementById('para').clientHeight", "1" },
 
         .{ "let r1 = document.getElementById('para').getBoundingClientRect()", "undefined" },
@@ -527,7 +527,7 @@ test "Browser.DOM.Element" {
         .{ "r3.width", "1" },
         .{ "r3.height", "1" },
 
-        .{ "document.getElementById('para').clientWidth", "2" },
+        .{ "document.getElementById('para').clientWidth", "3" },
         .{ "document.getElementById('para').clientHeight", "1" },
     }, .{});
 
