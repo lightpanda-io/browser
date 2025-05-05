@@ -21,16 +21,10 @@ const Allocator = std.mem.Allocator;
 
 const parser = @import("../netsurf.zig");
 
-const utils = @import("utils.z");
 const Element = @import("element.zig").Element;
 const Union = @import("element.zig").Union;
-
 const JsThis = @import("../env.zig").JsThis;
-
 const Walker = @import("walker.zig").Walker;
-const WalkerDepthFirst = @import("walker.zig").WalkerDepthFirst;
-const WalkerChildren = @import("walker.zig").WalkerChildren;
-const WalkerNone = @import("walker.zig").WalkerNone;
 
 const Matcher = union(enum) {
     matchByName: MatchByName,

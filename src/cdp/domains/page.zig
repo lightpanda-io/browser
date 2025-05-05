@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const runtime = @import("runtime.zig");
 const URL = @import("../../url.zig").URL;
 const Notification = @import("../../notification.zig").Notification;
 

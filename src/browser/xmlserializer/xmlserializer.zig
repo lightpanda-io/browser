@@ -22,7 +22,6 @@ const SessionState = @import("../env.zig").SessionState;
 
 const dump = @import("../dump.zig");
 const parser = @import("../netsurf.zig");
-const DOMError = parser.DOMError;
 
 pub const Interfaces = .{
     XMLSerializer,

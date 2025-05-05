@@ -23,7 +23,6 @@ const iterator = @import("../iterator/iterator.zig");
 
 const Callback = @import("../env.zig").Callback;
 const JsObject = @import("../env.zig").JsObject;
-const SessionState = @import("../env.zig").SessionState;
 const DOMException = @import("exceptions.zig").DOMException;
 
 const log = std.log.scoped(.token_list);

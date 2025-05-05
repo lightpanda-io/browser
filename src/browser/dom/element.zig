@@ -31,8 +31,6 @@ const NodeList = @import("nodelist.zig").NodeList;
 const HTMLElem = @import("../html/elements.zig");
 pub const Union = @import("../html/elements.zig").Union;
 
-const DOMException = @import("exceptions.zig").DOMException;
-
 // WEB IDL https://dom.spec.whatwg.org/#element
 pub const Element = struct {
     pub const Self = parser.Element;

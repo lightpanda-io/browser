@@ -18,8 +18,6 @@
 
 const std = @import("std");
 
-const builtin = @import("builtin");
-
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#the-history-interface
 pub const History = struct {
     const ScrollRestorationMode = enum {

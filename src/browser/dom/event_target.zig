@@ -16,8 +16,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
-
 const Env = @import("../env.zig").Env;
 const parser = @import("../netsurf.zig");
 const SessionState = @import("../env.zig").SessionState;

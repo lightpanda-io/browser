@@ -31,8 +31,6 @@ const css = @import("css.zig");
 const Element = @import("element.zig").Element;
 const ElementUnion = @import("element.zig").Union;
 
-const DocumentType = @import("document_type.zig").DocumentType;
-const DocumentFragment = @import("document_fragment.zig").DocumentFragment;
 const DOMImplementation = @import("implementation.zig").DOMImplementation;
 
 // WEB IDL https://dom.spec.whatwg.org/#document

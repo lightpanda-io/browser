@@ -4,7 +4,6 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const App = @import("../app.zig").App;
-const Loop = @import("jsruntime").Loop;
 const Notification = @import("../notification.zig").Notification;
 
 const uuidv4 = @import("../id.zig").uuidv4;
@@ -39,7 +38,7 @@ fn TelemetryT(comptime P: type) type {
             return .{
                 .disabled = disabled,
                 .run_mode = run_mode,
-                .provider = try P.init(app),
+                .provider = P.init(app),
                 .iid = if (disabled) null else getOrCreateId(app.app_dir_path),
             };
         }
@@ -135,7 +134,7 @@ pub const Event = union(enum) {
 };
 
 const NoopProvider = struct {
-    fn init(_: *App) !NoopProvider {
+    fn init(_: *App) NoopProvider {
         return .{};
     }
     fn deinit(_: NoopProvider) void {}
@@ -151,7 +150,7 @@ test "telemetry: disabled by environment" {
     defer _ = unsetenv(@constCast("LIGHTPANDA_DISABLE_TELEMETRY"));
 
     const FailingProvider = struct {
-        fn init(_: *App) !@This() {
+        fn init(_: *App) @This() {
             return .{};
         }
         fn deinit(_: @This()) void {}
@@ -207,7 +206,7 @@ const MockProvider = struct {
     allocator: Allocator,
     events: std.ArrayListUnmanaged(Event),
 
-    fn init(app: *App) !@This() {
+    fn init(app: *App) @This() {
         return .{
             .iid = null,
             .run_mode = null,

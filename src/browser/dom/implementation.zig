@@ -16,13 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
-
 const parser = @import("../netsurf.zig");
-const SessionState = @import("../env.zig").SessionState;
-
-const Document = @import("document.zig").Document;
-const DocumentType = @import("document_type.zig").DocumentType;
 const DOMException = @import("exceptions.zig").DOMException;
 
 // WEB IDL https://dom.spec.whatwg.org/#domimplementation

@@ -36,21 +36,16 @@ const URL = @import("../url.zig").URL;
 
 const http = @import("../http/client.zig");
 const storage = @import("storage/storage.zig");
-const Loop = @import("../runtime/loop.zig").Loop;
 const SessionState = @import("env.zig").SessionState;
-const HttpClient = @import("../http/client.zig").Client;
 const Notification = @import("../notification.zig").Notification;
 
 const polyfill = @import("polyfill/polyfill.zig");
 
 const log = std.log.scoped(.browser);
 
-pub const user_agent = "Lightpanda/1.0";
-
 // Browser is an instance of the browser.
 // You can create multiple browser instances.
 // A browser contains only one session.
-// TODO allow multiple sessions per browser.
 pub const Browser = struct {
     env: *Env,
     app: *App,
@@ -837,12 +832,6 @@ const FlatRenderer = struct {
         const elements = self.elements.items;
         return if (x < elements.len) @ptrFromInt(elements[@intCast(x)]) else null;
     }
-};
-
-const NoopContext = struct {
-    pub fn onInspectorResponse(_: *anyopaque, _: u32, _: []const u8) void {}
-    pub fn onInspectorEvent(_: *anyopaque, _: []const u8) void {}
-    pub fn notify(_: *anyopaque, _: *const Notification) !void {}
 };
 
 fn timestamp() u32 {
