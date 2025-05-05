@@ -26,7 +26,9 @@ pub const allocator = std.testing.allocator;
 // browser.Env or the browser.SessionState
 pub fn Runner(comptime State: type, comptime Global: type, comptime types: anytype) type {
     const AdjustedTypes = if (Global == void) generate.Tuple(.{ types, DefaultGlobal }) else types;
-    const Env = js.Env(State, struct {pub const Interfaces = AdjustedTypes;});
+    const Env = js.Env(State, struct {
+        pub const Interfaces = AdjustedTypes;
+    });
 
     return struct {
         env: *Env,

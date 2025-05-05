@@ -32,6 +32,7 @@ const Walker = @import("dom/walker.zig").WalkerDepthFirst;
 
 const Env = @import("env.zig").Env;
 const App = @import("../app.zig").App;
+const Loop = @import("../runtime/loop.zig").Loop;
 
 const URL = @import("../url.zig").URL;
 
@@ -171,8 +172,7 @@ pub const Session = struct {
 
         std.debug.assert(self.page != null);
         // Reset all existing callbacks.
-        self.browser.app.loop.resetJS();
-        self.browser.app.loop.resetZig();
+        self.browser.app.loop.reset();
         self.executor.endScope();
         self.page = null;
 
@@ -230,6 +230,8 @@ pub const Page = struct {
 
     renderer: FlatRenderer,
 
+    microtask_node: Loop.CallbackNode,
+
     window_clicked_event_node: parser.EventNode,
 
     scope: *Env.Scope,
@@ -248,6 +250,7 @@ pub const Page = struct {
             .url = URL.empty,
             .session = session,
             .renderer = FlatRenderer.init(arena),
+            .microtask_node = .{ .func = microtaskCallback },
             .window_clicked_event_node = .{ .func = windowClicked },
             .state = .{
                 .arena = arena,
@@ -264,13 +267,13 @@ pub const Page = struct {
         // load polyfills
         try polyfill.load(self.arena, self.scope);
 
-        self.microtaskLoop();
+        // _ = try session.browser.app.loop.timeout(1 * std.time.ns_per_ms, &self.microtask_node);
     }
 
-    fn microtaskLoop(self: *Page) void {
-        const browser = self.session.browser;
-        browser.runMicrotasks();
-        browser.app.loop.zigTimeout(1 * std.time.ns_per_ms, *Page, self, microtaskLoop);
+    fn microtaskCallback(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
+        const self: *Page = @fieldParentPtr("microtask_node", node);
+        self.session.browser.runMicrotasks();
+        repeat_delay.* = 1 * std.time.ns_per_ms;
     }
 
     // dump writes the page content into the given file.
@@ -297,20 +300,19 @@ pub const Page = struct {
     }
 
     pub fn wait(self: *Page) !void {
-        // try catch
         var try_catch: Env.TryCatch = undefined;
         try_catch.init(self.scope);
         defer try_catch.deinit();
 
-        self.session.browser.app.loop.run() catch |err| {
-            if (try try_catch.err(self.arena)) |msg| {
-                log.info("wait error: {s}", .{msg});
-                return;
-            } else {
-                log.info("wait error: {any}", .{err});
-            }
-        };
-        log.debug("wait: OK", .{});
+        try self.session.browser.app.loop.run();
+
+        if (try_catch.hasCaught() == false) {
+            log.debug("wait: OK", .{});
+            return;
+        }
+
+        const msg = (try try_catch.err(self.arena)) orelse "unknown";
+        log.info("wait error: {s}", .{msg});
     }
 
     pub fn origin(self: *const Page, arena: Allocator) ![]const u8 {
