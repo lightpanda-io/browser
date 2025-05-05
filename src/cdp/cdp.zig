@@ -340,6 +340,8 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             self.node_search_list = Node.Search.List.init(allocator, &self.node_registry);
             errdefer self.deinit();
 
+            try cdp.browser.notification.register(.page_remove, self, onPageRemove);
+            try cdp.browser.notification.register(.page_created, self, onPageCreated);
             try cdp.browser.notification.register(.page_navigate, self, onPageNavigate);
             try cdp.browser.notification.register(.page_navigated, self, onPageNavigated);
         }
@@ -365,7 +367,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             self.node_search_list.reset();
         }
 
-        pub fn createIsolatedWorld(self: *Self, page: *Page) !void {
+        pub fn createIsolatedWorld(self: *Self, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
             if (self.isolated_world != null) {
                 return error.CurrentlyOnly1IsolatedWorldSupported;
             }
@@ -374,19 +376,12 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             errdefer executor.deinit();
 
             self.isolated_world = .{
-                .name = "",
-                .scope = undefined,
+                .name = try self.arena.dupe(u8, world_name),
+                .scope = null,
                 .executor = executor,
-                .grant_universal_access = true,
+                .grant_universal_access = grant_universal_access,
             };
-            var world = &self.isolated_world.?;
-
-            // The isolate world must share at least some of the state with the related page, specifically the DocumentHTML
-            // (assuming grantUniveralAccess will be set to True!).
-            // We just created the world and the page. The page's state lives in the session, but is update on navigation.
-            // This also means this pointer becomes invalid after removePage untill a new page is created.
-            // Currently we have only 1 page/frame and thus also only 1 state in the isolate world.
-            world.scope = try world.executor.startScope(&page.window, &page.state, {}, false);
+            return &self.isolated_world.?;
         }
 
         pub fn nodeWriter(self: *Self, node: *const Node, opts: Node.Writer.Opts) Node.Writer {
@@ -401,6 +396,16 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             const page = self.session.currentPage() orelse return null;
             const raw_url = page.url.raw;
             return if (raw_url.len == 0) null else raw_url;
+        }
+
+        pub fn onPageRemove(ctx: *anyopaque, _: Notification.PageRemove) !void {
+            const self: *Self = @alignCast(@ptrCast(ctx));
+            return @import("domains/page.zig").pageRemove(self);
+        }
+
+        pub fn onPageCreated(ctx: *anyopaque, page: *Page) !void {
+            const self: *Self = @alignCast(@ptrCast(ctx));
+            return @import("domains/page.zig").pageCreated(self, page);
         }
 
         pub fn onPageNavigate(ctx: *anyopaque, data: *const Notification.PageNavigate) !void {
@@ -506,12 +511,28 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 /// An object id is unique across all contexts, different object ids can refer to the same Node in different contexts.
 const IsolatedWorld = struct {
     name: []const u8,
-    scope: *Env.Scope,
+    scope: ?*Env.Scope,
     executor: Env.Executor,
     grant_universal_access: bool,
 
     pub fn deinit(self: *IsolatedWorld) void {
         self.executor.deinit();
+        self.scope = null;
+    }
+    pub fn removeContext(self: *IsolatedWorld) !void {
+        if (self.scope == null) return error.NoIsolatedContextToRemove;
+        self.executor.endScope();
+        self.scope = null;
+    }
+
+    // The isolate world must share at least some of the state with the related page, specifically the DocumentHTML
+    // (assuming grantUniveralAccess will be set to True!).
+    // We just created the world and the page. The page's state lives in the session, but is update on navigation.
+    // This also means this pointer becomes invalid after removePage untill a new page is created.
+    // Currently we have only 1 page/frame and thus also only 1 state in the isolate world.
+    pub fn createContext(self: *IsolatedWorld, page: *Page) !void {
+        if (self.scope != null) return error.Only1IsolatedContextSupported;
+        self.scope = try self.executor.startScope(&page.window, &page.state, {}, false);
     }
 };
 

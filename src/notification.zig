@@ -55,17 +55,23 @@ pub const Notification = struct {
     node_pool: std.heap.MemoryPool(Node),
 
     const EventListeners = struct {
+        page_remove: List = .{},
+        page_created: List = .{},
         page_navigate: List = .{},
         page_navigated: List = .{},
         notification_created: List = .{},
     };
 
     const Events = union(enum) {
+        page_remove: PageRemove,
+        page_created: *browser.Page,
         page_navigate: *const PageNavigate,
         page_navigated: *const PageNavigated,
         notification_created: *Notification,
     };
     const EventType = std.meta.FieldEnum(Events);
+
+    pub const PageRemove = struct {};
 
     pub const PageNavigate = struct {
         timestamp: u32,

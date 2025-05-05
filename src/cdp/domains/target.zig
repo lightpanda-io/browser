@@ -125,8 +125,6 @@ fn createTarget(cmd: anytype) !void {
     bc.target_id = target_id;
 
     var page = try bc.session.createPage();
-    try bc.createIsolatedWorld(page);
-
     {
         const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
         bc.inspector.contextCreated(

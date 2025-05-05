@@ -197,7 +197,7 @@ fn resolveNode(cmd: anytype) !void {
     if (params.executionContextId) |context_id| {
         if (scope.context.debugContextId() != context_id) {
             const isolated_world = bc.isolated_world orelse return error.ContextNotFound;
-            scope = isolated_world.scope;
+            scope = isolated_world.scope orelse return error.ContextNotFound;
 
             if (scope.context.debugContextId() != context_id) return error.ContextNotFound;
         }
