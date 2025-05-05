@@ -1,4 +1,3 @@
-const std = @import("std");
 // fetch.js code comes from
 // https://github.com/JakeChampion/fetch/blob/main/fetch.js
 //

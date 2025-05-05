@@ -26,7 +26,7 @@ pub const LightPanda = struct {
 
     const List = std.DoublyLinkedList(LightPandaEvent);
 
-    pub fn init(app: *App) !LightPanda {
+    pub fn init(app: *App) LightPanda {
         const allocator = app.allocator;
         return .{
             .cond = .{},

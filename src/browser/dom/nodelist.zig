@@ -22,7 +22,6 @@ const parser = @import("../netsurf.zig");
 
 const JsThis = @import("../env.zig").JsThis;
 const Callback = @import("../env.zig").Callback;
-const SessionState = @import("../env.zig").SessionState;
 
 const NodeUnion = @import("node.zig").Union;
 const Node = @import("node.zig").Node;

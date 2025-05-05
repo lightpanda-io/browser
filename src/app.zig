@@ -1,7 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const js = @import("runtime/js.zig");
 const Loop = @import("runtime/loop.zig").Loop;
 const HttpClient = @import("http/client.zig").Client;
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;

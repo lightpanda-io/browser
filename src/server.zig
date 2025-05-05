@@ -30,8 +30,6 @@ const Completion = IO.Completion;
 const AcceptError = IO.AcceptError;
 const RecvError = IO.RecvError;
 const SendError = IO.SendError;
-const CloseError = IO.CloseError;
-const CancelError = IO.CancelOneError;
 const TimeoutError = IO.TimeoutError;
 const Loop = @import("runtime/loop.zig").Loop;
 
@@ -945,10 +943,6 @@ const OpCode = enum(u8) {
     text = 128 | 1,
     close = 128 | 8,
     pong = 128 | 10,
-};
-
-const CloseCode = enum {
-    timeout,
 };
 
 fn fillWebsocketHeader(buf: std.ArrayListUnmanaged(u8)) []const u8 {

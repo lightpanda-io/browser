@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const File = std.fs.File;
 
 const parser = @import("netsurf.zig");
 const Walker = @import("dom/walker.zig").WalkerChildren;

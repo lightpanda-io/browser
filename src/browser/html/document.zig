@@ -21,10 +21,8 @@ const std = @import("std");
 const parser = @import("../netsurf.zig");
 const SessionState = @import("../env.zig").SessionState;
 
-const Node = @import("../dom/node.zig").Node;
 const Document = @import("../dom/document.zig").Document;
 const NodeList = @import("../dom/nodelist.zig").NodeList;
-const HTMLElem = @import("elements.zig");
 const Location = @import("location.zig").Location;
 
 const collection = @import("../dom/html_collection.zig");

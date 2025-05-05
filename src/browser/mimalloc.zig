@@ -21,7 +21,6 @@
 // We replace the libdom default usage of allocations with mimalloc heap
 // allocation to be able to free all memory used at once, like an arena usage.
 
-const std = @import("std");
 const c = @cImport({
     @cInclude("mimalloc.h");
 });

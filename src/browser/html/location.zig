@@ -16,11 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
-
 const SessionState = @import("../env.zig").SessionState;
-
-const builtin = @import("builtin");
 
 const URL = @import("../url/url.zig").URL;
 
