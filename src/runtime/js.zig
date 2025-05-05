@@ -2532,9 +2532,14 @@ fn Caller(comptime E: type) type {
 
                         // We settle for just probing the first value. Ok, actually
                         // not tricky in this case either.
-                        const context = self.contxt;
+                        const context = self.context;
                         const js_obj = js_arr.castTo(v8.Object);
-                        return self.probeJsValueToZig(named_function, ptr.child, try js_obj.getAtIndex(context, 0));
+                        switch (try self.probeJsValueToZig(named_function, ptr.child, try js_obj.getAtIndex(context, 0))) {
+                            .value, .ok => return .{ .ok = {} },
+                            .compatible => return .{ .compatible = {} },
+                            .coerce => return .{ .coerce = {} },
+                            .invalid => return .{ .invalid = {} },
+                        }
                     },
                     else => {},
                 },

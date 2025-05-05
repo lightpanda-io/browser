@@ -25,6 +25,7 @@ const SessionState = @import("../env.zig").SessionState;
 const Navigator = @import("navigator.zig").Navigator;
 const History = @import("history.zig").History;
 const Location = @import("location.zig").Location;
+const Crypto = @import("../crypto/crypto.zig").Crypto;
 const Console = @import("../console/console.zig").Console;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 
@@ -49,6 +50,7 @@ pub const Window = struct {
     timeoutid: u32 = 0,
     timeoutids: [512]u64 = undefined,
 
+    crypto: Crypto = .{},
     console: Console = .{},
     navigator: Navigator = .{},
 
@@ -89,6 +91,10 @@ pub const Window = struct {
 
     pub fn get_console(self: *Window) *Console {
         return &self.console;
+    }
+
+    pub fn get_crypto(self: *Window) *Crypto {
+        return &self.crypto;
     }
 
     pub fn get_self(self: *Window) *Window {
