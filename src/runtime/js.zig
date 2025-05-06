@@ -594,7 +594,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 var origin: ?v8.ScriptOrigin = null;
                 if (name) |n| {
                     const scr_name = v8.String.initUtf8(isolate, n);
-                    origin = v8.ScriptOrigin.initDefault(self.isolate, scr_name.toValue());
+                    origin = v8.ScriptOrigin.initDefault(scr_name.toValue());
                 }
                 const scr_js = v8.String.initUtf8(isolate, src);
                 const scr = v8.Script.compile(context, scr_js, origin) catch {
@@ -1142,7 +1142,6 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             const script_source = v8.String.initUtf8(isolate, src);
 
             const origin = v8.ScriptOrigin.init(
-                isolate,
                 script_name.toValue(),
                 0, // resource_line_offset
                 0, // resource_column_offset
@@ -1201,14 +1200,15 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             if (@hasDecl(Struct, "get_symbol_toStringTag") == false) {
                 // If this WAS defined, then we would have created it in generateProperty.
                 // But if it isn't, we create a default one
-                const key = v8.Symbol.getToStringTag(isolate).toName();
-                template_proto.setGetter(key, struct {
-                    fn stringTag(_: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) void {
-                        const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
+                const string_tag_callback = v8.FunctionTemplate.initCallback(isolate, struct {
+                    fn stringTag(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
+                        const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
                         const class_name = v8.String.initUtf8(info.getIsolate(), comptime classNameForStruct(Struct));
                         info.getReturnValue().set(class_name);
                     }
                 }.stringTag);
+                const key = v8.Symbol.getToStringTag(isolate).toName();
+                template_proto.setAccessorGetter(key, string_tag_callback);
             }
 
             generateIndexer(Struct, template_proto);
@@ -1309,9 +1309,9 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 js_name = v8.String.initUtf8(isolate, name).toName();
             }
 
-            const getter_callback = struct {
-                fn callback(_: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) void {
-                    const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
+            const getter_callback = v8.FunctionTemplate.initCallback(isolate, struct {
+                fn callback(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
+                    const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
                     var caller = Caller(Self, State).init(info);
                     defer caller.deinit();
 
@@ -1320,28 +1320,30 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         caller.handleError(Struct, named_function, err, info);
                     };
                 }
-            }.callback;
+            }.callback);
 
             const setter_name = "set_" ++ name;
             if (@hasDecl(Struct, setter_name) == false) {
-                template_proto.setGetter(js_name, getter_callback);
+                template_proto.setAccessorGetter(js_name, getter_callback);
                 return;
             }
 
-            const setter_callback = struct {
-                fn callback(_: ?*const v8.C_Name, raw_value: ?*const v8.C_Value, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) void {
-                    const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
+            const setter_callback = v8.FunctionTemplate.initCallback(isolate, struct {
+                fn callback(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
+                    const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
                     var caller = Caller(Self, State).init(info);
                     defer caller.deinit();
 
-                    const js_value = v8.Value{ .handle = raw_value.? };
+                    std.debug.assert(info.length() == 1);
+                    const js_value = info.getArg(0);
                     const named_function = comptime NamedFunction.init(Struct, "set_" ++ name);
                     caller.setter(Struct, named_function, js_value, info) catch |err| {
                         caller.handleError(Struct, named_function, err, info);
                     };
                 }
-            }.callback;
-            template_proto.setGetterAndSetter(js_name, getter_callback, setter_callback);
+            }.callback);
+
+            template_proto.setAccessorGetterAndSetter(js_name, getter_callback, setter_callback);
         }
 
         fn generateIndexer(comptime Struct: type, template_proto: v8.ObjectTemplate) void {
@@ -1762,7 +1764,7 @@ fn Caller(comptime E: type, comptime State: type) type {
             info.getReturnValue().set(try self.zigValueToJs(res));
         }
 
-        fn getter(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, info: v8.PropertyCallbackInfo) !void {
+        fn getter(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, info: v8.FunctionCallbackInfo) !void {
             const func = @field(Struct, named_function.name);
             const Getter = @TypeOf(func);
             if (@typeInfo(Getter).@"fn".return_type == null) {
@@ -1788,7 +1790,7 @@ fn Caller(comptime E: type, comptime State: type) type {
             info.getReturnValue().set(try self.zigValueToJs(res));
         }
 
-        fn setter(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, js_value: v8.Value, info: v8.PropertyCallbackInfo) !void {
+        fn setter(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, js_value: v8.Value, info: v8.FunctionCallbackInfo) !void {
             const func = @field(Struct, named_function.name);
             comptime assertSelfReceiver(Struct, named_function);
 
