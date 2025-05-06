@@ -32,9 +32,10 @@ pub fn processMessage(cmd: anytype) !void {
 // https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-dispatchMouseEvent
 fn dispatchMouseEvent(cmd: anytype) !void {
     const params = (try cmd.params(struct {
-        x: i32,
-        y: i32,
-        type: Type,
+        type: Type, // Type of the mouse event.
+        x: f32, // X coordinate of the event relative to the main frame's viewport.
+        y: f32, // Y coordinate of the event relative to the main frame's viewport. 0 refers to the top of the viewport and Y increases as it proceeds towards the bottom of the viewport.
+        // Many optional parameters are not implemented yet, see documentation url.
 
         const Type = enum {
             mousePressed,
@@ -56,8 +57,8 @@ fn dispatchMouseEvent(cmd: anytype) !void {
     const page = bc.session.currentPage() orelse return;
 
     const mouse_event = Page.MouseEvent{
-        .x = params.x,
-        .y = params.y,
+        .x = @intFromFloat(@floor(params.x)), // Decimal pixel values are not understood by netsurf or our renderer
+        .y = @intFromFloat(@floor(params.y)), // So we convert them once at intake here. Using floor such that -0.5 becomes -1 and 0.5 becomes 0.
         .type = switch (params.type) {
             .mousePressed => .pressed,
             .mouseReleased => .released,
