@@ -54,7 +54,7 @@ pub const IntersectionObserver = struct {
         var options = IntersectionObserverOptions{
             .root = parser.documentToNode(parser.documentHTMLToDocument(state.document.?)),
             .rootMargin = "0px 0px 0px 0px",
-            .threshold = &default_threshold,
+            .threshold = &.{0.0},
         };
         if (options_) |*o| {
             if (o.root) |root| {
@@ -74,10 +74,16 @@ pub const IntersectionObserver = struct {
         self.observed_entries = .{}; // We don't free as it is on an arena
     }
 
-    pub fn _observe(self: *IntersectionObserver, targetElement: *parser.Element) !void {
+    pub fn _observe(self: *IntersectionObserver, target_element: *parser.Element) !void {
+        for (self.observed_entries.items) |*observer| {
+            if (observer.target == target_element) {
+                return; // Already observed
+            }
+        }
+
         try self.observed_entries.append(self.state.arena, .{
             .state = self.state,
-            .target = targetElement,
+            .target = target_element,
             .options = &self.options,
         });
 
@@ -107,7 +113,6 @@ const IntersectionObserverOptions = struct {
     rootMargin: ?[]const u8,
     threshold: ?[]const f32,
 };
-const default_threshold = [_]f32{0.0};
 
 // https://developer.mozilla.org/en-US/docs/Web/API/IntersectionObserverEntry
 // https://w3c.github.io/IntersectionObserver/#intersection-observer-entry
@@ -118,7 +123,7 @@ pub const IntersectionObserverEntry = struct {
 
     // Returns the bounds rectangle of the target element as a DOMRectReadOnly. The bounds are computed as described in the documentation for Element.getBoundingClientRect().
     pub fn get_boundingClientRect(self: *const IntersectionObserverEntry) !Element.DOMRect {
-        return self.state.renderer.getRect(self.target); // Does this ever change?
+        return self.state.renderer.getRect(self.target);
     }
 
     // Returns the ratio of the intersectionRect to the boundingClientRect.
@@ -139,6 +144,10 @@ pub const IntersectionObserverEntry = struct {
     // Returns a DOMRectReadOnly for the intersection observer's root.
     pub fn get_rootBounds(self: *const IntersectionObserverEntry) !Element.DOMRect {
         const root = self.options.root.?;
+        if (@intFromPtr(root) == @intFromPtr(self.state.document.?)) {
+            return self.state.renderer.boundingRect();
+        }
+
         const root_type = try parser.nodeType(root);
 
         var element: *parser.Element = undefined;
@@ -179,7 +188,7 @@ test "Browser.DOM.IntersectionObserver" {
     }, .{});
 
     // This test is documenting current behavior, not correct behavior.
-    // Currently every time observe is called, the callback is called with all entries. 1 + 2 = 3
+    // Currently every time observe is called, the callback is called with all entries.
     try runner.testCases(&.{
         .{ "let count_b = 0;", "undefined" },
         .{ "let observer_b = new IntersectionObserver(entries => {count_b = entries.length;});", "undefined" },
@@ -189,6 +198,17 @@ test "Browser.DOM.IntersectionObserver" {
         .{ "const b2 = document.createElement('div');", "undefined" },
         .{ "observer_b.observe(b2);", "undefined" },
         .{ "count_b;", "2" },
+    }, .{});
+
+    // Re-observing is a no-op
+    try runner.testCases(&.{
+        .{ "let count_bb = 0;", "undefined" },
+        .{ "let observer_bb = new IntersectionObserver(entries => {count_bb = entries.length;});", "undefined" },
+        .{ "const bb1 = document.createElement('div');", "undefined" },
+        .{ "observer_bb.observe(bb1);", "undefined" },
+        .{ "count_bb;", "1" },
+        .{ "observer_bb.observe(bb1);", "undefined" },
+        .{ "count_bb;", "1" }, // Still 1, not 2
     }, .{});
 
     // Unobserve
@@ -234,8 +254,9 @@ test "Browser.DOM.IntersectionObserver" {
         .{ "entry.intersectionRect.width;", "1" },
         .{ "entry.intersectionRect.height;", "1" },
         .{ "entry.isIntersecting;", "true" },
-        .{ "entry.rootBounds.x;", "2" }, // This is not the prefered behaviour, the Window rect should wrap all elements so x -> 0
-        .{ "entry.rootBounds.width;", "1" }, // width -> clientWidth
+        .{ "entry.rootBounds.x;", "0" },
+        .{ "entry.rootBounds.y;", "0" },
+        .{ "entry.rootBounds.width;", "2" },
         .{ "entry.rootBounds.height;", "1" },
         .{ "entry.target;", "[object HTMLDivElement]" },
     }, .{});
@@ -252,6 +273,6 @@ test "Browser.DOM.IntersectionObserver" {
             "undefined",
         },
         .{ "new_observer.observe(document.createElement('div'));", "undefined" },
-        .{ "new_entry.rootBounds.x;", "3" },
+        .{ "new_entry.rootBounds.x;", "2" },
     }, .{});
 }
