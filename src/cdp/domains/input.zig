@@ -57,7 +57,7 @@ fn dispatchMouseEvent(cmd: anytype) !void {
     const page = bc.session.currentPage() orelse return;
 
     const mouse_event = Page.MouseEvent{
-        .x = @intFromFloat(@floor(params.x)), // Decimal pixel values are not understood by netsurf or our rendered
+        .x = @intFromFloat(@floor(params.x)), // Decimal pixel values are not understood by netsurf or our renderer
         .y = @intFromFloat(@floor(params.y)), // So we convert them once at intake here. Using floor such that -0.5 becomes -1 and 0.5 becomes 0.
         .type = switch (params.type) {
             .mousePressed => .pressed,
