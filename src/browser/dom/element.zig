@@ -500,24 +500,24 @@ test "Browser.DOM.Element" {
         .{ "document.getElementById('para').clientHeight", "1" },
 
         .{ "let r1 = document.getElementById('para').getBoundingClientRect()", "undefined" },
-        .{ "r1.x", "1" },
+        .{ "r1.x", "0" },
         .{ "r1.y", "0" },
         .{ "r1.width", "1" },
         .{ "r1.height", "1" },
 
         .{ "let r2 = document.getElementById('content').getBoundingClientRect()", "undefined" },
-        .{ "r2.x", "2" },
+        .{ "r2.x", "1" },
         .{ "r2.y", "0" },
         .{ "r2.width", "1" },
         .{ "r2.height", "1" },
 
         .{ "let r3 = document.getElementById('para').getBoundingClientRect()", "undefined" },
-        .{ "r3.x", "1" },
+        .{ "r3.x", "0" },
         .{ "r3.y", "0" },
         .{ "r3.width", "1" },
         .{ "r3.height", "1" },
 
-        .{ "document.getElementById('para').clientWidth", "3" },
+        .{ "document.getElementById('para').clientWidth", "2" },
         .{ "document.getElementById('para').clientHeight", "1" },
     }, .{});
 

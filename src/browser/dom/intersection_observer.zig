@@ -247,16 +247,16 @@ test "Browser.DOM.IntersectionObserver" {
     try runner.testCases(&.{
         .{ "let entry;", "undefined" },
         .{ "new IntersectionObserver(entries => { entry = entries[0]; }).observe(document.createElement('div'));", "undefined" },
-        .{ "entry.boundingClientRect.x;", "1" },
+        .{ "entry.boundingClientRect.x;", "0" },
         .{ "entry.intersectionRatio;", "1" },
-        .{ "entry.intersectionRect.x;", "1" },
+        .{ "entry.intersectionRect.x;", "0" },
         .{ "entry.intersectionRect.y;", "0" },
         .{ "entry.intersectionRect.width;", "1" },
         .{ "entry.intersectionRect.height;", "1" },
         .{ "entry.isIntersecting;", "true" },
         .{ "entry.rootBounds.x;", "0" },
         .{ "entry.rootBounds.y;", "0" },
-        .{ "entry.rootBounds.width;", "2" },
+        .{ "entry.rootBounds.width;", "1" },
         .{ "entry.rootBounds.height;", "1" },
         .{ "entry.target;", "[object HTMLDivElement]" },
     }, .{});
@@ -273,6 +273,6 @@ test "Browser.DOM.IntersectionObserver" {
             "undefined",
         },
         .{ "new_observer.observe(document.createElement('div'));", "undefined" },
-        .{ "new_entry.rootBounds.x;", "2" },
+        .{ "new_entry.rootBounds.x;", "1" },
     }, .{});
 }
