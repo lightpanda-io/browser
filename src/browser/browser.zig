@@ -193,7 +193,7 @@ pub const Session = struct {
         // can't use the page arena, because we're about to reset it
         // and don't want to use the session's arena, because that'll start to
         // look like a leak if we navigate from page to page a lot.
-        var buf: [1024]u8 = undefined;
+        var buf: [4096]u8 = undefined;
         var fba = std.heap.FixedBufferAllocator.init(&buf);
         const url = try self.page.?.url.resolve(fba.allocator(), url_string);
 
@@ -818,8 +818,8 @@ const FlatRenderer = struct {
         const gop = try self.positions.getOrPut(self.allocator, @intFromPtr(e));
         var x: u32 = gop.value_ptr.*;
         if (gop.found_existing == false) {
-            try elements.append(self.allocator, @intFromPtr(e));
             x = @intCast(elements.items.len);
+            try elements.append(self.allocator, @intFromPtr(e));
             gop.value_ptr.* = x;
         }
 
@@ -841,7 +841,7 @@ const FlatRenderer = struct {
     }
 
     pub fn width(self: *const FlatRenderer) u32 {
-        return @intCast(self.elements.items.len + 1); // +1 since x starts at 1 (use len after append)
+        return @max(@as(u32, @intCast(self.elements.items.len)), 1); // At least 1 pixel even if empty
     }
 
     pub fn height(_: *const FlatRenderer) u32 {
@@ -849,7 +849,7 @@ const FlatRenderer = struct {
     }
 
     pub fn getElementAtPosition(self: *const FlatRenderer, x: i32, y: i32) ?*parser.Element {
-        if (y != 1 or x < 0) {
+        if (y != 0 or x < 0) {
             return null;
         }
 
