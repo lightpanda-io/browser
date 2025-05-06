@@ -346,6 +346,12 @@ pub const Element = struct {
         return state.renderer.getRect(self);
     }
 
+    // returns a collection of DOMRect objects that indicate the bounding rectangles for each CSS border box in a client.
+    // We do not render so just always return the element's rect.
+    pub fn _getClientRects(self: *parser.Element, state: *SessionState) ![1]DOMRect {
+        return [_]DOMRect{try state.renderer.getRect(self)};
+    }
+
     pub fn get_clientWidth(_: *parser.Element, state: *SessionState) u32 {
         return state.renderer.width();
     }
@@ -498,7 +504,7 @@ test "Browser.DOM.Element" {
     }, .{});
 
     try runner.testCases(&.{
-        .{ "document.getElementById('para').clientWidth", "0" },
+        .{ "document.getElementById('para').clientWidth", "1" },
         .{ "document.getElementById('para').clientHeight", "1" },
 
         .{ "let r1 = document.getElementById('para').getBoundingClientRect()", "undefined" },
@@ -519,7 +525,7 @@ test "Browser.DOM.Element" {
         .{ "r3.width", "1" },
         .{ "r3.height", "1" },
 
-        .{ "document.getElementById('para').clientWidth", "2" },
+        .{ "document.getElementById('para').clientWidth", "3" },
         .{ "document.getElementById('para').clientHeight", "1" },
     }, .{});
 

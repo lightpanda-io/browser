@@ -828,8 +828,17 @@ const FlatRenderer = struct {
         };
     }
 
+    pub fn boundingRect(self: *const FlatRenderer) Element.DOMRect {
+        return .{
+            .x = 0.0,
+            .y = 0.0,
+            .width = @floatFromInt(self.width()),
+            .height = @floatFromInt(self.height()),
+        };
+    }
+
     pub fn width(self: *const FlatRenderer) u32 {
-        return @intCast(self.elements.items.len);
+        return @intCast(self.elements.items.len + 1); // +1 since x starts at 1 (use len after append)
     }
 
     pub fn height(_: *const FlatRenderer) u32 {

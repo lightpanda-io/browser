@@ -24,6 +24,7 @@ const DOMTokenList = @import("token_list.zig");
 const NodeList = @import("nodelist.zig");
 const Node = @import("node.zig");
 const MutationObserver = @import("mutation_observer.zig");
+const IntersectionObserver = @import("intersection_observer.zig");
 
 pub const Interfaces = .{
     DOMException,
@@ -35,4 +36,5 @@ pub const Interfaces = .{
     Node.Node,
     Node.Interfaces,
     MutationObserver.Interfaces,
+    IntersectionObserver.Interfaces,
 };
