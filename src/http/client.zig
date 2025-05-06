@@ -214,6 +214,7 @@ pub const Request = struct {
         if (opts.tls_verify_host) |override| {
             self._tls_verify_host = override;
         }
+
         try self.prepareInitialSend();
         return self.doSendSync();
     }
@@ -905,6 +906,37 @@ const SyncHandler = struct {
             std.debug.assert(result.done or reader.body_reader != null);
             std.debug.assert(result.data == null);
 
+            // See CompressedReader for an explanation. This isn't great code. Sorry.
+            if (reader.response.get("content-encoding")) |ce| {
+                if (std.ascii.eqlIgnoreCase(ce, "gzip") == false) {
+                    log.err("unsupported content encoding '{s}' for: {}", .{ ce, request.uri });
+                    return error.UnsupportedContentEncoding;
+                }
+
+                var compress_reader = CompressedReader{
+                    .over = "",
+                    .inner = &reader,
+                    .done = result.done,
+                    .buffer = state.read_buf,
+                    .data = result.unprocessed,
+                    .connection = connection,
+                };
+                var body: std.ArrayListUnmanaged(u8) = .{};
+                var decompressor = std.compress.gzip.decompressor(compress_reader.reader());
+                try decompressor.decompress(body.writer(request.arena));
+
+                return .{
+                    .header = reader.response,
+                    ._done = true,
+                    ._request = request,
+                    ._peek_buf = body.items,
+                    ._peek_len = body.items.len,
+                    ._buf = undefined,
+                    ._reader = undefined,
+                    ._connection = undefined,
+                };
+            }
+
             return .{
                 ._buf = buf,
                 ._request = request,
@@ -994,6 +1026,90 @@ const SyncHandler = struct {
             while (i < data.len) {
                 i += try posix.write(socket, data[i..]);
             }
+        }
+    };
+
+    // We don't ask for encoding, but some providers (CloudFront!!)
+    // encode anyways. This is an issue for our async-path because Zig's
+    // decompressors aren't async-friendly - they want to pull data in
+    // rather than being given data when it's available. Unfortunately
+    // this is a problem for our own Reader, which is shared by both our
+    // sync and async handlers, but has an async-ish API. It's hard to
+    // use our Reader with Zig's decompressors. Given the way our Reader
+    // is write, this is a problem even for our sync requests. For now, we
+    // just read the entire body into memory, which makes things manageable.
+    // Finally, we leverage the existing `peek` logic in the Response to make
+    // this fully-read content available.
+    // If you think about it, this CompressedReader is just a fancy "peek" over
+    // the entire body.
+    const CompressedReader = struct {
+        done: bool,
+        buffer: []u8,
+        inner: *Reader,
+        connection: Connection,
+
+        // Represents data directly from the socket. It hasn't been processed
+        // by the body reader. It could, for example, have chunk information in it.
+        // Needed to be processed by `inner` before it can be returned
+        data: ?[]u8,
+
+        // Represents data that _was_ processed by the body reader, but coudln't
+        // fit in the destination buffer given to read.
+        // This adds complexity, but the reality is that we can read more data
+        // from the socket than space we have in the given `dest`. Think of
+        // this as doing something like a BufferedReader. We _could_ limit
+        // our reads to dest.len, but we can overread when initially reading
+        // the header/response, and at that point, we don't know anything about
+        // this Compression stuff.
+        over: []const u8,
+
+        const IOReader = std.io.Reader(*CompressedReader, anyerror, read);
+
+        pub fn reader(self: *CompressedReader) IOReader {
+            return .{ .context = self };
+        }
+
+        fn read(self: *CompressedReader, dest: []u8) anyerror!usize {
+            if (self.over.len > 0) {
+                // data from a previous `read` which is ready to go as-is. i.e.
+                // it's already been processed by inner (the body reader).
+                const l = @min(self.over.len, dest.len);
+                @memcpy(dest[0..l], self.over[0..l]);
+                self.over = self.over[l..];
+                return l;
+            }
+
+            var buffer = self.buffer;
+            buffer = buffer[0..@min(dest.len, buffer.len)];
+
+            while (true) {
+                if (try self.processData()) |data| {
+                    const l = @min(data.len, dest.len);
+                    @memcpy(dest[0..l], data[0..l]);
+
+                    // if we processed more data than fits into dest, we store
+                    // it in `over` for the next call to `read`
+                    self.over = data[l..];
+                    return l;
+                }
+
+                if (self.done) {
+                    return 0;
+                }
+
+                const n = try self.connection.read(self.buffer);
+                self.data = self.buffer[0..n];
+            }
+        }
+
+        fn processData(self: *CompressedReader) !?[]u8 {
+            const data = self.data orelse return null;
+            const result = try self.inner.process(data);
+
+            self.done = result.done;
+            self.data = result.unprocessed; // for the next call
+
+            return result.data;
         }
     };
 };
@@ -1576,6 +1692,13 @@ pub const Response = struct {
     }
 
     pub fn peek(self: *Response) ![]u8 {
+        if (self._peek_len > 0) {
+            // Under normal usage, this is only possible when we're dealing
+            // with a compressed response (despite not asking for it). We handle
+            // these responses by essentially peeking the entire body.
+            return self._peek_buf[0..self._peek_len];
+        }
+
         if (try self.processData()) |data| {
             // We already have some or all of the body. This happens because
             // we always read as much as we can, so getting the header and
@@ -1903,6 +2026,23 @@ test "HttpClient: sync with body" {
         try testing.expectEqual("127.0.0.1", res.header.get("_host"));
         try testing.expectEqual("Close", res.header.get("_connection"));
         try testing.expectEqual("Lightpanda/1.0", res.header.get("_user-agent"));
+    }
+}
+
+test "HttpClient: sync with gzip body" {
+    for (0..2) |i| {
+        var client = try testClient();
+        defer client.deinit();
+
+        const uri = try Uri.parse("http://127.0.0.1:9582/http_client/gzip");
+        var req = try client.request(.GET, &uri);
+        var res = try req.sendSync(.{});
+
+        if (i == 0) {
+            try testing.expectEqual("A new browser built for machines\n", try res.peek());
+        }
+        try testing.expectEqual("A new browser built for machines\n", try res.next());
+        try testing.expectEqual("gzip", res.header.get("content-encoding"));
     }
 }
 
