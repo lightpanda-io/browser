@@ -1042,9 +1042,6 @@ pub fn run(
     // - JS callbacks events from scripts
     while (true) {
         try loop.io.run_for_ns(10 * std.time.ns_per_ms);
-        if (loop.cbk_error) {
-            log.err("JS error", .{});
-        }
     }
 }
 

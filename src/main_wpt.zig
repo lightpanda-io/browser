@@ -156,12 +156,11 @@ fn run(arena: Allocator, test_file: []const u8, loader: *FileLoader, err_out: *?
         var try_catch: Env.TryCatch = undefined;
         try_catch.init(runner.scope);
         defer try_catch.deinit();
-        runner.loop.run() catch |err| {
-            if (try try_catch.err(arena)) |msg| {
-                err_out.* = msg;
-            }
-            return err;
-        };
+        try runner.loop.run();
+
+        if (try_catch.hasCaught()) {
+            err_out.* = (try try_catch.err(arena)) orelse "unknwon error";
+        }
     }
 
     // Check the final test status.

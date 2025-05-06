@@ -21,6 +21,7 @@ const std = @import("std");
 const parser = @import("../netsurf.zig");
 const Callback = @import("../env.zig").Callback;
 const SessionState = @import("../env.zig").SessionState;
+const Loop = @import("../../runtime/loop.zig").Loop;
 
 const Navigator = @import("navigator.zig").Navigator;
 const History = @import("history.zig").History;
@@ -30,6 +31,8 @@ const Console = @import("../console/console.zig").Console;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 
 const storage = @import("../storage/storage.zig");
+
+const log = std.log.scoped(.window);
 
 // https://dom.spec.whatwg.org/#interface-window-extensions
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#window
@@ -45,10 +48,9 @@ pub const Window = struct {
     location: Location = .{},
     storage_shelf: ?*storage.Shelf = null,
 
-    // store a map between internal timeouts ids and pointers to uint.
-    // the maximum number of possible timeouts is fixed.
-    timeoutid: u32 = 0,
-    timeoutids: [512]u64 = undefined,
+    // counter for having unique timer ids
+    timer_id: u31 = 0,
+    timers: std.AutoHashMapUnmanaged(u32, *TimerCallback) = .{},
 
     crypto: Crypto = .{},
     console: Console = .{},
@@ -129,23 +131,93 @@ pub const Window = struct {
 
     // TODO handle callback arguments.
     pub fn _setTimeout(self: *Window, cbk: Callback, delay: ?u32, state: *SessionState) !u32 {
-        if (self.timeoutid >= self.timeoutids.len) return error.TooMuchTimeout;
+        return self.createTimeout(cbk, delay, state, false);
+    }
 
-        const ddelay: u63 = delay orelse 0;
-        const id = try state.loop.timeout(ddelay * std.time.ns_per_ms, cbk);
-
-        self.timeoutids[self.timeoutid] = id;
-        defer self.timeoutid += 1;
-
-        return self.timeoutid;
+    // TODO handle callback arguments.
+    pub fn _setInterval(self: *Window, cbk: Callback, delay: ?u32, state: *SessionState) !u32 {
+        return self.createTimeout(cbk, delay, state, true);
     }
 
     pub fn _clearTimeout(self: *Window, id: u32, state: *SessionState) !void {
-        // I do would prefer return an error in this case, but it seems some JS
-        // uses invalid id, in particular id 0.
-        // So we silently ignore invalid id for now.
-        if (id >= self.timeoutid) return;
+        const kv = self.timers.fetchRemove(id) orelse return;
+        try state.loop.cancel(kv.value.loop_id);
+    }
 
-        try state.loop.cancel(self.timeoutids[id], null);
+    pub fn _clearInterval(self: *Window, id: u32, state: *SessionState) !void {
+        const kv = self.timers.fetchRemove(id) orelse return;
+        try state.loop.cancel(kv.value.loop_id);
+    }
+
+    pub fn createTimeout(self: *Window, cbk: Callback, delay_: ?u32, state: *SessionState, comptime repeat: bool) !u32 {
+        if (self.timers.count() > 512) {
+            return error.TooManyTimeout;
+        }
+        const timer_id = self.timer_id +% 1;
+        self.timer_id = timer_id;
+
+        const arena = state.arena;
+
+        const gop = try self.timers.getOrPut(arena, timer_id);
+        if (gop.found_existing) {
+            // this can only happen if we've created 2^31 timeouts.
+            return error.TooManyTimeout;
+        }
+        errdefer _ = self.timers.remove(timer_id);
+
+        const delay: u63 = (delay_ orelse 0) * std.time.ns_per_ms;
+        const callback = try arena.create(TimerCallback);
+
+        callback.* = .{
+            .cbk = cbk,
+            .loop_id = 0, // we're going to set this to a real value shortly
+            .window = self,
+            .timer_id = timer_id,
+            .node = .{ .func = TimerCallback.run },
+            .repeat = if (repeat) delay else null,
+        };
+        callback.loop_id = try state.loop.timeout(delay, &callback.node);
+
+        gop.value_ptr.* = callback;
+        return timer_id;
+    }
+};
+
+const TimerCallback = struct {
+    // the internal loop id, need it when cancelling
+    loop_id: usize,
+
+    // the id of our timer (windows.timers key)
+    timer_id: u31,
+
+    // The JavaScript callback to execute
+    cbk: Callback,
+
+    // This is the internal data that the event loop tracks. We'll get this
+    // back in run and, from it, can get our TimerCallback instance
+    node: Loop.CallbackNode = undefined,
+
+    // if the event should be repeated
+    repeat: ?u63 = null,
+
+    window: *Window,
+
+    fn run(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
+        const self: *TimerCallback = @fieldParentPtr("node", node);
+
+        var result: Callback.Result = undefined;
+        self.cbk.tryCall(.{}, &result) catch {
+            log.err("timeout callback error: {s}", .{result.exception});
+            log.debug("stack:\n{s}", .{result.stack orelse "???"});
+        };
+
+        if (self.repeat) |r| {
+            // setInterval
+            repeat_delay.* = r;
+            return;
+        }
+
+        // setTimeout
+        _ = self.window.timers.remove(self.timer_id);
     }
 };
