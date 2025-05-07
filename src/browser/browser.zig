@@ -205,6 +205,44 @@ pub const Session = struct {
     }
 };
 
+// Properly stitches two URLs together.
+//
+// For URLs with a path, it will replace the last entry with the src.
+// For URLs without a path, it will add src as the path.
+fn stitchUrl(allocator: std.mem.Allocator, src: []const u8, base: []const u8) ![]const u8 {
+    // Traversing until the path
+    var slash_iter = std.mem.splitScalar(u8, base, '/');
+    _ = slash_iter.next();
+    _ = slash_iter.next();
+    _ = slash_iter.next();
+
+    if (slash_iter.index) |path_index| {
+        // Remove final slash from pathless base slice.
+        const pathless_base = base[0 .. path_index - 1];
+        const path = slash_iter.rest();
+
+        if (path.len > 0) {
+            var split_halves = std.mem.splitBackwardsScalar(u8, path, '/');
+            _ = split_halves.first();
+            const stripped_path = split_halves.rest();
+
+            if (stripped_path.len > 0) {
+                // Multi path entry
+                return try std.fmt.allocPrint(allocator, "{s}/{s}/{s}", .{ pathless_base, stripped_path, src });
+            } else {
+                // Single path entry
+                return try std.fmt.allocPrint(allocator, "{s}/{s}", .{ pathless_base, src });
+            }
+        } else {
+            // Slash at the end case
+            return try std.fmt.allocPrint(allocator, "{s}/{s}", .{ pathless_base, src });
+        }
+    } else {
+        // No path case
+        return try std.fmt.allocPrint(allocator, "{s}/{s}", .{ base, src });
+    }
+}
+
 // Page navigates to an url.
 // You can navigates multiple urls with the same page, but you have to call
 // end() to stop the previous navigation before starting a new one.
@@ -599,11 +637,9 @@ pub const Page = struct {
 
         // if a base path is given, we resolve src using base.
         if (base) |_base| {
-            const dir = std.fs.path.dirname(_base);
-            if (dir) |_dir| {
-                res_src = try std.fs.path.resolve(arena, &.{ _dir, src });
-            }
+            res_src = try stitchUrl(arena, src, _base);
         }
+
         var origin_url = &self.url;
         const url = try origin_url.resolve(arena, res_src);
 
@@ -897,4 +933,34 @@ test "Browser" {
     try runner.testCases(&.{
         .{ "new Intl.DateTimeFormat()", "[object Intl.DateTimeFormat]" },
     }, .{});
+}
+
+test "Stitching Base & Src URLs (Basic)" {
+    const allocator = testing.allocator;
+
+    const base = "https://www.google.com/xyz/abc/123";
+    const src = "something.js";
+    const result = try stitchUrl(allocator, src, base);
+    defer allocator.free(result);
+    try testing.expectString("https://www.google.com/xyz/abc/something.js", result);
+}
+
+test "Stitching Base & Src URLs (Just Ending Slash)" {
+    const allocator = testing.allocator;
+
+    const base = "https://www.google.com/";
+    const src = "something.js";
+    const result = try stitchUrl(allocator, src, base);
+    defer allocator.free(result);
+    try testing.expectString("https://www.google.com/something.js", result);
+}
+
+test "Stitching Base & Src URLs (No Ending Slash)" {
+    const allocator = testing.allocator;
+
+    const base = "https://www.google.com";
+    const src = "something.js";
+    const result = try stitchUrl(allocator, src, base);
+    defer allocator.free(result);
+    try testing.expectString("https://www.google.com/something.js", result);
 }
