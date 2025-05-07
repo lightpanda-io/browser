@@ -103,22 +103,14 @@ pub const Element = struct {
 
     pub fn get_innerHTML(self: *parser.Element, state: *SessionState) ![]const u8 {
         var buf = std.ArrayList(u8).init(state.arena);
-        defer buf.deinit();
-
         try dump.writeChildren(parser.elementToNode(self), buf.writer());
-        // TODO express the caller owned the slice.
-        // https://github.com/lightpanda-io/jsruntime-lib/issues/195
-        return buf.toOwnedSlice();
+        return buf.items;
     }
 
     pub fn get_outerHTML(self: *parser.Element, state: *SessionState) ![]const u8 {
         var buf = std.ArrayList(u8).init(state.arena);
-        defer buf.deinit();
-
         try dump.writeNode(parser.elementToNode(self), buf.writer());
-        // TODO express the caller owned the slice.
-        // https://github.com/lightpanda-io/jsruntime-lib/issues/195
-        return buf.toOwnedSlice();
+        return buf.items;
     }
 
     pub fn set_innerHTML(self: *parser.Element, str: []const u8) !void {
