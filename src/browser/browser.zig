@@ -731,7 +731,9 @@ pub const Page = struct {
         fn delay_navigate(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
             _ = repeat_delay;
             const self: *DelayedNavigation = @fieldParentPtr("navigate_node", node);
-            self.session.pageNavigate(self.href) catch unreachable;
+            self.session.pageNavigate(self.href) catch |err| {
+                log.err("Delayed navigation error {}", .{err});
+            };
         }
     };
 
