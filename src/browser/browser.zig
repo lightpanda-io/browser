@@ -289,7 +289,7 @@ pub const Page = struct {
         try Dump.writeHTML(self.doc.?, out);
     }
 
-    pub fn fetchModuleSource(ctx: *anyopaque, specifier: []const u8) ![]const u8 {
+    pub fn fetchModuleSource(ctx: *anyopaque, specifier: []const u8) !?[]const u8 {
         const self: *Page = @ptrCast(@alignCast(ctx));
 
         log.debug("fetch module: specifier: {s}", .{specifier});
@@ -435,10 +435,18 @@ pub const Page = struct {
         // TODO fetch the script resources concurrently but execute them in the
         // declaration order for synchronous ones.
 
-        // sasync stores scripts which can be run asynchronously.
+        // async_scripts stores scripts which can be run asynchronously.
         // for now they are just run after the non-async one in order to
         // dispatch DOMContentLoaded the sooner as possible.
-        var sasync: std.ArrayListUnmanaged(Script) = .{};
+        var async_scripts: std.ArrayListUnmanaged(Script) = .{};
+
+        // defer_scripts stores scripts which are meant to be deferred. For now
+        // this doesn't have a huge impact, since normal scripts are parsed
+        // after the document is loaded. But (a) we should fix that and (b)
+        // this results in JavaScript being loaded in the same order as browsers
+        // which can help debug issues (and might actually fix issues if websites
+        // are expecting this execution order)
+        var defer_scripts: std.ArrayListUnmanaged(Script) = .{};
 
         const root = parser.documentToNode(doc);
         const walker = Walker{};
@@ -455,11 +463,6 @@ pub const Page = struct {
 
             // ignore non-js script.
             const script = try Script.init(e) orelse continue;
-            if (script.kind == .unknown) continue;
-
-            // Ignore the defer attribute b/c we analyze all script
-            // after the document has been parsed.
-            // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#defer
 
             // TODO use fetchpriority
             // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#fetchpriority
@@ -470,21 +473,17 @@ pub const Page = struct {
             // > parsing and evaluated as soon as it is available.
             // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#async
             if (script.is_async) {
-                try sasync.append(arena, script);
+                try async_scripts.append(arena, script);
+                continue;
+            }
+
+            if (script.is_defer) {
+                try defer_scripts.append(arena, script);
                 continue;
             }
 
             // TODO handle for attribute
             // TODO handle event attribute
-
-            // TODO defer
-            // > This Boolean attribute is set to indicate to a browser
-            // > that the script is meant to be executed after the
-            // > document has been parsed, but before firing
-            // > DOMContentLoaded.
-            // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#defer
-            // defer allow us to load a script w/o blocking the rest of
-            // evaluations.
 
             // > Scripts without async, defer or type="module"
             // > attributes, as well as inline scripts without the
@@ -497,7 +496,11 @@ pub const Page = struct {
             try parser.documentHTMLSetCurrentScript(html_doc, null);
         }
 
-        // TODO wait for deferred scripts
+        for (defer_scripts.items) |s| {
+            try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(s.element));
+            self.evalScript(&s) catch |err| log.warn("evaljs: {any}", .{err});
+            try parser.documentHTMLSetCurrentScript(html_doc, null);
+        }
 
         // dispatch DOMContentLoaded before the transition to "complete",
         // at the point where all subresources apart from async script elements
@@ -510,7 +513,7 @@ pub const Page = struct {
         _ = try parser.eventTargetDispatchEvent(parser.toEventTarget(parser.DocumentHTML, html_doc), evt);
 
         // eval async scripts.
-        for (sasync.items) |s| {
+        for (async_scripts.items) |s| {
             try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(s.element));
             self.evalScript(&s) catch |err| log.warn("evaljs: {any}", .{err});
             try parser.documentHTMLSetCurrentScript(html_doc, null);
@@ -534,57 +537,42 @@ pub const Page = struct {
     // evalScript evaluates the src in priority.
     // if no src is present, we evaluate the text source.
     // https://html.spec.whatwg.org/multipage/scripting.html#script-processing-model
-    fn evalScript(self: *Page, s: *const Script) !void {
-        self.current_script = s;
+    fn evalScript(self: *Page, script: *const Script) !void {
+        const src = script.src orelse {
+            // source is inline
+            // TODO handle charset attribute
+            if (try parser.nodeTextContent(parser.elementToNode(script.element))) |text| {
+                try script.eval(self, text);
+            }
+            return;
+        };
+
+        self.current_script = script;
         defer self.current_script = null;
 
+        log.debug("starting GET {s}", .{src});
+
         // https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-classic-script
-        const opt_src = try parser.elementGetAttribute(s.element, "src");
-        if (opt_src) |src| {
-            log.debug("starting GET {s}", .{src});
-
-            self.fetchScript(s) catch |err| {
-                switch (err) {
-                    FetchError.BadStatusCode => return err,
-
-                    // TODO If el's result is null, then fire an event named error at
-                    // el, and return.
-                    FetchError.NoBody => return,
-
-                    FetchError.JsErr => {}, // nothing to do here.
-                    else => return err,
-                }
-            };
-
-            // TODO If el's from an external file is true, then fire an event
-            // named load at el.
-
+        const body = (try self.fetchData(src, null)) orelse {
+            // TODO If el's result is null, then fire an event named error at
+            // el, and return
             return;
-        }
+        };
 
-        // TODO handle charset attribute
-        const opt_text = try parser.nodeTextContent(parser.elementToNode(s.element));
-        if (opt_text) |text| {
-            try s.eval(self, text);
-            return;
-        }
+        script.eval(self, body) catch |err| switch (err) {
+            error.JsErr => {}, // nothing to do here.
+            else => return err,
+        };
 
-        // nothing has been loaded.
-        // TODO If el's result is null, then fire an event named error at
-        // el, and return.
+        // TODO If el's from an external file is true, then fire an event
+        // named load at el.
     }
-
-    const FetchError = error{
-        BadStatusCode,
-        NoBody,
-        JsErr,
-    };
 
     // fetchData returns the data corresponding to the src target.
     // It resolves src using the page's uri.
     // If a base path is given, src is resolved according to the base first.
     // the caller owns the returned string
-    fn fetchData(self: *const Page, src: []const u8, base: ?[]const u8) ![]const u8 {
+    fn fetchData(self: *const Page, src: []const u8, base: ?[]const u8) !?[]const u8 {
         log.debug("starting fetch {s}", .{src});
 
         const arena = self.arena;
@@ -619,7 +607,7 @@ pub const Page = struct {
         log.info("fetch {any}: {d}", .{ url, header.status });
 
         if (header.status != 200) {
-            return FetchError.BadStatusCode;
+            return error.BadStatusCode;
         }
 
         var arr: std.ArrayListUnmanaged(u8) = .{};
@@ -631,15 +619,10 @@ pub const Page = struct {
 
         // check no body
         if (arr.items.len == 0) {
-            return FetchError.NoBody;
+            return null;
         }
 
         return arr.items;
-    }
-
-    fn fetchScript(self: *Page, s: *const Script) !void {
-        const body = try self.fetchData(s.src, null);
-        try s.eval(self, body);
     }
 
     fn newHTTPRequest(self: *const Page, method: http.Request.Method, url: *const URL, opts: storage.cookie.LookupOpts) !http.Request {
@@ -712,28 +695,42 @@ pub const Page = struct {
     }
 
     const Script = struct {
-        element: *parser.Element,
         kind: Kind,
         is_async: bool,
+        is_defer: bool,
+        src: ?[]const u8,
+        element: *parser.Element,
+        // The javascript  to load after we successfully load the script
+        onload: ?[]const u8,
 
-        src: []const u8,
+        // The javascript to load if we have an error executing the script
+        // For now, we ignore this, since we still have a lot of errors that we
+        // shouldn't
+        //onerror: ?[]const u8,
 
         const Kind = enum {
-            unknown,
-            javascript,
             module,
+            javascript,
         };
 
         fn init(e: *parser.Element) !?Script {
             // ignore non-script tags
             const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(e)));
-            if (tag != .script) return null;
+            if (tag != .script) {
+                return null;
+            }
+
+            const kind = parseKind(try parser.elementGetAttribute(e, "type")) orelse {
+                return null;
+            };
 
             return .{
+                .kind = kind,
                 .element = e,
-                .kind = parseKind(try parser.elementGetAttribute(e, "type")),
+                .src = try parser.elementGetAttribute(e, "src"),
+                .onload = try parser.elementGetAttribute(e, "onload"),
                 .is_async = try parser.elementGetAttribute(e, "async") != null,
-                .src = try parser.elementGetAttribute(e, "src") orelse "inline",
+                .is_defer = try parser.elementGetAttribute(e, "defer") != null,
             };
         }
 
@@ -742,34 +739,47 @@ pub const Page = struct {
         // > type indicates that the script is a "classic script", containing
         // > JavaScript code.
         // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#attribute_is_not_set_default_an_empty_string_or_a_javascript_mime_type
-        fn parseKind(stype: ?[]const u8) Kind {
-            if (stype == null or stype.?.len == 0) return .javascript;
-            if (std.mem.eql(u8, stype.?, "application/javascript")) return .javascript;
-            if (std.mem.eql(u8, stype.?, "text/javascript")) return .javascript;
-            if (std.mem.eql(u8, stype.?, "module")) return .module;
+        fn parseKind(script_type_: ?[]const u8) ?Kind {
+            const script_type = script_type_ orelse return .javascript;
+            if (script_type.len == 0) {
+                return .javascript;
+            }
 
-            return .unknown;
+            if (std.mem.eql(u8, script_type, "application/javascript")) return .javascript;
+            if (std.mem.eql(u8, script_type, "text/javascript")) return .javascript;
+            if (std.mem.eql(u8, script_type, "module")) return .module;
+
+            return null;
         }
 
-        fn eval(self: Script, page: *Page, body: []const u8) !void {
+        fn eval(self: *const Script, page: *Page, body: []const u8) !void {
             var try_catch: Env.TryCatch = undefined;
             try_catch.init(page.scope);
             defer try_catch.deinit();
 
+            const src = self.src orelse "inline";
             const res = switch (self.kind) {
-                .unknown => return error.UnknownScript,
-                .javascript => page.scope.exec(body, self.src),
-                .module => page.scope.module(body, self.src),
+                .javascript => page.scope.exec(body, src),
+                .module => page.scope.module(body, src),
             } catch {
                 if (try try_catch.err(page.arena)) |msg| {
-                    log.info("eval script {s}: {s}", .{ self.src, msg });
+                    log.info("eval script {s}: {s}", .{ src, msg });
                 }
-                return FetchError.JsErr;
+                return error.JsErr;
             };
 
             if (builtin.mode == .Debug) {
                 const msg = try res.toString(page.arena);
-                log.debug("eval script {s}: {s}", .{ self.src, msg });
+                log.debug("eval script {s}: {s}", .{ src, msg });
+            }
+
+            if (self.onload) |onload| {
+                _ = page.scope.exec(onload, "script_on_load") catch {
+                    if (try try_catch.err(page.arena)) |msg| {
+                        log.info("eval script onload {s}: {s}", .{ src, msg });
+                    }
+                    return error.JsErr;
+                };
             }
         }
     };
