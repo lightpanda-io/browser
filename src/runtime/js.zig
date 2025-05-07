@@ -57,7 +57,7 @@ pub const Platform = struct {
 // The `S` parameter is arbitrary state. When we start an Executor, an instance
 // of S must be given. This instance is available to any Zig binding.
 // The `types` parameter is a tuple of Zig structures we want to bind to V8.
-pub fn Env(comptime S: type, comptime WebApis: type) type {
+pub fn Env(comptime State: type, comptime WebApis: type) type {
     const Types = @typeInfo(WebApis.Interfaces).@"struct".fields;
 
     // Imagine we have a type Cat which has a getter:
@@ -179,7 +179,6 @@ pub fn Env(comptime S: type, comptime WebApis: type) type {
 
         const Self = @This();
 
-        const State = S;
         const TYPE_LOOKUP = TypeLookup{};
 
         const Opts = struct {
@@ -1216,7 +1215,7 @@ pub fn Env(comptime S: type, comptime WebApis: type) type {
             const template = v8.FunctionTemplate.initCallback(isolate, struct {
                 fn callback(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
                     const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
-                    var caller = Caller(Self).init(info);
+                    var caller = Caller(Self, State).init(info);
                     defer caller.deinit();
 
                     // See comment above. We generateConstructor on all types
@@ -1233,9 +1232,9 @@ pub fn Env(comptime S: type, comptime WebApis: type) type {
 
                     // Safe to call now, because if Struct.constructor didn't
                     // exist, the above if block would have returned.
-                    const named_function = NamedFunction(Struct, Struct.constructor, "constructor"){};
-                    caller.constructor(named_function, info) catch |err| {
-                        caller.handleError(named_function, err, info);
+                    const named_function = comptime NamedFunction.init(Struct, "constructor");
+                    caller.constructor(Struct, named_function, info) catch |err| {
+                        caller.handleError(Struct, named_function, err, info);
                     };
                 }
             }.callback);
@@ -1261,12 +1260,12 @@ pub fn Env(comptime S: type, comptime WebApis: type) type {
             const function_template = v8.FunctionTemplate.initCallback(isolate, struct {
                 fn callback(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
                     const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
-                    var caller = Caller(Self).init(info);
+                    var caller = Caller(Self, State).init(info);
                     defer caller.deinit();
 
-                    const named_function = NamedFunction(Struct, @field(Struct, name), name){};
-                    caller.method(named_function, info) catch |err| {
-                        caller.handleError(named_function, err, info);
+                    const named_function = comptime NamedFunction.init(Struct, name);
+                    caller.method(Struct, named_function, info) catch |err| {
+                        caller.handleError(Struct, named_function, err, info);
                     };
                 }
             }.callback);
@@ -1303,12 +1302,12 @@ pub fn Env(comptime S: type, comptime WebApis: type) type {
             const getter_callback = struct {
                 fn callback(_: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) void {
                     const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
-                    var caller = Caller(Self).init(info);
+                    var caller = Caller(Self, State).init(info);
                     defer caller.deinit();
 
-                    const named_function = NamedFunction(Struct, getter, "get_" ++ name){};
-                    caller.getter(named_function, info) catch |err| {
-                        caller.handleError(named_function, err, info);
+                    const named_function = comptime NamedFunction.init(Struct, "get_" ++ name);
+                    caller.getter(Struct, named_function, info) catch |err| {
+                        caller.handleError(Struct, named_function, err, info);
                     };
                 }
             }.callback;
@@ -1319,17 +1318,16 @@ pub fn Env(comptime S: type, comptime WebApis: type) type {
                 return;
             }
 
-            const setter = @field(Struct, setter_name);
             const setter_callback = struct {
                 fn callback(_: ?*const v8.C_Name, raw_value: ?*const v8.C_Value, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) void {
                     const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
-                    var caller = Caller(Self).init(info);
+                    var caller = Caller(Self, State).init(info);
                     defer caller.deinit();
 
                     const js_value = v8.Value{ .handle = raw_value.? };
-                    const named_function = NamedFunction(Struct, setter, "set_" ++ name){};
-                    caller.setter(named_function, js_value, info) catch |err| {
-                        caller.handleError(named_function, err, info);
+                    const named_function = comptime NamedFunction.init(Struct, "set_" ++ name);
+                    caller.setter(Struct, named_function, js_value, info) catch |err| {
+                        caller.handleError(Struct, named_function, err, info);
                     };
                 }
             }.callback;
@@ -1344,12 +1342,12 @@ pub fn Env(comptime S: type, comptime WebApis: type) type {
                 .getter = struct {
                     fn callback(idx: u32, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) void {
                         const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
-                        var caller = Caller(Self).init(info);
+                        var caller = Caller(Self, State).init(info);
                         defer caller.deinit();
 
-                        const named_function = NamedFunction(Struct, Struct.indexed_get, "indexed_get"){};
-                        caller.getIndex(named_function, idx, info) catch |err| {
-                            caller.handleError(named_function, err, info);
+                        const named_function = comptime NamedFunction.init(Struct, "indexed_get");
+                        caller.getIndex(Struct, named_function, idx, info) catch |err| {
+                            caller.handleError(Struct, named_function, err, info);
                         };
                     }
                 }.callback,
@@ -1373,12 +1371,12 @@ pub fn Env(comptime S: type, comptime WebApis: type) type {
                 .getter = struct {
                     fn callback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) void {
                         const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
-                        var caller = Caller(Self).init(info);
+                        var caller = Caller(Self, State).init(info);
                         defer caller.deinit();
 
-                        const named_function = NamedFunction(Struct, Struct.named_get, "named_get"){};
-                        caller.getNamedIndex(named_function, .{ .handle = c_name.? }, info) catch |err| {
-                            caller.handleError(named_function, err, info);
+                        const named_function = comptime NamedFunction.init(Struct, "named_get");
+                        caller.getNamedIndex(Struct, named_function, .{ .handle = c_name.? }, info) catch |err| {
+                            caller.handleError(Struct, named_function, err, info);
                         };
                     }
                 }.callback,
@@ -1539,7 +1537,7 @@ pub fn Env(comptime S: type, comptime WebApis: type) type {
         }
         // Reverses the mapZigInstanceToJs, making sure that our TaggedAnyOpaque
         // contains a ptr to the correct type.
-        fn typeTaggedAnyOpaque(comptime named_function: anytype, comptime R: type, js_obj: v8.Object) !R {
+        fn typeTaggedAnyOpaque(comptime named_function: NamedFunction, comptime R: type, js_obj: v8.Object) !R {
             const ti = @typeInfo(R);
             if (ti != .pointer) {
                 @compileError(std.fmt.comptimePrint(
@@ -1663,8 +1661,7 @@ fn isEmpty(comptime T: type) bool {
 // probably just contained in Executor, but having this specific logic, which
 // is somewhat repetitive between constructors, functions, getters, etc contained
 // here does feel like it makes it clenaer.
-fn Caller(comptime E: type) type {
-    const State = E.State;
+fn Caller(comptime E: type, comptime State: type) type {
     const TYPE_LOOKUP = E.TYPE_LOOKUP;
     const TypeLookup = @TypeOf(TYPE_LOOKUP);
 
@@ -1723,13 +1720,12 @@ fn Caller(comptime E: type) type {
             scope.call_depth = call_depth;
         }
 
-        fn constructor(self: *Self, comptime named_function: anytype, info: v8.FunctionCallbackInfo) !void {
-            const S = named_function.S;
-            const args = try self.getArgs(named_function, 0, info);
-            const res = @call(.auto, S.constructor, args);
+        fn constructor(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, info: v8.FunctionCallbackInfo) !void {
+            const args = try self.getArgs(Struct, named_function, 0, info);
+            const res = @call(.auto, Struct.constructor, args);
 
-            const ReturnType = @typeInfo(@TypeOf(S.constructor)).@"fn".return_type orelse {
-                @compileError(@typeName(S) ++ " has a constructor without a return type");
+            const ReturnType = @typeInfo(@TypeOf(Struct.constructor)).@"fn".return_type orelse {
+                @compileError(@typeName(Struct) ++ " has a constructor without a return type");
             };
 
             const this = info.getThis();
@@ -1742,25 +1738,25 @@ fn Caller(comptime E: type) type {
             info.getReturnValue().set(this);
         }
 
-        fn method(self: *Self, comptime named_function: anytype, info: v8.FunctionCallbackInfo) !void {
-            const S = named_function.S;
-            comptime assertSelfReceiver(named_function);
+        fn method(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, info: v8.FunctionCallbackInfo) !void {
+            const func = @field(Struct, named_function.name);
+            comptime assertSelfReceiver(Struct, named_function);
 
-            var args = try self.getArgs(named_function, 1, info);
-            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(S), info.getThis());
+            var args = try self.getArgs(Struct, named_function, 1, info);
+            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
 
             // inject 'self' as the first parameter
             @field(args, "0") = zig_instance;
 
-            const res = @call(.auto, named_function.func, args);
+            const res = @call(.auto, func, args);
             info.getReturnValue().set(try self.zigValueToJs(res));
         }
 
-        fn getter(self: *Self, comptime named_function: anytype, info: v8.PropertyCallbackInfo) !void {
-            const S = named_function.S;
-            const Getter = @TypeOf(named_function.func);
+        fn getter(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, info: v8.PropertyCallbackInfo) !void {
+            const func = @field(Struct, named_function.name);
+            const Getter = @TypeOf(func);
             if (@typeInfo(Getter).@"fn".return_type == null) {
-                @compileError(@typeName(S) ++ " has a getter without a return type: " ++ @typeName(Getter));
+                @compileError(@typeName(Struct) ++ " has a getter without a return type: " ++ @typeName(Getter));
             }
 
             var args: ParamterTypes(Getter) = undefined;
@@ -1768,27 +1764,27 @@ fn Caller(comptime E: type) type {
             switch (arg_fields.len) {
                 0 => {}, // getters _can_ be parameterless
                 1, 2 => {
-                    const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(S), info.getThis());
-                    comptime assertSelfReceiver(named_function);
+                    const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
+                    comptime assertSelfReceiver(Struct, named_function);
                     @field(args, "0") = zig_instance;
                     if (comptime arg_fields.len == 2) {
-                        comptime assertIsStateArg(named_function, 1);
+                        comptime assertIsStateArg(Struct, named_function, 1);
                         @field(args, "1") = self.scope.state;
                     }
                 },
                 else => @compileError(named_function.full_name + " has too many parmaters: " ++ @typeName(named_function.func)),
             }
-            const res = @call(.auto, named_function.func, args);
+            const res = @call(.auto, func, args);
             info.getReturnValue().set(try self.zigValueToJs(res));
         }
 
-        fn setter(self: *Self, comptime named_function: anytype, js_value: v8.Value, info: v8.PropertyCallbackInfo) !void {
-            const S = named_function.S;
-            comptime assertSelfReceiver(named_function);
+        fn setter(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, js_value: v8.Value, info: v8.PropertyCallbackInfo) !void {
+            const func = @field(Struct, named_function.name);
+            comptime assertSelfReceiver(Struct, named_function);
 
-            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(S), info.getThis());
+            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
 
-            const Setter = @TypeOf(named_function.func);
+            const Setter = @TypeOf(func);
             var args: ParamterTypes(Setter) = undefined;
             const arg_fields = @typeInfo(@TypeOf(args)).@"struct".fields;
             switch (arg_fields.len) {
@@ -1798,7 +1794,7 @@ fn Caller(comptime E: type) type {
                     @field(args, "0") = zig_instance;
                     @field(args, "1") = try self.jsValueToZig(named_function, arg_fields[1].type, js_value);
                     if (comptime arg_fields.len == 3) {
-                        comptime assertIsStateArg(named_function, 2);
+                        comptime assertIsStateArg(Struct, named_function, 2);
                         @field(args, "2") = self.scope.state;
                     }
                 },
@@ -1807,16 +1803,16 @@ fn Caller(comptime E: type) type {
 
             if (@typeInfo(Setter).@"fn".return_type) |return_type| {
                 if (@typeInfo(return_type) == .error_union) {
-                    _ = try @call(.auto, named_function.func, args);
+                    _ = try @call(.auto, func, args);
                     return;
                 }
             }
-            _ = @call(.auto, named_function.func, args);
+            _ = @call(.auto, func, args);
         }
 
-        fn getIndex(self: *Self, comptime named_function: anytype, idx: u32, info: v8.PropertyCallbackInfo) !void {
-            const S = named_function.S;
-            const IndexedGet = @TypeOf(named_function.func);
+        fn getIndex(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, idx: u32, info: v8.PropertyCallbackInfo) !void {
+            const func = @field(Struct, named_function.name);
+            const IndexedGet = @TypeOf(func);
             if (@typeInfo(IndexedGet).@"fn".return_type == null) {
                 @compileError(named_function.full_name ++ " must have a return type");
             }
@@ -1828,20 +1824,20 @@ fn Caller(comptime E: type) type {
             switch (arg_fields.len) {
                 0, 1, 2 => @compileError(named_function.full_name ++ " must take at least a u32 and *bool parameter"),
                 3, 4 => {
-                    const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(S), info.getThis());
-                    comptime assertSelfReceiver(named_function);
+                    const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
+                    comptime assertSelfReceiver(Struct, named_function);
                     @field(args, "0") = zig_instance;
                     @field(args, "1") = idx;
                     @field(args, "2") = &has_value;
                     if (comptime arg_fields.len == 4) {
-                        comptime assertIsStateArg(named_function, 3);
+                        comptime assertIsStateArg(Struct, named_function, 3);
                         @field(args, "3") = self.scope.state;
                     }
                 },
                 else => @compileError(named_function.full_name ++ " has too many parmaters"),
             }
 
-            const res = @call(.auto, S.indexed_get, args);
+            const res = @call(.auto, func, args);
             if (has_value == false) {
                 // for an indexed parameter, say nodes[10000], we should return
                 // undefined, not null, if the index is out of rante
@@ -1851,9 +1847,9 @@ fn Caller(comptime E: type) type {
             }
         }
 
-        fn getNamedIndex(self: *Self, comptime named_function: anytype, name: v8.Name, info: v8.PropertyCallbackInfo) !void {
-            const S = named_function.S;
-            const NamedGet = @TypeOf(named_function.func);
+        fn getNamedIndex(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, name: v8.Name, info: v8.PropertyCallbackInfo) !void {
+            const func = @field(Struct, named_function.name);
+            const NamedGet = @TypeOf(func);
             if (@typeInfo(NamedGet).@"fn".return_type == null) {
                 @compileError(named_function.full_name ++ " must have a return type");
             }
@@ -1864,20 +1860,20 @@ fn Caller(comptime E: type) type {
             switch (arg_fields.len) {
                 0, 1, 2 => @compileError(named_function.full_name ++ " must take at least a u32 and *bool parameter"),
                 3, 4 => {
-                    const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(S), info.getThis());
-                    comptime assertSelfReceiver(named_function);
+                    const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
+                    comptime assertSelfReceiver(Struct, named_function);
                     @field(args, "0") = zig_instance;
                     @field(args, "1") = try self.nameToString(name);
                     @field(args, "2") = &has_value;
                     if (comptime arg_fields.len == 4) {
-                        comptime assertIsStateArg(named_function, 3);
+                        comptime assertIsStateArg(Struct, named_function, 3);
                         @field(args, "3") = self.scope.state;
                     }
                 },
                 else => @compileError(named_function.full_name ++ " has too many parmaters"),
             }
 
-            const res = @call(.auto, S.named_get, args);
+            const res = @call(.auto, func, args);
             if (has_value == false) {
                 // for an indexed parameter, say nodes[10000], we should return
                 // undefined, not null, if the index is out of rante
@@ -1891,12 +1887,13 @@ fn Caller(comptime E: type) type {
             return valueToString(self.call_arena, .{ .handle = name.handle }, self.isolate, self.context);
         }
 
-        fn assertSelfReceiver(comptime named_function: anytype) void {
-            const params = @typeInfo(@TypeOf(named_function.func)).@"fn".params;
+        fn assertSelfReceiver(comptime Struct: type, comptime named_function: NamedFunction) void {
+            const func = @field(Struct, named_function.name);
+            const params = @typeInfo(@TypeOf(func)).@"fn".params;
             if (params.len == 0) {
                 @compileError(named_function.full_name ++ " must have a self parameter");
             }
-            const R = Receiver(named_function.S);
+            const R = Receiver(Struct);
 
             const first_param = params[0].type.?;
             if (first_param != *R and first_param != *const R) {
@@ -1904,8 +1901,9 @@ fn Caller(comptime E: type) type {
             }
         }
 
-        fn assertIsStateArg(comptime named_function: anytype, index: comptime_int) void {
-            const F = @TypeOf(named_function.func);
+        fn assertIsStateArg(comptime Struct: type, comptime named_function: NamedFunction, index: comptime_int) void {
+            const func = @field(Struct, named_function.name);
+            const F = @TypeOf(func);
             const params = @typeInfo(F).@"fn".params;
 
             const param = params[index].type.?;
@@ -1914,13 +1912,14 @@ fn Caller(comptime E: type) type {
             }
         }
 
-        fn handleError(self: *Self, comptime named_function: anytype, err: anyerror, info: anytype) void {
+        fn handleError(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, err: anyerror, info: anytype) void {
             const isolate = self.isolate;
             var js_err: ?v8.Value = switch (err) {
                 error.InvalidArgument => createTypeException(isolate, "invalid argument"),
                 error.OutOfMemory => createException(isolate, "out of memory"),
                 else => blk: {
-                    const return_type = @typeInfo(@TypeOf(named_function.func)).@"fn".return_type orelse {
+                    const func = @field(Struct, named_function.name);
+                    const return_type = @typeInfo(@TypeOf(func)).@"fn".return_type orelse {
                         // void return type;
                         break :blk null;
                     };
@@ -1935,7 +1934,7 @@ fn Caller(comptime E: type) type {
 
                     const function_error_set = @typeInfo(return_type).error_union.error_set;
 
-                    const Exception = comptime getCustomException(named_function.S) orelse break :blk null;
+                    const Exception = comptime getCustomException(Struct) orelse break :blk null;
                     if (function_error_set == Exception or isErrorSetException(Exception, err)) {
                         const custom_exception = Exception.init(self.call_arena, err, named_function.js_name) catch |init_err| {
                             switch (init_err) {
@@ -2004,8 +2003,8 @@ fn Caller(comptime E: type) type {
         // Finally, if the JS function is called with _more_ parameters and
         // the last parameter in Zig is an array, we'll try to slurp the additional
         // parameters into the array.
-        fn getArgs(self: *const Self, comptime named_function: anytype, comptime offset: usize, info: anytype) !ParamterTypes(@TypeOf(named_function.func)) {
-            const F = @TypeOf(named_function.func);
+        fn getArgs(self: *const Self, comptime Struct: type, comptime named_function: NamedFunction, comptime offset: usize, info: anytype) !ParamterTypes(@TypeOf(@field(Struct, named_function.name))) {
+            const F = @TypeOf(@field(Struct, named_function.name));
             var args: ParamterTypes(F) = undefined;
 
             const params = @typeInfo(F).@"fn".params[offset..];
@@ -2111,7 +2110,7 @@ fn Caller(comptime E: type) type {
             return args;
         }
 
-        fn jsValueToZig(self: *const Self, comptime named_function: anytype, comptime T: type, js_value: v8.Value) !T {
+        fn jsValueToZig(self: *const Self, comptime named_function: NamedFunction, comptime T: type, js_value: v8.Value) !T {
             switch (@typeInfo(T)) {
                 .optional => |o| {
                     if (js_value.isNullOrUndefined()) {
@@ -2329,7 +2328,7 @@ fn Caller(comptime E: type) type {
 
         // Extracted so that it can be used in both jsValueToZig and in
         // probeJsValueToZig. Avoids having to duplicate this logic when probing.
-        fn jsValueToStruct(self: *const Self, comptime named_function: anytype, comptime T: type, js_value: v8.Value) !?T {
+        fn jsValueToStruct(self: *const Self, comptime named_function: NamedFunction, comptime T: type, js_value: v8.Value) !?T {
             if (@hasDecl(T, "_CALLBACK_ID_KLUDGE")) {
                 if (!js_value.isFunction()) {
                     return error.InvalidArgument;
@@ -2416,7 +2415,7 @@ fn Caller(comptime E: type) type {
                 invalid: void,
             };
         }
-        fn probeJsValueToZig(self: *const Self, comptime named_function: anytype, comptime T: type, js_value: v8.Value) !ProbeResult(T) {
+        fn probeJsValueToZig(self: *const Self, comptime named_function: NamedFunction, comptime T: type, js_value: v8.Value) !ProbeResult(T) {
             switch (@typeInfo(T)) {
                 .optional => |o| {
                     if (js_value.isNullOrUndefined()) {
@@ -2843,27 +2842,28 @@ const ErrorModuleLoader = struct {
 //    pub fn meow(self: *OtherImpl) void { ... }
 // }
 // In which case, as we see above, the receiver is derived from the Self declaration
-fn Receiver(comptime S: type) type {
-    return if (@hasDecl(S, "Self")) S.Self else S;
+fn Receiver(comptime Struct: type) type {
+    return if (@hasDecl(Struct, "Self")) Struct.Self else Struct;
 }
 
 // We want the function name, or more precisely, the "Struct.function" for
 // displaying helpful @compileError.
-// However, there's no way to get the name from a std.Builtin.Fn,
-// so we capture it early and mostly pass around this NamedFunction instance
-// whenever we're trying to bind a function/getter/setter/etc so that we always
-// have the main data (struct + function) along with the meta data for displaying
-// better errors.
-fn NamedFunction(comptime S: type, comptime function: anytype, comptime name: []const u8) type {
-    const full_name = @typeName(S) ++ "." ++ name;
-    const js_name = if (name[0] == '_') name[1..] else name;
-    return struct {
-        S: type = S,
-        full_name: []const u8 = full_name,
-        func: @TypeOf(function) = function,
-        js_name: []const u8 = js_name,
-    };
-}
+// However, there's no way to get the name from a std.Builtin.Fn, so we create
+// a NamedFunction as part of our binding, and pass it around incase we need
+// to display an error
+const NamedFunction = struct {
+    name: []const u8,
+    js_name: []const u8,
+    full_name: []const u8,
+
+    fn init(comptime Struct: type, comptime name: []const u8) NamedFunction {
+        return .{
+            .name = name,
+            .js_name = if (name[0] == '_') name[1..] else name,
+            .full_name = @typeName(Struct) ++ "." ++ name,
+        };
+    }
+};
 
 // This is called from V8. Whenever the v8 inspector has to describe a value
 // it'll call this function to gets its [optional] subtype - which, from V8's
