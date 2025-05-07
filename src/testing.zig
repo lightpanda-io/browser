@@ -401,7 +401,7 @@ pub const JsRunner = struct {
         self.env = try Env.init(arena, .{});
         errdefer self.env.deinit();
 
-        self.url = try URL.parse("https://lightpanda.io/opensource-browser/", null);
+        self.url = try URL.parse(opts.url, null);
 
         self.renderer = Renderer.init(arena);
         self.cookie_jar = storage.CookieJar.init(arena);
@@ -500,6 +500,7 @@ pub const JsRunner = struct {
 };
 
 const RunnerOpts = struct {
+    url: []const u8 = "https://lightpanda.io/opensource-browser/",
     html: []const u8 =
         \\ <div id="content">
         \\   <a id="link" href="foo" class="ok">OK</a>

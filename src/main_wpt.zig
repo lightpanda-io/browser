@@ -108,6 +108,7 @@ fn run(arena: Allocator, test_file: []const u8, loader: *FileLoader, err_out: *?
     const dirname = std.fs.path.dirname(test_file) orelse "";
 
     var runner = try @import("testing.zig").jsRunner(arena, .{
+        .url = "http://127.0.0.1",
         .html = html,
     });
     defer runner.deinit();
