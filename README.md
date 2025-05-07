@@ -165,6 +165,11 @@ sudo apt install xz-utils \
     cmake clang
 ```
 
+For systems with [Nix](https://nixos.org/download/), you can use the devShell:
+```
+nix develop
+```
+
 For MacOS, you only need cmake:
 
 ```
