@@ -706,11 +706,34 @@ pub const Page = struct {
             .a => {
                 const element: *parser.Element = @ptrCast(node);
                 const href = (try parser.elementGetAttribute(element, "href")) orelse return;
-                return self.session.pageNavigate(href);
+
+                // We cannot navigate immediately as navigating will delete the DOM tree, which holds this event's node.
+                // As such we schedule the function to be called as soon as possible.
+                // NOTE Using the page.arena assumes that the scheduling loop does use this object after invoking the callback
+                // If that changes we may want to consider storing DelayedNavigation in the session instead.
+                const arena = self.arena;
+                const navi = try arena.create(DelayedNavigation);
+                navi.* = .{
+                    .session = self.session,
+                    .href = try arena.dupe(u8, href),
+                };
+                _ = try self.state.loop.timeout(0, &navi.navigate_node);
             },
             else => {},
         }
     }
+
+    const DelayedNavigation = struct {
+        navigate_node: Loop.CallbackNode = .{ .func = DelayedNavigation.delay_navigate },
+        session: *Session,
+        href: []const u8,
+
+        fn delay_navigate(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
+            _ = repeat_delay;
+            const self: *DelayedNavigation = @fieldParentPtr("navigate_node", node);
+            self.session.pageNavigate(self.href) catch unreachable;
+        }
+    };
 
     const Script = struct {
         element: *parser.Element,
