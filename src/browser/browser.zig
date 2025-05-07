@@ -267,7 +267,7 @@ pub const Page = struct {
         // load polyfills
         try polyfill.load(self.arena, self.scope);
 
-        _ = try session.browser.app.loop.timeout(1 * std.time.ns_per_ms, &self.microtask_node);
+        // _ = try session.browser.app.loop.timeout(1 * std.time.ns_per_ms, &self.microtask_node);
     }
 
     fn microtaskCallback(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
