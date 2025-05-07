@@ -41,6 +41,9 @@ pub const Loop = struct {
     // event are finished.
     events_nb: usize,
 
+    // Used to stop repeating timeouts when loop.run is called.
+    stopping: bool,
+
     // ctx_id is incremented each time the loop is reset.
     // All callbacks store an initial ctx_id and compare before execution.
     // If a ctx is outdated, the callback is ignored.
@@ -62,11 +65,12 @@ pub const Loop = struct {
     pub const ConnectError = IO.ConnectError;
 
     pub fn init(alloc: std.mem.Allocator) !Self {
-        return Self{
+        return .{
             .alloc = alloc,
             .cancelled = .{},
             .io = try IO.init(32, 0),
             .events_nb = 0,
+            .stopping = false,
             .timeout_pool = MemoryPool(ContextTimeout).init(alloc),
             .event_callback_pool = MemoryPool(EventCallbackContext).init(alloc),
         };
@@ -98,6 +102,10 @@ pub const Loop = struct {
     // Note that I/O events callbacks might register more I/O events
     // on the go when they are executed (ie. nested I/O events).
     pub fn run(self: *Self) !void {
+        // stop repeating / interval timeouts from re-registering
+        self.stopping = true;
+        defer self.stopping = false;
+
         while (self.eventsNb() > 0) {
             try self.io.run_for_ns(10 * std.time.ns_per_ms);
             // at each iteration we might have new events registred by previous callbacks
@@ -134,6 +142,7 @@ pub const Loop = struct {
     const ContextTimeout = struct {
         loop: *Self,
         ctx_id: u32,
+        initial: bool = true,
         callback_node: ?*CallbackNode,
     };
 
@@ -145,8 +154,11 @@ pub const Loop = struct {
         var repeating = false;
         const loop = ctx.loop;
 
-        defer {
+        if (ctx.initial) {
             loop.removeEvent();
+        }
+
+        defer {
             if (repeating == false) {
                 loop.timeout_pool.destroy(ctx);
                 loop.alloc.destroy(completion);
@@ -174,10 +186,13 @@ pub const Loop = struct {
         if (ctx.callback_node) |cn| {
             var repeat_in: ?u63 = null;
             cn.func(cn, &repeat_in);
-            if (repeat_in) |r| {
-                // prevents our context and completion from being cleaned up
-                repeating = true;
-                loop.scheduleTimeout(r, ctx, completion);
+            if (loop.stopping == false) {
+                if (repeat_in) |r| {
+                    // prevents our context and completion from being cleaned up
+                    repeating = true;
+                    ctx.initial = false;
+                    loop.scheduleTimeout(r, ctx, completion);
+                }
             }
         }
     }
@@ -195,12 +210,12 @@ pub const Loop = struct {
             .callback_node = callback_node,
         };
 
+        self.addEvent();
         self.scheduleTimeout(nanoseconds, ctx, completion);
         return @intFromPtr(completion);
     }
 
     fn scheduleTimeout(self: *Self, nanoseconds: u63, ctx: *ContextTimeout, completion: *Completion) void {
-        self.addEvent();
         self.io.timeout(*ContextTimeout, ctx, timeoutCallback, completion, nanoseconds);
     }
 
