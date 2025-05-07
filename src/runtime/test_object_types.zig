@@ -45,18 +45,18 @@ pub const MyObject = struct {
         };
     }
 
-    // pub fn named_get(_: *const MyObject, name: []const u8, has_value: *bool) ?OtherUnion {
-    //     if (std.mem.eql(u8, name, "a")) {
-    //         has_value.* = true;
-    //         return .{ .Other = .{ .val = 4 } };
-    //     }
-    //     if (std.mem.eql(u8, name, "c")) {
-    //         has_value.* = true;
-    //         return .{ .Bool = true };
-    //     }
-    //     has_value.* = false;
-    //     return null;
-    // }
+    pub fn named_get(_: *const MyObject, name: []const u8, has_value: *bool) ?OtherUnion {
+        if (std.mem.eql(u8, name, "a")) {
+            has_value.* = true;
+            return .{ .Other = .{ .val = 4 } };
+        }
+        if (std.mem.eql(u8, name, "c")) {
+            has_value.* = true;
+            return .{ .Bool = true };
+        }
+        has_value.* = false;
+        return null;
+    }
 
     pub fn get_val(self: *const MyObject) bool {
         return self.val;
@@ -95,31 +95,29 @@ test "JS: object types" {
     defer runner.deinit();
 
     // v8 has 5 default "own" properties
+    const own_base = "5";
 
-    // TODO: v8 upgrade
-    // const own_base = "5";
+    try runner.testCases(&.{
+        .{ "Object.getOwnPropertyNames(MyObject).length;", own_base },
+        .{ "let myObj = new MyObject(true);", "undefined" },
+        // check object property
+        .{ "myObj.a.val()", "4" },
+        .{ "myObj.b", "undefined" },
+        .{ "Object.getOwnPropertyNames(myObj).length;", "0" },
 
-    // try runner.testCases(&.{
-    //     .{ "Object.getOwnPropertyNames(MyObject).length;", own_base },
-    //     .{ "let myObj = new MyObject(true);", "undefined" },
-    //     // check object property
-    //     .{ "myObj.a.val()", "4" },
-    //     .{ "myObj.b", "undefined" },
-    //     .{ "Object.getOwnPropertyNames(myObj).length;", "0" },
+        // check if setter (pointer) still works
+        .{ "myObj.val", "true" },
+        .{ "myObj.val = false", "false" },
+        .{ "myObj.val", "false" },
 
-    //     // check if setter (pointer) still works
-    //     .{ "myObj.val", "true" },
-    //     .{ "myObj.val = false", "false" },
-    //     .{ "myObj.val", "false" },
+        .{ "let myObj2 = new MyObject(false);", "undefined" },
+        .{ "myObj2.c", "true" },
+    }, .{});
 
-    //     .{ "let myObj2 = new MyObject(false);", "undefined" },
-    //     .{ "myObj2.c", "true" },
-    // }, .{});
-
-    // try runner.testCases(&.{
-    //     .{ "let myAPI = new MyAPI();", "undefined" },
-    //     .{ "let myObjIndirect = myAPI.obj();", "undefined" },
-    //     // check object property
-    //     .{ "myObjIndirect.a.val()", "4" },
-    // }, .{});
+    try runner.testCases(&.{
+        .{ "let myAPI = new MyAPI();", "undefined" },
+        .{ "let myObjIndirect = myAPI.obj();", "undefined" },
+        // check object property
+        .{ "myObjIndirect.a.val()", "4" },
+    }, .{});
 }
