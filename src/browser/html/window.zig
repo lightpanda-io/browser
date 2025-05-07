@@ -165,7 +165,7 @@ pub const Window = struct {
         }
         errdefer _ = self.timers.remove(timer_id);
 
-        const delay: u63 = (delay_ orelse 0) * std.time.ns_per_ms;
+        const delay: u63 = @as(u63, (delay_ orelse 0)) * std.time.ns_per_ms;
         const callback = try arena.create(TimerCallback);
 
         callback.* = .{
