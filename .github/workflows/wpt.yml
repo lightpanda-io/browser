@@ -7,69 +7,18 @@ env:
   AWS_REGION: ${{ vars.LPD_PERF_AWS_REGION }}
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "build.zig"
-      - "src/**/*.zig"
-      - "src/*.zig"
-      - "tests/wpt/**"
-      - "vendor/**"
-      - ".github/**"
-  pull_request:
+  schedule:
+    - cron: "23 2 * * *"
 
-    # By default GH trigger on types opened, synchronize and reopened.
-    # see https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#pull_request
-    # Since we skip the job when the PR is in draft state, we want to force CI
-    # running when the PR is marked ready_for_review w/o other change.
-    # see https://github.com/orgs/community/discussions/25722#discussioncomment-3248917
-    types: [opened, synchronize, reopened, ready_for_review]
-
-    paths:
-      - ".github/**"
-      - "build.zig"
-      - "src/**/*.zig"
-      - "src/*.zig"
-      - "tests/wpt/**"
-      - "vendor/**"
-      - ".github/**"
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
 jobs:
   wpt:
-    name: web platform tests
-
-    # Only for PR without draft.
-    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    name: web platform tests json output
 
     runs-on: ubuntu-latest
     timeout-minutes: 90
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          # fetch submodules recusively, to get zig-js-runtime submodules also.
-          submodules: recursive
-
-      - uses: ./.github/actions/install
-
-      - run: zig build wpt -- --summary
-
-        # For now WPT tests doesn't pass at all.
-        # We accept then to continue the job on failure.
-        # TODO remove the continue-on-error when tests will pass.
-        continue-on-error: true
-
-  wpt-json:
-    name: web platform tests json output
-
-    # Don't execute on PR
-    if: github.event_name != 'pull_request'
-
-    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -99,9 +48,6 @@ jobs:
   perf-fmt:
     name: perf-fmt
     needs: wpt-json
-
-    # Don't execute on PR
-    if: github.event_name != 'pull_request'
 
     runs-on: ubuntu-latest
     timeout-minutes: 15
