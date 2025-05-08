@@ -26,14 +26,14 @@ on:
     # see https://github.com/orgs/community/discussions/25722#discussioncomment-3248917
     types: [opened, synchronize, reopened, ready_for_review]
 
-    paths:
-      - ".github/**"
-      - "build.zig"
-      - "src/**/*.zig"
-      - "src/*.zig"
-      - "tests/wpt/**"
-      - "vendor/**"
-      - ".github/**"
+    # paths:
+    #   - ".github/**"
+    #   - "build.zig"
+    #   - "src/**/*.zig"
+    #   - "src/*.zig"
+    #   - "tests/wpt/**"
+    #   - "vendor/**"
+    #   - ".github/**"
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
