@@ -165,7 +165,6 @@ fn common(b: *std.Build, opts: *std.Build.Step.Options, step: *std.Build.Step.Co
     );
     mod.link_libcpp = true;
     mod.addObjectFile(mod.owner.path(lib_path));
-    mod.addIncludePath(b.path("src/runtime/v8"));
 
     switch (target.result.os.tag) {
         .macos => {
