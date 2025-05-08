@@ -60,9 +60,7 @@ pub const Browser = struct {
     pub fn init(app: *App) !Browser {
         const allocator = app.allocator;
 
-        const env = try Env.init(allocator, .{
-            .gc_hints = app.config.gc_hints,
-        });
+        const env = try Env.init(allocator, .{});
         errdefer env.deinit();
 
         const notification = try Notification.init(allocator, app.notification);
@@ -98,6 +96,9 @@ pub const Browser = struct {
         if (self.session) |*session| {
             session.deinit();
             self.session = null;
+            if (self.app.config.gc_hints) {
+                self.env.lowMemoryNotification();
+            }
         }
     }
 
