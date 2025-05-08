@@ -29,6 +29,8 @@ const PseudoClass = selector.PseudoClass;
 const AttributeOP = selector.AttributeOP;
 const Combinator = selector.Combinator;
 
+const REPLACEMENT_CHARACTER = &.{ 239, 191, 189 };
+
 pub const ParseError = error{
     ExpectedSelector,
     ExpectedIdentifier,
@@ -217,22 +219,31 @@ pub const Parser = struct {
     // parseName parses a name (which is like an identifier, but doesn't have
     // extra restrictions on the first character).
     fn parseName(p: *Parser, w: anytype) ParseError!void {
+        const sel = p.s;
+        const sel_len = sel.len;
+
         var i = p.i;
         var ok = false;
 
-        while (i < p.s.len) {
-            const c = p.s[i];
+        while (i < sel_len) {
+            const c = sel[i];
 
             if (nameChar(c)) {
                 const start = i;
-                while (i < p.s.len and nameChar(p.s[i])) i += 1;
-                w.writeAll(p.s[start..i]) catch return ParseError.WriteError;
+                while (i < sel_len and nameChar(sel[i])) i += 1;
+                w.writeAll(sel[start..i]) catch return ParseError.WriteError;
                 ok = true;
             } else if (c == '\\') {
                 p.i = i;
                 try p.parseEscape(w);
                 i = p.i;
                 ok = true;
+            } else if (c == 0) {
+                w.writeAll(REPLACEMENT_CHARACTER) catch return ParseError.WriteError;
+                i += 1;
+                if (i == sel_len) {
+                    ok = true;
+                }
             } else {
                 // default:
                 break;
@@ -246,33 +257,52 @@ pub const Parser = struct {
     // parseEscape parses a backslash escape.
     // The returned string is owned by the caller.
     fn parseEscape(p: *Parser, w: anytype) ParseError!void {
-        if (p.s.len < p.i + 2 or p.s[p.i] != '\\') {
-            return ParseError.InvalidEscape;
+        const sel = p.s;
+        const sel_len = sel.len;
+
+        if (sel_len < p.i + 2 or sel[p.i] != '\\') {
+            p.i += 1;
+            w.writeAll(REPLACEMENT_CHARACTER) catch return ParseError.WriteError;
+            return;
         }
 
         const start = p.i + 1;
-        const c = p.s[start];
-        if (ascii.isWhitespace(c)) return ParseError.EscapeLineEndingOutsideString;
+        const c = sel[start];
 
         // unicode escape (hex)
         if (ascii.isHex(c)) {
             var i: usize = start;
-            while (i < start + 6 and i < p.s.len and ascii.isHex(p.s[i])) {
+            while (i < start + 6 and i < sel_len and ascii.isHex(sel[i])) {
                 i += 1;
             }
-            const v = std.fmt.parseUnsigned(u21, p.s[start..i], 16) catch return ParseError.InvalidUnicode;
-            if (p.s.len > i) {
-                switch (p.s[i]) {
-                    '\r' => {
-                        i += 1;
-                        if (p.s.len > i and p.s[i] == '\n') i += 1;
-                    },
-                    ' ', '\t', '\n', std.ascii.control_code.ff => i += 1,
-                    else => {},
+
+            const v = std.fmt.parseUnsigned(u21, sel[start..i], 16) catch {
+                p.i = i;
+                w.writeAll(REPLACEMENT_CHARACTER) catch return ParseError.WriteError;
+                return;
+            };
+
+            if (sel_len >= i) {
+                if (sel_len > i) {
+                    switch (sel[i]) {
+                        '\r' => {
+                            i += 1;
+                            if (sel_len > i and sel[i] == '\n') i += 1;
+                        },
+                        ' ', '\t', '\n', std.ascii.control_code.ff => i += 1,
+                        else => {},
+                    }
                 }
                 p.i = i;
+                if (v == 0) {
+                    w.writeAll(REPLACEMENT_CHARACTER) catch return ParseError.WriteError;
+                    return;
+                }
                 var buf: [4]u8 = undefined;
-                const ln = std.unicode.utf8Encode(v, &buf) catch return ParseError.InvalidUnicode;
+                const ln = std.unicode.utf8Encode(v, &buf) catch {
+                    w.writeAll(REPLACEMENT_CHARACTER) catch return ParseError.WriteError;
+                    return;
+                };
                 w.writeAll(buf[0..ln]) catch return ParseError.WriteError;
                 return;
             }
@@ -280,7 +310,7 @@ pub const Parser = struct {
 
         // Return the literal character after the backslash.
         p.i += 2;
-        w.writeAll(p.s[start .. start + 1]) catch return ParseError.WriteError;
+        w.writeByte(sel[start]) catch return ParseError.WriteError;
     }
 
     // parseIDSelector parses a selector that matches by id attribute.
@@ -383,20 +413,23 @@ pub const Parser = struct {
 
     // parseString parses a single- or double-quoted string.
     fn parseString(p: *Parser, writer: anytype) ParseError!void {
-        var i = p.i;
-        if (p.s.len < i + 2) return ParseError.ExpectedString;
+        const sel = p.s;
+        const sel_len = sel.len;
 
-        const quote = p.s[i];
+        var i = p.i;
+        if (sel_len < i + 2) return ParseError.ExpectedString;
+
+        const quote = sel[i];
         i += 1;
 
-        loop: while (i < p.s.len) {
-            switch (p.s[i]) {
+        loop: while (i < sel_len) {
+            switch (sel[i]) {
                 '\\' => {
-                    if (p.s.len > i + 1) {
-                        const c = p.s[i + 1];
+                    if (sel_len > i + 1) {
+                        const c = sel[i + 1];
                         switch (c) {
                             '\r' => {
-                                if (p.s.len > i + 2 and p.s[i + 2] == '\n') {
+                                if (sel_len > i + 2 and sel[i + 2] == '\n') {
                                     i += 3;
                                     continue :loop;
                                 }
@@ -418,17 +451,17 @@ pub const Parser = struct {
                 else => |c| {
                     if (c == quote) break :loop;
                     const start = i;
-                    while (i < p.s.len) {
-                        const cc = p.s[i];
+                    while (i < sel_len) {
+                        const cc = sel[i];
                         if (cc == quote or cc == '\\' or c == '\r' or c == '\n' or c == std.ascii.control_code.ff) break;
                         i += 1;
                     }
-                    writer.writeAll(p.s[start..i]) catch return ParseError.WriteError;
+                    writer.writeAll(sel[start..i]) catch return ParseError.WriteError;
                 },
             }
         }
 
-        if (i >= p.s.len) return ParseError.InvalidString;
+        if (i >= sel_len) return ParseError.InvalidString;
 
         // Consume the final quote.
         i += 1;
