@@ -97,6 +97,8 @@ test "JS: object types" {
     // v8 has 5 default "own" properties
     const own_base = "5";
 
+    std.debug.print("MASKING: {d} {d}\n", .{@import("v8").PropertyHandlerFlags.OnlyInterceptStrings, @import("v8").PropertyHandlerFlags.NonMasking});
+
     try runner.testCases(&.{
         .{ "Object.getOwnPropertyNames(MyObject).length;", own_base },
         .{ "let myObj = new MyObject(true);", "undefined" },
