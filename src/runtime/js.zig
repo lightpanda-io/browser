@@ -1352,14 +1352,15 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             }
             const configuration = v8.IndexedPropertyHandlerConfiguration{
                 .getter = struct {
-                    fn callback(idx: u32, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) void {
+                    fn callback(idx: u32, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
                         const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
                         var caller = Caller(Self, State).init(info);
                         defer caller.deinit();
 
                         const named_function = comptime NamedFunction.init(Struct, "indexed_get");
-                        caller.getIndex(Struct, named_function, idx, info) catch |err| {
+                        return caller.getIndex(Struct, named_function, idx, info) catch |err| blk: {
                             caller.handleError(Struct, named_function, err, info);
+                            break :blk v8.Intercepted.No;
                         };
                     }
                 }.callback,
@@ -1381,14 +1382,15 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             }
             const configuration = v8.NamedPropertyHandlerConfiguration{
                 .getter = struct {
-                    fn callback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) void {
+                    fn callback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
                         const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
                         var caller = Caller(Self, State).init(info);
                         defer caller.deinit();
 
                         const named_function = comptime NamedFunction.init(Struct, "named_get");
-                        caller.getNamedIndex(Struct, named_function, .{ .handle = c_name.? }, info) catch |err| {
+                        return caller.getNamedIndex(Struct, named_function, .{ .handle = c_name.? }, info) catch |err| blk: {
                             caller.handleError(Struct, named_function, err, info);
+                            break :blk v8.Intercepted.No;
                         };
                     }
                 }.callback,
@@ -1822,7 +1824,7 @@ fn Caller(comptime E: type, comptime State: type) type {
             _ = @call(.auto, func, args);
         }
 
-        fn getIndex(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, idx: u32, info: v8.PropertyCallbackInfo) !void {
+        fn getIndex(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, idx: u32, info: v8.PropertyCallbackInfo) !u8 {
             const func = @field(Struct, named_function.name);
             const IndexedGet = @TypeOf(func);
             if (@typeInfo(IndexedGet).@"fn".return_type == null) {
@@ -1851,15 +1853,13 @@ fn Caller(comptime E: type, comptime State: type) type {
 
             const res = @call(.auto, func, args);
             if (has_value == false) {
-                // for an indexed parameter, say nodes[10000], we should return
-                // undefined, not null, if the index is out of rante
-                info.getReturnValue().set(try self.zigValueToJs({}));
-            } else {
-                info.getReturnValue().set(try self.zigValueToJs(res));
+                return v8.Intercepted.No;
             }
+            info.getReturnValue().set(try self.zigValueToJs(res));
+            return v8.Intercepted.Yes;
         }
 
-        fn getNamedIndex(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, name: v8.Name, info: v8.PropertyCallbackInfo) !void {
+        fn getNamedIndex(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, name: v8.Name, info: v8.PropertyCallbackInfo) !u8 {
             const func = @field(Struct, named_function.name);
             const NamedGet = @TypeOf(func);
             if (@typeInfo(NamedGet).@"fn".return_type == null) {
@@ -1887,12 +1887,10 @@ fn Caller(comptime E: type, comptime State: type) type {
 
             const res = @call(.auto, func, args);
             if (has_value == false) {
-                // for an indexed parameter, say nodes[10000], we should return
-                // undefined, not null, if the index is out of rante
-                info.getReturnValue().set(try self.zigValueToJs({}));
-            } else {
-                info.getReturnValue().set(try self.zigValueToJs(res));
+                return v8.Intercepted.No;
             }
+            info.getReturnValue().set(try self.zigValueToJs(res));
+            return v8.Intercepted.Yes;
         }
 
         fn nameToString(self: *Self, name: v8.Name) ![]const u8 {
