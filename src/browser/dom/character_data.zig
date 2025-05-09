@@ -112,6 +112,16 @@ pub const CharacterData = struct {
 
         return true;
     }
+
+    pub fn _before(self: *parser.CharacterData, nodes: []const Node.NodeOrText) !void {
+        const ref_node = parser.characterDataToNode(self);
+        return Node.before(ref_node, nodes);
+    }
+
+    pub fn _after(self: *parser.CharacterData, nodes: []const Node.NodeOrText) !void {
+        const ref_node = parser.characterDataToNode(self);
+        return Node.after(ref_node, nodes);
+    }
 };
 
 // Tests

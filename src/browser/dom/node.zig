@@ -337,65 +337,72 @@ pub const Node = struct {
     // For now, it checks only if new nodes are not self.
     // TODO implements the others contraints.
     // see https://dom.spec.whatwg.org/#concept-node-tree
-    pub fn hierarchy(self: *parser.Node, nodes: []const *parser.Node) !bool {
-        if (nodes.len == 0) return true;
-
-        for (nodes) |node| if (self == node) return false;
-
+    pub fn hierarchy(self: *parser.Node, nodes: []const NodeOrText) bool {
+        for (nodes) |n| {
+            if (n.is(self)) {
+                return false;
+            }
+        }
         return true;
     }
 
-    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
-    // function must accept either node or string.
-    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
-    pub fn prepend(self: *parser.Node, nodes: []const *parser.Node) !void {
-        if (nodes.len == 0) return;
+    pub fn prepend(self: *parser.Node, nodes: []const NodeOrText) !void {
+        if (nodes.len == 0) {
+            return;
+        }
 
         // check hierarchy
-        if (!try hierarchy(self, nodes)) return parser.DOMError.HierarchyRequest;
+        if (!hierarchy(self, nodes)) {
+            return parser.DOMError.HierarchyRequest;
+        }
 
-        const first = try parser.nodeFirstChild(self);
-        if (first == null) {
+        const doc = (try parser.nodeOwnerDocument(self)) orelse return;
+
+        if (try parser.nodeFirstChild(self)) |first| {
             for (nodes) |node| {
-                _ = try parser.nodeAppendChild(self, node);
+                _ = try parser.nodeInsertBefore(self, try node.toNode(doc), first);
             }
             return;
         }
 
         for (nodes) |node| {
-            _ = try parser.nodeInsertBefore(self, node, first.?);
+            _ = try parser.nodeAppendChild(self, try node.toNode(doc));
         }
     }
 
-    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
-    // function must accept either node or string.
-    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
-    pub fn append(self: *parser.Node, nodes: []const *parser.Node) !void {
-        if (nodes.len == 0) return;
+    pub fn append(self: *parser.Node, nodes: []const NodeOrText) !void {
+        if (nodes.len == 0) {
+            return;
+        }
 
         // check hierarchy
-        if (!try hierarchy(self, nodes)) return parser.DOMError.HierarchyRequest;
+        if (!hierarchy(self, nodes)) {
+            return parser.DOMError.HierarchyRequest;
+        }
 
+        const doc = (try parser.nodeOwnerDocument(self)) orelse return;
         for (nodes) |node| {
-            _ = try parser.nodeAppendChild(self, node);
+            _ = try parser.nodeAppendChild(self, try node.toNode(doc));
         }
     }
 
-    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
-    // function must accept either node or string.
-    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
-    pub fn replaceChildren(self: *parser.Node, nodes: []const *parser.Node) !void {
-        if (nodes.len == 0) return;
+    pub fn replaceChildren(self: *parser.Node, nodes: []const NodeOrText) !void {
+        if (nodes.len == 0) {
+            return;
+        }
 
         // check hierarchy
-        if (!try hierarchy(self, nodes)) return parser.DOMError.HierarchyRequest;
+        if (!hierarchy(self, nodes)) {
+            return parser.DOMError.HierarchyRequest;
+        }
 
         // remove existing children
         try removeChildren(self);
 
+        const doc = (try parser.nodeOwnerDocument(self)) orelse return;
         // add new children
         for (nodes) |node| {
-            _ = try parser.nodeAppendChild(self, node);
+            _ = try parser.nodeAppendChild(self, try node.toNode(doc));
         }
     }
 
@@ -414,7 +421,87 @@ pub const Node = struct {
         }
     }
 
-    pub fn deinit(_: *parser.Node, _: std.mem.Allocator) void {}
+    pub fn before(self: *parser.Node, nodes: []const NodeOrText) !void {
+        const parent = try parser.nodeParentNode(self) orelse return;
+        const doc = (try parser.nodeOwnerDocument(parent)) orelse return;
+
+        var sibling: ?*parser.Node = self;
+        // have to find the first sibling that isn't in nodes
+        CHECK: while (sibling) |s| {
+            for (nodes) |n| {
+                if (n.is(s)) {
+                    sibling = try parser.nodePreviousSibling(s);
+                    continue :CHECK;
+                }
+            }
+            break;
+        }
+
+        if (sibling == null) {
+            sibling = try parser.nodeFirstChild(parent);
+        }
+
+        if (sibling) |ref_node| {
+            for (nodes) |node| {
+                _ = try parser.nodeInsertBefore(parent, try node.toNode(doc), ref_node);
+            }
+            return;
+        }
+
+        return Node.prepend(self, nodes);
+    }
+
+    pub fn after(self: *parser.Node, nodes: []const NodeOrText) !void {
+        const parent = try parser.nodeParentNode(self) orelse return;
+        const doc = (try parser.nodeOwnerDocument(parent)) orelse return;
+
+        // have to find the first sibling that isn't in nodes
+        var sibling = try parser.nodeNextSibling(self);
+        CHECK: while (sibling) |s| {
+            for (nodes) |n| {
+                if (n.is(s)) {
+                    sibling = try parser.nodeNextSibling(s);
+                    continue :CHECK;
+                }
+            }
+            break;
+        }
+
+        if (sibling) |ref_node| {
+            for (nodes) |node| {
+                _ = try parser.nodeInsertBefore(parent, try node.toNode(doc), ref_node);
+            }
+            return;
+        }
+
+        for (nodes) |node| {
+            _ = try parser.nodeAppendChild(parent, try node.toNode(doc));
+        }
+    }
+
+    // A lot of functions take either a node or text input.
+    // The text input is to be converted into a Text node.
+    pub const NodeOrText = union(enum) {
+        text: []const u8,
+        node: *parser.Node,
+
+        fn toNode(self: NodeOrText, doc: *parser.Document) !*parser.Node {
+            return switch (self) {
+                .node => |n| n,
+                .text => |txt| @ptrCast(try parser.documentCreateTextNode(doc, txt)),
+            };
+        }
+
+        // Whether the node represented by the NodeOrText is the same as the
+        // given Node. Always false for text values as these represent as-of-yet
+        // created Text nodes.
+        fn is(self: NodeOrText, other: *parser.Node) bool {
+            return switch (self) {
+                .text => false,
+                .node => |n| n == other,
+            };
+        }
+    };
 };
 
 const testing = @import("../../testing.zig");

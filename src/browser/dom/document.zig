@@ -227,28 +227,17 @@ pub const Document = struct {
         return css.querySelectorAll(allocator, parser.documentToNode(self), selector);
     }
 
-    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
-    // function must accept either node or string.
-    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
-    pub fn _prepend(self: *parser.Document, nodes: []const *parser.Node) !void {
+    pub fn _prepend(self: *parser.Document, nodes: []const Node.NodeOrText) !void {
         return Node.prepend(parser.documentToNode(self), nodes);
     }
 
-    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
-    // function must accept either node or string.
-    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
-    pub fn _append(self: *parser.Document, nodes: []const *parser.Node) !void {
+    pub fn _append(self: *parser.Document, nodes: []const Node.NodeOrText) !void {
         return Node.append(parser.documentToNode(self), nodes);
     }
 
-    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
-    // function must accept either node or string.
-    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
-    pub fn _replaceChildren(self: *parser.Document, nodes: []const *parser.Node) !void {
+    pub fn _replaceChildren(self: *parser.Document, nodes: []const Node.NodeOrText) !void {
         return Node.replaceChildren(parser.documentToNode(self), nodes);
     }
-
-    pub fn deinit(_: *parser.Document, _: std.mem.Allocator) void {}
 };
 
 const testing = @import("../../testing.zig");
