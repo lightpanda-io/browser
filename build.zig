@@ -161,7 +161,7 @@ fn common(b: *std.Build, opts: *std.Build.Step.Options, step: *std.Build.Step.Co
     const lib_path = try std.fmt.allocPrint(
         mod.owner.allocator,
         "v8/out/{s}/obj/zig/libc_v8.a",
-        .{ if (mod.optimize.? == .Debug) "debug" else "release" },
+        .{if (mod.optimize.? == .Debug) "debug" else "release"},
     );
     mod.link_libcpp = true;
     mod.addObjectFile(mod.owner.path(lib_path));
@@ -177,7 +177,6 @@ fn common(b: *std.Build, opts: *std.Build.Step.Options, step: *std.Build.Step.Co
 
     mod.addImport("build_info", opts.createModule());
     mod.addObjectFile(mod.owner.path(lib_path));
-
 }
 
 fn moduleNetSurf(b: *std.Build, step: *std.Build.Step.Compile, target: std.Build.ResolvedTarget) !void {
