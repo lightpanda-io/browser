@@ -174,18 +174,13 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
         // index.
         prototype_lookup: [Types.len]u16,
 
-        // Send a lowMemoryNotification whenever we stop an executor
-        gc_hints: bool,
-
         const Self = @This();
 
         const TYPE_LOOKUP = TypeLookup{};
 
-        const Opts = struct {
-            gc_hints: bool = false,
-        };
+        const Opts = struct {};
 
-        pub fn init(allocator: Allocator, opts: Opts) !*Self {
+        pub fn init(allocator: Allocator, _: Opts) !*Self {
             // var params = v8.initCreateParams();
             var params = try allocator.create(v8.CreateParams);
             errdefer allocator.destroy(params);
@@ -213,7 +208,6 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 .templates = undefined,
                 .allocator = allocator,
                 .isolate_params = params,
-                .gc_hints = opts.gc_hints,
                 .prototype_lookup = undefined,
             };
 
@@ -274,6 +268,18 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             };
         }
 
+        // V8 doesn't immediately free memory associated with
+        // a Context, it's managed by the garbage collector. So, when the
+        // `gc_hints` option is enabled, we'll use the `lowMemoryNotification`
+        // call on the isolate to encourage v8 to free any contexts which
+        // have been freed.
+        pub fn lowMemoryNotification(self: *Self) void {
+            var handle_scope: v8.HandleScope = undefined;
+            v8.HandleScope.init(&handle_scope, self.isolate);
+            defer handle_scope.deinit();
+            self.isolate.lowMemoryNotification();
+        }
+
         pub const Executor = struct {
             env: *Self,
 
@@ -304,18 +310,6 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     self.endScope();
                 }
 
-                // V8 doesn't immediately free memory associated with
-                // a Context, it's managed by the garbage collector. So, when the
-                // `gc_hints` option is enabled, we'll use the `lowMemoryNotification`
-                // call on the isolate to encourage v8 to free any contexts which
-                // have been freed.
-                if (self.env.gc_hints) {
-                    var handle_scope: v8.HandleScope = undefined;
-                    v8.HandleScope.init(&handle_scope, self.env.isolate);
-                    defer handle_scope.deinit();
-
-                    self.env.isolate.lowMemoryNotification(); // TODO we only need to call this for the main World Executor
-                }
                 self.call_arena.deinit();
                 self.scope_arena.deinit();
             }
