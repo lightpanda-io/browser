@@ -193,7 +193,7 @@ pub const Session = struct {
         // can't use the page arena, because we're about to reset it
         // and don't want to use the session's arena, because that'll start to
         // look like a leak if we navigate from page to page a lot.
-        var buf: [4096]u8 = undefined;
+        var buf: [2048]u8 = undefined;
         var fba = std.heap.FixedBufferAllocator.init(&buf);
         const url = try self.page.?.url.resolve(fba.allocator(), url_string);
 
@@ -732,7 +732,7 @@ pub const Page = struct {
             _ = repeat_delay;
             const self: *DelayedNavigation = @fieldParentPtr("navigate_node", node);
             self.session.pageNavigate(self.href) catch |err| {
-                log.err("Delayed navigation error {}", .{err});
+                log.err("Delayed navigation error {}", .{err}); // TODO: should we trigger a specific event here?
             };
         }
     };
