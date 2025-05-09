@@ -313,24 +313,25 @@ pub const Element = struct {
         return css.querySelectorAll(state.arena, parser.elementToNode(self), selector);
     }
 
-    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
-    // function must accept either node or string.
-    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
-    pub fn _prepend(self: *parser.Element, nodes: []const *parser.Node) !void {
+    pub fn _prepend(self: *parser.Element, nodes: []const Node.NodeOrText) !void {
         return Node.prepend(parser.elementToNode(self), nodes);
     }
 
-    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
-    // function must accept either node or string.
-    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
-    pub fn _append(self: *parser.Element, nodes: []const *parser.Node) !void {
+    pub fn _append(self: *parser.Element, nodes: []const Node.NodeOrText) !void {
         return Node.append(parser.elementToNode(self), nodes);
     }
 
-    // TODO according with https://dom.spec.whatwg.org/#parentnode, the
-    // function must accept either node or string.
-    // blocked by https://github.com/lightpanda-io/jsruntime-lib/issues/114
-    pub fn _replaceChildren(self: *parser.Element, nodes: []const *parser.Node) !void {
+    pub fn _before(self: *parser.Element, nodes: []const Node.NodeOrText) !void {
+        const ref_node = parser.elementToNode(self);
+        return Node.before(ref_node, nodes);
+    }
+
+    pub fn _after(self: *parser.Element, nodes: []const Node.NodeOrText) !void {
+        const ref_node = parser.elementToNode(self);
+        return Node.after(ref_node, nodes);
+    }
+
+    pub fn _replaceChildren(self: *parser.Element, nodes: []const Node.NodeOrText) !void {
         return Node.replaceChildren(parser.elementToNode(self), nodes);
     }
 
@@ -528,5 +529,29 @@ test "Browser.DOM.Element" {
         .{ "el.matches('.ok')", "true" },
         .{ "el.matches('#9000')", "false" },
         .{ "el.matches('.notok')", "false" },
+    }, .{});
+
+    // before
+    try runner.testCases(&.{
+        .{ "const before_container = document.createElement('div');", "undefined" },
+        .{ "document.append(before_container);", "undefined" },
+        .{ "const b1 = document.createElement('div');", "undefined" },
+        .{ "before_container.append(b1);", "undefined" },
+
+        .{ "const b1_a = document.createElement('p');", "undefined" },
+        .{ "b1.before(b1_a, 'over 9000');", "undefined" },
+        .{ "before_container.innerHTML", "<p></p>over 9000<div></div>" },
+    }, .{});
+
+    // after
+    try runner.testCases(&.{
+        .{ "const after_container = document.createElement('div');", "undefined" },
+        .{ "document.append(after_container);", "undefined" },
+        .{ "const a1 = document.createElement('div');", "undefined" },
+        .{ "after_container.append(a1);", "undefined" },
+
+        .{ "const a1_a = document.createElement('p');", "undefined" },
+        .{ "a1.after('over 9000', a1_a);", "undefined" },
+        .{ "after_container.innerHTML", "<div></div>over 9000<p></p>" },
     }, .{});
 }
