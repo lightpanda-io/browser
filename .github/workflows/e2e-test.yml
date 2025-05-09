@@ -36,6 +36,7 @@ jobs:
     name: zig build release
 
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -67,6 +68,7 @@ jobs:
       LIGHTPANDA_DISABLE_TELEMETRY: true
 
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -111,6 +113,7 @@ jobs:
     needs: zig-build-release
 
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4

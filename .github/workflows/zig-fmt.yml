@@ -29,6 +29,7 @@ jobs:
     if: github.event.pull_request.draft == false
 
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - uses: mlugg/setup-zig@v1

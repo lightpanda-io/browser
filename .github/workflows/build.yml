@@ -17,6 +17,7 @@ jobs:
       OS: linux
 
     runs-on: ubuntu-22.04
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -49,6 +50,7 @@ jobs:
       OS: linux
 
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -81,6 +83,7 @@ jobs:
       OS: macos
 
     runs-on: macos-latest
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -113,6 +116,7 @@ jobs:
       OS: macos
 
     runs-on: macos-13
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4

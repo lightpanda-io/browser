@@ -45,6 +45,7 @@ jobs:
     if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
 
     runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4
@@ -103,6 +104,8 @@ jobs:
     if: github.event_name != 'pull_request'
 
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
     container:
       image: ghcr.io/lightpanda-io/perf-fmt:latest
       credentials:
