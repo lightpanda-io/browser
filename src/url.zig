@@ -82,3 +82,19 @@ pub const URL = struct {
         return WebApiURL.init(allocator, self.uri);
     }
 };
+
+test "Url resolve size" {
+    const base = "https://www.lightpande.io";
+    const url = try URL.parse(base, null);
+
+    var url_string: [511]u8 = undefined; // Currently this is the largest url we support, it is however recommmended to at least support 2000 characters
+    @memset(&url_string, 'a');
+
+    var buf: [2048]u8 = undefined; // This is approximately the required size to support the current largest supported URL
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    const out_url = try url.resolve(fba.allocator(), &url_string);
+
+    try std.testing.expectEqualStrings(out_url.raw[0..25], base);
+    try std.testing.expectEqual(out_url.raw[25], '/');
+    try std.testing.expectEqualStrings(out_url.raw[26..], &url_string);
+}
