@@ -25,6 +25,7 @@ const c = @cImport({
     @cInclude("events/event_target.h");
     @cInclude("events/event.h");
     @cInclude("events/mouse_event.h");
+    @cInclude("utils/validate.h");
 });
 
 const mimalloc = @import("mimalloc.zig");
@@ -1509,6 +1510,13 @@ pub fn elementHasAttribute(elem: *Element, qname: []const u8) !bool {
     return res;
 }
 
+pub fn elementHasAttributeNS(elem: *Element, ns: []const u8, qname: []const u8) !bool {
+    var res: bool = undefined;
+    const err = elementVtable(elem).dom_element_has_attribute_ns.?(elem, if (ns.len == 0) null else try strFromData(ns), try strFromData(qname), &res);
+    try DOMErr(err);
+    return res;
+}
+
 pub fn elementGetAttributeNode(elem: *Element, name: []const u8) !?*Attribute {
     var a: ?*Attribute = undefined;
     const err = elementVtable(elem).dom_element_get_attribute_node.?(elem, try strFromData(name), &a);
@@ -1520,7 +1528,7 @@ pub fn elementGetAttributeNodeNS(elem: *Element, ns: []const u8, name: []const u
     var a: ?*Attribute = undefined;
     const err = elementVtable(elem).dom_element_get_attribute_node_ns.?(
         elem,
-        try strFromData(ns),
+        if (ns.len == 0) null else try strFromData(ns),
         try strFromData(name),
         &a,
     );
@@ -2306,4 +2314,8 @@ pub fn documentHTMLGetLocation(T: type, doc: *DocumentHTML) !?*T {
 
     const ptr: *align(@alignOf(*T)) anyopaque = @alignCast(l.?);
     return @as(*T, @ptrCast(ptr));
+}
+
+pub fn validateName(name: []const u8) !bool {
+    return c._dom_validate_name(try strFromData(name));
 }
