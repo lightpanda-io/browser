@@ -530,7 +530,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             const ModuleLoader = struct {
                 ptr: *anyopaque,
-                func: *const fn (ptr: *anyopaque, specifier: []const u8) anyerror![]const u8,
+                func: *const fn (ptr: *anyopaque, specifier: []const u8) anyerror!?[]const u8,
             };
 
             // no init, started with executor.startScope()
@@ -784,7 +784,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 const source = module_loader.func(module_loader.ptr, specifier) catch |err| {
                     log.err("fetchModuleSource for '{s}' fetch error: {}", .{ specifier, err });
                     return null;
-                };
+                } orelse return null;
 
                 const m = compileModule(self.isolate, source, specifier) catch |err| {
                     log.err("fetchModuleSource for '{s}' compile error: {}", .{ specifier, err });
@@ -2819,7 +2819,7 @@ const NoopInspector = struct {
 };
 
 const ErrorModuleLoader = struct {
-    pub fn fetchModuleSource(_: *anyopaque, _: []const u8) ![]const u8 {
+    pub fn fetchModuleSource(_: *anyopaque, _: []const u8) !?[]const u8 {
         return error.NoModuleLoadConfigured;
     }
 };

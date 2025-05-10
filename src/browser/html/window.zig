@@ -29,6 +29,7 @@ const Location = @import("location.zig").Location;
 const Crypto = @import("../crypto/crypto.zig").Crypto;
 const Console = @import("../console/console.zig").Console;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
+const MediaQueryList = @import("media_query_list.zig").MediaQueryList;
 
 const storage = @import("../storage/storage.zig");
 
@@ -149,7 +150,14 @@ pub const Window = struct {
         try state.loop.cancel(kv.value.loop_id);
     }
 
-    pub fn createTimeout(self: *Window, cbk: Callback, delay_: ?u32, state: *SessionState, comptime repeat: bool) !u32 {
+    pub fn _matchMedia(_: *const Window, media: []const u8, state: *SessionState) !MediaQueryList {
+        return .{
+            .matches = false, // TODO?
+            .media = try state.arena.dupe(u8, media),
+        };
+    }
+
+    fn createTimeout(self: *Window, cbk: Callback, delay_: ?u32, state: *SessionState, comptime repeat: bool) !u32 {
         if (self.timers.count() > 512) {
             return error.TooManyTimeout;
         }
