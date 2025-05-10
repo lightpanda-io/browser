@@ -47,7 +47,7 @@ jobs:
 
   perf-fmt:
     name: perf-fmt
-    needs: wpt-json
+    needs: wpt
 
     runs-on: ubuntu-latest
     timeout-minutes: 15
