@@ -167,8 +167,13 @@ pub const Element = struct {
         return try parser.elementHasAttribute(self, qname);
     }
 
+    pub fn _hasAttributeNS(self: *parser.Element, ns: []const u8, qname: []const u8) !bool {
+        return try parser.elementHasAttributeNS(self, ns, qname);
+    }
+
     // https://dom.spec.whatwg.org/#dom-element-toggleattribute
-    pub fn _toggleAttribute(self: *parser.Element, qname: []const u8, force: ?bool) !bool {
+    pub fn _toggleAttribute(self: *parser.Element, qname: []u8, force: ?bool) !bool {
+        _ = std.ascii.lowerString(qname, qname);
         const exists = try parser.elementHasAttribute(self, qname);
 
         // If attribute is null, then:
@@ -180,6 +185,9 @@ pub const Element = struct {
             if (force == null or force.?) {
                 try parser.elementSetAttribute(self, qname, "");
                 return true;
+            }
+            if (try parser.validateName(qname) == false) {
+                return parser.DOMError.InvalidCharacter;
             }
 
             // Return false.
