@@ -158,29 +158,25 @@ fn common(b: *std.Build, opts: *std.Build.Step.Options, step: *std.Build.Step.Co
         mod.addImport("v8", v8_mod);
     }
 
-    const mode_str: []const u8 = if (mod.optimize.? == .Debug) "debug" else "release";
-
-    // FIXME: we are tied to native v8 builds, currently:
-    // - aarch64-macos
-    // - x86_64-linux
-    const os = target.result.os.tag;
-    const arch = target.result.cpu.arch;
-    switch (os) {
-        .macos => {},
-        .linux => {
-            // TODO: why do we need it? It should be linked already when we built v8
-            mod.link_libcpp = true;
-        },
-        else => return error.OsNotSupported,
-    }
-
     const lib_path = try std.fmt.allocPrint(
         mod.owner.allocator,
-        "v8/build/{s}-{s}/{s}/ninja/obj/zig/libc_v8.a",
-        .{ @tagName(arch), @tagName(os), mode_str },
+        "v8/out/{s}/obj/zig/libc_v8.a",
+        .{if (mod.optimize.? == .Debug) "debug" else "release"},
     );
+    mod.link_libcpp = true;
     mod.addObjectFile(mod.owner.path(lib_path));
+
+    switch (target.result.os.tag) {
+        .macos => {
+            // v8 has a dependency, abseil-cpp, which, on Mac, uses CoreFoundation
+            mod.addSystemFrameworkPath(.{ .cwd_relative = "/System/Library/Frameworks" });
+            mod.linkFramework("CoreFoundation", .{});
+        },
+        else => {},
+    }
+
     mod.addImport("build_info", opts.createModule());
+    mod.addObjectFile(mod.owner.path(lib_path));
 }
 
 fn moduleNetSurf(b: *std.Build, step: *std.Build.Step.Compile, target: std.Build.ResolvedTarget) !void {
