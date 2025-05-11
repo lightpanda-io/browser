@@ -534,9 +534,6 @@ fn serveHTTPS(address: std.net.Address) !void {
     var listener = try address.listen(.{ .reuse_address = true });
     defer listener.deinit();
 
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
     test_wg.finish();
 
     var seed: u64 = undefined;
@@ -546,9 +543,6 @@ fn serveHTTPS(address: std.net.Address) !void {
 
     var read_buffer: [1024]u8 = undefined;
     while (true) {
-        // defer _ = arena.reset(.{ .retain_with_limit = 1024 });
-        // const aa = arena.allocator();
-
         const stream = blk: {
             const conn = try listener.accept();
             break :blk conn.stream;

@@ -306,7 +306,7 @@ pub const Request = struct {
     fn destroyConnection(self: *Request, connection: *Connection) void {
         const client = self._client;
         connection.deinit(client.allocator);
-        errdefer client.connection_pool.destroy(connection);
+        client.connection_pool.destroy(connection);
     }
 
     const AddHeaderOpts = struct {
@@ -2153,6 +2153,7 @@ const IdleConnections = struct {
 
     fn get(self: *IdleConnections, secure: bool, host: []const u8, port: u16, blocking: bool) ?*Connection {
         self.mutex.lock();
+        defer self.mutex.unlock();
 
         var node = self.idle.first;
         while (node) |n| {
@@ -2161,12 +2162,10 @@ const IdleConnections = struct {
                 self.count -= 1;
                 self.idle.remove(n);
                 self.node_pool.destroy(n);
-                self.mutex.unlock();
                 return connection;
             }
             node = n.next;
         }
-        self.mutex.unlock();
         return null;
     }
 
@@ -2178,6 +2177,7 @@ const IdleConnections = struct {
         if (self.count == self.max) {
             const oldest = self.idle.popFirst() orelse {
                 std.debug.assert(self.max == 0);
+                connection.deinit(self.allocator);
                 return;
             };
             oldest.data.deinit(self.allocator);
