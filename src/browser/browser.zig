@@ -587,11 +587,9 @@ pub const Page = struct {
 
         // if a base path is given, we resolve src using base.
         if (base) |_base| {
-            const dir = std.fs.path.dirname(_base);
-            if (dir) |_dir| {
-                res_src = try std.fs.path.resolve(arena, &.{ _dir, src });
-            }
+            res_src = try URL.stitch(arena, src, _base);
         }
+
         var origin_url = &self.url;
         const url = try origin_url.resolve(arena, res_src);
 

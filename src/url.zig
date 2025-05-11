@@ -81,6 +81,35 @@ pub const URL = struct {
     pub fn toWebApi(self: *const URL, allocator: Allocator) !WebApiURL {
         return WebApiURL.init(allocator, self.uri);
     }
+
+    /// Properly stitches two URL fragments together.
+    ///
+    /// For URLs with a path, it will replace the last entry with the src.
+    /// For URLs without a path, it will add src as the path.
+    pub fn stitch(allocator: std.mem.Allocator, src: []const u8, base: []const u8) ![]const u8 {
+        if (base.len == 0) {
+            return src;
+        }
+
+        const protocol_end: usize = blk: {
+            if (std.mem.indexOf(u8, base, "://")) |protocol_index| {
+                break :blk protocol_index + 3;
+            } else {
+                break :blk 0;
+            }
+        };
+
+        if (std.mem.lastIndexOfScalar(u8, base[protocol_end..], '/')) |index| {
+            const last_slash_pos = index + protocol_end;
+            if (last_slash_pos == base.len - 1) {
+                return std.fmt.allocPrint(allocator, "{s}{s}", .{ base, src });
+            } else {
+                return std.fmt.allocPrint(allocator, "{s}/{s}", .{ base[0..last_slash_pos], src });
+            }
+        } else {
+            return std.fmt.allocPrint(allocator, "{s}/{s}", .{ base, src });
+        }
+    }
 };
 
 test "Url resolve size" {
@@ -97,4 +126,46 @@ test "Url resolve size" {
     try std.testing.expectEqualStrings(out_url.raw[0..25], base);
     try std.testing.expectEqual(out_url.raw[25], '/');
     try std.testing.expectEqualStrings(out_url.raw[26..], &url_string);
+}
+
+const testing = @import("testing.zig");
+
+test "URL: Stitching Base & Src URLs (Basic)" {
+    const allocator = testing.allocator;
+
+    const base = "https://www.google.com/xyz/abc/123";
+    const src = "something.js";
+    const result = try URL.stitch(allocator, src, base);
+    defer allocator.free(result);
+    try testing.expectString("https://www.google.com/xyz/abc/something.js", result);
+}
+
+test "URL: Stitching Base & Src URLs (Just Ending Slash)" {
+    const allocator = testing.allocator;
+
+    const base = "https://www.google.com/";
+    const src = "something.js";
+    const result = try URL.stitch(allocator, src, base);
+    defer allocator.free(result);
+    try testing.expectString("https://www.google.com/something.js", result);
+}
+
+test "URL: Stitching Base & Src URLs (No Ending Slash)" {
+    const allocator = testing.allocator;
+
+    const base = "https://www.google.com";
+    const src = "something.js";
+    const result = try URL.stitch(allocator, src, base);
+    defer allocator.free(result);
+    try testing.expectString("https://www.google.com/something.js", result);
+}
+
+test "URL: Stiching Base & Src URLs (Both Local)" {
+    const allocator = testing.allocator;
+
+    const base = "./abcdef/123.js";
+    const src = "something.js";
+    const result = try URL.stitch(allocator, src, base);
+    defer allocator.free(result);
+    try testing.expectString("./abcdef/something.js", result);
 }
