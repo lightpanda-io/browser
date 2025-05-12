@@ -508,8 +508,8 @@ test "cdp.target: createTarget" {
 
         // Even about:blank should set the window and document
         const page = ctx.cdp().browser_context.?.session.page.?;
-        try testing.expect(page.state.document != null);
-        try testing.expect(page.window.document != null);
+        try std.testing.expect(page.state.document != null);
+        try std.testing.expect(page.window.document != null);
     }
 
     {
