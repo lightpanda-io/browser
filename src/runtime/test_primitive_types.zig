@@ -149,6 +149,15 @@ const Primitives = struct {
             a.* += @intCast(arr.len);
         }
     }
+
+    // return uint8Array
+    pub fn _uint8Array(_: *const Primitives, arr: []u8) []u8 {
+        return arr;
+    }
+
+    pub fn _uint16Array(_: *const Primitives, arr: []u16) []u16 {
+        return arr;
+    }
 };
 
 const testing = @import("testing.zig");
@@ -280,5 +289,14 @@ test "JS: primitive types" {
         .{ "try { p.int64(arr_u64) } catch(e) { e instanceof TypeError; }", "true" },
         .{ "try { p.intu64(arr_i64) } catch(e) { e instanceof TypeError; }", "true" },
         .{ "try { p.intu64(arr_u32) } catch(e) { e instanceof TypeError; }", "true" },
+    }, .{});
+
+    // returns array type
+    try runner.testCases(&.{
+        .{ "const re_arr_u16 = p.uint16Array(new Uint16Array([10, 20, 30]))", "undefined" },
+        .{ "re_arr_u16", "10,20,30" },
+
+        .{ "const re_arr_u8 = p.uint8Array(new Uint8Array([10, 20, 30]))", "undefined" },
+        .{ "re_arr_u8", "10,20,30" },
     }, .{});
 }
