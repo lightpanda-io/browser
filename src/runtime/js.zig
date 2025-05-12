@@ -1012,6 +1012,22 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             }
         };
 
+        // If a function returns a []i32, should that map to a plain-old
+        // JavaScript array, or a Int32Array? It's ambiguous. By default, we'll
+        // map arrays/slices to the JavaScript arrays. If you want a TypedArray
+        // wrap it in this.
+        // Also, this type has nothing to do with the Env. But we place it here
+        // for consistency. Want a callback? Env.Callback. Want a JsObject?
+        // Env.JsObject. Want a TypedArray? Env.TypedArray.
+        pub fn TypedArray(comptime T: type) type {
+            return struct {
+                // See Callback._CALLBACK_ID_KLUDGE
+                const _TYPED_ARRAY_ID_KLUDGE = true;
+
+                values: []const T,
+            };
+        }
+
         pub const Inspector = struct {
             isolate: v8.Isolate,
             inner: *v8.Inspector,
@@ -2631,6 +2647,53 @@ fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bool) 
                 return simpleZigValueToJs(isolate, v, fail);
             }
             return v8.initNull(isolate).toValue();
+        },
+        .@"struct" => {
+            const T = @TypeOf(value);
+            if (@hasDecl(T, "_TYPED_ARRAY_ID_KLUDGE")) {
+                const values = value.values;
+                const value_type = @typeInfo(@TypeOf(values)).pointer.child;
+                const len = values.len;
+                const bits = switch (@typeInfo(value_type)) {
+                    .int => |n| n.bits,
+                    .float => |f| f.bits,
+                    else => @compileError("Invalid TypeArray type: " ++ @typeName(value_type)),
+                };
+
+                const buffer_len = len * bits / 8;
+                const backing_store = v8.BackingStore.init(isolate, buffer_len);
+                const data: [*]u8 = @alignCast(@ptrCast(backing_store.getData()));
+                @memcpy(data[0..buffer_len], @as([]const u8, @ptrCast(values))[0..buffer_len]);
+                const array_buffer = v8.ArrayBuffer.initWithBackingStore(isolate, &backing_store.toSharedPtr());
+
+                switch (@typeInfo(value_type)) {
+                    .int => |n| switch (n.signedness) {
+                        .unsigned => switch (n.bits) {
+                            8 => return v8.Uint8Array.init(array_buffer, 0, len).toValue(),
+                            16 => return v8.Uint16Array.init(array_buffer, 0, len).toValue(),
+                            32 => return v8.Uint32Array.init(array_buffer, 0, len).toValue(),
+                            64 => return v8.BigUint64Array.init(array_buffer, 0, len).toValue(),
+                            else => {},
+                        },
+                        .signed => switch (n.bits) {
+                            8 => return v8.Int8Array.init(array_buffer, 0, len).toValue(),
+                            16 => return v8.Int16Array.init(array_buffer, 0, len).toValue(),
+                            32 => return v8.Int32Array.init(array_buffer, 0, len).toValue(),
+                            64 => return v8.BigInt64Array.init(array_buffer, 0, len).toValue(),
+                            else => {},
+                        },
+                    },
+                    .float => |f| switch (f.bits) {
+                        32 => return v8.Float32Array.init(array_buffer, 0, len).toValue(),
+                        64 => return v8.Float64Array.init(array_buffer, 0, len).toValue(),
+                        else => {},
+                    },
+                    else => {},
+                }
+                // We normally don't fail in this function unless fail == true
+                // but this can never be valid.
+                @compileError("Invalid TypeArray type: " ++ @typeName(value_type));
+            }
         },
         .@"union" => return simpleZigValueToJs(isolate, std.meta.activeTag(value), fail),
         else => {},

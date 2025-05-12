@@ -13,8 +13,8 @@
             .hash = "tigerbeetle_io-0.0.0-ViLgxpyRBAB5BMfIcj3KMXfbJzwARs9uSl8aRy2OXULd",
         },
         .v8 = .{
-            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/f0c7eaaffe39f2f1a224fbe97e550daca0ca1801.tar.gz",
-            .hash = "v8-0.0.0-xddH62T4IADchAHFgo4nx79w1VedNDhIVErtSNgup-Tk",
+            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/fc764e7d29bc1514924e8df09255a057e03d453a.tar.gz",
+            .hash = "v8-0.0.0-xddH6zUZIQBJf109L94sC-mWH1NJXWCnOJGJttKtfasI",
         },
         //.v8 = .{ .path = "../zig-v8-fork" },
         //.tigerbeetle_io = .{ .path = "../tigerbeetle-io" },
