@@ -43,6 +43,18 @@ pub const DocumentFragment = struct {
         _ = self;
         return true;
     }
+
+    pub fn _prepend(self: *parser.DocumentFragment, nodes: []const Node.NodeOrText) !void {
+        return Node.prepend(parser.documentFragmentToNode(self), nodes);
+    }
+
+    pub fn _append(self: *parser.DocumentFragment, nodes: []const Node.NodeOrText) !void {
+        return Node.append(parser.documentFragmentToNode(self), nodes);
+    }
+
+    pub fn _replaceChildren(self: *parser.DocumentFragment, nodes: []const Node.NodeOrText) !void {
+        return Node.replaceChildren(parser.documentFragmentToNode(self), nodes);
+    }
 };
 
 const testing = @import("../../testing.zig");
