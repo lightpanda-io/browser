@@ -397,21 +397,11 @@ pub const Page = struct {
 
     // A minimal reader for about:blank such that it can be parsed by loadHTMLDoc.
     pub const AboutBlank = struct {
-        const content =
-            \\ <!DOCTYPE html>
-            \\ <html>
-            \\ <head>
-            \\     <title></title>
-            \\ </head>
-            \\ <body>
-            \\ </body>
-            \\ </html>
-        ;
         done: bool = false,
         pub fn next(self: *AboutBlank) !?[]const u8 {
             if (self.done) return null;
             self.done = true;
-            return AboutBlank.content;
+            return ""; // The contents is blank
         }
     };
 
