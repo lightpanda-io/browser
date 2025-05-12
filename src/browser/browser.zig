@@ -335,6 +335,8 @@ pub const Page = struct {
 
         // if the url is about:blank, nothing to do.
         if (std.mem.eql(u8, "about:blank", request_url.raw)) {
+            var about_blank = AboutBlank{};
+            try self.loadHTMLDoc(&about_blank, "utf-8");
             return;
         }
 
@@ -392,6 +394,26 @@ pub const Page = struct {
             .timestamp = timestamp(),
         });
     }
+
+    // A minimal reader for about:blank such that it can be parsed by loadHTMLDoc.
+    pub const AboutBlank = struct {
+        const content =
+            \\ <!DOCTYPE html>
+            \\ <html>
+            \\ <head>
+            \\     <title></title>
+            \\ </head>
+            \\ <body>
+            \\ </body>
+            \\ </html>
+        ;
+        done: bool = false,
+        pub fn next(self: *AboutBlank) !?[]const u8 {
+            if (self.done) return null;
+            self.done = true;
+            return AboutBlank.content;
+        }
+    };
 
     // https://html.spec.whatwg.org/#read-html
     fn loadHTMLDoc(self: *Page, reader: anytype, charset: []const u8) !void {

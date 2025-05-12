@@ -125,6 +125,10 @@ fn createTarget(cmd: anytype) !void {
     bc.target_id = target_id;
 
     var page = try bc.session.createPage();
+    // Navigate to about:blank such that the window / state.document are created and set
+    // Playwright uses these before navigating to a real URL to detect when they are removed.
+    const url = try @import("../../url.zig").URL.parse("about:blank", "");
+    try page.navigate(url, .{});
     {
         const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
         bc.inspector.contextCreated(
@@ -501,6 +505,11 @@ test "cdp.target: createTarget" {
         // should create a browser context
         const bc = ctx.cdp().browser_context.?;
         try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "about:blank", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.target_id.? } }, .{});
+
+        // Even about:blank should set the window and document
+        const page = ctx.cdp().browser_context.?.session.page.?;
+        try testing.expect(page.state.document != null);
+        try testing.expect(page.window.document != null);
     }
 
     {
