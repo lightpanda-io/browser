@@ -152,6 +152,10 @@ pub const Session = struct {
     pub fn createPage(self: *Session) !*Page {
         std.debug.assert(self.page == null);
 
+        // Start netsurf memory arena.
+        // We need to init this early as JS event handlers may be registered through Runtime.evaluate before the first html doc is loaded
+        try parser.init();
+
         const page_arena = &self.browser.page_arena;
         _ = page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
 
@@ -392,9 +396,6 @@ pub const Page = struct {
     // https://html.spec.whatwg.org/#read-html
     fn loadHTMLDoc(self: *Page, reader: anytype, charset: []const u8) !void {
         const arena = self.arena;
-
-        // start netsurf memory arena.
-        try parser.init();
 
         log.debug("parse html with charset {s}", .{charset});
 
