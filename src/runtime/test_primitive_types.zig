@@ -17,6 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // TODO: use functions instead of "fake" struct once we handle function API generation
+
+const Runner = testing.Runner(void, void, .{Primitives});
+const Env = Runner.Env;
+
 const Primitives = struct {
     pub fn constructor() Primitives {
         return .{};
@@ -114,6 +118,46 @@ const Primitives = struct {
         }
     }
 
+    pub fn _returnUint8(_: *const Primitives) Env.TypedArray(u8) {
+        return .{ .values = &.{ 10, 20, 250 } };
+    }
+
+    pub fn _returnInt8(_: *const Primitives) Env.TypedArray(i8) {
+        return .{ .values = &.{ 10, -20, -120 } };
+    }
+
+    pub fn _returnUint16(_: *const Primitives) Env.TypedArray(u16) {
+        return .{ .values = &.{ 10, 200, 2050 } };
+    }
+
+    pub fn _returnInt16(_: *const Primitives) Env.TypedArray(i16) {
+        return .{ .values = &.{ 10, -420, 0 } };
+    }
+
+    pub fn _returnUint32(_: *const Primitives) Env.TypedArray(u32) {
+        return .{ .values = &.{ 10, 2444343, 43432432 } };
+    }
+
+    pub fn _returnInt32(_: *const Primitives) Env.TypedArray(i32) {
+        return .{ .values = &.{ 10, -20, -495929123 } };
+    }
+
+    pub fn _returnUint64(_: *const Primitives) Env.TypedArray(u64) {
+        return .{ .values = &.{ 10, 495812375924, 0 } };
+    }
+
+    pub fn _returnInt64(_: *const Primitives) Env.TypedArray(i64) {
+        return .{ .values = &.{ 10, -49283838122, -2 } };
+    }
+
+    pub fn _returnFloat32(_: *const Primitives) Env.TypedArray(f32) {
+        return .{ .values = &.{ 1.1, -200.035, 0.0003 } };
+    }
+
+    pub fn _returnFloat64(_: *const Primitives) Env.TypedArray(f64) {
+        return .{ .values = &.{ 8881.22284, -4928.3838122, -0.00004 } };
+    }
+
     pub fn _int16(_: *const Primitives, arr: []i16) void {
         for (arr) |*a| {
             a.* -= @intCast(arr.len);
@@ -153,7 +197,7 @@ const Primitives = struct {
 
 const testing = @import("testing.zig");
 test "JS: primitive types" {
-    var runner = try testing.Runner(void, void, .{Primitives}).init({}, {});
+    var runner = try Runner.init({}, {});
     defer runner.deinit();
 
     // constructor
@@ -280,5 +324,16 @@ test "JS: primitive types" {
         .{ "try { p.int64(arr_u64) } catch(e) { e instanceof TypeError; }", "true" },
         .{ "try { p.intu64(arr_i64) } catch(e) { e instanceof TypeError; }", "true" },
         .{ "try { p.intu64(arr_u32) } catch(e) { e instanceof TypeError; }", "true" },
+
+        .{ "p.returnUint8()", "10,20,250" },
+        .{ "p.returnInt8()", "10,-20,-120" },
+        .{ "p.returnUint16()", "10,200,2050" },
+        .{ "p.returnInt16()", "10,-420,0" },
+        .{ "p.returnUint32()", "10,2444343,43432432" },
+        .{ "p.returnInt32()", "10,-20,-495929123" },
+        .{ "p.returnUint64()", "10,495812375924,0" },
+        .{ "p.returnInt64()", "10,-49283838122,-2" },
+        .{ "p.returnFloat32()", "1.100000023841858,-200.03500366210938,0.0003000000142492354" },
+        .{ "p.returnFloat64()", "8881.22284,-4928.3838122,-0.00004" },
     }, .{});
 }
