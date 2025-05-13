@@ -813,7 +813,7 @@ test "Browser.XHR.XMLHttpRequest" {
         .{ "req.status", "200" },
         .{ "req.statusText", "OK" },
         .{ "req.getResponseHeader('Content-Type')", "text/html; charset=utf-8" },
-        .{ "req.getAllResponseHeaders().length", "61" },
+        .{ "req.getAllResponseHeaders().length", "80" },
         .{ "req.responseText.length", "100" },
         .{ "req.response.length == req.responseText.length", "true" },
         .{ "req.responseXML instanceof Document", "true" },
