@@ -251,7 +251,7 @@ pub const Page = struct {
     fn init(self: *Page, arena: Allocator, session: *Session) !void {
         const browser = session.browser;
         self.* = .{
-            .window = try Window.create(null, null), // TODO why do we not call Window.create()?
+            .window = try Window.create(null, null),
             .arena = arena,
             .doc = null,
             .raw_data = null,
