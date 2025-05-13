@@ -460,7 +460,12 @@ pub const Request = struct {
 
         if (self._secure) {
             connection.tls = .{
-                .nonblocking = try tls.nb.Client().init(self._client.allocator, .{ .host = connection.host, .root_ca = self._client.root_ca, .insecure_skip_verify = self._tls_verify_host == false, .key_log_callback = tls.config.key_log.callback }),
+                .nonblocking = try tls.nb.Client().init(self._client.allocator, .{
+                    .host = connection.host,
+                    .root_ca = self._client.root_ca,
+                    .insecure_skip_verify = self._tls_verify_host == false,
+                    .key_log_callback = tls.config.key_log.callback,
+                }),
             };
 
             async_handler.conn.protocol = .{
