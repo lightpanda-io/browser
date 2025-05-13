@@ -28,6 +28,7 @@ const WebApis = struct {
         @import("crypto/crypto.zig").Crypto,
         @import("console/console.zig").Console,
         @import("dom/dom.zig").Interfaces,
+        @import("encoding/text_encoder.zig").Interfaces,
         @import("events/event.zig").Interfaces,
         @import("html/html.zig").Interfaces,
         @import("iterator/iterator.zig").Interfaces,
