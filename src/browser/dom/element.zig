@@ -31,6 +31,8 @@ const NodeList = @import("nodelist.zig").NodeList;
 const HTMLElem = @import("../html/elements.zig");
 pub const Union = @import("../html/elements.zig").Union;
 
+const log = std.log.scoped(.element);
+
 // WEB IDL https://dom.spec.whatwg.org/#element
 pub const Element = struct {
     pub const Self = parser.Element;
@@ -132,6 +134,26 @@ pub const Element = struct {
             defer i += 1;
             const child = try parser.nodeListItem(children, i) orelse continue;
             _ = try parser.nodeAppendChild(node, child);
+        }
+    }
+
+    // The closest() method of the Element interface traverses the element and its parents (heading toward the document root) until it finds a node that matches the specified CSS selector.
+    // Returns the closest ancestor Element or itself, which matches the selectors. If there are no such element, null.
+    pub fn _closest(self: *parser.Element, selector: []const u8, state: *SessionState) !?*parser.Element {
+        const cssParse = @import("../css/css.zig").parse;
+        const CssNodeWrap = @import("../css/libdom.zig").Node;
+        const select = try cssParse(state.call_arena, selector, .{});
+
+        var current: CssNodeWrap = .{ .node = parser.elementToNode(self) };
+        while (true) {
+            if (try select.match(current)) {
+                if (!current.isElement()) {
+                    log.err("closest: is not an element: {s}", .{try current.tag()});
+                    return null;
+                }
+                return parser.nodeToElement(current.node);
+            }
+            current = try current.parent() orelse return null;
         }
     }
 
@@ -399,6 +421,20 @@ test "Browser.DOM.Element" {
         .{ "gs2.className = 'ok empty'", "ok empty" },
         .{ "let cl = gs2.classList", "undefined" },
         .{ "cl.length", "2" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "const el2 = document.createElement('div');", "undefined" },
+        .{ "el2.id = 'closest'; el2.className = 'ok';", "ok" },
+        .{ "el2.closest('#closest')", "[object HTMLDivElement]" },
+        .{ "el2.closest('.ok')", "[object HTMLDivElement]" },
+        .{ "el2.closest('#9000')", "null" },
+        .{ "el2.closest('.notok')", "null" },
+
+        .{ "const sp = document.createElement('span');", "undefined" },
+        .{ "el2.appendChild(sp);", "[object HTMLSpanElement]" },
+        .{ "sp.closest('#closest')", "[object HTMLDivElement]" },
+        .{ "sp.closest('#9000')", "null" },
     }, .{});
 
     try runner.testCases(&.{
