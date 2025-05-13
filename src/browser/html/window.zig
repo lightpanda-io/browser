@@ -138,6 +138,23 @@ pub const Window = struct {
         return &self.performance;
     }
 
+    // Tells the browser you wish to perform an animation. It requests the browser to call a user-supplied callback function before the next repaint.
+    // fn callback(timestamp: f64)
+    // Returns the request ID, that uniquely identifies the entry in the callback list.
+    pub fn _requestAnimationFrame(
+        self: *Window,
+        callback: Callback,
+    ) !u32 {
+        // We immediately execute the callback, but this may not be correct TBD.
+        // Since: When multiple callbacks queued by requestAnimationFrame() begin to fire in a single frame, each receives the same timestamp even though time has passed during the computation of every previous callback's workload.
+        var result: Callback.Result = undefined;
+        callback.tryCall(.{self.performance._now()}, &result) catch {
+            log.err("Window.requestAnimationFrame(): {s}", .{result.exception});
+            log.debug("stack:\n{s}", .{result.stack orelse "???"});
+        };
+        return 99; // not unique, but user cannot make assumptions about it. cancelAnimationFrame will be too late anyway.
+    }
+
     // TODO handle callback arguments.
     pub fn _setTimeout(self: *Window, cbk: Callback, delay: ?u32, state: *SessionState) !u32 {
         return self.createTimeout(cbk, delay, state, false);
