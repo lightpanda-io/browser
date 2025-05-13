@@ -21,6 +21,7 @@ const Allocator = std.mem.Allocator;
 
 pub const allocator = std.testing.allocator;
 pub const expectError = std.testing.expectError;
+pub const expect = std.testing.expect;
 pub const expectString = std.testing.expectEqualStrings;
 pub const expectEqualSlices = std.testing.expectEqualSlices;
 
@@ -421,7 +422,7 @@ pub const JsRunner = struct {
             .http_client = &self.http_client,
         };
 
-        self.window = .{};
+        self.window = try Window.create(null, null);
         try self.window.replaceDocument(document);
         try self.window.replaceLocation(.{
             .url = try self.url.toWebApi(arena),
