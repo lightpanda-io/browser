@@ -31,6 +31,8 @@ const NodeList = @import("nodelist.zig").NodeList;
 const HTMLElem = @import("../html/elements.zig");
 pub const Union = @import("../html/elements.zig").Union;
 
+const log = std.log.scoped(.element);
+
 // WEB IDL https://dom.spec.whatwg.org/#element
 pub const Element = struct {
     pub const Self = parser.Element;
@@ -146,16 +148,12 @@ pub const Element = struct {
         while (true) {
             if (try select.match(current)) {
                 if (!current.isElement()) {
-                    std.debug.print("closest: is not an element: {s}\n", .{try current.tag()});
+                    log.err("closest: is not an element: {s}", .{try current.tag()});
                     return null;
                 }
                 return parser.nodeToElement(current.node);
             }
-            if (try current.parent()) |parent| {
-                current = parent;
-                continue;
-            }
-            return null;
+            current = try current.parent() orelse return null;
         }
     }
 
