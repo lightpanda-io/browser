@@ -71,6 +71,7 @@ pub fn main() !void {
     var app = try App.init(alloc, .{
         .run_mode = args.mode,
         .gc_hints = args.gcHints(),
+        .http_proxy = args.httpProxy(),
         .tls_verify_host = args.tlsVerifyHost(),
     });
     defer app.deinit();
@@ -137,9 +138,15 @@ const Command = struct {
 
     fn tlsVerifyHost(self: *const Command) bool {
         return switch (self.mode) {
-            .serve => |opts| opts.tls_verify_host,
-            .fetch => |opts| opts.tls_verify_host,
+            inline .serve, .fetch => |opts| opts.tls_verify_host,
             else => true,
+        };
+    }
+
+    fn httpProxy(self: *const Command) ?std.Uri {
+        return switch (self.mode) {
+            inline .serve, .fetch => |opts| opts.http_proxy,
+            else => null,
         };
     }
 
@@ -156,12 +163,14 @@ const Command = struct {
         timeout: u16,
         gc_hints: bool,
         tls_verify_host: bool,
+        http_proxy: ?std.Uri,
     };
 
     const Fetch = struct {
         url: []const u8,
         dump: bool = false,
         tls_verify_host: bool,
+        http_proxy: ?std.Uri,
     };
 
     fn printUsageAndExit(self: *const Command, success: bool) void {
@@ -183,6 +192,9 @@ const Command = struct {
             \\                This is an advanced option which should only be
             \\                set if you understand and accept the risk of
             \\                disabling host verification.
+            \\
+            \\--http_proxy    The HTTP proxy to use for all HTTP requests.
+            \\                Defaults to none.
             \\
             \\serve command
             \\Starts a websocket CDP server
@@ -206,6 +218,9 @@ const Command = struct {
             \\                This is an advanced option which should only be
             \\                set if you understand and accept the risk of
             \\                disabling host verification.
+            \\
+            \\--http_proxy    The HTTP proxy to use for all HTTP requests.
+            \\                Defaults to none.
             \\
             \\version command
             \\Displays the version of {s}
@@ -297,12 +312,13 @@ fn parseServeArgs(
     var timeout: u16 = 3;
     var gc_hints = false;
     var tls_verify_host = true;
+    var http_proxy: ?std.Uri = null;
 
     while (args.next()) |opt| {
         if (std.mem.eql(u8, "--host", opt)) {
             const str = args.next() orelse {
                 log.err("--host argument requires an value", .{});
-                return error.InvalidMissingHost;
+                return error.InvalidArgument;
             };
             host = try allocator.dupe(u8, str);
             continue;
@@ -311,12 +327,12 @@ fn parseServeArgs(
         if (std.mem.eql(u8, "--port", opt)) {
             const str = args.next() orelse {
                 log.err("--port argument requires an value", .{});
-                return error.InvalidMissingPort;
+                return error.InvalidArgument;
             };
 
             port = std.fmt.parseInt(u16, str, 10) catch |err| {
                 log.err("--port value is invalid: {}", .{err});
-                return error.InvalidPort;
+                return error.InvalidArgument;
             };
             continue;
         }
@@ -324,12 +340,12 @@ fn parseServeArgs(
         if (std.mem.eql(u8, "--timeout", opt)) {
             const str = args.next() orelse {
                 log.err("--timeout argument requires an value", .{});
-                return error.MissingTimeout;
+                return error.InvalidArgument;
             };
 
             timeout = std.fmt.parseInt(u16, str, 10) catch |err| {
                 log.err("--timeout value is invalid: {}", .{err});
-                return error.InvalidTimeout;
+                return error.InvalidArgument;
             };
             continue;
         }
@@ -344,6 +360,15 @@ fn parseServeArgs(
             continue;
         }
 
+        if (std.mem.eql(u8, "--http_proxy", opt)) {
+            const str = args.next() orelse {
+                log.err("--http_proxy argument requires an value", .{});
+                return error.InvalidArgument;
+            };
+            http_proxy = try std.Uri.parse(try allocator.dupe(u8, str));
+            continue;
+        }
+
         log.err("Unknown option to serve command: '{s}'", .{opt});
         return error.UnkownOption;
     }
@@ -353,6 +378,7 @@ fn parseServeArgs(
         .port = port,
         .timeout = timeout,
         .gc_hints = gc_hints,
+        .http_proxy = http_proxy,
         .tls_verify_host = tls_verify_host,
     };
 }
@@ -364,6 +390,7 @@ fn parseFetchArgs(
     var dump: bool = false;
     var url: ?[]const u8 = null;
     var tls_verify_host = true;
+    var http_proxy: ?std.Uri = null;
 
     while (args.next()) |opt| {
         if (std.mem.eql(u8, "--dump", opt)) {
@@ -373,6 +400,15 @@ fn parseFetchArgs(
 
         if (std.mem.eql(u8, "--insecure_disable_tls_host_verification", opt)) {
             tls_verify_host = false;
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--http_proxy", opt)) {
+            const str = args.next() orelse {
+                log.err("--http_proxy argument requires an value", .{});
+                return error.InvalidArgument;
+            };
+            http_proxy = try std.Uri.parse(try allocator.dupe(u8, str));
             continue;
         }
 
@@ -396,6 +432,7 @@ fn parseFetchArgs(
     return .{
         .url = url.?,
         .dump = dump,
+        .http_proxy = http_proxy,
         .tls_verify_host = tls_verify_host,
     };
 }
