@@ -155,6 +155,12 @@ pub const Window = struct {
         return 99; // not unique, but user cannot make assumptions about it. cancelAnimationFrame will be too late anyway.
     }
 
+    // Cancels an animation frame request previously scheduled through requestAnimationFrame().
+    // This is a no-op since _requestAnimationFrame immediately executes the callback.
+    pub fn _cancelAnimationFrame(_: *Window, request_id: u32) void {
+        _ = request_id;
+    }
+
     // TODO handle callback arguments.
     pub fn _setTimeout(self: *Window, cbk: Callback, delay: ?u32, state: *SessionState) !u32 {
         return self.createTimeout(cbk, delay, state, false);
@@ -254,3 +260,35 @@ const TimerCallback = struct {
         _ = self.window.timers.remove(self.timer_id);
     }
 };
+
+const testing = @import("../../testing.zig");
+test "Browser.HTML.Window" {
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
+    defer runner.deinit();
+
+    // requestAnimationFrame should be able to wait by recursively calling itself
+    // Note however that we in this test do not wait as the request is just send to the browser
+    try runner.testCases(&.{
+        .{
+            \\ let start;
+            \\ function step(timestamp) {
+            \\    if (start === undefined) {
+            \\      start = timestamp;
+            \\    }
+            \\    const elapsed = timestamp - start;
+            \\    if (elapsed < 2000) {
+            \\      requestAnimationFrame(step);
+            \\    }
+            \\ }
+            ,
+            "undefined",
+        },
+        .{ "let id = requestAnimationFrame(step);", "undefined" },
+    }, .{});
+
+    // cancelAnimationFrame should be able to cancel a request with the given id
+    try runner.testCases(&.{
+        .{ "let request_id = requestAnimationFrame(timestamp => {});", "undefined" },
+        .{ "cancelAnimationFrame(request_id);", "undefined" },
+    }, .{});
+}
