@@ -31,6 +31,8 @@ pub fn processMessage(cmd: anytype) !void {
         discardSearchResults,
         resolveNode,
         describeNode,
+        scrollIntoViewIfNeeded,
+        getContentQuads,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -41,6 +43,8 @@ pub fn processMessage(cmd: anytype) !void {
         .discardSearchResults => return discardSearchResults(cmd),
         .resolveNode => return resolveNode(cmd),
         .describeNode => return describeNode(cmd),
+        .scrollIntoViewIfNeeded => return scrollIntoViewIfNeeded(cmd),
+        .getContentQuads => return getContentQuads(cmd),
     }
 }
 
@@ -239,7 +243,8 @@ fn describeNode(cmd: anytype) !void {
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-    if (params.nodeId != null) {
+    const input_node_id = params.nodeId orelse params.backendNodeId;
+    if (input_node_id != null) {
         const node = bc.node_registry.lookup_by_id.get(params.nodeId.?) orelse return error.NodeNotFound;
         return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{}) }, .{});
     }
@@ -250,6 +255,86 @@ fn describeNode(cmd: anytype) !void {
         return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{}) }, .{});
     }
     return error.MissingParams;
+}
+
+// Note Element.DOMRect exists, but there is no need to couple them at this time.
+const Rect = struct {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+};
+
+// An array of quad vertices, x immediately followed by y for each point, points clock-wise.
+// Note Y points downward
+// We are assuming the start/endpoint is not repeated.
+const Quad = [8]f64;
+
+fn scrollIntoViewIfNeeded(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        nodeId: ?Node.Id = null,
+        backendNodeId: ?u32 = null,
+        objectId: ?[]const u8 = null,
+        rect: ?Rect = null,
+    })) orelse return error.InvalidParams;
+
+    var set_count: u2 = 0; // only 1 of nodeId backendNodeId objectId may be set
+    if (params.nodeId != null) set_count += 1;
+    if (params.backendNodeId != null) set_count += 1;
+    if (params.objectId != null) set_count += 1;
+    if (set_count != 1) return error.InvalidParams;
+
+    // Since element.scrollIntoViewIfNeeded is a no-op we do not bother retrieving the node.
+    // This however also means we also do not error in case the node is not found.
+
+    return cmd.sendResult(null, .{});
+}
+
+fn getContentQuads(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        nodeId: ?Node.Id = null,
+        backendNodeId: ?u32 = null,
+        objectId: ?[]const u8 = null,
+    })) orelse return error.InvalidParams;
+
+    var set_count: u2 = 0; // only 1 of nodeId backendNodeId objectId may be set
+    if (params.nodeId != null) set_count += 1;
+    if (params.backendNodeId != null) set_count += 1;
+    if (params.objectId != null) set_count += 1;
+    if (set_count != 1) return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    const node = blk: {
+        const input_node_id = params.nodeId orelse params.backendNodeId;
+        if (input_node_id != null) {
+            const node = bc.node_registry.lookup_by_id.get(params.nodeId.?) orelse return error.NodeNotFound;
+            break :blk node;
+        }
+        if (params.objectId != null) {
+            const parser_node = try bc.inspector.getNodePtr(cmd.arena, params.objectId.?);
+            const node = try bc.node_registry.register(@ptrCast(parser_node));
+            break :blk node;
+        }
+        unreachable;
+    };
+
+    if (try parser.nodeType(node._node) != .element) return error.NodeISNotAnElement;
+
+    const element = parser.nodeToElement(node._node);
+    const rect = try bc.session.page.?.state.renderer.getRect(element);
+    const quad = Quad{
+        rect.x,
+        rect.y,
+        rect.x + rect.width,
+        rect.y,
+        rect.x + rect.width,
+        rect.y + rect.height,
+        rect.x,
+        rect.y + rect.height,
+    };
+
+    return cmd.sendResult(.{ .quads = &.{quad} }, .{});
 }
 
 const testing = @import("../testing.zig");
