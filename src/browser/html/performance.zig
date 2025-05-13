@@ -33,7 +33,7 @@ pub const Performance = struct {
     // else                            -> Resolution in non-isolated contexts: 100 microseconds
     const ms_resolution = 100;
 
-    fn limited_resolution_ms(nanoseconds: u64) f64 {
+    fn limitedResolutionMs(nanoseconds: u64) f64 {
         const elapsed_at_resolution = ((nanoseconds / std.time.ns_per_us) + ms_resolution / 2) / ms_resolution * ms_resolution;
         const elapsed = @as(f64, @floatFromInt(elapsed_at_resolution));
         return elapsed / @as(f64, std.time.us_per_ms);
@@ -46,11 +46,11 @@ pub const Performance = struct {
         };
         const zero = std.time.Instant{ .timestamp = if (!is_posix) 0 else .{ .sec = 0, .nsec = 0 } };
         const started = self.time_origin.started.since(zero);
-        return limited_resolution_ms(started);
+        return limitedResolutionMs(started);
     }
 
     pub fn _now(self: *Performance) f64 {
-        return limited_resolution_ms(self.time_origin.read());
+        return limitedResolutionMs(self.time_origin.read());
     }
 };
 
@@ -71,7 +71,7 @@ test "Performance: now" {
     // Monotonically increasing
     var now = perf._now();
     while (now <= 0) { // Loop for now to not be 0
-        try testing.expect(now == 0);
+        try testing.expectEqual(now, 0);
         now = perf._now();
     }
     // Check resolution
@@ -79,7 +79,7 @@ test "Performance: now" {
 
     var after = perf._now();
     while (after <= now) { // Loop untill after > now
-        try testing.expect(after == now);
+        try testing.expectEqual(after, now);
         after = perf._now();
     }
     // Check resolution
