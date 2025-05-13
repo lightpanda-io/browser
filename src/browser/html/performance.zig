@@ -34,7 +34,7 @@ pub const Performance = struct {
     const ms_resolution = 100;
 
     fn limited_resolution_ms(nanoseconds: u64) f64 {
-        const elapsed_at_resolution = ((nanoseconds / std.time.ns_per_ms) + ms_resolution / 2) / ms_resolution * ms_resolution;
+        const elapsed_at_resolution = ((nanoseconds / std.time.ns_per_us) + ms_resolution / 2) / ms_resolution * ms_resolution;
         const elapsed = @as(f64, @floatFromInt(elapsed_at_resolution));
         return elapsed / @as(f64, std.time.us_per_ms);
     }
