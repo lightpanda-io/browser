@@ -241,6 +241,9 @@ pub const Page = struct {
 
     scope: *Env.Scope,
 
+    // List of modules currently fetched/loaded.
+    module_map: std.StringHashMapUnmanaged([]const u8),
+
     // current_script is the script currently evaluated by the page.
     // current_script could by fetch module to resolve module's url to fetch.
     current_script: ?*const Script = null,
@@ -267,6 +270,7 @@ pub const Page = struct {
                 .http_client = browser.http_client,
             },
             .scope = try session.executor.startScope(&self.window, &self.state, self, true),
+            .module_map = .empty,
         };
 
         // load polyfills
@@ -298,10 +302,20 @@ pub const Page = struct {
         const self: *Page = @ptrCast(@alignCast(ctx));
 
         log.debug("fetch module: specifier: {s}", .{specifier});
-        return try self.fetchData(
-            specifier,
-            if (self.current_script) |s| s.src else null,
-        );
+
+        const base = if (self.current_script) |s| s.src else null;
+
+        const file_src = blk: {
+            if (base) |_base| {
+                break :blk try URL.stitch(self.arena, specifier, _base);
+            } else break :blk specifier;
+        };
+
+        if (self.module_map.get(file_src)) |module| return module;
+
+        const module = try self.fetchData(specifier, base);
+        if (module) |_module| try self.module_map.putNoClobber(self.arena, file_src, _module);
+        return module;
     }
 
     pub fn wait(self: *Page) !void {
