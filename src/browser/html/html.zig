@@ -24,6 +24,7 @@ const Navigator = @import("navigator.zig").Navigator;
 const History = @import("history.zig").History;
 const Location = @import("location.zig").Location;
 const MediaQueryList = @import("media_query_list.zig").MediaQueryList;
+const Performance = @import("performance.zig").Performance;
 
 pub const Interfaces = .{
     HTMLDocument,
@@ -36,4 +37,5 @@ pub const Interfaces = .{
     History,
     Location,
     MediaQueryList,
+    Performance,
 };

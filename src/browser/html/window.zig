@@ -30,6 +30,7 @@ const Crypto = @import("../crypto/crypto.zig").Crypto;
 const Console = @import("../console/console.zig").Console;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const MediaQueryList = @import("media_query_list.zig").MediaQueryList;
+const Performance = @import("performance.zig").Performance;
 
 const storage = @import("../storage/storage.zig");
 
@@ -56,11 +57,13 @@ pub const Window = struct {
     crypto: Crypto = .{},
     console: Console = .{},
     navigator: Navigator = .{},
+    performance: Performance,
 
-    pub fn create(target: ?[]const u8, navigator: ?Navigator) Window {
+    pub fn create(target: ?[]const u8, navigator: ?Navigator) !Window {
         return .{
             .target = target orelse "",
             .navigator = navigator orelse .{},
+            .performance = .{ .time_origin = try std.time.Timer.start() },
         };
     }
 
@@ -72,6 +75,7 @@ pub const Window = struct {
     }
 
     pub fn replaceDocument(self: *Window, doc: *parser.DocumentHTML) !void {
+        self.performance.time_origin.reset(); // When to reset see: https://developer.mozilla.org/en-US/docs/Web/API/Performance/timeOrigin
         self.document = doc;
         try parser.documentHTMLSetLocation(Location, doc, &self.location);
     }
@@ -128,6 +132,10 @@ pub const Window = struct {
     pub fn get_sessionStorage(self: *Window) !*storage.Bottle {
         if (self.storage_shelf == null) return parser.DOMError.NotSupported;
         return &self.storage_shelf.?.bucket.session;
+    }
+
+    pub fn get_performance(self: *Window) *Performance {
+        return &self.performance;
     }
 
     // TODO handle callback arguments.

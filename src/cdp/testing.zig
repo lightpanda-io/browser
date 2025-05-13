@@ -30,6 +30,7 @@ const parser = @import("../browser/netsurf.zig");
 const base = @import("../testing.zig");
 pub const allocator = base.allocator;
 pub const expectJson = base.expectJson;
+pub const expect = std.testing.expect;
 pub const expectEqual = base.expectEqual;
 pub const expectError = base.expectError;
 pub const expectEqualSlices = base.expectEqualSlices;
