@@ -356,7 +356,7 @@ pub const Page = struct {
         var response = try request.sendSync(.{});
 
         // would be different than self.url in the case of a redirect
-        self.url = try URL.fromURI(arena, request.uri);
+        self.url = try URL.fromURI(arena, request.request_uri);
 
         const header = response.header;
         try session.cookie_jar.populateFromResponse(&self.url.uri, &header);
