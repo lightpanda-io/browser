@@ -248,7 +248,7 @@ pub const Page = struct {
 
         const ccharset = try arena.dupeZ(u8, charset);
 
-        const html_doc = try parser.documentHTMLParse(reader, ccharset);
+        const html_doc = try parser.documentHTMLParse(arena, reader, ccharset);
         const doc = parser.documentHTMLToDocument(html_doc);
 
         // save a document's pointer in the page.

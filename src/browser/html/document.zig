@@ -29,6 +29,19 @@ const collection = @import("../dom/html_collection.zig");
 const Walker = @import("../dom/walker.zig").WalkerDepthFirst;
 const Cookie = @import("../storage/cookie.zig").Cookie;
 
+pub fn normalizeWhitespace(arena: std.mem.Allocator, title: []const u8) ![]const u8 {
+    var normalized = try std.ArrayListUnmanaged(u8).initCapacity(arena, title.len);
+    var tokens = std.mem.tokenizeAny(u8, title, &std.ascii.whitespace);
+
+    var prepend = false;
+    while (tokens.next()) |token| {
+        if (prepend) normalized.appendAssumeCapacity(' ') else prepend = true;
+        normalized.appendSliceAssumeCapacity(token);
+    }
+
+    return normalized.items;
+}
+
 // WEB IDL https://html.spec.whatwg.org/#the-document-object
 pub const HTMLDocument = struct {
     pub const Self = parser.DocumentHTML;
@@ -94,9 +107,10 @@ pub const HTMLDocument = struct {
         return try parser.documentHTMLGetTitle(self);
     }
 
-    pub fn set_title(self: *parser.DocumentHTML, v: []const u8) ![]const u8 {
-        try parser.documentHTMLSetTitle(self, v);
-        return v;
+    pub fn set_title(self: *parser.DocumentHTML, v: []const u8, state: *SessionState) ![]const u8 {
+        const normalized = try normalizeWhitespace(state.arena, v);
+        try parser.documentHTMLSetTitle(self, normalized);
+        return normalized;
     }
 
     pub fn _getElementsByName(self: *parser.DocumentHTML, name: []const u8, state: *SessionState) !NodeList {
