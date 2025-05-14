@@ -2597,7 +2597,7 @@ fn Caller(comptime E: type, comptime State: type) type {
             var arr: std.ArrayListUnmanaged(u8) = .{};
             for (0..js_parameter_count) |i| {
                 const js_value = info.getArg(@intCast(i));
-                const value_string = try valueToString(arena, js_value, isolate, context);
+                const value_string = try valueToDetailString(arena, js_value, isolate, context);
                 const value_type = try jsStringToZig(arena, try js_value.typeOf(isolate), isolate);
                 try std.fmt.format(arr.writer(arena), "{d}: {s} ({s})\n", .{ i + 1, value_string, value_type });
             }
@@ -2878,6 +2878,11 @@ const TaggedAnyOpaque = struct {
     // which is where we store the subtype.
     subtype: ?SubType,
 };
+
+fn valueToDetailString(allocator: Allocator, value: v8.Value, isolate: v8.Isolate, context: v8.Context) ![]u8 {
+    const str = try value.toDetailString(context);
+    return jsStringToZig(allocator, str, isolate);
+}
 
 fn valueToString(allocator: Allocator, value: v8.Value, isolate: v8.Isolate, context: v8.Context) ![]u8 {
     const str = try value.toString(context);
