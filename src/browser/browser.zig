@@ -759,6 +759,12 @@ pub const Page = struct {
                 return null;
             }
 
+            if (try parser.elementGetAttribute(e, "nomodule") != null) {
+                // these scripts should only be loaded if we don't support modules
+                // but since we do support modules, we can just skip them.
+                return null;
+            }
+
             const kind = parseKind(try parser.elementGetAttribute(e, "type")) orelse {
                 return null;
             };
