@@ -267,18 +267,25 @@ fn rectToQuad(rect: DOMRect) Quad {
 }
 
 fn scrollIntoViewIfNeeded(cmd: anytype) !void {
-    _ = (try cmd.params(struct {
+    const params = (try cmd.params(struct {
         nodeId: ?Node.Id = null,
         backendNodeId: ?u32 = null,
         objectId: ?[]const u8 = null,
         rect: ?DOMRect = null,
     })) orelse return error.InvalidParams;
+    // Only 1 of nodeId, backendNodeId, objectId may be set, but chrome just takes the first non-null
 
-    // Only 1 of nodeId, backendNodeId, objectId may be set, but we don't want to error unnecessarily
-    // TBD what do other browsers do in this user error sceneario?
+    // We retrieve the node to at least check if it exists and is valid.
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
 
-    // Since element.scrollIntoViewIfNeeded is a no-op we do not bother retrieving the node.
-    // This however also means we also do not error in case the node is not found.
+    const node_type = parser.nodeType(node._node) catch return error.InvalidNode;
+    switch (node_type) {
+        .element => {},
+        .document => {},
+        .text => {},
+        else => return error.NodeDoesNotHaveGeometry,
+    }
 
     return cmd.sendResult(null, .{});
 }
@@ -296,6 +303,8 @@ fn getNode(arena: Allocator, browser_context: anytype, node_id: ?Node.Id, backen
     return error.MissingParams;
 }
 
+// https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-getContentQuads
+// Related to: https://drafts.csswg.org/cssom-view/#the-geometryutils-interface
 fn getContentQuads(cmd: anytype) !void {
     const params = (try cmd.params(struct {
         nodeId: ?Node.Id = null,
@@ -307,8 +316,15 @@ fn getContentQuads(cmd: anytype) !void {
 
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
 
+    // TODO likely if the following CSS properties are set the quads should be empty
+    // visibility: hidden
+    // display: none
+
     if (try parser.nodeType(node._node) != .element) return error.NodeIsNotAnElement;
-    // TBD should the funcion work on nodes that are not elements, but may have geometry like Window?
+    // TODO implement for document or text
+    // Most likely document would require some hierachgy in the renderer. It is left unimplemented till we have a good example.
+    // Text may be tricky, multiple quads in case of multiple lines? empty quads of text  = ""?
+    // Elements like SVGElement may have multiple quads.
 
     const element = parser.nodeToElement(node._node);
     const rect = try bc.session.page.?.state.renderer.getRect(element);
