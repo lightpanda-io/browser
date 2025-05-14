@@ -226,6 +226,23 @@ pub const HTMLDocument = struct {
         return "";
     }
 
+    pub fn _elementFromPoint(_: *parser.DocumentHTML, x: f32, y: f32, state: *SessionState) !?*parser.Element {
+        const ix: i32 = @intFromFloat(@floor(x));
+        const iy: i32 = @intFromFloat(@floor(y));
+        return state.renderer.getElementAtPosition(ix, iy) orelse return null;
+    }
+
+    pub fn _elementsFromPoint(_: *parser.DocumentHTML, x: f32, y: f32, state: *SessionState) ![]*parser.Element { // empty array or optional array?
+        const ix: i32 = @intFromFloat(@floor(x));
+        const iy: i32 = @intFromFloat(@floor(y));
+        const element = state.renderer.getElementAtPosition(ix, iy) orelse return &.{}; // Or should we return the window element instead of empty -> parser.documentGetDocumentElement(self);
+        // We need to return either 0 or 1 item, so we cannot fix the size to [1]*parser.Element
+        // Converting the pointer to a slice []parser.Element is not supported by our framework.
+        // So instead we just need to allocate the pointer to create a slice of 1.
+        const heap_ptr = try state.arena.create(@TypeOf(element));
+        return heap_ptr[0..1];
+    }
+
     pub fn documentIsLoaded(html_doc: *parser.DocumentHTML, state: *SessionState) !void {
         const self = try state.getNodeWrapper(HTMLDocument, @ptrCast(html_doc));
         self.ready_state = .interactive;
@@ -293,6 +310,16 @@ test "Browser.HTML.Document" {
         .{ "document.cookie = 'name=Oeschger; SameSite=None; Secure'", "name=Oeschger; SameSite=None; Secure" },
         .{ "document.cookie = 'favorite_food=tripe; SameSite=None; Secure'", "favorite_food=tripe; SameSite=None; Secure" },
         .{ "document.cookie", "name=Oeschger; favorite_food=tripe" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "document.elementFromPoint(0.5, 0.5)", "null" },
+        .{ "document.elementsFromPoint(0.5, 0.5)", "" },
+        .{ "document.createElement('div').getClientRects()", "[object Object]" },
+        .{ "document.elementFromPoint(0.5, 0.5)", "[object HTMLDivElement]" },
+        .{ "let elems = document.elementsFromPoint(0.5, 0.5)", "undefined" },
+        .{ "elems.length", "1" },
+        .{ "elems[0]", "[object Element]" }, // TBD why is this not: HTMLDivElement?
     }, .{});
 
     try runner.testCases(&.{
