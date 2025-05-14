@@ -64,7 +64,7 @@ pub fn Runner(comptime State: type, comptime Global: type, comptime types: anyty
         }
 
         const RunOpts = struct {};
-        pub const Case = std.meta.Tuple(&.{ []const u8, []const u8 });
+        pub const Case = std.meta.Tuple(&.{ []const u8, ?[]const u8 });
         pub fn testCases(self: *Self, cases: []const Case, _: RunOpts) !void {
             for (cases, 0..) |case, i| {
                 var try_catch: Env.TryCatch = undefined;
@@ -82,18 +82,22 @@ pub fn Runner(comptime State: type, comptime Global: type, comptime types: anyty
                     return err;
                 };
 
-                const actual = try value.toString(allocator);
-                defer allocator.free(actual);
-                if (std.mem.eql(u8, case.@"1", actual) == false) {
-                    std.debug.print("Expected:\n{s}\n\nGot:\n{s}\n\nCase: {d}\n{s}\n", .{ case.@"1", actual, i + 1, case.@"0" });
-                    return error.UnexpectedResult;
+                if (case.@"1") |expected| {
+                    const actual = try value.toString(allocator);
+                    defer allocator.free(actual);
+                    if (std.mem.eql(u8, expected, actual) == false) {
+                        std.debug.print("Expected:\n{s}\n\nGot:\n{s}\n\nCase: {d}\n{s}\n", .{ expected, actual, i + 1, case.@"0" });
+                        return error.UnexpectedResult;
+                    }
                 }
             }
         }
     };
 }
 
-fn isExpectedTypeError(expected: []const u8, msg: []const u8) bool {
+fn isExpectedTypeError(expected_: ?[]const u8, msg: []const u8) bool {
+    const expected = expected_ orelse return false;
+
     if (!std.mem.eql(u8, expected, "TypeError")) {
         return false;
     }
