@@ -870,7 +870,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             }
 
             // debug/helper to print the source of the JS callback
-            fn printFunc(self: Callback) !void {
+            pub fn printFunc(self: Callback) !void {
                 const scope = self.scope;
                 const value = self.func.castToFunction().toValue();
                 const src = try valueToString(scope.call_arena, value, scope.isolate, scope.context);
@@ -2064,6 +2064,11 @@ fn Caller(comptime E: type, comptime State: type) type {
             const last_js_parameter = params_to_map.len - 1;
             var is_variadic = false;
 
+            errdefer |err| if (std.log.logEnabled(.debug, .js)) {
+                const args_dump = self.dumpFunctionArgs(info) catch "failed to serialize args";
+                log.debug("Failed to call '{s}'. Error: {}.\nArgs:\n{s}", .{ named_function.full_name, err, args_dump });
+            };
+
             {
                 // This is going to get complicated. If the last Zig paremeter
                 // is a slice AND the corresponding javascript parameter is
@@ -2582,6 +2587,22 @@ fn Caller(comptime E: type, comptime State: type) type {
         fn isJsThis(comptime T: type) bool {
             return @typeInfo(T) == .@"struct" and @hasDecl(T, "_JSTHIS_ID_KLUDGE");
         }
+
+        fn dumpFunctionArgs(self: *const Self, info: anytype) ![]const u8 {
+            const isolate = self.isolate;
+            const context = self.context;
+            const arena = self.call_arena;
+            const js_parameter_count = info.length();
+
+            var arr: std.ArrayListUnmanaged(u8) = .{};
+            for (0..js_parameter_count) |i| {
+                const js_value = info.getArg(@intCast(i));
+                const value_string = try valueToString(arena, js_value, isolate, context);
+                const value_type = try jsStringToZig(arena, try js_value.typeOf(isolate), isolate);
+                try std.fmt.format(arr.writer(arena), "{d}: {s} ({s})\n", .{ i + 1, value_string, value_type });
+            }
+            return arr.items;
+        }
     };
 }
 
@@ -2860,17 +2881,21 @@ const TaggedAnyOpaque = struct {
 
 fn valueToString(allocator: Allocator, value: v8.Value, isolate: v8.Isolate, context: v8.Context) ![]u8 {
     const str = try value.toString(context);
-    const len = str.lenUtf8(isolate);
-    const buf = try allocator.alloc(u8, len);
-    const n = str.writeUtf8(isolate, buf);
-    std.debug.assert(n == len);
-    return buf;
+    return jsStringToZig(allocator, str, isolate);
 }
 
 fn valueToStringZ(allocator: Allocator, value: v8.Value, isolate: v8.Isolate, context: v8.Context) ![:0]u8 {
     const str = try value.toString(context);
     const len = str.lenUtf8(isolate);
     const buf = try allocator.allocSentinel(u8, len, 0);
+    const n = str.writeUtf8(isolate, buf);
+    std.debug.assert(n == len);
+    return buf;
+}
+
+fn jsStringToZig(allocator: Allocator, str: v8.String, isolate: v8.Isolate) ![]u8 {
+    const len = str.lenUtf8(isolate);
+    const buf = try allocator.alloc(u8, len);
     const n = str.writeUtf8(isolate, buf);
     std.debug.assert(n == len);
     return buf;
