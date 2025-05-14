@@ -455,7 +455,7 @@ pub const JsRunner = struct {
     }
 
     const RunOpts = struct {};
-    pub const Case = std.meta.Tuple(&.{ []const u8, []const u8 });
+    pub const Case = std.meta.Tuple(&.{ []const u8, ?[]const u8 });
     pub fn testCases(self: *JsRunner, cases: []const Case, _: RunOpts) !void {
         const start = try std.time.Instant.now();
 
@@ -473,10 +473,12 @@ pub const JsRunner = struct {
             try self.loop.run();
             @import("root").js_runner_duration += std.time.Instant.since(try std.time.Instant.now(), start);
 
-            const actual = try value.toString(self.arena);
-            if (std.mem.eql(u8, case.@"1", actual) == false) {
-                std.debug.print("Expected:\n{s}\n\nGot:\n{s}\n\nCase: {d}\n{s}\n", .{ case.@"1", actual, i + 1, case.@"0" });
-                return error.UnexpectedResult;
+            if (case.@"1") |expected| {
+                const actual = try value.toString(self.arena);
+                if (std.mem.eql(u8, expected, actual) == false) {
+                    std.debug.print("Expected:\n{s}\n\nGot:\n{s}\n\nCase: {d}\n{s}\n", .{ expected, actual, i + 1, case.@"0" });
+                    return error.UnexpectedResult;
+                }
             }
         }
     }
