@@ -293,22 +293,22 @@ test "Browser.HTML.Window" {
             \\    }
             \\ }
             ,
-            "undefined",
+            null,
         },
-        .{ "let id = requestAnimationFrame(step);", "undefined" },
+        .{ "requestAnimationFrame(step);", null }, // returned id is checked in the next test
     }, .{});
 
     // cancelAnimationFrame should be able to cancel a request with the given id
     try runner.testCases(&.{
-        .{ "let request_id = requestAnimationFrame(timestamp => {});", "undefined" },
+        .{ "let request_id = requestAnimationFrame(timestamp => {});", null },
         .{ "cancelAnimationFrame(request_id);", "undefined" },
     }, .{});
 
     try runner.testCases(&.{
         .{ "innerHeight", "1" },
         .{ "innerWidth", "1" }, // Width is 1 even if there are no elements
-        .{ "document.createElement('div').getClientRects()", "[object Object]" },
-        .{ "document.createElement('div').getClientRects()", "[object Object]" },
+        .{ "document.createElement('div').getClientRects()", null },
+        .{ "document.createElement('div').getClientRects()", null },
         .{ "innerHeight", "1" },
         .{ "innerWidth", "2" },
     }, .{});
