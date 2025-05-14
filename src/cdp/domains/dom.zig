@@ -17,10 +17,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const Node = @import("../Node.zig");
 const css = @import("../../browser/dom/css.zig");
 const parser = @import("../../browser/netsurf.zig");
 const dom_node = @import("../../browser/dom/node.zig");
+const DOMRect = @import("../../browser/dom/element.zig").Element.DOMRect;
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -237,52 +239,43 @@ fn describeNode(cmd: anytype) !void {
         depth: u32 = 1,
         pierce: bool = false,
     })) orelse return error.InvalidParams;
-    if (params.backendNodeId != null or params.depth != 1 or params.pierce) {
-        return error.NotYetImplementedParams;
-    }
 
+    if (params.depth != 1 or params.pierce) return error.NotYetImplementedParams;
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-    const input_node_id = params.nodeId orelse params.backendNodeId;
-    if (input_node_id != null) {
-        const node = bc.node_registry.lookup_by_id.get(params.nodeId.?) orelse return error.NodeNotFound;
-        return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{}) }, .{});
-    }
-    if (params.objectId != null) {
-        // Retrieve the object from which ever context it is in.
-        const parser_node = try bc.inspector.getNodePtr(cmd.arena, params.objectId.?);
-        const node = try bc.node_registry.register(@ptrCast(parser_node));
-        return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{}) }, .{});
-    }
-    return error.MissingParams;
-}
+    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
 
-// Note Element.DOMRect exists, but there is no need to couple them at this time.
-const Rect = struct {
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-};
+    return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{}) }, .{});
+}
 
 // An array of quad vertices, x immediately followed by y for each point, points clock-wise.
 // Note Y points downward
 // We are assuming the start/endpoint is not repeated.
 const Quad = [8]f64;
 
+fn rectToQuad(rect: DOMRect) Quad {
+    return Quad{
+        rect.x,
+        rect.y,
+        rect.x + rect.width,
+        rect.y,
+        rect.x + rect.width,
+        rect.y + rect.height,
+        rect.x,
+        rect.y + rect.height,
+    };
+}
+
 fn scrollIntoViewIfNeeded(cmd: anytype) !void {
-    const params = (try cmd.params(struct {
+    _ = (try cmd.params(struct {
         nodeId: ?Node.Id = null,
         backendNodeId: ?u32 = null,
         objectId: ?[]const u8 = null,
-        rect: ?Rect = null,
+        rect: ?DOMRect = null,
     })) orelse return error.InvalidParams;
 
-    var set_count: u2 = 0; // only 1 of nodeId backendNodeId objectId may be set
-    if (params.nodeId != null) set_count += 1;
-    if (params.backendNodeId != null) set_count += 1;
-    if (params.objectId != null) set_count += 1;
-    if (set_count != 1) return error.InvalidParams;
+    // Only 1 of nodeId, backendNodeId, objectId may be set, but we don't want to error unnecessarily
+    // TBD what do other browsers do in this user error sceneario?
 
     // Since element.scrollIntoViewIfNeeded is a no-op we do not bother retrieving the node.
     // This however also means we also do not error in case the node is not found.
@@ -290,49 +283,36 @@ fn scrollIntoViewIfNeeded(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
+fn getNode(arena: Allocator, browser_context: anytype, node_id: ?Node.Id, backend_node_id: ?Node.Id, object_id: ?[]const u8) !*Node {
+    const input_node_id = node_id orelse backend_node_id;
+    if (input_node_id) |input_node_id_| {
+        return browser_context.node_registry.lookup_by_id.get(input_node_id_) orelse return error.NodeNotFound;
+    }
+    if (object_id) |object_id_| {
+        // Retrieve the object from which ever context it is in.
+        const parser_node = try browser_context.inspector.getNodePtr(arena, object_id_);
+        return try browser_context.node_registry.register(@ptrCast(parser_node));
+    }
+    return error.MissingParams;
+}
+
 fn getContentQuads(cmd: anytype) !void {
     const params = (try cmd.params(struct {
         nodeId: ?Node.Id = null,
-        backendNodeId: ?u32 = null,
+        backendNodeId: ?Node.Id = null,
         objectId: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
 
-    var set_count: u2 = 0; // only 1 of nodeId backendNodeId objectId may be set
-    if (params.nodeId != null) set_count += 1;
-    if (params.backendNodeId != null) set_count += 1;
-    if (params.objectId != null) set_count += 1;
-    if (set_count != 1) return error.InvalidParams;
-
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-    const node = blk: {
-        const input_node_id = params.nodeId orelse params.backendNodeId;
-        if (input_node_id != null) {
-            const node = bc.node_registry.lookup_by_id.get(params.nodeId.?) orelse return error.NodeNotFound;
-            break :blk node;
-        }
-        if (params.objectId != null) {
-            const parser_node = try bc.inspector.getNodePtr(cmd.arena, params.objectId.?);
-            const node = try bc.node_registry.register(@ptrCast(parser_node));
-            break :blk node;
-        }
-        unreachable;
-    };
+    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
 
-    if (try parser.nodeType(node._node) != .element) return error.NodeISNotAnElement;
+    if (try parser.nodeType(node._node) != .element) return error.NodeIsNotAnElement;
+    // TBD should the funcion work on nodes that are not elements, but may have geometry like Window?
 
     const element = parser.nodeToElement(node._node);
     const rect = try bc.session.page.?.state.renderer.getRect(element);
-    const quad = Quad{
-        rect.x,
-        rect.y,
-        rect.x + rect.width,
-        rect.y,
-        rect.x + rect.width,
-        rect.y + rect.height,
-        rect.x,
-        rect.y + rect.height,
-    };
+    const quad = rectToQuad(rect);
 
     return cmd.sendResult(.{ .quads = &.{quad} }, .{});
 }

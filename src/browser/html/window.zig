@@ -120,6 +120,18 @@ pub const Window = struct {
         return &self.history;
     }
 
+    //  The interior height of the window in pixels, including the height of the horizontal scroll bar, if present.
+    pub fn get_innerHeight(_: *Window, state: *SessionState) u32 {
+        // We do not have scrollbars or padding so this is the same as Element.clientHeight
+        return state.renderer.height();
+    }
+
+    // The interior width of the window in pixels. That includes the width of the vertical scroll bar, if one is present.
+    pub fn get_innerWidth(_: *Window, state: *SessionState) u32 {
+        // We do not have scrollbars or padding so this is the same as Element.clientWidth
+        return state.renderer.width();
+    }
+
     pub fn get_name(self: *Window) []const u8 {
         return self.target;
     }
@@ -290,5 +302,14 @@ test "Browser.HTML.Window" {
     try runner.testCases(&.{
         .{ "let request_id = requestAnimationFrame(timestamp => {});", "undefined" },
         .{ "cancelAnimationFrame(request_id);", "undefined" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "innerHeight", "1" },
+        .{ "innerWidth", "1" }, // Width is 1 even if there are no elements
+        .{ "document.createElement('div').getClientRects()", "[object Object]" },
+        .{ "document.createElement('div').getClientRects()", "[object Object]" },
+        .{ "innerHeight", "1" },
+        .{ "innerWidth", "2" },
     }, .{});
 }

@@ -390,8 +390,7 @@ pub const Element = struct {
         return s.match(CssNodeWrap{ .node = parser.elementToNode(self) });
     }
 
-    pub fn _scrollIntoViewIfNeeded(self: *parser.Element, center_if_needed: ?bool) void {
-        _ = self;
+    pub fn _scrollIntoViewIfNeeded(_: *parser.Element, center_if_needed: ?bool) void {
         _ = center_if_needed;
     }
 };
