@@ -42,20 +42,49 @@ pub const EventTarget = struct {
     // JS funcs
     // --------
 
+    const AddEventListenerOpts = union(enum) {
+        opts: Opts,
+        capture: bool,
+
+        const Opts = struct {
+            capture: ?bool,
+            once: ?bool, // currently does nothing
+            passive: ?bool, // currently does nothing
+            signal: ?bool, // currently does nothing
+        };
+    };
+
     pub fn _addEventListener(
         self: *parser.EventTarget,
         typ: []const u8,
         cbk: Env.Callback,
-        capture: ?bool,
+        opts_: ?AddEventListenerOpts,
         state: *SessionState,
-        // TODO: hanle EventListenerOptions
-        // see #https://github.com/lightpanda-io/jsruntime-lib/issues/114
     ) !void {
+        var capture = false;
+        if (opts_) |opts| {
+            switch (opts) {
+                .capture => |c| capture = c,
+                .opts => |o| {
+                    // Done this way so that, for common cases that _only_ set
+                    // capture, i.e. {captrue: true}, it works.
+                    // But for any case that sets any of the other flags, we
+                    // error. If we don't error, this function call would succeed
+                    // but the behavior might be wrong. At this point, it's
+                    // better to be explicit and error.
+                    if (o.once orelse false) return error.NotImplemented;
+                    if (o.signal orelse false) return error.NotImplemented;
+                    if (o.passive orelse false) return error.NotImplemented;
+                    capture = o.capture orelse false;
+                },
+            }
+        }
+
         // check if event target has already this listener
         const lst = try parser.eventTargetHasListener(
             self,
             typ,
-            capture orelse false,
+            capture,
             cbk.id,
         );
         if (lst != null) {
@@ -68,7 +97,7 @@ pub const EventTarget = struct {
             self,
             typ,
             &eh.node,
-            capture orelse false,
+            capture,
         );
     }
 
@@ -172,7 +201,7 @@ test "Browser.DOM.EventTarget" {
 
     try runner.testCases(&.{
         .{ "nb  = 0", "0" },
-        .{ "content.removeEventListener('basic', cbk, true)", "undefined" },
+        .{ "content.removeEventListener('basic', cbk, {capture: true})", "undefined" },
         .{ "content.dispatchEvent(new Event('basic'))", "true" },
         .{ "nb", "0" },
     }, .{});
