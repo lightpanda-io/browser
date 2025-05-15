@@ -328,6 +328,17 @@ test "Browser.HTML.Document" {
     }, .{});
 
     try runner.testCases(&.{
+        .{ "let a = document.createElement('a')", null },
+        .{ "a.href = \"https://lightpanda.io\"", null },
+        .{ "a.getClientRects()", null }, // Note this will be placed after the div of previous test
+        .{ "let a_again = document.elementFromPoint(1.5, 0.5)", null },
+        .{ "a_again", "[object HTMLAnchorElement]" },
+        .{ "a_again.href", "https://lightpanda.io" },
+        .{ "let a_agains = document.elementsFromPoint(1.5, 0.5)", null },
+        .{ "a_agains[0].href", "https://lightpanda.io" },
+    }, .{});
+
+    try runner.testCases(&.{
         .{ "!document.all", "true" },
         .{ "!!document.all", "false" },
         .{ "document.all(5)", "[object HTMLParagraphElement]" },
