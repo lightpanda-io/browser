@@ -389,6 +389,10 @@ pub const Element = struct {
         const s = try cssParse(state.call_arena, selectors, .{});
         return s.match(CssNodeWrap{ .node = parser.elementToNode(self) });
     }
+
+    pub fn _scrollIntoViewIfNeeded(_: *parser.Element, center_if_needed: ?bool) void {
+        _ = center_if_needed;
+    }
 };
 
 // Tests
@@ -573,6 +577,12 @@ test "Browser.DOM.Element" {
         .{ "el.matches('.ok')", "true" },
         .{ "el.matches('#9000')", "false" },
         .{ "el.matches('.notok')", "false" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "const el3 = document.createElement('div');", "undefined" },
+        .{ "el3.scrollIntoViewIfNeeded();", "undefined" },
+        .{ "el3.scrollIntoViewIfNeeded(false);", "undefined" },
     }, .{});
 
     // before

@@ -17,10 +17,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const Node = @import("../Node.zig");
 const css = @import("../../browser/dom/css.zig");
 const parser = @import("../../browser/netsurf.zig");
 const dom_node = @import("../../browser/dom/node.zig");
+const DOMRect = @import("../../browser/dom/element.zig").Element.DOMRect;
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -31,6 +33,8 @@ pub fn processMessage(cmd: anytype) !void {
         discardSearchResults,
         resolveNode,
         describeNode,
+        scrollIntoViewIfNeeded,
+        getContentQuads,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -41,6 +45,8 @@ pub fn processMessage(cmd: anytype) !void {
         .discardSearchResults => return discardSearchResults(cmd),
         .resolveNode => return resolveNode(cmd),
         .describeNode => return describeNode(cmd),
+        .scrollIntoViewIfNeeded => return scrollIntoViewIfNeeded(cmd),
+        .getContentQuads => return getContentQuads(cmd),
     }
 }
 
@@ -233,23 +239,98 @@ fn describeNode(cmd: anytype) !void {
         depth: u32 = 1,
         pierce: bool = false,
     })) orelse return error.InvalidParams;
-    if (params.backendNodeId != null or params.depth != 1 or params.pierce) {
-        return error.NotYetImplementedParams;
+
+    if (params.depth != 1 or params.pierce) return error.NotYetImplementedParams;
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+
+    return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{}) }, .{});
+}
+
+// An array of quad vertices, x immediately followed by y for each point, points clock-wise.
+// Note Y points downward
+// We are assuming the start/endpoint is not repeated.
+const Quad = [8]f64;
+
+fn rectToQuad(rect: DOMRect) Quad {
+    return Quad{
+        rect.x,
+        rect.y,
+        rect.x + rect.width,
+        rect.y,
+        rect.x + rect.width,
+        rect.y + rect.height,
+        rect.x,
+        rect.y + rect.height,
+    };
+}
+
+fn scrollIntoViewIfNeeded(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        nodeId: ?Node.Id = null,
+        backendNodeId: ?u32 = null,
+        objectId: ?[]const u8 = null,
+        rect: ?DOMRect = null,
+    })) orelse return error.InvalidParams;
+    // Only 1 of nodeId, backendNodeId, objectId may be set, but chrome just takes the first non-null
+
+    // We retrieve the node to at least check if it exists and is valid.
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+
+    const node_type = parser.nodeType(node._node) catch return error.InvalidNode;
+    switch (node_type) {
+        .element => {},
+        .document => {},
+        .text => {},
+        else => return error.NodeDoesNotHaveGeometry,
     }
+
+    return cmd.sendResult(null, .{});
+}
+
+fn getNode(arena: Allocator, browser_context: anytype, node_id: ?Node.Id, backend_node_id: ?Node.Id, object_id: ?[]const u8) !*Node {
+    const input_node_id = node_id orelse backend_node_id;
+    if (input_node_id) |input_node_id_| {
+        return browser_context.node_registry.lookup_by_id.get(input_node_id_) orelse return error.NodeNotFound;
+    }
+    if (object_id) |object_id_| {
+        // Retrieve the object from which ever context it is in.
+        const parser_node = try browser_context.inspector.getNodePtr(arena, object_id_);
+        return try browser_context.node_registry.register(@ptrCast(parser_node));
+    }
+    return error.MissingParams;
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-getContentQuads
+// Related to: https://drafts.csswg.org/cssom-view/#the-geometryutils-interface
+fn getContentQuads(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        nodeId: ?Node.Id = null,
+        backendNodeId: ?Node.Id = null,
+        objectId: ?[]const u8 = null,
+    })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-    if (params.nodeId != null) {
-        const node = bc.node_registry.lookup_by_id.get(params.nodeId.?) orelse return error.NodeNotFound;
-        return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{}) }, .{});
-    }
-    if (params.objectId != null) {
-        // Retrieve the object from which ever context it is in.
-        const parser_node = try bc.inspector.getNodePtr(cmd.arena, params.objectId.?);
-        const node = try bc.node_registry.register(@ptrCast(parser_node));
-        return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{}) }, .{});
-    }
-    return error.MissingParams;
+    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+
+    // TODO likely if the following CSS properties are set the quads should be empty
+    // visibility: hidden
+    // display: none
+
+    if (try parser.nodeType(node._node) != .element) return error.NodeIsNotAnElement;
+    // TODO implement for document or text
+    // Most likely document would require some hierachgy in the renderer. It is left unimplemented till we have a good example.
+    // Text may be tricky, multiple quads in case of multiple lines? empty quads of text  = ""?
+    // Elements like SVGElement may have multiple quads.
+
+    const element = parser.nodeToElement(node._node);
+    const rect = try bc.session.page.?.state.renderer.getRect(element);
+    const quad = rectToQuad(rect);
+
+    return cmd.sendResult(.{ .quads = &.{quad} }, .{});
 }
 
 const testing = @import("../testing.zig");
