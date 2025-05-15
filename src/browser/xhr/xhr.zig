@@ -497,7 +497,7 @@ pub const XMLHttpRequest = struct {
             self.state = .loading;
             self.dispatchEvt("readystatechange");
 
-            try self.cookie_jar.populateFromResponse(self.request.?.uri, &header);
+            try self.cookie_jar.populateFromResponse(self.request.?.request_uri, &header);
         }
 
         if (progress.data) |data| {

@@ -46,6 +46,7 @@ const MAX_HEADER_LINE_LEN = 4096;
 pub const Client = struct {
     allocator: Allocator,
     state_pool: StatePool,
+    http_proxy: ?Uri,
     root_ca: tls.config.CertBundle,
     tls_verify_host: bool = true,
     idle_connections: IdleConnections,
@@ -53,6 +54,7 @@ pub const Client = struct {
 
     const Opts = struct {
         tls_verify_host: bool = true,
+        http_proxy: ?std.Uri = null,
         max_idle_connection: usize = 10,
     };
 
@@ -70,6 +72,7 @@ pub const Client = struct {
             .root_ca = root_ca,
             .allocator = allocator,
             .state_pool = state_pool,
+            .http_proxy = opts.http_proxy,
             .idle_connections = idle_connections,
             .tls_verify_host = opts.tls_verify_host,
             .connection_pool = std.heap.MemoryPool(Connection).init(allocator),
@@ -150,10 +153,14 @@ pub const Request = struct {
     method: Method,
 
     // The URI we're requested
-    uri: *const Uri,
+    request_uri: *const Uri,
+
+    // The URI that we're connecting to. Can be different than request_uri when
+    // proxying is enabled
+    connect_uri: *const Uri,
 
     // If we're redirecting, this is where we're redirecting to. The only reason
-    // we really have this is so that we can set self.uri = &self.redirect_url.?
+    // we really have this is so that we can set self.request_uri = &self.redirect_url.?
     redirect_uri: ?Uri = null,
 
     // Optional body
@@ -174,9 +181,12 @@ pub const Request = struct {
     // for other requests
     _keepalive: bool,
 
-    _port: u16,
+    // extracted from request_uri
+    _request_host: []const u8,
 
-    _host: []const u8,
+    // extracted from connect_uri
+    _connect_port: u16,
+    _connect_host: []const u8,
 
     // whether or not the socket comes from the connection pool. If it does,
     // and we get an error sending the header, we might retry on a new connection
@@ -222,16 +232,18 @@ pub const Request = struct {
     };
 
     fn init(client: *Client, state: *State, method: Method, uri: *const Uri) !Request {
-        const secure, const host, const port = try decomposeURL(uri);
+        const decomposed = try decomposeURL(client, uri);
         return .{
-            .uri = uri,
+            .request_uri = uri,
+            .connect_uri = decomposed.connect_uri,
             .body = null,
             .headers = .{},
             .method = method,
             .arena = state.arena.allocator(),
-            ._secure = secure,
-            ._host = host,
-            ._port = port,
+            ._secure = decomposed.secure,
+            ._connect_host = decomposed.connect_host,
+            ._connect_port = decomposed.connect_port,
+            ._request_host = decomposed.request_host,
             ._state = state,
             ._client = client,
             ._connection = null,
@@ -249,14 +261,28 @@ pub const Request = struct {
         self._client.state_pool.release(self._state);
     }
 
-    fn decomposeURL(uri: *const Uri) !struct { bool, []const u8, u16 } {
+    const DecomposedURL = struct {
+        secure: bool,
+        connect_port: u16,
+        connect_host: []const u8,
+        connect_uri: *const std.Uri,
+        request_host: []const u8,
+    };
+    fn decomposeURL(client: *const Client, uri: *const Uri) !DecomposedURL {
         if (uri.host == null) {
             return error.UriMissingHost;
         }
+        const request_host = uri.host.?.percent_encoded;
+
+        var connect_uri = uri;
+        var connect_host = request_host;
+        if (client.http_proxy) |*proxy| {
+            connect_uri = proxy;
+            connect_host = proxy.host.?.percent_encoded;
+        }
 
         var secure: bool = undefined;
-
-        const scheme = uri.scheme;
+        const scheme = connect_uri.scheme;
         if (std.ascii.eqlIgnoreCase(scheme, "https")) {
             secure = true;
         } else if (std.ascii.eqlIgnoreCase(scheme, "http")) {
@@ -264,11 +290,15 @@ pub const Request = struct {
         } else {
             return error.UnsupportedUriScheme;
         }
+        const connect_port: u16 = connect_uri.port orelse if (secure) 443 else 80;
 
-        const host = uri.host.?.percent_encoded;
-        const port: u16 = uri.port orelse if (secure) 443 else 80;
-
-        return .{ secure, host, port };
+        return .{
+            .secure = secure,
+            .connect_port = connect_port,
+            .connect_host = connect_host,
+            .connect_uri = connect_uri,
+            .request_host = request_host,
+        };
     }
 
     // Called in deinit, but also called when we're redirecting to another page
@@ -293,11 +323,11 @@ pub const Request = struct {
         errdefer client.connection_pool.destroy(connection);
 
         connection.* = .{
-            .socket = socket,
             .tls = null,
-            .port = self._port,
+            .socket = socket,
             .blocking = blocking,
-            .host = try client.allocator.dupe(u8, self._host),
+            .port = self._connect_port,
+            .host = try client.allocator.dupe(u8, self._connect_host),
         };
 
         return connection;
@@ -374,12 +404,10 @@ pub const Request = struct {
                 return err;
             };
 
-            errdefer self.destroyConnection(connection);
-
             if (self._secure) {
                 connection.tls = .{
                     .blocking = try tls.client(std.net.Stream{ .handle = socket }, .{
-                        .host = connection.host,
+                        .host = self._connect_host,
                         .root_ca = self._client.root_ca,
                         .insecure_skip_verify = self._tls_verify_host == false,
                         // .key_log_callback = tls.config.key_log.callback,
@@ -391,11 +419,9 @@ pub const Request = struct {
             self._connection_from_keepalive = false;
         }
 
-        errdefer self.destroyConnection(self._connection.?);
-
         var handler = SyncHandler{ .request = self };
         return handler.send() catch |err| {
-            log.warn("HTTP error: {any} ({any} {any} {d})", .{ err, self.method, self.uri, self._redirect_count });
+            log.warn("HTTP error: {any} ({any} {any} {d})", .{ err, self.method, self.request_uri, self._redirect_count });
             return err;
         };
     }
@@ -461,7 +487,7 @@ pub const Request = struct {
         if (self._secure) {
             connection.tls = .{
                 .nonblocking = try tls.nb.Client().init(self._client.allocator, .{
-                    .host = connection.host,
+                    .host = self._connect_host,
                     .root_ca = self._client.root_ca,
                     .insecure_skip_verify = self._tls_verify_host == false,
                     .key_log_callback = tls.config.key_log.callback,
@@ -501,7 +527,7 @@ pub const Request = struct {
         }
 
         if (!self._has_host_header) {
-            try self.headers.append(arena, .{ .name = "Host", .value = self._host });
+            try self.headers.append(arena, .{ .name = "Host", .value = self._request_host });
         }
 
         try self.headers.append(arena, .{ .name = "User-Agent", .value = "Lightpanda/1.0" });
@@ -512,7 +538,7 @@ pub const Request = struct {
         self.releaseConnection();
 
         // CANNOT reset the arena (╥﹏╥)
-        // We need it for self.uri (which we're about to use to resolve
+        // We need it for self.request_uri (which we're about to use to resolve
         // redirect.location, and it might own some/all headers)
 
         const redirect_count = self._redirect_count;
@@ -522,14 +548,16 @@ pub const Request = struct {
 
         var buf = try self.arena.alloc(u8, 2048);
 
-        const previous_host = self._host;
-        self.redirect_uri = try self.uri.resolve_inplace(redirect.location, &buf);
+        const previous_request_host = self._request_host;
+        self.redirect_uri = try self.request_uri.resolve_inplace(redirect.location, &buf);
 
-        self.uri = &self.redirect_uri.?;
-        const secure, const host, const port = try decomposeURL(self.uri);
-        self._host = host;
-        self._port = port;
-        self._secure = secure;
+        self.request_uri = &self.redirect_uri.?;
+        const decomposed = try decomposeURL(self._client, self.request_uri);
+        self.connect_uri = decomposed.connect_uri;
+        self._request_host = decomposed.request_host;
+        self._connect_host = decomposed.connect_host;
+        self._connect_port = decomposed.connect_port;
+        self._secure = decomposed.secure;
         self._keepalive = false;
         self._redirect_count = redirect_count + 1;
 
@@ -538,7 +566,7 @@ pub const Request = struct {
             // to a GET.
             self.method = .GET;
         }
-        log.info("redirecting to: {any} {any}", .{ self.method, self.uri });
+        log.info("redirecting to: {any} {any}", .{ self.method, self.request_uri });
 
         if (self.body != null and self.method == .GET) {
             // If we have a body and the method is a GET, then we must be following
@@ -553,10 +581,10 @@ pub const Request = struct {
             }
         }
 
-        if (std.mem.eql(u8, previous_host, host) == false) {
+        if (std.mem.eql(u8, previous_request_host, self._request_host) == false) {
             for (self.headers.items) |*hdr| {
                 if (std.mem.eql(u8, hdr.name, "Host")) {
-                    hdr.value = host;
+                    hdr.value = self._request_host;
                     break;
                 }
             }
@@ -577,11 +605,11 @@ pub const Request = struct {
             return null;
         }
 
-        return self._client.idle_connections.get(self._secure, self._host, self._port, blocking);
+        return self._client.idle_connections.get(self._secure, self._connect_host, self._connect_port, blocking);
     }
 
     fn createSocket(self: *Request, blocking: bool) !struct { posix.socket_t, std.net.Address } {
-        const addresses = try std.net.getAddressList(self.arena, self._host, self._port);
+        const addresses = try std.net.getAddressList(self.arena, self._connect_host, self._connect_port);
         if (addresses.addrs.len == 0) {
             return error.UnknownHostName;
         }
@@ -600,13 +628,15 @@ pub const Request = struct {
     }
 
     fn buildHeader(self: *Request) ![]const u8 {
+        const proxied = self.connect_uri != self.request_uri;
+
         const buf = self._state.header_buf;
         var fbs = std.io.fixedBufferStream(buf);
         var writer = fbs.writer();
 
         try writer.writeAll(@tagName(self.method));
         try writer.writeByte(' ');
-        try self.uri.writeToStream(.{ .path = true, .query = true }, writer);
+        try self.request_uri.writeToStream(.{ .scheme = proxied, .authority = proxied, .path = true, .query = true }, writer);
         try writer.writeAll(" HTTP/1.1\r\n");
         for (self.headers.items) |header| {
             try writer.writeAll(header.name);
@@ -906,7 +936,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
         }
 
         fn handleError(self: *Self, comptime msg: []const u8, err: anyerror) void {
-            log.err(msg ++ ": {any} ({any} {any})", .{ err, self.request.method, self.request.uri });
+            log.err(msg ++ ": {any} ({any} {any})", .{ err, self.request.method, self.request.request_uri });
             self.handler.onHttpResponse(err) catch {};
             // just to be safe
             self.request._keepalive = false;
@@ -1127,7 +1157,7 @@ const SyncHandler = struct {
             // See CompressedReader for an explanation. This isn't great code. Sorry.
             if (reader.response.get("content-encoding")) |ce| {
                 if (std.ascii.eqlIgnoreCase(ce, "gzip") == false) {
-                    log.err("unsupported content encoding '{s}' for: {}", .{ ce, request.uri });
+                    log.err("unsupported content encoding '{s}' for: {}", .{ ce, request.request_uri });
                     return error.UnsupportedContentEncoding;
                 }
 
