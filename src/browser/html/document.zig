@@ -22,6 +22,8 @@ const parser = @import("../netsurf.zig");
 const SessionState = @import("../env.zig").SessionState;
 
 const Window = @import("window.zig").Window;
+const Element = @import("../dom/element.zig").Element;
+const ElementUnion = @import("../dom/element.zig").Union;
 const Document = @import("../dom/document.zig").Document;
 const NodeList = @import("../dom/nodelist.zig").NodeList;
 const Location = @import("location.zig").Location;
@@ -226,15 +228,16 @@ pub const HTMLDocument = struct {
         return "";
     }
 
-    pub fn _elementFromPoint(_: *parser.DocumentHTML, x: f32, y: f32, state: *SessionState) !?*parser.Element {
+    // This returns an ElementUnion instead of a *Parser.Element in case the element somehow hasn't passed through the js runtime yet.
+    pub fn _elementFromPoint(_: *parser.DocumentHTML, x: f32, y: f32, state: *SessionState) !?ElementUnion {
         const ix: i32 = @intFromFloat(@floor(x));
         const iy: i32 = @intFromFloat(@floor(y));
         const element = state.renderer.getElementAtPosition(ix, iy) orelse return null;
         // TODO if pointer-events set to none the underlying element should be returned (parser.documentGetDocumentElement(self.document);?)
-        return element;
+        return try Element.toInterface(element);
     }
 
-    pub fn _elementsFromPoint(_: *parser.DocumentHTML, x: f32, y: f32, state: *SessionState) ![]*parser.Element {
+    pub fn _elementsFromPoint(_: *parser.DocumentHTML, x: f32, y: f32, state: *SessionState) ![]ElementUnion {
         const ix: i32 = @intFromFloat(@floor(x));
         const iy: i32 = @intFromFloat(@floor(y));
         const element = state.renderer.getElementAtPosition(ix, iy) orelse return &.{};
@@ -243,8 +246,8 @@ pub const HTMLDocument = struct {
         // We need to return either 0 or 1 item, so we cannot fix the size to [1]*parser.Element
         // Converting the pointer to a slice []parser.Element is not supported by our framework.
         // So instead we just need to allocate the pointer to create a slice of 1.
-        const heap_ptr = try state.call_arena.create(@TypeOf(element));
-        heap_ptr.* = element;
+        const heap_ptr = try state.call_arena.create(ElementUnion);
+        heap_ptr.* = try Element.toInterface(element);
         return heap_ptr[0..1];
     }
 
