@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const Page = @import("../../browser/browser.zig").Page;
+const Page = @import("../../browser/page.zig").Page;
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {

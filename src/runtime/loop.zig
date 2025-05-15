@@ -22,8 +22,6 @@ const MemoryPool = std.heap.MemoryPool;
 
 pub const IO = @import("tigerbeetle-io").IO;
 
-const JSCallback = @import("../browser/env.zig").Env.Callback;
-
 const log = std.log.scoped(.loop);
 
 // SingleThreaded I/O Loop based on Tigerbeetle io_uring loop.

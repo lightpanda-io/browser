@@ -17,14 +17,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 
 const parser = @import("../netsurf.zig");
 const SessionState = @import("../env.zig").SessionState;
 
 const Env = @import("../env.zig").Env;
 const Element = @import("element.zig").Element;
-const Document = @import("document.zig").Document;
 
 pub const Interfaces = .{
     IntersectionObserver,
