@@ -18,8 +18,8 @@
 
 const std = @import("std");
 const URL = @import("../../url.zig").URL;
+const Page = @import("../../browser/page.zig").Page;
 const Notification = @import("../../notification.zig").Notification;
-const Page = @import("../../browser/browser.zig").Page;
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {

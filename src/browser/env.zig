@@ -5,9 +5,9 @@ const URL = @import("../url.zig").URL;
 const js = @import("../runtime/js.zig");
 const storage = @import("storage/storage.zig");
 const generate = @import("../runtime/generate.zig");
+const Renderer = @import("renderer.zig").Renderer;
 const Loop = @import("../runtime/loop.zig").Loop;
 const HttpClient = @import("../http/client.zig").Client;
-const Renderer = @import("browser.zig").Renderer;
 
 const WebApis = struct {
     // Wrapped like this for debug ergonomics.
