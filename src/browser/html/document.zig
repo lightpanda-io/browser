@@ -151,8 +151,8 @@ pub const HTMLDocument = struct {
         return try collection.HTMLCollectionByAnchors(parser.documentHTMLToNode(self), false);
     }
 
-    pub fn get_all(self: *parser.DocumentHTML) !collection.HTMLCollection {
-        return try collection.HTMLCollectionAll(parser.documentHTMLToNode(self), true);
+    pub fn get_all(self: *parser.DocumentHTML) collection.HTMLAllCollection {
+        return collection.HTMLAllCollection.init(parser.documentHTMLToNode(self));
     }
 
     pub fn get_currentScript(self: *parser.DocumentHTML) !?*parser.Script {
@@ -259,5 +259,12 @@ test "Browser.HTML.Document" {
         .{ "document.cookie = 'name=Oeschger; SameSite=None; Secure'", "name=Oeschger; SameSite=None; Secure" },
         .{ "document.cookie = 'favorite_food=tripe; SameSite=None; Secure'", "favorite_food=tripe; SameSite=None; Secure" },
         .{ "document.cookie", "name=Oeschger; favorite_food=tripe" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "!document.all", "true" },
+        .{ "!!document.all", "false" },
+        .{ "document.all(5)", "[object HTMLParagraphElement]" },
+        .{ "document.all('content')", "[object HTMLDivElement]" },
     }, .{});
 }

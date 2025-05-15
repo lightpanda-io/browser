@@ -1213,6 +1213,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             generateIndexer(Struct, template_proto);
             generateNamedIndexer(Struct, template_proto);
+            generateUndetectable(Struct, template.getInstanceTemplate());
         }
 
         // Even if a struct doesn't have a `constructor` function, we still
@@ -1410,6 +1411,32 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // (b) defining the getter or query to respond with the
             //     PropertyAttribute to indicate if the property can be set
             template_proto.setNamedProperty(configuration, null);
+        }
+
+        fn generateUndetectable(comptime Struct: type, template: v8.ObjectTemplate) void {
+            const has_js_call_as_function = @hasDecl(Struct, "jsCallAsFunction");
+
+            if (has_js_call_as_function) {
+                template.setCallAsFunctionHandler(struct {
+                    fn callback(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
+                        const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
+                        var caller = Caller(Self, State).init(info);
+                        defer caller.deinit();
+
+                        const named_function = comptime NamedFunction.init(Struct, "jsCallAsFunction");
+                        caller.method(Struct, named_function, info) catch |err| {
+                            caller.handleError(Struct, named_function, err, info);
+                        };
+                    }
+                }.callback);
+            }
+
+            if (@hasDecl(Struct, "mark_as_undetectable") and Struct.mark_as_undetectable) {
+                if (!has_js_call_as_function) {
+                    @compileError(@typeName(Struct) ++ ": mark_as_undetectable required jsCallAsFunction to be defined. This is a hard-coded requirement in V8, because mark_as_undetectable only exists for HTMLAllCollection which is also callable.");
+                }
+                template.markAsUndetectable();
+            }
         }
 
         // Turns a Zig value into a JS one.
