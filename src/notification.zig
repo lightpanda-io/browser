@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const URL = @import("url.zig").URL;
-const browser = @import("browser/browser.zig");
+const page = @import("browser/page.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -64,7 +64,7 @@ pub const Notification = struct {
 
     const Events = union(enum) {
         page_remove: PageRemove,
-        page_created: *browser.Page,
+        page_created: *page.Page,
         page_navigate: *const PageNavigate,
         page_navigated: *const PageNavigated,
         notification_created: *Notification,
@@ -76,7 +76,7 @@ pub const Notification = struct {
     pub const PageNavigate = struct {
         timestamp: u32,
         url: *const URL,
-        reason: browser.NavigateReason,
+        reason: page.NavigateReason,
     };
 
     pub const PageNavigated = struct {

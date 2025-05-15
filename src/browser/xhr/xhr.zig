@@ -20,7 +20,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const DOMError = @import("../netsurf.zig").DOMError;
-const DOMException = @import("../dom/exceptions.zig").DOMException;
 
 const ProgressEvent = @import("progress_event.zig").ProgressEvent;
 const XMLHttpRequestEventTarget = @import("event_target.zig").XMLHttpRequestEventTarget;

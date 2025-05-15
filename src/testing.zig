@@ -371,7 +371,7 @@ pub const JsRunner = struct {
     const HttpClient = @import("http/client.zig").Client;
     const storage = @import("browser/storage/storage.zig");
     const Window = @import("browser/html/window.zig").Window;
-    const Renderer = @import("browser/browser.zig").Renderer;
+    const Renderer = @import("browser/renderer.zig").Renderer;
     const SessionState = @import("browser/env.zig").SessionState;
 
     url: URL,
