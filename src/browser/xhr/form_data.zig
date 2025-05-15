@@ -46,6 +46,8 @@ pub const Interfaces = .{
 // This is much easier to do with an ArrayList than a HashMap, especially given
 // that the FormData could be mutated while iterating.
 // The downside is that most of the normal operations are O(N).
+
+// https://xhr.spec.whatwg.org/#interface-formdata
 pub const FormData = struct {
     entries: std.ArrayListUnmanaged(Entry),
 
