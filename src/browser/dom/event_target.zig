@@ -65,7 +65,18 @@ pub const EventTarget = struct {
         if (opts_) |opts| {
             switch (opts) {
                 .capture => |c| capture = c,
-                .opts => |o| capture = o.capture orelse false,
+                .opts => |o| {
+                    // Done this way so that, for common cases that _only_ set
+                    // capture, i.e. {captrue: true}, it works.
+                    // But for any case that sets any of the other flags, we
+                    // error. If we don't error, this function call would succeed
+                    // but the behavior might be wrong. At this point, it's
+                    // better to be explicit and error.
+                    if (o.once orelse false) return error.NotImplemented;
+                    if (o.signal orelse false) return error.NotImplemented;
+                    if (o.passive orelse false) return error.NotImplemented;
+                    capture = o.capture orelse false;
+                },
             }
         }
 
