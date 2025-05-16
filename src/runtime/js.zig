@@ -894,20 +894,28 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // for this declaration is _a lot_ easier.
             const _JSOBJECT_ID_KLUDGE = true;
 
-            pub fn setIndex(self: JsObject, index: usize, value: anytype) !void {
+            const SetOpts = packed struct(u32) {
+                READ_ONLY: bool = false,
+                DONT_ENUM: bool = false,
+                DONT_DELETE: bool = false,
+                _: u29 = 0,
+            };
+            pub fn setIndex(self: JsObject, index: u32, value: anytype, opts: SetOpts) !void {
                 const key = switch (index) {
                     inline 0...1000 => |i| std.fmt.comptimePrint("{d}", .{i}),
                     else => try std.fmt.allocPrint(self.scope.scope_arena, "{d}", .{index}),
                 };
-                return self.set(key, value);
+                return self.set(key, value, opts);
             }
 
-            pub fn set(self: JsObject, key: []const u8, value: anytype) !void {
+            pub fn set(self: JsObject, key: []const u8, value: anytype, opts: SetOpts) !void {
                 const scope = self.scope;
 
                 const js_key = v8.String.initUtf8(scope.isolate, key);
                 const js_value = try scope.zigValueToJs(value);
-                if (!self.js_obj.setValue(scope.context, js_key, js_value)) {
+
+                const res = self.js_obj.defineOwnProperty(scope.context, js_key.toName(), js_value, @bitCast(opts)) orelse false;
+                if (!res) {
                     return error.FailedToSet;
                 }
             }
@@ -957,12 +965,12 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             const _JSTHIS_ID_KLUDGE = true;
 
-            pub fn setIndex(self: JsThis, index: usize, value: anytype) !void {
-                return self.obj.setIndex(index, value);
+            pub fn setIndex(self: JsThis, index: u32, value: anytype, opts: JsObject.SetOpts) !void {
+                return self.obj.setIndex(index, value, opts);
             }
 
-            pub fn set(self: JsThis, key: []const u8, value: anytype) !void {
-                return self.obj.set(key, value);
+            pub fn set(self: JsThis, key: []const u8, value: anytype, opts: JsObject.SetOpts) !void {
+                return self.obj.set(key, value, opts);
             }
         };
 

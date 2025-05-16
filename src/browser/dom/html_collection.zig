@@ -406,10 +406,16 @@ pub const HTMLCollection = struct {
         for (0..len) |i| {
             const node = try self.item(@intCast(i)) orelse unreachable;
             const e = @as(*parser.Element, @ptrCast(node));
-            try js_this.setIndex(@intCast(i), e);
+            try js_this.setIndex(@intCast(i), e, .{});
 
             if (try item_name(e)) |name| {
-                try js_this.set(name, e);
+                // Even though an entry might have an empty id, the spec says
+                // that namedItem("") should always return null
+                if (name.len > 0) {
+                    // Named fields should not be enumerable (it is defined with
+                    // the LegacyUnenumerableNamedProperties flag.)
+                    try js_this.set(name, e, .{ .DONT_ENUM = true });
+                }
             }
         }
     }

@@ -173,7 +173,7 @@ pub const NodeList = struct {
         const len = self.get_length();
         for (0..len) |i| {
             const node = try self._item(@intCast(i)) orelse unreachable;
-            try js_this.setIndex(i, node);
+            try js_this.setIndex(@intCast(i), node, .{});
         }
     }
 };
