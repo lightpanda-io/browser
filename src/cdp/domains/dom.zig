@@ -22,7 +22,7 @@ const Node = @import("../Node.zig");
 const css = @import("../../browser/dom/css.zig");
 const parser = @import("../../browser/netsurf.zig");
 const dom_node = @import("../../browser/dom/node.zig");
-const DOMRect = @import("../../browser/dom/element.zig").Element.DOMRect;
+const Element = @import("../../browser/dom/element.zig").Element;
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -253,7 +253,7 @@ fn describeNode(cmd: anytype) !void {
 // We are assuming the start/endpoint is not repeated.
 const Quad = [8]f64;
 
-fn rectToQuad(rect: DOMRect) Quad {
+fn rectToQuad(rect: Element.DOMRect) Quad {
     return Quad{
         rect.x,
         rect.y,
@@ -271,7 +271,7 @@ fn scrollIntoViewIfNeeded(cmd: anytype) !void {
         nodeId: ?Node.Id = null,
         backendNodeId: ?u32 = null,
         objectId: ?[]const u8 = null,
-        rect: ?DOMRect = null,
+        rect: ?Element.DOMRect = null,
     })) orelse return error.InvalidParams;
     // Only 1 of nodeId, backendNodeId, objectId may be set, but chrome just takes the first non-null
 
@@ -327,7 +327,7 @@ fn getContentQuads(cmd: anytype) !void {
     // Elements like SVGElement may have multiple quads.
 
     const element = parser.nodeToElement(node._node);
-    const rect = try bc.session.page.?.state.renderer.getRect(element);
+    const rect = try Element._getBoundingClientRect(element, &bc.session.page.?.state);
     const quad = rectToQuad(rect);
 
     return cmd.sendResult(.{ .quads = &.{quad} }, .{});

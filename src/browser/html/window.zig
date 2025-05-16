@@ -307,8 +307,20 @@ test "Browser.HTML.Window" {
     try runner.testCases(&.{
         .{ "innerHeight", "1" },
         .{ "innerWidth", "1" }, // Width is 1 even if there are no elements
-        .{ "document.createElement('div').getClientRects()", null },
-        .{ "document.createElement('div').getClientRects()", null },
+        .{
+            \\ let div1 = document.createElement('div');
+            \\ document.body.appendChild(div1);
+            \\ div1.getClientRects();
+            ,
+            null,
+        },
+        .{
+            \\ let div2 = document.createElement('div');
+            \\ document.body.appendChild(div2);
+            \\ div2.getClientRects();
+            ,
+            null,
+        },
         .{ "innerHeight", "1" },
         .{ "innerWidth", "2" },
     }, .{});

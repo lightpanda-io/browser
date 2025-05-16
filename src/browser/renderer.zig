@@ -50,6 +50,8 @@ const FlatRenderer = struct {
         };
     }
 
+    // The DOMRect is always relative to the viewport, not the document the element belongs to.
+    // Element that are not part of the main document, either detached or in a shadow DOM should not call this function.
     pub fn getRect(self: *FlatRenderer, e: *parser.Element) !Element.DOMRect {
         var elements = &self.elements;
         const gop = try self.positions.getOrPut(self.allocator, @intFromPtr(e));
