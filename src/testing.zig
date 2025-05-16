@@ -412,21 +412,22 @@ pub const JsRunner = struct {
         var html = std.io.fixedBufferStream(opts.html);
         const document = try parser.documentHTMLParse(html.reader(), "UTF-8");
 
-        self.state = .{
-            .arena = arena,
-            .loop = &self.loop,
-            .document = document,
-            .url = &self.url,
-            .renderer = &self.renderer,
-            .cookie_jar = &self.cookie_jar,
-            .http_client = &self.http_client,
-        };
-
         self.window = try Window.create(null, null);
         try self.window.replaceDocument(document);
         try self.window.replaceLocation(.{
             .url = try self.url.toWebApi(arena),
         });
+
+        self.state = .{
+            .arena = arena,
+            .loop = &self.loop,
+            .document = document,
+            .url = &self.url,
+            .window = &self.window,
+            .renderer = &self.renderer,
+            .cookie_jar = &self.cookie_jar,
+            .http_client = &self.http_client,
+        };
 
         self.storage_shelf = storage.Shelf.init(arena);
         self.window.setStorageShelf(&self.storage_shelf);

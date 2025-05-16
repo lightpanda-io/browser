@@ -21,6 +21,7 @@ const std = @import("std");
 const parser = @import("../netsurf.zig");
 const SessionState = @import("../env.zig").SessionState;
 
+const Window = @import("window.zig").Window;
 const Document = @import("../dom/document.zig").Document;
 const NodeList = @import("../dom/nodelist.zig").NodeList;
 const Location = @import("location.zig").Location;
@@ -171,6 +172,10 @@ pub const HTMLDocument = struct {
         return "off";
     }
 
+    pub fn get_defaultView(_: *parser.DocumentHTML, state: *const SessionState) *Window {
+        return state.window;
+    }
+
     // noop legacy functions
     // https://html.spec.whatwg.org/#Document-partial
     pub fn _clear(_: *parser.DocumentHTML) void {}
@@ -266,5 +271,9 @@ test "Browser.HTML.Document" {
         .{ "!!document.all", "false" },
         .{ "document.all(5)", "[object HTMLParagraphElement]" },
         .{ "document.all('content')", "[object HTMLDivElement]" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "document.defaultView.document == document", "true" },
     }, .{});
 }
