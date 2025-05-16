@@ -126,7 +126,7 @@ pub const Session = struct {
         // it isn't null!
         std.debug.assert(self.page != null);
 
-        _ = self.browser.transfer_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
+        defer _ = self.browser.transfer_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
 
         // it's safe to use the transfer arena here, because the page will
         // eventually clone the URL using its own page_arena (after it gets
