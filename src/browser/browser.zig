@@ -38,6 +38,8 @@ pub const Browser = struct {
     allocator: Allocator,
     http_client: *http.Client,
     page_arena: ArenaAllocator,
+    session_arena: ArenaAllocator,
+    transfer_arena: ArenaAllocator,
     notification: *Notification,
 
     pub fn init(app: *App) !Browser {
@@ -57,6 +59,8 @@ pub const Browser = struct {
             .notification = notification,
             .http_client = &app.http_client,
             .page_arena = ArenaAllocator.init(allocator),
+            .session_arena = ArenaAllocator.init(allocator),
+            .transfer_arena = ArenaAllocator.init(allocator),
         };
     }
 
@@ -64,6 +68,8 @@ pub const Browser = struct {
         self.closeSession();
         self.env.deinit();
         self.page_arena.deinit();
+        self.session_arena.deinit();
+        self.transfer_arena.deinit();
         self.notification.deinit();
     }
 
@@ -79,6 +85,7 @@ pub const Browser = struct {
         if (self.session) |*session| {
             session.deinit();
             self.session = null;
+            _ = self.session_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
             if (self.app.config.gc_hints) {
                 self.env.lowMemoryNotification();
             }

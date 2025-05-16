@@ -314,7 +314,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             const allocator = cdp.allocator;
 
             const session = try cdp.browser.newSession();
-            const arena = session.arena.allocator();
+            const arena = session.arena;
 
             const inspector = try cdp.browser.env.newInspector(arena, self);
 

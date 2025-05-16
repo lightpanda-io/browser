@@ -18,7 +18,7 @@
 
 const std = @import("std");
 
-const ArenaAllocator = std.heap.ArenaAllocator;
+const Allocator = std.mem.Allocator;
 
 const Env = @import("env.zig").Env;
 const Page = @import("page.zig").Page;
@@ -37,7 +37,17 @@ pub const Session = struct {
     browser: *Browser,
 
     // Used to create our Inspector and in the BrowserContext.
-    arena: ArenaAllocator,
+    arena: Allocator,
+
+    // The page's arena is unsuitable for data that has to existing while
+    // navigating from one page to another. For example, if we're clicking
+    // on an HREF, the URL exists in the original page (where the click
+    // originated) but also has to exist in the new page.
+    // While we could use the Session's arena, this could accumulate a lot of
+    // memory if we do many navigation events. The `transfer_arena` is meant to
+    // bridge the gap: existing long enough to store any data needed to end one
+    // page and start another.
+    transfer_arena: Allocator,
 
     executor: Env.Executor,
     storage_shed: storage.Shed,
@@ -53,9 +63,10 @@ pub const Session = struct {
         self.* = .{
             .browser = browser,
             .executor = executor,
-            .arena = ArenaAllocator.init(allocator),
+            .arena = browser.session_arena.allocator(),
             .storage_shed = storage.Shed.init(allocator),
             .cookie_jar = storage.CookieJar.init(allocator),
+            .transfer_arena = browser.transfer_arena.allocator(),
         };
     }
 
@@ -63,7 +74,6 @@ pub const Session = struct {
         if (self.page != null) {
             self.removePage();
         }
-        self.arena.deinit();
         self.cookie_jar.deinit();
         self.storage_shed.deinit();
         self.executor.deinit();
@@ -116,12 +126,12 @@ pub const Session = struct {
         // it isn't null!
         std.debug.assert(self.page != null);
 
-        // can't use the page arena, because we're about to reset it
-        // and don't want to use the session's arena, because that'll start to
-        // look like a leak if we navigate from page to page a lot.
-        var buf: [2048]u8 = undefined;
-        var fba = std.heap.FixedBufferAllocator.init(&buf);
-        const url = try self.page.?.url.resolve(fba.allocator(), url_string);
+        _ = self.browser.transfer_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
+
+        // it's safe to use the transfer arena here, because the page will
+        // eventually clone the URL using its own page_arena (after it gets
+        // the final URL, possibly following redirects)
+        const url = try self.page.?.url.resolve(self.transfer_arena, url_string);
 
         self.removePage();
         var page = try self.createPage();
