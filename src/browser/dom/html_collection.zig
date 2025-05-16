@@ -149,17 +149,43 @@ pub fn HTMLCollectionByName(
     };
 }
 
-pub fn HTMLCollectionAll(
-    root: ?*parser.Node,
-    include_root: bool,
-) !HTMLCollection {
-    return HTMLCollection{
-        .root = root,
-        .walker = .{ .walkerDepthFirst = .{} },
-        .matcher = .{ .matchTrue = .{} },
-        .include_root = include_root,
+// HTMLAllCollection is a special type: instances of it are falsy. It's the only
+// object in the WebAPI that behaves like this - in fact, it's even a special
+// case in the JavaScript spec.
+// This is important, because a lot of browser detection rely on this behavior
+// to determine what browser is running.
+
+// It's also possible to use an instance like a function:
+//   document.all(3)
+//   document.all('some_id')
+pub const HTMLAllCollection = struct {
+    pub const prototype = *HTMLCollection;
+
+    proto: HTMLCollection,
+
+    pub const mark_as_undetectable = true;
+
+    pub fn init(root: ?*parser.Node) HTMLAllCollection {
+        return .{ .proto = .{
+            .root = root,
+            .walker = .{ .walkerDepthFirst = .{} },
+            .matcher = .{ .matchTrue = .{} },
+            .include_root = true,
+        } };
+    }
+
+    const CAllAsFunctionArg = union(enum) {
+        index: u32,
+        id: []const u8,
     };
-}
+
+    pub fn jsCallAsFunction(self: *HTMLAllCollection, arg: CAllAsFunctionArg) !?Union {
+        return switch (arg) {
+            .index => |i| self.proto._item(i),
+            .id => |id| self.proto._namedItem(id),
+        };
+    }
+};
 
 pub fn HTMLCollectionChildren(
     root: ?*parser.Node,

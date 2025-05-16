@@ -33,6 +33,7 @@ const Document = @import("document.zig").Document;
 const DocumentType = @import("document_type.zig").DocumentType;
 const DocumentFragment = @import("document_fragment.zig").DocumentFragment;
 const HTMLCollection = @import("html_collection.zig").HTMLCollection;
+const HTMLAllCollection = @import("html_collection.zig").HTMLAllCollection;
 const HTMLCollectionIterator = @import("html_collection.zig").HTMLCollectionIterator;
 const Walker = @import("walker.zig").WalkerDepthFirst;
 
@@ -50,6 +51,7 @@ pub const Interfaces = .{
     DocumentType,
     DocumentFragment,
     HTMLCollection,
+    HTMLAllCollection,
     HTMLCollectionIterator,
     HTML.Interfaces,
 };
