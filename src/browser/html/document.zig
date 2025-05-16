@@ -321,9 +321,15 @@ test "Browser.HTML.Document" {
     }, .{});
 
     try runner.testCases(&.{
-        .{ "document.elementFromPoint(0.5, 0.5)", "null" },
+        .{ "document.elementFromPoint(0.5, 0.5)", "null" }, //  Should these be document?
         .{ "document.elementsFromPoint(0.5, 0.5)", "" },
-        .{ "document.createElement('div').getClientRects()", null },
+        .{
+            \\ let div1 = document.createElement('div');
+            \\ document.body.appendChild(div1);
+            \\ div1.getClientRects();
+            ,
+            null,
+        },
         .{ "document.elementFromPoint(0.5, 0.5)", "[object HTMLDivElement]" },
         .{ "let elems = document.elementsFromPoint(0.5, 0.5)", null },
         .{ "elems.length", "1" },
@@ -331,9 +337,14 @@ test "Browser.HTML.Document" {
     }, .{});
 
     try runner.testCases(&.{
-        .{ "let a = document.createElement('a')", null },
-        .{ "a.href = \"https://lightpanda.io\"", null },
-        .{ "a.getClientRects()", null }, // Note this will be placed after the div of previous test
+        .{
+            \\ let a = document.createElement('a');
+            \\ a.href = "https://lightpanda.io";
+            \\ document.body.appendChild(a);
+            \\ a.getClientRects();
+            , // Note this will be placed after the div of previous test
+            null,
+        },
         .{ "let a_again = document.elementFromPoint(1.5, 0.5)", null },
         .{ "a_again", "[object HTMLAnchorElement]" },
         .{ "a_again.href", "https://lightpanda.io" },

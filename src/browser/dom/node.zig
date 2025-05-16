@@ -41,6 +41,8 @@ const Walker = @import("walker.zig").WalkerDepthFirst;
 const HTML = @import("../html/html.zig");
 const HTMLElem = @import("../html/elements.zig");
 
+const log = std.log.scoped(.node);
+
 // Node interfaces
 pub const Interfaces = .{
     Attr,
@@ -262,13 +264,15 @@ pub const Node = struct {
         return try parser.nodeContains(self, other);
     }
 
-    pub fn _getRootNode(self: *parser.Node) !?HTMLElem.Union {
-        // TODO return this’s shadow-including root if options["composed"] is true
-        const res = try parser.nodeOwnerDocument(self);
-        if (res == null) {
-            return null;
-        }
-        return try HTMLElem.toInterface(HTMLElem.Union, @as(*parser.Element, @ptrCast(res.?)));
+    // Returns itself or ancestor object inheriting from Node.
+    // - An Element inside a standard web page will return an HTMLDocument object representing the entire page (or <iframe>).
+    // - An Element inside a shadow DOM will return the associated ShadowRoot.
+    // - An Element that is not attached to a document or a shadow tree will return the root of the DOM tree it belongs to
+    pub fn _getRootNode(self: *parser.Node, options: ?struct { composed: bool = false }) !Union {
+        if (options) |options_| if (options_.composed) {
+            log.warn("getRootNode composed is not implemented yet", .{});
+        };
+        return try Node.toInterface(try parser.nodeGetRootNode(self));
     }
 
     pub fn _hasChildNodes(self: *parser.Node) !bool {

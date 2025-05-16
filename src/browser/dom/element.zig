@@ -365,14 +365,28 @@ pub const Element = struct {
         return Node.replaceChildren(parser.elementToNode(self), nodes);
     }
 
+    // A DOMRect object providing information about the size of an element and its position relative to the viewport.
+    // Returns a 0 DOMRect object if the element is eventually detached from the main window
     pub fn _getBoundingClientRect(self: *parser.Element, state: *SessionState) !DOMRect {
+        // Since we are lazy rendering we need to do this check. We could store the renderer in a viewport such that it could cache these, but it would require tracking changes.
+        const root = try parser.nodeGetRootNode(parser.elementToNode(self));
+        if (root != parser.documentToNode(parser.documentHTMLToDocument(state.document.?))) {
+            return DOMRect{ .x = 0, .y = 0, .width = 0, .height = 0 };
+        }
         return state.renderer.getRect(self);
     }
 
-    // returns a collection of DOMRect objects that indicate the bounding rectangles for each CSS border box in a client.
-    // We do not render so just always return the element's rect.
-    pub fn _getClientRects(self: *parser.Element, state: *SessionState) ![1]DOMRect {
-        return [_]DOMRect{try state.renderer.getRect(self)};
+    // Returns a collection of DOMRect objects that indicate the bounding rectangles for each CSS border box in a client.
+    // We do not render so it only always return the element's bounding rect.
+    // Returns an empty array if the element is eventually detached from the main window
+    pub fn _getClientRects(self: *parser.Element, state: *SessionState) ![]DOMRect {
+        const root = try parser.nodeGetRootNode(parser.elementToNode(self));
+        if (root != parser.documentToNode(parser.documentHTMLToDocument(state.document.?))) {
+            return &.{};
+        }
+        const heap_ptr = try state.arena.create(DOMRect);
+        heap_ptr.* = try state.renderer.getRect(self);
+        return heap_ptr[0..1];
     }
 
     pub fn get_clientWidth(_: *parser.Element, state: *SessionState) u32 {
@@ -568,6 +582,26 @@ test "Browser.DOM.Element" {
 
         .{ "document.getElementById('para').clientWidth", "2" },
         .{ "document.getElementById('para').clientHeight", "1" },
+
+        .{ "let r4 = document.createElement('div').getBoundingClientRect()", null },
+        .{ "r4.x", "0" },
+        .{ "r4.y", "0" },
+        .{ "r4.width", "0" },
+        .{ "r4.height", "0" },
+
+        // Test setup causes WrongDocument or HierarchyRequest error unlike in chrome/firefox
+        // .{ // An element of another document, even if created from the main document, is not rendered.
+        //     \\ let div5 = document.createElement('div');
+        //     \\ const newDoc = document.implementation.createHTMLDocument("New Document");
+        //     \\ newDoc.body.appendChild(div5);
+        //     \\ let r5 = div5.getBoundingClientRect();
+        //     ,
+        //     null,
+        // },
+        // .{ "r5.x", "0" },
+        // .{ "r5.y", "0" },
+        // .{ "r5.width", "0" },
+        // .{ "r5.height", "0" },
     }, .{});
 
     try runner.testCases(&.{

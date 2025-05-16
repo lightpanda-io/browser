@@ -121,7 +121,7 @@ pub const IntersectionObserverEntry = struct {
 
     // Returns the bounds rectangle of the target element as a DOMRectReadOnly. The bounds are computed as described in the documentation for Element.getBoundingClientRect().
     pub fn get_boundingClientRect(self: *const IntersectionObserverEntry) !Element.DOMRect {
-        return self.state.renderer.getRect(self.target);
+        return Element._getBoundingClientRect(self.target, self.state);
     }
 
     // Returns the ratio of the intersectionRect to the boundingClientRect.
@@ -131,7 +131,7 @@ pub const IntersectionObserverEntry = struct {
 
     // Returns a DOMRectReadOnly representing the target's visible area.
     pub fn get_intersectionRect(self: *const IntersectionObserverEntry) !Element.DOMRect {
-        return self.state.renderer.getRect(self.target);
+        return Element._getBoundingClientRect(self.target, self.state);
     }
 
     // A Boolean value which is true if the target element intersects with the intersection observer's root. If this is true, then, the IntersectionObserverEntry describes a transition into a state of intersection; if it's false, then you know the transition is from intersecting to not-intersecting.
@@ -158,7 +158,7 @@ pub const IntersectionObserverEntry = struct {
             else => return error.InvalidState,
         }
 
-        return try self.state.renderer.getRect(element);
+        return Element._getBoundingClientRect(element, self.state);
     }
 
     // The Element whose intersection with the root changed.
@@ -244,7 +244,9 @@ test "Browser.DOM.IntersectionObserver" {
     // Entry
     try runner.testCases(&.{
         .{ "let entry;", "undefined" },
-        .{ "new IntersectionObserver(entries => { entry = entries[0]; }).observe(document.createElement('div'));", "undefined" },
+        .{ "let div1 = document.createElement('div')", null },
+        .{ "document.body.appendChild(div1);", null },
+        .{ "new IntersectionObserver(entries => { entry = entries[0]; }).observe(div1);", null },
         .{ "entry.boundingClientRect.x;", "0" },
         .{ "entry.intersectionRatio;", "1" },
         .{ "entry.intersectionRect.x;", "0" },
@@ -261,7 +263,8 @@ test "Browser.DOM.IntersectionObserver" {
 
     // Options
     try runner.testCases(&.{
-        .{ "const new_root = document.createElement('span');", "undefined" },
+        .{ "const new_root = document.createElement('span');", null },
+        .{ "document.body.appendChild(new_root);", null },
         .{ "let new_entry;", "undefined" },
         .{
             \\ const new_observer = new IntersectionObserver(
