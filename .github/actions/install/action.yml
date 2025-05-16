@@ -17,11 +17,11 @@ inputs:
   zig-v8:
     description: 'zig v8 version to install'
     required: false
-    default: 'v0.1.21'
+    default: 'v0.1.22'
   v8:
     description: 'v8 version to install'
     required: false
-    default: '11.1.134'
+    default: '13.6.233.8'
   cache-dir:
     description: 'cache dir to use'
     required: false
@@ -59,11 +59,11 @@ runs:
     - name: install v8
       shell: bash
       run: |
-        mkdir -p v8/build/${{inputs.arch}}-${{inputs.os}}/debug/ninja/obj/zig/
-        ln -s ${{ inputs.cache-dir }}/v8/libc_v8.a v8/build/${{inputs.arch}}-${{inputs.os}}/debug/ninja/obj/zig/libc_v8.a
+        mkdir -p v8/out/debug/obj/zig/
+        ln -s ${{ inputs.cache-dir }}/v8/libc_v8.a v8/out/debug/obj/zig/libc_v8.a
 
-        mkdir -p v8/build/${{inputs.arch}}-${{inputs.os}}/release/ninja/obj/zig/
-        ln -s ${{ inputs.cache-dir }}/v8/libc_v8.a v8/build/${{inputs.arch}}-${{inputs.os}}/release/ninja/obj/zig/libc_v8.a
+        mkdir -p v8/out/release/obj/zig/
+        ln -s ${{ inputs.cache-dir }}/v8/libc_v8.a v8/out/release/obj/zig/libc_v8.a
 
     - name: libiconv
       shell: bash
