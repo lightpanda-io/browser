@@ -1151,6 +1151,17 @@ pub fn nodeGetChildNodes(node: *Node) !*NodeList {
     return nlist.?;
 }
 
+pub fn nodeGetRootNode(node: *Node) !*Node {
+    var root = node;
+    while (true) {
+        const parent = try nodeParentNode(root);
+        if (parent) |parent_| {
+            root = parent_;
+        } else break;
+    }
+    return root;
+}
+
 pub fn nodeAppendChild(node: *Node, child: *Node) !*Node {
     var res: ?*Node = undefined;
     const err = nodeVtable(node).dom_node_append_child.?(node, child, &res);
