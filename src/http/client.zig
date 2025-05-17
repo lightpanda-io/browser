@@ -700,6 +700,11 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
         // inside the TLS client, and so we can't deinitialize the tls_client)
         redirect: ?Reader.Redirect = null,
 
+        // There can be cases where we're forced to read the whole body into
+        // memory in order to process it (*cough* CloudFront incorrectly sending
+        // gzipped responses *cough*)
+        full_body: ?std.ArrayListUnmanaged(u8) = null,
+
         const Self = @This();
         const SendQueue = std.DoublyLinkedList([]const u8);
 
@@ -911,8 +916,72 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                     return .done;
                 }
 
+                if (would_be_first) {
+                    if (reader.response.get("content-encoding")) |ce| {
+                        if (std.ascii.eqlIgnoreCase(ce, "gzip") == false) {
+                            self.handleError("unsupported content encoding", error.UnsupportedContentEncoding);
+                            return .done;
+                        }
+                        // Our requests _do not_ include an Accept-Encoding header
+                        // but some servers (e.g. CloudFront) can send gzipped
+                        // responses nonetheless. Zig's compression libraries
+                        // do not work well with our async flow - they expect
+                        // to be able to read(buf) more data as needed, instead
+                        // of having us yield new data as it becomes available.
+                        // If async ever becomes a first class citizen, we could
+                        // expect this problem to go away. But, for now, we're
+                        // going to read the _whole_ body into memory. It makes
+                        // our life a lot easier, but it's still a mess.
+                        self.full_body = .empty;
+                    }
+                }
+
                 const done = result.done;
-                if (result.data != null or done or would_be_first) {
+
+                // see a few lines up, if this isn't null, something decided
+                // we should buffer the entire body into memory.
+                if (self.full_body) |*full_body| {
+                    if (result.data) |chunk| {
+                        full_body.appendSlice(self.request.arena, chunk) catch |err| {
+                            self.handleError("response buffering error", err);
+                            return .done;
+                        };
+                    }
+
+                    // when buffering the body into memory, we only emit it once
+                    // everything is done (because we need to process the body
+                    // as a whole)
+                    if (done) {
+                        // We should probably keep track of _why_ we're buffering
+                        // the body into memory. But, for now, the only possible
+                        // reason is that the response was gzipped. That means
+                        // we need to decompress it.
+                        var fbs = std.io.fixedBufferStream(full_body.items);
+                        var decompressor = std.compress.gzip.decompressor(fbs.reader());
+                        var next = decompressor.next() catch |err| {
+                            self.handleError("decompression error", err);
+                            return .done;
+                        };
+
+                        var first = true;
+                        while (next) |chunk| {
+                            // we need to know if there's another chunk so that
+                            // we know if done should be true or false
+                            next = decompressor.next() catch |err| {
+                                self.handleError("decompression error", err);
+                                return .done;
+                            };
+                            self.handler.onHttpResponse(.{
+                                .data = chunk,
+                                .first = first,
+                                .done = next == null,
+                                .header = reader.response,
+                            }) catch return .done;
+
+                            first = false;
+                        }
+                    }
+                } else if (result.data != null or done or would_be_first) {
                     // If we have data. Or if the request is done. Or if this is the
                     // first time we have a complete header. Emit the chunk.
                     self.handler.onHttpResponse(.{
@@ -1157,7 +1226,7 @@ const SyncHandler = struct {
             // See CompressedReader for an explanation. This isn't great code. Sorry.
             if (reader.response.get("content-encoding")) |ce| {
                 if (std.ascii.eqlIgnoreCase(ce, "gzip") == false) {
-                    log.err("unsupported content encoding '{s}' for: {}", .{ ce, request.request_uri });
+                    log.warn("unsupported content encoding '{s}' for: {}", .{ ce, request.request_uri });
                     return error.UnsupportedContentEncoding;
                 }
 
@@ -2589,6 +2658,28 @@ test "HttpClient: async with body" {
         "_host",          "127.0.0.1",
         "_user-agent",    "Lightpanda/1.0",
         "connection",     "Close",
+    });
+}
+
+test "HttpClient: async with gzip body" {
+    var client = try testClient();
+    defer client.deinit();
+
+    var handler = try CaptureHandler.init();
+    defer handler.deinit();
+
+    const uri = try Uri.parse("HTTP://127.0.0.1:9582/http_client/gzip");
+    var req = try client.request(.GET, &uri);
+    try req.sendAsync(&handler.loop, &handler, .{});
+    try handler.waitUntilDone();
+
+    const res = handler.response;
+    try testing.expectEqual("A new browser built for machines\n", res.body.items);
+    try testing.expectEqual(200, res.status);
+    try res.assertHeaders(&.{
+        "content-length",   "63",
+        "connection",       "close",
+        "content-encoding", "gzip",
     });
 }
 
