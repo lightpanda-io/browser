@@ -1972,9 +1972,16 @@ fn Caller(comptime E: type, comptime State: type) type {
             const params = @typeInfo(F).@"fn".params;
 
             const param = params[index].type.?;
-            if (param != State) {
-                @compileError(std.fmt.comptimePrint("The {d} parameter to {s} must be a {s}. Got: {s}", .{ index, named_function.full_name, @typeName(State), @typeName(param) }));
+            if (param == State) {
+                return;
             }
+
+            if (@typeInfo(State) == .pointer) {
+                if (param == *const @typeInfo(State).pointer.child) {
+                    return;
+                }
+            }
+            @compileError(std.fmt.comptimePrint("The {d} parameter to {s} must be a {s}. Got: {s}", .{ index, named_function.full_name, @typeName(State), @typeName(param) }));
         }
 
         fn handleError(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, err: anyerror, info: anytype) void {

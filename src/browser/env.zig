@@ -44,11 +44,14 @@ pub const JsThis = Env.JsThis;
 pub const JsObject = Env.JsObject;
 pub const Callback = Env.Callback;
 pub const Env = js.Env(*SessionState, WebApis);
-pub const Global = @import("html/window.zig").Window;
+
+const Window = @import("html/window.zig").Window;
+pub const Global = Window;
 
 pub const SessionState = struct {
     loop: *Loop,
     url: *const URL,
+    window: *Window,
     renderer: *Renderer,
     arena: std.mem.Allocator,
     http_client: *HttpClient,
