@@ -25,6 +25,7 @@ const NodeList = @import("nodelist.zig");
 const Node = @import("node.zig");
 const MutationObserver = @import("mutation_observer.zig");
 const IntersectionObserver = @import("intersection_observer.zig");
+const DOMParser = @import("dom_parser.zig").DOMParser;
 
 pub const Interfaces = .{
     DOMException,
@@ -37,4 +38,5 @@ pub const Interfaces = .{
     Node.Interfaces,
     MutationObserver.Interfaces,
     IntersectionObserver.Interfaces,
+    DOMParser,
 };
