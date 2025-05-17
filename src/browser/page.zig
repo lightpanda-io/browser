@@ -638,7 +638,18 @@ pub const Page = struct {
             const src = self.src orelse "inline";
             const res = switch (self.kind) {
                 .javascript => page.scope.exec(body, src),
-                .module => page.scope.module(body, src),
+                .module => blk: {
+                    switch (try page.scope.module(body, src)) {
+                        .value => |v| break :blk v,
+                        .exception => |e| {
+                            log.info("eval module {s}: {s}", .{
+                                src,
+                                try e.exception(page.arena),
+                            });
+                            return error.JsErr;
+                        },
+                    }
+                },
             } catch {
                 if (try try_catch.err(page.arena)) |msg| {
                     log.info("eval script {s}: {s}", .{ src, msg });

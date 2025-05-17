@@ -610,13 +610,12 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             // compile and eval a JS module
             // It doesn't wait for callbacks execution
-            pub fn module(self: *Scope, src: []const u8, name: []const u8) !Value {
+            pub fn module(self: *Scope, src: []const u8, name: []const u8) !union(enum) { value: Value, exception: Exception } {
                 const context = self.context;
                 const m = try compileModule(self.isolate, src, name);
 
                 // instantiate
-                // TODO handle ResolveModuleCallback parameters to load module's
-                // dependencies.
+                // resolveModuleCallback loads module's dependencies.
                 const ok = m.instantiate(context, resolveModuleCallback) catch {
                     return error.ExecutionError;
                 };
@@ -626,8 +625,18 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 }
 
                 // evaluate
-                const value = m.evaluate(context) catch return error.ExecutionError;
-                return self.createValue(value);
+                const value = m.evaluate(context) catch {
+                    return .{ .exception = self.createException(m.getException()) };
+                };
+                return .{ .value = self.createValue(value) };
+            }
+
+            // Wrap a v8.Exception
+            fn createException(self: *const Scope, e: v8.Value) Exception {
+                return .{
+                    .inner = e,
+                    .scope = self,
+                };
             }
 
             // Wrap a v8.Value, largely so that we can provide a convenient
@@ -1132,6 +1141,17 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
         };
 
         pub const RemoteObject = v8.RemoteObject;
+
+        pub const Exception = struct {
+            inner: v8.Value,
+            scope: *const Scope,
+
+            // the caller needs to deinit the string returned
+            pub fn exception(self: Exception, allocator: Allocator) ![]const u8 {
+                const scope = self.scope;
+                return try valueToString(allocator, self.inner, scope.isolate, scope.context);
+            }
+        };
 
         pub const Value = struct {
             value: v8.Value,
