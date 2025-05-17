@@ -642,9 +642,10 @@ pub const Page = struct {
                     switch (try page.scope.module(body, src)) {
                         .value => |v| break :blk v,
                         .exception => |e| {
-                            if (try e.exception(page.arena)) |msg| {
-                                log.info("eval module {s}: {s}", .{ src, msg });
-                            }
+                            log.info("eval module {s}: {s}", .{
+                                src,
+                                try e.exception(page.arena),
+                            });
                             return error.JsErr;
                         },
                     }

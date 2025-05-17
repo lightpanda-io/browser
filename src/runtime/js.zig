@@ -1147,7 +1147,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             scope: *const Scope,
 
             // the caller needs to deinit the string returned
-            pub fn exception(self: Exception, allocator: Allocator) !?[]const u8 {
+            pub fn exception(self: Exception, allocator: Allocator) ![]const u8 {
                 const scope = self.scope;
                 return try valueToString(allocator, self.inner, scope.isolate, scope.context);
             }
