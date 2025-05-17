@@ -29,6 +29,7 @@ const c = @cImport({
 });
 
 const mimalloc = @import("mimalloc.zig");
+const normalizeWhitespace = @import("html/document.zig").normalizeWhitespace;
 
 // init initializes netsurf lib.
 // init starts a mimalloc heap arena for the netsurf session. The caller must
@@ -2152,12 +2153,12 @@ fn parserErr(err: HubbubErr) ParserError!void {
 
 // documentHTMLParseFromStr parses the given HTML string.
 // The caller is responsible for closing the document.
-pub fn documentHTMLParseFromStr(str: []const u8) !*DocumentHTML {
+pub fn documentHTMLParseFromStr(arena: std.mem.Allocator, str: []const u8) !*DocumentHTML {
     var fbs = std.io.fixedBufferStream(str);
-    return try documentHTMLParse(fbs.reader(), "UTF-8");
+    return try documentHTMLParse(arena, fbs.reader(), "UTF-8");
 }
 
-pub fn documentHTMLParse(reader: anytype, enc: ?[:0]const u8) !*DocumentHTML {
+pub fn documentHTMLParse(arena: std.mem.Allocator, reader: anytype, enc: ?[:0]const u8) !*DocumentHTML {
     var parser: ?*c.dom_hubbub_parser = undefined;
     var doc: ?*c.dom_document = undefined;
     var err: c.hubbub_error = undefined;
@@ -2169,7 +2170,11 @@ pub fn documentHTMLParse(reader: anytype, enc: ?[:0]const u8) !*DocumentHTML {
 
     try parseData(parser.?, reader);
 
-    return @as(*DocumentHTML, @ptrCast(doc.?));
+    const html_doc: *DocumentHTML = @ptrCast(doc.?);
+    const old_title = try documentHTMLGetTitle(html_doc);
+    const normalized = try normalizeWhitespace(arena, old_title);
+    try documentHTMLSetTitle(html_doc, normalized);
+    return html_doc;
 }
 
 pub fn documentParseFragmentFromStr(self: *Document, str: []const u8) !*DocumentFragment {

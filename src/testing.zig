@@ -214,11 +214,13 @@ pub const Document = struct {
         parser.deinit();
         try parser.init();
 
+        var arena = std.heap.ArenaAllocator.init(allocator);
+
         var fbs = std.io.fixedBufferStream(html);
-        const html_doc = try parser.documentHTMLParse(fbs.reader(), "utf-8");
+        const html_doc = try parser.documentHTMLParse(arena.allocator(), fbs.reader(), "utf-8");
 
         return .{
-            .arena = std.heap.ArenaAllocator.init(allocator),
+            .arena = arena,
             .doc = parser.documentHTMLToDocument(html_doc),
         };
     }
@@ -410,7 +412,7 @@ pub const JsRunner = struct {
         errdefer self.loop.deinit();
 
         var html = std.io.fixedBufferStream(opts.html);
-        const document = try parser.documentHTMLParse(html.reader(), "UTF-8");
+        const document = try parser.documentHTMLParse(arena, html.reader(), "UTF-8");
 
         self.state = .{
             .arena = arena,

@@ -703,7 +703,7 @@ pub const XMLHttpRequest = struct {
         }
 
         var fbs = std.io.fixedBufferStream(self.response_bytes.items);
-        const doc = parser.documentHTMLParse(fbs.reader(), ccharset) catch {
+        const doc = parser.documentHTMLParse(self.arena, fbs.reader(), ccharset) catch {
             self.response_obj = .{ .Failure = {} };
             return;
         };
