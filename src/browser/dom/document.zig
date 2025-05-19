@@ -41,12 +41,12 @@ pub const Document = struct {
 
     pub fn constructor(state: *const SessionState) !*parser.DocumentHTML {
         const doc = try parser.documentCreateDocument(
-            try parser.documentHTMLGetTitle(state.document.?),
+            try parser.documentHTMLGetTitle(state.window.document.?),
         );
 
         // we have to work w/ document instead of html document.
         const ddoc = parser.documentHTMLToDocument(doc);
-        const ccur = parser.documentHTMLToDocument(state.document.?);
+        const ccur = parser.documentHTMLToDocument(state.window.document.?);
         try parser.documentSetDocumentURI(ddoc, try parser.documentGetDocumentURI(ccur));
         try parser.documentSetInputEncoding(ddoc, try parser.documentGetInputEncoding(ccur));
 

@@ -95,7 +95,6 @@ pub const Page = struct {
             .window_clicked_event_node = .{ .func = windowClicked },
             .state = .{
                 .arena = arena,
-                .document = null,
                 .url = &self.url,
                 .window = &self.window,
                 .renderer = &self.renderer,
@@ -276,9 +275,6 @@ pub const Page = struct {
         );
 
         // https://html.spec.whatwg.org/#read-html
-
-        // update the sessions state
-        self.state.document = html_doc;
 
         // browse the DOM tree to retrieve scripts
         // TODO execute the synchronous scripts during the HTL parsing.

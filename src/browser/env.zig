@@ -56,7 +56,6 @@ pub const SessionState = struct {
     arena: std.mem.Allocator,
     http_client: *HttpClient,
     cookie_jar: *storage.CookieJar,
-    document: ?*parser.DocumentHTML,
 
     // dangerous, but set by the JS framework
     // shorter-lived than the arena above, which

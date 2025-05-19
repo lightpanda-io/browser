@@ -116,7 +116,7 @@ fn run(arena: Allocator, test_file: []const u8, loader: *FileLoader, err_out: *?
     try polyfill.load(arena, runner.scope);
 
     // loop over the scripts.
-    const doc = parser.documentHTMLToDocument(runner.state.document.?);
+    const doc = parser.documentHTMLToDocument(runner.state.window.document.?);
     const scripts = try parser.documentGetElementsByTagName(doc, "script");
     const script_count = try parser.nodeListLength(scripts);
     for (0..script_count) |i| {
