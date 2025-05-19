@@ -228,6 +228,9 @@ pub const HTMLDocument = struct {
         return "";
     }
 
+    // Returns the topmost Element at the specified coordinates (relative to the viewport).
+    // Since LightPanda requires the client to know what they are clicking on we do not return the underlying element at this moment
+    // This can currenty only happen if the first pixel is click without having rendered any element. This will change when css properties are supported.
     // This returns an ElementUnion instead of a *Parser.Element in case the element somehow hasn't passed through the js runtime yet.
     pub fn _elementFromPoint(_: *parser.DocumentHTML, x: f32, y: f32, state: *SessionState) !?ElementUnion {
         const ix: i32 = @intFromFloat(@floor(x));
@@ -237,18 +240,31 @@ pub const HTMLDocument = struct {
         return try Element.toInterface(element);
     }
 
+    // Returns an array of all elements at the specified coordinates (relative to the viewport). The elements are ordered from the topmost to the bottommost box of the viewport.
     pub fn _elementsFromPoint(_: *parser.DocumentHTML, x: f32, y: f32, state: *SessionState) ![]ElementUnion {
         const ix: i32 = @intFromFloat(@floor(x));
         const iy: i32 = @intFromFloat(@floor(y));
         const element = state.renderer.getElementAtPosition(ix, iy) orelse return &.{};
         // TODO if pointer-events set to none the underlying element should be returned (parser.documentGetDocumentElement(self.document);?)
 
-        // We need to return either 0 or 1 item, so we cannot fix the size to [1]*parser.Element
-        // Converting the pointer to a slice []parser.Element is not supported by our framework.
-        // So instead we just need to allocate the pointer to create a slice of 1.
-        const heap_ptr = try state.call_arena.create(ElementUnion);
-        heap_ptr.* = try Element.toInterface(element);
-        return heap_ptr[0..1];
+        var list = try std.ArrayList(ElementUnion).initCapacity(state.call_arena, 3);
+        try list.append(try Element.toInterface(element));
+
+        // Since we are using a flat renderer there is no hierarchy of elements. What we do know is that the element is part of the main document.
+        // Thus we can add the HtmlHtmlElement and it's child HTMLBodyElement to the returned list.
+        // TBD Should we instead return every parent that is an element? Note that a child does not physically need to be overlapping the parent.
+        // Should we do a render pass on demand?
+        const doc_elem = try parser.documentGetDocumentElement(parser.documentHTMLToDocument(state.document.?)) orelse {
+            return list.items;
+        };
+        const body = try parser.documentHTMLBody(state.document.?) orelse {
+            try list.append(try Element.toInterface(doc_elem));
+            return list.items;
+        };
+
+        try list.append(try Element.toInterface(parser.bodyToElement(body)));
+        try list.append(try Element.toInterface(doc_elem));
+        return list.items;
     }
 
     pub fn documentIsLoaded(html_doc: *parser.DocumentHTML, state: *SessionState) !void {
@@ -321,7 +337,7 @@ test "Browser.HTML.Document" {
     }, .{});
 
     try runner.testCases(&.{
-        .{ "document.elementFromPoint(0.5, 0.5)", "null" }, //  Should these be document?
+        .{ "document.elementFromPoint(0.5, 0.5)", "null" }, //  Return null since we only return element s when they have previously been localized
         .{ "document.elementsFromPoint(0.5, 0.5)", "" },
         .{
             \\ let div1 = document.createElement('div');
@@ -332,8 +348,10 @@ test "Browser.HTML.Document" {
         },
         .{ "document.elementFromPoint(0.5, 0.5)", "[object HTMLDivElement]" },
         .{ "let elems = document.elementsFromPoint(0.5, 0.5)", null },
-        .{ "elems.length", "1" },
+        .{ "elems.length", "3" },
         .{ "elems[0]", "[object HTMLDivElement]" },
+        .{ "elems[1]", "[object HTMLBodyElement]" },
+        .{ "elems[2]", "[object HTMLHtmlElement]" },
     }, .{});
 
     try runner.testCases(&.{

@@ -2268,6 +2268,10 @@ pub inline fn documentHTMLBody(doc_html: *DocumentHTML) !?*Body {
     return @as(*Body, @ptrCast(body.?));
 }
 
+pub inline fn bodyToElement(body: *Body) *Element {
+    return @as(*Element, @ptrCast(body));
+}
+
 pub inline fn documentHTMLSetBody(doc_html: *DocumentHTML, elt: ?*ElementHTML) !void {
     const err = documentHTMLVtable(doc_html).set_body.?(doc_html, elt);
     try DOMErr(err);
