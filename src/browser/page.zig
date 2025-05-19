@@ -97,6 +97,7 @@ pub const Page = struct {
                 .arena = arena,
                 .document = null,
                 .url = &self.url,
+                .window = &self.window,
                 .renderer = &self.renderer,
                 .loop = browser.app.loop,
                 .cookie_jar = &session.cookie_jar,
