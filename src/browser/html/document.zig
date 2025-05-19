@@ -310,12 +310,12 @@ test "Browser.HTML.Document" {
         .{ "document.readyState", "loading" },
     }, .{});
 
-    try HTMLDocument.documentIsLoaded(runner.state.document.?, &runner.state);
+    try HTMLDocument.documentIsLoaded(runner.window.document.?, &runner.state);
     try runner.testCases(&.{
         .{ "document.readyState", "interactive" },
     }, .{});
 
-    try HTMLDocument.documentIsComplete(runner.state.document.?, &runner.state);
+    try HTMLDocument.documentIsComplete(runner.window.document.?, &runner.state);
     try runner.testCases(&.{
         .{ "document.readyState", "complete" },
     }, .{});
