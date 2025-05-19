@@ -230,7 +230,7 @@ pub const HTMLDocument = struct {
 
     // Returns the topmost Element at the specified coordinates (relative to the viewport).
     // Since LightPanda requires the client to know what they are clicking on we do not return the underlying element at this moment
-    // This can currenty only happen if the first pixel is click without having rendered any element. This will change when css properties are supported.
+    // This can currenty only happen if the first pixel is clicked without having rendered any element. This will change when css properties are supported.
     // This returns an ElementUnion instead of a *Parser.Element in case the element somehow hasn't passed through the js runtime yet.
     pub fn _elementFromPoint(_: *parser.DocumentHTML, x: f32, y: f32, state: *SessionState) !?ElementUnion {
         const ix: i32 = @intFromFloat(@floor(x));
@@ -247,8 +247,9 @@ pub const HTMLDocument = struct {
         const element = state.renderer.getElementAtPosition(ix, iy) orelse return &.{};
         // TODO if pointer-events set to none the underlying element should be returned (parser.documentGetDocumentElement(self.document);?)
 
-        var list = try std.ArrayList(ElementUnion).initCapacity(state.call_arena, 3);
-        try list.append(try Element.toInterface(element));
+        var list: std.ArrayListUnmanaged(ElementUnion) = .empty;
+        try list.ensureTotalCapacity(state.call_arena, 3);
+        list.appendAssumeCapacity(try Element.toInterface(element));
 
         // Since we are using a flat renderer there is no hierarchy of elements. What we do know is that the element is part of the main document.
         // Thus we can add the HtmlHtmlElement and it's child HTMLBodyElement to the returned list.
@@ -257,13 +258,10 @@ pub const HTMLDocument = struct {
         const doc_elem = try parser.documentGetDocumentElement(parser.documentHTMLToDocument(state.document.?)) orelse {
             return list.items;
         };
-        const body = try parser.documentHTMLBody(state.document.?) orelse {
-            try list.append(try Element.toInterface(doc_elem));
-            return list.items;
-        };
-
-        try list.append(try Element.toInterface(parser.bodyToElement(body)));
-        try list.append(try Element.toInterface(doc_elem));
+        if (try parser.documentHTMLBody(state.document.?)) |body| {
+            list.appendAssumeCapacity(try Element.toInterface(parser.bodyToElement(body)));
+        }
+        list.appendAssumeCapacity(try Element.toInterface(doc_elem));
         return list.items;
     }
 

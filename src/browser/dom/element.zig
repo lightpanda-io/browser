@@ -384,7 +384,7 @@ pub const Element = struct {
         if (root != parser.documentToNode(parser.documentHTMLToDocument(state.document.?))) {
             return &.{};
         }
-        const heap_ptr = try state.arena.create(DOMRect);
+        const heap_ptr = try state.call_arena.create(DOMRect);
         heap_ptr.* = try state.renderer.getRect(self);
         return heap_ptr[0..1];
     }
