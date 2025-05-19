@@ -232,6 +232,15 @@ pub const Window = struct {
         gop.value_ptr.* = callback;
         return timer_id;
     }
+
+    // NOT IMPLEMENTED - This is a dummy implementation that always returns null to deter PlayWright from using this path to solve click.js.
+    // returns an object containing the values of all CSS properties of an element, after applying active stylesheets and resolving any basic computation those values may contain.
+    pub fn _getComputedStyle(_: *Window, element: *parser.Element, pseudo_element: ?[]const u8) !?void {
+        _ = element;
+        _ = pseudo_element;
+        log.warn("Not implemented function getComputedStyle called, null returned", .{});
+        return null;
+    }
 };
 
 const TimerCallback = struct {
