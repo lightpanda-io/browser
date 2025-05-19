@@ -187,7 +187,7 @@ pub const HTMLDocument = struct {
     }
 
     pub fn get_readyState(node: *parser.DocumentHTML, state: *SessionState) ![]const u8 {
-        const self = try state.getNodeWrapper(HTMLDocument, @ptrCast(node));
+        const self = try state.getOrCreateNodeWrapper(HTMLDocument, @ptrCast(node));
         return @tagName(self.ready_state);
     }
 
@@ -266,7 +266,7 @@ pub const HTMLDocument = struct {
     }
 
     pub fn documentIsLoaded(html_doc: *parser.DocumentHTML, state: *SessionState) !void {
-        const self = try state.getNodeWrapper(HTMLDocument, @ptrCast(html_doc));
+        const self = try state.getOrCreateNodeWrapper(HTMLDocument, @ptrCast(html_doc));
         self.ready_state = .interactive;
 
         const evt = try parser.eventCreate();
@@ -277,7 +277,7 @@ pub const HTMLDocument = struct {
     }
 
     pub fn documentIsComplete(html_doc: *parser.DocumentHTML, state: *SessionState) !void {
-        const self = try state.getNodeWrapper(HTMLDocument, @ptrCast(html_doc));
+        const self = try state.getOrCreateNodeWrapper(HTMLDocument, @ptrCast(html_doc));
         self.ready_state = .complete;
     }
 };

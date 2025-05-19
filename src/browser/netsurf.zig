@@ -1303,6 +1303,15 @@ pub inline fn nodeToDocument(node: *Node) *Document {
     return @as(*Document, @ptrCast(node));
 }
 
+// Combination of nodeToElement + elementHTMLGetTagType
+pub fn nodeHTMLGetTagType(node: *Node) !?Tag {
+    if (try nodeType(node) != .element) {
+        return null;
+    }
+    const html_element: *ElementHTML = @ptrCast(node);
+    return try elementHTMLGetTagType(html_element);
+}
+
 // CharacterData
 pub const CharacterData = c.dom_characterdata;
 
@@ -1818,6 +1827,8 @@ pub const Title = c.dom_html_title_element;
 pub const Track = struct { base: *c.dom_html_element };
 pub const UList = c.dom_html_u_list_element;
 pub const Video = struct { base: *c.dom_html_element };
+pub const HTMLCollection = c.dom_html_collection;
+pub const OptionCollection = c.dom_html_options_collection;
 
 // Document Fragment
 pub const DocumentFragment = c.dom_document_fragment;
@@ -2340,4 +2351,161 @@ pub fn documentHTMLGetLocation(T: type, doc: *DocumentHTML) !?*T {
 
 pub fn validateName(name: []const u8) !bool {
     return c._dom_validate_name(try strFromData(name));
+}
+
+// Form
+pub fn formElementSubmit(form: *Form) !void {
+    const err = c.dom_html_form_element_submit(form);
+    try DOMErr(err);
+}
+
+pub fn formElementReset(form: *Form) !void {
+    const err = c.dom_html_form_element_reset(form);
+    try DOMErr(err);
+}
+
+pub fn formGetCollection(form: *Form) !*HTMLCollection {
+    var collection: ?*HTMLCollection = null;
+    const err = c.dom_html_form_element_get_elements(form, &collection);
+    try DOMErr(err);
+    return collection.?;
+}
+
+// TextArea
+pub fn textareaGetValue(textarea: *TextArea) ![]const u8 {
+    var s_: ?*String = null;
+    const err = c.dom_html_text_area_element_get_value(textarea, &s_);
+    try DOMErr(err);
+    const s = s_ orelse return "";
+    return strToData(s);
+}
+
+// Select
+pub fn selectGetOptions(select: *Select) !*OptionCollection {
+    var collection: ?*OptionCollection = null;
+    const err = c.dom__html_select_element_get_options(select, &collection);
+    try DOMErr(err);
+    return collection.?;
+}
+
+pub fn selectGetDisabled(select: *Select) !bool {
+    var disabled: bool = false;
+    const err = c.dom_html_select_element_get_disabled(select, &disabled);
+    try DOMErr(err);
+    return disabled;
+}
+
+pub fn selectSetDisabled(select: *Select, disabled: bool) !void {
+    const err = c.dom_html_select_element_set_disabled(select, disabled);
+    try DOMErr(err);
+}
+
+pub fn selectGetMultiple(select: *Select) !bool {
+    var multiple: bool = false;
+    const err = c.dom_html_select_element_get_multiple(select, &multiple);
+    try DOMErr(err);
+    return multiple;
+}
+
+pub fn selectSetMultiple(select: *Select, multiple: bool) !void {
+    const err = c.dom_html_select_element_set_multiple(select, multiple);
+    try DOMErr(err);
+}
+
+pub fn selectGetName(select: *Select) ![]const u8 {
+    var s_: ?*String = null;
+    const err = c.dom_html_select_element_get_name(select, &s_);
+    try DOMErr(err);
+    const s = s_ orelse return "";
+    return strToData(s);
+}
+
+pub fn selectSetName(select: *Select, name: []const u8) !void {
+    const err = c.dom_html_select_element_set_name(select, try strFromData(name));
+    try DOMErr(err);
+}
+
+pub fn selectGetLength(select: *Select) !u32 {
+    var length: u32 = 0;
+    const err = c.dom_html_select_element_get_length(select, &length);
+    try DOMErr(err);
+    return length;
+}
+
+pub fn selectGetSelectedIndex(select: *Select) !i32 {
+    var index: i32 = 0;
+    const err = c.dom_html_select_element_get_selected_index(select, &index);
+    try DOMErr(err);
+    return index;
+}
+
+pub fn selectSetSelectedIndex(select: *Select, index: i32) !void {
+    const err = c.dom_html_select_element_set_selected_index(select, index);
+    try DOMErr(err);
+}
+
+pub fn selectGetForm(select: *Select) !?*Form {
+    var form: ?*Form = null;
+    const err = c.dom_html_select_element_get_form(select, &form);
+    try DOMErr(err);
+    return form;
+}
+
+// OptionCollection
+pub fn optionCollectionGetLength(collection: *OptionCollection) !u32 {
+    var len: u32 = 0;
+    const err = c.dom_html_options_collection_get_length(collection, &len);
+    try DOMErr(err);
+    return len;
+}
+
+pub fn optionCollectionItem(collection: *OptionCollection, index: u32) !*Option {
+    var node: ?*NodeExternal = undefined;
+    const err = c.dom_html_options_collection_item(collection, index, &node);
+    try DOMErr(err);
+    return @ptrCast(node.?);
+}
+
+// Option
+pub fn optionGetValue(option: *Option) ![]const u8 {
+    var s_: ?*String = null;
+    const err = c.dom_html_option_element_get_value(option, &s_);
+    try DOMErr(err);
+    const s = s_ orelse return "";
+    return strToData(s);
+}
+
+pub fn optionGetSelected(option: *Option) !bool {
+    var selected: bool = false;
+    const err = c.dom_html_option_element_get_selected(option, &selected);
+    try DOMErr(err);
+    return selected;
+}
+
+pub fn optionSetSelected(option: *Option, selected: bool) !void {
+    const err = c.dom_html_option_element_set_selected(option, selected);
+    try DOMErr(err);
+}
+
+// Input
+pub fn inputGetChecked(input: *Input) !bool {
+    var b: bool = false;
+    const err = c.dom_html_input_element_get_checked(input, &b);
+    try DOMErr(err);
+    return b;
+}
+
+// HtmlCollection
+pub fn htmlCollectionGetLength(collection: *HTMLCollection) !u32 {
+    var len: u32 = 0;
+    const err = c.dom_html_collection_get_length(collection, &len);
+    try DOMErr(err);
+    return len;
+}
+
+pub fn htmlCollectionItem(collection: *HTMLCollection, index: u32) !*Node {
+    var node: ?*NodeExternal = undefined;
+    const err = c.dom_html_collection_item(collection, index, &node);
+    try DOMErr(err);
+    return @ptrCast(node.?);
 }

@@ -47,7 +47,6 @@ pub const Interfaces = .{
     HTMLEmbedElement,
     HTMLFieldSetElement,
     HTMLFontElement,
-    HTMLFormElement,
     HTMLFrameElement,
     HTMLFrameSetElement,
     HTMLHRElement,
@@ -77,7 +76,6 @@ pub const Interfaces = .{
     HTMLProgressElement,
     HTMLQuoteElement,
     HTMLScriptElement,
-    HTMLSelectElement,
     HTMLSourceElement,
     HTMLSpanElement,
     HTMLStyleElement,
@@ -95,6 +93,9 @@ pub const Interfaces = .{
     HTMLUListElement,
     HTMLVideoElement,
     CSSProperties,
+
+    @import("form.zig").HTMLFormElement,
+    @import("select.zig").HTMLSelectElement,
 };
 
 pub const Union = generate.Union(Interfaces);
@@ -516,12 +517,6 @@ pub const HTMLFontElement = struct {
     pub const subtype = .node;
 };
 
-pub const HTMLFormElement = struct {
-    pub const Self = parser.Form;
-    pub const prototype = *HTMLElement;
-    pub const subtype = .node;
-};
-
 pub const HTMLFrameElement = struct {
     pub const Self = parser.Frame;
     pub const prototype = *HTMLElement;
@@ -804,12 +799,6 @@ pub const HTMLScriptElement = struct {
 
         return try parser.elementRemoveAttribute(parser.scriptToElt(self), "nomodule");
     }
-};
-
-pub const HTMLSelectElement = struct {
-    pub const Self = parser.Select;
-    pub const prototype = *HTMLElement;
-    pub const subtype = .node;
 };
 
 pub const HTMLSourceElement = struct {
