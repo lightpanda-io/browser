@@ -1274,6 +1274,14 @@ pub fn nodeGetPrefix(node: *Node) !?[]const u8 {
     return strToData(s.?);
 }
 
+pub fn nodeGetEmbedderData(node: *Node) ?*anyopaque {
+    return c._dom_node_get_embedder_data(node);
+}
+
+pub fn nodeSetEmbedderData(node: *Node, data: *anyopaque) void {
+    c._dom_node_set_embedder_data(node, data);
+}
+
 // nodeToElement is an helper to convert a node to an element.
 pub inline fn nodeToElement(node: *Node) *Element {
     return @as(*Element, @ptrCast(node));
