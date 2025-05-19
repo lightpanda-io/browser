@@ -61,7 +61,10 @@ test "Browser.DOM.Implementation" {
     try runner.testCases(&.{
         .{ "let impl = document.implementation", "undefined" },
         .{ "impl.createHTMLDocument();", "[object HTMLDocument]" },
-        .{ "impl.createHTMLDocument('foo');", "[object HTMLDocument]" },
+        .{ "const doc = impl.createHTMLDocument('foo');", "undefined" },
+        .{ "doc", "[object HTMLDocument]" },
+        .{ "doc.title", "foo" },
+        .{ "doc.body", "[object HTMLBodyElement]" },
         .{ "impl.createDocument(null, 'foo');", "[object Document]" },
         .{ "impl.createDocumentType('foo', 'bar', 'baz')", "[object DocumentType]" },
         .{ "impl.hasFeature()", "true" },

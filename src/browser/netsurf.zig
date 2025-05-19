@@ -1920,7 +1920,6 @@ pub inline fn domImplementationCreateHTMLDocument(title: ?[]const u8) !*Document
     _ = try nodeAppendChild(elementToNode(html), elementToNode(head));
 
     if (title) |t| {
-        try documentHTMLSetTitle(doc_html, t);
         const htitle = try documentCreateElement(doc, "title");
         const txt = try documentCreateTextNode(doc, t);
         _ = try nodeAppendChild(elementToNode(htitle), @as(*Node, @ptrCast(txt)));
