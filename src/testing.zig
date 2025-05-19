@@ -421,7 +421,6 @@ pub const JsRunner = struct {
         self.state = .{
             .arena = arena,
             .loop = &self.loop,
-            .document = document,
             .url = &self.url,
             .window = &self.window,
             .renderer = &self.renderer,
