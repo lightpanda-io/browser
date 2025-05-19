@@ -30,6 +30,9 @@ const css = @import("css.zig");
 
 const Element = @import("element.zig").Element;
 const ElementUnion = @import("element.zig").Union;
+const TreeWalker = @import("tree_walker.zig").TreeWalker;
+
+const Env = @import("../env.zig").Env;
 
 const DOMImplementation = @import("implementation.zig").DOMImplementation;
 
@@ -237,6 +240,10 @@ pub const Document = struct {
 
     pub fn _replaceChildren(self: *parser.Document, nodes: []const Node.NodeOrText) !void {
         return Node.replaceChildren(parser.documentToNode(self), nodes);
+    }
+
+    pub fn _createTreeWalker(_: *parser.Document, root: *parser.Node, what_to_show: ?u32, filter: ?Env.Callback) TreeWalker {
+        return TreeWalker.init(root, what_to_show, filter);
     }
 };
 
