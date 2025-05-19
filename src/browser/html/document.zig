@@ -36,6 +36,14 @@ pub const HTMLDocument = struct {
     pub const prototype = *Document;
     pub const subtype = .node;
 
+    ready_state: ReadyState = .loading,
+
+    const ReadyState = enum {
+        loading,
+        interactive,
+        complete,
+    };
+
     // JS funcs
     // --------
 
@@ -176,6 +184,11 @@ pub const HTMLDocument = struct {
         return state.window;
     }
 
+    pub fn get_readyState(node: *parser.DocumentHTML, state: *SessionState) ![]const u8 {
+        const self = try state.getNodeWrapper(HTMLDocument, @ptrCast(node));
+        return @tagName(self.ready_state);
+    }
+
     // noop legacy functions
     // https://html.spec.whatwg.org/#Document-partial
     pub fn _clear(_: *parser.DocumentHTML) void {}
@@ -211,6 +224,22 @@ pub const HTMLDocument = struct {
     }
     pub fn set_bgColor(_: *parser.DocumentHTML, _: []const u8) []const u8 {
         return "";
+    }
+
+    pub fn documentIsLoaded(html_doc: *parser.DocumentHTML, state: *SessionState) !void {
+        const self = try state.getNodeWrapper(HTMLDocument, @ptrCast(html_doc));
+        self.ready_state = .interactive;
+
+        const evt = try parser.eventCreate();
+        defer parser.eventDestroy(evt);
+
+        try parser.eventInit(evt, "DOMContentLoaded", .{ .bubbles = true, .cancelable = true });
+        _ = try parser.eventTargetDispatchEvent(parser.toEventTarget(parser.DocumentHTML, html_doc), evt);
+    }
+
+    pub fn documentIsComplete(html_doc: *parser.DocumentHTML, state: *SessionState) !void {
+        const self = try state.getNodeWrapper(HTMLDocument, @ptrCast(html_doc));
+        self.ready_state = .complete;
     }
 };
 
@@ -275,5 +304,19 @@ test "Browser.HTML.Document" {
 
     try runner.testCases(&.{
         .{ "document.defaultView.document == document", "true" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "document.readyState", "loading" },
+    }, .{});
+
+    try HTMLDocument.documentIsLoaded(runner.state.document.?, &runner.state);
+    try runner.testCases(&.{
+        .{ "document.readyState", "interactive" },
+    }, .{});
+
+    try HTMLDocument.documentIsComplete(runner.state.document.?, &runner.state);
+    try runner.testCases(&.{
+        .{ "document.readyState", "complete" },
     }, .{});
 }

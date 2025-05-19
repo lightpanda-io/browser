@@ -31,6 +31,7 @@ const Window = @import("html/window.zig").Window;
 const Walker = @import("dom/walker.zig").WalkerDepthFirst;
 const Env = @import("env.zig").Env;
 const Loop = @import("../runtime/loop.zig").Loop;
+const HTMLDocument = @import("html/document.zig").HTMLDocument;
 
 const URL = @import("../url.zig").URL;
 
@@ -351,16 +352,11 @@ pub const Page = struct {
             self.evalScript(&s) catch |err| log.warn("evaljs: {any}", .{err});
             try parser.documentHTMLSetCurrentScript(html_doc, null);
         }
-
         // dispatch DOMContentLoaded before the transition to "complete",
         // at the point where all subresources apart from async script elements
         // have loaded.
         // https://html.spec.whatwg.org/#reporting-document-loading-status
-        const evt = try parser.eventCreate();
-        defer parser.eventDestroy(evt);
-
-        try parser.eventInit(evt, "DOMContentLoaded", .{ .bubbles = true, .cancelable = true });
-        _ = try parser.eventTargetDispatchEvent(parser.toEventTarget(parser.DocumentHTML, html_doc), evt);
+        try HTMLDocument.documentIsLoaded(html_doc, &self.state);
 
         // eval async scripts.
         for (async_scripts.items) |s| {
@@ -369,9 +365,7 @@ pub const Page = struct {
             try parser.documentHTMLSetCurrentScript(html_doc, null);
         }
 
-        // TODO wait for async scripts
-
-        // TODO set document.readyState to complete
+        try HTMLDocument.documentIsComplete(html_doc, &self.state);
 
         // dispatch window.load event
         const loadevt = try parser.eventCreate();
