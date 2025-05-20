@@ -44,7 +44,7 @@ pub const Window = struct {
     // Extend libdom event target for pure zig struct.
     base: parser.EventTargetTBase = parser.EventTargetTBase{},
 
-    document: ?*parser.DocumentHTML = null,
+    document: *parser.DocumentHTML,
     target: []const u8 = "",
     history: History = .{},
     location: Location = .{},
@@ -60,7 +60,13 @@ pub const Window = struct {
     performance: Performance,
 
     pub fn create(target: ?[]const u8, navigator: ?Navigator) !Window {
+        var fbs = std.io.fixedBufferStream("");
+        const html_doc = try parser.documentHTMLParse(fbs.reader(), "utf-8");
+        const doc = parser.documentHTMLToDocument(html_doc);
+        try parser.documentSetDocumentURI(doc, "about:blank");
+
         return .{
+            .document = html_doc,
             .target = target orelse "",
             .navigator = navigator orelse .{},
             .performance = .{ .time_origin = try std.time.Timer.start() },
@@ -69,9 +75,7 @@ pub const Window = struct {
 
     pub fn replaceLocation(self: *Window, loc: Location) !void {
         self.location = loc;
-        if (self.document) |doc| {
-            try parser.documentHTMLSetLocation(Location, doc, &self.location);
-        }
+        try parser.documentHTMLSetLocation(Location, self.document, &self.location);
     }
 
     pub fn replaceDocument(self: *Window, doc: *parser.DocumentHTML) !void {

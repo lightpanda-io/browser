@@ -41,7 +41,7 @@ pub const ProcessingInstruction = struct {
     // a simple workaround.
     pub fn _cloneNode(self: *parser.ProcessingInstruction, _: ?bool, state: *SessionState) !*parser.ProcessingInstruction {
         return try parser.documentCreateProcessingInstruction(
-            @ptrCast(state.window.document.?),
+            @ptrCast(state.window.document),
             try get_target(self),
             (try get_data(self)) orelse "",
         );

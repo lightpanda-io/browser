@@ -30,7 +30,7 @@ pub const Comment = struct {
 
     pub fn constructor(data: ?[]const u8, state: *const SessionState) !*parser.Comment {
         return parser.documentCreateComment(
-            parser.documentHTMLToDocument(state.window.document.?),
+            parser.documentHTMLToDocument(state.window.document),
             data orelse "",
         );
     }
