@@ -34,7 +34,7 @@ pub const Text = struct {
 
     pub fn constructor(data: ?[]const u8, state: *const SessionState) !*parser.Text {
         return parser.documentCreateTextNode(
-            parser.documentHTMLToDocument(state.window.document.?),
+            parser.documentHTMLToDocument(state.window.document),
             data orelse "",
         );
     }

@@ -29,7 +29,7 @@ pub const DocumentFragment = struct {
 
     pub fn constructor(state: *const SessionState) !*parser.DocumentFragment {
         return parser.documentCreateDocumentFragment(
-            parser.documentHTMLToDocument(state.window.document.?),
+            parser.documentHTMLToDocument(state.window.document),
         );
     }
 

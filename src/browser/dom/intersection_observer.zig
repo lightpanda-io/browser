@@ -50,7 +50,7 @@ pub const IntersectionObserver = struct {
     // new IntersectionObserver(callback, options) [not supported yet]
     pub fn constructor(callback: Env.Callback, options_: ?IntersectionObserverOptions, state: *SessionState) !IntersectionObserver {
         var options = IntersectionObserverOptions{
-            .root = parser.documentToNode(parser.documentHTMLToDocument(state.window.document.?)),
+            .root = parser.documentToNode(parser.documentHTMLToDocument(state.window.document)),
             .rootMargin = "0px 0px 0px 0px",
             .threshold = &.{0.0},
         };
@@ -142,7 +142,7 @@ pub const IntersectionObserverEntry = struct {
     // Returns a DOMRectReadOnly for the intersection observer's root.
     pub fn get_rootBounds(self: *const IntersectionObserverEntry) !Element.DOMRect {
         const root = self.options.root.?;
-        if (@intFromPtr(root) == @intFromPtr(self.state.window.document.?)) {
+        if (@intFromPtr(root) == @intFromPtr(self.state.window.document)) {
             return self.state.renderer.boundingRect();
         }
 

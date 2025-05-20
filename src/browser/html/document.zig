@@ -255,10 +255,10 @@ pub const HTMLDocument = struct {
         // Thus we can add the HtmlHtmlElement and it's child HTMLBodyElement to the returned list.
         // TBD Should we instead return every parent that is an element? Note that a child does not physically need to be overlapping the parent.
         // Should we do a render pass on demand?
-        const doc_elem = try parser.documentGetDocumentElement(parser.documentHTMLToDocument(state.window.document.?)) orelse {
+        const doc_elem = try parser.documentGetDocumentElement(parser.documentHTMLToDocument(state.window.document)) orelse {
             return list.items;
         };
-        if (try parser.documentHTMLBody(state.window.document.?)) |body| {
+        if (try parser.documentHTMLBody(state.window.document)) |body| {
             list.appendAssumeCapacity(try Element.toInterface(parser.bodyToElement(body)));
         }
         list.appendAssumeCapacity(try Element.toInterface(doc_elem));
@@ -383,12 +383,12 @@ test "Browser.HTML.Document" {
         .{ "document.readyState", "loading" },
     }, .{});
 
-    try HTMLDocument.documentIsLoaded(runner.window.document.?, &runner.state);
+    try HTMLDocument.documentIsLoaded(runner.window.document, &runner.state);
     try runner.testCases(&.{
         .{ "document.readyState", "interactive" },
     }, .{});
 
-    try HTMLDocument.documentIsComplete(runner.window.document.?, &runner.state);
+    try HTMLDocument.documentIsComplete(runner.window.document, &runner.state);
     try runner.testCases(&.{
         .{ "document.readyState", "complete" },
     }, .{});

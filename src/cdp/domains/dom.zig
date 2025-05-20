@@ -59,7 +59,7 @@ fn getDocument(cmd: anytype) !void {
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
-    const doc = page.doc orelse return error.DocumentNotLoaded;
+    const doc = parser.documentHTMLToDocument(page.window.document);
 
     const node = try bc.node_registry.register(parser.documentToNode(doc));
     return cmd.sendResult(.{ .root = bc.nodeWriter(node, .{}) }, .{});
@@ -74,7 +74,7 @@ fn performSearch(cmd: anytype) !void {
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
-    const doc = page.doc orelse return error.DocumentNotLoaded;
+    const doc = parser.documentHTMLToDocument(page.window.document);
 
     const allocator = cmd.cdp.allocator;
     var list = try css.querySelectorAll(allocator, parser.documentToNode(doc), params.query);

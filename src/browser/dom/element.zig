@@ -370,7 +370,7 @@ pub const Element = struct {
     pub fn _getBoundingClientRect(self: *parser.Element, state: *SessionState) !DOMRect {
         // Since we are lazy rendering we need to do this check. We could store the renderer in a viewport such that it could cache these, but it would require tracking changes.
         const root = try parser.nodeGetRootNode(parser.elementToNode(self));
-        if (root != parser.documentToNode(parser.documentHTMLToDocument(state.window.document.?))) {
+        if (root != parser.documentToNode(parser.documentHTMLToDocument(state.window.document))) {
             return DOMRect{ .x = 0, .y = 0, .width = 0, .height = 0 };
         }
         return state.renderer.getRect(self);
@@ -381,7 +381,7 @@ pub const Element = struct {
     // Returns an empty array if the element is eventually detached from the main window
     pub fn _getClientRects(self: *parser.Element, state: *SessionState) ![]DOMRect {
         const root = try parser.nodeGetRootNode(parser.elementToNode(self));
-        if (root != parser.documentToNode(parser.documentHTMLToDocument(state.window.document.?))) {
+        if (root != parser.documentToNode(parser.documentHTMLToDocument(state.window.document))) {
             return &.{};
         }
         const heap_ptr = try state.call_arena.create(DOMRect);

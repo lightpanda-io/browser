@@ -60,8 +60,6 @@ pub const Page = struct {
     // Serves are the root object of our JavaScript environment
     window: Window,
 
-    doc: ?*parser.Document,
-
     // The URL of the page
     url: URL,
 
@@ -87,7 +85,6 @@ pub const Page = struct {
         self.* = .{
             .window = try Window.create(null, null),
             .arena = arena,
-            .doc = null,
             .raw_data = null,
             .url = URL.empty,
             .session = session,
@@ -121,15 +118,14 @@ pub const Page = struct {
 
     // dump writes the page content into the given file.
     pub fn dump(self: *const Page, out: std.fs.File) !void {
-        // if no HTML document pointer available, dump the data content only.
-        if (self.doc == null) {
-            // no data loaded, nothing to do.
-            if (self.raw_data == null) return;
-            return try out.writeAll(self.raw_data.?);
+        if (self.raw_data) |raw_data| {
+            // raw_data was set if the document was not HTML, dump the data content only.
+            return try out.writeAll(raw_data);
         }
 
         // if the page has a pointer to a document, dumps the HTML.
-        try Dump.writeHTML(self.doc.?, out);
+        const doc = parser.documentHTMLToDocument(self.window.document);
+        try Dump.writeHTML(doc, out);
     }
 
     pub fn fetchModuleSource(ctx: *anyopaque, specifier: []const u8) !?[]const u8 {
@@ -187,7 +183,7 @@ pub const Page = struct {
             try self.loadHTMLDoc(fbs.reader(), "utf-8");
             // We do not processHTMLDoc here as we know we don't have any scripts
             // This assumption may be false when CDP Page.addScriptToEvaluateOnNewDocument is implemented
-            try HTMLDocument.documentIsComplete(self.window.document.?, &self.state);
+            try HTMLDocument.documentIsComplete(self.window.document, &self.state);
             return;
         }
 
@@ -229,6 +225,7 @@ pub const Page = struct {
         } orelse .unknown;
 
         if (mime.isHTML()) {
+            self.raw_data = null;
             try self.loadHTMLDoc(&response, mime.charset orelse "utf-8");
             try self.processHTMLDoc();
         } else {
@@ -256,9 +253,6 @@ pub const Page = struct {
         const html_doc = try parser.documentHTMLParse(reader, ccharset);
         const doc = parser.documentHTMLToDocument(html_doc);
 
-        // save a document's pointer in the page.
-        self.doc = doc;
-
         // inject the URL to the document including the fragment.
         try parser.documentSetDocumentURI(doc, self.url.raw);
 
@@ -270,8 +264,8 @@ pub const Page = struct {
     }
 
     fn processHTMLDoc(self: *Page) !void {
-        const doc = self.doc.?;
-        const html_doc = self.window.document.?;
+        const html_doc = self.window.document;
+        const doc = parser.documentHTMLToDocument(html_doc);
 
         const document_element = (try parser.documentGetDocumentElement(doc)) orelse return error.DocumentElementError;
         try parser.eventTargetAddEventListener(
