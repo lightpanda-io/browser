@@ -18,7 +18,7 @@ Lightpanda is the open-source browser made for headless usage:
 
 - Javascript execution
 - Support of Web APIs (partial, WIP)
-- Compatible with Playwright, Puppeteer through CDP (WIP)
+- Compatible with Playwright[^1], Puppeteer through CDP (WIP)
 
 Fast web automation for AI agents, LLM training, scraping and testing:
 
@@ -35,6 +35,9 @@ Fast web automation for AI agents, LLM training, scraping and testing:
 
 _Puppeteer requesting 100 pages from a local website on a AWS EC2 m5.large instance.
 See [benchmark details](https://github.com/lightpanda-io/demo)._
+
+[^1]: **Playwright support disclaimer:**  
+Due to the nature of Playwright, a script that works with the current version of the browser may not function correctly with a future version. Playwright uses an intermediate JavaScript layer that selects an execution strategy based on the browser's available features. If Lightpanda adds a new [Web API](https://developer.mozilla.org/en-US/docs/Web/API), Playwright may choose to execute different code for the same script. This new code path could attempt to use features that are not yet implemented. Lightpanda makes an effort to add compatibility tests, but we can't cover all scenarios. If you encounter an issue, please create a [GitHub issue](https://github.com/lightpanda-io/browser/issues) and include the last known working version of the script.
 
 ## Quick start
 
