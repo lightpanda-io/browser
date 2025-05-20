@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const build_info = @import("build_info");
+const build_config = @import("build_config");
 
 const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
@@ -151,7 +151,7 @@ const LightPandaEvent = struct {
         try writer.write(builtin.cpu.arch);
 
         try writer.objectField("version");
-        try writer.write(build_info.git_commit);
+        try writer.write(build_config.git_commit);
 
         try writer.objectField("event");
         try writer.write(@tagName(std.meta.activeTag(self.event)));

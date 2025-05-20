@@ -647,11 +647,7 @@ pub const Page = struct {
                 }
                 return error.JsErr;
             };
-
-            if (builtin.mode == .Debug) {
-                const msg = try res.toString(page.arena);
-                log.debug("eval script {s}: {s}", .{ src, msg });
-            }
+            _ = res;
 
             if (self.onload) |onload| {
                 _ = page.scope.exec(onload, "script_on_load") catch {
