@@ -31,6 +31,8 @@ pub fn processMessage(cmd: anytype) !void {
         performSearch,
         getSearchResults,
         discardSearchResults,
+        querySelector,
+        querySelectorAll,
         resolveNode,
         describeNode,
         scrollIntoViewIfNeeded,
@@ -43,6 +45,8 @@ pub fn processMessage(cmd: anytype) !void {
         .performSearch => return performSearch(cmd),
         .getSearchResults => return getSearchResults(cmd),
         .discardSearchResults => return discardSearchResults(cmd),
+        .querySelector => return querySelector(cmd),
+        .querySelectorAll => return querySelectorAll(cmd),
         .resolveNode => return resolveNode(cmd),
         .describeNode => return describeNode(cmd),
         .scrollIntoViewIfNeeded => return scrollIntoViewIfNeeded(cmd),
@@ -186,6 +190,61 @@ fn getSearchResults(cmd: anytype) !void {
     if (params.toIndex > node_ids.len) return error.BadToIndex;
 
     return cmd.sendResult(.{ .nodeIds = node_ids[params.fromIndex..params.toIndex] }, .{});
+}
+
+fn querySelector(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        nodeId: Node.Id,
+        selector: []const u8,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse return error.UnknownNode;
+
+    const selected_node = try css.querySelector(
+        cmd.arena,
+        node._node,
+        params.selector,
+    ) orelse return error.NodeNotFoundForGivenId;
+
+    const registered_node = try bc.node_registry.register(selected_node);
+
+    // Dispatch setChildNodesEvents to inform the client of the subpart of node tree covering the results.
+    var array = [1]*parser.Node{selected_node};
+    try dispatchSetChildNodes(cmd, array[0..]);
+
+    return cmd.sendResult(.{
+        .nodeId = registered_node.id,
+    }, .{});
+}
+
+fn querySelectorAll(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        nodeId: Node.Id,
+        selector: []const u8,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse return error.UnknownNode;
+
+    const arena = cmd.arena;
+    var selected_nodes = try css.querySelectorAll(arena, node._node, params.selector);
+    defer selected_nodes.deinit(arena);
+
+    const nodes = selected_nodes.nodes.items;
+    const node_ids = try arena.alloc(Node.Id, nodes.len);
+    for (nodes, node_ids) |selected_node, *node_id| {
+        node_id.* = (try bc.node_registry.register(selected_node)).id;
+    }
+
+    // Dispatch setChildNodesEvents to inform the client of the subpart of node tree covering the results.
+    try dispatchSetChildNodes(cmd, nodes);
+
+    return cmd.sendResult(.{
+        .nodeIds = node_ids,
+    }, .{});
 }
 
 fn resolveNode(cmd: anytype) !void {
@@ -398,4 +457,79 @@ test "cdp.dom: search flow" {
         .method = "DOM.getSearchResults",
         .params = .{ .searchId = "0", .fromIndex = 0, .toIndex = 1 },
     }));
+}
+
+test "cdp.dom: querySelector unknown search id" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .html = "<p>1</p> <p>2</p>" });
+
+    try testing.expectError(error.UnknownNode, ctx.processMessage(.{
+        .id = 9,
+        .method = "DOM.querySelector",
+        .params = .{ .nodeId = 99, .selector = "" },
+    }));
+    try testing.expectError(error.UnknownNode, ctx.processMessage(.{
+        .id = 9,
+        .method = "DOM.querySelectorAll",
+        .params = .{ .nodeId = 99, .selector = "" },
+    }));
+}
+
+test "cdp.dom: querySelector Node not found" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .html = "<p>1</p> <p>2</p>" });
+
+    try ctx.processMessage(.{ // Hacky way to make sure nodeId 0 exists in the registry
+        .id = 3,
+        .method = "DOM.performSearch",
+        .params = .{ .query = "p" },
+    });
+    try ctx.expectSentResult(.{ .searchId = "0", .resultCount = 2 }, .{ .id = 3 });
+
+    try testing.expectError(error.NodeNotFoundForGivenId, ctx.processMessage(.{
+        .id = 4,
+        .method = "DOM.querySelector",
+        .params = .{ .nodeId = 0, .selector = "a" },
+    }));
+
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "DOM.querySelectorAll",
+        .params = .{ .nodeId = 0, .selector = "a" },
+    });
+    try ctx.expectSentResult(.{ .nodeIds = &[_]u32{} }, .{ .id = 5 });
+}
+
+test "cdp.dom: querySelector Nodes found" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .html = "<div><p>2</p></div>" });
+
+    try ctx.processMessage(.{ // Hacky way to make sure nodeId 0 exists in the registry
+        .id = 3,
+        .method = "DOM.performSearch",
+        .params = .{ .query = "div" },
+    });
+    try ctx.expectSentResult(.{ .searchId = "0", .resultCount = 1 }, .{ .id = 3 });
+
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "DOM.querySelector",
+        .params = .{ .nodeId = 0, .selector = "p" },
+    });
+    // TODO Check 1 or more "DOM.setChildNodes" was send
+    try ctx.expectSentResult(.{ .nodeId = 5 }, .{ .id = 4 });
+
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "DOM.querySelectorAll",
+        .params = .{ .nodeId = 0, .selector = "p" },
+    });
+    // TODO Check 1 or more "DOM.setChildNodes" was send
+    try ctx.expectSentResult(.{ .nodeIds = &.{5} }, .{ .id = 5 });
 }
