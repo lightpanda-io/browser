@@ -502,14 +502,14 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             // Callbacks are PesistendObjects. When the scope ends, we need
             // to free every callback we created.
-            callbacks: std.ArrayListUnmanaged(v8.Persistent(v8.Function)) = .{},
+            callbacks: std.ArrayListUnmanaged(v8.Persistent(v8.Function)) = .empty,
 
             // Serves two purposes. Like `callbacks` above, this is used to free
             // every PeristentObjet we've created during the lifetime of the scope.
             // More importantly, it serves as an identity map - for a given Zig
             // instance, we map it to the same PersistentObject.
             // The key is the @intFromPtr of the Zig value
-            identity_map: std.AutoHashMapUnmanaged(usize, PersistentObject) = .{},
+            identity_map: std.AutoHashMapUnmanaged(usize, PersistentObject) = .empty,
 
             // Similar to the identity map, but used much less frequently. Some
             // web APIs have to manage opaque values. Ideally, they use an
@@ -517,7 +517,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // current call. They can call .persist() on their JsObject to get
             // a `*PersistentObject()`. We need to track these to free them.
             // The key is the @intFromPtr of the v8.Object.handle.
-            js_object_map: std.AutoHashMapUnmanaged(usize, PersistentObject) = .{},
+            js_object_map: std.AutoHashMapUnmanaged(usize, PersistentObject) = .empty,
 
             // When we need to load a resource (i.e. an external script), we call
             // this function to get the source. This is always a reference to the
@@ -525,8 +525,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // since this js module is decoupled from the browser implementation.
             module_loader: ModuleLoader,
 
+            // Some Zig types have code to execute to cleanup
+            destructor_callbacks: std.ArrayListUnmanaged(DestructorCallback) = .empty,
+
             // Some Zig types have code to execute when the call scope ends
-            call_scope_end_callbacks: std.ArrayListUnmanaged(CallScopeEndCallback) = .{},
+            call_scope_end_callbacks: std.ArrayListUnmanaged(CallScopeEndCallback) = .empty,
 
             const ModuleLoader = struct {
                 ptr: *anyopaque,
@@ -536,6 +539,10 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // no init, started with executor.startScope()
 
             fn deinit(self: *Scope) void {
+                for (self.destructor_callbacks.items) |cb| {
+                    cb.destructor(self);
+                }
+
                 {
                     var it = self.identity_map.valueIterator();
                     while (it.next()) |p| {
@@ -692,6 +699,10 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             // we've seen this instance before, return the same
                             // PersistentObject.
                             return gop.value_ptr.*;
+                        }
+
+                        if (comptime @hasDecl(ptr.child, "destructor")) {
+                            try self.destructor_callbacks.append(scope_arena, DestructorCallback.init(value));
                         }
 
                         if (comptime @hasDecl(ptr.child, "jsCallScopeEnd")) {
@@ -1672,7 +1683,35 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             }
         }
 
-        // An interface for types that want to their jsScopeEnd function to be
+        // An interface for types that want to have their jsDeinit function to be
+        // called when the call scope ends
+        const DestructorCallback = struct {
+            ptr: *anyopaque,
+            destructorFn: *const fn (ptr: *anyopaque, scope: *Scope) void,
+
+            fn init(ptr: anytype) DestructorCallback {
+                const T = @TypeOf(ptr);
+                const ptr_info = @typeInfo(T);
+
+                const gen = struct {
+                    pub fn destructor(pointer: *anyopaque, scope: *Scope) void {
+                        const self: T = @ptrCast(@alignCast(pointer));
+                        return ptr_info.pointer.child.destructor(self, scope);
+                    }
+                };
+
+                return .{
+                    .ptr = ptr,
+                    .destructorFn = gen.destructor,
+                };
+            }
+
+            pub fn destructor(self: DestructorCallback, scope: *Scope) void {
+                self.destructorFn(self.ptr, scope);
+            }
+        };
+
+        // An interface for types that want to have their jsScopeEnd function be
         // called when the call scope ends
         const CallScopeEndCallback = struct {
             ptr: *anyopaque,

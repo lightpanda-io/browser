@@ -257,6 +257,11 @@ pub const XMLHttpRequest = struct {
         };
     }
 
+    pub fn destructor(self: *XMLHttpRequest, _: anytype) void {
+        const request = &(self.request orelse return);
+        request.abort();
+    }
+
     pub fn reset(self: *XMLHttpRequest) void {
         self.url = null;
 
@@ -276,13 +281,6 @@ pub const XMLHttpRequest = struct {
         self.send_flag = false;
 
         self.priv_state = .new;
-    }
-
-    pub fn deinit(self: *XMLHttpRequest, alloc: Allocator) void {
-        if (self.response_obj) |v| {
-            v.deinit();
-        }
-        self.proto.deinit(alloc);
     }
 
     pub fn get_readyState(self: *XMLHttpRequest) u16 {
@@ -518,6 +516,7 @@ pub const XMLHttpRequest = struct {
             return;
         }
 
+        self.request = null;
         self.state = .done;
         self.send_flag = false;
         self.dispatchEvt("readystatechange");
