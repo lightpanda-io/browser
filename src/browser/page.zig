@@ -183,6 +183,11 @@ pub const Page = struct {
 
         // if the url is about:blank, nothing to do.
         if (std.mem.eql(u8, "about:blank", request_url.raw)) {
+            var fbs = std.io.fixedBufferStream("");
+            try self.loadHTMLDoc(fbs.reader(), "utf-8");
+            // We do not processHTMLDoc here as we know we don't have any scripts
+            // This assumption may be false when CDP Page.addScriptToEvaluateOnNewDocument is implemented
+            try HTMLDocument.documentIsComplete(self.window.document.?, &self.state);
             return;
         }
 
@@ -225,6 +230,7 @@ pub const Page = struct {
 
         if (mime.isHTML()) {
             try self.loadHTMLDoc(&response, mime.charset orelse "utf-8");
+            try self.processHTMLDoc();
         } else {
             log.info("non-HTML document: {s}", .{content_type orelse "null"});
             var arr: std.ArrayListUnmanaged(u8) = .{};
@@ -243,28 +249,15 @@ pub const Page = struct {
 
     // https://html.spec.whatwg.org/#read-html
     fn loadHTMLDoc(self: *Page, reader: anytype, charset: []const u8) !void {
-        const arena = self.arena;
-
         log.debug("parse html with charset {s}", .{charset});
 
-        const ccharset = try arena.dupeZ(u8, charset);
+        const ccharset = try self.arena.dupeZ(u8, charset);
 
         const html_doc = try parser.documentHTMLParse(reader, ccharset);
         const doc = parser.documentHTMLToDocument(html_doc);
 
         // save a document's pointer in the page.
         self.doc = doc;
-
-        const document_element = (try parser.documentGetDocumentElement(doc)) orelse return error.DocumentElementError;
-        try parser.eventTargetAddEventListener(
-            parser.toEventTarget(parser.Element, document_element),
-            "click",
-            &self.window_clicked_event_node,
-            false,
-        );
-
-        // TODO set document.readyState to interactive
-        // https://html.spec.whatwg.org/#reporting-document-loading-status
 
         // inject the URL to the document including the fragment.
         try parser.documentSetDocumentURI(doc, self.url.raw);
@@ -273,6 +266,19 @@ pub const Page = struct {
         try self.window.replaceDocument(html_doc);
         self.window.setStorageShelf(
             try self.session.storage_shed.getOrPut(try self.origin(self.arena)),
+        );
+    }
+
+    fn processHTMLDoc(self: *Page) !void {
+        const doc = self.doc.?;
+        const html_doc = self.window.document.?;
+
+        const document_element = (try parser.documentGetDocumentElement(doc)) orelse return error.DocumentElementError;
+        try parser.eventTargetAddEventListener(
+            parser.toEventTarget(parser.Element, document_element),
+            "click",
+            &self.window_clicked_event_node,
+            false,
         );
 
         // https://html.spec.whatwg.org/#read-html
@@ -320,12 +326,12 @@ pub const Page = struct {
             // > parsing and evaluated as soon as it is available.
             // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#async
             if (script.is_async) {
-                try async_scripts.append(arena, script);
+                try async_scripts.append(self.arena, script);
                 continue;
             }
 
             if (script.is_defer) {
-                try defer_scripts.append(arena, script);
+                try defer_scripts.append(self.arena, script);
                 continue;
             }
 

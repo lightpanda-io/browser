@@ -9,6 +9,7 @@ pub const URL = struct {
     raw: []const u8,
 
     pub const empty = URL{ .uri = .{ .scheme = "" }, .raw = "" };
+    pub const about_blank = URL{ .uri = .{ .scheme = "" }, .raw = "about:blank" };
 
     // We assume str will last as long as the URL
     // In some cases, this is safe to do, because we know the URL is short lived.
