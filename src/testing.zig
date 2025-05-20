@@ -207,7 +207,7 @@ pub const Random = struct {
 };
 
 pub const Document = struct {
-    doc: *parser.Document,
+    doc: *parser.DocumentHTML,
     arena: std.heap.ArenaAllocator,
 
     pub fn init(html: []const u8) !Document {
@@ -219,7 +219,7 @@ pub const Document = struct {
 
         return .{
             .arena = std.heap.ArenaAllocator.init(allocator),
-            .doc = parser.documentHTMLToDocument(html_doc),
+            .doc = html_doc,
         };
     }
 
@@ -240,7 +240,7 @@ pub const Document = struct {
     }
 
     pub fn asNode(self: *const Document) *parser.Node {
-        return parser.documentToNode(self.doc);
+        return parser.documentHTMLToNode(self.doc);
     }
 };
 

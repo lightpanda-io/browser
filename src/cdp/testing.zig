@@ -123,7 +123,7 @@ const TestContext = struct {
             if (bc.session_id == null) bc.session_id = "SID-X";
             parser.deinit();
             const page = try bc.session.createPage();
-            page.doc = (try Document.init(html)).doc;
+            page.window.document = (try Document.init(html)).doc;
         }
         return bc;
     }
