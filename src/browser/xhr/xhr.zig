@@ -258,8 +258,7 @@ pub const XMLHttpRequest = struct {
     }
 
     pub fn destructor(self: *XMLHttpRequest, _: anytype) void {
-        const request = &(self.request orelse return);
-        request.abort();
+        self._abort();
     }
 
     pub fn reset(self: *XMLHttpRequest) void {
@@ -516,7 +515,6 @@ pub const XMLHttpRequest = struct {
             return;
         }
 
-        self.request = null;
         self.state = .done;
         self.send_flag = false;
         self.dispatchEvt("readystatechange");
@@ -541,6 +539,10 @@ pub const XMLHttpRequest = struct {
     }
 
     pub fn _abort(self: *XMLHttpRequest) void {
+        const request = &(self.request orelse return);
+        // safe to call even if the request is complete
+        request.abort();
+
         self.onErr(DOMError.Abort);
     }
 
