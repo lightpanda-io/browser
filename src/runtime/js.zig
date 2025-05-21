@@ -775,6 +775,403 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 }
             }
 
+            fn jsValueToZig(self: *Scope, comptime named_function: NamedFunction, comptime T: type, js_value: v8.Value) !T {
+                switch (@typeInfo(T)) {
+                    .optional => |o| {
+                        if (js_value.isNullOrUndefined()) {
+                            return null;
+                        }
+                        return try self.jsValueToZig(named_function, o.child, js_value);
+                    },
+                    .float => |f| switch (f.bits) {
+                        0...32 => return js_value.toF32(self.context),
+                        33...64 => return js_value.toF64(self.context),
+                        else => {},
+                    },
+                    .int => return jsIntToZig(T, js_value, self.context),
+                    .bool => return js_value.toBool(self.isolate),
+                    .pointer => |ptr| switch (ptr.size) {
+                        .one => {
+                            if (!js_value.isObject()) {
+                                return error.InvalidArgument;
+                            }
+                            if (@hasField(TypeLookup, @typeName(ptr.child))) {
+                                const js_obj = js_value.castTo(v8.Object);
+                                return typeTaggedAnyOpaque(named_function, *Receiver(ptr.child), js_obj);
+                            }
+                        },
+                        .slice => {
+                            if (js_value.isTypedArray()) {
+                                const buffer_view = js_value.castTo(v8.ArrayBufferView);
+                                const buffer = buffer_view.getBuffer();
+                                const backing_store = v8.BackingStore.sharedPtrGet(&buffer.getBackingStore());
+                                const data = backing_store.getData();
+                                const byte_len = backing_store.getByteLength();
+
+                                switch (ptr.child) {
+                                    u8 => {
+                                        // need this sentinel check to keep the compiler happy
+                                        if (ptr.sentinel() == null) {
+                                            if (js_value.isUint8Array() or js_value.isUint8ClampedArray()) {
+                                                const arr_ptr = @as([*]u8, @alignCast(@ptrCast(data)));
+                                                return arr_ptr[0..byte_len];
+                                            }
+                                        }
+                                    },
+                                    i8 => {
+                                        if (js_value.isInt8Array()) {
+                                            const arr_ptr = @as([*]i8, @alignCast(@ptrCast(data)));
+                                            return arr_ptr[0..byte_len];
+                                        }
+                                    },
+                                    u16 => {
+                                        if (js_value.isUint16Array()) {
+                                            const arr_ptr = @as([*]u16, @alignCast(@ptrCast(data)));
+                                            return arr_ptr[0 .. byte_len / 2];
+                                        }
+                                    },
+                                    i16 => {
+                                        if (js_value.isInt16Array()) {
+                                            const arr_ptr = @as([*]i16, @alignCast(@ptrCast(data)));
+                                            return arr_ptr[0 .. byte_len / 2];
+                                        }
+                                    },
+                                    u32 => {
+                                        if (js_value.isUint32Array()) {
+                                            const arr_ptr = @as([*]u32, @alignCast(@ptrCast(data)));
+                                            return arr_ptr[0 .. byte_len / 4];
+                                        }
+                                    },
+                                    i32 => {
+                                        if (js_value.isInt32Array()) {
+                                            const arr_ptr = @as([*]i32, @alignCast(@ptrCast(data)));
+                                            return arr_ptr[0 .. byte_len / 4];
+                                        }
+                                    },
+                                    u64 => {
+                                        if (js_value.isBigUint64Array()) {
+                                            const arr_ptr = @as([*]u64, @alignCast(@ptrCast(data)));
+                                            return arr_ptr[0 .. byte_len / 8];
+                                        }
+                                    },
+                                    i64 => {
+                                        if (js_value.isBigInt64Array()) {
+                                            const arr_ptr = @as([*]i64, @alignCast(@ptrCast(data)));
+                                            return arr_ptr[0 .. byte_len / 8];
+                                        }
+                                    },
+                                    else => {},
+                                }
+                                return error.InvalidArgument;
+                            }
+
+                            if (ptr.child == u8) {
+                                if (ptr.sentinel()) |s| {
+                                    if (comptime s == 0) {
+                                        return valueToStringZ(self.call_arena, js_value, self.isolate, self.context);
+                                    }
+                                } else {
+                                    return valueToString(self.call_arena, js_value, self.isolate, self.context);
+                                }
+                            }
+
+                            if (!js_value.isArray()) {
+                                return error.InvalidArgument;
+                            }
+
+                            const context = self.context;
+                            const js_arr = js_value.castTo(v8.Array);
+                            const js_obj = js_arr.castTo(v8.Object);
+
+                            // Newer version of V8 appear to have an optimized way
+                            // to do this (V8::Array has an iterate method on it)
+                            const arr = try self.call_arena.alloc(ptr.child, js_arr.length());
+                            for (arr, 0..) |*a, i| {
+                                a.* = try self.jsValueToZig(named_function, ptr.child, try js_obj.getAtIndex(context, @intCast(i)));
+                            }
+                            return arr;
+                        },
+                        else => {},
+                    },
+                    .@"struct" => {
+                        return try (self.jsValueToStruct(named_function, T, js_value)) orelse {
+                            return error.InvalidArgument;
+                        };
+                    },
+                    .@"union" => |u| {
+                        // see probeJsValueToZig for some explanation of what we're
+                        // trying to do
+
+                        // the first field that we find which the js_value could be
+                        // coerced to.
+                        var coerce_index: ?usize = null;
+
+                        // the first field that we find which the js_Value is
+                        // compatible with. A compatible field has higher precedence
+                        // than a coercible, but still isn't a perfect match.
+                        var compatible_index: ?usize = null;
+
+                        inline for (u.fields, 0..) |field, i| {
+                            switch (try self.probeJsValueToZig(named_function, field.type, js_value)) {
+                                .value => |v| return @unionInit(T, field.name, v),
+                                .ok => {
+                                    // a perfect match like above case, except the probing
+                                    // didn't get the value for us.
+                                    return @unionInit(T, field.name, try self.jsValueToZig(named_function, field.type, js_value));
+                                },
+                                .coerce => if (coerce_index == null) {
+                                    coerce_index = i;
+                                },
+                                .compatible => if (compatible_index == null) {
+                                    compatible_index = i;
+                                },
+                                .invalid => {},
+                            }
+                        }
+
+                        // We didn't find a perfect match.
+                        const closest = compatible_index orelse coerce_index orelse return error.InvalidArgument;
+                        inline for (u.fields, 0..) |field, i| {
+                            if (i == closest) {
+                                return @unionInit(T, field.name, try self.jsValueToZig(named_function, field.type, js_value));
+                            }
+                        }
+                        unreachable;
+                    },
+                    else => {},
+                }
+
+                @compileError(named_function.full_name ++ " has an unsupported parameter type: " ++ @typeName(T));
+            }
+
+            // Extracted so that it can be used in both jsValueToZig and in
+            // probeJsValueToZig. Avoids having to duplicate this logic when probing.
+            fn jsValueToStruct(self: *Scope, comptime named_function: NamedFunction, comptime T: type, js_value: v8.Value) !?T {
+                if (@hasDecl(T, "_CALLBACK_ID_KLUDGE")) {
+                    if (!js_value.isFunction()) {
+                        return error.InvalidArgument;
+                    }
+
+                    const func = v8.Persistent(v8.Function).init(self.isolate, js_value.castTo(v8.Function));
+                    try self.trackCallback(func);
+
+                    return .{
+                        .func = func,
+                        .scope = self,
+                        .id = js_value.castTo(v8.Object).getIdentityHash(),
+                    };
+                }
+
+                const js_obj = js_value.castTo(v8.Object);
+
+                if (comptime isJsObject(T)) {
+                    // Caller wants an opaque JsObject. Probably a parameter
+                    // that it needs to pass back into a callback
+                    return JsObject{
+                        .js_obj = js_obj,
+                        .scope = self,
+                    };
+                }
+
+                if (!js_value.isObject()) {
+                    return null;
+                }
+
+                const context = self.context;
+                const isolate = self.isolate;
+
+                var value: T = undefined;
+                inline for (@typeInfo(T).@"struct".fields) |field| {
+                    const name = field.name;
+                    const key = v8.String.initUtf8(isolate, name);
+                    if (js_obj.has(context, key.toValue())) {
+                        @field(value, name) = try self.jsValueToZig(named_function, field.type, try js_obj.getValue(context, key));
+                    } else if (@typeInfo(field.type) == .optional) {
+                        @field(value, name) = null;
+                    } else {
+                        const dflt = field.defaultValue() orelse return null;
+                        @field(value, name) = dflt;
+                    }
+                }
+                return value;
+            }
+
+            // Probing is part of trying to map a JS value to a Zig union. There's
+            // a lot of ambiguity in this process, in part because some JS values
+            // can almost always be coerced. For example, anything can be coerced
+            // into an integer (it just becomes 0), or a float (becomes NaN) or a
+            // string.
+            //
+            // The way we'll do this is that, if there's a direct match, we'll use it
+            // If there's a potential match, we'll keep looking for a direct match
+            // and only use the (first) potential match as a fallback.
+            //
+            // Finally, I considered adding this probing directly into jsValueToZig
+            // but I decided doing this separately was better. However, the goal is
+            // obviously that probing is consistent with jsValueToZig.
+            fn ProbeResult(comptime T: type) type {
+                return union(enum) {
+                    // The js_value maps directly to T
+                    value: T,
+
+                    // The value is a T. This is almost the same as returning value: T,
+                    // but the caller still has to get T by calling jsValueToZig.
+                    // We prefer returning .{.ok => {}}, to avoid reducing duplication
+                    // with jsValueToZig, but in some cases where probing has a cost
+                    // AND yields the value anyways, we'll use .{.value = T}.
+                    ok: void,
+
+                    // the js_value is compatible with T (i.e. a int -> float),
+                    compatible: void,
+
+                    // the js_value can be coerced to T (this is a lower precedence
+                    // than compatible)
+                    coerce: void,
+
+                    // the js_value cannot be turned into T
+                    invalid: void,
+                };
+            }
+            fn probeJsValueToZig(self: *Scope, comptime named_function: NamedFunction, comptime T: type, js_value: v8.Value) !ProbeResult(T) {
+                switch (@typeInfo(T)) {
+                    .optional => |o| {
+                        if (js_value.isNullOrUndefined()) {
+                            return .{ .value = null };
+                        }
+                        return self.probeJsValueToZig(named_function, o.child, js_value);
+                    },
+                    .float => {
+                        if (js_value.isNumber() or js_value.isNumberObject()) {
+                            if (js_value.isInt32() or js_value.isUint32() or js_value.isBigInt() or js_value.isBigIntObject()) {
+                                // int => float is a reasonable match
+                                return .{ .compatible = {} };
+                            }
+                            return .{ .ok = {} };
+                        }
+                        // anything can be coerced into a float, it becomes NaN
+                        return .{ .coerce = {} };
+                    },
+                    .int => {
+                        if (js_value.isNumber() or js_value.isNumberObject()) {
+                            if (js_value.isInt32() or js_value.isUint32() or js_value.isBigInt() or js_value.isBigIntObject()) {
+                                return .{ .ok = {} };
+                            }
+                            // float => int is kind of reasonable, I guess
+                            return .{ .compatible = {} };
+                        }
+                        // anything can be coerced into a int, it becomes 0
+                        return .{ .coerce = {} };
+                    },
+                    .bool => {
+                        if (js_value.isBoolean() or js_value.isBooleanObject()) {
+                            return .{ .ok = {} };
+                        }
+                        // anything can be coerced into a boolean, it will become
+                        // true or false based on..some complex rules I don't know.
+                        return .{ .coerce = {} };
+                    },
+                    .pointer => |ptr| switch (ptr.size) {
+                        .one => {
+                            if (!js_value.isObject()) {
+                                return .{ .invalid = {} };
+                            }
+                            if (@hasField(TypeLookup, @typeName(ptr.child))) {
+                                const js_obj = js_value.castTo(v8.Object);
+                                // There's a bit of overhead in doing this, so instead
+                                // of having a version of typeTaggedAnyOpaque which
+                                // returns a boolean or an optional, we rely on the
+                                // main implementation and just handle the error.
+                                const attempt = typeTaggedAnyOpaque(named_function, *Receiver(ptr.child), js_obj);
+                                if (attempt) |value| {
+                                    return .{ .value = value };
+                                } else |_| {
+                                    return .{ .invalid = {} };
+                                }
+                            }
+                            // probably an error, but not for us to deal with
+                            return .{ .invalid = {} };
+                        },
+                        .slice => {
+                            if (js_value.isTypedArray()) {
+                                switch (ptr.child) {
+                                    u8 => if (ptr.sentinel() == null) {
+                                        if (js_value.isUint8Array() or js_value.isUint8ClampedArray()) {
+                                            return .{ .ok = {} };
+                                        }
+                                    },
+                                    i8 => if (js_value.isInt8Array()) {
+                                        return .{ .ok = {} };
+                                    },
+                                    u16 => if (js_value.isUint16Array()) {
+                                        return .{ .ok = {} };
+                                    },
+                                    i16 => if (js_value.isInt16Array()) {
+                                        return .{ .ok = {} };
+                                    },
+                                    u32 => if (js_value.isUint32Array()) {
+                                        return .{ .ok = {} };
+                                    },
+                                    i32 => if (js_value.isInt32Array()) {
+                                        return .{ .ok = {} };
+                                    },
+                                    u64 => if (js_value.isBigUint64Array()) {
+                                        return .{ .ok = {} };
+                                    },
+                                    i64 => if (js_value.isBigInt64Array()) {
+                                        return .{ .ok = {} };
+                                    },
+                                    else => {},
+                                }
+                                return .{ .invalid = {} };
+                            }
+
+                            if (ptr.child == u8) {
+                                if (js_value.isString()) {
+                                    return .{ .ok = {} };
+                                }
+                                // anything can be coerced into a string
+                                return .{ .coerce = {} };
+                            }
+
+                            if (!js_value.isArray()) {
+                                return error.InvalidArgument;
+                            }
+
+                            // This can get tricky.
+                            const js_arr = js_value.castTo(v8.Array);
+
+                            if (js_arr.length() == 0) {
+                                // not so tricky in this case.
+                                return .{ .value = &.{} };
+                            }
+
+                            // We settle for just probing the first value. Ok, actually
+                            // not tricky in this case either.
+                            const context = self.context;
+                            const js_obj = js_arr.castTo(v8.Object);
+                            switch (try self.probeJsValueToZig(named_function, ptr.child, try js_obj.getAtIndex(context, 0))) {
+                                .value, .ok => return .{ .ok = {} },
+                                .compatible => return .{ .compatible = {} },
+                                .coerce => return .{ .coerce = {} },
+                                .invalid => return .{ .invalid = {} },
+                            }
+                        },
+                        else => {},
+                    },
+                    .@"struct" => {
+                        // We don't want to duplicate the code for this, so we call
+                        // the actual coversion function.
+                        const value = (try self.jsValueToStruct(named_function, T, js_value)) orelse {
+                            return .{ .invalid = {} };
+                        };
+                        return .{ .value = value };
+                    },
+                    else => {},
+                }
+
+                return .{ .invalid = {} };
+            }
+
             // Callback from V8, asking us to load a module. The "specifier" is
             // the src of the module to load.
             fn resolveModuleCallback(
@@ -1805,9 +2202,6 @@ fn isEmpty(comptime T: type) bool {
 // is somewhat repetitive between constructors, functions, getters, etc contained
 // here does feel like it makes it clenaer.
 fn Caller(comptime E: type, comptime State: type) type {
-    const TYPE_LOOKUP = E.TYPE_LOOKUP;
-    const TypeLookup = @TypeOf(TYPE_LOOKUP);
-
     return struct {
         scope: *E.Scope,
         context: v8.Context,
@@ -1882,6 +2276,7 @@ fn Caller(comptime E: type, comptime State: type) type {
         }
 
         fn method(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, info: v8.FunctionCallbackInfo) !void {
+            const scope = self.scope;
             const func = @field(Struct, named_function.name);
             comptime assertSelfReceiver(Struct, named_function);
 
@@ -1892,10 +2287,11 @@ fn Caller(comptime E: type, comptime State: type) type {
             @field(args, "0") = zig_instance;
 
             const res = @call(.auto, func, args);
-            info.getReturnValue().set(try self.zigValueToJs(res));
+            info.getReturnValue().set(try scope.zigValueToJs(res));
         }
 
         fn getter(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, info: v8.FunctionCallbackInfo) !void {
+            const scope = self.scope;
             const func = @field(Struct, named_function.name);
             const Getter = @TypeOf(func);
             if (@typeInfo(Getter).@"fn".return_type == null) {
@@ -1912,16 +2308,17 @@ fn Caller(comptime E: type, comptime State: type) type {
                     @field(args, "0") = zig_instance;
                     if (comptime arg_fields.len == 2) {
                         comptime assertIsStateArg(Struct, named_function, 1);
-                        @field(args, "1") = self.scope.state;
+                        @field(args, "1") = scope.state;
                     }
                 },
                 else => @compileError(named_function.full_name + " has too many parmaters: " ++ @typeName(named_function.func)),
             }
             const res = @call(.auto, func, args);
-            info.getReturnValue().set(try self.zigValueToJs(res));
+            info.getReturnValue().set(try scope.zigValueToJs(res));
         }
 
         fn setter(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, js_value: v8.Value, info: v8.FunctionCallbackInfo) !void {
+            const scope = self.scope;
             const func = @field(Struct, named_function.name);
             comptime assertSelfReceiver(Struct, named_function);
 
@@ -1935,10 +2332,10 @@ fn Caller(comptime E: type, comptime State: type) type {
                 1 => @compileError(named_function.full_name ++ " only has 1 parameter"),
                 2, 3 => {
                     @field(args, "0") = zig_instance;
-                    @field(args, "1") = try self.jsValueToZig(named_function, arg_fields[1].type, js_value);
+                    @field(args, "1") = try scope.jsValueToZig(named_function, arg_fields[1].type, js_value);
                     if (comptime arg_fields.len == 3) {
                         comptime assertIsStateArg(Struct, named_function, 2);
-                        @field(args, "2") = self.scope.state;
+                        @field(args, "2") = scope.state;
                     }
                 },
                 else => @compileError(named_function.full_name ++ " setter with more than 3 parameters, why?"),
@@ -1954,6 +2351,7 @@ fn Caller(comptime E: type, comptime State: type) type {
         }
 
         fn getIndex(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, idx: u32, info: v8.PropertyCallbackInfo) !u8 {
+            const scope = self.scope;
             const func = @field(Struct, named_function.name);
             const IndexedGet = @TypeOf(func);
             if (@typeInfo(IndexedGet).@"fn".return_type == null) {
@@ -1974,7 +2372,7 @@ fn Caller(comptime E: type, comptime State: type) type {
                     @field(args, "2") = &has_value;
                     if (comptime arg_fields.len == 4) {
                         comptime assertIsStateArg(Struct, named_function, 3);
-                        @field(args, "3") = self.scope.state;
+                        @field(args, "3") = scope.state;
                     }
                 },
                 else => @compileError(named_function.full_name ++ " has too many parmaters"),
@@ -1984,11 +2382,12 @@ fn Caller(comptime E: type, comptime State: type) type {
             if (has_value == false) {
                 return v8.Intercepted.No;
             }
-            info.getReturnValue().set(try self.zigValueToJs(res));
+            info.getReturnValue().set(try scope.zigValueToJs(res));
             return v8.Intercepted.Yes;
         }
 
         fn getNamedIndex(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, name: v8.Name, info: v8.PropertyCallbackInfo) !u8 {
+            const scope = self.scope;
             const func = @field(Struct, named_function.name);
             const NamedGet = @TypeOf(func);
             if (@typeInfo(NamedGet).@"fn".return_type == null) {
@@ -2008,7 +2407,7 @@ fn Caller(comptime E: type, comptime State: type) type {
                     @field(args, "2") = &has_value;
                     if (comptime arg_fields.len == 4) {
                         comptime assertIsStateArg(Struct, named_function, 3);
-                        @field(args, "3") = self.scope.state;
+                        @field(args, "3") = scope.state;
                     }
                 },
                 else => @compileError(named_function.full_name ++ " has too many parmaters"),
@@ -2018,7 +2417,7 @@ fn Caller(comptime E: type, comptime State: type) type {
             if (has_value == false) {
                 return v8.Intercepted.No;
             }
-            info.getReturnValue().set(try self.zigValueToJs(res));
+            info.getReturnValue().set(try scope.zigValueToJs(res));
             return v8.Intercepted.Yes;
         }
 
@@ -2091,7 +2490,7 @@ fn Caller(comptime E: type, comptime State: type) type {
                             }
                         };
                         // ughh..how to handle an error here?
-                        break :blk self.zigValueToJs(custom_exception) catch createException(isolate, "internal error");
+                        break :blk self.scope.zigValueToJs(custom_exception) catch createException(isolate, "internal error");
                     }
                     // this error isn't part of a custom exception
                     break :blk null;
@@ -2150,6 +2549,7 @@ fn Caller(comptime E: type, comptime State: type) type {
         // the last parameter in Zig is an array, we'll try to slurp the additional
         // parameters into the array.
         fn getArgs(self: *const Self, comptime Struct: type, comptime named_function: NamedFunction, comptime offset: usize, info: anytype) !ParamterTypes(@TypeOf(@field(Struct, named_function.name))) {
+            const scope = self.scope;
             const F = @TypeOf(@field(Struct, named_function.name));
             var args: ParamterTypes(F) = undefined;
 
@@ -2223,7 +2623,7 @@ fn Caller(comptime E: type, comptime State: type) type {
                             const arr = try self.call_arena.alloc(last_parameter_type_info.pointer.child, js_parameter_count - params_to_map.len + 1);
                             for (arr, last_js_parameter..) |*a, i| {
                                 const js_value = info.getArg(@as(u32, @intCast(i)));
-                                a.* = try self.jsValueToZig(named_function, slice_type, js_value);
+                                a.* = try scope.jsValueToZig(named_function, slice_type, js_value);
                             }
                             @field(args, tupleFieldName(params_to_map.len + offset - 1)) = arr;
                         } else {
@@ -2252,7 +2652,7 @@ fn Caller(comptime E: type, comptime State: type) type {
                     @field(args, tupleFieldName(field_index)) = null;
                 } else {
                     const js_value = info.getArg(@as(u32, @intCast(i)));
-                    @field(args, tupleFieldName(field_index)) = self.jsValueToZig(named_function, param.type.?, js_value) catch {
+                    @field(args, tupleFieldName(field_index)) = scope.jsValueToZig(named_function, param.type.?, js_value) catch {
                         return error.InvalidArgument;
                     };
                 }
@@ -2261,467 +2661,10 @@ fn Caller(comptime E: type, comptime State: type) type {
             return args;
         }
 
-        fn jsValueToZig(self: *const Self, comptime named_function: NamedFunction, comptime T: type, js_value: v8.Value) !T {
-            switch (@typeInfo(T)) {
-                .optional => |o| {
-                    if (js_value.isNullOrUndefined()) {
-                        return null;
-                    }
-                    return try self.jsValueToZig(named_function, o.child, js_value);
-                },
-                .float => |f| switch (f.bits) {
-                    0...32 => return js_value.toF32(self.context),
-                    33...64 => return js_value.toF64(self.context),
-                    else => {},
-                },
-                .int => return jsIntToZig(T, js_value, self.context),
-                .bool => return js_value.toBool(self.isolate),
-                .pointer => |ptr| switch (ptr.size) {
-                    .one => {
-                        if (!js_value.isObject()) {
-                            return error.InvalidArgument;
-                        }
-                        if (@hasField(TypeLookup, @typeName(ptr.child))) {
-                            const js_obj = js_value.castTo(v8.Object);
-                            return E.typeTaggedAnyOpaque(named_function, *Receiver(ptr.child), js_obj);
-                        }
-                    },
-                    .slice => {
-                        if (js_value.isTypedArray()) {
-                            const buffer_view = js_value.castTo(v8.ArrayBufferView);
-                            const buffer = buffer_view.getBuffer();
-                            const backing_store = v8.BackingStore.sharedPtrGet(&buffer.getBackingStore());
-                            const data = backing_store.getData();
-                            const byte_len = backing_store.getByteLength();
-
-                            switch (ptr.child) {
-                                u8 => {
-                                    // need this sentinel check to keep the compiler happy
-                                    if (ptr.sentinel() == null) {
-                                        if (js_value.isUint8Array() or js_value.isUint8ClampedArray()) {
-                                            const arr_ptr = @as([*]u8, @alignCast(@ptrCast(data)));
-                                            return arr_ptr[0..byte_len];
-                                        }
-                                    }
-                                },
-                                i8 => {
-                                    if (js_value.isInt8Array()) {
-                                        const arr_ptr = @as([*]i8, @alignCast(@ptrCast(data)));
-                                        return arr_ptr[0..byte_len];
-                                    }
-                                },
-                                u16 => {
-                                    if (js_value.isUint16Array()) {
-                                        const arr_ptr = @as([*]u16, @alignCast(@ptrCast(data)));
-                                        return arr_ptr[0 .. byte_len / 2];
-                                    }
-                                },
-                                i16 => {
-                                    if (js_value.isInt16Array()) {
-                                        const arr_ptr = @as([*]i16, @alignCast(@ptrCast(data)));
-                                        return arr_ptr[0 .. byte_len / 2];
-                                    }
-                                },
-                                u32 => {
-                                    if (js_value.isUint32Array()) {
-                                        const arr_ptr = @as([*]u32, @alignCast(@ptrCast(data)));
-                                        return arr_ptr[0 .. byte_len / 4];
-                                    }
-                                },
-                                i32 => {
-                                    if (js_value.isInt32Array()) {
-                                        const arr_ptr = @as([*]i32, @alignCast(@ptrCast(data)));
-                                        return arr_ptr[0 .. byte_len / 4];
-                                    }
-                                },
-                                u64 => {
-                                    if (js_value.isBigUint64Array()) {
-                                        const arr_ptr = @as([*]u64, @alignCast(@ptrCast(data)));
-                                        return arr_ptr[0 .. byte_len / 8];
-                                    }
-                                },
-                                i64 => {
-                                    if (js_value.isBigInt64Array()) {
-                                        const arr_ptr = @as([*]i64, @alignCast(@ptrCast(data)));
-                                        return arr_ptr[0 .. byte_len / 8];
-                                    }
-                                },
-                                else => {},
-                            }
-                            return error.InvalidArgument;
-                        }
-
-                        if (ptr.child == u8) {
-                            if (ptr.sentinel()) |s| {
-                                if (comptime s == 0) {
-                                    return valueToStringZ(self.call_arena, js_value, self.isolate, self.context);
-                                }
-                            } else {
-                                return valueToString(self.call_arena, js_value, self.isolate, self.context);
-                            }
-                        }
-
-                        if (!js_value.isArray()) {
-                            return error.InvalidArgument;
-                        }
-
-                        const context = self.context;
-                        const js_arr = js_value.castTo(v8.Array);
-                        const js_obj = js_arr.castTo(v8.Object);
-
-                        // Newer version of V8 appear to have an optimized way
-                        // to do this (V8::Array has an iterate method on it)
-                        const arr = try self.call_arena.alloc(ptr.child, js_arr.length());
-                        for (arr, 0..) |*a, i| {
-                            a.* = try self.jsValueToZig(named_function, ptr.child, try js_obj.getAtIndex(context, @intCast(i)));
-                        }
-                        return arr;
-                    },
-                    else => {},
-                },
-                .@"struct" => {
-                    return try (self.jsValueToStruct(named_function, T, js_value)) orelse {
-                        return error.InvalidArgument;
-                    };
-                },
-                .@"union" => |u| {
-                    // see probeJsValueToZig for some explanation of what we're
-                    // trying to do
-
-                    // the first field that we find which the js_value could be
-                    // coerced to.
-                    var coerce_index: ?usize = null;
-
-                    // the first field that we find which the js_Value is
-                    // compatible with. A compatible field has higher precedence
-                    // than a coercible, but still isn't a perfect match.
-                    var compatible_index: ?usize = null;
-
-                    inline for (u.fields, 0..) |field, i| {
-                        switch (try self.probeJsValueToZig(named_function, field.type, js_value)) {
-                            .value => |v| return @unionInit(T, field.name, v),
-                            .ok => {
-                                // a perfect match like above case, except the probing
-                                // didn't get the value for us.
-                                return @unionInit(T, field.name, try self.jsValueToZig(named_function, field.type, js_value));
-                            },
-                            .coerce => if (coerce_index == null) {
-                                coerce_index = i;
-                            },
-                            .compatible => if (compatible_index == null) {
-                                compatible_index = i;
-                            },
-                            .invalid => {},
-                        }
-                    }
-
-                    // We didn't find a perfect match.
-                    const closest = compatible_index orelse coerce_index orelse return error.InvalidArgument;
-                    inline for (u.fields, 0..) |field, i| {
-                        if (i == closest) {
-                            return @unionInit(T, field.name, try self.jsValueToZig(named_function, field.type, js_value));
-                        }
-                    }
-                    unreachable;
-                },
-                else => {},
-            }
-
-            @compileError(named_function.full_name ++ " has an unsupported parameter type: " ++ @typeName(T));
-        }
-
-        fn jsIntToZig(comptime T: type, js_value: v8.Value, context: v8.Context) !T {
-            const n = @typeInfo(T).int;
-            switch (n.signedness) {
-                .signed => switch (n.bits) {
-                    8 => return jsSignedIntToZig(i8, -128, 127, try js_value.toI32(context)),
-                    16 => return jsSignedIntToZig(i16, -32_768, 32_767, try js_value.toI32(context)),
-                    32 => return jsSignedIntToZig(i32, -2_147_483_648, 2_147_483_647, try js_value.toI32(context)),
-                    64 => {
-                        if (js_value.isBigInt()) {
-                            const v = js_value.castTo(v8.BigInt);
-                            return v.getInt64();
-                        }
-                        return jsSignedIntToZig(i64, -2_147_483_648, 2_147_483_647, try js_value.toI32(context));
-                    },
-                    else => {},
-                },
-                .unsigned => switch (n.bits) {
-                    8 => return jsUnsignedIntToZig(u8, 255, try js_value.toU32(context)),
-                    16 => return jsUnsignedIntToZig(u16, 65_535, try js_value.toU32(context)),
-                    32 => return jsUnsignedIntToZig(u32, 4_294_967_295, try js_value.toU32(context)),
-                    64 => {
-                        if (js_value.isBigInt()) {
-                            const v = js_value.castTo(v8.BigInt);
-                            return v.getUint64();
-                        }
-                        return jsUnsignedIntToZig(u64, 4_294_967_295, try js_value.toU32(context));
-                    },
-                    else => {},
-                },
-            }
-            @compileError("Only i8, i16, i32, i64, u8, u16, u32 and u64 are supported");
-        }
-
-        fn jsSignedIntToZig(comptime T: type, comptime min: comptime_int, max: comptime_int, maybe: i32) !T {
-            if (maybe >= min and maybe <= max) {
-                return @intCast(maybe);
-            }
-            return error.InvalidArgument;
-        }
-
-        fn jsUnsignedIntToZig(comptime T: type, max: comptime_int, maybe: u32) !T {
-            if (maybe <= max) {
-                return @intCast(maybe);
-            }
-            return error.InvalidArgument;
-        }
-
-        // Extracted so that it can be used in both jsValueToZig and in
-        // probeJsValueToZig. Avoids having to duplicate this logic when probing.
-        fn jsValueToStruct(self: *const Self, comptime named_function: NamedFunction, comptime T: type, js_value: v8.Value) !?T {
-            if (@hasDecl(T, "_CALLBACK_ID_KLUDGE")) {
-                if (!js_value.isFunction()) {
-                    return error.InvalidArgument;
-                }
-
-                const func = v8.Persistent(v8.Function).init(self.isolate, js_value.castTo(v8.Function));
-                const scope = self.scope;
-                try scope.trackCallback(func);
-
-                return .{
-                    .func = func,
-                    .scope = scope,
-                    .id = js_value.castTo(v8.Object).getIdentityHash(),
-                };
-            }
-
-            const js_obj = js_value.castTo(v8.Object);
-
-            if (comptime isJsObject(T)) {
-                // Caller wants an opaque JsObject. Probably a parameter
-                // that it needs to pass back into a callback
-                return E.JsObject{
-                    .js_obj = js_obj,
-                    .scope = self.scope,
-                };
-            }
-
-            if (!js_value.isObject()) {
-                return null;
-            }
-
-            const context = self.context;
-            const isolate = self.isolate;
-
-            var value: T = undefined;
-            inline for (@typeInfo(T).@"struct".fields) |field| {
-                const name = field.name;
-                const key = v8.String.initUtf8(isolate, name);
-                if (js_obj.has(context, key.toValue())) {
-                    @field(value, name) = try self.jsValueToZig(named_function, field.type, try js_obj.getValue(context, key));
-                } else if (@typeInfo(field.type) == .optional) {
-                    @field(value, name) = null;
-                } else {
-                    const dflt = field.defaultValue() orelse return null;
-                    @field(value, name) = dflt;
-                }
-            }
-            return value;
-        }
-
-        // Probing is part of trying to map a JS value to a Zig union. There's
-        // a lot of ambiguity in this process, in part because some JS values
-        // can almost always be coerced. For example, anything can be coerced
-        // into an integer (it just becomes 0), or a float (becomes NaN) or a
-        // string.
-        //
-        // The way we'll do this is that, if there's a direct match, we'll use it
-        // If there's a potential match, we'll keep looking for a direct match
-        // and only use the (first) potential match as a fallback.
-        //
-        // Finally, I considered adding this probing directly into jsValueToZig
-        // but I decided doing this separately was better. However, the goal is
-        // obviously that probing is consistent with jsValueToZig.
-        fn ProbeResult(comptime T: type) type {
-            return union(enum) {
-                // The js_value maps directly to T
-                value: T,
-
-                // The value is a T. This is almost the same as returning value: T,
-                // but the caller still has to get T by calling jsValueToZig.
-                // We prefer returning .{.ok => {}}, to avoid reducing duplication
-                // with jsValueToZig, but in some cases where probing has a cost
-                // AND yields the value anyways, we'll use .{.value = T}.
-                ok: void,
-
-                // the js_value is compatible with T (i.e. a int -> float),
-                compatible: void,
-
-                // the js_value can be coerced to T (this is a lower precedence
-                // than compatible)
-                coerce: void,
-
-                // the js_value cannot be turned into T
-                invalid: void,
-            };
-        }
-        fn probeJsValueToZig(self: *const Self, comptime named_function: NamedFunction, comptime T: type, js_value: v8.Value) !ProbeResult(T) {
-            switch (@typeInfo(T)) {
-                .optional => |o| {
-                    if (js_value.isNullOrUndefined()) {
-                        return .{ .value = null };
-                    }
-                    return self.probeJsValueToZig(named_function, o.child, js_value);
-                },
-                .float => {
-                    if (js_value.isNumber() or js_value.isNumberObject()) {
-                        if (js_value.isInt32() or js_value.isUint32() or js_value.isBigInt() or js_value.isBigIntObject()) {
-                            // int => float is a reasonable match
-                            return .{ .compatible = {} };
-                        }
-                        return .{ .ok = {} };
-                    }
-                    // anything can be coerced into a float, it becomes NaN
-                    return .{ .coerce = {} };
-                },
-                .int => {
-                    if (js_value.isNumber() or js_value.isNumberObject()) {
-                        if (js_value.isInt32() or js_value.isUint32() or js_value.isBigInt() or js_value.isBigIntObject()) {
-                            return .{ .ok = {} };
-                        }
-                        // float => int is kind of reasonable, I guess
-                        return .{ .compatible = {} };
-                    }
-                    // anything can be coerced into a int, it becomes 0
-                    return .{ .coerce = {} };
-                },
-                .bool => {
-                    if (js_value.isBoolean() or js_value.isBooleanObject()) {
-                        return .{ .ok = {} };
-                    }
-                    // anything can be coerced into a boolean, it will become
-                    // true or false based on..some complex rules I don't know.
-                    return .{ .coerce = {} };
-                },
-                .pointer => |ptr| switch (ptr.size) {
-                    .one => {
-                        if (!js_value.isObject()) {
-                            return .{ .invalid = {} };
-                        }
-                        if (@hasField(TypeLookup, @typeName(ptr.child))) {
-                            const js_obj = js_value.castTo(v8.Object);
-                            // There's a bit of overhead in doing this, so instead
-                            // of having a version of typeTaggedAnyOpaque which
-                            // returns a boolean or an optional, we rely on the
-                            // main implementation and just handle the error.
-                            const attempt = E.typeTaggedAnyOpaque(named_function, *Receiver(ptr.child), js_obj);
-                            if (attempt) |value| {
-                                return .{ .value = value };
-                            } else |_| {
-                                return .{ .invalid = {} };
-                            }
-                        }
-                        // probably an error, but not for us to deal with
-                        return .{ .invalid = {} };
-                    },
-                    .slice => {
-                        if (js_value.isTypedArray()) {
-                            switch (ptr.child) {
-                                u8 => if (ptr.sentinel() == null) {
-                                    if (js_value.isUint8Array() or js_value.isUint8ClampedArray()) {
-                                        return .{ .ok = {} };
-                                    }
-                                },
-                                i8 => if (js_value.isInt8Array()) {
-                                    return .{ .ok = {} };
-                                },
-                                u16 => if (js_value.isUint16Array()) {
-                                    return .{ .ok = {} };
-                                },
-                                i16 => if (js_value.isInt16Array()) {
-                                    return .{ .ok = {} };
-                                },
-                                u32 => if (js_value.isUint32Array()) {
-                                    return .{ .ok = {} };
-                                },
-                                i32 => if (js_value.isInt32Array()) {
-                                    return .{ .ok = {} };
-                                },
-                                u64 => if (js_value.isBigUint64Array()) {
-                                    return .{ .ok = {} };
-                                },
-                                i64 => if (js_value.isBigInt64Array()) {
-                                    return .{ .ok = {} };
-                                },
-                                else => {},
-                            }
-                            return .{ .invalid = {} };
-                        }
-
-                        if (ptr.child == u8) {
-                            if (js_value.isString()) {
-                                return .{ .ok = {} };
-                            }
-                            // anything can be coerced into a string
-                            return .{ .coerce = {} };
-                        }
-
-                        if (!js_value.isArray()) {
-                            return error.InvalidArgument;
-                        }
-
-                        // This can get tricky.
-                        const js_arr = js_value.castTo(v8.Array);
-
-                        if (js_arr.length() == 0) {
-                            // not so tricky in this case.
-                            return .{ .value = &.{} };
-                        }
-
-                        // We settle for just probing the first value. Ok, actually
-                        // not tricky in this case either.
-                        const context = self.context;
-                        const js_obj = js_arr.castTo(v8.Object);
-                        switch (try self.probeJsValueToZig(named_function, ptr.child, try js_obj.getAtIndex(context, 0))) {
-                            .value, .ok => return .{ .ok = {} },
-                            .compatible => return .{ .compatible = {} },
-                            .coerce => return .{ .coerce = {} },
-                            .invalid => return .{ .invalid = {} },
-                        }
-                    },
-                    else => {},
-                },
-                .@"struct" => {
-                    // We don't want to duplicate the code for this, so we call
-                    // the actual coversion function.
-                    const value = (try self.jsValueToStruct(named_function, T, js_value)) orelse {
-                        return .{ .invalid = {} };
-                    };
-                    return .{ .value = value };
-                },
-                else => {},
-            }
-
-            return .{ .invalid = {} };
-        }
-
-        fn zigValueToJs(self: *const Self, value: anytype) !v8.Value {
-            return self.scope.zigValueToJs(value);
-        }
-
         fn isState(comptime T: type) bool {
             const ti = @typeInfo(State);
             const Const_State = if (ti == .pointer) *const ti.pointer.child else State;
             return T == State or T == Const_State;
-        }
-
-        fn isJsObject(comptime T: type) bool {
-            return @typeInfo(T) == .@"struct" and @hasDecl(T, "_JSOBJECT_ID_KLUDGE");
-        }
-
-        fn isJsThis(comptime T: type) bool {
-            return @typeInfo(T) == .@"struct" and @hasDecl(T, "_JSTHIS_ID_KLUDGE");
         }
 
         fn dumpFunctionArgs(self: *const Self, info: anytype) ![]const u8 {
@@ -2740,6 +2683,61 @@ fn Caller(comptime E: type, comptime State: type) type {
             return arr.items;
         }
     };
+}
+
+fn isJsObject(comptime T: type) bool {
+    return @typeInfo(T) == .@"struct" and @hasDecl(T, "_JSOBJECT_ID_KLUDGE");
+}
+
+fn isJsThis(comptime T: type) bool {
+    return @typeInfo(T) == .@"struct" and @hasDecl(T, "_JSTHIS_ID_KLUDGE");
+}
+
+fn jsIntToZig(comptime T: type, js_value: v8.Value, context: v8.Context) !T {
+    const n = @typeInfo(T).int;
+    switch (n.signedness) {
+        .signed => switch (n.bits) {
+            8 => return jsSignedIntToZig(i8, -128, 127, try js_value.toI32(context)),
+            16 => return jsSignedIntToZig(i16, -32_768, 32_767, try js_value.toI32(context)),
+            32 => return jsSignedIntToZig(i32, -2_147_483_648, 2_147_483_647, try js_value.toI32(context)),
+            64 => {
+                if (js_value.isBigInt()) {
+                    const v = js_value.castTo(v8.BigInt);
+                    return v.getInt64();
+                }
+                return jsSignedIntToZig(i64, -2_147_483_648, 2_147_483_647, try js_value.toI32(context));
+            },
+            else => {},
+        },
+        .unsigned => switch (n.bits) {
+            8 => return jsUnsignedIntToZig(u8, 255, try js_value.toU32(context)),
+            16 => return jsUnsignedIntToZig(u16, 65_535, try js_value.toU32(context)),
+            32 => return jsUnsignedIntToZig(u32, 4_294_967_295, try js_value.toU32(context)),
+            64 => {
+                if (js_value.isBigInt()) {
+                    const v = js_value.castTo(v8.BigInt);
+                    return v.getUint64();
+                }
+                return jsUnsignedIntToZig(u64, 4_294_967_295, try js_value.toU32(context));
+            },
+            else => {},
+        },
+    }
+    @compileError("Only i8, i16, i32, i64, u8, u16, u32 and u64 are supported");
+}
+
+fn jsSignedIntToZig(comptime T: type, comptime min: comptime_int, max: comptime_int, maybe: i32) !T {
+    if (maybe >= min and maybe <= max) {
+        return @intCast(maybe);
+    }
+    return error.InvalidArgument;
+}
+
+fn jsUnsignedIntToZig(comptime T: type, max: comptime_int, maybe: u32) !T {
+    if (maybe <= max) {
+        return @intCast(maybe);
+    }
+    return error.InvalidArgument;
 }
 
 // These are simple types that we can convert to JS with only an isolate. This
