@@ -1245,7 +1245,7 @@ test "Client: read invalid websocket message" {
         );
     }
 
-    // length of message is 0000 0401, i.e: 1024 * 256 + 1
+    // length of message is 0000 0401, i.e: 1024 * 512 + 1
     try assertWebSocketError(1009, &.{ 129, 255, 0, 0, 0, 0, 0, 8, 0, 1, 'm', 'a', 's', 'k' });
 
     // continuation type message must come after a normal message
