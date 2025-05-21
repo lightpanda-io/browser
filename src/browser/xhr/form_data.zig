@@ -221,8 +221,8 @@ fn collectForm(arena: Allocator, form: *parser.Form, submitter_: ?*parser.Elemen
         const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(element)));
         switch (tag) {
             .input => {
-                const input_type = try parser.elementGetAttribute(element, "type") orelse "";
-                if (std.ascii.eqlIgnoreCase(input_type, "image")) {
+                const tpe = try parser.elementGetAttribute(element, "type") orelse "";
+                if (std.ascii.eqlIgnoreCase(tpe, "image")) {
                     if (submitter_name_) |submitter_name| {
                         if (std.mem.eql(u8, submitter_name, name)) {
                             try entries.append(arena, .{
@@ -237,8 +237,14 @@ fn collectForm(arena: Allocator, form: *parser.Form, submitter_: ?*parser.Elemen
                     }
                     continue;
                 }
-                if (std.ascii.eqlIgnoreCase(input_type, "checkbox") or std.ascii.eqlIgnoreCase(input_type, "radio")) {
+
+                if (std.ascii.eqlIgnoreCase(tpe, "checkbox") or std.ascii.eqlIgnoreCase(tpe, "radio")) {
                     if (try parser.inputGetChecked(@ptrCast(element)) == false) {
+                        continue;
+                    }
+                }
+                if (std.ascii.eqlIgnoreCase(tpe, "submit")) {
+                    if (submitter_name_ == null or !std.mem.eql(u8, submitter_name_.?, name)) {
                         continue;
                     }
                 }
@@ -285,6 +291,10 @@ fn collectSelectValues(arena: Allocator, select: *parser.Select, name: []const u
     const is_multiple = try parser.selectGetMultiple(select);
     if (is_multiple == false) {
         const option = try parser.optionCollectionItem(options, @intCast(selected_index));
+
+        if (try parser.elementGetAttribute(@ptrCast(option), "disabled") != null) {
+            return;
+        }
         const value = try parser.optionGetValue(option);
         return entries.append(arena, .{ .key = name, .value = value });
     }
@@ -317,7 +327,7 @@ fn getSubmitterName(submitter_: ?*parser.ElementHTML) !?[]const u8 {
         .input => {
             const tpe = (try parser.elementGetAttribute(element, "type")) orelse "";
             // only an image type can be a sumbitter
-            if (std.ascii.eqlIgnoreCase(tpe, "image")) {
+            if (std.ascii.eqlIgnoreCase(tpe, "image") or std.ascii.eqlIgnoreCase(tpe, "submit")) {
                 return name;
             }
         },
@@ -356,8 +366,12 @@ test "Browser.FormData" {
         \\
         \\   <select name="sel-1"><option>blue<option>red</select>
         \\   <select name="sel-2"><option>blue<option value=sel-2-v selected>red</select>
+        \\   <select name="sel-3"><option disabled>nope1<option>nope2</select>
         \\   <select name="mlt-1" multiple><option>water<option>tea</select>
         \\   <select name="mlt-2" multiple><option selected>water<option selected>tea<option>coffee</select>
+        \\   <input type=submit id=s1 name=s1 value=s1-v>
+        \\   <input type=submit name=s2 value=s2-v>
+        \\   <input type=image name=i1 value=i1-v>
         \\ </form>
     });
     defer runner.deinit();
@@ -417,7 +431,9 @@ test "Browser.FormData" {
     }, .{});
 
     try runner.testCases(&.{
-        .{ "let f2 = new FormData(document.getElementById('form1'))", null },
+        .{ "let form1 = document.getElementById('form1')", null },
+        .{ "let submit1 = document.getElementById('s1')", null },
+        .{ "let f2 = new FormData(form1, submit1)", null },
         .{ "acc = '';", null },
         .{
             \\ for (const entry of f2) {
@@ -437,6 +453,7 @@ test "Browser.FormData" {
             \\sel-2=sel-2-v
             \\mlt-2=water
             \\mlt-2=tea
+            \\s1=s1-v
         },
     }, .{});
 }
