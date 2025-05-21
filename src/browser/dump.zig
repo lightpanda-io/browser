@@ -196,7 +196,10 @@ fn testWriteFullHTML(comptime expected: []const u8, src: []const u8) !void {
     var buf = std.ArrayListUnmanaged(u8){};
     defer buf.deinit(testing.allocator);
 
-    const doc_html = try parser.documentHTMLParseFromStr(src);
+    var aa = std.heap.ArenaAllocator.init(testing.allocator);
+    defer aa.deinit();
+
+    const doc_html = try parser.documentHTMLParseFromStr(aa.allocator(), src);
     defer parser.documentHTMLClose(doc_html) catch {};
 
     const doc = parser.documentHTMLToDocument(doc_html);
