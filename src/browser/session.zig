@@ -49,14 +49,14 @@ pub const Session = struct {
     // page and start another.
     transfer_arena: Allocator,
 
-    executor: Env.Executor,
+    executor: Env.ExecutionWorld,
     storage_shed: storage.Shed,
     cookie_jar: storage.CookieJar,
 
     page: ?Page = null,
 
     pub fn init(self: *Session, browser: *Browser) !void {
-        var executor = try browser.env.newExecutor();
+        var executor = try browser.env.newExecutionWorld();
         errdefer executor.deinit();
 
         const allocator = browser.app.allocator;
