@@ -69,6 +69,9 @@ pub fn CDPT(comptime TypeProvider: type) type {
         // 1 message at a time.
         message_arena: std.heap.ArenaAllocator,
 
+        // Used for processing notifications within a browser context.
+        notification_arena: std.heap.ArenaAllocator,
+
         const Self = @This();
 
         pub fn init(app: *App, client: TypeProvider.Client) !Self {
@@ -82,6 +85,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
                 .allocator = allocator,
                 .browser_context = null,
                 .message_arena = std.heap.ArenaAllocator.init(allocator),
+                .notification_arena = std.heap.ArenaAllocator.init(allocator),
             };
         }
 
@@ -91,6 +95,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
             }
             self.browser.deinit();
             self.message_arena.deinit();
+            self.notification_arena.deinit();
         }
 
         pub fn handleMessage(self: *Self, msg: []const u8) bool {
@@ -259,7 +264,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
             });
         }
 
-        fn sendJSON(self: *Self, message: anytype) !void {
+        pub fn sendJSON(self: *Self, message: anytype) !void {
             return self.client.sendJSON(message, .{
                 .emit_null_optional_fields = false,
             });
@@ -282,6 +287,12 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         // Points to the session arena
         arena: Allocator,
+
+        // From the parent's notification_arena.allocator(). Most of the CDP
+        // code paths deal with a cmd which has its own arena (from the
+        // message_arena). But notifications happen outside of the typical CDP
+        // request->response, and thus don't have a cmd and don't have an arena.
+        notification_arena: Allocator,
 
         // Maps to our Page. (There are other types of targets, but we only
         // deal with "pages" for now). Since we only allow 1 open page at a
@@ -336,6 +347,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .node_search_list = undefined,
                 .isolated_world = null,
                 .inspector = inspector,
+                .notification_arena = cdp.notification_arena.allocator(),
             };
             self.node_search_list = Node.Search.List.init(allocator, &self.node_registry);
             errdefer self.deinit();
@@ -397,6 +409,16 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             return if (raw_url.len == 0) null else raw_url;
         }
 
+        pub fn networkEnable(self: *Self) !void {
+            try self.cdp.browser.notification.register(.http_request_start, self, onHttpRequestStart);
+            try self.cdp.browser.notification.register(.http_request_complete, self, onHttpRequestComplete);
+        }
+
+        pub fn networkDisable(self: *Self) void {
+            self.cdp.browser.notification.unregister(.http_request_start, self);
+            self.cdp.browser.notification.unregister(.http_request_complete, self);
+        }
+
         pub fn onPageRemove(ctx: *anyopaque, _: Notification.PageRemove) !void {
             const self: *Self = @alignCast(@ptrCast(ctx));
             return @import("domains/page.zig").pageRemove(self);
@@ -409,12 +431,29 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         pub fn onPageNavigate(ctx: *anyopaque, data: *const Notification.PageNavigate) !void {
             const self: *Self = @alignCast(@ptrCast(ctx));
-            return @import("domains/page.zig").pageNavigate(self, data);
+            defer self.resetNotificationArena();
+            return @import("domains/page.zig").pageNavigate(self.notification_arena, self, data);
         }
 
         pub fn onPageNavigated(ctx: *anyopaque, data: *const Notification.PageNavigated) !void {
             const self: *Self = @alignCast(@ptrCast(ctx));
             return @import("domains/page.zig").pageNavigated(self, data);
+        }
+
+        pub fn onHttpRequestStart(ctx: *anyopaque, data: *const Notification.RequestStart) !void {
+            const self: *Self = @alignCast(@ptrCast(ctx));
+            defer self.resetNotificationArena();
+            return @import("domains/network.zig").httpRequestStart(self.notification_arena, self, data);
+        }
+
+        pub fn onHttpRequestComplete(ctx: *anyopaque, data: *const Notification.RequestComplete) !void {
+            const self: *Self = @alignCast(@ptrCast(ctx));
+            defer self.resetNotificationArena();
+            return @import("domains/network.zig").httpRequestComplete(self.notification_arena, self, data);
+        }
+
+        fn resetNotificationArena(self: *Self) void {
+            defer _ = self.cdp.notification_arena.reset(.{ .retain_with_limit = 1024 * 64 });
         }
 
         pub fn callInspector(self: *const Self, msg: []const u8) void {

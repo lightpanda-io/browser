@@ -7,7 +7,7 @@ const storage = @import("storage/storage.zig");
 const generate = @import("../runtime/generate.zig");
 const Renderer = @import("renderer.zig").Renderer;
 const Loop = @import("../runtime/loop.zig").Loop;
-const HttpClient = @import("../http/client.zig").Client;
+const RequestFactory = @import("../http/client.zig").RequestFactory;
 
 const WebApis = struct {
     // Wrapped like this for debug ergonomics.
@@ -54,8 +54,8 @@ pub const SessionState = struct {
     window: *Window,
     renderer: *Renderer,
     arena: std.mem.Allocator,
-    http_client: *HttpClient,
     cookie_jar: *storage.CookieJar,
+    request_factory: RequestFactory,
 
     // dangerous, but set by the JS framework
     // shorter-lived than the arena above, which

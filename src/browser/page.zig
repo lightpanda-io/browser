@@ -98,7 +98,7 @@ pub const Page = struct {
                 .renderer = &self.renderer,
                 .loop = browser.app.loop,
                 .cookie_jar = &session.cookie_jar,
-                .http_client = browser.http_client,
+                .request_factory = browser.http_client.requestFactory(browser.notification),
             },
             .scope = try session.executor.startScope(&self.window, &self.state, self, true),
             .module_map = .empty,
@@ -174,6 +174,7 @@ pub const Page = struct {
     pub fn navigate(self: *Page, request_url: URL, opts: NavigateOpts) !void {
         const arena = self.arena;
         const session = self.session;
+        const notification = session.browser.notification;
 
         log.debug("starting GET {s}", .{request_url});
 
@@ -195,10 +196,11 @@ pub const Page = struct {
         // load the data
         var request = try self.newHTTPRequest(.GET, &self.url, .{ .navigation = true });
         defer request.deinit();
+        request.notification = notification;
 
-        session.browser.notification.dispatch(.page_navigate, &.{
+        notification.dispatch(.page_navigate, &.{
+            .opts = opts,
             .url = &self.url,
-            .reason = opts.reason,
             .timestamp = timestamp(),
         });
 
@@ -238,7 +240,7 @@ pub const Page = struct {
             self.raw_data = arr.items;
         }
 
-        session.browser.notification.dispatch(.page_navigated, &.{
+        notification.dispatch(.page_navigated, &.{
             .url = &self.url,
             .timestamp = timestamp(),
         });
@@ -464,7 +466,9 @@ pub const Page = struct {
     }
 
     fn newHTTPRequest(self: *const Page, method: http.Request.Method, url: *const URL, opts: storage.cookie.LookupOpts) !http.Request {
-        var request = try self.state.http_client.request(method, &url.uri);
+        // Don't use the state's request_factory here, since requests made by the
+        // page (i.e. to load <scripts>) should not generate notifications.
+        var request = try self.session.browser.http_client.request(method, &url.uri);
         errdefer request.deinit();
 
         var arr: std.ArrayListUnmanaged(u8) = .{};
@@ -661,7 +665,8 @@ pub const NavigateReason = enum {
     address_bar,
 };
 
-const NavigateOpts = struct {
+pub const NavigateOpts = struct {
+    cdp_id: ?i64 = null,
     reason: NavigateReason = .address_bar,
 };
 

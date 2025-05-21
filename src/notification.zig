@@ -2,6 +2,7 @@ const std = @import("std");
 
 const URL = @import("url.zig").URL;
 const page = @import("browser/page.zig");
+const http_client = @import("http/client.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -59,6 +60,8 @@ pub const Notification = struct {
         page_created: List = .{},
         page_navigate: List = .{},
         page_navigated: List = .{},
+        http_request_start: List = .{},
+        http_request_complete: List = .{},
         notification_created: List = .{},
     };
 
@@ -67,6 +70,8 @@ pub const Notification = struct {
         page_created: *page.Page,
         page_navigate: *const PageNavigate,
         page_navigated: *const PageNavigated,
+        http_request_start: *const RequestStart,
+        http_request_complete: *const RequestComplete,
         notification_created: *Notification,
     };
     const EventType = std.meta.FieldEnum(Events);
@@ -76,12 +81,27 @@ pub const Notification = struct {
     pub const PageNavigate = struct {
         timestamp: u32,
         url: *const URL,
-        reason: page.NavigateReason,
+        opts: page.NavigateOpts,
     };
 
     pub const PageNavigated = struct {
         timestamp: u32,
         url: *const URL,
+    };
+
+    pub const RequestStart = struct {
+        id: usize,
+        url: *const std.Uri,
+        method: http_client.Request.Method,
+        headers: []std.http.Header,
+        has_body: bool,
+    };
+
+    pub const RequestComplete = struct {
+        id: usize,
+        url: *const std.Uri,
+        status: u16,
+        headers: []http_client.Header,
     };
 
     pub fn init(allocator: Allocator, parent: ?*Notification) !*Notification {
@@ -128,6 +148,7 @@ pub const Notification = struct {
             .list = list,
             .func = @ptrCast(func),
             .receiver = receiver,
+            .event = event,
             .struct_name = @typeName(@typeInfo(@TypeOf(receiver)).pointer.child),
         };
 
@@ -141,6 +162,30 @@ pub const Notification = struct {
         // we don't add this until we've successfully added the entry to
         // self.listeners
         list.append(node);
+    }
+
+    pub fn unregister(self: *Notification, comptime event: EventType, receiver: anytype) void {
+        var nodes = self.listeners.getPtr(@intFromPtr(receiver)) orelse return;
+
+        const node_pool = &self.node_pool;
+
+        var i: usize = 0;
+        while (i < nodes.items.len) {
+            const node = nodes.items[i];
+            if (node.data.event != event) {
+                i += 1;
+                continue;
+            }
+            node.data.list.remove(node);
+            node_pool.destroy(node);
+            _ = nodes.swapRemove(i);
+        }
+
+        if (nodes.items.len == 0) {
+            nodes.deinit(self.allocator);
+            const removed = self.listeners.remove(@intFromPtr(receiver));
+            std.debug.assert(removed == true);
+        }
     }
 
     pub fn unregisterAll(self: *Notification, receiver: *anyopaque) void {
@@ -184,7 +229,7 @@ fn EventFunc(comptime event: Notification.EventType) type {
     return *const fn (*anyopaque, ArgType(event)) anyerror!void;
 }
 
-// An listener. This is 1 receiver, with its function, and the linked list
+// A listener. This is 1 receiver, with its function, and the linked list
 // node that goes in the appropriate EventListeners list.
 const Listener = struct {
     // the receiver of the event, i.e. the self parameter to `func`
@@ -195,6 +240,8 @@ const Listener = struct {
 
     // For logging slightly better error
     struct_name: []const u8,
+
+    event: Notification.EventType,
 
     // The event list this listener belongs to.
     // We need this in order to be able to remove the node from the list
@@ -210,7 +257,7 @@ test "Notification" {
     notifier.dispatch(.page_navigate, &.{
         .timestamp = 4,
         .url = undefined,
-        .reason = undefined,
+        .opts = .{},
     });
 
     var tc = TestClient{};
@@ -219,7 +266,7 @@ test "Notification" {
     notifier.dispatch(.page_navigate, &.{
         .timestamp = 4,
         .url = undefined,
-        .reason = undefined,
+        .opts = .{},
     });
     try testing.expectEqual(4, tc.page_navigate);
 
@@ -227,7 +274,7 @@ test "Notification" {
     notifier.dispatch(.page_navigate, &.{
         .timestamp = 10,
         .url = undefined,
-        .reason = undefined,
+        .opts = .{},
     });
     try testing.expectEqual(4, tc.page_navigate);
 
@@ -236,7 +283,7 @@ test "Notification" {
     notifier.dispatch(.page_navigate, &.{
         .timestamp = 10,
         .url = undefined,
-        .reason = undefined,
+        .opts = .{},
     });
     notifier.dispatch(.page_navigated, &.{ .timestamp = 6, .url = undefined });
     try testing.expectEqual(14, tc.page_navigate);
@@ -246,11 +293,40 @@ test "Notification" {
     notifier.dispatch(.page_navigate, &.{
         .timestamp = 100,
         .url = undefined,
-        .reason = undefined,
+        .opts = .{},
     });
     notifier.dispatch(.page_navigated, &.{ .timestamp = 100, .url = undefined });
     try testing.expectEqual(14, tc.page_navigate);
     try testing.expectEqual(6, tc.page_navigated);
+
+    {
+        // unregister
+        try notifier.register(.page_navigate, &tc, TestClient.pageNavigate);
+        try notifier.register(.page_navigated, &tc, TestClient.pageNavigated);
+        notifier.dispatch(.page_navigate, &.{ .timestamp = 100, .url = undefined, .opts = .{} });
+        notifier.dispatch(.page_navigated, &.{ .timestamp = 1000, .url = undefined });
+        try testing.expectEqual(114, tc.page_navigate);
+        try testing.expectEqual(1006, tc.page_navigated);
+
+        notifier.unregister(.page_navigate, &tc);
+        notifier.dispatch(.page_navigate, &.{ .timestamp = 100, .url = undefined, .opts = .{} });
+        notifier.dispatch(.page_navigated, &.{ .timestamp = 1000, .url = undefined });
+        try testing.expectEqual(114, tc.page_navigate);
+        try testing.expectEqual(2006, tc.page_navigated);
+
+        notifier.unregister(.page_navigated, &tc);
+        notifier.dispatch(.page_navigate, &.{ .timestamp = 100, .url = undefined, .opts = .{} });
+        notifier.dispatch(.page_navigated, &.{ .timestamp = 1000, .url = undefined });
+        try testing.expectEqual(114, tc.page_navigate);
+        try testing.expectEqual(2006, tc.page_navigated);
+
+        // already unregistered, try anyways
+        notifier.unregister(.page_navigated, &tc);
+        notifier.dispatch(.page_navigate, &.{ .timestamp = 100, .url = undefined, .opts = .{} });
+        notifier.dispatch(.page_navigated, &.{ .timestamp = 1000, .url = undefined });
+        try testing.expectEqual(114, tc.page_navigate);
+        try testing.expectEqual(2006, tc.page_navigated);
+    }
 }
 
 const TestClient = struct {

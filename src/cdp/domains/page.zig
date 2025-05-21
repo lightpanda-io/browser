@@ -21,6 +21,8 @@ const URL = @import("../../url.zig").URL;
 const Page = @import("../../browser/page.zig").Page;
 const Notification = @import("../../notification.zig").Notification;
 
+const Allocator = std.mem.Allocator;
+
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
         enable,
@@ -137,7 +139,7 @@ fn navigate(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     // didn't create?
-    const target_id = bc.target_id orelse return error.TargetIdNotLoaded;
+    // const target_id = bc.target_id orelse return error.TargetIdNotLoaded;
 
     // didn't attach?
     if (bc.session_id == null) {
@@ -148,17 +150,14 @@ fn navigate(cmd: anytype) !void {
 
     var page = bc.session.currentPage() orelse return error.PageNotLoaded;
     bc.loader_id = bc.cdp.loader_id_gen.next();
-    try cmd.sendResult(.{
-        .frameId = target_id,
-        .loaderId = bc.loader_id,
-    }, .{});
 
     try page.navigate(url, .{
         .reason = .address_bar,
+        .cdp_id = cmd.input.id,
     });
 }
 
-pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void {
+pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.PageNavigate) !void {
     // I don't think it's possible that we get these notifications and don't
     // have these things setup.
     std.debug.assert(bc.session.page != null);
@@ -170,7 +169,8 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void 
 
     bc.reset();
 
-    if (event.reason == .anchor) {
+    const is_anchor = event.opts.reason == .anchor;
+    if (is_anchor) {
         try cdp.sendEvent("Page.frameScheduledNavigation", .{
             .frameId = target_id,
             .delay = 0,
@@ -199,6 +199,22 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void 
         .frameId = target_id,
     }, .{ .session_id = session_id });
 
+    // Drivers are sensitive to the order of events. Some more than others.
+    // The result for the Page.navigate seems like it _must_ come after
+    // the frameStartedLoading, but before any lifecycleEvent. So we
+    // unfortunately have to put the input_id ito the NavigateOpts which gets
+    // passed back into the notification.
+    if (event.opts.cdp_id) |input_id| {
+        try cdp.sendJSON(.{
+            .id = input_id,
+            .result = .{
+                .frameId = target_id,
+                .loaderId = loader_id,
+            },
+            .sessionId = session_id,
+        });
+    }
+
     if (bc.page_life_cycle_events) {
         try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
             .name = "init",
@@ -208,7 +224,7 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void 
         }, .{ .session_id = session_id });
     }
 
-    if (event.reason == .anchor) {
+    if (is_anchor) {
         try cdp.sendEvent("Page.frameClearedScheduledNavigation", .{
             .frameId = target_id,
         }, .{ .session_id = session_id });
@@ -219,21 +235,19 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void 
     // The client will expect us to send new contextCreated events, such that the client has new id's for the active contexts.
     try cdp.sendEvent("Runtime.executionContextsCleared", null, .{ .session_id = session_id });
 
-    var buffer: [512]u8 = undefined;
     {
-        var fba = std.heap.FixedBufferAllocator.init(&buffer);
         const page = bc.session.currentPage() orelse return error.PageNotLoaded;
-        const aux_data = try std.fmt.allocPrint(fba.allocator(), "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
+        const aux_data = try std.fmt.allocPrint(arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
         bc.inspector.contextCreated(
             page.scope,
             "",
-            try page.origin(fba.allocator()),
+            try page.origin(arena),
             aux_data,
             true,
         );
     }
     if (bc.isolated_world) |*isolated_world| {
-        const aux_json = try std.fmt.bufPrint(&buffer, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{target_id});
+        const aux_json = try std.fmt.allocPrint(arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{target_id});
         // Calling contextCreated will assign a new Id to the context and send the contextCreated event
         bc.inspector.contextCreated(
             &isolated_world.executor.scope.?,
