@@ -230,10 +230,9 @@ fn querySelectorAll(cmd: anytype) !void {
     const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse return error.UnknownNode;
 
     const arena = cmd.arena;
-    var selected_nodes = try css.querySelectorAll(arena, node._node, params.selector);
-    defer selected_nodes.deinit(arena);
-
+    const selected_nodes = try css.querySelectorAll(arena, node._node, params.selector);
     const nodes = selected_nodes.nodes.items;
+
     const node_ids = try arena.alloc(Node.Id, nodes.len);
     for (nodes, node_ids) |selected_node, *node_id| {
         node_id.* = (try bc.node_registry.register(selected_node)).id;
@@ -522,7 +521,7 @@ test "cdp.dom: querySelector Nodes found" {
         .method = "DOM.querySelector",
         .params = .{ .nodeId = 0, .selector = "p" },
     });
-    // TODO Check 1 or more "DOM.setChildNodes" was send
+    try ctx.expectSentEvent("DOM.setChildNodes", null, .{});
     try ctx.expectSentResult(.{ .nodeId = 5 }, .{ .id = 4 });
 
     try ctx.processMessage(.{
@@ -530,6 +529,6 @@ test "cdp.dom: querySelector Nodes found" {
         .method = "DOM.querySelectorAll",
         .params = .{ .nodeId = 0, .selector = "p" },
     });
-    // TODO Check 1 or more "DOM.setChildNodes" was send
+    try ctx.expectSentEvent("DOM.setChildNodes", null, .{});
     try ctx.expectSentResult(.{ .nodeIds = &.{5} }, .{ .id = 5 });
 }
