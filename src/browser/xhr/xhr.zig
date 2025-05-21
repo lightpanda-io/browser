@@ -278,13 +278,6 @@ pub const XMLHttpRequest = struct {
         self.priv_state = .new;
     }
 
-    pub fn deinit(self: *XMLHttpRequest, alloc: Allocator) void {
-        if (self.response_obj) |v| {
-            v.deinit();
-        }
-        self.proto.deinit(alloc);
-    }
-
     pub fn get_readyState(self: *XMLHttpRequest) u16 {
         return @intFromEnum(self.state);
     }
