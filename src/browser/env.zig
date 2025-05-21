@@ -42,7 +42,7 @@ const WebApis = struct {
 
 pub const JsThis = Env.JsThis;
 pub const JsObject = Env.JsObject;
-pub const Callback = Env.Callback;
+pub const Function = Env.Function;
 pub const Env = js.Env(*SessionState, WebApis);
 
 const Window = @import("html/window.zig").Window;

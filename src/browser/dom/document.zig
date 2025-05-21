@@ -242,8 +242,8 @@ pub const Document = struct {
         return Node.replaceChildren(parser.documentToNode(self), nodes);
     }
 
-    pub fn _createTreeWalker(_: *parser.Document, root: *parser.Node, what_to_show: ?u32, filter: ?Env.Callback) TreeWalker {
-        return TreeWalker.init(root, what_to_show, filter);
+    pub fn _createTreeWalker(_: *parser.Document, root: *parser.Node, what_to_show: ?u32, filter: ?TreeWalker.TreeWalkerOpts) !TreeWalker {
+        return try TreeWalker.init(root, what_to_show, filter);
     }
 };
 
