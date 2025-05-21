@@ -515,14 +515,9 @@ pub const Page = struct {
 
     fn _windowClicked(self: *Page, event: *parser.Event) !void {
         const target = (try parser.eventTarget(event)) orelse return;
-
         const node = parser.eventTargetToNode(target);
-        if (try parser.nodeType(node) != .element) {
-            return;
-        }
-
-        const html_element: *parser.ElementHTML = @ptrCast(node);
-        switch (try parser.elementHTMLGetTagType(html_element)) {
+        const tag = (try parser.nodeHTMLGetTagType(node)) orelse return;
+        switch (tag) {
             .a => {
                 const element: *parser.Element = @ptrCast(node);
                 const href = (try parser.elementGetAttribute(element, "href")) orelse return;

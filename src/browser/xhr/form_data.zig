@@ -20,8 +20,11 @@ const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 
+const parser = @import("../netsurf.zig");
 const iterator = @import("../iterator/iterator.zig");
 const SessionState = @import("../env.zig").SessionState;
+
+const log = std.log.scoped(.form_data);
 
 pub const Interfaces = .{
     FormData,
@@ -31,7 +34,7 @@ pub const Interfaces = .{
 };
 
 // We store the values in an ArrayList rather than a an
-// StringArrayHashMap([]const u8)  because of the way the iterators (i.e., keys(),
+// StringArrayHashMap([]const u8) because of the way the iterators (i.e., keys(),
 // values() and entries()) work. The FormData can contain duplicate keys, and
 // each iteration yields 1 key=>value pair. So, given:
 //
@@ -51,10 +54,20 @@ pub const Interfaces = .{
 pub const FormData = struct {
     entries: std.ArrayListUnmanaged(Entry),
 
-    pub fn constructor() FormData {
-        return .{
-            .entries = .empty,
-        };
+    pub fn constructor(form_: ?*parser.Form, submitter_: ?*parser.ElementHTML, state: *SessionState) !FormData {
+        const form = form_ orelse return .{ .entries = .empty };
+        return fromForm(form, submitter_, state, .{});
+    }
+
+    const FromFormOpts = struct {
+        // Uses the state.arena if null. This is needed for when we're handling
+        // form submission from the Page, and we want to capture the form within
+        // the session's transfer_arena.
+        allocator: ?Allocator = null,
+    };
+    pub fn fromForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, state: *SessionState, opts: FromFormOpts) !FormData {
+        const entries = try collectForm(opts.allocator orelse state.arena, form, submitter_, state);
+        return .{ .entries = entries };
     }
 
     pub fn _get(self: *const FormData, key: []const u8) ?[]const u8 {
@@ -186,9 +199,181 @@ const EntryIterator = struct {
     }
 };
 
+fn collectForm(arena: Allocator, form: *parser.Form, submitter_: ?*parser.ElementHTML, state: *SessionState) !std.ArrayListUnmanaged(Entry) {
+    const collection = try parser.formGetCollection(form);
+    const len = try parser.htmlCollectionGetLength(collection);
+
+    var entries: std.ArrayListUnmanaged(Entry) = .empty;
+    try entries.ensureTotalCapacity(arena, len);
+
+    const submitter_name_ = try getSubmitterName(submitter_);
+
+    for (0..len) |i| {
+        const node = try parser.htmlCollectionItem(collection, @intCast(i));
+        const element = parser.nodeToElement(node);
+
+        // must have a name
+        const name = try parser.elementGetAttribute(element, "name") orelse continue;
+        if (try parser.elementGetAttribute(element, "disabled") != null) {
+            continue;
+        }
+
+        const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(element)));
+        switch (tag) {
+            .input => {
+                const tpe = try parser.elementGetAttribute(element, "type") orelse "";
+                if (std.ascii.eqlIgnoreCase(tpe, "image")) {
+                    if (submitter_name_) |submitter_name| {
+                        if (std.mem.eql(u8, submitter_name, name)) {
+                            try entries.append(arena, .{
+                                .key = try std.fmt.allocPrint(arena, "{s}.x", .{name}),
+                                .value = "0",
+                            });
+                            try entries.append(arena, .{
+                                .key = try std.fmt.allocPrint(arena, "{s}.y", .{name}),
+                                .value = "0",
+                            });
+                        }
+                    }
+                    continue;
+                }
+
+                if (std.ascii.eqlIgnoreCase(tpe, "checkbox") or std.ascii.eqlIgnoreCase(tpe, "radio")) {
+                    if (try parser.inputGetChecked(@ptrCast(element)) == false) {
+                        continue;
+                    }
+                }
+                if (std.ascii.eqlIgnoreCase(tpe, "submit")) {
+                    if (submitter_name_ == null or !std.mem.eql(u8, submitter_name_.?, name)) {
+                        continue;
+                    }
+                }
+                const value = (try parser.elementGetAttribute(element, "value")) orelse "";
+                try entries.append(arena, .{ .key = name, .value = value });
+            },
+            .select => {
+                const select: *parser.Select = @ptrCast(node);
+                try collectSelectValues(arena, select, name, &entries, state);
+            },
+            .textarea => {
+                const textarea: *parser.TextArea = @ptrCast(node);
+                const value = try parser.textareaGetValue(textarea);
+                try entries.append(arena, .{ .key = name, .value = value });
+            },
+            .button => if (submitter_name_) |submitter_name| {
+                if (std.mem.eql(u8, submitter_name, name)) {
+                    const value = (try parser.elementGetAttribute(element, "value")) orelse "";
+                    try entries.append(arena, .{ .key = name, .value = value });
+                }
+            },
+            else => {
+                log.warn("unsupported form element: {s}\n", .{@tagName(tag)});
+                continue;
+            },
+        }
+    }
+
+    return entries;
+}
+
+fn collectSelectValues(arena: Allocator, select: *parser.Select, name: []const u8, entries: *std.ArrayListUnmanaged(Entry), state: *SessionState) !void {
+    const HTMLSelectElement = @import("../html/select.zig").HTMLSelectElement;
+
+    // Go through the HTMLSelectElement because it has specific logic for handling
+    // the default selected option, which libdom doesn't properly handle
+    const selected_index = try HTMLSelectElement.get_selectedIndex(select, state);
+    if (selected_index == -1) {
+        return;
+    }
+    std.debug.assert(selected_index >= 0);
+
+    const options = try parser.selectGetOptions(select);
+    const is_multiple = try parser.selectGetMultiple(select);
+    if (is_multiple == false) {
+        const option = try parser.optionCollectionItem(options, @intCast(selected_index));
+
+        if (try parser.elementGetAttribute(@ptrCast(option), "disabled") != null) {
+            return;
+        }
+        const value = try parser.optionGetValue(option);
+        return entries.append(arena, .{ .key = name, .value = value });
+    }
+
+    const len = try parser.optionCollectionGetLength(options);
+
+    // we can go directly to the first one
+    for (@intCast(selected_index)..len) |i| {
+        const option = try parser.optionCollectionItem(options, @intCast(i));
+        if (try parser.elementGetAttribute(@ptrCast(option), "disabled") != null) {
+            continue;
+        }
+
+        if (try parser.optionGetSelected(option)) {
+            const value = try parser.optionGetValue(option);
+            try entries.append(arena, .{ .key = name, .value = value });
+        }
+    }
+}
+
+fn getSubmitterName(submitter_: ?*parser.ElementHTML) !?[]const u8 {
+    const submitter = submitter_ orelse return null;
+
+    const tag = try parser.elementHTMLGetTagType(submitter);
+    const element: *parser.Element = @ptrCast(submitter);
+    const name = try parser.elementGetAttribute(element, "name");
+
+    switch (tag) {
+        .button => return name,
+        .input => {
+            const tpe = (try parser.elementGetAttribute(element, "type")) orelse "";
+            // only an image type can be a sumbitter
+            if (std.ascii.eqlIgnoreCase(tpe, "image") or std.ascii.eqlIgnoreCase(tpe, "submit")) {
+                return name;
+            }
+        },
+        else => {},
+    }
+    return error.InvalidArgument;
+}
+
 const testing = @import("../../testing.zig");
-test "FormData" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
+test "Browser.FormData" {
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html = 
+        \\ <form id="form1">
+        \\   <input id="has_no_name" value="nope1">
+        \\   <input id="is_disabled" disabled value="nope2">
+        \\
+        \\   <input name="txt-1" value="txt-1-v">
+        \\   <input name="txt-2" value="txt-2-v" type=password>
+        \\
+        \\   <input name="chk-3" value="chk-3-va" type=checkbox>
+        \\   <input name="chk-3" value="chk-3-vb" type=checkbox checked>
+        \\   <input name="chk-3" value="chk-3-vc" type=checkbox checked>
+        \\   <input name="chk-4" value="chk-4-va" type=checkbox>
+        \\   <input name="chk-4" value="chk-4-va" type=checkbox>
+        \\
+        \\   <input name="rdi-1" value="rdi-1-va" type=radio>
+        \\   <input name="rdi-1" value="rdi-1-vb" type=radio>
+        \\   <input name="rdi-1" value="rdi-1-vc" type=radio checked>
+        \\   <input name="rdi-2" value="rdi-2-va" type=radio>
+        \\   <input name="rdi-2" value="rdi-2-vb" type=radio>
+        \\
+        \\   <textarea name="ta-1"> ta-1-v</textarea>
+        \\   <textarea name="ta"></textarea>
+        \\
+        \\   <input type=hidden name=h1 value="h1-v">
+        \\   <input type=hidden name=h2 value="h2-v" disabled=disabled>
+        \\
+        \\   <select name="sel-1"><option>blue<option>red</select>
+        \\   <select name="sel-2"><option>blue<option value=sel-2-v selected>red</select>
+        \\   <select name="sel-3"><option disabled>nope1<option>nope2</select>
+        \\   <select name="mlt-1" multiple><option>water<option>tea</select>
+        \\   <select name="mlt-2" multiple><option selected>water<option selected>tea<option>coffee</select>
+        \\   <input type=submit id=s1 name=s1 value=s1-v>
+        \\   <input type=submit name=s2 value=s2-v>
+        \\   <input type=image name=i1 value=i1-v>
+        \\ </form>
+    });
     defer runner.deinit();
 
     try runner.testCases(&.{
@@ -243,5 +428,32 @@ test "FormData" {
 
         .{ "acc = [];", null },
         .{ "for (const entry of f) { acc.push(entry) }; acc;", "b,3" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "let form1 = document.getElementById('form1')", null },
+        .{ "let submit1 = document.getElementById('s1')", null },
+        .{ "let f2 = new FormData(form1, submit1)", null },
+        .{ "acc = '';", null },
+        .{
+            \\ for (const entry of f2) {
+            \\   acc += entry[0] + '=' + entry[1] + '\n';
+            \\ };
+            \\ acc.slice(0, -1)
+            ,
+            \\txt-1=txt-1-v
+            \\txt-2=txt-2-v
+            \\chk-3=chk-3-vb
+            \\chk-3=chk-3-vc
+            \\rdi-1=rdi-1-vc
+            \\ta-1= ta-1-v
+            \\ta=
+            \\h1=h1-v
+            \\sel-1=blue
+            \\sel-2=sel-2-v
+            \\mlt-2=water
+            \\mlt-2=tea
+            \\s1=s1-v
+        },
     }, .{});
 }

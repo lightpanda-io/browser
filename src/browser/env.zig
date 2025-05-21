@@ -62,9 +62,9 @@ pub const SessionState = struct {
     // exists for the entire rendering of the page
     call_arena: std.mem.Allocator = undefined,
 
-    pub fn getNodeWrapper(self: *SessionState, comptime T: type, node: *parser.Node) !*T {
-        if (parser.nodeGetEmbedderData(node)) |wrap| {
-            return @alignCast(@ptrCast(wrap));
+    pub fn getOrCreateNodeWrapper(self: *SessionState, comptime T: type, node: *parser.Node) !*T {
+        if (try self.getNodeWrapper(T, node)) |wrap| {
+            return wrap;
         }
 
         const wrap = try self.arena.create(T);
@@ -72,5 +72,12 @@ pub const SessionState = struct {
 
         parser.nodeSetEmbedderData(node, wrap);
         return wrap;
+    }
+
+    pub fn getNodeWrapper(_: *SessionState, comptime T: type, node: *parser.Node) !?*T {
+        if (parser.nodeGetEmbedderData(node)) |wrap| {
+            return @alignCast(@ptrCast(wrap));
+        }
+        return null;
     }
 };
