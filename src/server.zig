@@ -45,7 +45,7 @@ const MAX_HTTP_REQUEST_SIZE = 2048;
 // max message size
 // +14 for max websocket payload overhead
 // +140 for the max control packet that might be interleaved in a message
-const MAX_MESSAGE_SIZE = 256 * 1024 + 14;
+const MAX_MESSAGE_SIZE = 512 * 1024 + 14;
 
 const Server = struct {
     app: *App,
@@ -1246,10 +1246,7 @@ test "Client: read invalid websocket message" {
     }
 
     // length of message is 0000 0401, i.e: 1024 * 256 + 1
-    try assertWebSocketError(
-        1009,
-        &.{ 129, 255, 0, 0, 0, 0, 0, 4, 0, 1, 'm', 'a', 's', 'k' },
-    );
+    try assertWebSocketError(1009, &.{ 129, 255, 0, 0, 0, 0, 0, 8, 0, 1, 'm', 'a', 's', 'k' });
 
     // continuation type message must come after a normal message
     // even when not a fin frame
