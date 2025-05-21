@@ -539,8 +539,15 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // no init, started with executor.startScope()
 
             fn deinit(self: *Scope) void {
-                for (self.destructor_callbacks.items) |cb| {
-                    cb.destructor(self);
+                {
+                    // reverse order, as this has more chance of respecting any
+                    // dependencies objects might have with each other.
+                    const items = self.destructor_callbacks.items;
+                    var i = items.len;
+                    while (i > 0) {
+                        i -= 1;
+                        items[i].destructor();
+                    }
                 }
 
                 {
@@ -1687,16 +1694,16 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
         // called when the call scope ends
         const DestructorCallback = struct {
             ptr: *anyopaque,
-            destructorFn: *const fn (ptr: *anyopaque, scope: *Scope) void,
+            destructorFn: *const fn (ptr: *anyopaque) void,
 
             fn init(ptr: anytype) DestructorCallback {
                 const T = @TypeOf(ptr);
                 const ptr_info = @typeInfo(T);
 
                 const gen = struct {
-                    pub fn destructor(pointer: *anyopaque, scope: *Scope) void {
+                    pub fn destructor(pointer: *anyopaque) void {
                         const self: T = @ptrCast(@alignCast(pointer));
-                        return ptr_info.pointer.child.destructor(self, scope);
+                        return ptr_info.pointer.child.destructor(self);
                     }
                 };
 
@@ -1706,8 +1713,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 };
             }
 
-            pub fn destructor(self: DestructorCallback, scope: *Scope) void {
-                self.destructorFn(self.ptr, scope);
+            pub fn destructor(self: DestructorCallback) void {
+                self.destructorFn(self.ptr);
             }
         };
 
@@ -1715,16 +1722,16 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
         // called when the call scope ends
         const CallScopeEndCallback = struct {
             ptr: *anyopaque,
-            callScopeEndFn: *const fn (ptr: *anyopaque, scope: *Scope) void,
+            callScopeEndFn: *const fn (ptr: *anyopaque) void,
 
             fn init(ptr: anytype) CallScopeEndCallback {
                 const T = @TypeOf(ptr);
                 const ptr_info = @typeInfo(T);
 
                 const gen = struct {
-                    pub fn callScopeEnd(pointer: *anyopaque, scope: *Scope) void {
+                    pub fn callScopeEnd(pointer: *anyopaque) void {
                         const self: T = @ptrCast(@alignCast(pointer));
-                        return ptr_info.pointer.child.jsCallScopeEnd(self, scope);
+                        return ptr_info.pointer.child.jsCallScopeEnd(self);
                     }
                 };
 
@@ -1734,8 +1741,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 };
             }
 
-            pub fn callScopeEnd(self: CallScopeEndCallback, scope: *Scope) void {
-                self.callScopeEndFn(self.ptr, scope);
+            pub fn callScopeEnd(self: CallScopeEndCallback) void {
+                self.callScopeEndFn(self.ptr);
             }
         };
     };
@@ -1815,7 +1822,7 @@ fn Caller(comptime E: type, comptime State: type) type {
             // when a top-level (call_depth == 0) function ends.
             if (call_depth == 0) {
                 for (scope.call_scope_end_callbacks.items) |cb| {
-                    cb.callScopeEnd(scope);
+                    cb.callScopeEnd();
                 }
 
                 const arena: *ArenaAllocator = @alignCast(@ptrCast(scope.call_arena.ptr));

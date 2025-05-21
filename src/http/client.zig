@@ -261,13 +261,6 @@ pub const Request = struct {
         self._client.state_pool.release(self._state);
     }
 
-    pub fn abort(self: *Request) void {
-        const connection = self._connection orelse return;
-        self.destroyConnection(connection);
-        self._connection = null;
-        self.deinit();
-    }
-
     const DecomposedURL = struct {
         secure: bool,
         connect_port: u16,

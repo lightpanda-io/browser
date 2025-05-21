@@ -257,10 +257,6 @@ pub const XMLHttpRequest = struct {
         };
     }
 
-    pub fn destructor(self: *XMLHttpRequest, _: anytype) void {
-        self._abort();
-    }
-
     pub fn reset(self: *XMLHttpRequest) void {
         self.url = null;
 
@@ -539,10 +535,6 @@ pub const XMLHttpRequest = struct {
     }
 
     pub fn _abort(self: *XMLHttpRequest) void {
-        const request = &(self.request orelse return);
-        // safe to call even if the request is complete
-        request.abort();
-
         self.onErr(DOMError.Abort);
     }
 
