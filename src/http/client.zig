@@ -895,6 +895,10 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
             }
 
             const status = self.conn.received(self.read_buf[0 .. self.read_pos + n]) catch |err| {
+                if (err == error.TlsAlertCloseNotify and self.state == .handshake and self.maybeRetryRequest()) {
+                    return;
+                }
+
                 self.handleError("data processing", err);
                 return;
             };
