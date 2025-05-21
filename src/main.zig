@@ -25,14 +25,14 @@ const App = @import("app.zig").App;
 const Platform = @import("runtime/js.zig").Platform;
 const Browser = @import("browser/browser.zig").Browser;
 
+const build_config = @import("build_config");
 const parser = @import("browser/netsurf.zig");
-const version = @import("build_info").git_commit;
 
 const log = std.log.scoped(.cli);
 
 pub const std_options = std.Options{
     // Set the log level to info
-    .log_level = .info,
+    .log_level = @enumFromInt(@intFromEnum(build_config.log_level)),
 
     // Define logFn to override the std implementation
     .logFn = logFn,
@@ -59,7 +59,7 @@ pub fn main() !void {
             return std.process.cleanExit();
         },
         .version => {
-            std.debug.print("{s}\n", .{version});
+            std.debug.print("{s}\n", .{build_config.git_commit});
             return std.process.cleanExit();
         },
         else => {},

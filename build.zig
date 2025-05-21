@@ -44,6 +44,18 @@ pub fn build(b: *std.Build) !void {
         b.option([]const u8, "git_commit", "Current git commit") orelse "dev",
     );
 
+    opts.addOption(
+        std.log.Level,
+        "log_level",
+        b.option(std.log.Level, "log_level", "The log level") orelse std.log.Level.info,
+    );
+
+    opts.addOption(
+        bool,
+        "log_unknown_properties",
+        b.option(bool, "log_unknown_properties", "Log access to unknown properties") orelse false,
+    );
+
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -175,7 +187,7 @@ fn common(b: *std.Build, opts: *std.Build.Step.Options, step: *std.Build.Step.Co
         else => {},
     }
 
-    mod.addImport("build_info", opts.createModule());
+    mod.addImport("build_config", opts.createModule());
     mod.addObjectFile(mod.owner.path(lib_path));
 }
 
