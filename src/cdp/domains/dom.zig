@@ -37,6 +37,7 @@ pub fn processMessage(cmd: anytype) !void {
         describeNode,
         scrollIntoViewIfNeeded,
         getContentQuads,
+        getBoxModel,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -51,6 +52,7 @@ pub fn processMessage(cmd: anytype) !void {
         .describeNode => return describeNode(cmd),
         .scrollIntoViewIfNeeded => return scrollIntoViewIfNeeded(cmd),
         .getContentQuads => return getContentQuads(cmd),
+        .getBoxModel => return getBoxModel(cmd),
     }
 }
 
@@ -311,6 +313,16 @@ fn describeNode(cmd: anytype) !void {
 // We are assuming the start/endpoint is not repeated.
 const Quad = [8]f64;
 
+const BoxModel = struct {
+    content: Quad,
+    padding: Quad,
+    border: Quad,
+    margin: Quad,
+    width: i32,
+    height: i32,
+    // shapeOutside: ?ShapeOutsideInfo,
+};
+
 fn rectToQuad(rect: Element.DOMRect) Quad {
     return Quad{
         rect.x,
@@ -389,6 +401,34 @@ fn getContentQuads(cmd: anytype) !void {
     const quad = rectToQuad(rect);
 
     return cmd.sendResult(.{ .quads = &.{quad} }, .{});
+}
+
+fn getBoxModel(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        nodeId: ?Node.Id = null,
+        backendNodeId: ?u32 = null,
+        objectId: ?[]const u8 = null,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+
+    // TODO implement for document or text
+    if (try parser.nodeType(node._node) != .element) return error.NodeIsNotAnElement;
+    const element = parser.nodeToElement(node._node);
+
+    const rect = try Element._getBoundingClientRect(element, &bc.session.page.?.state);
+    const quad = rectToQuad(rect);
+
+    return cmd.sendResult(.{ .model = BoxModel{
+        .content = quad,
+        .padding = quad,
+        .border = quad,
+        .margin = quad,
+        .width = @intFromFloat(rect.width),
+        .height = @intFromFloat(rect.height),
+    } }, .{});
 }
 
 const testing = @import("../testing.zig");
@@ -531,4 +571,37 @@ test "cdp.dom: querySelector Nodes found" {
     });
     try ctx.expectSentEvent("DOM.setChildNodes", null, .{});
     try ctx.expectSentResult(.{ .nodeIds = &.{5} }, .{ .id = 5 });
+}
+
+test "cdp.dom: getBoxModel" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .html = "<div><p>2</p></div>" });
+
+    try ctx.processMessage(.{ // Hacky way to make sure nodeId 0 exists in the registry
+        .id = 3,
+        .method = "DOM.getDocument",
+    });
+
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "DOM.querySelector",
+        .params = .{ .nodeId = 0, .selector = "p" },
+    });
+    try ctx.expectSentResult(.{ .nodeId = 2 }, .{ .id = 4 });
+
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "DOM.getBoxModel",
+        .params = .{ .nodeId = 5 },
+    });
+    try ctx.expectSentResult(.{ .model = BoxModel{
+        .content = Quad{ 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0 },
+        .padding = Quad{ 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0 },
+        .border = Quad{ 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0 },
+        .margin = Quad{ 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0 },
+        .width = 1,
+        .height = 1,
+    } }, .{ .id = 5 });
 }
