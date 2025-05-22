@@ -30,7 +30,7 @@ pub fn Runner(comptime State: type, comptime Global: type, comptime types: anyty
     return struct {
         env: *Env,
         scope: *Env.Scope,
-        executor: Env.Executor,
+        executor: Env.ExecutionWorld,
 
         pub const Env = js.Env(State, struct {
             pub const Interfaces = AdjustedTypes;
@@ -45,7 +45,7 @@ pub fn Runner(comptime State: type, comptime Global: type, comptime types: anyty
             self.env = try Env.init(allocator, .{});
             errdefer self.env.deinit();
 
-            self.executor = try self.env.newExecutor();
+            self.executor = try self.env.newExecutionWorld();
             errdefer self.executor.deinit();
 
             self.scope = try self.executor.startScope(

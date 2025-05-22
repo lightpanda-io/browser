@@ -53,8 +53,8 @@ pub const Platform = struct {
 
 // The Env maps to a V8 isolate, which represents a isolated sandbox for
 // executing JavaScript. The Env is where we'll define our V8 <-> Zig bindings,
-// and it's where we'll start Executors, which actually execute JavaScript.
-// The `S` parameter is arbitrary state. When we start an Executor, an instance
+// and it's where we'll start ExecutionWorlds, which actually execute JavaScript.
+// The `S` parameter is arbitrary state. When we start an ExecutionWorld, an instance
 // of S must be given. This instance is available to any Zig binding.
 // The `types` parameter is a tuple of Zig structures we want to bind to V8.
 pub fn Env(comptime State: type, comptime WebApis: type) type {
@@ -259,7 +259,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             self.isolate.performMicrotasksCheckpoint();
         }
 
-        pub fn newExecutor(self: *Self) !Executor {
+        pub fn newExecutionWorld(self: *Self) !ExecutionWorld {
             return .{
                 .env = self,
                 .scope = null,
@@ -280,32 +280,35 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             self.isolate.lowMemoryNotification();
         }
 
-        pub const Executor = struct {
+        // ExecutionWorld closely models a JS World.
+        // https://chromium.googlesource.com/chromium/src/+/master/third_party/blink/renderer/bindings/core/v8/V8BindingDesign.md#World
+        // https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/scripting/ExecutionWorld
+        pub const ExecutionWorld = struct {
             env: *Self,
 
             // Arena whose lifetime is for a single getter/setter/function/etc.
             // Largely used to get strings out of V8, like a stack trace from
             // a TryCatch. The allocator will be owned by the Scope, but the
-            // arena itself is owned by the Executor so that we can re-use it
+            // arena itself is owned by the ExecutionWorld so that we can re-use it
             // from scope to scope.
             call_arena: ArenaAllocator,
 
             // Arena whose lifetime is for a single page load, aka a Scope. Where
             // the call_arena lives for a single function call, the scope_arena
             // lives for the lifetime of the entire page. The allocator will be
-            // owned by the Scope, but the arena itself is owned by the Executor
+            // owned by the Scope, but the arena itself is owned by the ExecutionWorld
             // so that we can re-use it from scope to scope.
             scope_arena: ArenaAllocator,
 
             // A Scope maps to a Browser's Page. Here though, it's only a
-            // mechanism to organization page-specific memory. The Executor
+            // mechanism to organization page-specific memory. The ExecutionWorld
             // does all the work, but having all page-specific data structures
             // grouped together helps keep things clean.
             scope: ?Scope = null,
 
-            // no init, must be initialized via env.newExecutor()
+            // no init, must be initialized via env.newExecutionWorld()
 
-            pub fn deinit(self: *Executor) void {
+            pub fn deinit(self: *ExecutionWorld) void {
                 if (self.scope != null) {
                     self.endScope();
                 }
@@ -320,7 +323,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // when the handle_scope is freed.
             // We also maintain our own "scope_arena" which allows us to have
             // all page related memory easily managed.
-            pub fn startScope(self: *Executor, global: anytype, state: State, module_loader: anytype, enter: bool) !*Scope {
+            pub fn startScope(self: *ExecutionWorld, global: anytype, state: State, module_loader: anytype, enter: bool) !*Scope {
                 std.debug.assert(self.scope == null);
 
                 const ModuleLoader = switch (@typeInfo(@TypeOf(module_loader))) {
@@ -338,9 +341,9 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 const Global = @TypeOf(global.*);
 
                 var context: v8.Context = blk: {
-                    var handle_scope: v8.HandleScope = undefined;
-                    v8.HandleScope.init(&handle_scope, isolate);
-                    defer handle_scope.deinit();
+                    var temp_scope: v8.HandleScope = undefined;
+                    v8.HandleScope.init(&temp_scope, isolate);
+                    defer temp_scope.deinit();
 
                     const js_global = v8.FunctionTemplate.initDefault(isolate);
                     attachClass(Global, isolate, js_global);
@@ -466,7 +469,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 return scope;
             }
 
-            pub fn endScope(self: *Executor) void {
+            pub fn endScope(self: *ExecutionWorld) void {
                 self.scope.?.deinit();
                 self.scope = null;
                 _ = self.scope_arena.reset(.{ .retain_with_limit = SCOPE_ARENA_RETAIN });
@@ -1517,7 +1520,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             }
 
             // Retrieves the RemoteObject for a given value.
-            // The value is loaded through the Executor's mapZigInstanceToJs function,
+            // The value is loaded through the ExecutionWorld's mapZigInstanceToJs function,
             // just like a method return value. Therefore, if we've mapped this
             // value before, we'll get the existing JS PersistedObject and if not
             // we'll create it and track it for cleanup when the scope ends.
@@ -2198,7 +2201,7 @@ fn isEmpty(comptime T: type) bool {
 }
 
 // Responsible for calling Zig functions from JS invokations. This could
-// probably just contained in Executor, but having this specific logic, which
+// probably just contained in ExecutionWorld, but having this specific logic, which
 // is somewhat repetitive between constructors, functions, getters, etc contained
 // here does feel like it makes it clenaer.
 fn Caller(comptime E: type, comptime State: type) type {

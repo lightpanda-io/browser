@@ -262,8 +262,8 @@ fn resolveNode(cmd: anytype) !void {
     var scope = page.scope;
     if (params.executionContextId) |context_id| {
         if (scope.context.debugContextId() != context_id) {
-            const isolated_world = bc.isolated_world orelse return error.ContextNotFound;
-            scope = isolated_world.scope orelse return error.ContextNotFound;
+            var isolated_world = bc.isolated_world orelse return error.ContextNotFound;
+            scope = &(isolated_world.executor.scope orelse return error.ContextNotFound);
 
             if (scope.context.debugContextId() != context_id) return error.ContextNotFound;
         }
