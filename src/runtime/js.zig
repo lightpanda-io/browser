@@ -1497,6 +1497,9 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             }
 
             pub fn send(self: *const Inspector, msg: []const u8) void {
+                var temp_scope: v8.HandleScope = undefined;
+                v8.HandleScope.init(&temp_scope, self.isolate);
+                defer temp_scope.deinit();
                 self.session.dispatchProtocolMessage(self.isolate, msg);
             }
 
