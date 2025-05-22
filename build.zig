@@ -179,20 +179,21 @@ fn common(b: *std.Build, opts: *std.Build.Step.Options, step: *std.Build.Step.Co
             .macos => "macos",
             else => return error.UnsupportedPlatform,
         };
-        var lib_path = try std.fmt.allocPrint(mod.owner.allocator,
+        var lib_path = try std.fmt.allocPrint(
+            mod.owner.allocator,
             "v8/out/{s}/{s}/obj/zig/libc_v8.a",
-            .{os, release_dir},
+            .{ os, release_dir },
         );
         std.fs.cwd().access(lib_path, .{}) catch {
             // legacy path
-            lib_path = try std.fmt.allocPrint(mod.owner.allocator,
+            lib_path = try std.fmt.allocPrint(
+                mod.owner.allocator,
                 "v8/out/{s}/obj/zig/libc_v8.a",
                 .{release_dir},
             );
         };
         mod.addObjectFile(mod.owner.path(lib_path));
     }
-
 
     switch (target.result.os.tag) {
         .macos => {
