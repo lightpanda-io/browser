@@ -115,7 +115,7 @@ pub const HTMLElement = struct {
     },
 
     pub fn get_style(e: *parser.ElementHTML, state: *SessionState) !*CSSStyleDeclaration {
-        const self = try state.getNodeWrapper(HTMLElement, @ptrCast(e));
+        const self = try state.getOrCreateNodeWrapper(HTMLElement, @ptrCast(e));
         return &self.style;
     }
 
