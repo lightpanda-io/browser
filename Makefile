@@ -69,11 +69,16 @@ build:
 ## Build in debug mode
 build-dev:
 	@printf "\e[36mBuilding (debug)...\e[0m\n"
-	@$(ZIG) build -Dgit_commit=$$(git rev-parse --short HEAD) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+	@$(ZIG) build -Dgit_commit=$$(git rev-parse --short HEAD) -Dlog_level=debug || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 	@printf "\e[33mBuild OK\e[0m\n"
 
-## Run the server in debug mode
+## Run the server in release mode
 run: build
+	@printf "\e[36mRunning...\e[0m\n"
+	@./zig-out/bin/lightpanda || (printf "\e[33mRun ERROR\e[0m\n"; exit 1;)
+
+## Run the server in debug mode
+run-debug: build-dev
 	@printf "\e[36mRunning...\e[0m\n"
 	@./zig-out/bin/lightpanda || (printf "\e[33mRun ERROR\e[0m\n"; exit 1;)
 
