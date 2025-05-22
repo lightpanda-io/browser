@@ -910,7 +910,6 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         // compatible with. A compatible field has higher precedence
                         // than a coercible, but still isn't a perfect match.
                         var compatible_index: ?usize = null;
-
                         inline for (u.fields, 0..) |field, i| {
                             switch (try self.probeJsValueToZig(named_function, field.type, js_value)) {
                                 .value => |v| return @unionInit(T, field.name, v),
@@ -949,7 +948,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             fn jsValueToStruct(self: *Scope, comptime named_function: NamedFunction, comptime T: type, js_value: v8.Value) !?T {
                 if (@hasDecl(T, "_FUNCTION_ID_KLUDGE")) {
                     if (!js_value.isFunction()) {
-                        return error.InvalidArgument;
+                        return null;
                     }
 
                     const func = v8.Persistent(v8.Function).init(self.isolate, js_value.castTo(v8.Function));
