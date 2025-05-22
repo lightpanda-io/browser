@@ -170,13 +170,29 @@ fn common(b: *std.Build, opts: *std.Build.Step.Options, step: *std.Build.Step.Co
         mod.addImport("v8", v8_mod);
     }
 
-    const lib_path = try std.fmt.allocPrint(
-        mod.owner.allocator,
-        "v8/out/{s}/obj/zig/libc_v8.a",
-        .{if (mod.optimize.? == .Debug) "debug" else "release"},
-    );
     mod.link_libcpp = true;
-    mod.addObjectFile(mod.owner.path(lib_path));
+
+    {
+        const release_dir = if (mod.optimize.? == .Debug) "debug" else "release";
+        const os = switch (target.result.os.tag) {
+            .linux => "linux",
+            .macos => "macos",
+            else => return error.UnsupportedPlatform,
+        };
+        var lib_path = try std.fmt.allocPrint(mod.owner.allocator,
+            "v8/out/{s}/{s}/obj/zig/libc_v8.a",
+            .{os, release_dir},
+        );
+        std.fs.cwd().access(lib_path, .{}) catch {
+            // legacy path
+            lib_path = try std.fmt.allocPrint(mod.owner.allocator,
+                "v8/out/{s}/obj/zig/libc_v8.a",
+                .{release_dir},
+            );
+        };
+        mod.addObjectFile(mod.owner.path(lib_path));
+    }
+
 
     switch (target.result.os.tag) {
         .macos => {
@@ -188,7 +204,6 @@ fn common(b: *std.Build, opts: *std.Build.Step.Options, step: *std.Build.Step.Co
     }
 
     mod.addImport("build_config", opts.createModule());
-    mod.addObjectFile(mod.owner.path(lib_path));
 }
 
 fn moduleNetSurf(b: *std.Build, step: *std.Build.Step.Compile, target: std.Build.ResolvedTarget) !void {
