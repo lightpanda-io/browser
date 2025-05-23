@@ -565,23 +565,49 @@ pub const HTMLImageElement = struct {
     pub const subtype = .node;
     pub const js_name = "Image";
 
-    pub fn constructor(width: ?[]const u8, height: ?[]const u8, state: *const SessionState) !*parser.Image {
+    pub fn constructor(width: ?u32, height: ?u32, state: *const SessionState) !*parser.Image {
         const element = try parser.documentCreateElement(parser.documentHTMLToDocument(state.window.document), "img");
-        if (width) |width_| try parser.elementSetAttribute(element, "width", width_);
-        if (height) |height_| try parser.elementSetAttribute(element, "height", height_);
-        return @ptrCast(element);
+        const image: *parser.Image = @ptrCast(element);
+        if (width) |width_| try parser.imageSetWidth(image, width_);
+        if (height) |height_| try parser.imageSetHeight(image, height_);
+        return image;
     }
 
-    pub fn get_width(self: *parser.Image) !u32 {
-        const width = try parser.elementGetAttribute(@ptrCast(self), "width") orelse return 0;
-        return try std.fmt.parseInt(u32, width, 10);
+    pub fn get_alt(self: *parser.Image) ![]const u8 {
+        return try parser.imageGetAlt(self);
     }
-    pub fn get_height(self: *parser.Image) !u32 {
-        const width = try parser.elementGetAttribute(@ptrCast(self), "height") orelse return 0;
-        return try std.fmt.parseInt(u32, width, 10);
+    pub fn set_alt(self: *parser.Image, alt: []const u8) !void {
+        try parser.imageSetAlt(self, alt);
     }
     pub fn get_src(self: *parser.Image) ![]const u8 {
-        return try parser.elementGetAttribute(@ptrCast(self), "src") orelse return "";
+        return try parser.imageGetSrc(self);
+    }
+    pub fn set_src(self: *parser.Image, src: []const u8) !void {
+        try parser.imageSetSrc(self, src);
+    }
+    pub fn get_useMap(self: *parser.Image) ![]const u8 {
+        return try parser.imageGetUseMap(self);
+    }
+    pub fn set_useMap(self: *parser.Image, use_map: []const u8) !void {
+        try parser.imageSetUseMap(self, use_map);
+    }
+    pub fn get_height(self: *parser.Image) !u32 {
+        return try parser.imageGetHeight(self);
+    }
+    pub fn set_height(self: *parser.Image, height: u32) !void {
+        try parser.imageSetHeight(self, height);
+    }
+    pub fn get_width(self: *parser.Image) !u32 {
+        return try parser.imageGetWidth(self);
+    }
+    pub fn set_width(self: *parser.Image, width: u32) !void {
+        try parser.imageSetWidth(self, width);
+    }
+    pub fn get_isMap(self: *parser.Image) !bool {
+        return try parser.imageGetIsMap(self);
+    }
+    pub fn set_isMap(self: *parser.Image, is_map: bool) !void {
+        try parser.imageSetIsMap(self, is_map);
     }
 };
 
@@ -1080,13 +1106,30 @@ test "Browser.HTML.Element" {
         .{ "click_count", "1" },
     }, .{});
 
+    // Image
     try runner.testCases(&.{
+        // Testing constructors
         .{ "(new Image).width", "0" },
         .{ "(new Image).height", "0" },
-        .{ "(new Image).src", "" },
         .{ "(new Image(4)).width", "4" },
         .{ "(new Image(4, 6)).height", "6" },
-        .{ "(new Image).width = 15", "15" },
-        .{ "(new Image).src = 'abc'", "abc" },
+
+        // Testing ulong property
+        .{ "let fruit = new Image", null },
+        .{ "fruit.width", "0" },
+        .{ "fruit.width = 5", "5" },
+        .{ "fruit.width", "5" },
+        .{ "fruit.width = '15'", "15" },
+        .{ "fruit.width", "15" },
+        .{ "fruit.width = 'apple'", "apple" },
+        .{ "fruit.width;", "0" },
+
+        // Testing string property
+        .{ "let lyric = new Image", null },
+        .{ "lyric.src", "" },
+        .{ "lyric.src = 'okay'", "okay" },
+        .{ "lyric.src", "okay" },
+        .{ "lyric.src = 15", "15" },
+        .{ "lyric.src", "15" },
     }, .{});
 }

@@ -2509,3 +2509,84 @@ pub fn htmlCollectionItem(collection: *HTMLCollection, index: u32) !*Node {
     try DOMErr(err);
     return @ptrCast(node.?);
 }
+
+const ulongNegativeOne = 4294967295;
+
+// Image
+// Image.name is deprecated
+// Image.align is deprecated
+// Image.border is deprecated
+// Image.longDesc is deprecated
+// Image.hspace is deprecated
+// Image.vspace is deprecated
+
+pub fn imageGetAlt(image: *Image) ![]const u8 {
+    var s_: ?*String = null;
+    const err = c.dom_html_image_element_get_alt(image, &s_);
+    try DOMErr(err);
+    const s = s_ orelse return "";
+    return strToData(s);
+}
+pub fn imageSetAlt(image: *Image, alt: []const u8) !void {
+    const err = c.dom_html_image_element_set_alt(image, try strFromData(alt));
+    try DOMErr(err);
+}
+
+pub fn imageGetSrc(image: *Image) ![]const u8 {
+    var s_: ?*String = null;
+    const err = c.dom_html_image_element_get_src(image, &s_);
+    try DOMErr(err);
+    const s = s_ orelse return "";
+    return strToData(s);
+}
+pub fn imageSetSrc(image: *Image, src: []const u8) !void {
+    const err = c.dom_html_image_element_set_src(image, try strFromData(src));
+    try DOMErr(err);
+}
+
+pub fn imageGetUseMap(image: *Image) ![]const u8 {
+    var s_: ?*String = null;
+    const err = c.dom_html_image_element_get_use_map(image, &s_);
+    try DOMErr(err);
+    const s = s_ orelse return "";
+    return strToData(s);
+}
+pub fn imageSetUseMap(image: *Image, use_map: []const u8) !void {
+    const err = c.dom_html_image_element_set_use_map(image, try strFromData(use_map));
+    try DOMErr(err);
+}
+
+pub fn imageGetHeight(image: *Image) !u32 {
+    var height: u32 = 0;
+    const err = c.dom_html_image_element_get_height(image, &height);
+    try DOMErr(err);
+    if (height == ulongNegativeOne) return 0;
+    return height;
+}
+pub fn imageSetHeight(image: *Image, height: u32) !void {
+    const err = c.dom_html_image_element_set_height(image, height);
+    try DOMErr(err);
+}
+
+pub fn imageGetWidth(image: *Image) !u32 {
+    var width: u32 = 0;
+    const err = c.dom_html_image_element_get_width(image, &width);
+    try DOMErr(err);
+    if (width == ulongNegativeOne) return 0;
+    return width;
+}
+pub fn imageSetWidth(image: *Image, width: u32) !void {
+    const err = c.dom_html_image_element_set_width(image, width);
+    try DOMErr(err);
+}
+
+pub fn imageGetIsMap(image: *Image) !bool {
+    var is_map: bool = false;
+    const err = c.dom_html_image_element_get_is_map(image, &is_map);
+    try DOMErr(err);
+    return is_map;
+}
+pub fn imageSetIsMap(image: *Image, is_map: bool) !void {
+    const err = c.dom_html_image_element_set_is_map(image, is_map);
+    try DOMErr(err);
+}
