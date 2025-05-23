@@ -48,31 +48,24 @@ pub const CSSStyleDeclaration = struct {
     }
 
     pub fn get_cssText(self: *const CSSStyleDeclaration, state: *SessionState) ![]const u8 {
-        var buffer = std.ArrayList(u8).init(state.arena);
-        const writer = buffer.writer();
+        var buffer = std.ArrayListUnmanaged(u8){};
+        const writer = buffer.writer(state.call_arena);
         for (self.order.items) |name| {
             const prop = self.store.get(name).?;
-            const escaped = try CSSValueAnalyzer.escapeCSSValue(state.arena, prop.value);
+            const escaped = try CSSValueAnalyzer.escapeCSSValue(state.call_arena, prop.value);
             try writer.print("{s}: {s}", .{ name, escaped });
             if (prop.priority) try writer.writeAll(" !important");
             try writer.writeAll("; ");
         }
-        return buffer.toOwnedSlice();
+        return buffer.items;
     }
 
     // TODO Propagate also upward to parent node
     pub fn set_cssText(self: *CSSStyleDeclaration, text: []const u8, state: *SessionState) !void {
-        var store_it = self.store.iterator();
-        while (store_it.next()) |entry| {
-            state.arena.free(entry.key_ptr.*);
-            state.arena.free(entry.value_ptr.value);
-        }
         self.store.clearRetainingCapacity();
-        for (self.order.items) |name| state.arena.free(name);
         self.order.clearRetainingCapacity();
 
-        const declarations = try CSSParser.parseDeclarations(text, state.arena);
-        defer state.arena.free(declarations);
+        const declarations = try CSSParser.parseDeclarations(state.call_arena, text);
 
         for (declarations) |decl| {
             if (!CSSValueAnalyzer.isValidPropertyName(decl.name)) continue;
@@ -104,13 +97,11 @@ pub const CSSStyleDeclaration = struct {
 
     pub fn _removeProperty(self: *CSSStyleDeclaration, name: []const u8, state: *SessionState) ![]const u8 {
         if (self.store.get(name)) |prop| {
-            const value_copy = try state.arena.dupe(u8, prop.value);
+            const value_copy = try state.call_arena.dupe(u8, prop.value);
             _ = self.store.remove(name);
-            state.arena.free(prop.value);
             var i: usize = 0;
             while (i < self.order.items.len) : (i += 1) {
                 if (std.mem.eql(u8, self.order.items[i], name)) {
-                    state.arena.free(self.order.items[i]);
                     _ = self.order.orderedRemove(i);
                     break;
                 }
@@ -130,8 +121,6 @@ pub const CSSStyleDeclaration = struct {
             try self.order.append(state.arena, name_copy);
             try self.store.put(state.arena, name_copy, Property{ .value = value_copy, .priority = is_important });
         } else {
-            const prev = self.store.get(name).?;
-            state.arena.free(prev.value);
             try self.store.put(state.arena, name, Property{ .value = value_copy, .priority = is_important });
         }
     }

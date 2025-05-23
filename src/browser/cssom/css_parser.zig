@@ -1,36 +1,44 @@
+// Copyright (C) 2023-2024  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 const std = @import("std");
 
 const CSSConstants = struct {
-    const IMPORTANT_KEYWORD = "!important";
-    const IMPORTANT_LENGTH = IMPORTANT_KEYWORD.len;
+    const IMPORTANT = "!important";
     const URL_PREFIX = "url(";
-    const URL_PREFIX_LENGTH = URL_PREFIX.len;
 };
 
 pub const CSSParserState = enum {
-    seekName,
-    inName,
-    seekColon,
-    seekValue,
-    inValue,
-    inQuotedValue,
-    inSingleQuotedValue,
-    inUrl,
-    inImportant,
+    seek_name,
+    in_name,
+    seek_colon,
+    seek_value,
+    in_value,
+    in_quoted_value,
+    in_single_quoted_value,
+    in_url,
+    in_important,
 };
 
 pub const CSSDeclaration = struct {
     name: []const u8,
     value: []const u8,
     is_important: bool,
-
-    pub fn init(name: []const u8, value: []const u8, is_important: bool) CSSDeclaration {
-        return .{
-            .name = name,
-            .value = value,
-            .is_important = is_important,
-        };
-    }
 };
 
 pub const CSSParser = struct {
@@ -44,7 +52,7 @@ pub const CSSParser = struct {
 
     pub fn init() CSSParser {
         return .{
-            .state = .seekName,
+            .state = .seek_name,
             .name_start = 0,
             .name_end = 0,
             .value_start = 0,
@@ -54,59 +62,56 @@ pub const CSSParser = struct {
         };
     }
 
-    pub fn parseDeclarations(text: []const u8, allocator: std.mem.Allocator) ![]CSSDeclaration {
+    pub fn parseDeclarations(allocator: std.mem.Allocator, text: []const u8) ![]CSSDeclaration {
         var parser = init();
-        var declarations = std.ArrayList(CSSDeclaration).init(allocator);
-        errdefer declarations.deinit();
+        var declarations = std.ArrayListUnmanaged(CSSDeclaration){};
 
         while (parser.position < text.len) {
             const c = text[parser.position];
 
             switch (parser.state) {
-                .seekName => {
+                .seek_name => {
                     if (!std.ascii.isWhitespace(c)) {
                         parser.name_start = parser.position;
-                        parser.state = .inName;
+                        parser.state = .in_name;
                         continue;
                     }
                 },
-                .inName => {
+                .in_name => {
                     if (c == ':') {
                         parser.name_end = parser.position;
-                        parser.state = .seekValue;
+                        parser.state = .seek_value;
                     } else if (std.ascii.isWhitespace(c)) {
                         parser.name_end = parser.position;
-                        parser.state = .seekColon;
+                        parser.state = .seek_colon;
                     }
                 },
-                .seekColon => {
+                .seek_colon => {
                     if (c == ':') {
-                        parser.state = .seekValue;
+                        parser.state = .seek_value;
                     } else if (!std.ascii.isWhitespace(c)) {
-                        parser.state = .seekName;
+                        parser.state = .seek_name;
                         continue;
                     }
                 },
-                .seekValue => {
+                .seek_value => {
                     if (!std.ascii.isWhitespace(c)) {
                         parser.value_start = parser.position;
                         if (c == '"') {
-                            parser.state = .inQuotedValue;
+                            parser.state = .in_quoted_value;
                         } else if (c == '\'') {
-                            parser.state = .inSingleQuotedValue;
-                        } else if (c == 'u' and parser.position + 3 < text.len and
-                            std.mem.eql(u8, text[parser.position .. parser.position + 4], CSSConstants.URL_PREFIX))
-                        {
-                            parser.state = .inUrl;
+                            parser.state = .in_single_quoted_value;
+                        } else if (c == 'u' and parser.position + CSSConstants.URL_PREFIX.len <= text.len and std.mem.startsWith(u8, text[parser.position..], CSSConstants.URL_PREFIX)) {
+                            parser.state = .in_url;
                             parser.paren_depth = 1;
                             parser.position += 3;
                         } else {
-                            parser.state = .inValue;
+                            parser.state = .in_value;
                             continue;
                         }
                     }
                 },
-                .inValue => {
+                .in_value => {
                     if (parser.escape_next) {
                         parser.escape_next = false;
                     } else if (c == '\\') {
@@ -116,29 +121,29 @@ pub const CSSParser = struct {
                     } else if (c == ')' and parser.paren_depth > 0) {
                         parser.paren_depth -= 1;
                     } else if (c == ';' and parser.paren_depth == 0) {
-                        try parser.finishDeclaration(text, &declarations);
-                        parser.state = .seekName;
+                        try parser.finishDeclaration(allocator, &declarations, text);
+                        parser.state = .seek_name;
                     }
                 },
-                .inQuotedValue => {
+                .in_quoted_value => {
                     if (parser.escape_next) {
                         parser.escape_next = false;
                     } else if (c == '\\') {
                         parser.escape_next = true;
                     } else if (c == '"') {
-                        parser.state = .inValue;
+                        parser.state = .in_value;
                     }
                 },
-                .inSingleQuotedValue => {
+                .in_single_quoted_value => {
                     if (parser.escape_next) {
                         parser.escape_next = false;
                     } else if (c == '\\') {
                         parser.escape_next = true;
                     } else if (c == '\'') {
-                        parser.state = .inValue;
+                        parser.state = .in_value;
                     }
                 },
-                .inUrl => {
+                .in_url => {
                     if (parser.escape_next) {
                         parser.escape_next = false;
                     } else if (c == '\\') {
@@ -148,22 +153,22 @@ pub const CSSParser = struct {
                     } else if (c == ')') {
                         parser.paren_depth -= 1;
                         if (parser.paren_depth == 0) {
-                            parser.state = .inValue;
+                            parser.state = .in_value;
                         }
                     }
                 },
-                .inImportant => {},
+                .in_important => {},
             }
 
             parser.position += 1;
         }
 
-        try parser.finalize(text, &declarations);
+        try parser.finalize(allocator, &declarations, text);
 
-        return declarations.toOwnedSlice();
+        return declarations.items;
     }
 
-    fn finishDeclaration(self: *CSSParser, text: []const u8, declarations: *std.ArrayList(CSSDeclaration)) !void {
+    fn finishDeclaration(self: *CSSParser, allocator: std.mem.Allocator, declarations: *std.ArrayListUnmanaged(CSSDeclaration), text: []const u8) !void {
         const name = std.mem.trim(u8, text[self.name_start..self.name_end], &std.ascii.whitespace);
         if (name.len == 0) return;
 
@@ -173,17 +178,20 @@ pub const CSSParser = struct {
         var final_value = value;
         var is_important = false;
 
-        if (std.mem.endsWith(u8, value, CSSConstants.IMPORTANT_KEYWORD)) {
+        if (std.mem.endsWith(u8, value, CSSConstants.IMPORTANT)) {
             is_important = true;
-            final_value = std.mem.trim(u8, value[0 .. value.len - CSSConstants.IMPORTANT_LENGTH], &std.ascii.whitespace);
+            final_value = std.mem.trim(u8, value[0 .. value.len - CSSConstants.IMPORTANT.len], &std.ascii.whitespace);
         }
 
-        const declaration = CSSDeclaration.init(name, final_value, is_important);
-        try declarations.append(declaration);
+        try declarations.append(allocator, .{
+            .name = name,
+            .value = final_value,
+            .is_important = is_important,
+        });
     }
 
-    fn finalize(self: *CSSParser, text: []const u8, declarations: *std.ArrayList(CSSDeclaration)) !void {
-        if (self.state == .inValue) {
+    fn finalize(self: *CSSParser, allocator: std.mem.Allocator, declarations: *std.ArrayListUnmanaged(CSSDeclaration), text: []const u8) !void {
+        if (self.state == .in_value) {
             const name = text[self.name_start..self.name_end];
             const trimmed_name = std.mem.trim(u8, name, &std.ascii.whitespace);
 
@@ -193,13 +201,16 @@ pub const CSSParser = struct {
 
                 var final_value = value;
                 var is_important = false;
-                if (std.mem.endsWith(u8, value, CSSConstants.IMPORTANT_KEYWORD)) {
+                if (std.mem.endsWith(u8, value, CSSConstants.IMPORTANT)) {
                     is_important = true;
-                    final_value = std.mem.trim(u8, value[0 .. value.len - CSSConstants.IMPORTANT_LENGTH], &std.ascii.whitespace);
+                    final_value = std.mem.trim(u8, value[0 .. value.len - CSSConstants.IMPORTANT.len], &std.ascii.whitespace);
                 }
 
-                const declaration = CSSDeclaration.init(trimmed_name, final_value, is_important);
-                try declarations.append(declaration);
+                try declarations.append(allocator, .{
+                    .name = trimmed_name,
+                    .value = final_value,
+                    .is_important = is_important,
+                });
             }
         }
     }
@@ -217,92 +228,93 @@ pub const CSSParser = struct {
     }
 };
 
-const testing = std.testing;
+const testing = @import("../../testing.zig");
 
 test "CSSParser - Simple property" {
-    const text = "color: red;";
-    const allocator = testing.allocator;
+    defer testing.reset();
 
-    const declarations = try CSSParser.parseDeclarations(text, allocator);
-    defer allocator.free(declarations);
+    const text = "color: red;";
+    const allocator = testing.arena_allocator;
+
+    const declarations = try CSSParser.parseDeclarations(allocator, text);
 
     try testing.expect(declarations.len == 1);
-    try testing.expectEqualStrings("color", declarations[0].name);
-    try testing.expectEqualStrings("red", declarations[0].value);
+    try testing.expectEqual("color", declarations[0].name);
+    try testing.expectEqual("red", declarations[0].value);
     try testing.expect(!declarations[0].is_important);
 }
 
 test "CSSParser - Property with !important" {
+    defer testing.reset();
     const text = "margin: 10px !important;";
-    const allocator = testing.allocator;
+    const allocator = testing.arena_allocator;
 
-    const declarations = try CSSParser.parseDeclarations(text, allocator);
-    defer allocator.free(declarations);
+    const declarations = try CSSParser.parseDeclarations(allocator, text);
 
     try testing.expect(declarations.len == 1);
-    try testing.expectEqualStrings("margin", declarations[0].name);
-    try testing.expectEqualStrings("10px", declarations[0].value);
+    try testing.expectEqual("margin", declarations[0].name);
+    try testing.expectEqual("10px", declarations[0].value);
     try testing.expect(declarations[0].is_important);
 }
 
 test "CSSParser - Multiple properties" {
+    defer testing.reset();
     const text = "color: red; font-size: 12px; margin: 5px !important;";
-    const allocator = testing.allocator;
+    const allocator = testing.arena_allocator;
 
-    const declarations = try CSSParser.parseDeclarations(text, allocator);
-    defer allocator.free(declarations);
+    const declarations = try CSSParser.parseDeclarations(allocator, text);
 
     try testing.expect(declarations.len == 3);
 
-    try testing.expectEqualStrings("color", declarations[0].name);
-    try testing.expectEqualStrings("red", declarations[0].value);
+    try testing.expectEqual("color", declarations[0].name);
+    try testing.expectEqual("red", declarations[0].value);
     try testing.expect(!declarations[0].is_important);
 
-    try testing.expectEqualStrings("font-size", declarations[1].name);
-    try testing.expectEqualStrings("12px", declarations[1].value);
+    try testing.expectEqual("font-size", declarations[1].name);
+    try testing.expectEqual("12px", declarations[1].value);
     try testing.expect(!declarations[1].is_important);
 
-    try testing.expectEqualStrings("margin", declarations[2].name);
-    try testing.expectEqualStrings("5px", declarations[2].value);
+    try testing.expectEqual("margin", declarations[2].name);
+    try testing.expectEqual("5px", declarations[2].value);
     try testing.expect(declarations[2].is_important);
 }
 
 test "CSSParser - Quoted value with semicolon" {
+    defer testing.reset();
     const text = "content: \"Hello; world!\";";
-    const allocator = testing.allocator;
+    const allocator = testing.arena_allocator;
 
-    const declarations = try CSSParser.parseDeclarations(text, allocator);
-    defer allocator.free(declarations);
+    const declarations = try CSSParser.parseDeclarations(allocator, text);
 
     try testing.expect(declarations.len == 1);
-    try testing.expectEqualStrings("content", declarations[0].name);
-    try testing.expectEqualStrings("\"Hello; world!\"", declarations[0].value);
+    try testing.expectEqual("content", declarations[0].name);
+    try testing.expectEqual("\"Hello; world!\"", declarations[0].value);
     try testing.expect(!declarations[0].is_important);
 }
 
 test "CSSParser - URL value" {
+    defer testing.reset();
     const text = "background-image: url(\"test.png\");";
-    const allocator = testing.allocator;
+    const allocator = testing.arena_allocator;
 
-    const declarations = try CSSParser.parseDeclarations(text, allocator);
-    defer allocator.free(declarations);
+    const declarations = try CSSParser.parseDeclarations(allocator, text);
 
     try testing.expect(declarations.len == 1);
-    try testing.expectEqualStrings("background-image", declarations[0].name);
-    try testing.expectEqualStrings("url(\"test.png\")", declarations[0].value);
+    try testing.expectEqual("background-image", declarations[0].name);
+    try testing.expectEqual("url(\"test.png\")", declarations[0].value);
     try testing.expect(!declarations[0].is_important);
 }
 
 test "CSSParser - Whitespace handling" {
+    defer testing.reset();
     const text = "  color  :  purple  ;  margin  :  10px  ;  ";
-    const allocator = testing.allocator;
+    const allocator = testing.arena_allocator;
 
-    const declarations = try CSSParser.parseDeclarations(text, allocator);
-    defer allocator.free(declarations);
+    const declarations = try CSSParser.parseDeclarations(allocator, text);
 
     try testing.expect(declarations.len == 2);
-    try testing.expectEqualStrings("color", declarations[0].name);
-    try testing.expectEqualStrings("purple", declarations[0].value);
-    try testing.expectEqualStrings("margin", declarations[1].name);
-    try testing.expectEqualStrings("10px", declarations[1].value);
+    try testing.expectEqual("color", declarations[0].name);
+    try testing.expectEqual("purple", declarations[0].value);
+    try testing.expectEqual("margin", declarations[1].name);
+    try testing.expectEqual("10px", declarations[1].value);
 }
