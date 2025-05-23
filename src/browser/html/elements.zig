@@ -563,6 +563,26 @@ pub const HTMLImageElement = struct {
     pub const Self = parser.Image;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
+    pub const js_name = "Image";
+
+    pub fn constructor(width: ?[]const u8, height: ?[]const u8, state: *const SessionState) !*parser.Image {
+        const element = try parser.documentCreateElement(parser.documentHTMLToDocument(state.window.document), "img");
+        if (width) |width_| try parser.elementSetAttribute(element, "width", width_);
+        if (height) |height_| try parser.elementSetAttribute(element, "height", height_);
+        return @ptrCast(element);
+    }
+
+    pub fn get_width(self: *parser.Image) !u32 {
+        const width = try parser.elementGetAttribute(@ptrCast(self), "width") orelse return 0;
+        return try std.fmt.parseInt(u32, width, 10);
+    }
+    pub fn get_height(self: *parser.Image) !u32 {
+        const width = try parser.elementGetAttribute(@ptrCast(self), "height") orelse return 0;
+        return try std.fmt.parseInt(u32, width, 10);
+    }
+    pub fn get_src(self: *parser.Image) ![]const u8 {
+        return try parser.elementGetAttribute(@ptrCast(self), "src") orelse return "";
+    }
 };
 
 pub const HTMLInputElement = struct {
@@ -1058,5 +1078,15 @@ test "Browser.HTML.Element" {
         .{ "document.getElementById('content').addEventListener('click', clickCbk);", "undefined" },
         .{ "document.getElementById('content').click()", "undefined" },
         .{ "click_count", "1" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "(new Image).width", "0" },
+        .{ "(new Image).height", "0" },
+        .{ "(new Image).src", "" },
+        .{ "(new Image(4)).width", "4" },
+        .{ "(new Image(4, 6)).height", "6" },
+        .{ "(new Image).width = 15", "15" },
+        .{ "(new Image).src = 'abc'", "abc" },
     }, .{});
 }
