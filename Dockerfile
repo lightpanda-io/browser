@@ -5,7 +5,7 @@ ARG ZIG=0.14.0
 ARG ZIG_MINISIG=RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
 ARG ARCH=x86_64
 ARG V8=11.1.134
-ARG ZIG_V8=v0.1.23
+ARG ZIG_V8=v0.1.24
 
 RUN apt-get update -yq && \
     apt-get install -yq xz-utils \
@@ -57,8 +57,8 @@ RUN make install-libiconv && \
 
 # download and install v8
 RUN curl --fail -L -o libc_v8.a https://github.com/lightpanda-io/zig-v8-fork/releases/download/${ZIG_V8}/libc_v8_${V8}_linux_${ARCH}.a && \
-    mkdir -p v8/build/${ARCH}-linux/release/ninja/obj/zig/ && \
-    mv libc_v8.a v8/build/${ARCH}-linux/release/ninja/obj/zig/libc_v8.a
+    mkdir -p v8/out/linux/release/obj/zig/ && \
+    mv libc_v8.a v8/out/linux/release/obj/zig/libc_v8.a
 
 # build release
 RUN make build
