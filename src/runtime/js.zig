@@ -269,10 +269,9 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
         }
 
         // V8 doesn't immediately free memory associated with
-        // a Context, it's managed by the garbage collector. So, when the
-        // `gc_hints` option is enabled, we'll use the `lowMemoryNotification`
-        // call on the isolate to encourage v8 to free any contexts which
-        // have been freed.
+        // a Context, it's managed by the garbage collector. We use the
+        // `lowMemoryNotification` call on the isolate to encourage v8 to free
+        // any contexts which have been freed.
         pub fn lowMemoryNotification(self: *Self) void {
             var handle_scope: v8.HandleScope = undefined;
             v8.HandleScope.init(&handle_scope, self.isolate);

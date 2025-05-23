@@ -88,7 +88,7 @@ jobs:
       - name: run puppeteer
         run: |
           python3 -m http.server 1234 -d ./public & echo $! > PYTHON.pid
-          ./lightpanda serve --gc_hints & echo $! > LPD.pid
+          ./lightpanda serve & echo $! > LPD.pid
           RUNS=100 npm run bench-puppeteer-cdp > puppeteer.out || exit 1
           cat /proc/`cat LPD.pid`/status |grep VmHWM|grep -oP '\d+' > LPD.VmHWM
           kill `cat LPD.pid` `cat PYTHON.pid`

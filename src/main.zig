@@ -70,7 +70,6 @@ pub fn main() !void {
 
     var app = try App.init(alloc, .{
         .run_mode = args.mode,
-        .gc_hints = args.gcHints(),
         .http_proxy = args.httpProxy(),
         .tls_verify_host = args.tlsVerifyHost(),
     });
@@ -129,13 +128,6 @@ const Command = struct {
     mode: Mode,
     exec_name: []const u8,
 
-    fn gcHints(self: *const Command) bool {
-        return switch (self.mode) {
-            .serve => |opts| opts.gc_hints,
-            else => false,
-        };
-    }
-
     fn tlsVerifyHost(self: *const Command) bool {
         return switch (self.mode) {
             inline .serve, .fetch => |opts| opts.tls_verify_host,
@@ -161,7 +153,6 @@ const Command = struct {
         host: []const u8,
         port: u16,
         timeout: u16,
-        gc_hints: bool,
         tls_verify_host: bool,
         http_proxy: ?std.Uri,
     };
@@ -209,9 +200,6 @@ const Command = struct {
             \\
             \\--timeout       Inactivity timeout in seconds before disconnecting clients
             \\                Defaults to 3 (seconds)
-            \\
-            \\--gc_hints      Encourage V8 to cleanup garbage for each new browser context.
-            \\                Defaults to false
             \\
             \\--insecure_disable_tls_host_verification
             \\                Disables host verification on all HTTP requests.
@@ -296,10 +284,6 @@ fn inferMode(opt: []const u8) ?App.RunMode {
         return .serve;
     }
 
-    if (std.mem.eql(u8, opt, "--gc_hints")) {
-        return .serve;
-    }
-
     return null;
 }
 
@@ -310,7 +294,6 @@ fn parseServeArgs(
     var host: []const u8 = "127.0.0.1";
     var port: u16 = 9222;
     var timeout: u16 = 3;
-    var gc_hints = false;
     var tls_verify_host = true;
     var http_proxy: ?std.Uri = null;
 
@@ -355,11 +338,6 @@ fn parseServeArgs(
             continue;
         }
 
-        if (std.mem.eql(u8, "--gc_hints", opt)) {
-            gc_hints = true;
-            continue;
-        }
-
         if (std.mem.eql(u8, "--http_proxy", opt)) {
             const str = args.next() orelse {
                 log.err("--http_proxy argument requires an value", .{});
@@ -377,7 +355,6 @@ fn parseServeArgs(
         .host = host,
         .port = port,
         .timeout = timeout,
-        .gc_hints = gc_hints,
         .http_proxy = http_proxy,
         .tls_verify_host = tls_verify_host,
     };
