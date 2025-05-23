@@ -45,15 +45,13 @@ pub const Browser = struct {
     pub fn init(app: *App) !Browser {
         const allocator = app.allocator;
 
-        const env = try Env.init(allocator, .{});
-        errdefer env.deinit();
 
         const notification = try Notification.init(allocator, app.notification);
         errdefer notification.deinit();
 
         return .{
             .app = app,
-            .env = env,
+            .env = app.env,
             .session = null,
             .allocator = allocator,
             .notification = notification,
@@ -66,7 +64,6 @@ pub const Browser = struct {
 
     pub fn deinit(self: *Browser) void {
         self.closeSession();
-        self.env.deinit();
         self.page_arena.deinit();
         self.session_arena.deinit();
         self.transfer_arena.deinit();

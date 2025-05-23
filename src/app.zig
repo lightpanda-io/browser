@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const Env = @import("browser/env.zig").Env;
 const Loop = @import("runtime/loop.zig").Loop;
 const HttpClient = @import("http/client.zig").Client;
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
@@ -11,6 +12,7 @@ const log = std.log.scoped(.app);
 // Container for global state / objects that various parts of the system
 // might need.
 pub const App = struct {
+    env: *Env,
     loop: *Loop,
     config: Config,
     allocator: Allocator,
@@ -47,7 +49,11 @@ pub const App = struct {
 
         const app_dir_path = getAndMakeAppDir(allocator);
 
+        const env = try Env.init(allocator, .{});
+        errdefer env.deinit();
+
         app.* = .{
+            .env = env,
             .loop = loop,
             .allocator = allocator,
             .telemetry = undefined,
@@ -75,6 +81,7 @@ pub const App = struct {
         allocator.destroy(self.loop);
         self.http_client.deinit();
         self.notification.deinit();
+        self.env.deinit();
         allocator.destroy(self);
     }
 };
