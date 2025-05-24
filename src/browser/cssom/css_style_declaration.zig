@@ -48,7 +48,7 @@ pub const CSSStyleDeclaration = struct {
     }
 
     pub fn get_cssText(self: *const CSSStyleDeclaration, state: *SessionState) ![]const u8 {
-        var buffer = std.ArrayListUnmanaged(u8){};
+        var buffer: std.ArrayListUnmanaged(u8) = .empty;
         const writer = buffer.writer(state.call_arena);
         for (self.order.items) |name| {
             const prop = self.store.get(name).?;
@@ -65,6 +65,8 @@ pub const CSSStyleDeclaration = struct {
         self.store.clearRetainingCapacity();
         self.order.clearRetainingCapacity();
 
+        // call_arena is safe here, because _setProperty will dupe the name
+        // using the state's longer-living arena.
         const declarations = try CSSParser.parseDeclarations(state.call_arena, text);
 
         for (declarations) |decl| {
@@ -95,34 +97,30 @@ pub const CSSStyleDeclaration = struct {
         return if (index < self.order.items.len) self.order.items[index] else "";
     }
 
-    pub fn _removeProperty(self: *CSSStyleDeclaration, name: []const u8, state: *SessionState) ![]const u8 {
-        if (self.store.get(name)) |prop| {
-            const value_copy = try state.call_arena.dupe(u8, prop.value);
-            _ = self.store.remove(name);
-            var i: usize = 0;
-            while (i < self.order.items.len) : (i += 1) {
-                if (std.mem.eql(u8, self.order.items[i], name)) {
-                    _ = self.order.orderedRemove(i);
-                    break;
-                }
+    pub fn _removeProperty(self: *CSSStyleDeclaration, name: []const u8) ![]const u8 {
+        const prop = self.store.fetchRemove(name) orelse return "";
+        for (self.order.items, 0..) |item, i| {
+            if (std.mem.eql(u8, item, name)) {
+                _ = self.order.orderedRemove(i);
+                break;
             }
-            return value_copy;
         }
-        return "";
+        // safe to return, since it's in our state.arena
+        return prop.value.value;
     }
 
     pub fn _setProperty(self: *CSSStyleDeclaration, name: []const u8, value: []const u8, priority: ?[]const u8, state: *SessionState) !void {
+        const owned_value = try state.arena.dupe(u8, value);
         const is_important = priority != null and std.ascii.eqlIgnoreCase(priority.?, "important");
 
-        const value_copy = try state.arena.dupe(u8, value);
-
-        if (!self.store.contains(name)) {
-            const name_copy = try state.arena.dupe(u8, name);
-            try self.order.append(state.arena, name_copy);
-            try self.store.put(state.arena, name_copy, Property{ .value = value_copy, .priority = is_important });
-        } else {
-            try self.store.put(state.arena, name, Property{ .value = value_copy, .priority = is_important });
+        const gop = try self.store.getOrPut(state.arena, name);
+        if (!gop.found_existing) {
+            const owned_name = try state.arena.dupe(u8, name);
+            gop.key_ptr.* = owned_name;
+            try self.order.append(state.arena, owned_name);
         }
+
+        gop.value_ptr.* = .{ .value = owned_value, .priority = is_important };
     }
 };
 
