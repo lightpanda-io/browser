@@ -1064,4 +1064,14 @@ test "Browser.HTML.Element" {
         .{ "document.getElementById('content').click()", "undefined" },
         .{ "click_count", "1" },
     }, .{});
+
+    try runner.testCases(&.{
+        .{ "let style = document.getElementById('content').style", "undefined" },
+        .{ "style.cssText = 'color: red; font-size: 12px; margin: 5px !important;'", "color: red; font-size: 12px; margin: 5px !important;" },
+        .{ "style.length", "3" },
+        .{ "style.setProperty('background-color', 'blue')", "undefined" },
+        .{ "style.getPropertyValue('background-color')", "blue" },
+        .{ "style.length", "4" },
+    }, .{});
+
 }
