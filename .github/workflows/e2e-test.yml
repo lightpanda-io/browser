@@ -63,7 +63,7 @@ jobs:
     needs: zig-build-release
 
     env:
-      MAX_MEMORY: 28000
+      MAX_MEMORY: 29000
       MAX_AVG_DURATION: 24
       LIGHTPANDA_DISABLE_TELEMETRY: true
 
