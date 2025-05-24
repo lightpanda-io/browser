@@ -150,7 +150,7 @@ pub const CSSValueAnalyzer = struct {
         const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
 
         if (std.mem.endsWith(u8, trimmed, "!important")) {
-            const clean_value = std.mem.trim(u8, trimmed[0 .. trimmed.len - 10], &std.ascii.whitespace);
+            const clean_value = std.mem.trimRight(u8, trimmed[0 .. trimmed.len - 10], &std.ascii.whitespace);
             return .{ .value = clean_value, .is_important = true };
         }
 
@@ -161,55 +161,52 @@ pub const CSSValueAnalyzer = struct {
         if (value.len == 0) return true;
         if (isAlreadyQuoted(value)) return false;
 
-        const has_spaces = std.mem.indexOf(u8, value, " ") != null;
-        const has_special_chars = CSSKeywords.containsSpecialChar(value);
+        if (CSSKeywords.containsSpecialChar(value)) {
+            return true;
+        }
+
+        if (std.mem.indexOfScalar(u8, value, ' ') == null) {
+            return false;
+        }
+
         const is_url = std.mem.startsWith(u8, value, "url(");
         const is_function = CSSKeywords.startsWithFunction(value);
 
-        const space_requires_quotes = has_spaces and
-            !isMultiValueProperty(value) and
+        return !isMultiValueProperty(value) and
             !is_url and
             !is_function;
-
-        return has_special_chars or space_requires_quotes;
     }
 
-    pub fn escapeCSSValue(allocator: std.mem.Allocator, value: []const u8) ![]const u8 {
-        var out = std.ArrayListUnmanaged(u8){};
-        const writer = out.writer(allocator);
-
-        if (isAlreadyQuoted(value)) {
-            try writer.writeAll(value);
-            return out.items;
+    pub fn escapeCSSValue(arena: std.mem.Allocator, value: []const u8) ![]const u8 {
+        if (!needsQuotes(value)) {
+            return value;
         }
+        var out: std.ArrayListUnmanaged(u8) = .empty;
 
-        const needs_quotes = needsQuotes(value);
+        // We'll need at least this much space, +2 for the quotes
+        try out.ensureTotalCapacity(arena, value.len + 2);
+        const writer = out.writer(arena);
 
-        if (needs_quotes) {
-            try writer.writeByte('"');
+        try writer.writeByte('"');
 
-            for (value, 0..) |c, i| {
-                switch (c) {
-                    '"' => try writer.writeAll("\\\""),
-                    '\\' => try writer.writeAll("\\\\"),
-                    '\n' => try writer.writeAll("\\A "),
-                    '\r' => try writer.writeAll("\\D "),
-                    '\t' => try writer.writeAll("\\9 "),
-                    0...8, 11, 12, 14...31, 127 => {
-                        try writer.print("\\{x}", .{c});
-                        if (i + 1 < value.len and std.ascii.isHex(value[i + 1])) {
-                            try writer.writeByte(' ');
-                        }
-                    },
-                    else => try writer.writeByte(c),
-                }
+        for (value, 0..) |c, i| {
+            switch (c) {
+                '"' => try writer.writeAll("\\\""),
+                '\\' => try writer.writeAll("\\\\"),
+                '\n' => try writer.writeAll("\\A "),
+                '\r' => try writer.writeAll("\\D "),
+                '\t' => try writer.writeAll("\\9 "),
+                0...8, 11, 12, 14...31, 127 => {
+                    try writer.print("\\{x}", .{c});
+                    if (i + 1 < value.len and std.ascii.isHex(value[i + 1])) {
+                        try writer.writeByte(' ');
+                    }
+                },
+                else => try writer.writeByte(c),
             }
-
-            try writer.writeByte('"');
-        } else {
-            try writer.writeAll(value);
         }
 
+        try writer.writeByte('"');
         return out.items;
     }
 
@@ -337,13 +334,13 @@ const CSSKeywords = struct {
     }
 
     pub fn startsWithFunction(value: []const u8) bool {
-        const open_paren = std.mem.indexOf(u8, value, "(");
-        const close_paren = std.mem.indexOf(u8, value, ")");
+        const pos = std.mem.indexOfScalar(u8, value, '(') orelse return false;
+        if (pos == 0) return false;
 
-        if (open_paren == null or close_paren == null) return false;
-        if (open_paren == 0) return false;
-
-        const function_name = value[0..open_paren.?];
+        if (std.mem.indexOfScalarPos(u8, value, pos, ')') == null) {
+            return false;
+        }
+        const function_name = value[0..pos];
         return isValidFunctionName(function_name);
     }
 
@@ -367,7 +364,7 @@ const CSSKeywords = struct {
 
 const testing = @import("../../testing.zig");
 
-test "isNumericWithUnit - valid numbers with units" {
+test "CSSValueAnalyzer: isNumericWithUnit - valid numbers with units" {
     try testing.expect(CSSValueAnalyzer.isNumericWithUnit("10px"));
     try testing.expect(CSSValueAnalyzer.isNumericWithUnit("3.14em"));
     try testing.expect(CSSValueAnalyzer.isNumericWithUnit("-5rem"));
@@ -376,14 +373,14 @@ test "isNumericWithUnit - valid numbers with units" {
     try testing.expect(CSSValueAnalyzer.isNumericWithUnit(".5vw"));
 }
 
-test "isNumericWithUnit - scientific notation" {
+test "CSSValueAnalyzer: isNumericWithUnit - scientific notation" {
     try testing.expect(CSSValueAnalyzer.isNumericWithUnit("1e5px"));
     try testing.expect(CSSValueAnalyzer.isNumericWithUnit("2.5E-3em"));
     try testing.expect(CSSValueAnalyzer.isNumericWithUnit("1e+2rem"));
     try testing.expect(CSSValueAnalyzer.isNumericWithUnit("-3.14e10px"));
 }
 
-test "isNumericWithUnit - edge cases and invalid inputs" {
+test "CSSValueAnalyzer: isNumericWithUnit - edge cases and invalid inputs" {
     try testing.expect(!CSSValueAnalyzer.isNumericWithUnit(""));
 
     try testing.expect(!CSSValueAnalyzer.isNumericWithUnit("px"));
@@ -405,7 +402,7 @@ test "isNumericWithUnit - edge cases and invalid inputs" {
     try testing.expect(CSSValueAnalyzer.isNumericWithUnit("-5"));
 }
 
-test "isHexColor - valid hex colors" {
+test "CSSValueAnalyzer: isHexColor - valid hex colors" {
     try testing.expect(CSSValueAnalyzer.isHexColor("#000"));
     try testing.expect(CSSValueAnalyzer.isHexColor("#fff"));
     try testing.expect(CSSValueAnalyzer.isHexColor("#123456"));
@@ -414,7 +411,7 @@ test "isHexColor - valid hex colors" {
     try testing.expect(CSSValueAnalyzer.isHexColor("#12345678"));
 }
 
-test "isHexColor - invalid hex colors" {
+test "CSSValueAnalyzer: isHexColor - invalid hex colors" {
     try testing.expect(!CSSValueAnalyzer.isHexColor(""));
     try testing.expect(!CSSValueAnalyzer.isHexColor("#"));
     try testing.expect(!CSSValueAnalyzer.isHexColor("000"));
@@ -427,7 +424,7 @@ test "isHexColor - invalid hex colors" {
     try testing.expect(!CSSValueAnalyzer.isHexColor("#123xyz"));
 }
 
-test "isMultiValueProperty - valid multi-value properties" {
+test "CSSValueAnalyzer: isMultiValueProperty - valid multi-value properties" {
     try testing.expect(CSSValueAnalyzer.isMultiValueProperty("10px 20px"));
     try testing.expect(CSSValueAnalyzer.isMultiValueProperty("solid red"));
     try testing.expect(CSSValueAnalyzer.isMultiValueProperty("#fff black"));
@@ -435,7 +432,7 @@ test "isMultiValueProperty - valid multi-value properties" {
     try testing.expect(CSSValueAnalyzer.isMultiValueProperty("rgb(255,0,0) solid"));
 }
 
-test "isMultiValueProperty - invalid multi-value properties" {
+test "CSSValueAnalyzer: isMultiValueProperty - invalid multi-value properties" {
     try testing.expect(!CSSValueAnalyzer.isMultiValueProperty(""));
     try testing.expect(!CSSValueAnalyzer.isMultiValueProperty("10px"));
     try testing.expect(!CSSValueAnalyzer.isMultiValueProperty("invalid unknown"));
@@ -443,7 +440,7 @@ test "isMultiValueProperty - invalid multi-value properties" {
     try testing.expect(!CSSValueAnalyzer.isMultiValueProperty("   "));
 }
 
-test "isAlreadyQuoted - various quoting scenarios" {
+test "CSSValueAnalyzer: isAlreadyQuoted - various quoting scenarios" {
     try testing.expect(CSSValueAnalyzer.isAlreadyQuoted("\"hello\""));
     try testing.expect(CSSValueAnalyzer.isAlreadyQuoted("'world'"));
     try testing.expect(CSSValueAnalyzer.isAlreadyQuoted("\"\""));
@@ -459,7 +456,7 @@ test "isAlreadyQuoted - various quoting scenarios" {
     try testing.expect(!CSSValueAnalyzer.isAlreadyQuoted("hello\""));
 }
 
-test "isValidPropertyName - valid property names" {
+test "CSSValueAnalyzer: isValidPropertyName - valid property names" {
     try testing.expect(CSSValueAnalyzer.isValidPropertyName("color"));
     try testing.expect(CSSValueAnalyzer.isValidPropertyName("background-color"));
     try testing.expect(CSSValueAnalyzer.isValidPropertyName("-webkit-transform"));
@@ -469,7 +466,7 @@ test "isValidPropertyName - valid property names" {
     try testing.expect(CSSValueAnalyzer.isValidPropertyName("line-height"));
 }
 
-test "isValidPropertyName - invalid property names" {
+test "CSSValueAnalyzer: isValidPropertyName - invalid property names" {
     try testing.expect(!CSSValueAnalyzer.isValidPropertyName(""));
     try testing.expect(!CSSValueAnalyzer.isValidPropertyName("123color"));
     try testing.expect(!CSSValueAnalyzer.isValidPropertyName("color!"));
@@ -479,7 +476,7 @@ test "isValidPropertyName - invalid property names" {
     try testing.expect(!CSSValueAnalyzer.isValidPropertyName("color_test"));
 }
 
-test "extractImportant - with and without !important" {
+test "CSSValueAnalyzer: extractImportant - with and without !important" {
     var result = CSSValueAnalyzer.extractImportant("red !important");
     try testing.expect(result.is_important);
     try testing.expectEqual("red", result.value);
@@ -501,7 +498,7 @@ test "extractImportant - with and without !important" {
     try testing.expectEqual("important", result.value);
 }
 
-test "needsQuotes - various scenarios" {
+test "CSSValueAnalyzer: needsQuotes - various scenarios" {
     try testing.expect(CSSValueAnalyzer.needsQuotes(""));
     try testing.expect(CSSValueAnalyzer.needsQuotes("hello world"));
     try testing.expect(CSSValueAnalyzer.needsQuotes("test;"));
@@ -516,7 +513,7 @@ test "needsQuotes - various scenarios" {
     try testing.expect(!CSSValueAnalyzer.needsQuotes("simple"));
 }
 
-test "escapeCSSValue - escaping various characters" {
+test "CSSValueAnalyzer: escapeCSSValue - escaping various characters" {
     const allocator = testing.arena_allocator;
 
     var result = try CSSValueAnalyzer.escapeCSSValue(allocator, "simple");
@@ -535,7 +532,7 @@ test "escapeCSSValue - escaping various characters" {
     try testing.expectEqual("\"test\\\\back\"", result);
 }
 
-test "CSSKeywords.isKnownKeyword - case sensitivity" {
+test "CSSValueAnalyzer: CSSKeywords.isKnownKeyword - case sensitivity" {
     try testing.expect(CSSKeywords.isKnownKeyword("red"));
     try testing.expect(CSSKeywords.isKnownKeyword("solid"));
     try testing.expect(CSSKeywords.isKnownKeyword("center"));
@@ -551,7 +548,7 @@ test "CSSKeywords.isKnownKeyword - case sensitivity" {
     try testing.expect(!CSSKeywords.isKnownKeyword(""));
 }
 
-test "CSSKeywords.containsSpecialChar - various special characters" {
+test "CSSValueAnalyzer: CSSKeywords.containsSpecialChar - various special characters" {
     try testing.expect(CSSKeywords.containsSpecialChar("test\"quote"));
     try testing.expect(CSSKeywords.containsSpecialChar("test'quote"));
     try testing.expect(CSSKeywords.containsSpecialChar("test;end"));
@@ -567,7 +564,7 @@ test "CSSKeywords.containsSpecialChar - various special characters" {
     try testing.expect(!CSSKeywords.containsSpecialChar(""));
 }
 
-test "CSSKeywords.isValidUnit - various units" {
+test "CSSValueAnalyzer: CSSKeywords.isValidUnit - various units" {
     try testing.expect(CSSKeywords.isValidUnit("px"));
     try testing.expect(CSSKeywords.isValidUnit("em"));
     try testing.expect(CSSKeywords.isValidUnit("rem"));
@@ -585,7 +582,7 @@ test "CSSKeywords.isValidUnit - various units" {
     try testing.expect(!CSSKeywords.isValidUnit(""));
 }
 
-test "CSSKeywords.startsWithFunction - function detection" {
+test "CSSValueAnalyzer: CSSKeywords.startsWithFunction - function detection" {
     try testing.expect(CSSKeywords.startsWithFunction("rgb(255, 0, 0)"));
     try testing.expect(CSSKeywords.startsWithFunction("rgba(255, 0, 0, 0.5)"));
     try testing.expect(CSSKeywords.startsWithFunction("url(image.png)"));
@@ -603,14 +600,14 @@ test "CSSKeywords.startsWithFunction - function detection" {
     try testing.expect(!CSSKeywords.startsWithFunction("rgb"));
 }
 
-test "isNumericWithUnit - whitespace handling" {
+test "CSSValueAnalyzer: isNumericWithUnit - whitespace handling" {
     try testing.expect(!CSSValueAnalyzer.isNumericWithUnit(" 10px"));
     try testing.expect(!CSSValueAnalyzer.isNumericWithUnit("10 px"));
     try testing.expect(!CSSValueAnalyzer.isNumericWithUnit("10px "));
     try testing.expect(!CSSValueAnalyzer.isNumericWithUnit(" 10 px "));
 }
 
-test "extractImportant - whitespace edge cases" {
+test "CSSValueAnalyzer: extractImportant - whitespace edge cases" {
     var result = CSSValueAnalyzer.extractImportant("   ");
     try testing.expect(!result.is_important);
     try testing.expectEqual("", result.value);
@@ -624,14 +621,14 @@ test "extractImportant - whitespace edge cases" {
     try testing.expectEqual("red", result.value);
 }
 
-test "isHexColor - mixed case handling" {
+test "CSSValueAnalyzer: isHexColor - mixed case handling" {
     try testing.expect(CSSValueAnalyzer.isHexColor("#AbC"));
     try testing.expect(CSSValueAnalyzer.isHexColor("#123aBc"));
     try testing.expect(CSSValueAnalyzer.isHexColor("#FFffFF"));
     try testing.expect(CSSValueAnalyzer.isHexColor("#000FFF"));
 }
 
-test "edge case - very long inputs" {
+test "CSSValueAnalyzer: edge case - very long inputs" {
     const long_valid = "a" ** 1000 ++ "px";
     try testing.expect(!CSSValueAnalyzer.isNumericWithUnit(long_valid)); // not numeric
 
@@ -642,7 +639,7 @@ test "edge case - very long inputs" {
     try testing.expect(!CSSValueAnalyzer.isHexColor(long_hex));
 }
 
-test "boundary conditions - numeric parsing" {
+test "CSSValueAnalyzer: boundary conditions - numeric parsing" {
     try testing.expect(CSSValueAnalyzer.isNumericWithUnit("0px"));
     try testing.expect(CSSValueAnalyzer.isNumericWithUnit("0.0px"));
     try testing.expect(CSSValueAnalyzer.isNumericWithUnit(".0px"));
@@ -655,7 +652,7 @@ test "boundary conditions - numeric parsing" {
     try testing.expect(CSSValueAnalyzer.isNumericWithUnit("1e-100px"));
 }
 
-test "extractImportant - malformed important declarations" {
+test "CSSValueAnalyzer: extractImportant - malformed important declarations" {
     var result = CSSValueAnalyzer.extractImportant("red ! important");
     try testing.expect(!result.is_important);
     try testing.expectEqual("red ! important", result.value);
@@ -677,7 +674,7 @@ test "extractImportant - malformed important declarations" {
     try testing.expectEqual("red !important", result.value);
 }
 
-test "isMultiValueProperty - complex spacing scenarios" {
+test "CSSValueAnalyzer: isMultiValueProperty - complex spacing scenarios" {
     try testing.expect(CSSValueAnalyzer.isMultiValueProperty("10px    20px"));
     try testing.expect(CSSValueAnalyzer.isMultiValueProperty("solid     red"));
 
@@ -689,7 +686,7 @@ test "isMultiValueProperty - complex spacing scenarios" {
     try testing.expect(CSSValueAnalyzer.isMultiValueProperty("10px   20px   30px"));
 }
 
-test "isAlreadyQuoted - edge cases with quotes" {
+test "CSSValueAnalyzer: isAlreadyQuoted - edge cases with quotes" {
     try testing.expect(CSSValueAnalyzer.isAlreadyQuoted("\"'hello'\""));
     try testing.expect(CSSValueAnalyzer.isAlreadyQuoted("'\"hello\"'"));
 
@@ -705,7 +702,7 @@ test "isAlreadyQuoted - edge cases with quotes" {
     try testing.expect(CSSValueAnalyzer.isAlreadyQuoted("'b'"));
 }
 
-test "needsQuotes - function and URL edge cases" {
+test "CSSValueAnalyzer: needsQuotes - function and URL edge cases" {
     try testing.expect(!CSSValueAnalyzer.needsQuotes("rgb(255, 0, 0)"));
     try testing.expect(!CSSValueAnalyzer.needsQuotes("calc(100% - 20px)"));
 
@@ -716,7 +713,7 @@ test "needsQuotes - function and URL edge cases" {
     try testing.expect(CSSValueAnalyzer.needsQuotes("rgb(255, 0, 0"));
 }
 
-test "escapeCSSValue - control characters and Unicode" {
+test "CSSValueAnalyzer: escapeCSSValue - control characters and Unicode" {
     const allocator = testing.arena_allocator;
 
     var result = try CSSValueAnalyzer.escapeCSSValue(allocator, "test\ttab");
@@ -735,7 +732,7 @@ test "escapeCSSValue - control characters and Unicode" {
     try testing.expectEqual("\"test\\\"quote\\A line\\\\back\"", result);
 }
 
-test "isValidPropertyName - CSS custom properties and vendor prefixes" {
+test "CSSValueAnalyzer: isValidPropertyName - CSS custom properties and vendor prefixes" {
     try testing.expect(CSSValueAnalyzer.isValidPropertyName("--custom-color"));
     try testing.expect(CSSValueAnalyzer.isValidPropertyName("--my-variable"));
     try testing.expect(CSSValueAnalyzer.isValidPropertyName("--123"));
@@ -750,7 +747,7 @@ test "isValidPropertyName - CSS custom properties and vendor prefixes" {
     try testing.expect(!CSSValueAnalyzer.isValidPropertyName("-"));
 }
 
-test "startsWithFunction - case sensitivity and partial matches" {
+test "CSSValueAnalyzer: startsWithFunction - case sensitivity and partial matches" {
     try testing.expect(CSSKeywords.startsWithFunction("RGB(255, 0, 0)"));
     try testing.expect(CSSKeywords.startsWithFunction("Rgb(255, 0, 0)"));
     try testing.expect(CSSKeywords.startsWithFunction("URL(image.png)"));
@@ -767,7 +764,7 @@ test "startsWithFunction - case sensitivity and partial matches" {
     try testing.expect(!CSSKeywords.startsWithFunction("123function(test)"));
 }
 
-test "isHexColor - Unicode and invalid characters" {
+test "CSSValueAnalyzer: isHexColor - Unicode and invalid characters" {
     try testing.expect(!CSSValueAnalyzer.isHexColor("#ghijkl"));
     try testing.expect(!CSSValueAnalyzer.isHexColor("#12345g"));
     try testing.expect(!CSSValueAnalyzer.isHexColor("#xyz"));
@@ -778,7 +775,7 @@ test "isHexColor - Unicode and invalid characters" {
     try testing.expect(!CSSValueAnalyzer.isHexColor("#g2345678"));
 }
 
-test "complex integration scenarios" {
+test "CSSValueAnalyzer: complex integration scenarios" {
     const allocator = testing.arena_allocator;
 
     try testing.expect(CSSValueAnalyzer.isMultiValueProperty("rgb(255,0,0) url(bg.jpg)"));
@@ -793,7 +790,7 @@ test "complex integration scenarios" {
     try testing.expectEqual("rgb(255,0,0)", important_result.value);
 }
 
-test "performance edge cases - empty and minimal inputs" {
+test "CSSValueAnalyzer: performance edge cases - empty and minimal inputs" {
     try testing.expect(!CSSValueAnalyzer.isNumericWithUnit(""));
     try testing.expect(!CSSValueAnalyzer.isHexColor(""));
     try testing.expect(!CSSValueAnalyzer.isMultiValueProperty(""));
