@@ -418,6 +418,10 @@ pub const JsRunner = struct {
             .url = try self.url.toWebApi(arena),
         });
 
+        self.http_client = try HttpClient.init(arena, 1, .{
+            .tls_verify_host = false,
+        });
+
         self.state = .{
             .arena = arena,
             .loop = &self.loop,
@@ -425,15 +429,11 @@ pub const JsRunner = struct {
             .window = &self.window,
             .renderer = &self.renderer,
             .cookie_jar = &self.cookie_jar,
-            .http_client = &self.http_client,
+            .request_factory = self.http_client.requestFactory(null),
         };
 
         self.storage_shelf = storage.Shelf.init(arena);
         self.window.setStorageShelf(&self.storage_shelf);
-
-        self.http_client = try HttpClient.init(arena, 1, .{
-            .tls_verify_host = false,
-        });
 
         self.executor = try self.env.newExecutionWorld();
         errdefer self.executor.deinit();

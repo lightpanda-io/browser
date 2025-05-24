@@ -80,7 +80,6 @@ const XMLHttpRequestBodyInit = union(enum) {
 pub const XMLHttpRequest = struct {
     proto: XMLHttpRequestEventTarget = XMLHttpRequestEventTarget{},
     arena: Allocator,
-    client: *http.Client,
     request: ?http.Request = null,
 
     priv_state: PrivState = .new,
@@ -252,7 +251,6 @@ pub const XMLHttpRequest = struct {
             .state = .unsent,
             .url = null,
             .origin_url = session_state.url,
-            .client = session_state.http_client,
             .cookie_jar = session_state.cookie_jar,
         };
     }
@@ -420,7 +418,7 @@ pub const XMLHttpRequest = struct {
         self.send_flag = true;
         self.priv_state = .open;
 
-        self.request = try self.client.request(self.method, &self.url.?.uri);
+        self.request = try session_state.request_factory.create(self.method, &self.url.?.uri);
         var request = &self.request.?;
         errdefer request.deinit();
 

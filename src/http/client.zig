@@ -29,6 +29,7 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const tls = @import("tls");
 const IO = @import("../runtime/loop.zig").IO;
 const Loop = @import("../runtime/loop.zig").Loop;
+const Notification = @import("../notification.zig").Notification;
 
 const log = std.log.scoped(.http_client);
 
@@ -44,6 +45,7 @@ const MAX_HEADER_LINE_LEN = 4096;
 // Thread-safe. Holds our root certificate, connection pool and state pool
 // Used to create Requests.
 pub const Client = struct {
+    req_id: usize,
     allocator: Allocator,
     state_pool: StatePool,
     http_proxy: ?Uri,
@@ -68,6 +70,7 @@ pub const Client = struct {
         errdefer connection_manager.deinit();
 
         return .{
+            .req_id = 0,
             .root_ca = root_ca,
             .allocator = allocator,
             .state_pool = state_pool,
@@ -95,6 +98,25 @@ pub const Client = struct {
         }
 
         return Request.init(self, state, method, uri);
+    }
+
+    pub fn requestFactory(self: *Client, notification: ?*Notification) RequestFactory {
+        return .{
+            .client = self,
+            .notification = notification,
+        };
+    }
+};
+
+// A factory for creating requests with a given set of options.
+pub const RequestFactory = struct {
+    client: *Client,
+    notification: ?*Notification,
+
+    pub fn create(self: RequestFactory, method: Request.Method, uri: *const Uri) !Request {
+        var req = try self.client.request(method, uri);
+        req.notification = self.notification;
+        return req;
     }
 };
 
@@ -146,10 +168,12 @@ const Connection = struct {
 // (but request.deinit() should still be called to discard the request
 // before the `sendAsync` is called).
 pub const Request = struct {
+    id: usize,
+
     // The HTTP Method to use
     method: Method,
 
-    // The URI we're requested
+    // The URI we requested
     request_uri: *const Uri,
 
     // The URI that we're connecting to. Can be different than request_uri when
@@ -211,6 +235,16 @@ pub const Request = struct {
     // Whether or not we should verify that the host matches the certificate CN
     _tls_verify_host: bool,
 
+    // We only want to emit a start / complete notifications once per request.
+    // Because of things like redirects and error handling, it is possible for
+    // the notification functions to be called multiple times, so we guard them
+    // with these booleans
+    _notified_start: bool,
+    _notified_complete: bool,
+
+    // The notifier that we emit request notifications to, if any.
+    notification: ?*Notification,
+
     pub const Method = enum {
         GET,
         PUT,
@@ -230,12 +264,18 @@ pub const Request = struct {
 
     fn init(client: *Client, state: *State, method: Method, uri: *const Uri) !Request {
         const decomposed = try decomposeURL(client, uri);
+
+        const id = client.req_id + 1;
+        client.req_id = id;
+
         return .{
+            .id = id,
             .request_uri = uri,
             .connect_uri = decomposed.connect_uri,
             .body = null,
             .headers = .{},
             .method = method,
+            .notification = null,
             .arena = state.arena.allocator(),
             ._secure = decomposed.secure,
             ._connect_host = decomposed.connect_host,
@@ -247,6 +287,8 @@ pub const Request = struct {
             ._keepalive = false,
             ._redirect_count = 0,
             ._has_host_header = false,
+            ._notified_start = false,
+            ._notified_complete = false,
             ._connection_from_keepalive = false,
             ._tls_verify_host = client.tls_verify_host,
         };
@@ -525,6 +567,7 @@ pub const Request = struct {
         }
 
         try self.headers.append(arena, .{ .name = "User-Agent", .value = "Lightpanda/1.0" });
+        self.requestStarting();
     }
 
     // Sets up the request for redirecting.
@@ -640,6 +683,35 @@ pub const Request = struct {
         }
         try writer.writeAll("\r\n");
         return buf[0..fbs.pos];
+    }
+
+    fn requestStarting(self: *Request) void {
+        const notification = self.notification orelse return;
+        if (self._notified_start) {
+            return;
+        }
+        self._notified_start = true;
+        notification.dispatch(.http_request_start, &.{
+            .id = self.id,
+            .url = self.request_uri,
+            .method = self.method,
+            .headers = self.headers.items,
+            .has_body = self.body != null,
+        });
+    }
+
+    fn requestCompleted(self: *Request, response: ResponseHeader) void {
+        const notification = self.notification orelse return;
+        if (self._notified_complete) {
+            return;
+        }
+        self._notified_complete = true;
+        notification.dispatch(.http_request_complete, &.{
+            .id = self.id,
+            .url = self.request_uri,
+            .status = response.status,
+            .headers = response.headers.items,
+        });
     }
 };
 
@@ -823,6 +895,10 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
             }
 
             const status = self.conn.received(self.read_buf[0 .. self.read_pos + n]) catch |err| {
+                if (err == error.TlsAlertCloseNotify and self.state == .handshake and self.maybeRetryRequest()) {
+                    return;
+                }
+
                 self.handleError("data processing", err);
                 return;
             };
@@ -832,6 +908,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                 .need_more => self.receive(),
                 .done => {
                     const redirect = self.redirect orelse {
+                        self.request.requestCompleted(self.reader.response);
                         self.deinit();
                         return;
                     };
@@ -1235,6 +1312,8 @@ const SyncHandler = struct {
                 var body: std.ArrayListUnmanaged(u8) = .{};
                 var decompressor = std.compress.gzip.decompressor(compress_reader.reader());
                 try decompressor.decompress(body.writer(request.arena));
+
+                self.request.requestCompleted(reader.response);
 
                 return .{
                     .header = reader.response,
@@ -1939,7 +2018,7 @@ pub const ResponseHeader = struct {
 // value in-place.
 // The value (and key) are both safe to mutate because they're cloned from
 // the byte stream by our arena.
-const Header = struct {
+pub const Header = struct {
     name: []const u8,
     value: []u8,
 };
@@ -2024,6 +2103,7 @@ pub const Response = struct {
                 return data;
             }
             if (self._done) {
+                self._request.requestCompleted(self.header);
                 return null;
             }
 
