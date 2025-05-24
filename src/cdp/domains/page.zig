@@ -115,7 +115,7 @@ fn createIsolatedWorld(cmd: anytype) !void {
     const world = try bc.createIsolatedWorld(params.worldName, params.grantUniveralAccess);
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
     try pageCreated(bc, page);
-    const scope = world.scope.?;
+    const scope = &world.executor.scope.?;
 
     // Create the auxdata json for the contextCreated event
     // Calling contextCreated will assign a Id to the context and send the contextCreated event
@@ -236,7 +236,7 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void 
         const aux_json = try std.fmt.bufPrint(&buffer, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{target_id});
         // Calling contextCreated will assign a new Id to the context and send the contextCreated event
         bc.inspector.contextCreated(
-            isolated_world.scope.?,
+            &isolated_world.executor.scope.?,
             isolated_world.name,
             "://",
             aux_json,
@@ -258,7 +258,7 @@ pub fn pageCreated(bc: anytype, page: *Page) !void {
         try isolated_world.createContext(page);
 
         const polyfill = @import("../../browser/polyfill/polyfill.zig");
-        try polyfill.load(bc.arena, isolated_world.scope.?);
+        try polyfill.load(bc.arena, &isolated_world.executor.scope.?);
     }
 }
 

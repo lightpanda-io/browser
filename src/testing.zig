@@ -383,7 +383,7 @@ pub const JsRunner = struct {
     renderer: Renderer,
     http_client: HttpClient,
     scope: *Env.Scope,
-    executor: Env.Executor,
+    executor: Env.ExecutionWorld,
     storage_shelf: storage.Shelf,
     cookie_jar: storage.CookieJar,
 
@@ -435,7 +435,7 @@ pub const JsRunner = struct {
             .tls_verify_host = false,
         });
 
-        self.executor = try self.env.newExecutor();
+        self.executor = try self.env.newExecutionWorld();
         errdefer self.executor.deinit();
 
         self.scope = try self.executor.startScope(&self.window, &self.state, {}, true);

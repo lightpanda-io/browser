@@ -28,7 +28,6 @@ pub const App = struct {
 
     pub const Config = struct {
         run_mode: RunMode,
-        gc_hints: bool = false,
         tls_verify_host: bool = true,
         http_proxy: ?std.Uri = null,
     };
