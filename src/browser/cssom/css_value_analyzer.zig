@@ -733,7 +733,6 @@ test "escapeCSSValue - control characters and Unicode" {
 
     result = try CSSValueAnalyzer.escapeCSSValue(allocator, "test\"quote\nline\\back");
     try testing.expectEqual("\"test\\\"quote\\A line\\\\back\"", result);
-    allocator.free(result);
 }
 
 test "isValidPropertyName - CSS custom properties and vendor prefixes" {
