@@ -57,7 +57,7 @@ pub const EventTarget = struct {
     pub fn _addEventListener(
         self: *parser.EventTarget,
         typ: []const u8,
-        cbk: Env.Callback,
+        cbk: Env.Function,
         opts_: ?AddEventListenerOpts,
         state: *SessionState,
     ) !void {
@@ -104,7 +104,7 @@ pub const EventTarget = struct {
     pub fn _removeEventListener(
         self: *parser.EventTarget,
         typ: []const u8,
-        cbk: Env.Callback,
+        cbk: Env.Function,
         capture: ?bool,
         // TODO: hanle EventListenerOptions
         // see #https://github.com/lightpanda-io/jsruntime-lib/issues/114

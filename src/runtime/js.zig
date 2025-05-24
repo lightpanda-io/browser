@@ -912,7 +912,6 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         // compatible with. A compatible field has higher precedence
                         // than a coercible, but still isn't a perfect match.
                         var compatible_index: ?usize = null;
-
                         inline for (u.fields, 0..) |field, i| {
                             switch (try self.probeJsValueToZig(named_function, field.type, js_value)) {
                                 .value => |v| return @unionInit(T, field.name, v),
@@ -949,9 +948,9 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // Extracted so that it can be used in both jsValueToZig and in
             // probeJsValueToZig. Avoids having to duplicate this logic when probing.
             fn jsValueToStruct(self: *Scope, comptime named_function: NamedFunction, comptime T: type, js_value: v8.Value) !?T {
-                if (@hasDecl(T, "_CALLBACK_ID_KLUDGE")) {
+                if (@hasDecl(T, "_FUNCTION_ID_KLUDGE")) {
                     if (!js_value.isFunction()) {
-                        return error.InvalidArgument;
+                        return null;
                     }
 
                     const func = v8.Persistent(v8.Function).init(self.isolate, js_value.castTo(v8.Function));
@@ -1220,25 +1219,25 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             }
         };
 
-        pub const Callback = struct {
+        pub const Function = struct {
             id: usize,
             scope: *Scope,
             this: ?v8.Object = null,
             func: PersistentFunction,
 
             // We use this when mapping a JS value to a Zig object. We can't
-            // Say we have a Zig function that takes a Callback, we can't just
-            // check param.type == Callback, because Callback is a generic.
+            // Say we have a Zig function that takes a Function, we can't just
+            // check param.type == Function, because Function is a generic.
             // So, as a quick hack, we can determine if the Zig type is a
-            // callback by checking @hasDecl(T, "_CALLBACK_ID_KLUDGE")
-            const _CALLBACK_ID_KLUDGE = true;
+            // callback by checking @hasDecl(T, "_FUNCTION_ID_KLUDGE")
+            const _FUNCTION_ID_KLUDGE = true;
 
             pub const Result = struct {
                 stack: ?[]const u8,
                 exception: []const u8,
             };
 
-            pub fn withThis(self: *const Callback, value: anytype) !Callback {
+            pub fn withThis(self: *const Function, value: anytype) !Function {
                 return .{
                     .id = self.id,
                     .func = self.func,
@@ -1247,20 +1246,20 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 };
             }
 
-            pub fn call(self: *const Callback, args: anytype) !void {
-                return self.callWithThis(self.getThis(), args);
+            pub fn call(self: *const Function, comptime T: type, args: anytype) !T {
+                return self.callWithThis(T, self.getThis(), args);
             }
 
-            pub fn tryCall(self: *const Callback, args: anytype, result: *Result) !void {
-                return self.tryCallWithThis(self.getThis(), args, result);
+            pub fn tryCall(self: *const Function, comptime T: type, args: anytype, result: *Result) !T {
+                return self.tryCallWithThis(T, self.getThis(), args, result);
             }
 
-            pub fn tryCallWithThis(self: *const Callback, this: anytype, args: anytype, result: *Result) !void {
+            pub fn tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype, result: *Result) !void {
                 var try_catch: TryCatch = undefined;
                 try_catch.init(self.scope);
                 defer try_catch.deinit();
 
-                self.callWithThis(this, args) catch |err| {
+                return self.callWithThis(T, this, args) catch |err| {
                     if (try_catch.hasCaught()) {
                         const allocator = self.scope.call_arena;
                         result.stack = try_catch.stack(allocator) catch null;
@@ -1273,7 +1272,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 };
             }
 
-            pub fn callWithThis(self: *const Callback, this: anytype, args: anytype) !void {
+            pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype) !T {
                 const scope = self.scope;
 
                 const js_this = try scope.valueToExistingObject(this);
@@ -1289,14 +1288,18 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 if (result == null) {
                     return error.JSExecCallback;
                 }
+
+                if (@typeInfo(T) == .void) return {};
+                const named_function = comptime NamedFunction.init(T, "callResult");
+                return scope.jsValueToZig(named_function, T, result.?);
             }
 
-            fn getThis(self: *const Callback) v8.Object {
+            fn getThis(self: *const Function) v8.Object {
                 return self.this orelse self.scope.context.getGlobal();
             }
 
             // debug/helper to print the source of the JS callback
-            pub fn printFunc(self: Callback) !void {
+            pub fn printFunc(self: Function) !void {
                 const scope = self.scope;
                 const value = self.func.castToFunction().toValue();
                 const src = try valueToString(scope.call_arena, value, scope.isolate, scope.context);
@@ -1455,7 +1458,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
         // Env.JsObject. Want a TypedArray? Env.TypedArray.
         pub fn TypedArray(comptime T: type) type {
             return struct {
-                // See Callback._CALLBACK_ID_KLUDGE
+                // See Function._FUNCTION_ID_KLUDGE
                 const _TYPED_ARRAY_ID_KLUDGE = true;
 
                 values: []const T,
@@ -1989,7 +1992,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         return js_obj.toValue();
                     }
 
-                    if (T == Callback) {
+                    if (T == Function) {
                         // we're returnig a callback
                         return value.func.toValue();
                     }

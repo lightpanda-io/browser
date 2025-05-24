@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const parser = @import("../netsurf.zig");
-const Callback = @import("../env.zig").Callback;
+const Function = @import("../env.zig").Function;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 
 // https://drafts.csswg.org/cssom-view/#the-mediaquerylist-interface
@@ -39,7 +39,7 @@ pub const MediaQueryList = struct {
         return self.media;
     }
 
-    pub fn _addListener(_: *const MediaQueryList, _: Callback) void {}
+    pub fn _addListener(_: *const MediaQueryList, _: Function) void {}
 
-    pub fn _removeListener(_: *const MediaQueryList, _: Callback) void {}
+    pub fn _removeListener(_: *const MediaQueryList, _: Function) void {}
 };

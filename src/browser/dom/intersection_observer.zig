@@ -40,7 +40,7 @@ const log = std.log.scoped(.events);
 // The returned Entries are phony, they always indicate full intersection.
 // https://developer.mozilla.org/en-US/docs/Web/API/IntersectionObserver
 pub const IntersectionObserver = struct {
-    callback: Env.Callback,
+    callback: Env.Function,
     options: IntersectionObserverOptions,
     state: *SessionState,
 
@@ -48,7 +48,7 @@ pub const IntersectionObserver = struct {
 
     // new IntersectionObserver(callback)
     // new IntersectionObserver(callback, options) [not supported yet]
-    pub fn constructor(callback: Env.Callback, options_: ?IntersectionObserverOptions, state: *SessionState) !IntersectionObserver {
+    pub fn constructor(callback: Env.Function, options_: ?IntersectionObserverOptions, state: *SessionState) !IntersectionObserver {
         var options = IntersectionObserverOptions{
             .root = parser.documentToNode(parser.documentHTMLToDocument(state.window.document)),
             .rootMargin = "0px 0px 0px 0px",
@@ -85,8 +85,8 @@ pub const IntersectionObserver = struct {
             .options = &self.options,
         });
 
-        var result: Env.Callback.Result = undefined;
-        self.callback.tryCall(.{self.observed_entries.items}, &result) catch {
+        var result: Env.Function.Result = undefined;
+        self.callback.tryCall(void, .{self.observed_entries.items}, &result) catch {
             log.err("intersection observer callback error: {s}", .{result.exception});
             log.debug("stack:\n{s}", .{result.stack orelse "???"});
         };

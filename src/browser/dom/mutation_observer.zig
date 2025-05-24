@@ -36,14 +36,14 @@ const log = std.log.scoped(.events);
 
 // WEB IDL https://dom.spec.whatwg.org/#interface-mutationobserver
 pub const MutationObserver = struct {
-    cbk: Env.Callback,
+    cbk: Env.Function,
     arena: Allocator,
 
     // List of records which were observed. When the scopeEnds, we need to
     // execute our callback with it.
     observed: std.ArrayListUnmanaged(*MutationRecord),
 
-    pub fn constructor(cbk: Env.Callback, state: *SessionState) !MutationObserver {
+    pub fn constructor(cbk: Env.Function, state: *SessionState) !MutationObserver {
         return .{
             .cbk = cbk,
             .observed = .{},
@@ -113,8 +113,8 @@ pub const MutationObserver = struct {
 
         for (record) |r| {
             const records = [_]MutationRecord{r.*};
-            var result: Env.Callback.Result = undefined;
-            self.cbk.tryCall(.{records}, &result) catch {
+            var result: Env.Function.Result = undefined;
+            self.cbk.tryCall(void, .{records}, &result) catch {
                 log.err("mutation observer callback error: {s}", .{result.exception});
                 log.debug("stack:\n{s}", .{result.stack orelse "???"});
             };

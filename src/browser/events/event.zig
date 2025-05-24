@@ -20,7 +20,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const parser = @import("../netsurf.zig");
-const Callback = @import("../env.zig").Callback;
+const Function = @import("../env.zig").Function;
 const generate = @import("../../runtime/generate.zig");
 
 const DOMException = @import("../dom/exceptions.zig").DOMException;
@@ -140,10 +140,10 @@ pub const Event = struct {
 };
 
 pub const EventHandler = struct {
-    callback: Callback,
+    callback: Function,
     node: parser.EventNode,
 
-    pub fn init(allocator: Allocator, callback: Callback) !*EventHandler {
+    pub fn init(allocator: Allocator, callback: Function) !*EventHandler {
         const eh = try allocator.create(EventHandler);
         eh.* = .{
             .callback = callback,
@@ -162,8 +162,8 @@ pub const EventHandler = struct {
         };
 
         const self: *EventHandler = @fieldParentPtr("node", node);
-        var result: Callback.Result = undefined;
-        self.callback.tryCall(.{ievent}, &result) catch {
+        var result: Function.Result = undefined;
+        self.callback.tryCall(void, .{ievent}, &result) catch {
             log.err("event handler error: {s}", .{result.exception});
             log.debug("stack:\n{s}", .{result.stack orelse "???"});
         };

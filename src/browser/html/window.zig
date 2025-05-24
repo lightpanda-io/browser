@@ -19,7 +19,7 @@
 const std = @import("std");
 
 const parser = @import("../netsurf.zig");
-const Callback = @import("../env.zig").Callback;
+const Function = @import("../env.zig").Function;
 const SessionState = @import("../env.zig").SessionState;
 const Loop = @import("../../runtime/loop.zig").Loop;
 
@@ -159,12 +159,12 @@ pub const Window = struct {
     // Returns the request ID, that uniquely identifies the entry in the callback list.
     pub fn _requestAnimationFrame(
         self: *Window,
-        callback: Callback,
+        callback: Function,
     ) !u32 {
         // We immediately execute the callback, but this may not be correct TBD.
         // Since: When multiple callbacks queued by requestAnimationFrame() begin to fire in a single frame, each receives the same timestamp even though time has passed during the computation of every previous callback's workload.
-        var result: Callback.Result = undefined;
-        callback.tryCall(.{self.performance._now()}, &result) catch {
+        var result: Function.Result = undefined;
+        callback.tryCall(void, .{self.performance._now()}, &result) catch {
             log.err("Window.requestAnimationFrame(): {s}", .{result.exception});
             log.debug("stack:\n{s}", .{result.stack orelse "???"});
         };
@@ -178,12 +178,12 @@ pub const Window = struct {
     }
 
     // TODO handle callback arguments.
-    pub fn _setTimeout(self: *Window, cbk: Callback, delay: ?u32, state: *SessionState) !u32 {
+    pub fn _setTimeout(self: *Window, cbk: Function, delay: ?u32, state: *SessionState) !u32 {
         return self.createTimeout(cbk, delay, state, false);
     }
 
     // TODO handle callback arguments.
-    pub fn _setInterval(self: *Window, cbk: Callback, delay: ?u32, state: *SessionState) !u32 {
+    pub fn _setInterval(self: *Window, cbk: Function, delay: ?u32, state: *SessionState) !u32 {
         return self.createTimeout(cbk, delay, state, true);
     }
 
@@ -204,7 +204,7 @@ pub const Window = struct {
         };
     }
 
-    fn createTimeout(self: *Window, cbk: Callback, delay_: ?u32, state: *SessionState, comptime repeat: bool) !u32 {
+    fn createTimeout(self: *Window, cbk: Function, delay_: ?u32, state: *SessionState, comptime repeat: bool) !u32 {
         if (self.timers.count() > 512) {
             return error.TooManyTimeout;
         }
@@ -255,7 +255,7 @@ const TimerCallback = struct {
     timer_id: u31,
 
     // The JavaScript callback to execute
-    cbk: Callback,
+    cbk: Function,
 
     // This is the internal data that the event loop tracks. We'll get this
     // back in run and, from it, can get our TimerCallback instance
@@ -269,8 +269,8 @@ const TimerCallback = struct {
     fn run(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
         const self: *TimerCallback = @fieldParentPtr("node", node);
 
-        var result: Callback.Result = undefined;
-        self.cbk.tryCall(.{}, &result) catch {
+        var result: Function.Result = undefined;
+        self.cbk.tryCall(void, .{}, &result) catch {
             log.err("timeout callback error: {s}", .{result.exception});
             log.debug("stack:\n{s}", .{result.stack orelse "???"});
         };
