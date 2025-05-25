@@ -25,6 +25,8 @@ const URL = @import("../url/url.zig").URL;
 const Node = @import("../dom/node.zig").Node;
 const Element = @import("../dom/element.zig").Element;
 
+const CSSStyleDeclaration = @import("../cssom/css_style_declaration.zig").CSSStyleDeclaration;
+
 // HTMLElement interfaces
 pub const Interfaces = .{
     HTMLElement,
@@ -92,7 +94,6 @@ pub const Interfaces = .{
     HTMLTrackElement,
     HTMLUListElement,
     HTMLVideoElement,
-    CSSProperties,
 
     @import("form.zig").HTMLFormElement,
     @import("select.zig").HTMLSelectElement,
@@ -103,15 +104,19 @@ pub const Union = generate.Union(Interfaces);
 // Abstract class
 // --------------
 
-const CSSProperties = struct {};
-
 pub const HTMLElement = struct {
     pub const Self = parser.ElementHTML;
     pub const prototype = *Element;
     pub const subtype = .node;
 
-    pub fn get_style(_: *parser.ElementHTML) CSSProperties {
-        return .{};
+    style: CSSStyleDeclaration = .{
+        .store = .{},
+        .order = .{},
+    },
+
+    pub fn get_style(e: *parser.ElementHTML, state: *SessionState) !*CSSStyleDeclaration {
+        const self = try state.getOrCreateNodeWrapper(HTMLElement, @ptrCast(e));
+        return &self.style;
     }
 
     pub fn get_innerText(e: *parser.ElementHTML) ![]const u8 {
@@ -1104,6 +1109,15 @@ test "Browser.HTML.Element" {
         .{ "document.getElementById('content').addEventListener('click', clickCbk);", "undefined" },
         .{ "document.getElementById('content').click()", "undefined" },
         .{ "click_count", "1" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "let style = document.getElementById('content').style", "undefined" },
+        .{ "style.cssText = 'color: red; font-size: 12px; margin: 5px !important;'", "color: red; font-size: 12px; margin: 5px !important;" },
+        .{ "style.length", "3" },
+        .{ "style.setProperty('background-color', 'blue')", "undefined" },
+        .{ "style.getPropertyValue('background-color')", "blue" },
+        .{ "style.length", "4" },
     }, .{});
 
     // Image
