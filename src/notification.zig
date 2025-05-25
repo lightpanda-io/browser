@@ -1,12 +1,11 @@
 const std = @import("std");
 
+const log = @import("log.zig");
 const URL = @import("url.zig").URL;
 const page = @import("browser/page.zig");
 const http_client = @import("http/client.zig");
 
 const Allocator = std.mem.Allocator;
-
-const log = std.log.scoped(.notification);
 
 const List = std.DoublyLinkedList(Listener);
 const Node = List.Node;
@@ -207,7 +206,11 @@ pub const Notification = struct {
             const listener = n.data;
             const func: EventFunc(event) = @alignCast(@ptrCast(listener.func));
             func(listener.receiver, data) catch |err| {
-                log.err("{s} '{s}' dispatch error: {}", .{ listener.struct_name, @tagName(event), err });
+                log.err(.notification, "dispatch error", .{
+                    .err = err,
+                    .event = event,
+                    .listener = listener.struct_name,
+                });
             };
             node = n.next;
         }

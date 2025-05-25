@@ -17,8 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-
-const log = std.log.scoped(.cdp);
+const log = @import("../../log.zig");
 
 // TODO: hard coded IDs
 const LOADER_ID = "LOADERID42AA389647D702B4D805F49A";
@@ -301,7 +300,7 @@ fn sendMessageToTarget(cmd: anytype) !void {
     };
 
     cmd.cdp.dispatch(cmd.arena, &capture, params.message) catch |err| {
-        log.err("send message {d} ({s}): {any}", .{ cmd.input.id orelse -1, params.message, err });
+        log.err(.cdp, "internal dispatch error", .{ .err = err, .id = cmd.input.id, .message = params.message });
         return err;
     };
 

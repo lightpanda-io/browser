@@ -22,7 +22,7 @@ const builtin = @import("builtin");
 const JsObject = @import("../env.zig").Env.JsObject;
 const SessionState = @import("../env.zig").SessionState;
 
-const log = if (builtin.is_test) &test_capture else std.log.scoped(.console);
+const log = if (builtin.is_test) &test_capture else @import("../../log.zig");
 
 pub const Console = struct {
     // TODO: configurable writer
@@ -33,7 +33,7 @@ pub const Console = struct {
         if (values.len == 0) {
             return;
         }
-        log.info("{s}", .{try serializeValues(values, state)});
+        log.info(.console, "info", .{ .args = try serializeValues(values, state) });
     }
 
     pub fn _info(console: *const Console, values: []JsObject, state: *SessionState) !void {
@@ -44,21 +44,21 @@ pub const Console = struct {
         if (values.len == 0) {
             return;
         }
-        log.debug("{s}", .{try serializeValues(values, state)});
+        log.debug(.console, "debug", .{ .args = try serializeValues(values, state) });
     }
 
     pub fn _warn(_: *const Console, values: []JsObject, state: *SessionState) !void {
         if (values.len == 0) {
             return;
         }
-        log.warn("{s}", .{try serializeValues(values, state)});
+        log.warn(.console, "warn", .{ .args = try serializeValues(values, state) });
     }
 
     pub fn _error(_: *const Console, values: []JsObject, state: *SessionState) !void {
         if (values.len == 0) {
             return;
         }
-        log.err("{s}", .{try serializeValues(values, state)});
+        log.info(.console, "error", .{ .args = try serializeValues(values, state) });
     }
 
     pub fn _clear(_: *const Console) void {}
@@ -77,17 +77,16 @@ pub const Console = struct {
         const count = current + 1;
         gop.value_ptr.* = count;
 
-        log.info("{s}: {d}", .{ label, count });
+        log.info(.console, "count", .{ .label = label, .count = count });
     }
 
     pub fn _countReset(self: *Console, label_: ?[]const u8) !void {
         const label = label_ orelse "default";
         const kv = self.counts.fetchRemove(label) orelse {
-            log.warn("Counter \"{s}\" doesn't exist.", .{label});
+            log.info(.console, "invalid counter", .{ .label = label });
             return;
         };
-
-        log.info("{s}: {d}", .{ label, kv.value });
+        log.info(.console, "count reset", .{ .label = label, .count = kv.value });
     }
 
     pub fn _time(self: *Console, label_: ?[]const u8, state: *SessionState) !void {
@@ -95,7 +94,7 @@ pub const Console = struct {
         const gop = try self.timers.getOrPut(state.arena, label);
 
         if (gop.found_existing) {
-            log.warn("Timer \"{s}\" already exists.", .{label});
+            log.info(.console, "duplicate timer", .{ .label = label });
             return;
         }
         gop.key_ptr.* = try state.arena.dupe(u8, label);
@@ -106,22 +105,21 @@ pub const Console = struct {
         const elapsed = timestamp();
         const label = label_ orelse "default";
         const start = self.timers.get(label) orelse {
-            log.warn("Timer \"{s}\" doesn't exist.", .{label});
+            log.info(.console, "invalid timer", .{ .label = label });
             return;
         };
-
-        log.info("\"{s}\": {d}ms", .{ label, elapsed - start });
+        log.info(.console, "timer", .{ .label = label, .elapsed = elapsed - start });
     }
 
     pub fn _timeStop(self: *Console, label_: ?[]const u8) void {
         const elapsed = timestamp();
         const label = label_ orelse "default";
         const kv = self.timers.fetchRemove(label) orelse {
-            log.warn("Timer \"{s}\" doesn't exist.", .{label});
+            log.info(.console, "invalid timer", .{ .label = label });
             return;
         };
 
-        log.info("\"{s}\": {d}ms - timer ended", .{ label, elapsed - kv.value });
+        log.warn(.console, "timer stop", .{ .label = label, .elapsed = elapsed - kv.value });
     }
 
     pub fn _assert(_: *Console, assertion: JsObject, values: []JsObject, state: *SessionState) !void {
@@ -132,7 +130,7 @@ pub const Console = struct {
         if (values.len > 0) {
             serialized_values = try serializeValues(values, state);
         }
-        log.err("Assertion failed: {s}", .{serialized_values});
+        log.info(.console, "assertion failed", .{ .values = serialized_values });
     }
 
     fn serializeValues(values: []JsObject, state: *SessionState) ![]const u8 {
@@ -155,10 +153,10 @@ fn timestamp() u32 {
 var test_capture = TestCapture{};
 const testing = @import("../../testing.zig");
 test "Browser.Console" {
+    defer testing.reset();
+
     var runner = try testing.jsRunner(testing.tracking_allocator, .{});
     defer runner.deinit();
-
-    defer testing.reset();
 
     {
         try runner.testCases(&.{
@@ -167,8 +165,8 @@ test "Browser.Console" {
         }, .{});
 
         const captured = test_capture.captured.items;
-        try testing.expectEqual("a", captured[0]);
-        try testing.expectEqual("hello world 23 true [object Object]", captured[1]);
+        try testing.expectEqual("[info] args=a", captured[0]);
+        try testing.expectEqual("[warn] args=hello world 23 true [object Object]", captured[1]);
     }
 
     {
@@ -186,15 +184,15 @@ test "Browser.Console" {
         }, .{});
 
         const captured = test_capture.captured.items;
-        try testing.expectEqual("Counter \"default\" doesn't exist.", captured[0]);
-        try testing.expectEqual("default: 1", captured[1]);
-        try testing.expectEqual("teg: 1", captured[2]);
-        try testing.expectEqual("teg: 2", captured[3]);
-        try testing.expectEqual("teg: 3", captured[4]);
-        try testing.expectEqual("default: 2", captured[5]);
-        try testing.expectEqual("teg: 3", captured[6]);
-        try testing.expectEqual("default: 2", captured[7]);
-        try testing.expectEqual("default: 1", captured[8]);
+        try testing.expectEqual("[invalid counter] label=default", captured[0]);
+        try testing.expectEqual("[count] label=default count=1", captured[1]);
+        try testing.expectEqual("[count] label=teg count=1", captured[2]);
+        try testing.expectEqual("[count] label=teg count=2", captured[3]);
+        try testing.expectEqual("[count] label=teg count=3", captured[4]);
+        try testing.expectEqual("[count] label=default count=2", captured[5]);
+        try testing.expectEqual("[count reset] label=teg count=3", captured[6]);
+        try testing.expectEqual("[count reset] label=default count=2", captured[7]);
+        try testing.expectEqual("[count] label=default count=1", captured[8]);
     }
 
     {
@@ -208,12 +206,11 @@ test "Browser.Console" {
         }, .{});
 
         const captured = test_capture.captured.items;
-        try testing.expectEqual("Assertion failed: ", captured[0]);
-        try testing.expectEqual("Assertion failed: x true", captured[1]);
-        try testing.expectEqual("Assertion failed: x", captured[2]);
+        try testing.expectEqual("[assertion failed] values=", captured[0]);
+        try testing.expectEqual("[assertion failed] values=x true", captured[1]);
+        try testing.expectEqual("[assertion failed] values=x", captured[2]);
     }
 }
-
 const TestCapture = struct {
     captured: std.ArrayListUnmanaged([]const u8) = .{},
 
@@ -221,20 +218,69 @@ const TestCapture = struct {
         self.captured = .{};
     }
 
-    fn debug(self: *TestCapture, comptime fmt: []const u8, args: anytype) void {
-        const str = std.fmt.allocPrint(testing.arena_allocator, fmt, args) catch unreachable;
-        self.captured.append(testing.arena_allocator, str) catch unreachable;
+    fn debug(
+        self: *TestCapture,
+        comptime scope: @Type(.enum_literal),
+        comptime msg: []const u8,
+        args: anytype,
+    ) void {
+        self.capture(scope, msg, args);
     }
 
-    fn info(self: *TestCapture, comptime fmt: []const u8, args: anytype) void {
-        self.debug(fmt, args);
+    fn info(
+        self: *TestCapture,
+        comptime scope: @Type(.enum_literal),
+        comptime msg: []const u8,
+        args: anytype,
+    ) void {
+        self.capture(scope, msg, args);
     }
 
-    fn warn(self: *TestCapture, comptime fmt: []const u8, args: anytype) void {
-        self.debug(fmt, args);
+    fn warn(
+        self: *TestCapture,
+        comptime scope: @Type(.enum_literal),
+        comptime msg: []const u8,
+        args: anytype,
+    ) void {
+        self.capture(scope, msg, args);
     }
 
-    fn err(self: *TestCapture, comptime fmt: []const u8, args: anytype) void {
-        self.debug(fmt, args);
+    fn err(
+        self: *TestCapture,
+        comptime scope: @Type(.enum_literal),
+        comptime msg: []const u8,
+        args: anytype,
+    ) void {
+        self.capture(scope, msg, args);
+    }
+
+    fn capture(
+        self: *TestCapture,
+        comptime scope: @Type(.enum_literal),
+        comptime msg: []const u8,
+        args: anytype,
+    ) void {
+        self._capture(scope, msg, args) catch unreachable;
+    }
+
+    fn _capture(
+        self: *TestCapture,
+        comptime scope: @Type(.enum_literal),
+        comptime msg: []const u8,
+        args: anytype,
+    ) !void {
+        std.debug.assert(scope == .console);
+
+        const allocator = testing.arena_allocator;
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        try buf.appendSlice(allocator, "[" ++ msg ++ "] ");
+
+        inline for (@typeInfo(@TypeOf(args)).@"struct".fields) |f| {
+            try buf.appendSlice(allocator, f.name);
+            try buf.append(allocator, '=');
+            try @import("../../log.zig").writeValue(allocator, &buf, false, @field(args, f.name));
+            try buf.append(allocator, ' ');
+        }
+        self.captured.append(testing.arena_allocator, std.mem.trimRight(u8, buf.items, " ")) catch unreachable;
     }
 };

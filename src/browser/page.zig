@@ -35,13 +35,12 @@ const HTMLDocument = @import("html/document.zig").HTMLDocument;
 
 const URL = @import("../url.zig").URL;
 
+const log = @import("../log.zig");
 const parser = @import("netsurf.zig");
 const http = @import("../http/client.zig");
 const storage = @import("storage/storage.zig");
 
 const polyfill = @import("polyfill/polyfill.zig");
-
-const log = std.log.scoped(.page);
 
 // Page navigates to an url.
 // You can navigates multiple urls with the same page, but you have to call
@@ -130,9 +129,6 @@ pub const Page = struct {
 
     pub fn fetchModuleSource(ctx: *anyopaque, specifier: []const u8) !?[]const u8 {
         const self: *Page = @ptrCast(@alignCast(ctx));
-
-        log.debug("fetch module: specifier: {s}", .{specifier});
-
         const base = if (self.current_script) |s| s.src else null;
 
         const file_src = blk: {
@@ -156,12 +152,12 @@ pub const Page = struct {
         try self.session.browser.app.loop.run();
 
         if (try_catch.hasCaught() == false) {
-            log.debug("wait: OK", .{});
+            log.debug(.page, "wait complete", .{});
             return;
         }
 
         const msg = (try try_catch.err(self.arena)) orelse "unknown";
-        log.info("wait error: {s}", .{msg});
+        log.err(.page, "wait error", .{ .err = msg });
     }
 
     pub fn origin(self: *const Page, arena: Allocator) ![]const u8 {
@@ -176,7 +172,7 @@ pub const Page = struct {
         const session = self.session;
         const notification = session.browser.notification;
 
-        log.debug("starting GET {s}", .{request_url});
+        log.info(.page, "navigate", .{ .url = request_url, .reason = opts.reason });
 
         // if the url is about:blank, nothing to do.
         if (std.mem.eql(u8, "about:blank", request_url.raw)) {
@@ -215,8 +211,6 @@ pub const Page = struct {
         // TODO handle fragment in url.
         try self.window.replaceLocation(.{ .url = try self.url.toWebApi(arena) });
 
-        log.info("GET {any} {d}", .{ self.url, header.status });
-
         const content_type = header.get("content-type");
 
         const mime: Mime = blk: {
@@ -226,12 +220,13 @@ pub const Page = struct {
             break :blk Mime.sniff(try response.peek());
         } orelse .unknown;
 
+        log.info(.page, "navigation header", .{ .status = header.status, .content_type = content_type, .charset = mime.charset });
+
         if (mime.isHTML()) {
             self.raw_data = null;
             try self.loadHTMLDoc(&response, mime.charset orelse "utf-8");
             try self.processHTMLDoc();
         } else {
-            log.info("non-HTML document: {s}", .{content_type orelse "null"});
             var arr: std.ArrayListUnmanaged(u8) = .{};
             while (try response.next()) |data| {
                 try arr.appendSlice(arena, try arena.dupe(u8, data));
@@ -244,12 +239,11 @@ pub const Page = struct {
             .url = &self.url,
             .timestamp = timestamp(),
         });
+        log.info(.page, "navigation complete", .{});
     }
 
     // https://html.spec.whatwg.org/#read-html
     fn loadHTMLDoc(self: *Page, reader: anytype, charset: []const u8) !void {
-        log.debug("parse html with charset {s}", .{charset});
-
         const ccharset = try self.arena.dupeZ(u8, charset);
 
         const html_doc = try parser.documentHTMLParse(reader, ccharset);
@@ -341,13 +335,17 @@ pub const Page = struct {
             // > page.
             // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#notes
             try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(e));
-            self.evalScript(&script) catch |err| log.warn("evaljs: {any}", .{err});
+            self.evalScript(&script) catch |err| {
+                log.err(.page, "eval script error", .{ .err = err });
+            };
             try parser.documentHTMLSetCurrentScript(html_doc, null);
         }
 
-        for (defer_scripts.items) |s| {
-            try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(s.element));
-            self.evalScript(&s) catch |err| log.warn("evaljs: {any}", .{err});
+        for (defer_scripts.items) |script| {
+            try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(script.element));
+            self.evalScript(&script) catch |err| {
+                log.err(.page, "eval script error", .{ .err = err });
+            };
             try parser.documentHTMLSetCurrentScript(html_doc, null);
         }
         // dispatch DOMContentLoaded before the transition to "complete",
@@ -357,9 +355,11 @@ pub const Page = struct {
         try HTMLDocument.documentIsLoaded(html_doc, &self.state);
 
         // eval async scripts.
-        for (async_scripts.items) |s| {
-            try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(s.element));
-            self.evalScript(&s) catch |err| log.warn("evaljs: {any}", .{err});
+        for (async_scripts.items) |script| {
+            try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(script.element));
+            self.evalScript(&script) catch |err| {
+                log.err(.page, "eval script error", .{ .err = err });
+            };
             try parser.documentHTMLSetCurrentScript(html_doc, null);
         }
 
@@ -392,8 +392,6 @@ pub const Page = struct {
         self.current_script = script;
         defer self.current_script = null;
 
-        log.debug("starting GET {s}", .{src});
-
         // https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-classic-script
         const body = (try self.fetchData(src, null)) orelse {
             // TODO If el's result is null, then fire an event named error at
@@ -415,8 +413,6 @@ pub const Page = struct {
     // If a base path is given, src is resolved according to the base first.
     // the caller owns the returned string
     fn fetchData(self: *const Page, src: []const u8, base: ?[]const u8) !?[]const u8 {
-        log.debug("starting fetch {s}", .{src});
-
         const arena = self.arena;
 
         // Handle data URIs.
@@ -434,6 +430,9 @@ pub const Page = struct {
         var origin_url = &self.url;
         const url = try origin_url.resolve(arena, res_src);
 
+        log.info(.page, "fetching script", .{ .url = url });
+        errdefer |err| log.err(.page, "fetch error", .{ .err = err });
+
         var request = try self.newHTTPRequest(.GET, &url, .{
             .origin_uri = &origin_url.uri,
             .navigation = false,
@@ -443,8 +442,6 @@ pub const Page = struct {
         var response = try request.sendSync(.{});
         var header = response.header;
         try self.session.cookie_jar.populateFromResponse(&url.uri, &header);
-
-        log.info("fetch {any}: {d}", .{ url, header.status });
 
         if (header.status != 200) {
             return error.BadStatusCode;
@@ -462,6 +459,7 @@ pub const Page = struct {
             return null;
         }
 
+        log.info(.page, "fetch complete", .{ .status = header.status, .content_length = arr.items.len });
         return arr.items;
     }
 
@@ -513,7 +511,7 @@ pub const Page = struct {
     fn windowClicked(node: *parser.EventNode, event: *parser.Event) void {
         const self: *Page = @fieldParentPtr("window_clicked_event_node", node);
         self._windowClicked(event) catch |err| {
-            log.err("window click handler: {}", .{err});
+            log.err(.page, "click handler error", .{ .err = err });
         };
     }
 
@@ -543,15 +541,16 @@ pub const Page = struct {
     }
 
     const DelayedNavigation = struct {
-        navigate_node: Loop.CallbackNode = .{ .func = DelayedNavigation.delay_navigate },
+        navigate_node: Loop.CallbackNode = .{ .func = DelayedNavigation.delayNavigate },
         session: *Session,
         href: []const u8,
 
-        fn delay_navigate(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
+        fn delayNavigate(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
             _ = repeat_delay;
             const self: *DelayedNavigation = @fieldParentPtr("navigate_node", node);
             self.session.pageNavigate(self.href) catch |err| {
-                log.err("Delayed navigation error {}", .{err}); // TODO: should we trigger a specific event here?
+                // TODO: should we trigger a specific event here?
+                log.err(.page, "delayed navigation error", .{ .err = err });
             };
         }
     };
@@ -632,17 +631,14 @@ pub const Page = struct {
                     switch (try page.scope.module(body, src)) {
                         .value => |v| break :blk v,
                         .exception => |e| {
-                            log.info("eval module {s}: {s}", .{
-                                src,
-                                try e.exception(page.arena),
-                            });
+                            log.warn(.page, "eval module", .{ .src = src, .err = try e.exception(page.arena) });
                             return error.JsErr;
                         },
                     }
                 },
             } catch {
                 if (try try_catch.err(page.arena)) |msg| {
-                    log.info("eval script {s}: {s}", .{ src, msg });
+                    log.warn(.page, "eval script", .{ .src = src, .err = msg });
                 }
                 return error.JsErr;
             };
@@ -651,7 +647,7 @@ pub const Page = struct {
             if (self.onload) |onload| {
                 _ = page.scope.exec(onload, "script_on_load") catch {
                     if (try try_catch.err(page.arena)) |msg| {
-                        log.info("eval script onload {s}: {s}", .{ src, msg });
+                        log.warn(.page, "eval onload", .{ .src = src, .err = msg });
                     }
                     return error.JsErr;
                 };

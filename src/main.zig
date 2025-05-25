@@ -20,6 +20,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
+const log = @import("log.zig");
 const server = @import("server.zig");
 const App = @import("app.zig").App;
 const Platform = @import("runtime/js.zig").Platform;
@@ -27,16 +28,6 @@ const Browser = @import("browser/browser.zig").Browser;
 
 const build_config = @import("build_config");
 const parser = @import("browser/netsurf.zig");
-
-const log = std.log.scoped(.cli);
-
-pub const std_options = std.Options{
-    // Set the log level to info
-    .log_level = @enumFromInt(@intFromEnum(build_config.log_level)),
-
-    // Define logFn to override the std implementation
-    .logFn = logFn,
-};
 
 pub fn main() !void {
     // allocator
@@ -49,6 +40,16 @@ pub fn main() !void {
         if (gpa.detectLeaks()) std.posix.exit(1);
     };
 
+    try log.init(alloc, .{});
+    defer log.deinit(alloc);
+
+    run(alloc) catch |err| {
+        log.fatal(.main, "exit", .{ .err = err });
+        std.posix.exit(1);
+    };
+}
+
+fn run(alloc: Allocator) !void {
     var args_arena = std.heap.ArenaAllocator.init(alloc);
     defer args_arena.deinit();
     const args = try parseArgs(args_arena.allocator());
@@ -78,19 +79,20 @@ pub fn main() !void {
 
     switch (args.mode) {
         .serve => |opts| {
+            log.debug(.main, "startup", .{ .mode = "serve" });
             const address = std.net.Address.parseIp4(opts.host, opts.port) catch |err| {
-                log.err("address (host:port) {any}\n", .{err});
+                log.fatal(.main, "server address", .{ .err = err, .host = opts.host, .port = opts.port });
                 return args.printUsageAndExit(false);
             };
 
             const timeout = std.time.ns_per_s * @as(u64, opts.timeout);
             server.run(app, address, timeout) catch |err| {
-                log.err("Server error", .{});
+                log.fatal(.main, "server run", .{ .err = err });
                 return err;
             };
         },
         .fetch => |opts| {
-            log.debug("Fetch mode: url {s}, dump {any}", .{ opts.url, opts.dump });
+            log.debug(.main, "startup", .{ .mode = "fetch", .dump = opts.dump, .url = opts.url });
             const url = try @import("url.zig").URL.parse(opts.url, null);
 
             // browser
@@ -104,11 +106,11 @@ pub fn main() !void {
 
             _ = page.navigate(url, .{}) catch |err| switch (err) {
                 error.UnsupportedUriScheme, error.UriMissingHost => {
-                    log.err("'{s}' is not a valid URL ({any})\n", .{ url, err });
+                    log.fatal(.main, "fetch invalid URL", .{ .err = err, .url = url });
                     return args.printUsageAndExit(false);
                 },
                 else => {
-                    log.err("'{s}' fetching error ({any})\n", .{ url, err });
+                    log.fatal(.main, "fetch error", .{ .err = err, .url = url });
                     return err;
                 },
             };
@@ -300,7 +302,7 @@ fn parseServeArgs(
     while (args.next()) |opt| {
         if (std.mem.eql(u8, "--host", opt)) {
             const str = args.next() orelse {
-                log.err("--host argument requires an value", .{});
+                log.fatal(.main, "missing argument value", .{ .arg = "--host" });
                 return error.InvalidArgument;
             };
             host = try allocator.dupe(u8, str);
@@ -309,12 +311,12 @@ fn parseServeArgs(
 
         if (std.mem.eql(u8, "--port", opt)) {
             const str = args.next() orelse {
-                log.err("--port argument requires an value", .{});
+                log.fatal(.main, "missing argument value", .{ .arg = "--port" });
                 return error.InvalidArgument;
             };
 
             port = std.fmt.parseInt(u16, str, 10) catch |err| {
-                log.err("--port value is invalid: {}", .{err});
+                log.fatal(.main, "invalid argument value", .{ .arg = "--port", .err = err });
                 return error.InvalidArgument;
             };
             continue;
@@ -322,12 +324,12 @@ fn parseServeArgs(
 
         if (std.mem.eql(u8, "--timeout", opt)) {
             const str = args.next() orelse {
-                log.err("--timeout argument requires an value", .{});
+                log.fatal(.main, "missing argument value", .{ .arg = "--timeout" });
                 return error.InvalidArgument;
             };
 
             timeout = std.fmt.parseInt(u16, str, 10) catch |err| {
-                log.err("--timeout value is invalid: {}", .{err});
+                log.fatal(.main, "invalid argument value", .{ .arg = "--timeout", .err = err });
                 return error.InvalidArgument;
             };
             continue;
@@ -340,14 +342,13 @@ fn parseServeArgs(
 
         if (std.mem.eql(u8, "--http_proxy", opt)) {
             const str = args.next() orelse {
-                log.err("--http_proxy argument requires an value", .{});
+                log.fatal(.main, "missing argument value", .{ .arg = "--http_proxy" });
                 return error.InvalidArgument;
             };
             http_proxy = try std.Uri.parse(try allocator.dupe(u8, str));
             continue;
         }
-
-        log.err("Unknown option to serve command: '{s}'", .{opt});
+        log.fatal(.main, "unknown argument", .{ .mode = "serve", .arg = opt });
         return error.UnkownOption;
     }
 
@@ -382,7 +383,7 @@ fn parseFetchArgs(
 
         if (std.mem.eql(u8, "--http_proxy", opt)) {
             const str = args.next() orelse {
-                log.err("--http_proxy argument requires an value", .{});
+                log.fatal(.main, "missing argument value", .{ .arg = "--http_proxy" });
                 return error.InvalidArgument;
             };
             http_proxy = try std.Uri.parse(try allocator.dupe(u8, str));
@@ -390,19 +391,19 @@ fn parseFetchArgs(
         }
 
         if (std.mem.startsWith(u8, opt, "--")) {
-            log.err("Unknown option to serve command: '{s}'", .{opt});
+            log.fatal(.main, "unknown argument", .{ .mode = "fetch", .arg = opt });
             return error.UnkownOption;
         }
 
         if (url != null) {
-            log.err("Can only fetch 1 URL", .{});
+            log.fatal(.main, "duplicate fetch url", .{ .help = "only 1 URL can be specified" });
             return error.TooManyURLs;
         }
         url = try allocator.dupe(u8, opt);
     }
 
     if (url == null) {
-        log.err("A URL must be provided to the fetch command", .{});
+        log.fatal(.main, "duplicate fetch url", .{ .help = "URL to fetch must be provided" });
         return error.MissingURL;
     }
 
@@ -414,21 +415,6 @@ fn parseFetchArgs(
     };
 }
 
-var verbose: bool = builtin.mode == .Debug; // In debug mode, force verbose.
-fn logFn(
-    comptime level: std.log.Level,
-    comptime scope: @Type(.enum_literal),
-    comptime format: []const u8,
-    args: anytype,
-) void {
-    if (!verbose) {
-        // hide all messages with level greater of equal to debug level.
-        if (@intFromEnum(level) >= @intFromEnum(std.log.Level.debug)) return;
-    }
-    // default std log function.
-    std.log.defaultLog(level, scope, format, args);
-}
-
 test {
     std.testing.refAllDecls(@This());
 }
@@ -436,6 +422,8 @@ test {
 var test_wg: std.Thread.WaitGroup = .{};
 test "tests:beforeAll" {
     try parser.init();
+    try log.init(std.testing.allocator, .{});
+
     test_wg.startMany(3);
     _ = try Platform.init();
 

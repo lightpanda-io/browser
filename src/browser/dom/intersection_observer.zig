@@ -18,6 +18,7 @@
 
 const std = @import("std");
 
+const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 const SessionState = @import("../env.zig").SessionState;
 
@@ -28,8 +29,6 @@ pub const Interfaces = .{
     IntersectionObserver,
     IntersectionObserverEntry,
 };
-
-const log = std.log.scoped(.events);
 
 // This is supposed to listen to change between the root and observation targets.
 // However, our rendered stores everything as 1 pixel sized boxes in a long row that never changes.
@@ -87,8 +86,7 @@ pub const IntersectionObserver = struct {
 
         var result: Env.Function.Result = undefined;
         self.callback.tryCall(void, .{self.observed_entries.items}, &result) catch {
-            log.err("intersection observer callback error: {s}", .{result.exception});
-            log.debug("stack:\n{s}", .{result.stack orelse "???"});
+            log.debug(.int_obs, "callback error", .{ .err = result.exception, .stack = result.stack });
         };
     }
 

@@ -18,6 +18,7 @@
 
 const std = @import("std");
 
+const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 const generate = @import("../../runtime/generate.zig");
 
@@ -40,8 +41,6 @@ const Walker = @import("walker.zig").WalkerDepthFirst;
 // HTML
 const HTML = @import("../html/html.zig");
 const HTMLElem = @import("../html/elements.zig");
-
-const log = std.log.scoped(.node);
 
 // Node interfaces
 pub const Interfaces = .{
@@ -270,7 +269,7 @@ pub const Node = struct {
     // - An Element that is not attached to a document or a shadow tree will return the root of the DOM tree it belongs to
     pub fn _getRootNode(self: *parser.Node, options: ?struct { composed: bool = false }) !Union {
         if (options) |options_| if (options_.composed) {
-            log.warn("getRootNode composed is not implemented yet", .{});
+            log.warn(.node, "not implemented", .{ .feature = "getRootNode composed" });
         };
         return try Node.toInterface(try parser.nodeGetRootNode(self));
     }

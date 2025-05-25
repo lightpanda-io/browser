@@ -19,6 +19,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 const Function = @import("../env.zig").Function;
 const generate = @import("../../runtime/generate.zig");
@@ -29,8 +30,6 @@ const EventTargetUnion = @import("../dom/event_target.zig").Union;
 
 const CustomEvent = @import("custom_event.zig").CustomEvent;
 const ProgressEvent = @import("../xhr/progress_event.zig").ProgressEvent;
-
-const log = std.log.scoped(.events);
 
 // Event interfaces
 pub const Interfaces = .{
@@ -157,15 +156,14 @@ pub const EventHandler = struct {
 
     fn handle(node: *parser.EventNode, event: *parser.Event) void {
         const ievent = Event.toInterface(event) catch |err| {
-            log.err("Event.toInterface: {}", .{err});
+            log.err(.event, "toInterface error", .{ .err = err });
             return;
         };
 
         const self: *EventHandler = @fieldParentPtr("node", node);
         var result: Function.Result = undefined;
         self.callback.tryCall(void, .{ievent}, &result) catch {
-            log.err("event handler error: {s}", .{result.exception});
-            log.debug("stack:\n{s}", .{result.stack orelse "???"});
+            log.debug(.event, "handle callback error", .{ .err = result.exception, .stack = result.stack });
         };
     }
 };

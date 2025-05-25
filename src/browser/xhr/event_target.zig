@@ -27,8 +27,6 @@ const EventHandler = @import("../events/event.zig").EventHandler;
 const parser = @import("../netsurf.zig");
 const SessionState = @import("../env.zig").SessionState;
 
-const log = std.log.scoped(.xhr);
-
 pub const XMLHttpRequestEventTarget = struct {
     pub const prototype = *EventTarget;
 
@@ -117,12 +115,5 @@ pub const XMLHttpRequestEventTarget = struct {
         if (self.onloadend_cbk) |cbk| try self.unregister("loadend", cbk.id);
         try self.register(state.arena, "loadend", handler);
         self.onloadend_cbk = handler;
-    }
-
-    pub fn deinit(self: *XMLHttpRequestEventTarget, state: *SessionState) void {
-        const arena = state.arena;
-        parser.eventTargetRemoveAllEventListeners(@as(*parser.EventTarget, @ptrCast(self)), arena) catch |e| {
-            log.err("remove all listeners: {any}", .{e});
-        };
     }
 };

@@ -19,6 +19,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 const SessionState = @import("../env.zig").SessionState;
 
@@ -31,8 +32,6 @@ pub const Interfaces = .{
 };
 
 const Walker = @import("../dom/walker.zig").WalkerChildren;
-
-const log = std.log.scoped(.events);
 
 // WEB IDL https://dom.spec.whatwg.org/#interface-mutationobserver
 pub const MutationObserver = struct {
@@ -115,8 +114,7 @@ pub const MutationObserver = struct {
             const records = [_]MutationRecord{r.*};
             var result: Env.Function.Result = undefined;
             self.cbk.tryCall(void, .{records}, &result) catch {
-                log.err("mutation observer callback error: {s}", .{result.exception});
-                log.debug("stack:\n{s}", .{result.stack orelse "???"});
+                log.debug(.mut_obs, "callback error", .{ .err = result.exception, .stack = result.stack });
             };
         }
     }
@@ -243,15 +241,16 @@ const Observer = struct {
 
     fn handle(en: *parser.EventNode, event: *parser.Event) void {
         const self: *Observer = @fieldParentPtr("event_node", en);
+        self._handle(event) catch |err| {
+            log.err(.mut_obs, "handle error", .{ .err = err });
+        };
+    }
 
+    fn _handle(self: *Observer, event: *parser.Event) !void {
         var mutation_observer = self.mutation_observer;
 
         const node = blk: {
-            const event_target = parser.eventTarget(event) catch |e| {
-                log.err("mutation observer event target: {any}", .{e});
-                return;
-            } orelse return;
-
+            const event_target = try parser.eventTarget(event) orelse return;
             break :blk parser.eventTargetToNode(event_target);
         };
 
@@ -260,10 +259,7 @@ const Observer = struct {
         }
 
         const event_type = blk: {
-            const t = parser.eventType(event) catch |e| {
-                log.err("mutation observer event type: {any}", .{e});
-                return;
-            };
+            const t = try parser.eventType(event);
             break :blk std.meta.stringToEnum(MutationEventType, t) orelse return;
         };
 
@@ -273,9 +269,7 @@ const Observer = struct {
                 .target = self.node,
                 .type = event_type.recordType(),
             };
-            mutation_observer.observed.append(arena, &self.record.?) catch |err| {
-                log.err("mutation_observer append: {}", .{err});
-            };
+            try mutation_observer.observed.append(arena, &self.record.?);
         }
 
         var record = &self.record.?;
@@ -295,18 +289,12 @@ const Observer = struct {
             },
             .DOMNodeInserted => {
                 if (parser.mutationEventRelatedNode(mutation_event) catch null) |related_node| {
-                    record.added_nodes.append(arena, related_node) catch |e| {
-                        log.err("mutation event handler error: {any}", .{e});
-                        return;
-                    };
+                    try record.added_nodes.append(arena, related_node);
                 }
             },
             .DOMNodeRemoved => {
                 if (parser.mutationEventRelatedNode(mutation_event) catch null) |related_node| {
-                    record.removed_nodes.append(arena, related_node) catch |e| {
-                        log.err("mutation event handler error: {any}", .{e});
-                        return;
-                    };
+                    try record.removed_nodes.append(arena, related_node);
                 }
             },
         }

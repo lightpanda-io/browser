@@ -20,8 +20,6 @@ const std = @import("std");
 
 const DOMError = @import("../netsurf.zig").DOMError;
 
-const log = std.log.scoped(.storage);
-
 pub const cookie = @import("cookie.zig");
 pub const Cookie = cookie.Cookie;
 pub const CookieJar = cookie.Jar;
@@ -149,10 +147,7 @@ pub const Bottle = struct {
     }
 
     pub fn _setItem(self: *Bottle, k: []const u8, v: []const u8) !void {
-        const gop = self.map.getOrPut(self.alloc, k) catch |e| {
-            log.debug("set item: {any}", .{e});
-            return DOMError.QuotaExceeded;
-        };
+        const gop = try self.map.getOrPut(self.alloc, k);
 
         if (gop.found_existing == false) {
             gop.key_ptr.* = try self.alloc.dupe(u8, k);
