@@ -582,7 +582,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             // Given an anytype, turns it into a v8.Object. The anytype could be:
             // 1 - A V8.object already
-            // 2 - Our this JsObject wrapper around a V8.Object
+            // 2 - Our JsObject wrapper around a V8.Object
             // 3 - A zig instance that has previously been given to V8
             //     (i.e., the value has to be known to the executor)
             fn valueToExistingObject(self: *const Scope, value: anytype) !v8.Object {
@@ -951,15 +951,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     if (!js_value.isFunction()) {
                         return null;
                     }
-
-                    const func = v8.Persistent(v8.Function).init(self.isolate, js_value.castTo(v8.Function));
-                    try self.trackCallback(func);
-
-                    return .{
-                        .func = func,
-                        .scope = self,
-                        .id = js_value.castTo(v8.Object).getIdentityHash(),
-                    };
+                    return try self.createFunction(js_value);
                 }
 
                 const js_obj = js_value.castTo(v8.Object);
@@ -994,6 +986,20 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     }
                 }
                 return value;
+            }
+
+            fn createFunction(self: *Scope, js_value: v8.Value) !Function {
+                // caller should have made sure this was a function
+                std.debug.assert(js_value.isFunction());
+
+                const func = v8.Persistent(v8.Function).init(self.isolate, js_value.castTo(v8.Function));
+                try self.trackCallback(func);
+
+                return .{
+                    .func = func,
+                    .scope = self,
+                    .id = js_value.castTo(v8.Object).getIdentityHash(),
+                };
             }
 
             // Probing is part of trying to map a JS value to a Zig union. There's
@@ -1234,11 +1240,16 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             };
 
             pub fn withThis(self: *const Function, value: anytype) !Function {
+                const this_obj = if (@TypeOf(value) == JsObject)
+                    value.js_obj
+                else
+                    try self.scope.valueToExistingObject(value);
+
                 return .{
                     .id = self.id,
+                    .this = this_obj,
                     .func = self.func,
                     .scope = self.scope,
-                    .this = try self.scope.valueToExistingObject(value),
                 };
             }
 
@@ -1374,6 +1385,17 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     .scope = scope,
                     .js_obj = gop.value_ptr.castToObject(),
                 };
+            }
+
+            pub fn getFunction(self: JsObject, name: []const u8) !?Function {
+                const scope = self.scope;
+                const js_name = v8.String.initUtf8(scope.isolate, name);
+
+                const js_value = try self.js_obj.getValue(scope.context, js_name.toName());
+                if (!js_value.isFunction()) {
+                    return null;
+                }
+                return try scope.createFunction(js_value);
             }
         };
 

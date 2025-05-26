@@ -57,7 +57,7 @@ pub const EventTarget = struct {
     pub fn _addEventListener(
         self: *parser.EventTarget,
         typ: []const u8,
-        cbk: Env.Function,
+        listener: EventHandler.Listener,
         opts_: ?AddEventListenerOpts,
         page: *Page,
     ) !void {
@@ -80,6 +80,8 @@ pub const EventTarget = struct {
             }
         }
 
+        const cbk = (try listener.callback(self)) orelse return;
+
         // check if event target has already this listener
         const lst = try parser.eventTargetHasListener(
             self,
@@ -90,8 +92,7 @@ pub const EventTarget = struct {
         if (lst != null) {
             return;
         }
-
-        const eh = try EventHandler.init(page.arena, try cbk.withThis(self));
+        const eh = try EventHandler.init(page.arena, cbk);
 
         try parser.eventTargetAddEventListener(
             self,
@@ -101,19 +102,34 @@ pub const EventTarget = struct {
         );
     }
 
+    const RemoveEventListenerOpts = union(enum) {
+        opts: Opts,
+        capture: bool,
+
+        const Opts = struct {
+            capture: ?bool,
+        };
+    };
+
     pub fn _removeEventListener(
         self: *parser.EventTarget,
         typ: []const u8,
         cbk: Env.Function,
-        capture: ?bool,
-        // TODO: hanle EventListenerOptions
-        // see #https://github.com/lightpanda-io/jsruntime-lib/issues/114
+        opts_: ?RemoveEventListenerOpts,
     ) !void {
+        var capture = false;
+        if (opts_) |opts| {
+            capture = switch (opts) {
+                .capture => |c| c,
+                .opts => |o| o.capture orelse false,
+            };
+        }
+
         // check if event target has already this listener
         const lst = try parser.eventTargetHasListener(
             self,
             typ,
-            capture orelse false,
+            capture,
             cbk.id,
         );
         if (lst == null) {
@@ -125,7 +141,7 @@ pub const EventTarget = struct {
             self,
             typ,
             lst.?,
-            capture orelse false,
+            capture,
         );
     }
 
@@ -243,5 +259,12 @@ test "Browser.DOM.EventTarget" {
         .{ "evt.type", "bubbles" },
         .{ "phase", "3" },
         .{ "cur.getAttribute('id')", "content" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "const obj1 = {calls: 0, handleEvent: function() { this.calls += 1; } };", null },
+        .{ "content.addEventListener('he', obj1);", null },
+        .{ "content.dispatchEvent(new Event('he'));", null },
+        .{ "obj1.calls", "1" },
     }, .{});
 }

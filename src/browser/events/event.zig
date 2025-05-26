@@ -21,7 +21,6 @@ const Allocator = std.mem.Allocator;
 
 const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
-const Function = @import("../env.zig").Function;
 const generate = @import("../../runtime/generate.zig");
 
 const DOMException = @import("../dom/exceptions.zig").DOMException;
@@ -141,6 +140,24 @@ pub const Event = struct {
 pub const EventHandler = struct {
     callback: Function,
     node: parser.EventNode,
+
+    const Env = @import("../env.zig").Env;
+    const Function = Env.Function;
+
+    pub const Listener = union(enum) {
+        function: Function,
+        object: Env.JsObject,
+
+        pub fn callback(self: Listener, target: *parser.EventTarget) !?Function {
+            return switch (self) {
+                .function => |func| try func.withThis(target),
+                .object => |obj| blk: {
+                    const func = (try obj.getFunction("handleEvent")) orelse return null;
+                    break :blk try func.withThis(try obj.persist());
+                },
+            };
+        }
+    };
 
     pub fn init(allocator: Allocator, callback: Function) !*EventHandler {
         const eh = try allocator.create(EventHandler);
