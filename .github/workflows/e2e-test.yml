@@ -159,13 +159,15 @@ jobs:
 
       - run: chmod a+x ./lightpanda
 
+      - name: start http
+        run: go run ws/main.go & echo $! > WS.pid
+
       - name: run puppeteer
         run: |
-          go run ws/main.go & echo $! > WS.pid
           ./lightpanda serve & echo $! > LPD.pid
           RUNS=100 npm run bench-puppeteer-cdp > puppeteer.out || exit 1
           cat /proc/`cat LPD.pid`/status |grep VmHWM|grep -oP '\d+' > LPD.VmHWM
-          kill `cat LPD.pid` `cat WS.pid`
+          kill `cat LPD.pid`
 
       - name: puppeteer result
         run: cat puppeteer.out
@@ -180,9 +182,10 @@ jobs:
 
       - name: run hyperfine
         run: |
-          go run ws/main.go & echo $! > WS.pid
           hyperfine --export-json=hyperfine.json --warmup 3 --runs 20 --shell=none "./lightpanda --dump http://127.0.0.1:1234/campfire-commerce/"
-          kill `cat WS.pid`
+
+      - name: stop http
+        run: kill `cat WS.pid`
 
       - name: write commit
         run: |
