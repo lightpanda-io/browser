@@ -48,7 +48,7 @@ jobs:
       - uses: ./.github/actions/install
 
       - name: zig build release
-        run: zig build -Doptimize=ReleaseSafe
+        run: zig build --release=safe -Doptimize=ReleaseSafe -Dcpu=x86_64 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
 
       - name: upload artifact
         uses: actions/upload-artifact@v4
@@ -135,3 +135,94 @@ jobs:
           ./lightpanda serve & echo $! > LPD.pid
           go run runner/main.go --verbose
           kill `cat LPD.pid`
+
+  cdp-and-hyperfine-bench:
+    name: cdp-and-hyperfine-bench
+    needs: zig-build-release
+
+    # use a self host runner.
+    runs-on: lpd_bench_m5.large
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: 'lightpanda-io/demo'
+          fetch-depth: 0
+
+      - run: npm install
+
+      - name: download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lightpanda-build-release
+
+      - run: chmod a+x ./lightpanda
+
+      - name: run puppeteer
+        run: |
+          go run ws/main.go & echo $! > WS.pid
+          ./lightpanda serve & echo $! > LPD.pid
+          RUNS=100 npm run bench-puppeteer-cdp > puppeteer.out || exit 1
+          cat /proc/`cat LPD.pid`/status |grep VmHWM|grep -oP '\d+' > LPD.VmHWM
+          kill `cat LPD.pid` `cat WS.pid`
+
+      - name: puppeteer result
+        run: cat puppeteer.out
+
+      - name: json output
+        run: |
+          export AVG_DURATION=`cat puppeteer.out|grep 'avg run'|sed 's/avg run duration (ms) //'`
+          export TOTAL_DURATION=`cat puppeteer.out|grep 'total duration'|sed 's/total duration (ms) //'`
+          export LPD_VmHWM=`cat LPD.VmHWM`
+          echo "{\"duration_total\":${TOTAL_DURATION},\"duration_avg\":${AVG_DURATION},\"mem_peak\":${LPD_VmHWM}}" > bench.json
+          cat bench.json
+
+      - name: run hyperfine
+        run: |
+          go run ws/main.go & echo $! > WS.pid
+          hyperfine --export-json=hyperfine.json --warmup 3 --runs 20 --shell=none "./lightpanda --dump http://127.0.0.1:1234/campfire-commerce/"
+          kill `cat WS.pid`
+
+      - name: write commit
+        run: |
+          echo "${{github.sha}}" > commit.txt
+
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: |
+            bench.json
+            hyperfine.json
+            commit.txt
+          retention-days: 10
+
+
+  perf-fmt:
+    name: perf-fmt
+    needs: cdp-bench
+
+    # Don't execute on PR
+    if: github.event_name != 'pull_request'
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    container:
+      image: ghcr.io/lightpanda-io/perf-fmt:latest
+      credentials:
+       username: ${{ github.actor }}
+       password: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: bench-results
+
+      - name: format and send json result
+        run: /perf-fmt cdp ${{ github.sha }} bench.json
+
+      - name: format and send json result
+        run: /perf-fmt hyperfine ${{ github.sha }} hyperfine.json
