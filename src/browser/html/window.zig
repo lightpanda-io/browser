@@ -31,6 +31,7 @@ const Console = @import("../console/console.zig").Console;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const MediaQueryList = @import("media_query_list.zig").MediaQueryList;
 const Performance = @import("performance.zig").Performance;
+const TrustedTypePolicyFactory = @import("trusted_types.zig").TrustedTypePolicyFactory;
 
 const storage = @import("../storage/storage.zig");
 
@@ -58,6 +59,7 @@ pub const Window = struct {
     console: Console = .{},
     navigator: Navigator = .{},
     performance: Performance,
+    trusted_types: TrustedTypePolicyFactory = .{},
 
     pub fn create(target: ?[]const u8, navigator: ?Navigator) !Window {
         var fbs = std.io.fixedBufferStream("");
@@ -152,6 +154,10 @@ pub const Window = struct {
 
     pub fn get_performance(self: *Window) *Performance {
         return &self.performance;
+    }
+
+    pub fn get_trustedTypes(self: *Window) !TrustedTypePolicyFactory {
+        return self.trusted_types;
     }
 
     // Tells the browser you wish to perform an animation. It requests the browser to call a user-supplied callback function before the next repaint.
