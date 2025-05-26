@@ -48,7 +48,7 @@ jobs:
       - uses: ./.github/actions/install
 
       - name: zig build release
-        run: zig build -Doptimize=ReleaseSafe
+        run: zig build --release=safe -Doptimize=ReleaseSafe -Dcpu=x86_64 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
 
       - name: upload artifact
         uses: actions/upload-artifact@v4
