@@ -21,7 +21,7 @@ const std = @import("std");
 const parser = @import("../netsurf.zig");
 
 const JsThis = @import("../env.zig").JsThis;
-const Callback = @import("../env.zig").Callback;
+const Function = @import("../env.zig").Function;
 
 const NodeUnion = @import("node.zig").Union;
 const Node = @import("node.zig").Node;
@@ -141,11 +141,11 @@ pub const NodeList = struct {
     //     };
     // }
 
-    pub fn _forEach(self: *NodeList, cbk: Callback) !void { // TODO handle thisArg
+    pub fn _forEach(self: *NodeList, cbk: Function) !void { // TODO handle thisArg
         for (self.nodes.items, 0..) |n, i| {
             const ii: u32 = @intCast(i);
-            var result: Callback.Result = undefined;
-            cbk.tryCall(.{ n, ii, self }, &result) catch {
+            var result: Function.Result = undefined;
+            cbk.tryCall(void, .{ n, ii, self }, &result) catch {
                 log.err("callback error: {s}", .{result.exception});
                 log.debug("stack:\n{s}", .{result.stack orelse "???"});
             };
