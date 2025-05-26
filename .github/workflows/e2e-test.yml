@@ -201,7 +201,7 @@ jobs:
 
   perf-fmt:
     name: perf-fmt
-    needs: cdp-bench
+    needs: cdp-and-hyperfine-bench
 
     # Don't execute on PR
     if: github.event_name != 'pull_request'
