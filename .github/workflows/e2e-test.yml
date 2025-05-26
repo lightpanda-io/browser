@@ -136,8 +136,8 @@ jobs:
           go run runner/main.go --verbose
           kill `cat LPD.pid`
 
-  cdp-bench:
-    name: cdp-bench
+  cdp-and-hyperfine-bench:
+    name: cdp-and-hyperfine-bench
     needs: zig-build-release
 
     # use a self host runner.
@@ -178,6 +178,12 @@ jobs:
           echo "{\"duration_total\":${TOTAL_DURATION},\"duration_avg\":${AVG_DURATION},\"mem_peak\":${LPD_VmHWM}}" > bench.json
           cat bench.json
 
+      - name: run hyperfine
+        run: |
+          go run ws/main.go & echo $! > WS.pid
+          hyperfine --export-json=hyperfine.json --warmup 3 --runs 20 --shell=none "./lightpanda --dump http://127.0.0.1:1234/campfire-commerce/"
+          kill `cat WS.pid`
+
       - name: write commit
         run: |
           echo "${{github.sha}}" > commit.txt
@@ -188,11 +194,12 @@ jobs:
           name: bench-results
           path: |
             bench.json
+            hyperfine.json
             commit.txt
           retention-days: 10
 
 
-  cpd-bench-fmt:
+  perf-fmt:
     name: perf-fmt
     needs: cdp-bench
 
@@ -216,3 +223,6 @@ jobs:
 
       - name: format and send json result
         run: /perf-fmt cdp ${{ github.sha }} bench.json
+
+      - name: format and send json result
+        run: /perf-fmt hyperfine ${{ github.sha }} hyperfine.json
