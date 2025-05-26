@@ -33,6 +33,11 @@ pub const CSSStyleDeclaration = struct {
     store: std.StringHashMapUnmanaged(Property),
     order: std.ArrayListUnmanaged([]const u8),
 
+    pub const empty: CSSStyleDeclaration = .{
+        .store = .empty,
+        .order = .empty,
+    };
+
     const Property = struct {
         value: []const u8,
         priority: bool,

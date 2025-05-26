@@ -109,10 +109,7 @@ pub const HTMLElement = struct {
     pub const prototype = *Element;
     pub const subtype = .node;
 
-    style: CSSStyleDeclaration = .{
-        .store = .{},
-        .order = .{},
-    },
+    style: CSSStyleDeclaration = .empty,
 
     pub fn get_style(e: *parser.ElementHTML, state: *SessionState) !*CSSStyleDeclaration {
         const self = try state.getOrCreateNodeWrapper(HTMLElement, @ptrCast(e));

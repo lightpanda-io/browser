@@ -31,6 +31,7 @@ const Console = @import("../console/console.zig").Console;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const MediaQueryList = @import("media_query_list.zig").MediaQueryList;
 const Performance = @import("performance.zig").Performance;
+const CSSStyleDeclaration = @import("../cssom/css_style_declaration.zig").CSSStyleDeclaration;
 
 const storage = @import("../storage/storage.zig");
 
@@ -237,13 +238,13 @@ pub const Window = struct {
         return timer_id;
     }
 
-    // NOT IMPLEMENTED - This is a dummy implementation that always returns null to deter PlayWright from using this path to solve click.js.
-    // returns an object containing the values of all CSS properties of an element, after applying active stylesheets and resolving any basic computation those values may contain.
-    pub fn _getComputedStyle(_: *Window, element: *parser.Element, pseudo_element: ?[]const u8) !?void {
+    // TODO: getComputedStyle should return a read-only CSSStyleDeclaration.
+    // We currently don't have a read-only one, so we return a new instance on
+    // each call.
+    pub fn _getComputedStyle(_: *Window, element: *parser.Element, pseudo_element: ?[]const u8) !CSSStyleDeclaration {
         _ = element;
         _ = pseudo_element;
-        log.warn("Not implemented function getComputedStyle called, null returned", .{});
-        return null;
+        return .empty;
     }
 };
 
