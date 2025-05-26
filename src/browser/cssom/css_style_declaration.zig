@@ -138,7 +138,6 @@ pub const CSSStyleDeclaration = struct {
     }
 
     pub fn named_get(self: *const CSSStyleDeclaration, name: []const u8, _: *bool) []const u8 {
-        std.debug.print("named_get: {s} {s}\n", .{name, self._getPropertyValue(name)});
         return self._getPropertyValue(name);
     }
 };
