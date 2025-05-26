@@ -95,7 +95,16 @@ pub const CSSStyleDeclaration = struct {
 
     // TODO should handle properly shorthand properties and canonical forms
     pub fn _getPropertyValue(self: *const CSSStyleDeclaration, name: []const u8) []const u8 {
-        return if (self.store.get(name)) |prop| prop.value else "";
+        if (self.store.get(name)) |prop| {
+            return prop.value;
+        }
+
+        // default to everything being visible (unless it's been explicitly set)
+        if (std.mem.eql(u8, name, "visibility")) {
+            return "visible";
+        }
+
+        return "";
     }
 
     pub fn _item(self: *const CSSStyleDeclaration, index: usize) []const u8 {
@@ -126,6 +135,11 @@ pub const CSSStyleDeclaration = struct {
         }
 
         gop.value_ptr.* = .{ .value = owned_value, .priority = is_important };
+    }
+
+    pub fn named_get(self: *const CSSStyleDeclaration, name: []const u8, _: *bool) []const u8 {
+        std.debug.print("named_get: {s} {s}\n", .{name, self._getPropertyValue(name)});
+        return self._getPropertyValue(name);
     }
 };
 
@@ -164,6 +178,7 @@ test "CSSOM.CSSStyleDeclaration" {
         .{ "style.setProperty('color', 'green')", "undefined" },
         .{ "style.getPropertyValue('color')", "green" },
         .{ "style.length", "4" },
+        .{ "style.color", "green"},
 
         .{ "style.setProperty('padding', '10px', 'important')", "undefined" },
         .{ "style.getPropertyValue('padding')", "10px" },
@@ -224,5 +239,10 @@ test "CSSOM.CSSStyleDeclaration" {
 
         .{ "style.setProperty('border-bottom-left-radius', '5px')", "undefined" },
         .{ "style.getPropertyValue('border-bottom-left-radius')", "5px" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "style.visibility", "visible" },
+        .{ "style.getPropertyValue('visibility')", "visible" },
     }, .{});
 }

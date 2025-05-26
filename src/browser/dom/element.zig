@@ -407,6 +407,18 @@ pub const Element = struct {
     pub fn _scrollIntoViewIfNeeded(_: *parser.Element, center_if_needed: ?bool) void {
         _ = center_if_needed;
     }
+
+    const CheckVisibilityOpts = struct {
+        contentVisibilityAuto: bool,
+        opacityProperty: bool,
+        visibilityProperty: bool,
+    };
+
+    pub fn _checkVisibility(self: *parser.Element, opts: ?CheckVisibilityOpts) bool {
+        _ = self;
+        _ = opts;
+        return true;
+    }
 };
 
 // Tests
