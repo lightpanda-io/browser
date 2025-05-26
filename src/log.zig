@@ -89,12 +89,7 @@ fn LogT(comptime Out: type) type {
 
         const Self = @This();
 
-        fn init(allocator: Allocator, opts: Opts) !Self {
-            return initTo(allocator, opts, std.io.getStdOut());
-        }
-
-        // Used for tests
-        fn initTo(allocator: Allocator, opts: Opts, out: Out) !Self {
+        fn init(allocator: Allocator, opts: Opts, out: Out) !Self {
             var buffer: std.ArrayListUnmanaged(u8) = .{};
             try buffer.ensureTotalCapacity(allocator, 2048);
 
@@ -159,9 +154,7 @@ fn LogT(comptime Out: type) type {
             buffer.appendSliceAssumeCapacity(level_and_msg);
             inline for (@typeInfo(@TypeOf(data)).@"struct".fields) |f| {
                 const key = " " ++ f.name ++ "=";
-
-                // + 5 covers null/true/false
-                try buffer.ensureUnusedCapacity(allocator, key.len + 5);
+                try buffer.ensureUnusedCapacity(allocator, key.len);
                 buffer.appendSliceAssumeCapacity(key);
                 try writeValue(allocator, buffer, true, @field(data, f.name));
             }
@@ -234,7 +227,7 @@ const Pool = struct {
         for (0..count) |i| {
             const logger = try allocator.create(Log);
             errdefer allocator.destroy(logger);
-            logger.* = try Log.initTo(allocator, opts, out);
+            logger.* = try Log.init(allocator, opts, out);
             loggers[i] = logger;
             started += 1;
         }
@@ -290,15 +283,13 @@ pub fn writeValue(allocator: Allocator, buffer: *std.ArrayListUnmanaged(u8), esc
             if (value) |v| {
                 return writeValue(allocator, buffer, escape_string, v);
             }
-            // in _log, we reserved space for a value of up to 5 bytes.
-            return buffer.appendSliceAssumeCapacity("null");
+            return buffer.appendSlice(allocator, "null");
         },
         .comptime_int, .int, .comptime_float, .float => {
             return std.fmt.format(buffer.writer(allocator), "{d}", .{value});
         },
         .bool => {
-            // in _log, we reserved space for a value of up to 5 bytes.
-            return buffer.appendSliceAssumeCapacity(if (value) "true" else "false");
+            return buffer.appendSlice(allocator, if (value) "true" else "false");
         },
         .error_set => return buffer.appendSlice(allocator, @errorName(value)),
         .@"enum" => return buffer.appendSlice(allocator, @tagName(value)),
@@ -422,7 +413,7 @@ test "log: data" {
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(testing.allocator);
 
-    var logger = try TestLogger.initTo(testing.allocator, .{ .format = .logfmt }, buf.writer(testing.allocator));
+    var logger = try TestLogger.init(testing.allocator, .{ .format = .logfmt }, buf.writer(testing.allocator));
     defer logger.deinit();
 
     {
@@ -461,7 +452,7 @@ test "log: string escape" {
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(testing.allocator);
 
-    var logger = try TestLogger.initTo(testing.allocator, .{ .format = .logfmt }, buf.writer(testing.allocator));
+    var logger = try TestLogger.init(testing.allocator, .{ .format = .logfmt }, buf.writer(testing.allocator));
     defer logger.deinit();
 
     const prefix = "$time=1739795092929 $scope=scope $level=error $msg=test ";
