@@ -1,5 +1,11 @@
 name: nightly build
 
+env:
+  AWS_ACCESS_KEY_ID: ${{ vars.NIGHTLY_BUILD_AWS_ACCESS_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.NIGHTLY_BUILD_AWS_SECRET_ACCESS_KEY }}
+  AWS_BUCKET: ${{ vars.NIGHTLY_BUILD_AWS_BUCKET }}
+  AWS_REGION: ${{ vars.NIGHTLY_BUILD_AWS_REGION }}
+
 on:
   schedule:
     - cron: "2 2 * * *"
@@ -37,6 +43,11 @@ jobs:
       - name: Rename binary
         run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
 
+      - name: upload on s3
+        run: |
+          export DIR=`git show --no-patch --no-notes --pretty='%cs_%h'`
+          aws s3 cp lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/${DIR}/lightpanda-${{ env.ARCH }}-${{ env.OS }}
+
       - name: Upload the build
         uses: ncipollo/release-action@v1
         with:
@@ -69,6 +80,11 @@ jobs:
 
       - name: Rename binary
         run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
+
+      - name: upload on s3
+        run: |
+          export DIR=`git show --no-patch --no-notes --pretty='%cs_%h'`
+          aws s3 cp lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/${DIR}/lightpanda-${{ env.ARCH }}-${{ env.OS }}
 
       - name: Upload the build
         uses: ncipollo/release-action@v1
@@ -103,6 +119,11 @@ jobs:
       - name: Rename binary
         run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
 
+      - name: upload on s3
+        run: |
+          export DIR=`git show --no-patch --no-notes --pretty='%cs_%h'`
+          aws s3 cp lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/${DIR}/lightpanda-${{ env.ARCH }}-${{ env.OS }}
+
       - name: Upload the build
         uses: ncipollo/release-action@v1
         with:
@@ -135,6 +156,11 @@ jobs:
 
       - name: Rename binary
         run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
+
+      - name: upload on s3
+        run: |
+          export DIR=`git show --no-patch --no-notes --pretty='%cs_%h'`
+          aws s3 cp lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/${DIR}/lightpanda-${{ env.ARCH }}-${{ env.OS }}
 
       - name: Upload the build
         uses: ncipollo/release-action@v1
