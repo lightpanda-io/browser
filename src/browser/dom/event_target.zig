@@ -48,8 +48,12 @@ pub const EventTarget = struct {
 
         const Opts = struct {
             capture: ?bool,
+            // We ignore this property. It seems to be largely used to help the
+            // browser make certain performance tweaks (i.e. the browser knows
+            // that the listener won't call preventDefault() and thus can safely
+            // run the default as needed).
+            passive: ?bool,
             once: ?bool, // currently does nothing
-            passive: ?bool, // currently does nothing
             signal: ?bool, // currently does nothing
         };
     };
@@ -74,7 +78,6 @@ pub const EventTarget = struct {
                     // better to be explicit and error.
                     if (o.once orelse false) return error.NotImplemented;
                     if (o.signal orelse false) return error.NotImplemented;
-                    if (o.passive orelse false) return error.NotImplemented;
                     capture = o.capture orelse false;
                 },
             }
