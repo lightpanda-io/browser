@@ -333,7 +333,7 @@ fn parseServeArgs(
             continue;
         }
 
-        if (std.mem.eql(u8, "--insecure_tls_verify_host", opt)) {
+        if (std.mem.eql(u8, "--insecure_disable_tls_host_verification", opt)) {
             tls_verify_host = false;
             continue;
         }
