@@ -114,7 +114,7 @@ pub const EventTarget = struct {
     pub fn _removeEventListener(
         self: *parser.EventTarget,
         typ: []const u8,
-        cbk: Env.Function,
+        listener: EventHandler.Listener,
         opts_: ?RemoveEventListenerOpts,
     ) !void {
         var capture = false;
@@ -124,6 +124,8 @@ pub const EventTarget = struct {
                 .opts => |o| o.capture orelse false,
             };
         }
+
+        const cbk = (try listener.callback(self)) orelse return;
 
         // check if event target has already this listener
         const lst = try parser.eventTargetHasListener(
@@ -264,6 +266,10 @@ test "Browser.DOM.EventTarget" {
     try runner.testCases(&.{
         .{ "const obj1 = {calls: 0, handleEvent: function() { this.calls += 1; } };", null },
         .{ "content.addEventListener('he', obj1);", null },
+        .{ "content.dispatchEvent(new Event('he'));", null },
+        .{ "obj1.calls", "1" },
+
+        .{ "content.removeEventListener('he', obj1);", null },
         .{ "content.dispatchEvent(new Event('he'));", null },
         .{ "obj1.calls", "1" },
     }, .{});
