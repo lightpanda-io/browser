@@ -29,7 +29,7 @@ pub fn Runner(comptime State: type, comptime Global: type, comptime types: anyty
 
     return struct {
         env: *Env,
-        scope: *Env.Scope,
+        context: *Env.Context,
         handle_scope: Env.HandleScope,
         executor: Env.ExecutionWorld,
 
@@ -49,12 +49,12 @@ pub fn Runner(comptime State: type, comptime Global: type, comptime types: anyty
             self.executor = try self.env.newExecutionWorld();
             errdefer self.executor.deinit();
 
-            self.scope = try self.executor.startScope(
+            self.context = try self.executor.createContext(
                 if (Global == void) &default_global else global,
                 state,
                 {},
             );
-            self.scope.enter();
+            self.context.enter();
 
             // Start a scope (stackframe) for JS Local variables.
             Env.HandleScope.init(&self.handle_scope, self.executor.env.isolate);
@@ -74,10 +74,10 @@ pub fn Runner(comptime State: type, comptime Global: type, comptime types: anyty
         pub fn testCases(self: *Self, cases: []const Case, _: RunOpts) !void {
             for (cases, 0..) |case, i| {
                 var try_catch: Env.TryCatch = undefined;
-                try_catch.init(self.scope);
+                try_catch.init(self.context);
                 defer try_catch.deinit();
 
-                const value = self.scope.exec(case.@"0", null) catch |err| {
+                const value = self.context.exec(case.@"0", null) catch |err| {
                     if (try try_catch.err(allocator)) |msg| {
                         defer allocator.free(msg);
                         if (isExpectedTypeError(case.@"1", msg)) {

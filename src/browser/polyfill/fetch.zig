@@ -16,7 +16,7 @@ test "Browser.fetch" {
     var runner = try testing.jsRunner(testing.tracking_allocator, .{});
     defer runner.deinit();
 
-    try @import("polyfill.zig").load(testing.allocator, runner.page.scope);
+    try @import("polyfill.zig").load(testing.allocator, runner.page.main_context);
 
     try runner.testCases(&.{
         .{

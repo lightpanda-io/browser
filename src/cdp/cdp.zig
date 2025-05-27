@@ -544,8 +544,8 @@ const IsolatedWorld = struct {
         self.executor.deinit();
     }
     pub fn removeContext(self: *IsolatedWorld) !void {
-        if (self.executor.scope == null) return error.NoIsolatedContextToRemove;
-        self.executor.endScope();
+        if (self.executor.context == null) return error.NoIsolatedContextToRemove;
+        self.executor.destroyContext();
     }
 
     // The isolate world must share at least some of the state with the related page, specifically the DocumentHTML
@@ -554,8 +554,8 @@ const IsolatedWorld = struct {
     // This also means this pointer becomes invalid after removePage untill a new page is created.
     // Currently we have only 1 page/frame and thus also only 1 state in the isolate world.
     pub fn createContext(self: *IsolatedWorld, page: *Page) !void {
-        if (self.executor.scope != null) return error.Only1IsolatedContextSupported;
-        _ = try self.executor.startScope(&page.window, page, {});
+        if (self.executor.context != null) return error.Only1IsolatedContextSupported;
+        _ = try self.executor.createContext(&page.window, page, {});
     }
 };
 

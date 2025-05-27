@@ -113,7 +113,7 @@ fn run(arena: Allocator, test_file: []const u8, loader: *FileLoader, err_out: *?
     });
     defer runner.deinit();
 
-    try polyfill.load(arena, runner.page.scope);
+    try polyfill.load(arena, runner.page.main_context);
 
     // loop over the scripts.
     const doc = parser.documentHTMLToDocument(runner.page.window.document);
@@ -155,7 +155,7 @@ fn run(arena: Allocator, test_file: []const u8, loader: *FileLoader, err_out: *?
     {
         // wait for all async executions
         var try_catch: Env.TryCatch = undefined;
-        try_catch.init(runner.page.scope);
+        try_catch.init(runner.page.main_context);
         defer try_catch.deinit();
         try runner.page.loop.run();
 

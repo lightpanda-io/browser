@@ -27,7 +27,7 @@ const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
 const CALL_ARENA_RETAIN = 1024 * 16;
-const SCOPE_ARENA_RETAIN = 1024 * 64;
+const CONTEXT_ARENA_RETAIN = 1024 * 64;
 
 // Global, should only be initialized once.
 pub const Platform = struct {
@@ -261,9 +261,9 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
         pub fn newExecutionWorld(self: *Self) !ExecutionWorld {
             return .{
                 .env = self,
-                .scope = null,
+                .context = null,
                 .call_arena = ArenaAllocator.init(self.allocator),
-                .scope_arena = ArenaAllocator.init(self.allocator),
+                .context_arena = ArenaAllocator.init(self.allocator),
             };
         }
 
@@ -286,43 +286,43 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             // Arena whose lifetime is for a single getter/setter/function/etc.
             // Largely used to get strings out of V8, like a stack trace from
-            // a TryCatch. The allocator will be owned by the Scope, but the
+            // a TryCatch. The allocator will be owned by the Context, but the
             // arena itself is owned by the ExecutionWorld so that we can re-use it
-            // from scope to scope.
+            // from context to context.
             call_arena: ArenaAllocator,
 
-            // Arena whose lifetime is for a single page load, aka a Scope. Where
-            // the call_arena lives for a single function call, the scope_arena
+            // Arena whose lifetime is for a single page load, aka a Context. Where
+            // the call_arena lives for a single function call, the context_arena
             // lives for the lifetime of the entire page. The allocator will be
-            // owned by the Scope, but the arena itself is owned by the ExecutionWorld
-            // so that we can re-use it from scope to scope.
-            scope_arena: ArenaAllocator,
+            // owned by the Context, but the arena itself is owned by the ExecutionWorld
+            // so that we can re-use it from context to context.
+            context_arena: ArenaAllocator,
 
-            // A Scope maps to a Browser's Page. Here though, it's only a
+            // A Context maps to a Browser's Page. Here though, it's only a
             // mechanism to organization page-specific memory. The ExecutionWorld
             // does all the work, but having all page-specific data structures
             // grouped together helps keep things clean.
-            scope: ?Scope = null,
+            context: ?Context = null,
 
             // no init, must be initialized via env.newExecutionWorld()
 
             pub fn deinit(self: *ExecutionWorld) void {
-                if (self.scope != null) {
-                    self.endScope();
+                if (self.context != null) {
+                    self.destroyContext();
                 }
 
                 self.call_arena.deinit();
-                self.scope_arena.deinit();
+                self.context_arena.deinit();
             }
 
-            // Our scope maps to a "browser.Page".
+            // Our context maps to a "browser.Page".
             // A v8.HandleScope is like an arena. Once created, any "Local" that
             // v8 creates will be released (or at least, releasable by the v8 GC)
             // when the handle_scope is freed.
-            // We also maintain our own "scope_arena" which allows us to have
+            // We also maintain our own "context_arena" which allows us to have
             // all page related memory easily managed.
-            pub fn startScope(self: *ExecutionWorld, global: anytype, state: State, module_loader: anytype) !*Scope {
-                std.debug.assert(self.scope == null);
+            pub fn createContext(self: *ExecutionWorld, global: anytype, state: State, module_loader: anytype) !*Context {
+                std.debug.assert(self.context == null);
 
                 const ModuleLoader = switch (@typeInfo(@TypeOf(module_loader))) {
                     .@"struct" => @TypeOf(module_loader),
@@ -371,9 +371,9 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 }
 
                 const context_local = v8.Context.init(isolate, global_template, null);
-                const context = v8.Persistent(v8.Context).init(isolate, context_local).castToContext();
-                context.enter();
-                defer context.exit();
+                const v8_context = v8.Persistent(v8.Context).init(isolate, context_local).castToContext();
+                v8_context.enter();
+                defer v8_context.exit();
 
                 // This shouldn't be necessary, but it is:
                 // https://groups.google.com/g/v8-users/c/qAQQBmbi--8
@@ -389,43 +389,43 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         }
 
                         const proto_index = @field(TYPE_LOOKUP, proto_name).index;
-                        const proto_obj = templates[proto_index].getFunction(context).toObject();
+                        const proto_obj = templates[proto_index].getFunction(v8_context).toObject();
 
-                        const self_obj = templates[i].getFunction(context).toObject();
-                        _ = self_obj.setPrototype(context, proto_obj);
+                        const self_obj = templates[i].getFunction(v8_context).toObject();
+                        _ = self_obj.setPrototype(v8_context, proto_obj);
                     }
                 }
 
                 {
                     // If we want to overwrite the built-in console, we have to
                     // delete the built-in one.
-                    const js_obj = context.getGlobal();
+                    const js_obj = v8_context.getGlobal();
                     const console_key = v8.String.initUtf8(isolate, "console");
-                    if (js_obj.deleteValue(context, console_key) == false) {
+                    if (js_obj.deleteValue(v8_context, console_key) == false) {
                         return error.ConsoleDeleteError;
                     }
                 }
 
-                self.scope = Scope{
+                self.context = Context{
                     .state = state,
                     .isolate = isolate,
-                    .context = context,
+                    .v8_context = v8_context,
                     .templates = &env.templates,
                     .call_arena = self.call_arena.allocator(),
-                    .scope_arena = self.scope_arena.allocator(),
+                    .context_arena = self.context_arena.allocator(),
                     .module_loader = .{
                         .ptr = safe_module_loader,
                         .func = ModuleLoader.fetchModuleSource,
                     },
                 };
 
-                var scope = &self.scope.?;
+                var context = &self.context.?;
                 {
                     // Given a context, we can get our executor.
                     // (we store a pointer to our executor in the context's
                     // embeddeder data)
-                    const data = isolate.initBigIntU64(@intCast(@intFromPtr(scope)));
-                    context.setEmbedderData(1, data);
+                    const data = isolate.initBigIntU64(@intCast(@intFromPtr(context)));
+                    v8_context.setEmbedderData(1, data);
                 }
 
                 {
@@ -434,7 +434,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     // call_arena field, fill-it in now.
                     const state_type_info = @typeInfo(@TypeOf(state));
                     if (state_type_info == .pointer and @hasField(state_type_info.pointer.child, "call_arena")) {
-                        scope.state.call_arena = scope.call_arena;
+                        context.state.call_arena = context.call_arena;
                     }
                 }
 
@@ -445,18 +445,18 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     const Struct = s.defaultValue().?;
                     if (@hasDecl(Struct, "ErrorSet")) {
                         const script = comptime classNameForStruct(Struct) ++ ".prototype.__proto__ = Error.prototype";
-                        _ = try scope.exec(script, "errorSubclass");
+                        _ = try context.exec(script, "errorSubclass");
                     }
                 }
 
-                _ = try scope._mapZigInstanceToJs(context.getGlobal(), global);
-                return scope;
+                _ = try context._mapZigInstanceToJs(v8_context.getGlobal(), global);
+                return context;
             }
 
-            pub fn endScope(self: *ExecutionWorld) void {
-                self.scope.?.deinit();
-                self.scope = null;
-                _ = self.scope_arena.reset(.{ .retain_with_limit = SCOPE_ARENA_RETAIN });
+            pub fn destroyContext(self: *ExecutionWorld) void {
+                self.context.?.deinit();
+                self.context = null;
+                _ = self.context_arena.reset(.{ .retain_with_limit = CONTEXT_ARENA_RETAIN });
             }
         };
 
@@ -466,11 +466,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
         pub const HandleScope = v8.HandleScope;
 
         // Loosely maps to a Browser Page.
-        pub const Scope = struct {
+        pub const Context = struct {
             state: State,
             isolate: v8.Isolate,
             // This context is a persistent object. The persistent needs to be recovered and reset.
-            context: v8.Context,
+            v8_context: v8.Context,
 
             // references the Env.template array
             templates: []v8.FunctionTemplate,
@@ -479,8 +479,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // call_depth reaches 0.
             call_arena: Allocator,
 
-            // An arena for the lifetime of the scope
-            scope_arena: Allocator,
+            // An arena for the lifetime of the context
+            context_arena: Allocator,
 
             // Because calls can be nested (i.e.a function calling a callback),
             // we can only reset the call_arena when call_depth == 0. If we were
@@ -488,12 +488,12 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // the call which is calling the callback.
             call_depth: usize = 0,
 
-            // Callbacks are PesistendObjects. When the scope ends, we need
+            // Callbacks are PesistendObjects. When the context ends, we need
             // to free every callback we created.
             callbacks: std.ArrayListUnmanaged(v8.Persistent(v8.Function)) = .empty,
 
             // Serves two purposes. Like `callbacks` above, this is used to free
-            // every PeristentObjet we've created during the lifetime of the scope.
+            // every PeristentObjet we've created during the lifetime of the context.
             // More importantly, it serves as an identity map - for a given Zig
             // instance, we map it to the same PersistentObject.
             // The key is the @intFromPtr of the Zig value
@@ -516,7 +516,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // Some Zig types have code to execute to cleanup
             destructor_callbacks: std.ArrayListUnmanaged(DestructorCallback) = .empty,
 
-            // Some Zig types have code to execute when the call scope ends
+            // Some Zig types have code to execute when the call context ends
             call_scope_end_callbacks: std.ArrayListUnmanaged(CallScopeEndCallback) = .empty,
 
             const ModuleLoader = struct {
@@ -524,9 +524,9 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 func: *const fn (ptr: *anyopaque, specifier: []const u8) anyerror!?[]const u8,
             };
 
-            // no init, started with executor.startScope()
+            // no init, started with executor.createContext()
 
-            fn deinit(self: *Scope) void {
+            fn deinit(self: *Context) void {
                 {
                     // reverse order, as this has more chance of respecting any
                     // dependencies objects might have with each other.
@@ -556,20 +556,20 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     cb.deinit();
                 }
 
-                var presistent_context = v8.Persistent(v8.Context).recoverCast(self.context);
+                var presistent_context = v8.Persistent(v8.Context).recoverCast(self.v8_context);
                 presistent_context.deinit();
             }
 
-            pub fn enter(self: *Scope) void {
-                self.context.enter();
+            pub fn enter(self: *Context) void {
+                self.v8_context.enter();
             }
 
-            pub fn exit(self: *Scope) void {
-                self.context.exit();
+            pub fn exit(self: *Context) void {
+                self.v8_context.exit();
             }
 
-            fn trackCallback(self: *Scope, pf: PersistentFunction) !void {
-                return self.callbacks.append(self.scope_arena, pf);
+            fn trackCallback(self: *Context, pf: PersistentFunction) !void {
+                return self.callbacks.append(self.context_arena, pf);
             }
 
             // Given an anytype, turns it into a v8.Object. The anytype could be:
@@ -577,7 +577,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // 2 - Our JsObject wrapper around a V8.Object
             // 3 - A zig instance that has previously been given to V8
             //     (i.e., the value has to be known to the executor)
-            fn valueToExistingObject(self: *const Scope, value: anytype) !v8.Object {
+            fn valueToExistingObject(self: *const Context, value: anytype) !v8.Object {
                 if (@TypeOf(value) == v8.Object) {
                     return value;
                 }
@@ -594,9 +594,9 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             }
 
             // Executes the src
-            pub fn exec(self: *Scope, src: []const u8, name: ?[]const u8) !Value {
+            pub fn exec(self: *Context, src: []const u8, name: ?[]const u8) !Value {
                 const isolate = self.isolate;
-                const context = self.context;
+                const v8_context = self.v8_context;
 
                 var origin: ?v8.ScriptOrigin = null;
                 if (name) |n| {
@@ -604,11 +604,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     origin = v8.ScriptOrigin.initDefault(scr_name.toValue());
                 }
                 const scr_js = v8.String.initUtf8(isolate, src);
-                const scr = v8.Script.compile(context, scr_js, origin) catch {
+                const scr = v8.Script.compile(v8_context, scr_js, origin) catch {
                     return error.CompilationError;
                 };
 
-                const value = scr.run(context) catch {
+                const value = scr.run(v8_context) catch {
                     return error.ExecutionError;
                 };
 
@@ -617,13 +617,13 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             // compile and eval a JS module
             // It doesn't wait for callbacks execution
-            pub fn module(self: *Scope, src: []const u8, name: []const u8) !union(enum) { value: Value, exception: Exception } {
-                const context = self.context;
+            pub fn module(self: *Context, src: []const u8, name: []const u8) !union(enum) { value: Value, exception: Exception } {
+                const v8_context = self.v8_context;
                 const m = try compileModule(self.isolate, src, name);
 
                 // instantiate
                 // resolveModuleCallback loads module's dependencies.
-                const ok = m.instantiate(context, resolveModuleCallback) catch {
+                const ok = m.instantiate(v8_context, resolveModuleCallback) catch {
                     return error.ExecutionError;
                 };
 
@@ -632,40 +632,40 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 }
 
                 // evaluate
-                const value = m.evaluate(context) catch {
+                const value = m.evaluate(v8_context) catch {
                     return .{ .exception = self.createException(m.getException()) };
                 };
                 return .{ .value = self.createValue(value) };
             }
 
             // Wrap a v8.Exception
-            fn createException(self: *const Scope, e: v8.Value) Exception {
+            fn createException(self: *const Context, e: v8.Value) Exception {
                 return .{
                     .inner = e,
-                    .scope = self,
+                    .context = self,
                 };
             }
 
             // Wrap a v8.Value, largely so that we can provide a convenient
             // toString function
-            fn createValue(self: *const Scope, value: v8.Value) Value {
+            fn createValue(self: *const Context, value: v8.Value) Value {
                 return .{
                     .value = value,
-                    .scope = self,
+                    .context = self,
                 };
             }
 
-            fn zigValueToJs(self: *const Scope, value: anytype) !v8.Value {
-                return Self.zigValueToJs(self.templates, self.isolate, self.context, value);
+            fn zigValueToJs(self: *const Context, value: anytype) !v8.Value {
+                return Self.zigValueToJs(self.templates, self.isolate, self.v8_context, value);
             }
 
             // See _mapZigInstanceToJs, this is wrapper that can be called
-            // without a Scope. This is possible because we store our
-            // scope in the EmbedderData of the v8.Context. So, as long as
-            // we have a v8.Context, we can get the scope.
-            fn mapZigInstanceToJs(context: v8.Context, js_obj_or_template: anytype, value: anytype) !PersistentObject {
-                const scope: *Scope = @ptrFromInt(context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
-                return scope._mapZigInstanceToJs(js_obj_or_template, value);
+            // without a Context. This is possible because we store our
+            // context in the EmbedderData of the v8.Context. So, as long as
+            // we have a v8.Context, we can get the context.
+            fn mapZigInstanceToJs(v8_context: v8.Context, js_obj_or_template: anytype, value: anytype) !PersistentObject {
+                const context: *Context = @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
+                return context._mapZigInstanceToJs(js_obj_or_template, value);
             }
 
             // To turn a Zig instance into a v8 object, we need to do a number of things.
@@ -681,20 +681,20 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             //  4 - Store our TaggedAnyOpaque into the persistent object
             //  5 - Update our identity_map (so that, if we return this same instance again,
             //      we can just grab it from the identity_map)
-            fn _mapZigInstanceToJs(self: *Scope, js_obj_or_template: anytype, value: anytype) !PersistentObject {
-                const context = self.context;
-                const scope_arena = self.scope_arena;
+            fn _mapZigInstanceToJs(self: *Context, js_obj_or_template: anytype, value: anytype) !PersistentObject {
+                const v8_context = self.v8_context;
+                const context_arena = self.context_arena;
 
                 const T = @TypeOf(value);
                 switch (@typeInfo(T)) {
                     .@"struct" => {
                         // Struct, has to be placed on the heap
-                        const heap = try scope_arena.create(T);
+                        const heap = try context_arena.create(T);
                         heap.* = value;
                         return self._mapZigInstanceToJs(js_obj_or_template, heap);
                     },
                     .pointer => |ptr| {
-                        const gop = try self.identity_map.getOrPut(scope_arena, @intFromPtr(value));
+                        const gop = try self.identity_map.getOrPut(context_arena, @intFromPtr(value));
                         if (gop.found_existing) {
                             // we've seen this instance before, return the same
                             // PersistentObject.
@@ -702,11 +702,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         }
 
                         if (comptime @hasDecl(ptr.child, "destructor")) {
-                            try self.destructor_callbacks.append(scope_arena, DestructorCallback.init(value));
+                            try self.destructor_callbacks.append(context_arena, DestructorCallback.init(value));
                         }
 
                         if (comptime @hasDecl(ptr.child, "jsCallScopeEnd")) {
-                            try self.call_scope_end_callbacks.append(scope_arena, CallScopeEndCallback.init(value));
+                            try self.call_scope_end_callbacks.append(context_arena, CallScopeEndCallback.init(value));
                         }
 
                         // Sometimes we're creating a new v8.Object, like when
@@ -718,7 +718,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         // already created the "this" object.
                         const js_obj = switch (@TypeOf(js_obj_or_template)) {
                             v8.Object => js_obj_or_template,
-                            v8.FunctionTemplate => js_obj_or_template.getInstanceTemplate().initInstance(context),
+                            v8.FunctionTemplate => js_obj_or_template.getInstanceTemplate().initInstance(v8_context),
                             else => @compileError("mapZigInstanceToJs requires a v8.Object (constructors) or v8.FunctionTemplate, got: " ++ @typeName(@TypeOf(js_obj_or_template))),
                         };
 
@@ -728,7 +728,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             // The TAO contains the pointer ot our Zig instance as
                             // well as any meta data we'll need to use it later.
                             // See the TaggedAnyOpaque struct for more details.
-                            const tao = try scope_arena.create(TaggedAnyOpaque);
+                            const tao = try context_arena.create(TaggedAnyOpaque);
                             const meta = @field(TYPE_LOOKUP, @typeName(ptr.child));
                             tao.* = .{
                                 .ptr = value,
@@ -754,7 +754,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         gop.value_ptr.* = js_persistent;
 
                         if (@hasDecl(ptr.child, "postAttach")) {
-                            const obj_wrap = JsThis{ .obj = .{ .js_obj = js_obj, .scope = self } };
+                            const obj_wrap = JsThis{ .obj = .{ .js_obj = js_obj, .context = self } };
                             switch (@typeInfo(@TypeOf(ptr.child.postAttach)).@"fn".params.len) {
                                 2 => try value.postAttach(obj_wrap),
                                 3 => try value.postAttach(self.state, obj_wrap),
@@ -768,7 +768,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 }
             }
 
-            fn jsValueToZig(self: *Scope, comptime named_function: NamedFunction, comptime T: type, js_value: v8.Value) !T {
+            fn jsValueToZig(self: *Context, comptime named_function: NamedFunction, comptime T: type, js_value: v8.Value) !T {
                 switch (@typeInfo(T)) {
                     .optional => |o| {
                         if (js_value.isNullOrUndefined()) {
@@ -777,11 +777,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         return try self.jsValueToZig(named_function, o.child, js_value);
                     },
                     .float => |f| switch (f.bits) {
-                        0...32 => return js_value.toF32(self.context),
-                        33...64 => return js_value.toF64(self.context),
+                        0...32 => return js_value.toF32(self.v8_context),
+                        33...64 => return js_value.toF64(self.v8_context),
                         else => {},
                     },
-                    .int => return jsIntToZig(T, js_value, self.context),
+                    .int => return jsIntToZig(T, js_value, self.v8_context),
                     .bool => return js_value.toBool(self.isolate),
                     .pointer => |ptr| switch (ptr.size) {
                         .one => {
@@ -861,10 +861,10 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             if (ptr.child == u8) {
                                 if (ptr.sentinel()) |s| {
                                     if (comptime s == 0) {
-                                        return valueToStringZ(self.call_arena, js_value, self.isolate, self.context);
+                                        return valueToStringZ(self.call_arena, js_value, self.isolate, self.v8_context);
                                     }
                                 } else {
-                                    return valueToString(self.call_arena, js_value, self.isolate, self.context);
+                                    return valueToString(self.call_arena, js_value, self.isolate, self.v8_context);
                                 }
                             }
 
@@ -872,7 +872,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                                 return error.InvalidArgument;
                             }
 
-                            const context = self.context;
+                            const v8_context = self.v8_context;
                             const js_arr = js_value.castTo(v8.Array);
                             const js_obj = js_arr.castTo(v8.Object);
 
@@ -880,7 +880,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             // to do this (V8::Array has an iterate method on it)
                             const arr = try self.call_arena.alloc(ptr.child, js_arr.length());
                             for (arr, 0..) |*a, i| {
-                                a.* = try self.jsValueToZig(named_function, ptr.child, try js_obj.getAtIndex(context, @intCast(i)));
+                                a.* = try self.jsValueToZig(named_function, ptr.child, try js_obj.getAtIndex(v8_context, @intCast(i)));
                             }
                             return arr;
                         },
@@ -944,7 +944,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             // Extracted so that it can be used in both jsValueToZig and in
             // probeJsValueToZig. Avoids having to duplicate this logic when probing.
-            fn jsValueToStruct(self: *Scope, comptime named_function: NamedFunction, comptime T: type, js_value: v8.Value) !?T {
+            fn jsValueToStruct(self: *Context, comptime named_function: NamedFunction, comptime T: type, js_value: v8.Value) !?T {
                 if (@hasDecl(T, "_FUNCTION_ID_KLUDGE")) {
                     if (!js_value.isFunction()) {
                         return null;
@@ -959,7 +959,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     // that it needs to pass back into a callback
                     return JsObject{
                         .js_obj = js_obj,
-                        .scope = self,
+                        .context = self,
                     };
                 }
 
@@ -967,15 +967,15 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     return null;
                 }
 
-                const context = self.context;
+                const v8_context = self.v8_context;
                 const isolate = self.isolate;
 
                 var value: T = undefined;
                 inline for (@typeInfo(T).@"struct".fields) |field| {
                     const name = field.name;
                     const key = v8.String.initUtf8(isolate, name);
-                    if (js_obj.has(context, key.toValue())) {
-                        @field(value, name) = try self.jsValueToZig(named_function, field.type, try js_obj.getValue(context, key));
+                    if (js_obj.has(v8_context, key.toValue())) {
+                        @field(value, name) = try self.jsValueToZig(named_function, field.type, try js_obj.getValue(v8_context, key));
                     } else if (@typeInfo(field.type) == .optional) {
                         @field(value, name) = null;
                     } else {
@@ -986,7 +986,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 return value;
             }
 
-            fn createFunction(self: *Scope, js_value: v8.Value) !Function {
+            fn createFunction(self: *Context, js_value: v8.Value) !Function {
                 // caller should have made sure this was a function
                 std.debug.assert(js_value.isFunction());
 
@@ -995,7 +995,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
                 return .{
                     .func = func,
-                    .scope = self,
+                    .context = self,
                     .id = js_value.castTo(v8.Object).getIdentityHash(),
                 };
             }
@@ -1036,7 +1036,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     invalid: void,
                 };
             }
-            fn probeJsValueToZig(self: *Scope, comptime named_function: NamedFunction, comptime T: type, js_value: v8.Value) !ProbeResult(T) {
+            fn probeJsValueToZig(self: *Context, comptime named_function: NamedFunction, comptime T: type, js_value: v8.Value) !ProbeResult(T) {
                 switch (@typeInfo(T)) {
                     .optional => |o| {
                         if (js_value.isNullOrUndefined()) {
@@ -1151,9 +1151,9 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
                             // We settle for just probing the first value. Ok, actually
                             // not tricky in this case either.
-                            const context = self.context;
+                            const v8_context = self.v8_context;
                             const js_obj = js_arr.castTo(v8.Object);
-                            switch (try self.probeJsValueToZig(named_function, ptr.child, try js_obj.getAtIndex(context, 0))) {
+                            switch (try self.probeJsValueToZig(named_function, ptr.child, try js_obj.getAtIndex(v8_context, 0))) {
                                 .value, .ok => return .{ .ok = {} },
                                 .compatible => return .{ .compatible = {} },
                                 .coerce => return .{ .coerce = {} },
@@ -1190,7 +1190,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 std.debug.assert(c_context != null);
                 const context = v8.Context{ .handle = c_context.? };
 
-                const self: *Scope = @ptrFromInt(context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
+                const self: *Context = @ptrFromInt(context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
 
                 // build the specifier value.
                 const specifier = valueToString(
@@ -1221,7 +1221,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
         pub const Function = struct {
             id: usize,
-            scope: *Scope,
+            context: *Context,
             this: ?v8.Object = null,
             func: PersistentFunction,
 
@@ -1241,13 +1241,13 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 const this_obj = if (@TypeOf(value) == JsObject)
                     value.js_obj
                 else
-                    try self.scope.valueToExistingObject(value);
+                    try self.context.valueToExistingObject(value);
 
                 return .{
                     .id = self.id,
                     .this = this_obj,
                     .func = self.func,
-                    .scope = self.scope,
+                    .context = self.context,
                 };
             }
 
@@ -1261,12 +1261,12 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             pub fn tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype, result: *Result) !void {
                 var try_catch: TryCatch = undefined;
-                try_catch.init(self.scope);
+                try_catch.init(self.context);
                 defer try_catch.deinit();
 
                 return self.callWithThis(T, this, args) catch |err| {
                     if (try_catch.hasCaught()) {
-                        const allocator = self.scope.call_arena;
+                        const allocator = self.context.call_arena;
                         result.stack = try_catch.stack(allocator) catch null;
                         result.exception = (try_catch.exception(allocator) catch @errorName(err)) orelse @errorName(err);
                     } else {
@@ -1278,42 +1278,42 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             }
 
             pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype) !T {
-                const scope = self.scope;
+                const context = self.context;
 
-                const js_this = try scope.valueToExistingObject(this);
+                const js_this = try context.valueToExistingObject(this);
 
                 const aargs = if (comptime @typeInfo(@TypeOf(args)) == .null) struct {}{} else args;
                 const fields = @typeInfo(@TypeOf(aargs)).@"struct".fields;
                 var js_args: [fields.len]v8.Value = undefined;
                 inline for (fields, 0..) |f, i| {
-                    js_args[i] = try scope.zigValueToJs(@field(aargs, f.name));
+                    js_args[i] = try context.zigValueToJs(@field(aargs, f.name));
                 }
 
-                const result = self.func.castToFunction().call(scope.context, js_this, &js_args);
+                const result = self.func.castToFunction().call(context.v8_context, js_this, &js_args);
                 if (result == null) {
                     return error.JSExecCallback;
                 }
 
                 if (@typeInfo(T) == .void) return {};
                 const named_function = comptime NamedFunction.init(T, "callResult");
-                return scope.jsValueToZig(named_function, T, result.?);
+                return context.jsValueToZig(named_function, T, result.?);
             }
 
             fn getThis(self: *const Function) v8.Object {
-                return self.this orelse self.scope.context.getGlobal();
+                return self.this orelse self.context.v8_context.getGlobal();
             }
 
             // debug/helper to print the source of the JS callback
             pub fn printFunc(self: Function) !void {
-                const scope = self.scope;
+                const context = self.context;
                 const value = self.func.castToFunction().toValue();
-                const src = try valueToString(scope.call_arena, value, scope.isolate, scope.context);
+                const src = try valueToString(context.call_arena, value, context.isolate, context.v8_context);
                 std.debug.print("{s}\n", .{src});
             }
         };
 
         pub const JsObject = struct {
-            scope: *Scope,
+            context: *Context,
             js_obj: v8.Object,
 
             // If a Zig struct wants the JsObject parameter, it'll declare a
@@ -1337,18 +1337,18 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             pub fn setIndex(self: JsObject, index: u32, value: anytype, opts: SetOpts) !void {
                 const key = switch (index) {
                     inline 0...1000 => |i| std.fmt.comptimePrint("{d}", .{i}),
-                    else => try std.fmt.allocPrint(self.scope.scope_arena, "{d}", .{index}),
+                    else => try std.fmt.allocPrint(self.context.context_arena, "{d}", .{index}),
                 };
                 return self.set(key, value, opts);
             }
 
             pub fn set(self: JsObject, key: []const u8, value: anytype, opts: SetOpts) !void {
-                const scope = self.scope;
+                const context = self.context;
 
-                const js_key = v8.String.initUtf8(scope.isolate, key);
-                const js_value = try scope.zigValueToJs(value);
+                const js_key = v8.String.initUtf8(context.isolate, key);
+                const js_value = try context.zigValueToJs(value);
 
-                const res = self.js_obj.defineOwnProperty(scope.context, js_key.toName(), js_value, @bitCast(opts)) orelse false;
+                const res = self.js_obj.defineOwnProperty(context.v8_context, js_key.toName(), js_value, @bitCast(opts)) orelse false;
                 if (!res) {
                     return error.FailedToSet;
                 }
@@ -1356,13 +1356,13 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             pub fn isTruthy(self: JsObject) bool {
                 const js_value = self.js_obj.toValue();
-                return js_value.toBool(self.scope.isolate);
+                return js_value.toBool(self.context.isolate);
             }
 
             pub fn toString(self: JsObject) ![]const u8 {
-                const scope = self.scope;
+                const context = self.context;
                 const js_value = self.js_obj.toValue();
-                return valueToString(scope.call_arena, js_value, scope.isolate, scope.context);
+                return valueToString(context.call_arena, js_value, context.isolate, context.v8_context);
             }
 
             pub fn format(self: JsObject, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
@@ -1370,30 +1370,30 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             }
 
             pub fn persist(self: JsObject) !JsObject {
-                var scope = self.scope;
+                var context = self.context;
                 const js_obj = self.js_obj;
                 const handle = js_obj.handle;
 
-                const gop = try scope.js_object_map.getOrPut(scope.scope_arena, @intFromPtr(handle));
+                const gop = try context.js_object_map.getOrPut(context.context_arena, @intFromPtr(handle));
                 if (gop.found_existing == false) {
-                    gop.value_ptr.* = PersistentObject.init(scope.isolate, js_obj);
+                    gop.value_ptr.* = PersistentObject.init(context.isolate, js_obj);
                 }
 
                 return .{
-                    .scope = scope,
+                    .context = context,
                     .js_obj = gop.value_ptr.castToObject(),
                 };
             }
 
             pub fn getFunction(self: JsObject, name: []const u8) !?Function {
-                const scope = self.scope;
-                const js_name = v8.String.initUtf8(scope.isolate, name);
+                const context = self.context;
+                const js_name = v8.String.initUtf8(context.isolate, name);
 
-                const js_value = try self.js_obj.getValue(scope.context, js_name.toName());
+                const js_value = try self.js_obj.getValue(context.v8_context, js_name.toName());
                 if (!js_value.isFunction()) {
                     return null;
                 }
-                return try scope.createFunction(js_value);
+                return try context.createFunction(js_value);
             }
         };
 
@@ -1421,11 +1421,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
         pub const TryCatch = struct {
             inner: v8.TryCatch,
-            scope: *const Scope,
+            context: *const Context,
 
-            pub fn init(self: *TryCatch, scope: *const Scope) void {
-                self.scope = scope;
-                self.inner.init(scope.isolate);
+            pub fn init(self: *TryCatch, context: *const Context) void {
+                self.context = context;
+                self.inner.init(context.isolate);
             }
 
             pub fn hasCaught(self: TryCatch) bool {
@@ -1435,15 +1435,15 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // the caller needs to deinit the string returned
             pub fn exception(self: TryCatch, allocator: Allocator) !?[]const u8 {
                 const msg = self.inner.getException() orelse return null;
-                const scope = self.scope;
-                return try valueToString(allocator, msg, scope.isolate, scope.context);
+                const context = self.context;
+                return try valueToString(allocator, msg, context.isolate, context.v8_context);
             }
 
             // the caller needs to deinit the string returned
             pub fn stack(self: TryCatch, allocator: Allocator) !?[]const u8 {
-                const scope = self.scope;
-                const s = self.inner.getStackTrace(scope.context) orelse return null;
-                return try valueToString(allocator, s, scope.isolate, scope.context);
+                const context = self.context;
+                const s = self.inner.getStackTrace(context.v8_context) orelse return null;
+                return try valueToString(allocator, s, context.isolate, context.v8_context);
             }
 
             // a shorthand method to return either the entire stack message
@@ -1528,38 +1528,38 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // - is_default_context: Whether the execution context is default, should match the auxData
             pub fn contextCreated(
                 self: *const Inspector,
-                scope: *const Scope,
+                context: *const Context,
                 name: []const u8,
                 origin: []const u8,
                 aux_data: ?[]const u8,
                 is_default_context: bool,
             ) void {
-                self.inner.contextCreated(scope.context, name, origin, aux_data, is_default_context);
+                self.inner.contextCreated(context.v8_context, name, origin, aux_data, is_default_context);
             }
 
             // Retrieves the RemoteObject for a given value.
             // The value is loaded through the ExecutionWorld's mapZigInstanceToJs function,
             // just like a method return value. Therefore, if we've mapped this
             // value before, we'll get the existing JS PersistedObject and if not
-            // we'll create it and track it for cleanup when the scope ends.
+            // we'll create it and track it for cleanup when the context ends.
             pub fn getRemoteObject(
                 self: *const Inspector,
-                scope: *const Scope,
+                context: *const Context,
                 group: []const u8,
                 value: anytype,
             ) !RemoteObject {
                 const js_value = try zigValueToJs(
-                    scope.templates,
-                    scope.isolate,
-                    scope.context,
+                    context.templates,
+                    context.isolate,
+                    context.v8_context,
                     value,
                 );
 
                 // We do not want to expose this as a parameter for now
                 const generate_preview = false;
                 return self.session.wrapObject(
-                    scope.isolate,
-                    scope.context,
+                    context.isolate,
+                    context.v8_context,
                     js_value,
                     group,
                     generate_preview,
@@ -1580,23 +1580,23 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
         pub const Exception = struct {
             inner: v8.Value,
-            scope: *const Scope,
+            context: *const Context,
 
             // the caller needs to deinit the string returned
             pub fn exception(self: Exception, allocator: Allocator) ![]const u8 {
-                const scope = self.scope;
-                return try valueToString(allocator, self.inner, scope.isolate, scope.context);
+                const context = self.context;
+                return try valueToString(allocator, self.inner, context.isolate, context.v8_context);
             }
         };
 
         pub const Value = struct {
             value: v8.Value,
-            scope: *const Scope,
+            context: *const Context,
 
             // the caller needs to deinit the string returned
             pub fn toString(self: Value, allocator: Allocator) ![]const u8 {
-                const scope = self.scope;
-                return valueToString(allocator, self.value, scope.isolate, scope.context);
+                const context = self.context;
+                return valueToString(allocator, self.value, context.isolate, context.v8_context);
             }
         };
 
@@ -1646,7 +1646,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
         // But it's extracted from generateClass because we also have 1 global
         // object (i.e. the Window), which gets attached not only to the Window
         // constructor/FunctionTemplate as normal, but also through the default
-        // FunctionTemplate of the isolate (in startScope)
+        // FunctionTemplate of the isolate (in createContext)
         fn attachClass(comptime Struct: type, isolate: v8.Isolate, template: v8.FunctionTemplate) void {
             const template_proto = template.getPrototypeTemplate();
             inline for (@typeInfo(Struct).@"struct".decls) |declaration| {
@@ -1886,11 +1886,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     fn callback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
                         const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
                         const isolate = info.getIsolate();
-                        const context = isolate.getCurrentContext();
+                        const v8_context = isolate.getCurrentContext();
 
-                        const scope: *Scope = @ptrFromInt(context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
+                        const context: *Context = @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
 
-                        const property = valueToString(scope.call_arena, .{ .handle = c_name.? }, isolate, context) catch "???";
+                        const property = valueToString(context.call_arena, .{ .handle = c_name.? }, isolate, v8_context) catch "???";
                         log.debug(.js, "unkown named property", .{ .@"struct" = @typeName(Struct), .property = property });
                         return v8.Intercepted.No;
                     }
@@ -1968,7 +1968,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         const type_name = @typeName(ptr.child);
                         if (@hasField(TypeLookup, type_name)) {
                             const template = templates[@field(TYPE_LOOKUP, type_name).index];
-                            const js_obj = try Scope.mapZigInstanceToJs(context, template, value);
+                            const js_obj = try Context.mapZigInstanceToJs(context, template, value);
                             return js_obj.toValue();
                         }
 
@@ -2004,7 +2004,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     const type_name = @typeName(T);
                     if (@hasField(TypeLookup, type_name)) {
                         const template = templates[@field(TYPE_LOOKUP, type_name).index];
-                        const js_obj = try Scope.mapZigInstanceToJs(context, template, value);
+                        const js_obj = try Context.mapZigInstanceToJs(context, template, value);
                         return js_obj.toValue();
                     }
 
@@ -2137,7 +2137,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
         }
 
         // An interface for types that want to have their jsDeinit function to be
-        // called when the call scope ends
+        // called when the call context ends
         const DestructorCallback = struct {
             ptr: *anyopaque,
             destructorFn: *const fn (ptr: *anyopaque) void,
@@ -2165,7 +2165,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
         };
 
         // An interface for types that want to have their jsScopeEnd function be
-        // called when the call scope ends
+        // called when the call context ends
         const CallScopeEndCallback = struct {
             ptr: *anyopaque,
             callScopeEndFn: *const fn (ptr: *anyopaque) void,
@@ -2221,11 +2221,11 @@ fn isEmpty(comptime T: type) bool {
 // Responsible for calling Zig functions from JS invokations. This could
 // probably just contained in ExecutionWorld, but having this specific logic, which
 // is somewhat repetitive between constructors, functions, getters, etc contained
-// here does feel like it makes it clenaer.
+// here does feel like it makes it cleaner.
 fn Caller(comptime E: type, comptime State: type) type {
     return struct {
-        scope: *E.Scope,
-        context: v8.Context,
+        context: *E.Context,
+        v8_context: v8.Context,
         isolate: v8.Isolate,
         call_arena: Allocator,
 
@@ -2236,21 +2236,21 @@ fn Caller(comptime E: type, comptime State: type) type {
         // executor = Isolate -> getCurrentContext -> getEmbedderData()
         fn init(info: anytype) Self {
             const isolate = info.getIsolate();
-            const context = isolate.getCurrentContext();
-            const scope: *E.Scope = @ptrFromInt(context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
+            const v8_context = isolate.getCurrentContext();
+            const context: *E.Context = @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
 
-            scope.call_depth += 1;
+            context.call_depth += 1;
             return .{
-                .scope = scope,
-                .isolate = isolate,
                 .context = context,
-                .call_arena = scope.call_arena,
+                .isolate = isolate,
+                .v8_context = v8_context,
+                .call_arena = context.call_arena,
             };
         }
 
         fn deinit(self: *Self) void {
-            const scope = self.scope;
-            const call_depth = scope.call_depth - 1;
+            const context = self.context;
+            const call_depth = context.call_depth - 1;
 
             // Because of callbacks, calls can be nested. Because of this, we
             // can't clear the call_arena after _every_ call. Imagine we have
@@ -2264,18 +2264,18 @@ fn Caller(comptime E: type, comptime State: type) type {
             // Therefore, we keep a call_depth, and only reset the call_arena
             // when a top-level (call_depth == 0) function ends.
             if (call_depth == 0) {
-                for (scope.call_scope_end_callbacks.items) |cb| {
+                for (context.call_scope_end_callbacks.items) |cb| {
                     cb.callScopeEnd();
                 }
 
-                const arena: *ArenaAllocator = @alignCast(@ptrCast(scope.call_arena.ptr));
+                const arena: *ArenaAllocator = @alignCast(@ptrCast(context.call_arena.ptr));
                 _ = arena.reset(.{ .retain_with_limit = CALL_ARENA_RETAIN });
             }
 
             // Set this _after_ we've executed the above code, so that if the
             // above code executes any callbacks, they aren't being executed
-            // at scope 0, which would be wrong.
-            scope.call_depth = call_depth;
+            // at context 0, which would be wrong.
+            context.call_depth = call_depth;
         }
 
         fn constructor(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, info: v8.FunctionCallbackInfo) !void {
@@ -2289,15 +2289,15 @@ fn Caller(comptime E: type, comptime State: type) type {
             const this = info.getThis();
             if (@typeInfo(ReturnType) == .error_union) {
                 const non_error_res = res catch |err| return err;
-                _ = try E.Scope.mapZigInstanceToJs(self.context, this, non_error_res);
+                _ = try E.Context.mapZigInstanceToJs(self.v8_context, this, non_error_res);
             } else {
-                _ = try E.Scope.mapZigInstanceToJs(self.context, this, res);
+                _ = try E.Context.mapZigInstanceToJs(self.v8_context, this, res);
             }
             info.getReturnValue().set(this);
         }
 
         fn method(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, info: v8.FunctionCallbackInfo) !void {
-            const scope = self.scope;
+            const context = self.context;
             const func = @field(Struct, named_function.name);
             comptime assertSelfReceiver(Struct, named_function);
 
@@ -2308,11 +2308,11 @@ fn Caller(comptime E: type, comptime State: type) type {
             @field(args, "0") = zig_instance;
 
             const res = @call(.auto, func, args);
-            info.getReturnValue().set(try scope.zigValueToJs(res));
+            info.getReturnValue().set(try context.zigValueToJs(res));
         }
 
         fn getter(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, info: v8.FunctionCallbackInfo) !void {
-            const scope = self.scope;
+            const context = self.context;
             const func = @field(Struct, named_function.name);
             const Getter = @TypeOf(func);
             if (@typeInfo(Getter).@"fn".return_type == null) {
@@ -2329,17 +2329,17 @@ fn Caller(comptime E: type, comptime State: type) type {
                     @field(args, "0") = zig_instance;
                     if (comptime arg_fields.len == 2) {
                         comptime assertIsStateArg(Struct, named_function, 1);
-                        @field(args, "1") = scope.state;
+                        @field(args, "1") = context.state;
                     }
                 },
                 else => @compileError(named_function.full_name + " has too many parmaters: " ++ @typeName(named_function.func)),
             }
             const res = @call(.auto, func, args);
-            info.getReturnValue().set(try scope.zigValueToJs(res));
+            info.getReturnValue().set(try context.zigValueToJs(res));
         }
 
         fn setter(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, js_value: v8.Value, info: v8.FunctionCallbackInfo) !void {
-            const scope = self.scope;
+            const context = self.context;
             const func = @field(Struct, named_function.name);
             comptime assertSelfReceiver(Struct, named_function);
 
@@ -2353,10 +2353,10 @@ fn Caller(comptime E: type, comptime State: type) type {
                 1 => @compileError(named_function.full_name ++ " only has 1 parameter"),
                 2, 3 => {
                     @field(args, "0") = zig_instance;
-                    @field(args, "1") = try scope.jsValueToZig(named_function, arg_fields[1].type, js_value);
+                    @field(args, "1") = try context.jsValueToZig(named_function, arg_fields[1].type, js_value);
                     if (comptime arg_fields.len == 3) {
                         comptime assertIsStateArg(Struct, named_function, 2);
-                        @field(args, "2") = scope.state;
+                        @field(args, "2") = context.state;
                     }
                 },
                 else => @compileError(named_function.full_name ++ " setter with more than 3 parameters, why?"),
@@ -2372,7 +2372,7 @@ fn Caller(comptime E: type, comptime State: type) type {
         }
 
         fn getIndex(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, idx: u32, info: v8.PropertyCallbackInfo) !u8 {
-            const scope = self.scope;
+            const context = self.context;
             const func = @field(Struct, named_function.name);
             const IndexedGet = @TypeOf(func);
             if (@typeInfo(IndexedGet).@"fn".return_type == null) {
@@ -2393,7 +2393,7 @@ fn Caller(comptime E: type, comptime State: type) type {
                     @field(args, "2") = &has_value;
                     if (comptime arg_fields.len == 4) {
                         comptime assertIsStateArg(Struct, named_function, 3);
-                        @field(args, "3") = scope.state;
+                        @field(args, "3") = context.state;
                     }
                 },
                 else => @compileError(named_function.full_name ++ " has too many parmaters"),
@@ -2403,12 +2403,12 @@ fn Caller(comptime E: type, comptime State: type) type {
             if (has_value == false) {
                 return v8.Intercepted.No;
             }
-            info.getReturnValue().set(try scope.zigValueToJs(res));
+            info.getReturnValue().set(try context.zigValueToJs(res));
             return v8.Intercepted.Yes;
         }
 
         fn getNamedIndex(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, name: v8.Name, info: v8.PropertyCallbackInfo) !u8 {
-            const scope = self.scope;
+            const context = self.context;
             const func = @field(Struct, named_function.name);
             const NamedGet = @TypeOf(func);
             if (@typeInfo(NamedGet).@"fn".return_type == null) {
@@ -2428,7 +2428,7 @@ fn Caller(comptime E: type, comptime State: type) type {
                     @field(args, "2") = &has_value;
                     if (comptime arg_fields.len == 4) {
                         comptime assertIsStateArg(Struct, named_function, 3);
-                        @field(args, "3") = scope.state;
+                        @field(args, "3") = context.state;
                     }
                 },
                 else => @compileError(named_function.full_name ++ " has too many parmaters"),
@@ -2438,12 +2438,12 @@ fn Caller(comptime E: type, comptime State: type) type {
             if (has_value == false) {
                 return v8.Intercepted.No;
             }
-            info.getReturnValue().set(try scope.zigValueToJs(res));
+            info.getReturnValue().set(try context.zigValueToJs(res));
             return v8.Intercepted.Yes;
         }
 
         fn nameToString(self: *Self, name: v8.Name) ![]const u8 {
-            return valueToString(self.call_arena, .{ .handle = name.handle }, self.isolate, self.context);
+            return valueToString(self.call_arena, .{ .handle = name.handle }, self.isolate, self.v8_context);
         }
 
         fn assertSelfReceiver(comptime Struct: type, comptime named_function: NamedFunction) void {
@@ -2511,7 +2511,7 @@ fn Caller(comptime E: type, comptime State: type) type {
                             }
                         };
                         // ughh..how to handle an error here?
-                        break :blk self.scope.zigValueToJs(custom_exception) catch createException(isolate, "internal error");
+                        break :blk self.context.zigValueToJs(custom_exception) catch createException(isolate, "internal error");
                     }
                     // this error isn't part of a custom exception
                     break :blk null;
@@ -2570,7 +2570,7 @@ fn Caller(comptime E: type, comptime State: type) type {
         // the last parameter in Zig is an array, we'll try to slurp the additional
         // parameters into the array.
         fn getArgs(self: *const Self, comptime Struct: type, comptime named_function: NamedFunction, comptime offset: usize, info: anytype) !ParamterTypes(@TypeOf(@field(Struct, named_function.name))) {
-            const scope = self.scope;
+            const context = self.context;
             const F = @TypeOf(@field(Struct, named_function.name));
             var args: ParamterTypes(F) = undefined;
 
@@ -2586,7 +2586,7 @@ fn Caller(comptime E: type, comptime State: type) type {
                 // from our params slice, because we don't want to bind it to
                 // a JS argument
                 if (comptime isState(params[params.len - 1].type.?)) {
-                    @field(args, std.fmt.comptimePrint("{d}", .{params.len - 1 + offset})) = self.scope.state;
+                    @field(args, std.fmt.comptimePrint("{d}", .{params.len - 1 + offset})) = context.state;
                     break :blk params[0 .. params.len - 1];
                 }
 
@@ -2601,7 +2601,7 @@ fn Caller(comptime E: type, comptime State: type) type {
 
                     // AND the 2nd last parameter is state
                     if (params.len > 1 and comptime isState(params[params.len - 2].type.?)) {
-                        @field(args, std.fmt.comptimePrint("{d}", .{params.len - 2 + offset})) = self.scope.state;
+                        @field(args, std.fmt.comptimePrint("{d}", .{params.len - 2 + offset})) = self.context.state;
                         break :blk params[0 .. params.len - 2];
                     }
 
@@ -2648,7 +2648,7 @@ fn Caller(comptime E: type, comptime State: type) type {
                             const arr = try self.call_arena.alloc(last_parameter_type_info.pointer.child, js_parameter_count - params_to_map.len + 1);
                             for (arr, last_js_parameter..) |*a, i| {
                                 const js_value = info.getArg(@as(u32, @intCast(i)));
-                                a.* = try scope.jsValueToZig(named_function, slice_type, js_value);
+                                a.* = try context.jsValueToZig(named_function, slice_type, js_value);
                             }
                             @field(args, tupleFieldName(params_to_map.len + offset - 1)) = arr;
                         } else {
@@ -2677,7 +2677,7 @@ fn Caller(comptime E: type, comptime State: type) type {
                     @field(args, tupleFieldName(field_index)) = null;
                 } else {
                     const js_value = info.getArg(@as(u32, @intCast(i)));
-                    @field(args, tupleFieldName(field_index)) = scope.jsValueToZig(named_function, param.type.?, js_value) catch {
+                    @field(args, tupleFieldName(field_index)) = context.jsValueToZig(named_function, param.type.?, js_value) catch {
                         return error.InvalidArgument;
                     };
                 }
@@ -2694,14 +2694,14 @@ fn Caller(comptime E: type, comptime State: type) type {
 
         fn dumpFunctionArgs(self: *const Self, info: anytype) ![]const u8 {
             const isolate = self.isolate;
-            const context = self.context;
+            const v8_context = self.v8_context;
             const arena = self.call_arena;
             const js_parameter_count = info.length();
 
             var arr: std.ArrayListUnmanaged(u8) = .{};
             for (0..js_parameter_count) |i| {
                 const js_value = info.getArg(@intCast(i));
-                const value_string = try valueToDetailString(arena, js_value, isolate, context);
+                const value_string = try valueToDetailString(arena, js_value, isolate, v8_context);
                 const value_type = try jsStringToZig(arena, try js_value.typeOf(isolate), isolate);
                 try std.fmt.format(arr.writer(arena), "{d}: {s} ({s})\n", .{ i + 1, value_string, value_type });
             }
