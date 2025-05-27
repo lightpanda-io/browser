@@ -358,7 +358,7 @@ pub const Cookie = struct {
                         value = value[1..];
                     }
 
-                    if (std.mem.indexOfScalarPos(u8, value, 0, '.') == null and std.mem.eql(u8, "localhost", value) == false) {
+                    if (std.mem.indexOfScalarPos(u8, value, 0, '.') == null and std.ascii.eqlIgnoreCase("localhost", value) == false) {
                         // can't set a cookie for a TLD
                         return error.InvalidDomain;
                     }
