@@ -383,6 +383,7 @@ fn getContentQuads(cmd: anytype) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
 
@@ -397,7 +398,7 @@ fn getContentQuads(cmd: anytype) !void {
     // Elements like SVGElement may have multiple quads.
 
     const element = parser.nodeToElement(node._node);
-    const rect = try Element._getBoundingClientRect(element, &bc.session.page.?.state);
+    const rect = try Element._getBoundingClientRect(element, page);
     const quad = rectToQuad(rect);
 
     return cmd.sendResult(.{ .quads = &.{quad} }, .{});
@@ -411,6 +412,7 @@ fn getBoxModel(cmd: anytype) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
 
@@ -418,7 +420,7 @@ fn getBoxModel(cmd: anytype) !void {
     if (try parser.nodeType(node._node) != .element) return error.NodeIsNotAnElement;
     const element = parser.nodeToElement(node._node);
 
-    const rect = try Element._getBoundingClientRect(element, &bc.session.page.?.state);
+    const rect = try Element._getBoundingClientRect(element, page);
     const quad = rectToQuad(rect);
 
     return cmd.sendResult(.{ .model = BoxModel{

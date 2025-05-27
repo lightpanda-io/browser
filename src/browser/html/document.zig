@@ -19,7 +19,7 @@
 const std = @import("std");
 
 const parser = @import("../netsurf.zig");
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 
 const Window = @import("window.zig").Window;
 const Element = @import("../dom/element.zig").Element;
@@ -86,18 +86,18 @@ pub const HTMLDocument = struct {
         }
     }
 
-    pub fn get_cookie(_: *parser.DocumentHTML, state: *SessionState) ![]const u8 {
+    pub fn get_cookie(_: *parser.DocumentHTML, page: *Page) ![]const u8 {
         var buf: std.ArrayListUnmanaged(u8) = .{};
-        try state.cookie_jar.forRequest(&state.url.uri, buf.writer(state.arena), .{ .navigation = true });
+        try page.cookie_jar.forRequest(&page.url.uri, buf.writer(page.arena), .{ .navigation = true });
         return buf.items;
     }
 
-    pub fn set_cookie(_: *parser.DocumentHTML, cookie_str: []const u8, state: *SessionState) ![]const u8 {
+    pub fn set_cookie(_: *parser.DocumentHTML, cookie_str: []const u8, page: *Page) ![]const u8 {
         // we use the cookie jar's allocator to parse the cookie because it
         // outlives the page's arena.
-        const c = try Cookie.parse(state.cookie_jar.allocator, &state.url.uri, cookie_str);
+        const c = try Cookie.parse(page.cookie_jar.allocator, &page.url.uri, cookie_str);
         errdefer c.deinit();
-        try state.cookie_jar.add(c, std.time.timestamp());
+        try page.cookie_jar.add(c, std.time.timestamp());
         return cookie_str;
     }
 
@@ -110,8 +110,8 @@ pub const HTMLDocument = struct {
         return v;
     }
 
-    pub fn _getElementsByName(self: *parser.DocumentHTML, name: []const u8, state: *SessionState) !NodeList {
-        const arena = state.arena;
+    pub fn _getElementsByName(self: *parser.DocumentHTML, name: []const u8, page: *Page) !NodeList {
+        const arena = page.arena;
         var list: NodeList = .{};
 
         if (name.len == 0) return list;
@@ -130,24 +130,24 @@ pub const HTMLDocument = struct {
         return list;
     }
 
-    pub fn get_images(self: *parser.DocumentHTML, state: *SessionState) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(state.arena, parser.documentHTMLToNode(self), "img", false);
+    pub fn get_images(self: *parser.DocumentHTML, page: *Page) !collection.HTMLCollection {
+        return try collection.HTMLCollectionByTagName(page.arena, parser.documentHTMLToNode(self), "img", false);
     }
 
-    pub fn get_embeds(self: *parser.DocumentHTML, state: *SessionState) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(state.arena, parser.documentHTMLToNode(self), "embed", false);
+    pub fn get_embeds(self: *parser.DocumentHTML, page: *Page) !collection.HTMLCollection {
+        return try collection.HTMLCollectionByTagName(page.arena, parser.documentHTMLToNode(self), "embed", false);
     }
 
-    pub fn get_plugins(self: *parser.DocumentHTML, state: *SessionState) !collection.HTMLCollection {
-        return get_embeds(self, state);
+    pub fn get_plugins(self: *parser.DocumentHTML, page: *Page) !collection.HTMLCollection {
+        return get_embeds(self, page);
     }
 
-    pub fn get_forms(self: *parser.DocumentHTML, state: *SessionState) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(state.arena, parser.documentHTMLToNode(self), "form", false);
+    pub fn get_forms(self: *parser.DocumentHTML, page: *Page) !collection.HTMLCollection {
+        return try collection.HTMLCollectionByTagName(page.arena, parser.documentHTMLToNode(self), "form", false);
     }
 
-    pub fn get_scripts(self: *parser.DocumentHTML, state: *SessionState) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(state.arena, parser.documentHTMLToNode(self), "script", false);
+    pub fn get_scripts(self: *parser.DocumentHTML, page: *Page) !collection.HTMLCollection {
+        return try collection.HTMLCollectionByTagName(page.arena, parser.documentHTMLToNode(self), "script", false);
     }
 
     pub fn get_applets(_: *parser.DocumentHTML) !collection.HTMLCollection {
@@ -182,12 +182,12 @@ pub const HTMLDocument = struct {
         return "off";
     }
 
-    pub fn get_defaultView(_: *parser.DocumentHTML, state: *const SessionState) *Window {
-        return state.window;
+    pub fn get_defaultView(_: *parser.DocumentHTML, page: *Page) *Window {
+        return &page.window;
     }
 
-    pub fn get_readyState(node: *parser.DocumentHTML, state: *SessionState) ![]const u8 {
-        const self = try state.getOrCreateNodeWrapper(HTMLDocument, @ptrCast(node));
+    pub fn get_readyState(node: *parser.DocumentHTML, page: *Page) ![]const u8 {
+        const self = try page.getOrCreateNodeWrapper(HTMLDocument, @ptrCast(node));
         return @tagName(self.ready_state);
     }
 
@@ -232,41 +232,41 @@ pub const HTMLDocument = struct {
     // Since LightPanda requires the client to know what they are clicking on we do not return the underlying element at this moment
     // This can currenty only happen if the first pixel is clicked without having rendered any element. This will change when css properties are supported.
     // This returns an ElementUnion instead of a *Parser.Element in case the element somehow hasn't passed through the js runtime yet.
-    pub fn _elementFromPoint(_: *parser.DocumentHTML, x: f32, y: f32, state: *SessionState) !?ElementUnion {
+    pub fn _elementFromPoint(_: *parser.DocumentHTML, x: f32, y: f32, page: *Page) !?ElementUnion {
         const ix: i32 = @intFromFloat(@floor(x));
         const iy: i32 = @intFromFloat(@floor(y));
-        const element = state.renderer.getElementAtPosition(ix, iy) orelse return null;
+        const element = page.renderer.getElementAtPosition(ix, iy) orelse return null;
         // TODO if pointer-events set to none the underlying element should be returned (parser.documentGetDocumentElement(self.document);?)
         return try Element.toInterface(element);
     }
 
     // Returns an array of all elements at the specified coordinates (relative to the viewport). The elements are ordered from the topmost to the bottommost box of the viewport.
-    pub fn _elementsFromPoint(_: *parser.DocumentHTML, x: f32, y: f32, state: *SessionState) ![]ElementUnion {
+    pub fn _elementsFromPoint(_: *parser.DocumentHTML, x: f32, y: f32, page: *Page) ![]ElementUnion {
         const ix: i32 = @intFromFloat(@floor(x));
         const iy: i32 = @intFromFloat(@floor(y));
-        const element = state.renderer.getElementAtPosition(ix, iy) orelse return &.{};
+        const element = page.renderer.getElementAtPosition(ix, iy) orelse return &.{};
         // TODO if pointer-events set to none the underlying element should be returned (parser.documentGetDocumentElement(self.document);?)
 
         var list: std.ArrayListUnmanaged(ElementUnion) = .empty;
-        try list.ensureTotalCapacity(state.call_arena, 3);
+        try list.ensureTotalCapacity(page.call_arena, 3);
         list.appendAssumeCapacity(try Element.toInterface(element));
 
         // Since we are using a flat renderer there is no hierarchy of elements. What we do know is that the element is part of the main document.
         // Thus we can add the HtmlHtmlElement and it's child HTMLBodyElement to the returned list.
         // TBD Should we instead return every parent that is an element? Note that a child does not physically need to be overlapping the parent.
         // Should we do a render pass on demand?
-        const doc_elem = try parser.documentGetDocumentElement(parser.documentHTMLToDocument(state.window.document)) orelse {
+        const doc_elem = try parser.documentGetDocumentElement(parser.documentHTMLToDocument(page.window.document)) orelse {
             return list.items;
         };
-        if (try parser.documentHTMLBody(state.window.document)) |body| {
+        if (try parser.documentHTMLBody(page.window.document)) |body| {
             list.appendAssumeCapacity(try Element.toInterface(parser.bodyToElement(body)));
         }
         list.appendAssumeCapacity(try Element.toInterface(doc_elem));
         return list.items;
     }
 
-    pub fn documentIsLoaded(html_doc: *parser.DocumentHTML, state: *SessionState) !void {
-        const self = try state.getOrCreateNodeWrapper(HTMLDocument, @ptrCast(html_doc));
+    pub fn documentIsLoaded(html_doc: *parser.DocumentHTML, page: *Page) !void {
+        const self = try page.getOrCreateNodeWrapper(HTMLDocument, @ptrCast(html_doc));
         self.ready_state = .interactive;
 
         const evt = try parser.eventCreate();
@@ -276,8 +276,8 @@ pub const HTMLDocument = struct {
         _ = try parser.eventTargetDispatchEvent(parser.toEventTarget(parser.DocumentHTML, html_doc), evt);
     }
 
-    pub fn documentIsComplete(html_doc: *parser.DocumentHTML, state: *SessionState) !void {
-        const self = try state.getOrCreateNodeWrapper(HTMLDocument, @ptrCast(html_doc));
+    pub fn documentIsComplete(html_doc: *parser.DocumentHTML, page: *Page) !void {
+        const self = try page.getOrCreateNodeWrapper(HTMLDocument, @ptrCast(html_doc));
         self.ready_state = .complete;
     }
 };
@@ -383,12 +383,12 @@ test "Browser.HTML.Document" {
         .{ "document.readyState", "loading" },
     }, .{});
 
-    try HTMLDocument.documentIsLoaded(runner.window.document, &runner.state);
+    try HTMLDocument.documentIsLoaded(runner.page.window.document, runner.page);
     try runner.testCases(&.{
         .{ "document.readyState", "interactive" },
     }, .{});
 
-    try HTMLDocument.documentIsComplete(runner.window.document, &runner.state);
+    try HTMLDocument.documentIsComplete(runner.page.window.document, runner.page);
     try runner.testCases(&.{
         .{ "document.readyState", "complete" },
     }, .{});

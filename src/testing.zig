@@ -171,7 +171,7 @@ pub fn print(comptime fmt: []const u8, args: anytype) void {
 }
 
 // dummy opts incase we want to add something, and not have to break all the callers
-pub fn app(_: anytype) *App {
+pub fn createApp(_: anytype) *App {
     return App.init(allocator, .{ .run_mode = .serve }) catch unreachable;
 }
 
@@ -367,114 +367,79 @@ pub const tracking_allocator = @import("root").tracking_allocator.allocator();
 pub const JsRunner = struct {
     const URL = @import("url.zig").URL;
     const Env = @import("browser/env.zig").Env;
-    const Loop = @import("runtime/loop.zig").Loop;
-    const HttpClient = @import("http/client.zig").Client;
-    const storage = @import("browser/storage/storage.zig");
-    const Window = @import("browser/html/window.zig").Window;
-    const Renderer = @import("browser/renderer.zig").Renderer;
-    const SessionState = @import("browser/env.zig").SessionState;
+    const Page = @import("browser/page.zig").Page;
+    const Browser = @import("browser/browser.zig").Browser;
 
-    url: URL,
-    env: *Env,
-    loop: Loop,
-    window: Window,
-    state: SessionState,
-    arena: Allocator,
-    renderer: Renderer,
-    http_client: HttpClient,
-    scope: *Env.Scope,
-    executor: Env.ExecutionWorld,
-    storage_shelf: storage.Shelf,
-    cookie_jar: storage.CookieJar,
+    app: *App,
+    page: *Page,
+    browser: *Browser,
 
-    fn init(parent_allocator: Allocator, opts: RunnerOpts) !*JsRunner {
+    fn init(alloc: Allocator, opts: RunnerOpts) !JsRunner {
         parser.deinit();
-        try parser.init();
 
-        const aa = try parent_allocator.create(std.heap.ArenaAllocator);
-        aa.* = std.heap.ArenaAllocator.init(parent_allocator);
-        errdefer aa.deinit();
-
-        const arena = aa.allocator();
-        const self = try arena.create(JsRunner);
-        self.arena = arena;
-
-        self.env = try Env.init(arena, .{});
-        errdefer self.env.deinit();
-
-        self.url = try URL.parse(opts.url, null);
-
-        self.renderer = Renderer.init(arena);
-        self.cookie_jar = storage.CookieJar.init(arena);
-        self.loop = try Loop.init(arena);
-        errdefer self.loop.deinit();
-
-        var html = std.io.fixedBufferStream(opts.html);
-        const document = try parser.documentHTMLParse(html.reader(), "UTF-8");
-
-        self.window = try Window.create(null, null);
-        try self.window.replaceDocument(document);
-        try self.window.replaceLocation(.{
-            .url = try self.url.toWebApi(arena),
-        });
-
-        self.http_client = try HttpClient.init(arena, 1, .{
+        var app = try App.init(alloc, .{
+            .run_mode = .serve,
             .tls_verify_host = false,
         });
+        errdefer app.deinit();
 
-        self.state = .{
-            .arena = arena,
-            .loop = &self.loop,
-            .url = &self.url,
-            .window = &self.window,
-            .renderer = &self.renderer,
-            .cookie_jar = &self.cookie_jar,
-            .request_factory = self.http_client.requestFactory(null),
+        const browser = try alloc.create(Browser);
+        errdefer alloc.destroy(browser);
+
+        browser.* = try Browser.init(app);
+        errdefer browser.deinit();
+
+        var session = try browser.newSession();
+
+        var page = try session.createPage();
+
+        // a bit hacky, but since we aren't going through page.navigate, there's
+        // some minimum setup we need to do
+        page.url = try URL.parse(opts.url, null);
+        try page.window.replaceLocation(.{
+            .url = try page.url.toWebApi(page.arena),
+        });
+
+        var html = std.io.fixedBufferStream(opts.html);
+        try page.loadHTMLDoc(html.reader(), "UTF-8");
+
+        return .{
+            .app = app,
+            .page = page,
+            .browser = browser,
         };
-
-        self.storage_shelf = storage.Shelf.init(arena);
-        self.window.setStorageShelf(&self.storage_shelf);
-
-        self.executor = try self.env.newExecutionWorld();
-        errdefer self.executor.deinit();
-
-        self.scope = try self.executor.startScope(&self.window, &self.state, {}, true);
-        return self;
     }
 
     pub fn deinit(self: *JsRunner) void {
-        self.loop.deinit();
-        self.executor.deinit();
-        self.env.deinit();
-        self.http_client.deinit();
-        self.storage_shelf.deinit();
-
-        const arena: *std.heap.ArenaAllocator = @ptrCast(@alignCast(self.arena.ptr));
-        arena.deinit();
-        arena.child_allocator.destroy(arena);
+        self.browser.deinit();
+        self.app.allocator.destroy(self.browser);
+        self.app.deinit();
     }
 
     const RunOpts = struct {};
     pub const Case = std.meta.Tuple(&.{ []const u8, ?[]const u8 });
     pub fn testCases(self: *JsRunner, cases: []const Case, _: RunOpts) !void {
+        const scope = self.page.scope;
+        const arena = self.page.arena;
+
         const start = try std.time.Instant.now();
 
         for (cases, 0..) |case, i| {
             var try_catch: Env.TryCatch = undefined;
-            try_catch.init(self.scope);
+            try_catch.init(scope);
             defer try_catch.deinit();
 
-            const value = self.scope.exec(case.@"0", null) catch |err| {
-                if (try try_catch.err(self.arena)) |msg| {
+            const value = scope.exec(case.@"0", null) catch |err| {
+                if (try try_catch.err(arena)) |msg| {
                     std.debug.print("{s}\n\nCase: {d}\n{s}\n", .{ msg, i + 1, case.@"0" });
                 }
                 return err;
             };
-            try self.loop.run();
+            try self.page.loop.run();
             @import("root").js_runner_duration += std.time.Instant.since(try std.time.Instant.now(), start);
 
             if (case.@"1") |expected| {
-                const actual = try value.toString(self.arena);
+                const actual = try value.toString(arena);
                 if (std.mem.eql(u8, expected, actual) == false) {
                     std.debug.print("Expected:\n{s}\n\nGot:\n{s}\n\nCase: {d}\n{s}\n", .{ expected, actual, i + 1, case.@"0" });
                     return error.UnexpectedResult;
@@ -488,12 +453,15 @@ pub const JsRunner = struct {
     }
 
     pub fn eval(self: *JsRunner, src: []const u8, name: ?[]const u8, err_msg: *?[]const u8) !Env.Value {
+        const scope = self.page.scope;
+        const arena = self.page.arena;
+
         var try_catch: Env.TryCatch = undefined;
-        try_catch.init(self.scope);
+        try_catch.init(scope);
         defer try_catch.deinit();
 
-        return self.scope.exec(src, name) catch |err| {
-            if (try try_catch.err(self.arena)) |msg| {
+        return scope.exec(src, name) catch |err| {
+            if (try try_catch.err(arena)) |msg| {
                 err_msg.* = msg;
                 std.debug.print("Error running script: {s}\n", .{msg});
             }
@@ -517,6 +485,6 @@ const RunnerOpts = struct {
     ,
 };
 
-pub fn jsRunner(alloc: Allocator, opts: RunnerOpts) !*JsRunner {
+pub fn jsRunner(alloc: Allocator, opts: RunnerOpts) !JsRunner {
     return JsRunner.init(alloc, opts);
 }

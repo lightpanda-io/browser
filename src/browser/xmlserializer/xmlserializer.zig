@@ -18,7 +18,7 @@
 //
 const std = @import("std");
 
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 
 const dump = @import("../dump.zig");
 const parser = @import("../netsurf.zig");
@@ -33,8 +33,8 @@ pub const XMLSerializer = struct {
         return .{};
     }
 
-    pub fn _serializeToString(_: *const XMLSerializer, root: *parser.Node, state: *SessionState) ![]const u8 {
-        var buf = std.ArrayList(u8).init(state.arena);
+    pub fn _serializeToString(_: *const XMLSerializer, root: *parser.Node, page: *Page) ![]const u8 {
+        var buf = std.ArrayList(u8).init(page.arena);
         if (try parser.nodeType(root) == .document) {
             try dump.writeHTML(@as(*parser.Document, @ptrCast(root)), buf.writer());
         } else {

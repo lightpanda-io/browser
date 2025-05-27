@@ -20,7 +20,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const JsObject = @import("../env.zig").Env.JsObject;
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 
 const log = if (builtin.is_test) &test_capture else @import("../../log.zig");
 
@@ -29,49 +29,49 @@ pub const Console = struct {
     timers: std.StringHashMapUnmanaged(u32) = .{},
     counts: std.StringHashMapUnmanaged(u32) = .{},
 
-    pub fn _log(_: *const Console, values: []JsObject, state: *SessionState) !void {
+    pub fn _log(_: *const Console, values: []JsObject, page: *Page) !void {
         if (values.len == 0) {
             return;
         }
-        log.info(.console, "info", .{ .args = try serializeValues(values, state) });
+        log.info(.console, "info", .{ .args = try serializeValues(values, page) });
     }
 
-    pub fn _info(console: *const Console, values: []JsObject, state: *SessionState) !void {
-        return console._log(values, state);
+    pub fn _info(console: *const Console, values: []JsObject, page: *Page) !void {
+        return console._log(values, page);
     }
 
-    pub fn _debug(_: *const Console, values: []JsObject, state: *SessionState) !void {
+    pub fn _debug(_: *const Console, values: []JsObject, page: *Page) !void {
         if (values.len == 0) {
             return;
         }
-        log.debug(.console, "debug", .{ .args = try serializeValues(values, state) });
+        log.debug(.console, "debug", .{ .args = try serializeValues(values, page) });
     }
 
-    pub fn _warn(_: *const Console, values: []JsObject, state: *SessionState) !void {
+    pub fn _warn(_: *const Console, values: []JsObject, page: *Page) !void {
         if (values.len == 0) {
             return;
         }
-        log.warn(.console, "warn", .{ .args = try serializeValues(values, state) });
+        log.warn(.console, "warn", .{ .args = try serializeValues(values, page) });
     }
 
-    pub fn _error(_: *const Console, values: []JsObject, state: *SessionState) !void {
+    pub fn _error(_: *const Console, values: []JsObject, page: *Page) !void {
         if (values.len == 0) {
             return;
         }
-        log.info(.console, "error", .{ .args = try serializeValues(values, state) });
+        log.info(.console, "error", .{ .args = try serializeValues(values, page) });
     }
 
     pub fn _clear(_: *const Console) void {}
 
-    pub fn _count(self: *Console, label_: ?[]const u8, state: *SessionState) !void {
+    pub fn _count(self: *Console, label_: ?[]const u8, page: *Page) !void {
         const label = label_ orelse "default";
-        const gop = try self.counts.getOrPut(state.arena, label);
+        const gop = try self.counts.getOrPut(page.arena, label);
 
         var current: u32 = 0;
         if (gop.found_existing) {
             current = gop.value_ptr.*;
         } else {
-            gop.key_ptr.* = try state.arena.dupe(u8, label);
+            gop.key_ptr.* = try page.arena.dupe(u8, label);
         }
 
         const count = current + 1;
@@ -89,15 +89,15 @@ pub const Console = struct {
         log.info(.console, "count reset", .{ .label = label, .count = kv.value });
     }
 
-    pub fn _time(self: *Console, label_: ?[]const u8, state: *SessionState) !void {
+    pub fn _time(self: *Console, label_: ?[]const u8, page: *Page) !void {
         const label = label_ orelse "default";
-        const gop = try self.timers.getOrPut(state.arena, label);
+        const gop = try self.timers.getOrPut(page.arena, label);
 
         if (gop.found_existing) {
             log.info(.console, "duplicate timer", .{ .label = label });
             return;
         }
-        gop.key_ptr.* = try state.arena.dupe(u8, label);
+        gop.key_ptr.* = try page.arena.dupe(u8, label);
         gop.value_ptr.* = timestamp();
     }
 
@@ -122,19 +122,19 @@ pub const Console = struct {
         log.warn(.console, "timer stop", .{ .label = label, .elapsed = elapsed - kv.value });
     }
 
-    pub fn _assert(_: *Console, assertion: JsObject, values: []JsObject, state: *SessionState) !void {
+    pub fn _assert(_: *Console, assertion: JsObject, values: []JsObject, page: *Page) !void {
         if (assertion.isTruthy()) {
             return;
         }
         var serialized_values: []const u8 = "";
         if (values.len > 0) {
-            serialized_values = try serializeValues(values, state);
+            serialized_values = try serializeValues(values, page);
         }
         log.info(.console, "assertion failed", .{ .values = serialized_values });
     }
 
-    fn serializeValues(values: []JsObject, state: *SessionState) ![]const u8 {
-        const arena = state.call_arena;
+    fn serializeValues(values: []JsObject, page: *Page) ![]const u8 {
+        const arena = page.call_arena;
         var arr: std.ArrayListUnmanaged(u8) = .{};
         try arr.appendSlice(arena, try values[0].toString());
         for (values[1..]) |value| {

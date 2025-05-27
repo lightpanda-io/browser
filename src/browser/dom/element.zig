@@ -19,7 +19,7 @@
 const std = @import("std");
 
 const parser = @import("../netsurf.zig");
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 
 const css = @import("css.zig");
 const log = @import("../../log.zig");
@@ -102,14 +102,14 @@ pub const Element = struct {
         return try parser.nodeGetAttributes(parser.elementToNode(self)) orelse unreachable;
     }
 
-    pub fn get_innerHTML(self: *parser.Element, state: *SessionState) ![]const u8 {
-        var buf = std.ArrayList(u8).init(state.arena);
+    pub fn get_innerHTML(self: *parser.Element, page: *Page) ![]const u8 {
+        var buf = std.ArrayList(u8).init(page.arena);
         try dump.writeChildren(parser.elementToNode(self), buf.writer());
         return buf.items;
     }
 
-    pub fn get_outerHTML(self: *parser.Element, state: *SessionState) ![]const u8 {
-        var buf = std.ArrayList(u8).init(state.arena);
+    pub fn get_outerHTML(self: *parser.Element, page: *Page) ![]const u8 {
+        var buf = std.ArrayList(u8).init(page.arena);
         try dump.writeNode(parser.elementToNode(self), buf.writer());
         return buf.items;
     }
@@ -138,10 +138,10 @@ pub const Element = struct {
 
     // The closest() method of the Element interface traverses the element and its parents (heading toward the document root) until it finds a node that matches the specified CSS selector.
     // Returns the closest ancestor Element or itself, which matches the selectors. If there are no such element, null.
-    pub fn _closest(self: *parser.Element, selector: []const u8, state: *SessionState) !?*parser.Element {
+    pub fn _closest(self: *parser.Element, selector: []const u8, page: *Page) !?*parser.Element {
         const cssParse = @import("../css/css.zig").parse;
         const CssNodeWrap = @import("../css/libdom.zig").Node;
-        const select = try cssParse(state.call_arena, selector, .{});
+        const select = try cssParse(page.call_arena, selector, .{});
 
         var current: CssNodeWrap = .{ .node = parser.elementToNode(self) };
         while (true) {
@@ -249,10 +249,10 @@ pub const Element = struct {
     pub fn _getElementsByTagName(
         self: *parser.Element,
         tag_name: []const u8,
-        state: *SessionState,
+        page: *Page,
     ) !collection.HTMLCollection {
         return try collection.HTMLCollectionByTagName(
-            state.arena,
+            page.arena,
             parser.elementToNode(self),
             tag_name,
             false,
@@ -262,10 +262,10 @@ pub const Element = struct {
     pub fn _getElementsByClassName(
         self: *parser.Element,
         classNames: []const u8,
-        state: *SessionState,
+        page: *Page,
     ) !collection.HTMLCollection {
         return try collection.HTMLCollectionByClassName(
-            state.arena,
+            page.arena,
             parser.elementToNode(self),
             classNames,
             false,
@@ -328,18 +328,18 @@ pub const Element = struct {
         }
     }
 
-    pub fn _querySelector(self: *parser.Element, selector: []const u8, state: *SessionState) !?Union {
+    pub fn _querySelector(self: *parser.Element, selector: []const u8, page: *Page) !?Union {
         if (selector.len == 0) return null;
 
-        const n = try css.querySelector(state.arena, parser.elementToNode(self), selector);
+        const n = try css.querySelector(page.arena, parser.elementToNode(self), selector);
 
         if (n == null) return null;
 
         return try toInterface(parser.nodeToElement(n.?));
     }
 
-    pub fn _querySelectorAll(self: *parser.Element, selector: []const u8, state: *SessionState) !NodeList {
-        return css.querySelectorAll(state.arena, parser.elementToNode(self), selector);
+    pub fn _querySelectorAll(self: *parser.Element, selector: []const u8, page: *Page) !NodeList {
+        return css.querySelectorAll(page.arena, parser.elementToNode(self), selector);
     }
 
     pub fn _prepend(self: *parser.Element, nodes: []const Node.NodeOrText) !void {
@@ -366,40 +366,40 @@ pub const Element = struct {
 
     // A DOMRect object providing information about the size of an element and its position relative to the viewport.
     // Returns a 0 DOMRect object if the element is eventually detached from the main window
-    pub fn _getBoundingClientRect(self: *parser.Element, state: *SessionState) !DOMRect {
+    pub fn _getBoundingClientRect(self: *parser.Element, page: *Page) !DOMRect {
         // Since we are lazy rendering we need to do this check. We could store the renderer in a viewport such that it could cache these, but it would require tracking changes.
         const root = try parser.nodeGetRootNode(parser.elementToNode(self));
-        if (root != parser.documentToNode(parser.documentHTMLToDocument(state.window.document))) {
+        if (root != parser.documentToNode(parser.documentHTMLToDocument(page.window.document))) {
             return DOMRect{ .x = 0, .y = 0, .width = 0, .height = 0 };
         }
-        return state.renderer.getRect(self);
+        return page.renderer.getRect(self);
     }
 
     // Returns a collection of DOMRect objects that indicate the bounding rectangles for each CSS border box in a client.
     // We do not render so it only always return the element's bounding rect.
     // Returns an empty array if the element is eventually detached from the main window
-    pub fn _getClientRects(self: *parser.Element, state: *SessionState) ![]DOMRect {
+    pub fn _getClientRects(self: *parser.Element, page: *Page) ![]DOMRect {
         const root = try parser.nodeGetRootNode(parser.elementToNode(self));
-        if (root != parser.documentToNode(parser.documentHTMLToDocument(state.window.document))) {
+        if (root != parser.documentToNode(parser.documentHTMLToDocument(page.window.document))) {
             return &.{};
         }
-        const heap_ptr = try state.call_arena.create(DOMRect);
-        heap_ptr.* = try state.renderer.getRect(self);
+        const heap_ptr = try page.call_arena.create(DOMRect);
+        heap_ptr.* = try page.renderer.getRect(self);
         return heap_ptr[0..1];
     }
 
-    pub fn get_clientWidth(_: *parser.Element, state: *SessionState) u32 {
-        return state.renderer.width();
+    pub fn get_clientWidth(_: *parser.Element, page: *Page) u32 {
+        return page.renderer.width();
     }
 
-    pub fn get_clientHeight(_: *parser.Element, state: *SessionState) u32 {
-        return state.renderer.height();
+    pub fn get_clientHeight(_: *parser.Element, page: *Page) u32 {
+        return page.renderer.height();
     }
 
-    pub fn _matches(self: *parser.Element, selectors: []const u8, state: *SessionState) !bool {
+    pub fn _matches(self: *parser.Element, selectors: []const u8, page: *Page) !bool {
         const cssParse = @import("../css/css.zig").parse;
         const CssNodeWrap = @import("../css/libdom.zig").Node;
-        const s = try cssParse(state.call_arena, selectors, .{});
+        const s = try cssParse(page.call_arena, selectors, .{});
         return s.match(CssNodeWrap{ .node = parser.elementToNode(self) });
     }
 

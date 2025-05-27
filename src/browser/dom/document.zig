@@ -19,7 +19,7 @@
 const std = @import("std");
 
 const parser = @import("../netsurf.zig");
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 
 const Node = @import("node.zig").Node;
 const NodeList = @import("nodelist.zig").NodeList;
@@ -42,14 +42,14 @@ pub const Document = struct {
     pub const prototype = *Node;
     pub const subtype = .node;
 
-    pub fn constructor(state: *const SessionState) !*parser.DocumentHTML {
+    pub fn constructor(page: *const Page) !*parser.DocumentHTML {
         const doc = try parser.documentCreateDocument(
-            try parser.documentHTMLGetTitle(state.window.document),
+            try parser.documentHTMLGetTitle(page.window.document),
         );
 
         // we have to work w/ document instead of html document.
         const ddoc = parser.documentHTMLToDocument(doc);
-        const ccur = parser.documentHTMLToDocument(state.window.document);
+        const ccur = parser.documentHTMLToDocument(page.window.document);
         try parser.documentSetDocumentURI(ddoc, try parser.documentGetDocumentURI(ccur));
         try parser.documentSetInputEncoding(ddoc, try parser.documentGetInputEncoding(ccur));
 
@@ -141,18 +141,17 @@ pub const Document = struct {
     pub fn _getElementsByTagName(
         self: *parser.Document,
         tag_name: []const u8,
-        state: *SessionState,
+        page: *Page,
     ) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(state.arena, parser.documentToNode(self), tag_name, true);
+        return try collection.HTMLCollectionByTagName(page.arena, parser.documentToNode(self), tag_name, true);
     }
 
     pub fn _getElementsByClassName(
         self: *parser.Document,
         classNames: []const u8,
-        state: *SessionState,
+        page: *Page,
     ) !collection.HTMLCollection {
-        const allocator = state.arena;
-        return try collection.HTMLCollectionByClassName(allocator, parser.documentToNode(self), classNames, true);
+        return try collection.HTMLCollectionByClassName(page.arena, parser.documentToNode(self), classNames, true);
     }
 
     pub fn _createDocumentFragment(self: *parser.Document) !*parser.DocumentFragment {
@@ -214,20 +213,18 @@ pub const Document = struct {
         return 1;
     }
 
-    pub fn _querySelector(self: *parser.Document, selector: []const u8, state: *SessionState) !?ElementUnion {
+    pub fn _querySelector(self: *parser.Document, selector: []const u8, page: *Page) !?ElementUnion {
         if (selector.len == 0) return null;
 
-        const allocator = state.arena;
-        const n = try css.querySelector(allocator, parser.documentToNode(self), selector);
+        const n = try css.querySelector(page.arena, parser.documentToNode(self), selector);
 
         if (n == null) return null;
 
         return try Element.toInterface(parser.nodeToElement(n.?));
     }
 
-    pub fn _querySelectorAll(self: *parser.Document, selector: []const u8, state: *SessionState) !NodeList {
-        const allocator = state.arena;
-        return css.querySelectorAll(allocator, parser.documentToNode(self), selector);
+    pub fn _querySelectorAll(self: *parser.Document, selector: []const u8, page: *Page) !NodeList {
+        return css.querySelectorAll(page.arena, parser.documentToNode(self), selector);
     }
 
     pub fn _prepend(self: *parser.Document, nodes: []const Node.NodeOrText) !void {
@@ -249,7 +246,9 @@ pub const Document = struct {
 
 const testing = @import("../../testing.zig");
 test "Browser.DOM.Document" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{
+        .url = "about:blank",
+    });
     defer runner.deinit();
 
     try runner.testCases(&.{

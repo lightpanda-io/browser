@@ -20,7 +20,7 @@ const std = @import("std");
 
 const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 
 const Env = @import("../env.zig").Env;
 const Element = @import("element.zig").Element;
@@ -39,17 +39,17 @@ pub const Interfaces = .{
 // The returned Entries are phony, they always indicate full intersection.
 // https://developer.mozilla.org/en-US/docs/Web/API/IntersectionObserver
 pub const IntersectionObserver = struct {
+    page: *Page,
     callback: Env.Function,
     options: IntersectionObserverOptions,
-    state: *SessionState,
 
     observed_entries: std.ArrayListUnmanaged(IntersectionObserverEntry),
 
     // new IntersectionObserver(callback)
     // new IntersectionObserver(callback, options) [not supported yet]
-    pub fn constructor(callback: Env.Function, options_: ?IntersectionObserverOptions, state: *SessionState) !IntersectionObserver {
+    pub fn constructor(callback: Env.Function, options_: ?IntersectionObserverOptions, page: *Page) !IntersectionObserver {
         var options = IntersectionObserverOptions{
-            .root = parser.documentToNode(parser.documentHTMLToDocument(state.window.document)),
+            .root = parser.documentToNode(parser.documentHTMLToDocument(page.window.document)),
             .rootMargin = "0px 0px 0px 0px",
             .threshold = &.{0.0},
         };
@@ -60,9 +60,9 @@ pub const IntersectionObserver = struct {
         }
 
         return .{
+            .page = page,
             .callback = callback,
             .options = options,
-            .state = state,
             .observed_entries = .{},
         };
     }
@@ -78,8 +78,8 @@ pub const IntersectionObserver = struct {
             }
         }
 
-        try self.observed_entries.append(self.state.arena, .{
-            .state = self.state,
+        try self.observed_entries.append(self.page.arena, .{
+            .page = self.page,
             .target = target_element,
             .options = &self.options,
         });
@@ -113,13 +113,13 @@ const IntersectionObserverOptions = struct {
 // https://developer.mozilla.org/en-US/docs/Web/API/IntersectionObserverEntry
 // https://w3c.github.io/IntersectionObserver/#intersection-observer-entry
 pub const IntersectionObserverEntry = struct {
-    state: *SessionState,
+    page: *Page,
     target: *parser.Element,
     options: *IntersectionObserverOptions,
 
     // Returns the bounds rectangle of the target element as a DOMRectReadOnly. The bounds are computed as described in the documentation for Element.getBoundingClientRect().
     pub fn get_boundingClientRect(self: *const IntersectionObserverEntry) !Element.DOMRect {
-        return Element._getBoundingClientRect(self.target, self.state);
+        return Element._getBoundingClientRect(self.target, self.page);
     }
 
     // Returns the ratio of the intersectionRect to the boundingClientRect.
@@ -129,10 +129,14 @@ pub const IntersectionObserverEntry = struct {
 
     // Returns a DOMRectReadOnly representing the target's visible area.
     pub fn get_intersectionRect(self: *const IntersectionObserverEntry) !Element.DOMRect {
-        return Element._getBoundingClientRect(self.target, self.state);
+        return Element._getBoundingClientRect(self.target, self.page);
     }
 
-    // A Boolean value which is true if the target element intersects with the intersection observer's root. If this is true, then, the IntersectionObserverEntry describes a transition into a state of intersection; if it's false, then you know the transition is from intersecting to not-intersecting.
+    // A Boolean value which is true if the target element intersects with the
+    // intersection observer's root. If this is true, then, the
+    // IntersectionObserverEntry describes a transition into a state of
+    // intersection; if it's false, then you know the transition is from
+    // intersecting to not-intersecting.
     pub fn get_isIntersecting(_: *const IntersectionObserverEntry) bool {
         return true;
     }
@@ -140,8 +144,8 @@ pub const IntersectionObserverEntry = struct {
     // Returns a DOMRectReadOnly for the intersection observer's root.
     pub fn get_rootBounds(self: *const IntersectionObserverEntry) !Element.DOMRect {
         const root = self.options.root.?;
-        if (@intFromPtr(root) == @intFromPtr(self.state.window.document)) {
-            return self.state.renderer.boundingRect();
+        if (@intFromPtr(root) == @intFromPtr(self.page.window.document)) {
+            return self.page.renderer.boundingRect();
         }
 
         const root_type = try parser.nodeType(root);
@@ -156,7 +160,7 @@ pub const IntersectionObserverEntry = struct {
             else => return error.InvalidState,
         }
 
-        return Element._getBoundingClientRect(element, self.state);
+        return Element._getBoundingClientRect(element, self.page);
     }
 
     // The Element whose intersection with the root changed.

@@ -22,16 +22,16 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const Dump = @import("dump.zig");
+const Env = @import("env.zig").Env;
 const Mime = @import("mime.zig").Mime;
 const DataURI = @import("datauri.zig").DataURI;
 const Session = @import("session.zig").Session;
 const Renderer = @import("renderer.zig").Renderer;
-const SessionState = @import("env.zig").SessionState;
 const Window = @import("html/window.zig").Window;
 const Walker = @import("dom/walker.zig").WalkerDepthFirst;
-const Env = @import("env.zig").Env;
 const Loop = @import("../runtime/loop.zig").Loop;
 const HTMLDocument = @import("html/document.zig").HTMLDocument;
+const RequestFactory = @import("../http/client.zig").RequestFactory;
 
 const URL = @import("../url.zig").URL;
 
@@ -48,13 +48,22 @@ const polyfill = @import("polyfill/polyfill.zig");
 // The page handle all its memory in an arena allocator. The arena is reseted
 // when end() is called.
 pub const Page = struct {
+    // Our event loop
+    loop: *Loop,
+
+    cookie_jar: *storage.CookieJar,
+
+    // Pre-configured http/cilent.zig used to make HTTP requests.
+    request_factory: RequestFactory,
+
     session: *Session,
 
-    // an arena with a lifetime for the entire duration of the page
+    // An arena with a lifetime for the entire duration of the page
     arena: Allocator,
 
-    // Gets injected into any WebAPI method that needs it
-    state: SessionState,
+    // Managed by the JS runtime, meant to have a much shorter life than the
+    // above arena. It should only be used by WebAPIs.
+    call_arena: Allocator,
 
     // Serves are the root object of our JavaScript environment
     window: Window,
@@ -62,6 +71,8 @@ pub const Page = struct {
     // The URL of the page
     url: URL,
 
+    // If the body of the main page isn't HTML, we capture its raw bytes here
+    // (currently, this is only useful in fetch mode with the --dump option)
     raw_data: ?[]const u8,
 
     renderer: Renderer,
@@ -70,6 +81,8 @@ pub const Page = struct {
 
     window_clicked_event_node: parser.EventNode,
 
+    // Our JavaScript context for this specific page. This is what we use to
+    // execute any JavaScript
     scope: *Env.Scope,
 
     // List of modules currently fetched/loaded.
@@ -87,21 +100,17 @@ pub const Page = struct {
             .raw_data = null,
             .url = URL.empty,
             .session = session,
+            .call_arena = undefined,
+            .loop = browser.app.loop,
             .renderer = Renderer.init(arena),
+            .cookie_jar = &session.cookie_jar,
             .microtask_node = .{ .func = microtaskCallback },
             .window_clicked_event_node = .{ .func = windowClicked },
-            .state = .{
-                .arena = arena,
-                .url = &self.url,
-                .window = &self.window,
-                .renderer = &self.renderer,
-                .loop = browser.app.loop,
-                .cookie_jar = &session.cookie_jar,
-                .request_factory = browser.http_client.requestFactory(browser.notification),
-            },
-            .scope = try session.executor.startScope(&self.window, &self.state, self, true),
+            .request_factory = browser.http_client.requestFactory(browser.notification),
+            .scope = undefined,
             .module_map = .empty,
         };
+        self.scope = try session.executor.startScope(&self.window, self, self, true);
 
         // load polyfills
         try polyfill.load(self.arena, self.scope);
@@ -180,7 +189,7 @@ pub const Page = struct {
             try self.loadHTMLDoc(fbs.reader(), "utf-8");
             // We do not processHTMLDoc here as we know we don't have any scripts
             // This assumption may be false when CDP Page.addScriptToEvaluateOnNewDocument is implemented
-            try HTMLDocument.documentIsComplete(self.window.document, &self.state);
+            try HTMLDocument.documentIsComplete(self.window.document, self);
             return;
         }
 
@@ -243,7 +252,7 @@ pub const Page = struct {
     }
 
     // https://html.spec.whatwg.org/#read-html
-    fn loadHTMLDoc(self: *Page, reader: anytype, charset: []const u8) !void {
+    pub fn loadHTMLDoc(self: *Page, reader: anytype, charset: []const u8) !void {
         const ccharset = try self.arena.dupeZ(u8, charset);
 
         const html_doc = try parser.documentHTMLParse(reader, ccharset);
@@ -352,7 +361,7 @@ pub const Page = struct {
         // at the point where all subresources apart from async script elements
         // have loaded.
         // https://html.spec.whatwg.org/#reporting-document-loading-status
-        try HTMLDocument.documentIsLoaded(html_doc, &self.state);
+        try HTMLDocument.documentIsLoaded(html_doc, self);
 
         // eval async scripts.
         for (async_scripts.items) |script| {
@@ -363,7 +372,7 @@ pub const Page = struct {
             try parser.documentHTMLSetCurrentScript(html_doc, null);
         }
 
-        try HTMLDocument.documentIsComplete(html_doc, &self.state);
+        try HTMLDocument.documentIsComplete(html_doc, self);
 
         // dispatch window.load event
         const loadevt = try parser.eventCreate();
@@ -470,7 +479,7 @@ pub const Page = struct {
         errdefer request.deinit();
 
         var arr: std.ArrayListUnmanaged(u8) = .{};
-        try self.state.cookie_jar.forRequest(&url.uri, arr.writer(self.arena), opts);
+        try self.cookie_jar.forRequest(&url.uri, arr.writer(self.arena), opts);
 
         if (arr.items.len > 0) {
             try request.addHeader("Cookie", arr.items, .{});
@@ -534,126 +543,145 @@ pub const Page = struct {
                     .session = self.session,
                     .href = try arena.dupe(u8, href),
                 };
-                _ = try self.state.loop.timeout(0, &navi.navigate_node);
+                _ = try self.loop.timeout(0, &navi.navigate_node);
             },
             else => {},
         }
     }
 
-    const DelayedNavigation = struct {
-        navigate_node: Loop.CallbackNode = .{ .func = DelayedNavigation.delayNavigate },
-        session: *Session,
-        href: []const u8,
-
-        fn delayNavigate(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
-            _ = repeat_delay;
-            const self: *DelayedNavigation = @fieldParentPtr("navigate_node", node);
-            self.session.pageNavigate(self.href) catch |err| {
-                // TODO: should we trigger a specific event here?
-                log.err(.page, "delayed navigation error", .{ .err = err });
-            };
+    pub fn getOrCreateNodeWrapper(self: *Page, comptime T: type, node: *parser.Node) !*T {
+        if (try self.getNodeWrapper(T, node)) |wrap| {
+            return wrap;
         }
+
+        const wrap = try self.arena.create(T);
+        wrap.* = T{};
+
+        parser.nodeSetEmbedderData(node, wrap);
+        return wrap;
+    }
+
+    pub fn getNodeWrapper(_: *Page, comptime T: type, node: *parser.Node) !?*T {
+        if (parser.nodeGetEmbedderData(node)) |wrap| {
+            return @alignCast(@ptrCast(wrap));
+        }
+        return null;
+    }
+};
+
+const DelayedNavigation = struct {
+    navigate_node: Loop.CallbackNode = .{ .func = DelayedNavigation.delay_navigate },
+    session: *Session,
+    href: []const u8,
+
+    fn delay_navigate(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
+        _ = repeat_delay;
+        const self: *DelayedNavigation = @fieldParentPtr("navigate_node", node);
+        self.session.pageNavigate(self.href) catch |err| {
+            // TODO: should we trigger a specific event here?
+            log.err(.page, "delayed navigation error", .{ .err = err });
+        };
+    }
+};
+
+const Script = struct {
+    kind: Kind,
+    is_async: bool,
+    is_defer: bool,
+    src: ?[]const u8,
+    element: *parser.Element,
+    // The javascript  to load after we successfully load the script
+    onload: ?[]const u8,
+
+    // The javascript to load if we have an error executing the script
+    // For now, we ignore this, since we still have a lot of errors that we
+    // shouldn't
+    //onerror: ?[]const u8,
+
+    const Kind = enum {
+        module,
+        javascript,
     };
 
-    const Script = struct {
-        kind: Kind,
-        is_async: bool,
-        is_defer: bool,
-        src: ?[]const u8,
-        element: *parser.Element,
-        // The javascript  to load after we successfully load the script
-        onload: ?[]const u8,
-
-        // The javascript to load if we have an error executing the script
-        // For now, we ignore this, since we still have a lot of errors that we
-        // shouldn't
-        //onerror: ?[]const u8,
-
-        const Kind = enum {
-            module,
-            javascript,
-        };
-
-        fn init(e: *parser.Element) !?Script {
-            // ignore non-script tags
-            const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(e)));
-            if (tag != .script) {
-                return null;
-            }
-
-            if (try parser.elementGetAttribute(e, "nomodule") != null) {
-                // these scripts should only be loaded if we don't support modules
-                // but since we do support modules, we can just skip them.
-                return null;
-            }
-
-            const kind = parseKind(try parser.elementGetAttribute(e, "type")) orelse {
-                return null;
-            };
-
-            return .{
-                .kind = kind,
-                .element = e,
-                .src = try parser.elementGetAttribute(e, "src"),
-                .onload = try parser.elementGetAttribute(e, "onload"),
-                .is_async = try parser.elementGetAttribute(e, "async") != null,
-                .is_defer = try parser.elementGetAttribute(e, "defer") != null,
-            };
-        }
-
-        // > type
-        // > Attribute is not set (default), an empty string, or a JavaScript MIME
-        // > type indicates that the script is a "classic script", containing
-        // > JavaScript code.
-        // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#attribute_is_not_set_default_an_empty_string_or_a_javascript_mime_type
-        fn parseKind(script_type_: ?[]const u8) ?Kind {
-            const script_type = script_type_ orelse return .javascript;
-            if (script_type.len == 0) {
-                return .javascript;
-            }
-
-            if (std.mem.eql(u8, script_type, "application/javascript")) return .javascript;
-            if (std.mem.eql(u8, script_type, "text/javascript")) return .javascript;
-            if (std.mem.eql(u8, script_type, "module")) return .module;
-
+    fn init(e: *parser.Element) !?Script {
+        // ignore non-script tags
+        const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(e)));
+        if (tag != .script) {
             return null;
         }
 
-        fn eval(self: *const Script, page: *Page, body: []const u8) !void {
-            var try_catch: Env.TryCatch = undefined;
-            try_catch.init(page.scope);
-            defer try_catch.deinit();
+        if (try parser.elementGetAttribute(e, "nomodule") != null) {
+            // these scripts should only be loaded if we don't support modules
+            // but since we do support modules, we can just skip them.
+            return null;
+        }
 
-            const src = self.src orelse "inline";
-            const res = switch (self.kind) {
-                .javascript => page.scope.exec(body, src),
-                .module => blk: {
-                    switch (try page.scope.module(body, src)) {
-                        .value => |v| break :blk v,
-                        .exception => |e| {
-                            log.warn(.page, "eval module", .{ .src = src, .err = try e.exception(page.arena) });
-                            return error.JsErr;
-                        },
-                    }
-                },
-            } catch {
+        const kind = parseKind(try parser.elementGetAttribute(e, "type")) orelse {
+            return null;
+        };
+
+        return .{
+            .kind = kind,
+            .element = e,
+            .src = try parser.elementGetAttribute(e, "src"),
+            .onload = try parser.elementGetAttribute(e, "onload"),
+            .is_async = try parser.elementGetAttribute(e, "async") != null,
+            .is_defer = try parser.elementGetAttribute(e, "defer") != null,
+        };
+    }
+
+    // > type
+    // > Attribute is not set (default), an empty string, or a JavaScript MIME
+    // > type indicates that the script is a "classic script", containing
+    // > JavaScript code.
+    // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#attribute_is_not_set_default_an_empty_string_or_a_javascript_mime_type
+    fn parseKind(script_type_: ?[]const u8) ?Kind {
+        const script_type = script_type_ orelse return .javascript;
+        if (script_type.len == 0) {
+            return .javascript;
+        }
+
+        if (std.mem.eql(u8, script_type, "application/javascript")) return .javascript;
+        if (std.mem.eql(u8, script_type, "text/javascript")) return .javascript;
+        if (std.mem.eql(u8, script_type, "module")) return .module;
+
+        return null;
+    }
+
+    fn eval(self: *const Script, page: *Page, body: []const u8) !void {
+        var try_catch: Env.TryCatch = undefined;
+        try_catch.init(page.scope);
+        defer try_catch.deinit();
+
+        const src = self.src orelse "inline";
+        const res = switch (self.kind) {
+            .javascript => page.scope.exec(body, src),
+            .module => blk: {
+                switch (try page.scope.module(body, src)) {
+                    .value => |v| break :blk v,
+                    .exception => |e| {
+                        log.warn(.page, "eval module", .{ .src = src, .err = try e.exception(page.arena) });
+                        return error.JsErr;
+                    },
+                }
+            },
+        } catch {
+            if (try try_catch.err(page.arena)) |msg| {
+                log.warn(.page, "eval script", .{ .src = src, .err = msg });
+            }
+            return error.JsErr;
+        };
+        _ = res;
+
+        if (self.onload) |onload| {
+            _ = page.scope.exec(onload, "script_on_load") catch {
                 if (try try_catch.err(page.arena)) |msg| {
-                    log.warn(.page, "eval script", .{ .src = src, .err = msg });
+                    log.warn(.page, "eval onload", .{ .src = src, .err = msg });
                 }
                 return error.JsErr;
             };
-            _ = res;
-
-            if (self.onload) |onload| {
-                _ = page.scope.exec(onload, "script_on_load") catch {
-                    if (try try_catch.err(page.arena)) |msg| {
-                        log.warn(.page, "eval onload", .{ .src = src, .err = msg });
-                    }
-                    return error.JsErr;
-                };
-            }
         }
-    };
+    }
 };
 
 pub const NavigateReason = enum {

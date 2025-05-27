@@ -22,7 +22,7 @@ const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 const generate = @import("../../runtime/generate.zig");
 
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 const EventTarget = @import("event_target.zig").EventTarget;
 
 // DOM
@@ -278,8 +278,8 @@ pub const Node = struct {
         return try parser.nodeHasChildNodes(self);
     }
 
-    pub fn get_childNodes(self: *parser.Node, state: *SessionState) !NodeList {
-        const allocator = state.arena;
+    pub fn get_childNodes(self: *parser.Node, page: *Page) !NodeList {
+        const allocator = page.arena;
         var list: NodeList = .{};
 
         var n = try parser.nodeFirstChild(self) orelse return list;

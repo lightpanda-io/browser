@@ -113,10 +113,10 @@ fn run(arena: Allocator, test_file: []const u8, loader: *FileLoader, err_out: *?
     });
     defer runner.deinit();
 
-    try polyfill.load(arena, runner.scope);
+    try polyfill.load(arena, runner.page.scope);
 
     // loop over the scripts.
-    const doc = parser.documentHTMLToDocument(runner.state.window.document);
+    const doc = parser.documentHTMLToDocument(runner.page.window.document);
     const scripts = try parser.documentGetElementsByTagName(doc, "script");
     const script_count = try parser.nodeListLength(scripts);
     for (0..script_count) |i| {
@@ -147,7 +147,7 @@ fn run(arena: Allocator, test_file: []const u8, loader: *FileLoader, err_out: *?
 
         try parser.eventInit(loadevt, "load", .{});
         _ = try parser.eventTargetDispatchEvent(
-            parser.toEventTarget(@TypeOf(runner.window), &runner.window),
+            parser.toEventTarget(@TypeOf(runner.page.window), &runner.page.window),
             loadevt,
         );
     }
@@ -155,9 +155,9 @@ fn run(arena: Allocator, test_file: []const u8, loader: *FileLoader, err_out: *?
     {
         // wait for all async executions
         var try_catch: Env.TryCatch = undefined;
-        try_catch.init(runner.scope);
+        try_catch.init(runner.page.scope);
         defer try_catch.deinit();
-        try runner.loop.run();
+        try runner.page.loop.run();
 
         if (try_catch.hasCaught()) {
             err_out.* = (try try_catch.err(arena)) orelse "unknwon error";

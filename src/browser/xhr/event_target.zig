@@ -25,7 +25,7 @@ const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const EventHandler = @import("../events/event.zig").EventHandler;
 
 const parser = @import("../netsurf.zig");
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 
 pub const XMLHttpRequestEventTarget = struct {
     pub const prototype = *EventTarget;
@@ -86,34 +86,34 @@ pub const XMLHttpRequestEventTarget = struct {
         return self.onloadend_cbk;
     }
 
-    pub fn set_onloadstart(self: *XMLHttpRequestEventTarget, handler: Function, state: *SessionState) !void {
+    pub fn set_onloadstart(self: *XMLHttpRequestEventTarget, handler: Function, page: *Page) !void {
         if (self.onloadstart_cbk) |cbk| try self.unregister("loadstart", cbk.id);
-        try self.register(state.arena, "loadstart", handler);
+        try self.register(page.arena, "loadstart", handler);
         self.onloadstart_cbk = handler;
     }
-    pub fn set_onprogress(self: *XMLHttpRequestEventTarget, handler: Function, state: *SessionState) !void {
+    pub fn set_onprogress(self: *XMLHttpRequestEventTarget, handler: Function, page: *Page) !void {
         if (self.onprogress_cbk) |cbk| try self.unregister("progress", cbk.id);
-        try self.register(state.arena, "progress", handler);
+        try self.register(page.arena, "progress", handler);
         self.onprogress_cbk = handler;
     }
-    pub fn set_onabort(self: *XMLHttpRequestEventTarget, handler: Function, state: *SessionState) !void {
+    pub fn set_onabort(self: *XMLHttpRequestEventTarget, handler: Function, page: *Page) !void {
         if (self.onabort_cbk) |cbk| try self.unregister("abort", cbk.id);
-        try self.register(state.arena, "abort", handler);
+        try self.register(page.arena, "abort", handler);
         self.onabort_cbk = handler;
     }
-    pub fn set_onload(self: *XMLHttpRequestEventTarget, handler: Function, state: *SessionState) !void {
+    pub fn set_onload(self: *XMLHttpRequestEventTarget, handler: Function, page: *Page) !void {
         if (self.onload_cbk) |cbk| try self.unregister("load", cbk.id);
-        try self.register(state.arena, "load", handler);
+        try self.register(page.arena, "load", handler);
         self.onload_cbk = handler;
     }
-    pub fn set_ontimeout(self: *XMLHttpRequestEventTarget, handler: Function, state: *SessionState) !void {
+    pub fn set_ontimeout(self: *XMLHttpRequestEventTarget, handler: Function, page: *Page) !void {
         if (self.ontimeout_cbk) |cbk| try self.unregister("timeout", cbk.id);
-        try self.register(state.arena, "timeout", handler);
+        try self.register(page.arena, "timeout", handler);
         self.ontimeout_cbk = handler;
     }
-    pub fn set_onloadend(self: *XMLHttpRequestEventTarget, handler: Function, state: *SessionState) !void {
+    pub fn set_onloadend(self: *XMLHttpRequestEventTarget, handler: Function, page: *Page) !void {
         if (self.onloadend_cbk) |cbk| try self.unregister("loadend", cbk.id);
-        try self.register(state.arena, "loadend", handler);
+        try self.register(page.arena, "loadend", handler);
         self.onloadend_cbk = handler;
     }
 };

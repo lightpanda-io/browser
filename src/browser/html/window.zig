@@ -21,7 +21,7 @@ const std = @import("std");
 const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 const Function = @import("../env.zig").Function;
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 const Loop = @import("../../runtime/loop.zig").Loop;
 
 const Navigator = @import("navigator.zig").Navigator;
@@ -130,15 +130,15 @@ pub const Window = struct {
     }
 
     //  The interior height of the window in pixels, including the height of the horizontal scroll bar, if present.
-    pub fn get_innerHeight(_: *Window, state: *SessionState) u32 {
+    pub fn get_innerHeight(_: *Window, page: *Page) u32 {
         // We do not have scrollbars or padding so this is the same as Element.clientHeight
-        return state.renderer.height();
+        return page.renderer.height();
     }
 
     // The interior width of the window in pixels. That includes the width of the vertical scroll bar, if one is present.
-    pub fn get_innerWidth(_: *Window, state: *SessionState) u32 {
+    pub fn get_innerWidth(_: *Window, page: *Page) u32 {
         // We do not have scrollbars or padding so this is the same as Element.clientWidth
-        return state.renderer.width();
+        return page.renderer.width();
     }
 
     pub fn get_name(self: *Window) []const u8 {
@@ -182,40 +182,40 @@ pub const Window = struct {
     }
 
     // TODO handle callback arguments.
-    pub fn _setTimeout(self: *Window, cbk: Function, delay: ?u32, state: *SessionState) !u32 {
-        return self.createTimeout(cbk, delay, state, false);
+    pub fn _setTimeout(self: *Window, cbk: Function, delay: ?u32, page: *Page) !u32 {
+        return self.createTimeout(cbk, delay, page, false);
     }
 
     // TODO handle callback arguments.
-    pub fn _setInterval(self: *Window, cbk: Function, delay: ?u32, state: *SessionState) !u32 {
-        return self.createTimeout(cbk, delay, state, true);
+    pub fn _setInterval(self: *Window, cbk: Function, delay: ?u32, page: *Page) !u32 {
+        return self.createTimeout(cbk, delay, page, true);
     }
 
-    pub fn _clearTimeout(self: *Window, id: u32, state: *SessionState) !void {
+    pub fn _clearTimeout(self: *Window, id: u32, page: *Page) !void {
         const kv = self.timers.fetchRemove(id) orelse return;
-        try state.loop.cancel(kv.value.loop_id);
+        try page.loop.cancel(kv.value.loop_id);
     }
 
-    pub fn _clearInterval(self: *Window, id: u32, state: *SessionState) !void {
+    pub fn _clearInterval(self: *Window, id: u32, page: *Page) !void {
         const kv = self.timers.fetchRemove(id) orelse return;
-        try state.loop.cancel(kv.value.loop_id);
+        try page.loop.cancel(kv.value.loop_id);
     }
 
-    pub fn _matchMedia(_: *const Window, media: []const u8, state: *SessionState) !MediaQueryList {
+    pub fn _matchMedia(_: *const Window, media: []const u8, page: *Page) !MediaQueryList {
         return .{
             .matches = false, // TODO?
-            .media = try state.arena.dupe(u8, media),
+            .media = try page.arena.dupe(u8, media),
         };
     }
 
-    fn createTimeout(self: *Window, cbk: Function, delay_: ?u32, state: *SessionState, comptime repeat: bool) !u32 {
+    fn createTimeout(self: *Window, cbk: Function, delay_: ?u32, page: *Page, comptime repeat: bool) !u32 {
         if (self.timers.count() > 512) {
             return error.TooManyTimeout;
         }
         const timer_id = self.timer_id +% 1;
         self.timer_id = timer_id;
 
-        const arena = state.arena;
+        const arena = page.arena;
 
         const gop = try self.timers.getOrPut(arena, timer_id);
         if (gop.found_existing) {
@@ -235,7 +235,7 @@ pub const Window = struct {
             .node = .{ .func = TimerCallback.run },
             .repeat = if (repeat) delay else null,
         };
-        callback.loop_id = try state.loop.timeout(delay, &callback.node);
+        callback.loop_id = try page.loop.timeout(delay, &callback.node);
 
         gop.value_ptr.* = callback;
         return timer_id;

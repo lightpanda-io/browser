@@ -231,7 +231,7 @@ fn areCookiesEqual(a: *const Cookie, b: *const Cookie) bool {
 
 fn areSameSite(origin_uri_: ?*const std.Uri, target_host: []const u8) !bool {
     const origin_uri = origin_uri_ orelse return true;
-    const origin_host = (origin_uri.host orelse return error.InvalidURI).percent_encoded;
+    const origin_host = (origin_uri.host orelse return error.InvalidURI333).percent_encoded;
 
     // common case
     if (std.mem.eql(u8, target_host, origin_host)) {

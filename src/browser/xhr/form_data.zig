@@ -23,7 +23,7 @@ const Allocator = std.mem.Allocator;
 const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 const iterator = @import("../iterator/iterator.zig");
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 
 pub const Interfaces = .{
     FormData,
@@ -53,19 +53,19 @@ pub const Interfaces = .{
 pub const FormData = struct {
     entries: std.ArrayListUnmanaged(Entry),
 
-    pub fn constructor(form_: ?*parser.Form, submitter_: ?*parser.ElementHTML, state: *SessionState) !FormData {
+    pub fn constructor(form_: ?*parser.Form, submitter_: ?*parser.ElementHTML, page: *Page) !FormData {
         const form = form_ orelse return .{ .entries = .empty };
-        return fromForm(form, submitter_, state, .{});
+        return fromForm(form, submitter_, page, .{});
     }
 
     const FromFormOpts = struct {
-        // Uses the state.arena if null. This is needed for when we're handling
+        // Uses the page.arena if null. This is needed for when we're handling
         // form submission from the Page, and we want to capture the form within
         // the session's transfer_arena.
         allocator: ?Allocator = null,
     };
-    pub fn fromForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, state: *SessionState, opts: FromFormOpts) !FormData {
-        const entries = try collectForm(opts.allocator orelse state.arena, form, submitter_, state);
+    pub fn fromForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page, opts: FromFormOpts) !FormData {
+        const entries = try collectForm(opts.allocator orelse page.arena, form, submitter_, page);
         return .{ .entries = entries };
     }
 
@@ -74,8 +74,8 @@ pub const FormData = struct {
         return result.entry.value;
     }
 
-    pub fn _getAll(self: *const FormData, key: []const u8, state: *SessionState) ![][]const u8 {
-        const arena = state.call_arena;
+    pub fn _getAll(self: *const FormData, key: []const u8, page: *Page) ![][]const u8 {
+        const arena = page.call_arena;
         var arr: std.ArrayListUnmanaged([]const u8) = .empty;
         for (self.entries.items) |entry| {
             if (std.mem.eql(u8, key, entry.key)) {
@@ -91,15 +91,15 @@ pub const FormData = struct {
 
     // TODO: value should be a string or blog
     // TODO: another optional parameter for the filename
-    pub fn _set(self: *FormData, key: []const u8, value: []const u8, state: *SessionState) !void {
+    pub fn _set(self: *FormData, key: []const u8, value: []const u8, page: *Page) !void {
         self._delete(key);
-        return self._append(key, value, state);
+        return self._append(key, value, page);
     }
 
     // TODO: value should be a string or blog
     // TODO: another optional parameter for the filename
-    pub fn _append(self: *FormData, key: []const u8, value: []const u8, state: *SessionState) !void {
-        const arena = state.arena;
+    pub fn _append(self: *FormData, key: []const u8, value: []const u8, page: *Page) !void {
+        const arena = page.arena;
         return self.entries.append(arena, .{ .key = try arena.dupe(u8, key), .value = try arena.dupe(u8, value) });
     }
 
@@ -198,7 +198,7 @@ const EntryIterator = struct {
     }
 };
 
-fn collectForm(arena: Allocator, form: *parser.Form, submitter_: ?*parser.ElementHTML, state: *SessionState) !std.ArrayListUnmanaged(Entry) {
+fn collectForm(arena: Allocator, form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page) !std.ArrayListUnmanaged(Entry) {
     const collection = try parser.formGetCollection(form);
     const len = try parser.htmlCollectionGetLength(collection);
 
@@ -252,7 +252,7 @@ fn collectForm(arena: Allocator, form: *parser.Form, submitter_: ?*parser.Elemen
             },
             .select => {
                 const select: *parser.Select = @ptrCast(node);
-                try collectSelectValues(arena, select, name, &entries, state);
+                try collectSelectValues(arena, select, name, &entries, page);
             },
             .textarea => {
                 const textarea: *parser.TextArea = @ptrCast(node);
@@ -275,12 +275,12 @@ fn collectForm(arena: Allocator, form: *parser.Form, submitter_: ?*parser.Elemen
     return entries;
 }
 
-fn collectSelectValues(arena: Allocator, select: *parser.Select, name: []const u8, entries: *std.ArrayListUnmanaged(Entry), state: *SessionState) !void {
+fn collectSelectValues(arena: Allocator, select: *parser.Select, name: []const u8, entries: *std.ArrayListUnmanaged(Entry), page: *Page) !void {
     const HTMLSelectElement = @import("../html/select.zig").HTMLSelectElement;
 
     // Go through the HTMLSelectElement because it has specific logic for handling
     // the default selected option, which libdom doesn't properly handle
-    const selected_index = try HTMLSelectElement.get_selectedIndex(select, state);
+    const selected_index = try HTMLSelectElement.get_selectedIndex(select, page);
     if (selected_index == -1) {
         return;
     }
