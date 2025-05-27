@@ -1,7 +1,7 @@
 name: zig-fmt
 
 env:
-  ZIG_VERSION: 0.14.0
+  ZIG_VERSION: 0.14.1
 
 on:
   pull_request:
@@ -32,7 +32,7 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: mlugg/setup-zig@v1
+      - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
 

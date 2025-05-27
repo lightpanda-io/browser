@@ -21,7 +21,7 @@ const builtin = @import("builtin");
 
 /// Do not rename this constant. It is scanned by some scripts to determine
 /// which zig version to install.
-const recommended_zig_version = "0.14.0";
+const recommended_zig_version = "0.14.1";
 
 pub fn build(b: *std.Build) !void {
     switch (comptime builtin.zig_version.order(std.SemanticVersion.parse(recommended_zig_version) catch unreachable)) {
