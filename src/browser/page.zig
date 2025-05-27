@@ -83,7 +83,7 @@ pub const Page = struct {
 
     // Our JavaScript context for this specific page. This is what we use to
     // execute any JavaScript
-    scope: *Env.Scope,
+    main_context: *Env.Context,
 
     // For a Page we only create one HandleScope and keep it alive for the duration of the page.
     // If needed JS Locals' lifetimes can be reduced by layering on additional Scopes.
@@ -112,22 +112,22 @@ pub const Page = struct {
             .microtask_node = .{ .func = microtaskCallback },
             .window_clicked_event_node = .{ .func = windowClicked },
             .request_factory = browser.http_client.requestFactory(browser.notification),
-            .scope = undefined,
+            .main_context = undefined,
             .handle_scope = undefined,
             .module_map = .empty,
         };
 
-        self.scope = try session.executor.startScope(&self.window, self, self);
+        self.main_context = try session.executor.createContext(&self.window, self, self);
 
         // Start a scope (stackframe) for JS Local variables.
         Env.HandleScope.init(&self.handle_scope, browser.env.isolate);
         errdefer self.handle_scope.deinit();
 
-        self.scope.enter();
-        errdefer self.scope.exit();
+        self.main_context.enter();
+        errdefer self.main_context.exit();
 
         // load polyfills
-        try polyfill.load(self.arena, self.scope);
+        try polyfill.load(self.arena, self.main_context);
 
         _ = try session.browser.app.loop.timeout(1 * std.time.ns_per_ms, &self.microtask_node);
     }
@@ -169,7 +169,7 @@ pub const Page = struct {
 
     pub fn wait(self: *Page) !void {
         var try_catch: Env.TryCatch = undefined;
-        try_catch.init(self.scope);
+        try_catch.init(self.main_context);
         defer try_catch.deinit();
 
         try self.session.browser.app.loop.run();
@@ -664,14 +664,14 @@ const Script = struct {
 
     fn eval(self: *const Script, page: *Page, body: []const u8) !void {
         var try_catch: Env.TryCatch = undefined;
-        try_catch.init(page.scope);
+        try_catch.init(page.main_context); // Sjors: Is this always the main context?
         defer try_catch.deinit();
 
         const src = self.src orelse "inline";
         const res = switch (self.kind) {
-            .javascript => page.scope.exec(body, src),
+            .javascript => page.main_context.exec(body, src),
             .module => blk: {
-                switch (try page.scope.module(body, src)) {
+                switch (try page.main_context.module(body, src)) {
                     .value => |v| break :blk v,
                     .exception => |e| {
                         log.warn(.page, "eval module", .{ .src = src, .err = try e.exception(page.arena) });
@@ -688,7 +688,7 @@ const Script = struct {
         _ = res;
 
         if (self.onload) |onload| {
-            _ = page.scope.exec(onload, "script_on_load") catch {
+            _ = page.main_context.exec(onload, "script_on_load") catch {
                 if (try try_catch.err(page.arena)) |msg| {
                     log.warn(.page, "eval onload", .{ .src = src, .err = msg });
                 }

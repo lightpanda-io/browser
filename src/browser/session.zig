@@ -110,8 +110,8 @@ pub const Session = struct {
         // Reset all existing callbacks.
         self.browser.app.loop.reset();
 
-        self.executor.scope.?.exit();
-        self.executor.endScope();
+        self.executor.context.?.exit();
+        self.executor.destroyContext();
 
         self.page.?.handle_scope.deinit();
         self.page = null;
