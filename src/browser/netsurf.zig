@@ -615,7 +615,7 @@ pub fn eventTargetAddEventListener(
     typ: []const u8,
     node: *EventNode,
     capture: bool,
-) !void {
+) !*EventListener {
     const event_handler = struct {
         fn handle(event_: ?*Event, ptr_: ?*anyopaque) callconv(.C) void {
             const ptr = ptr_ orelse return;
@@ -634,6 +634,8 @@ pub fn eventTargetAddEventListener(
     const s = try strFromData(typ);
     const err = eventTargetVtable(et).add_event_listener.?(et, s, listener, capture);
     try DOMErr(err);
+
+    return listener.?;
 }
 
 pub fn eventTargetHasListener(

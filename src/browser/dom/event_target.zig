@@ -41,68 +41,14 @@ pub const EventTarget = struct {
 
     // JS funcs
     // --------
-
-    const AddEventListenerOpts = union(enum) {
-        opts: Opts,
-        capture: bool,
-
-        const Opts = struct {
-            capture: ?bool,
-            // We ignore this property. It seems to be largely used to help the
-            // browser make certain performance tweaks (i.e. the browser knows
-            // that the listener won't call preventDefault() and thus can safely
-            // run the default as needed).
-            passive: ?bool,
-            once: ?bool, // currently does nothing
-            signal: ?bool, // currently does nothing
-        };
-    };
-
     pub fn _addEventListener(
         self: *parser.EventTarget,
         typ: []const u8,
         listener: EventHandler.Listener,
-        opts_: ?AddEventListenerOpts,
+        opts: ?EventHandler.Opts,
         page: *Page,
     ) !void {
-        var capture = false;
-        if (opts_) |opts| {
-            switch (opts) {
-                .capture => |c| capture = c,
-                .opts => |o| {
-                    // Done this way so that, for common cases that _only_ set
-                    // capture, i.e. {captrue: true}, it works.
-                    // But for any case that sets any of the other flags, we
-                    // error. If we don't error, this function call would succeed
-                    // but the behavior might be wrong. At this point, it's
-                    // better to be explicit and error.
-                    if (o.once orelse false) return error.NotImplemented;
-                    if (o.signal orelse false) return error.NotImplemented;
-                    capture = o.capture orelse false;
-                },
-            }
-        }
-
-        const cbk = (try listener.callback(self)) orelse return;
-
-        // check if event target has already this listener
-        const lst = try parser.eventTargetHasListener(
-            self,
-            typ,
-            capture,
-            cbk.id,
-        );
-        if (lst != null) {
-            return;
-        }
-        const eh = try EventHandler.init(page.arena, cbk);
-
-        try parser.eventTargetAddEventListener(
-            self,
-            typ,
-            &eh.node,
-            capture,
-        );
+        _ = try EventHandler.register(page.arena, self, typ, listener, opts);
     }
 
     const RemoveEventListenerOpts = union(enum) {

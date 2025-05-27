@@ -48,17 +48,14 @@ pub const XMLHttpRequestEventTarget = struct {
     ) !?Function {
         const target = @as(*parser.EventTarget, @ptrCast(self));
 
-        const callback = (try listener.callback(target)) orelse return null;
-        const eh = try EventHandler.init(alloc, callback);
-        try parser.eventTargetAddEventListener(
-            target,
-            typ,
-            &eh.node,
-            false,
-        );
-
-        return callback;
+        // The only time this can return null if the listener is already
+        // registered. But before calling `register`, all of our functions
+        // remove any existing listener, so it should be impossible to get null
+        // from this function call.
+        const eh = (try EventHandler.register(alloc, target, typ, listener, null)) orelse unreachable;
+        return eh.callback;
     }
+
     fn unregister(self: *XMLHttpRequestEventTarget, typ: []const u8, cbk_id: usize) !void {
         const et = @as(*parser.EventTarget, @ptrCast(self));
         // check if event target has already this listener
