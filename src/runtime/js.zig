@@ -932,7 +932,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     },
                     .@"enum" => |e| {
                         switch (@typeInfo(e.tag_type)) {
-                            .int => return std.meta.intToEnum(T, try jsIntToZig(e.tag_type, js_value, self.context)),
+                            .int => return std.meta.intToEnum(T, try jsIntToZig(e.tag_type, js_value, self.v8_context)),
                             else => @compileError(named_function.full_name ++ " has an unsupported enum parameter type: " ++ @typeName(T)),
                         }
                     },
