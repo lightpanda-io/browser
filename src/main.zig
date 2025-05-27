@@ -40,9 +40,6 @@ pub fn main() !void {
         if (gpa.detectLeaks()) std.posix.exit(1);
     };
 
-    try log.init(alloc, .{});
-    defer log.deinit(alloc);
-
     run(alloc) catch |err| {
         log.fatal(.main, "exit", .{ .err = err });
         std.posix.exit(1);
@@ -422,7 +419,6 @@ test {
 var test_wg: std.Thread.WaitGroup = .{};
 test "tests:beforeAll" {
     try parser.init();
-    try log.init(std.testing.allocator, .{});
 
     test_wg.startMany(3);
     _ = try Platform.init();
