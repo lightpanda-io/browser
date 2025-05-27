@@ -321,7 +321,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // when the handle_scope is freed.
             // We also maintain our own "scope_arena" which allows us to have
             // all page related memory easily managed.
-            pub fn startScope(self: *ExecutionWorld, global: anytype, state: State, module_loader: anytype, enter: bool) !*Scope {
+            pub fn startScope(self: *ExecutionWorld, global: anytype, state: State, module_loader: anytype) !*Scope {
                 std.debug.assert(self.scope == null);
 
                 const ModuleLoader = switch (@typeInfo(@TypeOf(module_loader))) {
@@ -338,76 +338,63 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 const isolate = env.isolate;
                 const Global = @TypeOf(global.*);
 
-                var context: v8.Context = blk: {
-                    var temp_scope: v8.HandleScope = undefined;
-                    v8.HandleScope.init(&temp_scope, isolate);
-                    defer temp_scope.deinit();
+                // All locals created in this function are temporary
+                var temp_scope: v8.HandleScope = undefined;
+                v8.HandleScope.init(&temp_scope, isolate);
+                defer temp_scope.deinit();
 
-                    const js_global = v8.FunctionTemplate.initDefault(isolate);
-                    attachClass(Global, isolate, js_global);
+                const js_global = v8.FunctionTemplate.initDefault(isolate);
+                attachClass(Global, isolate, js_global);
 
-                    const global_template = js_global.getInstanceTemplate();
-                    global_template.setInternalFieldCount(1);
+                const global_template = js_global.getInstanceTemplate();
+                global_template.setInternalFieldCount(1);
 
-                    // All the FunctionTemplates that we created and setup in Env.init
-                    // are now going to get associated with our global instance.
-                    const templates = &self.env.templates;
-                    inline for (Types, 0..) |s, i| {
-                        const Struct = s.defaultValue().?;
-                        const class_name = v8.String.initUtf8(isolate, comptime classNameForStruct(Struct));
-                        global_template.set(class_name.toName(), templates[i], v8.PropertyAttribute.None);
-                    }
-
-                    // The global object (Window) has already been hooked into the v8
-                    // engine when the Env was initialized - like every other type.
-                    // But the V8 global is its own FunctionTemplate instance so even
-                    // though it's also a Window, we need to set the prototype for this
-                    // specific instance of the the Window.
-                    if (@hasDecl(Global, "prototype")) {
-                        const proto_type = Receiver(@typeInfo(Global.prototype).pointer.child);
-                        const proto_name = @typeName(proto_type);
-                        const proto_index = @field(TYPE_LOOKUP, proto_name).index;
-                        js_global.inherit(templates[proto_index]);
-                    }
-
-                    const context_local = v8.Context.init(isolate, global_template, null);
-                    const context = v8.Persistent(v8.Context).init(isolate, context_local).castToContext();
-                    context.enter();
-                    errdefer if (enter) context.exit();
-                    defer if (!enter) context.exit();
-
-                    // This shouldn't be necessary, but it is:
-                    // https://groups.google.com/g/v8-users/c/qAQQBmbi--8
-                    // TODO: see if newer V8 engines have a way around this.
-                    inline for (Types, 0..) |s, i| {
-                        const Struct = s.defaultValue().?;
-
-                        if (@hasDecl(Struct, "prototype")) {
-                            const proto_type = Receiver(@typeInfo(Struct.prototype).pointer.child);
-                            const proto_name = @typeName(proto_type);
-                            if (@hasField(TypeLookup, proto_name) == false) {
-                                @compileError("Type '" ++ @typeName(Struct) ++ "' defines an unknown prototype: " ++ proto_name);
-                            }
-
-                            const proto_index = @field(TYPE_LOOKUP, proto_name).index;
-                            const proto_obj = templates[proto_index].getFunction(context).toObject();
-
-                            const self_obj = templates[i].getFunction(context).toObject();
-                            _ = self_obj.setPrototype(context, proto_obj);
-                        }
-                    }
-                    break :blk context;
-                };
-
-                // For a Page we only create one HandleScope, it is stored in the main World (enter==true). A page can have multple contexts, 1 for each World.
-                // The main Context/Scope that enters and holds the HandleScope should therefore always be created first. Following other worlds for this page
-                // like isolated Worlds, will thereby place their objects on the main page's HandleScope. Note: In the furure the number of context will multiply multiple frames support
-                var handle_scope: ?v8.HandleScope = null;
-                if (enter) {
-                    handle_scope = @as(v8.HandleScope, undefined);
-                    v8.HandleScope.init(&handle_scope.?, isolate);
+                // All the FunctionTemplates that we created and setup in Env.init
+                // are now going to get associated with our global instance.
+                const templates = &self.env.templates;
+                inline for (Types, 0..) |s, i| {
+                    const Struct = s.defaultValue().?;
+                    const class_name = v8.String.initUtf8(isolate, comptime classNameForStruct(Struct));
+                    global_template.set(class_name.toName(), templates[i], v8.PropertyAttribute.None);
                 }
-                errdefer if (enter) handle_scope.?.deinit();
+
+                // The global object (Window) has already been hooked into the v8
+                // engine when the Env was initialized - like every other type.
+                // But the V8 global is its own FunctionTemplate instance so even
+                // though it's also a Window, we need to set the prototype for this
+                // specific instance of the the Window.
+                if (@hasDecl(Global, "prototype")) {
+                    const proto_type = Receiver(@typeInfo(Global.prototype).pointer.child);
+                    const proto_name = @typeName(proto_type);
+                    const proto_index = @field(TYPE_LOOKUP, proto_name).index;
+                    js_global.inherit(templates[proto_index]);
+                }
+
+                const context_local = v8.Context.init(isolate, global_template, null);
+                const context = v8.Persistent(v8.Context).init(isolate, context_local).castToContext();
+                context.enter();
+                defer context.exit();
+
+                // This shouldn't be necessary, but it is:
+                // https://groups.google.com/g/v8-users/c/qAQQBmbi--8
+                // TODO: see if newer V8 engines have a way around this.
+                inline for (Types, 0..) |s, i| {
+                    const Struct = s.defaultValue().?;
+
+                    if (@hasDecl(Struct, "prototype")) {
+                        const proto_type = Receiver(@typeInfo(Struct.prototype).pointer.child);
+                        const proto_name = @typeName(proto_type);
+                        if (@hasField(TypeLookup, proto_name) == false) {
+                            @compileError("Type '" ++ @typeName(Struct) ++ "' defines an unknown prototype: " ++ proto_name);
+                        }
+
+                        const proto_index = @field(TYPE_LOOKUP, proto_name).index;
+                        const proto_obj = templates[proto_index].getFunction(context).toObject();
+
+                        const self_obj = templates[i].getFunction(context).toObject();
+                        _ = self_obj.setPrototype(context, proto_obj);
+                    }
+                }
 
                 {
                     // If we want to overwrite the built-in console, we have to
@@ -424,7 +411,6 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     .isolate = isolate,
                     .context = context,
                     .templates = &env.templates,
-                    .handle_scope = handle_scope,
                     .call_arena = self.call_arena.allocator(),
                     .scope_arena = self.scope_arena.allocator(),
                     .module_loader = .{
@@ -477,13 +463,14 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
         const PersistentObject = v8.Persistent(v8.Object);
         const PersistentFunction = v8.Persistent(v8.Function);
 
+        pub const HandleScope = v8.HandleScope;
+
         // Loosely maps to a Browser Page.
         pub const Scope = struct {
             state: State,
             isolate: v8.Isolate,
             // This context is a persistent object. The persistent needs to be recovered and reset.
             context: v8.Context,
-            handle_scope: ?v8.HandleScope,
 
             // references the Env.template array
             templates: []v8.FunctionTemplate,
@@ -568,12 +555,17 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 for (self.callbacks.items) |*cb| {
                     cb.deinit();
                 }
-                if (self.handle_scope) |*scope| {
-                    scope.deinit();
-                    self.context.exit();
-                }
+
                 var presistent_context = v8.Persistent(v8.Context).recoverCast(self.context);
                 presistent_context.deinit();
+            }
+
+            pub fn enter(self: *Scope) void {
+                self.context.enter();
+            }
+
+            pub fn exit(self: *Scope) void {
+                self.context.exit();
             }
 
             fn trackCallback(self: *Scope, pf: PersistentFunction) !void {
