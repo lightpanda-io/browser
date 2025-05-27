@@ -5,11 +5,11 @@ const build_config = @import("build_config");
 const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
 
+const log = @import("../log.zig");
 const App = @import("../app.zig").App;
 const telemetry = @import("telemetry.zig");
 const HttpClient = @import("../http/client.zig").Client;
 
-const log = std.log.scoped(.telemetry);
 const URL = "https://telemetry.lightpanda.io";
 const MAX_BATCH_SIZE = 20;
 
@@ -83,7 +83,7 @@ pub const LightPanda = struct {
                 const b = self.collectBatch(&batch);
                 self.mutex.unlock();
                 self.postEvent(b, &arr) catch |err| {
-                    log.warn("Telementry reporting error: {}", .{err});
+                    log.warn(.telemetry, "post error", .{ .err = err });
                 };
                 self.mutex.lock();
             }
@@ -110,7 +110,7 @@ pub const LightPanda = struct {
         var res = try req.sendSync(.{});
         while (try res.next()) |_| {}
         if (res.header.status != 200) {
-            log.warn("server error status: {d}", .{res.header.status});
+            log.warn(.telemetry, "server error", .{ .status = res.header.status });
         }
     }
 

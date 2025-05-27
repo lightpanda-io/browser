@@ -21,17 +21,16 @@ const std = @import("std");
 const parser = @import("../netsurf.zig");
 const SessionState = @import("../env.zig").SessionState;
 
-const collection = @import("html_collection.zig");
-const dump = @import("../dump.zig");
 const css = @import("css.zig");
+const log = @import("../../log.zig");
+const dump = @import("../dump.zig");
+const collection = @import("html_collection.zig");
 
 const Node = @import("node.zig").Node;
 const Walker = @import("walker.zig").WalkerDepthFirst;
 const NodeList = @import("nodelist.zig").NodeList;
 const HTMLElem = @import("../html/elements.zig");
 pub const Union = @import("../html/elements.zig").Union;
-
-const log = std.log.scoped(.element);
 
 // WEB IDL https://dom.spec.whatwg.org/#element
 pub const Element = struct {
@@ -148,7 +147,7 @@ pub const Element = struct {
         while (true) {
             if (try select.match(current)) {
                 if (!current.isElement()) {
-                    log.err("closest: is not an element: {s}", .{try current.tag()});
+                    log.err(.element, "closest invalid type", .{ .type = try current.tag() });
                     return null;
                 }
                 return parser.nodeToElement(current.node);

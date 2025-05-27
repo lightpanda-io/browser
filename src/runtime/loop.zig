@@ -20,9 +20,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const MemoryPool = std.heap.MemoryPool;
 
+const log = @import("../log.zig");
 pub const IO = @import("tigerbeetle-io").IO;
-
-const log = std.log.scoped(.loop);
 
 // SingleThreaded I/O Loop based on Tigerbeetle io_uring loop.
 // On Linux it's using io_uring.
@@ -81,7 +80,7 @@ pub const Loop = struct {
         // contexts are correcly free.
         while (self.eventsNb() > 0) {
             self.io.run_for_ns(10 * std.time.ns_per_ms) catch |err| {
-                log.err("deinit run tail events: {any}", .{err});
+                log.err(.loop, "deinit", .{ .err = err });
                 break;
             };
         }
@@ -176,7 +175,7 @@ pub const Loop = struct {
         result catch |err| {
             switch (err) {
                 error.Canceled => {},
-                else => log.err("timeout callback: {any}", .{err}),
+                else => log.err(.loop, "timeout callback error", .{ .err = err }),
             }
             return;
         };

@@ -20,12 +20,11 @@ const std = @import("std");
 const builtin = @import("builtin");
 const v8 = @import("v8");
 
+const log = @import("../log.zig");
 const SubType = @import("subtype.zig").SubType;
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
-
-const log = std.log.scoped(.js);
 
 const CALL_ARENA_RETAIN = 1024 * 16;
 const SCOPE_ARENA_RETAIN = 1024 * 64;
@@ -1189,17 +1188,14 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
                 const self: *Scope = @ptrFromInt(context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
 
-                var buf: [1024]u8 = undefined;
-                var fba = std.heap.FixedBufferAllocator.init(&buf);
-
                 // build the specifier value.
                 const specifier = valueToString(
-                    fba.allocator(),
+                    self.call_arena,
                     .{ .handle = c_specifier.? },
                     self.isolate,
                     context,
                 ) catch |e| {
-                    log.err("resolveModuleCallback: get ref str: {any}", .{e});
+                    log.err(.js, "resolve module specifier", .{ .err = e });
                     return null;
                 };
 
@@ -1207,12 +1203,12 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 // const referrer_module = if (referrer) |ref| v8.Module{ .handle = ref } else null;
                 const module_loader = self.module_loader;
                 const source = module_loader.func(module_loader.ptr, specifier) catch |err| {
-                    log.err("fetchModuleSource for '{s}' fetch error: {}", .{ specifier, err });
+                    log.err(.js, "resolve module fetch error", .{ .specifier = specifier, .err = err });
                     return null;
                 } orelse return null;
 
                 const m = compileModule(self.isolate, source, specifier) catch |err| {
-                    log.err("fetchModuleSource for '{s}' compile error: {}", .{ specifier, err });
+                    log.err(.js, "resolve module compile error", .{ .specifier = specifier, .err = err });
                     return null;
                 };
                 return m.handle;
@@ -1875,7 +1871,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         const scope: *Scope = @ptrFromInt(context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
 
                         const property = valueToString(scope.call_arena, .{ .handle = c_name.? }, isolate, context) catch "???";
-                        log.debug("unknwon named property {s}.{s}", .{ @typeName(Struct), property });
+                        log.debug(.js, "unkown named property", .{ .@"struct" = @typeName(Struct), .property = property });
                         return v8.Intercepted.No;
                     }
                 }.callback,
@@ -2605,9 +2601,13 @@ fn Caller(comptime E: type, comptime State: type) type {
             const last_js_parameter = params_to_map.len - 1;
             var is_variadic = false;
 
-            errdefer |err| if (std.log.logEnabled(.debug, .js)) {
+            errdefer |err| if (log.enabled(.js, .debug)) {
                 const args_dump = self.dumpFunctionArgs(info) catch "failed to serialize args";
-                log.debug("Failed to call '{s}'. Error: {}.\nArgs:\n{s}", .{ named_function.full_name, err, args_dump });
+                log.debug(.js, "function call error", .{
+                    .name = named_function.full_name,
+                    .err = err,
+                    .args = args_dump,
+                });
             };
 
             {

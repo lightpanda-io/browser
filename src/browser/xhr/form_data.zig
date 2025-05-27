@@ -20,11 +20,10 @@ const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 
+const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 const iterator = @import("../iterator/iterator.zig");
 const SessionState = @import("../env.zig").SessionState;
-
-const log = std.log.scoped(.form_data);
 
 pub const Interfaces = .{
     FormData,
@@ -267,7 +266,7 @@ fn collectForm(arena: Allocator, form: *parser.Form, submitter_: ?*parser.Elemen
                 }
             },
             else => {
-                log.warn("unsupported form element: {s}\n", .{@tagName(tag)});
+                log.warn(.form_data, "unsupported element", .{ .tag = @tagName(tag) });
                 continue;
             },
         }

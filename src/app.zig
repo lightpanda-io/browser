@@ -1,12 +1,11 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const log = @import("log.zig");
 const Loop = @import("runtime/loop.zig").Loop;
 const HttpClient = @import("http/client.zig").Client;
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
 const Notification = @import("notification.zig").Notification;
-
-const log = std.log.scoped(.app);
 
 // Container for global state / objects that various parts of the system
 // might need.
@@ -84,7 +83,7 @@ fn getAndMakeAppDir(allocator: Allocator) ?[]const u8 {
         return allocator.dupe(u8, "/tmp") catch unreachable;
     }
     const app_dir_path = std.fs.getAppDataDir(allocator, "lightpanda") catch |err| {
-        log.warn("failed to get lightpanda data dir: {}", .{err});
+        log.warn(.app, "get data dir", .{ .err = err });
         return null;
     };
 
@@ -92,7 +91,7 @@ fn getAndMakeAppDir(allocator: Allocator) ?[]const u8 {
         error.PathAlreadyExists => return app_dir_path,
         else => {
             allocator.free(app_dir_path);
-            log.warn("failed to create lightpanda data dir: {}", .{err});
+            log.warn(.app, "create data dir", .{ .err = err, .path = app_dir_path });
             return null;
         },
     };

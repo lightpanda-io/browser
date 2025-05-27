@@ -27,11 +27,10 @@ const MemoryPool = std.heap.MemoryPool;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
 const tls = @import("tls");
+const log = @import("../log.zig");
 const IO = @import("../runtime/loop.zig").IO;
 const Loop = @import("../runtime/loop.zig").Loop;
 const Notification = @import("../notification.zig").Notification;
-
-const log = std.log.scoped(.http_client);
 
 // We might need to peek at the body to try and sniff the content-type.
 // While we only need a few bytes, in most cases we need to ignore leading
@@ -352,7 +351,7 @@ pub const Request = struct {
 
         self._client.connection_manager.keepIdle(connection) catch |err| {
             self.destroyConnection(connection);
-            log.err("failed to release connection to pool: {}", .{err});
+            log.err(.http_client, "release to pool error", .{ .err = err });
         };
     }
 
@@ -457,7 +456,12 @@ pub const Request = struct {
 
         var handler = SyncHandler{ .request = self };
         return handler.send() catch |err| {
-            log.warn("HTTP error: {any} ({any} {any} {d})", .{ err, self.method, self.request_uri, self._redirect_count });
+            log.warn(.http_client, "sync error", .{
+                .err = err,
+                .method = self.method,
+                .url = self.request_uri,
+                .redirects = self._redirect_count,
+            });
             return err;
         };
     }
@@ -526,7 +530,7 @@ pub const Request = struct {
                     .host = self._connect_host,
                     .root_ca = self._client.root_ca,
                     .insecure_skip_verify = self._tls_verify_host == false,
-                    .key_log_callback = tls.config.key_log.callback,
+                    // .key_log_callback = tls.config.key_log.callback,
                 }),
             };
 
@@ -603,7 +607,7 @@ pub const Request = struct {
             // to a GET.
             self.method = .GET;
         }
-        log.info("redirecting to: {any} {any}", .{ self.method, self.request_uri });
+        log.debug(.http_client, "redirecting", .{ .method = self.method, .url = self.request_uri });
 
         if (self.body != null and self.method == .GET) {
             // If we have a body and the method is a GET, then we must be following
@@ -1076,7 +1080,12 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
         }
 
         fn handleError(self: *Self, comptime msg: []const u8, err: anyerror) void {
-            log.err(msg ++ ": {any} ({any} {any})", .{ err, self.request.method, self.request.request_uri });
+            log.err(.http_client, msg, .{
+                .err = err,
+                .method = self.request.method,
+                .url = self.request.request_uri,
+            });
+
             self.handler.onHttpResponse(err) catch {};
             // just to be safe
             self.request._keepalive = false;
@@ -1297,7 +1306,10 @@ const SyncHandler = struct {
             // See CompressedReader for an explanation. This isn't great code. Sorry.
             if (reader.response.get("content-encoding")) |ce| {
                 if (std.ascii.eqlIgnoreCase(ce, "gzip") == false) {
-                    log.warn("unsupported content encoding '{s}' for: {}", .{ ce, request.request_uri });
+                    log.warn(.http_client, "unsupported content encoding", .{
+                        .content_encoding = ce,
+                        .uri = request.request_uri,
+                    });
                     return error.UnsupportedContentEncoding;
                 }
 

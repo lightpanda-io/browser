@@ -3,11 +3,10 @@ const Uri = std.Uri;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
+const log = @import("../../log.zig");
 const http = @import("../../http/client.zig");
 const DateTime = @import("../../datetime.zig").DateTime;
 const public_suffix_list = @import("../../data/public_suffix_list.zig").lookup;
-
-const log = std.log.scoped(.cookie);
 
 pub const LookupOpts = struct {
     request_time: ?i64 = null,
@@ -156,7 +155,7 @@ pub const Jar = struct {
         var it = header.iterate("set-cookie");
         while (it.next()) |set_cookie| {
             const c = Cookie.parse(self.allocator, uri, set_cookie) catch |err| {
-                log.warn("Couldn't parse cookie '{s}': {}\n", .{ set_cookie, err });
+                log.warn(.cookie, "parse failed", .{ .raw = set_cookie, .err = err });
                 continue;
             };
             try self.add(c, now);

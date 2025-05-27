@@ -19,10 +19,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const log = @import("../../log.zig");
 const Allocator = std.mem.Allocator;
 const Env = @import("../env.zig").Env;
-
-const log = std.log.scoped(.polyfill);
 
 const modules = [_]struct {
     name: []const u8,
@@ -37,18 +36,12 @@ pub fn load(allocator: Allocator, scope: *Env.Scope) !void {
     defer try_catch.deinit();
 
     for (modules) |m| {
-        const res = scope.exec(m.source, m.name) catch |err| {
+        _ = scope.exec(m.source, m.name) catch |err| {
             if (try try_catch.err(allocator)) |msg| {
                 defer allocator.free(msg);
-                log.err("load {s}: {s}", .{ m.name, msg });
+                log.err(.polyfill, "exec error", .{ .name = m.name, .err = msg });
             }
             return err;
         };
-
-        if (builtin.mode == .Debug) {
-            const msg = try res.toString(allocator);
-            defer allocator.free(msg);
-            log.debug("load {s}: {s}", .{ m.name, msg });
-        }
     }
 }

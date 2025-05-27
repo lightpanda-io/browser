@@ -20,6 +20,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const json = std.json;
 
+const log = @import("../log.zig");
 const App = @import("../app.zig").App;
 const Env = @import("../browser/env.zig").Env;
 const asUint = @import("../str/parser.zig").asUint;
@@ -29,8 +30,6 @@ const Page = @import("../browser/page.zig").Page;
 const Inspector = @import("../browser/env.zig").Env.Inspector;
 const Incrementing = @import("../id.zig").Incrementing;
 const Notification = @import("../notification.zig").Notification;
-
-const log = std.log.scoped(.cdp);
 
 pub const URL_BASE = "chrome://newtab/";
 pub const LOADER_ID = "LOADERID24DD2FD56CF1EF33C965C79C";
@@ -463,36 +462,25 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         }
 
         pub fn onInspectorResponse(ctx: *anyopaque, _: u32, msg: []const u8) void {
-            if (std.log.defaultLogEnabled(.debug)) {
-                // msg should be {"id":<id>,...
-                std.debug.assert(std.mem.startsWith(u8, msg, "{\"id\":"));
-
-                const id_end = std.mem.indexOfScalar(u8, msg, ',') orelse {
-                    log.warn("invalid inspector response message: {s}", .{msg});
-                    return;
-                };
-                const id = msg[6..id_end];
-                log.debug("Res (inspector) > id {s}", .{id});
-            }
             sendInspectorMessage(@alignCast(@ptrCast(ctx)), msg) catch |err| {
-                log.err("Failed to send inspector response: {any}", .{err});
+                log.err(.cdp, "send inspector response", .{ .err = err });
             };
         }
 
         pub fn onInspectorEvent(ctx: *anyopaque, msg: []const u8) void {
-            if (std.log.defaultLogEnabled(.debug)) {
+            if (log.enabled(.cdp, .debug)) {
                 // msg should be {"method":<method>,...
                 std.debug.assert(std.mem.startsWith(u8, msg, "{\"method\":"));
                 const method_end = std.mem.indexOfScalar(u8, msg, ',') orelse {
-                    log.warn("invalid inspector event message: {s}", .{msg});
+                    log.err(.cdp, "invalid inspector event", .{ .msg = msg });
                     return;
                 };
                 const method = msg[10..method_end];
-                log.debug("Event (inspector) > method {s}", .{method});
+                log.debug(.cdp, "inspector event", .{ .method = method });
             }
 
             sendInspectorMessage(@alignCast(@ptrCast(ctx)), msg) catch |err| {
-                log.err("Failed to send inspector event: {any}", .{err});
+                log.err(.cdp, "send inspector event", .{ .err = err });
             };
         }
 
@@ -518,7 +506,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
             var buf: std.ArrayListUnmanaged(u8) = .{};
             buf.ensureTotalCapacity(arena.allocator(), message_len) catch |err| {
-                log.err("Failed to expand inspector buffer: {any}", .{err});
+                log.err(.cdp, "inspector buffer", .{ .err = err });
                 return;
             };
 

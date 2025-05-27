@@ -18,14 +18,13 @@
 
 const std = @import("std");
 
+const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 const iterator = @import("../iterator/iterator.zig");
 
 const Function = @import("../env.zig").Function;
 const JsObject = @import("../env.zig").JsObject;
 const DOMException = @import("exceptions.zig").DOMException;
-
-const log = std.log.scoped(.token_list);
 
 pub const Interfaces = .{
     DOMTokenList,
@@ -143,8 +142,7 @@ pub const DOMTokenList = struct {
         while (try entries._next()) |entry| {
             var result: Function.Result = undefined;
             cbk.tryCallWithThis(void, this_arg, .{ entry.@"1", entry.@"0", self }, &result) catch {
-                log.err("callback error: {s}", .{result.exception});
-                log.debug("stack:\n{s}", .{result.stack orelse "???"});
+                log.debug(.token_list, "foreach callback error", .{ .err = result.exception, .stack = result.stack });
             };
         }
     }

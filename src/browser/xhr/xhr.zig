@@ -24,14 +24,13 @@ const DOMError = @import("../netsurf.zig").DOMError;
 const ProgressEvent = @import("progress_event.zig").ProgressEvent;
 const XMLHttpRequestEventTarget = @import("event_target.zig").XMLHttpRequestEventTarget;
 
+const log = @import("../../log.zig");
 const URL = @import("../../url.zig").URL;
 const Mime = @import("../mime.zig").Mime;
 const parser = @import("../netsurf.zig");
 const http = @import("../../http/client.zig");
 const SessionState = @import("../env.zig").SessionState;
 const CookieJar = @import("../storage/storage.zig").CookieJar;
-
-const log = std.log.scoped(.xhr);
 
 // XHR interfaces
 // https://xhr.spec.whatwg.org/#interface-xmlhttprequest
@@ -81,8 +80,6 @@ pub const XMLHttpRequest = struct {
     proto: XMLHttpRequestEventTarget = XMLHttpRequestEventTarget{},
     arena: Allocator,
     request: ?http.Request = null,
-
-    priv_state: PrivState = .new,
 
     method: http.Request.Method,
     state: State,
@@ -272,8 +269,6 @@ pub const XMLHttpRequest = struct {
         self.response_status = 0;
 
         self.send_flag = false;
-
-        self.priv_state = .new;
     }
 
     pub fn get_readyState(self: *XMLHttpRequest) u16 {
@@ -323,8 +318,6 @@ pub const XMLHttpRequest = struct {
         const arena = self.arena;
 
         self.url = try self.origin_url.resolve(arena, url);
-
-        log.debug("open url ({s})", .{self.url.?});
         self.sync = if (asyn) |b| !b else false;
 
         self.state = .opened;
@@ -334,19 +327,19 @@ pub const XMLHttpRequest = struct {
     // dispatch request event.
     // errors are logged only.
     fn dispatchEvt(self: *XMLHttpRequest, typ: []const u8) void {
-        const evt = parser.eventCreate() catch |e| {
-            return log.err("dispatch event create: {any}", .{e});
+        log.debug(.xhr, "dispatch event", .{ .type = typ });
+        self._dispatchEvt(typ) catch |err| {
+            log.err(.xhr, "dispatch event error", .{ .err = err, .type = typ });
         };
+    }
 
+    fn _dispatchEvt(self: *XMLHttpRequest, typ: []const u8) !void {
+        const evt = try parser.eventCreate();
         // We can we defer event destroy once the event is dispatched.
         defer parser.eventDestroy(evt);
 
-        parser.eventInit(evt, typ, .{ .bubbles = true, .cancelable = true }) catch |e| {
-            return log.err("dispatch event init: {any}", .{e});
-        };
-        _ = parser.eventTargetDispatchEvent(@as(*parser.EventTarget, @ptrCast(self)), evt) catch |e| {
-            return log.err("dispatch event: {any}", .{e});
-        };
+        try parser.eventInit(evt, typ, .{ .bubbles = true, .cancelable = true });
+        _ = try parser.eventTargetDispatchEvent(@as(*parser.EventTarget, @ptrCast(self)), evt);
     }
 
     fn dispatchProgressEvent(
@@ -354,22 +347,28 @@ pub const XMLHttpRequest = struct {
         typ: []const u8,
         opts: ProgressEvent.EventInit,
     ) void {
-        log.debug("dispatch progress event: {s}", .{typ});
-        var evt = ProgressEvent.constructor(typ, .{
+        log.debug(.xhr, "dispatch progress event", .{ .type = typ });
+        self._dispatchProgressEvent(typ, opts) catch |err| {
+            log.err(.xhr, "dispatch progress event error", .{ .err = err, .type = typ });
+        };
+    }
+
+    fn _dispatchProgressEvent(
+        self: *XMLHttpRequest,
+        typ: []const u8,
+        opts: ProgressEvent.EventInit,
+    ) !void {
+        var evt = try ProgressEvent.constructor(typ, .{
             // https://xhr.spec.whatwg.org/#firing-events-using-the-progressevent-interface
             .lengthComputable = opts.total > 0,
             .total = opts.total,
             .loaded = opts.loaded,
-        }) catch |e| {
-            return log.err("construct progress event: {any}", .{e});
-        };
+        });
 
-        _ = parser.eventTargetDispatchEvent(
+        _ = try parser.eventTargetDispatchEvent(
             @as(*parser.EventTarget, @ptrCast(self)),
             @as(*parser.Event, @ptrCast(&evt)),
-        ) catch |e| {
-            return log.err("dispatch progress event: {any}", .{e});
-        };
+        );
     }
 
     const methods = [_]struct {
@@ -413,10 +412,9 @@ pub const XMLHttpRequest = struct {
         if (self.state != .opened) return DOMError.InvalidState;
         if (self.send_flag) return DOMError.InvalidState;
 
-        log.debug("{any} {any}", .{ self.method, self.url });
+        log.info(.xhr, "request", .{ .method = self.method, .url = self.url });
 
         self.send_flag = true;
-        self.priv_state = .open;
 
         self.request = try session_state.request_factory.create(self.method, &self.url.?.uri);
         var request = &self.request.?;
@@ -460,10 +458,8 @@ pub const XMLHttpRequest = struct {
 
         if (progress.first) {
             const header = progress.header;
-            log.info("{any} {any} {d}", .{ self.method, self.url, header.status });
 
-            self.priv_state = .done;
-
+            log.info(.xhr, "request header", .{ .status = header.status });
             for (header.headers.items) |hdr| {
                 try self.response_headers.append(hdr.name, hdr.value);
             }
@@ -509,6 +505,8 @@ pub const XMLHttpRequest = struct {
             return;
         }
 
+        log.info(.xhr, "request complete", .{});
+
         self.state = .done;
         self.send_flag = false;
         self.dispatchEvt("readystatechange");
@@ -520,16 +518,13 @@ pub const XMLHttpRequest = struct {
     }
 
     fn onErr(self: *XMLHttpRequest, err: anyerror) void {
-        self.priv_state = .done;
-
-        self.err = err;
         self.state = .done;
         self.send_flag = false;
         self.dispatchEvt("readystatechange");
         self.dispatchProgressEvent("error", .{});
         self.dispatchProgressEvent("loadend", .{});
 
-        log.debug("{any} {any} {any}", .{ self.method, self.url, self.err });
+        log.warn(.xhr, "error", .{ .method = self.method, .url = self.url, .err = err });
     }
 
     pub fn _abort(self: *XMLHttpRequest) void {
@@ -633,7 +628,7 @@ pub const XMLHttpRequest = struct {
             // response object to a new ArrayBuffer object representing this’s
             // received bytes. If this throws an exception, then set this’s
             // response object to failure and return null.
-            log.err("response type ArrayBuffer not implemented", .{});
+            log.err(.xhr, "not implemented", .{ .feature = "ArrayBuffer resposne type" });
             return null;
         }
 
@@ -642,7 +637,7 @@ pub const XMLHttpRequest = struct {
             // response object to a new Blob object representing this’s
             // received bytes with type set to the result of get a final MIME
             // type for this.
-            log.err("response type Blob not implemented", .{});
+            log.err(.xhr, "not implemented", .{ .feature = "Blog resposne type" });
             return null;
         }
 
@@ -717,7 +712,7 @@ pub const XMLHttpRequest = struct {
             self.response_bytes.items,
             .{},
         ) catch |e| {
-            log.err("parse JSON: {}", .{e});
+            log.warn(.xhr, "invalid json", .{ .err = e });
             self.response_obj = .{ .Failure = {} };
             return;
         };

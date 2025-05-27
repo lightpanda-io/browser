@@ -24,10 +24,9 @@ const Env = @import("env.zig").Env;
 const Page = @import("page.zig").Page;
 const Browser = @import("browser.zig").Browser;
 
+const log = @import("../log.zig");
 const parser = @import("netsurf.zig");
 const storage = @import("storage/storage.zig");
-
-const log = std.log.scoped(.session);
 
 // Session is like a browser's tab.
 // It owns the js env and the loader for all the pages of the session.
@@ -95,8 +94,8 @@ pub const Session = struct {
         const page = &self.page.?;
         try Page.init(page, page_arena.allocator(), self);
 
+        log.debug(.session, "create page", .{});
         // start JS env
-        log.debug("start new js scope", .{});
         // Inform CDP the main page has been created such that additional context for other Worlds can be created as well
         self.browser.notification.dispatch(.page_created, page);
 
@@ -115,6 +114,8 @@ pub const Session = struct {
 
         // clear netsurf memory arena.
         parser.deinit();
+
+        log.debug(.session, "remove page", .{});
     }
 
     pub fn currentPage(self: *Session) ?*Page {

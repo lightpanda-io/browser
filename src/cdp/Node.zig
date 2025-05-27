@@ -19,11 +19,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const log = @import("../log.zig");
 const parser = @import("../browser/netsurf.zig");
 
 pub const Id = u32;
-
-const log = std.log.scoped(.cdp_node);
 
 const Node = @This();
 
@@ -213,7 +212,7 @@ pub const Writer = struct {
             // The only error our jsonStringify method can return is
             // @TypeOf(w).Error. In other words, our code can't return its own
             // error, we can only return a writer error. Kinda sucks.
-            log.err("json stringify: {}", .{err});
+            log.err(.cdp, "json stringify", .{ .err = err });
             return error.OutOfMemory;
         };
     }

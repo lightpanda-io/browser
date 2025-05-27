@@ -18,6 +18,7 @@
 
 const std = @import("std");
 
+const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 
 const JsThis = @import("../env.zig").JsThis;
@@ -27,8 +28,6 @@ const NodeUnion = @import("node.zig").Union;
 const Node = @import("node.zig").Node;
 
 const U32Iterator = @import("../iterator/iterator.zig").U32Iterator;
-
-const log = std.log.scoped(.nodelist);
 
 const DOMException = @import("exceptions.zig").DOMException;
 
@@ -146,8 +145,7 @@ pub const NodeList = struct {
             const ii: u32 = @intCast(i);
             var result: Function.Result = undefined;
             cbk.tryCall(void, .{ n, ii, self }, &result) catch {
-                log.err("callback error: {s}", .{result.exception});
-                log.debug("stack:\n{s}", .{result.stack orelse "???"});
+                log.debug(.node_list, "forEach callback", .{ .err = result.exception, .stack = result.stack });
             };
         }
     }

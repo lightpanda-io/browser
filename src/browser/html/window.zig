@@ -18,6 +18,7 @@
 
 const std = @import("std");
 
+const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 const Function = @import("../env.zig").Function;
 const SessionState = @import("../env.zig").SessionState;
@@ -34,8 +35,6 @@ const Performance = @import("performance.zig").Performance;
 const CSSStyleDeclaration = @import("../cssom/css_style_declaration.zig").CSSStyleDeclaration;
 
 const storage = @import("../storage/storage.zig");
-
-const log = std.log.scoped(.window);
 
 // https://dom.spec.whatwg.org/#interface-window-extensions
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#window
@@ -171,8 +170,7 @@ pub const Window = struct {
         // Since: When multiple callbacks queued by requestAnimationFrame() begin to fire in a single frame, each receives the same timestamp even though time has passed during the computation of every previous callback's workload.
         var result: Function.Result = undefined;
         callback.tryCall(void, .{self.performance._now()}, &result) catch {
-            log.err("Window.requestAnimationFrame(): {s}", .{result.exception});
-            log.debug("stack:\n{s}", .{result.stack orelse "???"});
+            log.debug(.window, "requestAnimationFrame error", .{ .err = result.exception, .stack = result.stack });
         };
         return 99; // not unique, but user cannot make assumptions about it. cancelAnimationFrame will be too late anyway.
     }
@@ -277,8 +275,7 @@ const TimerCallback = struct {
 
         var result: Function.Result = undefined;
         self.cbk.tryCall(void, .{}, &result) catch {
-            log.err("timeout callback error: {s}", .{result.exception});
-            log.debug("stack:\n{s}", .{result.stack orelse "???"});
+            log.debug(.window, "timeout callback error", .{ .err = result.exception, .stack = result.stack });
         };
 
         if (self.repeat) |r| {

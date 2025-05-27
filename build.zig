@@ -44,11 +44,14 @@ pub fn build(b: *std.Build) !void {
         b.option([]const u8, "git_commit", "Current git commit") orelse "dev",
     );
 
-    opts.addOption(
-        std.log.Level,
-        "log_level",
-        b.option(std.log.Level, "log_level", "The log level") orelse std.log.Level.info,
-    );
+    {
+        const log = @import("src/log.zig");
+        opts.addOption(
+            log.Level,
+            "log_level",
+            b.option(log.Level, "log_level", "The log level") orelse .info,
+        );
+    }
 
     opts.addOption(
         bool,

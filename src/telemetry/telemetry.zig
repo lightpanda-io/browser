@@ -3,11 +3,11 @@ const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
 
+const log = @import("../log.zig");
 const App = @import("../app.zig").App;
 const Notification = @import("../notification.zig").Notification;
 
 const uuidv4 = @import("../id.zig").uuidv4;
-const log = std.log.scoped(.telemetry);
 const IID_FILE = "iid";
 
 pub const Telemetry = TelemetryT(blk: {
@@ -32,7 +32,7 @@ fn TelemetryT(comptime P: type) type {
         pub fn init(app: *App, run_mode: App.RunMode) Self {
             const disabled = std.process.hasEnvVarConstant("LIGHTPANDA_DISABLE_TELEMETRY");
             if (builtin.mode != .Debug and builtin.is_test == false) {
-                log.info("telemetry {s}", .{if (disabled) "disabled" else "enabled"});
+                log.info(.telemetry, "telemetry status", .{ .disabled = disabled });
             }
 
             return .{
@@ -53,7 +53,7 @@ fn TelemetryT(comptime P: type) type {
             }
             const iid: ?[]const u8 = if (self.iid) |*iid| iid else null;
             self.provider.send(iid, self.run_mode, event) catch |err| {
-                log.warn("failed to record event: {}", .{err});
+                log.warn(.telemetry, "record error", .{ .err = err, .type = @tagName(std.meta.activeTag(event)) });
             };
         }
 
@@ -94,7 +94,7 @@ fn getOrCreateId(app_dir_path_: ?[]const u8) ?[36]u8 {
 
     var buf: [37]u8 = undefined;
     var dir = std.fs.openDirAbsolute(app_dir_path, .{}) catch |err| {
-        log.warn("failed to open data directory '{s}': {}", .{ app_dir_path, err });
+        log.warn(.telemetry, "data directory open error", .{ .path = app_dir_path, .err = err });
         return null;
     };
     defer dir.close();
@@ -102,7 +102,7 @@ fn getOrCreateId(app_dir_path_: ?[]const u8) ?[36]u8 {
     const data = dir.readFile(IID_FILE, &buf) catch |err| switch (err) {
         error.FileNotFound => &.{},
         else => {
-            log.warn("failed to open id file: {}", .{err});
+            log.warn(.telemetry, "ID read error", .{ .path = app_dir_path, .err = err });
             return null;
         },
     };
@@ -115,7 +115,7 @@ fn getOrCreateId(app_dir_path_: ?[]const u8) ?[36]u8 {
 
     uuidv4(&id);
     dir.writeFile(.{ .sub_path = IID_FILE, .data = &id }) catch |err| {
-        log.warn("failed to write to id file: {}", .{err});
+        log.warn(.telemetry, "ID write error", .{ .path = app_dir_path, .err = err });
         return null;
     };
     return id;
