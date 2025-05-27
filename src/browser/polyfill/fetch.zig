@@ -31,16 +31,16 @@ test "Browser.fetch" {
         .{ "ok", "true" },
     }, .{});
 
-    // try runner.testCases(&.{
-    //     .{
-    //         \\  var ok2 = false;
-    //         \\  const request2 = new Request("http://127.0.0.1:9582/loader");
-    //         \\  (async function () { resp = await fetch(request2); ok2 = resp.ok; }());
-    //         \\  false;
-    //         ,
-    //         "false",
-    //     },
-    //     // all events have been resolved.
-    //     .{ "ok2", "true" },
-    // }, .{});
+    try runner.testCases(&.{
+        .{
+            \\  var ok2 = false;
+            \\  const request2 = new Request("http://127.0.0.1:9582/loader");
+            \\  (async function () { resp = await fetch(request2); ok2 = resp.ok; }());
+            \\  false;
+            ,
+            "false",
+        },
+        // all events have been resolved.
+        .{ "ok2", "true" },
+    }, .{});
 }
