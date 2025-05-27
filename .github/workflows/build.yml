@@ -46,7 +46,7 @@ jobs:
       - name: upload on s3
         run: |
           export DIR=`git show --no-patch --no-notes --pretty='%cs_%h'`
-          aws s3 cp lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/${DIR}/lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          aws s3 cp --storage-class=GLACIER_IR lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/${DIR}/lightpanda-${{ env.ARCH }}-${{ env.OS }}
 
       - name: Upload the build
         uses: ncipollo/release-action@v1
@@ -84,7 +84,7 @@ jobs:
       - name: upload on s3
         run: |
           export DIR=`git show --no-patch --no-notes --pretty='%cs_%h'`
-          aws s3 cp lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/${DIR}/lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          aws s3 cp --storage-class=GLACIER_IR lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/${DIR}/lightpanda-${{ env.ARCH }}-${{ env.OS }}
 
       - name: Upload the build
         uses: ncipollo/release-action@v1
@@ -122,7 +122,7 @@ jobs:
       - name: upload on s3
         run: |
           export DIR=`git show --no-patch --no-notes --pretty='%cs_%h'`
-          aws s3 cp lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/${DIR}/lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          aws s3 cp --storage-class=GLACIER_IR lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/${DIR}/lightpanda-${{ env.ARCH }}-${{ env.OS }}
 
       - name: Upload the build
         uses: ncipollo/release-action@v1
@@ -160,7 +160,7 @@ jobs:
       - name: upload on s3
         run: |
           export DIR=`git show --no-patch --no-notes --pretty='%cs_%h'`
-          aws s3 cp lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/${DIR}/lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          aws s3 cp --storage-class=GLACIER_IR lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/${DIR}/lightpanda-${{ env.ARCH }}-${{ env.OS }}
 
       - name: Upload the build
         uses: ncipollo/release-action@v1
