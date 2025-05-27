@@ -44,17 +44,18 @@ pub const XMLHttpRequestEventTarget = struct {
         self: *XMLHttpRequestEventTarget,
         alloc: std.mem.Allocator,
         typ: []const u8,
-        cbk: Function,
-    ) !void {
+        listener: EventHandler.Listener,
+    ) !?Function {
         const target = @as(*parser.EventTarget, @ptrCast(self));
-        const eh = try EventHandler.init(alloc, try cbk.withThis(target));
-        try parser.eventTargetAddEventListener(
-            target,
-            typ,
-            &eh.node,
-            false,
-        );
+
+        // The only time this can return null if the listener is already
+        // registered. But before calling `register`, all of our functions
+        // remove any existing listener, so it should be impossible to get null
+        // from this function call.
+        const eh = (try EventHandler.register(alloc, target, typ, listener, null)) orelse unreachable;
+        return eh.callback;
     }
+
     fn unregister(self: *XMLHttpRequestEventTarget, typ: []const u8, cbk_id: usize) !void {
         const et = @as(*parser.EventTarget, @ptrCast(self));
         // check if event target has already this listener
@@ -86,34 +87,28 @@ pub const XMLHttpRequestEventTarget = struct {
         return self.onloadend_cbk;
     }
 
-    pub fn set_onloadstart(self: *XMLHttpRequestEventTarget, handler: Function, page: *Page) !void {
+    pub fn set_onloadstart(self: *XMLHttpRequestEventTarget, listener: EventHandler.Listener, page: *Page) !void {
         if (self.onloadstart_cbk) |cbk| try self.unregister("loadstart", cbk.id);
-        try self.register(page.arena, "loadstart", handler);
-        self.onloadstart_cbk = handler;
+        self.onloadstart_cbk = try self.register(page.arena, "loadstart", listener);
     }
-    pub fn set_onprogress(self: *XMLHttpRequestEventTarget, handler: Function, page: *Page) !void {
+    pub fn set_onprogress(self: *XMLHttpRequestEventTarget, listener: EventHandler.Listener, page: *Page) !void {
         if (self.onprogress_cbk) |cbk| try self.unregister("progress", cbk.id);
-        try self.register(page.arena, "progress", handler);
-        self.onprogress_cbk = handler;
+        self.onprogress_cbk = try self.register(page.arena, "progress", listener);
     }
-    pub fn set_onabort(self: *XMLHttpRequestEventTarget, handler: Function, page: *Page) !void {
+    pub fn set_onabort(self: *XMLHttpRequestEventTarget, listener: EventHandler.Listener, page: *Page) !void {
         if (self.onabort_cbk) |cbk| try self.unregister("abort", cbk.id);
-        try self.register(page.arena, "abort", handler);
-        self.onabort_cbk = handler;
+        self.onabort_cbk = try self.register(page.arena, "abort", listener);
     }
-    pub fn set_onload(self: *XMLHttpRequestEventTarget, handler: Function, page: *Page) !void {
+    pub fn set_onload(self: *XMLHttpRequestEventTarget, listener: EventHandler.Listener, page: *Page) !void {
         if (self.onload_cbk) |cbk| try self.unregister("load", cbk.id);
-        try self.register(page.arena, "load", handler);
-        self.onload_cbk = handler;
+        self.onload_cbk = try self.register(page.arena, "load", listener);
     }
-    pub fn set_ontimeout(self: *XMLHttpRequestEventTarget, handler: Function, page: *Page) !void {
+    pub fn set_ontimeout(self: *XMLHttpRequestEventTarget, listener: EventHandler.Listener, page: *Page) !void {
         if (self.ontimeout_cbk) |cbk| try self.unregister("timeout", cbk.id);
-        try self.register(page.arena, "timeout", handler);
-        self.ontimeout_cbk = handler;
+        self.ontimeout_cbk = try self.register(page.arena, "timeout", listener);
     }
-    pub fn set_onloadend(self: *XMLHttpRequestEventTarget, handler: Function, page: *Page) !void {
+    pub fn set_onloadend(self: *XMLHttpRequestEventTarget, listener: EventHandler.Listener, page: *Page) !void {
         if (self.onloadend_cbk) |cbk| try self.unregister("loadend", cbk.id);
-        try self.register(page.arena, "loadend", handler);
-        self.onloadend_cbk = handler;
+        self.onloadend_cbk = try self.register(page.arena, "loadend", listener);
     }
 };

@@ -63,13 +63,13 @@ pub const MutationObserver = struct {
 
         // register node's events
         if (options.childList or options.subtree) {
-            try parser.eventTargetAddEventListener(
+            _ = try parser.eventTargetAddEventListener(
                 parser.toEventTarget(parser.Node, node),
                 "DOMNodeInserted",
                 &observer.event_node,
                 false,
             );
-            try parser.eventTargetAddEventListener(
+            _ = try parser.eventTargetAddEventListener(
                 parser.toEventTarget(parser.Node, node),
                 "DOMNodeRemoved",
                 &observer.event_node,
@@ -77,7 +77,7 @@ pub const MutationObserver = struct {
             );
         }
         if (options.attr()) {
-            try parser.eventTargetAddEventListener(
+            _ = try parser.eventTargetAddEventListener(
                 parser.toEventTarget(parser.Node, node),
                 "DOMAttrModified",
                 &observer.event_node,
@@ -85,7 +85,7 @@ pub const MutationObserver = struct {
             );
         }
         if (options.cdata()) {
-            try parser.eventTargetAddEventListener(
+            _ = try parser.eventTargetAddEventListener(
                 parser.toEventTarget(parser.Node, node),
                 "DOMCharacterDataModified",
                 &observer.event_node,
@@ -93,7 +93,7 @@ pub const MutationObserver = struct {
             );
         }
         if (options.subtree) {
-            try parser.eventTargetAddEventListener(
+            _ = try parser.eventTargetAddEventListener(
                 parser.toEventTarget(parser.Node, node),
                 "DOMSubtreeModified",
                 &observer.event_node,

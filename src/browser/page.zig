@@ -273,7 +273,7 @@ pub const Page = struct {
         const doc = parser.documentHTMLToDocument(html_doc);
 
         const document_element = (try parser.documentGetDocumentElement(doc)) orelse return error.DocumentElementError;
-        try parser.eventTargetAddEventListener(
+        _ = try parser.eventTargetAddEventListener(
             parser.toEventTarget(parser.Element, document_element),
             "click",
             &self.window_clicked_event_node,

@@ -41,79 +41,46 @@ pub const EventTarget = struct {
 
     // JS funcs
     // --------
+    pub fn _addEventListener(
+        self: *parser.EventTarget,
+        typ: []const u8,
+        listener: EventHandler.Listener,
+        opts: ?EventHandler.Opts,
+        page: *Page,
+    ) !void {
+        _ = try EventHandler.register(page.arena, self, typ, listener, opts);
+    }
 
-    const AddEventListenerOpts = union(enum) {
+    const RemoveEventListenerOpts = union(enum) {
         opts: Opts,
         capture: bool,
 
         const Opts = struct {
             capture: ?bool,
-            once: ?bool, // currently does nothing
-            passive: ?bool, // currently does nothing
-            signal: ?bool, // currently does nothing
         };
     };
-
-    pub fn _addEventListener(
-        self: *parser.EventTarget,
-        typ: []const u8,
-        cbk: Env.Function,
-        opts_: ?AddEventListenerOpts,
-        page: *Page,
-    ) !void {
-        var capture = false;
-        if (opts_) |opts| {
-            switch (opts) {
-                .capture => |c| capture = c,
-                .opts => |o| {
-                    // Done this way so that, for common cases that _only_ set
-                    // capture, i.e. {captrue: true}, it works.
-                    // But for any case that sets any of the other flags, we
-                    // error. If we don't error, this function call would succeed
-                    // but the behavior might be wrong. At this point, it's
-                    // better to be explicit and error.
-                    if (o.once orelse false) return error.NotImplemented;
-                    if (o.signal orelse false) return error.NotImplemented;
-                    if (o.passive orelse false) return error.NotImplemented;
-                    capture = o.capture orelse false;
-                },
-            }
-        }
-
-        // check if event target has already this listener
-        const lst = try parser.eventTargetHasListener(
-            self,
-            typ,
-            capture,
-            cbk.id,
-        );
-        if (lst != null) {
-            return;
-        }
-
-        const eh = try EventHandler.init(page.arena, try cbk.withThis(self));
-
-        try parser.eventTargetAddEventListener(
-            self,
-            typ,
-            &eh.node,
-            capture,
-        );
-    }
 
     pub fn _removeEventListener(
         self: *parser.EventTarget,
         typ: []const u8,
-        cbk: Env.Function,
-        capture: ?bool,
-        // TODO: hanle EventListenerOptions
-        // see #https://github.com/lightpanda-io/jsruntime-lib/issues/114
+        listener: EventHandler.Listener,
+        opts_: ?RemoveEventListenerOpts,
     ) !void {
+        var capture = false;
+        if (opts_) |opts| {
+            capture = switch (opts) {
+                .capture => |c| c,
+                .opts => |o| o.capture orelse false,
+            };
+        }
+
+        const cbk = (try listener.callback(self)) orelse return;
+
         // check if event target has already this listener
         const lst = try parser.eventTargetHasListener(
             self,
             typ,
-            capture orelse false,
+            capture,
             cbk.id,
         );
         if (lst == null) {
@@ -125,7 +92,7 @@ pub const EventTarget = struct {
             self,
             typ,
             lst.?,
-            capture orelse false,
+            capture,
         );
     }
 
@@ -243,5 +210,16 @@ test "Browser.DOM.EventTarget" {
         .{ "evt.type", "bubbles" },
         .{ "phase", "3" },
         .{ "cur.getAttribute('id')", "content" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "const obj1 = {calls: 0, handleEvent: function() { this.calls += 1; } };", null },
+        .{ "content.addEventListener('he', obj1);", null },
+        .{ "content.dispatchEvent(new Event('he'));", null },
+        .{ "obj1.calls", "1" },
+
+        .{ "content.removeEventListener('he', obj1);", null },
+        .{ "content.dispatchEvent(new Event('he'));", null },
+        .{ "obj1.calls", "1" },
     }, .{});
 }

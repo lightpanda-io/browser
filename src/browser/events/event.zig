@@ -21,7 +21,6 @@ const Allocator = std.mem.Allocator;
 
 const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
-const Function = @import("../env.zig").Function;
 const generate = @import("../../runtime/generate.zig");
 
 const DOMException = @import("../dom/exceptions.zig").DOMException;
@@ -139,18 +138,97 @@ pub const Event = struct {
 };
 
 pub const EventHandler = struct {
+    once: bool,
+    capture: bool,
     callback: Function,
     node: parser.EventNode,
+    listener: *parser.EventListener,
 
-    pub fn init(allocator: Allocator, callback: Function) !*EventHandler {
+    const Env = @import("../env.zig").Env;
+    const Function = Env.Function;
+
+    pub const Listener = union(enum) {
+        function: Function,
+        object: Env.JsObject,
+
+        pub fn callback(self: Listener, target: *parser.EventTarget) !?Function {
+            return switch (self) {
+                .function => |func| try func.withThis(target),
+                .object => |obj| blk: {
+                    const func = (try obj.getFunction("handleEvent")) orelse return null;
+                    break :blk try func.withThis(try obj.persist());
+                },
+            };
+        }
+    };
+
+    pub const Opts = union(enum) {
+        flags: Flags,
+        capture: bool,
+
+        const Flags = struct {
+            once: ?bool,
+            capture: ?bool,
+            // We ignore this property. It seems to be largely used to help the
+            // browser make certain performance tweaks (i.e. the browser knows
+            // that the listener won't call preventDefault() and thus can safely
+            // run the default as needed).
+            passive: ?bool,
+            signal: ?bool, // currently does nothing
+        };
+    };
+
+    pub fn register(
+        allocator: Allocator,
+        target: *parser.EventTarget,
+        typ: []const u8,
+        listener: Listener,
+        opts_: ?Opts,
+    ) !?*EventHandler {
+        var once = false;
+        var capture = false;
+        if (opts_) |opts| {
+            switch (opts) {
+                .capture => |c| capture = c,
+                .flags => |f| {
+                    // Done this way so that, for common cases that _only_ set
+                    // capture, i.e. {captrue: true}, it works.
+                    // But for any case that sets any of the other flags, we
+                    // error. If we don't error, this function call would succeed
+                    // but the behavior might be wrong. At this point, it's
+                    // better to be explicit and error.
+                    if (f.signal orelse false) return error.NotImplemented;
+                    once = f.once orelse false;
+                    capture = f.capture orelse false;
+                },
+            }
+        }
+
+        const callback = (try listener.callback(target)) orelse return null;
+
+        // check if event target has already this listener
+        if (try parser.eventTargetHasListener(target, typ, capture, callback.id) != null) {
+            return null;
+        }
+
         const eh = try allocator.create(EventHandler);
         eh.* = .{
+            .once = once,
+            .capture = capture,
             .callback = callback,
             .node = .{
                 .id = callback.id,
                 .func = handle,
             },
+            .listener = undefined,
         };
+
+        eh.listener = try parser.eventTargetAddEventListener(
+            target,
+            typ,
+            &eh.node,
+            capture,
+        );
         return eh;
     }
 
@@ -165,6 +243,17 @@ pub const EventHandler = struct {
         self.callback.tryCall(void, .{ievent}, &result) catch {
             log.debug(.event, "handle callback error", .{ .err = result.exception, .stack = result.stack });
         };
+
+        if (self.once) {
+            const target = (parser.eventTarget(event) catch return).?;
+            const typ = parser.eventType(event) catch return;
+            parser.eventTargetRemoveEventListener(
+                target,
+                typ,
+                self.listener,
+                self.capture,
+            ) catch {};
+        }
     }
 };
 
@@ -264,5 +353,14 @@ test "Browser.Event" {
         .{ "document.removeEventListener('count', cbk)", "undefined" },
         .{ "document.dispatchEvent(new Event('count'))", "true" },
         .{ "nb", "0" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "nb = 0; function cbk(event) { nb ++; }", null },
+        .{ "document.addEventListener('count', cbk, {once: true})", null },
+        .{ "document.dispatchEvent(new Event('count'))", "true" },
+        .{ "document.dispatchEvent(new Event('count'))", "true" },
+        .{ "document.dispatchEvent(new Event('count'))", "true" },
+        .{ "nb", "1" },
     }, .{});
 }
