@@ -22,8 +22,7 @@ const builtin = @import("builtin");
 const JsObject = @import("../env.zig").Env.JsObject;
 const SessionState = @import("../env.zig").SessionState;
 
-// const log = if (builtin.is_test) &test_capture else @import("../../log.zig");
-const log = @import("../../log.zig");
+const log = if (builtin.is_test) &test_capture else @import("../../log.zig");
 
 pub const Console = struct {
     // TODO: configurable writer
@@ -151,137 +150,137 @@ fn timestamp() u32 {
     return @intCast(ts.sec);
 }
 
-// var test_capture = TestCapture{};
-// const testing = @import("../../testing.zig");
-// test "Browser.Console" {
-//     defer testing.reset();
+var test_capture = TestCapture{};
+const testing = @import("../../testing.zig");
+test "Browser.Console" {
+    defer testing.reset();
 
-//     var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-//     defer runner.deinit();
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
+    defer runner.deinit();
 
-//     {
-//         try runner.testCases(&.{
-//             .{ "console.log('a')", "undefined" },
-//             .{ "console.warn('hello world', 23, true, new Object())", "undefined" },
-//         }, .{});
+    {
+        try runner.testCases(&.{
+            .{ "console.log('a')", "undefined" },
+            .{ "console.warn('hello world', 23, true, new Object())", "undefined" },
+        }, .{});
 
-//         const captured = test_capture.captured.items;
-//         try testing.expectEqual("[info] args=a", captured[0]);
-//         try testing.expectEqual("[warn] args=hello world 23 true [object Object]", captured[1]);
-//     }
+        const captured = test_capture.captured.items;
+        try testing.expectEqual("[info] args=a", captured[0]);
+        try testing.expectEqual("[warn] args=hello world 23 true [object Object]", captured[1]);
+    }
 
-//     {
-//         test_capture.reset();
-//         try runner.testCases(&.{
-//             .{ "console.countReset()", "undefined" },
-//             .{ "console.count()", "undefined" },
-//             .{ "console.count('teg')", "undefined" },
-//             .{ "console.count('teg')", "undefined" },
-//             .{ "console.count('teg')", "undefined" },
-//             .{ "console.count()", "undefined" },
-//             .{ "console.countReset('teg')", "undefined" },
-//             .{ "console.countReset()", "undefined" },
-//             .{ "console.count()", "undefined" },
-//         }, .{});
+    {
+        test_capture.reset();
+        try runner.testCases(&.{
+            .{ "console.countReset()", "undefined" },
+            .{ "console.count()", "undefined" },
+            .{ "console.count('teg')", "undefined" },
+            .{ "console.count('teg')", "undefined" },
+            .{ "console.count('teg')", "undefined" },
+            .{ "console.count()", "undefined" },
+            .{ "console.countReset('teg')", "undefined" },
+            .{ "console.countReset()", "undefined" },
+            .{ "console.count()", "undefined" },
+        }, .{});
 
-//         const captured = test_capture.captured.items;
-//         try testing.expectEqual("[invalid counter] label=default", captured[0]);
-//         try testing.expectEqual("[count] label=default count=1", captured[1]);
-//         try testing.expectEqual("[count] label=teg count=1", captured[2]);
-//         try testing.expectEqual("[count] label=teg count=2", captured[3]);
-//         try testing.expectEqual("[count] label=teg count=3", captured[4]);
-//         try testing.expectEqual("[count] label=default count=2", captured[5]);
-//         try testing.expectEqual("[count reset] label=teg count=3", captured[6]);
-//         try testing.expectEqual("[count reset] label=default count=2", captured[7]);
-//         try testing.expectEqual("[count] label=default count=1", captured[8]);
-//     }
+        const captured = test_capture.captured.items;
+        try testing.expectEqual("[invalid counter] label=default", captured[0]);
+        try testing.expectEqual("[count] label=default count=1", captured[1]);
+        try testing.expectEqual("[count] label=teg count=1", captured[2]);
+        try testing.expectEqual("[count] label=teg count=2", captured[3]);
+        try testing.expectEqual("[count] label=teg count=3", captured[4]);
+        try testing.expectEqual("[count] label=default count=2", captured[5]);
+        try testing.expectEqual("[count reset] label=teg count=3", captured[6]);
+        try testing.expectEqual("[count reset] label=default count=2", captured[7]);
+        try testing.expectEqual("[count] label=default count=1", captured[8]);
+    }
 
-//     {
-//         test_capture.reset();
-//         try runner.testCases(&.{
-//             .{ "console.assert(true)", "undefined" },
-//             .{ "console.assert('a', 2, 3, 4)", "undefined" },
-//             .{ "console.assert('')", "undefined" },
-//             .{ "console.assert('', 'x', true)", "undefined" },
-//             .{ "console.assert(false, 'x')", "undefined" },
-//         }, .{});
+    {
+        test_capture.reset();
+        try runner.testCases(&.{
+            .{ "console.assert(true)", "undefined" },
+            .{ "console.assert('a', 2, 3, 4)", "undefined" },
+            .{ "console.assert('')", "undefined" },
+            .{ "console.assert('', 'x', true)", "undefined" },
+            .{ "console.assert(false, 'x')", "undefined" },
+        }, .{});
 
-//         const captured = test_capture.captured.items;
-//         try testing.expectEqual("[assertion failed] values=", captured[0]);
-//         try testing.expectEqual("[assertion failed] values=x true", captured[1]);
-//         try testing.expectEqual("[assertion failed] values=x", captured[2]);
-//     }
-// }
-// const TestCapture = struct {
-//     captured: std.ArrayListUnmanaged([]const u8) = .{},
+        const captured = test_capture.captured.items;
+        try testing.expectEqual("[assertion failed] values=", captured[0]);
+        try testing.expectEqual("[assertion failed] values=x true", captured[1]);
+        try testing.expectEqual("[assertion failed] values=x", captured[2]);
+    }
+}
+const TestCapture = struct {
+    captured: std.ArrayListUnmanaged([]const u8) = .{},
 
-//     fn reset(self: *TestCapture) void {
-//         self.captured = .{};
-//     }
+    fn reset(self: *TestCapture) void {
+        self.captured = .{};
+    }
 
-//     fn debug(
-//         self: *TestCapture,
-//         comptime scope: @Type(.enum_literal),
-//         comptime msg: []const u8,
-//         args: anytype,
-//     ) void {
-//         self.capture(scope, msg, args);
-//     }
+    fn debug(
+        self: *TestCapture,
+        comptime scope: @Type(.enum_literal),
+        comptime msg: []const u8,
+        args: anytype,
+    ) void {
+        self.capture(scope, msg, args);
+    }
 
-//     fn info(
-//         self: *TestCapture,
-//         comptime scope: @Type(.enum_literal),
-//         comptime msg: []const u8,
-//         args: anytype,
-//     ) void {
-//         self.capture(scope, msg, args);
-//     }
+    fn info(
+        self: *TestCapture,
+        comptime scope: @Type(.enum_literal),
+        comptime msg: []const u8,
+        args: anytype,
+    ) void {
+        self.capture(scope, msg, args);
+    }
 
-//     fn warn(
-//         self: *TestCapture,
-//         comptime scope: @Type(.enum_literal),
-//         comptime msg: []const u8,
-//         args: anytype,
-//     ) void {
-//         self.capture(scope, msg, args);
-//     }
+    fn warn(
+        self: *TestCapture,
+        comptime scope: @Type(.enum_literal),
+        comptime msg: []const u8,
+        args: anytype,
+    ) void {
+        self.capture(scope, msg, args);
+    }
 
-//     fn err(
-//         self: *TestCapture,
-//         comptime scope: @Type(.enum_literal),
-//         comptime msg: []const u8,
-//         args: anytype,
-//     ) void {
-//         self.capture(scope, msg, args);
-//     }
+    fn err(
+        self: *TestCapture,
+        comptime scope: @Type(.enum_literal),
+        comptime msg: []const u8,
+        args: anytype,
+    ) void {
+        self.capture(scope, msg, args);
+    }
 
-//     fn capture(
-//         self: *TestCapture,
-//         comptime scope: @Type(.enum_literal),
-//         comptime msg: []const u8,
-//         args: anytype,
-//     ) void {
-//         self._capture(scope, msg, args) catch unreachable;
-//     }
+    fn capture(
+        self: *TestCapture,
+        comptime scope: @Type(.enum_literal),
+        comptime msg: []const u8,
+        args: anytype,
+    ) void {
+        self._capture(scope, msg, args) catch unreachable;
+    }
 
-//     fn _capture(
-//         self: *TestCapture,
-//         comptime scope: @Type(.enum_literal),
-//         comptime msg: []const u8,
-//         args: anytype,
-//     ) !void {
-//         std.debug.assert(scope == .console);
+    fn _capture(
+        self: *TestCapture,
+        comptime scope: @Type(.enum_literal),
+        comptime msg: []const u8,
+        args: anytype,
+    ) !void {
+        std.debug.assert(scope == .console);
 
-//         const allocator = testing.arena_allocator;
-//         var buf: std.ArrayListUnmanaged(u8) = .empty;
-//         try buf.appendSlice(allocator, "[" ++ msg ++ "] ");
+        const allocator = testing.arena_allocator;
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        try buf.appendSlice(allocator, "[" ++ msg ++ "] ");
 
-//         inline for (@typeInfo(@TypeOf(args)).@"struct".fields) |f| {
-//             try buf.appendSlice(allocator, f.name);
-//             try buf.append(allocator, '=');
-//             try @import("../../log.zig").writeValue(allocator, &buf, false, @field(args, f.name));
-//             try buf.append(allocator, ' ');
-//         }
-//         self.captured.append(testing.arena_allocator, std.mem.trimRight(u8, buf.items, " ")) catch unreachable;
-//     }
-// };
+        inline for (@typeInfo(@TypeOf(args)).@"struct".fields) |f| {
+            try buf.appendSlice(allocator, f.name);
+            try buf.append(allocator, '=');
+            try @import("../../log.zig").writeValue(false, @field(args, f.name), buf.writer(allocator));
+            try buf.append(allocator, ' ');
+        }
+        self.captured.append(testing.arena_allocator, std.mem.trimRight(u8, buf.items, " ")) catch unreachable;
+    }
+};

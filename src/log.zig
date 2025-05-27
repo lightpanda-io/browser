@@ -81,12 +81,16 @@ pub fn log(comptime scope: @Type(.enum_literal), comptime level: Level, comptime
     if (comptime enabled(scope, level) == false) {
         return;
     }
-    tryLog(scope, level, msg, data) catch |log_err| {
+
+    std.debug.lockStdErr();
+    defer std.debug.unlockStdErr();
+
+    logTo(scope, level, msg, data, std.io.getStdErr().writer()) catch |log_err| {
         std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"", .{ timestamp(), @errorName(log_err), @tagName(scope), msg });
     };
 }
 
-fn tryLog(comptime scope: @Type(.enum_literal), comptime level: Level, comptime msg: []const u8, data: anytype) !void {
+fn logTo(comptime scope: @Type(.enum_literal), comptime level: Level, comptime msg: []const u8, data: anytype, out: anytype) !void {
     comptime {
         if (msg.len > 30) {
             @compileError("log msg cannot be more than 30 characters: '" ++ msg ++ "'");
@@ -102,12 +106,7 @@ fn tryLog(comptime scope: @Type(.enum_literal), comptime level: Level, comptime 
         }
     }
 
-    out_lock.lock();
-    defer out_lock.unlock();
-
-    const stderr = std.io.getStdErr().writer();
-    var bw = std.io.bufferedWriter(stderr);
-
+    var bw = std.io.bufferedWriter(out);
     switch (format) {
         .logfmt => try logLogfmt(scope, level, msg, data, bw.writer()),
         .pretty => try logPretty(scope, level, msg, data, bw.writer()),
@@ -292,64 +291,56 @@ fn elapsed() i64 {
     return now - previous;
 }
 
-// const testing = @import("testing.zig");
-// test "log: data" {
-//     var buf: std.ArrayListUnmanaged(u8) = .{};
-//     defer buf.deinit(testing.allocator);
+const testing = @import("testing.zig");
+test "log: data" {
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(testing.allocator);
 
-//     var logger = try TestLogger.init(testing.allocator, .{ .format = .logfmt }, buf.writer(testing.allocator));
-//     defer logger.deinit();
+    {
+        try logTo(.t_scope, .err, "nope", .{}, buf.writer(testing.allocator));
+        try testing.expectEqual("$time=1739795092929 $scope=t_scope $level=error $msg=nope\n", buf.items);
+    }
 
-//     {
-//         try logger.log(.t_scope, .err, "nope", .{});
-//         try testing.expectEqual("$time=1739795092929 $scope=t_scope $level=error $msg=nope\n", buf.items);
-//     }
+    {
+        buf.clearRetainingCapacity();
+        const string = try testing.allocator.dupe(u8, "spice_must_flow");
+        defer testing.allocator.free(string);
 
-//     {
-//         buf.clearRetainingCapacity();
-//         const string = try testing.allocator.dupe(u8, "spice_must_flow");
-//         defer testing.allocator.free(string);
+        try logTo(.scope_2, .warn, "a msg", .{
+            .cint = 5,
+            .cfloat = 3.43,
+            .int = @as(i16, -49),
+            .float = @as(f32, 0.0003232),
+            .bt = true,
+            .bf = false,
+            .nn = @as(?i32, 33),
+            .n = @as(?i32, null),
+            .lit = "over9000!",
+            .slice = string,
+            .err = error.Nope,
+            .level = Level.warn,
+        }, buf.writer(testing.allocator));
 
-//         try logger.log(.scope_2, .warn, "a msg", .{
-//             .cint = 5,
-//             .cfloat = 3.43,
-//             .int = @as(i16, -49),
-//             .float = @as(f32, 0.0003232),
-//             .bt = true,
-//             .bf = false,
-//             .nn = @as(?i32, 33),
-//             .n = @as(?i32, null),
-//             .lit = "over9000!",
-//             .slice = string,
-//             .err = error.Nope,
-//             .level = Level.warn,
-//         });
+        try testing.expectEqual("$time=1739795092929 $scope=scope_2 $level=warn $msg=\"a msg\" " ++
+            "cint=5 cfloat=3.43 int=-49 float=0.0003232 bt=true bf=false " ++
+            "nn=33 n=null lit=over9000! slice=spice_must_flow " ++
+            "err=Nope level=warn\n", buf.items);
+    }
+}
 
-//         try testing.expectEqual("$time=1739795092929 $scope=scope_2 $level=warn $msg=\"a msg\" " ++
-//             "cint=5 cfloat=3.43 int=-49 float=0.0003232 bt=true bf=false " ++
-//             "nn=33 n=null lit=over9000! slice=spice_must_flow " ++
-//             "err=Nope level=warn\n", buf.items);
-//     }
-// }
+test "log: string escape" {
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(testing.allocator);
 
-// test "log: string escape" {
-//     var buf: std.ArrayListUnmanaged(u8) = .{};
-//     defer buf.deinit(testing.allocator);
+    const prefix = "$time=1739795092929 $scope=scope $level=error $msg=test ";
+    {
+        try logTo(.scope, .err, "test", .{ .string = "hello world" }, buf.writer(testing.allocator));
+        try testing.expectEqual(prefix ++ "string=\"hello world\"\n", buf.items);
+    }
 
-//     var logger = try TestLogger.init(testing.allocator, .{ .format = .logfmt }, buf.writer(testing.allocator));
-//     defer logger.deinit();
-
-//     const prefix = "$time=1739795092929 $scope=scope $level=error $msg=test ";
-//     {
-//         try logger.log(.scope, .err, "test", .{ .string = "hello world" });
-//         try testing.expectEqual(prefix ++ "string=\"hello world\"\n", buf.items);
-//     }
-
-//     {
-//         buf.clearRetainingCapacity();
-//         try logger.log(.scope, .err, "test", .{ .string = "\n \thi  \" \" " });
-//         try testing.expectEqual(prefix ++ "string=\"\\n \thi  \\\" \\\" \"\n", buf.items);
-//     }
-// }
-
-// const TestLogger = LogT(std.ArrayListUnmanaged(u8).Writer);
+    {
+        buf.clearRetainingCapacity();
+        try logTo(.scope, .err, "test", .{ .string = "\n \thi  \" \" " }, buf.writer(testing.allocator));
+        try testing.expectEqual(prefix ++ "string=\"\\n \thi  \\\" \\\" \"\n", buf.items);
+    }
+}
