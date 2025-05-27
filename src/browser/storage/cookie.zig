@@ -357,7 +357,7 @@ pub const Cookie = struct {
                         value = value[1..];
                     }
 
-                    if (std.mem.indexOfScalarPos(u8, value, 0, '.') == null) {
+                    if (std.mem.indexOfScalarPos(u8, value, 0, '.') == null and std.ascii.eqlIgnoreCase("localhost", value) == false) {
                         // can't set a cookie for a TLD
                         return error.InvalidDomain;
                     }
@@ -838,6 +838,17 @@ test "Cookie: parse all" {
         .domain = ".lightpanda.io",
         .expires = std.time.timestamp() + 30,
     }, "https://lightpanda.io/cms/users", "user-id=9000; HttpOnly; Max-Age=30; Secure; path=/; Domain=lightpanda.io");
+
+    try expectCookie(.{
+        .name = "app_session",
+        .value = "123",
+        .path = "/",
+        .http_only = true,
+        .secure = false,
+        .domain = ".localhost",
+        .same_site = .lax,
+        .expires = std.time.timestamp() + 7200,
+    }, "http://localhost:8000/login", "app_session=123; Max-Age=7200; path=/; domain=localhost; httponly; samesite=lax");
 }
 
 test "Cookie: parse domain" {
@@ -848,6 +859,8 @@ test "Cookie: parse domain" {
     try expectAttribute(.{ .domain = ".dev.lightpanda.io" }, "http://dev.lightpanda.io/", "b;domain=dev.lightpanda.io");
     try expectAttribute(.{ .domain = ".lightpanda.io" }, "http://dev.lightpanda.io/", "b;domain=lightpanda.io");
     try expectAttribute(.{ .domain = ".lightpanda.io" }, "http://dev.lightpanda.io/", "b;domain=.lightpanda.io");
+    try expectAttribute(.{ .domain = ".localhost" }, "http://localhost/", "b;domain=localhost");
+    try expectAttribute(.{ .domain = ".localhost" }, "http://localhost/", "b;domain=.localhost");
 
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=io");
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=.io");
