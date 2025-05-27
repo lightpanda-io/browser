@@ -117,6 +117,11 @@ pub const Window = struct {
         return self;
     }
 
+    // TODO: frames
+    pub fn get_top(self: *Window) *Window {
+        return self;
+    }
+
     pub fn get_document(self: *Window) ?*parser.DocumentHTML {
         return self.document;
     }
@@ -291,6 +296,11 @@ const testing = @import("../../testing.zig");
 test "Browser.HTML.Window" {
     var runner = try testing.jsRunner(testing.tracking_allocator, .{});
     defer runner.deinit();
+
+    try runner.testCases(&.{
+        .{ "window.parent === window", "true" },
+        .{ "window.top === window", "true" },
+    }, .{});
 
     // requestAnimationFrame should be able to wait by recursively calling itself
     // Note however that we in this test do not wait as the request is just send to the browser
