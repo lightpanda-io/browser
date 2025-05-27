@@ -21,7 +21,7 @@ const parser = @import("../netsurf.zig");
 
 const NodeFilter = @import("node_filter.zig").NodeFilter;
 const Env = @import("../env.zig").Env;
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 
 // https://developer.mozilla.org/en-US/docs/Web/API/TreeWalker
 pub const TreeWalker = struct {

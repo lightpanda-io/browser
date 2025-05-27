@@ -19,7 +19,7 @@ const std = @import("std");
 
 const parser = @import("../netsurf.zig");
 const HTMLElement = @import("elements.zig").HTMLElement;
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 
 pub const HTMLSelectElement = struct {
     pub const Self = parser.Select;
@@ -69,8 +69,8 @@ pub const HTMLSelectElement = struct {
         return parser.selectSetMultiple(select, multiple);
     }
 
-    pub fn get_selectedIndex(select: *parser.Select, state: *SessionState) !i32 {
-        const self = try state.getOrCreateNodeWrapper(HTMLSelectElement, @ptrCast(select));
+    pub fn get_selectedIndex(select: *parser.Select, page: *Page) !i32 {
+        const self = try page.getOrCreateNodeWrapper(HTMLSelectElement, @ptrCast(select));
         const selected_index = try parser.selectGetSelectedIndex(select);
 
         // See the explicit_index_set field documentation
@@ -88,8 +88,8 @@ pub const HTMLSelectElement = struct {
 
     // Libdom's dom_html_select_select_set_selected_index will crash if index
     // is out of range, and it doesn't properly unset options
-    pub fn set_selectedIndex(select: *parser.Select, index: i32, state: *SessionState) !void {
-        var self = try state.getOrCreateNodeWrapper(HTMLSelectElement, @ptrCast(select));
+    pub fn set_selectedIndex(select: *parser.Select, index: i32, page: *Page) !void {
+        var self = try page.getOrCreateNodeWrapper(HTMLSelectElement, @ptrCast(select));
         self.explicit_index_set = true;
 
         const options = try parser.selectGetOptions(select);

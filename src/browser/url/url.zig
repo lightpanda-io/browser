@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 
 const query = @import("query.zig");
 
@@ -47,9 +47,9 @@ pub const URL = struct {
     pub fn constructor(
         url: []const u8,
         base: ?[]const u8,
-        state: *SessionState,
+        page: *Page,
     ) !URL {
-        const arena = state.arena;
+        const arena = page.arena;
         const raw = try std.mem.concat(arena, u8, &[_][]const u8{ url, base orelse "" });
 
         const uri = std.Uri.parse(raw) catch return error.TypeError;
@@ -66,8 +66,8 @@ pub const URL = struct {
         };
     }
 
-    pub fn get_origin(self: *URL, state: *SessionState) ![]const u8 {
-        var buf = std.ArrayList(u8).init(state.arena);
+    pub fn get_origin(self: *URL, page: *Page) ![]const u8 {
+        var buf = std.ArrayList(u8).init(page.arena);
         try self.uri.writeToStream(.{
             .scheme = true,
             .authentication = false,
@@ -82,8 +82,8 @@ pub const URL = struct {
     // get_href returns the URL by writing all its components.
     // The query is replaced by a dump of search params.
     //
-    pub fn get_href(self: *URL, state: *SessionState) ![]const u8 {
-        const arena = state.arena;
+    pub fn get_href(self: *URL, page: *Page) ![]const u8 {
+        const arena = page.arena;
         // retrieve the query search from search_params.
         const cur = self.uri.query;
         defer self.uri.query = cur;
@@ -109,8 +109,8 @@ pub const URL = struct {
         return buf.items;
     }
 
-    pub fn get_protocol(self: *URL, state: *SessionState) ![]const u8 {
-        return try std.mem.concat(state.arena, u8, &[_][]const u8{ self.uri.scheme, ":" });
+    pub fn get_protocol(self: *URL, page: *Page) ![]const u8 {
+        return try std.mem.concat(page.arena, u8, &[_][]const u8{ self.uri.scheme, ":" });
     }
 
     pub fn get_username(self: *URL) []const u8 {
@@ -121,8 +121,8 @@ pub const URL = struct {
         return uriComponentNullStr(self.uri.password);
     }
 
-    pub fn get_host(self: *URL, state: *SessionState) ![]const u8 {
-        var buf = std.ArrayList(u8).init(state.arena);
+    pub fn get_host(self: *URL, page: *Page) ![]const u8 {
+        var buf = std.ArrayList(u8).init(page.arena);
 
         try self.uri.writeToStream(.{
             .scheme = false,
@@ -139,8 +139,8 @@ pub const URL = struct {
         return uriComponentNullStr(self.uri.host);
     }
 
-    pub fn get_port(self: *URL, state: *SessionState) ![]const u8 {
-        const arena = state.arena;
+    pub fn get_port(self: *URL, page: *Page) ![]const u8 {
+        const arena = page.arena;
         if (self.uri.port == null) return try arena.dupe(u8, "");
 
         var buf = std.ArrayList(u8).init(arena);
@@ -153,8 +153,8 @@ pub const URL = struct {
         return uriComponentStr(self.uri.path);
     }
 
-    pub fn get_search(self: *URL, state: *SessionState) ![]const u8 {
-        const arena = state.arena;
+    pub fn get_search(self: *URL, page: *Page) ![]const u8 {
+        const arena = page.arena;
         if (self.search_params.get_size() == 0) return try arena.dupe(u8, "");
 
         var buf: std.ArrayListUnmanaged(u8) = .{};
@@ -164,8 +164,8 @@ pub const URL = struct {
         return buf.items;
     }
 
-    pub fn get_hash(self: *URL, state: *SessionState) ![]const u8 {
-        const arena = state.arena;
+    pub fn get_hash(self: *URL, page: *Page) ![]const u8 {
+        const arena = page.arena;
         if (self.uri.fragment == null) return try arena.dupe(u8, "");
 
         return try std.mem.concat(arena, u8, &[_][]const u8{ "#", uriComponentNullStr(self.uri.fragment) });
@@ -175,8 +175,8 @@ pub const URL = struct {
         return &self.search_params;
     }
 
-    pub fn _toJSON(self: *URL, state: *SessionState) ![]const u8 {
-        return try self.get_href(state);
+    pub fn _toJSON(self: *URL, page: *Page) ![]const u8 {
+        return try self.get_href(page);
     }
 };
 
@@ -200,8 +200,8 @@ fn uriComponentStr(c: std.Uri.Component) []const u8 {
 pub const URLSearchParams = struct {
     values: query.Values,
 
-    pub fn constructor(qs: ?[]const u8, state: *SessionState) !URLSearchParams {
-        return init(state.arena, qs);
+    pub fn constructor(qs: ?[]const u8, page: *Page) !URLSearchParams {
+        return init(page.arena, qs);
     }
 
     pub fn init(arena: std.mem.Allocator, qs: ?[]const u8) !URLSearchParams {

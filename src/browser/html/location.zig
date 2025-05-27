@@ -16,7 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 
 const URL = @import("../url/url.zig").URL;
 
@@ -24,18 +24,18 @@ const URL = @import("../url/url.zig").URL;
 pub const Location = struct {
     url: ?URL = null,
 
-    pub fn get_href(self: *Location, state: *SessionState) ![]const u8 {
-        if (self.url) |*u| return u.get_href(state);
+    pub fn get_href(self: *Location, page: *Page) ![]const u8 {
+        if (self.url) |*u| return u.get_href(page);
         return "";
     }
 
-    pub fn get_protocol(self: *Location, state: *SessionState) ![]const u8 {
-        if (self.url) |*u| return u.get_protocol(state);
+    pub fn get_protocol(self: *Location, page: *Page) ![]const u8 {
+        if (self.url) |*u| return u.get_protocol(page);
         return "";
     }
 
-    pub fn get_host(self: *Location, state: *SessionState) ![]const u8 {
-        if (self.url) |*u| return u.get_host(state);
+    pub fn get_host(self: *Location, page: *Page) ![]const u8 {
+        if (self.url) |*u| return u.get_host(page);
         return "";
     }
 
@@ -44,8 +44,8 @@ pub const Location = struct {
         return "";
     }
 
-    pub fn get_port(self: *Location, state: *SessionState) ![]const u8 {
-        if (self.url) |*u| return u.get_port(state);
+    pub fn get_port(self: *Location, page: *Page) ![]const u8 {
+        if (self.url) |*u| return u.get_port(page);
         return "";
     }
 
@@ -54,18 +54,18 @@ pub const Location = struct {
         return "";
     }
 
-    pub fn get_search(self: *Location, state: *SessionState) ![]const u8 {
-        if (self.url) |*u| return u.get_search(state);
+    pub fn get_search(self: *Location, page: *Page) ![]const u8 {
+        if (self.url) |*u| return u.get_search(page);
         return "";
     }
 
-    pub fn get_hash(self: *Location, state: *SessionState) ![]const u8 {
-        if (self.url) |*u| return u.get_hash(state);
+    pub fn get_hash(self: *Location, page: *Page) ![]const u8 {
+        if (self.url) |*u| return u.get_hash(page);
         return "";
     }
 
-    pub fn get_origin(self: *Location, state: *SessionState) ![]const u8 {
-        if (self.url) |*u| return u.get_origin(state);
+    pub fn get_origin(self: *Location, page: *Page) ![]const u8 {
+        if (self.url) |*u| return u.get_origin(page);
         return "";
     }
 
@@ -82,8 +82,8 @@ pub const Location = struct {
     // TODO
     pub fn _reload(_: *Location) !void {}
 
-    pub fn _toString(self: *Location, state: *SessionState) ![]const u8 {
-        return try self.get_href(state);
+    pub fn _toString(self: *Location, page: *Page) ![]const u8 {
+        return try self.get_href(page);
     }
 };
 

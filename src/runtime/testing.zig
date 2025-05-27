@@ -23,7 +23,7 @@ const generate = @import("generate.zig");
 pub const allocator = std.testing.allocator;
 
 // Very similar to the JSRunner in src/testing.zig, but it isn't tied to the
-// browser.Env or the browser.SessionState
+// browser.Env or the *Page state
 pub fn Runner(comptime State: type, comptime Global: type, comptime types: anytype) type {
     const AdjustedTypes = if (Global == void) generate.Tuple(.{ types, DefaultGlobal }) else types;
 

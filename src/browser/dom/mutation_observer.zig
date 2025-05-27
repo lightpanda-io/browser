@@ -21,7 +21,7 @@ const Allocator = std.mem.Allocator;
 
 const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 
 const Env = @import("../env.zig").Env;
 const NodeList = @import("nodelist.zig").NodeList;
@@ -42,11 +42,11 @@ pub const MutationObserver = struct {
     // execute our callback with it.
     observed: std.ArrayListUnmanaged(*MutationRecord),
 
-    pub fn constructor(cbk: Env.Function, state: *SessionState) !MutationObserver {
+    pub fn constructor(cbk: Env.Function, page: *Page) !MutationObserver {
         return .{
             .cbk = cbk,
             .observed = .{},
-            .arena = state.arena,
+            .arena = page.arena,
         };
     }
 

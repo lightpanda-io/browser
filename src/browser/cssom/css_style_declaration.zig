@@ -20,7 +20,7 @@ const std = @import("std");
 
 const CSSParser = @import("./css_parser.zig").CSSParser;
 const CSSValueAnalyzer = @import("./css_value_analyzer.zig").CSSValueAnalyzer;
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 
 pub const Interfaces = .{
     CSSStyleDeclaration,
@@ -47,17 +47,17 @@ pub const CSSStyleDeclaration = struct {
         return self._getPropertyValue("float");
     }
 
-    pub fn set_cssFloat(self: *CSSStyleDeclaration, value: ?[]const u8, state: *SessionState) !void {
+    pub fn set_cssFloat(self: *CSSStyleDeclaration, value: ?[]const u8, page: *Page) !void {
         const final_value = value orelse "";
-        return self._setProperty("float", final_value, null, state);
+        return self._setProperty("float", final_value, null, page);
     }
 
-    pub fn get_cssText(self: *const CSSStyleDeclaration, state: *SessionState) ![]const u8 {
+    pub fn get_cssText(self: *const CSSStyleDeclaration, page: *Page) ![]const u8 {
         var buffer: std.ArrayListUnmanaged(u8) = .empty;
-        const writer = buffer.writer(state.call_arena);
+        const writer = buffer.writer(page.call_arena);
         for (self.order.items) |name| {
             const prop = self.store.get(name).?;
-            const escaped = try CSSValueAnalyzer.escapeCSSValue(state.call_arena, prop.value);
+            const escaped = try CSSValueAnalyzer.escapeCSSValue(page.call_arena, prop.value);
             try writer.print("{s}: {s}", .{ name, escaped });
             if (prop.priority) try writer.writeAll(" !important");
             try writer.writeAll("; ");
@@ -66,18 +66,18 @@ pub const CSSStyleDeclaration = struct {
     }
 
     // TODO Propagate also upward to parent node
-    pub fn set_cssText(self: *CSSStyleDeclaration, text: []const u8, state: *SessionState) !void {
+    pub fn set_cssText(self: *CSSStyleDeclaration, text: []const u8, page: *Page) !void {
         self.store.clearRetainingCapacity();
         self.order.clearRetainingCapacity();
 
         // call_arena is safe here, because _setProperty will dupe the name
-        // using the state's longer-living arena.
-        const declarations = try CSSParser.parseDeclarations(state.call_arena, text);
+        // using the page's longer-living arena.
+        const declarations = try CSSParser.parseDeclarations(page.call_arena, text);
 
         for (declarations) |decl| {
             if (!CSSValueAnalyzer.isValidPropertyName(decl.name)) continue;
             const priority: ?[]const u8 = if (decl.is_important) "important" else null;
-            try self._setProperty(decl.name, decl.value, priority, state);
+            try self._setProperty(decl.name, decl.value, priority, page);
         }
     }
 
@@ -119,19 +119,19 @@ pub const CSSStyleDeclaration = struct {
                 break;
             }
         }
-        // safe to return, since it's in our state.arena
+        // safe to return, since it's in our page.arena
         return prop.value.value;
     }
 
-    pub fn _setProperty(self: *CSSStyleDeclaration, name: []const u8, value: []const u8, priority: ?[]const u8, state: *SessionState) !void {
-        const owned_value = try state.arena.dupe(u8, value);
+    pub fn _setProperty(self: *CSSStyleDeclaration, name: []const u8, value: []const u8, priority: ?[]const u8, page: *Page) !void {
+        const owned_value = try page.arena.dupe(u8, value);
         const is_important = priority != null and std.ascii.eqlIgnoreCase(priority.?, "important");
 
-        const gop = try self.store.getOrPut(state.arena, name);
+        const gop = try self.store.getOrPut(page.arena, name);
         if (!gop.found_existing) {
-            const owned_name = try state.arena.dupe(u8, name);
+            const owned_name = try page.arena.dupe(u8, name);
             gop.key_ptr.* = owned_name;
-            try self.order.append(state.arena, owned_name);
+            try self.order.append(page.arena, owned_name);
         }
 
         gop.value_ptr.* = .{ .value = owned_value, .priority = is_important };
@@ -177,7 +177,7 @@ test "CSSOM.CSSStyleDeclaration" {
         .{ "style.setProperty('color', 'green')", "undefined" },
         .{ "style.getPropertyValue('color')", "green" },
         .{ "style.length", "4" },
-        .{ "style.color", "green"},
+        .{ "style.color", "green" },
 
         .{ "style.setProperty('padding', '10px', 'important')", "undefined" },
         .{ "style.getPropertyValue('padding')", "10px" },

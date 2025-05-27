@@ -19,7 +19,7 @@ const std = @import("std");
 
 const parser = @import("../netsurf.zig");
 const generate = @import("../../runtime/generate.zig");
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 
 const URL = @import("../url/url.zig").URL;
 const Node = @import("../dom/node.zig").Node;
@@ -111,8 +111,8 @@ pub const HTMLElement = struct {
 
     style: CSSStyleDeclaration = .empty,
 
-    pub fn get_style(e: *parser.ElementHTML, state: *SessionState) !*CSSStyleDeclaration {
-        const self = try state.getOrCreateNodeWrapper(HTMLElement, @ptrCast(e));
+    pub fn get_style(e: *parser.ElementHTML, page: *Page) !*CSSStyleDeclaration {
+        const self = try page.getOrCreateNodeWrapper(HTMLElement, @ptrCast(e));
         return &self.style;
     }
 
@@ -228,26 +228,26 @@ pub const HTMLAnchorElement = struct {
         return try parser.nodeSetTextContent(parser.anchorToNode(self), v);
     }
 
-    inline fn url(self: *parser.Anchor, state: *SessionState) !URL {
+    inline fn url(self: *parser.Anchor, page: *Page) !URL {
         const href = try parser.anchorGetHref(self);
-        return URL.constructor(href, null, state); // TODO inject base url
+        return URL.constructor(href, null, page); // TODO inject base url
     }
 
     // TODO return a disposable string
-    pub fn get_origin(self: *parser.Anchor, state: *SessionState) ![]const u8 {
-        var u = try url(self, state);
-        return try u.get_origin(state);
+    pub fn get_origin(self: *parser.Anchor, page: *Page) ![]const u8 {
+        var u = try url(self, page);
+        return try u.get_origin(page);
     }
 
     // TODO return a disposable string
-    pub fn get_protocol(self: *parser.Anchor, state: *SessionState) ![]const u8 {
-        var u = try url(self, state);
-        return u.get_protocol(state);
+    pub fn get_protocol(self: *parser.Anchor, page: *Page) ![]const u8 {
+        var u = try url(self, page);
+        return u.get_protocol(page);
     }
 
-    pub fn set_protocol(self: *parser.Anchor, v: []const u8, state: *SessionState) !void {
-        const arena = state.arena;
-        var u = try url(self, state);
+    pub fn set_protocol(self: *parser.Anchor, v: []const u8, page: *Page) !void {
+        const arena = page.arena;
+        var u = try url(self, page);
 
         u.uri.scheme = v;
         const href = try u.toString(arena);
@@ -255,12 +255,12 @@ pub const HTMLAnchorElement = struct {
     }
 
     // TODO return a disposable string
-    pub fn get_host(self: *parser.Anchor, state: *SessionState) ![]const u8 {
-        var u = try url(self, state);
-        return try u.get_host(state);
+    pub fn get_host(self: *parser.Anchor, page: *Page) ![]const u8 {
+        var u = try url(self, page);
+        return try u.get_host(page);
     }
 
-    pub fn set_host(self: *parser.Anchor, v: []const u8, state: *SessionState) !void {
+    pub fn set_host(self: *parser.Anchor, v: []const u8, page: *Page) !void {
         // search : separator
         var p: ?u16 = null;
         var h: []const u8 = undefined;
@@ -272,8 +272,8 @@ pub const HTMLAnchorElement = struct {
             }
         }
 
-        const arena = state.arena;
-        var u = try url(self, state);
+        const arena = page.arena;
+        var u = try url(self, page);
 
         if (p) |pp| {
             u.uri.host = .{ .raw = h };
@@ -288,28 +288,28 @@ pub const HTMLAnchorElement = struct {
     }
 
     // TODO return a disposable string
-    pub fn get_hostname(self: *parser.Anchor, state: *SessionState) ![]const u8 {
-        var u = try url(self, state);
-        return try state.arena.dupe(u8, u.get_hostname());
+    pub fn get_hostname(self: *parser.Anchor, page: *Page) ![]const u8 {
+        var u = try url(self, page);
+        return try page.arena.dupe(u8, u.get_hostname());
     }
 
-    pub fn set_hostname(self: *parser.Anchor, v: []const u8, state: *SessionState) !void {
-        const arena = state.arena;
-        var u = try url(self, state);
+    pub fn set_hostname(self: *parser.Anchor, v: []const u8, page: *Page) !void {
+        const arena = page.arena;
+        var u = try url(self, page);
         u.uri.host = .{ .raw = v };
         const href = try u.toString(arena);
         try parser.anchorSetHref(self, href);
     }
 
     // TODO return a disposable string
-    pub fn get_port(self: *parser.Anchor, state: *SessionState) ![]const u8 {
-        var u = try url(self, state);
-        return try u.get_port(state);
+    pub fn get_port(self: *parser.Anchor, page: *Page) ![]const u8 {
+        var u = try url(self, page);
+        return try u.get_port(page);
     }
 
-    pub fn set_port(self: *parser.Anchor, v: ?[]const u8, state: *SessionState) !void {
-        const arena = state.arena;
-        var u = try url(self, state);
+    pub fn set_port(self: *parser.Anchor, v: ?[]const u8, page: *Page) !void {
+        const arena = page.arena;
+        var u = try url(self, page);
 
         if (v != null and v.?.len > 0) {
             u.uri.port = try std.fmt.parseInt(u16, v.?, 10);
@@ -322,14 +322,14 @@ pub const HTMLAnchorElement = struct {
     }
 
     // TODO return a disposable string
-    pub fn get_username(self: *parser.Anchor, state: *SessionState) ![]const u8 {
-        var u = try url(self, state);
-        return try state.arena.dupe(u8, u.get_username());
+    pub fn get_username(self: *parser.Anchor, page: *Page) ![]const u8 {
+        var u = try url(self, page);
+        return try page.arena.dupe(u8, u.get_username());
     }
 
-    pub fn set_username(self: *parser.Anchor, v: ?[]const u8, state: *SessionState) !void {
-        const arena = state.arena;
-        var u = try url(self, state);
+    pub fn set_username(self: *parser.Anchor, v: ?[]const u8, page: *Page) !void {
+        const arena = page.arena;
+        var u = try url(self, page);
 
         if (v) |vv| {
             u.uri.user = .{ .raw = vv };
@@ -342,14 +342,14 @@ pub const HTMLAnchorElement = struct {
     }
 
     // TODO return a disposable string
-    pub fn get_password(self: *parser.Anchor, state: *SessionState) ![]const u8 {
-        var u = try url(self, state);
-        return try state.arena.dupe(u8, u.get_password());
+    pub fn get_password(self: *parser.Anchor, page: *Page) ![]const u8 {
+        var u = try url(self, page);
+        return try page.arena.dupe(u8, u.get_password());
     }
 
-    pub fn set_password(self: *parser.Anchor, v: ?[]const u8, state: *SessionState) !void {
-        const arena = state.arena;
-        var u = try url(self, state);
+    pub fn set_password(self: *parser.Anchor, v: ?[]const u8, page: *Page) !void {
+        const arena = page.arena;
+        var u = try url(self, page);
 
         if (v) |vv| {
             u.uri.password = .{ .raw = vv };
@@ -362,14 +362,14 @@ pub const HTMLAnchorElement = struct {
     }
 
     // TODO return a disposable string
-    pub fn get_pathname(self: *parser.Anchor, state: *SessionState) ![]const u8 {
-        var u = try url(self, state);
-        return try state.arena.dupe(u8, u.get_pathname());
+    pub fn get_pathname(self: *parser.Anchor, page: *Page) ![]const u8 {
+        var u = try url(self, page);
+        return try page.arena.dupe(u8, u.get_pathname());
     }
 
-    pub fn set_pathname(self: *parser.Anchor, v: []const u8, state: *SessionState) !void {
-        const arena = state.arena;
-        var u = try url(self, state);
+    pub fn set_pathname(self: *parser.Anchor, v: []const u8, page: *Page) !void {
+        const arena = page.arena;
+        var u = try url(self, page);
         u.uri.path = .{ .raw = v };
         const href = try u.toString(arena);
 
@@ -377,14 +377,14 @@ pub const HTMLAnchorElement = struct {
     }
 
     // TODO return a disposable string
-    pub fn get_search(self: *parser.Anchor, state: *SessionState) ![]const u8 {
-        var u = try url(self, state);
-        return try u.get_search(state);
+    pub fn get_search(self: *parser.Anchor, page: *Page) ![]const u8 {
+        var u = try url(self, page);
+        return try u.get_search(page);
     }
 
-    pub fn set_search(self: *parser.Anchor, v: ?[]const u8, state: *SessionState) !void {
-        const arena = state.arena;
-        var u = try url(self, state);
+    pub fn set_search(self: *parser.Anchor, v: ?[]const u8, page: *Page) !void {
+        const arena = page.arena;
+        var u = try url(self, page);
 
         if (v) |vv| {
             u.uri.query = .{ .raw = vv };
@@ -397,14 +397,14 @@ pub const HTMLAnchorElement = struct {
     }
 
     // TODO return a disposable string
-    pub fn get_hash(self: *parser.Anchor, state: *SessionState) ![]const u8 {
-        var u = try url(self, state);
-        return try u.get_hash(state);
+    pub fn get_hash(self: *parser.Anchor, page: *Page) ![]const u8 {
+        var u = try url(self, page);
+        return try u.get_hash(page);
     }
 
-    pub fn set_hash(self: *parser.Anchor, v: ?[]const u8, state: *SessionState) !void {
-        const arena = state.arena;
-        var u = try url(self, state);
+    pub fn set_hash(self: *parser.Anchor, v: ?[]const u8, page: *Page) !void {
+        const arena = page.arena;
+        var u = try url(self, page);
 
         if (v) |vv| {
             u.uri.fragment = .{ .raw = vv };
@@ -567,8 +567,8 @@ pub const HTMLImageElement = struct {
     pub const subtype = .node;
     pub const js_name = "Image";
 
-    pub fn constructor(width: ?u32, height: ?u32, state: *const SessionState) !*parser.Image {
-        const element = try parser.documentCreateElement(parser.documentHTMLToDocument(state.window.document), "img");
+    pub fn constructor(width: ?u32, height: ?u32, page: *const Page) !*parser.Image {
+        const element = try parser.documentCreateElement(parser.documentHTMLToDocument(page.window.document), "img");
         const image: *parser.Image = @ptrCast(element);
         if (width) |width_| try parser.imageSetWidth(image, width_);
         if (height) |height_| try parser.imageSetHeight(image, height_);

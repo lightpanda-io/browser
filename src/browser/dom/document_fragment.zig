@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const parser = @import("../netsurf.zig");
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 
 const Node = @import("node.zig").Node;
 
@@ -27,9 +27,9 @@ pub const DocumentFragment = struct {
     pub const prototype = *Node;
     pub const subtype = .node;
 
-    pub fn constructor(state: *const SessionState) !*parser.DocumentFragment {
+    pub fn constructor(page: *const Page) !*parser.DocumentFragment {
         return parser.documentCreateDocumentFragment(
-            parser.documentHTMLToDocument(state.window.document),
+            parser.documentHTMLToDocument(page.window.document),
         );
     }
 

@@ -29,7 +29,7 @@ const URL = @import("../../url.zig").URL;
 const Mime = @import("../mime.zig").Mime;
 const parser = @import("../netsurf.zig");
 const http = @import("../../http/client.zig");
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 const CookieJar = @import("../storage/storage.zig").CookieJar;
 
 // XHR interfaces
@@ -238,8 +238,8 @@ pub const XMLHttpRequest = struct {
 
     const min_delay: u64 = 50000000; // 50ms
 
-    pub fn constructor(session_state: *SessionState) !XMLHttpRequest {
-        const arena = session_state.arena;
+    pub fn constructor(page: *Page) !XMLHttpRequest {
+        const arena = page.arena;
         return .{
             .arena = arena,
             .headers = Headers.init(arena),
@@ -247,8 +247,8 @@ pub const XMLHttpRequest = struct {
             .method = undefined,
             .state = .unsent,
             .url = null,
-            .origin_url = session_state.url,
-            .cookie_jar = session_state.cookie_jar,
+            .origin_url = &page.url,
+            .cookie_jar = page.cookie_jar,
         };
     }
 
@@ -408,7 +408,7 @@ pub const XMLHttpRequest = struct {
     }
 
     // TODO body can be either a XMLHttpRequestBodyInit or a document
-    pub fn _send(self: *XMLHttpRequest, body: ?[]const u8, session_state: *SessionState) !void {
+    pub fn _send(self: *XMLHttpRequest, body: ?[]const u8, page: *Page) !void {
         if (self.state != .opened) return DOMError.InvalidState;
         if (self.send_flag) return DOMError.InvalidState;
 
@@ -416,7 +416,7 @@ pub const XMLHttpRequest = struct {
 
         self.send_flag = true;
 
-        self.request = try session_state.request_factory.create(self.method, &self.url.?.uri);
+        self.request = try page.request_factory.create(self.method, &self.url.?.uri);
         var request = &self.request.?;
         errdefer request.deinit();
 
@@ -426,7 +426,7 @@ pub const XMLHttpRequest = struct {
 
         {
             var arr: std.ArrayListUnmanaged(u8) = .{};
-            try self.cookie_jar.forRequest(&self.url.?.uri, arr.writer(session_state.arena), .{
+            try self.cookie_jar.forRequest(&self.url.?.uri, arr.writer(page.arena), .{
                 .navigation = false,
                 .origin_uri = &self.origin_url.uri,
             });
@@ -442,12 +442,12 @@ pub const XMLHttpRequest = struct {
         // var used_body: ?XMLHttpRequestBodyInit = null;
         if (body) |b| {
             if (self.method != .GET and self.method != .HEAD) {
-                request.body = try session_state.arena.dupe(u8, b);
+                request.body = try page.arena.dupe(u8, b);
                 try request.addHeader("Content-Type", "text/plain; charset=UTF-8", .{});
             }
         }
 
-        try request.sendAsync(session_state.loop, self, .{});
+        try request.sendAsync(page.loop, self, .{});
     }
 
     pub fn onHttpResponse(self: *XMLHttpRequest, progress_: anyerror!http.Progress) !void {

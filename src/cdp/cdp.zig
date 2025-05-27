@@ -555,7 +555,7 @@ const IsolatedWorld = struct {
     // Currently we have only 1 page/frame and thus also only 1 state in the isolate world.
     pub fn createContext(self: *IsolatedWorld, page: *Page) !void {
         if (self.executor.scope != null) return error.Only1IsolatedContextSupported;
-        _ = try self.executor.startScope(&page.window, &page.state, {}, false);
+        _ = try self.executor.startScope(&page.window, page, {}, false);
     }
 };
 

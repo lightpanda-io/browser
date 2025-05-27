@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const parser = @import("../netsurf.zig");
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 
 const CharacterData = @import("character_data.zig").CharacterData;
 const CDATASection = @import("cdata_section.zig").CDATASection;
@@ -32,9 +32,9 @@ pub const Text = struct {
     pub const prototype = *CharacterData;
     pub const subtype = .node;
 
-    pub fn constructor(data: ?[]const u8, state: *const SessionState) !*parser.Text {
+    pub fn constructor(data: ?[]const u8, page: *const Page) !*parser.Text {
         return parser.documentCreateTextNode(
-            parser.documentHTMLToDocument(state.window.document),
+            parser.documentHTMLToDocument(page.window.document),
             data orelse "",
         );
     }

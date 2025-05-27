@@ -18,7 +18,7 @@
 
 const Env = @import("../env.zig").Env;
 const parser = @import("../netsurf.zig");
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 
 const EventHandler = @import("../events/event.zig").EventHandler;
 
@@ -59,7 +59,7 @@ pub const EventTarget = struct {
         typ: []const u8,
         cbk: Env.Function,
         opts_: ?AddEventListenerOpts,
-        state: *SessionState,
+        page: *Page,
     ) !void {
         var capture = false;
         if (opts_) |opts| {
@@ -91,7 +91,7 @@ pub const EventTarget = struct {
             return;
         }
 
-        const eh = try EventHandler.init(state.arena, try cbk.withThis(self));
+        const eh = try EventHandler.init(page.arena, try cbk.withThis(self));
 
         try parser.eventTargetAddEventListener(
             self,
@@ -131,10 +131,6 @@ pub const EventTarget = struct {
 
     pub fn _dispatchEvent(self: *parser.EventTarget, event: *parser.Event) !bool {
         return try parser.eventTargetDispatchEvent(self, event);
-    }
-
-    pub fn deinit(self: *parser.EventTarget, state: *SessionState) void {
-        parser.eventTargetRemoveAllEventListeners(self, state.arena) catch unreachable;
     }
 };
 

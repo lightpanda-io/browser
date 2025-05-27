@@ -20,7 +20,7 @@ const parser = @import("../netsurf.zig");
 
 const CharacterData = @import("character_data.zig").CharacterData;
 
-const SessionState = @import("../env.zig").SessionState;
+const Page = @import("../page.zig").Page;
 
 // https://dom.spec.whatwg.org/#interface-comment
 pub const Comment = struct {
@@ -28,9 +28,9 @@ pub const Comment = struct {
     pub const prototype = *CharacterData;
     pub const subtype = .node;
 
-    pub fn constructor(data: ?[]const u8, state: *const SessionState) !*parser.Comment {
+    pub fn constructor(data: ?[]const u8, page: *const Page) !*parser.Comment {
         return parser.documentCreateComment(
-            parser.documentHTMLToDocument(state.window.document),
+            parser.documentHTMLToDocument(page.window.document),
             data orelse "",
         );
     }
