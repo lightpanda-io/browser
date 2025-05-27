@@ -146,6 +146,9 @@ jobs:
     name: cdp-and-hyperfine-bench
     needs: zig-build-release
 
+    # Don't execute on PR
+    if: github.event_name != 'pull_request'
+
     # use a self host runner.
     runs-on: lpd_bench_m5.large
     timeout-minutes: 15
