@@ -100,6 +100,10 @@ pub const Window = struct {
         return &self.location;
     }
 
+    pub fn set_location(_: *const Window, url: []const u8, page: *Page) !void {
+        return page.navigateFromWebAPI(url);
+    }
+
     pub fn get_console(self: *Window) *Console {
         return &self.console;
     }

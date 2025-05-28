@@ -69,18 +69,17 @@ pub const Location = struct {
         return "";
     }
 
-    // TODO
-    pub fn _assign(_: *Location, url: []const u8) !void {
-        _ = url;
+    pub fn _assign(_: *const Location, url: []const u8, page: *Page) !void {
+        return page.navigateFromWebAPI(url);
     }
 
-    // TODO
-    pub fn _replace(_: *Location, url: []const u8) !void {
-        _ = url;
+    pub fn _replace(_: *const Location, url: []const u8, page: *Page) !void {
+        return page.navigateFromWebAPI(url);
     }
 
-    // TODO
-    pub fn _reload(_: *Location) !void {}
+    pub fn _reload(_: *const Location, page: *Page) !void {
+        return page.navigateFromWebAPI(page.url.raw);
+    }
 
     pub fn _toString(self: *Location, page: *Page) ![]const u8 {
         return try self.get_href(page);

@@ -541,21 +541,23 @@ pub const Page = struct {
             .a => {
                 const element: *parser.Element = @ptrCast(node);
                 const href = (try parser.elementGetAttribute(element, "href")) orelse return;
-
-                // We cannot navigate immediately as navigating will delete the DOM tree, which holds this event's node.
-                // As such we schedule the function to be called as soon as possible.
-                // NOTE Using the page.arena assumes that the scheduling loop does use this object after invoking the callback
-                // If that changes we may want to consider storing DelayedNavigation in the session instead.
-                const arena = self.arena;
-                const navi = try arena.create(DelayedNavigation);
-                navi.* = .{
-                    .session = self.session,
-                    .href = try arena.dupe(u8, href),
-                };
-                _ = try self.loop.timeout(0, &navi.navigate_node);
+                try self.navigateFromWebAPI(href);
             },
             else => {},
         }
+    }
+
+    // As such we schedule the function to be called as soon as possible.
+    // The page.arena is safe to use here, but the transfer_arena exists
+    // specifically for this type of lifetime.
+    pub fn navigateFromWebAPI(self: *Page, url: []const u8) !void {
+        const arena = self.session.transfer_arena;
+        const navi = try arena.create(DelayedNavigation);
+        navi.* = .{
+            .session = self.session,
+            .url = try arena.dupe(u8, url),
+        };
+        _ = try self.loop.timeout(0, &navi.navigate_node);
     }
 
     pub fn getOrCreateNodeWrapper(self: *Page, comptime T: type, node: *parser.Node) !*T {
@@ -579,16 +581,15 @@ pub const Page = struct {
 };
 
 const DelayedNavigation = struct {
-    navigate_node: Loop.CallbackNode = .{ .func = DelayedNavigation.delay_navigate },
+    url: []const u8,
     session: *Session,
-    href: []const u8,
+    navigate_node: Loop.CallbackNode = .{ .func = delayNavigate },
 
-    fn delay_navigate(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
+    fn delayNavigate(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
         _ = repeat_delay;
         const self: *DelayedNavigation = @fieldParentPtr("navigate_node", node);
-        self.session.pageNavigate(self.href) catch |err| {
-            // TODO: should we trigger a specific event here?
-            log.err(.page, "delayed navigation error", .{ .err = err });
+        self.session.pageNavigate(self.url) catch |err| {
+            log.err(.page, "delayed navigation error", .{ .err = err, .url = self.url });
         };
     }
 };
