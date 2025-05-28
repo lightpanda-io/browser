@@ -626,6 +626,85 @@ pub const HTMLInputElement = struct {
     pub const Self = parser.Input;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
+
+    pub fn get_defaultValue(self: *parser.Input) ![]const u8 {
+        return try parser.inputGetDefaultValue(self);
+    }
+    pub fn set_defaultValue(self: *parser.Input, default_value: []const u8) !void {
+        try parser.inputSetDefaultValue(self, default_value);
+    }
+    pub fn get_defaultChecked(self: *parser.Input) !bool {
+        return try parser.inputGetDefaultChecked(self);
+    }
+    pub fn set_defaultChecked(self: *parser.Input, default_checked: bool) !void {
+        try parser.inputSetDefaultChecked(self, default_checked);
+    }
+    pub fn get_from(self: *parser.Input) !?*parser.Form {
+        return try parser.inputGetForm(self);
+    }
+    pub fn get_accept(self: *parser.Input) ![]const u8 {
+        return try parser.inputGetAccept(self);
+    }
+    pub fn set_accept(self: *parser.Input, accept: []const u8) !void {
+        try parser.inputSetAccept(self, accept);
+    }
+    pub fn get_alt(self: *parser.Input) ![]const u8 {
+        return try parser.inputGetAlt(self);
+    }
+    pub fn set_alt(self: *parser.Input, alt: []const u8) !void {
+        try parser.inputSetAlt(self, alt);
+    }
+    pub fn get_checked(self: *parser.Input) !bool {
+        return try parser.inputGetChecked(self);
+    }
+    pub fn set_checked(self: *parser.Input, checked: bool) !void {
+        try parser.inputSetChecked(self, checked);
+    }
+    pub fn get_disabled(self: *parser.Input) !bool {
+        return try parser.inputGetDisabled(self);
+    }
+    pub fn set_disabled(self: *parser.Input, disabled: bool) !void {
+        try parser.inputSetDisabled(self, disabled);
+    }
+    pub fn get_maxLength(self: *parser.Input) !i32 {
+        return try parser.inputGetMaxLength(self);
+    }
+    pub fn set_maxLength(self: *parser.Input, max_length: u32) !void {
+        try parser.inputSetMaxLength(self, max_length);
+    }
+    pub fn get_name(self: *parser.Input) ![]const u8 {
+        return try parser.inputGetName(self);
+    }
+    pub fn set_name(self: *parser.Input, name: []const u8) !void {
+        try parser.inputSetName(self, name);
+    }
+    pub fn get_readOnly(self: *parser.Input) !bool {
+        return try parser.inputGetReadOnly(self);
+    }
+    pub fn set_readOnly(self: *parser.Input, read_only: bool) !void {
+        try parser.inputSetReadOnly(self, read_only);
+    }
+    pub fn get_size(self: *parser.Input) !u32 {
+        return try parser.inputGetSize(self);
+    }
+    pub fn set_size(self: *parser.Input, size: u32) !void {
+        try parser.inputSetSize(self, size);
+    }
+    pub fn get_src(self: *parser.Input) ![]const u8 {
+        return try parser.inputGetSrc(self);
+    }
+    pub fn set_src(self: *parser.Input, src: []const u8) !void {
+        try parser.inputSetSrc(self, src);
+    }
+    pub fn get_type(self: *parser.Input) ![]const u8 {
+        return try parser.inputGetType(self);
+    }
+    pub fn get_value(self: *parser.Input) ![]const u8 {
+        return try parser.inputGetValue(self);
+    }
+    pub fn set_value(self: *parser.Input, value: []const u8) !void {
+        try parser.inputSetValue(self, value);
+    }
 };
 
 pub const HTMLLIElement = struct {
