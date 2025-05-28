@@ -412,7 +412,7 @@ pub const XMLHttpRequest = struct {
         if (self.state != .opened) return DOMError.InvalidState;
         if (self.send_flag) return DOMError.InvalidState;
 
-        log.info(.xhr, "request", .{ .method = self.method, .url = self.url });
+        log.debug(.xhr, "request", .{ .method = self.method, .url = self.url });
 
         self.send_flag = true;
 
@@ -459,7 +459,7 @@ pub const XMLHttpRequest = struct {
         if (progress.first) {
             const header = progress.header;
 
-            log.info(.xhr, "request header", .{ .status = header.status });
+            log.debug(.xhr, "request header", .{ .status = header.status });
             for (header.headers.items) |hdr| {
                 try self.response_headers.append(hdr.name, hdr.value);
             }
@@ -505,7 +505,10 @@ pub const XMLHttpRequest = struct {
             return;
         }
 
-        log.info(.xhr, "request complete", .{});
+        log.info(.xhr, "request complete", .{
+            .url = self.url,
+            .status = progress.header.status,
+        });
 
         self.state = .done;
         self.send_flag = false;
