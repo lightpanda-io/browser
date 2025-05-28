@@ -28,6 +28,32 @@ pub fn writeHTML(doc: *parser.Document, writer: anytype) !void {
     try writer.writeAll("\n");
 }
 
+// Spec: https://www.w3.org/TR/xml/#sec-prolog-dtd
+pub fn writeDocType(doc_type: *parser.DocumentType, writer: anytype) !void {
+    try writer.writeAll("<!DOCTYPE ");
+    try writer.writeAll(try parser.documentTypeGetName(doc_type));
+
+    const public_id = try parser.documentTypeGetPublicId(doc_type);
+    const system_id = try parser.documentTypeGetSystemId(doc_type);
+    if (public_id.len != 0 and system_id.len != 0) {
+        try writer.writeAll(" PUBLIC \"");
+        try writeEscapedAttributeValue(writer, public_id);
+        try writer.writeAll("\" \"");
+        try writeEscapedAttributeValue(writer, system_id);
+        try writer.writeAll("\"");
+    } else if (public_id.len != 0) {
+        try writer.writeAll(" PUBLIC \"");
+        try writeEscapedAttributeValue(writer, public_id);
+        try writer.writeAll("\"");
+    } else if (system_id.len != 0) {
+        try writer.writeAll(" SYSTEM \"");
+        try writeEscapedAttributeValue(writer, system_id);
+        try writer.writeAll("\"");
+    }
+    // Internal subset is not implemented
+    try writer.writeAll(">");
+}
+
 pub fn writeNode(node: *parser.Node, writer: anytype) anyerror!void {
     switch (try parser.nodeType(node)) {
         .element => {
@@ -88,7 +114,7 @@ pub fn writeNode(node: *parser.Node, writer: anytype) anyerror!void {
         .document_fragment => return,
         // document will never be called, but required for completeness.
         .document => return,
-        // done globally instead, but required for completeness.
+        // done globally instead, but required for completeness. Only the outer DOCTYPE should be written
         .document_type => return,
         // deprecated
         .attribute => return,

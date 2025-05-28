@@ -35,10 +35,10 @@ pub const XMLSerializer = struct {
 
     pub fn _serializeToString(_: *const XMLSerializer, root: *parser.Node, page: *Page) ![]const u8 {
         var buf = std.ArrayList(u8).init(page.arena);
-        if (try parser.nodeType(root) == .document) {
-            try dump.writeHTML(@as(*parser.Document, @ptrCast(root)), buf.writer());
-        } else {
-            try dump.writeNode(root, buf.writer());
+        switch (try parser.nodeType(root)) {
+            .document => try dump.writeHTML(@as(*parser.Document, @ptrCast(root)), buf.writer()),
+            .document_type => try dump.writeDocType(@as(*parser.DocumentType, @ptrCast(root)), buf.writer()),
+            else => try dump.writeNode(root, buf.writer()),
         }
         return buf.items;
     }
@@ -54,3 +54,12 @@ test "Browser.XMLSerializer" {
         .{ "s.serializeToString(document.getElementById('para'))", "<p id=\"para\"> And</p>" },
     }, .{});
 }
+test "Browser.XMLSerializer with DOCTYPE" {
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html = "<!DOCTYPE html><html><head></head><body></body></html>" });
+    defer runner.deinit();
+
+    try runner.testCases(&.{
+        .{ "new XMLSerializer().serializeToString(document.doctype)", "<!DOCTYPE html>" },
+    }, .{});
+}
+test
