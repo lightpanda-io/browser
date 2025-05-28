@@ -70,15 +70,15 @@ pub const Location = struct {
     }
 
     pub fn _assign(_: *const Location, url: []const u8, page: *Page) !void {
-        return page.navigateFromWebAPI(url);
+        return page.navigateFromWebAPI(url, .{ .reason = .script });
     }
 
     pub fn _replace(_: *const Location, url: []const u8, page: *Page) !void {
-        return page.navigateFromWebAPI(url);
+        return page.navigateFromWebAPI(url, .{ .reason = .script });
     }
 
     pub fn _reload(_: *const Location, page: *Page) !void {
-        return page.navigateFromWebAPI(page.url.raw);
+        return page.navigateFromWebAPI(page.url.raw, .{ .reason = .script });
     }
 
     pub fn _toString(self: *Location, page: *Page) ![]const u8 {

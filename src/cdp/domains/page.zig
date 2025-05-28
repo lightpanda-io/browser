@@ -169,18 +169,27 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
 
     bc.reset();
 
-    const is_anchor = event.opts.reason == .anchor;
-    if (is_anchor) {
+    const reason_: ?[]const u8 = switch (event.opts.reason) {
+        .anchor => "anchorClick",
+        .script => "scriptInitiated",
+        .form => switch (event.opts.method) {
+            .GET => "formSubmissionGet",
+            .POST => "formSubmissionPost",
+            else => unreachable,
+        },
+        .address_bar => null,
+    };
+    if (reason_) |reason| {
         try cdp.sendEvent("Page.frameScheduledNavigation", .{
             .frameId = target_id,
             .delay = 0,
-            .reason = "anchorClick",
+            .reason = reason,
             .url = event.url.raw,
         }, .{ .session_id = session_id });
 
         try cdp.sendEvent("Page.frameRequestedNavigation", .{
             .frameId = target_id,
-            .reason = "anchorClick",
+            .reason = reason,
             .url = event.url.raw,
             .disposition = "currentTab",
         }, .{ .session_id = session_id });
@@ -224,7 +233,7 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
         }, .{ .session_id = session_id });
     }
 
-    if (is_anchor) {
+    if (reason_ != null) {
         try cdp.sendEvent("Page.frameClearedScheduledNavigation", .{
             .frameId = target_id,
         }, .{ .session_id = session_id });
