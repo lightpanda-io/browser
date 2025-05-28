@@ -1267,7 +1267,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 return self.tryCallWithThis(T, self.getThis(), args, result);
             }
 
-            pub fn tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype, result: *Result) !void {
+            pub fn tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype, result: *Result) !T {
                 var try_catch: TryCatch = undefined;
                 try_catch.init(self.scope);
                 defer try_catch.deinit();
