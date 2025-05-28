@@ -79,7 +79,7 @@ const XMLHttpRequestBodyInit = union(enum) {
 pub const XMLHttpRequest = struct {
     proto: XMLHttpRequestEventTarget = XMLHttpRequestEventTarget{},
     arena: Allocator,
-    request: ?http.Request = null,
+    request: ?*http.Request = null,
 
     method: http.Request.Method,
     state: State,
@@ -252,6 +252,13 @@ pub const XMLHttpRequest = struct {
         };
     }
 
+    pub fn destructor(self: *XMLHttpRequest) void {
+        if (self.request) |req| {
+            req.abort();
+            self.request = null;
+        }
+    }
+
     pub fn reset(self: *XMLHttpRequest) void {
         self.url = null;
 
@@ -417,7 +424,7 @@ pub const XMLHttpRequest = struct {
         self.send_flag = true;
 
         self.request = try page.request_factory.create(self.method, &self.url.?.uri);
-        var request = &self.request.?;
+        var request = self.request.?;
         errdefer request.deinit();
 
         for (self.headers.list.items) |hdr| {
@@ -452,6 +459,9 @@ pub const XMLHttpRequest = struct {
 
     pub fn onHttpResponse(self: *XMLHttpRequest, progress_: anyerror!http.Progress) !void {
         const progress = progress_ catch |err| {
+            // The request has been closed internally by the client, it isn't safe
+            // for us to keep it around.
+            self.request = null;
             self.onErr(err);
             return err;
         };
@@ -510,6 +520,10 @@ pub const XMLHttpRequest = struct {
             .status = progress.header.status,
         });
 
+        // Not that the request is done, the http/client will free the request
+        // object. It isn't safe to keep it around.
+        self.request = null;
+
         self.state = .done;
         self.send_flag = false;
         self.dispatchEvt("readystatechange");
@@ -532,6 +546,7 @@ pub const XMLHttpRequest = struct {
 
     pub fn _abort(self: *XMLHttpRequest) void {
         self.onErr(DOMError.Abort);
+        self.destructor();
     }
 
     pub fn get_responseType(self: *XMLHttpRequest) []const u8 {
