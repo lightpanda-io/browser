@@ -181,7 +181,7 @@ pub const Page = struct {
         const session = self.session;
         const notification = session.browser.notification;
 
-        log.info(.page, "navigate", .{ .url = request_url, .reason = opts.reason });
+        log.debug(.page, "navigate", .{ .url = request_url, .reason = opts.reason });
 
         // if the url is about:blank, nothing to do.
         if (std.mem.eql(u8, "about:blank", request_url.raw)) {
@@ -229,7 +229,12 @@ pub const Page = struct {
             break :blk Mime.sniff(try response.peek());
         } orelse .unknown;
 
-        log.info(.page, "navigation header", .{ .status = header.status, .content_type = content_type, .charset = mime.charset });
+        log.info(.page, "navigation", .{
+            .status = header.status,
+            .content_type = content_type,
+            .charset = mime.charset,
+            .url = request_url,
+        });
 
         if (mime.isHTML()) {
             self.raw_data = null;
@@ -248,7 +253,7 @@ pub const Page = struct {
             .url = &self.url,
             .timestamp = timestamp(),
         });
-        log.info(.page, "navigation complete", .{});
+        log.debug(.page, "navigation complete", .{});
     }
 
     // https://html.spec.whatwg.org/#read-html
@@ -439,8 +444,8 @@ pub const Page = struct {
         var origin_url = &self.url;
         const url = try origin_url.resolve(arena, res_src);
 
-        log.info(.page, "fetching script", .{ .url = url });
-        errdefer |err| log.err(.page, "fetch error", .{ .err = err });
+        log.debug(.page, "fetching script", .{ .url = url });
+        errdefer |err| log.err(.page, "fetch error", .{ .err = err, .url = url });
 
         var request = try self.newHTTPRequest(.GET, &url, .{
             .origin_uri = &origin_url.uri,
@@ -468,7 +473,11 @@ pub const Page = struct {
             return null;
         }
 
-        log.info(.page, "fetch complete", .{ .status = header.status, .content_length = arr.items.len });
+        log.info(.page, "fetch complete", .{
+            .url = url,
+            .status = header.status,
+            .content_length = arr.items.len,
+        });
         return arr.items;
     }
 
