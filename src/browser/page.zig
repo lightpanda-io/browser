@@ -277,6 +277,10 @@ pub const Page = struct {
         const html_doc = self.window.document;
         const doc = parser.documentHTMLToDocument(html_doc);
 
+        // we want to be notified of any dynamically added script tags
+        // so that we can load the script
+        parser.documentSetScriptAddedCallback(doc, self, scriptAddedCallback);
+
         const document_element = (try parser.documentGetDocumentElement(doc)) orelse return error.DocumentElementError;
         _ = try parser.eventTargetAddEventListener(
             parser.toEventTarget(parser.Element, document_element),
@@ -317,8 +321,12 @@ pub const Page = struct {
             }
 
             const e = parser.nodeToElement(next.?);
+            const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(e)));
+            if (tag != .script) {
+                // ignore non-js script.
+                continue;
+            }
 
-            // ignore non-js script.
             const script = try Script.init(e) orelse continue;
 
             // TODO use fetchpriority
@@ -348,19 +356,11 @@ pub const Page = struct {
             // > immediately before the browser continues to parse the
             // > page.
             // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#notes
-            try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(e));
-            self.evalScript(&script) catch |err| {
-                log.err(.page, "eval script error", .{ .err = err });
-            };
-            try parser.documentHTMLSetCurrentScript(html_doc, null);
+            self.evalScript(&script);
         }
 
-        for (defer_scripts.items) |script| {
-            try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(script.element));
-            self.evalScript(&script) catch |err| {
-                log.err(.page, "eval script error", .{ .err = err });
-            };
-            try parser.documentHTMLSetCurrentScript(html_doc, null);
+        for (defer_scripts.items) |*script| {
+            self.evalScript(script);
         }
         // dispatch DOMContentLoaded before the transition to "complete",
         // at the point where all subresources apart from async script elements
@@ -369,12 +369,8 @@ pub const Page = struct {
         try HTMLDocument.documentIsLoaded(html_doc, self);
 
         // eval async scripts.
-        for (async_scripts.items) |script| {
-            try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(script.element));
-            self.evalScript(&script) catch |err| {
-                log.err(.page, "eval script error", .{ .err = err });
-            };
-            try parser.documentHTMLSetCurrentScript(html_doc, null);
+        for (async_scripts.items) |*script| {
+            self.evalScript(script);
         }
 
         try HTMLDocument.documentIsComplete(html_doc, self);
@@ -390,10 +386,24 @@ pub const Page = struct {
         );
     }
 
+    fn evalScript(self: *Page, script: *const Script) void {
+        self.tryEvalScript(script) catch |err| {
+            log.err(.page, "eval script error", .{ .err = err });
+        };
+    }
+
+
     // evalScript evaluates the src in priority.
     // if no src is present, we evaluate the text source.
     // https://html.spec.whatwg.org/multipage/scripting.html#script-processing-model
-    fn evalScript(self: *Page, script: *const Script) !void {
+    fn tryEvalScript(self: *Page, script: *const Script) !void {
+        const html_doc = self.window.document;
+        try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(script.element));
+
+        defer parser.documentHTMLSetCurrentScript(html_doc, null) catch |err| {
+            log.err(.page, "clear document script", .{.err = err});
+        };
+
         const src = script.src orelse {
             // source is inline
             // TODO handle charset attribute
@@ -613,12 +623,6 @@ const Script = struct {
     };
 
     fn init(e: *parser.Element) !?Script {
-        // ignore non-script tags
-        const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(e)));
-        if (tag != .script) {
-            return null;
-        }
-
         if (try parser.elementGetAttribute(e, "nomodule") != null) {
             // these scripts should only be loaded if we don't support modules
             // but since we do support modules, we can just skip them.
@@ -706,4 +710,21 @@ pub const NavigateOpts = struct {
 fn timestamp() u32 {
     const ts = std.posix.clock_gettime(std.posix.CLOCK.MONOTONIC) catch unreachable;
     return @intCast(ts.sec);
+}
+
+// A callback from libdom whenever a script tag is added to the DOM.
+// element is guaranteed to be a script element.
+// The script tag might not have a src. It might be any attribute, like
+// `nomodule`, `defer` and `async`. `Script.init` will return null on `nomodule`
+// so that's handled. And because we're only executing the inline <script> tags
+// after the document is loaded, it's ok to execute any async and defer scripts
+// immediately.
+pub export fn scriptAddedCallback(ctx: ?*anyopaque, element: ?*parser.Element) callconv(.C) void {
+    var script = Script.init(element.?) catch |err| {
+        log.warn(.page, "script added init error", .{.err = err});
+        return;
+    } orelse return;
+
+    const self: *Page = @alignCast(@ptrCast(ctx.?));
+    self.evalScript(&script);
 }
