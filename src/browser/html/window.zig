@@ -51,7 +51,7 @@ pub const Window = struct {
     storage_shelf: ?*storage.Shelf = null,
 
     // counter for having unique timer ids
-    timer_id: u31 = 0,
+    timer_id: u30 = 0,
     timers: std.AutoHashMapUnmanaged(u32, *TimerCallback) = .{},
 
     crypto: Crypto = .{},
@@ -209,6 +209,15 @@ pub const Window = struct {
     }
 
     fn createTimeout(self: *Window, cbk: Function, delay_: ?u32, page: *Page, comptime repeat: bool) !u32 {
+        const delay = delay_ orelse 0;
+        if (delay > 5000) {
+            log.warn(.window, "long timeout ignored", .{ .delay = delay, .interval = repeat });
+            // self.timer_id is u30, so the largest value we can generate is
+            // 1_073_741_824. Returning 2_000_000_000 makes sure that clients
+            // can call cancelTimer/cancelInterval without breaking anything.
+            return 2_000_000_000;
+        }
+
         if (self.timers.count() > 512) {
             return error.TooManyTimeout;
         }
@@ -224,7 +233,7 @@ pub const Window = struct {
         }
         errdefer _ = self.timers.remove(timer_id);
 
-        const delay: u63 = @as(u63, (delay_ orelse 0)) * std.time.ns_per_ms;
+        const delay_ms: u63 = @as(u63, delay) * std.time.ns_per_ms;
         const callback = try arena.create(TimerCallback);
 
         callback.* = .{
@@ -233,9 +242,9 @@ pub const Window = struct {
             .window = self,
             .timer_id = timer_id,
             .node = .{ .func = TimerCallback.run },
-            .repeat = if (repeat) delay else null,
+            .repeat = if (repeat) delay_ms else null,
         };
-        callback.loop_id = try page.loop.timeout(delay, &callback.node);
+        callback.loop_id = try page.loop.timeout(delay_ms, &callback.node);
 
         gop.value_ptr.* = callback;
         return timer_id;
@@ -344,5 +353,12 @@ test "Browser.HTML.Window" {
         },
         .{ "innerHeight", "1" },
         .{ "innerWidth", "2" },
+    }, .{});
+
+    // cancelAnimationFrame should be able to cancel a request with the given id
+    try runner.testCases(&.{
+        .{ "let longCall = false;", null },
+        .{ "window.setTimeout(() => {longCall = true}, 5001);", null },
+        .{ "longCall;", "false" },
     }, .{});
 }
