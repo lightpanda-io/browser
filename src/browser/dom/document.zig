@@ -18,6 +18,7 @@
 
 const std = @import("std");
 
+const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 const Page = @import("../page.zig").Page;
 
@@ -120,8 +121,26 @@ pub const Document = struct {
         return try Element.toInterface(e);
     }
 
-    pub fn _createElement(self: *parser.Document, tag_name: []const u8) !ElementUnion {
+    pub fn _createElement(self: *parser.Document, tag_name: []const u8, page: *Page) !ElementUnion {
         const e = try parser.documentCreateElement(self, tag_name);
+
+        const custom_elements = &page.window.custom_elements;
+        if (custom_elements._get(tag_name, page)) |construct| {
+            var result: Env.Function.Result = undefined;
+
+            _ = construct.newInstance(e, &result) catch |err| {
+                log.fatal(.user_script, "newInstance error", .{
+                    .err = result.exception,
+                    .stack = result.stack,
+                    .tag_name = tag_name,
+                    .source = "createElement",
+                });
+                return err;
+            };
+
+            return try Element.toInterface(e);
+        }
+
         return try Element.toInterface(e);
     }
 

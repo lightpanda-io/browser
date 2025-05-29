@@ -1271,6 +1271,30 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 };
             }
 
+            pub fn newInstance(self: *const Function, instance: anytype, result: *Result) !PersistentObject {
+                const context = self.js_context;
+
+                var try_catch: TryCatch = undefined;
+                try_catch.init(context);
+                defer try_catch.deinit();
+
+                // This creates a new instance using this Function as a constructor.
+                // This returns a generic Object
+                const js_this = self.func.castToFunction().initInstance(context.v8_context, &.{}) orelse {
+                    if (try_catch.hasCaught()) {
+                        const allocator = context.call_arena;
+                        result.stack = try_catch.stack(allocator) catch null;
+                        result.exception = (try_catch.exception(allocator) catch "???") orelse "???";
+                    } else {
+                        result.stack = null;
+                        result.exception = "???";
+                    }
+                    return error.JsConstructorFailed;
+                };
+
+                return try context._mapZigInstanceToJs(js_this, instance);
+            }
+
             pub fn call(self: *const Function, comptime T: type, args: anytype) !T {
                 return self.callWithThis(T, self.getThis(), args);
             }
