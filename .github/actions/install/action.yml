@@ -34,7 +34,9 @@ runs:
     - name: Install apt deps
       if: ${{ inputs.os == 'linux' }}
       shell: bash
-      run: sudo apt-get install -y wget xz-utils python3 ca-certificates git pkg-config libglib2.0-dev gperf libexpat1-dev cmake clang
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y wget xz-utils python3 ca-certificates git pkg-config libglib2.0-dev gperf libexpat1-dev cmake clang
 
     - uses: mlugg/setup-zig@v2
       with:
