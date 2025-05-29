@@ -1564,6 +1564,9 @@ const Reader = struct {
 
     header_done: bool,
 
+    // Whether or not the current header has to be skipped [because it's too long].
+    skip_current_header: bool,
+
     fn init(state: *State, keepalive: *bool) Reader {
         return .{
             .pos = 0,
@@ -1571,6 +1574,7 @@ const Reader = struct {
             .body_reader = null,
             .header_done = false,
             .keepalive = keepalive,
+            .skip_current_header = false,
             .header_buf = state.header_buf,
             .arena = state.arena.allocator(),
         };
@@ -1610,6 +1614,17 @@ const Reader = struct {
         var done = false;
         var unprocessed = data;
 
+        if (self.skip_current_header) {
+            const index = std.mem.indexOfScalarPos(u8, data, 0, '\n') orelse {
+                // discard all of this data, since it belongs to a header we
+                // want to skip
+                return .{ .done = false, .data = null, .unprocessed = null };
+            };
+            self.pos = 0;
+            self.skip_current_header = false;
+            unprocessed = data[index + 1 ..];
+        }
+
         // Data from a previous call to process that we weren't able to parse
         const pos = self.pos;
         const header_buf = self.header_buf;
@@ -1624,20 +1639,25 @@ const Reader = struct {
                 // data doesn't represent a complete header line. We need more data
                 const end = pos + data.len;
                 if (end > header_buf.len) {
-                    return error.HeaderTooLarge;
+                    self.prepareToSkipLongHeader();
+                } else {
+                    self.pos = end;
+                    @memcpy(self.header_buf[pos..end], data);
                 }
-                self.pos = end;
-                @memcpy(self.header_buf[pos..end], data);
                 return .{ .done = false, .data = null, .unprocessed = null };
             }) + 1;
 
             const end = pos + line_end;
             if (end > header_buf.len) {
-                return error.HeaderTooLarge;
+                unprocessed = &.{};
+                self.prepareToSkipLongHeader();
+                // we can disable this immediately, since we've essentially
+                // finished skipping it this point.
+                self.skip_current_header = false;
+            } else {
+                @memcpy(header_buf[pos..end], data[0..line_end]);
+                done, unprocessed = try self.parseHeader(header_buf[0..end]);
             }
-
-            @memcpy(header_buf[pos..end], data[0..line_end]);
-            done, unprocessed = try self.parseHeader(header_buf[0..end]);
 
             // we gave parseHeader exactly 1 header line, there should be no leftovers
             std.debug.assert(unprocessed.len == 0);
@@ -1661,10 +1681,11 @@ const Reader = struct {
                 const p = self.pos; // don't use pos, self.pos might have been altered
                 const end = p + unprocessed.len;
                 if (end > header_buf.len) {
-                    return error.HeaderTooLarge;
+                    self.prepareToSkipLongHeader();
+                } else {
+                    @memcpy(header_buf[p..end], unprocessed);
+                    self.pos = end;
                 }
-                @memcpy(header_buf[p..end], unprocessed);
-                self.pos = end;
                 return .{ .done = false, .data = null, .unprocessed = null };
             }
         }
@@ -1724,6 +1745,13 @@ const Reader = struct {
         return .{ .done = false, .data = null, .unprocessed = null };
     }
 
+    fn prepareToSkipLongHeader(self: *Reader) void {
+        self.skip_current_header = true;
+        const buf = self.header_buf;
+        const pos = std.mem.indexOfScalar(u8, buf, ':') orelse @min(buf.len, 20);
+        log.warn(.http_client, "skipping long header", .{ .name = buf[0..pos] });
+    }
+
     // returns true when done
     // returns any remaining unprocessed data
     // When done == true, the remaining data must belong to the body
@@ -1769,6 +1797,15 @@ const Reader = struct {
                 return error.InvalidHeader;
             };
             const name_end = pos + sep;
+
+            if (value_end - pos > MAX_HEADER_LINE_LEN) {
+                // at this point, we could return this header, but then it would
+                // be inconsistent with long headers that are split up and need
+                // to be buffered.
+                log.warn(.http_client, "skipping long header", .{ .name = data[pos..name_end] });
+                pos = value_end + 1;
+                continue;
+            }
 
             const value_start = name_end + 1;
 
@@ -2481,9 +2518,11 @@ test "HttpClient Reader: fuzz" {
         }
 
         {
-            // header too big
-            const data = "HTTP/1.1 200 OK\r\n" ++ ("a" ** 1500);
-            try testing.expectError(error.HeaderTooLarge, testReader(&state, &res, data));
+            // skips large headers
+            const data = "HTTP/1.1 200 OK\r\na: b\r\n" ++ ("a" ** 5000) ++ ": wow\r\nx:zz\r\n\r\n";
+            try testReader(&state, &res, data);
+            try testing.expectEqual(200, res.status);
+            try res.assertHeaders(&.{ "a", "b", "x", "zz" });
         }
     }
 }
