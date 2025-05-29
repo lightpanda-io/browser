@@ -19,6 +19,7 @@ const std = @import("std");
 
 const parser = @import("../netsurf.zig");
 const generate = @import("../../runtime/generate.zig");
+const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
 
 const URL = @import("../url/url.zig").URL;
@@ -746,6 +747,9 @@ pub const HTMLScriptElement = struct {
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
 
+    onload: ?Env.Function = null,
+    onerror: ?Env.Function = null,
+
     pub fn get_src(self: *parser.Script) !?[]const u8 {
         return try parser.elementGetAttribute(
             parser.scriptToElt(self),
@@ -853,6 +857,26 @@ pub const HTMLScriptElement = struct {
         }
 
         return try parser.elementRemoveAttribute(parser.scriptToElt(self), "nomodule");
+    }
+
+    pub fn get_onload(script: *parser.Script, page: *Page) !?Env.Function {
+        const self = page.getNodeWrapper(HTMLScriptElement, @ptrCast(script)) orelse return null;
+        return self.onload;
+    }
+
+    pub fn set_onload(script: *parser.Script, function: ?Env.Function, page: *Page) !void {
+        const self = try page.getOrCreateNodeWrapper(HTMLScriptElement, @ptrCast(script));
+        self.onload = function;
+    }
+
+    pub fn get_onerror(script: *parser.Script, page: *Page) !?Env.Function {
+        const self = page.getNodeWrapper(HTMLScriptElement, @ptrCast(script)) orelse return null;
+        return self.onerror;
+    }
+
+    pub fn set_onerror(script: *parser.Script, function: ?Env.Function, page: *Page) !void {
+        const self = try page.getOrCreateNodeWrapper(HTMLScriptElement, @ptrCast(script));
+        self.onerror = function;
     }
 };
 
