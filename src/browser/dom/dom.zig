@@ -34,6 +34,7 @@ pub const Interfaces = .{
     EventTarget,
     DOMImplementation,
     NamedNodeMap,
+    NamedNodeMap.Iterator,
     DOMTokenList.Interfaces,
     NodeList.Interfaces,
     Node.Node,

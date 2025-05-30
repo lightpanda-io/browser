@@ -470,8 +470,17 @@ test "Browser.DOM.Element" {
         .{ "let a = document.getElementById('content')", "undefined" },
         .{ "a.hasAttributes()", "true" },
         .{ "a.attributes.length", "1" },
-
         .{ "a.getAttribute('id')", "content" },
+        .{ "a.attributes['id'].value", "content" },
+        .{
+            \\ let x = '';
+            \\ for (const attr of a.attributes) {
+            \\   x += attr.name + '=' + attr.value;
+            \\ }
+            \\ x;
+            ,
+            "id=content",
+        },
 
         .{ "a.hasAttribute('foo')", "false" },
         .{ "a.getAttribute('foo')", "null" },
