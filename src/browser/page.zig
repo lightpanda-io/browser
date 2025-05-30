@@ -85,6 +85,11 @@ pub const Page = struct {
     // execute any JavaScript
     scope: *Env.Scope,
 
+    // For a Page we only create one HandleScope and keep it alive for the duration of the page.
+    // If needed JS Locals' lifetimes can be reduced by layering on additional Scopes.
+    // Note: An isolate has only 1 scope stack shared by all main and isolated worlds.
+    handle_scope: Env.HandleScope,
+
     // List of modules currently fetched/loaded.
     module_map: std.StringHashMapUnmanaged([]const u8),
 
@@ -108,9 +113,18 @@ pub const Page = struct {
             .window_clicked_event_node = .{ .func = windowClicked },
             .request_factory = browser.http_client.requestFactory(browser.notification),
             .scope = undefined,
+            .handle_scope = undefined,
             .module_map = .empty,
         };
-        self.scope = try session.executor.startScope(&self.window, self, self, true);
+
+        self.scope = try session.executor.startScope(&self.window, self, self);
+
+        // Start a scope (stackframe) for JS Local variables.
+        Env.HandleScope.init(&self.handle_scope, browser.env.isolate);
+        errdefer self.handle_scope.deinit();
+
+        self.scope.enter();
+        errdefer self.scope.exit();
 
         // load polyfills
         try polyfill.load(self.arena, self.scope);

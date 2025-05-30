@@ -109,7 +109,11 @@ pub const Session = struct {
         std.debug.assert(self.page != null);
         // Reset all existing callbacks.
         self.browser.app.loop.reset();
+
+        self.executor.scope.?.exit();
         self.executor.endScope();
+
+        self.page.?.handle_scope.deinit();
         self.page = null;
 
         // clear netsurf memory arena.

@@ -30,6 +30,7 @@ pub fn Runner(comptime State: type, comptime Global: type, comptime types: anyty
     return struct {
         env: *Env,
         scope: *Env.Scope,
+        handle_scope: Env.HandleScope,
         executor: Env.ExecutionWorld,
 
         pub const Env = js.Env(State, struct {
@@ -52,8 +53,13 @@ pub fn Runner(comptime State: type, comptime Global: type, comptime types: anyty
                 if (Global == void) &default_global else global,
                 state,
                 {},
-                true,
             );
+            self.scope.enter();
+
+            // Start a scope (stackframe) for JS Local variables.
+            Env.HandleScope.init(&self.handle_scope, self.executor.env.isolate);
+            errdefer self.handle_scope.deinit();
+
             return self;
         }
 
