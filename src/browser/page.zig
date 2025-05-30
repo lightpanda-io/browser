@@ -327,7 +327,7 @@ pub const Page = struct {
                 continue;
             }
 
-            const script = try Script.init(e) orelse continue;
+            const script = try Script.init(e, null) orelse continue;
 
             // TODO use fetchpriority
             // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#fetchpriority
@@ -568,7 +568,7 @@ pub const Page = struct {
     }
 
     pub fn getOrCreateNodeWrapper(self: *Page, comptime T: type, node: *parser.Node) !*T {
-        if (try self.getNodeWrapper(T, node)) |wrap| {
+        if (self.getNodeWrapper(T, node)) |wrap| {
             return wrap;
         }
 
@@ -579,7 +579,7 @@ pub const Page = struct {
         return wrap;
     }
 
-    pub fn getNodeWrapper(_: *Page, comptime T: type, node: *parser.Node) !?*T {
+    pub fn getNodeWrapper(_: *const Page, comptime T: type, node: *parser.Node) ?*T {
         if (parser.nodeGetEmbedderData(node)) |wrap| {
             return @alignCast(@ptrCast(wrap));
         }
@@ -608,8 +608,9 @@ const Script = struct {
     is_defer: bool,
     src: ?[]const u8,
     element: *parser.Element,
-    // The javascript  to load after we successfully load the script
-    onload: ?[]const u8,
+    // The javascript to load after we successfully load the script
+    onload: ?Callback,
+    onerror: ?Callback,
 
     // The javascript to load if we have an error executing the script
     // For now, we ignore this, since we still have a lot of errors that we
@@ -621,7 +622,12 @@ const Script = struct {
         javascript,
     };
 
-    fn init(e: *parser.Element) !?Script {
+    const Callback = union(enum) {
+        string: []const u8,
+        function: Env.Function,
+    };
+
+    fn init(e: *parser.Element, page_: ?*const Page) !?Script {
         if (try parser.elementGetAttribute(e, "nomodule") != null) {
             // these scripts should only be loaded if we don't support modules
             // but since we do support modules, we can just skip them.
@@ -632,11 +638,42 @@ const Script = struct {
             return null;
         };
 
+        var onload: ?Callback = null;
+        var onerror: ?Callback = null;
+
+        if (page_) |page| {
+            // If we're given the page, then it means the script is dynamic
+            // and we need to load the onload and onerror function (if there are
+            // any) from our WebAPI.
+            // This page == null is an optimization which isn't technically
+            // correct, as a static script could have a dynamic onload/onerror
+            // attached to it. But this seems quite unlikely and it does help
+            // optimize loading scripts, of which there can be hundreds for a
+            // page.
+            const HTMLScriptElement = @import("html/elements.zig").HTMLScriptElement;
+            if (page.getNodeWrapper(HTMLScriptElement, @ptrCast(e))) |se| {
+                if (se.onload) |function| {
+                    onload = .{ .function = function };
+                }
+                if (se.onerror) |function| {
+                    onerror = .{ .function = function };
+                }
+            }
+        } else {
+            if (try parser.elementGetAttribute(e, "onload")) |string| {
+                onload = .{ .string = string };
+            }
+            if (try parser.elementGetAttribute(e, "onerror")) |string| {
+                onerror = .{ .string = string };
+            }
+        }
+
         return .{
             .kind = kind,
             .element = e,
+            .onload = onload,
+            .onerror = onerror,
             .src = try parser.elementGetAttribute(e, "src"),
-            .onload = try parser.elementGetAttribute(e, "onload"),
             .is_async = try parser.elementGetAttribute(e, "async") != null,
             .is_defer = try parser.elementGetAttribute(e, "defer") != null,
         };
@@ -653,9 +690,9 @@ const Script = struct {
             return .javascript;
         }
 
-        if (std.mem.eql(u8, script_type, "application/javascript")) return .javascript;
-        if (std.mem.eql(u8, script_type, "text/javascript")) return .javascript;
-        if (std.mem.eql(u8, script_type, "module")) return .module;
+        if (std.ascii.eqlIgnoreCase(script_type, "application/javascript")) return .javascript;
+        if (std.ascii.eqlIgnoreCase(script_type, "text/javascript")) return .javascript;
+        if (std.ascii.eqlIgnoreCase(script_type, "module")) return .module;
 
         return null;
     }
@@ -666,7 +703,7 @@ const Script = struct {
         defer try_catch.deinit();
 
         const src = self.src orelse "inline";
-        const res = switch (self.kind) {
+        _ = switch (self.kind) {
             .javascript => page.scope.exec(body, src),
             .module => blk: {
                 switch (try page.scope.module(body, src)) {
@@ -681,17 +718,46 @@ const Script = struct {
             if (try try_catch.err(page.arena)) |msg| {
                 log.warn(.page, "eval script", .{ .src = src, .err = msg });
             }
+            try self.executeCallback("onerror", page);
             return error.JsErr;
         };
-        _ = res;
+        try self.executeCallback("onload", page);
+    }
 
-        if (self.onload) |onload| {
-            _ = page.scope.exec(onload, "script_on_load") catch {
-                if (try try_catch.err(page.arena)) |msg| {
-                    log.warn(.page, "eval onload", .{ .src = src, .err = msg });
-                }
-                return error.JsErr;
-            };
+    fn executeCallback(self: *const Script, comptime typ: []const u8, page: *Page) !void {
+        const callback = @field(self, typ) orelse return;
+        switch (callback) {
+            .string => |str| {
+                var try_catch: Env.TryCatch = undefined;
+                try_catch.init(page.scope);
+                defer try_catch.deinit();
+                _ = page.scope.exec(str, typ) catch {
+                    if (try try_catch.err(page.arena)) |msg| {
+                        log.warn(.page, "script callback", .{
+                            .src = self.src,
+                            .err = msg,
+                            .type = typ,
+                            .@"inline" = true,
+                        });
+                    }
+                };
+            },
+            .function => |f| {
+                const Event = @import("events/event.zig").Event;
+                const loadevt = try parser.eventCreate();
+                defer parser.eventDestroy(loadevt);
+
+                var result: Env.Function.Result = undefined;
+                f.tryCall(void, .{try Event.toInterface(loadevt)}, &result) catch {
+                    log.warn(.page, "script callback", .{
+                        .src = self.src,
+                        .type = typ,
+                        .err = result.exception,
+                        .stack = result.stack,
+                        .@"inline" = false,
+                    });
+                };
+            },
         }
     }
 };
@@ -719,11 +785,11 @@ fn timestamp() u32 {
 // after the document is loaded, it's ok to execute any async and defer scripts
 // immediately.
 pub export fn scriptAddedCallback(ctx: ?*anyopaque, element: ?*parser.Element) callconv(.C) void {
-    var script = Script.init(element.?) catch |err| {
+    const self: *Page = @alignCast(@ptrCast(ctx.?));
+    var script = Script.init(element.?, self) catch |err| {
         log.warn(.page, "script added init error", .{ .err = err });
         return;
     } orelse return;
 
-    const self: *Page = @alignCast(@ptrCast(ctx.?));
     self.evalScript(&script);
 }
