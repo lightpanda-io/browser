@@ -25,6 +25,7 @@ pub const NamedNodeMap = struct {
     pub const Self = parser.NamedNodeMap;
 
     pub const Exception = DOMException;
+    pub const Iterator = NamedNodeMapIterator;
 
     // TODO implement LegacyUnenumerableNamedProperties.
     // https://webidl.spec.whatwg.org/#LegacyUnenumerableNamedProperties
@@ -70,9 +71,46 @@ pub const NamedNodeMap = struct {
     }
 
     pub fn indexed_get(self: *parser.NamedNodeMap, index: u32, has_value: *bool) !*parser.Attribute {
-        return (try NamedNodeMap._item(self, index)) orelse {
+        return (try _item(self, index)) orelse {
             has_value.* = false;
             return undefined;
+        };
+    }
+
+    pub fn named_get(self: *parser.NamedNodeMap, name: []const u8, has_value: *bool) !*parser.Attribute {
+        return (try _getNamedItem(self, name)) orelse {
+            has_value.* = false;
+            return undefined;
+        };
+    }
+
+    pub fn _symbol_iterator(self: *parser.NamedNodeMap) NamedNodeMapIterator {
+        return .{ .map = self };
+    }
+};
+
+pub const NamedNodeMapIterator = struct {
+    index: u32 = 0,
+    map: *parser.NamedNodeMap,
+
+    pub const Return = struct {
+        done: bool,
+        value: ?*parser.Attribute,
+    };
+
+    pub fn _next(self: *NamedNodeMapIterator) !Return {
+        const e = try NamedNodeMap._item(self.map, self.index);
+        if (e == null) {
+            return .{
+                .value = null,
+                .done = true,
+            };
+        }
+
+        self.index += 1;
+        return .{
+            .value = e,
+            .done = false,
         };
     }
 };
@@ -93,5 +131,8 @@ test "Browser.DOM.NamedNodeMap" {
         .{ "a.getNamedItem('id')", "[object Attr]" },
         .{ "a.getNamedItem('foo')", "null" },
         .{ "a.setNamedItem(a.getNamedItem('id'))", "[object Attr]" },
+        .{ "a['id'].name", "id" },
+        .{ "a['id'].value", "content" },
+        .{ "a['other']", "undefined" },
     }, .{});
 }
