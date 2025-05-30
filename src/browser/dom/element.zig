@@ -128,10 +128,10 @@ pub const Element = struct {
 
         // append children to the node
         const ln = try parser.nodeListLength(children);
-        var i: u32 = 0;
-        while (i < ln) {
-            defer i += 1;
-            const child = try parser.nodeListItem(children, i) orelse continue;
+        for (0..ln) |_| {
+            // always index 0, because ndoeAppendChild moves the node out of
+            // the nodeList and into the new tree
+            const child = try parser.nodeListItem(children, 0) orelse continue;
             _ = try parser.nodeAppendChild(node, child);
         }
     }
@@ -661,5 +661,11 @@ test "Browser.DOM.Element" {
         .{ "const a1_a = document.createElement('p');", "undefined" },
         .{ "a1.after('over 9000', a1_a);", "undefined" },
         .{ "after_container.innerHTML", "<div></div>over 9000<p></p>" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "var div1 = document.createElement('div');", null },
+        .{ "div1.innerHTML = \"  <link/><table></table><a href='/a'>a</a><input type='checkbox'/>\"", null },
+        .{ "div1.getElementsByTagName('a').length", "1" },
     }, .{});
 }

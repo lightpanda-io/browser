@@ -432,7 +432,8 @@ pub const HTMLCollection = struct {
         for (0..len) |i| {
             const node = try self.item(@intCast(i)) orelse unreachable;
             const e = @as(*parser.Element, @ptrCast(node));
-            try js_this.setIndex(@intCast(i), e, .{});
+            const as_interface = try Element.toInterface(e);
+            try js_this.setIndex(@intCast(i), as_interface, .{});
 
             if (try item_name(e)) |name| {
                 // Even though an entry might have an empty id, the spec says
@@ -440,7 +441,7 @@ pub const HTMLCollection = struct {
                 if (name.len > 0) {
                     // Named fields should not be enumerable (it is defined with
                     // the LegacyUnenumerableNamedProperties flag.)
-                    try js_this.set(name, e, .{ .DONT_ENUM = true });
+                    try js_this.set(name, as_interface, .{ .DONT_ENUM = true });
                 }
             }
         }
