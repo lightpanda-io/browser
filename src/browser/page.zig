@@ -491,7 +491,7 @@ pub const Page = struct {
         return arr.items;
     }
 
-    fn newHTTPRequest(self: *const Page, method: http.Request.Method, url: *const URL, opts: storage.cookie.LookupOpts) !http.Request {
+    fn newHTTPRequest(self: *const Page, method: http.Request.Method, url: *const URL, opts: storage.cookie.LookupOpts) !*http.Request {
         // Don't use the state's request_factory here, since requests made by the
         // page (i.e. to load <scripts>) should not generate notifications.
         var request = try self.session.browser.http_client.request(method, &url.uri);

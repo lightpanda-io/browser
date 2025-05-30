@@ -51,6 +51,7 @@ pub const Client = struct {
     root_ca: tls.config.CertBundle,
     tls_verify_host: bool = true,
     connection_manager: ConnectionManager,
+    request_pool: std.heap.MemoryPool(Request),
 
     const Opts = struct {
         tls_verify_host: bool = true,
@@ -76,6 +77,7 @@ pub const Client = struct {
             .http_proxy = opts.http_proxy,
             .tls_verify_host = opts.tls_verify_host,
             .connection_manager = connection_manager,
+            .request_pool = std.heap.MemoryPool(Request).init(allocator),
         };
     }
 
@@ -86,9 +88,10 @@ pub const Client = struct {
         }
         self.state_pool.deinit(allocator);
         self.connection_manager.deinit();
+        self.request_pool.deinit();
     }
 
-    pub fn request(self: *Client, method: Request.Method, uri: *const Uri) !Request {
+    pub fn request(self: *Client, method: Request.Method, uri: *const Uri) !*Request {
         const state = self.state_pool.acquire();
 
         errdefer {
@@ -96,7 +99,18 @@ pub const Client = struct {
             self.state_pool.release(state);
         }
 
-        return Request.init(self, state, method, uri);
+        // We need the request on the heap, because it can have a longer lifetime
+        // than the code making the request. That sounds odd, but consider the
+        // case of an XHR request: it can still be inflight (e.g. waiting for
+        // the response) when the page gets unloaded. Once the page is unloaded
+        // the page arena is reset and the XHR instance becomes invalid. If the
+        // XHR instance owns the `Request`, we'd crash once an async callback
+        // executes.
+        const req = try self.request_pool.create();
+        errdefer self.request_pool.destroy(req);
+
+        req.* = try Request.init(self, state, method, uri);
+        return req;
     }
 
     pub fn requestFactory(self: *Client, notification: ?*Notification) RequestFactory {
@@ -112,7 +126,7 @@ pub const RequestFactory = struct {
     client: *Client,
     notification: ?*Notification,
 
-    pub fn create(self: RequestFactory, method: Request.Method, uri: *const Uri) !Request {
+    pub fn create(self: RequestFactory, method: Request.Method, uri: *const Uri) !*Request {
         var req = try self.client.request(method, uri);
         req.notification = self.notification;
         return req;
@@ -244,6 +258,17 @@ pub const Request = struct {
     // The notifier that we emit request notifications to, if any.
     notification: ?*Notification,
 
+    // Aborting an async request is complicated, as we need to wait until all
+    // in-flight IO events are completed. Our AsyncHandler is a generic type
+    // that we don't have the necessary type information for in the Request,
+    // so we need to rely on anyopaque.
+    _aborter: ?Aborter,
+
+    const Aborter = struct {
+        ctx: *anyopaque,
+        func: *const fn (*anyopaque) void,
+    };
+
     pub const Method = enum {
         GET,
         PUT,
@@ -282,6 +307,7 @@ pub const Request = struct {
             ._request_host = decomposed.request_host,
             ._state = state,
             ._client = client,
+            ._aborter = null,
             ._connection = null,
             ._keepalive = false,
             ._redirect_count = 0,
@@ -297,6 +323,15 @@ pub const Request = struct {
         self.releaseConnection();
         _ = self._state.reset();
         self._client.state_pool.release(self._state);
+        self._client.request_pool.destroy(self);
+    }
+
+    pub fn abort(self: *Request) void {
+        const aborter = self._aborter orelse {
+            self.deinit();
+            return;
+        };
+        aborter.func(aborter.ctx);
     }
 
     const DecomposedURL = struct {
@@ -544,6 +579,11 @@ pub const Request = struct {
             return async_handler.conn.connected();
         }
 
+        self._aborter = .{
+            .ctx = async_handler,
+            .func = AsyncHandlerT.abort,
+        };
+
         return loop.connect(
             AsyncHandlerT,
             async_handler,
@@ -732,13 +772,6 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
         // that we have valid, but unprocessed, data up to.
         read_pos: usize = 0,
 
-        // Depending on which version of TLS, there are different places during
-        // the handshake that we want to start receiving from. We can't have
-        // overlapping receives (works fine on MacOS (kqueue) but not Linux (
-        // io_uring)). Using this boolean as a guard, to make sure we only have
-        // 1 in-flight receive is easier than trying to understand TLS.
-        is_receiving: bool = false,
-
         // need a separate read and write buf because, with TLS, messages are
         // not strictly req->resp.
         write_buf: []u8,
@@ -775,6 +808,13 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
         // gzipped responses *cough*)
         full_body: ?std.ArrayListUnmanaged(u8) = null,
 
+        // Shutting down an async request requires that we wait for all inflight
+        // IO to be completed. So we need to track what inflight requests we
+        // have and whether or not we're shutting down
+        shutdown: bool = false,
+        pending_write: bool = false,
+        pending_receive: bool = false,
+
         const Self = @This();
         const SendQueue = std.DoublyLinkedList([]const u8);
 
@@ -792,6 +832,12 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
 
         fn deinit(self: *Self) void {
             self.request.deinit();
+        }
+
+        fn abort(ctx: *anyopaque) void {
+            var self: *Self = @alignCast(@ptrCast(ctx));
+            self.shutdown = true;
+            self.maybeShutdown();
         }
 
         fn connected(self: *Self, _: *IO.Completion, result: IO.ConnectError!void) void {
@@ -815,6 +861,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                 return;
             }
 
+            self.pending_write = true;
             self.loop.send(
                 Self,
                 self,
@@ -828,6 +875,10 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
         }
 
         fn sent(self: *Self, _: *IO.Completion, n_: IO.SendError!usize) void {
+            self.pending_write = false;
+            if (self.shutdown) {
+                return self.maybeShutdown();
+            }
             const n = n_ catch |err| {
                 return self.handleError("Write error", err);
             };
@@ -845,6 +896,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
             }
 
             if (next) |next_| {
+                self.pending_write = true;
                 // we still have data to send
                 self.loop.send(
                     Self,
@@ -869,11 +921,11 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
         // while handshaking and potentially while sending data. So we're always
         // receiving.
         fn receive(self: *Self) void {
-            if (self.is_receiving) {
+            if (self.pending_receive) {
                 return;
             }
 
-            self.is_receiving = true;
+            self.pending_receive = true;
             self.loop.recv(
                 Self,
                 self,
@@ -887,7 +939,11 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
         }
 
         fn received(self: *Self, _: *IO.Completion, n_: IO.RecvError!usize) void {
-            self.is_receiving = false;
+            self.pending_receive = false;
+            if (self.shutdown) {
+                return self.maybeShutdown();
+            }
+
             const n = n_ catch |err| {
                 return self.handleError("Read error", err);
             };
@@ -924,6 +980,17 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                     // including the socket.
                 },
             }
+        }
+
+        fn maybeShutdown(self: *Self) void {
+            std.debug.assert(self.shutdown);
+            if (self.pending_write or self.pending_receive) {
+                return;
+            }
+
+            // Who knows what state we're in, safer to not try to re-use the connection
+            self.request._keepalive = false;
+            self.request.deinit();
         }
 
         // If our socket came from the connection pool, it's possible that we're
