@@ -70,7 +70,7 @@ pub const URL = struct {
     }
 
     pub fn resolve(self: *const URL, arena: Allocator, url: []const u8) !URL {
-        var buf = try arena.alloc(u8, 1024);
+        var buf = try arena.alloc(u8, 4096);
         const new_uri = try self.uri.resolve_inplace(url, &buf);
         return fromURI(arena, &new_uri);
     }
