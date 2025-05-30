@@ -150,7 +150,7 @@ jobs:
     if: github.event_name != 'pull_request'
 
     # use a self host runner.
-    runs-on: lpd_bench_m5.large
+    runs-on: lpd-bench-hetzner
     timeout-minutes: 15
 
     steps:
