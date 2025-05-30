@@ -51,7 +51,7 @@ pub const IntersectionObserver = struct {
         var options = IntersectionObserverOptions{
             .root = parser.documentToNode(parser.documentHTMLToDocument(page.window.document)),
             .rootMargin = "0px 0px 0px 0px",
-            .threshold = &.{0.0},
+            .threshold = .{ .single = 0.0 },
         };
         if (options_) |*o| {
             if (o.root) |root| {
@@ -107,7 +107,12 @@ pub const IntersectionObserver = struct {
 const IntersectionObserverOptions = struct {
     root: ?*parser.Node, // Element or Document
     rootMargin: ?[]const u8,
-    threshold: ?[]const f32,
+    threshold: ?Threshold,
+
+    const Threshold = union(enum) {
+        single: f32,
+        list: []const f32,
+    };
 };
 
 // https://developer.mozilla.org/en-US/docs/Web/API/IntersectionObserverEntry
