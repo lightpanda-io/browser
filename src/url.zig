@@ -70,7 +70,7 @@ pub const URL = struct {
     }
 
     pub fn resolve(self: *const URL, arena: Allocator, url: []const u8) !URL {
-        var buf = try arena.alloc(u8, 1024);
+        var buf = try arena.alloc(u8, 4096);
         const new_uri = try self.uri.resolve_inplace(url, &buf);
         return fromURI(arena, &new_uri);
     }
@@ -145,7 +145,7 @@ test "Url resolve size" {
     var url_string: [511]u8 = undefined; // Currently this is the largest url we support, it is however recommmended to at least support 2000 characters
     @memset(&url_string, 'a');
 
-    var buf: [2048]u8 = undefined; // This is approximately the required size to support the current largest supported URL
+    var buf: [8192]u8 = undefined; // This is approximately the required size to support the current largest supported URL
     var fba = std.heap.FixedBufferAllocator.init(&buf);
     const out_url = try url.resolve(fba.allocator(), &url_string);
 
