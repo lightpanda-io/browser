@@ -174,6 +174,10 @@ pub const HTMLDocument = struct {
         return try parser.documentHTMLGetLocation(Location, self);
     }
 
+    pub fn set_location(_: *const parser.DocumentHTML, url: []const u8, page: *Page) !void {
+        return page.navigateFromWebAPI(url);
+    }
+
     pub fn get_designMode(_: *parser.DocumentHTML) []const u8 {
         return "off";
     }
