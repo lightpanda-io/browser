@@ -57,6 +57,7 @@ pub const Interfaces = .{
     HTMLHtmlElement,
     HTMLIFrameElement,
     HTMLImageElement,
+    HTMLImageElement.Factory,
     HTMLInputElement,
     HTMLLIElement,
     HTMLLabelElement,
@@ -565,15 +566,6 @@ pub const HTMLImageElement = struct {
     pub const Self = parser.Image;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-    pub const js_name = "Image";
-
-    pub fn constructor(width: ?u32, height: ?u32, page: *const Page) !*parser.Image {
-        const element = try parser.documentCreateElement(parser.documentHTMLToDocument(page.window.document), "img");
-        const image: *parser.Image = @ptrCast(element);
-        if (width) |width_| try parser.imageSetWidth(image, width_);
-        if (height) |height_| try parser.imageSetHeight(image, height_);
-        return image;
-    }
 
     pub fn get_alt(self: *parser.Image) ![]const u8 {
         return try parser.imageGetAlt(self);
@@ -611,6 +603,21 @@ pub const HTMLImageElement = struct {
     pub fn set_isMap(self: *parser.Image, is_map: bool) !void {
         try parser.imageSetIsMap(self, is_map);
     }
+
+    pub const Factory = struct {
+        pub const js_name = "Image";
+        pub const subtype = .node;
+        pub const js_legacy_factory = true;
+        pub const prototype = *HTMLImageElement;
+
+        pub fn constructor(width: ?u32, height: ?u32, page: *const Page) !*parser.Image {
+            const element = try parser.documentCreateElement(parser.documentHTMLToDocument(page.window.document), "img");
+            const image: *parser.Image = @ptrCast(element);
+            if (width) |width_| try parser.imageSetWidth(image, width_);
+            if (height) |height_| try parser.imageSetHeight(image, height_);
+            return image;
+        }
+    };
 };
 
 pub const HTMLInputElement = struct {

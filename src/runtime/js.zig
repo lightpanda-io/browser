@@ -2222,8 +2222,14 @@ const TypeMeta = struct {
     subtype: ?SubType,
 };
 
+// When we map a Zig instance into a JsObject, we'll normally store the a
+// TaggedAnyOpaque (TAO) inside of the JsObject's internal field. This requires
+// ensuring that the instance template has an InternalFieldCount of 1. However,
+// for empty objects, we don't need to store the TAO, because we can't just cast
+// one empty object to another, so for those, as an optimization, we do not set
+// the InternalFieldCount.
 fn isEmpty(comptime T: type) bool {
-    return @typeInfo(T) != .@"opaque" and @sizeOf(T) == 0;
+    return @typeInfo(T) != .@"opaque" and @sizeOf(T) == 0 and @hasDecl(T, "js_legacy_factory") == false;
 }
 
 // Responsible for calling Zig functions from JS invokations. This could
