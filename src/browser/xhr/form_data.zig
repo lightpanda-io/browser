@@ -51,21 +51,15 @@ pub const Interfaces = .{
 
 // https://xhr.spec.whatwg.org/#interface-formdata
 pub const FormData = struct {
-    entries: std.ArrayListUnmanaged(Entry),
+    entries: Entry.List,
 
     pub fn constructor(form_: ?*parser.Form, submitter_: ?*parser.ElementHTML, page: *Page) !FormData {
         const form = form_ orelse return .{ .entries = .empty };
-        return fromForm(form, submitter_, page, .{});
+        return fromForm(form, submitter_, page);
     }
 
-    const FromFormOpts = struct {
-        // Uses the page.arena if null. This is needed for when we're handling
-        // form submission from the Page, and we want to capture the form within
-        // the session's transfer_arena.
-        allocator: ?Allocator = null,
-    };
-    pub fn fromForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page, opts: FromFormOpts) !FormData {
-        const entries = try collectForm(opts.allocator orelse page.arena, form, submitter_, page);
+    pub fn fromForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page) !FormData {
+        const entries = try collectForm(form, submitter_, page);
         return .{ .entries = entries };
     }
 
@@ -144,11 +138,78 @@ pub const FormData = struct {
         }
         return null;
     }
+
+    pub fn write(self: *const FormData, encoding_: ?[]const u8, writer: anytype) !void {
+        const encoding = encoding_ orelse {
+            return urlEncode(self, writer);
+        };
+
+        if (std.ascii.eqlIgnoreCase(encoding, "application/x-www-form-urlencoded")) {
+            return urlEncode(self, writer);
+        }
+
+        log.warn(.form_data, "encoding not supported", .{ .encoding = encoding });
+        return error.EncodingNotSupported;
+    }
 };
+
+fn urlEncode(data: *const FormData, writer: anytype) !void {
+    const entries = data.entries.items;
+    if (entries.len == 0) {
+        return;
+    }
+
+    try urlEncodeEntry(entries[0], writer);
+    for (entries[1..]) |entry| {
+        try writer.writeByte('&');
+        try urlEncodeEntry(entry, writer);
+    }
+}
+
+fn urlEncodeEntry(entry: Entry, writer: anytype) !void {
+    try urlEncodeValue(entry.key, writer);
+    try writer.writeByte('=');
+    try urlEncodeValue(entry.value, writer);
+}
+
+fn urlEncodeValue(value: []const u8, writer: anytype) !void {
+    if (!urlEncodeShouldEscape(value)) {
+        return writer.writeAll(value);
+    }
+
+    for (value) |b| {
+        if (urlEncodeUnreserved(b)) {
+            try writer.writeByte(b);
+        } else if (b == ' ') {
+            // for form submission, space should be encoded as '+', not '%20'
+            try writer.writeByte('+');
+        } else {
+            try writer.print("%{X:0>2}", .{b});
+        }
+    }
+}
+
+fn urlEncodeShouldEscape(value: []const u8) bool {
+    for (value) |b| {
+        if (!urlEncodeUnreserved(b)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn urlEncodeUnreserved(b: u8) bool {
+    return switch (b) {
+        'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => true,
+        else => false,
+    };
+}
 
 const Entry = struct {
     key: []const u8,
     value: []const u8,
+
+    pub const List = std.ArrayListUnmanaged(Entry);
 };
 
 const KeyIterable = iterator.Iterable(KeyIterator, "FormDataKeyIterator");
@@ -157,7 +218,7 @@ const EntryIterable = iterator.Iterable(EntryIterator, "FormDataEntryIterator");
 
 const KeyIterator = struct {
     index: usize = 0,
-    entries: *const std.ArrayListUnmanaged(Entry),
+    entries: *const Entry.List,
 
     pub fn _next(self: *KeyIterator) ?[]const u8 {
         const index = self.index;
@@ -171,7 +232,7 @@ const KeyIterator = struct {
 
 const ValueIterator = struct {
     index: usize = 0,
-    entries: *const std.ArrayListUnmanaged(Entry),
+    entries: *const Entry.List,
 
     pub fn _next(self: *ValueIterator) ?[]const u8 {
         const index = self.index;
@@ -185,7 +246,7 @@ const ValueIterator = struct {
 
 const EntryIterator = struct {
     index: usize = 0,
-    entries: *const std.ArrayListUnmanaged(Entry),
+    entries: *const Entry.List,
 
     pub fn _next(self: *EntryIterator) ?struct { []const u8, []const u8 } {
         const index = self.index;
@@ -198,11 +259,13 @@ const EntryIterator = struct {
     }
 };
 
-fn collectForm(arena: Allocator, form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page) !std.ArrayListUnmanaged(Entry) {
+// TODO: handle disabled fieldsets
+fn collectForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page) !Entry.List {
+    const arena = page.arena;
     const collection = try parser.formGetCollection(form);
     const len = try parser.htmlCollectionGetLength(collection);
 
-    var entries: std.ArrayListUnmanaged(Entry) = .empty;
+    var entries: Entry.List = .empty;
     try entries.ensureTotalCapacity(arena, len);
 
     const submitter_name_ = try getSubmitterName(submitter_);
@@ -275,7 +338,7 @@ fn collectForm(arena: Allocator, form: *parser.Form, submitter_: ?*parser.Elemen
     return entries;
 }
 
-fn collectSelectValues(arena: Allocator, select: *parser.Select, name: []const u8, entries: *std.ArrayListUnmanaged(Entry), page: *Page) !void {
+fn collectSelectValues(arena: Allocator, select: *parser.Select, name: []const u8, entries: *Entry.List, page: *Page) !void {
     const HTMLSelectElement = @import("../html/select.zig").HTMLSelectElement;
 
     // Go through the HTMLSelectElement because it has specific logic for handling
@@ -455,4 +518,35 @@ test "Browser.FormData" {
             \\s1=s1-v
         },
     }, .{});
+}
+
+test "Browser.FormData: urlEncode" {
+    var arr: std.ArrayListUnmanaged(u8) = .empty;
+    defer arr.deinit(testing.allocator);
+
+    {
+        var fd = FormData{ .entries = .empty };
+        try testing.expectError(error.EncodingNotSupported, fd.write("unknown", arr.writer(testing.allocator)));
+
+        try fd.write(null, arr.writer(testing.allocator));
+        try testing.expectEqual("", arr.items);
+
+        try fd.write("application/x-www-form-urlencoded", arr.writer(testing.allocator));
+        try testing.expectEqual("", arr.items);
+    }
+
+    {
+        var fd = FormData{ .entries = Entry.List.fromOwnedSlice(@constCast(&[_]Entry{
+            .{ .key = "a", .value = "1" },
+            .{ .key = "it's over", .value = "9000 !!!" },
+            .{ .key = "emot", .value = "ok: ☺" },
+        })) };
+        const expected = "a=1&it%27s+over=9000+%21%21%21&emot=ok%3A+%E2%98%BA";
+        try fd.write(null, arr.writer(testing.allocator));
+        try testing.expectEqual(expected, arr.items);
+
+        arr.clearRetainingCapacity();
+        try fd.write("application/x-www-form-urlencoded", arr.writer(testing.allocator));
+        try testing.expectEqual(expected, arr.items);
+    }
 }

@@ -87,7 +87,7 @@ pub const URL = struct {
     ///
     /// For URLs with a path, it will replace the last entry with the src.
     /// For URLs without a path, it will add src as the path.
-    pub fn stitch(allocator: std.mem.Allocator, src: []const u8, base: []const u8) ![]const u8 {
+    pub fn stitch(allocator: Allocator, src: []const u8, base: []const u8) ![]const u8 {
         if (base.len == 0) {
             return src;
         }
@@ -110,6 +110,31 @@ pub const URL = struct {
         } else {
             return std.fmt.allocPrint(allocator, "{s}/{s}", .{ base, src });
         }
+    }
+
+    pub fn concatQueryString(arena: Allocator, url: []const u8, query_string: []const u8) ![]const u8 {
+        std.debug.assert(url.len != 0);
+
+        if (query_string.len == 0) {
+            return url;
+        }
+
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+
+        // the most space well need is the url + ('?' or '&') + the query_string
+        try buf.ensureTotalCapacity(arena, url.len + 1 + query_string.len);
+        buf.appendSliceAssumeCapacity(url);
+
+        if (std.mem.indexOfScalar(u8, url, '?')) |index| {
+            const last_index = url.len - 1;
+            if (index != last_index and url[last_index] != '&') {
+                buf.appendAssumeCapacity('&');
+            }
+        } else {
+            buf.appendAssumeCapacity('?');
+        }
+        buf.appendSliceAssumeCapacity(query_string);
+        return buf.items;
     }
 };
 
@@ -169,4 +194,34 @@ test "URL: Stiching Base & Src URLs (Both Local)" {
     const result = try URL.stitch(allocator, src, base);
     defer allocator.free(result);
     try testing.expectString("./abcdef/something.js", result);
+}
+
+test "URL: concatQueryString" {
+    defer testing.reset();
+    const arena = testing.arena_allocator;
+
+    {
+        const url = try URL.concatQueryString(arena, "https://www.lightpanda.io/", "");
+        try testing.expectEqual("https://www.lightpanda.io/", url);
+    }
+
+    {
+        const url = try URL.concatQueryString(arena, "https://www.lightpanda.io/index?", "");
+        try testing.expectEqual("https://www.lightpanda.io/index?", url);
+    }
+
+    {
+        const url = try URL.concatQueryString(arena, "https://www.lightpanda.io/index?", "a=b");
+        try testing.expectEqual("https://www.lightpanda.io/index?a=b", url);
+    }
+
+    {
+        const url = try URL.concatQueryString(arena, "https://www.lightpanda.io/index?1=2", "a=b");
+        try testing.expectEqual("https://www.lightpanda.io/index?1=2&a=b", url);
+    }
+
+    {
+        const url = try URL.concatQueryString(arena, "https://www.lightpanda.io/index?1=2&", "a=b");
+        try testing.expectEqual("https://www.lightpanda.io/index?1=2&a=b", url);
+    }
 }

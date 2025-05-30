@@ -19,6 +19,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const parser = @import("../netsurf.zig");
+const Page = @import("../page.zig").Page;
 const HTMLElement = @import("elements.zig").HTMLElement;
 const FormData = @import("../xhr/form_data.zig").FormData;
 
@@ -26,6 +27,10 @@ pub const HTMLFormElement = struct {
     pub const Self = parser.Form;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
+
+    pub fn _submit(self: *parser.Form, page: *Page) !void {
+        return page.submitForm(self, null);
+    }
 
     pub fn _requestSubmit(self: *parser.Form) !void {
         try parser.formElementSubmit(self);
@@ -35,20 +40,3 @@ pub const HTMLFormElement = struct {
         try parser.formElementReset(self);
     }
 };
-
-pub const Submission = struct {
-    method: ?[]const u8,
-    form_data: FormData,
-};
-
-pub fn processSubmission(arena: Allocator, form: *parser.Form) !?Submission {
-    const form_element: *parser.Element = @ptrCast(form);
-    const method = try parser.elementGetAttribute(form_element, "method");
-
-    return .{
-        .method = method,
-        .form_data = try FormData.fromForm(arena, form),
-    };
-}
-
-// Check xhr/form_data.zig for tests

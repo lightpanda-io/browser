@@ -199,8 +199,9 @@ pub const Page = struct {
         self.url = request_url;
 
         // load the data
-        var request = try self.newHTTPRequest(.GET, &self.url, .{ .navigation = true });
+        var request = try self.newHTTPRequest(opts.method, &self.url, .{ .navigation = true });
         defer request.deinit();
+        request.body = opts.body;
         request.notification = notification;
 
         notification.dispatch(.page_navigate, &.{
@@ -550,7 +551,7 @@ pub const Page = struct {
             .a => {
                 const element: *parser.Element = @ptrCast(node);
                 const href = (try parser.elementGetAttribute(element, "href")) orelse return;
-                try self.navigateFromWebAPI(href);
+                try self.navigateFromWebAPI(href, .{});
             },
             else => {},
         }
@@ -559,10 +560,11 @@ pub const Page = struct {
     // As such we schedule the function to be called as soon as possible.
     // The page.arena is safe to use here, but the transfer_arena exists
     // specifically for this type of lifetime.
-    pub fn navigateFromWebAPI(self: *Page, url: []const u8) !void {
+    pub fn navigateFromWebAPI(self: *Page, url: []const u8, opts: NavigateOpts) !void {
         const arena = self.session.transfer_arena;
         const navi = try arena.create(DelayedNavigation);
         navi.* = .{
+            .opts = opts,
             .session = self.session,
             .url = try arena.dupe(u8, url),
         };
@@ -587,17 +589,45 @@ pub const Page = struct {
         }
         return null;
     }
+
+    pub fn submitForm(self: *Page, form: *parser.Form, submitter: ?*parser.ElementHTML) !void {
+        const FormData = @import("xhr/form_data.zig").FormData;
+
+        const transfer_arena = self.session.transfer_arena;
+        var form_data = try FormData.fromForm(form, submitter, self);
+
+        const encoding = try parser.elementGetAttribute(@ptrCast(form), "enctype");
+
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        try form_data.write(encoding, buf.writer(transfer_arena));
+
+        const method = try parser.elementGetAttribute(@ptrCast(form), "method") orelse "";
+        var action = try parser.elementGetAttribute(@ptrCast(form), "action") orelse self.url.raw;
+
+        var opts = NavigateOpts{
+            .reason = .form,
+        };
+        if (std.ascii.eqlIgnoreCase(method, "post")) {
+            opts.method = .POST;
+            opts.body = buf.items;
+        } else {
+            action = try URL.concatQueryString(transfer_arena, action, buf.items);
+        }
+
+        try self.navigateFromWebAPI(action, opts);
+    }
 };
 
 const DelayedNavigation = struct {
     url: []const u8,
     session: *Session,
+    opts: NavigateOpts,
     navigate_node: Loop.CallbackNode = .{ .func = delayNavigate },
 
     fn delayNavigate(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
         _ = repeat_delay;
         const self: *DelayedNavigation = @fieldParentPtr("navigate_node", node);
-        self.session.pageNavigate(self.url) catch |err| {
+        self.session.pageNavigate(self.url, self.opts) catch |err| {
             log.err(.page, "delayed navigation error", .{ .err = err, .url = self.url });
         };
     }
@@ -766,11 +796,15 @@ const Script = struct {
 pub const NavigateReason = enum {
     anchor,
     address_bar,
+    form,
+    script,
 };
 
 pub const NavigateOpts = struct {
     cdp_id: ?i64 = null,
     reason: NavigateReason = .address_bar,
+    method: http.Request.Method = .GET,
+    body: ?[]const u8 = null,
 };
 
 fn timestamp() u32 {

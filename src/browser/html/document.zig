@@ -175,7 +175,7 @@ pub const HTMLDocument = struct {
     }
 
     pub fn set_location(_: *const parser.DocumentHTML, url: []const u8, page: *Page) !void {
-        return page.navigateFromWebAPI(url);
+        return page.navigateFromWebAPI(url, .{ .reason = .script });
     }
 
     pub fn get_designMode(_: *parser.DocumentHTML) []const u8 {

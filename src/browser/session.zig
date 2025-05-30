@@ -23,6 +23,7 @@ const Allocator = std.mem.Allocator;
 const Env = @import("env.zig").Env;
 const Page = @import("page.zig").Page;
 const Browser = @import("browser.zig").Browser;
+const NavigateOpts = @import("page.zig").NavigateOpts;
 
 const log = @import("../log.zig");
 const parser = @import("netsurf.zig");
@@ -122,7 +123,7 @@ pub const Session = struct {
         return &(self.page orelse return null);
     }
 
-    pub fn pageNavigate(self: *Session, url_string: []const u8) !void {
+    pub fn pageNavigate(self: *Session, url_string: []const u8, opts: NavigateOpts) !void {
         // currently, this is only called from the page, so let's hope
         // it isn't null!
         std.debug.assert(self.page != null);
@@ -136,8 +137,6 @@ pub const Session = struct {
 
         self.removePage();
         var page = try self.createPage();
-        return page.navigate(url, .{
-            .reason = .anchor,
-        });
+        return page.navigate(url, opts);
     }
 };
