@@ -289,8 +289,11 @@ pub const Node = struct {
         }
     }
 
-    pub fn _insertBefore(self: *parser.Node, new_node: *parser.Node, ref_node: *parser.Node) !*parser.Node {
-        return try parser.nodeInsertBefore(self, new_node, ref_node);
+    pub fn _insertBefore(self: *parser.Node, new_node: *parser.Node, ref_node_: ?*parser.Node) !Union {
+        if (ref_node_) |ref_node| {
+            return Node.toInterface(try parser.nodeInsertBefore(self, new_node, ref_node));
+        }
+        return _appendChild(self, new_node);
     }
 
     pub fn _isDefaultNamespace(self: *parser.Node, namespace: ?[]const u8) !bool {
@@ -662,6 +665,10 @@ test "Browser.DOM.node" {
         .{ "let insertBefore = document.createElement('a')", "undefined" },
         .{ "link.insertBefore(insertBefore, text) !== undefined", "true" },
         .{ "link.firstChild.localName === 'a'", "true" },
+
+        .{ "let insertBefore2 = document.createElement('b')", null },
+        .{ "link.insertBefore(insertBefore2, null).localName", "b" },
+        .{ "link.childNodes[link.childNodes.length - 1].localName", "b" },
     }, .{});
 
     try runner.testCases(&.{
