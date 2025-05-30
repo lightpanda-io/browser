@@ -2133,7 +2133,11 @@ pub inline fn documentCreateAttributeNS(doc: *Document, ns: []const u8, qname: [
     return attr.?;
 }
 
-pub fn documentSetScriptAddedCallback(doc: *Document, ctx: *anyopaque, callback: c.dom_script_added_callback,) void {
+pub fn documentSetScriptAddedCallback(
+    doc: *Document,
+    ctx: *anyopaque,
+    callback: c.dom_script_added_callback,
+) void {
     c._dom_document_set_script_added_callback(doc, ctx, callback);
 }
 

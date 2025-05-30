@@ -392,7 +392,6 @@ pub const Page = struct {
         };
     }
 
-
     // evalScript evaluates the src in priority.
     // if no src is present, we evaluate the text source.
     // https://html.spec.whatwg.org/multipage/scripting.html#script-processing-model
@@ -401,7 +400,7 @@ pub const Page = struct {
         try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(script.element));
 
         defer parser.documentHTMLSetCurrentScript(html_doc, null) catch |err| {
-            log.err(.page, "clear document script", .{.err = err});
+            log.err(.page, "clear document script", .{ .err = err });
         };
 
         const src = script.src orelse {
@@ -721,7 +720,7 @@ fn timestamp() u32 {
 // immediately.
 pub export fn scriptAddedCallback(ctx: ?*anyopaque, element: ?*parser.Element) callconv(.C) void {
     var script = Script.init(element.?) catch |err| {
-        log.warn(.page, "script added init error", .{.err = err});
+        log.warn(.page, "script added init error", .{ .err = err });
         return;
     } orelse return;
 
