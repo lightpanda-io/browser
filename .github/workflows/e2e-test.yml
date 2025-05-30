@@ -169,11 +169,14 @@ jobs:
       - run: chmod a+x ./lightpanda
 
       - name: start http
-        run: go run ws/main.go & echo $! > WS.pid
+        run: |
+          go run ws/main.go & echo $! > WS.pid
+          sleep 2
 
       - name: run puppeteer
         run: |
           ./lightpanda serve & echo $! > LPD.pid
+          sleep 2
           RUNS=100 npm run bench-puppeteer-cdp > puppeteer.out || exit 1
           cat /proc/`cat LPD.pid`/status |grep VmHWM|grep -oP '\d+' > LPD.VmHWM
           kill `cat LPD.pid`
