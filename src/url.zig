@@ -91,6 +91,9 @@ pub const URL = struct {
         if (base.len == 0) {
             return src;
         }
+        if (src.len == 0) {
+            return base;
+        }
 
         const protocol_end: usize = blk: {
             if (std.mem.indexOf(u8, base, "://")) |protocol_index| {
@@ -169,4 +172,14 @@ test "URL: Stiching Base & Src URLs (Both Local)" {
     const result = try URL.stitch(allocator, src, base);
     defer allocator.free(result);
     try testing.expectString("./abcdef/something.js", result);
+}
+
+test "URL: Stitching Base & Src URLs (empty src)" {
+    const allocator = testing.allocator;
+
+    const base = "https://www.google.com/xyz/abc/123";
+    const src = "";
+    const result = try URL.stitch(allocator, src, base);
+    // defer allocator.free(result);
+    try testing.expectString("https://www.google.com/xyz/abc/123", result);
 }
