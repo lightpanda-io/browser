@@ -2687,8 +2687,9 @@ pub fn inputGetMaxLength(input: *Input) !i32 {
     try DOMErr(err);
     return max_length;
 }
-pub fn inputSetMaxLength(input: *Input, max_length: u32) !void {
-    const err = c.dom_html_input_element_set_max_length(input, max_length);
+pub fn inputSetMaxLength(input: *Input, max_length: i32) !void {
+    if (max_length < 0) return error.NegativeValueNotAllowed;
+    const err = c.dom_html_input_element_set_max_length(input, @intCast(max_length));
     try DOMErr(err);
 }
 
@@ -2720,8 +2721,10 @@ pub fn inputGetSize(input: *Input) !u32 {
     if (size == ulongNegativeOne) return 20; // 20
     return size;
 }
-pub fn inputSetSize(input: *Input, size: u32) !void {
-    const err = c.dom_html_input_element_set_size(input, size);
+pub fn inputSetSize(input: *Input, size: i32) !void {
+    if (size == 0) return error.ZeroNotAllowed;
+    const new_size = if (size < 0) 20 else size;
+    const err = c.dom_html_input_element_set_size(input, @intCast(new_size));
     try DOMErr(err);
 }
 
@@ -2732,6 +2735,7 @@ pub fn inputGetSrc(input: *Input) ![]const u8 {
     const s = s_ orelse return "";
     return strToData(s);
 }
+// url should already be stitched!
 pub fn inputSetSrc(input: *Input, src: []const u8) !void {
     const err = c.dom_html_input_element_set_src(input, try strFromData(src));
     try DOMErr(err);
@@ -2741,8 +2745,21 @@ pub fn inputGetType(input: *Input) ![]const u8 {
     var s_: ?*String = null;
     const err = c.dom_html_input_element_get_type(input, &s_);
     try DOMErr(err);
-    const s = s_ orelse return "";
+    const s = s_ orelse return "text";
     return strToData(s);
+}
+pub fn inputSetType(input: *Input, type_: []const u8) !void {
+    // @speed sort values by usage frequency/length
+    const possible_values = [_][]const u8{ "text", "search", "tel", "url", "email", "password", "date", "month", "week", "time", "datetime-local", "number", "range", "color", "checkbox", "radio", "file", "hidden", "image", "button", "submit", "reset" };
+    var found = false;
+    for (possible_values) |item| {
+        if (std.mem.eql(u8, type_, item)) {
+            found = true;
+            break;
+        }
+    }
+    const new_type = if (found) type_ else "text";
+    try elementSetAttribute(@ptrCast(input), "type", new_type);
 }
 
 pub fn inputGetValue(input: *Input) ![]const u8 {
