@@ -19,8 +19,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const JsObject = @import("../env.zig").Env.JsObject;
+const Allocator = std.mem.Allocator;
 const Page = @import("../page.zig").Page;
+const JsObject = @import("../env.zig").Env.JsObject;
 
 const log = if (builtin.is_test) &test_capture else @import("../../log.zig");
 
@@ -28,6 +29,13 @@ pub const Console = struct {
     // TODO: configurable writer
     timers: std.StringHashMapUnmanaged(u32) = .{},
     counts: std.StringHashMapUnmanaged(u32) = .{},
+
+    pub fn _lp(_: *const Console, values: []JsObject, page: *Page) !void {
+        if (values.len == 0) {
+            return;
+        }
+        log.fatal(.console, "lightpanda", .{ .args = try serializeValues(values, page) });
+    }
 
     pub fn _log(_: *const Console, values: []JsObject, page: *Page) !void {
         if (values.len == 0) {
@@ -134,12 +142,19 @@ pub const Console = struct {
     }
 
     fn serializeValues(values: []JsObject, page: *Page) ![]const u8 {
+        if (values.len == 0) {
+            return "";
+        }
+
         const arena = page.call_arena;
+        const separator = log.separator();
         var arr: std.ArrayListUnmanaged(u8) = .{};
-        try arr.appendSlice(arena, try values[0].toString());
-        for (values[1..]) |value| {
-            try arr.append(arena, ' ');
-            try arr.appendSlice(arena, try value.toString());
+
+        for (values, 1..) |value, i| {
+            try arr.appendSlice(arena, separator);
+            try arr.writer(arena).print("{d}: ", .{i});
+            const serialized = if (builtin.mode == .Debug) value.toDetailString() else value.toString();
+            try arr.appendSlice(arena, try serialized);
         }
         return arr.items;
     }
