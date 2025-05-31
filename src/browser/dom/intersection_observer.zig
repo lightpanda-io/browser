@@ -86,7 +86,11 @@ pub const IntersectionObserver = struct {
 
         var result: Env.Function.Result = undefined;
         self.callback.tryCall(void, .{self.observed_entries.items}, &result) catch {
-            log.debug(.int_obs, "callback error", .{ .err = result.exception, .stack = result.stack });
+            log.debug(.user_script, "callback error", .{
+                .err = result.exception,
+                .stack = result.stack,
+                .source = "intersection observer",
+            });
         };
     }
 

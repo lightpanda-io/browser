@@ -39,7 +39,7 @@ pub fn load(allocator: Allocator, scope: *Env.Scope) !void {
         _ = scope.exec(m.source, m.name) catch |err| {
             if (try try_catch.err(allocator)) |msg| {
                 defer allocator.free(msg);
-                log.err(.polyfill, "exec error", .{ .name = m.name, .err = msg });
+                log.fatal(.app, "polyfill error", .{ .name = m.name, .err = msg });
             }
             return err;
         };

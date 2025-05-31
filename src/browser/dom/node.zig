@@ -269,7 +269,7 @@ pub const Node = struct {
     // - An Element that is not attached to a document or a shadow tree will return the root of the DOM tree it belongs to
     pub fn _getRootNode(self: *parser.Node, options: ?struct { composed: bool = false }) !Union {
         if (options) |options_| if (options_.composed) {
-            log.warn(.node, "not implemented", .{ .feature = "getRootNode composed" });
+            log.warn(.web_api, "not implemented", .{ .feature = "getRootNode composed" });
         };
         return try Node.toInterface(try parser.nodeGetRootNode(self));
     }

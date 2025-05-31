@@ -148,7 +148,7 @@ pub const FormData = struct {
             return urlEncode(self, writer);
         }
 
-        log.warn(.form_data, "encoding not supported", .{ .encoding = encoding });
+        log.warn(.web_api, "not implemented", .{ .feature = "form data encoding", .encoding = encoding });
         return error.EncodingNotSupported;
     }
 };
@@ -334,7 +334,7 @@ fn collectForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page
                 }
             },
             else => {
-                log.warn(.form_data, "unsupported element", .{ .tag = @tagName(tag) });
+                log.warn(.web_api, "unsupported form element", .{ .tag = @tagName(tag) });
                 continue;
             },
         }

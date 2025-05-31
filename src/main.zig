@@ -33,7 +33,7 @@ pub fn main() !void {
     // allocator
     // - in Debug mode we use the General Purpose Allocator to detect memory leaks
     // - in Release mode we use the c allocator
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     const alloc = if (builtin.mode == .Debug) gpa.allocator() else std.heap.c_allocator;
 
     defer if (builtin.mode == .Debug) {
@@ -41,7 +41,7 @@ pub fn main() !void {
     };
 
     run(alloc) catch |err| {
-        log.fatal(.main, "exit", .{ .err = err });
+        log.fatal(.app, "exit", .{ .err = err });
         std.posix.exit(1);
     };
 }
@@ -63,6 +63,16 @@ fn run(alloc: Allocator) !void {
         else => {},
     }
 
+    if (args.logLevel()) |ll| {
+        log.opts.level = ll;
+    }
+    if (args.logFormat()) |lf| {
+        log.opts.format = lf;
+    }
+    if (args.logFilterScopes()) |lfs| {
+        log.opts.filter_scopes = lfs;
+    }
+
     const platform = try Platform.init();
     defer platform.deinit();
 
@@ -76,20 +86,20 @@ fn run(alloc: Allocator) !void {
 
     switch (args.mode) {
         .serve => |opts| {
-            log.debug(.main, "startup", .{ .mode = "serve" });
+            log.debug(.app, "startup", .{ .mode = "serve" });
             const address = std.net.Address.parseIp4(opts.host, opts.port) catch |err| {
-                log.fatal(.main, "server address", .{ .err = err, .host = opts.host, .port = opts.port });
+                log.fatal(.app, "invalid server address", .{ .err = err, .host = opts.host, .port = opts.port });
                 return args.printUsageAndExit(false);
             };
 
             const timeout = std.time.ns_per_s * @as(u64, opts.timeout);
             server.run(app, address, timeout) catch |err| {
-                log.fatal(.main, "server run", .{ .err = err });
+                log.fatal(.app, "server run error", .{ .err = err });
                 return err;
             };
         },
         .fetch => |opts| {
-            log.debug(.main, "startup", .{ .mode = "fetch", .dump = opts.dump, .url = opts.url });
+            log.debug(.app, "startup", .{ .mode = "fetch", .dump = opts.dump, .url = opts.url });
             const url = try @import("url.zig").URL.parse(opts.url, null);
 
             // browser
@@ -103,11 +113,11 @@ fn run(alloc: Allocator) !void {
 
             _ = page.navigate(url, .{}) catch |err| switch (err) {
                 error.UnsupportedUriScheme, error.UriMissingHost => {
-                    log.fatal(.main, "fetch invalid URL", .{ .err = err, .url = url });
+                    log.fatal(.app, "invalid fetch URL", .{ .err = err, .url = url });
                     return args.printUsageAndExit(false);
                 },
                 else => {
-                    log.fatal(.main, "fetch error", .{ .err = err, .url = url });
+                    log.fatal(.app, "fetch error", .{ .err = err, .url = url });
                     return err;
                 },
             };
@@ -129,15 +139,36 @@ const Command = struct {
 
     fn tlsVerifyHost(self: *const Command) bool {
         return switch (self.mode) {
-            inline .serve, .fetch => |opts| opts.tls_verify_host,
-            else => true,
+            inline .serve, .fetch => |opts| opts.common.tls_verify_host,
+            else => unreachable,
         };
     }
 
     fn httpProxy(self: *const Command) ?std.Uri {
         return switch (self.mode) {
-            inline .serve, .fetch => |opts| opts.http_proxy,
-            else => null,
+            inline .serve, .fetch => |opts| opts.common.http_proxy,
+            else => unreachable,
+        };
+    }
+
+    fn logLevel(self: *const Command) ?log.Level {
+        return switch (self.mode) {
+            inline .serve, .fetch => |opts| opts.common.log_level,
+            else => unreachable,
+        };
+    }
+
+    fn logFormat(self: *const Command) ?log.Format {
+        return switch (self.mode) {
+            inline .serve, .fetch => |opts| opts.common.log_format,
+            else => unreachable,
+        };
+    }
+
+    fn logFilterScopes(self: *const Command) ?[]const log.Scope {
+        return switch (self.mode) {
+            inline .serve, .fetch => |opts| opts.common.log_filter_scopes,
+            else => unreachable,
         };
     }
 
@@ -152,18 +183,47 @@ const Command = struct {
         host: []const u8,
         port: u16,
         timeout: u16,
-        tls_verify_host: bool,
-        http_proxy: ?std.Uri,
+        common: Common,
     };
 
     const Fetch = struct {
         url: []const u8,
         dump: bool = false,
-        tls_verify_host: bool,
-        http_proxy: ?std.Uri,
+        common: Common,
+    };
+
+    const Common = struct {
+        http_proxy: ?std.Uri = null,
+        tls_verify_host: bool = true,
+        log_level: ?log.Level = null,
+        log_format: ?log.Format = null,
+        log_filter_scopes: ?[]log.Scope = null,
     };
 
     fn printUsageAndExit(self: *const Command, success: bool) void {
+        const common_options =
+            \\
+            \\--insecure_disable_tls_host_verification
+            \\                Disables host verification on all HTTP requests.
+            \\                This is an advanced option which should only be
+            \\                set if you understand and accept the risk of
+            \\                disabling host verification.
+            \\
+            \\--http_proxy    The HTTP proxy to use for all HTTP requests.
+            \\                Defaults to none.
+            \\
+            \\--log_level     The log level: debug, info, warn, error or fatal.
+            \\                Defaults to
+        ++ (if (builtin.mode == .Debug) " info." else "warn.") ++
+            \\
+            \\
+            \\--log_format    The log format: pretty or logfmt.
+            \\                Defaults to
+        ++ (if (builtin.mode == .Debug) " pretty." else " logfmt.") ++
+            \\
+            \\
+        ;
+
         const usage =
             \\usage: {s} command [options] [URL]
             \\
@@ -177,14 +237,7 @@ const Command = struct {
             \\--dump          Dumps document to stdout.
             \\                Defaults to false.
             \\
-            \\--insecure_disable_tls_host_verification
-            \\                Disables host verification on all HTTP requests.
-            \\                This is an advanced option which should only be
-            \\                set if you understand and accept the risk of
-            \\                disabling host verification.
-            \\
-            \\--http_proxy    The HTTP proxy to use for all HTTP requests.
-            \\                Defaults to none.
+        ++ common_options ++
             \\
             \\serve command
             \\Starts a websocket CDP server
@@ -200,14 +253,7 @@ const Command = struct {
             \\--timeout       Inactivity timeout in seconds before disconnecting clients
             \\                Defaults to 3 (seconds)
             \\
-            \\--insecure_disable_tls_host_verification
-            \\                Disables host verification on all HTTP requests.
-            \\                This is an advanced option which should only be
-            \\                set if you understand and accept the risk of
-            \\                disabling host verification.
-            \\
-            \\--http_proxy    The HTTP proxy to use for all HTTP requests.
-            \\                Defaults to none.
+        ++ common_options ++
             \\
             \\version command
             \\Displays the version of {s}
@@ -293,13 +339,12 @@ fn parseServeArgs(
     var host: []const u8 = "127.0.0.1";
     var port: u16 = 9222;
     var timeout: u16 = 3;
-    var tls_verify_host = true;
-    var http_proxy: ?std.Uri = null;
+    var common: Command.Common = .{};
 
     while (args.next()) |opt| {
         if (std.mem.eql(u8, "--host", opt)) {
             const str = args.next() orelse {
-                log.fatal(.main, "missing argument value", .{ .arg = "--host" });
+                log.fatal(.app, "missing argument value", .{ .arg = "--host" });
                 return error.InvalidArgument;
             };
             host = try allocator.dupe(u8, str);
@@ -308,12 +353,12 @@ fn parseServeArgs(
 
         if (std.mem.eql(u8, "--port", opt)) {
             const str = args.next() orelse {
-                log.fatal(.main, "missing argument value", .{ .arg = "--port" });
+                log.fatal(.app, "missing argument value", .{ .arg = "--port" });
                 return error.InvalidArgument;
             };
 
             port = std.fmt.parseInt(u16, str, 10) catch |err| {
-                log.fatal(.main, "invalid argument value", .{ .arg = "--port", .err = err });
+                log.fatal(.app, "invalid argument value", .{ .arg = "--port", .err = err });
                 return error.InvalidArgument;
             };
             continue;
@@ -321,40 +366,30 @@ fn parseServeArgs(
 
         if (std.mem.eql(u8, "--timeout", opt)) {
             const str = args.next() orelse {
-                log.fatal(.main, "missing argument value", .{ .arg = "--timeout" });
+                log.fatal(.app, "missing argument value", .{ .arg = "--timeout" });
                 return error.InvalidArgument;
             };
 
             timeout = std.fmt.parseInt(u16, str, 10) catch |err| {
-                log.fatal(.main, "invalid argument value", .{ .arg = "--timeout", .err = err });
+                log.fatal(.app, "invalid argument value", .{ .arg = "--timeout", .err = err });
                 return error.InvalidArgument;
             };
             continue;
         }
 
-        if (std.mem.eql(u8, "--insecure_disable_tls_host_verification", opt)) {
-            tls_verify_host = false;
+        if (try parseCommonArg(allocator, opt, args, &common)) {
             continue;
         }
 
-        if (std.mem.eql(u8, "--http_proxy", opt)) {
-            const str = args.next() orelse {
-                log.fatal(.main, "missing argument value", .{ .arg = "--http_proxy" });
-                return error.InvalidArgument;
-            };
-            http_proxy = try std.Uri.parse(try allocator.dupe(u8, str));
-            continue;
-        }
-        log.fatal(.main, "unknown argument", .{ .mode = "serve", .arg = opt });
+        log.fatal(.app, "unknown argument", .{ .mode = "serve", .arg = opt });
         return error.UnkownOption;
     }
 
     return .{
         .host = host,
         .port = port,
+        .common = common,
         .timeout = timeout,
-        .http_proxy = http_proxy,
-        .tls_verify_host = tls_verify_host,
     };
 }
 
@@ -364,8 +399,7 @@ fn parseFetchArgs(
 ) !Command.Fetch {
     var dump: bool = false;
     var url: ?[]const u8 = null;
-    var tls_verify_host = true;
-    var http_proxy: ?std.Uri = null;
+    var common: Command.Common = .{};
 
     while (args.next()) |opt| {
         if (std.mem.eql(u8, "--dump", opt)) {
@@ -373,43 +407,109 @@ fn parseFetchArgs(
             continue;
         }
 
-        if (std.mem.eql(u8, "--insecure_disable_tls_host_verification", opt)) {
-            tls_verify_host = false;
-            continue;
-        }
-
-        if (std.mem.eql(u8, "--http_proxy", opt)) {
-            const str = args.next() orelse {
-                log.fatal(.main, "missing argument value", .{ .arg = "--http_proxy" });
-                return error.InvalidArgument;
-            };
-            http_proxy = try std.Uri.parse(try allocator.dupe(u8, str));
+        if (try parseCommonArg(allocator, opt, args, &common)) {
             continue;
         }
 
         if (std.mem.startsWith(u8, opt, "--")) {
-            log.fatal(.main, "unknown argument", .{ .mode = "fetch", .arg = opt });
+            log.fatal(.app, "unknown argument", .{ .mode = "fetch", .arg = opt });
             return error.UnkownOption;
         }
 
         if (url != null) {
-            log.fatal(.main, "duplicate fetch url", .{ .help = "only 1 URL can be specified" });
+            log.fatal(.app, "duplicate fetch url", .{ .help = "only 1 URL can be specified" });
             return error.TooManyURLs;
         }
         url = try allocator.dupe(u8, opt);
     }
 
     if (url == null) {
-        log.fatal(.main, "duplicate fetch url", .{ .help = "URL to fetch must be provided" });
+        log.fatal(.app, "missing fetch url", .{ .help = "URL to fetch must be provided" });
         return error.MissingURL;
     }
 
     return .{
         .url = url.?,
         .dump = dump,
-        .http_proxy = http_proxy,
-        .tls_verify_host = tls_verify_host,
+        .common = common,
     };
+}
+
+fn parseCommonArg(
+    allocator: Allocator,
+    opt: []const u8,
+    args: *std.process.ArgIterator,
+    common: *Command.Common,
+) !bool {
+    if (std.mem.eql(u8, "--insecure_disable_tls_host_verification", opt)) {
+        common.tls_verify_host = false;
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--http_proxy", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--http_proxy" });
+            return error.InvalidArgument;
+        };
+        common.http_proxy = try std.Uri.parse(try allocator.dupe(u8, str));
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--log_level", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--log_level" });
+            return error.InvalidArgument;
+        };
+
+        common.log_level = std.meta.stringToEnum(log.Level, str) orelse blk: {
+            if (std.mem.eql(u8, str, "error")) {
+                break :blk .err;
+            }
+            log.fatal(.app, "invalid option choice", .{ .arg = "--log_level", .value = str });
+            return error.InvalidArgument;
+        };
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--log_format", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--log_format" });
+            return error.InvalidArgument;
+        };
+
+        common.log_format = std.meta.stringToEnum(log.Format, str) orelse {
+            log.fatal(.app, "invalid option choice", .{ .arg = "--log_format", .value = str });
+            return error.InvalidArgument;
+        };
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--log_filter_scopes", opt)) {
+        if (builtin.mode != .Debug) {
+            log.fatal(.app, "experimental", .{ .help = "log scope filtering is only available in debug builds" });
+            return false;
+        }
+
+        const str = args.next() orelse {
+            // disables the default filters
+            common.log_filter_scopes = &.{};
+            return true;
+        };
+
+        var arr: std.ArrayListUnmanaged(log.Scope) = .empty;
+
+        var it = std.mem.splitScalar(u8, str, ',');
+        while (it.next()) |part| {
+            try arr.append(allocator, std.meta.stringToEnum(log.Scope, part) orelse {
+                log.fatal(.app, "invalid option choice", .{ .arg = "--log_scope_filter", .value = part });
+                return false;
+            });
+        }
+        common.log_filter_scopes = arr.items;
+        return true;
+    }
+
+    return false;
 }
 
 test {
@@ -419,6 +519,8 @@ test {
 var test_wg: std.Thread.WaitGroup = .{};
 test "tests:beforeAll" {
     try parser.init();
+    log.opts.level = .err;
+    log.opts.format = .logfmt;
 
     test_wg.startMany(3);
     _ = try Platform.init();

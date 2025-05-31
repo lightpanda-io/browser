@@ -278,7 +278,7 @@ const TestCapture = struct {
         inline for (@typeInfo(@TypeOf(args)).@"struct".fields) |f| {
             try buf.appendSlice(allocator, f.name);
             try buf.append(allocator, '=');
-            try @import("../../log.zig").writeValue(false, @field(args, f.name), buf.writer(allocator));
+            try @import("../../log.zig").writeValue(.pretty, @field(args, f.name), buf.writer(allocator));
             try buf.append(allocator, ' ');
         }
         self.captured.append(testing.arena_allocator, std.mem.trimRight(u8, buf.items, " ")) catch unreachable;

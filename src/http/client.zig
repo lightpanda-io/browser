@@ -647,7 +647,7 @@ pub const Request = struct {
             // to a GET.
             self.method = .GET;
         }
-        log.debug(.http_client, "redirecting", .{ .method = self.method, .url = self.request_uri });
+        log.debug(.http, "redirecting", .{ .method = self.method, .url = self.request_uri });
 
         if (self.body != null and self.method == .GET) {
             // If we have a body and the method is a GET, then we must be following
