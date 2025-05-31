@@ -180,8 +180,8 @@ test "Browser.Console" {
         }, .{});
 
         const captured = test_capture.captured.items;
-        try testing.expectEqual("[info] args=a", captured[0]);
-        try testing.expectEqual("[warn] args=hello world 23 true [object Object]", captured[1]);
+        try testing.expectEqual("[info] args= 1: a", captured[0]);
+        try testing.expectEqual("[warn] args= 1: hello world 2: 23 3: true 4: #<Object>", captured[1]);
     }
 
     {
@@ -222,12 +222,16 @@ test "Browser.Console" {
 
         const captured = test_capture.captured.items;
         try testing.expectEqual("[assertion failed] values=", captured[0]);
-        try testing.expectEqual("[assertion failed] values=x true", captured[1]);
-        try testing.expectEqual("[assertion failed] values=x", captured[2]);
+        try testing.expectEqual("[assertion failed] values= 1: x 2: true", captured[1]);
+        try testing.expectEqual("[assertion failed] values= 1: x", captured[2]);
     }
 }
 const TestCapture = struct {
     captured: std.ArrayListUnmanaged([]const u8) = .{},
+
+    fn separator(_: *const TestCapture) []const u8 {
+        return " ";
+    }
 
     fn reset(self: *TestCapture) void {
         self.captured = .{};
@@ -261,6 +265,15 @@ const TestCapture = struct {
     }
 
     fn err(
+        self: *TestCapture,
+        comptime scope: @Type(.enum_literal),
+        comptime msg: []const u8,
+        args: anytype,
+    ) void {
+        self.capture(scope, msg, args);
+    }
+
+    fn fatal(
         self: *TestCapture,
         comptime scope: @Type(.enum_literal),
         comptime msg: []const u8,
