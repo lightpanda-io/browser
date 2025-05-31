@@ -334,9 +334,9 @@ pub const XMLHttpRequest = struct {
     // dispatch request event.
     // errors are logged only.
     fn dispatchEvt(self: *XMLHttpRequest, typ: []const u8) void {
-        log.debug(.xhr, "dispatch event", .{ .type = typ });
+        log.debug(.script_event, "dispatch event", .{ .type = typ, .source = "xhr" });
         self._dispatchEvt(typ) catch |err| {
-            log.err(.xhr, "dispatch event error", .{ .err = err, .type = typ });
+            log.err(.app, "dispatch event error", .{ .err = err, .type = typ, .source = "xhr" });
         };
     }
 
@@ -354,9 +354,9 @@ pub const XMLHttpRequest = struct {
         typ: []const u8,
         opts: ProgressEvent.EventInit,
     ) void {
-        log.debug(.xhr, "dispatch progress event", .{ .type = typ });
+        log.debug(.script_event, "dispatch progress event", .{ .type = typ, .source = "xhr" });
         self._dispatchProgressEvent(typ, opts) catch |err| {
-            log.err(.xhr, "dispatch progress event error", .{ .err = err, .type = typ });
+            log.err(.app, "dispatch progress event error", .{ .err = err, .type = typ, .source = "xhr" });
         };
     }
 
@@ -419,7 +419,7 @@ pub const XMLHttpRequest = struct {
         if (self.state != .opened) return DOMError.InvalidState;
         if (self.send_flag) return DOMError.InvalidState;
 
-        log.debug(.xhr, "request", .{ .method = self.method, .url = self.url });
+        log.debug(.http, "request", .{ .method = self.method, .url = self.url, .source = "xhr" });
 
         self.send_flag = true;
 
@@ -469,7 +469,11 @@ pub const XMLHttpRequest = struct {
         if (progress.first) {
             const header = progress.header;
 
-            log.debug(.xhr, "request header", .{ .status = header.status });
+            log.debug(.http, "request header", .{
+                .source = "xhr",
+                .url = self.url,
+                .status = header.status,
+            });
             for (header.headers.items) |hdr| {
                 try self.response_headers.append(hdr.name, hdr.value);
             }
@@ -515,7 +519,8 @@ pub const XMLHttpRequest = struct {
             return;
         }
 
-        log.info(.xhr, "request complete", .{
+        log.info(.http, "request complete", .{
+            .source = "xhr",
             .url = self.url,
             .status = progress.header.status,
         });
@@ -541,7 +546,12 @@ pub const XMLHttpRequest = struct {
         self.dispatchProgressEvent("error", .{});
         self.dispatchProgressEvent("loadend", .{});
 
-        log.warn(.xhr, "error", .{ .method = self.method, .url = self.url, .err = err });
+        const level: log.Level = if (err == DOMError.Abort) .debug else .err;
+        log.log(.http, level, "error", .{
+            .url = self.url,
+            .err = err,
+            .source = "xhr",
+        });
     }
 
     pub fn _abort(self: *XMLHttpRequest) void {
@@ -646,7 +656,7 @@ pub const XMLHttpRequest = struct {
             // response object to a new ArrayBuffer object representing this’s
             // received bytes. If this throws an exception, then set this’s
             // response object to failure and return null.
-            log.err(.xhr, "not implemented", .{ .feature = "ArrayBuffer resposne type" });
+            log.err(.web_api, "not implemented", .{ .feature = "XHR ArrayBuffer resposne type" });
             return null;
         }
 
@@ -655,7 +665,7 @@ pub const XMLHttpRequest = struct {
             // response object to a new Blob object representing this’s
             // received bytes with type set to the result of get a final MIME
             // type for this.
-            log.err(.xhr, "not implemented", .{ .feature = "Blog resposne type" });
+            log.err(.web_api, "not implemented", .{ .feature = "XHR Blob resposne type" });
             return null;
         }
 
@@ -730,7 +740,7 @@ pub const XMLHttpRequest = struct {
             self.response_bytes.items,
             .{},
         ) catch |e| {
-            log.warn(.xhr, "invalid json", .{ .err = e });
+            log.warn(.http, "invalid json", .{ .err = e, .url = self.url, .source = "xhr" });
             self.response_obj = .{ .Failure = {} };
             return;
         };

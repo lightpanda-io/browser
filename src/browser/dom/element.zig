@@ -147,7 +147,7 @@ pub const Element = struct {
         while (true) {
             if (try select.match(current)) {
                 if (!current.isElement()) {
-                    log.err(.element, "closest invalid type", .{ .type = try current.tag() });
+                    log.err(.browser, "closest invalid type", .{ .type = try current.tag() });
                     return null;
                 }
                 return parser.nodeToElement(current.node);

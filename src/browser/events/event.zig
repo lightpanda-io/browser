@@ -237,14 +237,18 @@ pub const EventHandler = struct {
 
     fn handle(node: *parser.EventNode, event: *parser.Event) void {
         const ievent = Event.toInterface(event) catch |err| {
-            log.err(.event, "toInterface error", .{ .err = err });
+            log.err(.app, "toInterface error", .{ .err = err });
             return;
         };
 
         const self: *EventHandler = @fieldParentPtr("node", node);
         var result: Function.Result = undefined;
         self.callback.tryCall(void, .{ievent}, &result) catch {
-            log.debug(.event, "handle callback error", .{ .err = result.exception, .stack = result.stack });
+            log.debug(.user_script, "callback error", .{
+                .err = result.exception,
+                .stack = result.stack,
+                .source = "event handler",
+            });
         };
 
         if (self.once) {

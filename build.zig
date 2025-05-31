@@ -44,21 +44,6 @@ pub fn build(b: *std.Build) !void {
         b.option([]const u8, "git_commit", "Current git commit") orelse "dev",
     );
 
-    {
-        const log = @import("src/log.zig");
-        opts.addOption(
-            log.Level,
-            "log_level",
-            b.option(log.Level, "log_level", "The log level") orelse .info,
-        );
-    }
-
-    opts.addOption(
-        bool,
-        "log_unknown_properties",
-        b.option(bool, "log_unknown_properties", "Log access to unknown properties") orelse false,
-    );
-
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 

@@ -18,6 +18,7 @@
 
 const std = @import("std");
 
+const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 const Page = @import("../page.zig").Page;
 
@@ -276,6 +277,10 @@ pub const HTMLDocument = struct {
         const evt = try parser.eventCreate();
         defer parser.eventDestroy(evt);
 
+        log.debug(.script_event, "dispatch event", .{
+            .type = "DOMContentLoaded",
+            .source = "document",
+        });
         try parser.eventInit(evt, "DOMContentLoaded", .{ .bubbles = true, .cancelable = true });
         _ = try parser.eventTargetDispatchEvent(parser.toEventTarget(parser.DocumentHTML, html_doc), evt);
     }

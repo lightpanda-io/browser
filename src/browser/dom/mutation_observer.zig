@@ -114,7 +114,11 @@ pub const MutationObserver = struct {
             const records = [_]MutationRecord{r.*};
             var result: Env.Function.Result = undefined;
             self.cbk.tryCall(void, .{records}, &result) catch {
-                log.debug(.mut_obs, "callback error", .{ .err = result.exception, .stack = result.stack });
+                log.debug(.user_script, "callback error", .{
+                    .err = result.exception,
+                    .stack = result.stack,
+                    .source = "mutation observer",
+                });
             };
         }
     }
@@ -242,7 +246,7 @@ const Observer = struct {
     fn handle(en: *parser.EventNode, event: *parser.Event) void {
         const self: *Observer = @fieldParentPtr("event_node", en);
         self._handle(event) catch |err| {
-            log.err(.mut_obs, "handle error", .{ .err = err });
+            log.err(.web_api, "handle error", .{ .err = err, .source = "mutation observer" });
         };
     }
 
