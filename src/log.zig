@@ -173,13 +173,17 @@ fn logLogfmt(comptime scope: Scope, level: Level, comptime msg: []const u8, data
 }
 
 fn logPretty(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, writer: anytype) !void {
-    try writer.writeAll(switch (level) {
-        .debug => "\x1b[0;36mDEBUG\x1b[0m ",
-        .info => "\x1b[0;32mINFO\x1b[0m  ",
-        .warn => "\x1b[0;33mWARN\x1b[0m  ",
-        .err => "\x1b[0;31mERROR\x1b[0m ",
-        .fatal => "\x1b[0;35mFATAL\x1b[0m ",
-    });
+    if (scope == .console and level == .fatal and comptime std.mem.eql(u8, msg, "lightpanda")) {
+        try writer.writeAll("\x1b[0;104mWARN  ");
+    } else {
+        try writer.writeAll(switch (level) {
+            .debug => "\x1b[0;36mDEBUG\x1b[0m ",
+            .info => "\x1b[0;32mINFO\x1b[0m  ",
+            .warn => "\x1b[0;33mWARN\x1b[0m  ",
+            .err => "\x1b[0;31mERROR ",
+            .fatal => "\x1b[0;35mFATAL ",
+        });
+    }
 
     const prefix = @tagName(scope) ++ " : " ++ msg;
     try writer.writeAll(prefix);
@@ -194,7 +198,7 @@ fn logPretty(comptime scope: Scope, level: Level, comptime msg: []const u8, data
         if (@mod(padding, 2) == 1) {
             try writer.writeByte(' ');
         }
-        try writer.print(" [+{d}ms]", .{elapsed()});
+        try writer.print(" \x1b[0m[+{d}ms]", .{elapsed()});
         try writer.writeByte('\n');
     }
 
