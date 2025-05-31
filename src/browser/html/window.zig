@@ -174,7 +174,11 @@ pub const Window = struct {
         // Since: When multiple callbacks queued by requestAnimationFrame() begin to fire in a single frame, each receives the same timestamp even though time has passed during the computation of every previous callback's workload.
         var result: Function.Result = undefined;
         callback.tryCall(void, .{self.performance._now()}, &result) catch {
-            log.debug(.window, "requestAnimationFrame error", .{ .err = result.exception, .stack = result.stack });
+            log.debug(.user_script, "callback error", .{
+                .err = result.exception,
+                .stack = result.stack,
+                .source = "requestAnimationFrame",
+            });
         };
         return 99; // not unique, but user cannot make assumptions about it. cancelAnimationFrame will be too late anyway.
     }
@@ -215,7 +219,7 @@ pub const Window = struct {
     fn createTimeout(self: *Window, cbk: Function, delay_: ?u32, page: *Page, comptime repeat: bool) !u32 {
         const delay = delay_ orelse 0;
         if (delay > 5000) {
-            log.warn(.window, "long timeout ignored", .{ .delay = delay, .interval = repeat });
+            log.warn(.user_script, "long timeout ignored", .{ .delay = delay, .interval = repeat });
             // self.timer_id is u30, so the largest value we can generate is
             // 1_073_741_824. Returning 2_000_000_000 makes sure that clients
             // can call cancelTimer/cancelInterval without breaking anything.
@@ -288,7 +292,11 @@ const TimerCallback = struct {
 
         var result: Function.Result = undefined;
         self.cbk.tryCall(void, .{}, &result) catch {
-            log.debug(.window, "timeout callback error", .{ .err = result.exception, .stack = result.stack });
+            log.debug(.user_script, "callback error", .{
+                .err = result.exception,
+                .stack = result.stack,
+                .source = "window timeout",
+            });
         };
 
         if (self.repeat) |r| {

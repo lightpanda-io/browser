@@ -206,9 +206,10 @@ pub const Notification = struct {
             const listener = n.data;
             const func: EventFunc(event) = @alignCast(@ptrCast(listener.func));
             func(listener.receiver, data) catch |err| {
-                log.err(.notification, "dispatch error", .{
+                log.err(.app, "dispatch error", .{
                     .err = err,
                     .event = event,
+                    .source = "notification",
                     .listener = listener.struct_name,
                 });
             };

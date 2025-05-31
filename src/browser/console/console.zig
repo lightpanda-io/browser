@@ -19,8 +19,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const JsObject = @import("../env.zig").Env.JsObject;
+const Allocator = std.mem.Allocator;
 const Page = @import("../page.zig").Page;
+const JsObject = @import("../env.zig").Env.JsObject;
 
 const log = if (builtin.is_test) &test_capture else @import("../../log.zig");
 
@@ -28,6 +29,13 @@ pub const Console = struct {
     // TODO: configurable writer
     timers: std.StringHashMapUnmanaged(u32) = .{},
     counts: std.StringHashMapUnmanaged(u32) = .{},
+
+    pub fn _lp(_: *const Console, values: []JsObject, page: *Page) !void {
+        if (values.len == 0) {
+            return;
+        }
+        log.fatal(.console, "lightpanda", .{ .args = try serializeValues(values, page) });
+    }
 
     pub fn _log(_: *const Console, values: []JsObject, page: *Page) !void {
         if (values.len == 0) {
@@ -134,12 +142,19 @@ pub const Console = struct {
     }
 
     fn serializeValues(values: []JsObject, page: *Page) ![]const u8 {
+        if (values.len == 0) {
+            return "";
+        }
+
         const arena = page.call_arena;
+        const separator = log.separator();
         var arr: std.ArrayListUnmanaged(u8) = .{};
-        try arr.appendSlice(arena, try values[0].toString());
-        for (values[1..]) |value| {
-            try arr.append(arena, ' ');
-            try arr.appendSlice(arena, try value.toString());
+
+        for (values, 1..) |value, i| {
+            try arr.appendSlice(arena, separator);
+            try arr.writer(arena).print("{d}: ", .{i});
+            const serialized = if (builtin.mode == .Debug) value.toDetailString() else value.toString();
+            try arr.appendSlice(arena, try serialized);
         }
         return arr.items;
     }
@@ -165,8 +180,8 @@ test "Browser.Console" {
         }, .{});
 
         const captured = test_capture.captured.items;
-        try testing.expectEqual("[info] args=a", captured[0]);
-        try testing.expectEqual("[warn] args=hello world 23 true [object Object]", captured[1]);
+        try testing.expectEqual("[info] args= 1: a", captured[0]);
+        try testing.expectEqual("[warn] args= 1: hello world 2: 23 3: true 4: #<Object>", captured[1]);
     }
 
     {
@@ -207,12 +222,16 @@ test "Browser.Console" {
 
         const captured = test_capture.captured.items;
         try testing.expectEqual("[assertion failed] values=", captured[0]);
-        try testing.expectEqual("[assertion failed] values=x true", captured[1]);
-        try testing.expectEqual("[assertion failed] values=x", captured[2]);
+        try testing.expectEqual("[assertion failed] values= 1: x 2: true", captured[1]);
+        try testing.expectEqual("[assertion failed] values= 1: x", captured[2]);
     }
 }
 const TestCapture = struct {
     captured: std.ArrayListUnmanaged([]const u8) = .{},
+
+    fn separator(_: *const TestCapture) []const u8 {
+        return " ";
+    }
 
     fn reset(self: *TestCapture) void {
         self.captured = .{};
@@ -254,6 +273,15 @@ const TestCapture = struct {
         self.capture(scope, msg, args);
     }
 
+    fn fatal(
+        self: *TestCapture,
+        comptime scope: @Type(.enum_literal),
+        comptime msg: []const u8,
+        args: anytype,
+    ) void {
+        self.capture(scope, msg, args);
+    }
+
     fn capture(
         self: *TestCapture,
         comptime scope: @Type(.enum_literal),
@@ -278,7 +306,7 @@ const TestCapture = struct {
         inline for (@typeInfo(@TypeOf(args)).@"struct".fields) |f| {
             try buf.appendSlice(allocator, f.name);
             try buf.append(allocator, '=');
-            try @import("../../log.zig").writeValue(false, @field(args, f.name), buf.writer(allocator));
+            try @import("../../log.zig").writeValue(.pretty, @field(args, f.name), buf.writer(allocator));
             try buf.append(allocator, ' ');
         }
         self.captured.append(testing.arena_allocator, std.mem.trimRight(u8, buf.items, " ")) catch unreachable;

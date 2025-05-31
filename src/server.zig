@@ -66,7 +66,7 @@ const Server = struct {
     }
 
     fn queueAccept(self: *Server) void {
-        log.debug(.server, "accepting connection", .{});
+        log.debug(.app, "accepting connection", .{});
         self.loop.io.accept(
             *Server,
             self,
@@ -83,7 +83,7 @@ const Server = struct {
     ) void {
         std.debug.assert(completion == &self.accept_completion);
         self.doCallbackAccept(result) catch |err| {
-            log.err(.server, "accept error", .{ .err = err });
+            log.err(.app, "server accept error", .{ .err = err });
             self.queueAccept();
         };
     }
@@ -97,11 +97,11 @@ const Server = struct {
         client.* = Client.init(socket, self);
         client.start();
 
-        if (log.enabled(.server, .info)) {
+        if (log.enabled(.app, .info)) {
             var address: std.net.Address = undefined;
             var socklen: posix.socklen_t = @sizeOf(net.Address);
             try std.posix.getsockname(socket, &address.any, &socklen);
-            log.info(.server, "client connected", .{ .ip = address });
+            log.info(.app, "client connected", .{ .ip = address });
         }
     }
 
@@ -223,7 +223,7 @@ pub const Client = struct {
     }
 
     fn close(self: *Self) void {
-        log.info(.server, "client disconected", .{});
+        log.info(.app, "client disconected", .{});
         self.connected = false;
         // recv only, because we might have pending writes we'd like to get
         // out (like the HTTP error response)
@@ -256,7 +256,7 @@ pub const Client = struct {
         }
 
         const size = result catch |err| {
-            log.err(.server, "read error", .{ .err = err });
+            log.err(.app, "server read error", .{ .err = err });
             self.close();
             return;
         };
@@ -319,7 +319,7 @@ pub const Client = struct {
                 error.InvalidVersionHeader => self.writeHTTPErrorResponse(400, "Invalid websocket version"),
                 error.InvalidConnectionHeader => self.writeHTTPErrorResponse(400, "Invalid connection header"),
                 else => {
-                    log.err(.server, "http 500", .{ .err = err });
+                    log.err(.app, "server 500", .{ .err = err, .req = request[0..@min(100, request.len)] });
                     self.writeHTTPErrorResponse(500, "Internal Server Error");
                 },
             }
@@ -600,7 +600,7 @@ pub const Client = struct {
 
         if (result) |_| {
             if (now().since(self.last_active) >= self.server.timeout) {
-                log.info(.server, "connection timeout", .{});
+                log.info(.app, "client connection timeout", .{});
                 if (self.mode == .websocket) {
                     self.send(null, &CLOSE_TIMEOUT) catch {};
                 }
@@ -608,7 +608,7 @@ pub const Client = struct {
                 return;
             }
         } else |err| {
-            log.err(.server, "timeout error", .{ .err = err });
+            log.err(.app, "server timeout error", .{ .err = err });
         }
 
         self.queueTimeout();
@@ -657,7 +657,7 @@ pub const Client = struct {
         }
 
         const sent = result catch |err| {
-            log.warn(.server, "send error", .{ .err = err });
+            log.warn(.app, "server send error", .{ .err = err });
             self.close();
             return;
         };
@@ -1043,7 +1043,7 @@ pub fn run(
 
     // accept an connection
     server.queueAccept();
-    log.info(.server, "running", .{ .address = address });
+    log.info(.app, "server running", .{ .address = address });
 
     // infinite loop on I/O events, either:
     // - cmd from incoming connection on server socket

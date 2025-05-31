@@ -1373,6 +1373,12 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 return valueToString(scope.call_arena, js_value, scope.isolate, scope.context);
             }
 
+            pub fn toDetailString(self: JsObject) ![]const u8 {
+                const scope = self.scope;
+                const js_value = self.js_obj.toValue();
+                return valueToDetailString(scope.call_arena, js_value, scope.isolate, scope.context);
+            }
+
             pub fn format(self: JsObject, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
                 return writer.writeAll(try self.toString());
             }
@@ -1851,7 +1857,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
         fn generateNamedIndexer(comptime Struct: type, template_proto: v8.ObjectTemplate) void {
             if (@hasDecl(Struct, "named_get") == false) {
-                if (comptime @import("build_config").log_unknown_properties) {
+                if (builtin.mode == .Debug and log.enabled(.unknown_prop, .debug)) {
                     generateDebugNamedIndexer(Struct, template_proto);
                 }
                 return;
@@ -1899,7 +1905,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         const scope: *Scope = @ptrFromInt(context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
 
                         const property = valueToString(scope.call_arena, .{ .handle = c_name.? }, isolate, context) catch "???";
-                        log.debug(.js, "unkown named property", .{ .@"struct" = @typeName(Struct), .property = property });
+                        log.debug(.unknown_prop, "unkown property", .{ .@"struct" = @typeName(Struct), .property = property });
                         return v8.Intercepted.No;
                     }
                 }.callback,
@@ -2493,6 +2499,15 @@ fn Caller(comptime E: type, comptime State: type) type {
         }
 
         fn handleError(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, err: anyerror, info: anytype) void {
+            if (builtin.mode == .Debug and log.enabled(.js, .warn) and @hasDecl(@TypeOf(info), "length")) {
+                const args_dump = self.serializeFunctionArgs(info) catch "failed to serialize args";
+                log.warn(.js, "function call error", .{
+                    .name = named_function.full_name,
+                    .err = err,
+                    .args = args_dump,
+                });
+            }
+
             const isolate = self.isolate;
             var js_err: ?v8.Value = switch (err) {
                 error.InvalidArgument => createTypeException(isolate, "invalid argument"),
@@ -2635,15 +2650,6 @@ fn Caller(comptime E: type, comptime State: type) type {
             const last_js_parameter = params_to_map.len - 1;
             var is_variadic = false;
 
-            errdefer |err| if (log.enabled(.js, .debug)) {
-                const args_dump = self.dumpFunctionArgs(info) catch "failed to serialize args";
-                log.debug(.js, "function call error", .{
-                    .name = named_function.full_name,
-                    .err = err,
-                    .args = args_dump,
-                });
-            };
-
             {
                 // This is going to get complicated. If the last Zig paremeter
                 // is a slice AND the corresponding javascript parameter is
@@ -2706,10 +2712,11 @@ fn Caller(comptime E: type, comptime State: type) type {
             return T == State or T == Const_State;
         }
 
-        fn dumpFunctionArgs(self: *const Self, info: anytype) ![]const u8 {
+        fn serializeFunctionArgs(self: *const Self, info: anytype) ![]const u8 {
             const isolate = self.isolate;
             const context = self.context;
             const arena = self.call_arena;
+            const separator = log.separator();
             const js_parameter_count = info.length();
 
             var arr: std.ArrayListUnmanaged(u8) = .{};
@@ -2717,7 +2724,12 @@ fn Caller(comptime E: type, comptime State: type) type {
                 const js_value = info.getArg(@intCast(i));
                 const value_string = try valueToDetailString(arena, js_value, isolate, context);
                 const value_type = try jsStringToZig(arena, try js_value.typeOf(isolate), isolate);
-                try std.fmt.format(arr.writer(arena), "{d}: {s} ({s})\n", .{ i + 1, value_string, value_type });
+                try std.fmt.format(arr.writer(arena), "{s}{d}: {s} ({s})", .{
+                    separator,
+                    i + 1,
+                    value_string,
+                    value_type,
+                });
             }
             return arr.items;
         }
@@ -3052,9 +3064,23 @@ const TaggedAnyOpaque = struct {
     subtype: ?SubType,
 };
 
-fn valueToDetailString(allocator: Allocator, value: v8.Value, isolate: v8.Isolate, context: v8.Context) ![]u8 {
-    const str = try value.toDetailString(context);
-    return jsStringToZig(allocator, str, isolate);
+fn valueToDetailString(arena: Allocator, value: v8.Value, isolate: v8.Isolate, context: v8.Context) ![]u8 {
+    var str: ?v8.String = null;
+    if (value.isObject() and !value.isFunction()) {
+        str = try v8.Json.stringify(context, value, null);
+
+        if (str.?.lenUtf8(isolate) == 2) {
+            // {} isn't useful, null this so that we can get the toDetailString
+            // (which might also be useless, but maybe not)
+            str = null;
+        }
+    }
+
+    if (str == null) {
+        str = try value.toDetailString(context);
+    }
+
+    return jsStringToZig(arena, str.?, isolate);
 }
 
 fn valueToString(allocator: Allocator, value: v8.Value, isolate: v8.Isolate, context: v8.Context) ![]u8 {

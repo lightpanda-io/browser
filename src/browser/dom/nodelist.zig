@@ -145,7 +145,7 @@ pub const NodeList = struct {
             const ii: u32 = @intCast(i);
             var result: Function.Result = undefined;
             cbk.tryCall(void, .{ n, ii, self }, &result) catch {
-                log.debug(.node_list, "forEach callback", .{ .err = result.exception, .stack = result.stack });
+                log.debug(.user_script, "forEach callback", .{ .err = result.exception, .stack = result.stack });
             };
         }
     }

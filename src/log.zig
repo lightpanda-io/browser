@@ -18,19 +18,36 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const build_config = @import("build_config");
 
 const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
 
-const log_evel: Level = blk: {
-    if (builtin.is_test) break :blk .err;
-    break :blk @enumFromInt(@intFromEnum(build_config.log_level));
+const is_debug = builtin.mode == .Debug;
+
+pub const Scope = enum {
+    app,
+    browser,
+    cdp,
+    console,
+    http,
+    http_client,
+    js,
+    loop,
+    script_event,
+    telemetry,
+    user_script,
+    unknown_prop,
+    web_api,
+    xhr,
 };
-const format: Format = blk: {
-    if (builtin.is_test or builtin.mode != .Debug) break :blk .logfmt;
-    break :blk .pretty;
+
+const Opts = struct {
+    format: Format = if (is_debug) .pretty else .logfmt,
+    level: Level = if (is_debug) .info else .warn,
+    filter_scopes: []const Scope = &.{.unknown_prop},
 };
+
+pub var opts = Opts{};
 
 // synchronizes writes to the output
 var out_lock: Thread.Mutex = .{};
@@ -38,10 +55,27 @@ var out_lock: Thread.Mutex = .{};
 // synchronizes access to last_log
 var last_log_lock: Thread.Mutex = .{};
 
-pub fn enabled(comptime scope: @Type(.enum_literal), comptime level: Level) bool {
-    // TODO scope disabling
-    _ = scope;
-    return @intFromEnum(level) >= @intFromEnum(log_evel);
+pub fn enabled(comptime scope: Scope, level: Level) bool {
+    if (@intFromEnum(level) < @intFromEnum(opts.level)) {
+        return false;
+    }
+
+    if (comptime builtin.mode == .Debug) {
+        for (opts.filter_scopes) |fs| {
+            if (fs == scope) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+// Ugliness to support complex debug parameters. Could add better support for
+// this directly in writeValue, but we [currently] only need this in one place
+// and I kind of don't want to encourage / make this easy.
+pub fn separator() []const u8 {
+    return if (opts.format == .pretty) "\n        " else "; ";
 }
 
 pub const Level = enum {
@@ -57,28 +91,28 @@ pub const Format = enum {
     pretty,
 };
 
-pub fn debug(comptime scope: @Type(.enum_literal), comptime msg: []const u8, data: anytype) void {
+pub fn debug(comptime scope: Scope, comptime msg: []const u8, data: anytype) void {
     log(scope, .debug, msg, data);
 }
 
-pub fn info(comptime scope: @Type(.enum_literal), comptime msg: []const u8, data: anytype) void {
+pub fn info(comptime scope: Scope, comptime msg: []const u8, data: anytype) void {
     log(scope, .info, msg, data);
 }
 
-pub fn warn(comptime scope: @Type(.enum_literal), comptime msg: []const u8, data: anytype) void {
+pub fn warn(comptime scope: Scope, comptime msg: []const u8, data: anytype) void {
     log(scope, .warn, msg, data);
 }
 
-pub fn err(comptime scope: @Type(.enum_literal), comptime msg: []const u8, data: anytype) void {
+pub fn err(comptime scope: Scope, comptime msg: []const u8, data: anytype) void {
     log(scope, .err, msg, data);
 }
 
-pub fn fatal(comptime scope: @Type(.enum_literal), comptime msg: []const u8, data: anytype) void {
+pub fn fatal(comptime scope: Scope, comptime msg: []const u8, data: anytype) void {
     log(scope, .fatal, msg, data);
 }
 
-pub fn log(comptime scope: @Type(.enum_literal), comptime level: Level, comptime msg: []const u8, data: anytype) void {
-    if (comptime enabled(scope, level) == false) {
+pub fn log(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype) void {
+    if (enabled(scope, level) == false) {
         return;
     }
 
@@ -90,13 +124,10 @@ pub fn log(comptime scope: @Type(.enum_literal), comptime level: Level, comptime
     };
 }
 
-fn logTo(comptime scope: @Type(.enum_literal), comptime level: Level, comptime msg: []const u8, data: anytype, out: anytype) !void {
+fn logTo(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, out: anytype) !void {
     comptime {
         if (msg.len > 30) {
             @compileError("log msg cannot be more than 30 characters: '" ++ msg ++ "'");
-        }
-        if (@tagName(scope).len > 15) {
-            @compileError("log scope cannot be more than 15 characters: '" ++ @tagName(scope) ++ "'");
         }
         for (msg) |b| {
             switch (b) {
@@ -107,46 +138,52 @@ fn logTo(comptime scope: @Type(.enum_literal), comptime level: Level, comptime m
     }
 
     var bw = std.io.bufferedWriter(out);
-    switch (format) {
+    switch (opts.format) {
         .logfmt => try logLogfmt(scope, level, msg, data, bw.writer()),
         .pretty => try logPretty(scope, level, msg, data, bw.writer()),
     }
     bw.flush() catch return;
 }
 
-fn logLogfmt(comptime scope: @Type(.enum_literal), comptime level: Level, comptime msg: []const u8, data: anytype, writer: anytype) !void {
+fn logLogfmt(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, writer: anytype) !void {
     try writer.writeAll("$time=");
     try writer.print("{d}", .{timestamp()});
 
     try writer.writeAll(" $scope=");
     try writer.writeAll(@tagName(scope));
 
-    const level_and_msg = comptime blk: {
-        const l = if (level == .err) "error" else @tagName(level);
+    try writer.writeAll(" $level=");
+    try writer.writeAll(if (level == .err) "error" else @tagName(level));
+
+    const full_msg = comptime blk: {
         // only wrap msg in quotes if it contains a space
-        const lm = " $level=" ++ l ++ " $msg=";
+        const prefix = " $msg=";
         if (std.mem.indexOfScalar(u8, msg, ' ') == null) {
-            break :blk lm ++ msg;
+            break :blk prefix ++ msg;
         }
-        break :blk lm ++ "\"" ++ msg ++ "\"";
+        break :blk prefix ++ "\"" ++ msg ++ "\"";
     };
-    try writer.writeAll(level_and_msg);
+    try writer.writeAll(full_msg);
     inline for (@typeInfo(@TypeOf(data)).@"struct".fields) |f| {
         const key = " " ++ f.name ++ "=";
         try writer.writeAll(key);
-        try writeValue(true, @field(data, f.name), writer);
+        try writeValue(.logfmt, @field(data, f.name), writer);
     }
     try writer.writeByte('\n');
 }
 
-fn logPretty(comptime scope: @Type(.enum_literal), comptime level: Level, comptime msg: []const u8, data: anytype, writer: anytype) !void {
-    try writer.writeAll(switch (level) {
-        .debug => "\x1b[0;36mDEBUG\x1b[0m ",
-        .info => "\x1b[0;32mINFO\x1b[0m  ",
-        .warn => "\x1b[0;33mWARN\x1b[0m  ",
-        .err => "\x1b[0;31mERROR\x1b[0m ",
-        .fatal => "\x1b[0;35mFATAL\x1b[0m ",
-    });
+fn logPretty(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, writer: anytype) !void {
+    if (scope == .console and level == .fatal and comptime std.mem.eql(u8, msg, "lightpanda")) {
+        try writer.writeAll("\x1b[0;104mWARN  ");
+    } else {
+        try writer.writeAll(switch (level) {
+            .debug => "\x1b[0;36mDEBUG\x1b[0m ",
+            .info => "\x1b[0;32mINFO\x1b[0m  ",
+            .warn => "\x1b[0;33mWARN\x1b[0m  ",
+            .err => "\x1b[0;31mERROR ",
+            .fatal => "\x1b[0;35mFATAL ",
+        });
+    }
 
     const prefix = @tagName(scope) ++ " : " ++ msg;
     try writer.writeAll(prefix);
@@ -161,25 +198,25 @@ fn logPretty(comptime scope: @Type(.enum_literal), comptime level: Level, compti
         if (@mod(padding, 2) == 1) {
             try writer.writeByte(' ');
         }
-        try writer.print(" [+{d}ms]", .{elapsed()});
+        try writer.print(" \x1b[0m[+{d}ms]", .{elapsed()});
         try writer.writeByte('\n');
     }
 
     inline for (@typeInfo(@TypeOf(data)).@"struct".fields) |f| {
         const key = "      " ++ f.name ++ " = ";
         try writer.writeAll(key);
-        try writeValue(false, @field(data, f.name), writer);
+        try writeValue(.pretty, @field(data, f.name), writer);
         try writer.writeByte('\n');
     }
     try writer.writeByte('\n');
 }
 
-pub fn writeValue(escape_string: bool, value: anytype, writer: anytype) !void {
+pub fn writeValue(comptime format: Format, value: anytype, writer: anytype) !void {
     const T = @TypeOf(value);
     switch (@typeInfo(T)) {
         .optional => {
             if (value) |v| {
-                return writeValue(escape_string, v, writer);
+                return writeValue(format, v, writer);
             }
             return writer.writeAll("null");
         },
@@ -191,15 +228,15 @@ pub fn writeValue(escape_string: bool, value: anytype, writer: anytype) !void {
         },
         .error_set => return writer.writeAll(@errorName(value)),
         .@"enum" => return writer.writeAll(@tagName(value)),
-        .array => return writeValue(escape_string, &value, writer),
+        .array => return writeValue(format, &value, writer),
         .pointer => |ptr| switch (ptr.size) {
             .slice => switch (ptr.child) {
-                u8 => return writeString(escape_string, value, writer),
+                u8 => return writeString(format, value, writer),
                 else => {},
             },
             .one => switch (@typeInfo(ptr.child)) {
                 .array => |arr| if (arr.child == u8) {
-                    return writeString(escape_string, value, writer);
+                    return writeString(format, value, writer);
                 },
                 else => return writer.print("{}", .{value}),
             },
@@ -209,11 +246,12 @@ pub fn writeValue(escape_string: bool, value: anytype, writer: anytype) !void {
         .@"struct" => return writer.print("{}", .{value}),
         else => {},
     }
+
     @compileError("cannot log a: " ++ @typeName(T));
 }
 
-fn writeString(escape: bool, value: []const u8, writer: anytype) !void {
-    if (escape == false) {
+fn writeString(comptime format: Format, value: []const u8, writer: anytype) !void {
+    if (format == .pretty) {
         return writer.writeAll(value);
     }
 
@@ -297,8 +335,8 @@ test "log: data" {
     defer buf.deinit(testing.allocator);
 
     {
-        try logTo(.t_scope, .err, "nope", .{}, buf.writer(testing.allocator));
-        try testing.expectEqual("$time=1739795092929 $scope=t_scope $level=error $msg=nope\n", buf.items);
+        try logTo(.browser, .err, "nope", .{}, buf.writer(testing.allocator));
+        try testing.expectEqual("$time=1739795092929 $scope=browser $level=error $msg=nope\n", buf.items);
     }
 
     {
@@ -306,7 +344,7 @@ test "log: data" {
         const string = try testing.allocator.dupe(u8, "spice_must_flow");
         defer testing.allocator.free(string);
 
-        try logTo(.scope_2, .warn, "a msg", .{
+        try logTo(.http, .warn, "a msg", .{
             .cint = 5,
             .cfloat = 3.43,
             .int = @as(i16, -49),
@@ -321,7 +359,7 @@ test "log: data" {
             .level = Level.warn,
         }, buf.writer(testing.allocator));
 
-        try testing.expectEqual("$time=1739795092929 $scope=scope_2 $level=warn $msg=\"a msg\" " ++
+        try testing.expectEqual("$time=1739795092929 $scope=http $level=warn $msg=\"a msg\" " ++
             "cint=5 cfloat=3.43 int=-49 float=0.0003232 bt=true bf=false " ++
             "nn=33 n=null lit=over9000! slice=spice_must_flow " ++
             "err=Nope level=warn\n", buf.items);
@@ -332,15 +370,15 @@ test "log: string escape" {
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(testing.allocator);
 
-    const prefix = "$time=1739795092929 $scope=scope $level=error $msg=test ";
+    const prefix = "$time=1739795092929 $scope=app $level=error $msg=test ";
     {
-        try logTo(.scope, .err, "test", .{ .string = "hello world" }, buf.writer(testing.allocator));
+        try logTo(.app, .err, "test", .{ .string = "hello world" }, buf.writer(testing.allocator));
         try testing.expectEqual(prefix ++ "string=\"hello world\"\n", buf.items);
     }
 
     {
         buf.clearRetainingCapacity();
-        try logTo(.scope, .err, "test", .{ .string = "\n \thi  \" \" " }, buf.writer(testing.allocator));
+        try logTo(.app, .err, "test", .{ .string = "\n \thi  \" \" " }, buf.writer(testing.allocator));
         try testing.expectEqual(prefix ++ "string=\"\\n \thi  \\\" \\\" \"\n", buf.items);
     }
 }

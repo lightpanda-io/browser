@@ -142,7 +142,11 @@ pub const DOMTokenList = struct {
         while (try entries._next()) |entry| {
             var result: Function.Result = undefined;
             cbk.tryCallWithThis(void, this_arg, .{ entry.@"1", entry.@"0", self }, &result) catch {
-                log.debug(.token_list, "foreach callback error", .{ .err = result.exception, .stack = result.stack });
+                log.debug(.user_script, "callback error", .{
+                    .err = result.exception,
+                    .stack = result.stack,
+                    .soure = "tokenList foreach",
+                });
             };
         }
     }
