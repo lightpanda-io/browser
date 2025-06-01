@@ -1547,7 +1547,15 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 // If necessary, turn a void context into something we can safely ptrCast
                 const safe_context: *anyopaque = if (ContextT == void) @constCast(@ptrCast(&{})) else ctx;
 
-                const channel = v8.InspectorChannel.init(safe_context, InspectorContainer.onInspectorResponse, InspectorContainer.onInspectorEvent, isolate);
+                const channel = v8.InspectorChannel.init(safe_context, struct {
+                    fn onInspectorResponse(ctx2: *anyopaque, call_id: u32, msg: v8.StringView) void {
+                        InspectorContainer.onInspectorResponse(ctx2, call_id, StringView{ .inner = msg });
+                    }
+                }.onInspectorResponse, struct {
+                    fn onInspectorEvent(ctx2: *anyopaque, msg: v8.StringView) void {
+                        InspectorContainer.onInspectorEvent(ctx2, StringView{ .inner = msg });
+                    }
+                }.onInspectorEvent, isolate);
 
                 const client = v8.InspectorClient.init();
 
@@ -1561,7 +1569,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 self.inner.deinit();
             }
 
-            pub fn send(self: *const Inspector, msg: []const u8) void {
+            pub fn send(self: *const Inspector, msg: []const u8) !void {
                 self.session.dispatchProtocolMessage(self.isolate, msg);
             }
 
@@ -1621,6 +1629,23 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 if (toa.subtype == null or toa.subtype != .node) return error.ObjectIdIsNotANode;
                 return toa.ptr;
             }
+
+            pub const StringView = struct {
+                inner: v8.StringView,
+
+                pub fn length(self: StringView) usize {
+                    return self.inner.length();
+                }
+
+                pub fn bytes(self: StringView) []const u8 {
+                    return self.inner.bytes()[0..self.length()];
+                }
+            };
+
+            const NoopInspector = struct {
+                pub fn onInspectorResponse(_: *anyopaque, _: u32, _: StringView) void {}
+                pub fn onInspectorEvent(_: *anyopaque, _: StringView) void {}
+            };
         };
 
         pub const RemoteObject = v8.RemoteObject;
@@ -3203,11 +3228,6 @@ fn stackForLogs(arena: Allocator, isolate: v8.Isolate) !?[]const u8 {
     }
     return buf.items;
 }
-
-const NoopInspector = struct {
-    pub fn onInspectorResponse(_: *anyopaque, _: u32, _: []const u8) void {}
-    pub fn onInspectorEvent(_: *anyopaque, _: []const u8) void {}
-};
 
 const ErrorModuleLoader = struct {
     pub fn fetchModuleSource(_: *anyopaque, _: []const u8) !?[]const u8 {

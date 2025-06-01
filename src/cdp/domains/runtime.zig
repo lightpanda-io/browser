@@ -44,7 +44,7 @@ fn sendInspector(cmd: anytype, action: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     // the result to return is handled directly by the inspector.
-    bc.callInspector(cmd.input.json);
+    return bc.callInspector(cmd.arena, cmd.input.json);
 }
 
 fn logInspector(cmd: anytype, action: anytype) !void {

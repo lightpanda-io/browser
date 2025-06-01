@@ -17,10 +17,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+
 const json = std.json;
+const Allocator = std.mem.Allocator;
 
 const log = @import("../log.zig");
+const cbor = @import("cbor/cbor.zig");
 const App = @import("../app.zig").App;
 const Env = @import("../browser/env.zig").Env;
 const asUint = @import("../str/parser.zig").asUint;
@@ -458,31 +460,21 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             defer _ = self.cdp.notification_arena.reset(.{ .retain_with_limit = 1024 * 64 });
         }
 
-        pub fn callInspector(self: *const Self, msg: []const u8) void {
-            self.inspector.send(msg);
+        pub fn callInspector(self: *const Self, arena: Allocator, input: []const u8) !void {
+            const encoded = try cbor.jsonToCbor(arena, input);
+            try self.inspector.send(encoded);
             // force running micro tasks after send input to the inspector.
             self.cdp.browser.runMicrotasks();
         }
 
-        pub fn onInspectorResponse(ctx: *anyopaque, _: u32, msg: []const u8) void {
-            sendInspectorMessage(@alignCast(@ptrCast(ctx)), msg) catch |err| {
+        pub fn onInspectorResponse(ctx: *anyopaque, _: u32, str: Env.Inspector.StringView) void {
+            sendInspectorMessage(@alignCast(@ptrCast(ctx)), str) catch |err| {
                 log.err(.cdp, "send inspector response", .{ .err = err });
             };
         }
 
-        pub fn onInspectorEvent(ctx: *anyopaque, msg: []const u8) void {
-            if (log.enabled(.cdp, .debug)) {
-                // msg should be {"method":<method>,...
-                std.debug.assert(std.mem.startsWith(u8, msg, "{\"method\":"));
-                const method_end = std.mem.indexOfScalar(u8, msg, ',') orelse {
-                    log.err(.cdp, "invalid inspector event", .{ .msg = msg });
-                    return;
-                };
-                const method = msg[10..method_end];
-                log.debug(.cdp, "inspector event", .{ .method = method });
-            }
-
-            sendInspectorMessage(@alignCast(@ptrCast(ctx)), msg) catch |err| {
+        pub fn onInspectorEvent(ctx: *anyopaque, str: Env.Inspector.StringView) void {
+            sendInspectorMessage(@alignCast(@ptrCast(ctx)), str) catch |err| {
                 log.err(.cdp, "send inspector event", .{ .err = err });
             };
         }
@@ -490,7 +482,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         // This is hacky x 2. First, we create the JSON payload by gluing our
         // session_id onto it. Second, we're much more client/websocket aware than
         // we should be.
-        fn sendInspectorMessage(self: *Self, msg: []const u8) !void {
+        fn sendInspectorMessage(self: *Self, str: Env.Inspector.StringView) !void {
             const session_id = self.session_id orelse {
                 // We no longer have an active session. What should we do
                 // in this case?
@@ -501,27 +493,26 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             var arena = std.heap.ArenaAllocator.init(cdp.allocator);
             errdefer arena.deinit();
 
-            const field = ",\"sessionId\":\"";
-
-            // + 1 for the closing quote after the session id
-            // + 10 for the max websocket header
-            const message_len = msg.len + session_id.len + 1 + field.len + 10;
-
+            const aa = arena.allocator();
             var buf: std.ArrayListUnmanaged(u8) = .{};
-            buf.ensureTotalCapacity(arena.allocator(), message_len) catch |err| {
-                log.err(.cdp, "inspector buffer", .{ .err = err });
-                return;
-            };
 
             // reserve 10 bytes for websocket header
-            buf.appendSliceAssumeCapacity(&.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 });
+            try buf.appendSlice(aa, &.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 });
 
-            // -1  because we dont' want the closing brace '}'
-            buf.appendSliceAssumeCapacity(msg[0 .. msg.len - 1]);
-            buf.appendSliceAssumeCapacity(field);
-            buf.appendSliceAssumeCapacity(session_id);
-            buf.appendSliceAssumeCapacity("\"}");
-            std.debug.assert(buf.items.len == message_len);
+            try cbor.cborToJson(str.bytes(), buf.writer(aa));
+
+            std.debug.assert(buf.getLast() == '}');
+
+            // We need to inject the session_id
+            // First, we strip out the closing '}'
+            buf.items.len -= 1;
+
+            // Next we inject the session id field + value
+            try buf.appendSlice(aa, ",\"sessionId\":\"");
+            try buf.appendSlice(aa, session_id);
+
+            // Finally, we re-close the object. Smooth.
+            try buf.appendSlice(aa, "\"}");
 
             try cdp.client.sendJSONRaw(arena, buf);
         }
