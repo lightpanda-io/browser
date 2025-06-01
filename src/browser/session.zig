@@ -89,7 +89,7 @@ pub const Session = struct {
         try parser.init();
 
         const page_arena = &self.browser.page_arena;
-        _ = page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
+        _ = page_arena.reset(.{ .retain_with_limit = 128 * 1024 });
 
         self.page = @as(Page, undefined);
         const page = &self.page.?;
@@ -133,7 +133,7 @@ pub const Session = struct {
                 // If, while loading the page, we intend to navigate to another
                 // page, then we need to keep the transfer_arena around, as this
                 // sub-navigation is probably using it.
-                _ = self.browser.transfer_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
+                _ = self.browser.transfer_arena.reset(.{ .retain_with_limit = 64 * 1024 });
             }
         };
 
