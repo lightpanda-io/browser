@@ -164,12 +164,12 @@ pub const Page = struct {
         try self.session.browser.app.loop.run();
 
         if (try_catch.hasCaught() == false) {
-            log.debug(.page, "wait complete", .{});
+            log.debug(.browser, "page wait complete", .{});
             return;
         }
 
         const msg = (try try_catch.err(self.arena)) orelse "unknown";
-        log.err(.page, "wait error", .{ .err = msg });
+        log.err(.browser, "page wait error", .{ .err = msg });
     }
 
     pub fn origin(self: *const Page, arena: Allocator) ![]const u8 {
@@ -184,7 +184,7 @@ pub const Page = struct {
         const session = self.session;
         const notification = session.browser.notification;
 
-        log.debug(.page, "navigate", .{ .url = request_url, .reason = opts.reason });
+        log.debug(.http, "navigate", .{ .url = request_url, .reason = opts.reason });
 
         // if the url is about:blank, nothing to do.
         if (std.mem.eql(u8, "about:blank", request_url.raw)) {
@@ -233,7 +233,7 @@ pub const Page = struct {
             break :blk Mime.sniff(try response.peek());
         } orelse .unknown;
 
-        log.info(.page, "navigation", .{
+        log.info(.http, "navigation", .{
             .status = header.status,
             .content_type = content_type,
             .charset = mime.charset,
@@ -257,7 +257,9 @@ pub const Page = struct {
             .url = &self.url,
             .timestamp = timestamp(),
         });
-        log.debug(.page, "navigation complete", .{});
+        log.debug(.http, "navigation complete", .{
+            .url = request_url,
+        });
     }
 
     // https://html.spec.whatwg.org/#read-html
@@ -383,6 +385,7 @@ pub const Page = struct {
         const loadevt = try parser.eventCreate();
         defer parser.eventDestroy(loadevt);
 
+        log.debug(.script_event, "dispatch event", .{ .type = "load", .source = "page" });
         try parser.eventInit(loadevt, "load", .{});
         _ = try parser.eventTargetDispatchEvent(
             parser.toEventTarget(Window, &self.window),
@@ -392,7 +395,7 @@ pub const Page = struct {
 
     fn evalScript(self: *Page, script: *const Script) void {
         self.tryEvalScript(script) catch |err| {
-            log.err(.page, "eval script error", .{ .err = err });
+            log.err(.js, "eval script error", .{ .err = err, .src = script.src });
         };
     }
 
@@ -404,7 +407,7 @@ pub const Page = struct {
         try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(script.element));
 
         defer parser.documentHTMLSetCurrentScript(html_doc, null) catch |err| {
-            log.err(.page, "clear document script", .{ .err = err });
+            log.err(.browser, "clear document script", .{ .err = err });
         };
 
         const src = script.src orelse {
@@ -457,8 +460,8 @@ pub const Page = struct {
         var origin_url = &self.url;
         const url = try origin_url.resolve(arena, res_src);
 
-        log.debug(.page, "fetching script", .{ .url = url });
-        errdefer |err| log.err(.page, "fetch error", .{ .err = err, .url = url });
+        log.debug(.http, "fetching script", .{ .url = url });
+        errdefer |err| log.err(.http, "fetch error", .{ .err = err, .url = url });
 
         var request = try self.newHTTPRequest(.GET, &url, .{
             .origin_uri = &origin_url.uri,
@@ -486,7 +489,7 @@ pub const Page = struct {
             return null;
         }
 
-        log.info(.page, "fetch complete", .{
+        log.info(.http, "fetch complete", .{
             .url = url,
             .status = header.status,
             .content_length = arr.items.len,
@@ -542,7 +545,7 @@ pub const Page = struct {
     fn windowClicked(node: *parser.EventNode, event: *parser.Event) void {
         const self: *Page = @fieldParentPtr("window_clicked_event_node", node);
         self._windowClicked(event) catch |err| {
-            log.err(.page, "click handler error", .{ .err = err });
+            log.err(.browser, "click handler error", .{ .err = err });
         };
     }
 
@@ -675,7 +678,7 @@ const DelayedNavigation = struct {
         _ = repeat_delay;
         const self: *DelayedNavigation = @fieldParentPtr("navigate_node", node);
         self.session.pageNavigate(self.url, self.opts) catch |err| {
-            log.err(.page, "delayed navigation error", .{ .err = err, .url = self.url });
+            log.err(.browser, "delayed navigation error", .{ .err = err, .url = self.url });
         };
     }
 };
@@ -787,14 +790,17 @@ const Script = struct {
                 switch (try page.scope.module(body, src)) {
                     .value => |v| break :blk v,
                     .exception => |e| {
-                        log.warn(.page, "eval module", .{ .src = src, .err = try e.exception(page.arena) });
+                        log.warn(.user_script, "eval module", .{
+                            .src = src,
+                            .err = try e.exception(page.arena),
+                        });
                         return error.JsErr;
                     },
                 }
             },
         } catch {
             if (try try_catch.err(page.arena)) |msg| {
-                log.warn(.page, "eval script", .{ .src = src, .err = msg });
+                log.warn(.user_script, "eval script", .{ .src = src, .err = msg });
             }
             try self.executeCallback("onerror", page);
             return error.JsErr;
@@ -811,7 +817,7 @@ const Script = struct {
                 defer try_catch.deinit();
                 _ = page.scope.exec(str, typ) catch {
                     if (try try_catch.err(page.arena)) |msg| {
-                        log.warn(.page, "script callback", .{
+                        log.warn(.user_script, "script callback", .{
                             .src = self.src,
                             .err = msg,
                             .type = typ,
@@ -827,7 +833,7 @@ const Script = struct {
 
                 var result: Env.Function.Result = undefined;
                 f.tryCall(void, .{try Event.toInterface(loadevt)}, &result) catch {
-                    log.warn(.page, "script callback", .{
+                    log.warn(.user_script, "script callback", .{
                         .src = self.src,
                         .type = typ,
                         .err = result.exception,
@@ -869,7 +875,7 @@ fn timestamp() u32 {
 pub export fn scriptAddedCallback(ctx: ?*anyopaque, element: ?*parser.Element) callconv(.C) void {
     const self: *Page = @alignCast(@ptrCast(ctx.?));
     var script = Script.init(element.?, self) catch |err| {
-        log.warn(.page, "script added init error", .{ .err = err });
+        log.warn(.browser, "script added init error", .{ .err = err });
         return;
     } orelse return;
 

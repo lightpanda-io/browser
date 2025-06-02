@@ -155,7 +155,7 @@ pub const Jar = struct {
         var it = header.iterate("set-cookie");
         while (it.next()) |set_cookie| {
             const c = Cookie.parse(self.allocator, uri, set_cookie) catch |err| {
-                log.warn(.cookie, "parse failed", .{ .raw = set_cookie, .err = err });
+                log.warn(.web_api, "cookie parse failed", .{ .raw = set_cookie, .err = err });
                 continue;
             };
             try self.add(c, now);

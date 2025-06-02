@@ -95,7 +95,7 @@ pub const Session = struct {
         const page = &self.page.?;
         try Page.init(page, page_arena.allocator(), self);
 
-        log.debug(.session, "create page", .{});
+        log.debug(.browser, "create page", .{});
         // start JS env
         // Inform CDP the main page has been created such that additional context for other Worlds can be created as well
         self.browser.notification.dispatch(.page_created, page);
@@ -116,7 +116,7 @@ pub const Session = struct {
         // clear netsurf memory arena.
         parser.deinit();
 
-        log.debug(.session, "remove page", .{});
+        log.debug(.browser, "remove page", .{});
     }
 
     pub fn currentPage(self: *Session) ?*Page {
@@ -133,7 +133,7 @@ pub const Session = struct {
                 // If, while loading the page, we intend to navigate to another
                 // page, then we need to keep the transfer_arena around, as this
                 // sub-navigation is probably using it.
-                _ = self.browser.transfer_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
+                _ = self.browser.transfer_arena.reset(.{ .retain_with_limit = 64 * 1024 });
             }
         };
 
