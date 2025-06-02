@@ -83,12 +83,28 @@ pub const URL = struct {
         return WebApiURL.init(allocator, self.uri);
     }
 
+    const StitchOpts = struct {
+        alloc: AllocWhen = .if_needed,
+
+        const AllocWhen = enum {
+            always,
+            if_needed,
+        };
+    };
     /// Properly stitches two URL fragments together.
     ///
     /// For URLs with a path, it will replace the last entry with the src.
     /// For URLs without a path, it will add src as the path.
-    pub fn stitch(allocator: Allocator, src: []const u8, base: []const u8) ![]const u8 {
+    pub fn stitch(
+        allocator: Allocator,
+        src: []const u8,
+        base: []const u8,
+        opts: StitchOpts,
+    ) ![]const u8 {
         if (base.len == 0) {
+            if (opts.alloc == .always) {
+                return allocator.dupe(u8, src);
+            }
             return src;
         }
 
@@ -161,7 +177,7 @@ test "URL: Stitching Base & Src URLs (Basic)" {
 
     const base = "https://www.google.com/xyz/abc/123";
     const src = "something.js";
-    const result = try URL.stitch(allocator, src, base);
+    const result = try URL.stitch(allocator, src, base, .{});
     defer allocator.free(result);
     try testing.expectString("https://www.google.com/xyz/abc/something.js", result);
 }
@@ -171,7 +187,7 @@ test "URL: Stitching Base & Src URLs (Just Ending Slash)" {
 
     const base = "https://www.google.com/";
     const src = "something.js";
-    const result = try URL.stitch(allocator, src, base);
+    const result = try URL.stitch(allocator, src, base, .{});
     defer allocator.free(result);
     try testing.expectString("https://www.google.com/something.js", result);
 }
@@ -181,7 +197,7 @@ test "URL: Stitching Base & Src URLs (No Ending Slash)" {
 
     const base = "https://www.google.com";
     const src = "something.js";
-    const result = try URL.stitch(allocator, src, base);
+    const result = try URL.stitch(allocator, src, base, .{});
     defer allocator.free(result);
     try testing.expectString("https://www.google.com/something.js", result);
 }
@@ -191,7 +207,7 @@ test "URL: Stiching Base & Src URLs (Both Local)" {
 
     const base = "./abcdef/123.js";
     const src = "something.js";
-    const result = try URL.stitch(allocator, src, base);
+    const result = try URL.stitch(allocator, src, base, .{});
     defer allocator.free(result);
     try testing.expectString("./abcdef/something.js", result);
 }

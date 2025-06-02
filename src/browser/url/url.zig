@@ -50,7 +50,14 @@ pub const URL = struct {
         page: *Page,
     ) !URL {
         const arena = page.arena;
-        const raw = try std.mem.concat(arena, u8, &[_][]const u8{ url, base orelse "" });
+        var raw: []const u8 = undefined;
+        if (base) |b| {
+            raw = try @import("../../url.zig").URL.stitch(arena, url, b, .{
+                .alloc = .always,
+            });
+        } else {
+            raw = try arena.dupe(u8, url);
+        }
 
         const uri = std.Uri.parse(raw) catch return error.TypeError;
         return init(arena, uri);
@@ -275,5 +282,10 @@ test "Browser.URL" {
         .{ "url.searchParams.get('c')", "" },
         .{ "url.searchParams.delete('a')", "undefined" },
         .{ "url.searchParams.get('a')", "" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "var url = new URL('over?9000', 'https://lightpanda.io')", null },
+        .{ "url.href", "https://lightpanda.io/over?9000" },
     }, .{});
 }
