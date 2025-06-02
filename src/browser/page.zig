@@ -470,7 +470,7 @@ pub const Page = struct {
         var header = response.header;
         try self.session.cookie_jar.populateFromResponse(&url.uri, &header);
 
-        if (header.status != 200) {
+        if (header.status < 200 or header.status > 299) {
             return error.BadStatusCode;
         }
 
