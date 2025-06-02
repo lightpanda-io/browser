@@ -1400,7 +1400,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             }
 
             pub fn getFunction(self: JsObject, name: []const u8) !?Function {
+                if (self.isNullOrUndefined()) {
+                    return null;
+                }
                 const scope = self.scope;
+
                 const js_name = v8.String.initUtf8(scope.isolate, name);
 
                 const js_value = try self.js_obj.getValue(scope.context, js_name.toName());
@@ -1408,6 +1412,10 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     return null;
                 }
                 return try scope.createFunction(js_value);
+            }
+
+            pub fn isNullOrUndefined(self: JsObject) bool {
+                return self.js_obj.toValue().isNullOrUndefined();
             }
         };
 
