@@ -92,6 +92,9 @@ pub const Page = struct {
     // current_script could by fetch module to resolve module's url to fetch.
     current_script: ?*const Script = null,
 
+    // indicates intention to navigate to another page on the next loop execution.
+    delayed_navigation: bool = false,
+
     pub fn init(self: *Page, arena: Allocator, session: *Session) !void {
         const browser = session.browser;
         self.* = .{
@@ -580,6 +583,7 @@ pub const Page = struct {
     // The page.arena is safe to use here, but the transfer_arena exists
     // specifically for this type of lifetime.
     pub fn navigateFromWebAPI(self: *Page, url: []const u8, opts: NavigateOpts) !void {
+        self.delayed_navigation = true;
         const arena = self.session.transfer_arena;
         const navi = try arena.create(DelayedNavigation);
         navi.* = .{
