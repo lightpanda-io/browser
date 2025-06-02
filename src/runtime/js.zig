@@ -1857,8 +1857,10 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
         fn generateNamedIndexer(comptime Struct: type, template_proto: v8.ObjectTemplate) void {
             if (@hasDecl(Struct, "named_get") == false) {
-                if (builtin.mode == .Debug and log.enabled(.unknown_prop, .debug)) {
-                    generateDebugNamedIndexer(Struct, template_proto);
+                if (comptime builtin.mode == .Debug) {
+                    if (log.enabled(.unknown_prop, .debug)) {
+                        generateDebugNamedIndexer(Struct, template_proto);
+                    }
                 }
                 return;
             }
@@ -2499,16 +2501,20 @@ fn Caller(comptime E: type, comptime State: type) type {
         }
 
         fn handleError(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, err: anyerror, info: anytype) void {
-            if (builtin.mode == .Debug and log.enabled(.js, .warn) and @hasDecl(@TypeOf(info), "length")) {
-                const args_dump = self.serializeFunctionArgs(info) catch "failed to serialize args";
-                log.warn(.js, "function call error", .{
-                    .name = named_function.full_name,
-                    .err = err,
-                    .args = args_dump,
-                });
+            const isolate = self.isolate;
+
+            if (comptime builtin.mode == .Debug and @hasDecl(@TypeOf(info), "length")) {
+                if (log.enabled(.js, .warn)) {
+                    const args_dump = self.serializeFunctionArgs(info) catch "failed to serialize args";
+                    log.warn(.js, "function call error", .{
+                        .name = named_function.full_name,
+                        .err = err,
+                        .args = args_dump,
+                        .stack = stackForLogs(self.call_arena, isolate) catch |err1| @errorName(err1),
+                    });
+                }
             }
 
-            const isolate = self.isolate;
             var js_err: ?v8.Value = switch (err) {
                 error.InvalidArgument => createTypeException(isolate, "invalid argument"),
                 error.OutOfMemory => createException(isolate, "out of memory"),
@@ -3103,6 +3109,24 @@ fn jsStringToZig(allocator: Allocator, str: v8.String, isolate: v8.Isolate) ![]u
     const n = str.writeUtf8(isolate, buf);
     std.debug.assert(n == len);
     return buf;
+}
+
+fn stackForLogs(arena: Allocator, isolate: v8.Isolate) !?[]const u8 {
+    std.debug.assert(builtin.mode == .Debug);
+
+    const separator = log.separator();
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    var writer = buf.writer(arena);
+
+    const stack_trace = v8.StackTrace.getCurrentStackTrace(isolate, 30);
+    const frame_count = stack_trace.getFrameCount();
+
+    for (0..frame_count) |i| {
+        const frame = stack_trace.getFrame(isolate, @intCast(i));
+        const script = try jsStringToZig(arena, frame.getScriptName(), isolate);
+        try writer.print("{s}{s}:{d}", .{ separator, script, frame.getLineNumber() });
+    }
+    return buf.items;
 }
 
 const NoopInspector = struct {
