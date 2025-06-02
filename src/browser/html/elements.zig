@@ -148,6 +148,14 @@ pub const HTMLElement = struct {
         });
         _ = try parser.elementDispatchEvent(@ptrCast(e), @ptrCast(event));
     }
+
+    pub fn _focus(e: *parser.ElementHTML, page: *Page) void {
+        // TODO: some elements can't be focused, like if they're disabled
+        // but there doesn't seem to be a generic way to check this. For example
+        // we could look for the "disabled" attribute, but that's only meaningful
+        // on certain types, and libdom's vtable doesn't seem to expose this.
+        page.active_element = @ptrCast(e);
+    }
 };
 
 // Deprecated HTMLElements in Chrome (2023/03/15)

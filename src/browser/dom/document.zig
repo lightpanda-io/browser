@@ -242,6 +242,11 @@ pub const Document = struct {
     pub fn _createTreeWalker(_: *parser.Document, root: *parser.Node, what_to_show: ?u32, filter: ?TreeWalker.TreeWalkerOpts) !TreeWalker {
         return try TreeWalker.init(root, what_to_show, filter);
     }
+
+    pub fn get_activeElement(_: *parser.Document, page: *const Page) !?ElementUnion {
+        const el = (try page.activeElement()) orelse return null;
+        return try Element.toInterface(el);
+    }
 };
 
 const testing = @import("../../testing.zig");
@@ -410,6 +415,12 @@ test "Browser.DOM.Document" {
             ,
             "1",
         },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "document.activeElement === document.body", "true" },
+        .{ "document.getElementById('link').focus()", "undefined" },
+        .{ "document.activeElement === document.getElementById('link')", "true" },
     }, .{});
 
     // this test breaks the doc structure, keep it at the end of the test
