@@ -20,21 +20,21 @@ RUN curl --fail -L -O https://github.com/jedisct1/minisign/releases/download/${M
     tar xvzf minisign-${MINISIG}-linux.tar.gz
 
 # install zig
-RUN curl --fail -L -O https://ziglang.org/download/${ZIG}/zig-linux-${ARCH}-${ZIG}.tar.xz
-RUN curl --fail -L -O https://ziglang.org/download/${ZIG}/zig-linux-${ARCH}-${ZIG}.tar.xz.minisig
+RUN curl --fail -L -O https://ziglang.org/download/${ZIG}/zig-${ARCH}-linux-${ZIG}.tar.xz
+RUN curl --fail -L -O https://ziglang.org/download/${ZIG}/zig-${ARCH}-linux-${ZIG}.tar.xz.minisig
 
-RUN minisign-linux/${ARCH}/minisign -Vm zig-linux-${ARCH}-${ZIG}.tar.xz -P ${ZIG_MINISIG}
+RUN minisign-linux/${ARCH}/minisign -Vm zig-${ARCH}-linux-${ZIG}.tar.xz -P ${ZIG_MINISIG}
 
 # clean minisg
 RUN rm -fr minisign-0.11-linux.tar.gz minisign-linux
 
 # install zig
-RUN tar xvf zig-linux-${ARCH}-${ZIG}.tar.xz && \
-    mv zig-linux-${ARCH}-${ZIG} /usr/local/lib && \
-    ln -s /usr/local/lib/zig-linux-${ARCH}-${ZIG}/zig /usr/local/bin/zig
+RUN tar xvf zig-${ARCH}-linux-${ZIG}.tar.xz && \
+    mv zig-${ARCH}-linux-${ZIG} /usr/local/lib && \
+    ln -s /usr/local/lib/zig-${ARCH}-linux-${ZIG}/zig /usr/local/bin/zig
 
 # clean up zig install
-RUN rm -fr zig-linux-${ARCH}-${ZIG}.tar.xz zig-linux-${ARCH}-${ZIG}.tar.xz.minisig
+RUN rm -fr zig-${ARCH}-linux-${ZIG}.tar.xz zig-${ARCH}-linux-${ZIG}.tar.xz.minisig
 
 # force use of http instead of ssh with github
 RUN cat <<EOF > /root/.gitconfig
