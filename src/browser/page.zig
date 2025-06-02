@@ -553,6 +553,25 @@ pub const Page = struct {
                 const href = (try parser.elementGetAttribute(element, "href")) orelse return;
                 try self.navigateFromWebAPI(href, .{});
             },
+            .input => {
+                const element: *parser.Element = @ptrCast(node);
+                const input_type = (try parser.elementGetAttribute(element, "type")) orelse return;
+                if (std.ascii.eqlIgnoreCase(input_type, "submit")) {
+                    return self.elementSubmitForm(element);
+                }
+            },
+            .button => {
+                const element: *parser.Element = @ptrCast(node);
+                const button_type = (try parser.elementGetAttribute(element, "type")) orelse return;
+                if (std.ascii.eqlIgnoreCase(button_type, "submit")) {
+                    return self.elementSubmitForm(element);
+                }
+                if (std.ascii.eqlIgnoreCase(button_type, "reset")) {
+                    if (try self.formForElement(element)) |form| {
+                        return parser.formElementReset(form);
+                    }
+                }
+            },
             else => {},
         }
     }
@@ -615,6 +634,30 @@ pub const Page = struct {
         }
 
         try self.navigateFromWebAPI(action, opts);
+    }
+
+    fn elementSubmitForm(self: *Page, element: *parser.Element) !void {
+        const form = (try self.formForElement(element)) orelse return;
+        return self.submitForm(@ptrCast(form), @ptrCast(element));
+    }
+
+    fn formForElement(self: *Page, element: *parser.Element) !?*parser.Form {
+        if (try parser.elementGetAttribute(element, "disabled") != null) {
+            return null;
+        }
+
+        if (try parser.elementGetAttribute(element, "form")) |form_id| {
+            const document = parser.documentHTMLToDocument(self.window.document);
+            const form_element = try parser.documentGetElementById(document, form_id) orelse return null;
+            if (try parser.elementHTMLGetTagType(@ptrCast(form_element)) == .form) {
+                return @ptrCast(form_element);
+            }
+            return null;
+        }
+
+        const Element = @import("dom/element.zig").Element;
+        const form = (try Element._closest(element, "form", self)) orelse return null;
+        return @ptrCast(form);
     }
 };
 
