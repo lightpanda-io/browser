@@ -62,4 +62,3 @@ test "Browser.XMLSerializer with DOCTYPE" {
         .{ "new XMLSerializer().serializeToString(document.doctype)", "<!DOCTYPE html>" },
     }, .{});
 }
-test
