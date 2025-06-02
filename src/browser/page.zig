@@ -95,8 +95,6 @@ pub const Page = struct {
     // indicates intention to navigate to another page on the next loop execution.
     delayed_navigation: bool = false,
 
-    active_element: ?*parser.Element = null,
-
     pub fn init(self: *Page, arena: Allocator, session: *Session) !void {
         const browser = session.browser;
         self.* = .{
@@ -645,21 +643,9 @@ pub const Page = struct {
         try self.navigateFromWebAPI(action, opts);
     }
 
-    pub fn activeElement(self: *const Page) !?*parser.Element {
-        if (self.active_element) |ae| {
-            return ae;
-        }
-
-        if (try parser.documentHTMLBody(self.window.document)) |body| {
-            return @ptrCast(body);
-        }
-
-        const doc = self.window.document;
-        if (try parser.documentGetDocumentElement(@ptrCast(doc))) |de| {
-            return @ptrCast(de);
-        }
-
-        return null;
+    pub fn isNodeAttached(self: *const Page, node: *parser.Node) !bool {
+        const root = parser.documentToNode(parser.documentHTMLToDocument(self.window.document));
+        return root == try parser.nodeGetRootNode(node);
     }
 
     fn elementSubmitForm(self: *Page, element: *parser.Element) !void {

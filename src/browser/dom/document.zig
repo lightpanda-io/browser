@@ -42,6 +42,8 @@ pub const Document = struct {
     pub const prototype = *Node;
     pub const subtype = .node;
 
+    active_element: ?*parser.Element = null,
+
     pub fn constructor(page: *const Page) !*parser.DocumentHTML {
         const doc = try parser.documentCreateDocument(
             try parser.documentHTMLGetTitle(page.window.document),
@@ -243,9 +245,17 @@ pub const Document = struct {
         return try TreeWalker.init(root, what_to_show, filter);
     }
 
-    pub fn get_activeElement(_: *parser.Document, page: *const Page) !?ElementUnion {
-        const el = (try page.activeElement()) orelse return null;
-        return try Element.toInterface(el);
+    pub fn get_activeElement(doc: *parser.Document, page: *Page) !?ElementUnion {
+        const self = try page.getOrCreateNodeWrapper(Document, @ptrCast(doc));
+        if (self.active_element) |ae| {
+            return try Element.toInterface(ae);
+        }
+
+        if (try parser.documentHTMLBody(page.window.document)) |body| {
+            return try Element.toInterface(@ptrCast(body));
+        }
+
+        return get_documentElement(doc);
     }
 };
 
