@@ -4,6 +4,8 @@ const Uri = std.Uri;
 const Allocator = std.mem.Allocator;
 const WebApiURL = @import("browser/url/url.zig").URL;
 
+pub const stitch = URL.stitch;
+
 pub const URL = struct {
     uri: Uri,
     raw: []const u8,
@@ -91,6 +93,7 @@ pub const URL = struct {
             if_needed,
         };
     };
+
     /// Properly stitches two URL fragments together.
     ///
     /// For URLs with a path, it will replace the last entry with the src.
@@ -101,7 +104,7 @@ pub const URL = struct {
         base: []const u8,
         opts: StitchOpts,
     ) ![]const u8 {
-        if (base.len == 0) {
+        if (base.len == 0 or isURL(src)) {
             if (opts.alloc == .always) {
                 return allocator.dupe(u8, src);
             }
@@ -154,7 +157,41 @@ pub const URL = struct {
     }
 };
 
-test "Url resolve size" {
+fn isURL(url: []const u8) bool {
+    if (std.mem.startsWith(u8, url, "://")) {
+        return true;
+    }
+
+    if (url.len < 8) {
+        return false;
+    }
+
+    if (!std.ascii.startsWithIgnoreCase(url, "http")) {
+        return false;
+    }
+
+    var pos: usize = 4;
+    if (url[4] == 's' or url[4] == 'S') {
+        pos = 5;
+    }
+    return std.mem.startsWith(u8, url[pos..], "://");
+}
+
+const testing = @import("testing.zig");
+test "URL: isURL" {
+    try testing.expectEqual(true, isURL("://lightpanda.io"));
+    try testing.expectEqual(true, isURL("://lightpanda.io/about"));
+    try testing.expectEqual(true, isURL("http://lightpanda.io/about"));
+    try testing.expectEqual(true, isURL("HttP://lightpanda.io/about"));
+    try testing.expectEqual(true, isURL("httpS://lightpanda.io/about"));
+    try testing.expectEqual(true, isURL("HTTPs://lightpanda.io/about"));
+
+    try testing.expectEqual(false, isURL("/lightpanda.io"));
+    try testing.expectEqual(false, isURL("../../about"));
+    try testing.expectEqual(false, isURL("about"));
+}
+
+test "URL: resolve size" {
     const base = "https://www.lightpande.io";
     const url = try URL.parse(base, null);
 
@@ -169,8 +206,6 @@ test "Url resolve size" {
     try std.testing.expectEqual(out_url.raw[25], '/');
     try std.testing.expectEqualStrings(out_url.raw[26..], &url_string);
 }
-
-const testing = @import("testing.zig");
 
 test "URL: Stitching Base & Src URLs (Basic)" {
     const allocator = testing.allocator;
@@ -210,6 +245,15 @@ test "URL: Stiching Base & Src URLs (Both Local)" {
     const result = try URL.stitch(allocator, src, base, .{});
     defer allocator.free(result);
     try testing.expectString("./abcdef/something.js", result);
+}
+
+test "URL: Stiching src as full path" {
+    const allocator = testing.allocator;
+
+    const base = "https://www.lightpanda.io/";
+    const src = "https://lightpanda.io/something.js";
+    const result = try URL.stitch(allocator, src, base, .{});
+    try testing.expectString("https://lightpanda.io/something.js", result);
 }
 
 test "URL: concatQueryString" {
