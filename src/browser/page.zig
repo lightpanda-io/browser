@@ -451,7 +451,7 @@ pub const Page = struct {
 
         // if a base path is given, we resolve src using base.
         if (base) |_base| {
-            res_src = try URL.stitch(arena, src, _base, .{});
+            res_src = try URL.stitch(arena, src, _base, .{ .alloc = .if_needed });
         }
 
         var origin_url = &self.url;

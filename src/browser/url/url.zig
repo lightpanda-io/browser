@@ -52,9 +52,7 @@ pub const URL = struct {
         const arena = page.arena;
         var raw: []const u8 = undefined;
         if (base) |b| {
-            raw = try @import("../../url.zig").URL.stitch(arena, url, b, .{
-                .alloc = .always,
-            });
+            raw = try @import("../../url.zig").URL.stitch(arena, url, b, .{});
         } else {
             raw = try arena.dupe(u8, url);
         }

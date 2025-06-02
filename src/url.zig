@@ -84,7 +84,7 @@ pub const URL = struct {
     }
 
     const StitchOpts = struct {
-        alloc: AllocWhen = .if_needed,
+        alloc: AllocWhen = .always,
 
         const AllocWhen = enum {
             always,
