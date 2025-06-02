@@ -128,7 +128,14 @@ pub const Session = struct {
         // it isn't null!
         std.debug.assert(self.page != null);
 
-        defer _ = self.browser.transfer_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
+        defer if (self.page) |*p| {
+            if (!p.delayed_navigation) {
+                // If, while loading the page, we intend to navigate to another
+                // page, then we need to keep the transfer_arena around, as this
+                // sub-navigation is probably using it.
+                _ = self.browser.transfer_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
+            }
+        };
 
         // it's safe to use the transfer arena here, because the page will
         // eventually clone the URL using its own page_arena (after it gets

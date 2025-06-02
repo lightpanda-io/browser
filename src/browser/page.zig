@@ -92,6 +92,9 @@ pub const Page = struct {
     // current_script could by fetch module to resolve module's url to fetch.
     current_script: ?*const Script = null,
 
+    // indicates intention to navigate to another page on the next loop execution.
+    delayed_navigation: bool = false,
+
     pub fn init(self: *Page, arena: Allocator, session: *Session) !void {
         const browser = session.browser;
         self.* = .{
@@ -553,6 +556,25 @@ pub const Page = struct {
                 const href = (try parser.elementGetAttribute(element, "href")) orelse return;
                 try self.navigateFromWebAPI(href, .{});
             },
+            .input => {
+                const element: *parser.Element = @ptrCast(node);
+                const input_type = (try parser.elementGetAttribute(element, "type")) orelse return;
+                if (std.ascii.eqlIgnoreCase(input_type, "submit")) {
+                    return self.elementSubmitForm(element);
+                }
+            },
+            .button => {
+                const element: *parser.Element = @ptrCast(node);
+                const button_type = (try parser.elementGetAttribute(element, "type")) orelse return;
+                if (std.ascii.eqlIgnoreCase(button_type, "submit")) {
+                    return self.elementSubmitForm(element);
+                }
+                if (std.ascii.eqlIgnoreCase(button_type, "reset")) {
+                    if (try self.formForElement(element)) |form| {
+                        return parser.formElementReset(form);
+                    }
+                }
+            },
             else => {},
         }
     }
@@ -561,6 +583,7 @@ pub const Page = struct {
     // The page.arena is safe to use here, but the transfer_arena exists
     // specifically for this type of lifetime.
     pub fn navigateFromWebAPI(self: *Page, url: []const u8, opts: NavigateOpts) !void {
+        self.delayed_navigation = true;
         const arena = self.session.transfer_arena;
         const navi = try arena.create(DelayedNavigation);
         navi.* = .{
@@ -615,6 +638,30 @@ pub const Page = struct {
         }
 
         try self.navigateFromWebAPI(action, opts);
+    }
+
+    fn elementSubmitForm(self: *Page, element: *parser.Element) !void {
+        const form = (try self.formForElement(element)) orelse return;
+        return self.submitForm(@ptrCast(form), @ptrCast(element));
+    }
+
+    fn formForElement(self: *Page, element: *parser.Element) !?*parser.Form {
+        if (try parser.elementGetAttribute(element, "disabled") != null) {
+            return null;
+        }
+
+        if (try parser.elementGetAttribute(element, "form")) |form_id| {
+            const document = parser.documentHTMLToDocument(self.window.document);
+            const form_element = try parser.documentGetElementById(document, form_id) orelse return null;
+            if (try parser.elementHTMLGetTagType(@ptrCast(form_element)) == .form) {
+                return @ptrCast(form_element);
+            }
+            return null;
+        }
+
+        const Element = @import("dom/element.zig").Element;
+        const form = (try Element._closest(element, "form", self)) orelse return null;
+        return @ptrCast(form);
     }
 };
 

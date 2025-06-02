@@ -32,10 +32,6 @@ pub const HTMLFormElement = struct {
         return page.submitForm(self, null);
     }
 
-    pub fn _requestSubmit(self: *parser.Form) !void {
-        try parser.formElementSubmit(self);
-    }
-
     pub fn _reset(self: *parser.Form) !void {
         try parser.formElementReset(self);
     }

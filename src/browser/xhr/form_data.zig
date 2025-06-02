@@ -268,6 +268,7 @@ fn collectForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page
     var entries: Entry.List = .empty;
     try entries.ensureTotalCapacity(arena, len);
 
+    var submitter_included = false;
     const submitter_name_ = try getSubmitterName(submitter_);
 
     for (0..len) |i| {
@@ -295,6 +296,8 @@ fn collectForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page
                                 .key = try std.fmt.allocPrint(arena, "{s}.y", .{name}),
                                 .value = "0",
                             });
+
+                            submitter_included = true;
                         }
                     }
                     continue;
@@ -309,6 +312,7 @@ fn collectForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page
                     if (submitter_name_ == null or !std.mem.eql(u8, submitter_name_.?, name)) {
                         continue;
                     }
+                    submitter_included = true;
                 }
                 const value = (try parser.elementGetAttribute(element, "value")) orelse "";
                 try entries.append(arena, .{ .key = name, .value = value });
@@ -326,12 +330,22 @@ fn collectForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page
                 if (std.mem.eql(u8, submitter_name, name)) {
                     const value = (try parser.elementGetAttribute(element, "value")) orelse "";
                     try entries.append(arena, .{ .key = name, .value = value });
+                    submitter_included = true;
                 }
             },
             else => {
                 log.warn(.form_data, "unsupported element", .{ .tag = @tagName(tag) });
                 continue;
             },
+        }
+    }
+
+    if (submitter_included == false) {
+        if (submitter_) |submitter| {
+            // this can happen if the submitter is outside the form, but associated
+            // with the form via a form=ID attribute
+            const value = (try parser.elementGetAttribute(@ptrCast(submitter), "value")) orelse "";
+            try entries.append(arena, .{ .key = submitter_name_.?, .value = value });
         }
     }
 
