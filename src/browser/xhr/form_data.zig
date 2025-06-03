@@ -22,8 +22,9 @@ const Allocator = std.mem.Allocator;
 
 const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
-const iterator = @import("../iterator/iterator.zig");
 const Page = @import("../page.zig").Page;
+const kv = @import("../key_value.zig");
+const iterator = @import("../iterator/iterator.zig");
 
 pub const Interfaces = .{
     FormData,
@@ -32,29 +33,12 @@ pub const Interfaces = .{
     EntryIterable,
 };
 
-// We store the values in an ArrayList rather than a an
-// StringArrayHashMap([]const u8) because of the way the iterators (i.e., keys(),
-// values() and entries()) work. The FormData can contain duplicate keys, and
-// each iteration yields 1 key=>value pair. So, given:
-//
-//  let f = new FormData();
-//  f.append('a', '1');
-//  f.append('a', '2');
-//
-// Then we'd expect f.keys(), f.values() and f.entries() to yield 2 results:
-//  ['a', '1']
-//  ['a', '2']
-//
-// This is much easier to do with an ArrayList than a HashMap, especially given
-// that the FormData could be mutated while iterating.
-// The downside is that most of the normal operations are O(N).
-
 // https://xhr.spec.whatwg.org/#interface-formdata
 pub const FormData = struct {
-    entries: Entry.List,
+    entries: kv.List,
 
     pub fn constructor(form_: ?*parser.Form, submitter_: ?*parser.ElementHTML, page: *Page) !FormData {
-        const form = form_ orelse return .{ .entries = .empty };
+        const form = form_ orelse return .{ .entries = .{} };
         return fromForm(form, submitter_, page);
     }
 
@@ -64,208 +48,77 @@ pub const FormData = struct {
     }
 
     pub fn _get(self: *const FormData, key: []const u8) ?[]const u8 {
-        const result = self.find(key) orelse return null;
-        return result.entry.value;
+        return self.entries.get(key);
     }
 
-    pub fn _getAll(self: *const FormData, key: []const u8, page: *Page) ![][]const u8 {
-        const arena = page.call_arena;
-        var arr: std.ArrayListUnmanaged([]const u8) = .empty;
-        for (self.entries.items) |entry| {
-            if (std.mem.eql(u8, key, entry.key)) {
-                try arr.append(arena, entry.value);
-            }
-        }
-        return arr.items;
+    pub fn _getAll(self: *const FormData, key: []const u8, page: *Page) ![]const []const u8 {
+        return self.entries.getAll(page.call_arena, key);
     }
 
     pub fn _has(self: *const FormData, key: []const u8) bool {
-        return self.find(key) != null;
+        return self.entries.has(key);
     }
 
     // TODO: value should be a string or blog
     // TODO: another optional parameter for the filename
     pub fn _set(self: *FormData, key: []const u8, value: []const u8, page: *Page) !void {
-        self._delete(key);
-        return self._append(key, value, page);
+        return self.entries.set(page.arena, key, value);
     }
 
     // TODO: value should be a string or blog
     // TODO: another optional parameter for the filename
     pub fn _append(self: *FormData, key: []const u8, value: []const u8, page: *Page) !void {
-        const arena = page.arena;
-        return self.entries.append(arena, .{ .key = try arena.dupe(u8, key), .value = try arena.dupe(u8, value) });
+        return self.entries.append(page.arena, key, value);
     }
 
     pub fn _delete(self: *FormData, key: []const u8) void {
-        var i: usize = 0;
-        while (i < self.entries.items.len) {
-            const entry = self.entries.items[i];
-            if (std.mem.eql(u8, key, entry.key)) {
-                _ = self.entries.swapRemove(i);
-            } else {
-                i += 1;
-            }
-        }
+        return self.entries.delete(key);
     }
 
     pub fn _keys(self: *const FormData) KeyIterable {
-        return .{ .inner = .{ .entries = &self.entries } };
+        return .{ .inner = self.entries.keyIterator() };
     }
 
     pub fn _values(self: *const FormData) ValueIterable {
-        return .{ .inner = .{ .entries = &self.entries } };
+        return .{ .inner = self.entries.valueIterator() };
     }
 
     pub fn _entries(self: *const FormData) EntryIterable {
-        return .{ .inner = .{ .entries = &self.entries } };
+        return .{ .inner = self.entries.entryIterator() };
     }
 
     pub fn _symbol_iterator(self: *const FormData) EntryIterable {
         return self._entries();
     }
 
-    const FindResult = struct {
-        index: usize,
-        entry: Entry,
-    };
-
-    fn find(self: *const FormData, key: []const u8) ?FindResult {
-        for (self.entries.items, 0..) |entry, i| {
-            if (std.mem.eql(u8, key, entry.key)) {
-                return .{ .index = i, .entry = entry };
-            }
-        }
-        return null;
-    }
-
     pub fn write(self: *const FormData, encoding_: ?[]const u8, writer: anytype) !void {
         const encoding = encoding_ orelse {
-            return urlEncode(self, writer);
+            return kv.urlEncode(self.entries, .form, writer);
         };
 
         if (std.ascii.eqlIgnoreCase(encoding, "application/x-www-form-urlencoded")) {
-            return urlEncode(self, writer);
+            return kv.urlEncode(self.entries, .form, writer);
         }
 
-        log.warn(.web_api, "not implemented", .{ .feature = "form data encoding", .encoding = encoding });
+        log.warn(.web_api, "not implemented", .{
+            .feature = "form data encoding",
+            .encoding = encoding,
+        });
         return error.EncodingNotSupported;
     }
 };
 
-fn urlEncode(data: *const FormData, writer: anytype) !void {
-    const entries = data.entries.items;
-    if (entries.len == 0) {
-        return;
-    }
-
-    try urlEncodeEntry(entries[0], writer);
-    for (entries[1..]) |entry| {
-        try writer.writeByte('&');
-        try urlEncodeEntry(entry, writer);
-    }
-}
-
-fn urlEncodeEntry(entry: Entry, writer: anytype) !void {
-    try urlEncodeValue(entry.key, writer);
-    try writer.writeByte('=');
-    try urlEncodeValue(entry.value, writer);
-}
-
-fn urlEncodeValue(value: []const u8, writer: anytype) !void {
-    if (!urlEncodeShouldEscape(value)) {
-        return writer.writeAll(value);
-    }
-
-    for (value) |b| {
-        if (urlEncodeUnreserved(b)) {
-            try writer.writeByte(b);
-        } else if (b == ' ') {
-            // for form submission, space should be encoded as '+', not '%20'
-            try writer.writeByte('+');
-        } else {
-            try writer.print("%{X:0>2}", .{b});
-        }
-    }
-}
-
-fn urlEncodeShouldEscape(value: []const u8) bool {
-    for (value) |b| {
-        if (!urlEncodeUnreserved(b)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-fn urlEncodeUnreserved(b: u8) bool {
-    return switch (b) {
-        'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => true,
-        else => false,
-    };
-}
-
-const Entry = struct {
-    key: []const u8,
-    value: []const u8,
-
-    pub const List = std.ArrayListUnmanaged(Entry);
-};
-
-const KeyIterable = iterator.Iterable(KeyIterator, "FormDataKeyIterator");
-const ValueIterable = iterator.Iterable(ValueIterator, "FormDataValueIterator");
-const EntryIterable = iterator.Iterable(EntryIterator, "FormDataEntryIterator");
-
-const KeyIterator = struct {
-    index: usize = 0,
-    entries: *const Entry.List,
-
-    pub fn _next(self: *KeyIterator) ?[]const u8 {
-        const index = self.index;
-        if (index == self.entries.items.len) {
-            return null;
-        }
-        self.index += 1;
-        return self.entries.items[index].key;
-    }
-};
-
-const ValueIterator = struct {
-    index: usize = 0,
-    entries: *const Entry.List,
-
-    pub fn _next(self: *ValueIterator) ?[]const u8 {
-        const index = self.index;
-        if (index == self.entries.items.len) {
-            return null;
-        }
-        self.index += 1;
-        return self.entries.items[index].value;
-    }
-};
-
-const EntryIterator = struct {
-    index: usize = 0,
-    entries: *const Entry.List,
-
-    pub fn _next(self: *EntryIterator) ?struct { []const u8, []const u8 } {
-        const index = self.index;
-        if (index == self.entries.items.len) {
-            return null;
-        }
-        self.index += 1;
-        const entry = self.entries.items[index];
-        return .{ entry.key, entry.value };
-    }
-};
+const KeyIterable = iterator.Iterable(kv.KeyIterator, "FormDataKeyIterator");
+const ValueIterable = iterator.Iterable(kv.ValueIterator, "FormDataValueIterator");
+const EntryIterable = iterator.Iterable(kv.EntryIterator, "FormDataEntryIterator");
 
 // TODO: handle disabled fieldsets
-fn collectForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page) !Entry.List {
+fn collectForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page) !kv.List {
     const arena = page.arena;
     const collection = try parser.formGetCollection(form);
     const len = try parser.htmlCollectionGetLength(collection);
 
-    var entries: Entry.List = .empty;
+    var entries: kv.List = .{};
     try entries.ensureTotalCapacity(arena, len);
 
     var submitter_included = false;
@@ -288,15 +141,10 @@ fn collectForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page
                 if (std.ascii.eqlIgnoreCase(tpe, "image")) {
                     if (submitter_name_) |submitter_name| {
                         if (std.mem.eql(u8, submitter_name, name)) {
-                            try entries.append(arena, .{
-                                .key = try std.fmt.allocPrint(arena, "{s}.x", .{name}),
-                                .value = "0",
-                            });
-                            try entries.append(arena, .{
-                                .key = try std.fmt.allocPrint(arena, "{s}.y", .{name}),
-                                .value = "0",
-                            });
-
+                            const key_x = try std.fmt.allocPrint(arena, "{s}.x", .{name});
+                            const key_y = try std.fmt.allocPrint(arena, "{s}.y", .{name});
+                            try entries.appendOwned(arena, key_x, "0");
+                            try entries.appendOwned(arena, key_y, "0");
                             submitter_included = true;
                         }
                     }
@@ -315,7 +163,7 @@ fn collectForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page
                     submitter_included = true;
                 }
                 const value = (try parser.elementGetAttribute(element, "value")) orelse "";
-                try entries.append(arena, .{ .key = name, .value = value });
+                try entries.appendOwned(arena, name, value);
             },
             .select => {
                 const select: *parser.Select = @ptrCast(node);
@@ -324,12 +172,12 @@ fn collectForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page
             .textarea => {
                 const textarea: *parser.TextArea = @ptrCast(node);
                 const value = try parser.textareaGetValue(textarea);
-                try entries.append(arena, .{ .key = name, .value = value });
+                try entries.appendOwned(arena, name, value);
             },
             .button => if (submitter_name_) |submitter_name| {
                 if (std.mem.eql(u8, submitter_name, name)) {
                     const value = (try parser.elementGetAttribute(element, "value")) orelse "";
-                    try entries.append(arena, .{ .key = name, .value = value });
+                    try entries.appendOwned(arena, name, value);
                     submitter_included = true;
                 }
             },
@@ -345,14 +193,14 @@ fn collectForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page
             // this can happen if the submitter is outside the form, but associated
             // with the form via a form=ID attribute
             const value = (try parser.elementGetAttribute(@ptrCast(submitter), "value")) orelse "";
-            try entries.append(arena, .{ .key = submitter_name_.?, .value = value });
+            try entries.appendOwned(arena, submitter_name_.?, value);
         }
     }
 
     return entries;
 }
 
-fn collectSelectValues(arena: Allocator, select: *parser.Select, name: []const u8, entries: *Entry.List, page: *Page) !void {
+fn collectSelectValues(arena: Allocator, select: *parser.Select, name: []const u8, entries: *kv.List, page: *Page) !void {
     const HTMLSelectElement = @import("../html/select.zig").HTMLSelectElement;
 
     // Go through the HTMLSelectElement because it has specific logic for handling
@@ -372,7 +220,7 @@ fn collectSelectValues(arena: Allocator, select: *parser.Select, name: []const u
             return;
         }
         const value = try parser.optionGetValue(option);
-        return entries.append(arena, .{ .key = name, .value = value });
+        return entries.appendOwned(arena, name, value);
     }
 
     const len = try parser.optionCollectionGetLength(options);
@@ -386,7 +234,7 @@ fn collectSelectValues(arena: Allocator, select: *parser.Select, name: []const u
 
         if (try parser.optionGetSelected(option)) {
             const value = try parser.optionGetValue(option);
-            try entries.append(arena, .{ .key = name, .value = value });
+            try entries.appendOwned(arena, name, value);
         }
     }
 }
@@ -420,7 +268,7 @@ test "Browser.FormData" {
         \\   <input id="is_disabled" disabled value="nope2">
         \\
         \\   <input name="txt-1" value="txt-1-v">
-        \\   <input name="txt-2" value="txt-2-v" type=password>
+        \\   <input name="txt-2" value="txt-~-v" type=password>
         \\
         \\   <input name="chk-3" value="chk-3-va" type=checkbox>
         \\   <input name="chk-3" value="chk-3-vb" type=checkbox checked>
@@ -518,7 +366,7 @@ test "Browser.FormData" {
             \\ acc.slice(0, -1)
             ,
             \\txt-1=txt-1-v
-            \\txt-2=txt-2-v
+            \\txt-2=txt-~-v
             \\chk-3=chk-3-vb
             \\chk-3=chk-3-vc
             \\rdi-1=rdi-1-vc
@@ -539,7 +387,7 @@ test "Browser.FormData: urlEncode" {
     defer arr.deinit(testing.allocator);
 
     {
-        var fd = FormData{ .entries = .empty };
+        var fd = FormData{ .entries = .{} };
         try testing.expectError(error.EncodingNotSupported, fd.write("unknown", arr.writer(testing.allocator)));
 
         try fd.write(null, arr.writer(testing.allocator));
@@ -550,12 +398,12 @@ test "Browser.FormData: urlEncode" {
     }
 
     {
-        var fd = FormData{ .entries = Entry.List.fromOwnedSlice(@constCast(&[_]Entry{
+        var fd = FormData{ .entries = kv.List.fromOwnedSlice(@constCast(&[_]kv.KeyValue{
             .{ .key = "a", .value = "1" },
             .{ .key = "it's over", .value = "9000 !!!" },
-            .{ .key = "emot", .value = "ok: ☺" },
+            .{ .key = "em~ot", .value = "ok: ☺" },
         })) };
-        const expected = "a=1&it%27s+over=9000+%21%21%21&emot=ok%3A+%E2%98%BA";
+        const expected = "a=1&it%27s+over=9000+%21%21%21&em%7Eot=ok%3A+%E2%98%BA";
         try fd.write(null, arr.writer(testing.allocator));
         try testing.expectEqual(expected, arr.items);
 
