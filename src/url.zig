@@ -252,7 +252,7 @@ test "URL: Stiching src as full path" {
 
     const base = "https://www.lightpanda.io/";
     const src = "https://lightpanda.io/something.js";
-    const result = try URL.stitch(allocator, src, base, .{});
+    const result = try URL.stitch(allocator, src, base, .{ .alloc = .if_needed });
     try testing.expectString("https://lightpanda.io/something.js", result);
 }
 
