@@ -601,6 +601,10 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 return persistent_object.castToObject();
             }
 
+            pub fn stackTrace(self: *const Scope) !?[]const u8 {
+                return stackForLogs(self.call_arena, self.isolate);
+            }
+
             // Executes the src
             pub fn exec(self: *Scope, src: []const u8, name: ?[]const u8) !Value {
                 const isolate = self.isolate;

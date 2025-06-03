@@ -66,7 +66,11 @@ pub const Console = struct {
         if (values.len == 0) {
             return;
         }
-        log.info(.console, "error", .{ .args = try serializeValues(values, page) });
+
+        log.info(.console, "error", .{
+            .args = try serializeValues(values, page),
+            .stack = page.stackTrace() catch "???",
+        });
     }
 
     pub fn _clear(_: *const Console) void {}
