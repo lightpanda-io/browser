@@ -194,8 +194,10 @@ pub const HTMLAnchorElement = struct {
         return try parser.anchorGetHref(self);
     }
 
-    pub fn set_href(self: *parser.Anchor, href: []const u8) !void {
-        return try parser.anchorSetHref(self, href);
+    pub fn set_href(self: *parser.Anchor, href: []const u8, page: *const Page) !void {
+        const stitch = @import("../../url.zig").stitch;
+        const full = try stitch(page.call_arena, href, page.url.raw, .{});
+        return try parser.anchorSetHref(self, full);
     }
 
     pub fn get_hreflang(self: *parser.Anchor) ![]const u8 {
@@ -289,10 +291,9 @@ pub const HTMLAnchorElement = struct {
         try parser.anchorSetHref(self, href);
     }
 
-    // TODO return a disposable string
     pub fn get_hostname(self: *parser.Anchor, page: *Page) ![]const u8 {
         var u = try url(self, page);
-        return try page.arena.dupe(u8, u.get_hostname());
+        return u.get_hostname();
     }
 
     pub fn set_hostname(self: *parser.Anchor, v: []const u8, page: *Page) !void {
@@ -326,7 +327,7 @@ pub const HTMLAnchorElement = struct {
     // TODO return a disposable string
     pub fn get_username(self: *parser.Anchor, page: *Page) ![]const u8 {
         var u = try url(self, page);
-        return try page.arena.dupe(u8, u.get_username());
+        return u.get_username();
     }
 
     pub fn set_username(self: *parser.Anchor, v: ?[]const u8, page: *Page) !void {
@@ -366,7 +367,7 @@ pub const HTMLAnchorElement = struct {
     // TODO return a disposable string
     pub fn get_pathname(self: *parser.Anchor, page: *Page) ![]const u8 {
         var u = try url(self, page);
-        return try page.arena.dupe(u8, u.get_pathname());
+        return u.get_pathname();
     }
 
     pub fn set_pathname(self: *parser.Anchor, v: []const u8, page: *Page) !void {
@@ -1056,62 +1057,62 @@ test "Browser.HTML.Element" {
     defer runner.deinit();
 
     try runner.testCases(&.{
-        .{ "let a = document.getElementById('link')", "undefined" },
-        .{ "a.target", "" },
-        .{ "a.target = '_blank'", "_blank" },
-        .{ "a.target", "_blank" },
-        .{ "a.target = ''", "" },
+        .{ "let link = document.getElementById('link')", "undefined" },
+        .{ "link.target", "" },
+        .{ "link.target = '_blank'", "_blank" },
+        .{ "link.target", "_blank" },
+        .{ "link.target = ''", "" },
 
-        .{ "a.href", "foo" },
-        .{ "a.href = 'https://lightpanda.io/'", "https://lightpanda.io/" },
-        .{ "a.href", "https://lightpanda.io/" },
+        .{ "link.href", "foo" },
+        .{ "link.href = 'https://lightpanda.io/'", "https://lightpanda.io/" },
+        .{ "link.href", "https://lightpanda.io/" },
 
-        .{ "a.origin", "https://lightpanda.io" },
+        .{ "link.origin", "https://lightpanda.io" },
 
-        .{ "a.host = 'lightpanda.io:443'", "lightpanda.io:443" },
-        .{ "a.host", "lightpanda.io:443" },
-        .{ "a.port", "443" },
-        .{ "a.hostname", "lightpanda.io" },
+        .{ "link.host = 'lightpanda.io:443'", "lightpanda.io:443" },
+        .{ "link.host", "lightpanda.io:443" },
+        .{ "link.port", "443" },
+        .{ "link.hostname", "lightpanda.io" },
 
-        .{ "a.host = 'lightpanda.io'", "lightpanda.io" },
-        .{ "a.host", "lightpanda.io" },
-        .{ "a.port", "" },
-        .{ "a.hostname", "lightpanda.io" },
+        .{ "link.host = 'lightpanda.io'", "lightpanda.io" },
+        .{ "link.host", "lightpanda.io" },
+        .{ "link.port", "" },
+        .{ "link.hostname", "lightpanda.io" },
 
-        .{ "a.host", "lightpanda.io" },
-        .{ "a.hostname", "lightpanda.io" },
-        .{ "a.hostname = 'foo.bar'", "foo.bar" },
-        .{ "a.href", "https://foo.bar/" },
+        .{ "link.host", "lightpanda.io" },
+        .{ "link.hostname", "lightpanda.io" },
+        .{ "link.hostname = 'foo.bar'", "foo.bar" },
+        .{ "link.href", "https://foo.bar/" },
 
-        .{ "a.search", "" },
-        .{ "a.search = 'q=bar'", "q=bar" },
-        .{ "a.search", "?q=bar" },
-        .{ "a.href", "https://foo.bar/?q=bar" },
+        .{ "link.search", "" },
+        .{ "link.search = 'q=bar'", "q=bar" },
+        .{ "link.search", "?q=bar" },
+        .{ "link.href", "https://foo.bar/?q=bar" },
 
-        .{ "a.hash", "" },
-        .{ "a.hash = 'frag'", "frag" },
-        .{ "a.hash", "#frag" },
-        .{ "a.href", "https://foo.bar/?q=bar#frag" },
+        .{ "link.hash", "" },
+        .{ "link.hash = 'frag'", "frag" },
+        .{ "link.hash", "#frag" },
+        .{ "link.href", "https://foo.bar/?q=bar#frag" },
 
-        .{ "a.port", "" },
-        .{ "a.port = '443'", "443" },
-        .{ "a.host", "foo.bar:443" },
-        .{ "a.hostname", "foo.bar" },
-        .{ "a.href", "https://foo.bar:443/?q=bar#frag" },
-        .{ "a.port = null", "null" },
-        .{ "a.href", "https://foo.bar/?q=bar#frag" },
+        .{ "link.port", "" },
+        .{ "link.port = '443'", "443" },
+        .{ "link.host", "foo.bar:443" },
+        .{ "link.hostname", "foo.bar" },
+        .{ "link.href", "https://foo.bar:443/?q=bar#frag" },
+        .{ "link.port = null", "null" },
+        .{ "link.href", "https://foo.bar/?q=bar#frag" },
 
-        .{ "a.href = 'foo'", "foo" },
+        .{ "link.href = 'foo'", "foo" },
 
-        .{ "a.type", "" },
-        .{ "a.type = 'text/html'", "text/html" },
-        .{ "a.type", "text/html" },
-        .{ "a.type = ''", "" },
+        .{ "link.type", "" },
+        .{ "link.type = 'text/html'", "text/html" },
+        .{ "link.type", "text/html" },
+        .{ "link.type = ''", "" },
 
-        .{ "a.text", "OK" },
-        .{ "a.text = 'foo'", "foo" },
-        .{ "a.text", "foo" },
-        .{ "a.text = 'OK'", "OK" },
+        .{ "link.text", "OK" },
+        .{ "link.text = 'foo'", "foo" },
+        .{ "link.text", "foo" },
+        .{ "link.text = 'OK'", "OK" },
     }, .{});
 
     try runner.testCases(&.{
@@ -1173,5 +1174,11 @@ test "Browser.HTML.Element" {
         .{ "lyric.src", "okay" },
         .{ "lyric.src = 15", "15" },
         .{ "lyric.src", "15" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "let a = document.createElement('a');", null },
+        .{ "a.href = 'about'", null },
+        .{ "a.href", "https://lightpanda.io/opensource-browser/about" },
     }, .{});
 }
