@@ -255,7 +255,7 @@ const Command = struct {
             \\                Defaults to 9222
             \\
             \\--timeout       Inactivity timeout in seconds before disconnecting clients
-            \\                Defaults to 3 (seconds)
+            \\                Defaults to 10 (seconds)
             \\
         ++ common_options ++
             \\
@@ -342,7 +342,7 @@ fn parseServeArgs(
 ) !Command.Serve {
     var host: []const u8 = "127.0.0.1";
     var port: u16 = 9222;
-    var timeout: u16 = 3;
+    var timeout: u16 = 10;
     var common: Command.Common = .{};
 
     while (args.next()) |opt| {
