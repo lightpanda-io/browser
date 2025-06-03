@@ -196,8 +196,7 @@ pub const HTMLAnchorElement = struct {
     }
 
     pub fn set_href(self: *parser.Anchor, href: []const u8, page: *const Page) !void {
-        const stitch = @import("../../url.zig").stitch;
-        const full = try stitch(page.call_arena, href, page.url.raw, .{});
+        const full = try urlStitch(page.call_arena, href, page.url.raw, .{});
         return try parser.anchorSetHref(self, full);
     }
 
@@ -695,7 +694,7 @@ pub const HTMLInputElement = struct {
         return try parser.inputGetSrc(self);
     }
     pub fn set_src(self: *parser.Input, src: []const u8, page: *Page) !void {
-        const new_src = try urlStitch(page.call_arena, src, page.url.raw);
+        const new_src = try urlStitch(page.call_arena, src, page.url.raw, .{ .alloc = .if_needed });
         try parser.inputSetSrc(self, new_src);
     }
     pub fn get_type(self: *parser.Input) ![]const u8 {
@@ -1266,40 +1265,55 @@ test "Browser.HTML.Element" {
         .{ "a.href", "https://lightpanda.io/opensource-browser/about" },
     }, .{});
 }
-test "Browser.HTML.Element.propeties" {
+test "Browser.HTML.HtmlInputElement.propeties" {
     var runner = try testing.jsRunner(testing.tracking_allocator, .{ .url = "https://lightpanda.io/noslashattheend" });
     defer runner.deinit();
-    const bool_valids = [_]Valid{
-        .{ .input = "true", .is_str = false },
-        .{ .input = "", .is_str = true, .expected = "false" },
-        .{ .input = "13.5", .is_str = true, .expected = "true" },
-    };
-    const str_valids = [_]Valid{
-        .{ .input = "foo", .is_str = true },
-        .{ .input = "5", .is_str = false, .expected = "5" },
-        .{ .input = "", .is_str = true },
-        .{ .input = "document", .is_str = false, .expected = "[object HTMLDocument]" },
-    };
-    // TODO these tests are mostly just data should we store them in Sqlite or so?
-    try testCreateElement(&runner, "input");
-    // Valid input.form is tested separately :Browser.HTML.Element.propeties.input.form
-    try testProperty(&runner, "input", "form", "null", "null", &.{}, &.{.{ .input = "foo", .is_str = true }});
-    try testProperty(&runner, "input", "accept", "", "", &str_valids, &.{});
-    try testProperty(&runner, "input", "alt", "", "", &str_valids, &.{});
-    try testProperty(&runner, "input", "disabled", "false", "false", &bool_valids, &.{});
-    try testProperty(&runner, "input", "maxLength", "-1", "0", &.{.{ .input = "5", .is_str = false }}, &.{.{ .input = "banana", .is_str = true }});
-    try testing.expectError(error.ExecutionError, runner.testCases(&.{.{ "elem_input.maxLength = -45", null }}, .{}));
-    try testProperty(&runner, "input", "name", "", "", &str_valids, &.{});
-    try testProperty(&runner, "input", "readOnly", "false", "false", &bool_valids, &.{});
-    try testProperty(&runner, "input", "size", "20", "20", &.{.{ .input = "5", .is_str = false }}, &.{.{ .input = "-26", .is_str = false }});
-    try testing.expectError(error.ExecutionError, runner.testCases(&.{.{ "elem_input.size = 0", null }}, .{}));
-    try testing.expectError(error.ExecutionError, runner.testCases(&.{.{ "elem_input.size = 'banana'", null }}, .{}));
-    try testProperty(&runner, "input", "src", "", "", &.{
-        .{ .input = "foo", .is_str = true, .expected = "https://lightpanda.io/foo" }, // TODO stitch should work with spaces -> %20
-        .{ .input = "-3", .is_str = false, .expected = "https://lightpanda.io/-3" },
-        .{ .input = "", .is_str = true, .expected = "https://lightpanda.io/noslashattheend" },
-    }, &.{});
-    try testProperty(&runner, "input", "type", "text", "text", &.{.{ .input = "checkbox", .is_str = true }}, &.{.{ .input = "5", .is_str = true }});
+    var alloc = std.heap.ArenaAllocator.init(runner.app.allocator);
+    defer alloc.deinit();
+    const arena = alloc.allocator();
+
+    try runner.testCases(&.{.{ "let elem_input = document.createElement('input')", null }}, .{});
+
+    try runner.testCases(&.{.{ "elem_input.form", "null" }}, .{}); // Initial value
+    // Valid input.form is tested separately :Browser.HTML.HtmlInputElement.propeties.form
+    try testProperty(arena, &runner, "elem_input.form", "null", &.{.{ .input = "'foo'" }}); // Invalid
+
+    try runner.testCases(&.{.{ "elem_input.accept", "" }}, .{}); // Initial value
+    try testProperty(arena, &runner, "elem_input.accept", null, &str_valids); // Valid
+
+    try runner.testCases(&.{.{ "elem_input.alt", "" }}, .{}); // Initial value
+    try testProperty(arena, &runner, "elem_input.alt", null, &str_valids); // Valid
+
+    try runner.testCases(&.{.{ "elem_input.disabled", "false" }}, .{}); // Initial value
+    try testProperty(arena, &runner, "elem_input.disabled", null, &bool_valids); // Valid
+
+    try runner.testCases(&.{.{ "elem_input.maxLength", "-1" }}, .{}); // Initial value
+    try testProperty(arena, &runner, "elem_input.maxLength", null, &.{.{ .input = "5" }}); // Valid
+    try testProperty(arena, &runner, "elem_input.maxLength", "0", &.{.{ .input = "'banana'" }}); // Invalid
+    try testing.expectError(error.ExecutionError, runner.testCases(&.{.{ "elem_input.maxLength = -45", null }}, .{})); // Error
+
+    try runner.testCases(&.{.{ "elem_input.name", "" }}, .{}); // Initial value
+    try testProperty(arena, &runner, "elem_input.name", null, &str_valids); // Valid
+
+    try runner.testCases(&.{.{ "elem_input.readOnly", "false" }}, .{}); // Initial value
+    try testProperty(arena, &runner, "elem_input.readOnly", null, &bool_valids); // Valid
+
+    try runner.testCases(&.{.{ "elem_input.size", "20" }}, .{}); // Initial value
+    try testProperty(arena, &runner, "elem_input.size", null, &.{.{ .input = "5" }}); // Valid
+    try testProperty(arena, &runner, "elem_input.size", "20", &.{.{ .input = "-26" }}); // Invalid
+    try testing.expectError(error.ExecutionError, runner.testCases(&.{.{ "elem_input.size = 0", null }}, .{})); // Error
+    try testing.expectError(error.ExecutionError, runner.testCases(&.{.{ "elem_input.size = 'banana'", null }}, .{})); // Error
+
+    try runner.testCases(&.{.{ "elem_input.src", "" }}, .{}); // Initial value
+    try testProperty(arena, &runner, "elem_input.src", null, &.{
+        .{ .input = "'foo'", .expected = "https://lightpanda.io/foo" }, // TODO stitch should work with spaces -> %20
+        .{ .input = "-3", .expected = "https://lightpanda.io/-3" },
+        .{ .input = "''", .expected = "https://lightpanda.io/noslashattheend" },
+    });
+
+    try runner.testCases(&.{.{ "elem_input.type", "text" }}, .{}); // Initial value
+    try testProperty(arena, &runner, "elem_input.type", null, &.{.{ .input = "'checkbox'", .expected = "checkbox" }}); // Valid
+    try testProperty(arena, &runner, "elem_input.type", "text", &.{.{ .input = "'5'" }}); // Invalid
 
     // Properties that are related
     try runner.testCases(&.{
@@ -1335,7 +1349,7 @@ test "Browser.HTML.Element.propeties" {
         .{ "input_value.value", "mango" }, // Still mango
     }, .{});
 }
-test "Browser.HTML.Element.propeties.input.form" {
+test "Browser.HTML.HtmlInputElement.propeties.form" {
     var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html = 
         \\ <form action="test.php" target="_blank">
         \\   <p>
@@ -1348,62 +1362,42 @@ test "Browser.HTML.Element.propeties.input.form" {
     try runner.testCases(&.{
         .{ "let elem_input = document.querySelector('input')", null },
     }, .{});
-    try testProperty(&runner, "input", "form", "[object HTMLFormElement]", "[object HTMLFormElement]", &.{}, &.{.{ .input = "5", .is_str = false }});
+    try runner.testCases(&.{.{ "elem_input.form", "[object HTMLFormElement]" }}, .{}); // Initial value
+    try runner.testCases(&.{
+        .{ "elem_input.form = 'foo'", null },
+        .{ "elem_input.form", "[object HTMLFormElement]" }, // Invalid
+    }, .{});
 }
 
-const Valid = struct {
+const Check = struct {
     input: []const u8,
-    is_str: bool,
     expected: ?[]const u8 = null, // Needed when input != expected
 };
-const Invalid = struct {
-    input: []const u8,
-    is_str: bool,
+const bool_valids = [_]Check{
+    .{ .input = "true" },
+    .{ .input = "''", .expected = "false" },
+    .{ .input = "13.5", .expected = "true" },
+};
+const str_valids = [_]Check{
+    .{ .input = "'foo'", .expected = "foo" },
+    .{ .input = "5", .expected = "5" },
+    .{ .input = "''", .expected = "" },
+    .{ .input = "document", .expected = "[object HTMLDocument]" },
 };
 
-fn testCreateElement(runner: *testing.JsRunner, comptime name: []const u8) !void {
-    try runner.testCases(&.{
-        .{ "let elem_" ++ name ++ " = document.createElement('" ++ name ++ "')", null },
-    }, .{});
-}
-// TODO reduce comptime
-// Default is the expected value after creation and after setting an invalid value
-// Valid input is expected to return itself or the expected value
-// Invalid input is expected to return the default value
-// .{ "elem.type", "text" },                  // default
-// .{ "elem.type = 'checkbox'", "checkbox" }, // valid
-// .{ "elem.type", "checkbox" },
-// .{ "elem.type = '5'", "5" },               // invalid
+// .{ "elem.type = '5'", "5" },
 // .{ "elem.type", "text" },
 fn testProperty(
+    arena: std.mem.Allocator,
     runner: *testing.JsRunner,
-    comptime name: []const u8,
-    comptime property: []const u8,
-    comptime initial: []const u8,
-    comptime default: []const u8,
-    comptime valids: []const Valid,
-    comptime invalids: []const Invalid,
+    elem_dot_prop: []const u8,
+    always: ?[]const u8, // Ignores checks' expected if set
+    checks: []const Check,
 ) !void {
-    const elem_dot_prop = "elem_" ++ name ++ "." ++ property;
-
-    try runner.testCases(&.{
-        .{ elem_dot_prop, initial },
-    }, .{});
-
-    inline for (valids) |valid| {
-        const set_input = if (valid.is_str) "'" ++ valid.input ++ "'" else valid.input;
-        const expected = valid.expected orelse valid.input;
+    for (checks) |check| {
         try runner.testCases(&.{
-            .{ elem_dot_prop ++ " = " ++ set_input, null },
-            .{ elem_dot_prop, expected },
-        }, .{});
-    }
-
-    inline for (invalids) |invalid| {
-        const set_input = if (invalid.is_str) "'" ++ invalid.input ++ "'" else invalid.input;
-        try runner.testCases(&.{
-            .{ elem_dot_prop ++ " = " ++ set_input, null },
-            .{ elem_dot_prop, default },
+            .{ try std.mem.concat(arena, u8, &.{ elem_dot_prop, " = ", check.input }), null },
+            .{ elem_dot_prop, always orelse check.expected orelse check.input },
         }, .{});
     }
 }

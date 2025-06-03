@@ -114,6 +114,7 @@ pub const URL = struct {
             if (opts.alloc == .always) {
                 return allocator.dupe(u8, base);
             }
+            return base;
         }
 
         const protocol_end: usize = blk: {
@@ -266,7 +267,7 @@ test "URL: Stitching Base & Src URLs (empty src)" {
 
     const base = "https://www.google.com/xyz/abc/123";
     const src = "";
-    const result = try URL.stitch(allocator, src, base);
+    const result = try URL.stitch(allocator, src, base, .{});
     defer allocator.free(result);
     try testing.expectString("https://www.google.com/xyz/abc/123", result);
 }
