@@ -145,7 +145,7 @@ pub const Page = struct {
 
         const file_src = blk: {
             if (base) |_base| {
-                break :blk try URL.stitch(self.arena, specifier, _base);
+                break :blk try URL.stitch(self.arena, specifier, _base, .{});
             } else break :blk specifier;
         };
 
@@ -454,7 +454,7 @@ pub const Page = struct {
 
         // if a base path is given, we resolve src using base.
         if (base) |_base| {
-            res_src = try URL.stitch(arena, src, _base);
+            res_src = try URL.stitch(arena, src, _base, .{ .alloc = .if_needed });
         }
 
         var origin_url = &self.url;
