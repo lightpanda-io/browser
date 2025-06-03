@@ -261,10 +261,25 @@ pub const Window = struct {
     // TODO: getComputedStyle should return a read-only CSSStyleDeclaration.
     // We currently don't have a read-only one, so we return a new instance on
     // each call.
-    pub fn _getComputedStyle(_: *Window, element: *parser.Element, pseudo_element: ?[]const u8) !CSSStyleDeclaration {
+    pub fn _getComputedStyle(_: *const Window, element: *parser.Element, pseudo_element: ?[]const u8) !CSSStyleDeclaration {
         _ = element;
         _ = pseudo_element;
         return .empty;
+    }
+
+    const ScrollToOpts = union(enum) {
+        x: i32,
+        opts: Opts,
+
+        const Opts = struct {
+            top: i32,
+            left: i32,
+            behavior: []const u8,
+        };
+    };
+    pub fn _scrollTo(_: *const Window, opts: ScrollToOpts, y: ?u32) void {
+        _ = opts;
+        _ = y;
     }
 };
 
