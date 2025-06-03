@@ -222,4 +222,10 @@ test "Browser.DOM.EventTarget" {
         .{ "content.dispatchEvent(new Event('he'));", null },
         .{ "obj1.calls", "1" },
     }, .{});
+
+    // doesn't crash on null receiver
+    try runner.testCases(&.{
+        .{ "content.addEventListener('he2', null);", null },
+        .{ "content.dispatchEvent(new Event('he2'));", null },
+    }, .{});
 }
