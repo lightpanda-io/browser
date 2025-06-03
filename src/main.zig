@@ -41,6 +41,10 @@ pub fn main() !void {
     };
 
     run(alloc) catch |err| {
+        // If explicit filters were set, they won't be valid anymore because
+        // the args_arena is gone. We need to set it to something that's not
+        // invalid. (We should just move the args_arena up to main)
+        log.opts.filter_scopes = &.{};
         log.fatal(.app, "exit", .{ .err = err });
         std.posix.exit(1);
     };
