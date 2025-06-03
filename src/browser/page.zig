@@ -332,6 +332,15 @@ pub const Page = struct {
 
             const e = parser.nodeToElement(next.?);
             const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(e)));
+
+            if (tag == .undef) {
+                const tag_name = try parser.nodeLocalName(@ptrCast(e));
+                const custom_elements = &self.window.custom_elements;
+                if (custom_elements.map.contains(tag_name)) {
+                    log.info(.browser, "Registered WebComponent Found", .{ .element_name = tag_name });
+                }
+            }
+
             if (tag != .script) {
                 // ignore non-js script.
                 continue;

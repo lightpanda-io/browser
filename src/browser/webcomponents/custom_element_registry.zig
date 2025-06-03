@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const log = @import("../../log.zig");
 
 const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
@@ -27,8 +28,9 @@ pub const CustomElementRegistry = struct {
     map: std.StringHashMapUnmanaged(Env.Function) = .empty,
 
     pub fn _define(self: *CustomElementRegistry, name: []const u8, el: Env.Function, page: *Page) !void {
+        log.info(.browser, "Registering WebComponent", .{ .component = name });
         try self.map.put(page.arena, try page.arena.dupe(u8, name), el);
-        // const entry = try self.map.getOrPut(page.arena, name);
+        // const entry = try self.map.getOrPut(page.arena, try page.arena.dupe(u8, name));
         // if (entry.found_existing) return error.NotSupportedError;
         // entry.value_ptr.* = el;
     }

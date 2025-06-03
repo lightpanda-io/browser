@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 const std = @import("std");
+const log = @import("../../log.zig");
 
 const parser = @import("../netsurf.zig");
 const generate = @import("../../runtime/generate.zig");
@@ -1064,6 +1065,7 @@ pub const HTMLVideoElement = struct {
 pub fn toInterface(comptime T: type, e: *parser.Element) !T {
     const elem: *align(@alignOf(*parser.Element)) parser.Element = @alignCast(e);
     const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(elem)));
+
     return switch (tag) {
         .abbr, .acronym, .address, .article, .aside, .b, .basefont, .bdi, .bdo, .bgsound, .big, .center, .cite, .code, .dd, .details, .dfn, .dt, .em, .figcaption, .figure, .footer, .header, .hgroup, .i, .isindex, .keygen, .kbd, .main, .mark, .marquee, .menu, .menuitem, .nav, .nobr, .noframes, .noscript, .rp, .rt, .ruby, .s, .samp, .section, .small, .spacer, .strike, .strong, .sub, .summary, .sup, .tt, .u, .wbr, ._var => .{ .HTMLElement = @as(*parser.ElementHTML, @ptrCast(elem)) },
         .a => .{ .HTMLAnchorElement = @as(*parser.Anchor, @ptrCast(elem)) },
