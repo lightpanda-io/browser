@@ -2,7 +2,7 @@
   description = "headless browser designed for AI and automation";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
+    nixpkgs.url = "github:nixos/nixpkgs/release-25.05";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
@@ -19,27 +19,36 @@
           inherit system;
         };
 
+        # We need crtbeginS.o for building.
+        crtFiles = pkgs.runCommand "crt-files" { } ''
+          mkdir -p $out/lib
+          cp -r ${pkgs.gcc.cc}/lib/gcc $out/lib/gcc
+        '';
+
         # This build pipeline is very unhappy without an FHS-compliant env.
         fhs = pkgs.buildFHSEnv {
           name = "fhs-shell";
+          multiArch = true;
           targetPkgs =
             pkgs: with pkgs; [
+              # Build Tools
               zig
               zls
+              python3
               pkg-config
               cmake
               gperf
+
+              # GCC
+              gcc
+              gcc.cc.lib
+              crtFiles
+
+              # Libaries
               expat.dev
-              python3
               glib.dev
               glibc.dev
               zlib
-              ninja
-              gn
-              gcc-unwrapped
-              binutils
-              clang
-              clang-tools
             ];
         };
       in
