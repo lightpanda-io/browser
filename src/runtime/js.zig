@@ -1680,6 +1680,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     }
                 } else if (comptime std.mem.startsWith(u8, name, "get_")) {
                     generateProperty(Struct, name[4..], isolate, template_proto);
+                } else if (comptime std.mem.startsWith(u8, name, "static_")) {
+                    generateFunction(Struct, name[7..], isolate, template_proto);
                 }
             }
 
@@ -1762,6 +1764,23 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
                     const named_function = comptime NamedFunction.init(Struct, name);
                     caller.method(Struct, named_function, info) catch |err| {
+                        caller.handleError(Struct, named_function, err, info);
+                    };
+                }
+            }.callback);
+            template_proto.set(js_name, function_template, v8.PropertyAttribute.None);
+        }
+
+        fn generateFunction(comptime Struct: type, comptime name: []const u8, isolate: v8.Isolate, template_proto: v8.ObjectTemplate) void {
+            const js_name = v8.String.initUtf8(isolate, name).toName();
+            const function_template = v8.FunctionTemplate.initCallback(isolate, struct {
+                fn callback(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
+                    const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
+                    var caller = Caller(Self, State).init(info);
+                    defer caller.deinit();
+
+                    const named_function = comptime NamedFunction.init(Struct, "static_" ++ name);
+                    caller.function(Struct, named_function, info) catch |err| {
                         caller.handleError(Struct, named_function, err, info);
                     };
                 }
@@ -2154,6 +2173,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     return @ptrFromInt(@intFromPtr(toa.ptr) + @as(usize, @intCast(offset)));
                 }
                 if (prototype_index == type_index) {
+                    // When a type has itself as the prototype, then we've
+                    // reached the end of the chain.
                     return error.InvalidArgument;
                 }
                 type_index = prototype_index;
@@ -2337,6 +2358,14 @@ fn Caller(comptime E: type, comptime State: type) type {
             // inject 'self' as the first parameter
             @field(args, "0") = zig_instance;
 
+            const res = @call(.auto, func, args);
+            info.getReturnValue().set(try scope.zigValueToJs(res));
+        }
+
+        fn function(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, info: v8.FunctionCallbackInfo) !void {
+            const scope = self.scope;
+            const func = @field(Struct, named_function.name);
+            const args = try self.getArgs(Struct, named_function, 0, info);
             const res = @call(.auto, func, args);
             info.getReturnValue().set(try scope.zigValueToJs(res));
         }

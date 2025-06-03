@@ -30,46 +30,46 @@ pub const Console = struct {
     timers: std.StringHashMapUnmanaged(u32) = .{},
     counts: std.StringHashMapUnmanaged(u32) = .{},
 
-    pub fn _lp(_: *const Console, values: []JsObject, page: *Page) !void {
+    pub fn static_lp(values: []JsObject, page: *Page) !void {
         if (values.len == 0) {
             return;
         }
         log.fatal(.console, "lightpanda", .{ .args = try serializeValues(values, page) });
     }
 
-    pub fn _log(_: *const Console, values: []JsObject, page: *Page) !void {
+    pub fn static_log(values: []JsObject, page: *Page) !void {
         if (values.len == 0) {
             return;
         }
         log.info(.console, "info", .{ .args = try serializeValues(values, page) });
     }
 
-    pub fn _info(console: *const Console, values: []JsObject, page: *Page) !void {
-        return console._log(values, page);
+    pub fn static_info(values: []JsObject, page: *Page) !void {
+        return static_log(values, page);
     }
 
-    pub fn _debug(_: *const Console, values: []JsObject, page: *Page) !void {
+    pub fn static_debug(values: []JsObject, page: *Page) !void {
         if (values.len == 0) {
             return;
         }
         log.debug(.console, "debug", .{ .args = try serializeValues(values, page) });
     }
 
-    pub fn _warn(_: *const Console, values: []JsObject, page: *Page) !void {
+    pub fn static_warn(values: []JsObject, page: *Page) !void {
         if (values.len == 0) {
             return;
         }
         log.warn(.console, "warn", .{ .args = try serializeValues(values, page) });
     }
 
-    pub fn _error(_: *const Console, values: []JsObject, page: *Page) !void {
+    pub fn static_error(values: []JsObject, page: *Page) !void {
         if (values.len == 0) {
             return;
         }
         log.info(.console, "error", .{ .args = try serializeValues(values, page) });
     }
 
-    pub fn _clear(_: *const Console) void {}
+    pub fn static_clear() void {}
 
     pub fn _count(self: *Console, label_: ?[]const u8, page: *Page) !void {
         const label = label_ orelse "default";
@@ -130,7 +130,7 @@ pub const Console = struct {
         log.warn(.console, "timer stop", .{ .label = label, .elapsed = elapsed - kv.value });
     }
 
-    pub fn _assert(_: *Console, assertion: JsObject, values: []JsObject, page: *Page) !void {
+    pub fn static_assert(assertion: JsObject, values: []JsObject, page: *Page) !void {
         if (assertion.isTruthy()) {
             return;
         }
@@ -225,7 +225,18 @@ test "Browser.Console" {
         try testing.expectEqual("[assertion failed] values= 1: x 2: true", captured[1]);
         try testing.expectEqual("[assertion failed] values= 1: x", captured[2]);
     }
+
+    {
+        test_capture.reset();
+        try runner.testCases(&.{
+            .{ "[1].forEach(console.log)", null },
+        }, .{});
+
+        const captured = test_capture.captured.items;
+        try testing.expectEqual("[info] args= 1: 1 2: 0 3: [1]", captured[0]);
+    }
 }
+
 const TestCapture = struct {
     captured: std.ArrayListUnmanaged([]const u8) = .{},
 
