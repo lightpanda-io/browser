@@ -22,6 +22,7 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const Dump = @import("dump.zig");
+const State = @import("State.zig");
 const Env = @import("env.zig").Env;
 const Mime = @import("mime.zig").Mime;
 const DataURI = @import("datauri.zig").DataURI;
@@ -95,6 +96,8 @@ pub const Page = struct {
     // indicates intention to navigate to another page on the next loop execution.
     delayed_navigation: bool = false,
 
+    state_pool: *std.heap.MemoryPool(State),
+
     pub fn init(self: *Page, arena: Allocator, session: *Session) !void {
         const browser = session.browser;
         self.* = .{
@@ -106,6 +109,7 @@ pub const Page = struct {
             .call_arena = undefined,
             .loop = browser.app.loop,
             .renderer = Renderer.init(arena),
+            .state_pool = &browser.state_pool,
             .cookie_jar = &session.cookie_jar,
             .microtask_node = .{ .func = microtaskCallback },
             .window_clicked_event_node = .{ .func = windowClicked },
@@ -597,21 +601,21 @@ pub const Page = struct {
         _ = try self.loop.timeout(0, &navi.navigate_node);
     }
 
-    pub fn getOrCreateNodeWrapper(self: *Page, comptime T: type, node: *parser.Node) !*T {
-        if (self.getNodeWrapper(T, node)) |wrap| {
+    pub fn getOrCreateNodeState(self: *Page, node: *parser.Node) !*State {
+        if (self.getNodeState(node)) |wrap| {
             return wrap;
         }
 
-        const wrap = try self.arena.create(T);
-        wrap.* = T{};
+        const state = try self.state_pool.create();
+        state.* = .{};
 
-        parser.nodeSetEmbedderData(node, wrap);
-        return wrap;
+        parser.nodeSetEmbedderData(node, state);
+        return state;
     }
 
-    pub fn getNodeWrapper(_: *const Page, comptime T: type, node: *parser.Node) ?*T {
-        if (parser.nodeGetEmbedderData(node)) |wrap| {
-            return @alignCast(@ptrCast(wrap));
+    pub fn getNodeState(_: *const Page, node: *parser.Node) ?*State {
+        if (parser.nodeGetEmbedderData(node)) |state| {
+            return @alignCast(@ptrCast(state));
         }
         return null;
     }
@@ -743,8 +747,7 @@ const Script = struct {
             // attached to it. But this seems quite unlikely and it does help
             // optimize loading scripts, of which there can be hundreds for a
             // page.
-            const HTMLScriptElement = @import("html/elements.zig").HTMLScriptElement;
-            if (page.getNodeWrapper(HTMLScriptElement, @ptrCast(e))) |se| {
+            if (page.getNodeState(@ptrCast(e))) |se| {
                 if (se.onload) |function| {
                     onload = .{ .function = function };
                 }

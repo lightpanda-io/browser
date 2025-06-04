@@ -21,6 +21,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
+const State = @import("State.zig");
 const Env = @import("env.zig").Env;
 const App = @import("../app.zig").App;
 const Session = @import("session.zig").Session;
@@ -41,6 +42,7 @@ pub const Browser = struct {
     session_arena: ArenaAllocator,
     transfer_arena: ArenaAllocator,
     notification: *Notification,
+    state_pool: std.heap.MemoryPool(State),
 
     pub fn init(app: *App) !Browser {
         const allocator = app.allocator;
@@ -61,6 +63,7 @@ pub const Browser = struct {
             .page_arena = ArenaAllocator.init(allocator),
             .session_arena = ArenaAllocator.init(allocator),
             .transfer_arena = ArenaAllocator.init(allocator),
+            .state_pool = std.heap.MemoryPool(State).init(allocator),
         };
     }
 
@@ -71,6 +74,7 @@ pub const Browser = struct {
         self.session_arena.deinit();
         self.transfer_arena.deinit();
         self.notification.deinit();
+        self.state_pool.deinit();
     }
 
     pub fn newSession(self: *Browser) !*Session {

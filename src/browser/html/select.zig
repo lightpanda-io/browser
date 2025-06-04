@@ -26,20 +26,6 @@ pub const HTMLSelectElement = struct {
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
 
-    // By default, if no option is explicitly selected, the first option should
-    // be selected. However, libdom doesn't do this, and it sets the
-    // selectedIndex to -1, which is a valid value for "nothing selected".
-    // Therefore, when libdom says the selectedIndex == -1, we don't know if
-    // it means that nothing is selected, or if the first option is selected by
-    // default.
-    // There are cases where this won't work, but when selectedIndex is
-    // explicitly set, we set this boolean flag. Then, when we're getting then
-    // selectedIndex, if this flag is == false, which is to say that if
-    // selectedIndex hasn't been explicitly set AND if we have at least 1 option
-    // AND if it isn't a multi select, we can make the 1st item selected by
-    // default (by returning selectedIndex == 0).
-    explicit_index_set: bool = false,
-
     pub fn get_length(select: *parser.Select) !u32 {
         return parser.selectGetLength(select);
     }
@@ -70,11 +56,11 @@ pub const HTMLSelectElement = struct {
     }
 
     pub fn get_selectedIndex(select: *parser.Select, page: *Page) !i32 {
-        const self = try page.getOrCreateNodeWrapper(HTMLSelectElement, @ptrCast(select));
+        const state = try page.getOrCreateNodeState(@ptrCast(select));
         const selected_index = try parser.selectGetSelectedIndex(select);
 
         // See the explicit_index_set field documentation
-        if (!self.explicit_index_set) {
+        if (!state.explicit_index_set) {
             if (selected_index == -1) {
                 if (try parser.selectGetMultiple(select) == false) {
                     if (try get_length(select) > 0) {
@@ -89,8 +75,8 @@ pub const HTMLSelectElement = struct {
     // Libdom's dom_html_select_select_set_selected_index will crash if index
     // is out of range, and it doesn't properly unset options
     pub fn set_selectedIndex(select: *parser.Select, index: i32, page: *Page) !void {
-        var self = try page.getOrCreateNodeWrapper(HTMLSelectElement, @ptrCast(select));
-        self.explicit_index_set = true;
+        var state = try page.getOrCreateNodeState(@ptrCast(select));
+        state.explicit_index_set = true;
 
         const options = try parser.selectGetOptions(select);
         const len = try parser.optionCollectionGetLength(options);

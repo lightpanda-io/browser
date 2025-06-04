@@ -39,14 +39,6 @@ pub const HTMLDocument = struct {
     pub const prototype = *Document;
     pub const subtype = .node;
 
-    ready_state: ReadyState = .loading,
-
-    const ReadyState = enum {
-        loading,
-        interactive,
-        complete,
-    };
-
     // JS funcs
     // --------
 
@@ -191,9 +183,9 @@ pub const HTMLDocument = struct {
         return &page.window;
     }
 
-    pub fn get_readyState(node: *parser.DocumentHTML, page: *Page) ![]const u8 {
-        const self = try page.getOrCreateNodeWrapper(HTMLDocument, @ptrCast(node));
-        return @tagName(self.ready_state);
+    pub fn get_readyState(self: *parser.DocumentHTML, page: *Page) ![]const u8 {
+        const state = try page.getOrCreateNodeState(@ptrCast(self));
+        return @tagName(state.ready_state);
     }
 
     // noop legacy functions
@@ -270,9 +262,9 @@ pub const HTMLDocument = struct {
         return list.items;
     }
 
-    pub fn documentIsLoaded(html_doc: *parser.DocumentHTML, page: *Page) !void {
-        const self = try page.getOrCreateNodeWrapper(HTMLDocument, @ptrCast(html_doc));
-        self.ready_state = .interactive;
+    pub fn documentIsLoaded(self: *parser.DocumentHTML, page: *Page) !void {
+        const state = try page.getOrCreateNodeState(@ptrCast(self));
+        state.ready_state = .interactive;
 
         const evt = try parser.eventCreate();
         defer parser.eventDestroy(evt);
@@ -282,12 +274,12 @@ pub const HTMLDocument = struct {
             .source = "document",
         });
         try parser.eventInit(evt, "DOMContentLoaded", .{ .bubbles = true, .cancelable = true });
-        _ = try parser.eventTargetDispatchEvent(parser.toEventTarget(parser.DocumentHTML, html_doc), evt);
+        _ = try parser.eventTargetDispatchEvent(parser.toEventTarget(parser.DocumentHTML, self), evt);
     }
 
-    pub fn documentIsComplete(html_doc: *parser.DocumentHTML, page: *Page) !void {
-        const self = try page.getOrCreateNodeWrapper(HTMLDocument, @ptrCast(html_doc));
-        self.ready_state = .complete;
+    pub fn documentIsComplete(self: *parser.DocumentHTML, page: *Page) !void {
+        const state = try page.getOrCreateNodeState(@ptrCast(self));
+        state.ready_state = .complete;
     }
 };
 
