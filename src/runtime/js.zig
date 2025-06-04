@@ -911,7 +911,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         // coerced to.
                         var coerce_index: ?usize = null;
 
-                        // the first field that we find which the js_Value is
+                        // the first field that we find which the js_value is
                         // compatible with. A compatible field has higher precedence
                         // than a coercible, but still isn't a perfect match.
                         var compatible_index: ?usize = null;
