@@ -21,25 +21,22 @@ const std = @import("std");
 const StyleSheet = @import("stylesheet.zig").StyleSheet;
 
 const CSSRule = @import("css_rule.zig").CSSRule;
-const CSSImportRule = @import("css_rule_list.zig").CSSImportRule;
+const CSSImportRule = @import("css_rule.zig").CSSImportRule;
 
 pub const CSSStyleSheet = struct {
     pub const prototype = *StyleSheet;
 
     css_rules: std.ArrayListUnmanaged(CSSRule),
-    owner_rule: *CSSImportRule,
+    owner_rule: ?*CSSImportRule,
 
     pub fn constructor() CSSStyleSheet {
-        return .{};
+        return .{ .css_rules = .empty, .owner_rule = null };
     }
 
-    pub fn _insertRule(self: *CSSStyleSheet, rule: []const u8) u32 {
-        const next_index = self.css_rules.items.len + 1;
-        _ = next_index;
-        _ = rule;
-        return 0;
-
-        // parse rule string into CSSRule
-        // return next_index
-    }
+    // pub fn _insertRule(self: *CSSStyleSheet, rule: []const u8) u32 {
+    //     const next_index = self.css_rules.items.len + 1;
+    //     _ = next_index;
+    //     _ = rule;
+    //     return 0;
+    // }
 };

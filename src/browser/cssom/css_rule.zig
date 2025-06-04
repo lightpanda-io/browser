@@ -18,18 +18,19 @@
 
 const std = @import("std");
 
-const Session = @import("../session.zig").Session;
+const Page = @import("../page.zig").Page;
 
 const CSSStyleDeclaration = @import("css_style_declaration.zig").CSSStyleDeclaration;
 const CSSStyleSheet = @import("css_stylesheet.zig").CSSStyleSheet;
 
-const Interfaces = .{
+pub const Interfaces = .{
     CSSRule,
     CSSGroupingRule,
     CSSStyleRule,
     CSSImportRule,
 };
 
+// https://developer.mozilla.org/en-US/docs/Web/API/CSSRule
 pub const CSSRule = struct {
     css_text: []const u8,
     parent_rule: ?*CSSRule,
@@ -40,18 +41,18 @@ pub const CSSGroupingRule = struct {
     pub const prototype = *CSSRule;
     list: std.ArrayListUnmanaged(CSSRule),
 
-    pub fn _insertRule(self: *CSSGroupingRule, rule: []const u8, _index: ?usize, session: *Session) !usize {
-        if (_index > self.list.items.len) return error.IndexSizeError;
-
+    pub fn _insertRule(self: *CSSGroupingRule, rule: []const u8, _index: ?usize, page: *Page) !usize {
         const index = _index orelse 0;
-        const css_rule: CSSRule = .{ .css_text = rule };
-        try self.list.insert(session.arena, index, css_rule);
+        if (index > self.list.items.len) return error.IndexSizeError;
+
+        const css_rule: CSSRule = .{ .css_text = rule, .parent_rule = null, .parent_stylesheet = null };
+        try self.list.insert(page.arena, index, css_rule);
+        return self.list.items.len;
     }
 
     pub fn _deleteRule(self: *CSSGroupingRule, index: usize) !void {
         if (index > self.list.items.len) return error.IndexSizeError;
-
-        try self.list.orderedRemove(index);
+        _ = self.list.orderedRemove(index);
     }
 };
 

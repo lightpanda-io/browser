@@ -16,8 +16,13 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pub const CSSImportRule = struct {
-    pub fn constructor() CSSImportRule {
-        return .{};
-    }
+pub const Stylesheet = @import("stylesheet.zig").StyleSheet;
+pub const CSSStylesheet = @import("css_stylesheet.zig").CSSStyleSheet;
+pub const CSSStyleDeclaration = @import("css_style_declaration.zig").CSSStyleDeclaration;
+
+pub const Interfaces = .{
+    Stylesheet,
+    CSSStylesheet,
+    CSSStyleDeclaration,
+    @import("css_rule.zig").Interfaces,
 };

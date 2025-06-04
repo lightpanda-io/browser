@@ -20,14 +20,8 @@ const std = @import("std");
 
 const CSSParser = @import("./css_parser.zig").CSSParser;
 const CSSValueAnalyzer = @import("./css_value_analyzer.zig").CSSValueAnalyzer;
+const CSSRule = @import("css_rule.zig").CSSRule;
 const Page = @import("../page.zig").Page;
-
-pub const Interfaces = .{
-    CSSStyleDeclaration,
-    CSSRule,
-};
-
-const CSSRule = struct {};
 
 pub const CSSStyleDeclaration = struct {
     store: std.StringHashMapUnmanaged(Property),
