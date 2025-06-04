@@ -23,6 +23,7 @@ const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 const generate = @import("../../runtime/generate.zig");
 
+const Page = @import("../page.zig").Page;
 const DOMException = @import("../dom/exceptions.zig").DOMException;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const EventTargetUnion = @import("../dom/event_target.zig").Union;
@@ -76,16 +77,16 @@ pub const Event = struct {
         return try parser.eventType(self);
     }
 
-    pub fn get_target(self: *parser.Event) !?EventTargetUnion {
+    pub fn get_target(self: *parser.Event, page: *Page) !?EventTargetUnion {
         const et = try parser.eventTarget(self);
         if (et == null) return null;
-        return try EventTarget.toInterface(et.?);
+        return try EventTarget.toInterface(et.?, page);
     }
 
-    pub fn get_currentTarget(self: *parser.Event) !?EventTargetUnion {
+    pub fn get_currentTarget(self: *parser.Event, page: *Page) !?EventTargetUnion {
         const et = try parser.eventCurrentTarget(self);
         if (et == null) return null;
-        return try EventTarget.toInterface(et.?);
+        return try EventTarget.toInterface(et.?, page);
     }
 
     pub fn get_eventPhase(self: *parser.Event) !u8 {
