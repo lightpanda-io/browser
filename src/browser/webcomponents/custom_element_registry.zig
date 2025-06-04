@@ -34,4 +34,8 @@ pub const CustomElementRegistry = struct {
         // if (entry.found_existing) return error.NotSupportedError;
         // entry.value_ptr.* = el;
     }
+
+    pub fn _get(self: *CustomElementRegistry, name: []const u8) ?Env.Function {
+        return self.map.get(name);
+    }
 };
