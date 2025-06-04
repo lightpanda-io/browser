@@ -33,9 +33,15 @@ pub const EventTarget = struct {
     pub const Self = parser.EventTarget;
     pub const Exception = DOMException;
 
-    pub fn toInterface(et: *parser.EventTarget) !Union {
-        // NOTE: for now we state that all EventTarget are Nodes
-        // TODO: handle other types (eg. Window)
+    pub fn toInterface(et: *parser.EventTarget, page: *Page) !Union {
+        // Not all targets are *parser.Nodes. page.zig emits a "load" event
+        // where the target is a Window, which cannot be cast directly to a node.
+        // Ideally, we'd remove this duality. Failing that, we'll need to embed
+        // data into the *parser.EventTarget should we need this for other types.
+        // For now, for the Window, which is a singleton, we can do this:
+        if (@intFromPtr(et) == @intFromPtr(&page.window.base)) {
+            return .{ .Window = &page.window };
+        }
         return Nod.Node.toInterface(@as(*parser.Node, @ptrCast(et)));
     }
 

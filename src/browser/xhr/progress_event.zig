@@ -24,6 +24,7 @@ const DOMException = @import("../dom/exceptions.zig").DOMException;
 pub const ProgressEvent = struct {
     pub const prototype = *Event;
     pub const Exception = DOMException;
+    pub const union_make_copy = true;
 
     pub const EventInit = struct {
         lengthComputable: bool = false,

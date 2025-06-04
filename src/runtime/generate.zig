@@ -71,6 +71,8 @@ pub fn Union(comptime interfaces: anytype) type {
         var FT = @field(tuple, field.name);
         if (@hasDecl(FT, "Self")) {
             FT = *(@field(FT, "Self"));
+        } else if (!@hasDecl(FT, "union_make_copy")) {
+            FT = *FT;
         }
         union_fields[index] = .{
             .type = FT,
@@ -171,7 +173,7 @@ fn filterMap(comptime count: usize, interfaces: [count]type) struct { usize, [co
     return .{ unfiltered_count, map };
 }
 
-test "generate.Union" {
+test "generate: Union" {
     const Astruct = struct {
         pub const Self = Other;
         const Other = struct {};
@@ -188,15 +190,15 @@ test "generate.Union" {
     const value = Union(.{ Astruct, Bstruct, .{Cstruct} });
     const ti = @typeInfo(value).@"union";
     try std.testing.expectEqual(3, ti.fields.len);
-    try std.testing.expectEqualStrings("*runtime.generate.test.generate.Union.Astruct.Other", @typeName(ti.fields[0].type));
+    try std.testing.expectEqualStrings("*runtime.generate.test.generate: Union.Astruct.Other", @typeName(ti.fields[0].type));
     try std.testing.expectEqualStrings(ti.fields[0].name, "Astruct");
-    try std.testing.expectEqual(Bstruct, ti.fields[1].type);
+    try std.testing.expectEqual(*Bstruct, ti.fields[1].type);
     try std.testing.expectEqualStrings(ti.fields[1].name, "Bstruct");
-    try std.testing.expectEqual(Cstruct, ti.fields[2].type);
+    try std.testing.expectEqual(*Cstruct, ti.fields[2].type);
     try std.testing.expectEqualStrings(ti.fields[2].name, "Cstruct");
 }
 
-test "generate.Tuple" {
+test "generate: Tuple" {
     const Astruct = struct {};
 
     const Bstruct = struct {

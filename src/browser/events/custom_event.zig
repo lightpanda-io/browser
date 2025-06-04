@@ -23,6 +23,7 @@ const JsObject = @import("../env.zig").JsObject;
 // https://dom.spec.whatwg.org/#interface-customevent
 pub const CustomEvent = struct {
     pub const prototype = *Event;
+    pub const union_make_copy = true;
 
     proto: parser.Event,
     detail: ?JsObject,
