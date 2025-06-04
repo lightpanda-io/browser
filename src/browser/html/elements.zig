@@ -148,6 +148,27 @@ pub const HTMLElement = struct {
         });
         _ = try parser.elementDispatchEvent(@ptrCast(e), @ptrCast(event));
     }
+
+    const FocusOpts = struct {
+        preventScroll: bool,
+        focusVisible: bool,
+    };
+    pub fn _focus(e: *parser.ElementHTML, _: ?FocusOpts, page: *Page) !void {
+        if (!try page.isNodeAttached(@ptrCast(e))) {
+            return;
+        }
+
+        const root_node = try parser.nodeGetRootNode(@ptrCast(e));
+
+        const Document = @import("../dom/document.zig").Document;
+        const document = try page.getOrCreateNodeWrapper(Document, @ptrCast(root_node));
+
+        // TODO: some elements can't be focused, like if they're disabled
+        // but there doesn't seem to be a generic way to check this. For example
+        // we could look for the "disabled" attribute, but that's only meaningful
+        // on certain types, and libdom's vtable doesn't seem to expose this.
+        document.active_element = @ptrCast(e);
+    }
 };
 
 // Deprecated HTMLElements in Chrome (2023/03/15)
@@ -1180,5 +1201,12 @@ test "Browser.HTML.Element" {
         .{ "let a = document.createElement('a');", null },
         .{ "a.href = 'about'", null },
         .{ "a.href", "https://lightpanda.io/opensource-browser/about" },
+    }, .{});
+
+    // detached node cannot be focused
+    try runner.testCases(&.{
+        .{ "const focused = document.activeElement", null },
+        .{ "document.createElement('a').focus()", null },
+        .{ "document.activeElement === focused", "true" },
     }, .{});
 }

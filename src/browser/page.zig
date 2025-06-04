@@ -643,6 +643,11 @@ pub const Page = struct {
         try self.navigateFromWebAPI(action, opts);
     }
 
+    pub fn isNodeAttached(self: *const Page, node: *parser.Node) !bool {
+        const root = parser.documentToNode(parser.documentHTMLToDocument(self.window.document));
+        return root == try parser.nodeGetRootNode(node);
+    }
+
     fn elementSubmitForm(self: *Page, element: *parser.Element) !void {
         const form = (try self.formForElement(element)) orelse return;
         return self.submitForm(@ptrCast(form), @ptrCast(element));

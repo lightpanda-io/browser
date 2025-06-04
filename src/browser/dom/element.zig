@@ -368,8 +368,7 @@ pub const Element = struct {
     // Returns a 0 DOMRect object if the element is eventually detached from the main window
     pub fn _getBoundingClientRect(self: *parser.Element, page: *Page) !DOMRect {
         // Since we are lazy rendering we need to do this check. We could store the renderer in a viewport such that it could cache these, but it would require tracking changes.
-        const root = try parser.nodeGetRootNode(parser.elementToNode(self));
-        if (root != parser.documentToNode(parser.documentHTMLToDocument(page.window.document))) {
+        if (!try page.isNodeAttached(parser.elementToNode(self))) {
             return DOMRect{ .x = 0, .y = 0, .width = 0, .height = 0 };
         }
         return page.renderer.getRect(self);
@@ -379,8 +378,7 @@ pub const Element = struct {
     // We do not render so it only always return the element's bounding rect.
     // Returns an empty array if the element is eventually detached from the main window
     pub fn _getClientRects(self: *parser.Element, page: *Page) ![]DOMRect {
-        const root = try parser.nodeGetRootNode(parser.elementToNode(self));
-        if (root != parser.documentToNode(parser.documentHTMLToDocument(page.window.document))) {
+        if (!try page.isNodeAttached(parser.elementToNode(self))) {
             return &.{};
         }
         const heap_ptr = try page.call_arena.create(DOMRect);
