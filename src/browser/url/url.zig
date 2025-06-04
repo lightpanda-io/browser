@@ -111,10 +111,12 @@ pub const URL = struct {
     }
 
     // get_href returns the URL by writing all its components.
-    // The query is replaced by a dump of search params.
-    //
     pub fn get_href(self: *URL, page: *Page) ![]const u8 {
-        return try self.toString(page.arena);
+        return self.toString(page.arena);
+    }
+
+    pub fn _toString(self: *URL, page: *Page) ![]const u8 {
+        return self.toString(page.arena);
     }
 
     // format the url with all its components.
@@ -307,7 +309,7 @@ pub const URLSearchParams = struct {
         return self._entries();
     }
 
-    fn _toString(self: *const URLSearchParams, page: *Page) ![]const u8 {
+    pub fn _toString(self: *const URLSearchParams, page: *Page) ![]const u8 {
         var arr: std.ArrayListUnmanaged(u8) = .empty;
         try self.write(arr.writer(page.call_arena));
         return arr.items;

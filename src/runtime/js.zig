@@ -1806,14 +1806,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
         }
 
         fn generateProperty(comptime Struct: type, comptime name: []const u8, isolate: v8.Isolate, template_proto: v8.ObjectTemplate) void {
-            const getter = @field(Struct, "get_" ++ name);
-            const param_count = @typeInfo(@TypeOf(getter)).@"fn".params.len;
-
             var js_name: v8.Name = undefined;
             if (comptime std.mem.eql(u8, name, "symbol_toStringTag")) {
-                if (param_count != 0) {
-                    @compileError(@typeName(Struct) ++ ".get_symbol_toStringTag() cannot take any parameters");
-                }
                 js_name = v8.Symbol.getToStringTag(isolate).toName();
             } else {
                 js_name = v8.String.initUtf8(isolate, name).toName();
