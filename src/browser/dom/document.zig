@@ -42,7 +42,8 @@ pub const Document = struct {
     pub const prototype = *Node;
     pub const subtype = .node;
 
-    active_element: ?*parser.Element = null,
+    // DO NOT ADD STATE HERE
+    // ADD IT TO html/document
 
     pub fn constructor(page: *const Page) !*parser.DocumentHTML {
         const doc = try parser.documentCreateDocument(
@@ -246,8 +247,9 @@ pub const Document = struct {
     }
 
     pub fn get_activeElement(doc: *parser.Document, page: *Page) !?ElementUnion {
-        const self = try page.getOrCreateNodeWrapper(Document, @ptrCast(doc));
-        if (self.active_element) |ae| {
+        const HTMLDocument = @import("../html/document.zig").HTMLDocument;
+        const html_doc = try page.getOrCreateNodeWrapper(HTMLDocument, @ptrCast(doc));
+        if (html_doc.active_element) |ae| {
             return try Element.toInterface(ae);
         }
 

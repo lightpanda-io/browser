@@ -40,6 +40,7 @@ pub const HTMLDocument = struct {
     pub const subtype = .node;
 
     ready_state: ReadyState = .loading,
+    active_element: ?*parser.Element = null,
 
     const ReadyState = enum {
         loading,

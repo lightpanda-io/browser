@@ -161,14 +161,14 @@ pub const HTMLElement = struct {
 
         const root_node = try parser.nodeGetRootNode(@ptrCast(e));
 
-        const Document = @import("../dom/document.zig").Document;
-        const document = try page.getOrCreateNodeWrapper(Document, @ptrCast(root_node));
+        const HTMLDocument = @import("../html/document.zig").HTMLDocument;
+        const html_doc = try page.getOrCreateNodeWrapper(HTMLDocument, @ptrCast(root_node));
 
         // TODO: some elements can't be focused, like if they're disabled
         // but there doesn't seem to be a generic way to check this. For example
         // we could look for the "disabled" attribute, but that's only meaningful
         // on certain types, and libdom's vtable doesn't seem to expose this.
-        document.active_element = @ptrCast(e);
+        html_doc.active_element = @ptrCast(e);
     }
 };
 
