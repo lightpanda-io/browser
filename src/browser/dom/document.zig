@@ -248,7 +248,8 @@ pub const Document = struct {
 
     pub fn get_activeElement(doc: *parser.Document, page: *Page) !?ElementUnion {
         const HTMLDocument = @import("../html/document.zig").HTMLDocument;
-        const html_doc = try page.getOrCreateNodeWrapper(HTMLDocument, @ptrCast(doc));
+        const doc_elem = try parser.documentGetDocumentElement(doc);
+        const html_doc = try page.getOrCreateNodeWrapper(HTMLDocument, @ptrCast(doc_elem));
         if (html_doc.active_element) |ae| {
             return try Element.toInterface(ae);
         }
