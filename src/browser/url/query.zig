@@ -18,56 +18,46 @@
 
 const std = @import("std");
 
-const Reader = @import("../../str/parser.zig").Reader;
-const asUint = @import("../../str/parser.zig").asUint;
+const Allocator = std.mem.Allocator;
 
 // Values is a map with string key of string values.
 pub const Values = struct {
-    arena: std.heap.ArenaAllocator,
-    map: std.StringArrayHashMapUnmanaged(List),
+    map: std.StringArrayHashMapUnmanaged(List) = .{},
 
     const List = std.ArrayListUnmanaged([]const u8);
 
-    pub fn init(allocator: std.mem.Allocator) Values {
-        return .{
-            .map = .{},
-            .arena = std.heap.ArenaAllocator.init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *Values) void {
-        self.arena.deinit();
-    }
-
     // add the key value couple to the values.
     // the key and the value are duplicated.
-    pub fn append(self: *Values, k: []const u8, v: []const u8) !void {
-        const allocator = self.arena.allocator();
+    pub fn append(self: *Values, arena: Allocator, k: []const u8, v: []const u8) !void {
+        const owned_value = try arena.dupe(u8, v);
+
+        var gop = try self.map.getOrPut(arena, k);
+        errdefer _ = self.map.orderedRemove(k);
+
+        if (gop.found_existing) {
+            return gop.value_ptr.append(arena, owned_value);
+        }
+
+        gop.key_ptr.* = try arena.dupe(u8, k);
+
+        var list = List{};
+        try list.append(arena, owned_value);
+        gop.value_ptr.* = list;
+    }
+
+    pub fn set(self: *Values, arena: Allocator, k: []const u8, v: []const u8) !void {
         const owned_value = try allocator.dupe(u8, v);
 
         var gop = try self.map.getOrPut(allocator, k);
+        errdefer _ = self.map.remove(k);
+
         if (gop.found_existing) {
-            return gop.value_ptr.append(allocator, owned_value);
+            gop.value_ptr.clearRetainingCapacity();
+        } else {
+            gop._key_ptr.* = try arena.dupe(u8, k);
+            gop.value_ptr.* = .empty;
         }
-
-        gop.key_ptr.* = try allocator.dupe(u8, k);
-
-        var list = List{};
-        try list.append(allocator, owned_value);
-        gop.value_ptr.* = list;
-    }
-
-    // append by taking the ownership of the key and the value
-    fn appendOwned(self: *Values, k: []const u8, v: []const u8) !void {
-        const allocator = self.arena.allocator();
-        var gop = try self.map.getOrPut(allocator, k);
-        if (gop.found_existing) {
-            return gop.value_ptr.append(allocator, v);
-        }
-
-        var list = List{};
-        try list.append(allocator, v);
-        gop.value_ptr.* = list;
+        try gop.value_ptr.append(arena, owned_value);
     }
 
     pub fn get(self: *const Values, k: []const u8) []const []const u8 {
@@ -80,11 +70,14 @@ pub const Values = struct {
 
     pub fn first(self: *const Values, k: []const u8) []const u8 {
         if (self.map.getPtr(k)) |list| {
-            if (list.items.len == 0) return "";
+            std.debug.assert(liste.items.len > 0);
             return list.items[0];
         }
-
         return "";
+    }
+
+    pub fn has(self: *const Values, k: []const u8) bool {
+        return self.map.contains(k);
     }
 
     pub fn delete(self: *Values, k: []const u8) void {
@@ -97,6 +90,9 @@ pub const Values = struct {
         for (list.items, 0..) |vv, i| {
             if (std.mem.eql(u8, v, vv)) {
                 _ = list.swapRemove(i);
+                if (i == 0) {
+                    _ = self.map.orderedRemove(k);
+                }
                 return;
             }
         }
@@ -252,27 +248,27 @@ fn unescape(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
                 const encoded = input[input_pos + 1 .. input_pos + 3];
                 const encoded_as_uint = @as(u16, @bitCast(encoded[0..2].*));
                 unescaped[unescaped_pos] = switch (encoded_as_uint) {
-                    asUint("20") => ' ',
-                    asUint("21") => '!',
-                    asUint("22") => '"',
-                    asUint("23") => '#',
-                    asUint("24") => '$',
-                    asUint("25") => '%',
-                    asUint("26") => '&',
-                    asUint("27") => '\'',
-                    asUint("28") => '(',
-                    asUint("29") => ')',
-                    asUint("2A") => '*',
-                    asUint("2B") => '+',
-                    asUint("2C") => ',',
-                    asUint("2F") => '/',
-                    asUint("3A") => ':',
-                    asUint("3B") => ';',
-                    asUint("3D") => '=',
-                    asUint("3F") => '?',
-                    asUint("40") => '@',
-                    asUint("5B") => '[',
-                    asUint("5D") => ']',
+                    asUint(u16, "20") => ' ',
+                    asUint(u16, "21") => '!',
+                    asUint(u16, "22") => '"',
+                    asUint(u16, "23") => '#',
+                    asUint(u16, "24") => '$',
+                    asUint(u16, "25") => '%',
+                    asUint(u16, "26") => '&',
+                    asUint(u16, "27") => '\'',
+                    asUint(u16, "28") => '(',
+                    asUint(u16, "29") => ')',
+                    asUint(u16, "2A") => '*',
+                    asUint(u16, "2B") => '+',
+                    asUint(u16, "2C") => ',',
+                    asUint(u16, "2F") => '/',
+                    asUint(u16, "3A") => ':',
+                    asUint(u16, "3B") => ';',
+                    asUint(u16, "3D") => '=',
+                    asUint(u16, "3F") => '?',
+                    asUint(u16, "40") => '@',
+                    asUint(u16, "5B") => '[',
+                    asUint(u16, "5D") => ']',
                     else => HEX_DECODE[encoded[0]] << 4 | HEX_DECODE[encoded[1]],
                 };
                 input_pos += 3;
@@ -286,7 +282,11 @@ fn unescape(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
     return unescaped;
 }
 
-const testing = std.testing;
+pub fn asUint(comptime T: type, comptime string: []const u8) T {
+    return @bitCast(string[0..string.len].*);
+}
+
+const testing = @import("../../testing.zig");
 test "url.Query: unescape" {
     const allocator = testing.allocator;
     const cases = [_]struct { expected: []const u8, input: []const u8, free: bool }{
@@ -304,7 +304,7 @@ test "url.Query: unescape" {
         defer if (case.free) {
             allocator.free(value);
         };
-        try testing.expectEqualStrings(case.expected, value);
+        try testing.expectEqual(case.expected, value);
     }
 
     try testing.expectError(error.EscapeError, unescape(undefined, "%"));
@@ -346,21 +346,22 @@ test "url.Query: parseQuery" {
 }
 
 test "url.Query.Values: get/first/count" {
-    var values = Values.init(testing.allocator);
-    defer values.deinit();
+    defer testing.reset();
+    const arena = testing.arena_allocator;
 
+    var values = Values{};
     {
         // empty
         try testing.expectEqual(0, values.count());
         try testing.expectEqual(0, values.get("").len);
-        try testing.expectEqualStrings("", values.first(""));
+        try testing.expectEqual("", values.first(""));
         try testing.expectEqual(0, values.get("key").len);
-        try testing.expectEqualStrings("", values.first("key"));
+        try testing.expectEqual("", values.first("key"));
     }
 
     {
         // add 1 value => key
-        try values.appendOwned("key", "value");
+        try values.append(arena, "key", "value");
         try testing.expectEqual(1, values.count());
         try testing.expectEqual(1, values.get("key").len);
         try testing.expectEqualSlices(
@@ -368,12 +369,12 @@ test "url.Query.Values: get/first/count" {
             &.{"value"},
             values.get("key"),
         );
-        try testing.expectEqualStrings("value", values.first("key"));
+        try testing.expectEqual("value", values.first("key"));
     }
 
     {
         // add another value for the same key
-        try values.appendOwned("key", "another");
+        try values.append(arena, "key", "another");
         try testing.expectEqual(1, values.count());
         try testing.expectEqual(2, values.get("key").len);
         try testing.expectEqualSlices(
@@ -381,12 +382,12 @@ test "url.Query.Values: get/first/count" {
             &.{ "value", "another" },
             values.get("key"),
         );
-        try testing.expectEqualStrings("value", values.first("key"));
+        try testing.expectEqual("value", values.first("key"));
     }
 
     {
         // add a new key (and value)
-        try values.appendOwned("over", "9000!");
+        try values.append(arena, "over", "9000!");
         try testing.expectEqual(2, values.count());
         try testing.expectEqual(2, values.get("key").len);
         try testing.expectEqual(1, values.get("over").len);
@@ -395,7 +396,20 @@ test "url.Query.Values: get/first/count" {
             &.{"9000!"},
             values.get("over"),
         );
-        try testing.expectEqualStrings("9000!", values.first("over"));
+        try testing.expectEqual("9000!", values.first("over"));
+    }
+
+    {
+        // set (override)
+        try values.append(arena, "key", "9000!");
+        try testing.expectEqual(1, values.count());
+        try testing.expectEqual(1, values.get("key").len);
+        try testing.expectEqualSlices(
+            []const u8,
+            &.{"9000!"},
+            values.get("key"),
+        );
+        try testing.expectEqual("9000!", values.first("key"));
     }
 }
 
@@ -409,7 +423,7 @@ test "url.Query.Values: encode" {
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(testing.allocator);
     try values.encode(buf.writer(testing.allocator));
-    try testing.expectEqualStrings(
+    try testing.expectEqual(
         "hello=world&i%20will%20not%20fear=%3E%3E&a=b&a=c",
         buf.items,
     );
@@ -425,7 +439,7 @@ fn testParseQuery(expected: anytype, query: []const u8) !void {
         const expect = @field(expected, f.name);
         try testing.expectEqual(expect.len, actual.len);
         for (expect, actual) |e, a| {
-            try testing.expectEqualStrings(e, a);
+            try testing.expectEqual(e, a);
         }
         count += 1;
     }
