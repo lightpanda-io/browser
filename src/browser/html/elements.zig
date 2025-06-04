@@ -245,8 +245,7 @@ pub const HTMLAnchorElement = struct {
     }
 
     inline fn url(self: *parser.Anchor, page: *Page) !URL {
-        const href = try parser.anchorGetHref(self);
-        return URL.constructor(href, null, page); // TODO inject base url
+        return URL.constructor(.{ .element = @ptrCast(self) }, null, page); // TODO inject base url
     }
 
     // TODO return a disposable string
@@ -391,23 +390,16 @@ pub const HTMLAnchorElement = struct {
         try parser.anchorSetHref(self, href);
     }
 
-    // TODO return a disposable string
     pub fn get_search(self: *parser.Anchor, page: *Page) ![]const u8 {
         var u = try url(self, page);
         return try u.get_search(page);
     }
 
     pub fn set_search(self: *parser.Anchor, v: ?[]const u8, page: *Page) !void {
-        const arena = page.arena;
         var u = try url(self, page);
+        try u.set_search(v, page);
 
-        if (v) |vv| {
-            u.uri.query = .{ .raw = vv };
-        } else {
-            u.uri.query = null;
-        }
-        const href = try u.toString(arena);
-
+        const href = try u.toString(page.call_arena);
         try parser.anchorSetHref(self, href);
     }
 

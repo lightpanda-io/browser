@@ -19,8 +19,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const parser = @import("../netsurf.zig");
 const Page = @import("../page.zig").Page;
 const FormData = @import("../xhr/form_data.zig").FormData;
+const HTMLElement = @import("../html/elements.zig").HTMLElement;
 
 const kv = @import("../key_value.zig");
 const iterator = @import("../iterator/iterator.zig");
@@ -51,20 +53,37 @@ pub const URL = struct {
     uri: std.Uri,
     search_params: URLSearchParams,
 
-    pub fn constructor(
-        url: []const u8,
-        base: ?[]const u8,
-        page: *Page,
-    ) !URL {
+    const URLArg = union(enum) {
+        url: *URL,
+        element: *parser.ElementHTML,
+        string: []const u8,
+
+        fn toString(self: URLArg, arena: Allocator) !?[]const u8 {
+            switch (self) {
+                .string => |s| return s,
+                .url => |url| return try url.toString(arena),
+                .element => |e| return try parser.elementGetAttribute(@ptrCast(e), "href"),
+            }
+        }
+    };
+
+    pub fn constructor(url: URLArg, base: ?URLArg, page: *Page) !URL {
         const arena = page.arena;
-        var raw: []const u8 = undefined;
+        const url_str = try url.toString(arena) orelse return error.InvalidArgument;
+
+        var raw: ?[]const u8 = null;
         if (base) |b| {
-            raw = try @import("../../url.zig").URL.stitch(arena, url, b, .{});
-        } else {
-            raw = try arena.dupe(u8, url);
+            if (try b.toString(arena)) |bb| {
+                raw = try @import("../../url.zig").URL.stitch(arena, url_str, bb, .{});
+            }
         }
 
-        const uri = std.Uri.parse(raw) catch return error.TypeError;
+        if (raw == null) {
+            // if it was a URL, then it's already be owned by the arena
+            raw = if (url == .url) url_str else try arena.dupe(u8, url_str);
+        }
+
+        const uri = std.Uri.parse(raw.?) catch return error.TypeError;
         return init(arena, uri);
     }
 
@@ -92,32 +111,36 @@ pub const URL = struct {
     }
 
     // get_href returns the URL by writing all its components.
-    // The query is replaced by a dump of search params.
-    //
     pub fn get_href(self: *URL, page: *Page) ![]const u8 {
-        const arena = page.arena;
-        // retrieve the query search from search_params.
-        const cur = self.uri.query;
-        defer self.uri.query = cur;
-        var q = std.ArrayList(u8).init(arena);
-        try self.search_params.encode(q.writer());
-        self.uri.query = .{ .percent_encoded = q.items };
+        return self.toString(page.arena);
+    }
 
-        return try self.toString(arena);
+    pub fn _toString(self: *URL, page: *Page) ![]const u8 {
+        return self.toString(page.arena);
     }
 
     // format the url with all its components.
-    pub fn toString(self: *URL, arena: Allocator) ![]const u8 {
+    pub fn toString(self: *const URL, arena: Allocator) ![]const u8 {
         var buf: std.ArrayListUnmanaged(u8) = .empty;
-
         try self.uri.writeToStream(.{
             .scheme = true,
             .authentication = true,
             .authority = true,
             .path = uriComponentNullStr(self.uri.path).len > 0,
-            .query = uriComponentNullStr(self.uri.query).len > 0,
-            .fragment = uriComponentNullStr(self.uri.fragment).len > 0,
         }, buf.writer(arena));
+
+        if (self.search_params.get_size() > 0) {
+            try buf.append(arena, '?');
+            try self.search_params.write(buf.writer(arena));
+        }
+
+        {
+            const fragment = uriComponentNullStr(self.uri.fragment);
+            if (fragment.len > 0) {
+                try buf.append(arena, '#');
+                try buf.appendSlice(arena, fragment);
+            }
+        }
 
         return buf.items;
     }
@@ -168,13 +191,22 @@ pub const URL = struct {
 
     pub fn get_search(self: *URL, page: *Page) ![]const u8 {
         const arena = page.arena;
-        if (self.search_params.get_size() == 0) return try arena.dupe(u8, "");
+
+        if (self.search_params.get_size() == 0) {
+            return "";
+        }
 
         var buf: std.ArrayListUnmanaged(u8) = .{};
-
         try buf.append(arena, '?');
         try self.search_params.encode(buf.writer(arena));
         return buf.items;
+    }
+
+    pub fn set_search(self: *URL, qs_: ?[]const u8, page: *Page) !void {
+        self.search_params = .{};
+        if (qs_) |qs| {
+            self.search_params = try URLSearchParams.init(page.arena, qs);
+        }
     }
 
     pub fn get_hash(self: *URL, page: *Page) ![]const u8 {
@@ -189,7 +221,7 @@ pub const URL = struct {
     }
 
     pub fn _toJSON(self: *URL, page: *Page) ![]const u8 {
-        return try self.get_href(page);
+        return self.get_href(page);
     }
 };
 
@@ -210,7 +242,7 @@ fn uriComponentStr(c: std.Uri.Component) []const u8 {
 
 // https://url.spec.whatwg.org/#interface-urlsearchparams
 pub const URLSearchParams = struct {
-    entries: kv.List,
+    entries: kv.List = .{},
 
     const URLSearchParamsOpts = union(enum) {
         qs: []const u8,
@@ -277,10 +309,14 @@ pub const URLSearchParams = struct {
         return self._entries();
     }
 
-    fn _toString(self: *const URLSearchParams, page: *Page) ![]const u8 {
+    pub fn _toString(self: *const URLSearchParams, page: *Page) ![]const u8 {
         var arr: std.ArrayListUnmanaged(u8) = .empty;
-        try kv.urlEncode(self.entries, .query, arr.writer(page.call_arena));
+        try self.write(arr.writer(page.call_arena));
         return arr.items;
+    }
+
+    fn write(self: *const URLSearchParams, writer: anytype) !void {
+        return kv.urlEncode(self.entries, .query, writer);
     }
 
     // TODO
@@ -449,6 +485,27 @@ test "Browser.URL" {
         .{ "url.search", "?query" },
         .{ "url.hash", "#fragment" },
         .{ "url.searchParams.get('query')", "" },
+
+        .{ "url.search = 'hello=world'", null },
+        .{ "url.searchParams.size", "1" },
+        .{ "url.searchParams.get('hello')", "world" },
+
+        .{ "url.search = '?over=9000'", null },
+        .{ "url.searchParams.size", "1" },
+        .{ "url.searchParams.get('over')", "9000" },
+
+        .{ "url.search = ''", null },
+        .{ "url.searchParams.size", "0" },
+
+        .{ " const url2 = new URL(url);", null },
+        .{ "url2.href", "https://foo.bar/path#fragment" },
+
+        .{ " try { new URL(document.createElement('a')); } catch (e) { e }", "TypeError: invalid argument" },
+
+        .{ " let a = document.createElement('a');", null },
+        .{ " a.href = 'https://www.lightpanda.io/over?9000=!!';", null },
+        .{ " const url3 = new URL(a);", null },
+        .{ "url3.href", "https://www.lightpanda.io/over?9000=%21%21" },
     }, .{});
 
     try runner.testCases(&.{
