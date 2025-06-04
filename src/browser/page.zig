@@ -671,6 +671,13 @@ pub const Page = struct {
         const form = (try Element._closest(element, "form", self)) orelse return null;
         return @ptrCast(form);
     }
+
+    pub fn stackTrace(self: *Page) !?[]const u8 {
+        if (comptime builtin.mode == .Debug) {
+            return self.scope.stackTrace();
+        }
+        return null;
+    }
 };
 
 const DelayedNavigation = struct {
