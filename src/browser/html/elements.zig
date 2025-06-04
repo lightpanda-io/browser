@@ -26,6 +26,7 @@ const urlStitch = @import("../../url.zig").URL.stitch;
 const URL = @import("../url/url.zig").URL;
 const Node = @import("../dom/node.zig").Node;
 const Element = @import("../dom/element.zig").Element;
+const State = @import("../State.zig");
 
 const CSSStyleDeclaration = @import("../cssom/css_style_declaration.zig").CSSStyleDeclaration;
 
@@ -626,10 +627,72 @@ pub const HTMLImageElement = struct {
     };
 };
 
+pub fn createElement(doc: *parser.Document, params: *parser.dom_html_element_create_params, elem: **parser.HtmlElement) !void {
+    // Required to be set on all documents. How during dom parsing?
+    const wrap = parser.nodeGetEmbedderData(@ptrCast(doc)).?;
+    const state = @as(State, @alignCast(@ptrCast(wrap)));
+    const page = state.page;
+
+    switch (params.type) {
+        .DOM_HTML_ELEMENT_TYPE_INPUT => {
+            elem.* = try HTMLInputElement.dom_create(params, page);
+        },
+    }
+}
+
 pub const HTMLInputElement = struct {
     pub const Self = parser.Input;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
+
+    // VTables can be generated from the dom_ funcs
+    pub const vtable: parser.dom_html_element_vtable = parser._dom_html_element_vtable;
+    pub const protected_vtable: parser.dom_element_protected_vtable = .{
+        .dom_node_copy = dom_node_copy,
+        // .dom_node_destroy = dom_node_destroy, // Not needed in zig
+        .dom_initialise = dom_initialise,
+    };
+
+    base: parser.ElementHTML,
+
+    // Should instead have 2 vtable fields to generate the creation function
+    pub fn dom_create(params: *parser.dom_html_element_create_params, page: *Page) !*parser.HtmlElement {
+        var self = try page.arena.create(HTMLInputElement); // Put in pool?
+        self.base.base.base.vtable = &HTMLInputElement.vtable;
+        self.base.base.vtable = &HTMLInputElement.protected_vtable;
+        // set vtable and protected vtable
+
+        self.initialise(params);
+        return self.base;
+    }
+    // Initialise is separated from create such that the leaf type sets the vtable, then calls all the way up the protochain to init
+    // Currently we do only leaf types tho
+    pub fn dom_initialise(self: *HTMLInputElement, params: *parser.dom_html_element_create_params) !void {
+        return parser._dom_html_element_initialise(params, &self.base);
+    }
+
+    // This should always be the same and we should not have cleanup for new zig implementation, hopefully
+    // pub fn dom_node_destroy(self: *parser.Node) !void {
+    //     parser._dom_html_element_finalise(@as(parser.HtmlElement, @ptrCast(&self.base)));
+    // }
+
+    pub fn dom_node_copy(old: *parser.Node, page: Page) !*parser.Node {
+        const self = @as(*HTMLInputElement, @fieldParentPtr("base", old));
+        const copy = try HTMLInputElement.create(&self.base.create_params, page);
+        return @ptrCast(copy);
+    }
+
+    // pub fn dom_element_parse_attribute(self: *parser.Element, name: []const u8, value: []const u8, page: *Page) ![]const u8 {
+    //     _ = page;
+    //     _ = name;
+    //     _ = self;
+    //     // Probably should not use this and instead override the getAttribute setAttribute Element methods directly, perhaps other related functions.
+
+    //     // handle defaultValue likes
+    //     // Call setter or store in general attribute store
+    //     // increment domstring ref?
+    //     return value;
+    // }
 
     pub fn get_defaultValue(self: *parser.Input) ![]const u8 {
         return try parser.inputGetDefaultValue(self);
