@@ -28,6 +28,7 @@ const NodeUnion = @import("node.zig").Union;
 const collection = @import("html_collection.zig");
 const css = @import("css.zig");
 
+const State = @import("../state/Document.zig");
 const Element = @import("element.zig").Element;
 const ElementUnion = @import("element.zig").Union;
 const TreeWalker = @import("tree_walker.zig").TreeWalker;
@@ -41,8 +42,6 @@ pub const Document = struct {
     pub const Self = parser.Document;
     pub const prototype = *Node;
     pub const subtype = .node;
-
-    active_element: ?*parser.Element = null,
 
     pub fn constructor(page: *const Page) !*parser.DocumentHTML {
         const doc = try parser.documentCreateDocument(
@@ -245,9 +244,9 @@ pub const Document = struct {
         return try TreeWalker.init(root, what_to_show, filter);
     }
 
-    pub fn get_activeElement(doc: *parser.Document, page: *Page) !?ElementUnion {
-        const self = try page.getOrCreateNodeWrapper(Document, @ptrCast(doc));
-        if (self.active_element) |ae| {
+    pub fn get_activeElement(self: *parser.Document, page: *Page) !?ElementUnion {
+        const state = try page.getOrCreateNodeWrapper(State, @ptrCast(self));
+        if (state.active_element) |ae| {
             return try Element.toInterface(ae);
         }
 
@@ -255,7 +254,16 @@ pub const Document = struct {
             return try Element.toInterface(@ptrCast(body));
         }
 
-        return get_documentElement(doc);
+        return get_documentElement(self);
+    }
+
+    // TODO: some elements can't be focused, like if they're disabled
+    // but there doesn't seem to be a generic way to check this. For example
+    // we could look for the "disabled" attribute, but that's only meaningful
+    // on certain types, and libdom's vtable doesn't seem to expose this.
+    pub fn setFocus(self: *parser.Document, e: *parser.ElementHTML, page: *Page) !void {
+        const state = try page.getOrCreateNodeWrapper(State, @ptrCast(self));
+        state.active_element = @ptrCast(e);
     }
 };
 

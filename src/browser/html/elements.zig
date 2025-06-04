@@ -25,6 +25,7 @@ const Page = @import("../page.zig").Page;
 const urlStitch = @import("../../url.zig").URL.stitch;
 const URL = @import("../url/url.zig").URL;
 const Node = @import("../dom/node.zig").Node;
+const State = @import("../state/HTMLElement.zig");
 const Element = @import("../dom/element.zig").Element;
 
 const CSSStyleDeclaration = @import("../cssom/css_style_declaration.zig").CSSStyleDeclaration;
@@ -112,11 +113,9 @@ pub const HTMLElement = struct {
     pub const prototype = *Element;
     pub const subtype = .node;
 
-    style: CSSStyleDeclaration = .empty,
-
     pub fn get_style(e: *parser.ElementHTML, page: *Page) !*CSSStyleDeclaration {
-        const self = try page.getOrCreateNodeWrapper(HTMLElement, @ptrCast(e));
-        return &self.style;
+        const state = try page.getOrCreateNodeWrapper(State, @ptrCast(e));
+        return &state.style;
     }
 
     pub fn get_innerText(e: *parser.ElementHTML) ![]const u8 {
@@ -159,16 +158,9 @@ pub const HTMLElement = struct {
             return;
         }
 
-        const root_node = try parser.nodeGetRootNode(@ptrCast(e));
-
         const Document = @import("../dom/document.zig").Document;
-        const document = try page.getOrCreateNodeWrapper(Document, @ptrCast(root_node));
-
-        // TODO: some elements can't be focused, like if they're disabled
-        // but there doesn't seem to be a generic way to check this. For example
-        // we could look for the "disabled" attribute, but that's only meaningful
-        // on certain types, and libdom's vtable doesn't seem to expose this.
-        document.active_element = @ptrCast(e);
+        const root_node = try parser.nodeGetRootNode(@ptrCast(e));
+        try Document.setFocus(@ptrCast(root_node), e, page);
     }
 };
 
@@ -852,9 +844,6 @@ pub const HTMLScriptElement = struct {
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
 
-    onload: ?Env.Function = null,
-    onerror: ?Env.Function = null,
-
     pub fn get_src(self: *parser.Script) !?[]const u8 {
         return try parser.elementGetAttribute(
             parser.scriptToElt(self),
@@ -964,24 +953,24 @@ pub const HTMLScriptElement = struct {
         return try parser.elementRemoveAttribute(parser.scriptToElt(self), "nomodule");
     }
 
-    pub fn get_onload(script: *parser.Script, page: *Page) !?Env.Function {
-        const self = page.getNodeWrapper(HTMLScriptElement, @ptrCast(script)) orelse return null;
-        return self.onload;
+    pub fn get_onload(self: *parser.Script, page: *Page) !?Env.Function {
+        const state = page.getNodeWrapper(State, @ptrCast(self)) orelse return null;
+        return state.onload;
     }
 
-    pub fn set_onload(script: *parser.Script, function: ?Env.Function, page: *Page) !void {
-        const self = try page.getOrCreateNodeWrapper(HTMLScriptElement, @ptrCast(script));
-        self.onload = function;
+    pub fn set_onload(self: *parser.Script, function: ?Env.Function, page: *Page) !void {
+        const state = try page.getOrCreateNodeWrapper(State, @ptrCast(self));
+        state.onload = function;
     }
 
-    pub fn get_onerror(script: *parser.Script, page: *Page) !?Env.Function {
-        const self = page.getNodeWrapper(HTMLScriptElement, @ptrCast(script)) orelse return null;
-        return self.onerror;
+    pub fn get_onerror(self: *parser.Script, page: *Page) !?Env.Function {
+        const state = page.getNodeWrapper(State, @ptrCast(self)) orelse return null;
+        return state.onerror;
     }
 
-    pub fn set_onerror(script: *parser.Script, function: ?Env.Function, page: *Page) !void {
-        const self = try page.getOrCreateNodeWrapper(HTMLScriptElement, @ptrCast(script));
-        self.onerror = function;
+    pub fn set_onerror(self: *parser.Script, function: ?Env.Function, page: *Page) !void {
+        const state = try page.getOrCreateNodeWrapper(State, @ptrCast(self));
+        state.onerror = function;
     }
 };
 

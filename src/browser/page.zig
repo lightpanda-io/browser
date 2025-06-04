@@ -743,8 +743,8 @@ const Script = struct {
             // attached to it. But this seems quite unlikely and it does help
             // optimize loading scripts, of which there can be hundreds for a
             // page.
-            const HTMLScriptElement = @import("html/elements.zig").HTMLScriptElement;
-            if (page.getNodeWrapper(HTMLScriptElement, @ptrCast(e))) |se| {
+            const State = @import("state/HTMLElement.zig");
+            if (page.getNodeWrapper(State, @ptrCast(e))) |se| {
                 if (se.onload) |function| {
                     onload = .{ .function = function };
                 }
