@@ -22,6 +22,7 @@ const generate = @import("../../runtime/generate.zig");
 const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
 
+const urlStitch = @import("../../url.zig").URL.stitch;
 const URL = @import("../url/url.zig").URL;
 const Node = @import("../dom/node.zig").Node;
 const Element = @import("../dom/element.zig").Element;
@@ -216,8 +217,7 @@ pub const HTMLAnchorElement = struct {
     }
 
     pub fn set_href(self: *parser.Anchor, href: []const u8, page: *const Page) !void {
-        const stitch = @import("../../url.zig").stitch;
-        const full = try stitch(page.call_arena, href, page.url.raw, .{});
+        const full = try urlStitch(page.call_arena, href, page.url.raw, .{});
         return try parser.anchorSetHref(self, full);
     }
 
@@ -647,6 +647,89 @@ pub const HTMLInputElement = struct {
     pub const Self = parser.Input;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
+
+    pub fn get_defaultValue(self: *parser.Input) ![]const u8 {
+        return try parser.inputGetDefaultValue(self);
+    }
+    pub fn set_defaultValue(self: *parser.Input, default_value: []const u8) !void {
+        try parser.inputSetDefaultValue(self, default_value);
+    }
+    pub fn get_defaultChecked(self: *parser.Input) !bool {
+        return try parser.inputGetDefaultChecked(self);
+    }
+    pub fn set_defaultChecked(self: *parser.Input, default_checked: bool) !void {
+        try parser.inputSetDefaultChecked(self, default_checked);
+    }
+    pub fn get_form(self: *parser.Input) !?*parser.Form {
+        return try parser.inputGetForm(self);
+    }
+    pub fn get_accept(self: *parser.Input) ![]const u8 {
+        return try parser.inputGetAccept(self);
+    }
+    pub fn set_accept(self: *parser.Input, accept: []const u8) !void {
+        try parser.inputSetAccept(self, accept);
+    }
+    pub fn get_alt(self: *parser.Input) ![]const u8 {
+        return try parser.inputGetAlt(self);
+    }
+    pub fn set_alt(self: *parser.Input, alt: []const u8) !void {
+        try parser.inputSetAlt(self, alt);
+    }
+    pub fn get_checked(self: *parser.Input) !bool {
+        return try parser.inputGetChecked(self);
+    }
+    pub fn set_checked(self: *parser.Input, checked: bool) !void {
+        try parser.inputSetChecked(self, checked);
+    }
+    pub fn get_disabled(self: *parser.Input) !bool {
+        return try parser.inputGetDisabled(self);
+    }
+    pub fn set_disabled(self: *parser.Input, disabled: bool) !void {
+        try parser.inputSetDisabled(self, disabled);
+    }
+    pub fn get_maxLength(self: *parser.Input) !i32 {
+        return try parser.inputGetMaxLength(self);
+    }
+    pub fn set_maxLength(self: *parser.Input, max_length: i32) !void {
+        try parser.inputSetMaxLength(self, max_length);
+    }
+    pub fn get_name(self: *parser.Input) ![]const u8 {
+        return try parser.inputGetName(self);
+    }
+    pub fn set_name(self: *parser.Input, name: []const u8) !void {
+        try parser.inputSetName(self, name);
+    }
+    pub fn get_readOnly(self: *parser.Input) !bool {
+        return try parser.inputGetReadOnly(self);
+    }
+    pub fn set_readOnly(self: *parser.Input, read_only: bool) !void {
+        try parser.inputSetReadOnly(self, read_only);
+    }
+    pub fn get_size(self: *parser.Input) !u32 {
+        return try parser.inputGetSize(self);
+    }
+    pub fn set_size(self: *parser.Input, size: i32) !void {
+        try parser.inputSetSize(self, size);
+    }
+    pub fn get_src(self: *parser.Input) ![]const u8 {
+        return try parser.inputGetSrc(self);
+    }
+    pub fn set_src(self: *parser.Input, src: []const u8, page: *Page) !void {
+        const new_src = try urlStitch(page.call_arena, src, page.url.raw, .{ .alloc = .if_needed });
+        try parser.inputSetSrc(self, new_src);
+    }
+    pub fn get_type(self: *parser.Input) ![]const u8 {
+        return try parser.inputGetType(self);
+    }
+    pub fn set_type(self: *parser.Input, type_: []const u8) !void {
+        try parser.inputSetType(self, type_);
+    }
+    pub fn get_value(self: *parser.Input) ![]const u8 {
+        return try parser.inputGetValue(self);
+    }
+    pub fn set_value(self: *parser.Input, value: []const u8) !void {
+        try parser.inputSetValue(self, value);
+    }
 };
 
 pub const HTMLLIElement = struct {
@@ -1209,4 +1292,140 @@ test "Browser.HTML.Element" {
         .{ "document.createElement('a').focus()", null },
         .{ "document.activeElement === focused", "true" },
     }, .{});
+}
+test "Browser.HTML.HtmlInputElement.propeties" {
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .url = "https://lightpanda.io/noslashattheend" });
+    defer runner.deinit();
+    var alloc = std.heap.ArenaAllocator.init(runner.app.allocator);
+    defer alloc.deinit();
+    const arena = alloc.allocator();
+
+    try runner.testCases(&.{.{ "let elem_input = document.createElement('input')", null }}, .{});
+
+    try runner.testCases(&.{.{ "elem_input.form", "null" }}, .{}); // Initial value
+    // Valid input.form is tested separately :Browser.HTML.HtmlInputElement.propeties.form
+    try testProperty(arena, &runner, "elem_input.form", "null", &.{.{ .input = "'foo'" }}); // Invalid
+
+    try runner.testCases(&.{.{ "elem_input.accept", "" }}, .{}); // Initial value
+    try testProperty(arena, &runner, "elem_input.accept", null, &str_valids); // Valid
+
+    try runner.testCases(&.{.{ "elem_input.alt", "" }}, .{}); // Initial value
+    try testProperty(arena, &runner, "elem_input.alt", null, &str_valids); // Valid
+
+    try runner.testCases(&.{.{ "elem_input.disabled", "false" }}, .{}); // Initial value
+    try testProperty(arena, &runner, "elem_input.disabled", null, &bool_valids); // Valid
+
+    try runner.testCases(&.{.{ "elem_input.maxLength", "-1" }}, .{}); // Initial value
+    try testProperty(arena, &runner, "elem_input.maxLength", null, &.{.{ .input = "5" }}); // Valid
+    try testProperty(arena, &runner, "elem_input.maxLength", "0", &.{.{ .input = "'banana'" }}); // Invalid
+    try testing.expectError(error.ExecutionError, runner.testCases(&.{.{ "elem_input.maxLength = -45", null }}, .{})); // Error
+
+    try runner.testCases(&.{.{ "elem_input.name", "" }}, .{}); // Initial value
+    try testProperty(arena, &runner, "elem_input.name", null, &str_valids); // Valid
+
+    try runner.testCases(&.{.{ "elem_input.readOnly", "false" }}, .{}); // Initial value
+    try testProperty(arena, &runner, "elem_input.readOnly", null, &bool_valids); // Valid
+
+    try runner.testCases(&.{.{ "elem_input.size", "20" }}, .{}); // Initial value
+    try testProperty(arena, &runner, "elem_input.size", null, &.{.{ .input = "5" }}); // Valid
+    try testProperty(arena, &runner, "elem_input.size", "20", &.{.{ .input = "-26" }}); // Invalid
+    try testing.expectError(error.ExecutionError, runner.testCases(&.{.{ "elem_input.size = 0", null }}, .{})); // Error
+    try testing.expectError(error.ExecutionError, runner.testCases(&.{.{ "elem_input.size = 'banana'", null }}, .{})); // Error
+
+    try runner.testCases(&.{.{ "elem_input.src", "" }}, .{}); // Initial value
+    try testProperty(arena, &runner, "elem_input.src", null, &.{
+        .{ .input = "'foo'", .expected = "https://lightpanda.io/foo" }, // TODO stitch should work with spaces -> %20
+        .{ .input = "-3", .expected = "https://lightpanda.io/-3" },
+        .{ .input = "''", .expected = "https://lightpanda.io/noslashattheend" },
+    });
+
+    try runner.testCases(&.{.{ "elem_input.type", "text" }}, .{}); // Initial value
+    try testProperty(arena, &runner, "elem_input.type", null, &.{.{ .input = "'checkbox'", .expected = "checkbox" }}); // Valid
+    try testProperty(arena, &runner, "elem_input.type", "text", &.{.{ .input = "'5'" }}); // Invalid
+
+    // Properties that are related
+    try runner.testCases(&.{
+        .{ "let input_checked = document.createElement('input')", null },
+        .{ "input_checked.defaultChecked", "false" },
+        .{ "input_checked.checked", "false" },
+
+        .{ "input_checked.defaultChecked = true", "true" },
+        .{ "input_checked.defaultChecked", "true" },
+        .{ "input_checked.checked", "true" }, // Also perceived as true
+
+        .{ "input_checked.checked = false", "false" },
+        .{ "input_checked.defaultChecked", "true" },
+        .{ "input_checked.checked", "false" },
+
+        .{ "input_checked.defaultChecked = true", "true" },
+        .{ "input_checked.checked", "false" }, // Still false
+    }, .{});
+    try runner.testCases(&.{
+        .{ "let input_value = document.createElement('input')", null },
+        .{ "input_value.defaultValue", "" },
+        .{ "input_value.value", "" },
+
+        .{ "input_value.defaultValue = 3.1", "3.1" },
+        .{ "input_value.defaultValue", "3.1" },
+        .{ "input_value.value", "3.1" }, // Also perceived as 3.1
+
+        .{ "input_value.value = 'mango'", "mango" },
+        .{ "input_value.defaultValue", "3.1" },
+        .{ "input_value.value", "mango" },
+
+        .{ "input_value.defaultValue = true", "true" },
+        .{ "input_value.value", "mango" }, // Still mango
+    }, .{});
+}
+test "Browser.HTML.HtmlInputElement.propeties.form" {
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html = 
+        \\ <form action="test.php" target="_blank">
+        \\   <p>
+        \\     <label>First name: <input type="text" name="first-name" /></label>
+        \\   </p>
+        \\ </form>
+    });
+    defer runner.deinit();
+
+    try runner.testCases(&.{
+        .{ "let elem_input = document.querySelector('input')", null },
+    }, .{});
+    try runner.testCases(&.{.{ "elem_input.form", "[object HTMLFormElement]" }}, .{}); // Initial value
+    try runner.testCases(&.{
+        .{ "elem_input.form = 'foo'", null },
+        .{ "elem_input.form", "[object HTMLFormElement]" }, // Invalid
+    }, .{});
+}
+
+const Check = struct {
+    input: []const u8,
+    expected: ?[]const u8 = null, // Needed when input != expected
+};
+const bool_valids = [_]Check{
+    .{ .input = "true" },
+    .{ .input = "''", .expected = "false" },
+    .{ .input = "13.5", .expected = "true" },
+};
+const str_valids = [_]Check{
+    .{ .input = "'foo'", .expected = "foo" },
+    .{ .input = "5", .expected = "5" },
+    .{ .input = "''", .expected = "" },
+    .{ .input = "document", .expected = "[object HTMLDocument]" },
+};
+
+// .{ "elem.type = '5'", "5" },
+// .{ "elem.type", "text" },
+fn testProperty(
+    arena: std.mem.Allocator,
+    runner: *testing.JsRunner,
+    elem_dot_prop: []const u8,
+    always: ?[]const u8, // Ignores checks' expected if set
+    checks: []const Check,
+) !void {
+    for (checks) |check| {
+        try runner.testCases(&.{
+            .{ try std.mem.concat(arena, u8, &.{ elem_dot_prop, " = ", check.input }), null },
+            .{ elem_dot_prop, always orelse check.expected orelse check.input },
+        }, .{});
+    }
 }

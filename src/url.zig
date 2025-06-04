@@ -110,6 +110,12 @@ pub const URL = struct {
             }
             return src;
         }
+        if (src.len == 0) {
+            if (opts.alloc == .always) {
+                return allocator.dupe(u8, base);
+            }
+            return base;
+        }
 
         const protocol_end: usize = blk: {
             if (std.mem.indexOf(u8, base, "://")) |protocol_index| {
@@ -254,6 +260,16 @@ test "URL: Stiching src as full path" {
     const src = "https://lightpanda.io/something.js";
     const result = try URL.stitch(allocator, src, base, .{ .alloc = .if_needed });
     try testing.expectString("https://lightpanda.io/something.js", result);
+}
+
+test "URL: Stitching Base & Src URLs (empty src)" {
+    const allocator = testing.allocator;
+
+    const base = "https://www.google.com/xyz/abc/123";
+    const src = "";
+    const result = try URL.stitch(allocator, src, base, .{});
+    defer allocator.free(result);
+    try testing.expectString("https://www.google.com/xyz/abc/123", result);
 }
 
 test "URL: concatQueryString" {
