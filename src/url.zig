@@ -125,16 +125,16 @@ pub const URL = struct {
             }
         };
 
+        const normalized_src = if (src[0] == '/') src[1..] else src;
+
         if (std.mem.lastIndexOfScalar(u8, base[protocol_end..], '/')) |index| {
             const last_slash_pos = index + protocol_end;
             if (last_slash_pos == base.len - 1) {
-                return std.fmt.allocPrint(allocator, "{s}{s}", .{ base, src });
-            } else {
-                return std.fmt.allocPrint(allocator, "{s}/{s}", .{ base[0..last_slash_pos], src });
+                return std.fmt.allocPrint(allocator, "{s}{s}", .{ base, normalized_src });
             }
-        } else {
-            return std.fmt.allocPrint(allocator, "{s}/{s}", .{ base, src });
+            return std.fmt.allocPrint(allocator, "{s}/{s}", .{ base[0..last_slash_pos], normalized_src });
         }
+        return std.fmt.allocPrint(allocator, "{s}/{s}", .{ base, normalized_src });
     }
 
     pub fn concatQueryString(arena: Allocator, url: []const u8, query_string: []const u8) ![]const u8 {
@@ -228,6 +228,16 @@ test "URL: Stitching Base & Src URLs (Just Ending Slash)" {
 
     const base = "https://www.google.com/";
     const src = "something.js";
+    const result = try URL.stitch(allocator, src, base, .{});
+    defer allocator.free(result);
+    try testing.expectString("https://www.google.com/something.js", result);
+}
+
+test "URL: Stitching Base & Src URLs with leading slash" {
+    const allocator = testing.allocator;
+
+    const base = "https://www.google.com/";
+    const src = "/something.js";
     const result = try URL.stitch(allocator, src, base, .{});
     defer allocator.free(result);
     try testing.expectString("https://www.google.com/something.js", result);

@@ -219,7 +219,7 @@ pub const URL = struct {
     }
 
     pub fn _toJSON(self: *URL, page: *Page) ![]const u8 {
-        return try self.get_href(page);
+        return self.get_href(page);
     }
 };
 
