@@ -90,6 +90,7 @@ pub const Session = struct {
 
         const page_arena = &self.browser.page_arena;
         _ = page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
+        _ = self.browser.state_pool.reset(.{ .retain_with_limit = 4 * 1024 });
 
         self.page = @as(Page, undefined);
         const page = &self.page.?;

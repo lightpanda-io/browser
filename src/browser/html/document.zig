@@ -30,7 +30,6 @@ const NodeList = @import("../dom/nodelist.zig").NodeList;
 const Location = @import("location.zig").Location;
 
 const collection = @import("../dom/html_collection.zig");
-const State = @import("../state/Document.zig");
 const Walker = @import("../dom/walker.zig").WalkerDepthFirst;
 const Cookie = @import("../storage/cookie.zig").Cookie;
 
@@ -185,7 +184,7 @@ pub const HTMLDocument = struct {
     }
 
     pub fn get_readyState(self: *parser.DocumentHTML, page: *Page) ![]const u8 {
-        const state = try page.getOrCreateNodeWrapper(State, @ptrCast(self));
+        const state = try page.getOrCreateNodeState(@ptrCast(self));
         return @tagName(state.ready_state);
     }
 
@@ -264,7 +263,7 @@ pub const HTMLDocument = struct {
     }
 
     pub fn documentIsLoaded(self: *parser.DocumentHTML, page: *Page) !void {
-        const state = try page.getOrCreateNodeWrapper(State, @ptrCast(self));
+        const state = try page.getOrCreateNodeState(@ptrCast(self));
         state.ready_state = .interactive;
 
         const evt = try parser.eventCreate();
@@ -279,7 +278,7 @@ pub const HTMLDocument = struct {
     }
 
     pub fn documentIsComplete(self: *parser.DocumentHTML, page: *Page) !void {
-        const state = try page.getOrCreateNodeWrapper(State, @ptrCast(self));
+        const state = try page.getOrCreateNodeState(@ptrCast(self));
         state.ready_state = .complete;
     }
 };

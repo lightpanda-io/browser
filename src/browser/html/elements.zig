@@ -25,7 +25,6 @@ const Page = @import("../page.zig").Page;
 const urlStitch = @import("../../url.zig").URL.stitch;
 const URL = @import("../url/url.zig").URL;
 const Node = @import("../dom/node.zig").Node;
-const State = @import("../state/HTMLElement.zig");
 const Element = @import("../dom/element.zig").Element;
 
 const CSSStyleDeclaration = @import("../cssom/css_style_declaration.zig").CSSStyleDeclaration;
@@ -114,7 +113,7 @@ pub const HTMLElement = struct {
     pub const subtype = .node;
 
     pub fn get_style(e: *parser.ElementHTML, page: *Page) !*CSSStyleDeclaration {
-        const state = try page.getOrCreateNodeWrapper(State, @ptrCast(e));
+        const state = try page.getOrCreateNodeState(@ptrCast(e));
         return &state.style;
     }
 
@@ -954,22 +953,22 @@ pub const HTMLScriptElement = struct {
     }
 
     pub fn get_onload(self: *parser.Script, page: *Page) !?Env.Function {
-        const state = page.getNodeWrapper(State, @ptrCast(self)) orelse return null;
+        const state = page.getNodeState(@ptrCast(self)) orelse return null;
         return state.onload;
     }
 
     pub fn set_onload(self: *parser.Script, function: ?Env.Function, page: *Page) !void {
-        const state = try page.getOrCreateNodeWrapper(State, @ptrCast(self));
+        const state = try page.getOrCreateNodeState(@ptrCast(self));
         state.onload = function;
     }
 
     pub fn get_onerror(self: *parser.Script, page: *Page) !?Env.Function {
-        const state = page.getNodeWrapper(State, @ptrCast(self)) orelse return null;
+        const state = page.getNodeState(@ptrCast(self)) orelse return null;
         return state.onerror;
     }
 
     pub fn set_onerror(self: *parser.Script, function: ?Env.Function, page: *Page) !void {
-        const state = try page.getOrCreateNodeWrapper(State, @ptrCast(self));
+        const state = try page.getOrCreateNodeState(@ptrCast(self));
         state.onerror = function;
     }
 };

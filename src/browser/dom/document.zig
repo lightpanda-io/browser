@@ -28,7 +28,6 @@ const NodeUnion = @import("node.zig").Union;
 const collection = @import("html_collection.zig");
 const css = @import("css.zig");
 
-const State = @import("../state/Document.zig");
 const Element = @import("element.zig").Element;
 const ElementUnion = @import("element.zig").Union;
 const TreeWalker = @import("tree_walker.zig").TreeWalker;
@@ -245,7 +244,7 @@ pub const Document = struct {
     }
 
     pub fn get_activeElement(self: *parser.Document, page: *Page) !?ElementUnion {
-        const state = try page.getOrCreateNodeWrapper(State, @ptrCast(self));
+        const state = try page.getOrCreateNodeState(@ptrCast(self));
         if (state.active_element) |ae| {
             return try Element.toInterface(ae);
         }
@@ -262,7 +261,7 @@ pub const Document = struct {
     // we could look for the "disabled" attribute, but that's only meaningful
     // on certain types, and libdom's vtable doesn't seem to expose this.
     pub fn setFocus(self: *parser.Document, e: *parser.ElementHTML, page: *Page) !void {
-        const state = try page.getOrCreateNodeWrapper(State, @ptrCast(self));
+        const state = try page.getOrCreateNodeState(@ptrCast(self));
         state.active_element = @ptrCast(e);
     }
 };
