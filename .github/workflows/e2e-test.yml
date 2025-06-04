@@ -81,6 +81,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: 'lightpanda-io/demo'
+          ref: 'playwright-links.js'
           fetch-depth: 0
 
       - run: npm install
