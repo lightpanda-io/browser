@@ -54,16 +54,17 @@ pub const Client = struct {
     request_pool: std.heap.MemoryPool(Request),
 
     const Opts = struct {
-        tls_verify_host: bool = true,
+        max_concurrent: usize = 3,
         http_proxy: ?std.Uri = null,
+        tls_verify_host: bool = true,
         max_idle_connection: usize = 10,
     };
 
-    pub fn init(allocator: Allocator, max_concurrent: usize, opts: Opts) !Client {
+    pub fn init(allocator: Allocator, opts: Opts) !Client {
         var root_ca: tls.config.CertBundle = if (builtin.is_test) .{} else try tls.config.CertBundle.fromSystem(allocator);
         errdefer root_ca.deinit(allocator);
 
-        const state_pool = try StatePool.init(allocator, max_concurrent);
+        const state_pool = try StatePool.init(allocator, opts.max_concurrent);
         errdefer state_pool.deinit(allocator);
 
         const connection_manager = ConnectionManager.init(allocator, opts.max_idle_connection);
@@ -92,12 +93,61 @@ pub const Client = struct {
     }
 
     pub fn request(self: *Client, method: Request.Method, uri: *const Uri) !*Request {
-        const state = self.state_pool.acquire();
+        const state = self.state_pool.acquireWait();
+        errdefer self.state_pool.release(state);
 
-        errdefer {
-            state.reset();
-            self.state_pool.release(state);
+        const req = try self.request_pool.create();
+        errdefer self.request_pool.destroy(req);
+
+        req.* = try Request.init(self, state, method, uri);
+        return req;
+    }
+
+    pub fn initAsync(
+        self: *Client,
+        arena: Allocator,
+        method: Request.Method,
+        uri: *const Uri,
+        ctx: *anyopaque,
+        callback: AsyncQueue.Callback,
+        loop: *Loop,
+        opts: RequestOpts,
+    ) !void {
+        if (self.state_pool.acquireOrNull()) |state| {
+            // if we have state ready, we can skip the loop and immediately
+            // kick this request off.
+            return self.asyncRequestReady(method, uri, ctx, callback, state, opts);
         }
+
+        // This cannot be a client-owned MemoryPool. The page can end before
+        // this is ever completed (and the check callback will never be called).
+        // As long as the loop doesn't guarantee that callbacks will be called,
+        // this _has_ to be the page arena.
+        const queue = try arena.create(AsyncQueue);
+        queue.* = .{
+            .ctx = ctx,
+            .uri = uri,
+            .opts = opts,
+            .client = self,
+            .method = method,
+            .callback = callback,
+            .node = .{ .func = AsyncQueue.check },
+        };
+        _ = try loop.timeout(10 * std.time.ns_per_ms, &queue.node);
+    }
+
+    // Either called directly from initAsync (if we have a state ready)
+    // Or from when the AsyncQueue(T) is ready.
+    fn asyncRequestReady(
+        self: *Client,
+        method: Request.Method,
+        uri: *const Uri,
+        ctx: *anyopaque,
+        callback: AsyncQueue.Callback,
+        state: *State,
+        opts: RequestOpts,
+    ) !void {
+        errdefer self.state_pool.release(state);
 
         // We need the request on the heap, because it can have a longer lifetime
         // than the code making the request. That sounds odd, but consider the
@@ -110,26 +160,78 @@ pub const Client = struct {
         errdefer self.request_pool.destroy(req);
 
         req.* = try Request.init(self, state, method, uri);
-        return req;
+        if (opts.notification) |notification| {
+            req.notification = notification;
+        }
+
+        errdefer req.deinit();
+        try callback(ctx, req);
     }
 
-    pub fn requestFactory(self: *Client, notification: ?*Notification) RequestFactory {
+    pub fn requestFactory(self: *Client, opts: RequestOpts) RequestFactory {
         return .{
+            .opts = opts,
             .client = self,
-            .notification = notification,
         };
     }
+};
+
+const RequestOpts = struct {
+    notification: ?*Notification = null,
 };
 
 // A factory for creating requests with a given set of options.
 pub const RequestFactory = struct {
     client: *Client,
-    notification: ?*Notification,
+    opts: RequestOpts,
 
-    pub fn create(self: RequestFactory, method: Request.Method, uri: *const Uri) !*Request {
-        var req = try self.client.request(method, uri);
-        req.notification = self.notification;
-        return req;
+    pub fn initAsync(
+        self: RequestFactory,
+        arena: Allocator,
+        method: Request.Method,
+        uri: *const Uri,
+        ctx: *anyopaque,
+        callback: AsyncQueue.Callback,
+        loop: *Loop,
+    ) !void {
+        return self.client.initAsync(arena, method, uri, ctx, callback, loop, self.opts);
+    }
+};
+
+const AsyncQueue = struct {
+    ctx: *anyopaque,
+    method: Request.Method,
+    uri: *const Uri,
+    client: *Client,
+    opts: RequestOpts,
+    node: Loop.CallbackNode,
+    callback: Callback,
+
+    const Callback = *const fn (*anyopaque, *Request) anyerror!void;
+
+    fn check(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
+        const self: *AsyncQueue = @fieldParentPtr("node", node);
+        self._check(repeat_delay) catch |err| {
+            log.err(.http_client, "async queue check", .{ .err = err });
+        };
+    }
+
+    fn _check(self: *AsyncQueue, repeat_delay: *?u63) !void {
+        const client = self.client;
+        const state = client.state_pool.acquireOrNull() orelse {
+            // re-run this function in 10 milliseconds
+            repeat_delay.* = 10 * std.time.ns_per_ms;
+            return;
+        };
+
+        try client.asyncRequestReady(
+            self.method,
+            self.uri,
+            self.ctx,
+            self.callback,
+            state,
+            self.opts,
+        );
     }
 };
 
@@ -321,7 +423,6 @@ pub const Request = struct {
 
     pub fn deinit(self: *Request) void {
         self.releaseConnection();
-        _ = self._state.reset();
         self._client.state_pool.release(self._state);
         self._client.request_pool.destroy(self);
     }
@@ -1137,6 +1238,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                                 self.handleError("decompression error", err);
                                 return .done;
                             };
+
                             self.handler.onHttpResponse(.{
                                 .data = chunk,
                                 .first = first,
@@ -2346,7 +2448,7 @@ const State = struct {
     }
 
     fn reset(self: *State) void {
-        _ = self.arena.reset(.{ .retain_with_limit = 1024 * 1024 });
+        _ = self.arena.reset(.{ .retain_with_limit = 64 * 1024 });
     }
 
     fn deinit(self: *State) void {
@@ -2399,10 +2501,11 @@ const StatePool = struct {
         allocator.free(self.states);
     }
 
-    pub fn acquire(self: *StatePool) *State {
+    pub fn acquireWait(self: *StatePool) *State {
+        const states = self.states;
+
         self.mutex.lock();
         while (true) {
-            const states = self.states;
             const available = self.available;
             if (available == 0) {
                 self.cond.wait(&self.mutex);
@@ -2416,7 +2519,25 @@ const StatePool = struct {
         }
     }
 
+    pub fn acquireOrNull(self: *StatePool) ?*State {
+        const states = self.states;
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const available = self.available;
+        if (available == 0) {
+            return null;
+        }
+
+        const index = available - 1;
+        const state = states[index];
+        self.available = index;
+        return state;
+    }
+
     pub fn release(self: *StatePool, state: *State) void {
+        state.reset();
         self.mutex.lock();
         var states = self.states;
         const available = self.available;
@@ -2823,11 +2944,19 @@ test "HttpClient: sync GET redirect" {
 }
 
 test "HttpClient: async connect error" {
+    defer testing.reset();
     var loop = try Loop.init(testing.allocator);
     defer loop.deinit();
 
     const Handler = struct {
+        loop: *Loop,
         reset: *Thread.ResetEvent,
+
+        fn requestReady(ctx: *anyopaque, req: *Request) !void {
+            const self: *@This() = @alignCast(@ptrCast(ctx));
+            try req.sendAsync(self.loop, self, .{});
+        }
+
         fn onHttpResponse(self: *@This(), res: anyerror!Progress) !void {
             _ = res catch |err| {
                 if (err == error.ConnectionRefused) {
@@ -2845,14 +2974,21 @@ test "HttpClient: async connect error" {
     var client = try testClient();
     defer client.deinit();
 
+    var handler = Handler{
+        .loop = &loop,
+        .reset = &reset,
+    };
+
     const uri = try Uri.parse("HTTP://127.0.0.1:9920");
-    var req = try client.request(.GET, &uri);
-    try req.sendAsync(&loop, Handler{ .reset = &reset }, .{});
+    try client.initAsync(testing.arena_allocator, .GET, &uri, &handler, Handler.requestReady, &loop, .{}, );
+
     try loop.io.run_for_ns(std.time.ns_per_ms);
     try reset.timedWait(std.time.ns_per_s);
 }
 
 test "HttpClient: async no body" {
+    defer testing.reset();
+
     var client = try testClient();
     defer client.deinit();
 
@@ -2860,8 +2996,7 @@ test "HttpClient: async no body" {
     defer handler.deinit();
 
     const uri = try Uri.parse("HTTP://127.0.0.1:9582/http_client/simple");
-    var req = try client.request(.GET, &uri);
-    try req.sendAsync(&handler.loop, &handler, .{});
+    try client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, &handler.loop, .{});
     try handler.waitUntilDone();
 
     const res = handler.response;
@@ -2871,6 +3006,8 @@ test "HttpClient: async no body" {
 }
 
 test "HttpClient: async with body" {
+    defer testing.reset();
+
     var client = try testClient();
     defer client.deinit();
 
@@ -2878,8 +3015,7 @@ test "HttpClient: async with body" {
     defer handler.deinit();
 
     const uri = try Uri.parse("HTTP://127.0.0.1:9582/http_client/echo");
-    var req = try client.request(.GET, &uri);
-    try req.sendAsync(&handler.loop, &handler, .{});
+    try client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, &handler.loop, .{});
     try handler.waitUntilDone();
 
     const res = handler.response;
@@ -2894,6 +3030,8 @@ test "HttpClient: async with body" {
 }
 
 test "HttpClient: async with gzip body" {
+    defer testing.reset();
+
     var client = try testClient();
     defer client.deinit();
 
@@ -2901,8 +3039,7 @@ test "HttpClient: async with gzip body" {
     defer handler.deinit();
 
     const uri = try Uri.parse("HTTP://127.0.0.1:9582/http_client/gzip");
-    var req = try client.request(.GET, &uri);
-    try req.sendAsync(&handler.loop, &handler, .{});
+    try client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, &handler.loop, .{});
     try handler.waitUntilDone();
 
     const res = handler.response;
@@ -2916,6 +3053,8 @@ test "HttpClient: async with gzip body" {
 }
 
 test "HttpClient: async redirect" {
+    defer testing.reset();
+
     var client = try testClient();
     defer client.deinit();
 
@@ -2923,8 +3062,7 @@ test "HttpClient: async redirect" {
     defer handler.deinit();
 
     const uri = try Uri.parse("HTTP://127.0.0.1:9582/http_client/redirect");
-    var req = try client.request(.GET, &uri);
-    try req.sendAsync(&handler.loop, &handler, .{});
+    try client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, &handler.loop, .{});
 
     // Called twice on purpose. The initial GET resutls in the # of pending
     // events to reach 0. This causes our `run_for_ns` to return. But we then
@@ -2945,6 +3083,7 @@ test "HttpClient: async redirect" {
 }
 
 test "HttpClient: async tls no body" {
+    defer testing.reset();
     var client = try testClient();
     defer client.deinit();
     for (0..5) |_| {
@@ -2952,8 +3091,7 @@ test "HttpClient: async tls no body" {
         defer handler.deinit();
 
         const uri = try Uri.parse("HTTPs://127.0.0.1:9581/http_client/simple");
-        var req = try client.request(.GET, &uri);
-        try req.sendAsync(&handler.loop, &handler, .{ .tls_verify_host = false });
+        try client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, &handler.loop, .{});
         try handler.waitUntilDone();
 
         const res = handler.response;
@@ -2969,6 +3107,7 @@ test "HttpClient: async tls no body" {
 }
 
 test "HttpClient: async tls with body x" {
+    defer testing.reset();
     for (0..5) |_| {
         var client = try testClient();
         defer client.deinit();
@@ -2977,8 +3116,7 @@ test "HttpClient: async tls with body x" {
         defer handler.deinit();
 
         const uri = try Uri.parse("HTTPs://127.0.0.1:9581/http_client/body");
-        var req = try client.request(.GET, &uri);
-        try req.sendAsync(&handler.loop, &handler, .{ .tls_verify_host = false });
+        try client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, &handler.loop, .{});
         try handler.waitUntilDone();
 
         const res = handler.response;
@@ -2993,6 +3131,7 @@ test "HttpClient: async tls with body x" {
 }
 
 test "HttpClient: async redirect from TLS to Plaintext" {
+    defer testing.reset();
     for (0..1) |_| {
         var client = try testClient();
         defer client.deinit();
@@ -3001,8 +3140,7 @@ test "HttpClient: async redirect from TLS to Plaintext" {
         defer handler.deinit();
 
         const uri = try Uri.parse("https://127.0.0.1:9581/http_client/redirect/insecure");
-        var req = try client.request(.GET, &uri);
-        try req.sendAsync(&handler.loop, &handler, .{ .tls_verify_host = false });
+        try client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, &handler.loop, .{});
         try handler.waitUntilDone();
 
         const res = handler.response;
@@ -3018,6 +3156,7 @@ test "HttpClient: async redirect from TLS to Plaintext" {
 }
 
 test "HttpClient: async redirect plaintext to TLS" {
+    defer testing.reset();
     for (0..5) |_| {
         var client = try testClient();
         defer client.deinit();
@@ -3026,8 +3165,7 @@ test "HttpClient: async redirect plaintext to TLS" {
         defer handler.deinit();
 
         const uri = try Uri.parse("http://127.0.0.1:9582/http_client/redirect/secure");
-        var req = try client.request(.GET, &uri);
-        try req.sendAsync(&handler.loop, &handler, .{ .tls_verify_host = false });
+        try client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, &handler.loop, .{});
         try handler.waitUntilDone();
 
         const res = handler.response;
@@ -3149,6 +3287,11 @@ const CaptureHandler = struct {
         self.loop.deinit();
     }
 
+    fn requestReady(ctx: *anyopaque, req: *Request) !void {
+        const self: *CaptureHandler = @alignCast(@ptrCast(ctx));
+        try req.sendAsync(&self.loop, self, .{ .tls_verify_host = false });
+    }
+
     fn onHttpResponse(self: *CaptureHandler, progress_: anyerror!Progress) !void {
         self.process(progress_) catch |err| {
             std.debug.print("capture handler error: {}\n", .{err});
@@ -3230,5 +3373,5 @@ fn testReader(state: *State, res: *TestResponse, data: []const u8) !void {
 }
 
 fn testClient() !Client {
-    return try Client.init(testing.allocator, 1, .{});
+    return try Client.init(testing.allocator, .{ .max_concurrent = 1 });
 }

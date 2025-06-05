@@ -113,7 +113,9 @@ pub const Page = struct {
             .cookie_jar = &session.cookie_jar,
             .microtask_node = .{ .func = microtaskCallback },
             .window_clicked_event_node = .{ .func = windowClicked },
-            .request_factory = browser.http_client.requestFactory(browser.notification),
+            .request_factory = browser.http_client.requestFactory(.{
+                .notification = browser.notification,
+            }),
             .scope = undefined,
             .module_map = .empty,
         };

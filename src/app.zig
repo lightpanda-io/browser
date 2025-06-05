@@ -52,7 +52,8 @@ pub const App = struct {
             .telemetry = undefined,
             .app_dir_path = app_dir_path,
             .notification = notification,
-            .http_client = try HttpClient.init(allocator, 5, .{
+            .http_client = try HttpClient.init(allocator, .{
+                .max_concurrent = 3,
                 .http_proxy = config.http_proxy,
                 .tls_verify_host = config.tls_verify_host,
             }),
