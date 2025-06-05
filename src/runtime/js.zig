@@ -1366,6 +1366,13 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 }
             }
 
+            pub fn get(self: JsObject, key: []const u8) !Value {
+                const scope = self.scope;
+                const js_key = v8.String.initUtf8(scope.isolate, key);
+                const js_val = try self.js_obj.getValue(scope.context, js_key);
+                return scope.createValue(js_val);
+            }
+
             pub fn isTruthy(self: JsObject) bool {
                 const js_value = self.js_obj.toValue();
                 return js_value.toBool(self.scope.isolate);
@@ -1420,6 +1427,20 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             pub fn isNullOrUndefined(self: JsObject) bool {
                 return self.js_obj.toValue().isNullOrUndefined();
+            }
+
+            pub fn nameIterator(self: JsObject) ValueIterator {
+                const scope = self.scope;
+                const js_obj = self.js_obj;
+
+                const array = js_obj.getPropertyNames(scope.context);
+                const count = array.length();
+
+                return .{
+                    .count = count,
+                    .scope = scope,
+                    .js_obj = array.castTo(v8.Object),
+                };
             }
         };
 
@@ -1623,6 +1644,25 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             pub fn toString(self: Value, allocator: Allocator) ![]const u8 {
                 const scope = self.scope;
                 return valueToString(allocator, self.value, scope.isolate, scope.context);
+            }
+        };
+
+        pub const ValueIterator = struct {
+            count: u32,
+            idx: u32 = 0,
+            js_obj: v8.Object,
+            scope: *const Scope,
+
+            pub fn next(self: *ValueIterator) !?Value {
+                const idx = self.idx;
+                if (idx == self.count) {
+                    return null;
+                }
+                self.idx += 1;
+
+                const scope = self.scope;
+                const js_val = try self.js_obj.getAtIndex(scope.context, idx);
+                return scope.createValue(js_val);
             }
         };
 
