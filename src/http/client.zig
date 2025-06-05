@@ -677,6 +677,7 @@ pub const Request = struct {
 
         if (self._connection_from_keepalive) {
             // we're already connected
+            async_handler.pending_connect = false;
             return async_handler.conn.connected();
         }
 
@@ -915,6 +916,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
         shutdown: bool = false,
         pending_write: bool = false,
         pending_receive: bool = false,
+        pending_connect: bool = true,
 
         const Self = @This();
         const SendQueue = std.DoublyLinkedList([]const u8);
@@ -939,10 +941,15 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
         fn abort(ctx: *anyopaque) void {
             var self: *Self = @alignCast(@ptrCast(ctx));
             self.shutdown = true;
+            posix.shutdown(self.request._connection.?.socket, .both) catch {};
             self.maybeShutdown();
         }
 
         fn connected(self: *Self, _: *IO.Completion, result: IO.ConnectError!void) void {
+            self.pending_connect = false;
+            if (self.shutdown) {
+                return self.maybeShutdown();
+            }
             result catch |err| return self.handleError("Connection failed", err);
             self.conn.connected() catch |err| {
                 self.handleError("connected handler error", err);
@@ -1109,7 +1116,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
 
         fn maybeShutdown(self: *Self) void {
             std.debug.assert(self.shutdown);
-            if (self.pending_write or self.pending_receive) {
+            if (self.pending_write or self.pending_receive or self.pending_connect) {
                 return;
             }
 
@@ -2538,12 +2545,14 @@ const StatePool = struct {
 
     pub fn release(self: *StatePool, state: *State) void {
         state.reset();
-        self.mutex.lock();
         var states = self.states;
+
+        self.mutex.lock();
         const available = self.available;
         states[available] = state;
         self.available = available + 1;
         self.mutex.unlock();
+
         self.cond.signal();
     }
 };
@@ -2980,7 +2989,15 @@ test "HttpClient: async connect error" {
     };
 
     const uri = try Uri.parse("HTTP://127.0.0.1:9920");
-    try client.initAsync(testing.arena_allocator, .GET, &uri, &handler, Handler.requestReady, &loop, .{}, );
+    try client.initAsync(
+        testing.arena_allocator,
+        .GET,
+        &uri,
+        &handler,
+        Handler.requestReady,
+        &loop,
+        .{},
+    );
 
     try loop.io.run_for_ns(std.time.ns_per_ms);
     try reset.timedWait(std.time.ns_per_s);

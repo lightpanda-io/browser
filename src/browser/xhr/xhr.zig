@@ -430,7 +430,14 @@ pub const XMLHttpRequest = struct {
             self.request_body = try self.arena.dupe(u8, b);
         }
 
-        try page.request_factory.initAsync(page.arena, self.method, &self.url.?.uri, self, onHttpRequestReady, self.loop,);
+        try page.request_factory.initAsync(
+            page.arena,
+            self.method,
+            &self.url.?.uri,
+            self,
+            onHttpRequestReady,
+            self.loop,
+        );
     }
 
     fn onHttpRequestReady(ctx: *anyopaque, request: *http.Request) !void {

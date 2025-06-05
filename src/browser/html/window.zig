@@ -164,7 +164,7 @@ pub const Window = struct {
     }
 
     pub fn _requestAnimationFrame(self: *Window, cbk: Function, page: *Page) !u32 {
-        return self.createTimeout(cbk, 5, page, .{.animation_frame = true});
+        return self.createTimeout(cbk, 5, page, .{ .animation_frame = true });
     }
 
     pub fn _cancelAnimationFrame(self: *Window, id: u32, page: *Page) !void {
@@ -179,7 +179,7 @@ pub const Window = struct {
 
     // TODO handle callback arguments.
     pub fn _setInterval(self: *Window, cbk: Function, delay: ?u32, page: *Page) !u32 {
-        return self.createTimeout(cbk, delay, page, .{.repeat = true});
+        return self.createTimeout(cbk, delay, page, .{ .repeat = true });
     }
 
     pub fn _clearTimeout(self: *Window, id: u32, page: *Page) !void {
