@@ -468,7 +468,6 @@ pub const XMLHttpRequest = struct {
 
         if (progress.first) {
             const header = progress.header;
-
             log.debug(.http, "request header", .{
                 .source = "xhr",
                 .url = self.url,
@@ -522,7 +521,7 @@ pub const XMLHttpRequest = struct {
         log.info(.http, "request complete", .{
             .source = "xhr",
             .url = self.url,
-            .status = progress.header.status,
+            .status = self.response_status,
         });
 
         // Not that the request is done, the http/client will free the request
