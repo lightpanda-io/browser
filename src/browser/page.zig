@@ -330,13 +330,18 @@ pub const Page = struct {
                 continue;
             }
 
-            const e = parser.nodeToElement(next.?);
+            const current = next.?;
+
+            const e = parser.nodeToElement(current);
             const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(e)));
 
             if (tag == .undef) {
                 const tag_name = try parser.nodeLocalName(@ptrCast(e));
                 const custom_elements = &self.window.custom_elements;
-                if (custom_elements.map.contains(tag_name)) {
+                if (custom_elements._get(tag_name)) |construct| {
+                    try construct.printFunc();
+                    // This is just here for testing for now.
+                    _ = try construct.newInstance(*parser.Element);
                     log.info(.browser, "Registered WebComponent Found", .{ .element_name = tag_name });
                 }
             }

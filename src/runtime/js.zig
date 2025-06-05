@@ -1263,6 +1263,17 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 };
             }
 
+            pub fn newInstance(self: *const Function, comptime T: type) !T {
+                const scope = self.scope;
+
+                if (self.func.castToFunction().initInstance(scope.context, &.{})) |result| {
+                    const named_function = comptime NamedFunction.init(T, "constructorResult");
+                    return scope.jsValueToZig(named_function, T, result.toValue());
+                } else {
+                    return error.JsConstructorFailed;
+                }
+            }
+
             pub fn call(self: *const Function, comptime T: type, args: anytype) !T {
                 return self.callWithThis(T, self.getThis(), args);
             }

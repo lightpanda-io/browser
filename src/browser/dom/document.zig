@@ -120,7 +120,13 @@ pub const Document = struct {
         return try Element.toInterface(e);
     }
 
-    pub fn _createElement(self: *parser.Document, tag_name: []const u8) !ElementUnion {
+    pub fn _createElement(self: *parser.Document, tag_name: []const u8, page: *Page) !ElementUnion {
+        const custom_elements = &page.window.custom_elements;
+        if (custom_elements._get(tag_name)) |construct| {
+            const e = try construct.newInstance(*parser.Element);
+            return try Element.toInterface(e);
+        }
+
         const e = try parser.documentCreateElement(self, tag_name);
         return try Element.toInterface(e);
     }
