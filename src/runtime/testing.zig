@@ -29,7 +29,7 @@ pub fn Runner(comptime State: type, comptime Global: type, comptime types: anyty
 
     return struct {
         env: *Env,
-        scope: *Env.Scope,
+        js_context: *Env.JsContext,
         executor: Env.ExecutionWorld,
 
         pub const Env = js.Env(State, struct {
@@ -48,7 +48,7 @@ pub fn Runner(comptime State: type, comptime Global: type, comptime types: anyty
             self.executor = try self.env.newExecutionWorld();
             errdefer self.executor.deinit();
 
-            self.scope = try self.executor.startScope(
+            self.js_context = try self.executor.createJsContext(
                 if (Global == void) &default_global else global,
                 state,
                 {},
@@ -68,10 +68,10 @@ pub fn Runner(comptime State: type, comptime Global: type, comptime types: anyty
         pub fn testCases(self: *Self, cases: []const Case, _: RunOpts) !void {
             for (cases, 0..) |case, i| {
                 var try_catch: Env.TryCatch = undefined;
-                try_catch.init(self.scope);
+                try_catch.init(self.js_context);
                 defer try_catch.deinit();
 
-                const value = self.scope.exec(case.@"0", null) catch |err| {
+                const value = self.js_context.exec(case.@"0", null) catch |err| {
                     if (try try_catch.err(allocator)) |msg| {
                         defer allocator.free(msg);
                         if (isExpectedTypeError(case.@"1", msg)) {

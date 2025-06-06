@@ -259,13 +259,13 @@ fn resolveNode(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
-    var scope = page.scope;
+    var js_context = page.main_context;
     if (params.executionContextId) |context_id| {
-        if (scope.context.debugContextId() != context_id) {
+        if (js_context.v8_context.debugContextId() != context_id) {
             var isolated_world = bc.isolated_world orelse return error.ContextNotFound;
-            scope = &(isolated_world.executor.scope orelse return error.ContextNotFound);
+            js_context = &(isolated_world.executor.js_context orelse return error.ContextNotFound);
 
-            if (scope.context.debugContextId() != context_id) return error.ContextNotFound;
+            if (js_context.v8_context.debugContextId() != context_id) return error.ContextNotFound;
         }
     }
 
@@ -275,7 +275,7 @@ fn resolveNode(cmd: anytype) !void {
     // node._node is a *parser.Node we need this to be able to find its most derived type e.g. Node -> Element -> HTMLElement
     // So we use the Node.Union when retrieve the value from the environment
     const remote_object = try bc.inspector.getRemoteObject(
-        scope,
+        js_context,
         params.objectGroup orelse "",
         try dom_node.Node.toInterface(node._node),
     );
