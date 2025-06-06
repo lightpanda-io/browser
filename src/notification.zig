@@ -59,6 +59,7 @@ pub const Notification = struct {
         page_created: List = .{},
         page_navigate: List = .{},
         page_navigated: List = .{},
+        http_request_fail: List = .{},
         http_request_start: List = .{},
         http_request_complete: List = .{},
         notification_created: List = .{},
@@ -69,6 +70,7 @@ pub const Notification = struct {
         page_created: *page.Page,
         page_navigate: *const PageNavigate,
         page_navigated: *const PageNavigated,
+        http_request_fail: *const RequestFail,
         http_request_start: *const RequestStart,
         http_request_complete: *const RequestComplete,
         notification_created: *Notification,
@@ -95,6 +97,12 @@ pub const Notification = struct {
         method: http_client.Request.Method,
         headers: *std.ArrayListUnmanaged(std.http.Header),
         has_body: bool,
+    };
+
+    pub const RequestFail = struct {
+        id: usize,
+        url: *const std.Uri,
+        err: []const u8,
     };
 
     pub const RequestComplete = struct {
