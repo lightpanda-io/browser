@@ -419,17 +419,17 @@ pub const JsRunner = struct {
     const RunOpts = struct {};
     pub const Case = std.meta.Tuple(&.{ []const u8, ?[]const u8 });
     pub fn testCases(self: *JsRunner, cases: []const Case, _: RunOpts) !void {
-        const scope = self.page.scope;
+        const js_context = self.page.main_context;
         const arena = self.page.arena;
 
         const start = try std.time.Instant.now();
 
         for (cases, 0..) |case, i| {
             var try_catch: Env.TryCatch = undefined;
-            try_catch.init(scope);
+            try_catch.init(js_context);
             defer try_catch.deinit();
 
-            const value = scope.exec(case.@"0", null) catch |err| {
+            const value = js_context.exec(case.@"0", null) catch |err| {
                 if (try try_catch.err(arena)) |msg| {
                     std.debug.print("{s}\n\nCase: {d}\n{s}\n", .{ msg, i + 1, case.@"0" });
                 }
@@ -453,14 +453,14 @@ pub const JsRunner = struct {
     }
 
     pub fn eval(self: *JsRunner, src: []const u8, name: ?[]const u8, err_msg: *?[]const u8) !Env.Value {
-        const scope = self.page.scope;
+        const js_context = self.page.main_context;
         const arena = self.page.arena;
 
         var try_catch: Env.TryCatch = undefined;
-        try_catch.init(scope);
+        try_catch.init(js_context);
         defer try_catch.deinit();
 
-        return scope.exec(src, name) catch |err| {
+        return js_context.exec(src, name) catch |err| {
             if (try try_catch.err(arena)) |msg| {
                 err_msg.* = msg;
                 std.debug.print("Error running script: {s}\n", .{msg});

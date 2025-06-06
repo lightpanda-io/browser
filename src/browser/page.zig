@@ -85,7 +85,7 @@ pub const Page = struct {
 
     // Our JavaScript context for this specific page. This is what we use to
     // execute any JavaScript
-    scope: *Env.Scope,
+    main_context: *Env.JsContext,
 
     // List of modules currently fetched/loaded.
     module_map: std.StringHashMapUnmanaged([]const u8),
@@ -118,13 +118,13 @@ pub const Page = struct {
             .request_factory = browser.http_client.requestFactory(.{
                 .notification = browser.notification,
             }),
-            .scope = undefined,
+            .main_context = undefined,
             .module_map = .empty,
         };
-        self.scope = try session.executor.startScope(&self.window, self, self, true);
+        self.main_context = try session.executor.createJsContext(&self.window, self, self, true);
 
         // load polyfills
-        try polyfill.load(self.arena, self.scope);
+        try polyfill.load(self.arena, self.main_context);
 
         _ = try session.browser.app.loop.timeout(1 * std.time.ns_per_ms, &self.microtask_node);
     }
@@ -166,7 +166,7 @@ pub const Page = struct {
 
     pub fn wait(self: *Page) !void {
         var try_catch: Env.TryCatch = undefined;
-        try_catch.init(self.scope);
+        try_catch.init(self.main_context);
         defer try_catch.deinit();
 
         try self.session.browser.app.loop.run();
@@ -798,7 +798,7 @@ pub const Page = struct {
 
     pub fn stackTrace(self: *Page) !?[]const u8 {
         if (comptime builtin.mode == .Debug) {
-            return self.scope.stackTrace();
+            return self.main_context.stackTrace();
         }
         return null;
     }
@@ -818,7 +818,7 @@ const DelayedNavigation = struct {
     //
     // In the first phase, when self.initial == true, we'll shutdown the page
     // and create a new one. The shutdown is important, because it resets the
-    // loop ctx_id and closes the scope. Closing the scope calls our XHR
+    // loop ctx_id and removes the JsContext. Removing the context calls our XHR
     // destructors which aborts requests. This is necessary to make sure our
     // [blocking] navigate won't block.
     //
@@ -982,14 +982,14 @@ const Script = struct {
 
     fn eval(self: *const Script, page: *Page, body: []const u8) !void {
         var try_catch: Env.TryCatch = undefined;
-        try_catch.init(page.scope);
+        try_catch.init(page.main_context);
         defer try_catch.deinit();
 
         const src = self.src orelse "inline";
         _ = switch (self.kind) {
-            .javascript => page.scope.exec(body, src),
+            .javascript => page.main_context.exec(body, src),
             .module => blk: {
-                switch (try page.scope.module(body, src)) {
+                switch (try page.main_context.module(body, src)) {
                     .value => |v| break :blk v,
                     .exception => |e| {
                         log.warn(.user_script, "eval module", .{
@@ -1023,9 +1023,9 @@ const Script = struct {
         switch (callback) {
             .string => |str| {
                 var try_catch: Env.TryCatch = undefined;
-                try_catch.init(page.scope);
+                try_catch.init(page.main_context);
                 defer try_catch.deinit();
-                _ = page.scope.exec(str, typ) catch {
+                _ = page.main_context.exec(str, typ) catch {
                     if (try try_catch.err(page.arena)) |msg| {
                         log.warn(.user_script, "script callback", .{
                             .src = self.src,

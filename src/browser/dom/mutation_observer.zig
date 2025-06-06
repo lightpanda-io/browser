@@ -38,7 +38,7 @@ pub const MutationObserver = struct {
     cbk: Env.Function,
     arena: Allocator,
 
-    // List of records which were observed. When the scopeEnds, we need to
+    // List of records which were observed. When the call scope ends, we need to
     // execute our callback with it.
     observed: std.ArrayListUnmanaged(*MutationRecord),
 
