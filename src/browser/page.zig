@@ -633,13 +633,13 @@ pub const Page = struct {
         const transfer_arena = self.session.transfer_arena;
         var form_data = try FormData.fromForm(form, submitter, self);
 
-        const encoding = try parser.elementGetAttribute(@ptrCast(form), "enctype");
+        const encoding = try parser.elementGetAttribute(@alignCast(@ptrCast(form)), "enctype");
 
         var buf: std.ArrayListUnmanaged(u8) = .empty;
         try form_data.write(encoding, buf.writer(transfer_arena));
 
-        const method = try parser.elementGetAttribute(@ptrCast(form), "method") orelse "";
-        var action = try parser.elementGetAttribute(@ptrCast(form), "action") orelse self.url.raw;
+        const method = try parser.elementGetAttribute(@alignCast(@ptrCast(form)), "method") orelse "";
+        var action = try parser.elementGetAttribute(@alignCast(@ptrCast(form)), "action") orelse self.url.raw;
 
         var opts = NavigateOpts{
             .reason = .form,

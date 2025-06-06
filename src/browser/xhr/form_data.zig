@@ -216,7 +216,7 @@ fn collectSelectValues(arena: Allocator, select: *parser.Select, name: []const u
     if (is_multiple == false) {
         const option = try parser.optionCollectionItem(options, @intCast(selected_index));
 
-        if (try parser.elementGetAttribute(@ptrCast(option), "disabled") != null) {
+        if (try parser.elementGetAttribute(@alignCast(@ptrCast(option)), "disabled") != null) {
             return;
         }
         const value = try parser.optionGetValue(option);
@@ -228,7 +228,7 @@ fn collectSelectValues(arena: Allocator, select: *parser.Select, name: []const u
     // we can go directly to the first one
     for (@intCast(selected_index)..len) |i| {
         const option = try parser.optionCollectionItem(options, @intCast(i));
-        if (try parser.elementGetAttribute(@ptrCast(option), "disabled") != null) {
+        if (try parser.elementGetAttribute(@alignCast(@ptrCast(option)), "disabled") != null) {
             continue;
         }
 

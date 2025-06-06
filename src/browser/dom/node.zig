@@ -496,7 +496,7 @@ pub const Node = struct {
         fn toNode(self: NodeOrText, doc: *parser.Document) !*parser.Node {
             return switch (self) {
                 .node => |n| n,
-                .text => |txt| @ptrCast(try parser.documentCreateTextNode(doc, txt)),
+                .text => |txt| @alignCast(@ptrCast(try parser.documentCreateTextNode(doc, txt))),
             };
         }
 

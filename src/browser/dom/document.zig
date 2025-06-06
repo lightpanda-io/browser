@@ -244,13 +244,13 @@ pub const Document = struct {
     }
 
     pub fn get_activeElement(self: *parser.Document, page: *Page) !?ElementUnion {
-        const state = try page.getOrCreateNodeState(@ptrCast(self));
+        const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(self)));
         if (state.active_element) |ae| {
             return try Element.toInterface(ae);
         }
 
         if (try parser.documentHTMLBody(page.window.document)) |body| {
-            return try Element.toInterface(@ptrCast(body));
+            return try Element.toInterface(@alignCast(@ptrCast(body)));
         }
 
         return get_documentElement(self);
@@ -261,7 +261,7 @@ pub const Document = struct {
     // we could look for the "disabled" attribute, but that's only meaningful
     // on certain types, and libdom's vtable doesn't seem to expose this.
     pub fn setFocus(self: *parser.Document, e: *parser.ElementHTML, page: *Page) !void {
-        const state = try page.getOrCreateNodeState(@ptrCast(self));
+        const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(self)));
         state.active_element = @ptrCast(e);
     }
 };
