@@ -341,7 +341,8 @@ pub const Page = struct {
                 if (custom_elements._get(tag_name)) |construct| {
                     try construct.printFunc();
                     // This is just here for testing for now.
-                    _ = try construct.newInstance(*parser.Element);
+                    var result: Env.Function.Result = undefined;
+                    _ = try construct.newInstance(*parser.Element, &result);
                     log.info(.browser, "Registered WebComponent Found", .{ .element_name = tag_name });
                 }
             }

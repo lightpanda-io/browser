@@ -1263,15 +1263,26 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 };
             }
 
-            pub fn newInstance(self: *const Function, comptime T: type) !T {
+            pub fn newInstance(self: *const Function, comptime T: type, result: *Result) !T {
                 const scope = self.scope;
 
-                if (self.func.castToFunction().initInstance(scope.context, &.{})) |result| {
-                    const named_function = comptime NamedFunction.init(T, "constructorResult");
-                    return scope.jsValueToZig(named_function, T, result.toValue());
-                } else {
+                var try_catch: TryCatch = undefined;
+                try_catch.init(scope);
+                defer try_catch.deinit();
+
+                const js_this = self.func.castToFunction().initInstance(scope.context, &.{}) orelse {
+                    if (try_catch.hasCaught()) {
+                        const allocator = scope.call_arena;
+                        result.stack = try_catch.stack(allocator) catch null;
+                        result.exception = (try_catch.exception(allocator) catch "???") orelse "???";
+                    } else {
+                        result.stack = null;
+                        result.exception = "???";
+                    }
                     return error.JsConstructorFailed;
-                }
+                };
+                const named_function = comptime NamedFunction.init(T, "constructorResult");
+                return scope.jsValueToZig(named_function, T, js_this.toValue());
             }
 
             pub fn call(self: *const Function, comptime T: type, args: anytype) !T {

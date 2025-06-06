@@ -52,7 +52,16 @@ test "Browser.CustomElementRegistry" {
         .{ "customElements instanceof CustomElementRegistry", "true" },
 
         // Define a simple custom element
-        .{ "class MyElement extends HTMLElement { constructor() { super(); this.textContent = 'Hello World'; } }", "undefined" },
+        .{
+            \\ class MyElement extends HTMLElement {
+            \\   constructor() {
+            \\      super();
+            \\      this.textContent = 'Hello World';
+            \\   }
+            \\ }
+            ,
+            null,
+        },
         .{ "customElements.define('my-element', MyElement)", "undefined" },
 
         // Check if element is defined
