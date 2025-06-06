@@ -163,50 +163,33 @@ pub const Window = struct {
         return &self.performance;
     }
 
-    // Tells the browser you wish to perform an animation. It requests the browser to call a user-supplied callback function before the next repaint.
-    // fn callback(timestamp: f64)
-    // Returns the request ID, that uniquely identifies the entry in the callback list.
-    pub fn _requestAnimationFrame(
-        self: *Window,
-        callback: Function,
-    ) !u32 {
-        // We immediately execute the callback, but this may not be correct TBD.
-        // Since: When multiple callbacks queued by requestAnimationFrame() begin to fire in a single frame, each receives the same timestamp even though time has passed during the computation of every previous callback's workload.
-        var result: Function.Result = undefined;
-        callback.tryCall(void, .{self.performance._now()}, &result) catch {
-            log.debug(.user_script, "callback error", .{
-                .err = result.exception,
-                .stack = result.stack,
-                .source = "requestAnimationFrame",
-            });
-        };
-        return 99; // not unique, but user cannot make assumptions about it. cancelAnimationFrame will be too late anyway.
+    pub fn _requestAnimationFrame(self: *Window, cbk: Function, page: *Page) !u32 {
+        return self.createTimeout(cbk, 5, page, .{.animation_frame = true});
     }
 
-    // Cancels an animation frame request previously scheduled through requestAnimationFrame().
-    // This is a no-op since _requestAnimationFrame immediately executes the callback.
-    pub fn _cancelAnimationFrame(_: *Window, request_id: u32) void {
-        _ = request_id;
+    pub fn _cancelAnimationFrame(self: *Window, id: u32, page: *Page) !void {
+        const kv = self.timers.fetchRemove(id) orelse return;
+        return page.loop.cancel(kv.value.loop_id);
     }
 
     // TODO handle callback arguments.
     pub fn _setTimeout(self: *Window, cbk: Function, delay: ?u32, page: *Page) !u32 {
-        return self.createTimeout(cbk, delay, page, false);
+        return self.createTimeout(cbk, delay, page, .{});
     }
 
     // TODO handle callback arguments.
     pub fn _setInterval(self: *Window, cbk: Function, delay: ?u32, page: *Page) !u32 {
-        return self.createTimeout(cbk, delay, page, true);
+        return self.createTimeout(cbk, delay, page, .{.repeat = true});
     }
 
     pub fn _clearTimeout(self: *Window, id: u32, page: *Page) !void {
         const kv = self.timers.fetchRemove(id) orelse return;
-        try page.loop.cancel(kv.value.loop_id);
+        return page.loop.cancel(kv.value.loop_id);
     }
 
     pub fn _clearInterval(self: *Window, id: u32, page: *Page) !void {
         const kv = self.timers.fetchRemove(id) orelse return;
-        try page.loop.cancel(kv.value.loop_id);
+        return page.loop.cancel(kv.value.loop_id);
     }
 
     pub fn _matchMedia(_: *const Window, media: []const u8, page: *Page) !MediaQueryList {
@@ -216,10 +199,14 @@ pub const Window = struct {
         };
     }
 
-    fn createTimeout(self: *Window, cbk: Function, delay_: ?u32, page: *Page, comptime repeat: bool) !u32 {
+    const CreateTimeoutOpts = struct {
+        repeat: bool = false,
+        animation_frame: bool = false,
+    };
+    fn createTimeout(self: *Window, cbk: Function, delay_: ?u32, page: *Page, comptime opts: CreateTimeoutOpts) !u32 {
         const delay = delay_ orelse 0;
         if (delay > 5000) {
-            log.warn(.user_script, "long timeout ignored", .{ .delay = delay, .interval = repeat });
+            log.warn(.user_script, "long timeout ignored", .{ .delay = delay, .interval = opts.repeat });
             // self.timer_id is u30, so the largest value we can generate is
             // 1_073_741_824. Returning 2_000_000_000 makes sure that clients
             // can call cancelTimer/cancelInterval without breaking anything.
@@ -250,7 +237,8 @@ pub const Window = struct {
             .window = self,
             .timer_id = timer_id,
             .node = .{ .func = TimerCallback.run },
-            .repeat = if (repeat) delay_ms else null,
+            .repeat = if (opts.repeat) delay_ms else null,
+            .animation_frame = opts.animation_frame,
         };
         callback.loop_id = try page.loop.timeout(delay_ms, &callback.node);
 
@@ -300,13 +288,23 @@ const TimerCallback = struct {
     // if the event should be repeated
     repeat: ?u63 = null,
 
+    animation_frame: bool = false,
+
     window: *Window,
 
     fn run(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
         const self: *TimerCallback = @fieldParentPtr("node", node);
 
         var result: Function.Result = undefined;
-        self.cbk.tryCall(void, .{}, &result) catch {
+
+        var call: anyerror!void = undefined;
+        if (self.animation_frame) {
+            call = self.cbk.tryCall(void, .{self.window.performance._now()}, &result);
+        } else {
+            call = self.cbk.tryCall(void, .{}, &result);
+        }
+
+        call catch {
             log.debug(.user_script, "callback error", .{
                 .err = result.exception,
                 .stack = result.stack,
