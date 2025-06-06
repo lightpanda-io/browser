@@ -1298,7 +1298,7 @@ test "Browser.HTML.HtmlInputElement.propeties" {
     try runner.testCases(&.{.{ "elem_input.maxLength", "-1" }}, .{}); // Initial value
     try testProperty(arena, &runner, "elem_input.maxLength", null, &.{.{ .input = "5" }}); // Valid
     try testProperty(arena, &runner, "elem_input.maxLength", "0", &.{.{ .input = "'banana'" }}); // Invalid
-    try testing.expectError(error.ExecutionError, runner.testCases(&.{.{ "elem_input.maxLength = -45", null }}, .{})); // Error
+    try runner.testCases(&.{.{ "try { elem_input.maxLength = -45 } catch(e) {e}", "Error: NegativeValueNotAllowed" }}, .{}); // Error
 
     try runner.testCases(&.{.{ "elem_input.name", "" }}, .{}); // Initial value
     try testProperty(arena, &runner, "elem_input.name", null, &str_valids); // Valid
@@ -1309,8 +1309,8 @@ test "Browser.HTML.HtmlInputElement.propeties" {
     try runner.testCases(&.{.{ "elem_input.size", "20" }}, .{}); // Initial value
     try testProperty(arena, &runner, "elem_input.size", null, &.{.{ .input = "5" }}); // Valid
     try testProperty(arena, &runner, "elem_input.size", "20", &.{.{ .input = "-26" }}); // Invalid
-    try testing.expectError(error.ExecutionError, runner.testCases(&.{.{ "elem_input.size = 0", null }}, .{})); // Error
-    try testing.expectError(error.ExecutionError, runner.testCases(&.{.{ "elem_input.size = 'banana'", null }}, .{})); // Error
+    try runner.testCases(&.{.{ "try { elem_input.size = 0 } catch(e) {e}", "Error: ZeroNotAllowed" }}, .{}); // Error
+    try runner.testCases(&.{.{ "try { elem_input.size = 'banana' } catch(e) {e}", "Error: ZeroNotAllowed" }}, .{}); // Error
 
     try runner.testCases(&.{.{ "elem_input.src", "" }}, .{}); // Initial value
     try testProperty(arena, &runner, "elem_input.src", null, &.{
