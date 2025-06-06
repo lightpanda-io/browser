@@ -115,11 +115,11 @@ pub const Session = struct {
         // phase. It's important that we clean these up, as they're holding onto
         // limited resources (like our fixed-sized http state pool).
         //
-        // First thing we do, is endScope() which will execute the destructor
+        // First thing we do, is removeJsContext() which will execute the destructor
         // of any type that registered a destructor (e.g. XMLHttpRequest).
         // This will shutdown any pending sockets, which begins our cleaning
         // processed
-        self.executor.endScope();
+        self.executor.removeJsContext();
 
         // Second thing we do is reset the loop. This increments the loop ctx_id
         // so that any "stale" timeouts we process will get ignored. We need to
@@ -128,7 +128,7 @@ pub const Session = struct {
         self.browser.app.loop.reset();
 
         // Finally, we run the loop. Because of the reset just above, this will
-        // ignore any timeouts. And, because of the endScope about this, it
+        // ignore any timeouts. And, because of the removeJsContext about this, it
         // should ensure that the http requests detect the shutdown socket and
         // release their resources.
         try self.browser.app.loop.run();
