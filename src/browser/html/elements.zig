@@ -627,17 +627,20 @@ pub const HTMLImageElement = struct {
     };
 };
 
-pub fn createElement(doc: *parser.Document, params: *parser.dom_html_element_create_params, elem: **parser.HtmlElement) !void {
-    // Required to be set on all documents. How during dom parsing?
-    const wrap = parser.nodeGetEmbedderData(@ptrCast(doc)).?;
-    const state = @as(State, @alignCast(@ptrCast(wrap)));
-    const page = state.page;
+pub fn createElement(doc: [*c]parser.DocumentHTML, params: [*c]parser.c.dom_html_element_create_params, elem: [*c][*c]parser.ElementHTML) callconv(.c) parser.c.dom_exception {
+    // Required to be set on all htmldocuments. How during dom parsing?
+    const wrap = parser.nodeGetEmbedderData(@ptrCast(doc)).?; // TODO this is not set yet
+    const state = @as(*State, @alignCast(@ptrCast(wrap)));
+    const page = state.page.?;
 
-    switch (params.type) {
-        .DOM_HTML_ELEMENT_TYPE_INPUT => {
+    const p: *parser.c.dom_html_element_create_params = @ptrCast(params);
+    switch (p.type) {
+        parser.c.DOM_HTML_ELEMENT_TYPE_INPUT => {
             elem.* = try HTMLInputElement.dom_create(params, page);
         },
+        else => return parser.c.DOM_NOT_FOUND_ERR,
     }
+    return parser.c.DOM_NO_ERR;
 }
 
 pub const HTMLInputElement = struct {
@@ -646,29 +649,29 @@ pub const HTMLInputElement = struct {
     pub const subtype = .node;
 
     // VTables can be generated from the dom_ funcs
-    pub const vtable: parser.dom_html_element_vtable = parser._dom_html_element_vtable;
-    pub const protected_vtable: parser.dom_element_protected_vtable = .{
+    vtable: parser.c.dom_html_element_vtable = parser.c._dom_html_element_vtable, // TODO make global, instantiate value and cast to void probably
+    protected_vtable: parser.c.dom_element_protected_vtable = .{
         .dom_node_copy = dom_node_copy,
         // .dom_node_destroy = dom_node_destroy, // Not needed in zig
         .dom_initialise = dom_initialise,
-    };
+    },
 
     base: parser.ElementHTML,
 
     // Should instead have 2 vtable fields to generate the creation function
-    pub fn dom_create(params: *parser.dom_html_element_create_params, page: *Page) !*parser.HtmlElement {
+    pub fn dom_create(params: *parser.c.dom_html_element_create_params, page: *Page) !*parser.ElementHTML {
         var self = try page.arena.create(HTMLInputElement); // Put in pool?
         self.base.base.base.vtable = &HTMLInputElement.vtable;
         self.base.base.vtable = &HTMLInputElement.protected_vtable;
         // set vtable and protected vtable
 
-        self.initialise(params);
+        self.dom_initialise(params);
         return self.base;
     }
     // Initialise is separated from create such that the leaf type sets the vtable, then calls all the way up the protochain to init
     // Currently we do only leaf types tho
-    pub fn dom_initialise(self: *HTMLInputElement, params: *parser.dom_html_element_create_params) !void {
-        return parser._dom_html_element_initialise(params, &self.base);
+    pub fn dom_initialise(self: *HTMLInputElement, params: *parser.c.dom_html_element_create_params) parser.c.dom_exception {
+        return parser.c._dom_html_element_initialise(params, &self.base);
     }
 
     // This should always be the same and we should not have cleanup for new zig implementation, hopefully

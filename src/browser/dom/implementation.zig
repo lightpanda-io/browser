@@ -42,7 +42,8 @@ pub const DOMImplementation = struct {
     }
 
     pub fn _createHTMLDocument(_: *DOMImplementation, title: ?[]const u8) !*parser.DocumentHTML {
-        return try parser.domImplementationCreateHTMLDocument(title);
+        const Elements = @import("../html/elements.zig");
+        return try parser.domImplementationCreateHTMLDocument(title, &Elements.createElement);
     }
 
     pub fn _hasFeature(_: *DOMImplementation) bool {
