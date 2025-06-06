@@ -828,6 +828,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
             wait,
             done,
             need_more,
+            handler_error,
         };
 
         fn deinit(self: *Self) void {
@@ -966,12 +967,35 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
             switch (status) {
                 .wait => {},
                 .need_more => self.receive(),
+                .handler_error => {
+                    // handler should never have been called if we're redirecting
+                    std.debug.assert(self.redirect == null);
+                    self.request.requestCompleted(self.reader.response);
+                    self.deinit();
+                    return;
+                },
                 .done => {
                     const redirect = self.redirect orelse {
+                        var handler = self.handler;
                         self.request.requestCompleted(self.reader.response);
                         self.deinit();
+
+                        // Emit the done chunk. We expect the caller to do
+                        // processing once the full request is completed. By
+                        // emiting this AFTER we've relreased the connection,
+                        // we free the connection and its state for re-use.
+                        // If we don't do this this way, we can end up with
+                        // _a lot_ of pending request/states.
+                        // DO NOT USE `self` here, it's no longer valid.
+                        handler.onHttpResponse(.{
+                            .data = null,
+                            .done = true,
+                            .first = false,
+                            .header = .{},
+                        }) catch {};
                         return;
                     };
+
                     self.request.redirectAsync(redirect, self.loop, self.handler) catch |err| {
                         self.handleError("Setup async redirect", err);
                         return;
@@ -1116,22 +1140,22 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                             self.handler.onHttpResponse(.{
                                 .data = chunk,
                                 .first = first,
-                                .done = next == null,
+                                .done = false,
                                 .header = reader.response,
-                            }) catch return .done;
+                            }) catch return .handler_error;
 
                             first = false;
                         }
                     }
-                } else if (result.data != null or done or would_be_first) {
+                } else if (result.data != null or would_be_first) {
                     // If we have data. Or if the request is done. Or if this is the
                     // first time we have a complete header. Emit the chunk.
                     self.handler.onHttpResponse(.{
-                        .done = done,
+                        .done = false,
                         .data = result.data,
                         .first = would_be_first,
                         .header = reader.response,
-                    }) catch return .done;
+                    }) catch return .handler_error;
                 }
 
                 if (done == true) {
@@ -3135,7 +3159,8 @@ const CaptureHandler = struct {
         const progress = try progress_;
         const allocator = self.response.arena.allocator();
         try self.response.body.appendSlice(allocator, progress.data orelse "");
-        if (progress.done) {
+        if (progress.first) {
+            std.debug.assert(!progress.done);
             self.response.status = progress.header.status;
             try self.response.headers.ensureTotalCapacity(allocator, progress.header.headers.items.len);
             for (progress.header.headers.items) |header| {
@@ -3144,6 +3169,9 @@ const CaptureHandler = struct {
                     .value = try allocator.dupe(u8, header.value),
                 });
             }
+        }
+
+        if (progress.done) {
             self.reset.set();
         }
     }
