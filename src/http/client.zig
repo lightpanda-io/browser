@@ -838,10 +838,11 @@ pub const Request = struct {
         }
         self._notified_start = true;
         notification.dispatch(.http_request_start, &.{
+            .arena = self.arena,
             .id = self.id,
             .url = self.request_uri,
             .method = self.method,
-            .headers = self.headers.items,
+            .headers = &self.headers,
             .has_body = self.body != null,
         });
     }

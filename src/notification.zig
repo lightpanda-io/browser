@@ -89,10 +89,11 @@ pub const Notification = struct {
     };
 
     pub const RequestStart = struct {
+        arena: Allocator,
         id: usize,
         url: *const std.Uri,
         method: http_client.Request.Method,
-        headers: []std.http.Header,
+        headers: *std.ArrayListUnmanaged(std.http.Header),
         has_body: bool,
     };
 

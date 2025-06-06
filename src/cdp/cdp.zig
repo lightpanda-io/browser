@@ -71,6 +71,9 @@ pub fn CDPT(comptime TypeProvider: type) type {
         // Used for processing notifications within a browser context.
         notification_arena: std.heap.ArenaAllocator,
 
+        // Extra headers to add to all requests. TBD under which conditions this should be reset.
+        extra_headers: std.ArrayListUnmanaged(std.http.Header) = .empty,
+
         const Self = @This();
 
         pub fn init(app: *App, client: TypeProvider.Client) !Self {

@@ -389,6 +389,9 @@ fn doAttachtoTarget(cmd: anytype, target_id: []const u8) !void {
     std.debug.assert(bc.session_id == null);
     const session_id = cmd.cdp.session_id_gen.next();
 
+    // extra_headers should not be kept on a new page or tab, currently we have only 1 page, we clear it just in case
+    bc.cdp.extra_headers.clearRetainingCapacity();
+
     try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
         .sessionId = session_id,
         .targetInfo = TargetInfo{
