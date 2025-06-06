@@ -220,7 +220,7 @@ fn closeTarget(cmd: anytype) !void {
         bc.session_id = null;
     }
 
-    bc.session.removePage();
+    try bc.session.removePage();
     if (bc.isolated_world) |*world| {
         world.deinit();
         bc.isolated_world = null;

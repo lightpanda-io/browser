@@ -34,9 +34,11 @@ pub const Loop = struct {
     alloc: std.mem.Allocator, // TODO: unmanaged version ?
     io: IO,
 
-    // Used to track how many callbacks are to be called and wait until all
-    // event are finished.
-    events_nb: usize,
+    // number of pending network events we have
+    pending_network_count: usize,
+
+    // number of pending timeout events we have
+    pending_timeout_count: usize,
 
     // Used to stop repeating timeouts when loop.run is called.
     stopping: bool,
@@ -66,8 +68,9 @@ pub const Loop = struct {
             .alloc = alloc,
             .cancelled = .{},
             .io = try IO.init(32, 0),
-            .events_nb = 0,
             .stopping = false,
+            .pending_network_count = 0,
+            .pending_timeout_count = 0,
             .timeout_pool = MemoryPool(ContextTimeout).init(alloc),
             .event_callback_pool = MemoryPool(EventCallbackContext).init(alloc),
         };
@@ -78,7 +81,7 @@ pub const Loop = struct {
 
         // run tail events. We do run the tail events to ensure all the
         // contexts are correcly free.
-        while (self.eventsNb() > 0) {
+        while (self.hasPendinEvents()) {
             self.io.run_for_ns(10 * std.time.ns_per_ms) catch |err| {
                 log.err(.loop, "deinit", .{ .err = err });
                 break;
@@ -93,6 +96,21 @@ pub const Loop = struct {
         self.cancelled.deinit(self.alloc);
     }
 
+    // We can shutdown once all the pending network IO is complete.
+    // In debug mode we also wait until al the pending timeouts are complete
+    // but we only do this so that the `timeoutCallback` can free all allocated
+    // memory and we won't report a leak.
+    fn hasPendinEvents(self: *const Self) bool {
+        if (self.pending_network_count > 0) {
+            return true;
+        }
+
+        if (builtin.mode != .Debug) {
+            return false;
+        }
+        return self.pending_timeout_count > 0;
+    }
+
     // Retrieve all registred I/O events completed by OS kernel,
     // and execute sequentially their callbacks.
     // Stops when there is no more I/O events registered on the loop.
@@ -103,25 +121,12 @@ pub const Loop = struct {
         self.stopping = true;
         defer self.stopping = false;
 
-        while (self.eventsNb() > 0) {
+        while (self.pending_network_count > 0) {
             try self.io.run_for_ns(10 * std.time.ns_per_ms);
             // at each iteration we might have new events registred by previous callbacks
         }
     }
 
-    // Register events atomically
-    // - add 1 event and return previous value
-    fn addEvent(self: *Self) void {
-        _ = @atomicRmw(usize, &self.events_nb, .Add, 1, .acq_rel);
-    }
-    // - remove 1 event and return previous value
-    fn removeEvent(self: *Self) void {
-        _ = @atomicRmw(usize, &self.events_nb, .Sub, 1, .acq_rel);
-    }
-    // - get the number of current events
-    fn eventsNb(self: *Self) usize {
-        return @atomicLoad(usize, &self.events_nb, .seq_cst);
-    }
 
     // JS callbacks APIs
     // -----------------
@@ -152,7 +157,7 @@ pub const Loop = struct {
         const loop = ctx.loop;
 
         if (ctx.initial) {
-            loop.removeEvent();
+            loop.pending_timeout_count -= 1;
         }
 
         defer {
@@ -207,7 +212,7 @@ pub const Loop = struct {
             .callback_node = callback_node,
         };
 
-        self.addEvent();
+        self.pending_timeout_count += 1;
         self.scheduleTimeout(nanoseconds, ctx, completion);
         return @intFromPtr(completion);
     }
@@ -244,17 +249,18 @@ pub const Loop = struct {
     ) !void {
         const onConnect = struct {
             fn onConnect(callback: *EventCallbackContext, completion_: *Completion, res: ConnectError!void) void {
+                callback.loop.pending_network_count -= 1;
                 defer callback.loop.event_callback_pool.destroy(callback);
-                callback.loop.removeEvent();
                 cbk(@alignCast(@ptrCast(callback.ctx)), completion_, res);
             }
         }.onConnect;
+
 
         const callback = try self.event_callback_pool.create();
         errdefer self.event_callback_pool.destroy(callback);
         callback.* = .{ .loop = self, .ctx = ctx };
 
-        self.addEvent();
+        self.pending_network_count += 1;
         self.io.connect(*EventCallbackContext, callback, onConnect, completion, socket, address);
     }
 
@@ -271,8 +277,8 @@ pub const Loop = struct {
     ) !void {
         const onSend = struct {
             fn onSend(callback: *EventCallbackContext, completion_: *Completion, res: SendError!usize) void {
+                callback.loop.pending_network_count -= 1;
                 defer callback.loop.event_callback_pool.destroy(callback);
-                callback.loop.removeEvent();
                 cbk(@alignCast(@ptrCast(callback.ctx)), completion_, res);
             }
         }.onSend;
@@ -281,7 +287,7 @@ pub const Loop = struct {
         errdefer self.event_callback_pool.destroy(callback);
         callback.* = .{ .loop = self, .ctx = ctx };
 
-        self.addEvent();
+        self.pending_network_count += 1;
         self.io.send(*EventCallbackContext, callback, onSend, completion, socket, buf);
     }
 
@@ -298,8 +304,8 @@ pub const Loop = struct {
     ) !void {
         const onRecv = struct {
             fn onRecv(callback: *EventCallbackContext, completion_: *Completion, res: RecvError!usize) void {
+                callback.loop.pending_network_count -= 1;
                 defer callback.loop.event_callback_pool.destroy(callback);
-                callback.loop.removeEvent();
                 cbk(@alignCast(@ptrCast(callback.ctx)), completion_, res);
             }
         }.onRecv;
@@ -307,8 +313,7 @@ pub const Loop = struct {
         const callback = try self.event_callback_pool.create();
         errdefer self.event_callback_pool.destroy(callback);
         callback.* = .{ .loop = self, .ctx = ctx };
-
-        self.addEvent();
+        self.pending_network_count += 1;
         self.io.recv(*EventCallbackContext, callback, onRecv, completion, socket, buf);
     }
 };
