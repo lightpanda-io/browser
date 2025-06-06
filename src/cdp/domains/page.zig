@@ -117,14 +117,14 @@ fn createIsolatedWorld(cmd: anytype) !void {
     const world = try bc.createIsolatedWorld(params.worldName, params.grantUniveralAccess);
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
     try pageCreated(bc, page);
-    const scope = &world.executor.scope.?;
+    const js_context = &world.executor.js_context.?;
 
     // Create the auxdata json for the contextCreated event
     // Calling contextCreated will assign a Id to the context and send the contextCreated event
     const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{params.frameId});
-    bc.inspector.contextCreated(scope, world.name, "", aux_data, false);
+    bc.inspector.contextCreated(js_context, world.name, "", aux_data, false);
 
-    return cmd.sendResult(.{ .executionContextId = scope.context.debugContextId() }, .{});
+    return cmd.sendResult(.{ .executionContextId = js_context.v8_context.debugContextId() }, .{});
 }
 
 fn navigate(cmd: anytype) !void {
@@ -253,7 +253,7 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
         const page = bc.session.currentPage() orelse return error.PageNotLoaded;
         const aux_data = try std.fmt.allocPrint(arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
         bc.inspector.contextCreated(
-            page.scope,
+            page.main_context,
             "",
             try page.origin(arena),
             aux_data,
@@ -264,7 +264,7 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
         const aux_json = try std.fmt.allocPrint(arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{target_id});
         // Calling contextCreated will assign a new Id to the context and send the contextCreated event
         bc.inspector.contextCreated(
-            &isolated_world.executor.scope.?,
+            &isolated_world.executor.js_context.?,
             isolated_world.name,
             "://",
             aux_json,
@@ -286,7 +286,7 @@ pub fn pageCreated(bc: anytype, page: *Page) !void {
         try isolated_world.createContext(page);
 
         const polyfill = @import("../../browser/polyfill/polyfill.zig");
-        try polyfill.load(bc.arena, &isolated_world.executor.scope.?);
+        try polyfill.load(bc.arena, &isolated_world.executor.js_context.?);
     }
 }
 
