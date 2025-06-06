@@ -90,7 +90,7 @@ fn clickNavigate(cmd: anytype, uri: std.Uri) !void {
         .disposition = "currentTab",
     }, .{ .session_id = bc.session_id.? });
 
-    bc.session.removePage();
+    try bc.session.removePage();
     _ = try bc.session.createPage(null);
 
     try @import("page.zig").navigateToUrl(cmd, url, false);

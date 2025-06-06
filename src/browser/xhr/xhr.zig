@@ -30,6 +30,7 @@ const Mime = @import("../mime.zig").Mime;
 const parser = @import("../netsurf.zig");
 const http = @import("../../http/client.zig");
 const Page = @import("../page.zig").Page;
+const Loop = @import("../../runtime/loop.zig").Loop;
 const CookieJar = @import("../storage/storage.zig").CookieJar;
 
 // XHR interfaces
@@ -78,6 +79,7 @@ const XMLHttpRequestBodyInit = union(enum) {
 
 pub const XMLHttpRequest = struct {
     proto: XMLHttpRequestEventTarget = XMLHttpRequestEventTarget{},
+    loop: *Loop,
     arena: Allocator,
     request: ?*http.Request = null,
 
@@ -91,6 +93,7 @@ pub const XMLHttpRequest = struct {
     sync: bool = true,
     err: ?anyerror = null,
     last_dispatch: i64 = 0,
+    request_body: ?[]const u8 = null,
 
     cookie_jar: *CookieJar,
     // the URI of the page where this request is originating from
@@ -241,12 +244,13 @@ pub const XMLHttpRequest = struct {
     pub fn constructor(page: *Page) !XMLHttpRequest {
         const arena = page.arena;
         return .{
+            .url = null,
             .arena = arena,
+            .loop = page.loop,
             .headers = Headers.init(arena),
             .response_headers = Headers.init(arena),
             .method = undefined,
             .state = .unsent,
-            .url = null,
             .origin_url = &page.url,
             .cookie_jar = page.cookie_jar,
         };
@@ -422,10 +426,23 @@ pub const XMLHttpRequest = struct {
         log.debug(.http, "request", .{ .method = self.method, .url = self.url, .source = "xhr" });
 
         self.send_flag = true;
+        if (body) |b| {
+            self.request_body = try self.arena.dupe(u8, b);
+        }
 
-        self.request = try page.request_factory.create(self.method, &self.url.?.uri);
-        var request = self.request.?;
-        errdefer request.deinit();
+        try page.request_factory.initAsync(
+            page.arena,
+            self.method,
+            &self.url.?.uri,
+            self,
+            onHttpRequestReady,
+            self.loop,
+        );
+    }
+
+    fn onHttpRequestReady(ctx: *anyopaque, request: *http.Request) !void {
+        // on error, our caller will cleanup request
+        const self: *XMLHttpRequest = @alignCast(@ptrCast(ctx));
 
         for (self.headers.list.items) |hdr| {
             try request.addHeader(hdr.name, hdr.value, .{});
@@ -433,7 +450,7 @@ pub const XMLHttpRequest = struct {
 
         {
             var arr: std.ArrayListUnmanaged(u8) = .{};
-            try self.cookie_jar.forRequest(&self.url.?.uri, arr.writer(page.arena), .{
+            try self.cookie_jar.forRequest(&self.url.?.uri, arr.writer(self.arena), .{
                 .navigation = false,
                 .origin_uri = &self.origin_url.uri,
             });
@@ -447,14 +464,15 @@ pub const XMLHttpRequest = struct {
         //  if the request method is GET or HEAD.
         //  https://xhr.spec.whatwg.org/#the-send()-method
         // var used_body: ?XMLHttpRequestBodyInit = null;
-        if (body) |b| {
+        if (self.request_body) |b| {
             if (self.method != .GET and self.method != .HEAD) {
-                request.body = try page.arena.dupe(u8, b);
+                request.body = b;
                 try request.addHeader("Content-Type", "text/plain; charset=UTF-8", .{});
             }
         }
 
-        try request.sendAsync(page.loop, self, .{});
+        try request.sendAsync(self.loop, self, .{});
+        self.request = request;
     }
 
     pub fn onHttpResponse(self: *XMLHttpRequest, progress_: anyerror!http.Progress) !void {

@@ -72,7 +72,7 @@ pub const Session = struct {
 
     pub fn deinit(self: *Session) void {
         if (self.page != null) {
-            self.removePage();
+            self.removePage() catch {};
         }
         self.cookie_jar.deinit();
         self.storage_shed.deinit();
@@ -104,14 +104,35 @@ pub const Session = struct {
         return page;
     }
 
-    pub fn removePage(self: *Session) void {
+    pub fn removePage(self: *Session) !void {
         // Inform CDP the page is going to be removed, allowing other worlds to remove themselves before the main one
         self.browser.notification.dispatch(.page_remove, .{});
 
         std.debug.assert(self.page != null);
-        // Reset all existing callbacks.
-        self.browser.app.loop.reset();
+
+        // Cleanup is a bit sensitive. We could still have inflight I/O. For
+        // example, we could have an XHR request which is still in the connect
+        // phase. It's important that we clean these up, as they're holding onto
+        // limited resources (like our fixed-sized http state pool).
+        //
+        // First thing we do, is endScope() which will execute the destructor
+        // of any type that registered a destructor (e.g. XMLHttpRequest).
+        // This will shutdown any pending sockets, which begins our cleaning
+        // processed
         self.executor.endScope();
+
+        // Second thing we do is reset the loop. This increments the loop ctx_id
+        // so that any "stale" timeouts we process will get ignored. We need to
+        // do this BEFORE running the loop because, at this point, things like
+        // window.setTimeout and running microtasks should be ignored
+        self.browser.app.loop.reset();
+
+        // Finally, we run the loop. Because of the reset just above, this will
+        // ignore any timeouts. And, because of the endScope about this, it
+        // should ensure that the http requests detect the shutdown socket and
+        // release their resources.
+        try self.browser.app.loop.run();
+
         self.page = null;
 
         // clear netsurf memory arena.
@@ -143,7 +164,7 @@ pub const Session = struct {
         // the final URL, possibly following redirects)
         const url = try self.page.?.url.resolve(self.transfer_arena, url_string);
 
-        self.removePage();
+        try self.removePage();
         var page = try self.createPage();
         return page.navigate(url, opts);
     }

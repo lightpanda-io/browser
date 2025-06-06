@@ -113,7 +113,9 @@ pub const Page = struct {
             .cookie_jar = &session.cookie_jar,
             .microtask_node = .{ .func = microtaskCallback },
             .window_clicked_event_node = .{ .func = windowClicked },
-            .request_factory = browser.http_client.requestFactory(browser.notification),
+            .request_factory = browser.http_client.requestFactory(.{
+                .notification = browser.notification,
+            }),
             .scope = undefined,
             .module_map = .empty,
         };
@@ -205,57 +207,62 @@ pub const Page = struct {
         // redirect)
         self.url = request_url;
 
-        // load the data
-        var request = try self.newHTTPRequest(opts.method, &self.url, .{ .navigation = true });
-        defer request.deinit();
-        request.body = opts.body;
-        request.notification = notification;
+        {
+            // block exists to limit the lifetime of the request, which holds
+            // onto a connection
+            var request = try self.newHTTPRequest(opts.method, &self.url, .{ .navigation = true });
+            defer request.deinit();
 
-        notification.dispatch(.page_navigate, &.{
-            .opts = opts,
-            .url = &self.url,
-            .timestamp = timestamp(),
-        });
+            request.body = opts.body;
+            request.notification = notification;
 
-        var response = try request.sendSync(.{});
+            notification.dispatch(.page_navigate, &.{
+                .opts = opts,
+                .url = &self.url,
+                .timestamp = timestamp(),
+            });
 
-        // would be different than self.url in the case of a redirect
-        self.url = try URL.fromURI(arena, request.request_uri);
+            var response = try request.sendSync(.{});
 
-        const header = response.header;
-        try session.cookie_jar.populateFromResponse(&self.url.uri, &header);
+            // would be different than self.url in the case of a redirect
+            self.url = try URL.fromURI(arena, request.request_uri);
 
-        // TODO handle fragment in url.
-        try self.window.replaceLocation(.{ .url = try self.url.toWebApi(arena) });
+            const header = response.header;
+            try session.cookie_jar.populateFromResponse(&self.url.uri, &header);
 
-        const content_type = header.get("content-type");
+            // TODO handle fragment in url.
+            try self.window.replaceLocation(.{ .url = try self.url.toWebApi(arena) });
 
-        const mime: Mime = blk: {
-            if (content_type) |ct| {
-                break :blk try Mime.parse(arena, ct);
+            const content_type = header.get("content-type");
+
+            const mime: Mime = blk: {
+                if (content_type) |ct| {
+                    break :blk try Mime.parse(arena, ct);
+                }
+                break :blk Mime.sniff(try response.peek());
+            } orelse .unknown;
+
+            log.info(.http, "navigation", .{
+                .status = header.status,
+                .content_type = content_type,
+                .charset = mime.charset,
+                .url = request_url,
+            });
+
+            if (!mime.isHTML()) {
+                var arr: std.ArrayListUnmanaged(u8) = .{};
+                while (try response.next()) |data| {
+                    try arr.appendSlice(arena, try arena.dupe(u8, data));
+                }
+                // save the body into the page.
+                self.raw_data = arr.items;
+                return;
             }
-            break :blk Mime.sniff(try response.peek());
-        } orelse .unknown;
 
-        log.info(.http, "navigation", .{
-            .status = header.status,
-            .content_type = content_type,
-            .charset = mime.charset,
-            .url = request_url,
-        });
-
-        if (mime.isHTML()) {
-            self.raw_data = null;
             try self.loadHTMLDoc(&response, mime.charset orelse "utf-8");
-            try self.processHTMLDoc();
-        } else {
-            var arr: std.ArrayListUnmanaged(u8) = .{};
-            while (try response.next()) |data| {
-                try arr.appendSlice(arena, try arena.dupe(u8, data));
-            }
-            // save the body into the page.
-            self.raw_data = arr.items;
         }
+
+        try self.processHTMLDoc();
 
         notification.dispatch(.page_navigated, &.{
             .url = &self.url,
