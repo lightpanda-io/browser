@@ -102,6 +102,13 @@ pub const List = struct {
         });
     }
 
+    pub fn appendOwnedAssumeCapacity(self: *List, key: []const u8, value: []const u8) void {
+        self.entries.appendAssumeCapacity(.{
+            .key = key,
+            .value = value,
+        });
+    }
+
     pub fn delete(self: *List, key: []const u8) void {
         var i: usize = 0;
         while (i < self.entries.items.len) {

@@ -20,6 +20,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const parser = @import("../netsurf.zig");
+const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
 const FormData = @import("../xhr/form_data.zig").FormData;
 const HTMLElement = @import("../html/elements.zig").HTMLElement;
@@ -247,12 +248,31 @@ pub const URLSearchParams = struct {
     const URLSearchParamsOpts = union(enum) {
         qs: []const u8,
         form_data: *const FormData,
+        js_obj: Env.JsObject,
     };
     pub fn constructor(opts_: ?URLSearchParamsOpts, page: *Page) !URLSearchParams {
         const opts = opts_ orelse return .{ .entries = .{} };
         return switch (opts) {
             .qs => |qs| init(page.arena, qs),
             .form_data => |fd| .{ .entries = try fd.entries.clone(page.arena) },
+            .js_obj => |js_obj| {
+                const arena = page.arena;
+                var it = js_obj.nameIterator();
+
+                var entries: kv.List = .{};
+                try entries.ensureTotalCapacity(arena, it.count);
+
+                while (try it.next()) |js_name| {
+                    const name = try js_name.toString(arena);
+                    const js_val = try js_obj.get(name);
+                    entries.appendOwnedAssumeCapacity(
+                        name,
+                        try js_val.toString(arena),
+                    );
+                }
+
+                return .{ .entries = entries };
+            },
         };
     }
 
@@ -613,5 +633,9 @@ test "Browser.URLSearchParams" {
         .{ "ups.getAll('b')", "3" },
         .{ "fd.delete('a')", null }, // the two aren't linked, it created a copy
         .{ "ups.size", "3" },
+        .{ "ups = new URLSearchParams({over: 9000, spice: 'flow'})", null },
+        .{ "ups.size", "2" },
+        .{ "ups.getAll('over')", "9000" },
+        .{ "ups.getAll('spice')", "flow" },
     }, .{});
 }
