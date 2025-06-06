@@ -56,7 +56,7 @@ pub const HTMLSelectElement = struct {
     }
 
     pub fn get_selectedIndex(select: *parser.Select, page: *Page) !i32 {
-        const state = try page.getOrCreateNodeState(@ptrCast(select));
+        const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(select)));
         const selected_index = try parser.selectGetSelectedIndex(select);
 
         // See the explicit_index_set field documentation
@@ -75,7 +75,7 @@ pub const HTMLSelectElement = struct {
     // Libdom's dom_html_select_select_set_selected_index will crash if index
     // is out of range, and it doesn't properly unset options
     pub fn set_selectedIndex(select: *parser.Select, index: i32, page: *Page) !void {
-        var state = try page.getOrCreateNodeState(@ptrCast(select));
+        var state = try page.getOrCreateNodeState(@alignCast(@ptrCast(select)));
         state.explicit_index_set = true;
 
         const options = try parser.selectGetOptions(select);

@@ -26,6 +26,8 @@ const c = @cImport({
     @cInclude("events/event.h");
     @cInclude("events/mouse_event.h");
     @cInclude("utils/validate.h");
+    @cInclude("html/html_element.h");
+    @cInclude("html/html_document.h");
 });
 
 const mimalloc = @import("mimalloc.zig");
@@ -550,7 +552,7 @@ pub fn mutationEventRelatedNode(evt: *MutationEvent) !?*Node {
     const err = c._dom_mutation_event_get_related_node(evt, &n);
     try DOMErr(err);
     if (n == null) return null;
-    return @as(*Node, @ptrCast(n));
+    return @as(*Node, @alignCast(@ptrCast(n)));
 }
 
 // EventListener
@@ -565,7 +567,7 @@ fn eventListenerGetData(lst: *EventListener) ?*anyopaque {
 pub const EventTarget = c.dom_event_target;
 
 pub fn eventTargetToNode(et: *EventTarget) *Node {
-    return @as(*Node, @ptrCast(et));
+    return @as(*Node, @alignCast(@ptrCast(et)));
 }
 
 fn eventTargetVtable(et: *EventTarget) c.dom_event_target_vtable {
@@ -894,7 +896,7 @@ pub fn nodeListItem(nodeList: *NodeList, index: u32) !?*Node {
     const err = c._dom_nodelist_item(nodeList, index, &n);
     try DOMErr(err);
     if (n == null) return null;
-    return @as(*Node, @ptrCast(n));
+    return @as(*Node, @alignCast(@ptrCast(n)));
 }
 
 // NodeExternal is the libdom public representation of a Node.
@@ -1323,7 +1325,7 @@ fn characterDataVtable(data: *CharacterData) c.dom_characterdata_vtable {
 }
 
 pub inline fn characterDataToNode(cdata: *CharacterData) *Node {
-    return @as(*Node, @ptrCast(cdata));
+    return @as(*Node, @alignCast(@ptrCast(cdata)));
 }
 
 pub fn characterDataData(cdata: *CharacterData) ![]const u8 {
@@ -1408,7 +1410,7 @@ pub const ProcessingInstruction = c.dom_processing_instruction;
 
 // processingInstructionToNode is an helper to convert an ProcessingInstruction to a node.
 pub inline fn processingInstructionToNode(pi: *ProcessingInstruction) *Node {
-    return @as(*Node, @ptrCast(pi));
+    return @as(*Node, @alignCast(@ptrCast(pi)));
 }
 
 pub fn processInstructionCopy(pi: *ProcessingInstruction) !*ProcessingInstruction {
@@ -1463,7 +1465,7 @@ pub fn attributeGetOwnerElement(a: *Attribute) !?*Element {
 
 // attributeToNode is an helper to convert an attribute to a node.
 pub inline fn attributeToNode(a: *Attribute) *Node {
-    return @as(*Node, @ptrCast(a));
+    return @as(*Node, @alignCast(@ptrCast(a)));
 }
 
 // Element
@@ -1601,7 +1603,7 @@ pub fn elementHasClass(elem: *Element, class: []const u8) !bool {
 
 // elementToNode is an helper to convert an element to a node.
 pub inline fn elementToNode(e: *Element) *Node {
-    return @as(*Node, @ptrCast(e));
+    return @as(*Node, @alignCast(@ptrCast(e)));
 }
 
 // TokenList
@@ -1685,14 +1687,14 @@ pub fn elementHTMLGetTagType(elem_html: *ElementHTML) !Tag {
 
 // scriptToElt is an helper to convert an script to an element.
 pub inline fn scriptToElt(s: *Script) *Element {
-    return @as(*Element, @ptrCast(s));
+    return @as(*Element, @alignCast(@ptrCast(s)));
 }
 
 // HTMLAnchorElement
 
 // anchorToNode is an helper to convert an anchor to a node.
 pub inline fn anchorToNode(a: *Anchor) *Node {
-    return @as(*Node, @ptrCast(a));
+    return @as(*Node, @alignCast(@ptrCast(a)));
 }
 
 pub fn anchorGetTarget(a: *Anchor) ![]const u8 {
@@ -1837,7 +1839,7 @@ pub const OptionCollection = c.dom_html_options_collection;
 pub const DocumentFragment = c.dom_document_fragment;
 
 pub inline fn documentFragmentToNode(doc: *DocumentFragment) *Node {
-    return @as(*Node, @ptrCast(doc));
+    return @as(*Node, @alignCast(@ptrCast(doc)));
 }
 
 pub fn documentFragmentBodyChildren(doc: *DocumentFragment) !?*NodeList {
@@ -1947,7 +1949,7 @@ pub inline fn domImplementationCreateHTMLDocument(title: ?[]const u8) !*Document
     if (title) |t| {
         const htitle = try documentCreateElement(doc, "title");
         const txt = try documentCreateTextNode(doc, t);
-        _ = try nodeAppendChild(elementToNode(htitle), @as(*Node, @ptrCast(txt)));
+        _ = try nodeAppendChild(elementToNode(htitle), @as(*Node, @alignCast(@ptrCast(txt))));
         _ = try nodeAppendChild(elementToNode(head), elementToNode(htitle));
     }
 
@@ -1965,7 +1967,7 @@ fn documentVtable(doc: *Document) c.dom_document_vtable {
 }
 
 pub inline fn documentToNode(doc: *Document) *Node {
-    return @as(*Node, @ptrCast(doc));
+    return @as(*Node, @alignCast(@ptrCast(doc)));
 }
 
 pub inline fn documentGetElementById(doc: *Document, id: []const u8) !?*Element {
@@ -2103,7 +2105,7 @@ pub inline fn documentImportNode(doc: *Document, node: *Node, deep: bool) !*Node
     const nodeext = toNodeExternal(Node, node);
     const err = documentVtable(doc).dom_document_import_node.?(doc, nodeext, deep, &res);
     try DOMErr(err);
-    return @as(*Node, @ptrCast(res));
+    return @as(*Node, @alignCast(@ptrCast(res)));
 }
 
 pub inline fn documentAdoptNode(doc: *Document, node: *Node) !*Node {
@@ -2111,7 +2113,7 @@ pub inline fn documentAdoptNode(doc: *Document, node: *Node) !*Node {
     const nodeext = toNodeExternal(Node, node);
     const err = documentVtable(doc).dom_document_adopt_node.?(doc, nodeext, &res);
     try DOMErr(err);
-    return @as(*Node, @ptrCast(res));
+    return @as(*Node, @alignCast(@ptrCast(res)));
 }
 
 pub inline fn documentCreateAttribute(doc: *Document, name: []const u8) !*Attribute {
@@ -2146,7 +2148,7 @@ pub const DocumentHTML = c.dom_html_document;
 
 // documentHTMLToNode is an helper to convert a documentHTML to an node.
 pub inline fn documentHTMLToNode(doc: *DocumentHTML) *Node {
-    return @as(*Node, @ptrCast(doc));
+    return @as(*Node, @alignCast(@ptrCast(doc)));
 }
 
 fn documentHTMLVtable(doc_html: *DocumentHTML) c.dom_html_document_vtable {
@@ -2291,7 +2293,7 @@ pub inline fn documentHTMLBody(doc_html: *DocumentHTML) !?*Body {
 }
 
 pub inline fn bodyToElement(body: *Body) *Element {
-    return @as(*Element, @ptrCast(body));
+    return @as(*Element, @alignCast(@ptrCast(body)));
 }
 
 pub inline fn documentHTMLSetBody(doc_html: *DocumentHTML, elt: ?*ElementHTML) !void {
@@ -2330,7 +2332,7 @@ pub inline fn documentHTMLSetTitle(doc: *DocumentHTML, v: []const u8) !void {
 
 pub fn documentHTMLSetCurrentScript(doc: *DocumentHTML, script: ?*Script) !void {
     var s: ?*ElementHTML = null;
-    if (script != null) s = @ptrCast(script.?);
+    if (script != null) s = @alignCast(@ptrCast(script.?));
     const err = documentHTMLVtable(doc).set_current_script.?(doc, s);
     try DOMErr(err);
 }
@@ -2759,7 +2761,7 @@ pub fn inputSetType(input: *Input, type_: []const u8) !void {
         }
     }
     const new_type = if (found) type_ else "text";
-    try elementSetAttribute(@ptrCast(input), "type", new_type);
+    try elementSetAttribute(@alignCast(@ptrCast(input)), "type", new_type);
 }
 
 pub fn inputGetValue(input: *Input) ![]const u8 {

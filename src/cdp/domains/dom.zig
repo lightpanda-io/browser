@@ -368,7 +368,7 @@ fn getNode(arena: Allocator, browser_context: anytype, node_id: ?Node.Id, backen
     if (object_id) |object_id_| {
         // Retrieve the object from which ever context it is in.
         const parser_node = try browser_context.inspector.getNodePtr(arena, object_id_);
-        return try browser_context.node_registry.register(@ptrCast(parser_node));
+        return try browser_context.node_registry.register(@alignCast(@ptrCast(parser_node)));
     }
     return error.MissingParams;
 }
