@@ -133,7 +133,7 @@ pub const HTMLElement = struct {
         try Node.removeChildren(n);
 
         // attach the text node.
-        _ = try parser.nodeAppendChild(n, @as(*parser.Node, @ptrCast(t)));
+        _ = try parser.nodeAppendChild(n, @as(*parser.Node, @alignCast(@ptrCast(t))));
     }
 
     pub fn _click(e: *parser.ElementHTML) !void {
@@ -245,7 +245,7 @@ pub const HTMLAnchorElement = struct {
     }
 
     inline fn url(self: *parser.Anchor, page: *Page) !URL {
-        return URL.constructor(.{ .element = @ptrCast(self) }, null, page); // TODO inject base url
+        return URL.constructor(.{ .element = @alignCast(@ptrCast(self)) }, null, page); // TODO inject base url
     }
 
     // TODO return a disposable string
@@ -945,22 +945,22 @@ pub const HTMLScriptElement = struct {
     }
 
     pub fn get_onload(self: *parser.Script, page: *Page) !?Env.Function {
-        const state = page.getNodeState(@ptrCast(self)) orelse return null;
+        const state = page.getNodeState(@alignCast(@ptrCast(self))) orelse return null;
         return state.onload;
     }
 
     pub fn set_onload(self: *parser.Script, function: ?Env.Function, page: *Page) !void {
-        const state = try page.getOrCreateNodeState(@ptrCast(self));
+        const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(self)));
         state.onload = function;
     }
 
     pub fn get_onerror(self: *parser.Script, page: *Page) !?Env.Function {
-        const state = page.getNodeState(@ptrCast(self)) orelse return null;
+        const state = page.getNodeState(@alignCast(@ptrCast(self))) orelse return null;
         return state.onerror;
     }
 
     pub fn set_onerror(self: *parser.Script, function: ?Env.Function, page: *Page) !void {
-        const state = try page.getOrCreateNodeState(@ptrCast(self));
+        const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(self)));
         state.onerror = function;
     }
 };
