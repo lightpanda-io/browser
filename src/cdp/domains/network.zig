@@ -71,6 +71,19 @@ fn setExtraHTTPHeaders(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
+// Upsert a header into the headers array.
+// returns true if the header was added, false if it was updated
+fn putAssumeCapacity(headers: *std.ArrayListUnmanaged(std.http.Header), extra: std.http.Header) bool {
+    for (headers.items) |*header| {
+        if (std.mem.eql(u8, header.name, extra.name)) {
+            header.value = extra.value;
+            return false;
+        }
+    }
+    headers.appendAssumeCapacity(extra);
+    return true;
+}
+
 pub fn httpRequestStart(arena: Allocator, bc: anytype, request: *const Notification.RequestStart) !void {
     // Isn't possible to do a network request within a Browser (which our
     // notification is tied to), without a page.
@@ -84,18 +97,10 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, request: *const Notificat
     const page = bc.session.currentPage() orelse unreachable;
 
     // Modify request with extra CDP headers
-    const original_len = request.headers.items.len;
-    try request.headers.ensureTotalCapacity(arena, original_len + cdp.extra_headers.items.len);
-    outer: for (cdp.extra_headers.items) |extra| {
-        for (request.headers.items[0..original_len]) |*existing_header| {
-            if (std.mem.eql(u8, existing_header.name, extra.name)) {
-                // If the header already exists, we overwrite it
-                log.debug(.cdp, "request header overwritten", .{ .name = extra.name });
-                existing_header.value = extra.value;
-                continue :outer;
-            }
-        }
-        request.headers.appendAssumeCapacity(extra);
+    try request.headers.ensureTotalCapacity(request.arena, request.headers.items.len + cdp.extra_headers.items.len);
+    for (cdp.extra_headers.items) |extra| {
+        const new = putAssumeCapacity(request.headers, extra);
+        if (!new) log.debug(.cdp, "request header overwritten", .{ .name = extra.name });
     }
 
     const document_url = try urlToString(arena, &page.url.uri, .{
@@ -204,5 +209,9 @@ test "cdp.network setExtraHTTPHeaders" {
         .params = .{ .headers = .{ .food = "bars" } },
     });
 
-    try testing.expectEqual(ctx.cdp_.?.browser_context.?.cdp.extra_headers.items.len, 1);
+    const bc = ctx.cdp().browser_context.?;
+    try testing.expectEqual(bc.cdp.extra_headers.items.len, 1);
+
+    try ctx.processMessage(.{ .id = 5, .method = "Target.attachToTarget", .params = .{ .targetId = bc.target_id.? } });
+    try testing.expectEqual(bc.cdp.extra_headers.items.len, 0);
 }
