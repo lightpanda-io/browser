@@ -18,7 +18,7 @@
 
 const std = @import("std");
 
-const c = @cImport({
+pub const c = @cImport({
     @cInclude("dom/dom.h");
     @cInclude("core/pi.h");
     @cInclude("dom/bindings/hubbub/parser.h");
@@ -1989,7 +1989,9 @@ pub inline fn domImplementationCreateDocumentType(
     return dt.?;
 }
 
-pub inline fn domImplementationCreateHTMLDocument(title: ?[]const u8) !*DocumentHTML {
+pub const CreateElementFn = ?*const fn ([*c]DocumentHTML, [*c]c.dom_html_element_create_params, [*c][*c]ElementHTML) callconv(.c) c.dom_exception;
+
+pub inline fn domImplementationCreateHTMLDocument(title: ?[]const u8, create_element: CreateElementFn) !*DocumentHTML {
     const doc_html = try documentCreateDocument(title);
     const doc = documentHTMLToDocument(doc_html);
 
@@ -2010,6 +2012,7 @@ pub inline fn domImplementationCreateHTMLDocument(title: ?[]const u8) !*Document
     const body = try documentCreateElement(doc, "body");
     _ = try nodeAppendChild(elementToNode(html), elementToNode(body));
 
+    doc_html.create_element_external = create_element;
     return doc_html;
 }
 
@@ -2085,6 +2088,9 @@ pub inline fn documentCreateDocument(title: ?[]const u8) !*DocumentHTML {
     try DOMErr(err);
     const doc_html = @as(*DocumentHTML, @ptrCast(doc.?));
     if (title) |t| try documentHTMLSetTitle(doc_html, t);
+
+    // doc_html.create_element_external =
+
     return doc_html;
 }
 

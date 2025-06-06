@@ -29,6 +29,7 @@
 const Env = @import("env.zig").Env;
 const parser = @import("netsurf.zig");
 const CSSStyleDeclaration = @import("cssom/css_style_declaration.zig").CSSStyleDeclaration;
+const Page = @import("page.zig").Page;
 
 // for HTMLScript (but probably needs to be added to more)
 onload: ?Env.Function = null,
@@ -57,6 +58,9 @@ active_element: ?*parser.Element = null,
 // AND if it isn't a multi select, we can make the 1st item selected by
 // default (by returning selectedIndex == 0).
 explicit_index_set: bool = false,
+
+// TODO
+page: ?*Page = null,
 
 const ReadyState = enum {
     loading,
