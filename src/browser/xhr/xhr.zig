@@ -338,7 +338,11 @@ pub const XMLHttpRequest = struct {
     // dispatch request event.
     // errors are logged only.
     fn dispatchEvt(self: *XMLHttpRequest, typ: []const u8) void {
-        log.debug(.script_event, "dispatch event", .{ .type = typ, .source = "xhr" });
+        log.debug(.script_event, "dispatch event", .{
+            .type = typ,
+            .source = "xhr",
+            .url = self.url,
+        });
         self._dispatchEvt(typ) catch |err| {
             log.err(.app, "dispatch event error", .{ .err = err, .type = typ, .source = "xhr" });
         };
@@ -358,7 +362,11 @@ pub const XMLHttpRequest = struct {
         typ: []const u8,
         opts: ProgressEvent.EventInit,
     ) void {
-        log.debug(.script_event, "dispatch progress event", .{ .type = typ, .source = "xhr" });
+        log.debug(.script_event, "dispatch progress event", .{
+            .type = typ,
+            .source = "xhr",
+            .url = self.url,
+        });
         self._dispatchProgressEvent(typ, opts) catch |err| {
             log.err(.app, "dispatch progress event error", .{ .err = err, .type = typ, .source = "xhr" });
         };

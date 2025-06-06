@@ -84,6 +84,24 @@ fn putAssumeCapacity(headers: *std.ArrayListUnmanaged(std.http.Header), extra: s
     return true;
 }
 
+pub fn httpRequestFail(arena: Allocator, bc: anytype, request: *const Notification.RequestFail) !void {
+    // Isn't possible to do a network request within a Browser (which our
+    // notification is tied to), without a page.
+    std.debug.assert(bc.session.page != null);
+
+    // all unreachable because we _have_ to have a page.
+    const session_id = bc.session_id orelse unreachable;
+
+    // We're missing a bunch of fields, but, for now, this seems like enough
+    try bc.cdp.sendEvent("Network.loadingFailed", .{
+        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{request.id}),
+        // Seems to be what chrome answers with. I assume it depends on the type of error?
+        .type = "Ping",
+        .errorText = request.err,
+        .canceled = false,
+    }, .{ .session_id = session_id });
+}
+
 pub fn httpRequestStart(arena: Allocator, bc: anytype, request: *const Notification.RequestStart) !void {
     // Isn't possible to do a network request within a Browser (which our
     // notification is tied to), without a page.

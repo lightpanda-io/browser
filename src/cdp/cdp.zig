@@ -412,11 +412,13 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         }
 
         pub fn networkEnable(self: *Self) !void {
+            try self.cdp.browser.notification.register(.http_request_fail, self, onHttpRequestFail);
             try self.cdp.browser.notification.register(.http_request_start, self, onHttpRequestStart);
             try self.cdp.browser.notification.register(.http_request_complete, self, onHttpRequestComplete);
         }
 
         pub fn networkDisable(self: *Self) void {
+            self.cdp.browser.notification.unregister(.http_request_fail, self);
             self.cdp.browser.notification.unregister(.http_request_start, self);
             self.cdp.browser.notification.unregister(.http_request_complete, self);
         }
@@ -446,6 +448,12 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             const self: *Self = @alignCast(@ptrCast(ctx));
             defer self.resetNotificationArena();
             return @import("domains/network.zig").httpRequestStart(self.notification_arena, self, data);
+        }
+
+        pub fn onHttpRequestFail(ctx: *anyopaque, data: *const Notification.RequestFail) !void {
+            const self: *Self = @alignCast(@ptrCast(ctx));
+            defer self.resetNotificationArena();
+            return @import("domains/network.zig").httpRequestFail(self.notification_arena, self, data);
         }
 
         pub fn onHttpRequestComplete(ctx: *anyopaque, data: *const Notification.RequestComplete) !void {

@@ -247,6 +247,8 @@ pub const Page = struct {
                 .content_type = content_type,
                 .charset = mime.charset,
                 .url = request_url,
+                .method = opts.method,
+                .reason = opts.reason,
             });
 
             if (!mime.isHTML()) {
@@ -597,6 +599,10 @@ pub const Page = struct {
     // The page.arena is safe to use here, but the transfer_arena exists
     // specifically for this type of lifetime.
     pub fn navigateFromWebAPI(self: *Page, url: []const u8, opts: NavigateOpts) !void {
+        log.debug(.browser, "delayed navigation", .{
+            .url = url,
+            .reason = opts.reason,
+        });
         self.delayed_navigation = true;
         const arena = self.session.transfer_arena;
         const navi = try arena.create(DelayedNavigation);
