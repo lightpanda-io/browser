@@ -127,7 +127,6 @@ pub const Loop = struct {
         }
     }
 
-
     // JS callbacks APIs
     // -----------------
 
@@ -254,7 +253,6 @@ pub const Loop = struct {
                 cbk(@alignCast(@ptrCast(callback.ctx)), completion_, res);
             }
         }.onConnect;
-
 
         const callback = try self.event_callback_pool.create();
         errdefer self.event_callback_pool.destroy(callback);

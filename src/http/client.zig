@@ -354,6 +354,7 @@ pub const Request = struct {
     // Because of things like redirects and error handling, it is possible for
     // the notification functions to be called multiple times, so we guard them
     // with these booleans
+    _notified_fail: bool,
     _notified_start: bool,
     _notified_complete: bool,
 
@@ -414,6 +415,7 @@ pub const Request = struct {
             ._keepalive = false,
             ._redirect_count = 0,
             ._has_host_header = false,
+            ._notified_fail = false,
             ._notified_start = false,
             ._notified_complete = false,
             ._connection_from_keepalive = false,
@@ -428,6 +430,7 @@ pub const Request = struct {
     }
 
     pub fn abort(self: *Request) void {
+        self.requestFailed("aborted");
         const aborter = self._aborter orelse {
             self.deinit();
             return;
@@ -555,6 +558,10 @@ pub const Request = struct {
     }
 
     fn doSendSync(self: *Request, use_pool: bool) anyerror!Response {
+        // https://github.com/ziglang/zig/issues/20369
+        // errdefer |err| self.requestFailed(@errorName(err));
+        errdefer self.requestFailed("network error");
+
         if (use_pool) {
             if (self.findExistingConnection(true)) |connection| {
                 self._connection = connection;
@@ -844,6 +851,19 @@ pub const Request = struct {
             .method = self.method,
             .headers = &self.headers,
             .has_body = self.body != null,
+        });
+    }
+
+    fn requestFailed(self: *Request, err: []const u8) void {
+        const notification = self.notification orelse return;
+        if (self._notified_fail) {
+            return;
+        }
+        self._notified_fail = true;
+        notification.dispatch(.http_request_fail, &.{
+            .id = self.id,
+            .err = err,
+            .url = self.request_uri,
         });
     }
 
@@ -1290,6 +1310,8 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
             self.handler.onHttpResponse(err) catch {};
             // just to be safe
             self.request._keepalive = false;
+
+            self.request.requestFailed(@errorName(err));
             self.request.deinit();
         }
 
