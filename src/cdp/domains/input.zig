@@ -21,12 +21,58 @@ const Page = @import("../../browser/page.zig").Page;
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
+        dispatchKeyEvent,
         dispatchMouseEvent,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
+        .dispatchKeyEvent => return dispatchKeyEvent(cmd),
         .dispatchMouseEvent => return dispatchMouseEvent(cmd),
     }
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-dispatchKeyEvent
+fn dispatchKeyEvent(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        type: Type,
+        key: []const u8,
+        code: []const u8,
+        modifiers: u4,
+        // Many optional parameters are not implemented yet, see documentation url.
+
+        const Type = enum {
+            keyDown,
+            keyUp,
+            rawKeyDown,
+            char,
+        };
+    })) orelse return error.InvalidParams;
+
+    try cmd.sendResult(null, .{});
+
+    // quickly ignore types we know we don't handle
+    switch (params.type) {
+        .keyUp, .rawKeyDown, .char => return,
+        .keyDown => {},
+    }
+
+    const bc = cmd.browser_context orelse return;
+    const page = bc.session.currentPage() orelse return;
+
+    const keyboard_event = Page.KeyboardEvent{
+        .key = params.key,
+        .code = params.code,
+        .type = switch (params.type) {
+            .keyDown => .keydown,
+            else => unreachable,
+        },
+        .alt = params.modifiers & 1 == 1,
+        .ctrl = params.modifiers & 2 == 2,
+        .meta = params.modifiers & 4 == 4,
+        .shift = params.modifiers & 8 == 8,
+    };
+    try page.keyboardEvent(keyboard_event);
+    // result already sent
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-dispatchMouseEvent

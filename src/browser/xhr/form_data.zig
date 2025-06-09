@@ -162,7 +162,7 @@ fn collectForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page
                     }
                     submitter_included = true;
                 }
-                const value = (try parser.elementGetAttribute(element, "value")) orelse "";
+                const value = try parser.inputGetValue(@ptrCast(element));
                 try entries.appendOwned(arena, name, value);
             },
             .select => {
@@ -189,11 +189,11 @@ fn collectForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page
     }
 
     if (submitter_included == false) {
-        if (submitter_) |submitter| {
+        if (submitter_name_) |submitter_name| {
             // this can happen if the submitter is outside the form, but associated
             // with the form via a form=ID attribute
-            const value = (try parser.elementGetAttribute(@ptrCast(submitter), "value")) orelse "";
-            try entries.appendOwned(arena, submitter_name_.?, value);
+            const value = (try parser.elementGetAttribute(@ptrCast(submitter_.?), "value")) orelse "";
+            try entries.appendOwned(arena, submitter_name, value);
         }
     }
 

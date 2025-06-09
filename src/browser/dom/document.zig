@@ -243,17 +243,23 @@ pub const Document = struct {
         return try TreeWalker.init(root, what_to_show, filter);
     }
 
-    pub fn get_activeElement(self: *parser.Document, page: *Page) !?ElementUnion {
-        const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(self)));
-        if (state.active_element) |ae| {
-            return try Element.toInterface(ae);
+    pub fn getActiveElement(self: *parser.Document, page: *Page) !?*parser.Element {
+        if (page.getNodeState(@alignCast(@ptrCast(self)))) |state| {
+            if (state.active_element) |ae| {
+                return ae;
+            }
         }
 
         if (try parser.documentHTMLBody(page.window.document)) |body| {
-            return try Element.toInterface(@alignCast(@ptrCast(body)));
+            return @alignCast(@ptrCast(body));
         }
 
-        return get_documentElement(self);
+        return try parser.documentGetDocumentElement(self);
+    }
+
+    pub fn get_activeElement(self: *parser.Document, page: *Page) !?ElementUnion {
+        const ae = (try getActiveElement(self, page)) orelse return null;
+        return try Element.toInterface(ae);
     }
 
     // TODO: some elements can't be focused, like if they're disabled

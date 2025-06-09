@@ -80,6 +80,7 @@ pub const Page = struct {
 
     microtask_node: Loop.CallbackNode,
 
+    keydown_event_node: parser.EventNode,
     window_clicked_event_node: parser.EventNode,
 
     // Our JavaScript context for this specific page. This is what we use to
@@ -112,6 +113,7 @@ pub const Page = struct {
             .state_pool = &browser.state_pool,
             .cookie_jar = &session.cookie_jar,
             .microtask_node = .{ .func = microtaskCallback },
+            .keydown_event_node = .{ .func = keydownCallback },
             .window_clicked_event_node = .{ .func = windowClicked },
             .request_factory = browser.http_client.requestFactory(.{
                 .notification = browser.notification,
@@ -305,6 +307,12 @@ pub const Page = struct {
             parser.toEventTarget(parser.Element, document_element),
             "click",
             &self.window_clicked_event_node,
+            false,
+        );
+        _ = try parser.eventTargetAddEventListener(
+            parser.toEventTarget(parser.Element, document_element),
+            "keydown",
+            &self.keydown_event_node,
             false,
         );
 
@@ -590,6 +598,76 @@ pub const Page = struct {
                         return parser.formElementReset(form);
                     }
                 }
+            },
+            else => {},
+        }
+    }
+
+    pub const KeyboardEvent = struct {
+        type: Type,
+        key: []const u8,
+        code: []const u8,
+        alt: bool,
+        ctrl: bool,
+        meta: bool,
+        shift: bool,
+
+        const Type = enum {
+            keydown,
+        };
+    };
+
+    pub fn keyboardEvent(self: *Page, kbe: KeyboardEvent) !void {
+        if (kbe.type != .keydown) {
+            return;
+        }
+
+        const Document = @import("dom/document.zig").Document;
+        const element = (try Document.getActiveElement(@ptrCast(self.window.document), self)) orelse return;
+
+        const event = try parser.keyboardEventCreate();
+        defer parser.keyboardEventDestroy(event);
+        try parser.keyboardEventInit(event, "keydown", .{
+            .bubbles = true,
+            .cancelable = true,
+            .key = kbe.key,
+            .code = kbe.code,
+            .alt = kbe.alt,
+            .ctrl = kbe.ctrl,
+            .meta = kbe.meta,
+            .shift = kbe.shift,
+        });
+        _ = try parser.elementDispatchEvent(element, @ptrCast(event));
+    }
+
+    fn keydownCallback(node: *parser.EventNode, event: *parser.Event) void {
+        const self: *Page = @fieldParentPtr("keydown_event_node", node);
+        self._keydownCallback(event) catch |err| {
+            log.err(.browser, "keydown handler error", .{ .err = err });
+        };
+    }
+
+    fn _keydownCallback(page: *Page, event: *parser.Event) !void {
+        const kbe: *parser.KeyboardEvent = @ptrCast(event);
+        const target = (try parser.eventTarget(event)) orelse return;
+        const node = parser.eventTargetToNode(target);
+        const tag = (try parser.nodeHTMLGetTagType(node)) orelse return;
+        switch (tag) {
+            .input => {
+                const element: *parser.Element = @ptrCast(node);
+                const input_type = (try parser.elementGetAttribute(element, "type")) orelse "text";
+                if (std.mem.eql(u8, input_type, "text")) {
+                    const value = try parser.inputGetValue(@ptrCast(element));
+                    const new_key = try parser.keyboardEventGetKey(kbe);
+                    const new_value = try std.mem.concat(page.arena, u8, &.{ value, new_key });
+                    try parser.inputSetValue(@ptrCast(element), new_value);
+                }
+            },
+            .textarea => {
+                const value = try parser.textareaGetValue(@ptrCast(node));
+                const new_key = try parser.keyboardEventGetKey(kbe);
+                const new_value = try std.mem.concat(page.arena, u8, &.{ value, new_key });
+                try parser.textareaSetValue(@ptrCast(node), new_value);
             },
             else => {},
         }
