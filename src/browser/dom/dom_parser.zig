@@ -30,8 +30,8 @@ pub const DOMParser = struct {
             // TODO: Support XML
             return error.TypeError;
         }
-
-        return try parser.documentHTMLParseFromStr(string);
+        const Elements = @import("../html/elements.zig");
+        return try parser.documentHTMLParseFromStr(string, &Elements.createElement);
     }
 };
 

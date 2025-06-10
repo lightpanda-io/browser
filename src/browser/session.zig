@@ -85,13 +85,13 @@ pub const Session = struct {
     pub fn createPage(self: *Session) !*Page {
         std.debug.assert(self.page == null);
 
-        // Start netsurf memory arena.
-        // We need to init this early as JS event handlers may be registered through Runtime.evaluate before the first html doc is loaded
-        try parser.init();
-
         const page_arena = &self.browser.page_arena;
         _ = page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
         _ = self.browser.state_pool.reset(.{ .retain_with_limit = 4 * 1024 });
+
+        // Start netsurf memory arena.
+        // We need to init this early as JS event handlers may be registered through Runtime.evaluate before the first html doc is loaded
+        try parser.init(page_arena.allocator());
 
         self.page = @as(Page, undefined);
         const page = &self.page.?;

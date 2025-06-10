@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 pub const c = @cImport({
     @cInclude("dom/dom.h");
@@ -32,11 +33,13 @@ pub const c = @cImport({
 });
 
 const mimalloc = @import("mimalloc.zig");
+pub var ARENA: ?Allocator = null;
 
 // init initializes netsurf lib.
 // init starts a mimalloc heap arena for the netsurf session. The caller must
 // call deinit() to free the arena memory.
-pub fn init() !void {
+pub fn init(allocator: Allocator) !void {
+    ARENA = allocator;
     try mimalloc.create();
 }
 
@@ -49,6 +52,7 @@ pub fn deinit() void {
     c.lwc_deinit_strings();
 
     mimalloc.destroy();
+    ARENA = null;
 }
 
 // Vtable
@@ -1357,6 +1361,10 @@ pub inline fn nodeToElement(node: *Node) *Element {
     return @as(*Element, @ptrCast(node));
 }
 
+pub inline fn nodeToHtmlElement(node: *Node) *ElementHTML {
+    return @as(*ElementHTML, @alignCast(@ptrCast(node)));
+}
+
 // nodeToDocument is an helper to convert a node to an document.
 pub inline fn nodeToDocument(node: *Node) *Document {
     return @as(*Document, @ptrCast(node));
@@ -1989,10 +1997,10 @@ pub inline fn domImplementationCreateDocumentType(
     return dt.?;
 }
 
-pub const CreateElementFn = ?*const fn ([*c]DocumentHTML, [*c]c.dom_html_element_create_params, [*c][*c]ElementHTML) callconv(.c) c.dom_exception;
+pub const CreateElementFn = ?*const fn ([*c]c.dom_html_element_create_params, [*c][*c]ElementHTML) callconv(.c) c.dom_exception;
 
 pub inline fn domImplementationCreateHTMLDocument(title: ?[]const u8, create_element: CreateElementFn) !*DocumentHTML {
-    const doc_html = try documentCreateDocument(title);
+    const doc_html = try documentCreateDocument(title, create_element);
     const doc = documentHTMLToDocument(doc_html);
 
     // add hierarchy: html, head, body.
@@ -2012,7 +2020,6 @@ pub inline fn domImplementationCreateHTMLDocument(title: ?[]const u8, create_ele
     const body = try documentCreateElement(doc, "body");
     _ = try nodeAppendChild(elementToNode(html), elementToNode(body));
 
-    doc_html.create_element_external = create_element;
     return doc_html;
 }
 
@@ -2074,7 +2081,7 @@ pub inline fn documentSetInputEncoding(doc: *Document, enc: []const u8) !void {
     try DOMErr(err);
 }
 
-pub inline fn documentCreateDocument(title: ?[]const u8) !*DocumentHTML {
+pub inline fn documentCreateDocument(title: ?[]const u8, create_element: CreateElementFn) !*DocumentHTML {
     var doc: ?*Document = undefined;
     const err = c.dom_implementation_create_document(
         c.DOM_IMPLEMENTATION_HTML,
@@ -2089,7 +2096,7 @@ pub inline fn documentCreateDocument(title: ?[]const u8) !*DocumentHTML {
     const doc_html = @as(*DocumentHTML, @ptrCast(doc.?));
     if (title) |t| try documentHTMLSetTitle(doc_html, t);
 
-    // doc_html.create_element_external =
+    doc_html.create_element_external = create_element;
 
     return doc_html;
 }
@@ -2254,24 +2261,26 @@ fn parserErr(err: HubbubErr) ParserError!void {
 
 // documentHTMLParseFromStr parses the given HTML string.
 // The caller is responsible for closing the document.
-pub fn documentHTMLParseFromStr(str: []const u8) !*DocumentHTML {
+pub fn documentHTMLParseFromStr(str: []const u8, create_element: CreateElementFn) !*DocumentHTML {
     var fbs = std.io.fixedBufferStream(str);
-    return try documentHTMLParse(fbs.reader(), "UTF-8");
+    return try documentHTMLParse(fbs.reader(), "UTF-8", create_element);
 }
 
-pub fn documentHTMLParse(reader: anytype, enc: ?[:0]const u8) !*DocumentHTML {
+pub fn documentHTMLParse(reader: anytype, enc: ?[:0]const u8, create_element: CreateElementFn) !*DocumentHTML {
     var parser: ?*c.dom_hubbub_parser = undefined;
     var doc: ?*c.dom_document = undefined;
     var err: c.hubbub_error = undefined;
     var params = parseParams(enc);
 
     err = c.dom_hubbub_parser_create(&params, &parser, &doc);
+    const result = @as(*DocumentHTML, @ptrCast(doc.?));
+    result.create_element_external = create_element;
     try parserErr(err);
     defer c.dom_hubbub_parser_destroy(parser);
 
     try parseData(parser.?, reader);
 
-    return @as(*DocumentHTML, @ptrCast(doc.?));
+    return result;
 }
 
 pub fn documentParseFragmentFromStr(self: *Document, str: []const u8) !*DocumentFragment {

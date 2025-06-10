@@ -756,7 +756,8 @@ pub const XMLHttpRequest = struct {
         }
 
         var fbs = std.io.fixedBufferStream(self.response_bytes.items);
-        const doc = parser.documentHTMLParse(fbs.reader(), ccharset) catch {
+        const Elements = @import("../html/elements.zig");
+        const doc = parser.documentHTMLParse(fbs.reader(), ccharset, &Elements.createElement) catch {
             self.response_obj = .{ .Failure = {} };
             return;
         };
