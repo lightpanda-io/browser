@@ -1263,13 +1263,15 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 };
             }
 
-            pub fn newInstance(self: *const Function, comptime T: type, result: *Result) !T {
+            pub fn newInstance(self: *const Function, instance: anytype, result: *Result) !PersistentObject {
                 const scope = self.scope;
 
                 var try_catch: TryCatch = undefined;
                 try_catch.init(scope);
                 defer try_catch.deinit();
 
+                // This creates a new instance using this Function as a constructor.
+                // This returns a generic Object
                 const js_this = self.func.castToFunction().initInstance(scope.context, &.{}) orelse {
                     if (try_catch.hasCaught()) {
                         const allocator = scope.call_arena;
@@ -1281,8 +1283,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     }
                     return error.JsConstructorFailed;
                 };
-                const named_function = comptime NamedFunction.init(T, "constructorResult");
-                return scope.jsValueToZig(named_function, T, js_this.toValue());
+
+                return try scope._mapZigInstanceToJs(js_this, instance);
             }
 
             pub fn call(self: *const Function, comptime T: type, args: anytype) !T {
