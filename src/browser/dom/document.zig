@@ -30,6 +30,7 @@ const css = @import("css.zig");
 
 const Element = @import("element.zig").Element;
 const ElementUnion = @import("element.zig").Union;
+const Elements = @import("../html/elements.zig");
 const TreeWalker = @import("tree_walker.zig").TreeWalker;
 
 const Env = @import("../env.zig").Env;
@@ -45,6 +46,7 @@ pub const Document = struct {
     pub fn constructor(page: *const Page) !*parser.DocumentHTML {
         const doc = try parser.documentCreateDocument(
             try parser.documentHTMLGetTitle(page.window.document),
+            &Elements.createElement,
         );
 
         // we have to work w/ document instead of html document.

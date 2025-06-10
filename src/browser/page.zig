@@ -286,7 +286,8 @@ pub const Page = struct {
     pub fn loadHTMLDoc(self: *Page, reader: anytype, charset: []const u8) !void {
         const ccharset = try self.arena.dupeZ(u8, charset);
 
-        const html_doc = try parser.documentHTMLParse(reader, ccharset);
+        const Elements = @import("html/elements.zig");
+        const html_doc = try parser.documentHTMLParse(reader, ccharset, &Elements.createElement);
         const doc = parser.documentHTMLToDocument(html_doc);
 
         // inject the URL to the document including the fragment.

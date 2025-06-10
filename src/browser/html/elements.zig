@@ -627,75 +627,84 @@ pub const HTMLImageElement = struct {
     };
 };
 
-pub fn createElement(doc: [*c]parser.DocumentHTML, params: [*c]parser.c.dom_html_element_create_params, elem: [*c][*c]parser.ElementHTML) callconv(.c) parser.c.dom_exception {
-    // Required to be set on all htmldocuments. How during dom parsing?
-    const wrap = parser.nodeGetEmbedderData(@ptrCast(doc)).?; // TODO this is not set yet
-    const state = @as(*State, @alignCast(@ptrCast(wrap)));
-    const page = state.page.?;
-
+pub fn createElement(params: [*c]parser.c.dom_html_element_create_params, elem: [*c][*c]parser.ElementHTML) callconv(.c) parser.c.dom_exception {
     const p: *parser.c.dom_html_element_create_params = @ptrCast(params);
     switch (p.type) {
         parser.c.DOM_HTML_ELEMENT_TYPE_INPUT => {
-            elem.* = try HTMLInputElement.dom_create(params, page);
+            return HTMLInputElement.dom_create(params, elem);
         },
-        else => return parser.c.DOM_NOT_FOUND_ERR,
+        else => return parser.c.DOM_NO_ERR,
     }
-    return parser.c.DOM_NO_ERR;
 }
+
+var input_protected_vtable: parser.c.dom_element_protected_vtable = .{
+    .base = .{
+        .destroy = HTMLInputElement.node_destroy,
+        .copy = HTMLInputElement.node_copy,
+    },
+    .dom_element_parse_attribute = HTMLInputElement.element_parse_attribute,
+};
 
 pub const HTMLInputElement = struct {
     pub const Self = parser.Input;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
 
-    // VTables can be generated from the dom_ funcs
-    vtable: parser.c.dom_html_element_vtable = parser.c._dom_html_element_vtable, // TODO make global, instantiate value and cast to void probably
-    protected_vtable: parser.c.dom_element_protected_vtable = .{
-        .dom_node_copy = dom_node_copy,
-        // .dom_node_destroy = dom_node_destroy, // Not needed in zig
-        .dom_initialise = dom_initialise,
-    },
-
     base: parser.ElementHTML,
 
-    // Should instead have 2 vtable fields to generate the creation function
-    pub fn dom_create(params: *parser.c.dom_html_element_create_params, page: *Page) !*parser.ElementHTML {
-        var self = try page.arena.create(HTMLInputElement); // Put in pool?
-        self.base.base.base.vtable = &HTMLInputElement.vtable;
-        self.base.base.vtable = &HTMLInputElement.protected_vtable;
-        // set vtable and protected vtable
+    type: []const u8 = "text",
 
-        self.dom_initialise(params);
-        return self.base;
+    pub fn dom_create(params: *parser.c.dom_html_element_create_params, output: *?*parser.ElementHTML) parser.c.dom_exception {
+        var self = parser.ARENA.?.create(HTMLInputElement) catch return parser.c.DOM_NO_MEM_ERR;
+        output.* = &self.base; // Self can be recovered using @fieldParentPtr
+
+        self.base.base.base.base.vtable = &parser.c._dom_html_element_vtable; // TODO replace get/setAttribute
+        self.base.base.base.vtable = &input_protected_vtable;
+
+        return self.dom_initialise(params);
     }
     // Initialise is separated from create such that the leaf type sets the vtable, then calls all the way up the protochain to init
-    // Currently we do only leaf types tho
     pub fn dom_initialise(self: *HTMLInputElement, params: *parser.c.dom_html_element_create_params) parser.c.dom_exception {
         return parser.c._dom_html_element_initialise(params, &self.base);
     }
 
     // This should always be the same and we should not have cleanup for new zig implementation, hopefully
-    // pub fn dom_node_destroy(self: *parser.Node) !void {
-    //     parser._dom_html_element_finalise(@as(parser.HtmlElement, @ptrCast(&self.base)));
-    // }
-
-    pub fn dom_node_copy(old: *parser.Node, page: Page) !*parser.Node {
-        const self = @as(*HTMLInputElement, @fieldParentPtr("base", old));
-        const copy = try HTMLInputElement.create(&self.base.create_params, page);
-        return @ptrCast(copy);
+    pub fn node_destroy(node: [*c]parser.Node) callconv(.c) void {
+        const elem = parser.nodeToHtmlElement(node);
+        parser.c._dom_html_element_finalise(elem);
     }
 
-    // pub fn dom_element_parse_attribute(self: *parser.Element, name: []const u8, value: []const u8, page: *Page) ![]const u8 {
-    //     _ = page;
-    //     _ = name;
-    //     _ = self;
-    //     // Probably should not use this and instead override the getAttribute setAttribute Element methods directly, perhaps other related functions.
+    pub fn node_copy(old: [*c]parser.Node, new: [*c][*c]parser.Node) callconv(.c) parser.c.dom_exception {
+        const old_elem = parser.nodeToHtmlElement(old);
+        const self = @as(*HTMLInputElement, @fieldParentPtr("base", old_elem));
 
-    //     // handle defaultValue likes
-    //     // Call setter or store in general attribute store
-    //     // increment domstring ref?
-    //     return value;
-    // }
+        var copy = parser.ARENA.?.create(HTMLInputElement) catch return parser.c.DOM_NO_MEM_ERR;
+        copy.type = self.type;
+
+        const err = parser.c._dom_html_element_copy_internal(old_elem, &copy.base);
+        if (err != parser.c.DOM_NO_ERR) {
+            return err;
+        }
+
+        new.* = @ptrCast(copy);
+        return parser.c.DOM_NO_ERR;
+    }
+
+    // fn ([*c]cimport.struct_dom_element, [*c]cimport.struct_dom_string, [*c]cimport.struct_dom_string, [*c][*c]cimport.struct_dom_string) callconv(.c) c_uint
+    pub fn element_parse_attribute(self: [*c]parser.Element, name: [*c]parser.c.dom_string, value: [*c]parser.c.dom_string, parsed: [*c][*c]parser.c.dom_string) callconv(.c) parser.c.dom_exception {
+        _ = name;
+        _ = self;
+        parsed.* = value;
+        _ = parser.c.dom_string_ref(value);
+
+        // TODO actual implementation
+        // Probably should not use this and instead override the getAttribute setAttribute Element methods directly, perhaps other related functions.
+
+        // handle defaultValue likes
+        // Call setter or store in general attribute store
+        // increment domstring ref?
+        return parser.c.DOM_NO_ERR;
+    }
 
     pub fn get_defaultValue(self: *parser.Input) ![]const u8 {
         return try parser.inputGetDefaultValue(self);
@@ -768,10 +777,26 @@ pub const HTMLInputElement = struct {
         try parser.inputSetSrc(self, new_src);
     }
     pub fn get_type(self: *parser.Input) ![]const u8 {
-        return try parser.inputGetType(self);
+        const elem = parser.nodeToHtmlElement(@alignCast(@ptrCast(self)));
+        const input = @as(*HTMLInputElement, @fieldParentPtr("base", elem));
+
+        return input.type;
     }
     pub fn set_type(self: *parser.Input, type_: []const u8) !void {
-        try parser.inputSetType(self, type_);
+        const elem = parser.nodeToHtmlElement(@alignCast(@ptrCast(self)));
+        const input = @as(*HTMLInputElement, @fieldParentPtr("base", elem));
+
+        const possible_values = [_][]const u8{ "text", "search", "tel", "url", "email", "password", "date", "month", "week", "time", "datetime-local", "number", "range", "color", "checkbox", "radio", "file", "hidden", "image", "button", "submit", "reset" };
+        var found = false;
+        for (possible_values) |item| {
+            if (std.mem.eql(u8, type_, item)) {
+                found = true;
+                break;
+            }
+        }
+        input.type = if (found) type_ else "text";
+
+        // TODO DOM events
     }
     pub fn get_value(self: *parser.Input) ![]const u8 {
         return try parser.inputGetValue(self);

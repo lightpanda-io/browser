@@ -522,7 +522,7 @@ test {
 
 var test_wg: std.Thread.WaitGroup = .{};
 test "tests:beforeAll" {
-    try parser.init();
+    try parser.init(std.testing.allocator);
     log.opts.level = .err;
     log.opts.format = .logfmt;
 

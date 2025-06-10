@@ -211,14 +211,16 @@ pub const Document = struct {
     arena: std.heap.ArenaAllocator,
 
     pub fn init(html: []const u8) !Document {
+        var arena = std.heap.ArenaAllocator.init(allocator);
         parser.deinit();
-        try parser.init();
+        try parser.init(arena.allocator());
 
         var fbs = std.io.fixedBufferStream(html);
-        const html_doc = try parser.documentHTMLParse(fbs.reader(), "utf-8");
+        const Elements = @import("browser/html/elements.zig");
+        const html_doc = try parser.documentHTMLParse(fbs.reader(), "utf-8", &Elements.createElement);
 
         return .{
-            .arena = std.heap.ArenaAllocator.init(allocator),
+            .arena = arena,
             .doc = html_doc,
         };
     }

@@ -61,7 +61,8 @@ pub const Window = struct {
 
     pub fn create(target: ?[]const u8, navigator: ?Navigator) !Window {
         var fbs = std.io.fixedBufferStream("");
-        const html_doc = try parser.documentHTMLParse(fbs.reader(), "utf-8");
+        const Elements = @import("../html/elements.zig");
+        const html_doc = try parser.documentHTMLParse(fbs.reader(), "utf-8", &Elements.createElement);
         const doc = parser.documentHTMLToDocument(html_doc);
         try parser.documentSetDocumentURI(doc, "about:blank");
 

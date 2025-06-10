@@ -182,7 +182,7 @@ fn writeEscapedAttributeValue(writer: anytype, value: []const u8) !void {
 
 const testing = std.testing;
 test "dump.writeHTML" {
-    try parser.init();
+    try parser.init(testing.allocator);
     defer parser.deinit();
 
     try testWriteHTML(
@@ -225,7 +225,8 @@ fn testWriteFullHTML(comptime expected: []const u8, src: []const u8) !void {
     var buf = std.ArrayListUnmanaged(u8){};
     defer buf.deinit(testing.allocator);
 
-    const doc_html = try parser.documentHTMLParseFromStr(src);
+    const Elements = @import("html/elements.zig");
+    const doc_html = try parser.documentHTMLParseFromStr(src, &Elements.createElement);
     defer parser.documentHTMLClose(doc_html) catch {};
 
     const doc = parser.documentHTMLToDocument(doc_html);
