@@ -204,6 +204,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
                     asUint("Browser") => return @import("domains/browser.zig").processMessage(command),
                     asUint("Runtime") => return @import("domains/runtime.zig").processMessage(command),
                     asUint("Network") => return @import("domains/network.zig").processMessage(command),
+                    asUint("Storage") => return @import("domains/storage.zig").processMessage(command),
                     else => {},
                 },
                 8 => switch (@as(u64, @bitCast(domain[0..8].*))) {
