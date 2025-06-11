@@ -29,6 +29,7 @@ pub fn processMessage(cmd: anytype) !void {
         setCacheDisabled,
         setExtraHTTPHeaders,
         deleteCookies,
+        setCookies,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -37,6 +38,7 @@ pub fn processMessage(cmd: anytype) !void {
         .setCacheDisabled => return cmd.sendResult(null, .{}),
         .setExtraHTTPHeaders => return setExtraHTTPHeaders(cmd),
         .deleteCookies => return deleteCookies(cmd),
+        .setCookies => return setCookies(cmd),
     }
 }
 
@@ -73,18 +75,16 @@ fn setExtraHTTPHeaders(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
-// const CookiePartitionKey = struct {
-//     topLevelSite: []const u8,
-//     hasCrossSiteAncestor: bool,
-// };
+const CookiePartitionKey = struct {
+    topLevelSite: []const u8,
+    hasCrossSiteAncestor: bool,
+};
 
 const Cookie = @import("../../browser/storage/storage.zig").Cookie;
 const CookieJar = @import("../../browser/storage/storage.zig").CookieJar;
 
-fn cookieMatches(cookie: *const Cookie, name: []const u8, url: ?[]const u8, domain: ?[]const u8, path: ?[]const u8) bool {
+fn cookieMatches(cookie: *const Cookie, name: []const u8, domain: ?[]const u8, path: ?[]const u8) bool {
     if (!std.mem.eql(u8, cookie.name, name)) return false;
-
-    _ = url; // TODO
 
     if (domain) |domain_| {
         if (!std.mem.eql(u8, cookie.domain, domain_)) return false;
@@ -112,10 +112,115 @@ fn deleteCookies(cmd: anytype) !void {
     while (index > 0) {
         index -= 1;
         const cookie = &cookies.items[index];
-        if (cookieMatches(cookie, params.name, params.url, params.domain, params.path)) {
+        const domain = try percentEncodedDomain(cmd.arena, params.url, params.domain);
+        // TBD does chrome take the path from the url as default? (unlike setCookies)
+        if (cookieMatches(cookie, params.name, domain, params.path)) {
             cookies.swapRemove(index).deinit();
         }
     }
+    return cmd.sendResult(null, .{});
+}
+
+const SameSite = enum {
+    Strict,
+    Lax,
+    None,
+};
+const CookiePriority = enum {
+    Low,
+    Medium,
+    High,
+};
+const CookieSourceScheme = enum {
+    Unset,
+    NonSecure,
+    Secure,
+};
+
+fn isHostChar(c: u8) bool {
+    return switch (c) {
+        'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => true,
+        '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=' => true,
+        ':' => true,
+        '[', ']' => true,
+        else => false,
+    };
+}
+
+// Note: Chrome does not apply rules like removing a leading `.` from the domain.
+fn percentEncodedDomain(allocator: Allocator, default_url: ?[]const u8, domain: ?[]const u8) !?[]const u8 {
+    if (domain) |domain_| {
+        return try allocator.dupe(u8, domain_);
+    } else if (default_url) |url| {
+        const uri = std.Uri.parse(url) catch return error.InvalidParams;
+
+        switch (uri.host orelse return error.InvalidParams) {
+            .raw => |str| {
+                var list = std.ArrayList(u8).init(allocator);
+                try list.ensureTotalCapacity(str.len); // Expect no precents needed
+                try std.Uri.Component.percentEncode(list.writer(), str, isHostChar);
+                return list.items; // @memory retains memory used before growing
+            },
+            .percent_encoded => |str| {
+                return try allocator.dupe(u8, str);
+            },
+        }
+    } else return null;
+}
+
+fn setCookies(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        cookies: []const struct {
+            name: []const u8,
+            value: []const u8,
+            url: ?[]const u8 = null,
+            domain: ?[]const u8 = null,
+            path: ?[]const u8 = null,
+            secure: bool = false, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
+            httpOnly: bool = false, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
+            sameSite: SameSite = .None, // default: https://datatracker.ietf.org/doc/html/draft-west-first-party-cookies
+            expires: ?i64 = null, // -1? says google
+            priority: CookiePriority = .Medium, // default: https://datatracker.ietf.org/doc/html/draft-west-cookie-priority-00
+            sameParty: ?bool = null,
+            sourceScheme: ?CookieSourceScheme = null,
+            // sourcePort: Temporary ability and it will be removed from CDP
+            partitionKey: ?CookiePartitionKey = null,
+        },
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    for (params.cookies) |param| {
+        if (param.priority != .Medium or param.sameParty != null or param.sourceScheme != null or param.partitionKey != null) {
+            return error.NotYetImplementedParams;
+        }
+        if (param.name.len == 0) return error.InvalidParams;
+        if (param.value.len == 0) return error.InvalidParams;
+
+        var arena = std.heap.ArenaAllocator.init(bc.session.cookie_jar.allocator);
+        errdefer arena.deinit();
+        const a = arena.allocator();
+
+        // NOTE: The param.url can affect the default domain, path, source port, and source scheme.
+        const domain = try percentEncodedDomain(a, param.url, param.domain) orelse return error.InvalidParams;
+
+        const cookie = Cookie{
+            .arena = arena,
+            .name = try a.dupe(u8, param.name),
+            .value = try a.dupe(u8, param.value),
+            .path = if (param.path) |path| try a.dupe(u8, path) else "/", // Chrome does not actually take the path from the url and just defaults to "/".
+            .domain = domain,
+            .expires = param.expires,
+            .secure = param.secure,
+            .http_only = param.httpOnly,
+            .same_site = switch (param.sameSite) {
+                .Strict => .strict,
+                .Lax => .lax,
+                .None => .none,
+            },
+        };
+        try bc.session.cookie_jar.add(cookie, std.time.timestamp());
+    }
+
     return cmd.sendResult(null, .{});
 }
 
