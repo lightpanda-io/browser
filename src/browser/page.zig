@@ -582,14 +582,14 @@ pub const Page = struct {
             },
             .input => {
                 const element: *parser.Element = @ptrCast(node);
-                const input_type = (try parser.elementGetAttribute(element, "type")) orelse return;
+                const input_type = try parser.inputGetType(@ptrCast(element));
                 if (std.ascii.eqlIgnoreCase(input_type, "submit")) {
                     return self.elementSubmitForm(element);
                 }
             },
             .button => {
                 const element: *parser.Element = @ptrCast(node);
-                const button_type = (try parser.elementGetAttribute(element, "type")) orelse return;
+                const button_type = try parser.buttonGetType(@ptrCast(element));
                 if (std.ascii.eqlIgnoreCase(button_type, "submit")) {
                     return self.elementSubmitForm(element);
                 }
@@ -661,7 +661,7 @@ pub const Page = struct {
         switch (tag) {
             .input => {
                 const element: *parser.Element = @ptrCast(node);
-                const input_type = (try parser.elementGetAttribute(element, "type")) orelse "text";
+                const input_type = try parser.inputGetType(@ptrCast(element));
                 if (std.mem.eql(u8, input_type, "text")) {
                     if (std.mem.eql(u8, new_key, "Enter")) {
                         const form = (try self.formForElement(element)) orelse return;

@@ -2834,3 +2834,11 @@ pub fn inputSetValue(input: *Input, value: []const u8) !void {
     const err = c.dom_html_input_element_set_value(input, try strFromData(value));
     try DOMErr(err);
 }
+
+pub fn buttonGetType(button: *Button) ![]const u8 {
+    var s_: ?*String = null;
+    const err = c.dom_html_button_element_get_type(button, &s_);
+    try DOMErr(err);
+    const s = s_ orelse return "button";
+    return strToData(s);
+}

@@ -137,7 +137,7 @@ fn collectForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page
         const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(element)));
         switch (tag) {
             .input => {
-                const tpe = try parser.elementGetAttribute(element, "type") orelse "";
+                const tpe = try parser.inputGetType(@ptrCast(element));
                 if (std.ascii.eqlIgnoreCase(tpe, "image")) {
                     if (submitter_name_) |submitter_name| {
                         if (std.mem.eql(u8, submitter_name, name)) {
@@ -249,7 +249,7 @@ fn getSubmitterName(submitter_: ?*parser.ElementHTML) !?[]const u8 {
     switch (tag) {
         .button => return name,
         .input => {
-            const tpe = (try parser.elementGetAttribute(element, "type")) orelse "";
+            const tpe = try parser.inputGetType(@ptrCast(element));
             // only an image type can be a sumbitter
             if (std.ascii.eqlIgnoreCase(tpe, "image") or std.ascii.eqlIgnoreCase(tpe, "submit")) {
                 return name;
