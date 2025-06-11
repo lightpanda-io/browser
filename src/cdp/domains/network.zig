@@ -29,6 +29,7 @@ pub fn processMessage(cmd: anytype) !void {
         setCacheDisabled,
         setExtraHTTPHeaders,
         deleteCookies,
+        setCookie,
         setCookies,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
@@ -38,6 +39,7 @@ pub fn processMessage(cmd: anytype) !void {
         .setCacheDisabled => return cmd.sendResult(null, .{}),
         .setExtraHTTPHeaders => return setExtraHTTPHeaders(cmd),
         .deleteCookies => return deleteCookies(cmd),
+        .setCookie => return setCookie(cmd),
         .setCookies => return setCookies(cmd),
     }
 }
@@ -168,60 +170,77 @@ fn percentEncodedDomain(allocator: Allocator, default_url: ?[]const u8, domain: 
     } else return null;
 }
 
+const CdpCookie = struct {
+    name: []const u8,
+    value: []const u8,
+    url: ?[]const u8 = null,
+    domain: ?[]const u8 = null,
+    path: ?[]const u8 = null,
+    secure: bool = false, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
+    httpOnly: bool = false, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
+    sameSite: SameSite = .None, // default: https://datatracker.ietf.org/doc/html/draft-west-first-party-cookies
+    expires: ?i64 = null, // -1? says google
+    priority: CookiePriority = .Medium, // default: https://datatracker.ietf.org/doc/html/draft-west-cookie-priority-00
+    sameParty: ?bool = null,
+    sourceScheme: ?CookieSourceScheme = null,
+    // sourcePort: Temporary ability and it will be removed from CDP
+    partitionKey: ?CookiePartitionKey = null,
+};
+
+fn setCookie(cmd: anytype) !void {
+    const params = (try cmd.params(
+        CdpCookie,
+    )) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    try setCdpCookie(&bc.session.cookie_jar, params);
+
+    try cmd.sendResult(.{ .success = true }, .{});
+}
+
 fn setCookies(cmd: anytype) !void {
     const params = (try cmd.params(struct {
-        cookies: []const struct {
-            name: []const u8,
-            value: []const u8,
-            url: ?[]const u8 = null,
-            domain: ?[]const u8 = null,
-            path: ?[]const u8 = null,
-            secure: bool = false, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
-            httpOnly: bool = false, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
-            sameSite: SameSite = .None, // default: https://datatracker.ietf.org/doc/html/draft-west-first-party-cookies
-            expires: ?i64 = null, // -1? says google
-            priority: CookiePriority = .Medium, // default: https://datatracker.ietf.org/doc/html/draft-west-cookie-priority-00
-            sameParty: ?bool = null,
-            sourceScheme: ?CookieSourceScheme = null,
-            // sourcePort: Temporary ability and it will be removed from CDP
-            partitionKey: ?CookiePartitionKey = null,
-        },
+        cookies: []const CdpCookie,
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     for (params.cookies) |param| {
-        if (param.priority != .Medium or param.sameParty != null or param.sourceScheme != null or param.partitionKey != null) {
-            return error.NotYetImplementedParams;
-        }
-        if (param.name.len == 0) return error.InvalidParams;
-        if (param.value.len == 0) return error.InvalidParams;
-
-        var arena = std.heap.ArenaAllocator.init(bc.session.cookie_jar.allocator);
-        errdefer arena.deinit();
-        const a = arena.allocator();
-
-        // NOTE: The param.url can affect the default domain, path, source port, and source scheme.
-        const domain = try percentEncodedDomain(a, param.url, param.domain) orelse return error.InvalidParams;
-
-        const cookie = Cookie{
-            .arena = arena,
-            .name = try a.dupe(u8, param.name),
-            .value = try a.dupe(u8, param.value),
-            .path = if (param.path) |path| try a.dupe(u8, path) else "/", // Chrome does not actually take the path from the url and just defaults to "/".
-            .domain = domain,
-            .expires = param.expires,
-            .secure = param.secure,
-            .http_only = param.httpOnly,
-            .same_site = switch (param.sameSite) {
-                .Strict => .strict,
-                .Lax => .lax,
-                .None => .none,
-            },
-        };
-        try bc.session.cookie_jar.add(cookie, std.time.timestamp());
+        try setCdpCookie(&bc.session.cookie_jar, param);
     }
 
-    return cmd.sendResult(null, .{});
+    try cmd.sendResult(null, .{});
+}
+
+fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
+    if (param.priority != .Medium or param.sameParty != null or param.sourceScheme != null or param.partitionKey != null) {
+        return error.NotYetImplementedParams;
+    }
+    if (param.name.len == 0) return error.InvalidParams;
+    if (param.value.len == 0) return error.InvalidParams;
+
+    var arena = std.heap.ArenaAllocator.init(cookie_jar.allocator);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+
+    // NOTE: The param.url can affect the default domain, path, source port, and source scheme.
+    const domain = try percentEncodedDomain(a, param.url, param.domain) orelse return error.InvalidParams;
+
+    const cookie = Cookie{
+        .arena = arena,
+        .name = try a.dupe(u8, param.name),
+        .value = try a.dupe(u8, param.value),
+        .path = if (param.path) |path| try a.dupe(u8, path) else "/", // Chrome does not actually take the path from the url and just defaults to "/".
+        .domain = domain,
+        .expires = param.expires,
+        .secure = param.secure,
+        .http_only = param.httpOnly,
+        .same_site = switch (param.sameSite) {
+            .Strict => .strict,
+            .Lax => .lax,
+            .None => .none,
+        },
+    };
+    try cookie_jar.add(cookie, std.time.timestamp());
 }
 
 // Upsert a header into the headers array.
