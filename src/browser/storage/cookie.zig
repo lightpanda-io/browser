@@ -266,9 +266,9 @@ pub const Cookie = struct {
     path: []const u8,
     domain: []const u8,
     expires: ?i64,
-    secure: bool,
-    http_only: bool,
-    same_site: SameSite,
+    secure: bool = false,
+    http_only: bool = false,
+    same_site: SameSite = .none,
 
     const SameSite = enum {
         strict,
@@ -372,7 +372,7 @@ pub const Cookie = struct {
                     if (std.mem.endsWith(u8, host, value) == false) {
                         return error.InvalidDomain;
                     }
-                    domain = value;
+                    domain = value; // TODO to lower case: https://www.rfc-editor.org/rfc/rfc6265#section-5.2.3
                 },
                 .secure => secure = true,
                 .@"max-age" => max_age = std.fmt.parseInt(i64, value, 10) catch continue,
