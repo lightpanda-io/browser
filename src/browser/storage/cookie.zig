@@ -32,6 +32,13 @@ pub const Jar = struct {
         self.cookies.deinit(self.allocator);
     }
 
+    pub fn clear(self: *Jar) void {
+        for (self.cookies.items) |c| {
+            c.deinit();
+        }
+        self.cookies.clearRetainingCapacity();
+    }
+
     pub fn add(
         self: *Jar,
         cookie: Cookie,
@@ -173,43 +180,43 @@ pub const Jar = struct {
     }
 };
 
-pub const CookieList = struct {
-    _cookies: std.ArrayListUnmanaged(*const Cookie) = .{},
+// pub const CookieList = struct {
+//     _cookies: std.ArrayListUnmanaged(*const Cookie) = .{},
 
-    pub fn deinit(self: *CookieList, allocator: Allocator) void {
-        self._cookies.deinit(allocator);
-    }
+//     pub fn deinit(self: *CookieList, allocator: Allocator) void {
+//         self._cookies.deinit(allocator);
+//     }
 
-    pub fn cookies(self: *const CookieList) []*const Cookie {
-        return self._cookies.items;
-    }
+//     pub fn cookies(self: *const CookieList) []*const Cookie {
+//         return self._cookies.items;
+//     }
 
-    pub fn len(self: *const CookieList) usize {
-        return self._cookies.items.len;
-    }
+//     pub fn len(self: *const CookieList) usize {
+//         return self._cookies.items.len;
+//     }
 
-    pub fn write(self: *const CookieList, writer: anytype) !void {
-        const all = self._cookies.items;
-        if (all.len == 0) {
-            return;
-        }
-        try writeCookie(all[0], writer);
-        for (all[1..]) |cookie| {
-            try writer.writeAll("; ");
-            try writeCookie(cookie, writer);
-        }
-    }
+//     pub fn write(self: *const CookieList, writer: anytype) !void {
+//         const all = self._cookies.items;
+//         if (all.len == 0) {
+//             return;
+//         }
+//         try writeCookie(all[0], writer);
+//         for (all[1..]) |cookie| {
+//             try writer.writeAll("; ");
+//             try writeCookie(cookie, writer);
+//         }
+//     }
 
-    fn writeCookie(cookie: *const Cookie, writer: anytype) !void {
-        if (cookie.name.len > 0) {
-            try writer.writeAll(cookie.name);
-            try writer.writeByte('=');
-        }
-        if (cookie.value.len > 0) {
-            try writer.writeAll(cookie.value);
-        }
-    }
-};
+//     fn writeCookie(cookie: *const Cookie, writer: anytype) !void {
+//         if (cookie.name.len > 0) {
+//             try writer.writeAll(cookie.name);
+//             try writer.writeByte('=');
+//         }
+//         if (cookie.value.len > 0) {
+//             try writer.writeAll(cookie.value);
+//         }
+//     }
+// };
 
 fn isCookieExpired(cookie: *const Cookie, now: i64) bool {
     const ce = cookie.expires orelse return false;
@@ -660,39 +667,39 @@ test "Jar: forRequest" {
     // the 'global2' cookie
 }
 
-test "CookieList: write" {
-    var arr: std.ArrayListUnmanaged(u8) = .{};
-    defer arr.deinit(testing.allocator);
+// test "CookieList: write" {
+//     var arr: std.ArrayListUnmanaged(u8) = .{};
+//     defer arr.deinit(testing.allocator);
 
-    var cookie_list = CookieList{};
-    defer cookie_list.deinit(testing.allocator);
+//     var cookie_list = CookieList{};
+//     defer cookie_list.deinit(testing.allocator);
 
-    const c1 = try Cookie.parse(testing.allocator, &test_uri, "cookie_name=cookie_value");
-    defer c1.deinit();
-    {
-        try cookie_list._cookies.append(testing.allocator, &c1);
-        try cookie_list.write(arr.writer(testing.allocator));
-        try testing.expectEqual("cookie_name=cookie_value", arr.items);
-    }
+//     const c1 = try Cookie.parse(testing.allocator, &test_uri, "cookie_name=cookie_value");
+//     defer c1.deinit();
+//     {
+//         try cookie_list._cookies.append(testing.allocator, &c1);
+//         try cookie_list.write(arr.writer(testing.allocator));
+//         try testing.expectEqual("cookie_name=cookie_value", arr.items);
+//     }
 
-    const c2 = try Cookie.parse(testing.allocator, &test_uri, "x84");
-    defer c2.deinit();
-    {
-        arr.clearRetainingCapacity();
-        try cookie_list._cookies.append(testing.allocator, &c2);
-        try cookie_list.write(arr.writer(testing.allocator));
-        try testing.expectEqual("cookie_name=cookie_value; x84", arr.items);
-    }
+//     const c2 = try Cookie.parse(testing.allocator, &test_uri, "x84");
+//     defer c2.deinit();
+//     {
+//         arr.clearRetainingCapacity();
+//         try cookie_list._cookies.append(testing.allocator, &c2);
+//         try cookie_list.write(arr.writer(testing.allocator));
+//         try testing.expectEqual("cookie_name=cookie_value; x84", arr.items);
+//     }
 
-    const c3 = try Cookie.parse(testing.allocator, &test_uri, "nope=");
-    defer c3.deinit();
-    {
-        arr.clearRetainingCapacity();
-        try cookie_list._cookies.append(testing.allocator, &c3);
-        try cookie_list.write(arr.writer(testing.allocator));
-        try testing.expectEqual("cookie_name=cookie_value; x84; nope=", arr.items);
-    }
-}
+//     const c3 = try Cookie.parse(testing.allocator, &test_uri, "nope=");
+//     defer c3.deinit();
+//     {
+//         arr.clearRetainingCapacity();
+//         try cookie_list._cookies.append(testing.allocator, &c3);
+//         try cookie_list.write(arr.writer(testing.allocator));
+//         try testing.expectEqual("cookie_name=cookie_value; x84; nope=", arr.items);
+//     }
+// }
 
 test "Cookie: parse key=value" {
     try expectError(error.Empty, null, "");
