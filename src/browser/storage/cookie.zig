@@ -32,7 +32,7 @@ pub const Jar = struct {
         self.cookies.deinit(self.allocator);
     }
 
-    pub fn clear(self: *Jar) void {
+    pub fn clearRetainingCapacity(self: *Jar) void {
         for (self.cookies.items) |c| {
             c.deinit();
         }
