@@ -647,26 +647,38 @@ pub const Page = struct {
         };
     }
 
-    fn _keydownCallback(page: *Page, event: *parser.Event) !void {
-        const kbe: *parser.KeyboardEvent = @ptrCast(event);
+    fn _keydownCallback(self: *Page, event: *parser.Event) !void {
         const target = (try parser.eventTarget(event)) orelse return;
         const node = parser.eventTargetToNode(target);
         const tag = (try parser.nodeHTMLGetTagType(node)) orelse return;
+
+        const kbe: *parser.KeyboardEvent = @ptrCast(event);
+        var new_key = try parser.keyboardEventGetKey(kbe);
+        if (std.mem.eql(u8, new_key, "Dead")) {
+            return;
+        }
+
         switch (tag) {
             .input => {
                 const element: *parser.Element = @ptrCast(node);
                 const input_type = (try parser.elementGetAttribute(element, "type")) orelse "text";
                 if (std.mem.eql(u8, input_type, "text")) {
+                    if (std.mem.eql(u8, new_key, "Enter")) {
+                        const form = (try self.formForElement(element)) orelse return;
+                        return self.submitForm(@ptrCast(form), null);
+                    }
+
                     const value = try parser.inputGetValue(@ptrCast(element));
-                    const new_key = try parser.keyboardEventGetKey(kbe);
-                    const new_value = try std.mem.concat(page.arena, u8, &.{ value, new_key });
+                    const new_value = try std.mem.concat(self.arena, u8, &.{ value, new_key });
                     try parser.inputSetValue(@ptrCast(element), new_value);
                 }
             },
             .textarea => {
                 const value = try parser.textareaGetValue(@ptrCast(node));
-                const new_key = try parser.keyboardEventGetKey(kbe);
-                const new_value = try std.mem.concat(page.arena, u8, &.{ value, new_key });
+                if (std.mem.eql(u8, new_key, "Enter")) {
+                    new_key = "\n";
+                }
+                const new_value = try std.mem.concat(self.arena, u8, &.{ value, new_key });
                 try parser.textareaSetValue(@ptrCast(node), new_value);
             },
             else => {},
@@ -734,7 +746,6 @@ pub const Page = struct {
         } else {
             action = try URL.concatQueryString(transfer_arena, action, buf.items);
         }
-
         try self.navigateFromWebAPI(action, opts);
     }
 
