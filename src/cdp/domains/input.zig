@@ -35,9 +35,9 @@ pub fn processMessage(cmd: anytype) !void {
 fn dispatchKeyEvent(cmd: anytype) !void {
     const params = (try cmd.params(struct {
         type: Type,
-        key: []const u8,
-        code: []const u8,
-        modifiers: u4,
+        key: []const u8 = "",
+        code: []const u8 = "",
+        modifiers: u4 = 0,
         // Many optional parameters are not implemented yet, see documentation url.
 
         const Type = enum {
