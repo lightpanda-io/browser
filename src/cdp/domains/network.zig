@@ -28,6 +28,7 @@ pub fn processMessage(cmd: anytype) !void {
         disable,
         setCacheDisabled,
         setExtraHTTPHeaders,
+        deleteCookies,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -35,6 +36,7 @@ pub fn processMessage(cmd: anytype) !void {
         .disable => return disable(cmd),
         .setCacheDisabled => return cmd.sendResult(null, .{}),
         .setExtraHTTPHeaders => return setExtraHTTPHeaders(cmd),
+        .deleteCookies => return deleteCookies(cmd),
     }
 }
 
@@ -68,6 +70,52 @@ fn setExtraHTTPHeaders(cmd: anytype) !void {
         extra_headers.appendAssumeCapacity(.{ .name = try arena.dupe(u8, header.key_ptr.*), .value = try arena.dupe(u8, header.value_ptr.*) });
     }
 
+    return cmd.sendResult(null, .{});
+}
+
+// const CookiePartitionKey = struct {
+//     topLevelSite: []const u8,
+//     hasCrossSiteAncestor: bool,
+// };
+
+const Cookie = @import("../../browser/storage/storage.zig").Cookie;
+const CookieJar = @import("../../browser/storage/storage.zig").CookieJar;
+
+fn cookieMatches(cookie: *const Cookie, name: []const u8, url: ?[]const u8, domain: ?[]const u8, path: ?[]const u8) bool {
+    if (!std.mem.eql(u8, cookie.name, name)) return false;
+
+    _ = url; // TODO
+
+    if (domain) |domain_| {
+        if (!std.mem.eql(u8, cookie.domain, domain_)) return false;
+    }
+    if (path) |path_| {
+        if (!std.mem.eql(u8, cookie.path, path_)) return false;
+    }
+
+    return true;
+}
+
+fn deleteCookies(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        name: []const u8,
+        url: ?[]const u8 = null,
+        domain: ?[]const u8 = null,
+        path: ?[]const u8 = null,
+        // partitionKey: ?CookiePartitionKey,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const cookies = &bc.session.cookie_jar.cookies;
+
+    var index = cookies.items.len;
+    while (index > 0) {
+        index -= 1;
+        const cookie = &cookies.items[index];
+        if (cookieMatches(cookie, params.name, params.url, params.domain, params.path)) {
+            cookies.swapRemove(index).deinit();
+        }
+    }
     return cmd.sendResult(null, .{});
 }
 
