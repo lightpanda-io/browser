@@ -29,6 +29,7 @@ pub fn processMessage(cmd: anytype) !void {
         setCacheDisabled,
         setExtraHTTPHeaders,
         deleteCookies,
+        clearBrowserCookies,
         setCookie,
         setCookies,
     }, cmd.input.action) orelse return error.UnknownMethod;
@@ -39,6 +40,7 @@ pub fn processMessage(cmd: anytype) !void {
         .setCacheDisabled => return cmd.sendResult(null, .{}),
         .setExtraHTTPHeaders => return setExtraHTTPHeaders(cmd),
         .deleteCookies => return deleteCookies(cmd),
+        .clearBrowserCookies => return clearBrowserCookies(cmd),
         .setCookie => return setCookie(cmd),
         .setCookies => return setCookies(cmd),
     }
@@ -120,6 +122,15 @@ fn deleteCookies(cmd: anytype) !void {
             cookies.swapRemove(index).deinit();
         }
     }
+    return cmd.sendResult(null, .{});
+}
+
+fn clearBrowserCookies(cmd: anytype) !void {
+    _ = (try cmd.params(struct {})) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    bc.session.cookie_jar.clearRetainingCapacity();
+
     return cmd.sendResult(null, .{});
 }
 
