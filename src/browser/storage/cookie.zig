@@ -372,7 +372,7 @@ pub const Cookie = struct {
                     if (std.mem.endsWith(u8, host, value) == false) {
                         return error.InvalidDomain;
                     }
-                    domain = value; // TODO to lower case: https://www.rfc-editor.org/rfc/rfc6265#section-5.2.3
+                    domain = value; // Domain is made lower case after it has relocated to the arena
                 },
                 .secure => secure = true,
                 .@"max-age" => max_age = std.fmt.parseInt(i64, value, 10) catch continue,
@@ -406,6 +406,7 @@ pub const Cookie = struct {
         } else blk: {
             break :blk try aa.dupe(u8, host);
         };
+        _ = toLower(owned_domain);
 
         var normalized_expires: ?i64 = null;
         if (max_age) |ma| {
@@ -468,6 +469,13 @@ fn trimLeft(str: []const u8) []const u8 {
 
 fn trimRight(str: []const u8) []const u8 {
     return std.mem.trimLeft(u8, str, &std.ascii.whitespace);
+}
+
+pub fn toLower(str: []u8) []u8 {
+    for (str, 0..) |c, i| {
+        str[i] = std.ascii.toLower(c);
+    }
+    return str;
 }
 
 const testing = @import("../../testing.zig");
