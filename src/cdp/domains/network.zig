@@ -17,10 +17,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
+
 const Notification = @import("../../notification.zig").Notification;
 const log = @import("../../log.zig");
-
-const Allocator = std.mem.Allocator;
+const CdpStorage = @import("storage.zig");
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -79,13 +80,7 @@ fn setExtraHTTPHeaders(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
-const CookiePartitionKey = struct {
-    topLevelSite: []const u8,
-    hasCrossSiteAncestor: bool,
-};
-
 const Cookie = @import("../../browser/storage/storage.zig").Cookie;
-const CookieJar = @import("../../browser/storage/storage.zig").CookieJar;
 
 fn cookieMatches(cookie: *const Cookie, name: []const u8, domain: ?[]const u8, path: ?[]const u8) bool {
     if (!std.mem.eql(u8, cookie.name, name)) return false;
@@ -116,7 +111,7 @@ fn deleteCookies(cmd: anytype) !void {
     while (index > 0) {
         index -= 1;
         const cookie = &cookies.items[index];
-        const domain = try percentEncodedDomain(cmd.arena, params.url, params.domain);
+        const domain = try CdpStorage.percentEncodedDomain(cmd.arena, params.url, params.domain);
         // TBD does chrome take the path from the url as default? (unlike setCookies)
         if (cookieMatches(cookie, params.name, domain, params.path)) {
             cookies.swapRemove(index).deinit();
@@ -134,128 +129,28 @@ fn clearBrowserCookies(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
-const SameSite = enum {
-    Strict,
-    Lax,
-    None,
-};
-const CookiePriority = enum {
-    Low,
-    Medium,
-    High,
-};
-const CookieSourceScheme = enum {
-    Unset,
-    NonSecure,
-    Secure,
-};
-
-fn isHostChar(c: u8) bool {
-    return switch (c) {
-        'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => true,
-        '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=' => true,
-        ':' => true,
-        '[', ']' => true,
-        else => false,
-    };
-}
-
-const CdpCookie = struct {
-    name: []const u8,
-    value: []const u8,
-    url: ?[]const u8 = null,
-    domain: ?[]const u8 = null,
-    path: ?[]const u8 = null,
-    secure: bool = false, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
-    httpOnly: bool = false, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
-    sameSite: SameSite = .None, // default: https://datatracker.ietf.org/doc/html/draft-west-first-party-cookies
-    expires: ?i64 = null, // -1? says google
-    priority: CookiePriority = .Medium, // default: https://datatracker.ietf.org/doc/html/draft-west-cookie-priority-00
-    sameParty: ?bool = null,
-    sourceScheme: ?CookieSourceScheme = null,
-    // sourcePort: Temporary ability and it will be removed from CDP
-    partitionKey: ?CookiePartitionKey = null,
-};
-
 fn setCookie(cmd: anytype) !void {
     const params = (try cmd.params(
-        CdpCookie,
+        CdpStorage.CdpCookie,
     )) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    try setCdpCookie(&bc.session.cookie_jar, params);
+    try CdpStorage.setCdpCookie(&bc.session.cookie_jar, params);
 
     try cmd.sendResult(.{ .success = true }, .{});
 }
 
 fn setCookies(cmd: anytype) !void {
     const params = (try cmd.params(struct {
-        cookies: []const CdpCookie,
+        cookies: []const CdpStorage.CdpCookie,
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     for (params.cookies) |param| {
-        try setCdpCookie(&bc.session.cookie_jar, param);
+        try CdpStorage.setCdpCookie(&bc.session.cookie_jar, param);
     }
 
     try cmd.sendResult(null, .{});
-}
-
-fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
-    if (param.priority != .Medium or param.sameParty != null or param.sourceScheme != null or param.partitionKey != null) {
-        return error.NotYetImplementedParams;
-    }
-    if (param.name.len == 0) return error.InvalidParams;
-    if (param.value.len == 0) return error.InvalidParams;
-
-    var arena = std.heap.ArenaAllocator.init(cookie_jar.allocator);
-    errdefer arena.deinit();
-    const a = arena.allocator();
-
-    // NOTE: The param.url can affect the default domain, path, source port, and source scheme.
-    const domain = try percentEncodedDomain(a, param.url, param.domain) orelse return error.InvalidParams;
-
-    const cookie = Cookie{
-        .arena = arena,
-        .name = try a.dupe(u8, param.name),
-        .value = try a.dupe(u8, param.value),
-        .path = if (param.path) |path| try a.dupe(u8, path) else "/", // Chrome does not actually take the path from the url and just defaults to "/".
-        .domain = domain,
-        .expires = param.expires,
-        .secure = param.secure,
-        .http_only = param.httpOnly,
-        .same_site = switch (param.sameSite) {
-            .Strict => .strict,
-            .Lax => .lax,
-            .None => .none,
-        },
-    };
-    try cookie_jar.add(cookie, std.time.timestamp());
-}
-
-// Note: Chrome does not apply rules like removing a leading `.` from the domain.
-fn percentEncodedDomain(allocator: Allocator, default_url: ?[]const u8, domain: ?[]const u8) !?[]const u8 {
-    const toLower = @import("../../browser/storage/cookie.zig").toLower;
-    if (domain) |domain_| {
-        const output = try allocator.dupe(u8, domain_);
-        return toLower(output);
-    } else if (default_url) |url| {
-        const uri = std.Uri.parse(url) catch return error.InvalidParams;
-
-        var output: []u8 = undefined;
-        switch (uri.host orelse return error.InvalidParams) {
-            .raw => |str| {
-                var list = std.ArrayList(u8).init(allocator);
-                try list.ensureTotalCapacity(str.len); // Expect no precents needed
-                try std.Uri.Component.percentEncode(list.writer(), str, isHostChar);
-                output = list.items; // @memory retains memory used before growing
-            },
-            .percent_encoded => |str| {
-                output = try allocator.dupe(u8, str);
-            },
-        }
-        return toLower(output);
-    } else return null;
 }
 
 // Upsert a header into the headers array.
