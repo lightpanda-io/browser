@@ -341,10 +341,17 @@ pub const XMLHttpRequest = struct {
         log.debug(.script_event, "dispatch event", .{
             .type = typ,
             .source = "xhr",
+            .method = self.method,
             .url = self.url,
         });
         self._dispatchEvt(typ) catch |err| {
-            log.err(.app, "dispatch event error", .{ .err = err, .type = typ, .source = "xhr" });
+            log.err(.app, "dispatch event error", .{
+                .err = err,
+                .type = typ,
+                .source = "xhr",
+                .method = self.method,
+                .url = self.url,
+            });
         };
     }
 
@@ -365,10 +372,17 @@ pub const XMLHttpRequest = struct {
         log.debug(.script_event, "dispatch progress event", .{
             .type = typ,
             .source = "xhr",
+            .method = self.method,
             .url = self.url,
         });
         self._dispatchProgressEvent(typ, opts) catch |err| {
-            log.err(.app, "dispatch progress event error", .{ .err = err, .type = typ, .source = "xhr" });
+            log.err(.app, "dispatch progress event error", .{
+                .err = err,
+                .type = typ,
+                .source = "xhr",
+                .method = self.method,
+                .url = self.url,
+            });
         };
     }
 

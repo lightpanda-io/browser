@@ -192,7 +192,12 @@ pub const Page = struct {
         const session = self.session;
         const notification = session.browser.notification;
 
-        log.debug(.http, "navigate", .{ .url = request_url, .reason = opts.reason });
+        log.debug(.http, "navigate", .{
+            .url = request_url,
+            .method = opts.method,
+            .reason = opts.reason,
+            .body = opts.body != null,
+        });
 
         // if the url is about:blank, nothing to do.
         if (std.mem.eql(u8, "about:blank", request_url.raw)) {
@@ -685,6 +690,8 @@ pub const Page = struct {
         }
     }
 
+    // We cannot navigate immediately as navigating will delete the DOM tree,
+    // which holds this event's node.
     // As such we schedule the function to be called as soon as possible.
     // The page.arena is safe to use here, but the transfer_arena exists
     // specifically for this type of lifetime.
@@ -699,7 +706,7 @@ pub const Page = struct {
         navi.* = .{
             .opts = opts,
             .session = self.session,
-            .url = try arena.dupe(u8, url),
+            .url = try self.url.resolve(arena, url),
         };
         _ = try self.loop.timeout(0, &navi.navigate_node);
     }
@@ -787,15 +794,77 @@ pub const Page = struct {
 };
 
 const DelayedNavigation = struct {
-    url: []const u8,
+    url: URL,
     session: *Session,
     opts: NavigateOpts,
+    initial: bool = true,
     navigate_node: Loop.CallbackNode = .{ .func = delayNavigate },
 
+    // Navigation is blocking, which is problem because it can seize up
+    // the loop and deadlock. We can only safely try to navigate to a
+    // new page when we're sure there's at least 1 free slot in the
+    // http client. We handle this in two phases:
+    //
+    // In the first phase, when self.initial == true, we'll shutdown the page
+    // and create a new one. The shutdown is important, because it resets the
+    // loop ctx_id and closes the scope. Closing the scope calls our XHR
+    // destructors which aborts requests. This is necessary to make sure our
+    // [blocking] navigate won't block.
+    //
+    // In the 2nd phase, we wait until there's a free http slot so that our
+    // navigate definetly won't block (which could deadlock the system if there
+    // are still pending async requests, which we've seen happen, even after
+    // an abort).
     fn delayNavigate(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
-        _ = repeat_delay;
         const self: *DelayedNavigation = @fieldParentPtr("navigate_node", node);
-        self.session.pageNavigate(self.url, self.opts) catch |err| {
+
+        const session = self.session;
+        const initial = self.initial;
+
+        if (initial) {
+            session.removePage();
+            _ = session.createPage() catch |err| {
+                log.err(.browser, "delayed navigation page error", .{
+                    .err = err,
+                    .url = self.url,
+                });
+                return;
+            };
+            self.initial = false;
+        }
+
+        if (session.browser.http_client.freeSlotCount() == 0) {
+            log.debug(.browser, "delayed navigate waiting", .{});
+            const delay = 0 * std.time.ns_per_ms;
+
+            // If this isn't the initial check, we can safely re-use the timer
+            // to check again.
+            if (initial == false) {
+                repeat_delay.* = delay;
+                return;
+            }
+
+            // However, if this _is_ the initial check, we called
+            // session.removePage above, and that reset the loop ctx_id.
+            // We can't re-use this timer, because it has the previous ctx_id.
+            // We can create a new timeout though, and that'll get the new ctx_id.
+            //
+            // Page has to be not-null here because we called createPage above.
+            _ = session.page.?.loop.timeout(delay, &self.navigate_node) catch |err| {
+                log.err(.browser, "delayed navigation loop err", .{ .err = err });
+            };
+            return;
+        }
+
+        const page = session.currentPage() orelse return;
+        defer if (!page.delayed_navigation) {
+            // If, while loading the page, we intend to navigate to another
+            // page, then we need to keep the transfer_arena around, as this
+            // sub-navigation is probably using it.
+            _ = session.browser.transfer_arena.reset(.{ .retain_with_limit = 64 * 1024 });
+        };
+
+        return page.navigate(self.url, self.opts) catch |err| {
             log.err(.browser, "delayed navigation error", .{ .err = err, .url = self.url });
         };
     }

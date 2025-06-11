@@ -113,10 +113,18 @@ pub const Client = struct {
         loop: *Loop,
         opts: RequestOpts,
     ) !void {
-        if (self.state_pool.acquireOrNull()) |state| {
-            // if we have state ready, we can skip the loop and immediately
-            // kick this request off.
-            return self.asyncRequestReady(method, uri, ctx, callback, state, opts);
+
+        // See the page's DelayedNavitation for why we're doing this. TL;DR -
+        // we need to keep 1 slot available for the blocking page navigation flow
+        // (Almost worth keeping a dedicate State just for that flow, but keep
+        // thinking we need a more permanent solution (i.e. making everything
+        // non-blocking).
+        if (self.freeSlotCount() > 1) {
+            if (self.state_pool.acquireOrNull()) |state| {
+                // if we have state ready, we can skip the loop and immediately
+                // kick this request off.
+                return self.asyncRequestReady(method, uri, ctx, callback, state, opts);
+            }
         }
 
         // This cannot be a client-owned MemoryPool. The page can end before
@@ -173,6 +181,10 @@ pub const Client = struct {
             .opts = opts,
             .client = self,
         };
+    }
+
+    pub fn freeSlotCount(self: *Client) usize {
+        return self.state_pool.freeSlotCount();
     }
 };
 
@@ -2531,6 +2543,12 @@ const StatePool = struct {
         allocator.free(self.states);
     }
 
+    pub fn freeSlotCount(self: *StatePool) usize {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.available;
+    }
+
     pub fn acquireWait(self: *StatePool) *State {
         const states = self.states;
 
@@ -3022,8 +3040,14 @@ test "HttpClient: async connect error" {
         .{},
     );
 
-    try loop.io.run_for_ns(std.time.ns_per_ms);
-    try reset.timedWait(std.time.ns_per_s);
+    for (0..10) |_| {
+        try loop.io.run_for_ns(std.time.ns_per_ms * 10);
+        if (reset.isSet()) {
+            break;
+        }
+    } else {
+        return error.Timeout;
+    }
 }
 
 test "HttpClient: async no body" {
