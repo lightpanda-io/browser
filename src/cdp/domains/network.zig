@@ -160,27 +160,6 @@ fn isHostChar(c: u8) bool {
     };
 }
 
-// Note: Chrome does not apply rules like removing a leading `.` from the domain.
-fn percentEncodedDomain(allocator: Allocator, default_url: ?[]const u8, domain: ?[]const u8) !?[]const u8 {
-    if (domain) |domain_| {
-        return try allocator.dupe(u8, domain_);
-    } else if (default_url) |url| {
-        const uri = std.Uri.parse(url) catch return error.InvalidParams;
-
-        switch (uri.host orelse return error.InvalidParams) {
-            .raw => |str| {
-                var list = std.ArrayList(u8).init(allocator);
-                try list.ensureTotalCapacity(str.len); // Expect no precents needed
-                try std.Uri.Component.percentEncode(list.writer(), str, isHostChar);
-                return list.items; // @memory retains memory used before growing
-            },
-            .percent_encoded => |str| {
-                return try allocator.dupe(u8, str);
-            },
-        }
-    } else return null;
-}
-
 const CdpCookie = struct {
     name: []const u8,
     value: []const u8,
@@ -252,6 +231,31 @@ fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
         },
     };
     try cookie_jar.add(cookie, std.time.timestamp());
+}
+
+// Note: Chrome does not apply rules like removing a leading `.` from the domain.
+fn percentEncodedDomain(allocator: Allocator, default_url: ?[]const u8, domain: ?[]const u8) !?[]const u8 {
+    const toLower = @import("../../browser/storage/cookie.zig").toLower;
+    if (domain) |domain_| {
+        const output = try allocator.dupe(u8, domain_);
+        return toLower(output);
+    } else if (default_url) |url| {
+        const uri = std.Uri.parse(url) catch return error.InvalidParams;
+
+        var output: []u8 = undefined;
+        switch (uri.host orelse return error.InvalidParams) {
+            .raw => |str| {
+                var list = std.ArrayList(u8).init(allocator);
+                try list.ensureTotalCapacity(str.len); // Expect no precents needed
+                try std.Uri.Component.percentEncode(list.writer(), str, isHostChar);
+                output = list.items; // @memory retains memory used before growing
+            },
+            .percent_encoded => |str| {
+                output = try allocator.dupe(u8, str);
+            },
+        }
+        return toLower(output);
+    } else return null;
 }
 
 // Upsert a header into the headers array.
