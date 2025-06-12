@@ -66,87 +66,33 @@ pub const Jar = struct {
         }
     }
 
+    pub fn removeExpired(self: *Jar, request_time: ?i64) void {
+        if (self.cookies.items.len == 0) return;
+        const time = request_time orelse std.time.timestamp();
+        var i: usize = self.cookies.items.len - 1;
+        while (i > 0) {
+            defer i -= 1;
+            const cookie = &self.cookies.items[i];
+            if (isCookieExpired(cookie, time)) {
+                self.cookies.swapRemove(i).deinit();
+            }
+        }
+    }
+
     pub fn forRequest(self: *Jar, target_uri: *const Uri, writer: anytype, opts: LookupOpts) !void {
-        const target_path = target_uri.path.percent_encoded;
-        const target_host = (target_uri.host orelse return error.InvalidURI).percent_encoded;
+        const target = PreparedUri{
+            .host = (target_uri.host orelse return error.InvalidURI).percent_encoded,
+            .path = target_uri.path.percent_encoded,
+            .secure = std.mem.eql(u8, target_uri.scheme, "https"),
+        };
+        const same_site = try areSameSite(opts.origin_uri, target.host);
 
-        const same_site = try areSameSite(opts.origin_uri, target_host);
-        const is_secure = std.mem.eql(u8, target_uri.scheme, "https");
-
-        var i: usize = 0;
-        var cookies = self.cookies.items;
-        const navigation = opts.navigation;
-        const request_time = opts.request_time orelse std.time.timestamp();
+        removeExpired(self, opts.request_time);
 
         var first = true;
-        while (i < cookies.len) {
-            const cookie = &cookies[i];
+        for (self.cookies.items) |*cookie| {
+            if (!cookie.appliesTo(&target, same_site, opts.navigation)) continue;
 
-            if (isCookieExpired(cookie, request_time)) {
-                cookie.deinit();
-                _ = self.cookies.swapRemove(i);
-                // don't increment i !
-                continue;
-            }
-            i += 1;
-
-            if (is_secure == false and cookie.secure) {
-                // secure cookie can only be sent over HTTPs
-                continue;
-            }
-
-            if (same_site == false) {
-                // If we aren't on the "same site" (matching 2nd level domain
-                // taking into account public suffix list), then the cookie
-                // can only be sent if cookie.same_site == .none, or if
-                // we're navigating to (as opposed to, say, loading an image)
-                // and cookie.same_site == .lax
-                switch (cookie.same_site) {
-                    .strict => continue,
-                    .lax => if (navigation == false) continue,
-                    .none => {},
-                }
-            }
-
-            {
-                const domain = cookie.domain;
-                if (domain[0] == '.') {
-                    // When a Set-Cookie header has a Domain attribute
-                    // Then we will _always_ prefix it with a dot, extending its
-                    // availability to all subdomains (yes, setting the Domain
-                    // attributes EXPANDS the domains which the cookie will be
-                    // sent to, to always include all subdomains).
-                    if (std.mem.eql(u8, target_host, domain[1..]) == false and std.mem.endsWith(u8, target_host, domain) == false) {
-                        continue;
-                    }
-                } else if (std.mem.eql(u8, target_host, domain) == false) {
-                    // When the Domain attribute isn't specific, then the cookie
-                    // is only sent on an exact match.
-                    continue;
-                }
-            }
-
-            {
-                const path = cookie.path;
-                if (path[path.len - 1] == '/') {
-                    // If our cookie has a trailing slash, we can only match is
-                    // the target path is a perfix. I.e., if our path is
-                    // /doc/  we can only match /doc/*
-                    if (std.mem.startsWith(u8, target_path, path) == false) {
-                        continue;
-                    }
-                } else {
-                    // Our cookie path is something like /hello
-                    if (std.mem.startsWith(u8, target_path, path) == false) {
-                        // The target path has to either be /hello (it isn't)
-                        continue;
-                    } else if (target_path.len < path.len or (target_path.len > path.len and target_path[path.len] != '/')) {
-                        // Or it has to be something like /hello/* (it isn't)
-                        // it isn't!
-                        continue;
-                    }
-                }
-            }
             // we have a match!
             if (first) {
                 first = false;
@@ -179,44 +125,6 @@ pub const Jar = struct {
         }
     }
 };
-
-// pub const CookieList = struct {
-//     _cookies: std.ArrayListUnmanaged(*const Cookie) = .{},
-
-//     pub fn deinit(self: *CookieList, allocator: Allocator) void {
-//         self._cookies.deinit(allocator);
-//     }
-
-//     pub fn cookies(self: *const CookieList) []*const Cookie {
-//         return self._cookies.items;
-//     }
-
-//     pub fn len(self: *const CookieList) usize {
-//         return self._cookies.items.len;
-//     }
-
-//     pub fn write(self: *const CookieList, writer: anytype) !void {
-//         const all = self._cookies.items;
-//         if (all.len == 0) {
-//             return;
-//         }
-//         try writeCookie(all[0], writer);
-//         for (all[1..]) |cookie| {
-//             try writer.writeAll("; ");
-//             try writeCookie(cookie, writer);
-//         }
-//     }
-
-//     fn writeCookie(cookie: *const Cookie, writer: anytype) !void {
-//         if (cookie.name.len > 0) {
-//             try writer.writeAll(cookie.name);
-//             try writer.writeByte('=');
-//         }
-//         if (cookie.value.len > 0) {
-//             try writer.writeAll(cookie.value);
-//         }
-//     }
-// };
 
 fn isCookieExpired(cookie: *const Cookie, now: i64) bool {
     const ce = cookie.expires orelse return false;
@@ -447,6 +355,71 @@ pub const Cookie = struct {
         const value = trim(str[sep + 1 .. key_value_end]);
         return .{ name, value, rest };
     }
+
+    pub fn appliesTo(self: *const Cookie, url: *const PreparedUri, same_site: bool, navigation: bool) bool {
+        if (url.secure == false and self.secure) {
+            // secure cookie can only be sent over HTTPs
+            return false;
+        }
+
+        if (same_site == false) {
+            // If we aren't on the "same site" (matching 2nd level domain
+            // taking into account public suffix list), then the cookie
+            // can only be sent if cookie.same_site == .none, or if
+            // we're navigating to (as opposed to, say, loading an image)
+            // and cookie.same_site == .lax
+            switch (self.same_site) {
+                .strict => return false,
+                .lax => if (navigation == false) return false,
+                .none => {},
+            }
+        }
+
+        {
+            if (self.domain[0] == '.') {
+                // When a Set-Cookie header has a Domain attribute
+                // Then we will _always_ prefix it with a dot, extending its
+                // availability to all subdomains (yes, setting the Domain
+                // attributes EXPANDS the domains which the cookie will be
+                // sent to, to always include all subdomains).
+                if (std.mem.eql(u8, url.host, self.domain[1..]) == false and std.mem.endsWith(u8, url.host, self.domain) == false) {
+                    return false;
+                }
+            } else if (std.mem.eql(u8, url.host, self.domain) == false) {
+                // When the Domain attribute isn't specific, then the cookie
+                // is only sent on an exact match.
+                return false;
+            }
+        }
+
+        {
+            if (self.path[self.path.len - 1] == '/') {
+                // If our cookie has a trailing slash, we can only match is
+                // the target path is a perfix. I.e., if our path is
+                // /doc/  we can only match /doc/*
+                if (std.mem.startsWith(u8, url.path, self.path) == false) {
+                    return false;
+                }
+            } else {
+                // Our cookie path is something like /hello
+                if (std.mem.startsWith(u8, url.path, self.path) == false) {
+                    // The target path has to either be /hello (it isn't)
+                    return false;
+                } else if (url.path.len < self.path.len or (url.path.len > self.path.len and url.path[self.path.len] != '/')) {
+                    // Or it has to be something like /hello/* (it isn't)
+                    // it isn't!
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+};
+
+pub const PreparedUri = struct {
+    host: []const u8, // Percent encoded, lower case
+    path: []const u8, // Percent encoded
+    secure: bool, // True if scheme is https
 };
 
 fn defaultPath(allocator: Allocator, document_path: []const u8) ![]const u8 {
@@ -674,40 +647,6 @@ test "Jar: forRequest" {
     // If you add more cases after this point, note that the above test removes
     // the 'global2' cookie
 }
-
-// test "CookieList: write" {
-//     var arr: std.ArrayListUnmanaged(u8) = .{};
-//     defer arr.deinit(testing.allocator);
-
-//     var cookie_list = CookieList{};
-//     defer cookie_list.deinit(testing.allocator);
-
-//     const c1 = try Cookie.parse(testing.allocator, &test_uri, "cookie_name=cookie_value");
-//     defer c1.deinit();
-//     {
-//         try cookie_list._cookies.append(testing.allocator, &c1);
-//         try cookie_list.write(arr.writer(testing.allocator));
-//         try testing.expectEqual("cookie_name=cookie_value", arr.items);
-//     }
-
-//     const c2 = try Cookie.parse(testing.allocator, &test_uri, "x84");
-//     defer c2.deinit();
-//     {
-//         arr.clearRetainingCapacity();
-//         try cookie_list._cookies.append(testing.allocator, &c2);
-//         try cookie_list.write(arr.writer(testing.allocator));
-//         try testing.expectEqual("cookie_name=cookie_value; x84", arr.items);
-//     }
-
-//     const c3 = try Cookie.parse(testing.allocator, &test_uri, "nope=");
-//     defer c3.deinit();
-//     {
-//         arr.clearRetainingCapacity();
-//         try cookie_list._cookies.append(testing.allocator, &c3);
-//         try cookie_list.write(arr.writer(testing.allocator));
-//         try testing.expectEqual("cookie_name=cookie_value; x84; nope=", arr.items);
-//     }
-// }
 
 test "Cookie: parse key=value" {
     try expectError(error.Empty, null, "");

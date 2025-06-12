@@ -33,6 +33,7 @@ pub fn processMessage(cmd: anytype) !void {
         clearBrowserCookies,
         setCookie,
         setCookies,
+        getCookies,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -44,6 +45,7 @@ pub fn processMessage(cmd: anytype) !void {
         .clearBrowserCookies => return clearBrowserCookies(cmd),
         .setCookie => return setCookie(cmd),
         .setCookies => return setCookies(cmd),
+        .getCookies => return getCookies(cmd),
     }
 }
 
@@ -82,6 +84,7 @@ fn setExtraHTTPHeaders(cmd: anytype) !void {
 
 const Cookie = @import("../../browser/storage/storage.zig").Cookie;
 
+// Only matches the cookie on provided parameters
 fn cookieMatches(cookie: *const Cookie, name: []const u8, domain: ?[]const u8, path: ?[]const u8) bool {
     if (!std.mem.eql(u8, cookie.name, name)) return false;
 
@@ -91,8 +94,13 @@ fn cookieMatches(cookie: *const Cookie, name: []const u8, domain: ?[]const u8, p
     if (path) |path_| {
         if (!std.mem.eql(u8, cookie.path, path_)) return false;
     }
-
     return true;
+}
+
+// Only matches the cookie on provided parameters
+fn cookieAppliesTo(cookie: *const Cookie, domain: []const u8, path: []const u8) bool {
+    if (!std.mem.eql(u8, cookie.domain, domain)) return false;
+    return std.mem.startsWith(u8, path, cookie.path);
 }
 
 fn deleteCookies(cmd: anytype) !void {
@@ -107,11 +115,13 @@ fn deleteCookies(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const cookies = &bc.session.cookie_jar.cookies;
 
+    const uri = if (params.url) |url| std.Uri.parse(url) catch return error.InvalidParams else null;
+
     var index = cookies.items.len;
     while (index > 0) {
         index -= 1;
         const cookie = &cookies.items[index];
-        const domain = try CdpStorage.percentEncodedDomain(cmd.arena, params.url, params.domain);
+        const domain = try CdpStorage.percentEncodedDomainOrHost(cmd.arena, uri, params.domain);
         // TBD does chrome take the path from the url as default? (unlike setCookies)
         if (cookieMatches(cookie, params.name, domain, params.path)) {
             cookies.swapRemove(index).deinit();
@@ -151,6 +161,33 @@ fn setCookies(cmd: anytype) !void {
     }
 
     try cmd.sendResult(null, .{});
+}
+
+fn getCookies(cmd: anytype) !void {
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const params = (try cmd.params(struct {
+        urls: []const []const u8,
+    })) orelse return error.InvalidParams;
+
+    var urls = try std.ArrayListUnmanaged(CdpStorage.PreparedUri).initCapacity(cmd.arena, params.urls.len);
+    for (params.urls) |url| {
+        const uri = std.Uri.parse(url) catch return error.InvalidParams;
+
+        const host_component = uri.host orelse return error.InvalidParams;
+        const host = CdpStorage.toLower(try CdpStorage.percentEncode(cmd.arena, host_component, CdpStorage.isHostChar));
+
+        var path: []const u8 = try CdpStorage.percentEncode(cmd.arena, uri.path, CdpStorage.isPathChar);
+        if (path.len == 0) path = "/";
+
+        const secure = std.mem.eql(u8, uri.scheme, "https");
+
+        urls.appendAssumeCapacity(.{ .host = host, .path = path, .secure = secure });
+    }
+
+    var jar = &bc.session.cookie_jar;
+    jar.removeExpired(null);
+    const writer = CdpStorage.CookieWriter{ .cookies = jar.cookies.items, .urls = urls.items };
+    try cmd.sendResult(.{ .cookies = writer }, .{});
 }
 
 // Upsert a header into the headers array.

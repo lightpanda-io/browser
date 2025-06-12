@@ -22,6 +22,8 @@ const Allocator = std.mem.Allocator;
 const log = @import("../../log.zig");
 const Cookie = @import("../../browser/storage/storage.zig").Cookie;
 const CookieJar = @import("../../browser/storage/storage.zig").CookieJar;
+pub const PreparedUri = @import("../../browser/storage/cookie.zig").PreparedUri;
+pub const toLower = @import("../../browser/storage/cookie.zig").toLower;
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -65,6 +67,7 @@ fn getCookies(cmd: anytype) !void {
             return error.UnknownBrowserContextId;
         }
     }
+    bc.session.cookie_jar.removeExpired(null);
     const cookies = CookieWriter{ .cookies = bc.session.cookie_jar.cookies.items };
     try cmd.sendResult(.{ .cookies = cookies }, .{});
 }
@@ -139,7 +142,8 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
     const a = arena.allocator();
 
     // NOTE: The param.url can affect the default domain, path, source port, and source scheme.
-    const domain = try percentEncodedDomain(a, param.url, param.domain) orelse return error.InvalidParams;
+    const uri = if (param.url) |url| std.Uri.parse(url) catch return error.InvalidParams else null;
+    const domain = try percentEncodedDomainOrHost(a, uri, param.domain) orelse return error.InvalidParams;
 
     const cookie = Cookie{
         .arena = arena,
@@ -160,31 +164,32 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
 }
 
 // Note: Chrome does not apply rules like removing a leading `.` from the domain.
-pub fn percentEncodedDomain(allocator: Allocator, default_url: ?[]const u8, domain: ?[]const u8) !?[]const u8 {
-    const toLower = @import("../../browser/storage/cookie.zig").toLower;
+pub fn percentEncodedDomainOrHost(allocator: Allocator, default_url: ?std.Uri, domain: ?[]const u8) !?[]const u8 {
     if (domain) |domain_| {
         const output = try allocator.dupe(u8, domain_);
         return toLower(output);
     } else if (default_url) |url| {
-        const uri = std.Uri.parse(url) catch return error.InvalidParams;
-
-        var output: []u8 = undefined;
-        switch (uri.host orelse return error.InvalidParams) {
-            .raw => |str| {
-                var list = std.ArrayList(u8).init(allocator);
-                try list.ensureTotalCapacity(str.len); // Expect no precents needed
-                try std.Uri.Component.percentEncode(list.writer(), str, isHostChar);
-                output = list.items; // @memory retains memory used before growing
-            },
-            .percent_encoded => |str| {
-                output = try allocator.dupe(u8, str);
-            },
-        }
+        const host = url.host orelse return error.InvalidParams;
+        const output = try percentEncode(allocator, host, isHostChar); // TODO remove subdomains
         return toLower(output);
     } else return null;
 }
 
-fn isHostChar(c: u8) bool {
+pub fn percentEncode(arena: Allocator, component: std.Uri.Component, comptime isValidChar: fn (u8) bool) ![]u8 {
+    switch (component) {
+        .raw => |str| {
+            var list = std.ArrayList(u8).init(arena);
+            try list.ensureTotalCapacity(str.len); // Expect no precents needed
+            try std.Uri.Component.percentEncode(list.writer(), str, isValidChar);
+            return list.items; // @memory retains memory used before growing
+        },
+        .percent_encoded => |str| {
+            return try arena.dupe(u8, str);
+        },
+    }
+}
+
+pub fn isHostChar(c: u8) bool {
     return switch (c) {
         'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => true,
         '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=' => true,
@@ -194,8 +199,18 @@ fn isHostChar(c: u8) bool {
     };
 }
 
+pub fn isPathChar(c: u8) bool {
+    return switch (c) {
+        'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => true,
+        '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=' => true,
+        '/', ':', '@' => true,
+        else => false,
+    };
+}
+
 pub const CookieWriter = struct {
     cookies: []const Cookie,
+    urls: ?[]const PreparedUri = null,
 
     pub fn jsonStringify(self: *const CookieWriter, w: anytype) !void {
         self.writeCookies(w) catch |err| {
@@ -207,49 +222,59 @@ pub const CookieWriter = struct {
 
     fn writeCookies(self: CookieWriter, w: anytype) !void {
         try w.beginArray();
-        for (self.cookies) |*cookie| {
-            try writeCookie(cookie, w);
+        if (self.urls) |urls| {
+            for (self.cookies) |*cookie| {
+                for (urls) |*url| {
+                    if (cookie.appliesTo(url, false, false)) { // TBD same_site, should we compare to the pages url?
+                        try writeCookie(cookie, w);
+                        break;
+                    }
+                }
+            }
+        } else {
+            for (self.cookies) |*cookie| {
+                try writeCookie(cookie, w);
+            }
         }
         try w.endArray();
     }
-
-    fn writeCookie(cookie: *const Cookie, w: anytype) !void {
-        try w.beginObject();
-        {
-            try w.objectField("name");
-            try w.write(cookie.name);
-
-            try w.objectField("value");
-            try w.write(cookie.value);
-
-            try w.objectField("domain");
-            try w.write(cookie.domain);
-
-            try w.objectField("path");
-            try w.write(cookie.path);
-
-            try w.objectField("expires");
-            try w.write(cookie.expires orelse -1);
-
-            // TODO size
-
-            try w.objectField("httpOnly");
-            try w.write(cookie.http_only);
-
-            try w.objectField("secure");
-            try w.write(cookie.secure);
-
-            // TODO session
-
-            try w.objectField("sameSite");
-            switch (cookie.same_site) {
-                .none => try w.write("None"),
-                .lax => try w.write("Lax"),
-                .strict => try w.write("Strict"),
-            }
-
-            // TODO experimentals
-        }
-        try w.endObject();
-    }
 };
+pub fn writeCookie(cookie: *const Cookie, w: anytype) !void {
+    try w.beginObject();
+    {
+        try w.objectField("name");
+        try w.write(cookie.name);
+
+        try w.objectField("value");
+        try w.write(cookie.value);
+
+        try w.objectField("domain");
+        try w.write(cookie.domain);
+
+        try w.objectField("path");
+        try w.write(cookie.path);
+
+        try w.objectField("expires");
+        try w.write(cookie.expires orelse -1);
+
+        // TODO size
+
+        try w.objectField("httpOnly");
+        try w.write(cookie.http_only);
+
+        try w.objectField("secure");
+        try w.write(cookie.secure);
+
+        // TODO session
+
+        try w.objectField("sameSite");
+        switch (cookie.same_site) {
+            .none => try w.write("None"),
+            .lax => try w.write("Lax"),
+            .strict => try w.write("Strict"),
+        }
+
+        // TODO experimentals
+    }
+    try w.endObject();
+}
