@@ -85,12 +85,14 @@ fn putAssumeCapacity(headers: *std.ArrayListUnmanaged(std.http.Header), extra: s
 }
 
 pub fn httpRequestFail(arena: Allocator, bc: anytype, request: *const Notification.RequestFail) !void {
+    // It's possible that the request failed because we aborted when the client
+    // sent Target.closeTarget. In that case, bc.session_id will be cleared
+    // already, and we can skip sending these messages to the client.
+    const session_id = bc.session_id orelse return;
+
     // Isn't possible to do a network request within a Browser (which our
     // notification is tied to), without a page.
     std.debug.assert(bc.session.page != null);
-
-    // all unreachable because we _have_ to have a page.
-    const session_id = bc.session_id orelse unreachable;
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{

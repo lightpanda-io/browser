@@ -1369,9 +1369,7 @@ test "Browser.HTML.HtmlInputElement.propeties.form" {
 
     try runner.testCases(&.{
         .{ "let elem_input = document.querySelector('input')", null },
-    }, .{});
-    try runner.testCases(&.{.{ "elem_input.form", "[object HTMLFormElement]" }}, .{}); // Initial value
-    try runner.testCases(&.{
+        .{ "elem_input.form", "[object HTMLFormElement]" }, // Initial value
         .{ "elem_input.form = 'foo'", null },
         .{ "elem_input.form", "[object HTMLFormElement]" }, // Invalid
     }, .{});
