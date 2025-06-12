@@ -472,6 +472,14 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 self.scope = null;
                 _ = self.scope_arena.reset(.{ .retain_with_limit = SCOPE_ARENA_RETAIN });
             }
+
+            pub fn terminateExecution(self: *const ExecutionWorld) void {
+                self.env.isolate.terminateExecution();
+            }
+
+            pub fn resumeExecution(self: *const ExecutionWorld) void {
+                self.env.isolate.cancelTerminateExecution();
+            }
         };
 
         const PersistentObject = v8.Persistent(v8.Object);
@@ -1562,7 +1570,15 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             }
 
             pub fn send(self: *const Inspector, msg: []const u8) void {
-                self.session.dispatchProtocolMessage(self.isolate, msg);
+                // Can't assume there's an existing Scope (with its HandleScope)
+                // available when doing this. Pages (and thus Scopes) come and
+                // go, but CDP can keep sending messages.
+                const isolate = self.isolate;
+                var temp_scope: v8.HandleScope = undefined;
+                v8.HandleScope.init(&temp_scope, isolate);
+                defer temp_scope.deinit();
+
+                self.session.dispatchProtocolMessage(isolate, msg);
             }
 
             // From CDP docs

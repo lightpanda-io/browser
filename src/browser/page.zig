@@ -388,11 +388,15 @@ pub const Page = struct {
             // > immediately before the browser continues to parse the
             // > page.
             // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#notes
-            self.evalScript(&script);
+            if (self.evalScript(&script) == false) {
+                return;
+            }
         }
 
         for (defer_scripts.items) |*script| {
-            self.evalScript(script);
+            if (self.evalScript(script) == false) {
+                return;
+            }
         }
         // dispatch DOMContentLoaded before the transition to "complete",
         // at the point where all subresources apart from async script elements
@@ -402,7 +406,9 @@ pub const Page = struct {
 
         // eval async scripts.
         for (async_scripts.items) |*script| {
-            self.evalScript(script);
+            if (self.evalScript(script) == false) {
+                return;
+            }
         }
 
         try HTMLDocument.documentIsComplete(html_doc, self);
@@ -419,10 +425,13 @@ pub const Page = struct {
         );
     }
 
-    fn evalScript(self: *Page, script: *const Script) void {
-        self.tryEvalScript(script) catch |err| {
-            log.err(.js, "eval script error", .{ .err = err, .src = script.src });
+    fn evalScript(self: *Page, script: *const Script) bool {
+        self.tryEvalScript(script) catch |err| switch (err) {
+            error.JsErr => {}, // already been logged with detail
+            error.Terminated => return false,
+            else => log.err(.js, "eval script error", .{ .err = err, .src = script.src }),
         };
+        return true;
     }
 
     // evalScript evaluates the src in priority.
@@ -436,29 +445,26 @@ pub const Page = struct {
             log.err(.browser, "clear document script", .{ .err = err });
         };
 
-        const src = script.src orelse {
+        var script_source: ?[]const u8 = null;
+        if (script.src) |src| {
+            self.current_script = script;
+            defer self.current_script = null;
+
+            // https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-classic-script
+            script_source = (try self.fetchData(src, null)) orelse {
+                // TODO If el's result is null, then fire an event named error at
+                // el, and return
+                return;
+            };
+        } else {
             // source is inline
             // TODO handle charset attribute
-            if (try parser.nodeTextContent(parser.elementToNode(script.element))) |text| {
-                try script.eval(self, text);
-            }
-            return;
-        };
+            script_source = try parser.nodeTextContent(parser.elementToNode(script.element));
+        }
 
-        self.current_script = script;
-        defer self.current_script = null;
-
-        // https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-classic-script
-        const body = (try self.fetchData(src, null)) orelse {
-            // TODO If el's result is null, then fire an event named error at
-            // el, and return
-            return;
-        };
-
-        script.eval(self, body) catch |err| switch (err) {
-            error.JsErr => {}, // nothing to do here.
-            else => return err,
-        };
+        if (script_source) |ss| {
+            try script.eval(self, ss);
+        }
 
         // TODO If el's from an external file is true, then fire an event
         // named load at el.
@@ -701,13 +707,18 @@ pub const Page = struct {
             .reason = opts.reason,
         });
         self.delayed_navigation = true;
-        const arena = self.session.transfer_arena;
+
+        const session = self.session;
+        const arena = session.transfer_arena;
         const navi = try arena.create(DelayedNavigation);
         navi.* = .{
             .opts = opts,
-            .session = self.session,
+            .session = session,
             .url = try self.url.resolve(arena, url),
         };
+
+        // In v8, this throws an exception which JS code cannot catch.
+        session.executor.terminateExecution();
         _ = try self.loop.timeout(0, &navi.navigate_node);
     }
 
@@ -822,6 +833,11 @@ const DelayedNavigation = struct {
         const initial = self.initial;
 
         if (initial) {
+            // Prior to schedule this task, we terminated excution to stop
+            // the running script. If we don't resume it before doing a shutdown
+            // we'll get an error.
+            session.executor.resumeExecution();
+
             session.removePage();
             _ = session.createPage() catch |err| {
                 log.err(.browser, "delayed navigation page error", .{
@@ -985,9 +1001,17 @@ const Script = struct {
                 }
             },
         } catch {
-            if (try try_catch.err(page.arena)) |msg| {
-                log.warn(.user_script, "eval script", .{ .src = src, .err = msg });
+            if (page.delayed_navigation) {
+                return error.Terminated;
             }
+
+            if (try try_catch.err(page.arena)) |msg| {
+                log.warn(.user_script, "eval script", .{
+                    .src = src,
+                    .err = msg,
+                });
+            }
+
             try self.executeCallback("onerror", page);
             return error.JsErr;
         };
@@ -1060,10 +1084,15 @@ fn timestamp() u32 {
 // immediately.
 pub export fn scriptAddedCallback(ctx: ?*anyopaque, element: ?*parser.Element) callconv(.C) void {
     const self: *Page = @alignCast(@ptrCast(ctx.?));
+    if (self.delayed_navigation) {
+        // if we're planning on navigating to another page, don't run this script
+        return;
+    }
+
     var script = Script.init(element.?, self) catch |err| {
         log.warn(.browser, "script added init error", .{ .err = err });
         return;
     } orelse return;
 
-    self.evalScript(&script);
+    _ = self.evalScript(&script);
 }
