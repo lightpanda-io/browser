@@ -25,6 +25,7 @@ const c = @cImport({
     @cInclude("events/event_target.h");
     @cInclude("events/event.h");
     @cInclude("events/mouse_event.h");
+    @cInclude("events/keyboard_event.h");
     @cInclude("utils/validate.h");
     @cInclude("html/html_element.h");
     @cInclude("html/html_document.h");
@@ -862,6 +863,59 @@ pub fn mouseEventInit(evt: *MouseEvent, typ: []const u8, opts: MouseEventOpts) !
 
 pub fn mouseEventDefaultPrevented(evt: *MouseEvent) !bool {
     return eventDefaultPrevented(@ptrCast(evt));
+}
+
+// KeyboardEvent
+
+pub const KeyboardEvent = c.dom_keyboard_event;
+
+pub fn keyboardEventCreate() !*KeyboardEvent {
+    var evt: ?*KeyboardEvent = undefined;
+    const err = c._dom_keyboard_event_create(&evt);
+    try DOMErr(err);
+    return evt.?;
+}
+
+pub fn keyboardEventDestroy(evt: *KeyboardEvent) void {
+    c._dom_keyboard_event_destroy(evt);
+}
+
+const KeyboardEventOpts = struct {
+    key: []const u8,
+    code: []const u8,
+    bubbles: bool = false,
+    cancelable: bool = false,
+    ctrl: bool = false,
+    alt: bool = false,
+    shift: bool = false,
+    meta: bool = false,
+};
+
+pub fn keyboardEventInit(evt: *KeyboardEvent, typ: []const u8, opts: KeyboardEventOpts) !void {
+    const s = try strFromData(typ);
+    const err = c._dom_keyboard_event_init(
+        evt,
+        s,
+        opts.bubbles,
+        opts.cancelable,
+        null, // dom_abstract_view* ?
+        try strFromData(opts.key),
+        try strFromData(opts.code),
+        0, // location 0 == standard
+        opts.ctrl,
+        opts.shift,
+        opts.alt,
+        opts.meta,
+        false, // repease
+        false, // is_composiom
+    );
+    try DOMErr(err);
+}
+
+pub fn keyboardEventGetKey(evt: *KeyboardEvent) ![]const u8 {
+    var s: ?*String = undefined;
+    _ = c._dom_keyboard_event_get_key(evt, &s);
+    return strToData(s.?);
 }
 
 // NodeType
@@ -2393,6 +2447,11 @@ pub fn textareaGetValue(textarea: *TextArea) ![]const u8 {
     return strToData(s);
 }
 
+pub fn textareaSetValue(textarea: *TextArea, value: []const u8) !void {
+    const err = c.dom_html_text_area_element_set_value(textarea, try strFromData(value));
+    try DOMErr(err);
+}
+
 // Select
 pub fn selectGetOptions(select: *Select) !*OptionCollection {
     var collection: ?*OptionCollection = null;
@@ -2774,4 +2833,12 @@ pub fn inputGetValue(input: *Input) ![]const u8 {
 pub fn inputSetValue(input: *Input, value: []const u8) !void {
     const err = c.dom_html_input_element_set_value(input, try strFromData(value));
     try DOMErr(err);
+}
+
+pub fn buttonGetType(button: *Button) ![]const u8 {
+    var s_: ?*String = null;
+    const err = c.dom_html_button_element_get_type(button, &s_);
+    try DOMErr(err);
+    const s = s_ orelse return "button";
+    return strToData(s);
 }
