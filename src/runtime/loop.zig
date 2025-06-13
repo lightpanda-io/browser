@@ -81,12 +81,13 @@ pub const Loop = struct {
 
         // run tail events. We do run the tail events to ensure all the
         // contexts are correcly free.
-        while (self.hasPendinEvents()) {
-            self.io.run_for_ns(10 * std.time.ns_per_ms) catch |err| {
+        while (self.pending_network_count != 0 or self.pending_timeout_count != 0) {
+            self.io.run_for_ns(std.time.ns_per_ms * 10) catch |err| {
                 log.err(.loop, "deinit", .{ .err = err });
                 break;
             };
         }
+
         if (comptime CANCEL_SUPPORTED) {
             self.io.cancel_all();
         }
@@ -94,21 +95,6 @@ pub const Loop = struct {
         self.timeout_pool.deinit();
         self.event_callback_pool.deinit();
         self.cancelled.deinit(self.alloc);
-    }
-
-    // We can shutdown once all the pending network IO is complete.
-    // In debug mode we also wait until al the pending timeouts are complete
-    // but we only do this so that the `timeoutCallback` can free all allocated
-    // memory and we won't report a leak.
-    fn hasPendinEvents(self: *const Self) bool {
-        if (self.pending_network_count > 0) {
-            return true;
-        }
-
-        if (builtin.mode != .Debug) {
-            return false;
-        }
-        return self.pending_timeout_count > 0;
     }
 
     // Retrieve all registred I/O events completed by OS kernel,
@@ -121,9 +107,11 @@ pub const Loop = struct {
         self.stopping = true;
         defer self.stopping = false;
 
-        while (self.pending_network_count > 0) {
-            try self.io.run_for_ns(10 * std.time.ns_per_ms);
-            // at each iteration we might have new events registred by previous callbacks
+        while (self.pending_network_count != 0 or self.pending_timeout_count != 0) {
+            self.io.run_for_ns(std.time.ns_per_ms * 10) catch |err| {
+                log.err(.loop, "deinit", .{ .err = err });
+                break;
+            };
         }
     }
 

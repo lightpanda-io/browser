@@ -22,6 +22,7 @@ const Allocator = std.mem.Allocator;
 
 const Env = @import("env.zig").Env;
 const Page = @import("page.zig").Page;
+const URL = @import("../url.zig").URL;
 const Browser = @import("browser.zig").Browser;
 const NavigateOpts = @import("page.zig").NavigateOpts;
 
@@ -72,7 +73,7 @@ pub const Session = struct {
 
     pub fn deinit(self: *Session) void {
         if (self.page != null) {
-            self.removePage() catch {};
+            self.removePage();
         }
         self.cookie_jar.deinit();
         self.storage_shed.deinit();
@@ -104,7 +105,7 @@ pub const Session = struct {
         return page;
     }
 
-    pub fn removePage(self: *Session) !void {
+    pub fn removePage(self: *Session) void {
         // Inform CDP the page is going to be removed, allowing other worlds to remove themselves before the main one
         self.browser.notification.dispatch(.page_remove, .{});
 
@@ -127,12 +128,6 @@ pub const Session = struct {
         // window.setTimeout and running microtasks should be ignored
         self.browser.app.loop.reset();
 
-        // Finally, we run the loop. Because of the reset just above, this will
-        // ignore any timeouts. And, because of the endScope about this, it
-        // should ensure that the http requests detect the shutdown socket and
-        // release their resources.
-        try self.browser.app.loop.run();
-
         self.page = null;
 
         // clear netsurf memory arena.
@@ -143,29 +138,5 @@ pub const Session = struct {
 
     pub fn currentPage(self: *Session) ?*Page {
         return &(self.page orelse return null);
-    }
-
-    pub fn pageNavigate(self: *Session, url_string: []const u8, opts: NavigateOpts) !void {
-        // currently, this is only called from the page, so let's hope
-        // it isn't null!
-        std.debug.assert(self.page != null);
-
-        defer if (self.page) |*p| {
-            if (!p.delayed_navigation) {
-                // If, while loading the page, we intend to navigate to another
-                // page, then we need to keep the transfer_arena around, as this
-                // sub-navigation is probably using it.
-                _ = self.browser.transfer_arena.reset(.{ .retain_with_limit = 64 * 1024 });
-            }
-        };
-
-        // it's safe to use the transfer arena here, because the page will
-        // eventually clone the URL using its own page_arena (after it gets
-        // the final URL, possibly following redirects)
-        const url = try self.page.?.url.resolve(self.transfer_arena, url_string);
-
-        try self.removePage();
-        var page = try self.createPage();
-        return page.navigate(url, opts);
     }
 };
