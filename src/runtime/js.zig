@@ -400,7 +400,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 };
 
                 // For a Page we only create one HandleScope, it is stored in the main World (enter==true). A page can have multple contexts, 1 for each World.
-                // The main Context/Scope that enters and holds the HandleScope should therefore always be created first. Following other worlds for this page
+                // The main Context that enters and holds the HandleScope should therefore always be created first. Following other worlds for this page
                 // like isolated Worlds, will thereby place their objects on the main page's HandleScope. Note: In the furure the number of context will multiply multiple frames support
                 var handle_scope: ?v8.HandleScope = null;
                 if (enter) {
