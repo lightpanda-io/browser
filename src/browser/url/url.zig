@@ -48,7 +48,7 @@ pub const Interfaces = .{
 // allocatorate data, I should be able to retrieve the scheme + the following `:`
 // from rawuri.
 //
-// 2. The other way would bu to copy the `std.Uri` code to ahve a dedicated
+// 2. The other way would be to copy the `std.Uri` code to have a dedicated
 // parser including the characters we want for the web API.
 pub const URL = struct {
     uri: std.Uri,
