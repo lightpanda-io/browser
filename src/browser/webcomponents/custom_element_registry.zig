@@ -26,57 +26,33 @@ const Page = @import("../page.zig").Page;
 const Element = @import("../dom/element.zig").Element;
 
 pub const CustomElementRegistry = struct {
-    map: std.StringHashMapUnmanaged(v8.FunctionTemplate) = .empty,
-    constructors: std.StringHashMapUnmanaged(v8.Persistent(v8.Function)) = .empty,
+    // JS FunctionName -> Definition Name, so that, given a function, we can
+    // create the element with the right tag
+    names: std.StringHashMapUnmanaged([]const u8) = .empty,
 
-    pub fn _define(self: *CustomElementRegistry, name: []const u8, el: Env.Function, page: *Page) !void {
-        log.info(.browser, "Registering WebComponent", .{ .component = name });
+    // tag_name -> Function
+    lookup: std.StringHashMapUnmanaged(Env.Function) = .empty,
 
-        const context = page.main_context;
-        const duped_name = try page.arena.dupe(u8, name);
+    pub fn _define(self: *CustomElementRegistry, tag_name: []const u8, fun: Env.Function, page: *Page) !void {
+        log.info(.browser, "define custom element", .{ .name = tag_name });
 
-        const template = v8.FunctionTemplate.initCallback(context.isolate, struct {
-            fn callback(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
-                const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
-                const this = info.getThis();
+        const arena = page.arena;
 
-                const isolate = info.getIsolate();
-                const ctx = isolate.getCurrentContext();
+        const gop = try self.lookup.getOrPut(arena, tag_name);
+        if (gop.found_existing) {
+            return error.DuplicateCustomElement;
+        }
+        errdefer _ = self.lookup.remove(tag_name);
 
-                const registry_key = v8.String.initUtf8(isolate, "__lightpanda_constructor");
-                const original_function = this.getValue(ctx, registry_key.toName()) catch unreachable;
-                if (original_function.isFunction()) {
-                    const f = original_function.castTo(Env.Function);
-                    f.call(void, .{}) catch unreachable;
-                }
-            }
-        }.callback);
+        const owned_tag_name = try arena.dupe(u8, tag_name);
+        gop.key_ptr.* = owned_tag_name;
+        gop.value_ptr.* = fun;
 
-        const instance_template = template.getInstanceTemplate();
-        instance_template.setInternalFieldCount(1);
-
-        const registry_key = v8.String.initUtf8(context.isolate, "__lightpanda_constructor");
-        instance_template.set(registry_key.toName(), el.func, (1 << 1));
-
-        const class_name = v8.String.initUtf8(context.isolate, name);
-        template.setClassName(class_name);
-
-        try self.map.put(page.arena, duped_name, template);
-
-        // const entry = try self.map.getOrPut(page.arena, try page.arena.dupe(u8, name));
-        // if (entry.found_existing) return error.NotSupportedError;
-        // entry.value_ptr.* = el;
+        try self.names.putNoClobber(arena, try fun.getName(arena), owned_tag_name);
     }
 
-    pub fn _get(self: *CustomElementRegistry, name: []const u8, page: *Page) ?Env.Function {
-        if (self.map.get(name)) |template| {
-            const func = template.getFunction(page.main_context.v8_context);
-            return Env.Function{
-                .js_context = page.main_context,
-                .func = v8.Persistent(v8.Function).init(page.main_context.isolate, func),
-                .id = func.toObject().getIdentityHash(),
-            };
-        } else return null;
+    pub fn _get(self: *CustomElementRegistry, name: []const u8) ?Env.Function {
+        return self.lookup.get(name);
     }
 };
 
@@ -92,8 +68,9 @@ test "Browser.CustomElementRegistry" {
 
         // Define a simple custom element
         .{
-            \\ class MyElement {
+            \\ class MyElement extends HTMLElement {
             \\   constructor() {
+            \\      super();
             \\      this.textContent = 'Hello World';
             \\   }
             \\ }
@@ -108,10 +85,10 @@ test "Browser.CustomElementRegistry" {
 
         // Create element via document.createElement
         .{ "let el = document.createElement('my-element')", "undefined" },
-        // .{ "el instanceof MyElement", "true" },
-        // .{ "el instanceof HTMLElement", "true" },
-        // .{ "el.tagName", "MY-ELEMENT" },
-        // .{ "el.textContent", "Hello World" },
+        .{ "el instanceof MyElement", "true" },
+        .{ "el instanceof HTMLElement", "true" },
+        .{ "el.tagName", "MY-ELEMENT" },
+        .{ "el.textContent", "Hello World" },
 
         // Create element via HTML parsing
         // .{ "document.body.innerHTML = '<my-element></my-element>'", "undefined" },
