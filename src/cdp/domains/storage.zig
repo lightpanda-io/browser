@@ -41,7 +41,7 @@ pub fn processMessage(cmd: anytype) !void {
 fn clearCookies(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const params = (try cmd.params(struct {
-        browserContextId: ?[]const u8,
+        browserContextId: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
 
     if (params.browserContextId) |browser_context_id| {
@@ -58,7 +58,7 @@ fn clearCookies(cmd: anytype) !void {
 fn getCookies(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const params = (try cmd.params(struct {
-        browserContextId: ?[]const u8,
+        browserContextId: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
 
     if (params.browserContextId) |browser_context_id| {
@@ -75,7 +75,7 @@ fn setCookies(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const params = (try cmd.params(struct {
         cookies: []const CdpCookie,
-        browserContextId: ?[]const u8,
+        browserContextId: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
 
     if (params.browserContextId) |browser_context_id| {
@@ -118,7 +118,7 @@ pub const CdpCookie = struct {
     url: ?[]const u8 = null,
     domain: ?[]const u8 = null,
     path: ?[]const u8 = null,
-    secure: bool = false, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
+    secure: ?bool = null, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
     httpOnly: bool = false, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
     sameSite: SameSite = .None, // default: https://datatracker.ietf.org/doc/html/draft-west-first-party-cookies
     expires: ?i64 = null, // -1? says google
@@ -140,11 +140,13 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
     errdefer arena.deinit();
     const a = arena.allocator();
 
-    // NOTE: The param.url can affect the default domain, path, source port, and source scheme.
+    // NOTE: The param.url can affect the default domain, (NOT path), secure, source port, and source scheme.
     const uri = if (param.url) |url| std.Uri.parse(url) catch return error.InvalidParams else null;
     const uri_ptr = if (uri) |*u| u else null;
     const domain = try Cookie.parseDomain(a, uri_ptr, param.domain);
-    const path = try Cookie.parsePath(a, uri_ptr, param.path);
+    const path = if (param.path == null) "/" else try Cookie.parsePath(a, null, param.path);
+
+    const secure = if (param.secure) |s| s else if (uri) |uri_| std.mem.eql(u8, uri_.scheme, "https") else false;
 
     const cookie = Cookie{
         .arena = arena,
@@ -153,7 +155,7 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
         .path = path,
         .domain = domain,
         .expires = param.expires,
-        .secure = param.secure,
+        .secure = secure,
         .http_only = param.httpOnly,
         .same_site = switch (param.sameSite) {
             .Strict => .strict,
@@ -181,7 +183,7 @@ pub const CookieWriter = struct {
         if (self.urls) |urls| {
             for (self.cookies) |*cookie| {
                 for (urls) |*url| {
-                    if (cookie.appliesTo(url, false, false)) { // TBD same_site, should we compare to the pages url?
+                    if (cookie.appliesTo(url, true, true)) { // TBD same_site, should we compare to the pages url?
                         try writeCookie(cookie, w);
                         break;
                     }
@@ -234,3 +236,69 @@ pub fn writeCookie(cookie: *const Cookie, w: anytype) !void {
     }
     try w.endObject();
 }
+
+const testing = @import("../testing.zig");
+
+test "cdp.Storage: cookies" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-S" });
+
+    // Initially empty
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Storage.getCookies",
+        .params = .{ .browserContextId = "BID-S" },
+    });
+    try ctx.expectSentResult(.{ .cookies = &[_]ResCookie{} }, .{ .id = 3 });
+
+    // Has cookies after setting them
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "Storage.setCookies",
+        .params = .{
+            .cookies = &[_]CdpCookie{
+                .{ .name = "test", .value = "value", .domain = "example.com", .path = "/mango" },
+                .{ .name = "test2", .value = "value2", .url = "https://car.example.com/pancakes" },
+            },
+            .browserContextId = "BID-S",
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "Storage.getCookies",
+        .params = .{ .browserContextId = "BID-S" },
+    });
+    try ctx.expectSentResult(.{
+        .cookies = &[_]ResCookie{
+            .{ .name = "test", .value = "value", .domain = ".example.com", .path = "/mango" },
+            .{ .name = "test2", .value = "value2", .domain = "car.example.com", .path = "/", .secure = true }, // No Pancakes!
+        },
+    }, .{ .id = 5 });
+
+    // Empty after clearing cookies
+    try ctx.processMessage(.{
+        .id = 6,
+        .method = "Storage.clearCookies",
+        .params = .{ .browserContextId = "BID-S" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 6 });
+    try ctx.processMessage(.{
+        .id = 7,
+        .method = "Storage.getCookies",
+        .params = .{ .browserContextId = "BID-S" },
+    });
+    try ctx.expectSentResult(.{ .cookies = &[_]ResCookie{} }, .{ .id = 7 });
+}
+
+pub const ResCookie = struct {
+    name: []const u8,
+    value: []const u8,
+    domain: []const u8,
+    path: []const u8 = "/",
+    expires: i32 = -1,
+    httpOnly: bool = false,
+    secure: bool = false,
+    sameSite: []const u8 = "None",
+};
