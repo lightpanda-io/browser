@@ -89,18 +89,14 @@ fn cookieMatches(cookie: *const Cookie, name: []const u8, domain: ?[]const u8, p
     if (!std.mem.eql(u8, cookie.name, name)) return false;
 
     if (domain) |domain_| {
-        if (!std.mem.eql(u8, cookie.domain, domain_)) return false;
+        const c_no_dot = if (std.mem.startsWith(u8, cookie.domain, ".")) cookie.domain[1..] else cookie.domain;
+        const d_no_dot = if (std.mem.startsWith(u8, domain_, ".")) domain_[1..] else domain_;
+        if (!std.mem.eql(u8, c_no_dot, d_no_dot)) return false;
     }
     if (path) |path_| {
         if (!std.mem.eql(u8, cookie.path, path_)) return false;
     }
     return true;
-}
-
-// Only matches the cookie on provided parameters
-fn cookieAppliesTo(cookie: *const Cookie, domain: []const u8, path: []const u8) bool {
-    if (!std.mem.eql(u8, cookie.domain, domain)) return false;
-    return std.mem.startsWith(u8, path, cookie.path);
 }
 
 fn deleteCookies(cmd: anytype) !void {
@@ -109,8 +105,9 @@ fn deleteCookies(cmd: anytype) !void {
         url: ?[]const u8 = null,
         domain: ?[]const u8 = null,
         path: ?[]const u8 = null,
-        // partitionKey: ?CookiePartitionKey,
+        partitionKey: ?CdpStorage.CookiePartitionKey = null,
     })) orelse return error.InvalidParams;
+    if (params.partitionKey != null) return error.NotYetImplementedParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const cookies = &bc.session.cookie_jar.cookies;
@@ -135,11 +132,8 @@ fn deleteCookies(cmd: anytype) !void {
 }
 
 fn clearBrowserCookies(cmd: anytype) !void {
-    _ = (try cmd.params(struct {})) orelse return error.InvalidParams;
-
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     bc.session.cookie_jar.clearRetainingCapacity();
-
     return cmd.sendResult(null, .{});
 }
 
@@ -170,11 +164,15 @@ fn setCookies(cmd: anytype) !void {
 fn getCookies(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const params = (try cmd.params(struct {
-        urls: []const []const u8,
+        urls: ?[]const []const u8 = null,
     })) orelse return error.InvalidParams;
 
-    var urls = try std.ArrayListUnmanaged(CdpStorage.PreparedUri).initCapacity(cmd.arena, params.urls.len);
-    for (params.urls) |url| {
+    // If not specified, use the URLs of the page and all of its subframes. TODO subframes
+    const page_url = if (bc.session.page) |*page| page.url.raw else null; // @speed: avoid repasing the URL
+    const param_urls = params.urls orelse &[_][]const u8{page_url orelse return error.InvalidParams};
+
+    var urls = try std.ArrayListUnmanaged(CdpStorage.PreparedUri).initCapacity(cmd.arena, param_urls.len);
+    for (param_urls) |url| {
         const uri = std.Uri.parse(url) catch return error.InvalidParams;
 
         urls.appendAssumeCapacity(.{
@@ -353,4 +351,78 @@ test "cdp.network setExtraHTTPHeaders" {
 
     try ctx.processMessage(.{ .id = 5, .method = "Target.attachToTarget", .params = .{ .targetId = bc.target_id.? } });
     try testing.expectEqual(bc.cdp.extra_headers.items.len, 0);
+}
+
+test "cdp.Network: cookies" {
+    const ResCookie = CdpStorage.ResCookie;
+    const CdpCookie = CdpStorage.CdpCookie;
+
+    var ctx = testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-S" });
+
+    // Initially empty
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Network.getCookies",
+        .params = .{ .urls = &[_][]const u8{"https://example.com/pancakes"} },
+    });
+    try ctx.expectSentResult(.{ .cookies = &[_]ResCookie{} }, .{ .id = 3 });
+
+    // Has cookies after setting them
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "Network.setCookie",
+        .params = CdpCookie{ .name = "test3", .value = "valuenot3", .url = "https://car.example.com/defnotpancakes" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "Network.setCookies",
+        .params = .{
+            .cookies = &[_]CdpCookie{
+                .{ .name = "test3", .value = "value3", .url = "https://car.example.com/pan/cakes" },
+                .{ .name = "test4", .value = "value4", .domain = "example.com", .path = "/mango" },
+            },
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 5 });
+    try ctx.processMessage(.{
+        .id = 6,
+        .method = "Network.getCookies",
+        .params = .{ .urls = &[_][]const u8{"https://car.example.com/pan/cakes"} },
+    });
+    try ctx.expectSentResult(.{
+        .cookies = &[_]ResCookie{
+            .{ .name = "test3", .value = "value3", .domain = "car.example.com", .path = "/", .secure = true }, // No Pancakes!
+        },
+    }, .{ .id = 6 });
+
+    // deleteCookies
+    try ctx.processMessage(.{
+        .id = 7,
+        .method = "Network.deleteCookies",
+        .params = .{ .name = "test3", .domain = "car.example.com" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 7 });
+    try ctx.processMessage(.{
+        .id = 8,
+        .method = "Storage.getCookies",
+        .params = .{ .browserContextId = "BID-S" },
+    });
+    // Just the untouched test4 should be in the result
+    try ctx.expectSentResult(.{ .cookies = &[_]ResCookie{.{ .name = "test4", .value = "value4", .domain = ".example.com", .path = "/mango" }} }, .{ .id = 8 });
+
+    // Empty after clearBrowserCookies
+    try ctx.processMessage(.{
+        .id = 9,
+        .method = "Network.clearBrowserCookies",
+    });
+    try ctx.expectSentResult(null, .{ .id = 9 });
+    try ctx.processMessage(.{
+        .id = 10,
+        .method = "Storage.getCookies",
+        .params = .{ .browserContextId = "BID-S" },
+    });
+    try ctx.expectSentResult(.{ .cookies = &[_]ResCookie{} }, .{ .id = 10 });
 }
