@@ -27,6 +27,7 @@ const urlStitch = @import("../../url.zig").URL.stitch;
 const URL = @import("../url/url.zig").URL;
 const Node = @import("../dom/node.zig").Node;
 const Element = @import("../dom/element.zig").Element;
+const ElementUnion = @import("../dom/element.zig").Union;
 
 const CSSStyleDeclaration = @import("../cssom/css_style_declaration.zig").CSSStyleDeclaration;
 
@@ -112,6 +113,16 @@ pub const HTMLElement = struct {
     pub const Self = parser.ElementHTML;
     pub const prototype = *Element;
     pub const subtype = .node;
+
+    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
+        const constructor_name = try js_this.constructorName(page.call_arena);
+        const tag_name = page.window.custom_elements.names.get(constructor_name) orelse {
+            return error.IllegalContructor;
+        };
+
+        const el = try parser.documentCreateElement(@ptrCast(page.window.document), tag_name);
+        return el;
+    }
 
     pub fn get_style(e: *parser.ElementHTML, page: *Page) !*CSSStyleDeclaration {
         const state = try page.getOrCreateNodeState(@ptrCast(e));
@@ -614,6 +625,7 @@ pub const HTMLImageElement = struct {
     pub const Factory = struct {
         pub const js_name = "Image";
         pub const subtype = .node;
+
         pub const js_legacy_factory = true;
         pub const prototype = *HTMLImageElement;
 
