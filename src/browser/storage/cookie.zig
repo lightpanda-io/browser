@@ -207,9 +207,6 @@ pub const Cookie = struct {
             // this check is necessary, `std.mem.minMax` asserts len > 0
             return error.Empty;
         }
-
-        const host = (uri.host orelse return error.InvalidURI).percent_encoded;
-
         {
             const min, const max = std.mem.minMax(u8, str);
             if (min < 32 or max > 126) {
@@ -254,34 +251,10 @@ pub const Cookie = struct {
                 samesite,
             }, std.ascii.lowerString(&scrap, key_string)) orelse continue;
 
-            var value = if (sep == attribute.len) "" else trim(attribute[sep + 1 ..]);
+            const value = if (sep == attribute.len) "" else trim(attribute[sep + 1 ..]);
             switch (key) {
-                .path => {
-                    // path attribute value either begins with a '/' or we
-                    // ignore it and use the "default-path" algorithm
-                    if (value.len > 0 and value[0] == '/') {
-                        path = value;
-                    }
-                },
-                .domain => {
-                    if (value.len == 0) {
-                        continue;
-                    }
-                    if (value[0] == '.') {
-                        // leading dot is ignored
-                        value = value[1..];
-                    }
-
-                    if (std.mem.indexOfScalarPos(u8, value, 0, '.') == null and std.ascii.eqlIgnoreCase("localhost", value) == false) {
-                        // can't set a cookie for a TLD
-                        return error.InvalidDomain;
-                    }
-
-                    if (std.mem.endsWith(u8, host, value) == false) {
-                        return error.InvalidDomain;
-                    }
-                    domain = value; // Domain is made lower case after it has relocated to the arena
-                },
+                .path => path = value,
+                .domain => domain = value,
                 .secure => secure = true,
                 .@"max-age" => max_age = std.fmt.parseInt(i64, value, 10) catch continue,
                 .expires => expires = DateTime.parse(value, .rfc822) catch continue,
@@ -301,20 +274,9 @@ pub const Cookie = struct {
         const aa = arena.allocator();
         const owned_name = try aa.dupe(u8, cookie_name);
         const owned_value = try aa.dupe(u8, cookie_value);
-        const owned_path = if (path) |p|
-            try aa.dupe(u8, p)
-        else
-            try defaultPath(aa, uri.path.percent_encoded);
-
-        const owned_domain = if (domain) |d| blk: {
-            const s = try aa.alloc(u8, d.len + 1);
-            s[0] = '.';
-            @memcpy(s[1..], d);
-            break :blk s;
-        } else blk: {
-            break :blk try aa.dupe(u8, host); // Sjors: Should subdomains be removed from host?
-        };
-        _ = toLower(owned_domain);
+        const owned_path = try parse_path(aa, uri.path, path);
+        const host = uri.host orelse return error.InvalidURI;
+        const owned_domain = try parse_domain(aa, host, domain);
 
         var normalized_expires: ?i64 = null;
         if (max_age) |ma| {
@@ -336,6 +298,92 @@ pub const Cookie = struct {
             .http_only = http_only orelse false,
             .domain = owned_domain,
             .expires = normalized_expires,
+        };
+    }
+
+    pub fn parse_path(arena: Allocator, url_path: std.Uri.Component, explicit_path: ?[]const u8) ![]const u8 {
+        // path attribute value either begins with a '/' or we
+        // ignore it and use the "default-path" algorithm
+        if (explicit_path) |path| {
+            if (path.len > 0 and path[0] == '/') {
+                return try arena.dupe(u8, path);
+            }
+        }
+
+        // default-path
+        const either = url_path.percent_encoded;
+        if (either.len == 0 or (either.len == 1 and either[0] == '/')) {
+            return "/";
+        }
+
+        var owned_path: []const u8 = try percentEncode(arena, url_path, isPathChar);
+        const last = std.mem.lastIndexOfScalar(u8, owned_path[1..], '/') orelse {
+            return "/";
+        };
+        return try arena.dupe(u8, owned_path[0 .. last + 1]);
+    }
+
+    pub fn parse_domain(arena: Allocator, url_host: std.Uri.Component, explicit_domain: ?[]const u8) ![]const u8 {
+        const encoded_host = try percentEncode(arena, url_host, isHostChar);
+        _ = toLower(encoded_host);
+
+        if (explicit_domain) |domain| {
+            if (domain.len > 0) {
+                const no_leading_dot = if (domain[0] == '.') domain[1..] else domain;
+
+                var list = std.ArrayList(u8).init(arena);
+                try list.ensureTotalCapacity(no_leading_dot.len + 1); // Expect no precents needed
+                list.appendAssumeCapacity('.');
+                try std.Uri.Component.percentEncode(list.writer(), no_leading_dot, isHostChar);
+                var owned_domain: []u8 = list.items; // @memory retains memory used before growing
+                _ = toLower(owned_domain);
+
+                if (std.mem.indexOfScalarPos(u8, owned_domain, 1, '.') == null and std.mem.eql(u8, "localhost", owned_domain[1..]) == false) {
+                    // can't set a cookie for a TLD
+                    return error.InvalidDomain;
+                }
+                if (std.mem.endsWith(u8, encoded_host, owned_domain[1..]) == false) {
+                    return error.InvalidDomain;
+                }
+                return owned_domain;
+            }
+        }
+
+        return encoded_host; // default-domain
+    }
+
+    // TODO when getting cookeis Note: Chrome does not apply rules like removing a leading `.` from the domain.
+
+    pub fn percentEncode(arena: Allocator, component: std.Uri.Component, comptime isValidChar: fn (u8) bool) ![]u8 {
+        switch (component) {
+            .raw => |str| {
+                var list = std.ArrayList(u8).init(arena);
+                try list.ensureTotalCapacity(str.len); // Expect no precents needed
+                try std.Uri.Component.percentEncode(list.writer(), str, isValidChar);
+                return list.items; // @memory retains memory used before growing
+            },
+            .percent_encoded => |str| {
+                return try arena.dupe(u8, str);
+            },
+        }
+    }
+
+    pub fn isHostChar(c: u8) bool {
+        return switch (c) {
+            'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => true,
+            '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=' => true,
+            ':' => true,
+            '[', ']' => true,
+            else => false,
+        };
+    }
+
+    pub fn isPathChar(c: u8) bool {
+        return switch (c) {
+            'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => true,
+            '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=' => true,
+            '/', ':', '@' => true,
+            else => false,
         };
     }
 
@@ -421,16 +469,6 @@ pub const PreparedUri = struct {
     path: []const u8, // Percent encoded
     secure: bool, // True if scheme is https
 };
-
-fn defaultPath(allocator: Allocator, document_path: []const u8) ![]const u8 {
-    if (document_path.len == 0 or (document_path.len == 1 and document_path[0] == '/')) {
-        return "/";
-    }
-    const last = std.mem.lastIndexOfScalar(u8, document_path[1..], '/') orelse {
-        return "/";
-    };
-    return try allocator.dupe(u8, document_path[0 .. last + 1]);
-}
 
 fn trim(str: []const u8) []const u8 {
     return std.mem.trim(u8, str, &std.ascii.whitespace);

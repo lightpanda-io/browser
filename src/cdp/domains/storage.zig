@@ -249,7 +249,7 @@ pub fn writeCookie(cookie: *const Cookie, w: anytype) !void {
         try w.write(cookie.value);
 
         try w.objectField("domain");
-        try w.write(cookie.domain);
+        try w.write(cookie.domain); // Should we hide a leading dot?
 
         try w.objectField("path");
         try w.write(cookie.path);
