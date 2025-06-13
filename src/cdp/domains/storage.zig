@@ -23,7 +23,6 @@ const log = @import("../../log.zig");
 const Cookie = @import("../../browser/storage/storage.zig").Cookie;
 const CookieJar = @import("../../browser/storage/storage.zig").CookieJar;
 pub const PreparedUri = @import("../../browser/storage/cookie.zig").PreparedUri;
-pub const toLower = @import("../../browser/storage/cookie.zig").toLower;
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -143,13 +142,15 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
 
     // NOTE: The param.url can affect the default domain, path, source port, and source scheme.
     const uri = if (param.url) |url| std.Uri.parse(url) catch return error.InvalidParams else null;
-    const domain = try percentEncodedDomainOrHost(a, uri, param.domain) orelse return error.InvalidParams; // TODO Domain needs to be prefixed with a dot if is explicitely set
+    const uri_ptr = if (uri) |*u| u else null;
+    const domain = try Cookie.parseDomain(a, uri_ptr, param.domain);
+    const path = try Cookie.parsePath(a, uri_ptr, param.path);
 
     const cookie = Cookie{
         .arena = arena,
         .name = try a.dupe(u8, param.name),
         .value = try a.dupe(u8, param.value),
-        .path = if (param.path) |path| try a.dupe(u8, path) else "/", // Chrome does not actually take the path from the url and just defaults to "/".
+        .path = path,
         .domain = domain,
         .expires = param.expires,
         .secure = param.secure,
@@ -161,51 +162,6 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
         },
     };
     try cookie_jar.add(cookie, std.time.timestamp());
-}
-
-// Note: Chrome does not apply rules like removing a leading `.` from the domain.
-pub fn percentEncodedDomainOrHost(allocator: Allocator, default_url: ?std.Uri, domain: ?[]const u8) !?[]const u8 {
-    if (domain) |domain_| {
-        const output = try allocator.dupe(u8, domain_);
-        return toLower(output);
-    } else if (default_url) |url| {
-        const host = url.host orelse return error.InvalidParams;
-        const output = try percentEncode(allocator, host, isHostChar); // TODO remove subdomains
-        return toLower(output);
-    } else return null;
-}
-
-pub fn percentEncode(arena: Allocator, component: std.Uri.Component, comptime isValidChar: fn (u8) bool) ![]u8 {
-    switch (component) {
-        .raw => |str| {
-            var list = std.ArrayList(u8).init(arena);
-            try list.ensureTotalCapacity(str.len); // Expect no precents needed
-            try std.Uri.Component.percentEncode(list.writer(), str, isValidChar);
-            return list.items; // @memory retains memory used before growing
-        },
-        .percent_encoded => |str| {
-            return try arena.dupe(u8, str);
-        },
-    }
-}
-
-pub fn isHostChar(c: u8) bool {
-    return switch (c) {
-        'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => true,
-        '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=' => true,
-        ':' => true,
-        '[', ']' => true,
-        else => false,
-    };
-}
-
-pub fn isPathChar(c: u8) bool {
-    return switch (c) {
-        'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => true,
-        '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=' => true,
-        '/', ':', '@' => true,
-        else => false,
-    };
 }
 
 pub const CookieWriter = struct {

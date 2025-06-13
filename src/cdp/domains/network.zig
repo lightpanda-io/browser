@@ -116,14 +116,18 @@ fn deleteCookies(cmd: anytype) !void {
     const cookies = &bc.session.cookie_jar.cookies;
 
     const uri = if (params.url) |url| std.Uri.parse(url) catch return error.InvalidParams else null;
+    const uri_ptr = if (uri) |u| &u else null;
 
     var index = cookies.items.len;
     while (index > 0) {
         index -= 1;
         const cookie = &cookies.items[index];
-        const domain = try CdpStorage.percentEncodedDomainOrHost(cmd.arena, uri, params.domain);
-        // TBD does chrome take the path from the url as default? (unlike setCookies)
-        if (cookieMatches(cookie, params.name, domain, params.path)) {
+        const domain = try Cookie.parseDomain(cmd.arena, uri_ptr, params.domain);
+        const path = try Cookie.parsePath(cmd.arena, uri_ptr, params.path);
+
+        // We do not want to use Cookie.appliesTo here. As a Cookie with a shorter path would match.
+        // Similar to deduplicating with areCookiesEqual, except domain and path are optional.
+        if (cookieMatches(cookie, params.name, domain, path)) {
             cookies.swapRemove(index).deinit();
         }
     }
@@ -173,15 +177,11 @@ fn getCookies(cmd: anytype) !void {
     for (params.urls) |url| {
         const uri = std.Uri.parse(url) catch return error.InvalidParams;
 
-        const host_component = uri.host orelse return error.InvalidParams;
-        const host = CdpStorage.toLower(try CdpStorage.percentEncode(cmd.arena, host_component, CdpStorage.isHostChar));
-
-        var path: []const u8 = try CdpStorage.percentEncode(cmd.arena, uri.path, CdpStorage.isPathChar);
-        if (path.len == 0) path = "/";
-
-        const secure = std.mem.eql(u8, uri.scheme, "https");
-
-        urls.appendAssumeCapacity(.{ .host = host, .path = path, .secure = secure });
+        urls.appendAssumeCapacity(.{
+            .host = try Cookie.parseDomain(cmd.arena, &uri, null),
+            .path = try Cookie.parsePath(cmd.arena, &uri, null),
+            .secure = std.mem.eql(u8, uri.scheme, "https"),
+        });
     }
 
     var jar = &bc.session.cookie_jar;
