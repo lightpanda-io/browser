@@ -274,9 +274,8 @@ pub const Cookie = struct {
         const aa = arena.allocator();
         const owned_name = try aa.dupe(u8, cookie_name);
         const owned_value = try aa.dupe(u8, cookie_value);
-        const owned_path = try parse_path(aa, uri.path, path);
-        const host = uri.host orelse return error.InvalidURI;
-        const owned_domain = try parse_domain(aa, host, domain);
+        const owned_path = try parsePath(aa, uri, path);
+        const owned_domain = try parseDomain(aa, uri, domain);
 
         var normalized_expires: ?i64 = null;
         if (max_age) |ma| {
@@ -301,7 +300,7 @@ pub const Cookie = struct {
         };
     }
 
-    pub fn parse_path(arena: Allocator, url_path: std.Uri.Component, explicit_path: ?[]const u8) ![]const u8 {
+    pub fn parsePath(arena: Allocator, uri: ?*const std.Uri, explicit_path: ?[]const u8) ![]const u8 {
         // path attribute value either begins with a '/' or we
         // ignore it and use the "default-path" algorithm
         if (explicit_path) |path| {
@@ -311,6 +310,8 @@ pub const Cookie = struct {
         }
 
         // default-path
+        const url_path = (uri orelse return "/").path;
+
         const either = url_path.percent_encoded;
         if (either.len == 0 or (either.len == 1 and either[0] == '/')) {
             return "/";
@@ -323,9 +324,14 @@ pub const Cookie = struct {
         return try arena.dupe(u8, owned_path[0 .. last + 1]);
     }
 
-    pub fn parse_domain(arena: Allocator, url_host: std.Uri.Component, explicit_domain: ?[]const u8) ![]const u8 {
-        const encoded_host = try percentEncode(arena, url_host, isHostChar);
-        _ = toLower(encoded_host);
+    pub fn parseDomain(arena: Allocator, uri: ?*const std.Uri, explicit_domain: ?[]const u8) ![]const u8 {
+        var encoded_host: ?[]const u8 = null;
+        if (uri) |uri_| {
+            const uri_host = uri_.host orelse return error.InvalidURI;
+            const host = try percentEncode(arena, uri_host, isHostChar);
+            _ = toLower(host);
+            encoded_host = host;
+        }
 
         if (explicit_domain) |domain| {
             if (domain.len > 0) {
@@ -342,14 +348,17 @@ pub const Cookie = struct {
                     // can't set a cookie for a TLD
                     return error.InvalidDomain;
                 }
-                if (std.mem.endsWith(u8, encoded_host, owned_domain[1..]) == false) {
-                    return error.InvalidDomain;
+                if (encoded_host) |host| {
+                    if (std.mem.endsWith(u8, host, owned_domain[1..]) == false) {
+                        return error.InvalidDomain;
+                    }
                 }
+
                 return owned_domain;
             }
         }
 
-        return encoded_host; // default-domain
+        return encoded_host orelse return error.InvalidDomain; // default-domain
     }
 
     // TODO when getting cookeis Note: Chrome does not apply rules like removing a leading `.` from the domain.
