@@ -312,7 +312,7 @@ pub const Cookie = struct {
             @memcpy(s[1..], d);
             break :blk s;
         } else blk: {
-            break :blk try aa.dupe(u8, host);
+            break :blk try aa.dupe(u8, host); // Sjors: Should subdomains be removed from host?
         };
         _ = toLower(owned_domain);
 
