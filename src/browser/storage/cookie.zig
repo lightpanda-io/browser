@@ -361,8 +361,6 @@ pub const Cookie = struct {
         return encoded_host orelse return error.InvalidDomain; // default-domain
     }
 
-    // TODO when getting cookeis Note: Chrome does not apply rules like removing a leading `.` from the domain.
-
     pub fn percentEncode(arena: Allocator, component: std.Uri.Component, comptime isValidChar: fn (u8) bool) ![]u8 {
         switch (component) {
             .raw => |str| {
