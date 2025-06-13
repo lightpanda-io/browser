@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2024  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -68,8 +68,8 @@ fn getCookies(cmd: anytype) !void {
         }
     }
     bc.session.cookie_jar.removeExpired(null);
-    const cookies = CookieWriter{ .cookies = bc.session.cookie_jar.cookies.items };
-    try cmd.sendResult(.{ .cookies = cookies }, .{});
+    const writer = CookieWriter{ .cookies = bc.session.cookie_jar.cookies.items };
+    try cmd.sendResult(.{ .cookies = writer }, .{});
 }
 
 fn setCookies(cmd: anytype) !void {
@@ -143,7 +143,7 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
 
     // NOTE: The param.url can affect the default domain, path, source port, and source scheme.
     const uri = if (param.url) |url| std.Uri.parse(url) catch return error.InvalidParams else null;
-    const domain = try percentEncodedDomainOrHost(a, uri, param.domain) orelse return error.InvalidParams;
+    const domain = try percentEncodedDomainOrHost(a, uri, param.domain) orelse return error.InvalidParams; // TODO Domain needs to be prefixed with a dot if is explicitely set
 
     const cookie = Cookie{
         .arena = arena,
