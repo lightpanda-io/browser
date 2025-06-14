@@ -1262,6 +1262,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 return valueToString(allocator, name, self.js_context.isolate, self.js_context.v8_context);
             }
 
+            pub fn setName(self: *const Function, name: []const u8) void {
+                const v8_name = v8.String.initUtf8(self.js_context.isolate, name);
+                self.func.castToFunction().setName(v8_name);
+            }
+
             pub fn withThis(self: *const Function, value: anytype) !Function {
                 const this_obj = if (@TypeOf(value) == JsObject)
                     value.js_obj
