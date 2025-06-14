@@ -26,10 +26,6 @@ const Page = @import("../page.zig").Page;
 const Element = @import("../dom/element.zig").Element;
 
 pub const CustomElementRegistry = struct {
-    // JS FunctionName -> Definition Name, so that, given a function, we can
-    // create the element with the right tag
-    names: std.StringHashMapUnmanaged([]const u8) = .empty,
-
     // tag_name -> Function
     lookup: std.StringHashMapUnmanaged(Env.Function) = .empty,
 
@@ -37,18 +33,14 @@ pub const CustomElementRegistry = struct {
         log.info(.browser, "define custom element", .{ .name = tag_name });
 
         const arena = page.arena;
-
         const gop = try self.lookup.getOrPut(arena, tag_name);
-        if (gop.found_existing) {
-            return error.DuplicateCustomElement;
+        if (!gop.found_existing) {
+            errdefer _ = self.lookup.remove(tag_name);
+            const owned_tag_name = try arena.dupe(u8, tag_name);
+            gop.key_ptr.* = owned_tag_name;
         }
-        errdefer _ = self.lookup.remove(tag_name);
-
-        const owned_tag_name = try arena.dupe(u8, tag_name);
-        gop.key_ptr.* = owned_tag_name;
         gop.value_ptr.* = fun;
-
-        try self.names.putNoClobber(arena, try fun.getName(arena), owned_tag_name);
+        fun.setName(tag_name);
     }
 
     pub fn _get(self: *CustomElementRegistry, name: []const u8) ?Env.Function {

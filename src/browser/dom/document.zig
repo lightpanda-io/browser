@@ -129,7 +129,7 @@ pub const Document = struct {
     pub fn _createElement(self: *parser.Document, tag_name: []const u8, page: *Page) !CreateElementResult {
         const custom_element = page.window.custom_elements._get(tag_name) orelse {
             const e = try parser.documentCreateElement(self, tag_name);
-            return .{.element = try Element.toInterface(e)};
+            return .{ .element = try Element.toInterface(e) };
         };
 
         var result: Env.Function.Result = undefined;
@@ -142,7 +142,7 @@ pub const Document = struct {
             });
             return err;
         };
-        return .{.custom = js_obj};
+        return .{ .custom = js_obj };
     }
 
     pub fn _createElementNS(self: *parser.Document, ns: []const u8, tag_name: []const u8) !ElementUnion {

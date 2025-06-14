@@ -1253,6 +1253,10 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 const name = self.func.castToFunction().getName();
                 return valueToString(allocator, name, self.scope.isolate, self.scope.context);
             }
+            pub fn setName(self: *const Function, name: []const u8) void {
+                const v8_name = v8.String.initUtf8(self.scope.isolate, name);
+                self.func.castToFunction().setName(v8_name);
+            }
 
             pub fn withThis(self: *const Function, value: anytype) !Function {
                 const this_obj = if (@TypeOf(value) == JsObject)
@@ -1277,7 +1281,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
                 // This creates a new instance using this Function as a constructor.
                 // This returns a generic Object
-                const js_obj = self.func.castToFunction().initInstance(scope.context,&.{}) orelse {
+                const js_obj = self.func.castToFunction().initInstance(scope.context, &.{}) orelse {
                     if (try_catch.hasCaught()) {
                         const allocator = scope.call_arena;
                         result.stack = try_catch.stack(allocator) catch null;
