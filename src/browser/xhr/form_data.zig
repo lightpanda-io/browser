@@ -115,17 +115,16 @@ const EntryIterable = iterator.Iterable(kv.EntryIterator, "FormDataEntryIterator
 // TODO: handle disabled fieldsets
 fn collectForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page) !kv.List {
     const arena = page.arena;
-    const collection = try parser.formGetCollection(form);
-    const len = try parser.htmlCollectionGetLength(collection);
+    const node_list = try @import("../dom/css.zig").querySelectorAll(arena, @alignCast(@ptrCast(form)), "input,select,button,textarea");
+    const nodes = node_list.nodes.items;
 
     var entries: kv.List = .{};
-    try entries.ensureTotalCapacity(arena, len);
+    try entries.ensureTotalCapacity(arena, nodes.len);
 
     var submitter_included = false;
     const submitter_name_ = try getSubmitterName(submitter_);
 
-    for (0..len) |i| {
-        const node = try parser.htmlCollectionItem(collection, @intCast(i));
+    for (nodes) |node| {
         const element = parser.nodeToElement(node);
 
         // must have a name
@@ -181,10 +180,7 @@ fn collectForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page
                     submitter_included = true;
                 }
             },
-            else => {
-                log.warn(.web_api, "unsupported form element", .{ .tag = @tagName(tag) });
-                continue;
-            },
+            else => unreachable,
         }
     }
 
@@ -297,6 +293,7 @@ test "Browser.FormData" {
         \\   <input type=submit name=s2 value=s2-v>
         \\   <input type=image name=i1 value=i1-v>
         \\ </form>
+        \\   <input type=text name=abc value=123 form=form1>
     });
     defer runner.deinit();
 
@@ -356,6 +353,8 @@ test "Browser.FormData" {
 
     try runner.testCases(&.{
         .{ "let form1 = document.getElementById('form1')", null },
+        .{ "let input = document.createElement('input');", null },
+        .{ "input.name = 'dyn'; input.value= 'dyn-v'; form1.appendChild(input);", null },
         .{ "let submit1 = document.getElementById('s1')", null },
         .{ "let f2 = new FormData(form1, submit1)", null },
         .{ "acc = '';", null },
@@ -378,6 +377,7 @@ test "Browser.FormData" {
             \\mlt-2=water
             \\mlt-2=tea
             \\s1=s1-v
+            \\dyn=dyn-v
         },
     }, .{});
 }
