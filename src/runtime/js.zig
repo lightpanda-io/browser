@@ -3214,8 +3214,12 @@ fn stackForLogs(arena: Allocator, isolate: v8.Isolate) !?[]const u8 {
 
     for (0..frame_count) |i| {
         const frame = stack_trace.getFrame(isolate, @intCast(i));
-        const script = try jsStringToZig(arena, frame.getScriptName(), isolate);
-        try writer.print("{s}{s}:{d}", .{ separator, script, frame.getLineNumber() });
+        if (frame.getScriptName()) |name| {
+            const script = try jsStringToZig(arena, name, isolate);
+            try writer.print("{s}{s}:{d}", .{ separator, script, frame.getLineNumber() });
+        } else {
+            try writer.print("{s}<anonymous>:{d}", .{ separator, frame.getLineNumber() });
+        }
     }
     return buf.items;
 }
