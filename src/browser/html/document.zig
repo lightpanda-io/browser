@@ -337,7 +337,7 @@ test "Browser.HTML.Document" {
         .{ "document.cookie = 'name=Oeschger; SameSite=None; Secure'", "name=Oeschger; SameSite=None; Secure" },
         .{ "document.cookie = 'favorite_food=tripe; SameSite=None; Secure'", "favorite_food=tripe; SameSite=None; Secure" },
         .{ "document.cookie", "name=Oeschger; favorite_food=tripe" },
-        .{ "document.cookie = 'IgnoreMy=Ghost; HttpOnly'", null }, // "" should be returned, but the framework overrules it atm
+        .{ "document.cookie = 'IgnoreMy=Ghost; HttpOnly'", "" },
         .{ "document.cookie", "name=Oeschger; favorite_food=tripe" },
     }, .{});
 

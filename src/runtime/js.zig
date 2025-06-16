@@ -2475,13 +2475,9 @@ fn Caller(comptime E: type, comptime State: type) type {
                 else => @compileError(named_function.full_name ++ " setter with more than 3 parameters, why?"),
             }
 
-            if (@typeInfo(Setter).@"fn".return_type) |return_type| {
-                if (@typeInfo(return_type) == .error_union) {
-                    _ = try @call(.auto, func, args);
-                    return;
-                }
-            }
-            _ = @call(.auto, func, args);
+            // TODO: Do not set res for void type to allow default input return behavior, but how to allow get to return undefined?
+            const res = @call(.auto, func, args);
+            info.getReturnValue().set(try js_context.zigValueToJs(res));
         }
 
         fn getIndex(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, idx: u32, info: v8.PropertyCallbackInfo) !u8 {
