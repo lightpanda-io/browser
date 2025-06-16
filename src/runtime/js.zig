@@ -1158,7 +1158,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             }
 
                             if (!js_value.isArray()) {
-                                return error.InvalidArgument;
+                                return .{.invalid = {}};
                             }
 
                             // This can get tricky.

@@ -98,6 +98,7 @@ pub const PseudoClass = enum {
     placeholder,
     selection,
     spelling_error,
+    modal,
 
     pub const Error = error{
         InvalidPseudoClass,
@@ -154,6 +155,7 @@ pub const PseudoClass = enum {
         if (std.ascii.eqlIgnoreCase(s, "placeholder")) return .placeholder;
         if (std.ascii.eqlIgnoreCase(s, "selection")) return .selection;
         if (std.ascii.eqlIgnoreCase(s, "spelling-error")) return .spelling_error;
+        if (std.ascii.eqlIgnoreCase(s, "modal")) return .modal;
         return Error.InvalidPseudoClass;
     }
 };
