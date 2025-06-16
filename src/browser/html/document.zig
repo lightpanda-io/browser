@@ -81,7 +81,7 @@ pub const HTMLDocument = struct {
 
     pub fn get_cookie(_: *parser.DocumentHTML, page: *Page) ![]const u8 {
         var buf: std.ArrayListUnmanaged(u8) = .{};
-        try page.cookie_jar.forRequest(&page.url.uri, buf.writer(page.arena), .{ .navigation = true });
+        try page.cookie_jar.forRequest(&page.url.uri, buf.writer(page.arena), .{ .navigation = true, .is_http = false });
         return buf.items;
     }
 
@@ -90,6 +90,10 @@ pub const HTMLDocument = struct {
         // outlives the page's arena.
         const c = try Cookie.parse(page.cookie_jar.allocator, &page.url.uri, cookie_str);
         errdefer c.deinit();
+        if (c.http_only) {
+            c.deinit();
+            return ""; // HttpOnly cookies cannot be set from JS
+        }
         try page.cookie_jar.add(c, std.time.timestamp());
         return cookie_str;
     }
@@ -332,6 +336,8 @@ test "Browser.HTML.Document" {
         .{ "document.cookie", "" },
         .{ "document.cookie = 'name=Oeschger; SameSite=None; Secure'", "name=Oeschger; SameSite=None; Secure" },
         .{ "document.cookie = 'favorite_food=tripe; SameSite=None; Secure'", "favorite_food=tripe; SameSite=None; Secure" },
+        .{ "document.cookie", "name=Oeschger; favorite_food=tripe" },
+        .{ "document.cookie = 'IgnoreMy=Ghost; HttpOnly'", null }, // "" should be returned, but the framework overrules it atm
         .{ "document.cookie", "name=Oeschger; favorite_food=tripe" },
     }, .{});
 
