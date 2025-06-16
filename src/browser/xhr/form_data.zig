@@ -115,6 +115,14 @@ const EntryIterable = iterator.Iterable(kv.EntryIterator, "FormDataEntryIterator
 // TODO: handle disabled fieldsets
 fn collectForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page) !kv.List {
     const arena = page.arena;
+
+    // Don't use libdom's formGetCollection (aka dom_html_form_element_get_elements)
+    // It doesn't work with dynamically added elements, because their form
+    // property doesn't get set. We should fix that.
+    // However, even once fixed, there are other form-collection features we
+    // probably want to implement (like disabled fieldsets), so we might want
+    // to stick with our own walker even if fix libdom to properly support
+    // dynamically added elements.
     const node_list = try @import("../dom/css.zig").querySelectorAll(arena, @alignCast(@ptrCast(form)), "input,select,button,textarea");
     const nodes = node_list.nodes.items;
 
