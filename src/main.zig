@@ -103,7 +103,7 @@ fn run(alloc: Allocator) !void {
             };
         },
         .fetch => |opts| {
-            log.debug(.app, "startup", .{ .mode = "fetch", .dump = opts.dump, .url = opts.url });
+            log.debug(.app, "startup", .{ .mode = "fetch", .dump = opts.dump, .markdown = opts.markdown, .url = opts.url });
             const url = try @import("url.zig").URL.parse(opts.url, null);
 
             // browser
@@ -127,6 +127,13 @@ fn run(alloc: Allocator) !void {
             };
 
             try page.wait();
+
+            // markdown
+            if (opts.markdown) {
+                try page.markdown(std.io.getStdOut());
+                // do not dump HTML if both options are provided
+                return;
+            }
 
             // dump
             if (opts.dump) {
@@ -193,6 +200,7 @@ const Command = struct {
     const Fetch = struct {
         url: []const u8,
         dump: bool = false,
+        markdown: bool = false,
         common: Common,
     };
 
@@ -239,6 +247,9 @@ const Command = struct {
             \\
             \\Options:
             \\--dump          Dumps document to stdout.
+            \\                Defaults to false.
+            \\
+            \\--markdown      Converts document in Markdown format and dumps it to stdout.
             \\                Defaults to false.
             \\
         ++ common_options ++
@@ -315,6 +326,9 @@ fn inferMode(opt: []const u8) ?App.RunMode {
     }
 
     if (std.mem.eql(u8, opt, "--dump")) {
+        return .fetch;
+    }
+    if (std.mem.eql(u8, opt, "--markdown")) {
         return .fetch;
     }
     if (std.mem.startsWith(u8, opt, "--") == false) {
@@ -402,12 +416,17 @@ fn parseFetchArgs(
     args: *std.process.ArgIterator,
 ) !Command.Fetch {
     var dump: bool = false;
+    var markdown: bool = false;
     var url: ?[]const u8 = null;
     var common: Command.Common = .{};
 
     while (args.next()) |opt| {
         if (std.mem.eql(u8, "--dump", opt)) {
             dump = true;
+            continue;
+        }
+        if (std.mem.eql(u8, "--markdown", opt)) {
+            markdown = true;
             continue;
         }
 
@@ -435,6 +454,7 @@ fn parseFetchArgs(
     return .{
         .url = url.?,
         .dump = dump,
+        .markdown = markdown,
         .common = common,
     };
 }

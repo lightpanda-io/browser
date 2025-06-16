@@ -22,6 +22,7 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const Dump = @import("dump.zig");
+const Markdown = @import("markdown.zig");
 const State = @import("State.zig");
 const Env = @import("env.zig").Env;
 const Mime = @import("mime.zig").Mime;
@@ -145,6 +146,18 @@ pub const Page = struct {
         // if the page has a pointer to a document, dumps the HTML.
         const doc = parser.documentHTMLToDocument(self.window.document);
         try Dump.writeHTML(doc, out);
+    }
+
+    // dump writes the page content into the given file.
+    pub fn markdown(self: *const Page, out: std.fs.File) !void {
+        if (self.raw_data) |_| {
+            // raw_data was set if the document was not HTML we can not convert it to Markdown,
+            return error.HTMLDocument;
+        }
+
+        // if the page has a pointer to a document, converts the HTML in Markdown and dump it.
+        const doc = parser.documentHTMLToDocument(self.window.document);
+        try Markdown.writeMarkdown(doc, out);
     }
 
     pub fn fetchModuleSource(ctx: *anyopaque, specifier: []const u8) !?[]const u8 {
