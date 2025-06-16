@@ -217,7 +217,7 @@ pub const Page = struct {
         {
             // block exists to limit the lifetime of the request, which holds
             // onto a connection
-            var request = try self.newHTTPRequest(opts.method, &self.url, .{ .navigation = true });
+            var request = try self.newHTTPRequest(opts.method, &self.url, .{ .navigation = true, .is_http = true });
             defer request.deinit();
 
             request.body = opts.body;
@@ -498,6 +498,7 @@ pub const Page = struct {
         var request = try self.newHTTPRequest(.GET, &url, .{
             .origin_uri = &origin_url.uri,
             .navigation = false,
+            .is_http = true,
         });
         defer request.deinit();
 

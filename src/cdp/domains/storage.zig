@@ -133,8 +133,6 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
     if (param.priority != .Medium or param.sameParty != null or param.sourceScheme != null or param.partitionKey != null) {
         return error.NotYetImplementedParams;
     }
-    if (param.name.len == 0) return error.InvalidParams;
-    if (param.value.len == 0) return error.InvalidParams;
 
     var arena = std.heap.ArenaAllocator.init(cookie_jar.allocator);
     errdefer arena.deinit();
@@ -183,7 +181,7 @@ pub const CookieWriter = struct {
         if (self.urls) |urls| {
             for (self.cookies) |*cookie| {
                 for (urls) |*url| {
-                    if (cookie.appliesTo(url, true, true)) { // TBD same_site, should we compare to the pages url?
+                    if (cookie.appliesTo(url, true, true, true)) { // TBD same_site, should we compare to the pages url?
                         try writeCookie(cookie, w);
                         break;
                     }
@@ -223,7 +221,8 @@ pub fn writeCookie(cookie: *const Cookie, w: anytype) !void {
         try w.objectField("secure");
         try w.write(cookie.secure);
 
-        // TODO session
+        try w.objectField("session");
+        try w.write(cookie.expires == null);
 
         try w.objectField("sameSite");
         switch (cookie.same_site) {

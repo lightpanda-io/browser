@@ -475,6 +475,7 @@ pub const XMLHttpRequest = struct {
             try self.cookie_jar.forRequest(&self.url.?.uri, arr.writer(self.arena), .{
                 .navigation = false,
                 .origin_uri = &self.origin_url.uri,
+                .is_http = true,
             });
 
             if (arr.items.len > 0) {
