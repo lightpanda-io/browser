@@ -1922,7 +1922,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     defer caller.deinit();
 
                     const named_function = comptime NamedFunction.init(Struct, "get_" ++ name);
-                    caller.getter(Struct, named_function, info) catch |err| {
+                    caller.method(Struct, named_function, info) catch |err| {
                         caller.handleError(Struct, named_function, err, info);
                     };
                 }
@@ -1937,13 +1937,13 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             const setter_callback = v8.FunctionTemplate.initCallback(isolate, struct {
                 fn callback(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
                     const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
+                    std.debug.assert(info.length() == 1);
+
                     var caller = Caller(Self, State).init(info);
                     defer caller.deinit();
 
-                    std.debug.assert(info.length() == 1);
-                    const js_value = info.getArg(0);
                     const named_function = comptime NamedFunction.init(Struct, "set_" ++ name);
-                    caller.setter(Struct, named_function, js_value, info) catch |err| {
+                    caller.method(Struct, named_function, info) catch |err| {
                         caller.handleError(Struct, named_function, err, info);
                     };
                 }
@@ -2470,66 +2470,6 @@ fn Caller(comptime E: type, comptime State: type) type {
             info.getReturnValue().set(try js_context.zigValueToJs(res));
         }
 
-        fn getter(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, info: v8.FunctionCallbackInfo) !void {
-            const js_context = self.js_context;
-            const func = @field(Struct, named_function.name);
-            const Getter = @TypeOf(func);
-            if (@typeInfo(Getter).@"fn".return_type == null) {
-                @compileError(@typeName(Struct) ++ " has a getter without a return type: " ++ @typeName(Getter));
-            }
-
-            var args: ParamterTypes(Getter) = undefined;
-            const arg_fields = @typeInfo(@TypeOf(args)).@"struct".fields;
-            switch (arg_fields.len) {
-                0 => {}, // getters _can_ be parameterless
-                1, 2 => {
-                    const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
-                    comptime assertSelfReceiver(Struct, named_function);
-                    @field(args, "0") = zig_instance;
-                    if (comptime arg_fields.len == 2) {
-                        comptime assertIsStateArg(Struct, named_function, 1);
-                        @field(args, "1") = js_context.state;
-                    }
-                },
-                else => @compileError(named_function.full_name + " has too many parmaters: " ++ @typeName(named_function.func)),
-            }
-            const res = @call(.auto, func, args);
-            info.getReturnValue().set(try js_context.zigValueToJs(res));
-        }
-
-        fn setter(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, js_value: v8.Value, info: v8.FunctionCallbackInfo) !void {
-            const js_context = self.js_context;
-            const func = @field(Struct, named_function.name);
-            comptime assertSelfReceiver(Struct, named_function);
-
-            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
-
-            const Setter = @TypeOf(func);
-            var args: ParamterTypes(Setter) = undefined;
-            const arg_fields = @typeInfo(@TypeOf(args)).@"struct".fields;
-            switch (arg_fields.len) {
-                0 => unreachable, // assertSelfReceiver make sure of this
-                1 => @compileError(named_function.full_name ++ " only has 1 parameter"),
-                2, 3 => {
-                    @field(args, "0") = zig_instance;
-                    @field(args, "1") = try js_context.jsValueToZig(named_function, arg_fields[1].type, js_value);
-                    if (comptime arg_fields.len == 3) {
-                        comptime assertIsStateArg(Struct, named_function, 2);
-                        @field(args, "2") = js_context.state;
-                    }
-                },
-                else => @compileError(named_function.full_name ++ " setter with more than 3 parameters, why?"),
-            }
-
-            if (@typeInfo(Setter).@"fn".return_type) |return_type| {
-                if (@typeInfo(return_type) == .error_union) {
-                    _ = try @call(.auto, func, args);
-                    return;
-                }
-            }
-            _ = @call(.auto, func, args);
-        }
-
         fn getIndex(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, idx: u32, info: v8.PropertyCallbackInfo) !u8 {
             const js_context = self.js_context;
             const func = @field(Struct, named_function.name);
@@ -2642,13 +2582,7 @@ fn Caller(comptime E: type, comptime State: type) type {
 
             if (comptime builtin.mode == .Debug and @hasDecl(@TypeOf(info), "length")) {
                 if (log.enabled(.js, .warn)) {
-                    const args_dump = self.serializeFunctionArgs(info) catch "failed to serialize args";
-                    log.warn(.js, "function call error", .{
-                        .name = named_function.full_name,
-                        .err = err,
-                        .args = args_dump,
-                        .stack = stackForLogs(self.call_arena, isolate) catch |err1| @errorName(err1),
-                    });
+                    logFunctionCallError(self.call_arena, self.isolate, self.v8_context, err, named_function.full_name, info);
                 }
             }
 
@@ -2717,6 +2651,7 @@ fn Caller(comptime E: type, comptime State: type) type {
         // Does the error we want to return belong to the custom exeception's ErrorSet
         fn isErrorSetException(comptime Exception: type, err: anytype) bool {
             const Entry = std.meta.Tuple(&.{ []const u8, void });
+
             const error_set = @typeInfo(Exception.ErrorSet).error_set.?;
             const entries = comptime blk: {
                 var kv: [error_set.len]Entry = undefined;
@@ -2854,28 +2789,6 @@ fn Caller(comptime E: type, comptime State: type) type {
             const ti = @typeInfo(State);
             const Const_State = if (ti == .pointer) *const ti.pointer.child else State;
             return T == State or T == Const_State;
-        }
-
-        fn serializeFunctionArgs(self: *const Self, info: anytype) ![]const u8 {
-            const isolate = self.isolate;
-            const v8_context = self.v8_context;
-            const arena = self.call_arena;
-            const separator = log.separator();
-            const js_parameter_count = info.length();
-
-            var arr: std.ArrayListUnmanaged(u8) = .{};
-            for (0..js_parameter_count) |i| {
-                const js_value = info.getArg(@intCast(i));
-                const value_string = try valueToDetailString(arena, js_value, isolate, v8_context);
-                const value_type = try jsStringToZig(arena, try js_value.typeOf(isolate), isolate);
-                try std.fmt.format(arr.writer(arena), "{s}{d}: {s} ({s})", .{
-                    separator,
-                    i + 1,
-                    value_string,
-                    value_type,
-                });
-            }
-            return arr.items;
         }
     };
 }
@@ -3316,6 +3229,37 @@ const NamedFunction = struct {
         };
     }
 };
+
+// This is extracted to speed up compilation. When left inlined in handleError,
+// this can add as much as 10 seconds of compilation time.
+fn logFunctionCallError(arena: Allocator, isolate: v8.Isolate, context: v8.Context, err: anyerror, function_name: []const u8, info: v8.FunctionCallbackInfo) void {
+    const args_dump = serializeFunctionArgs(arena, isolate, context, info) catch "failed to serialize args";
+    log.warn(.js, "function call error", .{
+        .name = function_name,
+        .err = err,
+        .args = args_dump,
+        .stack = stackForLogs(arena, isolate) catch |err1| @errorName(err1),
+    });
+}
+
+fn serializeFunctionArgs(arena: Allocator, isolate: v8.Isolate, context: v8.Context, info: v8.FunctionCallbackInfo) ![]const u8 {
+    const separator = log.separator();
+    const js_parameter_count = info.length();
+
+    var arr: std.ArrayListUnmanaged(u8) = .{};
+    for (0..js_parameter_count) |i| {
+        const js_value = info.getArg(@intCast(i));
+        const value_string = try valueToDetailString(arena, js_value, isolate, context);
+        const value_type = try jsStringToZig(arena, try js_value.typeOf(isolate), isolate);
+        try std.fmt.format(arr.writer(arena), "{s}{d}: {s} ({s})", .{
+            separator,
+            i + 1,
+            value_string,
+            value_type,
+        });
+    }
+    return arr.items;
+}
 
 // This is called from V8. Whenever the v8 inspector has to describe a value
 // it'll call this function to gets its [optional] subtype - which, from V8's

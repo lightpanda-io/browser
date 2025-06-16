@@ -146,6 +146,16 @@ fn logTo(comptime scope: Scope, level: Level, comptime msg: []const u8, data: an
 }
 
 fn logLogfmt(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, writer: anytype) !void {
+    try logLogFmtPrefix(scope, level, msg, writer);
+    inline for (@typeInfo(@TypeOf(data)).@"struct".fields) |f| {
+        const key = " " ++ f.name ++ "=";
+        try writer.writeAll(key);
+        try writeValue(.logfmt, @field(data, f.name), writer);
+    }
+    try writer.writeByte('\n');
+}
+
+fn logLogFmtPrefix(comptime scope: Scope, level: Level, comptime msg: []const u8, writer: anytype) !void {
     try writer.writeAll("$time=");
     try writer.print("{d}", .{timestamp()});
 
@@ -164,15 +174,20 @@ fn logLogfmt(comptime scope: Scope, level: Level, comptime msg: []const u8, data
         break :blk prefix ++ "\"" ++ msg ++ "\"";
     };
     try writer.writeAll(full_msg);
+}
+
+fn logPretty(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, writer: anytype) !void {
+    try logPrettyPrefix(scope, level, msg, writer);
     inline for (@typeInfo(@TypeOf(data)).@"struct".fields) |f| {
-        const key = " " ++ f.name ++ "=";
+        const key = "      " ++ f.name ++ " = ";
         try writer.writeAll(key);
-        try writeValue(.logfmt, @field(data, f.name), writer);
+        try writeValue(.pretty, @field(data, f.name), writer);
+        try writer.writeByte('\n');
     }
     try writer.writeByte('\n');
 }
 
-fn logPretty(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, writer: anytype) !void {
+fn logPrettyPrefix(comptime scope: Scope, level: Level, comptime msg: []const u8, writer: anytype) !void {
     if (scope == .console and level == .fatal and comptime std.mem.eql(u8, msg, "lightpanda")) {
         try writer.writeAll("\x1b[0;104mWARN  ");
     } else {
@@ -201,14 +216,6 @@ fn logPretty(comptime scope: Scope, level: Level, comptime msg: []const u8, data
         try writer.print(" \x1b[0m[+{d}ms]", .{elapsed()});
         try writer.writeByte('\n');
     }
-
-    inline for (@typeInfo(@TypeOf(data)).@"struct".fields) |f| {
-        const key = "      " ++ f.name ++ " = ";
-        try writer.writeAll(key);
-        try writeValue(.pretty, @field(data, f.name), writer);
-        try writer.writeByte('\n');
-    }
-    try writer.writeByte('\n');
 }
 
 pub fn writeValue(comptime format: Format, value: anytype, writer: anytype) !void {
