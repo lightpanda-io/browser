@@ -27,7 +27,6 @@ const urlStitch = @import("../../url.zig").URL.stitch;
 const URL = @import("../url/url.zig").URL;
 const Node = @import("../dom/node.zig").Node;
 const Element = @import("../dom/element.zig").Element;
-const ElementUnion = @import("../dom/element.zig").Union;
 
 const CSSStyleDeclaration = @import("../cssom/css_style_declaration.zig").CSSStyleDeclaration;
 
@@ -1405,7 +1404,6 @@ pub fn toInterface(comptime T: type, e: *parser.Element) !T {
 
 fn constructHtmlElement(page: *Page, js_this: Env.JsThis) !*parser.Element {
     const constructor_name = try js_this.constructorName(page.call_arena);
-    std.debug.print("constructor: {s}\n", .{constructor_name});
     if (!page.window.custom_elements.lookup.contains(constructor_name)) {
         return error.IllegalContructor;
     }
