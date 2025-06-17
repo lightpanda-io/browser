@@ -23,8 +23,6 @@ const v8 = @import("v8");
 const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
 
-const Element = @import("../dom/element.zig").Element;
-
 pub const CustomElementRegistry = struct {
     // tag_name -> Function
     lookup: std.StringHashMapUnmanaged(Env.Function) = .empty,
@@ -46,6 +44,26 @@ pub const CustomElementRegistry = struct {
     pub fn _get(self: *CustomElementRegistry, name: []const u8) ?Env.Function {
         return self.lookup.get(name);
     }
+
+    pub fn newInstance(self: *const CustomElementRegistry, tag_name: []const u8) !?Env.JsObject {
+        const func = self.lookup.get(tag_name) orelse return null;
+
+        var result: Env.Function.Result = undefined;
+        const js_obj = func.newInstance(&result) catch |err| {
+            log.fatal(.user_script, "newInstance error", .{
+                .err = result.exception,
+                .stack = result.stack,
+                .tag_name = tag_name,
+                .source = "createElement",
+            });
+            return err;
+        };
+
+        // This is associated with an HTML element, which, at the very least
+        // is going to be libdom node. It will outlive this call, and thus needs
+        // to be persisted.
+        return try js_obj.persist();
+    }
 };
 
 const testing = @import("../../testing.zig");
@@ -63,7 +81,11 @@ test "Browser.CustomElementRegistry" {
             \\ class MyElement extends HTMLElement {
             \\   constructor() {
             \\      super();
-            \\      this.textContent = 'Hello World';
+            \\      this.textContent = 'created';
+            \\   }
+            \\
+            \\   connectedCallback() {
+            \\      this.textContent = 'connected';
             \\   }
             \\ }
             ,
@@ -80,7 +102,9 @@ test "Browser.CustomElementRegistry" {
         .{ "el instanceof MyElement", "true" },
         .{ "el instanceof HTMLElement", "true" },
         .{ "el.tagName", "MY-ELEMENT" },
-        .{ "el.textContent", "Hello World" },
+        .{ "el.textContent", "created" },
+        .{ "document.getElementsByTagName('body')[0].append(el)", null },
+        .{ "el.textContent", "connected" },
 
         // Create element via HTML parsing
         // .{ "document.body.innerHTML = '<my-element></my-element>'", "undefined" },

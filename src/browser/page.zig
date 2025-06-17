@@ -297,15 +297,16 @@ pub const Page = struct {
         self.window.setStorageShelf(
             try self.session.storage_shed.getOrPut(try self.origin(self.arena)),
         );
+
+        // we want to be notified of any dynamically added script tags
+        // so that we can load the script. Or dynamically added custom elements
+        // for their lifecycle callbacks.
+        parser.documentSetElementAddedCallback(doc, self, elementAddedCallback);
     }
 
     fn processHTMLDoc(self: *Page) !void {
         const html_doc = self.window.document;
         const doc = parser.documentHTMLToDocument(html_doc);
-
-        // we want to be notified of any dynamically added script tags
-        // so that we can load the script
-        parser.documentSetScriptAddedCallback(doc, self, scriptAddedCallback);
 
         const document_element = (try parser.documentGetDocumentElement(doc)) orelse return error.DocumentElementError;
         _ = try parser.eventTargetAddEventListener(
@@ -817,6 +818,43 @@ pub const Page = struct {
         }
         return null;
     }
+
+    fn elementAdded(self: *Page, element: *parser.Element) !void {
+        if (self.delayed_navigation) {
+            // if we're planning on navigating to another page, we can skip whatever
+            // this is.
+            return;
+        }
+
+        switch (try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(element)))) {
+            .script => {
+                var script = Script.init(element, self) catch |err| {
+                    log.warn(.browser, "script added", .{ .err = err });
+                    return;
+                } orelse return;
+                _ = self.evalScript(&script);
+            },
+            .undef => {
+                // a custom element
+                const js_obj = self.main_context.getJsObject(element) orelse return;
+
+                // @memory
+                // getFunction, and more generally Env.Function always create
+                // a Persisted Object. But, in cases like this, we don't need
+                // it to persist.
+                const func = (try js_obj.getFunction("connectedCallback")) orelse return;
+
+                var result: Env.Function.Result = undefined;
+                func.tryCallWithThis(void, js_obj, .{}, &result) catch {
+                    log.warn(.user_script, "connected callback", .{
+                        .err = result.exception,
+                        .stack = result.stack,
+                    });
+                };
+            },
+            else => {},
+        }
+    }
 };
 
 const DelayedNavigation = struct {
@@ -1090,24 +1128,22 @@ fn timestamp() u32 {
     return @intCast(ts.sec);
 }
 
-// A callback from libdom whenever a script tag is added to the DOM.
+// A callback from libdom whenever an html element is added to the DOM.
+// Note that "added" could mean that it was removed from one parent and re-added
+// to another, which is how MOST APIs implement "move" (corrently so).
+//
+// The only API which seems to actual "move" is Element.moveBefore, which we
+// don't currently implement, but should support in general, and should handle
+// specifically here.
 // element is guaranteed to be a script element.
-// The script tag might not have a src. It might be any attribute, like
+// The script tag might not have a src. It might have any attribute, like
 // `nomodule`, `defer` and `async`. `Script.init` will return null on `nomodule`
 // so that's handled. And because we're only executing the inline <script> tags
 // after the document is loaded, it's ok to execute any async and defer scripts
 // immediately.
-pub export fn scriptAddedCallback(ctx: ?*anyopaque, element: ?*parser.Element) callconv(.C) void {
+pub export fn elementAddedCallback(ctx: ?*anyopaque, element: ?*parser.Element) callconv(.C) void {
     const self: *Page = @alignCast(@ptrCast(ctx.?));
-    if (self.delayed_navigation) {
-        // if we're planning on navigating to another page, don't run this script
-        return;
-    }
-
-    var script = Script.init(element.?, self) catch |err| {
-        log.warn(.browser, "script added init error", .{ .err = err });
-        return;
-    } orelse return;
-
-    _ = self.evalScript(&script);
+    self.elementAdded(element.?) catch |err| {
+        log.warn(.browser, "element added callback", .{ .err = err });
+    };
 }

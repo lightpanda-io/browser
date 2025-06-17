@@ -1158,7 +1158,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             }
 
                             if (!js_value.isArray()) {
-                                return .{.invalid = {}};
+                                return .{ .invalid = {} };
                             }
 
                             // This can get tricky.
@@ -1194,6 +1194,14 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 }
 
                 return .{ .invalid = {} };
+            }
+
+            pub fn getJsObject(self: *JsContext, zig_value: *anyopaque) ?JsObject {
+                const po = self.identity_map.get(@intFromPtr(zig_value)) orelse return null;
+                return .{
+                    .js_context = self,
+                    .js_obj = po.castToObject(),
+                };
             }
 
             // Callback from V8, asking us to load a module. The "specifier" is
