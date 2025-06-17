@@ -1257,6 +1257,16 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 exception: []const u8,
             };
 
+            pub fn getName(self: *const Function, allocator: Allocator) ![]const u8 {
+                const name = self.func.castToFunction().getName();
+                return valueToString(allocator, name, self.js_context.isolate, self.js_context.v8_context);
+            }
+
+            pub fn setName(self: *const Function, name: []const u8) void {
+                const v8_name = v8.String.initUtf8(self.js_context.isolate, name);
+                self.func.castToFunction().setName(v8_name);
+            }
+
             pub fn withThis(self: *const Function, value: anytype) !Function {
                 const this_obj = if (@TypeOf(value) == JsObject)
                     value.js_obj
@@ -1268,6 +1278,33 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     .this = this_obj,
                     .func = self.func,
                     .js_context = self.js_context,
+                };
+            }
+
+            pub fn newInstance(self: *const Function, result: *Result) !JsObject {
+                const context = self.js_context;
+
+                var try_catch: TryCatch = undefined;
+                try_catch.init(context);
+                defer try_catch.deinit();
+
+                // This creates a new instance using this Function as a constructor.
+                // This returns a generic Object
+                const js_obj = self.func.castToFunction().initInstance(context.v8_context, &.{}) orelse {
+                    if (try_catch.hasCaught()) {
+                        const allocator = context.call_arena;
+                        result.stack = try_catch.stack(allocator) catch null;
+                        result.exception = (try_catch.exception(allocator) catch "???") orelse "???";
+                    } else {
+                        result.stack = null;
+                        result.exception = "???";
+                    }
+                    return error.JsConstructorFailed;
+                };
+
+                return .{
+                    .js_context = context,
+                    .js_obj = js_obj,
                 };
             }
 
@@ -1450,6 +1487,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     .js_obj = array.castTo(v8.Object),
                 };
             }
+
+            pub fn constructorName(self: JsObject, allocator: Allocator) ![]const u8 {
+                const str = try self.js_obj.getConstructorName();
+                return jsStringToZig(allocator, str, self.js_context.isolate);
+            }
         };
 
         // This only exists so that we know whether a function wants the opaque
@@ -1471,6 +1513,10 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             pub fn set(self: JsThis, key: []const u8, value: anytype, opts: JsObject.SetOpts) !void {
                 return self.obj.set(key, value, opts);
+            }
+
+            pub fn constructorName(self: JsThis, allocator: Allocator) ![]const u8 {
+                return try self.obj.constructorName(allocator);
             }
         };
 
@@ -1784,7 +1830,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     // a constructor function, we'll return an error.
                     if (@hasDecl(Struct, "constructor") == false) {
                         const iso = caller.isolate;
-                        const js_exception = iso.throwException(createException(iso, "illegal constructor"));
+                        const js_exception = iso.throwException(createException(iso, "Illegal Constructor"));
                         info.getReturnValue().set(js_exception);
                         return;
                     }
@@ -2543,6 +2589,7 @@ fn Caller(comptime E: type, comptime State: type) type {
             var js_err: ?v8.Value = switch (err) {
                 error.InvalidArgument => createTypeException(isolate, "invalid argument"),
                 error.OutOfMemory => createException(isolate, "out of memory"),
+                error.IllegalConstructor => createException(isolate, "Illegal Contructor"),
                 else => blk: {
                     const func = @field(Struct, named_function.name);
                     const return_type = @typeInfo(@TypeOf(func)).@"fn".return_type orelse {
@@ -2656,8 +2703,8 @@ fn Caller(comptime E: type, comptime State: type) type {
                 // a JS argument
                 if (comptime isJsThis(params[params.len - 1].type.?)) {
                     @field(args, std.fmt.comptimePrint("{d}", .{params.len - 1 + offset})) = .{ .obj = .{
+                        .js_context = js_context,
                         .js_obj = info.getThis(),
-                        .executor = self.executor,
                     } };
 
                     // AND the 2nd last parameter is state
