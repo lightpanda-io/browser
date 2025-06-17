@@ -3170,7 +3170,7 @@ test "HttpClient: async tls no body" {
     }
 }
 
-test "HttpClient: async tls with body x" {
+test "HttpClient: async tls with body" {
     defer testing.reset();
     for (0..5) |_| {
         var client = try testClient();

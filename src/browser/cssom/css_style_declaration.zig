@@ -85,7 +85,7 @@ pub const CSSStyleDeclaration = struct {
         return self.order.items.len;
     }
 
-    pub fn get_parentRule() ?CSSRule {
+    pub fn get_parentRule(_: *const CSSStyleDeclaration) ?CSSRule {
         return null;
     }
 

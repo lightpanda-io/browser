@@ -23,7 +23,6 @@ const json = std.json;
 const log = @import("../log.zig");
 const App = @import("../app.zig").App;
 const Env = @import("../browser/env.zig").Env;
-const asUint = @import("../str/parser.zig").asUint;
 const Browser = @import("../browser/browser.zig").Browser;
 const Session = @import("../browser/session.zig").Session;
 const Page = @import("../browser/page.zig").Page;
@@ -182,41 +181,41 @@ pub fn CDPT(comptime TypeProvider: type) type {
 
             switch (domain.len) {
                 3 => switch (@as(u24, @bitCast(domain[0..3].*))) {
-                    asUint("DOM") => return @import("domains/dom.zig").processMessage(command),
-                    asUint("Log") => return @import("domains/log.zig").processMessage(command),
-                    asUint("CSS") => return @import("domains/css.zig").processMessage(command),
+                    asUint(u24, "DOM") => return @import("domains/dom.zig").processMessage(command),
+                    asUint(u24, "Log") => return @import("domains/log.zig").processMessage(command),
+                    asUint(u24, "CSS") => return @import("domains/css.zig").processMessage(command),
                     else => {},
                 },
                 4 => switch (@as(u32, @bitCast(domain[0..4].*))) {
-                    asUint("Page") => return @import("domains/page.zig").processMessage(command),
+                    asUint(u32, "Page") => return @import("domains/page.zig").processMessage(command),
                     else => {},
                 },
                 5 => switch (@as(u40, @bitCast(domain[0..5].*))) {
-                    asUint("Fetch") => return @import("domains/fetch.zig").processMessage(command),
-                    asUint("Input") => return @import("domains/input.zig").processMessage(command),
+                    asUint(u40, "Fetch") => return @import("domains/fetch.zig").processMessage(command),
+                    asUint(u40, "Input") => return @import("domains/input.zig").processMessage(command),
                     else => {},
                 },
                 6 => switch (@as(u48, @bitCast(domain[0..6].*))) {
-                    asUint("Target") => return @import("domains/target.zig").processMessage(command),
+                    asUint(u48, "Target") => return @import("domains/target.zig").processMessage(command),
                     else => {},
                 },
                 7 => switch (@as(u56, @bitCast(domain[0..7].*))) {
-                    asUint("Browser") => return @import("domains/browser.zig").processMessage(command),
-                    asUint("Runtime") => return @import("domains/runtime.zig").processMessage(command),
-                    asUint("Network") => return @import("domains/network.zig").processMessage(command),
+                    asUint(u56, "Browser") => return @import("domains/browser.zig").processMessage(command),
+                    asUint(u56, "Runtime") => return @import("domains/runtime.zig").processMessage(command),
+                    asUint(u56, "Network") => return @import("domains/network.zig").processMessage(command),
                     else => {},
                 },
                 8 => switch (@as(u64, @bitCast(domain[0..8].*))) {
-                    asUint("Security") => return @import("domains/security.zig").processMessage(command),
+                    asUint(u64, "Security") => return @import("domains/security.zig").processMessage(command),
                     else => {},
                 },
                 9 => switch (@as(u72, @bitCast(domain[0..9].*))) {
-                    asUint("Emulation") => return @import("domains/emulation.zig").processMessage(command),
-                    asUint("Inspector") => return @import("domains/inspector.zig").processMessage(command),
+                    asUint(u72, "Emulation") => return @import("domains/emulation.zig").processMessage(command),
+                    asUint(u72, "Inspector") => return @import("domains/inspector.zig").processMessage(command),
                     else => {},
                 },
                 11 => switch (@as(u88, @bitCast(domain[0..11].*))) {
-                    asUint("Performance") => return @import("domains/performance.zig").processMessage(command),
+                    asUint(u88, "Performance") => return @import("domains/performance.zig").processMessage(command),
                     else => {},
                 },
                 else => {},
@@ -695,6 +694,10 @@ const InputParams = struct {
         return .{ .raw = scanner.input[start..end] };
     }
 };
+
+fn asUint(comptime T: type, comptime string: []const u8) T {
+    return @bitCast(string[0..string.len].*);
+}
 
 const testing = @import("testing.zig");
 test "cdp: invalid json" {

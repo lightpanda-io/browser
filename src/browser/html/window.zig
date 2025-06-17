@@ -337,20 +337,15 @@ test "Browser.HTML.Window" {
     // Note however that we in this test do not wait as the request is just send to the browser
     try runner.testCases(&.{
         .{
-            \\ let start;
+            \\ let start = 0;
             \\ function step(timestamp) {
-            \\    if (start === undefined) {
-            \\      start = timestamp;
-            \\    }
-            \\    const elapsed = timestamp - start;
-            \\    if (elapsed < 2000) {
-            \\      requestAnimationFrame(step);
-            \\    }
+            \\    start = timestamp;
             \\ }
             ,
             null,
         },
         .{ "requestAnimationFrame(step);", null }, // returned id is checked in the next test
+        .{ " start > 0", "true" },
     }, .{});
 
     // cancelAnimationFrame should be able to cancel a request with the given id
