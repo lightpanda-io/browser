@@ -121,7 +121,7 @@ pub const CdpCookie = struct {
     secure: ?bool = null, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
     httpOnly: bool = false, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
     sameSite: SameSite = .None, // default: https://datatracker.ietf.org/doc/html/draft-west-first-party-cookies
-    expires: ?i64 = null, // -1? says google
+    expires: ?f64 = null, // -1? says google
     priority: CookiePriority = .Medium, // default: https://datatracker.ietf.org/doc/html/draft-west-cookie-priority-00
     sameParty: ?bool = null,
     sourceScheme: ?CookieSourceScheme = null,
@@ -296,7 +296,7 @@ pub const ResCookie = struct {
     value: []const u8,
     domain: []const u8,
     path: []const u8 = "/",
-    expires: i32 = -1,
+    expires: f64 = -1,
     httpOnly: bool = false,
     secure: bool = false,
     sameSite: []const u8 = "None",
