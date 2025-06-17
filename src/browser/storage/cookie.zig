@@ -129,7 +129,7 @@ pub const Jar = struct {
 
 fn isCookieExpired(cookie: *const Cookie, now: i64) bool {
     const ce = cookie.expires orelse return false;
-    return ce <= now;
+    return ce <= @as(f64, @floatFromInt(now));
 }
 
 fn areCookiesEqual(a: *const Cookie, b: *const Cookie) bool {
@@ -174,7 +174,7 @@ pub const Cookie = struct {
     value: []const u8,
     domain: []const u8,
     path: []const u8,
-    expires: ?i64,
+    expires: ?f64,
     secure: bool = false,
     http_only: bool = false,
     same_site: SameSite = .none,
@@ -226,7 +226,7 @@ pub const Cookie = struct {
         var secure: ?bool = null;
         var max_age: ?i64 = null;
         var http_only: ?bool = null;
-        var expires: ?DateTime = null;
+        var expires: ?[]const u8 = null;
         var same_site: ?Cookie.SameSite = null;
 
         var it = std.mem.splitScalar(u8, rest, ';');
@@ -258,7 +258,7 @@ pub const Cookie = struct {
                 .domain => domain = value,
                 .secure => secure = true,
                 .@"max-age" => max_age = std.fmt.parseInt(i64, value, 10) catch continue,
-                .expires => expires = DateTime.parse(value, .rfc822) catch continue,
+                .expires => expires = value,
                 .httponly => http_only = true,
                 .samesite => {
                     same_site = std.meta.stringToEnum(Cookie.SameSite, std.ascii.lowerString(&scrap, value)) orelse continue;
@@ -278,13 +278,25 @@ pub const Cookie = struct {
         const owned_path = try parsePath(aa, uri, path);
         const owned_domain = try parseDomain(aa, uri, domain);
 
-        var normalized_expires: ?i64 = null;
+        var normalized_expires: ?f64 = null;
         if (max_age) |ma| {
-            normalized_expires = std.time.timestamp() + ma;
+            normalized_expires = @floatFromInt(std.time.timestamp() + ma);
         } else {
             // max age takes priority over expires
-            if (expires) |e| {
-                normalized_expires = e.sub(DateTime.now(), .seconds);
+            if (expires) |expires_| {
+                var exp_dt = DateTime.parse(expires_, .rfc822) catch null;
+                if (exp_dt == null) {
+                    if ((expires_.len > 11 and expires_[7] == '-' and expires_[11] == '-')) {
+                        // Replace dashes and try again
+                        const output = try aa.dupe(u8, expires_);
+                        output[7] = ' ';
+                        output[11] = ' ';
+                        exp_dt = DateTime.parse(output, .rfc822) catch null;
+                    }
+                }
+                if (exp_dt) |dt| {
+                    normalized_expires = @floatFromInt(dt.unix(.seconds));
+                } else std.debug.print("Invalid cookie expires value: {s}\n", .{expires_});
             }
         }
 
@@ -838,7 +850,8 @@ test "Cookie: parse expires" {
     try expectAttribute(.{ .expires = null }, null, "b;expires=13.22");
     try expectAttribute(.{ .expires = null }, null, "b;expires=33");
 
-    try expectAttribute(.{ .expires = 1918798080 - std.time.timestamp() }, null, "b;expires=Wed, 21 Oct 2030 07:28:00 GMT");
+    try expectAttribute(.{ .expires = 1918798080 }, null, "b;expires=Wed, 21 Oct 2030 07:28:00 GMT");
+    try expectAttribute(.{ .expires = 1784275395 }, null, "b;expires=Fri, 17-Jul-2026 08:03:15 GMT");
     // max-age has priority over expires
     try expectAttribute(.{ .expires = std.time.timestamp() + 10 }, null, "b;Max-Age=10; expires=Wed, 21 Oct 2030 07:28:00 GMT");
 }
@@ -858,7 +871,7 @@ test "Cookie: parse all" {
         .http_only = true,
         .secure = true,
         .domain = ".lightpanda.io",
-        .expires = std.time.timestamp() + 30,
+        .expires = @floatFromInt(std.time.timestamp() + 30),
     }, "https://lightpanda.io/cms/users", "user-id=9000; HttpOnly; Max-Age=30; Secure; path=/; Domain=lightpanda.io");
 
     try expectCookie(.{
@@ -869,7 +882,7 @@ test "Cookie: parse all" {
         .secure = false,
         .domain = ".localhost",
         .same_site = .lax,
-        .expires = std.time.timestamp() + 7200,
+        .expires = @floatFromInt(std.time.timestamp() + 7200),
     }, "http://localhost:8000/login", "app_session=123; Max-Age=7200; path=/; domain=localhost; httponly; samesite=lax");
 }
 
@@ -896,7 +909,7 @@ const ExpectedCookie = struct {
     value: []const u8,
     path: []const u8,
     domain: []const u8,
-    expires: ?i64 = null,
+    expires: ?f64 = null,
     secure: bool = false,
     http_only: bool = false,
     same_site: Cookie.SameSite = .lax,
@@ -915,7 +928,7 @@ fn expectCookie(expected: ExpectedCookie, url: []const u8, set_cookie: []const u
     try testing.expectEqual(expected.path, cookie.path);
     try testing.expectEqual(expected.domain, cookie.domain);
 
-    try testing.expectDelta(expected.expires, cookie.expires, 2);
+    try testing.expectDelta(expected.expires, cookie.expires, 2.0);
 }
 
 fn expectAttribute(expected: anytype, url: ?[]const u8, set_cookie: []const u8) !void {
@@ -925,7 +938,10 @@ fn expectAttribute(expected: anytype, url: ?[]const u8, set_cookie: []const u8) 
 
     inline for (@typeInfo(@TypeOf(expected)).@"struct".fields) |f| {
         if (comptime std.mem.eql(u8, f.name, "expires")) {
-            try testing.expectDelta(expected.expires, cookie.expires, 1);
+            switch (@typeInfo(@TypeOf(expected.expires))) {
+                .int, .comptime_int => try testing.expectDelta(@as(f64, @floatFromInt(expected.expires)), cookie.expires, 1.0),
+                else => try testing.expectDelta(expected.expires, cookie.expires, 1.0),
+            }
         } else {
             try testing.expectEqual(@field(expected, f.name), @field(cookie, f.name));
         }
