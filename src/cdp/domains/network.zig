@@ -132,6 +132,7 @@ fn deleteCookies(cmd: anytype) !void {
 }
 
 fn clearBrowserCookies(cmd: anytype) !void {
+    if (try cmd.params(struct {}) != null) return error.InvalidParams;
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     bc.session.cookie_jar.clearRetainingCapacity();
     return cmd.sendResult(null, .{});
@@ -161,11 +162,10 @@ fn setCookies(cmd: anytype) !void {
     try cmd.sendResult(null, .{});
 }
 
+const GetCookiesParam = struct { urls: ?[]const []const u8 = null };
 fn getCookies(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const params = (try cmd.params(struct {
-        urls: ?[]const []const u8 = null,
-    })) orelse return error.InvalidParams;
+    const params = (try cmd.params(GetCookiesParam)) orelse GetCookiesParam{};
 
     // If not specified, use the URLs of the page and all of its subframes. TODO subframes
     const page_url = if (bc.session.page) |*page| page.url.raw else null; // @speed: avoid repasing the URL

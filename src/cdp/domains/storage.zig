@@ -38,11 +38,11 @@ pub fn processMessage(cmd: anytype) !void {
     }
 }
 
+const BrowserContextParam = struct { browserContextId: ?[]const u8 = null };
+
 fn clearCookies(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const params = (try cmd.params(struct {
-        browserContextId: ?[]const u8 = null,
-    })) orelse return error.InvalidParams;
+    const params = (try cmd.params(BrowserContextParam)) orelse BrowserContextParam{};
 
     if (params.browserContextId) |browser_context_id| {
         if (std.mem.eql(u8, browser_context_id, bc.id) == false) {
@@ -57,9 +57,7 @@ fn clearCookies(cmd: anytype) !void {
 
 fn getCookies(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const params = (try cmd.params(struct {
-        browserContextId: ?[]const u8 = null,
-    })) orelse return error.InvalidParams;
+    const params = (try cmd.params(BrowserContextParam)) orelse BrowserContextParam{};
 
     if (params.browserContextId) |browser_context_id| {
         if (std.mem.eql(u8, browser_context_id, bc.id) == false) {
