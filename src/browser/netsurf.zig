@@ -775,6 +775,17 @@ pub const EventTargetTBase = extern struct {
         .add_event_listener = add_event_listener,
         .iter_event_listener = iter_event_listener,
     },
+
+    // When we dispatch the event, we need to provide a target. In reality, the
+    // target is the container of this EventTargetTBase. But we can't pass that
+    // to _dom_event_target_dispatch, because it expects a dom_event_target.
+    // If you try to pass an non-event_target, you'll get weird behavior. For
+    // example, libdom might dom_node_ref that memory. Say we passed a *Window
+    // as the target, what happens if libdom calls dom_node_ref(window)? If
+    // you're lucky, you'll crash. If you're unlucky, you'll increment a random
+    // part of the window structure.
+    refcnt: u32 = 0,
+
     eti: c.dom_event_target_internal = c.dom_event_target_internal{ .listeners = null },
 
     pub fn add_event_listener(et: [*c]c.dom_event_target, t: [*c]c.dom_string, l: ?*c.struct_dom_event_listener, capture: bool) callconv(.C) c.dom_exception {
