@@ -151,16 +151,29 @@ pub const Page = struct {
         const self: *Page = @ptrCast(@alignCast(ctx));
         const base = if (self.current_script) |s| s.src else null;
 
-        const file_src = blk: {
+        const src = blk: {
             if (base) |_base| {
                 break :blk try URL.stitch(self.arena, specifier, _base, .{});
             } else break :blk specifier;
         };
 
-        if (self.module_map.get(file_src)) |module| return module;
+        if (self.module_map.get(src)) |module| {
+            log.debug(.http, "fetching module", .{
+                .src = src,
+                .cached = true,
+            });
+            return module;
+        }
+
+        log.debug(.http, "fetching module", .{
+            .src = src,
+            .base = base,
+            .cached = false,
+            .specifier = specifier,
+        });
 
         const module = try self.fetchData(specifier, base);
-        if (module) |_module| try self.module_map.putNoClobber(self.arena, file_src, _module);
+        if (module) |_module| try self.module_map.putNoClobber(self.arena, src, _module);
         return module;
     }
 
@@ -461,9 +474,9 @@ pub const Page = struct {
         };
 
         var script_source: ?[]const u8 = null;
+        defer self.current_script = null;
         if (script.src) |src| {
             self.current_script = script;
-            defer self.current_script = null;
 
             // https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-classic-script
             script_source = (try self.fetchData(src, null)) orelse {
@@ -507,8 +520,18 @@ pub const Page = struct {
         var origin_url = &self.url;
         const url = try origin_url.resolve(arena, res_src);
 
-        log.debug(.http, "fetching script", .{ .url = url });
-        errdefer |err| log.err(.http, "fetch error", .{ .err = err, .url = url });
+        var status_code: u16 = 0;
+        log.debug(.http, "fetching script", .{
+            .url = url,
+            .src = src,
+            .base = base,
+        });
+
+        errdefer |err| log.err(.http, "fetch error", .{
+            .err = err,
+            .url = url,
+            .status = status_code,
+        });
 
         var request = try self.newHTTPRequest(.GET, &url, .{
             .origin_uri = &origin_url.uri,
@@ -521,7 +544,8 @@ pub const Page = struct {
         var header = response.header;
         try self.session.cookie_jar.populateFromResponse(&url.uri, &header);
 
-        if (header.status < 200 or header.status > 299) {
+        status_code = header.status;
+        if (status_code < 200 or status_code > 299) {
             return error.BadStatusCode;
         }
 
@@ -539,7 +563,7 @@ pub const Page = struct {
 
         log.info(.http, "fetch complete", .{
             .url = url,
-            .status = header.status,
+            .status = status_code,
             .content_length = arr.items.len,
         });
         return arr.items;
@@ -1002,6 +1026,9 @@ const Script = struct {
         defer try_catch.deinit();
 
         const src = self.src orelse "inline";
+
+        log.debug(.browser, "executing script", .{ .src = src, .kind = self.kind });
+
         _ = switch (self.kind) {
             .javascript => page.main_context.exec(body, src),
             .module => blk: {

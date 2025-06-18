@@ -1158,7 +1158,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             }
 
                             if (!js_value.isArray()) {
-                                return .{.invalid = {}};
+                                return .{ .invalid = {} };
                             }
 
                             // This can get tricky.
@@ -1227,12 +1227,25 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 // const referrer_module = if (referrer) |ref| v8.Module{ .handle = ref } else null;
                 const module_loader = self.module_loader;
                 const source = module_loader.func(module_loader.ptr, specifier) catch |err| {
-                    log.err(.js, "resolve module fetch error", .{ .specifier = specifier, .err = err });
+                    log.err(.js, "resolve module fetch", .{
+                        .err = err,
+                        .specifier = specifier,
+                    });
                     return null;
                 } orelse return null;
 
+                var try_catch: TryCatch = undefined;
+                try_catch.init(self);
+                defer try_catch.deinit();
+
                 const m = compileModule(self.isolate, source, specifier) catch |err| {
-                    log.err(.js, "resolve module compile error", .{ .specifier = specifier, .err = err });
+                    log.err(.js, "resolve module compile", .{
+                        .specifier = specifier,
+                        .stack = try_catch.stack(self.context_arena) catch null,
+                        .src = try_catch.sourceLine(self.context_arena) catch "err",
+                        .line = try_catch.sourceLineNumber() orelse 0,
+                        .exception = (try_catch.exception(self.context_arena) catch @errorName(err)) orelse @errorName(err),
+                    });
                     return null;
                 };
                 return m.handle;
@@ -1545,6 +1558,20 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 const js_context = self.js_context;
                 const s = self.inner.getStackTrace(js_context.v8_context) orelse return null;
                 return try valueToString(allocator, s, js_context.isolate, js_context.v8_context);
+            }
+
+            // the caller needs to deinit the string returned
+            pub fn sourceLine(self: TryCatch, allocator: Allocator) !?[]const u8 {
+                const js_context = self.js_context;
+                const msg = self.inner.getMessage() orelse return null;
+                const sl = msg.getSourceLine(js_context.v8_context) orelse return null;
+                return try jsStringToZig(allocator, sl, js_context.isolate);
+            }
+
+            pub fn sourceLineNumber(self: TryCatch) ?u32 {
+                const js_context = self.js_context;
+                const msg = self.inner.getMessage() orelse return null;
+                return msg.getLineNumber(js_context.v8_context);
             }
 
             // a shorthand method to return either the entire stack message
