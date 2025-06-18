@@ -43,6 +43,10 @@ pub const Element = struct {
         y: f64,
         width: f64,
         height: f64,
+        bottom: f64,
+        right: f64,
+        top: f64,
+        left: f64,
     };
 
     pub fn toInterface(e: *parser.Element) !Union {
@@ -369,7 +373,16 @@ pub const Element = struct {
     pub fn _getBoundingClientRect(self: *parser.Element, page: *Page) !DOMRect {
         // Since we are lazy rendering we need to do this check. We could store the renderer in a viewport such that it could cache these, but it would require tracking changes.
         if (!try page.isNodeAttached(parser.elementToNode(self))) {
-            return DOMRect{ .x = 0, .y = 0, .width = 0, .height = 0 };
+            return DOMRect{
+                .x = 0,
+                .y = 0,
+                .width = 0,
+                .height = 0,
+                .bottom = 0,
+                .right = 0,
+                .top = 0,
+                .left = 0,
+            };
         }
         return page.renderer.getRect(self);
     }

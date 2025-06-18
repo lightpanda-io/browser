@@ -62,20 +62,38 @@ const FlatRenderer = struct {
             gop.value_ptr.* = x;
         }
 
+        const _x: f64 = @floatFromInt(x);
+        const y: f64 = 0.0;
+        const w: f64 = 1.0;
+        const h: f64 = 1.0;
+
         return .{
-            .x = @floatFromInt(x),
-            .y = 0.0,
-            .width = 1.0,
-            .height = 1.0,
+            .x = _x,
+            .y = y,
+            .width = w,
+            .height = h,
+            .left = _x,
+            .top = y,
+            .right = _x + w,
+            .bottom = y + h,
         };
     }
 
     pub fn boundingRect(self: *const FlatRenderer) Element.DOMRect {
+        const x: f64 = 0.0;
+        const y: f64 = 0.0;
+        const w: f64 = @floatFromInt(self.width());
+        const h: f64 = @floatFromInt(self.width());
+
         return .{
-            .x = 0.0,
-            .y = 0.0,
-            .width = @floatFromInt(self.width()),
-            .height = @floatFromInt(self.height()),
+            .x = x,
+            .y = y,
+            .width = w,
+            .height = h,
+            .left = x,
+            .top = y,
+            .right = x + w,
+            .bottom = y + h,
         };
     }
 
