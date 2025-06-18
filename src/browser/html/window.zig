@@ -387,4 +387,19 @@ test "Browser.HTML.Window" {
         .{ "window.setTimeout(() => {longCall = true}, 5001);", null },
         .{ "longCall;", "false" },
     }, .{});
+
+    // window event target
+    try runner.testCases(&.{
+        .{
+            \\ let called = false;
+            \\ window.addEventListener("ready", (e) => {
+            \\   called = (e.currentTarget == window);
+            \\ }, {capture: false, once: false});
+            \\ const evt = new Event("ready", { bubbles: true, cancelable: false });
+            \\ window.dispatchEvent(evt);
+            \\ called;
+            ,
+            "true",
+        },
+    }, .{});
 }

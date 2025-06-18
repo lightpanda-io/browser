@@ -777,6 +777,21 @@ pub const EventTargetTBase = extern struct {
     },
     eti: c.dom_event_target_internal = c.dom_event_target_internal{ .listeners = null },
 
+    // When we dispatch the event, we need to provide a target. In reality, the
+    // target is the container of this EventTargetTBase. But we can't pass that
+    // to _dom_event_target_dispatch, because it expects a dom_event_target.
+    // If you try to pass an non-event_target, you'll get weird behavior. For
+    // example, libdom might dom_node_ref that memory. Say we passed a *Window
+    // as the target, what happens if libdom calls dom_node_ref(window)? If
+    // you're lucky, you'll crash. If you're unlucky, you'll increment a random
+    // part of the window structure.
+    target: DummyTarget = .{},
+
+    const DummyTarget = extern struct {
+        vtable: usize = undefined,
+        refcnt: u32 = 0,
+    };
+
     pub fn add_event_listener(et: [*c]c.dom_event_target, t: [*c]c.dom_string, l: ?*c.struct_dom_event_listener, capture: bool) callconv(.C) c.dom_exception {
         const self = @as(*Self, @ptrCast(et));
         return c._dom_event_target_add_event_listener(&self.eti, t, l, capture);
@@ -785,11 +800,11 @@ pub const EventTargetTBase = extern struct {
     pub fn dispatch_event(et: [*c]c.dom_event_target, evt: ?*c.struct_dom_event, res: [*c]bool) callconv(.C) c.dom_exception {
         const self = @as(*Self, @ptrCast(et));
         // Set the event target to the target dispatched.
-        const e = c._dom_event_set_target(evt, et);
+        const e = c._dom_event_set_target(evt, @ptrCast(&self.target));
         if (e != c.DOM_NO_ERR) {
             return e;
         }
-        return c._dom_event_target_dispatch(et, &self.eti, evt, c.DOM_AT_TARGET, res);
+        return c._dom_event_target_dispatch(@ptrCast(&self.target), &self.eti, evt, c.DOM_AT_TARGET, res);
     }
 
     pub fn remove_event_listener(et: [*c]c.dom_event_target, t: [*c]c.dom_string, l: ?*c.struct_dom_event_listener, capture: bool) callconv(.C) c.dom_exception {

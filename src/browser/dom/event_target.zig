@@ -39,7 +39,7 @@ pub const EventTarget = struct {
         // Ideally, we'd remove this duality. Failing that, we'll need to embed
         // data into the *parser.EventTarget should we need this for other types.
         // For now, for the Window, which is a singleton, we can do this:
-        if (@intFromPtr(et) == @intFromPtr(&page.window.base)) {
+        if (@intFromPtr(et) == @intFromPtr(&page.window.base.target)) {
             return .{ .Window = &page.window };
         }
         return Nod.Node.toInterface(@as(*parser.Node, @ptrCast(et)));
