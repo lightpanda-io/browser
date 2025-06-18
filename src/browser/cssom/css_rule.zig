@@ -43,38 +43,3 @@ pub const CSSImportRule = struct {
     style_sheet: CSSStyleSheet,
     supports_text: ?[]const u8,
 };
-
-// pub const CSSGroupingRule = struct {
-//     pub const prototype = *CSSRule;
-//     list: std.ArrayListUnmanaged(CSSRule),
-
-//     pub fn _insertRule(self: *CSSGroupingRule, rule: []const u8, _index: ?usize, page: *Page) !usize {
-//         const index = _index orelse 0;
-//         if (index > self.list.items.len) return error.IndexSizeError;
-
-//         const css_rule: CSSRule = .{ .css_text = rule, .parent_rule = null, .parent_stylesheet = null };
-//         try self.list.insert(page.arena, index, css_rule);
-//         return self.list.items.len;
-//     }
-
-//     pub fn _deleteRule(self: *CSSGroupingRule, index: usize) !void {
-//         if (index > self.list.items.len) return error.IndexSizeError;
-//         _ = self.list.orderedRemove(index);
-//     }
-// };
-
-// pub const CSSStyleRule = struct {
-//     pub const prototype = *CSSGroupingRule;
-//     selector_text: []const u8,
-//     style: CSSStyleDeclaration,
-// };
-
-// pub const CSSFontFaceRule = struct {
-//     pub const prototype = *CSSRule;
-// };
-
-// pub const CSSPageRule = struct {
-//     pub const prototype = *CSSGroupingRule;
-//     selector_text: []const u8,
-//     style: CSSStyleDeclaration,
-// };

@@ -19,10 +19,12 @@
 pub const Stylesheet = @import("stylesheet.zig").StyleSheet;
 pub const CSSStylesheet = @import("css_stylesheet.zig").CSSStyleSheet;
 pub const CSSStyleDeclaration = @import("css_style_declaration.zig").CSSStyleDeclaration;
+pub const CSSRuleList = @import("css_rule_list.zig").CSSRuleList;
 
 pub const Interfaces = .{
     Stylesheet,
     CSSStylesheet,
     CSSStyleDeclaration,
+    CSSRuleList,
     @import("css_rule.zig").Interfaces,
 };

@@ -21,55 +21,57 @@ const std = @import("std");
 const Page = @import("../page.zig").Page;
 const StyleSheet = @import("stylesheet.zig").StyleSheet;
 
-const CSSRule = @import("css_rule.zig").CSSRule;
+const CSSRuleList = @import("css_rule_list.zig").CSSRuleList;
 const CSSImportRule = @import("css_rule.zig").CSSImportRule;
 
 pub const CSSStyleSheet = struct {
     pub const prototype = *StyleSheet;
 
-    // TODO: For now, we won't parse any rules.
-    css_rules: std.ArrayListUnmanaged([]const u8),
-
-    // TODO: Support owner_rule here.
+    css_rules: *CSSRuleList,
+    owner_rule: ?*CSSImportRule,
 
     const CSSStyleSheetOpts = struct {
-        base_url: ?[]const u8,
+        base_url: ?[]const u8 = null,
         // TODO: Suupport media
         disabled: bool = false,
     };
 
-    pub fn constructor(_opts: ?CSSStyleSheetOpts) CSSStyleSheet {
+    pub fn constructor(_opts: ?CSSStyleSheetOpts, page: *Page) !CSSStyleSheet {
         const opts = _opts orelse CSSStyleSheetOpts{};
         _ = opts;
 
-        return .{ .css_rules = .empty, .owner_rule = null };
+        const arena = page.arena;
+        const rules = try arena.create(CSSRuleList);
+        rules.* = .constructor();
+
+        return .{ .css_rules = rules, .owner_rule = null };
     }
 
     pub fn get_ownerRule(_: *CSSStyleSheet) ?*CSSImportRule {
         return null;
     }
 
-    pub fn get_cssRules(self: *CSSStyleSheet) *std.ArrayListUnmanaged([]const u8) {
+    pub fn get_cssRules(self: *CSSStyleSheet) *CSSRuleList {
         return self.css_rules;
     }
 
     pub fn _insertRule(self: *CSSStyleSheet, rule: []const u8, _index: ?usize, page: *Page) !usize {
         const index = _index orelse 0;
-        if (index > self.css_rules.items.len) {
+        if (index > self.css_rules.list.items.len) {
             return error.IndexSize;
         }
 
         const arena = page.arena;
-        try self.css_rules.insert(arena, index, arena.dupe(u8, rule));
+        try self.css_rules.list.insert(arena, index, try arena.dupe(u8, rule));
         return index;
     }
 
     pub fn _deleteRule(self: *CSSStyleSheet, index: usize) !void {
-        if (index > self.css_rules.items.len) {
+        if (index > self.css_rules.list.items.len) {
             return error.IndexSize;
         }
 
-        _ = self.css_rules.orderedRemove(index);
+        _ = self.css_rules.list.orderedRemove(index);
     }
 };
 
@@ -79,6 +81,12 @@ test "Browser.CSS.StyleSheet" {
     defer runner.deinit();
 
     try runner.testCases(&.{
-        .{ "let css = new CSSStylesheet()", "" },
+        .{ "let css = new CSSStyleSheet()", "undefined" },
+        .{ "css instanceof CSSStyleSheet", "true" },
+        .{ "css.cssRules.length", "0" },
+        .{ "css.ownerRule", "null" },
+        .{ "let index1 = css.insertRule('body { color: red; }', 0)", "undefined" },
+        .{ "index1", "0" },
+        .{ "css.cssRules.length", "1" },
     }, .{});
 }
