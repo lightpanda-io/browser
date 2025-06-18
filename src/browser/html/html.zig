@@ -38,4 +38,5 @@ pub const Interfaces = .{
     Location,
     MediaQueryList,
     Performance,
+    @import("screen.zig").Interfaces,
 };

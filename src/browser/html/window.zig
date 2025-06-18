@@ -34,6 +34,7 @@ const MediaQueryList = @import("media_query_list.zig").MediaQueryList;
 const Performance = @import("performance.zig").Performance;
 const CSSStyleDeclaration = @import("../cssom/css_style_declaration.zig").CSSStyleDeclaration;
 const CustomElementRegistry = @import("../webcomponents/custom_element_registry.zig").CustomElementRegistry;
+const Screen = @import("screen.zig").Screen;
 
 const storage = @import("../storage/storage.zig");
 
@@ -60,6 +61,7 @@ pub const Window = struct {
     navigator: Navigator = .{},
     performance: Performance,
     custom_elements: CustomElementRegistry = .{},
+    screen: Screen = .{},
 
     pub fn create(target: ?[]const u8, navigator: ?Navigator) !Window {
         var fbs = std.io.fixedBufferStream("");
@@ -167,6 +169,10 @@ pub const Window = struct {
 
     pub fn get_customElements(self: *Window) *CustomElementRegistry {
         return &self.custom_elements;
+    }
+
+    pub fn get_screen(self: *Window) *Screen {
+        return &self.screen;
     }
 
     pub fn _requestAnimationFrame(self: *Window, cbk: Function, page: *Page) !u32 {
