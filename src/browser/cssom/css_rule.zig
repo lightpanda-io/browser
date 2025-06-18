@@ -18,9 +18,6 @@
 
 const std = @import("std");
 
-const Page = @import("../page.zig").Page;
-
-const CSSStyleDeclaration = @import("css_style_declaration.zig").CSSStyleDeclaration;
 const CSSStyleSheet = @import("css_stylesheet.zig").CSSStyleSheet;
 
 pub const Interfaces = .{

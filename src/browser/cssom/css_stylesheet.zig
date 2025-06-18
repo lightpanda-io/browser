@@ -25,9 +25,8 @@ const CSSRuleList = @import("css_rule_list.zig").CSSRuleList;
 const CSSImportRule = @import("css_rule.zig").CSSImportRule;
 
 pub const CSSStyleSheet = struct {
-    pub const prototype = *StyleSheet;
-
-    css_rules: *CSSRuleList,
+    proto: StyleSheet,
+    css_rules: CSSRuleList,
     owner_rule: ?*CSSImportRule,
 
     const CSSStyleSheetOpts = struct {
@@ -36,15 +35,13 @@ pub const CSSStyleSheet = struct {
         disabled: bool = false,
     };
 
-    pub fn constructor(_opts: ?CSSStyleSheetOpts, page: *Page) !CSSStyleSheet {
+    pub fn constructor(_opts: ?CSSStyleSheetOpts) !CSSStyleSheet {
         const opts = _opts orelse CSSStyleSheetOpts{};
-        _ = opts;
-
-        const arena = page.arena;
-        const rules = try arena.create(CSSRuleList);
-        rules.* = .constructor();
-
-        return .{ .css_rules = rules, .owner_rule = null };
+        return .{
+            .proto = StyleSheet{ .disabled = opts.disabled },
+            .css_rules = .constructor(),
+            .owner_rule = null,
+        };
     }
 
     pub fn get_ownerRule(_: *CSSStyleSheet) ?*CSSImportRule {
@@ -52,7 +49,7 @@ pub const CSSStyleSheet = struct {
     }
 
     pub fn get_cssRules(self: *CSSStyleSheet) *CSSRuleList {
-        return self.css_rules;
+        return &self.css_rules;
     }
 
     pub fn _insertRule(self: *CSSStyleSheet, rule: []const u8, _index: ?usize, page: *Page) !usize {
