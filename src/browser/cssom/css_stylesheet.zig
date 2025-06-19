@@ -25,6 +25,8 @@ const CSSRuleList = @import("css_rule_list.zig").CSSRuleList;
 const CSSImportRule = @import("css_rule.zig").CSSImportRule;
 
 pub const CSSStyleSheet = struct {
+    pub const prototype = *StyleSheet;
+
     proto: StyleSheet,
     css_rules: CSSRuleList,
     owner_rule: ?*CSSImportRule,
