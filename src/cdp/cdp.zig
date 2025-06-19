@@ -320,6 +320,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         inspector: Inspector,
         isolated_world: ?IsolatedWorld,
+        http_proxy_before: ??std.Uri = null,
 
         const Self = @This();
 
@@ -374,6 +375,8 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             self.node_registry.deinit();
             self.node_search_list.deinit();
             self.cdp.browser.notification.unregisterAll(self);
+
+            if (self.http_proxy_before) |prev_proxy| self.cdp.browser.http_client.http_proxy = prev_proxy;
         }
 
         pub fn reset(self: *Self) void {
