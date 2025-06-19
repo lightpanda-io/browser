@@ -337,6 +337,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 const env = self.env;
                 const isolate = env.isolate;
                 const Global = @TypeOf(global.*);
+                const templates = &self.env.templates;
 
                 var v8_context: v8.Context = blk: {
                     var temp_scope: v8.HandleScope = undefined;
@@ -351,7 +352,6 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
                     // All the FunctionTemplates that we created and setup in Env.init
                     // are now going to get associated with our global instance.
-                    const templates = &self.env.templates;
                     inline for (Types, 0..) |s, i| {
                         const Struct = s.defaultValue().?;
                         const class_name = v8.String.initUtf8(isolate, comptime classNameForStruct(Struct));
@@ -460,6 +460,38 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     if (@hasDecl(Struct, "ErrorSet")) {
                         const script = comptime classNameForStruct(Struct) ++ ".prototype.__proto__ = Error.prototype";
                         _ = try js_context.exec(script, "errorSubclass");
+                    }
+                }
+
+                // Primitive attributes are set directly on the FunctionTemplate
+                // when we setup the environment. But we cannot set more complex
+                // types (v8 will crash).
+                //
+                // Plus, just to create more complex types, we always need a
+                // context, i.e. an Array has to have a Context to exist.
+                //
+                // As far as I can tell, getting the FunctionTemplate's object
+                // and setting values directly on it, for each context, is the
+                // way to do this.
+                inline for (Types, 0..) |s, i| {
+                    const Struct = s.defaultValue().?;
+                    inline for (@typeInfo(Struct).@"struct".decls) |declaration| {
+                        const name = declaration.name;
+                        if (comptime name[0] == '_') {
+                            const value = @field(Struct, name);
+
+                            if (comptime isComplexAttributeType(@typeInfo(@TypeOf(value)))) {
+                                const js_obj = templates[i].getFunction(v8_context).toObject();
+                                const js_name = v8.String.initUtf8(isolate, name[1..]).toName();
+                                const js_val = try js_context.zigValueToJs(value);
+                                if (!js_obj.setValue(v8_context, js_name, js_val)) {
+                                    log.fatal(.app, "set class attribute", .{
+                                        .@"struct" = @typeName(Struct),
+                                        .name = name,
+                                    });
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -1809,7 +1841,9 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 if (comptime name[0] == '_') {
                     switch (@typeInfo(@TypeOf(@field(Struct, name)))) {
                         .@"fn" => generateMethod(Struct, name, isolate, template_proto),
-                        else => generateAttribute(Struct, name, isolate, template, template_proto),
+                        else => |ti| if (!comptime isComplexAttributeType(ti)) {
+                            generateAttribute(Struct, name, isolate, template, template_proto);
+                        },
                     }
                 } else if (comptime std.mem.startsWith(u8, name, "get_")) {
                     generateProperty(Struct, name[4..], isolate, template_proto);
@@ -1930,7 +1964,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // apply it both to the type itself
             template.set(js_name, js_value, v8.PropertyAttribute.ReadOnly + v8.PropertyAttribute.DontDelete);
 
-            // andto instances of the type
+            // and to instances of the type
             template_proto.set(js_name, js_value, v8.PropertyAttribute.ReadOnly + v8.PropertyAttribute.DontDelete);
         }
 
@@ -2394,6 +2428,20 @@ const TypeMeta = struct {
 // the InternalFieldCount.
 fn isEmpty(comptime T: type) bool {
     return @typeInfo(T) != .@"opaque" and @sizeOf(T) == 0 and @hasDecl(T, "js_legacy_factory") == false;
+}
+
+// Attributes that return a primitive type are setup directly on the
+// FunctionTemplate when the Env is setup. More complex types need a v8.Context
+// and cannot be set directly on the FunctionTemplate.
+// We default to saying types are primitives because that's mostly what
+// we have. If we add a new complex type that isn't explictly handled here,
+// we'll get a compiler error in simpleZigValueToJs, and can then explicitly
+// add the type here.
+fn isComplexAttributeType(ti: std.builtin.Type) bool {
+    return switch (ti) {
+        .array => true,
+        else => false,
+    };
 }
 
 // Responsible for calling Zig functions from JS invokations. This could
