@@ -157,7 +157,7 @@ pub const Page = struct {
 
         // if the page has a pointer to a document, converts the HTML in Markdown and dump it.
         const doc = parser.documentHTMLToDocument(self.window.document);
-        try Markdown.writeMarkdown(doc, out);
+        try Markdown.writeMarkdown(self.url, doc, out);
     }
 
     pub fn fetchModuleSource(ctx: *anyopaque, specifier: []const u8) !?[]const u8 {

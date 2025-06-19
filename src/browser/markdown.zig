@@ -21,195 +21,254 @@ const std = @import("std");
 const parser = @import("netsurf.zig");
 const Walker = @import("dom/walker.zig").WalkerChildren;
 
+const URL = @import("../url.zig").URL;
+
 const NP = "\n\n";
 
+const Elem = struct {
+    inlin: bool = false,
+    list_order: ?u8 = null,
+    parent: ?*Elem = null,
+};
+
+const State = struct {
+    block: bool,
+    last_char: u8,
+    elem: ?*Elem = null,
+
+    fn is_inline(state: *State) bool {
+        if (state.elem == null) return false;
+        return state.elem.?.inlin;
+    }
+
+    fn last_char_space(state: *State) bool {
+        if (state.last_char == ' ' or state.last_char == '\n') return true;
+        return false;
+    }
+};
+
 // writer must be a std.io.Writer
-pub fn writeMarkdown(doc: *parser.Document, writer: anytype) !void {
-    _ = try writeChildren(parser.documentToNode(doc), true, writer);
+pub fn writeMarkdown(url: URL, doc: *parser.Document, writer: anytype) !void {
+    var state = State{ .block = true, .last_char = '\n' };
+    _ = try writeChildren(url, parser.documentToNode(doc), &state, writer);
     try writer.writeAll("\n");
 }
 
-fn writeChildren(root: *parser.Node, new_para: bool, writer: anytype) !bool {
+fn writeChildren(url: URL, root: *parser.Node, state: *State, writer: anytype) !void {
     const walker = Walker{};
     var next: ?*parser.Node = null;
-    var _new_para = new_para;
     while (true) {
         next = try walker.get_next(root, next) orelse break;
-        _new_para = try writeNode(next.?, _new_para, writer);
+        try writeNode(url, next.?, state, writer);
     }
-    return _new_para;
 }
 
-fn skipTextChild(root: *parser.Node) !*parser.Node {
-    const child = parser.nodeFirstChild(root) orelse return root;
-    const node_type = try parser.nodeType(child);
-    if (node_type == .text) return child;
-    return root;
+fn ensureBlock(state: *State, writer: anytype) !void {
+    if (state.is_inline()) return;
+    if (!state.block) {
+        try writer.writeAll(NP);
+        state.last_char = '\n';
+        state.block = true;
+    }
 }
 
-// the returned boolean can be either:
-// - true if a new paragraph has been written at the end
-// - false if an inline text (ie. without new paragraph) has been written at the end
-// - the value of the writeChildren function if it has been called recursively at the end
-// - the new_para received as argument otherwise
-fn writeNode(node: *parser.Node, new_para: bool, writer: anytype) anyerror!bool {
+fn writeInline(state: *State, text: []const u8, writer: anytype) !void {
+    try writer.writeAll(text);
+    state.last_char = text[text.len - 1];
+    if (state.block) state.block = false;
+}
+
+const order = [_][]const u8{
+    "1",  "2",  "3",  "4",  "5",  "6",  "7",  "8",  "9",  "10",
+    "11", "12", "13", "14", "15", "16", "17", "18", "19", "20",
+    "21", "22", "23", "24", "25", "26", "27", "28", "29", "30",
+    "31", "32", "33", "34", "35", "36", "37", "38", "39", "40",
+    "41", "42", "43", "44", "45", "46", "47", "48", "49", "50",
+};
+
+fn writeNode(url: URL, node: *parser.Node, state: *State, writer: anytype) anyerror!void {
     switch (try parser.nodeType(node)) {
         .element => {
             const html_element: *parser.ElementHTML = @ptrCast(node);
             const tag = try parser.elementHTMLGetTagType(html_element);
 
             // debug
+            // try writer.writeAll("\nstart - ");
             // try writer.writeAll(@tagName(tag));
-            // try writer.writeAll("-");
-            // if (new_para) {
-            //     try writer.writeAll("1");
-            // } else {
-            //     try writer.writeAll("0");
-            // }
+            // try writer.writeAll("\n");
 
             switch (tag) {
 
                 // skip element, go to children
-                .html, .head, .header, .footer, .meta, .link, .body => {
-                    return try writeChildren(node, new_para, writer);
+                .html, .head, .meta, .link, .body, .span => {
+                    try writeChildren(url, node, state, writer);
                 },
 
-                // skip element and children (eg. text)
-                .title, .i, .script, .noscript, .undef, .style => return new_para,
+                // skip element and children
+                .title, .i, .script, .noscript, .undef, .style => {},
 
                 // generic elements
-                .h1, .h2, .h3, .h4 => {
-                    if (!new_para) {
-                        try writer.writeAll(NP);
+                .h1, .h2, .h3, .h4, .h5, .h6 => {
+                    try ensureBlock(state, writer);
+                    if (!state.is_inline()) {
+                        switch (tag) {
+                            .h1 => try writeInline(state, "# ", writer),
+                            .h2 => try writeInline(state, "## ", writer),
+                            .h3 => try writeInline(state, "### ", writer),
+                            .h4 => try writeInline(state, "#### ", writer),
+                            .h5 => try writeInline(state, "##### ", writer),
+                            .h6 => try writeInline(state, "###### ", writer),
+                            else => @panic("only headers tags are supported here"),
+                        }
                     }
-                    switch (tag) {
-                        .h1 => try writer.writeAll("# "),
-                        .h2 => try writer.writeAll("## "),
-                        .h3 => try writer.writeAll("### "),
-                        .h4 => try writer.writeAll("#### "),
-                        else => @panic("only headers tags are supported here"),
-                    }
-                    const np = try writeChildren(node, false, writer);
-                    if (!np) try writer.writeAll(NP);
-                    return true;
+                    try writeChildren(url, node, state, writer);
+                    try ensureBlock(state, writer);
                 },
 
                 // containers and dividers
-                .nav, .section, .article, .p, .div, .button, .form => {
-                    if (!new_para) try writer.writeAll(NP);
-                    const np = try writeChildren(node, true, writer);
-                    if (!np) try writer.writeAll(NP);
-                    return true;
-                },
-                .span => {
-                    return try writeChildren(node, new_para, writer);
-                },
-                .b => {
-                    try writer.writeAll("**");
-                    _ = try writeChildren(node, false, writer);
-                    try writer.writeAll("**");
-                    return false;
+                .header, .footer, .nav, .section, .div, .article, .p, .button, .form => {
+                    try ensureBlock(state, writer);
+                    try writeChildren(url, node, state, writer);
+                    try ensureBlock(state, writer);
                 },
                 .br => {
-                    if (!new_para) try writer.writeAll(NP);
-                    return try writeChildren(node, true, writer);
+                    try ensureBlock(state, writer);
+                    try writeChildren(url, node, state, writer);
                 },
                 .hr => {
-                    if (!new_para) try writer.writeAll(NP);
-                    try writer.writeAll("---");
-                    try writer.writeAll(NP);
-                    return true;
+                    try ensureBlock(state, writer);
+                    try writeInline(state, "---", writer);
+                    try ensureBlock(state, writer);
+                },
+
+                // styling
+                .b => {
+                    var elem = Elem{ .parent = state.elem, .inlin = true };
+                    state.elem = &elem;
+                    defer state.elem = elem.parent;
+                    try writeInline(state, "**", writer);
+                    try writeChildren(url, node, state, writer);
+                    try writeInline(state, "**", writer);
                 },
 
                 // specific elements
                 .a => {
+                    if (!state.last_char_space()) try writeInline(state, " ", writer);
+                    var elem = Elem{ .parent = state.elem, .inlin = true };
+                    state.elem = &elem;
+                    defer state.elem = elem.parent;
                     const element = parser.nodeToElement(node);
                     if (try getAttributeValue(element, "href")) |href| {
-                        // TODO: absolute path?
-                        try writer.writeAll("[");
-                        _ = try writeChildren(node, false, writer);
-                        try writer.writeAll("](");
-                        try writer.writeAll(href);
-                        try writer.writeAll(")");
-                        return false;
+                        try writeInline(state, "[", writer);
+                        try writeChildren(url, node, state, writer);
+                        try writeInline(state, "](", writer);
+                        // handle relative path
+                        if (href[0] == '/') {
+                            try writeInline(state, url.scheme(), writer);
+                            try writeInline(state, "://", writer);
+                            try writeInline(state, url.host(), writer);
+                        }
+                        try writeInline(state, href, writer);
+                        try writeInline(state, ")", writer);
+                    } else {
+                        try writeChildren(url, node, state, writer);
                     }
-                    return try writeChildren(node, new_para, writer);
                 },
                 .img => {
+                    var elem = Elem{ .parent = state.elem, .inlin = true };
+                    state.elem = &elem;
+                    defer state.elem = elem.parent;
                     const element = parser.nodeToElement(node);
                     if (try getAttributeValue(element, "src")) |src| {
-                        // TODO: absolute path?
-                        try writer.writeAll("![");
+                        try writeInline(state, "![", writer);
                         if (try getAttributeValue(element, "alt")) |alt| {
-                            try writer.writeAll(alt);
+                            try writeInline(state, alt, writer);
                         } else {
-                            try writer.writeAll(src);
+                            try writeInline(state, src, writer);
                         }
-                        try writer.writeAll("](");
-                        try writer.writeAll(src);
-                        try writer.writeAll(")");
-                        return false;
+                        try writeInline(state, "](", writer);
+                        // handle relative path
+                        if (src[0] == '/') {
+                            try writeInline(state, url.scheme(), writer);
+                            try writeInline(state, "://", writer);
+                            try writeInline(state, url.host(), writer);
+                        }
+                        try writeInline(state, src, writer);
+                        try writeInline(state, ")", writer);
                     }
-                    return new_para;
-                },
-                .ol => {
-                    if (!new_para) try writer.writeAll(NP);
-                    const np = try writeChildren(node, true, writer);
-                    if (!np) try writer.writeAll(NP);
-                    return true;
                 },
                 .ul => {
-                    if (!new_para) try writer.writeAll(NP);
-                    const np = try writeChildren(node, true, writer);
-                    if (!np) try writer.writeAll(NP);
-                    return true;
+                    var elem = Elem{ .parent = state.elem, .list_order = 0 };
+                    state.elem = &elem;
+                    defer state.elem = elem.parent;
+                    try ensureBlock(state, writer);
+                    try writeChildren(url, node, state, writer);
+                    try ensureBlock(state, writer);
                 },
-                .li => {
-                    if (!new_para) try writer.writeAll("\n");
-                    try writer.writeAll("- ");
-                    return try writeChildren(node, false, writer);
+                .ol => {
+                    var elem = Elem{ .parent = state.elem, .list_order = 1 };
+                    state.elem = &elem;
+                    defer state.elem = elem.parent;
+                    try ensureBlock(state, writer);
+                    try writeChildren(url, node, state, writer);
+                    try ensureBlock(state, writer);
+                },
+                .li => blk: {
+                    const parent = state.elem orelse break :blk;
+                    const list_order = parent.list_order orelse break :blk;
+                    if (!state.block) try writer.writeAll("\n");
+                    if (list_order > 0) {
+                        // ordered list
+                        try writeInline(state, order[list_order - 1], writer);
+                        try writeInline(state, ". ", writer);
+                        parent.list_order = list_order + 1;
+                    } else {
+                        // unordered list
+                        try writeInline(state, "- ", writer);
+                    }
+                    try writeChildren(url, node, state, writer);
                 },
                 .input => {
+                    var elem = Elem{ .parent = state.elem, .inlin = true };
+                    state.elem = &elem;
+                    defer state.elem = elem.parent;
                     const element = parser.nodeToElement(node);
                     if (try getAttributeValue(element, "value")) |value| {
-                        try writer.writeAll(value);
-                        try writer.writeAll(" ");
+                        try writeInline(state, value, writer);
+                        try writeInline(state, " ", writer);
                     }
-                    return false;
                 },
+
                 else => {
-                    try writer.writeAll("\n");
+                    try ensureBlock(state, writer);
                     try writer.writeAll(@tagName(tag));
-                    try writer.writeAll(" not supported\n");
+                    try writer.writeAll(" not supported");
+                    try ensureBlock(state, writer);
                 },
             }
-            // panic
+            // try writer.writeAll("\nend - ");
+            // try writer.writeAll(@tagName(tag));
+            // try writer.writeAll("\n");
         },
         .text => {
-            const v = try parser.nodeValue(node) orelse return new_para;
-            const printed = try writeText(v, writer);
-            if (printed) return false;
-            return new_para;
+            const v = try parser.nodeValue(node) orelse return;
+            const printed = try writeText(state, v, writer);
+            if (printed) state.block = false;
         },
-        .cdata_section => {
-            return new_para;
-        },
-        .comment => {
-            return new_para;
-        },
+        .cdata_section => {},
+        .comment => {},
         // TODO handle processing instruction dump
-        .processing_instruction => return new_para,
+        .processing_instruction => {},
         // document fragment is outside of the main document DOM, so we
         // don't output it.
-        .document_fragment => return new_para,
+        .document_fragment => {},
         // document will never be called, but required for completeness.
-        .document => return new_para,
+        .document => {},
         // done globally instead, but required for completeness. Only the outer DOCTYPE should be written
-        .document_type => return new_para,
+        .document_type => {},
         // deprecated
-        .attribute, .entity_reference, .entity, .notation => return new_para,
+        .attribute, .entity_reference, .entity, .notation => {},
     }
-    return new_para;
 }
 
 // TODO: not sure about + - . ! as they are very common characters
@@ -217,12 +276,12 @@ fn writeNode(node: *parser.Node, new_para: bool, writer: anytype) anyerror!bool 
 // TODO: | (pipe)
 const escape = [_]u8{ '\\', '`', '*', '_', '{', '}', '[', ']', '<', '>', '(', ')', '#' };
 
-fn writeText(value: []const u8, writer: anytype) !bool {
+fn writeText(state: *State, value: []const u8, writer: anytype) !bool {
     if (value.len == 0) return false;
 
     var last_char: u8 = ' ';
     var printed: u64 = 0;
-    for (value) |v| {
+    for (value, 0..) |v, i| {
         // do not print:
         // - multiple spaces
         // - return line
@@ -236,10 +295,17 @@ fn writeText(value: []const u8, writer: anytype) !bool {
             if (v == esc) try writer.writeAll("\\");
         }
 
+        if (printed == 0 and !state.is_inline()) {
+            if (state.last_char != '\n' and state.last_char != ' ') {
+                try writer.writeAll(" ");
+            }
+        }
+
         last_char = v;
         printed += 1;
         const x = [_]u8{v}; // TODO: do we have something better?
         try writer.writeAll(&x);
+        if (i == value.len - 1) state.last_char = v;
     }
     if (printed > 0) return true;
     return false;
