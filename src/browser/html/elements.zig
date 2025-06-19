@@ -1265,6 +1265,16 @@ pub const HTMLTemplateElement = struct {
     pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
         return constructHtmlElement(page, js_this);
     }
+
+    pub fn get_content(self: *parser.Template, page: *Page) !*parser.DocumentFragment {
+        const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(self)));
+        if (state.template_content) |tc| {
+            return tc;
+        }
+        const tc = try parser.documentCreateDocumentFragment(@ptrCast(page.window.document));
+        state.template_content = tc;
+        return tc;
+    }
 };
 
 pub const HTMLTextAreaElement = struct {
@@ -1550,7 +1560,8 @@ test "Browser.HTML.Element" {
         .{ "document.activeElement === focused", "true" },
     }, .{});
 }
-test "Browser.HTML.HtmlInputElement.propeties" {
+
+test "Browser.HTML.HtmlInputElement.properties" {
     var runner = try testing.jsRunner(testing.tracking_allocator, .{ .url = "https://lightpanda.io/noslashattheend" });
     defer runner.deinit();
     var alloc = std.heap.ArenaAllocator.init(runner.app.allocator);
@@ -1634,7 +1645,8 @@ test "Browser.HTML.HtmlInputElement.propeties" {
         .{ "input_value.value", "mango" }, // Still mango
     }, .{});
 }
-test "Browser.HTML.HtmlInputElement.propeties.form" {
+
+test "Browser.HTML.HtmlInputElement.properties.form" {
     var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html = 
         \\ <form action="test.php" target="_blank">
         \\   <p>
@@ -1649,6 +1661,21 @@ test "Browser.HTML.HtmlInputElement.propeties.form" {
         .{ "elem_input.form", "[object HTMLFormElement]" }, // Initial value
         .{ "elem_input.form = 'foo'", null },
         .{ "elem_input.form", "[object HTMLFormElement]" }, // Invalid
+    }, .{});
+}
+
+test "Browser.HTML.HTMLTemplateElement" {
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html = "<div id=c></div>" });
+    defer runner.deinit();
+
+    try runner.testCases(&.{
+        .{ "let t = document.createElement('template')", null },
+        .{ "let d = document.createElement('div')", null },
+        .{ "d.id = 'abc'", null },
+        .{ "t.content.append(d)", null },
+        .{ "document.getElementById('abc')", "null" },
+        .{ "document.getElementById('c').appendChild(t.content.cloneNode(true))", null },
+        .{ "document.getElementById('abc').id", "abc" },
     }, .{});
 }
 
