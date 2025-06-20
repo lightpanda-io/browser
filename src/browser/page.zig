@@ -87,13 +87,6 @@ pub const Page = struct {
     // execute any JavaScript
     main_context: *Env.JsContext,
 
-    // List of modules currently fetched/loaded.
-    module_map: std.StringHashMapUnmanaged([]const u8),
-
-    // current_script is the script currently evaluated by the page.
-    // current_script could by fetch module to resolve module's url to fetch.
-    current_script: ?*const Script = null,
-
     // indicates intention to navigate to another page on the next loop execution.
     delayed_navigation: bool = false,
 
@@ -119,7 +112,6 @@ pub const Page = struct {
                 .notification = browser.notification,
             }),
             .main_context = undefined,
-            .module_map = .empty,
         };
         self.main_context = try session.executor.createJsContext(&self.window, self, self, true);
 
@@ -147,34 +139,9 @@ pub const Page = struct {
         try Dump.writeHTML(doc, out);
     }
 
-    pub fn fetchModuleSource(ctx: *anyopaque, specifier: []const u8) !?[]const u8 {
+    pub fn fetchModuleSource(ctx: *anyopaque, src: []const u8) !?[]const u8 {
         const self: *Page = @ptrCast(@alignCast(ctx));
-        const base = if (self.current_script) |s| s.src else null;
-
-        const src = blk: {
-            if (base) |_base| {
-                break :blk try URL.stitch(self.arena, specifier, _base, .{});
-            } else break :blk specifier;
-        };
-
-        if (self.module_map.get(src)) |module| {
-            log.debug(.http, "fetching module", .{
-                .src = src,
-                .cached = true,
-            });
-            return module;
-        }
-
-        log.debug(.http, "fetching module", .{
-            .src = src,
-            .base = base,
-            .cached = false,
-            .specifier = specifier,
-        });
-
-        const module = try self.fetchData(specifier, base);
-        if (module) |_module| try self.module_map.putNoClobber(self.arena, src, _module);
-        return module;
+        return self.fetchData("module", src);
     }
 
     pub fn wait(self: *Page) !void {
@@ -473,26 +440,20 @@ pub const Page = struct {
             log.err(.browser, "clear document script", .{ .err = err });
         };
 
-        var script_source: ?[]const u8 = null;
-        defer self.current_script = null;
-        if (script.src) |src| {
-            self.current_script = script;
-
-            // https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-classic-script
-            script_source = (try self.fetchData(src, null)) orelse {
-                // TODO If el's result is null, then fire an event named error at
-                // el, and return
-                return;
-            };
-        } else {
+        const src = script.src orelse {
             // source is inline
             // TODO handle charset attribute
-            script_source = try parser.nodeTextContent(parser.elementToNode(script.element));
-        }
+            const script_source = try parser.nodeTextContent(parser.elementToNode(script.element)) orelse return;
+            return script.eval(self, script_source);
+        };
 
-        if (script_source) |ss| {
-            try script.eval(self, ss);
-        }
+        // https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-classic-script
+        const script_source = (try self.fetchData("script", src)) orelse {
+            // TODO If el's result is null, then fire an event named error at
+            // el, and return
+            return;
+        };
+        return script.eval(self, script_source);
 
         // TODO If el's from an external file is true, then fire an event
         // named load at el.
@@ -502,7 +463,11 @@ pub const Page = struct {
     // It resolves src using the page's uri.
     // If a base path is given, src is resolved according to the base first.
     // the caller owns the returned string
-    fn fetchData(self: *const Page, src: []const u8, base: ?[]const u8) !?[]const u8 {
+    fn fetchData(
+        self: *const Page,
+        comptime reason: []const u8,
+        src: []const u8,
+    ) !?[]const u8 {
         const arena = self.arena;
 
         // Handle data URIs.
@@ -510,26 +475,20 @@ pub const Page = struct {
             return data_uri.data;
         }
 
-        var res_src = src;
-
-        // if a base path is given, we resolve src using base.
-        if (base) |_base| {
-            res_src = try URL.stitch(arena, src, _base, .{ .alloc = .if_needed });
-        }
-
         var origin_url = &self.url;
-        const url = try origin_url.resolve(arena, res_src);
+        const url = try origin_url.resolve(arena, src);
 
         var status_code: u16 = 0;
         log.debug(.http, "fetching script", .{
             .url = url,
             .src = src,
-            .base = base,
+            .reason = reason,
         });
 
         errdefer |err| log.err(.http, "fetch error", .{
             .err = err,
             .url = url,
+            .reason = reason,
             .status = status_code,
         });
 
@@ -563,6 +522,7 @@ pub const Page = struct {
 
         log.info(.http, "fetch complete", .{
             .url = url,
+            .reason = reason,
             .status = status_code,
             .content_length = arr.items.len,
         });
@@ -1025,25 +985,16 @@ const Script = struct {
         try_catch.init(page.main_context);
         defer try_catch.deinit();
 
-        const src = self.src orelse "inline";
+        const src = self.src orelse page.url.raw;
 
         log.debug(.browser, "executing script", .{ .src = src, .kind = self.kind });
 
-        _ = switch (self.kind) {
-            .javascript => page.main_context.exec(body, src),
-            .module => blk: {
-                switch (try page.main_context.module(body, src)) {
-                    .value => |v| break :blk v,
-                    .exception => |e| {
-                        log.warn(.user_script, "eval module", .{
-                            .src = src,
-                            .err = try e.exception(page.arena),
-                        });
-                        return error.JsErr;
-                    },
-                }
-            },
-        } catch {
+        const result = switch (self.kind) {
+            .javascript => page.main_context.eval(body, src),
+            .module => page.main_context.module(body, src),
+        };
+
+        result catch {
             if (page.delayed_navigation) {
                 return error.Terminated;
             }
