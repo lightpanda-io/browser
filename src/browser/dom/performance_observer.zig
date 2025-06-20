@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2024  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -16,25 +16,19 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const HTMLDocument = @import("document.zig").HTMLDocument;
-const HTMLElem = @import("elements.zig");
-const SVGElem = @import("svg_elements.zig");
-const Window = @import("window.zig").Window;
-const Navigator = @import("navigator.zig").Navigator;
-const History = @import("history.zig").History;
-const Location = @import("location.zig").Location;
-const MediaQueryList = @import("media_query_list.zig").MediaQueryList;
+const std = @import("std");
 
-pub const Interfaces = .{
-    HTMLDocument,
-    HTMLElem.HTMLElement,
-    HTMLElem.HTMLMediaElement,
-    HTMLElem.Interfaces,
-    SVGElem.SVGElement,
-    Window,
-    Navigator,
-    History,
-    Location,
-    MediaQueryList,
-    @import("screen.zig").Interfaces,
+// https://developer.mozilla.org/en-US/docs/Web/API/PerformanceObserver
+pub const PerformanceObserver = struct {
+    pub const _supportedEntryTypes = [0][]const u8{};
 };
+
+const testing = @import("../../testing.zig");
+test "Browser.DOM.PerformanceObserver" {
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
+    defer runner.deinit();
+
+    try runner.testCases(&.{
+        .{ "PerformanceObserver.supportedEntryTypes.length", "0" },
+    }, .{});
+}

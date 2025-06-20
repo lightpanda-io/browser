@@ -28,6 +28,8 @@ const IntersectionObserver = @import("intersection_observer.zig");
 const DOMParser = @import("dom_parser.zig").DOMParser;
 const TreeWalker = @import("tree_walker.zig").TreeWalker;
 const NodeFilter = @import("node_filter.zig").NodeFilter;
+const Performance = @import("performance.zig").Performance;
+const PerformanceObserver = @import("performance_observer.zig").PerformanceObserver;
 
 pub const Interfaces = .{
     DOMException,
@@ -44,4 +46,6 @@ pub const Interfaces = .{
     DOMParser,
     TreeWalker,
     NodeFilter,
+    Performance,
+    PerformanceObserver,
 };
