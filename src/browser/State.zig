@@ -58,6 +58,8 @@ active_element: ?*parser.Element = null,
 // default (by returning selectedIndex == 0).
 explicit_index_set: bool = false,
 
+template_content: ?*parser.DocumentFragment = null,
+
 const ReadyState = enum {
     loading,
     interactive,

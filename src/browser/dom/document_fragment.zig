@@ -71,4 +71,17 @@ test "Browser.DOM.DocumentFragment" {
         .{ "dc1.isEqualNode(dc1)", "true" },
         .{ "dc1.isEqualNode(dc2)", "true" },
     }, .{});
+
+    try runner.testCases(&.{
+        .{ "let f = document.createDocumentFragment()", null },
+        .{ "let d = document.createElement('div');", null },
+        .{ "d.id = 'x';", null },
+        .{ "document.getElementById('x') == null;", "true" },
+
+        .{ "f.append(d);", null },
+        .{ "document.getElementById('x') == null;", "true" },
+
+        .{ "document.getElementsByTagName('body')[0].append(f.cloneNode(true));", null },
+        .{ "document.getElementById('x') != null;", "true" },
+    }, .{});
 }
