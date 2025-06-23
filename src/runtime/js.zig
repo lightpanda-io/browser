@@ -691,7 +691,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             // compile and eval a JS module
             // It doesn't wait for callbacks execution
-            pub fn module(self: *JsContext, src: []const u8, url: []const u8) !void {
+            pub fn module(self: *JsContext, src: []const u8, url: []const u8, cacheable: bool) !void {
+                if (!cacheable) {
+                    return self.moduleNoCache(src, url);
+                }
+
                 const arena = self.context_arena;
 
                 const gop = try self.module_cache.getOrPut(arena, url);
@@ -710,6 +714,16 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 gop.value_ptr.* = PersistentModule.init(self.isolate, m);
 
                 // resolveModuleCallback loads module's dependencies.
+                const v8_context = self.v8_context;
+                if (try m.instantiate(v8_context, resolveModuleCallback) == false) {
+                    return error.ModuleInstantiationError;
+                }
+
+                _ = try m.evaluate(v8_context);
+            }
+
+            fn moduleNoCache(self: *JsContext, src: []const u8, url: []const u8) !void {
+                const m = try compileModule(self.isolate, src, url);
                 const v8_context = self.v8_context;
                 if (try m.instantiate(v8_context, resolveModuleCallback) == false) {
                     return error.ModuleInstantiationError;
