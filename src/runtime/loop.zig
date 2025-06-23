@@ -187,6 +187,12 @@ pub const Loop = struct {
     }
 
     pub fn timeout(self: *Self, nanoseconds: u63, callback_node: ?*CallbackNode) !usize {
+        if (self.stopping) {
+            // Prevents a timeout callback from creating a new timeout, which
+            // would make `loop.run` run forever.
+            return 0;
+        }
+
         const completion = try self.alloc.create(Completion);
         errdefer self.alloc.destroy(completion);
         completion.* = undefined;
