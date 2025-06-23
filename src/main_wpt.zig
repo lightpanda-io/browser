@@ -157,7 +157,7 @@ fn run(arena: Allocator, test_file: []const u8, loader: *FileLoader, err_out: *?
         var try_catch: Env.TryCatch = undefined;
         try_catch.init(runner.page.main_context);
         defer try_catch.deinit();
-        try runner.page.loop.run();
+        try runner.page.loop.run(std.time.ns_per_ms * 200);
 
         if (try_catch.hasCaught()) {
             err_out.* = (try try_catch.err(arena)) orelse "unknwon error";
