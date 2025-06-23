@@ -102,12 +102,16 @@ pub const Loop = struct {
     // Stops when there is no more I/O events registered on the loop.
     // Note that I/O events callbacks might register more I/O events
     // on the go when they are executed (ie. nested I/O events).
-    pub fn run(self: *Self) !void {
+    pub fn run(self: *Self, wait_time: usize) !void {
         // stop repeating / interval timeouts from re-registering
         self.stopping = true;
         defer self.stopping = false;
 
-        while (self.pending_network_count != 0 or self.pending_timeout_count != 0) {
+        const max_iterations = wait_time / (std.time.ns_per_ms * 10);
+        for (0..max_iterations) |_| {
+            if (self.pending_network_count == 0 and self.pending_timeout_count == 0) {
+                break;
+            }
             self.io.run_for_ns(std.time.ns_per_ms * 10) catch |err| {
                 log.err(.loop, "deinit", .{ .err = err });
                 break;
@@ -187,12 +191,6 @@ pub const Loop = struct {
     }
 
     pub fn timeout(self: *Self, nanoseconds: u63, callback_node: ?*CallbackNode) !usize {
-        if (self.stopping) {
-            // Prevents a timeout callback from creating a new timeout, which
-            // would make `loop.run` run forever.
-            return 0;
-        }
-
         const completion = try self.alloc.create(Completion);
         errdefer self.alloc.destroy(completion);
         completion.* = undefined;

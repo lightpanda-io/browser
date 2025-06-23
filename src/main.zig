@@ -126,7 +126,7 @@ fn run(alloc: Allocator) !void {
                 },
             };
 
-            try page.wait();
+            try page.wait(std.time.ns_per_s * 3);
 
             // dump
             if (opts.dump) {

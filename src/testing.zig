@@ -435,7 +435,7 @@ pub const JsRunner = struct {
                 }
                 return err;
             };
-            try self.page.loop.run();
+            try self.page.loop.run(std.time.ns_per_ms * 200);
             @import("root").js_runner_duration += std.time.Instant.since(try std.time.Instant.now(), start);
 
             if (case.@"1") |expected| {
