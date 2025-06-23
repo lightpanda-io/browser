@@ -193,6 +193,11 @@ pub const Loop = struct {
     }
 
     pub fn timeout(self: *Self, nanoseconds: u63, callback_node: ?*CallbackNode) !usize {
+        if (self.stopping and nanoseconds > std.time.ns_per_ms * 500) {
+            // we're trying to shutdown, we probably don't want to wait for a new
+            // long timeout
+            return 0;
+        }
         const completion = try self.alloc.create(Completion);
         errdefer self.alloc.destroy(completion);
         completion.* = undefined;
