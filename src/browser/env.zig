@@ -22,6 +22,7 @@ const WebApis = struct {
     pub const Interfaces = generate.Tuple(.{
         @import("crypto/crypto.zig").Crypto,
         @import("console/console.zig").Console,
+        @import("css/css.zig").Interfaces,
         @import("cssom/cssom.zig").Interfaces,
         @import("dom/dom.zig").Interfaces,
         @import("encoding/text_encoder.zig").Interfaces,

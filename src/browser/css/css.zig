@@ -23,6 +23,18 @@ const std = @import("std");
 const Selector = @import("selector.zig").Selector;
 const parser = @import("parser.zig");
 
+pub const Interfaces = .{
+    Css,
+};
+
+// https://developer.mozilla.org/en-US/docs/Web/API/CSS
+pub const Css = struct {
+    pub fn _supports(_: *Css, _: []const u8, _: ?[]const u8) bool {
+        // TODO: Actually respond with which CSS features we support.
+        return true;
+    }
+};
+
 // parse parse a selector string and returns the parsed result or an error.
 pub fn parse(alloc: std.mem.Allocator, s: []const u8, opts: parser.ParseOptions) parser.ParseError!Selector {
     var p = parser.Parser{ .s = s, .i = 0, .opts = opts };
@@ -173,4 +185,15 @@ test "parse" {
         };
         defer s.deinit(alloc);
     }
+}
+
+const testing = @import("../../testing.zig");
+test "Browser.HTML.CSS" {
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
+    defer runner.deinit();
+
+    try runner.testCases(&.{
+        .{ "CSS.supports('display: flex')", "true" },
+        .{ "CSS.supports('text-decoration-style', 'blink')", "true" },
+    }, .{});
 }
