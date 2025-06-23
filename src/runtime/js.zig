@@ -515,6 +515,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
         };
 
         const PersistentObject = v8.Persistent(v8.Object);
+        const PersistentModule = v8.Persistent(v8.Module);
         const PersistentFunction = v8.Persistent(v8.Function);
 
         // Loosely maps to a Browser Page.
@@ -572,6 +573,16 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // Some Zig types have code to execute when the call scope ends
             call_scope_end_callbacks: std.ArrayListUnmanaged(CallScopeEndCallback) = .empty,
 
+            // Our module cache: normalized module specifier => module.
+            module_cache: std.StringHashMapUnmanaged(PersistentModule) = .empty,
+
+            // Module => Path. The key is the module hashcode (module.getIdentityHash)
+            // and the value is the full path to the module. We need to capture this
+            // so that when we're asked to resolve a dependent module, and all we're
+            // given is the specifier, we can form the full path. The full path is
+            // necessary to lookup/store the dependent module in the module_cache.
+            module_identifier: std.AutoHashMapUnmanaged(u32, []const u8) = .empty,
+
             const ModuleLoader = struct {
                 ptr: *anyopaque,
                 func: *const fn (ptr: *anyopaque, specifier: []const u8) anyerror!?[]const u8,
@@ -600,6 +611,13 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
                 {
                     var it = self.js_object_map.valueIterator();
+                    while (it.next()) |p| {
+                        p.deinit();
+                    }
+                }
+
+                {
+                    var it = self.module_cache.valueIterator();
                     while (it.next()) |p| {
                         p.deinit();
                     }
@@ -646,6 +664,10 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             }
 
             // Executes the src
+            pub fn eval(self: *JsContext, src: []const u8, name: ?[]const u8) !void {
+                _ = try self.exec(src, name);
+            }
+
             pub fn exec(self: *JsContext, src: []const u8, name: ?[]const u8) !Value {
                 const isolate = self.isolate;
                 const v8_context = self.v8_context;
@@ -669,25 +691,31 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             // compile and eval a JS module
             // It doesn't wait for callbacks execution
-            pub fn module(self: *JsContext, src: []const u8, name: []const u8) !union(enum) { value: Value, exception: Exception } {
-                const v8_context = self.v8_context;
-                const m = try compileModule(self.isolate, src, name);
+            pub fn module(self: *JsContext, src: []const u8, url: []const u8) !void {
+                const arena = self.context_arena;
 
-                // instantiate
+                const gop = try self.module_cache.getOrPut(arena, url);
+                if (gop.found_existing) {
+                    return;
+                }
+                errdefer _ = self.module_cache.remove(url);
+
+                const m = try compileModule(self.isolate, src, url);
+
+                const owned_url = try arena.dupe(u8, url);
+                try self.module_identifier.putNoClobber(arena, m.getIdentityHash(), owned_url);
+                errdefer _ = self.module_identifier.remove(m.getIdentityHash());
+
+                gop.key_ptr.* = owned_url;
+                gop.value_ptr.* = PersistentModule.init(self.isolate, m);
+
                 // resolveModuleCallback loads module's dependencies.
-                const ok = m.instantiate(v8_context, resolveModuleCallback) catch {
-                    return error.ExecutionError;
-                };
-
-                if (!ok) {
+                const v8_context = self.v8_context;
+                if (try m.instantiate(v8_context, resolveModuleCallback) == false) {
                     return error.ModuleInstantiationError;
                 }
 
-                // evaluate
-                const value = m.evaluate(v8_context) catch {
-                    return .{ .exception = self.createException(m.getException()) };
-                };
-                return .{ .value = self.createValue(value) };
+                _ = try m.evaluate(v8_context);
             }
 
             // Wrap a v8.Exception
@@ -1234,52 +1262,74 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 c_context: ?*const v8.C_Context,
                 c_specifier: ?*const v8.C_String,
                 import_attributes: ?*const v8.C_FixedArray,
-                referrer: ?*const v8.C_Module,
+                c_referrer: ?*const v8.C_Module,
             ) callconv(.C) ?*const v8.C_Module {
                 _ = import_attributes;
-                _ = referrer;
 
-                std.debug.assert(c_context != null);
                 const v8_context = v8.Context{ .handle = c_context.? };
-
                 const self: *JsContext = @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
 
-                // build the specifier value.
-                const specifier = valueToString(
-                    self.call_arena,
-                    .{ .handle = c_specifier.? },
-                    self.isolate,
-                    v8_context,
-                ) catch |e| {
-                    log.err(.js, "resolve module specifier", .{ .err = e });
+                const specifier = jsStringToZig(self.call_arena, .{ .handle = c_specifier.? }, self.isolate) catch |err| {
+                    log.err(.js, "resolve module", .{ .err = err });
                     return null;
                 };
+                const referrer = v8.Module{ .handle = c_referrer.? };
 
-                // not currently needed
-                // const referrer_module = if (referrer) |ref| v8.Module{ .handle = ref } else null;
-                const module_loader = self.module_loader;
-                const source = module_loader.func(module_loader.ptr, specifier) catch |err| {
-                    log.err(.js, "resolve module fetch", .{
+                return self._resolveModuleCallback(referrer, specifier) catch |err| {
+                    log.err(.js, "resolve module", .{
                         .err = err,
                         .specifier = specifier,
                     });
                     return null;
-                } orelse return null;
+                };
+            }
+
+            fn _resolveModuleCallback(
+                self: *JsContext,
+                referrer: v8.Module,
+                specifier: []const u8,
+            ) !?*const v8.C_Module {
+                const referrer_path = self.module_identifier.get(referrer.getIdentityHash()) orelse {
+                    // Shouldn't be possible.
+                    return error.UnknownModuleReferrer;
+                };
+
+                const normalized_specifier = try @import("../url.zig").stitch(
+                    self.call_arena,
+                    specifier,
+                    referrer_path,
+                    .{ .alloc = .if_needed },
+                );
+
+                if (self.module_cache.get(normalized_specifier)) |pm| {
+                    return pm.handle;
+                }
+
+                const module_loader = self.module_loader;
+                const source = try module_loader.func(module_loader.ptr, normalized_specifier) orelse return null;
 
                 var try_catch: TryCatch = undefined;
                 try_catch.init(self);
                 defer try_catch.deinit();
 
                 const m = compileModule(self.isolate, source, specifier) catch |err| {
-                    log.err(.js, "resolve module compile", .{
+                    log.warn(.js, "compile resolved module", .{
                         .specifier = specifier,
-                        .stack = try_catch.stack(self.context_arena) catch null,
-                        .src = try_catch.sourceLine(self.context_arena) catch "err",
+                        .stack = try_catch.stack(self.call_arena) catch null,
+                        .src = try_catch.sourceLine(self.call_arena) catch "err",
                         .line = try_catch.sourceLineNumber() orelse 0,
-                        .exception = (try_catch.exception(self.context_arena) catch @errorName(err)) orelse @errorName(err),
+                        .exception = (try_catch.exception(self.call_arena) catch @errorName(err)) orelse @errorName(err),
                     });
                     return null;
                 };
+
+                // We were hoping to find the module in our cache, and thus used
+                // the short-lived call_arena to create the normalized_specifier.
+                // But now this'll live for the lifetime of the context.
+                const arena = self.context_arena;
+                const owned_specifier = try arena.dupe(u8, normalized_specifier);
+                try self.module_cache.put(arena, owned_specifier, PersistentModule.init(self.isolate, m));
+                try self.module_identifier.putNoClobber(arena, m.getIdentityHash(), owned_specifier);
                 return m.handle;
             }
         };
