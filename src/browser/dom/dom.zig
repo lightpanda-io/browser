@@ -48,4 +48,5 @@ pub const Interfaces = .{
     NodeFilter,
     Performance,
     PerformanceObserver,
+    @import("range.zig").Interfaces,
 };

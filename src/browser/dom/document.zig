@@ -32,6 +32,7 @@ const css = @import("css.zig");
 const Element = @import("element.zig").Element;
 const ElementUnion = @import("element.zig").Union;
 const TreeWalker = @import("tree_walker.zig").TreeWalker;
+const Range = @import("range.zig").Range;
 
 const Env = @import("../env.zig").Env;
 
@@ -289,6 +290,10 @@ pub const Document = struct {
     pub fn setFocus(self: *parser.Document, e: *parser.ElementHTML, page: *Page) !void {
         const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(self)));
         state.active_element = @ptrCast(e);
+    }
+
+    pub fn _createRange(_: *parser.Document) Range {
+        return Range.constructor();
     }
 };
 
