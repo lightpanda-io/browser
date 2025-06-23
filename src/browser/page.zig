@@ -144,12 +144,12 @@ pub const Page = struct {
         return self.fetchData("module", src);
     }
 
-    pub fn wait(self: *Page, wait_time: usize) !void {
+    pub fn wait(self: *Page, wait_ns: usize) !void {
         var try_catch: Env.TryCatch = undefined;
         try_catch.init(self.main_context);
         defer try_catch.deinit();
 
-        try self.session.browser.app.loop.run(wait_time);
+        try self.session.browser.app.loop.run(wait_ns);
 
         if (try_catch.hasCaught() == false) {
             log.debug(.browser, "page wait complete", .{});
