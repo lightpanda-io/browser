@@ -35,6 +35,7 @@ const Performance = @import("../dom/performance.zig").Performance;
 const CSSStyleDeclaration = @import("../cssom/css_style_declaration.zig").CSSStyleDeclaration;
 const CustomElementRegistry = @import("../webcomponents/custom_element_registry.zig").CustomElementRegistry;
 const Screen = @import("screen.zig").Screen;
+const Css = @import("../css/css.zig").Css;
 
 const storage = @import("../storage/storage.zig");
 
@@ -62,6 +63,7 @@ pub const Window = struct {
     performance: Performance,
     custom_elements: CustomElementRegistry = .{},
     screen: Screen = .{},
+    css: Css = .{},
 
     pub fn create(target: ?[]const u8, navigator: ?Navigator) !Window {
         var fbs = std.io.fixedBufferStream("");
@@ -173,6 +175,10 @@ pub const Window = struct {
 
     pub fn get_screen(self: *Window) *Screen {
         return &self.screen;
+    }
+
+    pub fn get_CSS(self: *Window) *Css {
+        return &self.css;
     }
 
     pub fn _requestAnimationFrame(self: *Window, cbk: Function, page: *Page) !u32 {
