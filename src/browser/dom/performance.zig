@@ -20,6 +20,19 @@ const std = @import("std");
 
 const parser = @import("../netsurf.zig");
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
+const Env = @import("../env.zig").Env;
+const Page = @import("../page.zig").Page;
+
+pub const Interfaces = .{
+    Performance,
+    PerformanceEntry,
+    PerformanceMark,
+};
+
+const MarkOptions = struct {
+    detail: ?Env.JsObject = null,
+    start_time: ?f64 = null,
+};
 
 // https://developer.mozilla.org/en-US/docs/Web/API/Performance
 pub const Performance = struct {
@@ -51,6 +64,93 @@ pub const Performance = struct {
 
     pub fn _now(self: *Performance) f64 {
         return limitedResolutionMs(self.time_origin.read());
+    }
+
+    pub fn _mark(_: *Performance, name: []const u8, _options: ?MarkOptions, page: *Page) !PerformanceMark {
+        const mark: PerformanceMark = try .constructor(name, _options, page);
+        // TODO: Should store this in an entries list
+        return mark;
+    }
+};
+
+// https://developer.mozilla.org/en-US/docs/Web/API/PerformanceEntry
+pub const PerformanceEntry = struct {
+    const PerformanceEntryType = enum {
+        element,
+        event,
+        first_input,
+        largest_contentful_paint,
+        layout_shift,
+        long_animation_frame,
+        longtask,
+        mark,
+        measure,
+        navigation,
+        paint,
+        resource,
+        taskattribution,
+        visibility_state,
+
+        pub fn toString(self: PerformanceEntryType) []const u8 {
+            return switch (self) {
+                .first_input => "first-input",
+                .largest_contentful_paint => "largest-contentful-paint",
+                .layout_shift => "layout-shift",
+                .long_animation_frame => "long-animation-frame",
+                .visibility_state => "visibility-state",
+                else => @tagName(self),
+            };
+        }
+    };
+
+    duration: f64 = 0.0,
+    entry_type: PerformanceEntryType,
+    name: []const u8,
+    start_time: f64 = 0.0,
+
+    pub fn get_duration(self: *const PerformanceEntry) f64 {
+        return self.duration;
+    }
+
+    pub fn get_entryType(self: *const PerformanceEntry) PerformanceEntryType {
+        return self.entry_type;
+    }
+
+    pub fn get_name(self: *const PerformanceEntry) []const u8 {
+        return self.name;
+    }
+
+    pub fn get_startTime(self: *const PerformanceEntry) f64 {
+        return self.start_time;
+    }
+};
+
+// https://developer.mozilla.org/en-US/docs/Web/API/PerformanceMark
+pub const PerformanceMark = struct {
+    pub const prototype = *PerformanceEntry;
+
+    proto: PerformanceEntry,
+    detail: ?Env.JsObject,
+
+    pub fn constructor(name: []const u8, _options: ?MarkOptions, page: *Page) !PerformanceMark {
+        const perf = &page.window.performance;
+
+        const options = _options orelse MarkOptions{};
+        const start_time = options.start_time orelse perf._now();
+        const detail = if (options.detail) |d| try d.persist() else null;
+
+        if (start_time < 0.0) {
+            return error.TypeError;
+        }
+
+        const duped_name = try page.arena.dupe(u8, name);
+        const proto = PerformanceEntry{ .name = duped_name, .entry_type = .mark, .start_time = start_time };
+
+        return .{ .proto = proto, .detail = detail };
+    }
+
+    pub fn get_detail(self: *const PerformanceMark) ?Env.JsObject {
+        return self.detail;
     }
 };
 
@@ -84,4 +184,20 @@ test "Performance: now" {
     }
     // Check resolution
     try testing.expectDelta(@rem(after * std.time.us_per_ms, 100.0), 0.0, 0.1);
+}
+
+test "Browser.Performance.Mark" {
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
+    defer runner.deinit();
+
+    try runner.testCases(&.{
+        .{ "let performance = window.performance", "undefined" },
+        .{ "performance instanceof Performance", "true" },
+        .{ "let mark = performance.mark(\"start\")", "undefined" },
+        .{ "mark instanceof PerformanceMark", "true" },
+        .{ "mark.name", "start" },
+        .{ "mark.entryType", "mark" },
+        .{ "mark.duration", "0" },
+        .{ "mark.detail", "null" },
+    }, .{});
 }

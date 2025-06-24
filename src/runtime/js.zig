@@ -2215,7 +2215,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             const T = @TypeOf(value);
             switch (@typeInfo(T)) {
-                .void, .bool, .int, .comptime_int, .float, .comptime_float => {
+                .void, .bool, .int, .comptime_int, .float, .comptime_float, .@"enum" => {
                     // Need to do this to keep the compiler happy
                     // simpleZigValueToJs handles all of these cases.
                     unreachable;
@@ -3098,6 +3098,12 @@ fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bool) 
             }
         },
         .@"union" => return simpleZigValueToJs(isolate, std.meta.activeTag(value), fail),
+        .@"enum" => {
+            const T = @TypeOf(value);
+            if (@hasDecl(T, "toString")) {
+                return simpleZigValueToJs(isolate, value.toString(), fail);
+            }
+        },
         else => {},
     }
     if (fail) {
