@@ -21,12 +21,13 @@ const uuidv4 = @import("../../id.zig").uuidv4;
 
 // https://w3c.github.io/webcrypto/#crypto-interface
 pub const Crypto = struct {
-    pub fn _getRandomValues(_: *const Crypto, into: RandomValues) !void {
+    pub fn _getRandomValues(_: *const Crypto, into: RandomValues) !RandomValues {
         const buf = into.asBuffer();
         if (buf.len > 65_536) {
             return error.QuotaExceededError;
         }
         std.crypto.random.bytes(buf);
+        return into;
     }
 
     pub fn _randomUUID(_: *const Crypto) [36]u8 {
@@ -69,14 +70,16 @@ test "Browser.Crypto" {
         .{ "const a = crypto.randomUUID();", "undefined" },
         .{ "const b = crypto.randomUUID();", "undefined" },
         .{ "a.length;", "36" },
-        .{ "a.length;", "36" },
+        .{ "b.length;", "36" },
         .{ "a == b;", "false" },
     }, .{});
 
     try runner.testCases(&.{
         .{ "try { crypto.getRandomValues(new BigUint64Array(8193)) } catch(e) { e.message == 'QuotaExceededError' }", "true" },
         .{ "let r1 = new Int32Array(5)", "undefined" },
-        .{ "crypto.getRandomValues(r1)", "undefined" },
+        .{ "let r2 = crypto.getRandomValues(r1)", "undefined" },
         .{ "new Set(r1).size", "5" },
+        .{ "new Set(r2).size", "5" },
+        .{ "r1.every((v, i) => v === r2[i])", "true" },
     }, .{});
 }
