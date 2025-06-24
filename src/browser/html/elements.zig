@@ -27,6 +27,7 @@ const urlStitch = @import("../../url.zig").URL.stitch;
 const URL = @import("../url/url.zig").URL;
 const Node = @import("../dom/node.zig").Node;
 const Element = @import("../dom/element.zig").Element;
+const DataSet = @import("DataSet.zig");
 
 const CSSStyleDeclaration = @import("../cssom/css_style_declaration.zig").CSSStyleDeclaration;
 
@@ -120,6 +121,36 @@ pub const HTMLElement = struct {
     pub fn get_style(e: *parser.ElementHTML, page: *Page) !*CSSStyleDeclaration {
         const state = try page.getOrCreateNodeState(@ptrCast(e));
         return &state.style;
+    }
+
+    pub fn get_dataset(e: *parser.ElementHTML, page: *Page) !*DataSet {
+        const state = try page.getOrCreateNodeState(@ptrCast(e));
+        if (state.dataset) |*ds| {
+            return ds;
+        }
+
+        // The first time this is called, load the data attributes from the DOM
+        var ds: DataSet = .empty;
+
+        if (try parser.nodeGetAttributes(@ptrCast(e))) |map| {
+            const arena = page.arena;
+            const count = try parser.namedNodeMapGetLength(map);
+            for (0..count) |i| {
+                const attr = try parser.namedNodeMapItem(map, @intCast(i)) orelse continue;
+                const name = try parser.attributeGetName(attr);
+                if (!std.mem.startsWith(u8, name, "data-")) {
+                    continue;
+                }
+                const normalized_name = try DataSet.normalizeName(arena, name);
+                const value = try parser.attributeGetValue(attr) orelse "";
+                // I don't think we need to dupe value, It'll live in libdom for
+                // as long as the page due to the fact that we're using an arena.
+                try ds.attributes.put(arena, normalized_name, value);
+            }
+        }
+
+        state.dataset = ds;
+        return &state.dataset.?;
     }
 
     pub fn get_innerText(e: *parser.ElementHTML) ![]const u8 {
@@ -1559,6 +1590,13 @@ test "Browser.HTML.Element" {
         .{ "document.createElement('a').focus()", null },
         .{ "document.activeElement === focused", "true" },
     }, .{});
+}
+
+test "Browser.HTML.Element.DataSet" {
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html = "<div id=x data-power='over 9000' data-empty data-some-long-key=ok></div>" });
+    defer runner.deinit();
+
+    try runner.testCases(&.{ .{ "let div = document.getElementById('x')", null }, .{ "div.dataset.nope", "undefined" }, .{ "div.dataset.power", "over 9000" }, .{ "div.dataset.empty", "" }, .{ "div.dataset.someLongKey", "ok" }, .{ "delete div.dataset.power", "true" }, .{ "div.dataset.power", "undefined" } }, .{});
 }
 
 test "Browser.HTML.HtmlInputElement.properties" {

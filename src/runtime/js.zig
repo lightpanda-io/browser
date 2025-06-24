@@ -1931,7 +1931,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             }
 
             generateIndexer(Struct, template_proto);
-            generateNamedIndexer(Struct, template_proto);
+            generateNamedIndexer(Struct, template.getInstanceTemplate());
             generateUndetectable(Struct, template.getInstanceTemplate());
         }
 
@@ -2116,7 +2116,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 }
                 return;
             }
-            const configuration = v8.NamedPropertyHandlerConfiguration{
+
+            var configuration = v8.NamedPropertyHandlerConfiguration{
                 .getter = struct {
                     fn callback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
                         const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
@@ -2138,13 +2139,37 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 .flags = v8.PropertyHandlerFlags.OnlyInterceptStrings | v8.PropertyHandlerFlags.NonMasking,
             };
 
-            // If you're trying to implement setter, read:
-            // https://groups.google.com/g/v8-users/c/8tahYBsHpgY/m/IteS7Wn2AAAJ
-            // The issue I had was
-            // (a) where to attache it: does it go ont he instance_template
-            //     instead of the prototype?
-            // (b) defining the getter or query to respond with the
-            //     PropertyAttribute to indicate if the property can be set
+            if (@hasDecl(Struct, "named_set")) {
+                configuration.setter = struct {
+                    fn callback(c_name: ?*const v8.C_Name, c_value: ?*const v8.C_Value, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
+                        const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
+                        var caller = Caller(Self, State).init(info);
+                        defer caller.deinit();
+
+                        const named_function = comptime NamedFunction.init(Struct, "named_set");
+                        return caller.setNamedIndex(Struct, named_function, .{ .handle = c_name.? }, .{ .handle = c_value.? }, info) catch |err| blk: {
+                            caller.handleError(Struct, named_function, err, info);
+                            break :blk v8.Intercepted.No;
+                        };
+                    }
+                }.callback;
+            }
+
+            if (@hasDecl(Struct, "named_delete")) {
+                configuration.deleter = struct {
+                    fn callback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
+                        const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
+                        var caller = Caller(Self, State).init(info);
+                        defer caller.deinit();
+
+                        const named_function = comptime NamedFunction.init(Struct, "named_delete");
+                        return caller.deleteNamedIndex(Struct, named_function, .{ .handle = c_name.? }, info) catch |err| blk: {
+                            caller.handleError(Struct, named_function, err, info);
+                            break :blk v8.Intercepted.No;
+                        };
+                    }
+                }.callback;
+            }
             template_proto.setNamedProperty(configuration, null);
         }
 
@@ -2646,37 +2671,63 @@ fn Caller(comptime E: type, comptime State: type) type {
         }
 
         fn getNamedIndex(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, name: v8.Name, info: v8.PropertyCallbackInfo) !u8 {
-            const js_context = self.js_context;
             const func = @field(Struct, named_function.name);
-            const NamedGet = @TypeOf(func);
-            if (@typeInfo(NamedGet).@"fn".return_type == null) {
-                @compileError(named_function.full_name ++ " must have a return type");
-            }
+            comptime assertSelfReceiver(Struct, named_function);
 
             var has_value = true;
-            var args: ParamterTypes(NamedGet) = undefined;
-            const arg_fields = @typeInfo(@TypeOf(args)).@"struct".fields;
-            switch (arg_fields.len) {
-                0, 1, 2 => @compileError(named_function.full_name ++ " must take at least a u32 and *bool parameter"),
-                3, 4 => {
-                    const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
-                    comptime assertSelfReceiver(Struct, named_function);
-                    @field(args, "0") = zig_instance;
-                    @field(args, "1") = try self.nameToString(name);
-                    @field(args, "2") = &has_value;
-                    if (comptime arg_fields.len == 4) {
-                        comptime assertIsStateArg(Struct, named_function, 3);
-                        @field(args, "3") = js_context.state;
-                    }
-                },
-                else => @compileError(named_function.full_name ++ " has too many parmaters"),
-            }
+            var args = try self.getArgs(Struct, named_function, 3, info);
+            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
+            @field(args, "0") = zig_instance;
+            @field(args, "1") = try self.nameToString(name);
+            @field(args, "2") = &has_value;
 
             const res = @call(.auto, func, args);
             if (has_value == false) {
                 return v8.Intercepted.No;
             }
-            info.getReturnValue().set(try js_context.zigValueToJs(res));
+            info.getReturnValue().set(try self.js_context.zigValueToJs(res));
+            return v8.Intercepted.Yes;
+        }
+
+        fn setNamedIndex(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, name: v8.Name, js_value: v8.Value, info: v8.PropertyCallbackInfo) !u8 {
+            const js_context = self.js_context;
+            const func = @field(Struct, named_function.name);
+            comptime assertSelfReceiver(Struct, named_function);
+
+            var has_value = true;
+            var args = try self.getArgs(Struct, named_function, 4, info);
+            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
+            @field(args, "0") = zig_instance;
+            @field(args, "1") = try self.nameToString(name);
+            @field(args, "2") = try js_context.jsValueToZig(named_function, @TypeOf(@field(args, "2")), js_value);
+            @field(args, "3") = &has_value;
+
+            const res = @call(.auto, func, args);
+            return namedSetOrDeleteCall(res, has_value);
+        }
+
+        fn deleteNamedIndex(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, name: v8.Name, info: v8.PropertyCallbackInfo) !u8 {
+            const func = @field(Struct, named_function.name);
+            comptime assertSelfReceiver(Struct, named_function);
+
+            var has_value = true;
+            var args = try self.getArgs(Struct, named_function, 3, info);
+            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
+            @field(args, "0") = zig_instance;
+            @field(args, "1") = try self.nameToString(name);
+            @field(args, "2") = &has_value;
+
+            const res = @call(.auto, func, args);
+            return namedSetOrDeleteCall(res, has_value);
+        }
+
+        fn namedSetOrDeleteCall(res: anytype, has_value: bool) !u8 {
+            if (@typeInfo(@TypeOf(res)) == .error_union) {
+                _ = try res;
+            }
+            if (has_value == false) {
+                return v8.Intercepted.No;
+            }
             return v8.Intercepted.Yes;
         }
 

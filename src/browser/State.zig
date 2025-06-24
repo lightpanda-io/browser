@@ -28,6 +28,7 @@
 
 const Env = @import("env.zig").Env;
 const parser = @import("netsurf.zig");
+const DataSet = @import("html/DataSet.zig");
 const CSSStyleDeclaration = @import("cssom/css_style_declaration.zig").CSSStyleDeclaration;
 
 // for HTMLScript (but probably needs to be added to more)
@@ -36,6 +37,7 @@ onerror: ?Env.Function = null,
 
 // for HTMLElement
 style: CSSStyleDeclaration = .empty,
+dataset: ?DataSet = null,
 
 // for html/document
 ready_state: ReadyState = .loading,
