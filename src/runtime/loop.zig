@@ -23,6 +23,8 @@ const MemoryPool = std.heap.MemoryPool;
 const log = @import("../log.zig");
 pub const IO = @import("tigerbeetle-io").IO;
 
+const RUN_DURATION = 10 * std.time.ns_per_ms;
+
 // SingleThreaded I/O Loop based on Tigerbeetle io_uring loop.
 // On Linux it's using io_uring.
 // On MacOS and Windows it's using kqueue/IOCP with a ring design.
@@ -82,7 +84,7 @@ pub const Loop = struct {
         // run tail events. We do run the tail events to ensure all the
         // contexts are correcly free.
         while (self.pending_network_count != 0 or self.pending_timeout_count != 0) {
-            self.io.run_for_ns(std.time.ns_per_ms * 10) catch |err| {
+            self.io.run_for_ns(RUN_DURATION) catch |err| {
                 log.err(.loop, "deinit", .{ .err = err });
                 break;
             };
@@ -102,12 +104,16 @@ pub const Loop = struct {
     // Stops when there is no more I/O events registered on the loop.
     // Note that I/O events callbacks might register more I/O events
     // on the go when they are executed (ie. nested I/O events).
-    pub fn run(self: *Self) !void {
+    pub fn run(self: *Self, wait_ns: usize) !void {
         // stop repeating / interval timeouts from re-registering
         self.stopping = true;
         defer self.stopping = false;
 
-        while (self.pending_network_count != 0 or self.pending_timeout_count != 0) {
+        const max_iterations = wait_ns / (RUN_DURATION);
+        for (0..max_iterations) |_| {
+            if (self.pending_network_count == 0 and self.pending_timeout_count == 0) {
+                break;
+            }
             self.io.run_for_ns(std.time.ns_per_ms * 10) catch |err| {
                 log.err(.loop, "deinit", .{ .err = err });
                 break;
@@ -187,6 +193,11 @@ pub const Loop = struct {
     }
 
     pub fn timeout(self: *Self, nanoseconds: u63, callback_node: ?*CallbackNode) !usize {
+        if (self.stopping and nanoseconds > std.time.ns_per_ms * 500) {
+            // we're trying to shutdown, we probably don't want to wait for a new
+            // long timeout
+            return 0;
+        }
         const completion = try self.alloc.create(Completion);
         errdefer self.alloc.destroy(completion);
         completion.* = undefined;
