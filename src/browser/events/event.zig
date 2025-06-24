@@ -31,14 +31,10 @@ const EventTargetUnion = @import("../dom/event_target.zig").Union;
 const CustomEvent = @import("custom_event.zig").CustomEvent;
 const ProgressEvent = @import("../xhr/progress_event.zig").ProgressEvent;
 const MouseEvent = @import("mouse_event.zig").MouseEvent;
+const ErrorEvent = @import("../html/error_event.zig").ErrorEvent;
 
 // Event interfaces
-pub const Interfaces = .{
-    Event,
-    CustomEvent,
-    ProgressEvent,
-    MouseEvent,
-};
+pub const Interfaces = .{ Event, CustomEvent, ProgressEvent, MouseEvent, ErrorEvent };
 
 pub const Union = generate.Union(Interfaces);
 
@@ -62,6 +58,7 @@ pub const Event = struct {
             .custom_event => .{ .CustomEvent = @as(*CustomEvent, @ptrCast(evt)).* },
             .progress_event => .{ .ProgressEvent = @as(*ProgressEvent, @ptrCast(evt)).* },
             .mouse_event => .{ .MouseEvent = @as(*parser.MouseEvent, @ptrCast(evt)) },
+            .error_event => .{ .ErrorEvent = @as(*ErrorEvent, @ptrCast(evt)).* },
         };
     }
 

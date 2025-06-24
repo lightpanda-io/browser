@@ -37,4 +37,5 @@ pub const Interfaces = .{
     Location,
     MediaQueryList,
     @import("screen.zig").Interfaces,
+    @import("error_event.zig").ErrorEvent,
 };

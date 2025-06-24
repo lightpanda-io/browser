@@ -37,10 +37,10 @@ pub const ProgressEvent = struct {
     loaded: u64 = 0,
     total: u64 = 0,
 
-    pub fn constructor(eventType: []const u8, opts: ?EventInit) !ProgressEvent {
+    pub fn constructor(event_type: []const u8, opts: ?EventInit) !ProgressEvent {
         const event = try parser.eventCreate();
         defer parser.eventDestroy(event);
-        try parser.eventInit(event, eventType, .{});
+        try parser.eventInit(event, event_type, .{});
         try parser.eventSetInternalType(event, .progress_event);
 
         const o = opts orelse EventInit{};
