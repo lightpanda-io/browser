@@ -85,6 +85,7 @@ fn run(alloc: Allocator) !void {
         .run_mode = args.mode,
         .http_proxy = args.httpProxy(),
         .proxy_type = args.proxyType(),
+        .proxy_auth = args.proxyAuth(),
         .tls_verify_host = args.tlsVerifyHost(),
     });
     defer app.deinit();
@@ -164,6 +165,13 @@ const Command = struct {
         };
     }
 
+    fn proxyAuth(self: *const Command) ?http.ProxyAuth {
+        return switch (self.mode) {
+            inline .serve, .fetch => |opts| opts.common.proxy_auth,
+            else => unreachable,
+        };
+    }
+
     fn logLevel(self: *const Command) ?log.Level {
         return switch (self.mode) {
             inline .serve, .fetch => |opts| opts.common.log_level,
@@ -208,6 +216,7 @@ const Command = struct {
     const Common = struct {
         http_proxy: ?std.Uri = null,
         proxy_type: ?http.ProxyType = null,
+        proxy_auth: ?http.ProxyAuth = null,
         tls_verify_host: bool = true,
         log_level: ?log.Level = null,
         log_format: ?log.Format = null,
@@ -232,6 +241,14 @@ const Command = struct {
             \\               'simple' sends the full URL in the request target
             \\               and expects the proxy to MITM the request.
             \\               Defaults to connect when --http_proxy is set.
+            \\
+            \\--proxy_bearer_token
+            \\               The token to send for bearer authentication with the proxy
+            \\               Proxy-Authorization: Bearer <token>
+            \\
+            \\--proxy_basic_auth
+            \\               The user:password to send for basic authentication with the proxy
+            \\               Proxy-Authorization: Basic <base64(user:password)>
             \\
             \\--log_level     The log level: debug, info, warn, error or fatal.
             \\                Defaults to
@@ -489,6 +506,31 @@ fn parseCommonArg(
             log.fatal(.app, "invalid option choice", .{ .arg = "--proxy_type", .value = str });
             return error.InvalidArgument;
         };
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--proxy_bearer_token", opt)) {
+        if (common.proxy_auth != null) {
+            log.fatal(.app, "proxy auth already set", .{ .arg = "--proxy_bearer_token" });
+            return error.InvalidArgument;
+        }
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--proxy_bearer_token" });
+            return error.InvalidArgument;
+        };
+        common.proxy_auth = .{ .bearer = .{ .token = str } };
+        return true;
+    }
+    if (std.mem.eql(u8, "--proxy_basic_auth", opt)) {
+        if (common.proxy_auth != null) {
+            log.fatal(.app, "proxy auth already set", .{ .arg = "--proxy_basic_auth" });
+            return error.InvalidArgument;
+        }
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--proxy_basic_auth" });
+            return error.InvalidArgument;
+        };
+        common.proxy_auth = .{ .basic = .{ .user_pass = str } };
         return true;
     }
 
