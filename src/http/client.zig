@@ -732,6 +732,7 @@ pub const Request = struct {
         }
 
         try self.headers.append(arena, .{ .name = "User-Agent", .value = "Lightpanda/1.0" });
+        try self.headers.append(arena, .{ .name = "Accept", .value = "*/*" });
         self.requestStarting();
     }
 
@@ -2863,11 +2864,12 @@ test "HttpClient: sync with body" {
         }
         try testing.expectEqual("over 9000!", try res.next());
         try testing.expectEqual(201, res.header.status);
-        try testing.expectEqual(4, res.header.count());
+        try testing.expectEqual(5, res.header.count());
         try testing.expectEqual("Close", res.header.get("connection"));
         try testing.expectEqual("10", res.header.get("content-length"));
         try testing.expectEqual("127.0.0.1", res.header.get("_host"));
         try testing.expectEqual("Lightpanda/1.0", res.header.get("_user-agent"));
+        try testing.expectEqual("*/*", res.header.get("_accept"));
     }
 }
 
@@ -2939,11 +2941,12 @@ test "HttpClient: sync redirect from TLS to Plaintext" {
         }
         try testing.expectEqual(201, res.header.status);
         try testing.expectEqual("over 9000!", arr.items);
-        try testing.expectEqual(4, res.header.count());
+        try testing.expectEqual(5, res.header.count());
         try testing.expectEqual("Close", res.header.get("connection"));
         try testing.expectEqual("10", res.header.get("content-length"));
         try testing.expectEqual("127.0.0.1", res.header.get("_host"));
         try testing.expectEqual("Lightpanda/1.0", res.header.get("_user-agent"));
+        try testing.expectEqual("*/*", res.header.get("_accept"));
     }
 }
 
@@ -2985,11 +2988,12 @@ test "HttpClient: sync GET redirect" {
 
     try testing.expectEqual("over 9000!", try res.next());
     try testing.expectEqual(201, res.header.status);
-    try testing.expectEqual(4, res.header.count());
+    try testing.expectEqual(5, res.header.count());
     try testing.expectEqual("Close", res.header.get("connection"));
     try testing.expectEqual("10", res.header.get("content-length"));
     try testing.expectEqual("127.0.0.1", res.header.get("_host"));
     try testing.expectEqual("Lightpanda/1.0", res.header.get("_user-agent"));
+    try testing.expectEqual("*/*", res.header.get("_accept"));
 }
 
 test "HttpClient: async connect error" {
@@ -3088,6 +3092,7 @@ test "HttpClient: async with body" {
         "content-length", "10",
         "_host",          "127.0.0.1",
         "_user-agent",    "Lightpanda/1.0",
+        "_accept",        "*/*",
         "connection",     "Close",
     });
 }
@@ -3141,6 +3146,7 @@ test "HttpClient: async redirect" {
         "content-length", "10",
         "_host",          "127.0.0.1",
         "_user-agent",    "Lightpanda/1.0",
+        "_accept",        "*/*",
         "connection",     "Close",
     });
 }
@@ -3213,6 +3219,7 @@ test "HttpClient: async redirect from TLS to Plaintext" {
             "content-length", "10",
             "_host",          "127.0.0.1",
             "_user-agent",    "Lightpanda/1.0",
+            "_accept",        "*/*",
             "connection",     "Close",
         });
     }
