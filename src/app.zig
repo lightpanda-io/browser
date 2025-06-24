@@ -3,7 +3,8 @@ const Allocator = std.mem.Allocator;
 
 const log = @import("log.zig");
 const Loop = @import("runtime/loop.zig").Loop;
-const HttpClient = @import("http/client.zig").Client;
+const http = @import("http/client.zig");
+
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
 const Notification = @import("notification.zig").Notification;
 
@@ -14,7 +15,7 @@ pub const App = struct {
     config: Config,
     allocator: Allocator,
     telemetry: Telemetry,
-    http_client: HttpClient,
+    http_client: http.Client,
     app_dir_path: ?[]const u8,
     notification: *Notification,
 
@@ -29,6 +30,7 @@ pub const App = struct {
         run_mode: RunMode,
         tls_verify_host: bool = true,
         http_proxy: ?std.Uri = null,
+        proxy_type: ?http.ProxyType = null,
     };
 
     pub fn init(allocator: Allocator, config: Config) !*App {
@@ -52,9 +54,10 @@ pub const App = struct {
             .telemetry = undefined,
             .app_dir_path = app_dir_path,
             .notification = notification,
-            .http_client = try HttpClient.init(allocator, .{
+            .http_client = try http.Client.init(allocator, .{
                 .max_concurrent = 3,
                 .http_proxy = config.http_proxy,
+                .proxy_type = config.proxy_type,
                 .tls_verify_host = config.tls_verify_host,
             }),
             .config = config,
