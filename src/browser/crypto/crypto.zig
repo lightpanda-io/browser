@@ -17,17 +17,21 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const Env = @import("../env.zig").Env;
 const uuidv4 = @import("../../id.zig").uuidv4;
 
 // https://w3c.github.io/webcrypto/#crypto-interface
 pub const Crypto = struct {
-    pub fn _getRandomValues(_: *const Crypto, into: RandomValues) !RandomValues {
+    _not_empty: bool = true,
+
+    pub fn _getRandomValues(_: *const Crypto, js_obj: Env.JsObject) !Env.JsObject {
+        var into = try js_obj.toZig(Crypto, "getRandomValues", RandomValues);
         const buf = into.asBuffer();
         if (buf.len > 65_536) {
             return error.QuotaExceededError;
         }
         std.crypto.random.bytes(buf);
-        return into;
+        return js_obj;
     }
 
     pub fn _randomUUID(_: *const Crypto) [36]u8 {
@@ -48,16 +52,16 @@ const RandomValues = union(enum) {
     uint64: []u64,
 
     fn asBuffer(self: RandomValues) []u8 {
-        switch (self) {
-            .int8 => |b| return (@as([]u8, @ptrCast(b)))[0..b.len],
-            .uint8 => |b| return (@as([]u8, @ptrCast(b)))[0..b.len],
-            .int16 => |b| return (@as([]u8, @ptrCast(b)))[0 .. b.len * 2],
-            .uint16 => |b| return (@as([]u8, @ptrCast(b)))[0 .. b.len * 2],
-            .int32 => |b| return (@as([]u8, @ptrCast(b)))[0 .. b.len * 4],
-            .uint32 => |b| return (@as([]u8, @ptrCast(b)))[0 .. b.len * 4],
-            .int64 => |b| return (@as([]u8, @ptrCast(b)))[0 .. b.len * 8],
-            .uint64 => |b| return (@as([]u8, @ptrCast(b)))[0 .. b.len * 8],
-        }
+        return switch (self) {
+            .int8 => |b| (@as([]u8, @ptrCast(b)))[0..b.len],
+            .uint8 => |b| (@as([]u8, @ptrCast(b)))[0..b.len],
+            .int16 => |b| (@as([]u8, @ptrCast(b)))[0 .. b.len * 2],
+            .uint16 => |b| (@as([]u8, @ptrCast(b)))[0 .. b.len * 2],
+            .int32 => |b| (@as([]u8, @ptrCast(b)))[0 .. b.len * 4],
+            .uint32 => |b| (@as([]u8, @ptrCast(b)))[0 .. b.len * 4],
+            .int64 => |b| (@as([]u8, @ptrCast(b)))[0 .. b.len * 8],
+            .uint64 => |b| (@as([]u8, @ptrCast(b)))[0 .. b.len * 8],
+        };
     }
 };
 
@@ -81,5 +85,13 @@ test "Browser.Crypto" {
         .{ "new Set(r1).size", "5" },
         .{ "new Set(r2).size", "5" },
         .{ "r1.every((v, i) => v === r2[i])", "true" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "var r3 = new Uint8Array(16)", null },
+        .{ "let r4 = crypto.getRandomValues(r3)", "undefined" },
+        .{ "r4[6] = 10", null },
+        .{ "r4[6]", "10" },
+        .{ "r3[6]", "10" },
     }, .{});
 }
