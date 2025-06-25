@@ -16,64 +16,66 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 const std = @import("std");
+const parser = @import("../netsurf.zig");
 const Page = @import("../page.zig").Page;
+
 const Allocator = std.mem.Allocator;
 
 const DataSet = @This();
 
-attributes: std.StringHashMapUnmanaged([]const u8),
-
-pub const empty: DataSet = .{
-    .attributes = .empty,
-};
+element: *parser.Element,
 
 const GetResult = union(enum) {
     value: []const u8,
     undefined: void,
 };
-pub fn named_get(self: *const DataSet, name: []const u8, _: *bool) GetResult {
-    if (self.attributes.get(name)) |value| {
+pub fn named_get(self: *const DataSet, name: []const u8, _: *bool, page: *Page) !GetResult {
+    const normalized_name = try normalize(page.call_arena, name);
+    if (try parser.elementGetAttribute(self.element, normalized_name)) |value| {
         return .{ .value = value };
     }
     return .{ .undefined = {} };
 }
 
 pub fn named_set(self: *DataSet, name: []const u8, value: []const u8, _: *bool, page: *Page) !void {
-    const arena = page.arena;
-    const gop = try self.attributes.getOrPut(arena, name);
-    errdefer _ = self.attributes.remove(name);
-
-    if (!gop.found_existing) {
-        gop.key_ptr.* = try arena.dupe(u8, name);
-    }
-    gop.value_ptr.* = try arena.dupe(u8, value);
+    const normalized_name = try normalize(page.call_arena, name);
+    try parser.elementSetAttribute(self.element, normalized_name, value);
 }
 
-pub fn named_delete(self: *DataSet, name: []const u8, _: *bool) void {
-    _ = self.attributes.remove(name);
+pub fn named_delete(self: *DataSet, name: []const u8, _: *bool, page: *Page) !void {
+    const normalized_name = try normalize(page.call_arena, name);
+    try parser.elementRemoveAttribute(self.element, normalized_name);
 }
 
-pub fn normalizeName(allocator: Allocator, name: []const u8) ![]const u8 {
-    std.debug.assert(std.mem.startsWith(u8, name, "data-"));
-    var owned = try allocator.alloc(u8, name.len - 5);
-
-    var pos: usize = 0;
-    var capitalize = false;
-    for (name[5..]) |c| {
-        if (c == '-') {
-            capitalize = true;
-            continue;
+fn normalize(allocator: Allocator, name: []const u8) ![]const u8 {
+    var upper_count: usize = 0;
+    for (name) |c| {
+        if (std.ascii.isUpper(c)) {
+            upper_count += 1;
         }
+    }
+    // for every upper-case letter, we'll probably need a dash before it
+    // and we need the 'data-' prefix
+    var normalized = try allocator.alloc(u8, name.len + upper_count + 5);
 
-        if (capitalize) {
-            capitalize = false;
-            owned[pos] = std.ascii.toUpper(c);
+    @memcpy(normalized[0..5], "data-");
+    if (upper_count == 0) {
+        @memcpy(normalized[5..], name);
+        return normalized;
+    }
+
+    var pos: usize = 5;
+    for (name) |c| {
+        if (std.ascii.isUpper(c)) {
+            normalized[pos] = '-';
+            pos += 1;
+            normalized[pos] = c + 32;
         } else {
-            owned[pos] = c;
+            normalized[pos] = c;
         }
         pos += 1;
     }
-    return owned[0..pos];
+    return normalized;
 }
 
 const testing = @import("../../testing.zig");
@@ -88,5 +90,11 @@ test "Browser.HTML.DataSet" {
         .{ "delete el1.dataset.x", "true" },
         .{ "el1.dataset.x", "undefined" },
         .{ "delete el1.dataset.other", "true" }, // yes, this is right
+
+        .{ "let ds1 = el1.dataset", null },
+        .{ "ds1.helloWorld = 'yes'", null },
+        .{ "el1.getAttribute('data-hello-world')", "yes" },
+        .{ "el1.setAttribute('data-this-will-work', 'positive')", null },
+        .{ "ds1.thisWillWork", "positive" },
     }, .{});
 }

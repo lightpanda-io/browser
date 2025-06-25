@@ -128,28 +128,7 @@ pub const HTMLElement = struct {
         if (state.dataset) |*ds| {
             return ds;
         }
-
-        // The first time this is called, load the data attributes from the DOM
-        var ds: DataSet = .empty;
-
-        if (try parser.nodeGetAttributes(@ptrCast(e))) |map| {
-            const arena = page.arena;
-            const count = try parser.namedNodeMapGetLength(map);
-            for (0..count) |i| {
-                const attr = try parser.namedNodeMapItem(map, @intCast(i)) orelse continue;
-                const name = try parser.attributeGetName(attr);
-                if (!std.mem.startsWith(u8, name, "data-")) {
-                    continue;
-                }
-                const normalized_name = try DataSet.normalizeName(arena, name);
-                const value = try parser.attributeGetValue(attr) orelse "";
-                // I don't think we need to dupe value, It'll live in libdom for
-                // as long as the page due to the fact that we're using an arena.
-                try ds.attributes.put(arena, normalized_name, value);
-            }
-        }
-
-        state.dataset = ds;
+        state.dataset = DataSet{ .element = @ptrCast(e) };
         return &state.dataset.?;
     }
 
