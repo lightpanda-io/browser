@@ -226,10 +226,10 @@ const Command = struct {
             \\--http_proxy    The HTTP proxy to use for all HTTP requests.
             \\                Defaults to none.
             \\
-            \\--proxy_type   The type of proxy: connect, simple.
+            \\--proxy_type   The type of proxy: connect, forward.
             \\               'connect' creates a tunnel through the proxy via
             \\               and initial CONNECT request.
-            \\               'simple' sends the full URL in the request target
+            \\               'forward' sends the full URL in the request target
             \\               and expects the proxy to MITM the request.
             \\               Defaults to connect when --http_proxy is set.
             \\

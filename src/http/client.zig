@@ -42,7 +42,7 @@ const BUFFER_LEN = 32 * 1024;
 const MAX_HEADER_LINE_LEN = 4096;
 
 pub const ProxyType = enum {
-    simple,
+    forward,
     connect,
 };
 
@@ -202,7 +202,7 @@ pub const Client = struct {
 
     fn isSimpleProxy(self: *const Client) bool {
         const proxy_type = self.proxy_type orelse return false;
-        return proxy_type == .simple;
+        return proxy_type == .forward;
     }
 };
 
