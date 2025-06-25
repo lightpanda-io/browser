@@ -648,6 +648,7 @@ fn serveHTTP(address: std.net.Address) !void {
         var conn = try listener.accept();
         defer conn.stream.close();
         var http_server = std.http.Server.init(conn, &read_buffer);
+        var connect_headers: std.ArrayListUnmanaged(std.http.Header) = .{};
         REQUEST: while (true) {
             var request = http_server.receiveHead() catch |err| switch (err) {
                 error.HttpConnectionClosing => continue :ACCEPT,
@@ -659,6 +660,16 @@ fn serveHTTP(address: std.net.Address) !void {
 
             if (request.head.method == .CONNECT) {
                 try request.respond("", .{ .status = .ok });
+
+                // Proxy headers and destination headers are separated in the case of a CONNECT proxy
+                // We store the CONNECT headers, then continue with the request for the destination
+                var it = request.iterateHeaders();
+                while (it.next()) |hdr| {
+                    try connect_headers.append(aa, .{
+                        .name = try std.fmt.allocPrint(aa, "__{s}", .{hdr.name}),
+                        .value = try aa.dupe(u8, hdr.value),
+                    });
+                }
                 continue :REQUEST;
             }
 
@@ -698,6 +709,11 @@ fn serveHTTP(address: std.net.Address) !void {
                         .name = try std.fmt.allocPrint(aa, "_{s}", .{hdr.name}),
                         .value = hdr.value,
                     });
+                }
+
+                if (connect_headers.items.len > 0) {
+                    try headers.appendSlice(aa, connect_headers.items);
+                    connect_headers.clearRetainingCapacity();
                 }
                 try headers.append(aa, .{ .name = "Connection", .value = "Close" });
 

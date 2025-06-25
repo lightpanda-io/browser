@@ -66,7 +66,10 @@ pub fn expectEqual(expected: anytype, actual: anytype) !void {
             if (@typeInfo(@TypeOf(expected)) == .null) {
                 return std.testing.expectEqual(null, actual);
             }
-            return expectEqual(expected, actual.?);
+            if (actual) |_actual| {
+                return expectEqual(expected, _actual);
+            }
+            return std.testing.expectEqual(expected, null);
         },
         .@"union" => |union_info| {
             if (union_info.tag_type == null) {

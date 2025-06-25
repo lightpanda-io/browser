@@ -59,15 +59,15 @@ pub const ProxyAuth = union(enum) {
                 var encoder = std.base64.standard.Encoder;
                 const size = encoder.calcSize(auth.user_pass.len);
                 var buffer = try allocator.alloc(u8, size + prefix.len);
-                std.mem.copyForwards(u8, buffer, prefix);
+                @memcpy(buffer[0..prefix.len], prefix);
                 _ = std.base64.standard.Encoder.encode(buffer[prefix.len..], auth.user_pass);
                 return buffer;
             },
             .bearer => |*auth| {
                 const prefix = "Bearer ";
                 var buffer = try allocator.alloc(u8, auth.token.len + prefix.len);
-                std.mem.copyForwards(u8, buffer, prefix);
-                std.mem.copyForwards(u8, buffer[prefix.len..], auth.token);
+                @memcpy(buffer[0..prefix.len], prefix);
+                @memcpy(buffer[prefix.len..], auth.token);
                 return buffer;
             },
         }
@@ -3078,13 +3078,54 @@ test "HttpClient: sync with body proxy CONNECT" {
         }
         try testing.expectEqual("over 9000!", try res.next());
         try testing.expectEqual(201, res.header.status);
-        try testing.expectEqual(5, res.header.count());
+        try testing.expectEqual(6, res.header.count());
         try testing.expectEqual("Close", res.header.get("connection"));
         try testing.expectEqual("10", res.header.get("content-length"));
         try testing.expectEqual("127.0.0.1", res.header.get("_host"));
         try testing.expectEqual("Lightpanda/1.0", res.header.get("_user-agent"));
         try testing.expectEqual("*/*", res.header.get("_accept"));
+        // Proxy headers
+        try testing.expectEqual("127.0.0.1:9582", res.header.get("__host"));
     }
+}
+
+test "HttpClient: basic authentication CONNECT" {
+    const proxy_uri = try Uri.parse("http://127.0.0.1:9582/");
+    var client = try testClient(.{ .proxy_type = .connect, .http_proxy = proxy_uri, .proxy_auth = .{ .basic = .{ .user_pass = "user:pass" } } });
+    defer client.deinit();
+
+    const uri = try Uri.parse("http://127.0.0.1:9582/http_client/echo");
+    var req = try client.request(.GET, &uri);
+    defer req.deinit();
+
+    var res = try req.sendSync(.{});
+
+    try testing.expectEqual(201, res.header.status);
+    // Destination headers
+    try testing.expectEqual(null, res.header.get("_authorization"));
+    try testing.expectEqual(null, res.header.get("_proxy-authorization"));
+    // Proxy headers
+    try testing.expectEqual(null, res.header.get("__authorization"));
+    try testing.expectEqual("Basic dXNlcjpwYXNz", res.header.get("__proxy-authorization"));
+}
+test "HttpClient: bearer authentication CONNECT" {
+    const proxy_uri = try Uri.parse("http://127.0.0.1:9582/");
+    var client = try testClient(.{ .proxy_type = .connect, .http_proxy = proxy_uri, .proxy_auth = .{ .bearer = .{ .token = "fruitsalad" } } });
+    defer client.deinit();
+
+    const uri = try Uri.parse("http://127.0.0.1:9582/http_client/echo");
+    var req = try client.request(.GET, &uri);
+    defer req.deinit();
+
+    var res = try req.sendSync(.{});
+
+    try testing.expectEqual(201, res.header.status);
+    // Destination headers
+    try testing.expectEqual(null, res.header.get("_authorization"));
+    try testing.expectEqual(null, res.header.get("_proxy-authorization"));
+    // Proxy headers
+    try testing.expectEqual(null, res.header.get("__authorization"));
+    try testing.expectEqual("Bearer fruitsalad", res.header.get("__proxy-authorization"));
 }
 
 test "HttpClient: sync with gzip body" {
