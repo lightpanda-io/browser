@@ -195,6 +195,205 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             var isolate = v8.Isolate.init(params);
             errdefer isolate.deinit();
 
+            // This is the callback that runs whenever a module is dynamically imported.
+            isolate.setHostImportModuleDynamicallyCallback(struct {
+                pub fn callback(
+                    v8_ctx: ?*const v8.c.Context,
+                    host_defined_options: ?*const v8.c.Data,
+                    resource_name: ?*const v8.c.Value,
+                    v8_specifier: ?*const v8.c.String,
+                    import_attrs: ?*const v8.c.FixedArray,
+                ) callconv(.c) ?*v8.c.Promise {
+                    _ = host_defined_options;
+                    _ = import_attrs;
+                    const ctx: v8.Context = .{ .handle = v8_ctx.? };
+                    const context: *JsContext = @ptrFromInt(ctx.getEmbedderData(1).castTo(v8.BigInt).getUint64());
+                    const iso = context.isolate;
+                    const resolver = v8.PromiseResolver.init(ctx);
+
+                    const specifier: v8.String = .{ .handle = v8_specifier.? };
+                    const specifier_str = jsStringToZig(context.call_arena, specifier, iso) catch {
+                        const error_msg = v8.String.initUtf8(iso, "Failed to parse module specifier");
+                        _ = resolver.reject(ctx, error_msg.toValue());
+                        return @constCast(resolver.getPromise().handle);
+                    };
+                    const resource: v8.String = .{ .handle = resource_name.? };
+                    const resource_str = jsStringToZig(context.call_arena, resource, iso) catch {
+                        const error_msg = v8.String.initUtf8(iso, "Failed to parse module resource");
+                        _ = resolver.reject(ctx, error_msg.toValue());
+                        return @constCast(resolver.getPromise().handle);
+                    };
+
+                    const referrer_full_url = blk: {
+                        // Search through module_identifier values to find matching resource
+                        var it = context.module_identifier.valueIterator();
+                        while (it.next()) |full_url| {
+                            // Extract just the filename from the full URL
+                            const last_slash = std.mem.lastIndexOfScalar(u8, full_url.*, '/') orelse 0;
+                            const filename = full_url.*[last_slash + 1 ..];
+
+                            // Compare with our resource string (removing ./ prefix if present)
+                            const resource_clean = if (std.mem.startsWith(u8, resource_str, "./"))
+                                resource_str[2..]
+                            else
+                                resource_str;
+
+                            if (std.mem.eql(u8, filename, resource_clean)) {
+                                break :blk full_url.*;
+                            }
+                        }
+
+                        // Fallback - maybe it's already a full URL in some cases?
+                        break :blk resource_str;
+                    };
+
+                    const normalized_specifier = @import("../url.zig").stitch(
+                        context.context_arena,
+                        specifier_str,
+                        referrer_full_url,
+                        .{ .alloc = .if_needed },
+                    ) catch unreachable;
+
+                    // TODO: we need to resolve the full URL here and normalize it.
+                    // That way we can pass the correct one in the module_loader.
+
+                    log.info(.js, "dynamic import", .{
+                        .specifier = specifier_str,
+                        .resource = resource_str,
+                        .normalized = normalized_specifier,
+                    });
+
+                    const module_loader = context.module_loader;
+                    const source = module_loader.func(module_loader.ptr, normalized_specifier) catch {
+                        const error_msg = v8.String.initUtf8(iso, "Failed to load module");
+                        _ = resolver.reject(ctx, error_msg.toValue());
+                        return @constCast(resolver.getPromise().handle);
+                    } orelse {
+                        const error_msg = v8.String.initUtf8(iso, "Module source not available");
+                        _ = resolver.reject(ctx, error_msg.toValue());
+                        return @constCast(resolver.getPromise().handle);
+                    };
+
+                    var try_catch: TryCatch = undefined;
+                    try_catch.init(context);
+                    defer try_catch.deinit();
+
+                    const module = compileModule(iso, source, specifier_str) catch {
+                        log.err(.js, "module compilation failed", .{
+                            .specifier = specifier_str,
+                            .exception = try_catch.exception(context.call_arena) catch "unknown error",
+                            .stack = try_catch.stack(context.call_arena) catch null,
+                        });
+                        const error_msg = if (try_catch.hasCaught()) blk: {
+                            const exception_str = try_catch.exception(context.call_arena) catch "Compilation error";
+                            break :blk v8.String.initUtf8(iso, exception_str orelse "Compilation error");
+                        } else v8.String.initUtf8(iso, "Module compilation failed");
+
+                        _ = resolver.reject(ctx, error_msg.toValue());
+                        return @constCast(resolver.getPromise().handle);
+                    };
+
+                    context.module_identifier.putNoClobber(context.context_arena, module.getIdentityHash(), normalized_specifier) catch unreachable;
+                    context.module_cache.putNoClobber(context.context_arena, normalized_specifier, v8.Persistent(v8.Module).init(iso, module)) catch unreachable;
+
+                    const instantiated = module.instantiate(ctx, JsContext.resolveModuleCallback) catch {
+                        log.err(.js, "module instantiation failed", .{
+                            .specifier = specifier_str,
+                            .exception = try_catch.exception(context.call_arena) catch "unknown error",
+                            .stack = try_catch.stack(context.call_arena) catch null,
+                        });
+                        const error_msg = if (try_catch.hasCaught()) blk: {
+                            const exception_str = try_catch.exception(context.call_arena) catch "Instantiation error";
+                            break :blk v8.String.initUtf8(iso, exception_str orelse "Instantiation error");
+                        } else v8.String.initUtf8(iso, "Module instantiation failed");
+
+                        _ = resolver.reject(ctx, error_msg.toValue());
+                        return @constCast(resolver.getPromise().handle);
+                    };
+
+                    if (!instantiated) {
+                        const error_msg = v8.String.initUtf8(iso, "Module did not instantiate");
+                        _ = resolver.reject(ctx, error_msg.toValue());
+                        return @constCast(resolver.getPromise().handle);
+                    }
+
+                    const evaluated = module.evaluate(ctx) catch {
+                        log.err(.js, "module evaluation failed", .{
+                            .specifier = specifier_str,
+                            .exception = try_catch.exception(context.call_arena) catch "unknown error",
+                            .stack = try_catch.stack(context.call_arena) catch null,
+                            .line = try_catch.sourceLineNumber() orelse 0,
+                        });
+                        const error_msg = if (try_catch.hasCaught()) blk: {
+                            const exception_str = try_catch.exception(context.call_arena) catch "Evaluation error";
+                            break :blk v8.String.initUtf8(iso, exception_str orelse "Evaluation error");
+                        } else v8.String.initUtf8(iso, "Module evaluation failed");
+
+                        _ = resolver.reject(ctx, error_msg.toValue());
+                        return @constCast(resolver.getPromise().handle);
+                    };
+
+                    if (evaluated.isPromise()) {
+                        const promise = v8.Promise{ .handle = evaluated.handle };
+
+                        const EvaluationData = struct {
+                            module: v8.Persistent(v8.Module),
+                            resolver: v8.Persistent(v8.PromiseResolver),
+                        };
+
+                        const ev_data = context.context_arena.create(EvaluationData) catch unreachable;
+                        ev_data.* = .{
+                            .module = v8.Persistent(v8.Module).init(iso, module),
+                            .resolver = v8.Persistent(v8.PromiseResolver).init(iso, resolver),
+                        };
+                        const external = v8.External.init(iso, @ptrCast(ev_data));
+
+                        const then_callback = v8.Function.initWithData(ctx, struct {
+                            pub fn callback(info: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
+                                const cb_info = v8.FunctionCallbackInfo{ .handle = info.? };
+                                const cb_isolate = cb_info.getIsolate();
+                                const cb_context = cb_isolate.getCurrentContext();
+                                const data: *EvaluationData = @ptrCast(@alignCast(cb_info.getExternalValue()));
+                                const cb_module = data.module.castToModule();
+                                const cb_resolver = data.resolver.castToPromiseResolver();
+
+                                const namespace = cb_module.getModuleNamespace();
+                                log.warn(.js, "module then promise", .{
+                                    .namespace = namespace,
+                                });
+                                _ = cb_resolver.resolve(cb_context, namespace);
+                            }
+                        }.callback, external);
+
+                        const catch_callback = v8.Function.initWithData(ctx, struct {
+                            pub fn callback(info: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
+                                log.warn(.js, "module catch promise", .{});
+                                const cb_info = v8.FunctionCallbackInfo{ .handle = info.? };
+                                const cb_context = cb_info.getIsolate().getCurrentContext();
+                                const data: *EvaluationData = @ptrCast(@alignCast(cb_info.getExternalValue()));
+                                const cb_resolver = data.resolver.castToPromiseResolver();
+                                _ = cb_resolver.reject(cb_context, cb_info.getData());
+                            }
+                        }.callback, external);
+
+                        _ = promise.thenAndCatch(ctx, then_callback, catch_callback) catch {
+                            log.err(.js, "module evaluation is promise", .{
+                                .specifier = specifier_str,
+                                .line = try_catch.sourceLineNumber() orelse 0,
+                            });
+                            const error_msg = v8.String.initUtf8(iso, "Evaluation is a promise");
+                            _ = resolver.reject(ctx, error_msg.toValue());
+                            return @constCast(resolver.getPromise().handle);
+                        };
+                    } else {
+                        const namespace = module.getModuleNamespace();
+                        _ = resolver.resolve(ctx, namespace);
+                    }
+
+                    return @constCast(resolver.getPromise().handle);
+                }
+            }.callback);
+
             isolate.enter();
             errdefer isolate.exit();
 
