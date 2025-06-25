@@ -21,6 +21,8 @@ const uuidv4 = @import("../../id.zig").uuidv4;
 
 // https://w3c.github.io/webcrypto/#crypto-interface
 pub const Crypto = struct {
+    _not_empty: bool = true,
+
     pub fn _getRandomValues(_: *const Crypto, into: RandomValues) !RandomValues {
         const buf = into.asBuffer();
         if (buf.len > 65_536) {
