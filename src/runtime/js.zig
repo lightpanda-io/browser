@@ -210,16 +210,70 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     const resolver = v8.PromiseResolver.init(ctx);
 
                     const specifier: v8.String = .{ .handle = v8_specifier.? };
-                    const specifier_str = jsStringToZig(context.call_arena, specifier, iso) catch unreachable;
-                    log.info(.js, "dynamic import", .{
-                        .specifier = specifier_str,
-                    });
+                    const specifier_str = jsStringToZig(context.call_arena, specifier, iso) catch {
+                        const error_msg = v8.String.initUtf8(iso, "Failed to parse module specifier");
+                        _ = resolver.reject(ctx, error_msg.toValue());
+                        return @constCast(resolver.getPromise().handle);
+                    };
 
-                    // TODO:
-                    // On success, we need to resolve with the module namespace object.
-                    // On error (exception), we must reject this promise with the exception.
+                    log.info(.js, "dynamic import", .{ .specifier = specifier_str });
 
-                    _ = resolver.resolve(ctx, v8.initNull(iso).toValue());
+                    const module_loader = context.module_loader;
+                    const source = module_loader.func(module_loader.ptr, specifier_str) catch {
+                        const error_msg = v8.String.initUtf8(iso, "Failed to load module");
+                        _ = resolver.reject(ctx, error_msg.toValue());
+                        return @constCast(resolver.getPromise().handle);
+                    } orelse {
+                        const error_msg = v8.String.initUtf8(iso, "Module source not available");
+                        _ = resolver.reject(ctx, error_msg.toValue());
+                        return @constCast(resolver.getPromise().handle);
+                    };
+
+                    var try_catch: TryCatch = undefined;
+                    try_catch.init(context);
+                    defer try_catch.deinit();
+
+                    const module = compileModule(iso, source, specifier_str) catch {
+                        const error_msg = if (try_catch.hasCaught()) blk: {
+                            const exception_str = try_catch.exception(context.call_arena) catch "Compilation error";
+                            break :blk v8.String.initUtf8(iso, exception_str orelse "Compilation error");
+                        } else v8.String.initUtf8(iso, "Module compilation failed");
+
+                        _ = resolver.reject(ctx, error_msg.toValue());
+                        return @constCast(resolver.getPromise().handle);
+                    };
+
+                    // TODO: add module to our module cache.
+
+                    const instantiated = module.instantiate(ctx, JsContext.resolveModuleCallback) catch {
+                        const error_msg = if (try_catch.hasCaught()) blk: {
+                            const exception_str = try_catch.exception(context.call_arena) catch "Instantiation error";
+                            break :blk v8.String.initUtf8(iso, exception_str orelse "Instantiation error");
+                        } else v8.String.initUtf8(iso, "Module instantiation failed");
+
+                        _ = resolver.reject(ctx, error_msg.toValue());
+                        return @constCast(resolver.getPromise().handle);
+                    };
+
+                    if (!instantiated) {
+                        const error_msg = v8.String.initUtf8(iso, "Module did not instantiate");
+                        _ = resolver.reject(ctx, error_msg.toValue());
+                        return @constCast(resolver.getPromise().handle);
+                    }
+
+                    const evaluated = module.evaluate(ctx) catch {
+                        const error_msg = if (try_catch.hasCaught()) blk: {
+                            const exception_str = try_catch.exception(context.call_arena) catch "Evaluation error";
+                            break :blk v8.String.initUtf8(iso, exception_str orelse "Evaluation error");
+                        } else v8.String.initUtf8(iso, "Module evaluation failed");
+
+                        _ = resolver.reject(ctx, error_msg.toValue());
+                        return @constCast(resolver.getPromise().handle);
+                    };
+                    _ = evaluated;
+
+                    const namespace = module.getModuleNamespace();
+                    _ = resolver.resolve(ctx, namespace);
                     return @constCast(resolver.getPromise().handle);
                 }
             }.callback);
