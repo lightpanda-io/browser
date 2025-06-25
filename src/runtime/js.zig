@@ -192,6 +192,38 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             var isolate = v8.Isolate.init(params);
             errdefer isolate.deinit();
 
+            // This is the callback that runs whenever a module is dynamically imported.
+            isolate.setHostImportModuleDynamicallyCallback(struct {
+                pub fn callback(
+                    v8_ctx: ?*const v8.c.Context,
+                    host_defined_options: ?*const v8.c.Data,
+                    resource_name: ?*const v8.c.Value,
+                    v8_specifier: ?*const v8.c.String,
+                    import_attrs: ?*const v8.c.FixedArray,
+                ) callconv(.c) ?*v8.c.Promise {
+                    _ = host_defined_options;
+                    _ = resource_name;
+                    _ = import_attrs;
+                    const ctx: v8.Context = .{ .handle = v8_ctx.? };
+                    const context: *JsContext = @ptrFromInt(ctx.getEmbedderData(1).castTo(v8.BigInt).getUint64());
+                    const iso = context.isolate;
+                    const resolver = v8.PromiseResolver.init(ctx);
+
+                    const specifier: v8.String = .{ .handle = v8_specifier.? };
+                    const specifier_str = jsStringToZig(context.call_arena, specifier, iso) catch unreachable;
+                    log.info(.js, "dynamic import", .{
+                        .specifier = specifier_str,
+                    });
+
+                    // TODO:
+                    // On success, we need to resolve with the module namespace object.
+                    // On error (exception), we must reject this promise with the exception.
+
+                    _ = resolver.resolve(ctx, v8.initNull(iso).toValue());
+                    return @constCast(resolver.getPromise().handle);
+                }
+            }.callback);
+
             isolate.enter();
             errdefer isolate.exit();
 
