@@ -82,9 +82,13 @@ pub fn writeNode(node: *parser.Node, writer: anytype) anyerror!void {
             // void elements can't have any content.
             if (try isVoid(parser.nodeToElement(node))) return;
 
-            // write the children
-            // TODO avoid recursion
-            try writeChildren(node, writer);
+            if (try parser.elementHTMLGetTagType(@ptrCast(node)) == .script) {
+                try writer.writeAll(try parser.nodeTextContent(node) orelse "");
+            } else {
+                // write the children
+                // TODO avoid recursion
+                try writeChildren(node, writer);
+            }
 
             // close the tag
             try writer.writeAll("</");
@@ -211,6 +215,11 @@ test "dump.writeHTML" {
         \\</head><body>9000</body></html>
         \\
     , "<html><title>It's over what?</title><meta name=a value=\"b\">\n<body>9000");
+
+    try testWriteHTML(
+        "<p>hi</p><script>alert(power > 9000)</script>",
+        "<p>hi</p><script>alert(power > 9000)</script>",
+    );
 }
 
 fn testWriteHTML(comptime expected_body: []const u8, src: []const u8) !void {
