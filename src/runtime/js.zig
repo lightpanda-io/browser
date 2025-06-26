@@ -1603,6 +1603,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 const str = try self.js_obj.getConstructorName();
                 return jsStringToZig(allocator, str, self.js_context.isolate);
             }
+
+            pub fn toZig(self: JsObject, comptime Struct: type, comptime name: []const u8, comptime T: type) !T {
+                const named_function = comptime NamedFunction.init(Struct, name);
+                return self.js_context.jsValueToZig(named_function, T, self.js_obj.toValue());
+            }
         };
 
         // This only exists so that we know whether a function wants the opaque
