@@ -27,6 +27,7 @@ const urlStitch = @import("../../url.zig").URL.stitch;
 const URL = @import("../url/url.zig").URL;
 const Node = @import("../dom/node.zig").Node;
 const Element = @import("../dom/element.zig").Element;
+const DataSet = @import("DataSet.zig");
 
 const CSSStyleDeclaration = @import("../cssom/css_style_declaration.zig").CSSStyleDeclaration;
 
@@ -120,6 +121,15 @@ pub const HTMLElement = struct {
     pub fn get_style(e: *parser.ElementHTML, page: *Page) !*CSSStyleDeclaration {
         const state = try page.getOrCreateNodeState(@ptrCast(e));
         return &state.style;
+    }
+
+    pub fn get_dataset(e: *parser.ElementHTML, page: *Page) !*DataSet {
+        const state = try page.getOrCreateNodeState(@ptrCast(e));
+        if (state.dataset) |*ds| {
+            return ds;
+        }
+        state.dataset = DataSet{ .element = @ptrCast(e) };
+        return &state.dataset.?;
     }
 
     pub fn get_innerText(e: *parser.ElementHTML) ![]const u8 {
@@ -1559,6 +1569,13 @@ test "Browser.HTML.Element" {
         .{ "document.createElement('a').focus()", null },
         .{ "document.activeElement === focused", "true" },
     }, .{});
+}
+
+test "Browser.HTML.Element.DataSet" {
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html = "<div id=x data-power='over 9000' data-empty data-some-long-key=ok></div>" });
+    defer runner.deinit();
+
+    try runner.testCases(&.{ .{ "let div = document.getElementById('x')", null }, .{ "div.dataset.nope", "undefined" }, .{ "div.dataset.power", "over 9000" }, .{ "div.dataset.empty", "" }, .{ "div.dataset.someLongKey", "ok" }, .{ "delete div.dataset.power", "true" }, .{ "div.dataset.power", "undefined" } }, .{});
 }
 
 test "Browser.HTML.HtmlInputElement.properties" {
