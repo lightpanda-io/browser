@@ -728,7 +728,9 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 if (try m.instantiate(v8_context, resolveModuleCallback) == false) {
                     return error.ModuleInstantiationError;
                 }
-
+                const arena = self.context_arena;
+                const owned_url = try arena.dupe(u8, url);
+                try self.module_identifier.putNoClobber(arena, m.getIdentityHash(), owned_url);
                 _ = try m.evaluate(v8_context);
             }
 
