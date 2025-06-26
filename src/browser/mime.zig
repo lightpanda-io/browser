@@ -218,7 +218,9 @@ pub const Mime = struct {
 
     fn parseAttributeValue(arena: Allocator, value: []const u8) ![]const u8 {
         if (value[0] != '"') {
-            return value;
+            // almost certainly referenced from an http.Request which has its
+            // own lifetime.
+            return arena.dupe(u8, value);
         }
 
         // 1 to skip the opening quote
