@@ -41,6 +41,11 @@ const BUFFER_LEN = 32 * 1024;
 
 const MAX_HEADER_LINE_LEN = 4096;
 
+pub const ProxyType = enum {
+    forward,
+    connect,
+};
+
 // Thread-safe. Holds our root certificate, connection pool and state pool
 // Used to create Requests.
 pub const Client = struct {
@@ -48,6 +53,7 @@ pub const Client = struct {
     allocator: Allocator,
     state_pool: StatePool,
     http_proxy: ?Uri,
+    proxy_type: ?ProxyType,
     root_ca: tls.config.CertBundle,
     tls_verify_host: bool = true,
     connection_manager: ConnectionManager,
@@ -56,6 +62,7 @@ pub const Client = struct {
     const Opts = struct {
         max_concurrent: usize = 3,
         http_proxy: ?std.Uri = null,
+        proxy_type: ?ProxyType = null,
         tls_verify_host: bool = true,
         max_idle_connection: usize = 10,
     };
@@ -76,6 +83,7 @@ pub const Client = struct {
             .allocator = allocator,
             .state_pool = state_pool,
             .http_proxy = opts.http_proxy,
+            .proxy_type = if (opts.http_proxy == null) null else (opts.proxy_type orelse .connect),
             .tls_verify_host = opts.tls_verify_host,
             .connection_manager = connection_manager,
             .request_pool = std.heap.MemoryPool(Request).init(allocator),
@@ -185,6 +193,16 @@ pub const Client = struct {
 
     pub fn freeSlotCount(self: *Client) usize {
         return self.state_pool.freeSlotCount();
+    }
+
+    fn isConnectProxy(self: *const Client) bool {
+        const proxy_type = self.proxy_type orelse return false;
+        return proxy_type == .connect;
+    }
+
+    fn isSimpleProxy(self: *const Client) bool {
+        const proxy_type = self.proxy_type orelse return false;
+        return proxy_type == .forward;
     }
 };
 
@@ -330,6 +348,7 @@ pub const Request = struct {
     _keepalive: bool,
 
     // extracted from request_uri
+    _request_port: u16,
     _request_host: []const u8,
 
     // extracted from connect_uri
@@ -420,6 +439,7 @@ pub const Request = struct {
             ._connect_host = decomposed.connect_host,
             ._connect_port = decomposed.connect_port,
             ._request_host = decomposed.request_host,
+            ._request_port = decomposed.request_port,
             ._state = state,
             ._client = client,
             ._aborter = null,
@@ -455,6 +475,7 @@ pub const Request = struct {
         connect_port: u16,
         connect_host: []const u8,
         connect_uri: *const std.Uri,
+        request_port: u16,
         request_host: []const u8,
     };
     fn decomposeURL(client: *const Client, uri: *const Uri) !DecomposedURL {
@@ -470,8 +491,10 @@ pub const Request = struct {
             connect_host = proxy.host.?.percent_encoded;
         }
 
+        const is_connect_proxy = client.isConnectProxy();
+
         var secure: bool = undefined;
-        const scheme = connect_uri.scheme;
+        const scheme = if (is_connect_proxy) uri.scheme else connect_uri.scheme;
         if (std.ascii.eqlIgnoreCase(scheme, "https")) {
             secure = true;
         } else if (std.ascii.eqlIgnoreCase(scheme, "http")) {
@@ -479,13 +502,15 @@ pub const Request = struct {
         } else {
             return error.UnsupportedUriScheme;
         }
-        const connect_port: u16 = connect_uri.port orelse if (secure) 443 else 80;
+        const request_port: u16 = uri.port orelse if (secure) 443 else 80;
+        const connect_port: u16 = connect_uri.port orelse (if (is_connect_proxy) 80 else request_port);
 
         return .{
             .secure = secure,
             .connect_port = connect_port,
             .connect_host = connect_host,
             .connect_uri = connect_uri,
+            .request_port = request_port,
             .request_host = request_host,
         };
     }
@@ -595,13 +620,18 @@ pub const Request = struct {
             };
             self._connection = connection;
 
+            const is_connect_proxy = self._client.isConnectProxy();
+            if (is_connect_proxy) {
+                try SyncHandler.connect(self);
+            }
+
             if (self._secure) {
                 self._connection.?.tls = .{
                     .blocking = try tls.client(std.net.Stream{ .handle = socket }, .{
-                        .host = self._connect_host,
+                        .host = if (is_connect_proxy) self._request_host else self._connect_host,
                         .root_ca = self._client.root_ca,
                         .insecure_skip_verify = self._tls_verify_host == false,
-                        // .key_log_callback = tls.config.key_log.callback,
+                        .key_log_callback = tls.config.key_log.callback,
                     }),
                 };
             }
@@ -682,7 +712,7 @@ pub const Request = struct {
         if (self._secure) {
             connection.tls = .{
                 .nonblocking = try tls.nb.Client().init(self._client.allocator, .{
-                    .host = self._connect_host,
+                    .host = if (self._client.isConnectProxy()) self._request_host else self._connect_host,
                     .root_ca = self._client.root_ca,
                     .insecure_skip_verify = self._tls_verify_host == false,
                     // .key_log_callback = tls.config.key_log.callback,
@@ -831,7 +861,7 @@ pub const Request = struct {
     }
 
     fn buildHeader(self: *Request) ![]const u8 {
-        const proxied = self.connect_uri != self.request_uri;
+        const proxied = self._client.isSimpleProxy();
 
         const buf = self._state.header_buf;
         var fbs = std.io.fixedBufferStream(buf);
@@ -848,6 +878,16 @@ pub const Request = struct {
             try writer.writeAll("\r\n");
         }
         try writer.writeAll("\r\n");
+        return buf[0..fbs.pos];
+    }
+
+    fn buildConnectHeader(self: *Request) ![]const u8 {
+        const buf = self._state.header_buf;
+        var fbs = std.io.fixedBufferStream(buf);
+        var writer = fbs.writer();
+
+        try writer.print("CONNECT {s}:{d} HTTP/1.1\r\n", .{ self._request_host, self._request_port });
+        try writer.print("Host: {s}:{d}\r\n\r\n", .{ self._request_host, self._request_port });
         return buf[0..fbs.pos];
     }
 
@@ -894,6 +934,15 @@ pub const Request = struct {
             .status = response.status,
             .headers = response.headers.items,
         });
+    }
+
+    fn shouldProxyConnect(self: *const Request) bool {
+        // if the connection comes from a keepalive pool, than we already
+        // made a CONNECT request
+        if (self._connection_from_keepalive) {
+            return false;
+        }
+        return self._client.isConnectProxy();
     }
 };
 
@@ -958,6 +1007,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
         const SendQueue = std.DoublyLinkedList([]const u8);
 
         const SendState = enum {
+            connect,
             handshake,
             header,
             body,
@@ -986,7 +1036,19 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
             if (self.shutdown) {
                 return self.maybeShutdown();
             }
+
             result catch |err| return self.handleError("Connection failed", err);
+
+            if (self.request.shouldProxyConnect()) {
+                self.state = .connect;
+                const header = self.request.buildConnectHeader() catch |err| {
+                    return self.handleError("Failed to build CONNECT header", err);
+                };
+                self.send(header);
+                self.receive();
+                return;
+            }
+
             self.conn.connected() catch |err| {
                 self.handleError("connected handler error", err);
             };
@@ -1056,6 +1118,12 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                 return;
             }
 
+            if (self.state == .connect) {
+                // We're in a proxy CONNECT flow. There's nothing for us to
+                // do except for wait for the response.
+                return;
+            }
+
             self.conn.sent() catch |err| {
                 self.handleError("send handling", err);
             };
@@ -1099,7 +1167,27 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                 return self.handleError("Connection closed", error.ConnectionResetByPeer);
             }
 
-            const status = self.conn.received(self.read_buf[0 .. self.read_pos + n]) catch |err| {
+            const data = self.read_buf[0 .. self.read_pos + n];
+
+            if (self.state == .connect) {
+                const success = self.reader.connectResponse(data) catch |err| {
+                    return self.handleError("Invalid CONNECT response", err);
+                };
+
+                if (!success) {
+                    self.receive();
+                } else {
+                    // CONNECT was successful, resume our normal flow
+                    self.state = .handshake;
+                    self.reader = self.request.newReader();
+                    self.conn.connected() catch |err| {
+                        self.handleError("connected handler error", err);
+                    };
+                }
+                return;
+            }
+
+            const status = self.conn.received(data) catch |err| {
                 if (err == error.TlsAlertCloseNotify and self.state == .handshake and self.maybeRetryRequest()) {
                     return;
                 }
@@ -1438,7 +1526,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                 const handler = self.handler;
                 switch (self.protocol) {
                     .plain => switch (handler.state) {
-                        .handshake => unreachable,
+                        .handshake, .connect => unreachable,
                         .header => {
                             handler.state = .body;
                             if (handler.request.body) |body| {
@@ -1455,6 +1543,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                             return;
                         }
                         switch (handler.state) {
+                            .connect => unreachable,
                             .handshake => return self.sendSecureHeader(tls_client),
                             .header => {
                                 handler.state = .body;
@@ -1586,6 +1675,37 @@ const SyncHandler = struct {
                 ._peek_buf = request._state.peek_buf,
                 .header = reader.response,
             };
+        }
+    }
+
+    // Unfortunately, this is called from the Request doSendSync since we need
+    // to do this before setting up our TLS connection.
+    fn connect(request: *Request) !void {
+        const socket = request._connection.?.socket;
+
+        const header = try request.buildConnectHeader();
+        try Conn.writeAll(socket, header);
+
+        var pos: usize = 0;
+        var reader = request.newReader();
+        var read_buf = request._state.read_buf;
+
+        while (true) {
+            // we would never 'maybeRetryOrErr' on a CONNECT request, because
+            // we only send CONNECT requests on newly established connections
+            // and maybeRetryOrErr is only for connections that might have been
+            // closed while being kept-alive
+            const n = try posix.read(socket, read_buf[pos..]);
+            if (n == 0) {
+                return error.ConnectionResetByPeer;
+            }
+            pos += n;
+            if (try reader.connectResponse(read_buf[0..pos])) {
+                // returns true if we have a successful connect response
+                return;
+            }
+
+            // we don't have enough data yet.
         }
     }
 
@@ -1826,6 +1946,26 @@ const Reader = struct {
 
         const location = self.response.get("location") orelse return null;
         return .{ .use_get = use_get, .location = location };
+    }
+
+    fn connectResponse(self: *Reader, data: []u8) !bool {
+        const result = try self.process(data);
+        if (self.header_done == false) {
+            return false;
+        }
+
+        if (result.done == false) {
+            // CONNECT responses should not have a body. If the header is
+            // done, then the entire response should be done.
+            return error.InvalidConnectResponse;
+        }
+
+        const status = self.response.status;
+        if (status < 200 or status > 299) {
+            return error.InvalidConnectResponseStatus;
+        }
+
+        return true;
     }
 
     fn process(self: *Reader, data: []u8) ProcessError!Result {
@@ -2790,14 +2930,14 @@ test "HttpClient Reader: fuzz" {
 }
 
 test "HttpClient: invalid url" {
-    var client = try testClient();
+    var client = try testClient(.{});
     defer client.deinit();
     const uri = try Uri.parse("http:///");
     try testing.expectError(error.UriMissingHost, client.request(.GET, &uri));
 }
 
 test "HttpClient: sync connect error" {
-    var client = try testClient();
+    var client = try testClient(.{});
     defer client.deinit();
 
     const uri = try Uri.parse("HTTP://127.0.0.1:9920");
@@ -2809,7 +2949,7 @@ test "HttpClient: sync connect error" {
 
 test "HttpClient: sync no body" {
     for (0..2) |i| {
-        var client = try testClient();
+        var client = try testClient(.{});
         defer client.deinit();
 
         const uri = try Uri.parse("http://127.0.0.1:9582/http_client/simple");
@@ -2831,7 +2971,7 @@ test "HttpClient: sync no body" {
 
 test "HttpClient: sync tls no body" {
     for (0..1) |_| {
-        var client = try testClient();
+        var client = try testClient(.{});
         defer client.deinit();
 
         const uri = try Uri.parse("https://127.0.0.1:9581/http_client/simple");
@@ -2850,7 +2990,33 @@ test "HttpClient: sync tls no body" {
 
 test "HttpClient: sync with body" {
     for (0..2) |i| {
-        var client = try testClient();
+        var client = try testClient(.{});
+        defer client.deinit();
+
+        const uri = try Uri.parse("http://127.0.0.1:9582/http_client/echo");
+        var req = try client.request(.GET, &uri);
+        defer req.deinit();
+
+        var res = try req.sendSync(.{});
+
+        if (i == 0) {
+            try testing.expectEqual("over 9000!", try res.peek());
+        }
+        try testing.expectEqual("over 9000!", try res.next());
+        try testing.expectEqual(201, res.header.status);
+        try testing.expectEqual(5, res.header.count());
+        try testing.expectEqual("Close", res.header.get("connection"));
+        try testing.expectEqual("10", res.header.get("content-length"));
+        try testing.expectEqual("127.0.0.1", res.header.get("_host"));
+        try testing.expectEqual("Lightpanda/1.0", res.header.get("_user-agent"));
+        try testing.expectEqual("*/*", res.header.get("_accept"));
+    }
+}
+
+test "HttpClient: sync with body proxy CONNECT" {
+    for (0..2) |i| {
+        const proxy_uri = try Uri.parse("http://127.0.0.1:9582/");
+        var client = try testClient(.{ .proxy_type = .connect, .http_proxy = proxy_uri });
         defer client.deinit();
 
         const uri = try Uri.parse("http://127.0.0.1:9582/http_client/echo");
@@ -2875,7 +3041,7 @@ test "HttpClient: sync with body" {
 
 test "HttpClient: sync with gzip body" {
     for (0..2) |i| {
-        var client = try testClient();
+        var client = try testClient(.{});
         defer client.deinit();
 
         const uri = try Uri.parse("http://127.0.0.1:9582/http_client/gzip");
@@ -2897,7 +3063,7 @@ test "HttpClient: sync tls with body" {
     defer arr.deinit(testing.allocator);
     try arr.ensureTotalCapacity(testing.allocator, 20);
 
-    var client = try testClient();
+    var client = try testClient(.{});
     defer client.deinit();
     for (0..5) |_| {
         defer arr.clearRetainingCapacity();
@@ -2927,7 +3093,7 @@ test "HttpClient: sync redirect from TLS to Plaintext" {
 
     for (0..5) |_| {
         defer arr.clearRetainingCapacity();
-        var client = try testClient();
+        var client = try testClient(.{});
         defer client.deinit();
 
         const uri = try Uri.parse("https://127.0.0.1:9581/http_client/redirect/insecure");
@@ -2957,7 +3123,7 @@ test "HttpClient: sync redirect plaintext to TLS" {
 
     for (0..5) |_| {
         defer arr.clearRetainingCapacity();
-        var client = try testClient();
+        var client = try testClient(.{});
         defer client.deinit();
 
         const uri = try Uri.parse("http://127.0.0.1:9582/http_client/redirect/secure");
@@ -2978,7 +3144,7 @@ test "HttpClient: sync redirect plaintext to TLS" {
 }
 
 test "HttpClient: sync GET redirect" {
-    var client = try testClient();
+    var client = try testClient(.{});
     defer client.deinit();
 
     const uri = try Uri.parse("http://127.0.0.1:9582/http_client/redirect");
@@ -3024,7 +3190,7 @@ test "HttpClient: async connect error" {
     };
 
     var reset: Thread.ResetEvent = .{};
-    var client = try testClient();
+    var client = try testClient(.{});
     defer client.deinit();
 
     var handler = Handler{
@@ -3056,7 +3222,7 @@ test "HttpClient: async connect error" {
 test "HttpClient: async no body" {
     defer testing.reset();
 
-    var client = try testClient();
+    var client = try testClient(.{});
     defer client.deinit();
 
     var handler = try CaptureHandler.init();
@@ -3075,7 +3241,7 @@ test "HttpClient: async no body" {
 test "HttpClient: async with body" {
     defer testing.reset();
 
-    var client = try testClient();
+    var client = try testClient(.{});
     defer client.deinit();
 
     var handler = try CaptureHandler.init();
@@ -3100,7 +3266,7 @@ test "HttpClient: async with body" {
 test "HttpClient: async with gzip body" {
     defer testing.reset();
 
-    var client = try testClient();
+    var client = try testClient(.{});
     defer client.deinit();
 
     var handler = try CaptureHandler.init();
@@ -3123,7 +3289,7 @@ test "HttpClient: async with gzip body" {
 test "HttpClient: async redirect" {
     defer testing.reset();
 
-    var client = try testClient();
+    var client = try testClient(.{});
     defer client.deinit();
 
     var handler = try CaptureHandler.init();
@@ -3153,7 +3319,7 @@ test "HttpClient: async redirect" {
 
 test "HttpClient: async tls no body" {
     defer testing.reset();
-    var client = try testClient();
+    var client = try testClient(.{});
     defer client.deinit();
     for (0..5) |_| {
         var handler = try CaptureHandler.init();
@@ -3178,7 +3344,7 @@ test "HttpClient: async tls no body" {
 test "HttpClient: async tls with body" {
     defer testing.reset();
     for (0..5) |_| {
-        var client = try testClient();
+        var client = try testClient(.{});
         defer client.deinit();
 
         var handler = try CaptureHandler.init();
@@ -3202,7 +3368,7 @@ test "HttpClient: async tls with body" {
 test "HttpClient: async redirect from TLS to Plaintext" {
     defer testing.reset();
     for (0..1) |_| {
-        var client = try testClient();
+        var client = try testClient(.{});
         defer client.deinit();
 
         var handler = try CaptureHandler.init();
@@ -3228,7 +3394,7 @@ test "HttpClient: async redirect from TLS to Plaintext" {
 test "HttpClient: async redirect plaintext to TLS" {
     defer testing.reset();
     for (0..5) |_| {
-        var client = try testClient();
+        var client = try testClient(.{});
         defer client.deinit();
 
         var handler = try CaptureHandler.init();
@@ -3441,6 +3607,8 @@ fn testReader(state: *State, res: *TestResponse, data: []const u8) !void {
     return error.NeverDone;
 }
 
-fn testClient() !Client {
-    return try Client.init(testing.allocator, .{ .max_concurrent = 1 });
+fn testClient(opts: Client.Opts) !Client {
+    var o = opts;
+    o.max_concurrent = 1;
+    return try Client.init(testing.allocator, o);
 }

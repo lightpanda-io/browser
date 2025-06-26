@@ -23,6 +23,7 @@ const Allocator = std.mem.Allocator;
 const log = @import("log.zig");
 const server = @import("server.zig");
 const App = @import("app.zig").App;
+const http = @import("http/client.zig");
 const Platform = @import("runtime/js.zig").Platform;
 const Browser = @import("browser/browser.zig").Browser;
 
@@ -83,6 +84,7 @@ fn run(alloc: Allocator) !void {
     var app = try App.init(alloc, .{
         .run_mode = args.mode,
         .http_proxy = args.httpProxy(),
+        .proxy_type = args.proxyType(),
         .tls_verify_host = args.tlsVerifyHost(),
     });
     defer app.deinit();
@@ -155,6 +157,13 @@ const Command = struct {
         };
     }
 
+    fn proxyType(self: *const Command) ?http.ProxyType {
+        return switch (self.mode) {
+            inline .serve, .fetch => |opts| opts.common.proxy_type,
+            else => unreachable,
+        };
+    }
+
     fn logLevel(self: *const Command) ?log.Level {
         return switch (self.mode) {
             inline .serve, .fetch => |opts| opts.common.log_level,
@@ -198,6 +207,7 @@ const Command = struct {
 
     const Common = struct {
         http_proxy: ?std.Uri = null,
+        proxy_type: ?http.ProxyType = null,
         tls_verify_host: bool = true,
         log_level: ?log.Level = null,
         log_format: ?log.Format = null,
@@ -215,6 +225,13 @@ const Command = struct {
             \\
             \\--http_proxy    The HTTP proxy to use for all HTTP requests.
             \\                Defaults to none.
+            \\
+            \\--proxy_type   The type of proxy: connect, forward.
+            \\               'connect' creates a tunnel through the proxy via
+            \\               and initial CONNECT request.
+            \\               'forward' sends the full URL in the request target
+            \\               and expects the proxy to MITM the request.
+            \\               Defaults to connect when --http_proxy is set.
             \\
             \\--log_level     The log level: debug, info, warn, error or fatal.
             \\                Defaults to
@@ -456,6 +473,22 @@ fn parseCommonArg(
             return error.InvalidArgument;
         };
         common.http_proxy = try std.Uri.parse(try allocator.dupe(u8, str));
+        if (common.http_proxy.?.host == null) {
+            log.fatal(.app, "invalid http proxy", .{ .arg = "--http_proxy", .hint = "missing scheme?" });
+            return error.InvalidArgument;
+        }
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--proxy_type", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--proxy_type" });
+            return error.InvalidArgument;
+        };
+        common.proxy_type = std.meta.stringToEnum(http.ProxyType, str) orelse {
+            log.fatal(.app, "invalid option choice", .{ .arg = "--proxy_type", .value = str });
+            return error.InvalidArgument;
+        };
         return true;
     }
 
@@ -573,58 +606,65 @@ fn serveHTTP(address: std.net.Address) !void {
         var conn = try listener.accept();
         defer conn.stream.close();
         var http_server = std.http.Server.init(conn, &read_buffer);
-
-        var request = http_server.receiveHead() catch |err| switch (err) {
-            error.HttpConnectionClosing => continue :ACCEPT,
-            else => {
-                std.debug.print("Test HTTP Server error: {}\n", .{err});
-                return err;
-            },
-        };
-
-        const path = request.head.target;
-        if (std.mem.eql(u8, path, "/loader")) {
-            try request.respond("Hello!", .{
-                .extra_headers = &.{.{ .name = "Connection", .value = "close" }},
-            });
-        } else if (std.mem.eql(u8, path, "/http_client/simple")) {
-            try request.respond("", .{
-                .extra_headers = &.{.{ .name = "Connection", .value = "close" }},
-            });
-        } else if (std.mem.eql(u8, path, "/http_client/redirect")) {
-            try request.respond("", .{
-                .status = .moved_permanently,
-                .extra_headers = &.{
-                    .{ .name = "Connection", .value = "close" },
-                    .{ .name = "LOCATION", .value = "../http_client/echo" },
+        REQUEST: while (true) {
+            var request = http_server.receiveHead() catch |err| switch (err) {
+                error.HttpConnectionClosing => continue :ACCEPT,
+                else => {
+                    std.debug.print("Test HTTP Server error: {}\n", .{err});
+                    return err;
                 },
-            });
-        } else if (std.mem.eql(u8, path, "/http_client/redirect/secure")) {
-            try request.respond("", .{
-                .status = .moved_permanently,
-                .extra_headers = &.{ .{ .name = "Connection", .value = "close" }, .{ .name = "LOCATION", .value = "https://127.0.0.1:9581/http_client/body" } },
-            });
-        } else if (std.mem.eql(u8, path, "/http_client/gzip")) {
-            const body = &.{ 0x1f, 0x8b, 0x08, 0x08, 0x01, 0xc6, 0x19, 0x68, 0x00, 0x03, 0x74, 0x65, 0x73, 0x74, 0x2e, 0x68, 0x74, 0x6d, 0x6c, 0x00, 0x73, 0x54, 0xc8, 0x4b, 0x2d, 0x57, 0x48, 0x2a, 0xca, 0x2f, 0x2f, 0x4e, 0x2d, 0x52, 0x48, 0x2a, 0xcd, 0xcc, 0x29, 0x51, 0x48, 0xcb, 0x2f, 0x52, 0xc8, 0x4d, 0x4c, 0xce, 0xc8, 0xcc, 0x4b, 0x2d, 0xe6, 0x02, 0x00, 0xe7, 0xc3, 0x4b, 0x27, 0x21, 0x00, 0x00, 0x00 };
-            try request.respond(body, .{
-                .extra_headers = &.{ .{ .name = "Connection", .value = "close" }, .{ .name = "Content-Encoding", .value = "gzip" } },
-            });
-        } else if (std.mem.eql(u8, path, "/http_client/echo")) {
-            var headers: std.ArrayListUnmanaged(std.http.Header) = .{};
+            };
 
-            var it = request.iterateHeaders();
-            while (it.next()) |hdr| {
-                try headers.append(aa, .{
-                    .name = try std.fmt.allocPrint(aa, "_{s}", .{hdr.name}),
-                    .value = hdr.value,
+            if (request.head.method == .CONNECT) {
+                try request.respond("", .{ .status = .ok });
+                continue :REQUEST;
+            }
+
+            const path = request.head.target;
+            if (std.mem.eql(u8, path, "/loader")) {
+                try request.respond("Hello!", .{
+                    .extra_headers = &.{.{ .name = "Connection", .value = "close" }},
+                });
+            } else if (std.mem.eql(u8, path, "/http_client/simple")) {
+                try request.respond("", .{
+                    .extra_headers = &.{.{ .name = "Connection", .value = "close" }},
+                });
+            } else if (std.mem.eql(u8, path, "/http_client/redirect")) {
+                try request.respond("", .{
+                    .status = .moved_permanently,
+                    .extra_headers = &.{
+                        .{ .name = "Connection", .value = "close" },
+                        .{ .name = "LOCATION", .value = "../http_client/echo" },
+                    },
+                });
+            } else if (std.mem.eql(u8, path, "/http_client/redirect/secure")) {
+                try request.respond("", .{
+                    .status = .moved_permanently,
+                    .extra_headers = &.{ .{ .name = "Connection", .value = "close" }, .{ .name = "LOCATION", .value = "https://127.0.0.1:9581/http_client/body" } },
+                });
+            } else if (std.mem.eql(u8, path, "/http_client/gzip")) {
+                const body = &.{ 0x1f, 0x8b, 0x08, 0x08, 0x01, 0xc6, 0x19, 0x68, 0x00, 0x03, 0x74, 0x65, 0x73, 0x74, 0x2e, 0x68, 0x74, 0x6d, 0x6c, 0x00, 0x73, 0x54, 0xc8, 0x4b, 0x2d, 0x57, 0x48, 0x2a, 0xca, 0x2f, 0x2f, 0x4e, 0x2d, 0x52, 0x48, 0x2a, 0xcd, 0xcc, 0x29, 0x51, 0x48, 0xcb, 0x2f, 0x52, 0xc8, 0x4d, 0x4c, 0xce, 0xc8, 0xcc, 0x4b, 0x2d, 0xe6, 0x02, 0x00, 0xe7, 0xc3, 0x4b, 0x27, 0x21, 0x00, 0x00, 0x00 };
+                try request.respond(body, .{
+                    .extra_headers = &.{ .{ .name = "Connection", .value = "close" }, .{ .name = "Content-Encoding", .value = "gzip" } },
+                });
+            } else if (std.mem.eql(u8, path, "/http_client/echo")) {
+                var headers: std.ArrayListUnmanaged(std.http.Header) = .{};
+
+                var it = request.iterateHeaders();
+                while (it.next()) |hdr| {
+                    try headers.append(aa, .{
+                        .name = try std.fmt.allocPrint(aa, "_{s}", .{hdr.name}),
+                        .value = hdr.value,
+                    });
+                }
+                try headers.append(aa, .{ .name = "Connection", .value = "Close" });
+
+                try request.respond("over 9000!", .{
+                    .status = .created,
+                    .extra_headers = headers.items,
                 });
             }
-            try headers.append(aa, .{ .name = "Connection", .value = "Close" });
-
-            try request.respond("over 9000!", .{
-                .status = .created,
-                .extra_headers = headers.items,
-            });
+            continue :ACCEPT;
         }
     }
 }
