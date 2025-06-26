@@ -46,6 +46,34 @@ pub const ProxyType = enum {
     connect,
 };
 
+pub const ProxyAuth = union(enum) {
+    basic: struct { user_pass: []const u8 },
+    bearer: struct { token: []const u8 },
+
+    pub fn header_value(self: ProxyAuth, allocator: Allocator) ![]const u8 {
+        switch (self) {
+            .basic => |*auth| {
+                if (std.mem.indexOfScalar(u8, auth.user_pass, ':') == null) return error.InvalidProxyAuth;
+
+                const prefix = "Basic ";
+                var encoder = std.base64.standard.Encoder;
+                const size = encoder.calcSize(auth.user_pass.len);
+                var buffer = try allocator.alloc(u8, size + prefix.len);
+                @memcpy(buffer[0..prefix.len], prefix);
+                _ = std.base64.standard.Encoder.encode(buffer[prefix.len..], auth.user_pass);
+                return buffer;
+            },
+            .bearer => |*auth| {
+                const prefix = "Bearer ";
+                var buffer = try allocator.alloc(u8, auth.token.len + prefix.len);
+                @memcpy(buffer[0..prefix.len], prefix);
+                @memcpy(buffer[prefix.len..], auth.token);
+                return buffer;
+            },
+        }
+    }
+};
+
 // Thread-safe. Holds our root certificate, connection pool and state pool
 // Used to create Requests.
 pub const Client = struct {
@@ -54,6 +82,7 @@ pub const Client = struct {
     state_pool: StatePool,
     http_proxy: ?Uri,
     proxy_type: ?ProxyType,
+    proxy_auth: ?[]const u8, // Basic <user:pass; base64> or Bearer <token>
     root_ca: tls.config.CertBundle,
     tls_verify_host: bool = true,
     connection_manager: ConnectionManager,
@@ -63,6 +92,7 @@ pub const Client = struct {
         max_concurrent: usize = 3,
         http_proxy: ?std.Uri = null,
         proxy_type: ?ProxyType = null,
+        proxy_auth: ?ProxyAuth = null,
         tls_verify_host: bool = true,
         max_idle_connection: usize = 10,
     };
@@ -71,10 +101,10 @@ pub const Client = struct {
         var root_ca: tls.config.CertBundle = if (builtin.is_test) .{} else try tls.config.CertBundle.fromSystem(allocator);
         errdefer root_ca.deinit(allocator);
 
-        const state_pool = try StatePool.init(allocator, opts.max_concurrent);
+        var state_pool = try StatePool.init(allocator, opts.max_concurrent);
         errdefer state_pool.deinit(allocator);
 
-        const connection_manager = ConnectionManager.init(allocator, opts.max_idle_connection);
+        var connection_manager = ConnectionManager.init(allocator, opts.max_idle_connection);
         errdefer connection_manager.deinit();
 
         return .{
@@ -84,6 +114,7 @@ pub const Client = struct {
             .state_pool = state_pool,
             .http_proxy = opts.http_proxy,
             .proxy_type = if (opts.http_proxy == null) null else (opts.proxy_type orelse .connect),
+            .proxy_auth = if (opts.proxy_auth) |*auth| try auth.header_value(allocator) else null,
             .tls_verify_host = opts.tls_verify_host,
             .connection_manager = connection_manager,
             .request_pool = std.heap.MemoryPool(Request).init(allocator),
@@ -98,6 +129,10 @@ pub const Client = struct {
         self.state_pool.deinit(allocator);
         self.connection_manager.deinit();
         self.request_pool.deinit();
+
+        if (self.proxy_auth) |auth| {
+            allocator.free(auth);
+        }
     }
 
     pub fn request(self: *Client, method: Request.Method, uri: *const Uri) !*Request {
@@ -763,6 +798,13 @@ pub const Request = struct {
 
         try self.headers.append(arena, .{ .name = "User-Agent", .value = "Lightpanda/1.0" });
         try self.headers.append(arena, .{ .name = "Accept", .value = "*/*" });
+
+        if (self._client.isSimpleProxy()) {
+            if (self._client.proxy_auth) |proxy_auth| {
+                try self.headers.append(arena, .{ .name = "Proxy-Authorization", .value = proxy_auth });
+            }
+        }
+
         self.requestStarting();
     }
 
@@ -887,7 +929,13 @@ pub const Request = struct {
         var writer = fbs.writer();
 
         try writer.print("CONNECT {s}:{d} HTTP/1.1\r\n", .{ self._request_host, self._request_port });
-        try writer.print("Host: {s}:{d}\r\n\r\n", .{ self._request_host, self._request_port });
+        try writer.print("Host: {s}:{d}\r\n", .{ self._request_host, self._request_port });
+
+        if (self._client.proxy_auth) |proxy_auth| {
+            try writer.print("Proxy-Authorization: {s}\r\n", .{proxy_auth});
+        }
+
+        _ = try writer.write("\r\n");
         return buf[0..fbs.pos];
     }
 
@@ -3030,13 +3078,54 @@ test "HttpClient: sync with body proxy CONNECT" {
         }
         try testing.expectEqual("over 9000!", try res.next());
         try testing.expectEqual(201, res.header.status);
-        try testing.expectEqual(5, res.header.count());
+        try testing.expectEqual(6, res.header.count());
         try testing.expectEqual("Close", res.header.get("connection"));
         try testing.expectEqual("10", res.header.get("content-length"));
         try testing.expectEqual("127.0.0.1", res.header.get("_host"));
         try testing.expectEqual("Lightpanda/1.0", res.header.get("_user-agent"));
         try testing.expectEqual("*/*", res.header.get("_accept"));
+        // Proxy headers
+        try testing.expectEqual("127.0.0.1:9582", res.header.get("__host"));
     }
+}
+
+test "HttpClient: basic authentication CONNECT" {
+    const proxy_uri = try Uri.parse("http://127.0.0.1:9582/");
+    var client = try testClient(.{ .proxy_type = .connect, .http_proxy = proxy_uri, .proxy_auth = .{ .basic = .{ .user_pass = "user:pass" } } });
+    defer client.deinit();
+
+    const uri = try Uri.parse("http://127.0.0.1:9582/http_client/echo");
+    var req = try client.request(.GET, &uri);
+    defer req.deinit();
+
+    var res = try req.sendSync(.{});
+
+    try testing.expectEqual(201, res.header.status);
+    // Destination headers
+    try testing.expectEqual(null, res.header.get("_authorization"));
+    try testing.expectEqual(null, res.header.get("_proxy-authorization"));
+    // Proxy headers
+    try testing.expectEqual(null, res.header.get("__authorization"));
+    try testing.expectEqual("Basic dXNlcjpwYXNz", res.header.get("__proxy-authorization"));
+}
+test "HttpClient: bearer authentication CONNECT" {
+    const proxy_uri = try Uri.parse("http://127.0.0.1:9582/");
+    var client = try testClient(.{ .proxy_type = .connect, .http_proxy = proxy_uri, .proxy_auth = .{ .bearer = .{ .token = "fruitsalad" } } });
+    defer client.deinit();
+
+    const uri = try Uri.parse("http://127.0.0.1:9582/http_client/echo");
+    var req = try client.request(.GET, &uri);
+    defer req.deinit();
+
+    var res = try req.sendSync(.{});
+
+    try testing.expectEqual(201, res.header.status);
+    // Destination headers
+    try testing.expectEqual(null, res.header.get("_authorization"));
+    try testing.expectEqual(null, res.header.get("_proxy-authorization"));
+    // Proxy headers
+    try testing.expectEqual(null, res.header.get("__authorization"));
+    try testing.expectEqual("Bearer fruitsalad", res.header.get("__proxy-authorization"));
 }
 
 test "HttpClient: sync with gzip body" {

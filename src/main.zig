@@ -85,6 +85,7 @@ fn run(alloc: Allocator) !void {
         .run_mode = args.mode,
         .http_proxy = args.httpProxy(),
         .proxy_type = args.proxyType(),
+        .proxy_auth = args.proxyAuth(),
         .tls_verify_host = args.tlsVerifyHost(),
     });
     defer app.deinit();
@@ -164,6 +165,13 @@ const Command = struct {
         };
     }
 
+    fn proxyAuth(self: *const Command) ?http.ProxyAuth {
+        return switch (self.mode) {
+            inline .serve, .fetch => |opts| opts.common.proxy_auth,
+            else => unreachable,
+        };
+    }
+
     fn logLevel(self: *const Command) ?log.Level {
         return switch (self.mode) {
             inline .serve, .fetch => |opts| opts.common.log_level,
@@ -208,6 +216,7 @@ const Command = struct {
     const Common = struct {
         http_proxy: ?std.Uri = null,
         proxy_type: ?http.ProxyType = null,
+        proxy_auth: ?http.ProxyAuth = null,
         tls_verify_host: bool = true,
         log_level: ?log.Level = null,
         log_format: ?log.Format = null,
@@ -232,6 +241,14 @@ const Command = struct {
             \\               'forward' sends the full URL in the request target
             \\               and expects the proxy to MITM the request.
             \\               Defaults to connect when --http_proxy is set.
+            \\
+            \\--proxy_bearer_token
+            \\               The token to send for bearer authentication with the proxy
+            \\               Proxy-Authorization: Bearer <token>
+            \\
+            \\--proxy_basic_auth
+            \\               The user:password to send for basic authentication with the proxy
+            \\               Proxy-Authorization: Basic <base64(user:password)>
             \\
             \\--log_level     The log level: debug, info, warn, error or fatal.
             \\                Defaults to
@@ -492,6 +509,31 @@ fn parseCommonArg(
         return true;
     }
 
+    if (std.mem.eql(u8, "--proxy_bearer_token", opt)) {
+        if (common.proxy_auth != null) {
+            log.fatal(.app, "proxy auth already set", .{ .arg = "--proxy_bearer_token" });
+            return error.InvalidArgument;
+        }
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--proxy_bearer_token" });
+            return error.InvalidArgument;
+        };
+        common.proxy_auth = .{ .bearer = .{ .token = str } };
+        return true;
+    }
+    if (std.mem.eql(u8, "--proxy_basic_auth", opt)) {
+        if (common.proxy_auth != null) {
+            log.fatal(.app, "proxy auth already set", .{ .arg = "--proxy_basic_auth" });
+            return error.InvalidArgument;
+        }
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--proxy_basic_auth" });
+            return error.InvalidArgument;
+        };
+        common.proxy_auth = .{ .basic = .{ .user_pass = str } };
+        return true;
+    }
+
     if (std.mem.eql(u8, "--log_level", opt)) {
         const str = args.next() orelse {
             log.fatal(.app, "missing argument value", .{ .arg = "--log_level" });
@@ -606,6 +648,7 @@ fn serveHTTP(address: std.net.Address) !void {
         var conn = try listener.accept();
         defer conn.stream.close();
         var http_server = std.http.Server.init(conn, &read_buffer);
+        var connect_headers: std.ArrayListUnmanaged(std.http.Header) = .{};
         REQUEST: while (true) {
             var request = http_server.receiveHead() catch |err| switch (err) {
                 error.HttpConnectionClosing => continue :ACCEPT,
@@ -617,6 +660,16 @@ fn serveHTTP(address: std.net.Address) !void {
 
             if (request.head.method == .CONNECT) {
                 try request.respond("", .{ .status = .ok });
+
+                // Proxy headers and destination headers are separated in the case of a CONNECT proxy
+                // We store the CONNECT headers, then continue with the request for the destination
+                var it = request.iterateHeaders();
+                while (it.next()) |hdr| {
+                    try connect_headers.append(aa, .{
+                        .name = try std.fmt.allocPrint(aa, "__{s}", .{hdr.name}),
+                        .value = try aa.dupe(u8, hdr.value),
+                    });
+                }
                 continue :REQUEST;
             }
 
@@ -656,6 +709,11 @@ fn serveHTTP(address: std.net.Address) !void {
                         .name = try std.fmt.allocPrint(aa, "_{s}", .{hdr.name}),
                         .value = hdr.value,
                     });
+                }
+
+                if (connect_headers.items.len > 0) {
+                    try headers.appendSlice(aa, connect_headers.items);
+                    connect_headers.clearRetainingCapacity();
                 }
                 try headers.append(aa, .{ .name = "Connection", .value = "Close" });
 

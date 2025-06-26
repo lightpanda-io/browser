@@ -31,6 +31,7 @@ pub const App = struct {
         tls_verify_host: bool = true,
         http_proxy: ?std.Uri = null,
         proxy_type: ?http.ProxyType = null,
+        proxy_auth: ?http.ProxyAuth = null,
     };
 
     pub fn init(allocator: Allocator, config: Config) !*App {
@@ -58,6 +59,7 @@ pub const App = struct {
                 .max_concurrent = 3,
                 .http_proxy = config.http_proxy,
                 .proxy_type = config.proxy_type,
+                .proxy_auth = config.proxy_auth,
                 .tls_verify_host = config.tls_verify_host,
             }),
             .config = config,
