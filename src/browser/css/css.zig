@@ -29,6 +29,8 @@ pub const Interfaces = .{
 
 // https://developer.mozilla.org/en-US/docs/Web/API/CSS
 pub const Css = struct {
+    _not_empty: bool = true,
+
     pub fn _supports(_: *Css, _: []const u8, _: ?[]const u8) bool {
         // TODO: Actually respond with which CSS features we support.
         return true;

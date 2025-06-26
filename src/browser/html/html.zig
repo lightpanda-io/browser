@@ -36,6 +36,7 @@ pub const Interfaces = .{
     History,
     Location,
     MediaQueryList,
+    @import("DataSet.zig"),
     @import("screen.zig").Interfaces,
     @import("error_event.zig").ErrorEvent,
 };
