@@ -20,10 +20,11 @@ const std = @import("std");
 const allocPrint = std.fmt.allocPrint;
 
 const parser = @import("../netsurf.zig");
+const Page = @import("../page.zig").Page;
 
 // https://webidl.spec.whatwg.org/#idl-DOMException
 pub const DOMException = struct {
-    err: parser.DOMError,
+    err: ?parser.DOMError,
     str: []const u8,
 
     pub const ErrorSet = parser.DOMError;
@@ -55,6 +56,17 @@ pub const DOMException = struct {
     pub const _INVALID_NODE_TYPE_ERR = 24;
     pub const _DATA_CLONE_ERR = 25;
 
+    pub fn constructor(message_: ?[]const u8, name_: ?[]const u8, page: *const Page) !DOMException {
+        const message = message_ orelse "";
+        const err = if (name_) |n| error_from_str(n) else null;
+        const fixed_name = name(err);
+
+        if (message.len == 0) return .{ .err = err, .str = fixed_name };
+
+        const str = try allocPrint(page.arena, "{s}: {s}", .{ fixed_name, message });
+        return .{ .err = err, .str = str };
+    }
+
     // TODO: deinit
     pub fn init(alloc: std.mem.Allocator, err: anyerror, callerName: []const u8) !DOMException {
         const errCast = @as(parser.DOMError, @errorCast(err));
@@ -75,14 +87,52 @@ pub const DOMException = struct {
         return .{ .err = errCast, .str = str };
     }
 
-    fn name(err: parser.DOMError) []const u8 {
+    fn error_from_str(name_: []const u8) ?parser.DOMError {
+        // @speed: Consider length first, left as is for maintainability, awaiting switch on string support
+        if (std.mem.eql(u8, name_, "IndexSizeError")) return error.IndexSize;
+        if (std.mem.eql(u8, name_, "StringSizeError")) return error.StringSize;
+        if (std.mem.eql(u8, name_, "HierarchyRequestError")) return error.HierarchyRequest;
+        if (std.mem.eql(u8, name_, "WrongDocumentError")) return error.WrongDocument;
+        if (std.mem.eql(u8, name_, "InvalidCharacterError")) return error.InvalidCharacter;
+        if (std.mem.eql(u8, name_, "NoDataAllowedError")) return error.NoDataAllowed;
+        if (std.mem.eql(u8, name_, "NoModificationAllowedError")) return error.NoModificationAllowed;
+        if (std.mem.eql(u8, name_, "NotFoundError")) return error.NotFound;
+        if (std.mem.eql(u8, name_, "NotSupportedError")) return error.NotSupported;
+        if (std.mem.eql(u8, name_, "InuseAttributeError")) return error.InuseAttribute;
+        if (std.mem.eql(u8, name_, "InvalidStateError")) return error.InvalidState;
+        if (std.mem.eql(u8, name_, "SyntaxError")) return error.Syntax;
+        if (std.mem.eql(u8, name_, "InvalidModificationError")) return error.InvalidModification;
+        if (std.mem.eql(u8, name_, "NamespaceError")) return error.Namespace;
+        if (std.mem.eql(u8, name_, "InvalidAccessError")) return error.InvalidAccess;
+        if (std.mem.eql(u8, name_, "ValidationError")) return error.Validation;
+        if (std.mem.eql(u8, name_, "TypeMismatchError")) return error.TypeMismatch;
+        if (std.mem.eql(u8, name_, "SecurityError")) return error.Security;
+        if (std.mem.eql(u8, name_, "NetworkError")) return error.Network;
+        if (std.mem.eql(u8, name_, "AbortError")) return error.Abort;
+        if (std.mem.eql(u8, name_, "URLismatchError")) return error.URLismatch;
+        if (std.mem.eql(u8, name_, "QuotaExceededError")) return error.QuotaExceeded;
+        if (std.mem.eql(u8, name_, "TimeoutError")) return error.Timeout;
+        if (std.mem.eql(u8, name_, "InvalidNodeTypeError")) return error.InvalidNodeType;
+        if (std.mem.eql(u8, name_, "DataCloneError")) return error.DataClone;
+
+        // custom netsurf error
+        if (std.mem.eql(u8, name_, "UnspecifiedEventTypeError")) return error.UnspecifiedEventType;
+        if (std.mem.eql(u8, name_, "DispatchRequestError")) return error.DispatchRequest;
+        if (std.mem.eql(u8, name_, "NoMemoryError")) return error.NoMemory;
+        if (std.mem.eql(u8, name_, "AttributeWrongTypeError")) return error.AttributeWrongType;
+        return null;
+    }
+
+    fn name(err_: ?parser.DOMError) []const u8 {
+        const err = err_ orelse return "Error";
+
         return switch (err) {
             error.IndexSize => "IndexSizeError",
-            error.StringSize => "StringSizeError",
+            error.StringSize => "StringSizeError", // Legacy: DOMSTRING_SIZE_ERR
             error.HierarchyRequest => "HierarchyRequestError",
             error.WrongDocument => "WrongDocumentError",
             error.InvalidCharacter => "InvalidCharacterError",
-            error.NoDataAllowed => "NoDataAllowedError",
+            error.NoDataAllowed => "NoDataAllowedError", // Legacy: NO_DATA_ALLOWED_ERR
             error.NoModificationAllowed => "NoModificationAllowedError",
             error.NotFound => "NotFoundError",
             error.NotSupported => "NotSupportedError",
@@ -92,7 +142,7 @@ pub const DOMException = struct {
             error.InvalidModification => "InvalidModificationError",
             error.Namespace => "NamespaceError",
             error.InvalidAccess => "InvalidAccessError",
-            error.Validation => "ValidationError",
+            error.Validation => "ValidationError", // Legacy: VALIDATION_ERR
             error.TypeMismatch => "TypeMismatchError",
             error.Security => "SecurityError",
             error.Network => "NetworkError",
@@ -115,7 +165,8 @@ pub const DOMException = struct {
     // JS properties and methods
 
     pub fn get_code(self: *const DOMException) u8 {
-        return switch (self.err) {
+        const err = self.err orelse return 0;
+        return switch (err) {
             error.IndexSize => 1,
             error.StringSize => 2,
             error.HierarchyRequest => 3,
@@ -157,7 +208,8 @@ pub const DOMException = struct {
 
     pub fn get_message(self: *const DOMException) []const u8 {
         const errName = DOMException.name(self.err);
-        return self.str[errName.len + 2 ..];
+        if (self.str.len <= errName.len + 2) return "";
+        return self.str[errName.len + 2 ..]; // ! Requires str is formatted as "{name}: {message}"
     }
 
     pub fn _toString(self: *const DOMException) []const u8 {
@@ -187,5 +239,26 @@ test "Browser.DOM.Exception" {
         .{ "he.toString()", "HierarchyRequestError: " ++ err },
         .{ "he instanceof DOMException", "true" },
         .{ "he instanceof Error", "true" },
+    }, .{});
+
+    // Test DOMException constructor
+    try runner.testCases(&.{
+        .{ "let exc0 = new DOMException()", "undefined" },
+        .{ "exc0.name", "Error" },
+        .{ "exc0.code", "0" },
+        .{ "exc0.message", "" },
+        .{ "exc0.toString()", "Error" },
+
+        .{ "let exc1 = new DOMException('Sandwich malfunction')", "undefined" },
+        .{ "exc1.name", "Error" },
+        .{ "exc1.code", "0" },
+        .{ "exc1.message", "Sandwich malfunction" },
+        .{ "exc1.toString()", "Error: Sandwich malfunction" },
+
+        .{ "let exc2 = new DOMException('Caterpillar turned into a butterfly', 'NoModificationAllowedError')", "undefined" },
+        .{ "exc2.name", "NoModificationAllowedError" },
+        .{ "exc2.code", "7" },
+        .{ "exc2.message", "Caterpillar turned into a butterfly" },
+        .{ "exc2.toString()", "NoModificationAllowedError: Caterpillar turned into a butterfly" },
     }, .{});
 }
