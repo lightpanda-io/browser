@@ -37,7 +37,7 @@ const Notification = @import("../notification.zig").Notification;
 // whitespace, so we want to get a reasonable-sized chunk.
 const PEEK_BUF_LEN = 1024;
 
-const BUFFER_LEN = 32 * 1024;
+const BUFFER_LEN = tls.max_ciphertext_record_len;
 
 const MAX_HEADER_LINE_LEN = 4096;
 
@@ -83,7 +83,7 @@ pub const Client = struct {
     http_proxy: ?Uri,
     proxy_type: ?ProxyType,
     proxy_auth: ?[]const u8, // Basic <user:pass; base64> or Bearer <token>
-    root_ca: tls.config.CertBundle,
+    root_ca: std.crypto.Certificate.Bundle,
     tls_verify_host: bool = true,
     connection_manager: ConnectionManager,
     request_pool: std.heap.MemoryPool(Request),
@@ -98,7 +98,7 @@ pub const Client = struct {
     };
 
     pub fn init(allocator: Allocator, opts: Opts) !Client {
-        var root_ca: tls.config.CertBundle = if (builtin.is_test) .{} else try tls.config.CertBundle.fromSystem(allocator);
+        var root_ca: std.crypto.Certificate.Bundle = if (builtin.is_test) .{} else try tls.config.cert.fromSystem(allocator);
         errdefer root_ca.deinit(allocator);
 
         var state_pool = try StatePool.init(allocator, opts.max_concurrent);
@@ -322,12 +322,12 @@ const Connection = struct {
 
     const TLSClient = union(enum) {
         blocking: tls.Connection(std.net.Stream),
-        nonblocking: tls.nb.Client(),
+        nonblocking: tls.nonblock.Connection,
 
         fn close(self: *TLSClient) void {
             switch (self.*) {
                 .blocking => |*tls_client| tls_client.close() catch {},
-                .nonblocking => |*tls_client| tls_client.deinit(),
+                .nonblocking => {},
             }
         }
     };
@@ -666,7 +666,7 @@ pub const Request = struct {
                         .host = if (is_connect_proxy) self._request_host else self._connect_host,
                         .root_ca = self._client.root_ca,
                         .insecure_skip_verify = self._tls_verify_host == false,
-                        .key_log_callback = tls.config.key_log.callback,
+                        // .key_log_callback = tls.config.key_log.callback,
                     }),
                 };
             }
@@ -745,18 +745,21 @@ pub const Request = struct {
         };
 
         if (self._secure) {
-            connection.tls = .{
-                .nonblocking = try tls.nb.Client().init(self._client.allocator, .{
-                    .host = if (self._client.isConnectProxy()) self._request_host else self._connect_host,
-                    .root_ca = self._client.root_ca,
-                    .insecure_skip_verify = self._tls_verify_host == false,
-                    // .key_log_callback = tls.config.key_log.callback,
-                }),
-            };
-
-            async_handler.conn.protocol = .{
-                .secure = &connection.tls.?.nonblocking,
-            };
+            if (self._connection_from_keepalive) {
+                // If the connection came from the keepalive pool, than we already
+                // have a TLS Connection.
+                async_handler.conn.protocol = .{ .encrypted = .{ .conn = &connection.tls.?.nonblocking } };
+            } else {
+                std.debug.assert(connection.tls == null);
+                async_handler.conn.protocol = .{
+                    .handshake = tls.nonblock.Client.init(.{
+                        .host = if (self._client.isConnectProxy()) self._request_host else self._connect_host,
+                        .root_ca = self._client.root_ca,
+                        .insecure_skip_verify = self._tls_verify_host == false,
+                        .key_log_callback = tls.config.key_log.callback,
+                    }),
+                };
+            }
         }
 
         if (self._connection_from_keepalive) {
@@ -1470,25 +1473,54 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
             handler: *Self,
             protocol: Protocol,
 
+            const Encrypted = struct {
+                conn: *tls.nonblock.Connection,
+                // If we want to send "XYZ", we'll ask conn to encrypt it. But
+                // the result might not fit in our write buffer. The encrypt
+                // return tells us what part of "XYZ" wasn't encrypted. We need
+                // to keep this around, so that when our writer buffer becomes
+                // available (when our send is complete), we can continue
+                // encrypting + sending the unsent part.
+                unsent: []const u8 = "",
+            };
+
             const Protocol = union(enum) {
                 plain: void,
-                secure: *tls.nb.Client(),
+                encrypted: Encrypted,
+                handshake: tls.nonblock.Client,
             };
 
             fn connected(self: *Conn) !void {
                 const handler = self.handler;
 
+                std.debug.assert(handler.state == .handshake);
                 switch (self.protocol) {
                     .plain => {
                         handler.state = .header;
                         const header = try handler.request.buildHeader();
                         handler.send(header);
                     },
-                    .secure => |tls_client| {
-                        std.debug.assert(handler.state == .handshake);
+                    .encrypted => |*encrypted| {
+                        // If we're here, it means that we've just "connected"
+                        // from a keepalive connection. We already did the
+                        // handshake in a previous request (which is why we now
+                        // have an encrypted connection) and can send the request
+                        // header directly.
+                        std.debug.assert(handler.request._connection_from_keepalive);
+                        try self.sendHeaderEncrypted(encrypted);
+                    },
+                    .handshake => |*handshake| {
                         // initiate the handshake
-                        _, const i = try tls_client.handshake(handler.read_buf[0..0], handler.write_buf);
-                        handler.send(handler.write_buf[0..i]);
+                        const res = try handshake.run(handler.read_buf[0..0], handler.write_buf);
+
+                        // there should always be something to send
+                        std.debug.assert(res.send.len > 0);
+                        handler.send(res.send);
+
+                        // Regardless of the TLS version, our handshake cannot
+                        // be done at this point.
+                        std.debug.assert(handshake.done() == false);
+
                         handler.receive();
                     },
                 }
@@ -1497,56 +1529,39 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
             fn received(self: *Conn, data: []u8) !ProcessStatus {
                 const handler = self.handler;
                 switch (self.protocol) {
-                    .plain => return handler.processData(data),
-                    .secure => |tls_client| {
-                        var used: usize = 0;
-                        var closed = false;
-                        var cleartext_pos: usize = 0;
+                    .plain => {
+                        std.debug.assert(handler.state == .body);
+                        return handler.processData(data);
+                    },
+                    .encrypted => |*encrypted| {
+                        std.debug.assert(handler.state == .body);
+                        const res = try encrypted.conn.decrypt(data, data);
+
+                        if (res.ciphertext_pos == 0) {
+                            // no part of the encrypted data was consumed
+                            // no cleartext data should have been generated
+                            std.debug.assert(res.cleartext.len == 0);
+
+                            // our next read needs to append more data to
+                            // the existing data
+                            handler.read_pos = data.len;
+                            return if (res.closed) .done else .need_more;
+                        }
+
                         var status = ProcessStatus.need_more;
 
-                        if (tls_client.isConnected()) {
-                            used, cleartext_pos, closed = try tls_client.decrypt(data);
-                        } else {
-                            std.debug.assert(handler.state == .handshake);
-                            // process handshake data
-                            used, const i = try tls_client.handshake(data, handler.write_buf);
-                            if (i > 0) {
-                                handler.send(handler.write_buf[0..i]);
-                            } else if (tls_client.isConnected()) {
-                                // if we're done our handshake, there should be
-                                // no unused data
-                                handler.read_pos = 0;
-                                std.debug.assert(used == data.len);
-                                try self.sendSecureHeader(tls_client);
-                                return .wait;
-                            }
+                        if (res.cleartext.len > 0) {
+                            status = handler.processData(res.cleartext);
                         }
 
-                        if (used == 0) {
-                            // if nothing was used, there should have been
-                            // no cleartext data to process;
-                            std.debug.assert(cleartext_pos == 0);
-
-                            // if we need more data, then it needs to be
-                            // appended to the end of our existing data to
-                            // build up a complete record
-                            handler.read_pos = data.len;
-                            return if (closed) .done else .need_more;
-                        }
-
-                        if (cleartext_pos > 0) {
-                            status = handler.processData(data[0..cleartext_pos]);
-                        }
-
-                        if (closed) {
+                        if (res.closed) {
                             return .done;
                         }
 
-                        if (used == data.len) {
-                            // We used up all the data that we were given. We must
-                            // reset read_pos to 0 because (a) that's more
-                            // efficient and (b) we need all the available space
-                            // to make sure we get a full TLS record next time
+                        const unused = res.unused_ciphertext;
+                        if (unused.len == 0) {
+                            // all of data was used up, our next read can use
+                            // the whole read buffer.
                             handler.read_pos = 0;
                             return status;
                         }
@@ -1560,11 +1575,42 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                         // record size. So as long as we make sure that the start
                         // of a record is at read_buf[0], we know that we'll
                         // always have enough space for 1 record.
-                        const unused = data.len - used;
-                        std.mem.copyForwards(u8, handler.read_buf, data[unused..]);
-                        handler.read_pos = unused;
+                        std.mem.copyForwards(u8, handler.read_buf, unused);
+                        handler.read_pos = unused.len;
 
                         // an incomplete record means there must be more data
+                        return .need_more;
+                    },
+                    .handshake => |*handshake| {
+                        std.debug.assert(handler.state == .handshake);
+                        const res = try handshake.run(data, handler.write_buf);
+
+                        if (res.send.len > 0) {
+                            handler.send(res.send);
+                        } else if (handshake.done()) {
+                            // if our handshake is done, all of our received data
+                            // should have been used
+                            std.debug.assert(res.unused_recv.len == 0);
+                            handler.read_pos = 0;
+                            try self.upgradeHandshake(handshake.cipher().?);
+
+                            // the next step after sendind the header is to wait
+                            // for the sent() callback, so that we know the header
+                            // has been sent and we can either send the body
+                            // or start receiving the response.
+                            return .wait;
+                        }
+
+                        const unused = res.unused_recv;
+                        if (unused.len == 0) {
+                            handler.read_pos = 0;
+                        } else {
+                            std.mem.copyForwards(u8, handler.read_buf, unused);
+                            handler.read_pos = unused.len;
+                        }
+
+                        // whether we have unused data or not, our handshake
+                        // isn't done, so we need more data.
                         return .need_more;
                     },
                 }
@@ -1575,44 +1621,43 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                 switch (self.protocol) {
                     .plain => switch (handler.state) {
                         .handshake, .connect => unreachable,
-                        .header => {
-                            handler.state = .body;
-                            if (handler.request.body) |body| {
-                                handler.send(body);
-                            }
-                            handler.receive();
-                        },
+                        .header => return self.sendBody(),
                         .body => {},
                     },
-                    .secure => |tls_client| {
-                        if (tls_client.isConnected() == false) {
-                            std.debug.assert(handler.state == .handshake);
-                            // still handshaking, nothing to do
-                            return;
+                    .encrypted => |*encrypted| {
+                        if (encrypted.unsent.len > 0) {
+                            return self.send(encrypted.unsent);
                         }
                         switch (handler.state) {
-                            .connect => unreachable,
-                            .handshake => return self.sendSecureHeader(tls_client),
-                            .header => {
-                                handler.state = .body;
-                                const body = handler.request.body orelse {
-                                    // We've sent the header, and there's no body
-                                    // start receiving the response
-                                    handler.receive();
-                                    return;
-                                };
-                                const used, const i = try tls_client.encrypt(body, handler.write_buf);
-                                std.debug.assert(body.len == used);
-                                handler.send(handler.write_buf[0..i]);
-                            },
-                            .body => {
-                                // We've sent the body, start receiving the
-                                // response
-                                handler.receive();
-                            },
+                            .handshake, .connect => unreachable,
+                            .header => return self.sendBody(),
+                            .body => {},
                         }
                     },
+                    .handshake => |*handshake| {
+                        if (handshake.done()) {
+                            return self.upgradeHandshake(handshake.cipher().?);
+                        }
+                        // else still handshaking, nothing to do until we
+                        // receive data
+                    },
                 }
+            }
+
+            fn upgradeHandshake(self: *Conn, cipher: anytype) !void {
+                const encrypted = tls.nonblock.Connection.init(cipher);
+
+                // Hack, but we need to store this in the underlying
+                // connection object, since that's what we "keepalive".
+                var handler = self.handler;
+                std.debug.assert(handler.request._connection.?.tls == null);
+                handler.request._connection.?.tls = .{ .nonblocking = encrypted };
+                self.protocol = .{
+                    .encrypted = .{
+                        .conn = &handler.request._connection.?.tls.?.nonblocking,
+                    },
+                };
+                try self.sendHeaderEncrypted(&self.protocol.encrypted);
             }
 
             // This can be called from two places because, I think, of differences
@@ -1620,14 +1665,45 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
             // as soon as we've written our handshake, we consider the connection
             // "connected". TLS 1.2 requires a extra round trip, and thus is
             // only connected after we receive response from the server.
-            fn sendSecureHeader(self: *Conn, tls_client: *tls.nb.Client()) !void {
+            fn sendHeaderEncrypted(self: *Conn, encrypted: *Encrypted) !void {
                 const handler = self.handler;
                 handler.state = .header;
 
-                const header = try handler.request.buildHeader();
-                const used, const i = try tls_client.encrypt(header, handler.write_buf);
-                std.debug.assert(header.len == used);
-                handler.send(handler.write_buf[0..i]);
+                const header = try self.handler.request.buildHeader();
+                const res = try encrypted.conn.encrypt(header, handler.write_buf);
+                encrypted.unsent = res.unused_cleartext;
+
+                // we always expect encrypted our header to result in some data
+                // encrypted data we can send.
+                std.debug.assert(res.ciphertext.len > 0);
+
+                handler.send(res.ciphertext);
+            }
+
+            fn sendBody(self: *Conn) !void {
+                var handler = self.handler;
+                handler.state = .body;
+                if (handler.request.body) |b| {
+                    try self.send(b);
+                }
+                handler.receive();
+            }
+
+            fn send(self: *Conn, data: []const u8) !void {
+                const handler = self.handler;
+                switch (self.protocol) {
+                    .plain => return handler.send(data),
+                    .encrypted => |*encrypted| {
+                        const res = try encrypted.conn.encrypt(data, handler.write_buf);
+                        encrypted.unsent = res.unused_cleartext;
+                        return handler.send(res.ciphertext);
+                    },
+                    .handshake => {
+                        // While we do send data during handshake, we send it
+                        // directly.
+                        unreachable;
+                    },
+                }
             }
         };
     };
