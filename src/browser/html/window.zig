@@ -217,6 +217,21 @@ pub const Window = struct {
         };
     }
 
+    pub fn _btoa(_: *const Window, value: []const u8, page: *Page) ![]const u8 {
+        const Encoder = std.base64.standard.Encoder;
+        const out = try page.call_arena.alloc(u8, Encoder.calcSize(value.len));
+        return Encoder.encode(out, value);
+    }
+
+    pub fn _atob(_: *const Window, value: []const u8, page: *Page) ![]const u8 {
+        const Decoder = std.base64.standard.Decoder;
+        const size = Decoder.calcSizeForSlice(value) catch return error.InvalidCharacterError;
+
+        const out = try page.call_arena.alloc(u8, size);
+        Decoder.decode(out, value) catch return error.InvalidCharacterError;
+        return out;
+    }
+
     const CreateTimeoutOpts = struct {
         repeat: bool = false,
         animation_frame: bool = false,
@@ -413,5 +428,13 @@ test "Browser.HTML.Window" {
             ,
             "true",
         },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "const b64 = btoa('https://ziglang.org/documentation/master/std/#std.base64.Base64Decoder')", "undefined" },
+        .{ "b64", "aHR0cHM6Ly96aWdsYW5nLm9yZy9kb2N1bWVudGF0aW9uL21hc3Rlci9zdGQvI3N0ZC5iYXNlNjQuQmFzZTY0RGVjb2Rlcg==" },
+        .{ "const str = atob(b64)", "undefined" },
+        .{ "str", "https://ziglang.org/documentation/master/std/#std.base64.Base64Decoder" },
+        .{ "try { atob('b') } catch (e) { e } ", "Error: InvalidCharacterError" },
     }, .{});
 }
