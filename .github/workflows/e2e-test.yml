@@ -65,56 +65,6 @@ jobs:
             zig-out/bin/lightpanda
           retention-days: 1
 
-  puppeteer-perf:
-    name: puppeteer-perf
-    needs: zig-build-release
-
-    env:
-      MAX_MEMORY: 30000
-      MAX_AVG_DURATION: 24
-      LIGHTPANDA_DISABLE_TELEMETRY: true
-
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          repository: 'lightpanda-io/demo'
-          fetch-depth: 0
-
-      - run: npm install
-
-      - name: download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: lightpanda-build-release
-
-      - run: chmod a+x ./lightpanda
-
-      - name: run puppeteer
-        run: |
-          python3 -m http.server 1234 -d ./public & echo $! > PYTHON.pid
-          ./lightpanda serve & echo $! > LPD.pid
-          RUNS=100 npm run bench-puppeteer-cdp > puppeteer.out || exit 1
-          cat /proc/`cat LPD.pid`/status |grep VmHWM|grep -oP '\d+' > LPD.VmHWM
-          kill `cat LPD.pid` `cat PYTHON.pid`
-
-      - name: puppeteer result
-        run: cat puppeteer.out
-
-      - name: memory regression
-        run: |
-          export LPD_VmHWM=`cat LPD.VmHWM`
-          echo "Peak resident set size: $LPD_VmHWM"
-          test "$LPD_VmHWM" -le "$MAX_MEMORY"
-
-      - name: duration regression
-        run: |
-          export PUPPETEER_AVG_DURATION=`cat puppeteer.out|grep 'avg run'|sed 's/avg run duration (ms) //'`
-          echo "puppeteer avg duration: $PUPPETEER_AVG_DURATION"
-          test "$PUPPETEER_AVG_DURATION" -le "$MAX_AVG_DURATION"
-
   demo-scripts:
     name: demo-scripts
     needs: zig-build-release
@@ -147,8 +97,10 @@ jobs:
     name: cdp-and-hyperfine-bench
     needs: zig-build-release
 
-    # Don't execute on PR
-    if: github.event_name != 'pull_request'
+    env:
+      MAX_MEMORY: 27000
+      MAX_AVG_DURATION: 23
+      LIGHTPANDA_DISABLE_TELEMETRY: true
 
     # use a self host runner.
     runs-on: lpd-bench-hetzner
@@ -184,6 +136,18 @@ jobs:
 
       - name: puppeteer result
         run: cat puppeteer.out
+
+      - name: memory regression
+        run: |
+          export LPD_VmHWM=`cat LPD.VmHWM`
+          echo "Peak resident set size: $LPD_VmHWM"
+          test "$LPD_VmHWM" -le "$MAX_MEMORY"
+
+      - name: duration regression
+        run: |
+          export PUPPETEER_AVG_DURATION=`cat puppeteer.out|grep 'avg run'|sed 's/avg run duration (ms) //'`
+          echo "puppeteer avg duration: $PUPPETEER_AVG_DURATION"
+          test "$PUPPETEER_AVG_DURATION" -le "$MAX_AVG_DURATION"
 
       - name: json output
         run: |
