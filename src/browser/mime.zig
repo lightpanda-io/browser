@@ -35,6 +35,8 @@ pub const Mime = struct {
         text_html,
         text_javascript,
         text_plain,
+        text_css,
+        application_json,
         unknown,
         other,
     };
@@ -44,6 +46,8 @@ pub const Mime = struct {
         text_html: void,
         text_javascript: void,
         text_plain: void,
+        text_css: void,
+        application_json: void,
         unknown: void,
         other: struct { type: []const u8, sub_type: []const u8 },
     };
@@ -174,18 +178,22 @@ pub const Mime = struct {
         if (std.meta.stringToEnum(enum {
             @"text/xml",
             @"text/html",
+            @"text/css",
+            @"text/plain",
 
             @"text/javascript",
             @"application/javascript",
             @"application/x-javascript",
 
-            @"text/plain",
+            @"application/json",
         }, type_name)) |known_type| {
             const ct: ContentType = switch (known_type) {
                 .@"text/xml" => .{ .text_xml = {} },
                 .@"text/html" => .{ .text_html = {} },
                 .@"text/javascript", .@"application/javascript", .@"application/x-javascript" => .{ .text_javascript = {} },
                 .@"text/plain" => .{ .text_plain = {} },
+                .@"text/css" => .{ .text_css = {} },
+                .@"application/json" => .{ .application_json = {} },
             };
             return .{ ct, attribute_start };
         }
@@ -351,6 +359,9 @@ test "Mime: parse common" {
     try expect(.{ .content_type = .{ .text_javascript = {} } }, "text/javascript");
     try expect(.{ .content_type = .{ .text_javascript = {} } }, "Application/JavaScript");
     try expect(.{ .content_type = .{ .text_javascript = {} } }, "application/x-javascript");
+
+    try expect(.{ .content_type = .{ .application_json = {} } }, "application/json");
+    try expect(.{ .content_type = .{ .text_css = {} } }, "text/css");
 }
 
 test "Mime: parse uncommon" {

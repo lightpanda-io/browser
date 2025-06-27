@@ -238,17 +238,33 @@ pub const Page = struct {
                 .reason = opts.reason,
             });
 
-            if (!mime.isHTML()) {
+            if (mime.isHTML()) {
+                // the page is an HTML, load it as it.
+                try self.loadHTMLDoc(&response, mime.charset orelse "utf-8");
+            } else {
+                // the page isn't an HTML
                 var arr: std.ArrayListUnmanaged(u8) = .{};
                 while (try response.next()) |data| {
                     try arr.appendSlice(arena, try arena.dupe(u8, data));
                 }
                 // save the body into the page.
                 self.raw_data = arr.items;
-                return;
-            }
 
-            try self.loadHTMLDoc(&response, mime.charset orelse "utf-8");
+                // construct a pseudo HTML containing the response body.
+                var buf: std.ArrayListUnmanaged(u8) = .{};
+
+                switch (mime.content_type) {
+                    .application_json, .text_plain, .text_javascript, .text_css => {
+                        try buf.appendSlice(arena, "<html><head><meta charset=\"utf-8\"></head><body><pre>");
+                        try buf.appendSlice(arena, self.raw_data.?);
+                        try buf.appendSlice(arena, "</pre></body></html>\n");
+                    },
+                    // In other cases, we prefer to not integrate the content into the HTML document page iself.
+                    else => {},
+                }
+                var fbs = std.io.fixedBufferStream(buf.items);
+                try self.loadHTMLDoc(fbs.reader(), mime.charset orelse "utf-8");
+            }
         }
 
         try self.processHTMLDoc();
