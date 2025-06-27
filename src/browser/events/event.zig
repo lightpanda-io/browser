@@ -54,7 +54,7 @@ pub const Event = struct {
 
     pub fn toInterface(evt: *parser.Event) !Union {
         return switch (try parser.eventGetInternalType(evt)) {
-            .event => .{ .Event = evt },
+            .event, .abort_signal => .{ .Event = evt },
             .custom_event => .{ .CustomEvent = @as(*CustomEvent, @ptrCast(evt)).* },
             .progress_event => .{ .ProgressEvent = @as(*ProgressEvent, @ptrCast(evt)).* },
             .mouse_event => .{ .MouseEvent = @as(*parser.MouseEvent, @ptrCast(evt)) },
@@ -77,13 +77,13 @@ pub const Event = struct {
     pub fn get_target(self: *parser.Event, page: *Page) !?EventTargetUnion {
         const et = try parser.eventTarget(self);
         if (et == null) return null;
-        return try EventTarget.toInterface(et.?, page);
+        return try EventTarget.toInterface(self, et.?, page);
     }
 
     pub fn get_currentTarget(self: *parser.Event, page: *Page) !?EventTargetUnion {
         const et = try parser.eventCurrentTarget(self);
         if (et == null) return null;
-        return try EventTarget.toInterface(et.?, page);
+        return try EventTarget.toInterface(self, et.?, page);
     }
 
     pub fn get_eventPhase(self: *parser.Event) !u8 {

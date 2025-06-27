@@ -30,39 +30,39 @@ pub const Console = struct {
     timers: std.StringHashMapUnmanaged(u32) = .{},
     counts: std.StringHashMapUnmanaged(u32) = .{},
 
-    pub fn static_lp(values: []JsObject, page: *Page) !void {
+    pub fn _lp(values: []JsObject, page: *Page) !void {
         if (values.len == 0) {
             return;
         }
         log.fatal(.console, "lightpanda", .{ .args = try serializeValues(values, page) });
     }
 
-    pub fn static_log(values: []JsObject, page: *Page) !void {
+    pub fn _log(values: []JsObject, page: *Page) !void {
         if (values.len == 0) {
             return;
         }
         log.info(.console, "info", .{ .args = try serializeValues(values, page) });
     }
 
-    pub fn static_info(values: []JsObject, page: *Page) !void {
-        return static_log(values, page);
+    pub fn _info(values: []JsObject, page: *Page) !void {
+        return _log(values, page);
     }
 
-    pub fn static_debug(values: []JsObject, page: *Page) !void {
+    pub fn _debug(values: []JsObject, page: *Page) !void {
         if (values.len == 0) {
             return;
         }
         log.debug(.console, "debug", .{ .args = try serializeValues(values, page) });
     }
 
-    pub fn static_warn(values: []JsObject, page: *Page) !void {
+    pub fn _warn(values: []JsObject, page: *Page) !void {
         if (values.len == 0) {
             return;
         }
         log.warn(.console, "warn", .{ .args = try serializeValues(values, page) });
     }
 
-    pub fn static_error(values: []JsObject, page: *Page) !void {
+    pub fn _error(values: []JsObject, page: *Page) !void {
         if (values.len == 0) {
             return;
         }
@@ -73,7 +73,7 @@ pub const Console = struct {
         });
     }
 
-    pub fn static_clear() void {}
+    pub fn _clear() void {}
 
     pub fn _count(self: *Console, label_: ?[]const u8, page: *Page) !void {
         const label = label_ orelse "default";
@@ -134,7 +134,7 @@ pub const Console = struct {
         log.warn(.console, "timer stop", .{ .label = label, .elapsed = elapsed - kv.value });
     }
 
-    pub fn static_assert(assertion: JsObject, values: []JsObject, page: *Page) !void {
+    pub fn _assert(assertion: JsObject, values: []JsObject, page: *Page) !void {
         if (assertion.isTruthy()) {
             return;
         }
