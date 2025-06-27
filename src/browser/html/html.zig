@@ -39,4 +39,5 @@ pub const Interfaces = .{
     @import("DataSet.zig"),
     @import("screen.zig").Interfaces,
     @import("error_event.zig").ErrorEvent,
+    @import("AbortController.zig").Interfaces,
 };
