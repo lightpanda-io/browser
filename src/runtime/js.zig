@@ -1858,6 +1858,13 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             }
         };
 
+        pub fn UndefinedOr(comptime T: type) type {
+            return union(enum) {
+                value: T,
+                undefined: void,
+            };
+        }
+
         fn compileModule(isolate: v8.Isolate, src: []const u8, name: []const u8) !v8.Module {
             // compile
             const script_name = v8.String.initUtf8(isolate, name);
