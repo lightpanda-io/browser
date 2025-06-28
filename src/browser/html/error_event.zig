@@ -72,15 +72,11 @@ pub const ErrorEvent = struct {
         return self.colno;
     }
 
-    const ErrorValue = union(enum) {
-        obj: Env.JsObject,
-        undefined: void,
-    };
-    pub fn get_error(self: *const ErrorEvent) ErrorValue {
+    pub fn get_error(self: *const ErrorEvent) Env.UndefinedOr(Env.JsObject) {
         if (self.@"error") |e| {
-            return .{ .obj = e };
+            return .{ .value = e };
         }
-        return .{ .undefined = {} };
+        return .undefined;
     }
 };
 
