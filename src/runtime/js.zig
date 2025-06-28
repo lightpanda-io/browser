@@ -1860,8 +1860,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
         pub fn UndefinedOr(comptime T: type) type {
             return union(enum) {
-                value: T,
                 undefined: void,
+                value: T,
             };
         }
 
