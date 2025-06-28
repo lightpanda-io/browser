@@ -29,6 +29,8 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const CALL_ARENA_RETAIN = 1024 * 16;
 const CONTEXT_ARENA_RETAIN = 1024 * 64;
 
+const js = @This();
+
 // Global, should only be initialized once.
 pub const Platform = struct {
     inner: v8.Platform,
@@ -1272,6 +1274,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 return .{ .invalid = {} };
             }
 
+            pub fn throw(self: *JsContext, err: []const u8) Exception {
+                const js_value = js.createException(self.isolate, err);
+                return self.createException(js_value);
+            }
+
             // Callback from V8, asking us to load a module. The "specifier" is
             // the src of the module to load.
             fn resolveModuleCallback(
@@ -1821,6 +1828,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             inner: v8.Value,
             js_context: *const JsContext,
 
+            const _EXCEPTION_ID_KLUDGE = true;
+
             // the caller needs to deinit the string returned
             pub fn exception(self: Exception, allocator: Allocator) ![]const u8 {
                 const js_context = self.js_context;
@@ -1919,7 +1928,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 } else if (comptime std.mem.startsWith(u8, name, "get_")) {
                     generateProperty(Struct, name[4..], isolate, template_proto);
                 } else if (comptime std.mem.startsWith(u8, name, "static_")) {
-                    generateFunction(Struct, name[7..], isolate, template_proto);
+                    generateFunction(Struct, name[7..], isolate, template);
                 }
             }
 
@@ -2009,7 +2018,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             template_proto.set(js_name, function_template, v8.PropertyAttribute.None);
         }
 
-        fn generateFunction(comptime Struct: type, comptime name: []const u8, isolate: v8.Isolate, template_proto: v8.ObjectTemplate) void {
+        fn generateFunction(comptime Struct: type, comptime name: []const u8, isolate: v8.Isolate, template: v8.FunctionTemplate) void {
             const js_name = v8.String.initUtf8(isolate, name).toName();
             const function_template = v8.FunctionTemplate.initCallback(isolate, struct {
                 fn callback(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
@@ -2023,7 +2032,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     };
                 }
             }.callback);
-            template_proto.set(js_name, function_template, v8.PropertyAttribute.None);
+            template.set(js_name, function_template, v8.PropertyAttribute.None);
         }
 
         fn generateAttribute(comptime Struct: type, comptime name: []const u8, isolate: v8.Isolate, template: v8.FunctionTemplate, template_proto: v8.ObjectTemplate) void {
@@ -2316,6 +2325,10 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     if (T == JsObject) {
                         // we're returning a v8.Object
                         return value.js_obj.toValue();
+                    }
+
+                    if (@hasDecl(T, "_EXCEPTION_ID_KLUDGE")) {
+                        return isolate.throwException(value.inner);
                     }
 
                     if (s.is_tuple) {
@@ -2619,10 +2632,12 @@ fn Caller(comptime E: type, comptime State: type) type {
         }
 
         fn method(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, info: v8.FunctionCallbackInfo) !void {
+            if (comptime isSelfReceiver(Struct, named_function) == false) {
+                return self.function(Struct, named_function, info);
+            }
+
             const js_context = self.js_context;
             const func = @field(Struct, named_function.name);
-            comptime assertSelfReceiver(Struct, named_function);
-
             var args = try self.getArgs(Struct, named_function, 1, info);
             const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
 
@@ -2742,18 +2757,36 @@ fn Caller(comptime E: type, comptime State: type) type {
             return valueToString(self.call_arena, .{ .handle = name.handle }, self.isolate, self.v8_context);
         }
 
+        fn isSelfReceiver(comptime Struct: type, comptime named_function: NamedFunction) bool {
+            return checkSelfReceiver(Struct, named_function, false);
+        }
         fn assertSelfReceiver(comptime Struct: type, comptime named_function: NamedFunction) void {
+            _ = checkSelfReceiver(Struct, named_function, true);
+        }
+        fn checkSelfReceiver(comptime Struct: type, comptime named_function: NamedFunction, comptime fail: bool) bool {
             const func = @field(Struct, named_function.name);
             const params = @typeInfo(@TypeOf(func)).@"fn".params;
             if (params.len == 0) {
-                @compileError(named_function.full_name ++ " must have a self parameter");
+                if (fail) {
+                    @compileError(named_function.full_name ++ " must have a self parameter");
+                }
+                return false;
             }
-            const R = Receiver(Struct);
 
+            const R = Receiver(Struct);
             const first_param = params[0].type.?;
             if (first_param != *R and first_param != *const R) {
-                @compileError(std.fmt.comptimePrint("The first parameter to {s} must be a *{s} or *const {s}. Got: {s}", .{ named_function.full_name, @typeName(R), @typeName(R), @typeName(first_param) }));
+                if (fail) {
+                    @compileError(std.fmt.comptimePrint("The first parameter to {s} must be a *{s} or *const {s}. Got: {s}", .{
+                        named_function.full_name,
+                        @typeName(R),
+                        @typeName(R),
+                        @typeName(first_param),
+                    }));
+                }
+                return false;
             }
+            return true;
         }
 
         fn assertIsStateArg(comptime Struct: type, comptime named_function: NamedFunction, index: comptime_int) void {

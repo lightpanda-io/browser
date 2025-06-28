@@ -526,6 +526,7 @@ pub const EventType = enum(u8) {
     custom_event = 2,
     mouse_event = 3,
     error_event = 4,
+    abort_signal = 5,
 };
 
 pub const MutationEvent = c.dom_mutation_event;
