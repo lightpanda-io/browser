@@ -322,11 +322,19 @@ const Connection = struct {
 
     const TLSClient = union(enum) {
         blocking: tls.Connection(std.net.Stream),
+        blocking_tls_in_tls: struct {
+            proxy: tls.Connection(std.net.Stream),
+            destination: tls.Connection(*tls.Connection(std.net.Stream)),
+        },
         nonblocking: tls.nonblock.Connection,
 
         fn close(self: *TLSClient) void {
             switch (self.*) {
                 .blocking => |*tls_client| tls_client.close() catch {},
+                .blocking_tls_in_tls => {}, // |*tls_in_tls| {
+                // tls_in_tls.destination.close() catch {}; // Crashes
+                // tls_in_tls.proxy.close() catch {};
+                // },
                 .nonblocking => {},
             }
         }
@@ -657,18 +665,32 @@ pub const Request = struct {
 
             const is_connect_proxy = self._client.isConnectProxy();
             if (is_connect_proxy) {
-                try SyncHandler.connect(self);
-            }
-
-            if (self._secure) {
-                self._connection.?.tls = .{
-                    .blocking = try tls.client(std.net.Stream{ .handle = socket }, .{
-                        .host = if (is_connect_proxy) self._request_host else self._connect_host,
+                var connect_connection = try SyncHandler.connect(self);
+                if (self._secure) { // TODO separate _secure for proxy and desination
+                    const tls_in_tls = try tls.client(&connect_connection, .{
+                        .host = self._request_host,
                         .root_ca = self._client.root_ca,
                         .insecure_skip_verify = self._tls_verify_host == false,
                         // .key_log_callback = tls.config.key_log.callback,
-                    }),
-                };
+                    });
+                    self._connection.?.tls = .{
+                        .blocking_tls_in_tls = .{
+                            .proxy = connect_connection,
+                            .destination = tls_in_tls,
+                        },
+                    };
+                }
+            } else {
+                if (self._secure) {
+                    self._connection.?.tls = .{
+                        .blocking = try tls.client(std.net.Stream{ .handle = socket }, .{
+                            .host = if (is_connect_proxy) self._request_host else self._connect_host,
+                            .root_ca = self._client.root_ca,
+                            .insecure_skip_verify = self._tls_verify_host == false,
+                            // .key_log_callback = tls.config.key_log.callback,
+                        }),
+                    };
+                }
             }
 
             self._connection_from_keepalive = false;
@@ -1721,7 +1743,15 @@ const SyncHandler = struct {
         var conn: Conn = blk: {
             const c = request._connection.?;
             if (c.tls) |*tls_client| {
-                break :blk .{ .tls = &tls_client.blocking };
+                switch (tls_client.*) {
+                    .nonblocking => unreachable,
+                    .blocking => |*blocking| {
+                        break :blk .{ .tls = blocking };
+                    },
+                    .blocking_tls_in_tls => |*blocking_tls_in_tls| {
+                        break :blk .{ .tls_in_tls = &blocking_tls_in_tls.destination };
+                    },
+                }
             }
             break :blk .{ .plain = c.socket };
         };
@@ -1804,11 +1834,18 @@ const SyncHandler = struct {
 
     // Unfortunately, this is called from the Request doSendSync since we need
     // to do this before setting up our TLS connection.
-    fn connect(request: *Request) !void {
+    fn connect(request: *Request) !tls.Connection(std.net.Stream) {
         const socket = request._connection.?.socket;
 
         const header = try request.buildConnectHeader();
-        try Conn.writeAll(socket, header);
+        // try Conn.writeAll(socket, header);
+        var tls_client = try tls.client(std.net.Stream{ .handle = socket }, .{
+            .host = request._connect_host,
+            .root_ca = request._client.root_ca,
+            .insecure_skip_verify = request._tls_verify_host == false,
+            .key_log_callback = tls.config.key_log.callback,
+        });
+        try tls_client.writeAll(header);
 
         var pos: usize = 0;
         var reader = request.newReader();
@@ -1819,18 +1856,24 @@ const SyncHandler = struct {
             // we only send CONNECT requests on newly established connections
             // and maybeRetryOrErr is only for connections that might have been
             // closed while being kept-alive
-            const n = try posix.read(socket, read_buf[pos..]);
+            // const n = try posix.read(socket, read_buf[pos..]);
+            // const n = switch (self.*) {
+            //     .tls => |tls_client| try tls_client.read(buf),
+            //     .plain => |socket| try posix.read(socket, buf),
+            // };
+            const n = try tls_client.read(read_buf[pos..]);
             if (n == 0) {
                 return error.ConnectionResetByPeer;
             }
             pos += n;
             if (try reader.connectResponse(read_buf[0..pos])) {
                 // returns true if we have a successful connect response
-                return;
+                return tls_client;
             }
 
             // we don't have enough data yet.
         }
+        return tls_client;
     }
 
     fn maybeRetryOrErr(self: *SyncHandler, err: anyerror) !Response {
@@ -1880,11 +1923,18 @@ const SyncHandler = struct {
     }
 
     const Conn = union(enum) {
+        tls_in_tls: *tls.Connection(*tls.Connection(std.net.Stream)),
         tls: *tls.Connection(std.net.Stream),
         plain: posix.socket_t,
 
         fn sendRequest(self: *Conn, header: []const u8, body: ?[]const u8) !void {
             switch (self.*) {
+                .tls_in_tls => |tls_client| {
+                    try tls_client.writeAll(header);
+                    if (body) |b| {
+                        try tls_client.writeAll(b);
+                    }
+                },
                 .tls => |tls_client| {
                     try tls_client.writeAll(header);
                     if (body) |b| {
@@ -1906,6 +1956,7 @@ const SyncHandler = struct {
 
         fn read(self: *Conn, buf: []u8) !usize {
             const n = switch (self.*) {
+                .tls_in_tls => |tls_client| try tls_client.read(buf),
                 .tls => |tls_client| try tls_client.read(buf),
                 .plain => |socket| try posix.read(socket, buf),
             };
@@ -2081,6 +2132,7 @@ const Reader = struct {
         if (result.done == false) {
             // CONNECT responses should not have a body. If the header is
             // done, then the entire response should be done.
+            log.err(.http_client, "InvalidConnectResponse", .{ .unprocessed = result.unprocessed.? });
             return error.InvalidConnectResponse;
         }
 
