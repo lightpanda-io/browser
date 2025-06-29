@@ -60,7 +60,7 @@ jobs:
       ARCH: aarch64
       OS: linux
 
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-22.04-arm
     timeout-minutes: 15
 
     steps:
