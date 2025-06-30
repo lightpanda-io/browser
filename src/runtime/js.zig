@@ -236,6 +236,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     defer try_catch.deinit();
 
                     const module = compileModule(iso, source, specifier_str) catch {
+                        log.err(.js, "module compilation failed", .{
+                            .specifier = specifier_str,
+                            .exception = try_catch.exception(context.call_arena) catch "unknown error",
+                            .stack = try_catch.stack(context.call_arena) catch null,
+                        });
                         const error_msg = if (try_catch.hasCaught()) blk: {
                             const exception_str = try_catch.exception(context.call_arena) catch "Compilation error";
                             break :blk v8.String.initUtf8(iso, exception_str orelse "Compilation error");
@@ -245,9 +250,12 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         return @constCast(resolver.getPromise().handle);
                     };
 
-                    // TODO: add module to our module cache.
-
                     const instantiated = module.instantiate(ctx, JsContext.resolveModuleCallback) catch {
+                        log.err(.js, "module instantiation failed", .{
+                            .specifier = specifier_str,
+                            .exception = try_catch.exception(context.call_arena) catch "unknown error",
+                            .stack = try_catch.stack(context.call_arena) catch null,
+                        });
                         const error_msg = if (try_catch.hasCaught()) blk: {
                             const exception_str = try_catch.exception(context.call_arena) catch "Instantiation error";
                             break :blk v8.String.initUtf8(iso, exception_str orelse "Instantiation error");
@@ -264,6 +272,12 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     }
 
                     const evaluated = module.evaluate(ctx) catch {
+                        log.err(.js, "module evaluation failed", .{
+                            .specifier = specifier_str,
+                            .exception = try_catch.exception(context.call_arena) catch "unknown error",
+                            .stack = try_catch.stack(context.call_arena) catch null,
+                            .line = try_catch.sourceLineNumber() orelse 0,
+                        });
                         const error_msg = if (try_catch.hasCaught()) blk: {
                             const exception_str = try_catch.exception(context.call_arena) catch "Evaluation error";
                             break :blk v8.String.initUtf8(iso, exception_str orelse "Evaluation error");
@@ -272,10 +286,64 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         _ = resolver.reject(ctx, error_msg.toValue());
                         return @constCast(resolver.getPromise().handle);
                     };
-                    _ = evaluated;
 
-                    const namespace = module.getModuleNamespace();
-                    _ = resolver.resolve(ctx, namespace);
+                    if (evaluated.isPromise()) {
+                        const promise = v8.Promise{ .handle = evaluated.handle };
+
+                        const EvaluationData = struct {
+                            module: v8.Persistent(v8.Module),
+                            resolver: v8.Persistent(v8.PromiseResolver),
+                        };
+
+                        const ev_data = context.context_arena.create(EvaluationData) catch unreachable;
+                        ev_data.* = .{
+                            .module = v8.Persistent(v8.Module).init(iso, module),
+                            .resolver = v8.Persistent(v8.PromiseResolver).init(iso, resolver),
+                        };
+                        const external = v8.External.init(iso, @ptrCast(ev_data));
+
+                        const then_callback = v8.Function.initWithData(ctx, struct {
+                            pub fn callback(info: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
+                                const cb_info = v8.FunctionCallbackInfo{ .handle = info.? };
+                                const cb_isolate = cb_info.getIsolate();
+                                const cb_context = cb_isolate.getCurrentContext();
+                                const data: *EvaluationData = @ptrCast(@alignCast(cb_info.getExternalValue()));
+                                const cb_module = v8.Module{ .handle = data.module.handle };
+                                const cb_resolver = v8.PromiseResolver{ .handle = data.resolver.handle };
+
+                                const namespace = cb_module.getModuleNamespace();
+                                log.warn(.js, "module then promise", .{
+                                    .namespace = namespace,
+                                });
+                                _ = cb_resolver.resolve(cb_context, namespace);
+                            }
+                        }.callback, external);
+
+                        const catch_callback = v8.Function.initWithData(ctx, struct {
+                            pub fn callback(info: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
+                                log.warn(.js, "module catch promise", .{});
+                                const cb_info = v8.FunctionCallbackInfo{ .handle = info.? };
+                                const cb_context = cb_info.getIsolate().getCurrentContext();
+                                const data: *EvaluationData = @ptrCast(@alignCast(cb_info.getExternalValue()));
+                                const cb_resolver = v8.PromiseResolver{ .handle = data.resolver.handle };
+                                _ = cb_resolver.reject(cb_context, cb_info.getData());
+                            }
+                        }.callback, external);
+
+                        _ = promise.thenAndCatch(ctx, then_callback, catch_callback) catch {
+                            log.err(.js, "module evaluation is promise", .{
+                                .specifier = specifier_str,
+                                .line = try_catch.sourceLineNumber() orelse 0,
+                            });
+                            const error_msg = v8.String.initUtf8(iso, "Evaluation is a promise");
+                            _ = resolver.reject(ctx, error_msg.toValue());
+                            return @constCast(resolver.getPromise().handle);
+                        };
+                    } else {
+                        const namespace = module.getModuleNamespace();
+                        _ = resolver.resolve(ctx, namespace);
+                    }
+
                     return @constCast(resolver.getPromise().handle);
                 }
             }.callback);
@@ -810,6 +878,38 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 _ = try m.evaluate(v8_context);
             }
 
+            pub fn module2(self: *JsContext, src: []const u8, url: []const u8, cacheable: bool) !v8.Module {
+                if (!cacheable) {
+                    return self.moduleNoCache2(src, url);
+                }
+
+                const arena = self.context_arena;
+
+                const gop = try self.module_cache.getOrPut(arena, url);
+                if (gop.found_existing) {
+                    return v8.Module{ .handle = gop.value_ptr.handle };
+                }
+                errdefer _ = self.module_cache.remove(url);
+
+                const m = try compileModule(self.isolate, src, url);
+
+                const owned_url = try arena.dupe(u8, url);
+                try self.module_identifier.putNoClobber(arena, m.getIdentityHash(), owned_url);
+                errdefer _ = self.module_identifier.remove(m.getIdentityHash());
+
+                gop.key_ptr.* = owned_url;
+                gop.value_ptr.* = PersistentModule.init(self.isolate, m);
+
+                // resolveModuleCallback loads module's dependencies.
+                const v8_context = self.v8_context;
+                if (try m.instantiate(v8_context, resolveModuleCallback) == false) {
+                    return error.ModuleInstantiationError;
+                }
+
+                _ = try m.evaluate(v8_context);
+                return m;
+            }
+
             fn moduleNoCache(self: *JsContext, src: []const u8, url: []const u8) !void {
                 const m = try compileModule(self.isolate, src, url);
                 const v8_context = self.v8_context;
@@ -820,6 +920,19 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 const owned_url = try arena.dupe(u8, url);
                 try self.module_identifier.putNoClobber(arena, m.getIdentityHash(), owned_url);
                 _ = try m.evaluate(v8_context);
+            }
+
+            fn moduleNoCache2(self: *JsContext, src: []const u8, url: []const u8) !v8.Module {
+                const m = try compileModule(self.isolate, src, url);
+                const v8_context = self.v8_context;
+                if (try m.instantiate(v8_context, resolveModuleCallback) == false) {
+                    return error.ModuleInstantiationError;
+                }
+                const arena = self.context_arena;
+                const owned_url = try arena.dupe(u8, url);
+                try self.module_identifier.putNoClobber(arena, m.getIdentityHash(), owned_url);
+                _ = try m.evaluate(v8_context);
+                return m;
             }
 
             // Wrap a v8.Exception
