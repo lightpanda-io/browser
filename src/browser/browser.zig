@@ -27,6 +27,8 @@ const App = @import("../app.zig").App;
 const Session = @import("session.zig").Session;
 const Notification = @import("../notification.zig").Notification;
 
+const log = @import("../log.zig");
+
 const http = @import("../http/client.zig");
 
 // Browser is an instance of the browser.
@@ -47,7 +49,7 @@ pub const Browser = struct {
     pub fn init(app: *App) !Browser {
         const allocator = app.allocator;
 
-        const env = try Env.init(allocator, .{});
+        const env = try Env.init(allocator, app.platform, .{});
         errdefer env.deinit();
 
         const notification = try Notification.init(allocator, app.notification);
@@ -95,6 +97,9 @@ pub const Browser = struct {
     }
 
     pub fn runMicrotasks(self: *const Browser) void {
+        while (self.env.pumpMessageLoop()) {
+            log.debug(.browser, "pumpMessageLoop", .{});
+        }
         return self.env.runMicrotasks();
     }
 };

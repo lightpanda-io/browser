@@ -83,6 +83,7 @@ fn run(alloc: Allocator) !void {
 
     var app = try App.init(alloc, .{
         .run_mode = args.mode,
+        .platform = &platform,
         .http_proxy = args.httpProxy(),
         .proxy_type = args.proxyType(),
         .proxy_auth = args.proxyAuth(),
