@@ -23,14 +23,28 @@ const log = @import("../../log.zig");
 const Allocator = std.mem.Allocator;
 const Env = @import("../env.zig").Env;
 
-const modules = [_]struct {
+const Module = struct {
     name: []const u8,
     source: []const u8,
-}{
+};
+
+const global_modules = [_]Module{
     .{ .name = "polyfill-fetch", .source = @import("fetch.zig").source },
 };
 
-pub fn load(allocator: Allocator, js_context: *Env.JsContext) !void {
+const document_modules = [_]Module{
+    .{ .name = "polyfill-webcomponents", .source = @embedFile("webcomponents.js") },
+};
+
+pub fn global(allocator: Allocator, js_context: *Env.JsContext) !void {
+    return load(allocator, js_context, &global_modules);
+}
+
+pub fn document(allocator: Allocator, js_context: *Env.JsContext) !void {
+    return load(allocator, js_context, &document_modules);
+}
+
+fn load(allocator: Allocator, js_context: *Env.JsContext, modules: []const Module) !void {
     var try_catch: Env.TryCatch = undefined;
     try_catch.init(js_context);
     defer try_catch.deinit();

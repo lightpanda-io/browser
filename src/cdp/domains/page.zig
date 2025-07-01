@@ -286,7 +286,7 @@ pub fn pageCreated(bc: anytype, page: *Page) !void {
         try isolated_world.createContext(page);
 
         const polyfill = @import("../../browser/polyfill/polyfill.zig");
-        try polyfill.load(bc.arena, &isolated_world.executor.js_context.?);
+        try polyfill.global(bc.arena, &isolated_world.executor.js_context.?);
     }
 }
 
@@ -352,6 +352,11 @@ pub fn pageNavigated(bc: anytype, event: *const Notification.PageNavigated) !voi
             .frameId = target_id,
             .loaderId = loader_id,
         }, .{ .session_id = session_id });
+    }
+
+    if (bc.isolated_world) |*isolated_world| {
+        const polyfill = @import("../../browser/polyfill/polyfill.zig");
+        try polyfill.document(bc.arena, &isolated_world.executor.js_context.?);
     }
 
     // frameStoppedLoading

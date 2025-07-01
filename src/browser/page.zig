@@ -116,7 +116,7 @@ pub const Page = struct {
         self.main_context = try session.executor.createJsContext(&self.window, self, self, true);
 
         // load polyfills
-        try polyfill.load(self.arena, self.main_context);
+        try polyfill.global(self.arena, self.main_context);
 
         _ = try session.browser.app.loop.timeout(1 * std.time.ns_per_ms, &self.microtask_node);
     }
@@ -290,6 +290,7 @@ pub const Page = struct {
 
         // TODO set the referrer to the document.
         try self.window.replaceDocument(html_doc);
+        try polyfill.document(self.arena, self.main_context);
         self.window.setStorageShelf(
             try self.session.storage_shed.getOrPut(try self.origin(self.arena)),
         );
