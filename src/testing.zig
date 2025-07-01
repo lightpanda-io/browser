@@ -19,6 +19,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const Platform = @import("runtime/js.zig").Platform;
+
 pub const allocator = std.testing.allocator;
 pub const expectError = std.testing.expectError;
 pub const expect = std.testing.expect;
@@ -383,6 +385,7 @@ pub const JsRunner = struct {
         var app = try App.init(alloc, .{
             .run_mode = .serve,
             .tls_verify_host = false,
+            .platform = opts.platform,
         });
         errdefer app.deinit();
 
@@ -474,6 +477,7 @@ pub const JsRunner = struct {
 };
 
 const RunnerOpts = struct {
+    platform: ?*const Platform = null,
     url: []const u8 = "https://lightpanda.io/opensource-browser/",
     html: []const u8 =
         \\ <div id="content">
