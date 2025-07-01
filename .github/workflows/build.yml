@@ -76,7 +76,7 @@ jobs:
           arch: ${{env.ARCH}}
 
       - name: zig build
-        run: zig build --release=safe -Doptimize=ReleaseSafe -Dcpu=cortex_a72 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
+        run: zig build --release=safe -Doptimize=ReleaseSafe -Dcpu=generic -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
 
       - name: Rename binary
         run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
