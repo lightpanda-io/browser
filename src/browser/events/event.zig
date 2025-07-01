@@ -32,6 +32,7 @@ const CustomEvent = @import("custom_event.zig").CustomEvent;
 const ProgressEvent = @import("../xhr/progress_event.zig").ProgressEvent;
 const MouseEvent = @import("mouse_event.zig").MouseEvent;
 const ErrorEvent = @import("../html/error_event.zig").ErrorEvent;
+const AbortSignal = @import("../html/AbortController.zig").AbortSignal;
 
 // Event interfaces
 pub const Interfaces = .{ Event, CustomEvent, ProgressEvent, MouseEvent, ErrorEvent };
@@ -144,6 +145,10 @@ pub const EventHandler = struct {
     callback: Function,
     node: parser.EventNode,
     listener: *parser.EventListener,
+    target: *parser.EventTarget,
+    typ: []const u8,
+    abort_node: parser.EventNode,
+    abort_listener: *parser.EventListener,
 
     const Env = @import("../env.zig").Env;
     const Function = Env.Function;
@@ -175,7 +180,7 @@ pub const EventHandler = struct {
             // that the listener won't call preventDefault() and thus can safely
             // run the default as needed).
             passive: ?bool,
-            signal: ?bool, // currently does nothing
+            signal: ?*AbortSignal,
         };
     };
 
@@ -188,6 +193,7 @@ pub const EventHandler = struct {
     ) !?*EventHandler {
         var once = false;
         var capture = false;
+        var abort_signal: ?*AbortSignal = null;
         if (opts_) |opts| {
             switch (opts) {
                 .capture => |c| capture = c,
@@ -198,7 +204,7 @@ pub const EventHandler = struct {
                     // error. If we don't error, this function call would succeed
                     // but the behavior might be wrong. At this point, it's
                     // better to be explicit and error.
-                    if (f.signal orelse false) return error.NotImplemented;
+                    abort_signal = f.signal;
                     once = f.once orelse false;
                     capture = f.capture orelse false;
                 },
@@ -222,6 +228,12 @@ pub const EventHandler = struct {
                 .func = handle,
             },
             .listener = undefined,
+            .target = target,
+            .typ = typ,
+            .abort_node = .{
+                .func = handle_abort,
+            },
+            .abort_listener = undefined,
         };
 
         eh.listener = try parser.eventTargetAddEventListener(
@@ -230,6 +242,16 @@ pub const EventHandler = struct {
             &eh.node,
             capture,
         );
+
+        if (abort_signal) |signal| {
+            eh.abort_listener = try parser.eventTargetAddEventListener(
+                parser.toEventTarget(AbortSignal, signal),
+                "abort",
+                &eh.abort_node,
+                false,
+            );
+        }
+
         return eh;
     }
 
@@ -259,6 +281,27 @@ pub const EventHandler = struct {
                 self.capture,
             ) catch {};
         }
+    }
+    fn handle_abort(node: *parser.EventNode, event: *parser.Event) void {
+        const self: *EventHandler = @fieldParentPtr("abort_node", node);
+
+        // Remove the event listener from the target
+        parser.eventTargetRemoveEventListener(
+            self.target,
+            self.typ,
+            self.listener,
+            self.capture,
+        ) catch {};
+
+        // Also remove the abort listener since we can't abort twice anyway
+        const target_abort = (parser.eventTarget(event) catch return).?;
+        const typ_abort = parser.eventType(event) catch return;
+        parser.eventTargetRemoveEventListener(
+            target_abort,
+            typ_abort,
+            self.abort_listener,
+            false,
+        ) catch {};
     }
 };
 
