@@ -111,7 +111,7 @@ pub const URL = struct {
             return src;
         }
 
-        var normalized_src = if (std.mem.startsWith(u8, src, "/")) src[1..] else src;
+        var normalized_src = src;
         while (std.mem.startsWith(u8, normalized_src, "./")) {
             normalized_src = normalized_src[2..];
         }
@@ -130,6 +130,13 @@ pub const URL = struct {
                 break :blk 0;
             }
         };
+
+        if (normalized_src[0] == '/') {
+            if (std.mem.indexOfScalarPos(u8, base, protocol_end, '/')) |pos| {
+                return std.fmt.allocPrint(allocator, "{s}{s}", .{ base[0..pos], normalized_src });
+            }
+            // not sure what to do here...error? Just let it fallthrough for now.
+        }
 
         if (std.mem.lastIndexOfScalar(u8, base[protocol_end..], '/')) |index| {
             const last_slash_pos = index + protocol_end;
@@ -255,6 +262,16 @@ test "URL: Stitching Base & Src URLs (No Ending Slash)" {
     const result = try URL.stitch(allocator, src, base, .{});
     defer allocator.free(result);
     try testing.expectString("https://lightpanda.io/something.js", result);
+}
+
+test "URL: Stitching Base with absolute src" {
+    const allocator = testing.allocator;
+
+    const base = "https://lightpanda.io/hello";
+    const src = "/abc/something.js";
+    const result = try URL.stitch(allocator, src, base, .{});
+    defer allocator.free(result);
+    try testing.expectString("https://lightpanda.io/abc/something.js", result);
 }
 
 test "URL: Stiching Base & Src URLs (Both Local)" {

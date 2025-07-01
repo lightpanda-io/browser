@@ -197,6 +197,16 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             isolate.enter();
             errdefer isolate.exit();
 
+            isolate.setHostInitializeImportMetaObjectCallback(struct {
+                fn callback(c_context: ?*v8.C_Context, c_module: ?*v8.C_Module, c_meta: ?*v8.C_Value) callconv(.C) void {
+                    const v8_context = v8.Context{.handle = c_context.?};
+                    const js_context: *JsContext = @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
+                    js_context.initializeImportMeta(v8.Module{.handle = c_module.?}, v8.Object{.handle = c_meta.?}) catch |err| {
+                        log.err(.js, "import meta", .{ .err = err });
+                    };
+                }
+            }.callback);
+
             var temp_scope: v8.HandleScope = undefined;
             v8.HandleScope.init(&temp_scope, isolate);
             defer temp_scope.deinit();
@@ -726,13 +736,15 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             fn moduleNoCache(self: *JsContext, src: []const u8, url: []const u8) !void {
                 const m = try compileModule(self.isolate, src, url);
+
+                const arena = self.context_arena;
+                const owned_url = try arena.dupe(u8, url);
+                try self.module_identifier.putNoClobber(arena, m.getIdentityHash(), owned_url);
+
                 const v8_context = self.v8_context;
                 if (try m.instantiate(v8_context, resolveModuleCallback) == false) {
                     return error.ModuleInstantiationError;
                 }
-                const arena = self.context_arena;
-                const owned_url = try arena.dupe(u8, url);
-                try self.module_identifier.putNoClobber(arena, m.getIdentityHash(), owned_url);
                 _ = try m.evaluate(v8_context);
             }
 
@@ -1279,6 +1291,20 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 return self.createException(js_value);
             }
 
+            fn initializeImportMeta(self: *JsContext, m: v8.Module, meta: v8.Object) !void {
+                const url = self.module_identifier.get(m.getIdentityHash()) orelse {
+                    // Shouldn't be possible.
+                    return error.UnknownModuleReferrer;
+                };
+
+                const js_key = v8.String.initUtf8(self.isolate, "url");
+                const js_value = try self.zigValueToJs(url);
+                const res = meta.defineOwnProperty(self.v8_context, js_key.toName(), js_value, 0) orelse false;
+                if (!res) {
+                    return error.FailedToSet;
+                }
+            }
+
             // Callback from V8, asking us to load a module. The "specifier" is
             // the src of the module to load.
             fn resolveModuleCallback(
@@ -1335,7 +1361,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 try_catch.init(self);
                 defer try_catch.deinit();
 
-                const m = compileModule(self.isolate, source, specifier) catch |err| {
+                const m = compileModule(self.isolate, source, normalized_specifier) catch |err| {
                     log.warn(.js, "compile resolved module", .{
                         .specifier = specifier,
                         .stack = try_catch.stack(self.call_arena) catch null,
