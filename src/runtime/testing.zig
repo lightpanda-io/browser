@@ -42,7 +42,7 @@ pub fn Runner(comptime State: type, comptime Global: type, comptime types: anyty
             const self = try allocator.create(Self);
             errdefer allocator.destroy(self);
 
-            self.env = try Env.init(allocator, .{});
+            self.env = try Env.init(allocator, null, .{});
             errdefer self.env.deinit();
 
             self.executor = try self.env.newExecutionWorld();
