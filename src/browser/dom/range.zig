@@ -94,6 +94,32 @@ pub const Range = struct {
         const doc_frag = try parser.documentParseFragmentFromStr(document, fragment);
         return doc_frag;
     }
+
+    pub fn _selectNodeContents(self: *Range, node: *parser.Node) !void {
+        self.proto.start_container = node;
+        self.proto.start_offset = 0;
+        self.proto.end_container = node;
+
+        // Set end_offset
+        switch (try parser.nodeType(node)) {
+            .text, .cdata_section, .comment, .processing_instruction => {
+                // For text-like nodes, end_offset should be the length of the text data
+                if (try parser.nodeValue(node)) |text_data| {
+                    self.proto.end_offset = @intCast(text_data.len);
+                } else {
+                    self.proto.end_offset = 0;
+                }
+            },
+            else => {
+                // For element and other nodes, end_offset is the number of children
+                const child_nodes = try parser.nodeGetChildNodes(node);
+                const child_count = try parser.nodeListLength(child_nodes);
+                self.proto.end_offset = @intCast(child_count);
+            },
+        }
+
+        self.proto.updateCollapsed();
+    }
 };
 
 const testing = @import("../../testing.zig");
@@ -116,5 +142,23 @@ test "Browser.Range" {
         .{ "let docRange = document.createRange()", "undefined" },
         .{ "docRange instanceof Range", "true" },
         .{ "docRange.collapsed", "true" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "const container = document.getElementById('content');", null },
+
+        // Test text range
+        .{ "const commentNode = container.childNodes[7];", null },
+        .{ "commentNode.nodeValue", "comment" },
+        .{ "const textRange = document.createRange();", null },
+        .{ "textRange.selectNodeContents(commentNode)", "undefined" },
+        .{ "textRange.startOffset", "0" },
+        .{ "textRange.endOffset", "7" }, // length of `comment`
+
+        // Test Node range
+        .{ "const nodeRange = document.createRange();", null },
+        .{ "nodeRange.selectNodeContents(container)", "undefined" },
+        .{ "nodeRange.startOffset", "0" },
+        .{ "nodeRange.endOffset", "9" }, // length of container.childNodes
     }, .{});
 }
