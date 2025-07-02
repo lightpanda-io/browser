@@ -240,11 +240,6 @@ pub const Client = struct {
         const proxy_type = self.proxy_type orelse return false;
         return proxy_type == .forward;
     }
-
-    fn isProxyTLS(self: *const Client) bool {
-        const proxy = self.http_proxy orelse return false;
-        return std.ascii.eqlIgnoreCase(proxy.scheme, "https");
-    }
 };
 
 const RequestOpts = struct {
@@ -388,9 +383,6 @@ pub const Request = struct {
     // List of request headers
     headers: std.ArrayListUnmanaged(std.http.Header),
 
-    // whether or not we expect this connection to be secure
-    _secure: bool,
-
     // whether or not we should keep the underlying socket open and and usable
     // for other requests
     _keepalive: bool,
@@ -398,6 +390,10 @@ pub const Request = struct {
     // extracted from request_uri
     _request_port: u16,
     _request_host: []const u8,
+    // Whether or not we expect this connection to be secure, connection may still be secure due to proxy
+    _request_secure: bool,
+    // Whether or not we expect the SIMPLE/CONNECT proxy connection to be secure
+    _proxy_secure: bool,
 
     // extracted from connect_uri
     _connect_port: u16,
@@ -483,11 +479,12 @@ pub const Request = struct {
             .method = method,
             .notification = null,
             .arena = state.arena.allocator(),
-            ._secure = decomposed.secure,
             ._connect_host = decomposed.connect_host,
             ._connect_port = decomposed.connect_port,
+            ._proxy_secure = decomposed.proxy_secure,
             ._request_host = decomposed.request_host,
             ._request_port = decomposed.request_port,
+            ._request_secure = decomposed.request_secure,
             ._state = state,
             ._client = client,
             ._aborter = null,
@@ -519,12 +516,13 @@ pub const Request = struct {
     }
 
     const DecomposedURL = struct {
-        secure: bool,
         connect_port: u16,
         connect_host: []const u8,
         connect_uri: *const std.Uri,
+        proxy_secure: bool,
         request_port: u16,
         request_host: []const u8,
+        request_secure: bool,
     };
     fn decomposeURL(client: *const Client, uri: *const Uri) !DecomposedURL {
         if (uri.host == null) {
@@ -539,32 +537,31 @@ pub const Request = struct {
             connect_host = proxy.host.?.percent_encoded;
         }
 
-        const is_connect_proxy = client.isConnectProxy();
-        const is_proxy_tls = client.isProxyTLS();
-
-        var secure: bool = undefined;
-        const scheme = if (is_connect_proxy) uri.scheme else connect_uri.scheme;
-        if (std.ascii.eqlIgnoreCase(scheme, "https")) {
-            secure = true;
-        } else if (std.ascii.eqlIgnoreCase(scheme, "http")) {
-            secure = false;
+        var request_secure: bool = undefined;
+        if (std.ascii.eqlIgnoreCase(uri.scheme, "https")) {
+            request_secure = true;
+        } else if (std.ascii.eqlIgnoreCase(uri.scheme, "http")) {
+            request_secure = false;
         } else {
             return error.UnsupportedUriScheme;
         }
-        const request_port: u16 = uri.port orelse if (secure) 443 else 80;
+        const proxy_secure = client.http_proxy != null and std.ascii.eqlIgnoreCase(client.http_proxy.?.scheme, "https");
+
+        const request_port: u16 = uri.port orelse if (request_secure) 443 else 80;
         const connect_port: u16 = connect_uri.port orelse blk: {
-            if (is_connect_proxy) {
-                if (is_proxy_tls) break :blk 443 else break :blk 80;
+            if (client.isConnectProxy()) {
+                if (proxy_secure) break :blk 443 else break :blk 80;
             } else break :blk request_port;
         };
 
         return .{
-            .secure = secure,
             .connect_port = connect_port,
             .connect_host = connect_host,
             .connect_uri = connect_uri,
+            .proxy_secure = proxy_secure,
             .request_port = request_port,
             .request_host = request_host,
+            .request_secure = request_secure,
         };
     }
 
@@ -682,12 +679,11 @@ pub const Request = struct {
 
             // proxy
             const is_connect_proxy = self._client.isConnectProxy();
-            const is_proxy_tls = self._client.isProxyTLS();
 
             if (is_connect_proxy) {
                 var proxy_conn: SyncHandler.Conn = .{ .plain = self._connection.?.socket };
 
-                if (is_proxy_tls) {
+                if (self._proxy_secure) {
                     // Create an underlying TLS stream with the proxy
                     var proxy_tls_config = tls_config;
                     proxy_tls_config.host = self._connect_host;
@@ -698,8 +694,8 @@ pub const Request = struct {
                 // Connect to the proxy
                 try SyncHandler.connect(self, &proxy_conn);
 
-                if (is_proxy_tls) {
-                    if (self._secure) {
+                if (self._proxy_secure) {
+                    if (self._request_secure) {
                         // If secure endpoint, create the main TLS stream encapsulated into the TLS stream proxy
                         self._connection.?.tls = .{
                             .blocking_tls_in_tls = .{
@@ -715,7 +711,7 @@ pub const Request = struct {
                     }
                 }
             }
-            if (self._secure and !is_proxy_tls) {
+            if (self._request_secure and !self._proxy_secure) {
                 self._connection.?.tls = .{
                     .blocking = try tls.client(std.net.Stream{ .handle = socket }, tls_config),
                 };
@@ -796,7 +792,8 @@ pub const Request = struct {
             .conn = .{ .handler = async_handler, .protocol = .{ .plain = {} } },
         };
 
-        if (self._secure) {
+        if (self._client.isConnectProxy() and self._proxy_secure) log.warn(.http, "ASYNC TLS CONNECT no impl.", .{});
+        if (self._request_secure) {
             if (self._connection_from_keepalive) {
                 // If the connection came from the keepalive pool, than we already
                 // have a TLS Connection.
@@ -805,7 +802,7 @@ pub const Request = struct {
                 std.debug.assert(connection.tls == null);
                 async_handler.conn.protocol = .{
                     .handshake = tls.nonblock.Client.init(.{
-                        .host = if (self._client.isConnectProxy()) self._request_host else self._connect_host,
+                        .host = if (self._client.isConnectProxy()) self._request_host else self._connect_host, // looks wrong
                         .root_ca = self._client.root_ca,
                         .insecure_skip_verify = self._tls_verify_host == false,
                         .key_log_callback = tls.config.key_log.callback,
@@ -885,9 +882,10 @@ pub const Request = struct {
         const decomposed = try decomposeURL(self._client, self.request_uri);
         self.connect_uri = decomposed.connect_uri;
         self._request_host = decomposed.request_host;
+        self._request_secure = decomposed.request_secure;
         self._connect_host = decomposed.connect_host;
         self._connect_port = decomposed.connect_port;
-        self._secure = decomposed.secure;
+        self._proxy_secure = decomposed.proxy_secure;
         self._keepalive = false;
         self._redirect_count = redirect_count + 1;
 
@@ -935,7 +933,9 @@ pub const Request = struct {
             return null;
         }
 
-        return self._client.connection_manager.get(self._secure, self._connect_host, self._connect_port, blocking);
+        // A simple http proxy to an https destination is made into tls by the proxy, we see it as a plain connection
+        const expect_tls = self._proxy_secure or (self._request_secure and !self._client.isSimpleProxy());
+        return self._client.connection_manager.get(expect_tls, self._connect_host, self._connect_port, blocking);
     }
 
     fn createSocket(self: *Request, blocking: bool) !struct { posix.socket_t, std.net.Address } {
@@ -2975,14 +2975,14 @@ const ConnectionManager = struct {
         self.connection_pool.deinit();
     }
 
-    fn get(self: *ConnectionManager, secure: bool, host: []const u8, port: u16, blocking: bool) ?*Connection {
+    fn get(self: *ConnectionManager, expect_tls: bool, host: []const u8, port: u16, blocking: bool) ?*Connection {
         self.mutex.lock();
         defer self.mutex.unlock();
 
         var node = self.idle.first;
         while (node) |n| {
             const connection = n.data;
-            if (std.ascii.eqlIgnoreCase(connection.host, host) and connection.port == port and connection.blocking == blocking and ((connection.tls == null) == !secure)) {
+            if (std.ascii.eqlIgnoreCase(connection.host, host) and connection.port == port and connection.blocking == blocking and ((connection.tls == null) == !expect_tls)) {
                 self.count -= 1;
                 self.idle.remove(n);
                 self.node_pool.destroy(n);
