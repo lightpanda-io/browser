@@ -5,8 +5,8 @@
     .fingerprint = 0xda130f3af836cea0,
     .dependencies = .{
         .tls = .{
-            .url = "https://github.com/lightpanda-io/tls.zig/archive/bcf8f3982b3aaab950d47a9e0e2d1d96b1b9df22.tar.gz",
-            .hash = "tls-0.1.0-ER2e0mA4BQD2zfshj2kF83371dgVvhdr4dJ-TxPX5mmG",
+            .url = "https://github.com/ianic/tls.zig/archive/55845f755d9e2e821458ea55693f85c737cd0c7a.tar.gz",
+            .hash = "tls-0.1.0-ER2e0m43BQAshi8ixj1qf3w2u2lqKtXtkrxUJ4AGZDcl",
         },
         .tigerbeetle_io = .{
             .url = "https://github.com/lightpanda-io/tigerbeetle-io/archive/61d9652f1a957b7f4db723ea6aa0ce9635e840ce.tar.gz",
