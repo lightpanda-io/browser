@@ -98,6 +98,10 @@ pub const Browser = struct {
 
     pub fn runMicrotasks(self: *const Browser) void {
         self.env.runMicrotasks();
+    }
+
+    pub fn runMessageLoop(self: *const Browser) void {
+        log.debug(.browser, "pumpMessageLoop", .{});
         while (self.env.pumpMessageLoop()) {
             log.debug(.browser, "pumpMessageLoop", .{});
         }
