@@ -603,7 +603,7 @@ test "tests:beforeAll" {
     log.opts.format = .logfmt;
 
     test_wg.startMany(3);
-    _ = try Platform.init();
+    const platform = try Platform.init();
 
     {
         const address = try std.net.Address.parseIp("127.0.0.1", 9582);
@@ -619,7 +619,7 @@ test "tests:beforeAll" {
 
     {
         const address = try std.net.Address.parseIp("127.0.0.1", 9583);
-        const thread = try std.Thread.spawn(.{}, serveCDP, .{address});
+        const thread = try std.Thread.spawn(.{}, serveCDP, .{ address, &platform });
         thread.detach();
     }
 
@@ -801,11 +801,12 @@ fn serveHTTPS(address: std.net.Address) !void {
     }
 }
 
-fn serveCDP(address: std.net.Address) !void {
+fn serveCDP(address: std.net.Address, platform: *const Platform) !void {
     var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
     var app = try App.init(gpa.allocator(), .{
         .run_mode = .serve,
         .tls_verify_host = false,
+        .platform = platform,
     });
     defer app.deinit();
 

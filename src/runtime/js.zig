@@ -274,18 +274,12 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
         }
 
         pub fn pumpMessageLoop(self: *const Self) bool {
-            if (comptime builtin.is_test) {
-                if (self.platform == null) return false;
-            }
-            // assume it's not-null in non-test.
+            // assume it's not-null.
             return self.platform.?.inner.pumpMessageLoop(self.isolate, false);
         }
 
         pub fn runIdleTasks(self: *const Self) void {
-            if (comptime builtin.is_test) {
-                if (self.platform == null) return;
-            }
-            // assume it's not-null in non-test.
+            // assume it's not-null.
             return self.platform.?.inner.runIdleTasks(self.isolate, 1);
         }
 
