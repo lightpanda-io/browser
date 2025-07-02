@@ -243,7 +243,7 @@ pub const Client = struct {
 
     fn isProxyTLS(self: *const Client) bool {
         const proxy = self.http_proxy orelse return false;
-        return std.mem.eql(u8, proxy.scheme, "https");
+        return std.ascii.eqlIgnoreCase(proxy.scheme, "https");
     }
 };
 
@@ -328,7 +328,7 @@ const Connection = struct {
     const TLSClient = union(enum) {
         blocking: tls.Connection(std.net.Stream),
         blocking_tls_in_tls: struct {
-            proxy: tls.Connection(std.net.Stream),
+            proxy: tls.Connection(std.net.Stream), // Note, self-referential field. Proxy should be pinned in memory.
             destination: tls.Connection(*tls.Connection(std.net.Stream)),
         },
         nonblocking: tls.nonblock.Connection,
@@ -688,37 +688,33 @@ pub const Request = struct {
                 var proxy_conn: SyncHandler.Conn = .{ .plain = self._connection.?.socket };
 
                 if (is_proxy_tls) {
-
-                    // create an underlying TLS stream with the proxy
+                    // Create an underlying TLS stream with the proxy
                     var proxy_tls_config = tls_config;
                     proxy_tls_config.host = self._connect_host;
                     var proxy_conn_tls = try tls.client(std.net.Stream{ .handle = socket }, proxy_tls_config);
                     proxy_conn = .{ .tls = &proxy_conn_tls };
                 }
 
-                // connect to the proxy
+                // Connect to the proxy
                 try SyncHandler.connect(self, &proxy_conn);
 
                 if (is_proxy_tls) {
                     if (self._secure) {
-
-                        // if secure endpoint, create the main TLS stream
-                        // encapsulated into the TLS stream proxy
-                        const tls_in_tls = try tls.client(proxy_conn.tls, tls_config);
+                        // If secure endpoint, create the main TLS stream encapsulated into the TLS stream proxy
                         self._connection.?.tls = .{
                             .blocking_tls_in_tls = .{
                                 .proxy = proxy_conn.tls.*,
-                                .destination = tls_in_tls,
+                                .destination = undefined,
                             },
                         };
+                        const proxy = &self._connection.?.tls.?.blocking_tls_in_tls.proxy;
+                        self._connection.?.tls.?.blocking_tls_in_tls.destination = try tls.client(proxy, tls_config);
                     } else {
-
-                        // otherwise, just use the TLS stream proxy
+                        // Otherwise, just use the TLS stream proxy
                         self._connection.?.tls = .{ .blocking = proxy_conn.tls.* };
                     }
                 }
             }
-
             if (self._secure and !is_proxy_tls) {
                 self._connection.?.tls = .{
                     .blocking = try tls.client(std.net.Stream{ .handle = socket }, tls_config),
@@ -1949,16 +1945,10 @@ const SyncHandler = struct {
 
         fn sendRequest(self: *Conn, header: []const u8, body: ?[]const u8) !void {
             switch (self.*) {
-                .tls => |_| {
-                    try self.writeAll(header);
+                inline .tls, .tls_in_tls => |tls_client| {
+                    try tls_client.writeAll(header);
                     if (body) |b| {
-                        try self.writeAll(b);
-                    }
-                },
-                .tls_in_tls => |_| {
-                    try self.writeAll(header);
-                    if (body) |b| {
-                        try self.writeAll(b);
+                        try tls_client.writeAll(b);
                     }
                 },
                 .plain => |socket| {
@@ -2158,7 +2148,7 @@ const Reader = struct {
         if (result.done == false) {
             // CONNECT responses should not have a body. If the header is
             // done, then the entire response should be done.
-            log.err(.http_client, "InvalidConnectResponse", .{ .unprocessed = result.unprocessed.? });
+            log.info(.http_client, "InvalidConnectResponse", .{ .status = self.response.status, .unprocessed = result.unprocessed });
             return error.InvalidConnectResponse;
         }
 
