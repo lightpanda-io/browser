@@ -458,7 +458,6 @@ pub const XMLHttpRequest = struct {
             &self.url.?.uri,
             self,
             onHttpRequestReady,
-            self.loop,
         );
     }
 
@@ -494,7 +493,7 @@ pub const XMLHttpRequest = struct {
             }
         }
 
-        try request.sendAsync(self.loop, self, .{});
+        try request.sendAsync(self, .{});
         self.request = request;
     }
 
