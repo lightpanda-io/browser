@@ -21,6 +21,9 @@ const std = @import("std");
 const parser = @import("../netsurf.zig");
 const Page = @import("../page.zig").Page;
 
+const NodeUnion = @import("node.zig").Union;
+const Node = @import("node.zig").Node;
+
 pub const Interfaces = .{
     AbstractRange,
     Range,
@@ -42,16 +45,16 @@ pub const AbstractRange = struct {
         return self.collapsed;
     }
 
-    pub fn get_endContainer(self: *const AbstractRange) *parser.Node {
-        return self.end_container;
+    pub fn get_endContainer(self: *const AbstractRange) !NodeUnion {
+        return Node.toInterface(self.end_container);
     }
 
     pub fn get_endOffset(self: *const AbstractRange) i32 {
         return self.end_offset;
     }
 
-    pub fn get_startContainer(self: *const AbstractRange) *parser.Node {
-        return self.start_container;
+    pub fn get_startContainer(self: *const AbstractRange) !NodeUnion {
+        return Node.toInterface(self.start_container);
     }
 
     pub fn get_startOffset(self: *const AbstractRange) i32 {
@@ -64,12 +67,15 @@ pub const Range = struct {
 
     proto: AbstractRange,
 
-    pub fn constructor() Range {
+    // The Range() constructor returns a newly created Range object whose start
+    // and end is the global Document object.
+    // https://developer.mozilla.org/en-US/docs/Web/API/Range/Range
+    pub fn constructor(page: *Page) Range {
         const proto: AbstractRange = .{
             .collapsed = true,
-            .end_container = undefined,
+            .end_container = parser.documentHTMLToNode(page.window.document),
             .end_offset = 0,
-            .start_container = undefined,
+            .start_container = parser.documentHTMLToNode(page.window.document),
             .start_offset = 0,
         };
 
@@ -137,6 +143,8 @@ test "Browser.Range" {
         .{ "range.collapsed", "true" },
         .{ "range.startOffset", "0" },
         .{ "range.endOffset", "0" },
+        .{ "range.startContainer instanceof HTMLDocument", "true" },
+        .{ "range.endContainer instanceof HTMLDocument", "true" },
 
         // Test document.createRange()
         .{ "let docRange = document.createRange()", "undefined" },
