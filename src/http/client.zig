@@ -77,6 +77,7 @@ pub const ProxyAuth = union(enum) {
 // Thread-safe. Holds our root certificate, connection pool and state pool
 // Used to create Requests.
 pub const Client = struct {
+    loop: *Loop,
     req_id: usize,
     allocator: Allocator,
     state_pool: StatePool,
@@ -97,7 +98,7 @@ pub const Client = struct {
         max_idle_connection: usize = 10,
     };
 
-    pub fn init(allocator: Allocator, opts: Opts) !Client {
+    pub fn init(allocator: Allocator, loop: *Loop, opts: Opts) !Client {
         var root_ca: std.crypto.Certificate.Bundle = if (builtin.is_test) .{} else try tls.config.cert.fromSystem(allocator);
         errdefer root_ca.deinit(allocator);
 
@@ -109,6 +110,7 @@ pub const Client = struct {
 
         return .{
             .req_id = 0,
+            .loop = loop,
             .root_ca = root_ca,
             .allocator = allocator,
             .state_pool = state_pool,
@@ -153,7 +155,6 @@ pub const Client = struct {
         uri: *const Uri,
         ctx: *anyopaque,
         callback: AsyncQueue.Callback,
-        loop: *Loop,
         opts: RequestOpts,
     ) !void {
 
@@ -184,7 +185,7 @@ pub const Client = struct {
             .callback = callback,
             .node = .{ .func = AsyncQueue.check },
         };
-        _ = try loop.timeout(10 * std.time.ns_per_ms, &queue.node);
+        _ = try self.loop.timeout(10 * std.time.ns_per_ms, &queue.node);
     }
 
     // Either called directly from initAsync (if we have a state ready)
@@ -257,9 +258,8 @@ pub const RequestFactory = struct {
         uri: *const Uri,
         ctx: *anyopaque,
         callback: AsyncQueue.Callback,
-        loop: *Loop,
     ) !void {
-        return self.client.initAsync(arena, method, uri, ctx, callback, loop, self.opts);
+        return self.client.initAsync(arena, method, uri, ctx, callback, self.opts);
     }
 };
 
@@ -690,19 +690,19 @@ pub const Request = struct {
         tls_verify_host: ?bool = null,
     };
     // Makes an asynchronous request
-    pub fn sendAsync(self: *Request, loop: anytype, handler: anytype, opts: SendAsyncOpts) !void {
+    pub fn sendAsync(self: *Request, handler: anytype, opts: SendAsyncOpts) !void {
         if (opts.tls_verify_host) |override| {
             self._tls_verify_host = override;
         }
         try self.prepareInitialSend();
-        return self.doSendAsync(loop, handler, true);
+        return self.doSendAsync(handler, true);
     }
-    pub fn redirectAsync(self: *Request, redirect: Reader.Redirect, loop: anytype, handler: anytype) !void {
+    pub fn redirectAsync(self: *Request, redirect: Reader.Redirect, handler: anytype) !void {
         try self.prepareToRedirect(redirect);
-        return self.doSendAsync(loop, handler, true);
+        return self.doSendAsync(handler, true);
     }
 
-    fn doSendAsync(self: *Request, loop: anytype, handler: anytype, use_pool: bool) !void {
+    fn doSendAsync(self: *Request, handler: anytype, use_pool: bool) !void {
         if (use_pool) {
             if (self.findExistingConnection(false)) |connection| {
                 self._connection = connection;
@@ -729,7 +729,9 @@ pub const Request = struct {
         const connection = self._connection.?;
         errdefer self.destroyConnection(connection);
 
-        const AsyncHandlerT = AsyncHandler(@TypeOf(handler), @TypeOf(loop));
+        const loop = self._client.loop;
+
+        const AsyncHandlerT = AsyncHandler(@TypeOf(handler));
         const async_handler = try self.arena.create(AsyncHandlerT);
 
         const state = self._state;
@@ -998,9 +1000,9 @@ pub const Request = struct {
 };
 
 // Handles asynchronous requests
-fn AsyncHandler(comptime H: type, comptime L: type) type {
+fn AsyncHandler(comptime H: type) type {
     return struct {
-        loop: L,
+        loop: *Loop,
         handler: H,
         request: *Request,
         read_buf: []u8,
@@ -1279,7 +1281,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
                         return;
                     };
 
-                    self.request.redirectAsync(redirect, self.loop, self.handler) catch |err| {
+                    self.request.redirectAsync(redirect, self.handler) catch |err| {
                         self.handleError("Setup async redirect", err);
                         return;
                     };
@@ -1319,7 +1321,7 @@ fn AsyncHandler(comptime H: type, comptime L: type) type {
             std.debug.assert(request._keepalive == false);
             request.releaseConnection();
 
-            request.doSendAsync(self.loop, self.handler, false) catch |conn_err| {
+            request.doSendAsync(self.handler, false) catch |conn_err| {
                 // You probably think it's weird that we fallthrough to the:
                 //   return true;
                 // The caller will take the `true` and just exit. This is what
@@ -3054,30 +3056,30 @@ test "HttpClient Reader: fuzz" {
 }
 
 test "HttpClient: invalid url" {
-    var client = try testClient(.{});
-    defer client.deinit();
+    var tc = try TestContext.init(.{});
+    defer tc.deinit();
     const uri = try Uri.parse("http:///");
-    try testing.expectError(error.UriMissingHost, client.request(.GET, &uri));
+    try testing.expectError(error.UriMissingHost, tc.client.request(.GET, &uri));
 }
 
 test "HttpClient: sync connect error" {
-    var client = try testClient(.{});
-    defer client.deinit();
+    var tc = try TestContext.init(.{});
+    defer tc.deinit();
 
     const uri = try Uri.parse("HTTP://127.0.0.1:9920");
-    var req = try client.request(.GET, &uri);
+    var req = try tc.client.request(.GET, &uri);
     defer req.deinit();
 
     try testing.expectError(error.ConnectionRefused, req.sendSync(.{}));
 }
 
 test "HttpClient: sync no body" {
-    for (0..2) |i| {
-        var client = try testClient(.{});
-        defer client.deinit();
+    var tc = try TestContext.init(.{});
+    defer tc.deinit();
 
+    for (0..2) |i| {
         const uri = try Uri.parse("http://127.0.0.1:9582/http_client/simple");
-        var req = try client.request(.GET, &uri);
+        var req = try tc.client.request(.GET, &uri);
         defer req.deinit();
 
         var res = try req.sendSync(.{});
@@ -3094,12 +3096,12 @@ test "HttpClient: sync no body" {
 }
 
 test "HttpClient: sync tls no body" {
-    for (0..1) |_| {
-        var client = try testClient(.{});
-        defer client.deinit();
+    var tc = try TestContext.init(.{});
+    defer tc.deinit();
 
+    for (0..2) |_| {
         const uri = try Uri.parse("https://127.0.0.1:9581/http_client/simple");
-        var req = try client.request(.GET, &uri);
+        var req = try tc.client.request(.GET, &uri);
         defer req.deinit();
 
         var res = try req.sendSync(.{ .tls_verify_host = false });
@@ -3113,12 +3115,12 @@ test "HttpClient: sync tls no body" {
 }
 
 test "HttpClient: sync with body" {
-    for (0..2) |i| {
-        var client = try testClient(.{});
-        defer client.deinit();
+    var tc = try TestContext.init(.{});
+    defer tc.deinit();
 
+    for (0..2) |i| {
         const uri = try Uri.parse("http://127.0.0.1:9582/http_client/echo");
-        var req = try client.request(.GET, &uri);
+        var req = try tc.client.request(.GET, &uri);
         defer req.deinit();
 
         var res = try req.sendSync(.{});
@@ -3138,13 +3140,13 @@ test "HttpClient: sync with body" {
 }
 
 test "HttpClient: sync with body proxy CONNECT" {
-    for (0..2) |i| {
-        const proxy_uri = try Uri.parse("http://127.0.0.1:9582/");
-        var client = try testClient(.{ .proxy_type = .connect, .http_proxy = proxy_uri });
-        defer client.deinit();
+    const proxy_uri = try Uri.parse("http://127.0.0.1:9582/");
+    var tc = try TestContext.init(.{ .proxy_type = .connect, .http_proxy = proxy_uri });
+    defer tc.deinit();
 
+    for (0..2) |i| {
         const uri = try Uri.parse("http://127.0.0.1:9582/http_client/echo");
-        var req = try client.request(.GET, &uri);
+        var req = try tc.client.request(.GET, &uri);
         defer req.deinit();
 
         var res = try req.sendSync(.{});
@@ -3167,11 +3169,11 @@ test "HttpClient: sync with body proxy CONNECT" {
 
 test "HttpClient: basic authentication CONNECT" {
     const proxy_uri = try Uri.parse("http://127.0.0.1:9582/");
-    var client = try testClient(.{ .proxy_type = .connect, .http_proxy = proxy_uri, .proxy_auth = .{ .basic = .{ .user_pass = "user:pass" } } });
-    defer client.deinit();
+    var tc = try TestContext.init(.{ .proxy_type = .connect, .http_proxy = proxy_uri, .proxy_auth = .{ .basic = .{ .user_pass = "user:pass" } } });
+    defer tc.deinit();
 
     const uri = try Uri.parse("http://127.0.0.1:9582/http_client/echo");
-    var req = try client.request(.GET, &uri);
+    var req = try tc.client.request(.GET, &uri);
     defer req.deinit();
 
     var res = try req.sendSync(.{});
@@ -3184,13 +3186,14 @@ test "HttpClient: basic authentication CONNECT" {
     try testing.expectEqual(null, res.header.get("__authorization"));
     try testing.expectEqual("Basic dXNlcjpwYXNz", res.header.get("__proxy-authorization"));
 }
+
 test "HttpClient: bearer authentication CONNECT" {
     const proxy_uri = try Uri.parse("http://127.0.0.1:9582/");
-    var client = try testClient(.{ .proxy_type = .connect, .http_proxy = proxy_uri, .proxy_auth = .{ .bearer = .{ .token = "fruitsalad" } } });
-    defer client.deinit();
+    var tc = try TestContext.init(.{ .proxy_type = .connect, .http_proxy = proxy_uri, .proxy_auth = .{ .bearer = .{ .token = "fruitsalad" } } });
+    defer tc.deinit();
 
     const uri = try Uri.parse("http://127.0.0.1:9582/http_client/echo");
-    var req = try client.request(.GET, &uri);
+    var req = try tc.client.request(.GET, &uri);
     defer req.deinit();
 
     var res = try req.sendSync(.{});
@@ -3205,12 +3208,12 @@ test "HttpClient: bearer authentication CONNECT" {
 }
 
 test "HttpClient: sync with gzip body" {
-    for (0..2) |i| {
-        var client = try testClient(.{});
-        defer client.deinit();
+    var tc = try TestContext.init(.{});
+    defer tc.deinit();
 
+    for (0..2) |i| {
         const uri = try Uri.parse("http://127.0.0.1:9582/http_client/gzip");
-        var req = try client.request(.GET, &uri);
+        var req = try tc.client.request(.GET, &uri);
         defer req.deinit();
 
         var res = try req.sendSync(.{});
@@ -3224,17 +3227,18 @@ test "HttpClient: sync with gzip body" {
 }
 
 test "HttpClient: sync tls with body" {
+    var tc = try TestContext.init(.{});
+    defer tc.deinit();
+
     var arr: std.ArrayListUnmanaged(u8) = .{};
     defer arr.deinit(testing.allocator);
     try arr.ensureTotalCapacity(testing.allocator, 20);
 
-    var client = try testClient(.{});
-    defer client.deinit();
     for (0..5) |_| {
         defer arr.clearRetainingCapacity();
 
         const uri = try Uri.parse("https://127.0.0.1:9581/http_client/body");
-        var req = try client.request(.GET, &uri);
+        var req = try tc.client.request(.GET, &uri);
         defer req.deinit();
 
         var res = try req.sendSync(.{ .tls_verify_host = false });
@@ -3252,17 +3256,18 @@ test "HttpClient: sync tls with body" {
 }
 
 test "HttpClient: sync redirect from TLS to Plaintext" {
+    var tc = try TestContext.init(.{});
+    defer tc.deinit();
+
     var arr: std.ArrayListUnmanaged(u8) = .{};
     defer arr.deinit(testing.allocator);
     try arr.ensureTotalCapacity(testing.allocator, 20);
 
     for (0..5) |_| {
         defer arr.clearRetainingCapacity();
-        var client = try testClient(.{});
-        defer client.deinit();
 
         const uri = try Uri.parse("https://127.0.0.1:9581/http_client/redirect/insecure");
-        var req = try client.request(.GET, &uri);
+        var req = try tc.client.request(.GET, &uri);
         defer req.deinit();
 
         var res = try req.sendSync(.{ .tls_verify_host = false });
@@ -3282,17 +3287,18 @@ test "HttpClient: sync redirect from TLS to Plaintext" {
 }
 
 test "HttpClient: sync redirect plaintext to TLS" {
+    var tc = try TestContext.init(.{});
+    defer tc.deinit();
+
     var arr: std.ArrayListUnmanaged(u8) = .{};
     defer arr.deinit(testing.allocator);
     try arr.ensureTotalCapacity(testing.allocator, 20);
 
     for (0..5) |_| {
         defer arr.clearRetainingCapacity();
-        var client = try testClient(.{});
-        defer client.deinit();
 
         const uri = try Uri.parse("http://127.0.0.1:9582/http_client/redirect/secure");
-        var req = try client.request(.GET, &uri);
+        var req = try tc.client.request(.GET, &uri);
         defer req.deinit();
         var res = try req.sendSync(.{ .tls_verify_host = false });
 
@@ -3309,11 +3315,11 @@ test "HttpClient: sync redirect plaintext to TLS" {
 }
 
 test "HttpClient: sync GET redirect" {
-    var client = try testClient(.{});
-    defer client.deinit();
+    var tc = try TestContext.init(.{});
+    defer tc.deinit();
 
     const uri = try Uri.parse("http://127.0.0.1:9582/http_client/redirect");
-    var req = try client.request(.GET, &uri);
+    var req = try tc.client.request(.GET, &uri);
     defer req.deinit();
     var res = try req.sendSync(.{ .tls_verify_host = false });
 
@@ -3329,8 +3335,9 @@ test "HttpClient: sync GET redirect" {
 
 test "HttpClient: async connect error" {
     defer testing.reset();
-    var loop = try Loop.init(testing.allocator);
-    defer loop.deinit();
+
+    var tc = try TestContext.init(.{});
+    defer tc.deinit();
 
     const Handler = struct {
         loop: *Loop,
@@ -3338,7 +3345,7 @@ test "HttpClient: async connect error" {
 
         fn requestReady(ctx: *anyopaque, req: *Request) !void {
             const self: *@This() = @alignCast(@ptrCast(ctx));
-            try req.sendAsync(self.loop, self, .{});
+            try req.sendAsync(self, .{});
         }
 
         fn onHttpResponse(self: *@This(), res: anyerror!Progress) !void {
@@ -3355,27 +3362,24 @@ test "HttpClient: async connect error" {
     };
 
     var reset: Thread.ResetEvent = .{};
-    var client = try testClient(.{});
-    defer client.deinit();
 
     var handler = Handler{
-        .loop = &loop,
+        .loop = tc.loop,
         .reset = &reset,
     };
 
     const uri = try Uri.parse("HTTP://127.0.0.1:9920");
-    try client.initAsync(
+    try tc.client.initAsync(
         testing.arena_allocator,
         .GET,
         &uri,
         &handler,
         Handler.requestReady,
-        &loop,
         .{},
     );
 
     for (0..10) |_| {
-        try loop.io.run_for_ns(std.time.ns_per_ms * 10);
+        try tc.loop.io.run_for_ns(std.time.ns_per_ms * 10);
         if (reset.isSet()) {
             break;
         }
@@ -3387,14 +3391,14 @@ test "HttpClient: async connect error" {
 test "HttpClient: async no body" {
     defer testing.reset();
 
-    var client = try testClient(.{});
-    defer client.deinit();
+    var tc = try TestContext.init(.{});
+    defer tc.deinit();
 
-    var handler = try CaptureHandler.init();
+    var handler = tc.captureHandler();
     defer handler.deinit();
 
     const uri = try Uri.parse("HTTP://127.0.0.1:9582/http_client/simple");
-    try client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, &handler.loop, .{});
+    try tc.client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, .{});
     try handler.waitUntilDone();
 
     const res = handler.response;
@@ -3406,14 +3410,14 @@ test "HttpClient: async no body" {
 test "HttpClient: async with body" {
     defer testing.reset();
 
-    var client = try testClient(.{});
-    defer client.deinit();
+    var tc = try TestContext.init(.{});
+    defer tc.deinit();
 
-    var handler = try CaptureHandler.init();
+    var handler = tc.captureHandler();
     defer handler.deinit();
 
     const uri = try Uri.parse("HTTP://127.0.0.1:9582/http_client/echo");
-    try client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, &handler.loop, .{});
+    try tc.client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, .{});
     try handler.waitUntilDone();
 
     const res = handler.response;
@@ -3431,14 +3435,14 @@ test "HttpClient: async with body" {
 test "HttpClient: async with gzip body" {
     defer testing.reset();
 
-    var client = try testClient(.{});
-    defer client.deinit();
+    var tc = try TestContext.init(.{});
+    defer tc.deinit();
 
-    var handler = try CaptureHandler.init();
+    var handler = tc.captureHandler();
     defer handler.deinit();
 
     const uri = try Uri.parse("HTTP://127.0.0.1:9582/http_client/gzip");
-    try client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, &handler.loop, .{});
+    try tc.client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, .{});
     try handler.waitUntilDone();
 
     const res = handler.response;
@@ -3454,14 +3458,14 @@ test "HttpClient: async with gzip body" {
 test "HttpClient: async redirect" {
     defer testing.reset();
 
-    var client = try testClient(.{});
-    defer client.deinit();
+    var tc = try TestContext.init(.{});
+    defer tc.deinit();
 
-    var handler = try CaptureHandler.init();
+    var handler = tc.captureHandler();
     defer handler.deinit();
 
     const uri = try Uri.parse("HTTP://127.0.0.1:9582/http_client/redirect");
-    try client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, &handler.loop, .{});
+    try tc.client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, .{});
 
     // Called twice on purpose. The initial GET resutls in the # of pending
     // events to reach 0. This causes our `run_for_ns` to return. But we then
@@ -3484,14 +3488,15 @@ test "HttpClient: async redirect" {
 
 test "HttpClient: async tls no body" {
     defer testing.reset();
-    var client = try testClient(.{});
-    defer client.deinit();
+    var tc = try TestContext.init(.{});
+    defer tc.deinit();
+
     for (0..5) |_| {
-        var handler = try CaptureHandler.init();
+        var handler = tc.captureHandler();
         defer handler.deinit();
 
         const uri = try Uri.parse("HTTPs://127.0.0.1:9581/http_client/simple");
-        try client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, &handler.loop, .{});
+        try tc.client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, .{});
         try handler.waitUntilDone();
 
         const res = handler.response;
@@ -3508,15 +3513,15 @@ test "HttpClient: async tls no body" {
 
 test "HttpClient: async tls with body" {
     defer testing.reset();
-    for (0..5) |_| {
-        var client = try testClient(.{});
-        defer client.deinit();
+    var tc = try TestContext.init(.{});
+    defer tc.deinit();
 
-        var handler = try CaptureHandler.init();
+    for (0..5) |_| {
+        var handler = tc.captureHandler();
         defer handler.deinit();
 
         const uri = try Uri.parse("HTTPs://127.0.0.1:9581/http_client/body");
-        try client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, &handler.loop, .{});
+        try tc.client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, .{});
         try handler.waitUntilDone();
 
         const res = handler.response;
@@ -3532,15 +3537,15 @@ test "HttpClient: async tls with body" {
 
 test "HttpClient: async redirect from TLS to Plaintext" {
     defer testing.reset();
-    for (0..1) |_| {
-        var client = try testClient(.{});
-        defer client.deinit();
+    var tc = try TestContext.init(.{});
+    defer tc.deinit();
 
-        var handler = try CaptureHandler.init();
+    for (0..2) |_| {
+        var handler = tc.captureHandler();
         defer handler.deinit();
 
         const uri = try Uri.parse("https://127.0.0.1:9581/http_client/redirect/insecure");
-        try client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, &handler.loop, .{});
+        try tc.client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, .{});
         try handler.waitUntilDone();
 
         const res = handler.response;
@@ -3558,15 +3563,15 @@ test "HttpClient: async redirect from TLS to Plaintext" {
 
 test "HttpClient: async redirect plaintext to TLS" {
     defer testing.reset();
-    for (0..5) |_| {
-        var client = try testClient(.{});
-        defer client.deinit();
+    var tc = try TestContext.init(.{});
+    defer tc.deinit();
 
-        var handler = try CaptureHandler.init();
+    for (0..5) |_| {
+        var handler = tc.captureHandler();
         defer handler.deinit();
 
         const uri = try Uri.parse("http://127.0.0.1:9582/http_client/redirect/secure");
-        try client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, &handler.loop, .{});
+        try tc.client.initAsync(testing.arena_allocator, .GET, &uri, &handler, CaptureHandler.requestReady, .{});
         try handler.waitUntilDone();
 
         const res = handler.response;
@@ -3670,67 +3675,6 @@ const TestResponse = struct {
     }
 };
 
-const CaptureHandler = struct {
-    loop: Loop,
-    reset: Thread.ResetEvent,
-    response: TestResponse,
-
-    fn init() !CaptureHandler {
-        return .{
-            .reset = .{},
-            .response = TestResponse.init(),
-            .loop = try Loop.init(testing.allocator),
-        };
-    }
-
-    fn deinit(self: *CaptureHandler) void {
-        self.response.deinit();
-        self.loop.deinit();
-    }
-
-    fn requestReady(ctx: *anyopaque, req: *Request) !void {
-        const self: *CaptureHandler = @alignCast(@ptrCast(ctx));
-        try req.sendAsync(&self.loop, self, .{ .tls_verify_host = false });
-    }
-
-    fn onHttpResponse(self: *CaptureHandler, progress_: anyerror!Progress) !void {
-        self.process(progress_) catch |err| {
-            std.debug.print("capture handler error: {}\n", .{err});
-        };
-    }
-
-    fn process(self: *CaptureHandler, progress_: anyerror!Progress) !void {
-        const progress = try progress_;
-        const allocator = self.response.arena.allocator();
-        try self.response.body.appendSlice(allocator, progress.data orelse "");
-        if (progress.first) {
-            std.debug.assert(!progress.done);
-            self.response.status = progress.header.status;
-            try self.response.headers.ensureTotalCapacity(allocator, progress.header.headers.items.len);
-            for (progress.header.headers.items) |header| {
-                self.response.headers.appendAssumeCapacity(.{
-                    .name = try allocator.dupe(u8, header.name),
-                    .value = try allocator.dupe(u8, header.value),
-                });
-            }
-        }
-
-        if (progress.done) {
-            self.reset.set();
-        }
-    }
-
-    fn waitUntilDone(self: *CaptureHandler) !void {
-        for (0..20) |_| {
-            try self.loop.io.run_for_ns(std.time.ns_per_ms * 25);
-            if (self.reset.isSet()) {
-                return;
-            }
-        }
-        return error.TimeoutWaitingForRequestToComplete;
-    }
-};
-
 fn testReader(state: *State, res: *TestResponse, data: []const u8) !void {
     var status: u16 = 0;
     var r = Reader.init(state);
@@ -3772,8 +3716,92 @@ fn testReader(state: *State, res: *TestResponse, data: []const u8) !void {
     return error.NeverDone;
 }
 
-fn testClient(opts: Client.Opts) !Client {
-    var o = opts;
-    o.max_concurrent = 1;
-    return try Client.init(testing.allocator, o);
-}
+const TestContext = struct {
+    loop: *Loop,
+    client: Client,
+
+    fn init(opts: Client.Opts) !TestContext {
+        const loop = try testing.allocator.create(Loop);
+        errdefer testing.allocator.destroy(loop);
+
+        loop.* = try Loop.init(testing.allocator);
+        errdefer loop.deinit();
+
+        var o = opts;
+        o.max_concurrent = 1;
+
+        const client = try Client.init(testing.allocator, loop, o);
+        errdefer client.deinit();
+
+        return .{
+            .loop = loop,
+            .client = client,
+        };
+    }
+
+    fn deinit(self: *TestContext) void {
+        self.loop.deinit();
+        self.client.deinit();
+        testing.allocator.destroy(self.loop);
+    }
+
+    fn captureHandler(self: *TestContext) CaptureHandler {
+        return .{
+            .reset = .{},
+            .loop = self.loop,
+            .response = TestResponse.init(),
+        };
+    }
+};
+
+const CaptureHandler = struct {
+    loop: *Loop,
+    reset: Thread.ResetEvent,
+    response: TestResponse,
+
+    fn deinit(self: *CaptureHandler) void {
+        self.response.deinit();
+    }
+
+    fn requestReady(ctx: *anyopaque, req: *Request) !void {
+        const self: *CaptureHandler = @alignCast(@ptrCast(ctx));
+        try req.sendAsync(self, .{ .tls_verify_host = false });
+    }
+
+    fn onHttpResponse(self: *CaptureHandler, progress_: anyerror!Progress) !void {
+        self.process(progress_) catch |err| {
+            std.debug.print("capture handler error: {}\n", .{err});
+        };
+    }
+
+    fn process(self: *CaptureHandler, progress_: anyerror!Progress) !void {
+        const progress = try progress_;
+        const allocator = self.response.arena.allocator();
+        try self.response.body.appendSlice(allocator, progress.data orelse "");
+        if (progress.first) {
+            std.debug.assert(!progress.done);
+            self.response.status = progress.header.status;
+            try self.response.headers.ensureTotalCapacity(allocator, progress.header.headers.items.len);
+            for (progress.header.headers.items) |header| {
+                self.response.headers.appendAssumeCapacity(.{
+                    .name = try allocator.dupe(u8, header.name),
+                    .value = try allocator.dupe(u8, header.value),
+                });
+            }
+        }
+
+        if (progress.done) {
+            self.reset.set();
+        }
+    }
+
+    fn waitUntilDone(self: *CaptureHandler) !void {
+        for (0..20) |_| {
+            try self.loop.io.run_for_ns(std.time.ns_per_ms * 25);
+            if (self.reset.isSet()) {
+                return;
+            }
+        }
+        return error.TimeoutWaitingForRequestToComplete;
+    }
+};
