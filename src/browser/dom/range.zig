@@ -126,6 +126,12 @@ pub const Range = struct {
 
         self.proto.updateCollapsed();
     }
+
+    // The Range.detach() method does nothing. It used to disable the Range
+    // object and enable the browser to release associated resources. The
+    // method has been kept for compatibility.
+    // https://developer.mozilla.org/en-US/docs/Web/API/Range/detach
+    pub fn _detach(_: *Range) void {}
 };
 
 const testing = @import("../../testing.zig");
