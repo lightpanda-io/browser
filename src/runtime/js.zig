@@ -3392,8 +3392,8 @@ const TaggedAnyOpaque = struct {
 
 fn valueToDetailString(arena: Allocator, value: v8.Value, isolate: v8.Isolate, v8_context: v8.Context) ![]u8 {
     var str: ?v8.String = null;
-    if (value.isObject() and !value.isFunction()) {
-        str = try v8.Json.stringify(v8_context, value, null);
+    if (value.isObject() and !value.isFunction()) blk: {
+        str = v8.Json.stringify(v8_context, value, null) catch break :blk;
 
         if (str.?.lenUtf8(isolate) == 2) {
             // {} isn't useful, null this so that we can get the toDetailString
@@ -3406,10 +3406,24 @@ fn valueToDetailString(arena: Allocator, value: v8.Value, isolate: v8.Isolate, v
         str = try value.toDetailString(v8_context);
     }
 
-    return jsStringToZig(arena, str.?, isolate);
+    const s = try jsStringToZig(arena, str.?, isolate);
+    if (comptime builtin.mode == .Debug) {
+        if (std.mem.eql(u8, s, "[object Object]")) {
+            if (debugValueToString(arena, value.castTo(v8.Object), isolate, v8_context)) |ds| {
+                return ds;
+            } else |err| {
+                log.err(.js, "debug serialize value", .{.err = err});
+            }
+        }
+    }
+    return s;
 }
 
 fn valueToString(allocator: Allocator, value: v8.Value, isolate: v8.Isolate, v8_context: v8.Context) ![]u8 {
+    if (value.isSymbol()) {
+        // symbol's can't be converted to a string
+        return allocator.dupe(u8, "$Symbol");
+    }
     const str = try value.toString(v8_context);
     return jsStringToZig(allocator, str, isolate);
 }
@@ -3429,6 +3443,38 @@ fn jsStringToZig(allocator: Allocator, str: v8.String, isolate: v8.Isolate) ![]u
     const n = str.writeUtf8(isolate, buf);
     std.debug.assert(n == len);
     return buf;
+}
+
+fn debugValueToString(arena: Allocator, js_obj: v8.Object, isolate: v8.Isolate, v8_context: v8.Context) ![]u8 {
+    if (comptime builtin.mode != .Debug) {
+        @compileError("debugValue can only be called in debug mode");
+    }
+
+    var arr: std.ArrayListUnmanaged(u8) = .empty;
+    var writer = arr.writer(arena);
+
+    const names_arr = js_obj.getOwnPropertyNames(v8_context);
+    const names_obj = names_arr.castTo(v8.Object);
+    const len = names_arr.length();
+
+    try writer.writeAll("(JSON.stringify failed, dumping top-level fields)\n");
+    for (0..len) |i| {
+        const field_name = try names_obj.getAtIndex(v8_context, @intCast(i));
+        const field_value = try js_obj.getValue(v8_context, field_name);
+        const name = try valueToString(arena, field_name, isolate, v8_context);
+        const value = try valueToString(arena, field_value, isolate, v8_context);
+        try writer.writeAll(name);
+        try writer.writeAll(": ");
+        if (std.mem.indexOfAny(u8, value, &std.ascii.whitespace) == null) {
+            try writer.writeAll(value);
+        } else {
+            try writer.writeByte('"');
+            try writer.writeAll(value);
+            try writer.writeByte('"');
+        }
+        try writer.writeByte(' ');
+    }
+    return arr.items;
 }
 
 fn stackForLogs(arena: Allocator, isolate: v8.Isolate) !?[]const u8 {
