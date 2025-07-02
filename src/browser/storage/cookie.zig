@@ -296,7 +296,12 @@ pub const Cookie = struct {
                 }
                 if (exp_dt) |dt| {
                     normalized_expires = @floatFromInt(dt.unix(.seconds));
-                } else std.debug.print("Invalid cookie expires value: {s}\n", .{expires_});
+                } else {
+                    // Algolia, for example, will call document.setCookie with
+                    // an expired value which is literally 'Invalid Date'
+                    // (it's trying to do something like: `new Date() + undefined`).
+                    log.debug(.web_api, "cookie expires date", .{ .date = expires_ });
+                }
             }
         }
 
