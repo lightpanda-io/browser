@@ -292,8 +292,8 @@ pub const Document = struct {
         state.active_element = @ptrCast(e);
     }
 
-    pub fn _createRange(_: *parser.Document) Range {
-        return Range.constructor();
+    pub fn _createRange(_: *parser.Document, page: *Page) Range {
+        return Range.constructor(page);
     }
 };
 
