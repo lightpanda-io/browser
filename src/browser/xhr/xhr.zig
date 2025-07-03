@@ -138,6 +138,13 @@ pub const XMLHttpRequest = struct {
         done = 4,
     };
 
+    // class attributes
+    pub const _UNSENT = @intFromEnum(State.unsent);
+    pub const _OPENED = @intFromEnum(State.opened);
+    pub const _HEADERS_RECEIVED = @intFromEnum(State.headers_received);
+    pub const _LOADING = @intFromEnum(State.loading);
+    pub const _DONE = @intFromEnum(State.done);
+
     // https://xhr.spec.whatwg.org/#response-type
     const ResponseType = enum {
         Empty,
@@ -359,6 +366,8 @@ pub const XMLHttpRequest = struct {
         const evt = try parser.eventCreate();
         // We can we defer event destroy once the event is dispatched.
         defer parser.eventDestroy(evt);
+
+        try parser.eventSetInternalType(evt, .xhr_event);
 
         try parser.eventInit(evt, typ, .{ .bubbles = true, .cancelable = true });
         _ = try parser.eventTargetDispatchEvent(@as(*parser.EventTarget, @ptrCast(self)), evt);
@@ -922,5 +931,27 @@ test "Browser.XHR.XMLHttpRequest" {
         // Each case executed waits for all loop callaback calls.
         // So the url has been retrieved.
         .{ "status", "200" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "const req6 = new XMLHttpRequest()", null },
+        .{
+            \\ var readyStates = [];
+            \\ var currentTarget = null;
+            \\ req6.onreadystatechange = (e) => {
+            \\  currentTarget = e.currentTarget;
+            \\  readyStates.push(req6.readyState);
+            \\ }
+            ,
+            null,
+        },
+        .{ "req6.open('GET', 'https://127.0.0.1:9581/xhr')", null },
+        .{ "req6.send()", null },
+        .{ "readyStates.length", "4" },
+        .{ "readyStates[0] === XMLHttpRequest.OPENED", "true" },
+        .{ "readyStates[1] === XMLHttpRequest.HEADERS_RECEIVED", "true" },
+        .{ "readyStates[2] === XMLHttpRequest.LOADING", "true" },
+        .{ "readyStates[3] === XMLHttpRequest.DONE", "true" },
+        .{ "currentTarget == req6", "true" },
     }, .{});
 }
