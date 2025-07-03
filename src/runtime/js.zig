@@ -199,9 +199,9 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             isolate.setHostInitializeImportMetaObjectCallback(struct {
                 fn callback(c_context: ?*v8.C_Context, c_module: ?*v8.C_Module, c_meta: ?*v8.C_Value) callconv(.C) void {
-                    const v8_context = v8.Context{.handle = c_context.?};
+                    const v8_context = v8.Context{ .handle = c_context.? };
                     const js_context: *JsContext = @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
-                    js_context.initializeImportMeta(v8.Module{.handle = c_module.?}, v8.Object{.handle = c_meta.?}) catch |err| {
+                    js_context.initializeImportMeta(v8.Module{ .handle = c_module.? }, v8.Object{ .handle = c_meta.? }) catch |err| {
                         log.err(.js, "import meta", .{ .err = err });
                     };
                 }
@@ -1537,7 +1537,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             };
             pub fn setIndex(self: JsObject, index: u32, value: anytype, opts: SetOpts) !void {
                 const key = switch (index) {
-                    inline 0...1000 => |i| std.fmt.comptimePrint("{d}", .{i}),
+                    inline 0...50 => |i| std.fmt.comptimePrint("{d}", .{i}),
                     else => try std.fmt.allocPrint(self.js_context.context_arena, "{d}", .{index}),
                 };
                 return self.set(key, value, opts);
@@ -2419,10 +2419,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
         fn typeTaggedAnyOpaque(comptime named_function: NamedFunction, comptime R: type, js_obj: v8.Object) !R {
             const ti = @typeInfo(R);
             if (ti != .pointer) {
-                @compileError(std.fmt.comptimePrint(
-                    "{s} has a non-pointer Zig parameter type: {s}",
-                    .{ named_function.full_name, @typeName(R) },
-                ));
+                @compileError(named_function.full_name ++ "has a non-pointer Zig parameter type: " ++ @typeName(R));
             }
 
             const T = ti.pointer.child;
@@ -2442,10 +2439,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             const type_name = @typeName(T);
             if (@hasField(TypeLookup, type_name) == false) {
-                @compileError(std.fmt.comptimePrint(
-                    "{s} has an unknown Zig type: {s}",
-                    .{ named_function.full_name, @typeName(R) },
-                ));
+                @compileError(named_function.full_name ++ "has an unknown Zig type: " ++ @typeName(R));
             }
 
             const op = js_obj.getInternalField(0).castTo(v8.External).get();
@@ -2957,7 +2951,7 @@ fn Caller(comptime E: type, comptime State: type) type {
                 // from our params slice, because we don't want to bind it to
                 // a JS argument
                 if (comptime isState(params[params.len - 1].type.?)) {
-                    @field(args, std.fmt.comptimePrint("{d}", .{params.len - 1 + offset})) = self.js_context.state;
+                    @field(args, tupleFieldName(params.len - 1 + offset)) = self.js_context.state;
                     break :blk params[0 .. params.len - 1];
                 }
 
@@ -2965,14 +2959,14 @@ fn Caller(comptime E: type, comptime State: type) type {
                 // from our params slice, because we don't want to bind it to
                 // a JS argument
                 if (comptime isJsThis(params[params.len - 1].type.?)) {
-                    @field(args, std.fmt.comptimePrint("{d}", .{params.len - 1 + offset})) = .{ .obj = .{
+                    @field(args, tupleFieldName(params.len - 1 + offset)) = .{ .obj = .{
                         .js_context = js_context,
                         .js_obj = info.getThis(),
                     } };
 
                     // AND the 2nd last parameter is state
                     if (params.len > 1 and comptime isState(params[params.len - 2].type.?)) {
-                        @field(args, std.fmt.comptimePrint("{d}", .{params.len - 2 + offset})) = self.js_context.state;
+                        @field(args, tupleFieldName(params.len - 2 + offset)) = self.js_context.state;
                         break :blk params[0 .. params.len - 2];
                     }
 
@@ -3299,7 +3293,19 @@ fn ParamterTypes(comptime F: type) type {
 }
 
 fn tupleFieldName(comptime i: usize) [:0]const u8 {
-    return std.fmt.comptimePrint("{d}", .{i});
+    return switch (i) {
+        0 => "0",
+        1 => "1",
+        2 => "2",
+        3 => "3",
+        4 => "4",
+        5 => "5",
+        6 => "6",
+        7 => "7",
+        8 => "8",
+        9 => "9",
+        else => std.fmt.comptimePrint("{d}", .{i}),
+    };
 }
 
 fn createException(isolate: v8.Isolate, msg: []const u8) v8.Value {
