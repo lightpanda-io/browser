@@ -298,9 +298,31 @@ pub const Window = struct {
             behavior: []const u8,
         };
     };
-    pub fn _scrollTo(_: *const Window, opts: ScrollToOpts, y: ?u32) void {
+    pub fn _scrollTo(self: *Window, opts: ScrollToOpts, y: ?u32) !void {
         _ = opts;
         _ = y;
+
+        {
+            const scroll_event = try parser.eventCreate();
+            defer parser.eventDestroy(scroll_event);
+
+            try parser.eventInit(scroll_event, "scroll", .{});
+            _ = try parser.eventTargetDispatchEvent(
+                parser.toEventTarget(Window, self),
+                scroll_event,
+            );
+        }
+
+        {
+            const scroll_end = try parser.eventCreate();
+            defer parser.eventDestroy(scroll_end);
+
+            try parser.eventInit(scroll_end, "scrollend", .{});
+            _ = try parser.eventTargetDispatchEvent(
+                parser.toEventTarget(parser.DocumentHTML, self.document),
+                scroll_end,
+            );
+        }
     }
 };
 
@@ -436,5 +458,14 @@ test "Browser.HTML.Window" {
         .{ "const str = atob(b64)", "undefined" },
         .{ "str", "https://ziglang.org/documentation/master/std/#std.base64.Base64Decoder" },
         .{ "try { atob('b') } catch (e) { e } ", "Error: InvalidCharacterError" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "let scroll = false; let scrolend = false", null },
+        .{ "window.addEventListener('scroll', () => {scroll = true});", null },
+        .{ "document.addEventListener('scrollend', () => {scrollend = true});", null },
+        .{ "window.scrollTo(0)", null },
+        .{ "scroll", "true" },
+        .{ "scrollend", "true" },
     }, .{});
 }
