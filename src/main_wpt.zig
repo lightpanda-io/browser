@@ -70,7 +70,13 @@ pub fn main() !void {
         defer _ = test_arena.reset(.{ .retain_capacity = {} });
 
         var err_out: ?[]const u8 = null;
-        const result = run(test_arena.allocator(), test_file, &loader, &err_out) catch |err| blk: {
+        const result = run(
+            test_arena.allocator(),
+            &platform,
+            test_file,
+            &loader,
+            &err_out,
+        ) catch |err| blk: {
             if (err_out == null) {
                 err_out = @errorName(err);
             }
@@ -89,7 +95,13 @@ pub fn main() !void {
     try writer.finalize();
 }
 
-fn run(arena: Allocator, test_file: []const u8, loader: *FileLoader, err_out: *?[]const u8) !?[]const u8 {
+fn run(
+    arena: Allocator,
+    platform: *const Platform,
+    test_file: []const u8,
+    loader: *FileLoader,
+    err_out: *?[]const u8,
+) !?[]const u8 {
     // document
     const html = blk: {
         const full_path = try std.fs.path.join(arena, &.{ WPT_DIR, test_file });
@@ -110,6 +122,7 @@ fn run(arena: Allocator, test_file: []const u8, loader: *FileLoader, err_out: *?
     var runner = try @import("testing.zig").jsRunner(arena, .{
         .url = "http://127.0.0.1",
         .html = html,
+        .platform = platform,
     });
     defer runner.deinit();
 

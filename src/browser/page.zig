@@ -78,7 +78,10 @@ pub const Page = struct {
 
     renderer: Renderer,
 
+    // run v8 micro tasks
     microtask_node: Loop.CallbackNode,
+    // run v8 pump message loop and idle tasks
+    messageloop_node: Loop.CallbackNode,
 
     keydown_event_node: parser.EventNode,
     window_clicked_event_node: parser.EventNode,
@@ -106,6 +109,7 @@ pub const Page = struct {
             .state_pool = &browser.state_pool,
             .cookie_jar = &session.cookie_jar,
             .microtask_node = .{ .func = microtaskCallback },
+            .messageloop_node = .{ .func = messageLoopCallback },
             .keydown_event_node = .{ .func = keydownCallback },
             .window_clicked_event_node = .{ .func = windowClicked },
             .request_factory = browser.http_client.requestFactory(.{
@@ -119,12 +123,22 @@ pub const Page = struct {
         try polyfill.load(self.arena, self.main_context);
 
         _ = try session.browser.app.loop.timeout(1 * std.time.ns_per_ms, &self.microtask_node);
+        // message loop must run only non-test env
+        if (comptime !builtin.is_test) {
+            _ = try session.browser.app.loop.timeout(1 * std.time.ns_per_ms, &self.messageloop_node);
+        }
     }
 
     fn microtaskCallback(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
         const self: *Page = @fieldParentPtr("microtask_node", node);
         self.session.browser.runMicrotasks();
         repeat_delay.* = 1 * std.time.ns_per_ms;
+    }
+
+    fn messageLoopCallback(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
+        const self: *Page = @fieldParentPtr("messageloop_node", node);
+        self.session.browser.runMessageLoop();
+        repeat_delay.* = 100 * std.time.ns_per_ms;
     }
 
     // dump writes the page content into the given file.
