@@ -1001,7 +1001,11 @@ const Script = struct {
         try_catch.init(page.main_context);
         defer try_catch.deinit();
 
-        const src = self.src orelse page.url.raw;
+        const src: []const u8 = blk: {
+            const s = self.src orelse break :blk page.url.raw;
+            break :blk try URL.stitch(page.arena, s, page.url.raw, .{.alloc = .if_needed});
+        };
+
         // if self.src is null, then this is an inline script, and it should
         // not be cached.
         const cacheable = self.src != null;

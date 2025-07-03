@@ -580,7 +580,7 @@ fn parseCommonArg(
         var it = std.mem.splitScalar(u8, str, ',');
         while (it.next()) |part| {
             try arr.append(allocator, std.meta.stringToEnum(log.Scope, part) orelse {
-                log.fatal(.app, "invalid option choice", .{ .arg = "--log_scope_filter", .value = part });
+                log.fatal(.app, "invalid option choice", .{ .arg = "--log_filter_scopes", .value = part });
                 return false;
             });
         }
