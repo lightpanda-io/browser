@@ -12,11 +12,11 @@
             .url = "https://github.com/lightpanda-io/tigerbeetle-io/archive/61d9652f1a957b7f4db723ea6aa0ce9635e840ce.tar.gz",
             .hash = "tigerbeetle_io-0.0.0-ViLgxpyRBAB5BMfIcj3KMXfbJzwARs9uSl8aRy2OXULd",
         },
-        .v8 = .{
-            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/dd087771378ea854452bcb010309fa9ffe5a9cac.tar.gz",
-            .hash = "v8-0.0.0-xddH66e8AwBL3O_A8yWQYQIyfMbKHFNVQr_NqM6YjU11",
-        },
-        //.v8 = .{ .path = "../zig-v8-fork" },
+        //.v8 = .{
+        //    .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/dd087771378ea854452bcb010309fa9ffe5a9cac.tar.gz",
+        //    .hash = "v8-0.0.0-xddH66e8AwBL3O_A8yWQYQIyfMbKHFNVQr_NqM6YjU11",
+        //},
+        .v8 = .{ .path = "../zig-v8-fork" },
         //.tigerbeetle_io = .{ .path = "../tigerbeetle-io" },
     },
 }
