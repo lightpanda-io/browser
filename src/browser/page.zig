@@ -1017,7 +1017,7 @@ const Script = struct {
 
         const src: []const u8 = blk: {
             const s = self.src orelse break :blk page.url.raw;
-            break :blk try URL.stitch(page.arena, s, page.url.raw, .{.alloc = .if_needed});
+            break :blk try URL.stitch(page.arena, s, page.url.raw, .{ .alloc = .if_needed });
         };
 
         // if self.src is null, then this is an inline script, and it should

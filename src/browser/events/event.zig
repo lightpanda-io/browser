@@ -54,7 +54,7 @@ pub const Event = struct {
 
     pub fn toInterface(evt: *parser.Event) !Union {
         return switch (try parser.eventGetInternalType(evt)) {
-            .event, .abort_signal => .{ .Event = evt },
+            .event, .abort_signal, .xhr_event => .{ .Event = evt },
             .custom_event => .{ .CustomEvent = @as(*CustomEvent, @ptrCast(evt)).* },
             .progress_event => .{ .ProgressEvent = @as(*ProgressEvent, @ptrCast(evt)).* },
             .mouse_event => .{ .MouseEvent = @as(*parser.MouseEvent, @ptrCast(evt)) },
