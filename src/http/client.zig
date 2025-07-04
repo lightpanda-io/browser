@@ -322,7 +322,7 @@ const Connection = struct {
 
     const TLSClient = union(enum) {
         blocking: tls.Connection(std.net.Stream),
-        blocking_tls_in_tls: struct {
+        blocking_tlsproxy: struct {
             proxy: tls.Connection(std.net.Stream), // Note, self-referential field. Proxy should be pinned in memory.
             destination: tls.Connection(*tls.Connection(std.net.Stream)),
         },
@@ -331,7 +331,7 @@ const Connection = struct {
         fn close(self: *TLSClient) void {
             switch (self.*) {
                 .blocking => |*tls_client| tls_client.close() catch {},
-                .blocking_tls_in_tls => |*tls_in_tls| {
+                .blocking_tlsproxy => |*tls_in_tls| {
                     tls_in_tls.destination.close() catch {};
                     tls_in_tls.proxy.close() catch {};
                 },
@@ -698,13 +698,13 @@ pub const Request = struct {
                     if (self._request_secure) {
                         // If secure endpoint, create the main TLS stream encapsulated into the TLS stream proxy
                         self._connection.?.tls = .{
-                            .blocking_tls_in_tls = .{
+                            .blocking_tlsproxy = .{
                                 .proxy = proxy_conn.tls.*,
                                 .destination = undefined,
                             },
                         };
-                        const proxy = &self._connection.?.tls.?.blocking_tls_in_tls.proxy;
-                        self._connection.?.tls.?.blocking_tls_in_tls.destination = try tls.client(proxy, tls_config);
+                        const proxy = &self._connection.?.tls.?.blocking_tlsproxy.proxy;
+                        self._connection.?.tls.?.blocking_tlsproxy.destination = try tls.client(proxy, tls_config);
                     } else {
                         // Otherwise, just use the TLS stream proxy
                         self._connection.?.tls = .{ .blocking = proxy_conn.tls.* };
@@ -1776,8 +1776,8 @@ const SyncHandler = struct {
                     .blocking => |*blocking| {
                         break :blk .{ .tls = blocking };
                     },
-                    .blocking_tls_in_tls => |*blocking_tls_in_tls| {
-                        break :blk .{ .tls_in_tls = &blocking_tls_in_tls.destination };
+                    .blocking_tlsproxy => |*blocking_tlsproxy| {
+                        break :blk .{ .tls_in_tls = &blocking_tlsproxy.destination };
                     },
                 }
             }
