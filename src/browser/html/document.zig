@@ -233,6 +233,10 @@ pub const HTMLDocument = struct {
     // Since LightPanda requires the client to know what they are clicking on we do not return the underlying element at this moment
     // This can currenty only happen if the first pixel is clicked without having rendered any element. This will change when css properties are supported.
     // This returns an ElementUnion instead of a *Parser.Element in case the element somehow hasn't passed through the js runtime yet.
+    // While x and y should be f32, here we take i32 since that's what our
+    // "renderer" uses. By specifying i32 here, rather than f32 and doing the
+    // conversion ourself, we rely on v8's type conversion which is both more
+    // flexible (e.g. handles NaN) and will be more consistent with a browser.
     pub fn _elementFromPoint(_: *parser.DocumentHTML, x: i32, y: i32, page: *Page) !?ElementUnion {
         const element = page.renderer.getElementAtPosition(x, y) orelse return null;
         // TODO if pointer-events set to none the underlying element should be returned (parser.documentGetDocumentElement(self.document);?)
@@ -240,6 +244,10 @@ pub const HTMLDocument = struct {
     }
 
     // Returns an array of all elements at the specified coordinates (relative to the viewport). The elements are ordered from the topmost to the bottommost box of the viewport.
+    // While x and y should be f32, here we take i32 since that's what our
+    // "renderer" uses. By specifying i32 here, rather than f32 and doing the
+    // conversion ourself, we rely on v8's type conversion which is both more
+    // flexible (e.g. handles NaN) and will be more consistent with a browser.
     pub fn _elementsFromPoint(_: *parser.DocumentHTML, x: i32, y: i32, page: *Page) ![]ElementUnion {
         const element = page.renderer.getElementAtPosition(x, y) orelse return &.{};
         // TODO if pointer-events set to none the underlying element should be returned (parser.documentGetDocumentElement(self.document);?)
