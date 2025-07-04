@@ -122,6 +122,8 @@ pub const Page = struct {
         // load polyfills
         try polyfill.load(self.arena, self.main_context);
 
+        _ = session.executor.env.snapshot(self.main_context);
+
         _ = try session.browser.app.loop.timeout(1 * std.time.ns_per_ms, &self.microtask_node);
         // message loop must run only non-test env
         if (comptime !builtin.is_test) {
