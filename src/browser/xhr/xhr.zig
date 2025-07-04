@@ -589,11 +589,27 @@ pub const XMLHttpRequest = struct {
     }
 
     fn onErr(self: *XMLHttpRequest, err: anyerror) void {
-        self.state = .done;
         self.send_flag = false;
-        self.dispatchEvt("readystatechange");
-        self.dispatchProgressEvent("error", .{});
-        self.dispatchProgressEvent("loadend", .{});
+
+        // capture the state before we change it
+        const s = self.state;
+
+        const is_abort = err == DOMError.Abort;
+
+        if (is_abort) {
+            self.state = .unsent;
+        } else {
+            self.state = .done;
+            self.dispatchEvt("error");
+        }
+
+        if (s != .done or s != .unsent) {
+            self.dispatchEvt("readystatechange");
+            if (is_abort) {
+                self.dispatchProgressEvent("abort", .{});
+            }
+            self.dispatchProgressEvent("loadend", .{});
+        }
 
         const level: log.Level = if (err == DOMError.Abort) .debug else .err;
         log.log(.http, level, "error", .{
