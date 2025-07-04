@@ -274,7 +274,7 @@ pub const HTMLAnchorElement = struct {
     fn url(self: *parser.Anchor, page: *Page) !URL {
         // Although the URL.constructor union accepts an .{.element = X}, we
         // can't use this here because the behavior is different.
-        //    new URL(document.createElement('a')
+        //    URL.constructor(document.createElement('a')
         // should fail (a.href isn't a valid URL)
         // But
         //     document.createElement('a').host
