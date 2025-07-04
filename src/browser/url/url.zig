@@ -54,6 +54,11 @@ pub const URL = struct {
     uri: std.Uri,
     search_params: URLSearchParams,
 
+    pub const empty = URL{
+        .uri = .{ .scheme = "" },
+        .search_params = .{},
+    };
+
     const URLArg = union(enum) {
         url: *URL,
         element: *parser.ElementHTML,

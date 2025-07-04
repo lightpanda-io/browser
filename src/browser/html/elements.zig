@@ -271,8 +271,18 @@ pub const HTMLAnchorElement = struct {
         return try parser.nodeSetTextContent(parser.anchorToNode(self), v);
     }
 
-    inline fn url(self: *parser.Anchor, page: *Page) !URL {
-        return URL.constructor(.{ .element = @alignCast(@ptrCast(self)) }, null, page); // TODO inject base url
+    fn url(self: *parser.Anchor, page: *Page) !URL {
+        // Although the URL.constructor union accepts an .{.element = X}, we
+        // can't use this here because the behavior is different.
+        //    new URL(document.createElement('a')
+        // should fail (a.href isn't a valid URL)
+        // But
+        //     document.createElement('a').host
+        // should not fail, it should return an empty string
+        if (try parser.elementGetAttribute(@alignCast(@ptrCast(self)), "href")) |href| {
+            return URL.constructor(.{ .string = href }, null, page); // TODO inject base url
+        }
+        return .empty;
     }
 
     // TODO return a disposable string
@@ -1559,6 +1569,8 @@ test "Browser.HTML.Element" {
 
     try runner.testCases(&.{
         .{ "let a = document.createElement('a');", null },
+        .{ "a.href", "" },
+        .{ "a.host", "" },
         .{ "a.href = 'about'", null },
         .{ "a.href", "https://lightpanda.io/opensource-browser/about" },
     }, .{});
