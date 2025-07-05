@@ -45,6 +45,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    # Don't run the CI with draft PR.
+    if: github.event.pull_request.draft == false
+
     steps:
       - uses: actions/checkout@v4
         with:
