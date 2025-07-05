@@ -23,25 +23,36 @@ const log = @import("../../log.zig");
 const Allocator = std.mem.Allocator;
 const Env = @import("../env.zig").Env;
 
-const modules = [_]struct {
-    name: []const u8,
-    source: []const u8,
-}{
-    .{ .name = "polyfill-fetch", .source = @import("fetch.zig").source },
-};
+pub const Loader = struct {
+    done: struct {
+        fetch: bool = false,
+    } = .{},
 
-pub fn load(allocator: Allocator, js_context: *Env.JsContext) !void {
-    var try_catch: Env.TryCatch = undefined;
-    try_catch.init(js_context);
-    defer try_catch.deinit();
+    pub fn load(name: []const u8, source: []const u8, js_context: *Env.JsContext) !void {
+        var try_catch: Env.TryCatch = undefined;
+        try_catch.init(js_context);
+        defer try_catch.deinit();
 
-    for (modules) |m| {
-        _ = js_context.exec(m.source, m.name) catch |err| {
-            if (try try_catch.err(allocator)) |msg| {
-                defer allocator.free(msg);
-                log.fatal(.app, "polyfill error", .{ .name = m.name, .err = msg });
+        _ = js_context.exec(source, name) catch |err| {
+            if (try try_catch.err(js_context.call_arena)) |msg| {
+                log.fatal(.app, "polyfill error", .{ .name = name, .err = msg });
             }
             return err;
         };
     }
-}
+
+    pub fn missing(self: *Loader, name: []const u8, js_context: *Env.JsContext) bool {
+        if (!self.done.fetch and std.mem.eql(u8, name, "fetch")) {
+            // load the polyfill once.
+            self.done.fetch = true;
+
+            const _name = "fetch";
+            const source = @import("fetch.zig").source;
+            log.debug(.polyfill, "dynamic load", .{ .property = name });
+            load(_name, source, js_context) catch |err| {
+                log.fatal(.app, "polyfill load", .{ .name = name, .err = err });
+            };
+        }
+        return false;
+    }
+};

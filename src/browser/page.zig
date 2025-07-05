@@ -95,6 +95,8 @@ pub const Page = struct {
 
     state_pool: *std.heap.MemoryPool(State),
 
+    polyfill_loader: polyfill.Loader = .{},
+
     pub fn init(self: *Page, arena: Allocator, session: *Session) !void {
         const browser = session.browser;
         self.* = .{
@@ -117,10 +119,7 @@ pub const Page = struct {
             }),
             .main_context = undefined,
         };
-        self.main_context = try session.executor.createJsContext(&self.window, self, self, true);
-
-        // load polyfills
-        try polyfill.load(self.arena, self.main_context);
+        self.main_context = try session.executor.createJsContext(&self.window, self, self, true, Env.GlobalMissingCallback.init(&self.polyfill_loader));
 
         _ = try session.browser.app.loop.timeout(1 * std.time.ns_per_ms, &self.microtask_node);
         // message loop must run only non-test env
