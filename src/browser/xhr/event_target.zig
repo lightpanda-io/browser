@@ -39,6 +39,7 @@ pub const XMLHttpRequestEventTarget = struct {
     onload_cbk: ?Function = null,
     ontimeout_cbk: ?Function = null,
     onloadend_cbk: ?Function = null,
+    onreadystatechange_cbk: ?Function = null,
 
     fn register(
         self: *XMLHttpRequestEventTarget,
@@ -86,6 +87,9 @@ pub const XMLHttpRequestEventTarget = struct {
     pub fn get_onloadend(self: *XMLHttpRequestEventTarget) ?Function {
         return self.onloadend_cbk;
     }
+    pub fn get_onreadystatechange(self: *XMLHttpRequestEventTarget) ?Function {
+        return self.onreadystatechange_cbk;
+    }
 
     pub fn set_onloadstart(self: *XMLHttpRequestEventTarget, listener: EventHandler.Listener, page: *Page) !void {
         if (self.onloadstart_cbk) |cbk| try self.unregister("loadstart", cbk.id);
@@ -110,5 +114,9 @@ pub const XMLHttpRequestEventTarget = struct {
     pub fn set_onloadend(self: *XMLHttpRequestEventTarget, listener: EventHandler.Listener, page: *Page) !void {
         if (self.onloadend_cbk) |cbk| try self.unregister("loadend", cbk.id);
         self.onloadend_cbk = try self.register(page.arena, "loadend", listener);
+    }
+    pub fn set_onreadystatechange(self: *XMLHttpRequestEventTarget, listener: EventHandler.Listener, page: *Page) !void {
+        if (self.onreadystatechange_cbk) |cbk| try self.unregister("readystatechange", cbk.id);
+        self.onreadystatechange_cbk = try self.register(page.arena, "readystatechange", listener);
     }
 };

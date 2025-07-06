@@ -23,10 +23,12 @@ const Page = @import("../page.zig").Page;
 const EventHandler = @import("../events/event.zig").EventHandler;
 
 const DOMException = @import("exceptions.zig").DOMException;
-const Nod = @import("node.zig");
+const nod = @import("node.zig");
 
-// EventTarget interfaces
-pub const Union = Nod.Union;
+pub const Union = union(enum) {
+    node: nod.Union,
+    xhr: *@import("../xhr/xhr.zig").XMLHttpRequest,
+};
 
 // EventTarget implementation
 pub const EventTarget = struct {
@@ -39,18 +41,22 @@ pub const EventTarget = struct {
         // The window is a common non-node target, but it's easy to handle as
         // its a singleton.
         if (@intFromPtr(et) == @intFromPtr(&page.window.base)) {
-            return .{ .Window = &page.window };
+            return .{ .node = .{ .Window = &page.window } };
         }
 
         // AbortSignal is another non-node target. It has a distinct usage though
         // so we hijack the event internal type to identity if.
         switch (try parser.eventGetInternalType(e)) {
             .abort_signal => {
-                return .{ .AbortSignal = @fieldParentPtr("proto", @as(*parser.EventTargetTBase, @ptrCast(et))) };
+                return .{ .node = .{ .AbortSignal = @fieldParentPtr("proto", @as(*parser.EventTargetTBase, @ptrCast(et))) } };
+            },
+            .xhr_event => {
+                const XMLHttpRequestEventTarget = @import("../xhr/event_target.zig").XMLHttpRequestEventTarget;
+                const base: *XMLHttpRequestEventTarget = @fieldParentPtr("base", @as(*parser.EventTargetTBase, @ptrCast(et)));
+                return .{ .xhr = @fieldParentPtr("proto", base) };
             },
             else => {
-                // some of these probably need to be special-cased like abort_signal
-                return Nod.Node.toInterface(@as(*parser.Node, @ptrCast(et)));
+                return .{ .node = try nod.Node.toInterface(@as(*parser.Node, @ptrCast(et))) };
             },
         }
     }
