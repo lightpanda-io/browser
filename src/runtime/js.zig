@@ -158,7 +158,10 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
         platform: ?*const Platform,
 
+        snapshot_creator: v8.SnapshotCreator,
+
         // the global isolate
+        // owned by snapshot_creator.
         isolate: v8.Isolate,
 
         // just kept around because we need to free it on deinit
@@ -193,11 +196,12 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             params.array_buffer_allocator = v8.createDefaultArrayBufferAllocator();
             errdefer v8.destroyArrayBufferAllocator(params.array_buffer_allocator.?);
 
-            var isolate = v8.Isolate.init(params);
-            errdefer isolate.deinit();
+            var snapshot_creator = v8.SnapshotCreator.init(params);
+            errdefer snapshot_creator.deinit();
 
-            isolate.enter();
-            errdefer isolate.exit();
+            var isolate = snapshot_creator.getIsolate();
+
+            // snapshot_creator enters the isolate for us.
 
             isolate.setHostInitializeImportMetaObjectCallback(struct {
                 fn callback(c_context: ?*v8.C_Context, c_module: ?*v8.C_Module, c_meta: ?*v8.C_Value) callconv(.C) void {
@@ -218,6 +222,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             env.* = .{
                 .platform = platform,
+                .snapshot_creator = snapshot_creator,
                 .isolate = isolate,
                 .templates = undefined,
                 .allocator = allocator,
@@ -258,11 +263,64 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            self.isolate.exit();
-            self.isolate.deinit();
+            // The snapshot_creator owns the isolate. So it exit and deinit it
+            // for us.
+            self.snapshot_creator.deinit();
             v8.destroyArrayBufferAllocator(self.isolate_params.array_buffer_allocator.?);
             self.allocator.destroy(self.isolate_params);
             self.allocator.destroy(self);
+        }
+
+        pub fn snapshot(self: *Self, default_ctx: *const JsContext) v8.StartupData {
+            self.snapshot_creator.setDefaultContextWithCallbacks(
+                default_ctx.v8_context,
+                // SerializeInternalFieldsCallback serializes internal fields
+                // of V8 objects that contain embedder data
+                .{
+                    .callback = struct {
+                        fn callback(holder: ?*v8.C_Object, index: c_int, data: ?*anyopaque) callconv(.C) v8.StartupData {
+                            _ = holder;
+                            _ = index;
+                            _ = data;
+                            // TODO
+                            std.debug.print("SerializeInternalFieldsCallback\n", .{});
+                            return .{};
+                        }
+                    }.callback,
+                    .data = null,
+                },
+                // SerializeContextDataCallback serializes context-specific
+                // state (globals, modules, etc.)
+                .{
+                    .callback = struct {
+                        fn callback(context: ?*v8.C_Context, index: c_int, data: ?*anyopaque) callconv(.C) v8.StartupData {
+                            _ = context;
+                            _ = index;
+                            _ = data;
+                            // TODO
+                            std.debug.print("SerializeContextDataCallback\n", .{});
+                            return .{};
+                        }
+                    }.callback,
+                    .data = null,
+                },
+                // SerializeAPIWrapperCallback serializes API wrappers that
+                // bridge V8 and Native objects
+                .{
+                    .callback = struct {
+                        fn callback(holder: ?*v8.C_Object, ptr: ?*anyopaque, data: ?*anyopaque) callconv(.C) v8.StartupData {
+                            _ = holder;
+                            _ = ptr;
+                            _ = data;
+                            // TODO
+                            std.debug.print("SerializeAPIWrapperCallback\n", .{});
+                            return .{};
+                        }
+                    }.callback,
+                    .data = null,
+                },
+            );
+            return self.snapshot_creator.createBlob();
         }
 
         pub fn newInspector(self: *Self, arena: Allocator, ctx: anytype) !Inspector {
