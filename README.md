@@ -66,6 +66,7 @@ The Lightpanda browser is compatible to run on windows inside WSL. Follow the Li
 It is recommended to install clients like Puppeteer on the Windows host.
 
 **Install from Docker**
+
 Lightpanda provides [official Docker
 images](https://hub.docker.com/r/lightpanda/browser) for both Linux amd64 and
 arm64 architectures.
@@ -141,7 +142,7 @@ You may still encounter errors or crashes. Please open an issue with specifics i
 Here are the key features we have implemented:
 
 - [x] HTTP loader
-- [x] HTTP headers
+- [x] HTTP loader
 - [x] HTML parser and DOM tree (based on Netsurf libs)
 - [x] Javascript support (v8)
 - [x] DOM APIs
@@ -153,6 +154,7 @@ Here are the key features we have implemented:
 - [x] Click
 - [x] Input form
 - [x] Cookies
+- [x] Custom HTTP headers
 - [ ] Proxy support
 - [ ] Network interception 
 
