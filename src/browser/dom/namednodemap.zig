@@ -134,5 +134,7 @@ test "Browser.DOM.NamedNodeMap" {
         .{ "a['id'].name", "id" },
         .{ "a['id'].value", "content" },
         .{ "a['other']", "undefined" },
+        .{ "a[0].value = 'abc123'", null },
+        .{ "a[0].value", "abc123" },
     }, .{});
 }
