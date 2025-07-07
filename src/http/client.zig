@@ -711,7 +711,12 @@ pub const Request = struct {
                     }
                 }
             }
-            if (self._request_secure and !self._proxy_secure and !self._client.isForwardProxy()) {
+
+
+            if (
+                (self._request_secure and !self._proxy_secure) and
+                (!self._client.isForwardProxy() or self._proxy_secure)
+            ) {
                 self._connection.?.tls = .{
                     .blocking = try tls.client(std.net.Stream{ .handle = socket }, tls_config),
                 };
