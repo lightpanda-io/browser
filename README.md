@@ -18,7 +18,7 @@ Lightpanda is the open-source browser made for headless usage:
 
 - Javascript execution
 - Support of Web APIs (partial, WIP)
-- Compatible with Playwright[^1], Puppeteer through CDP (WIP)
+- Compatible with Playwright[^1], Puppeteer, chromedp through CDP
 
 Fast web automation for AI agents, LLM training, scraping and testing:
 
@@ -41,7 +41,8 @@ Due to the nature of Playwright, a script that works with the current version of
 
 ## Quick start
 
-### Install from the nightly builds
+### Install 
+**Install from the nightly builds**
 
 You can download the last binary from the [nightly
 builds](https://github.com/lightpanda-io/browser/releases/tag/nightly) for
@@ -63,6 +64,16 @@ chmod a+x ./lightpanda
 
 The Lightpanda browser is compatible to run on windows inside WSL. Follow the Linux instruction for installation from a WSL terminal.
 It is recommended to install clients like Puppeteer on the Windows host.
+
+**Install from Docker**
+Lightpanda provides [official Docker
+images](https://hub.docker.com/r/lightpanda/browser) for both Linux amd64 and
+arm64 architectures.
+The following command fetches the Docker image and starts a new container exposing Lightpanda's CDP server on port `9222`.
+The `--privileged` option is required because the browser requires `io_uring` syscalls which are blocked by default by Docker.
+```sh copy
+$ docker run -d --name lightpanda -p 9222:9222 --privileged lightpanda/browser:nightly
+```
 
 ### Dump a URL
 
@@ -124,21 +135,26 @@ By default, Lightpanda collects and sends usage telemetry. This can be disabled 
 
 ## Status
 
-Lightpanda is still a work in progress and is currently at a Beta stage.
-
-:warning: You should expect most websites to fail or crash.
+Lightpanda is in Beta and currently a work in progress. Stability and coverage are improving and many websites now work.
+You may still encounter errors or crashes. Please open an issue with specifics if so.
 
 Here are the key features we have implemented:
 
 - [x] HTTP loader
+- [x] HTTP headers
 - [x] HTML parser and DOM tree (based on Netsurf libs)
 - [x] Javascript support (v8)
-- [x] Basic DOM APIs
+- [x] DOM APIs
 - [x] Ajax
   - [x] XHR API
-  - [x] Fetch API
+  - [x] Fetch API (polyfill)
 - [x] DOM dump
-- [x] Basic CDP/websockets server
+- [x] CDP/websockets server
+- [x] Click
+- [x] Input form
+- [x] Cookies
+- [ ] Proxy support
+- [ ] Network interception 
 
 NOTE: There are hundreds of Web APIs. Developing a browser (even just for headless mode) is a huge task. Coverage will increase over time.
 
