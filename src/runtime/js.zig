@@ -2199,11 +2199,6 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
         fn generateNamedIndexer(comptime Struct: type, template_proto: v8.ObjectTemplate) void {
             if (@hasDecl(Struct, "named_get") == false) {
-                if (comptime builtin.mode == .Debug) {
-                    if (log.enabled(.unknown_prop, .debug)) {
-                        generateDebugNamedIndexer(Struct, template_proto);
-                    }
-                }
                 return;
             }
 
@@ -2260,31 +2255,6 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     }
                 }.callback;
             }
-            template_proto.setNamedProperty(configuration, null);
-        }
-
-        fn generateDebugNamedIndexer(comptime Struct: type, template_proto: v8.ObjectTemplate) void {
-            const configuration = v8.NamedPropertyHandlerConfiguration{
-                .getter = struct {
-                    fn callback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
-                        const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
-                        const isolate = info.getIsolate();
-                        const v8_context = isolate.getCurrentContext();
-
-                        const js_context: *JsContext = @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
-
-                        const property = valueToString(js_context.call_arena, .{ .handle = c_name.? }, isolate, v8_context) catch "???";
-                        log.debug(.unknown_prop, "unkown property", .{ .@"struct" = @typeName(Struct), .property = property });
-                        return v8.Intercepted.No;
-                    }
-                }.callback,
-
-                // This is really cool. Without this, we'd intercept _all_ properties
-                // even those explicitly set. So, node.length for example would get routed
-                // to our `named_get`, rather than a `get_length`. This might be
-                // useful if we run into a type that we can't model properly in Zig.
-                .flags = v8.PropertyHandlerFlags.OnlyInterceptStrings | v8.PropertyHandlerFlags.NonMasking,
-            };
             template_proto.setNamedProperty(configuration, null);
         }
 

@@ -45,7 +45,7 @@ pub const Scope = enum {
 const Opts = struct {
     format: Format = if (is_debug) .pretty else .logfmt,
     level: Level = if (is_debug) .info else .warn,
-    filter_scopes: []const Scope = &.{.unknown_prop},
+    filter_scopes: []const Scope = &.{},
 };
 
 pub var opts = Opts{};
