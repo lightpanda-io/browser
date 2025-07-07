@@ -1714,8 +1714,46 @@ fn AsyncHandler(comptime H: type) type {
                 const handler = self.handler;
 
                 if (self.connect_protocol) |*connect_protocol| {
-                    _ = try connect_protocol.encrypted.conn.decrypt(data, data);
-                    // TODO needsmore
+                    blk: {
+                        const res = try connect_protocol.encrypted.conn.decrypt(data, data);
+
+                        // Not sure about this code:
+
+                        if (res.ciphertext_pos == 0) {
+                            // no part of the encrypted data was consumed no cleartext data should have been generated
+                            std.debug.assert(res.cleartext.len == 0);
+
+                            // our next read needs to append more data to the existing data
+                            handler.read_pos = data.len;
+                            return if (res.closed) break :blk else return .need_more;
+                        }
+
+                        if (res.cleartext.len > 0) break :blk;
+                        if (res.closed) break :blk;
+
+                        const unused = res.unused_ciphertext;
+                        if (unused.len == 0) {
+                            // all of data was used up, our next read can use
+                            // the whole read buffer.
+                            handler.read_pos = 0;
+                            return .need_more;
+                        }
+
+                        // We used some of the data, but have some leftover
+                        // (i.e. there was 1+ full records AND an incomplete
+                        // record). We need to maintain the "leftover" data
+                        // for subsequent reads.
+
+                        // Remember that our read_buf is the MAX possible TLS
+                        // record size. So as long as we make sure that the start
+                        // of a record is at read_buf[0], we know that we'll
+                        // always have enough space for 1 record.
+                        std.mem.copyForwards(u8, handler.read_buf, unused);
+                        handler.read_pos = unused.len;
+
+                        // an incomplete record means there must be more data
+                        return .need_more;
+                    }
                 }
 
                 switch (self.protocol) {
@@ -2950,7 +2988,7 @@ const State = struct {
 
         const write_buf = try allocator.alloc(u8, buf_size);
         errdefer allocator.free(write_buf);
-        const write_connect_buf = try allocator.alloc(u8, buf_size * 2);
+        const write_connect_buf = try allocator.alloc(u8, buf_size * 5);
         errdefer allocator.free(write_connect_buf);
 
         const header_buf = try allocator.alloc(u8, header_size);
