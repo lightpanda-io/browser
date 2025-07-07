@@ -410,5 +410,18 @@ test "Browser.Event" {
         .{ "document.dispatchEvent(new Event('count'))", "true" },
         .{ "document.dispatchEvent(new Event('count'))", "true" },
         .{ "nb", "1" },
+        .{ "document.removeEventListener('count', cbk)", "undefined" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "nb = 0; function cbk(event) { nb ++; }", null },
+        .{ "let ac = new AbortController()", null },
+        .{ "document.addEventListener('count', cbk, {signal: ac.signal})", null },
+        .{ "document.dispatchEvent(new Event('count'))", "true" },
+        .{ "document.dispatchEvent(new Event('count'))", "true" },
+        .{ "ac.abort()", null },
+        .{ "document.dispatchEvent(new Event('count'))", "true" },
+        .{ "nb", "2" },
+        .{ "document.removeEventListener('count', cbk)", "undefined" },
     }, .{});
 }
