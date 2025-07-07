@@ -24,6 +24,8 @@ const Allocator = std.mem.Allocator;
 const Env = @import("../env.zig").Env;
 
 pub const Loader = struct {
+    state: enum { empty, loading } = .empty,
+
     done: struct {
         fetch: bool = false,
     } = .{},
@@ -42,9 +44,14 @@ pub const Loader = struct {
     }
 
     pub fn missing(self: *Loader, name: []const u8, js_context: *Env.JsContext) bool {
-        if (!self.done.fetch and std.mem.eql(u8, name, "fetch")) {
-            // load the polyfill once.
-            self.done.fetch = true;
+        // Avoid recursive calls during polyfill loading.
+        if (self.state == .loading) {
+            return false;
+        }
+
+        if (!self.done.fetch and isFetch(name)) {
+            self.state = .loading;
+            defer self.state = .empty;
 
             const _name = "fetch";
             const source = @import("fetch.zig").source;
@@ -52,7 +59,33 @@ pub const Loader = struct {
             load(_name, source, js_context) catch |err| {
                 log.fatal(.app, "polyfill load", .{ .name = name, .err = err });
             };
+
+            // load the polyfill once.
+            self.done.fetch = true;
+
+            // We return false here: We want v8 to continue the calling chain
+            // to finally find the polyfill we just inserted. If we want to
+            // return false and stops the call chain, we have to use
+            // `info.GetReturnValue.Set()` function, or `undefined` will be
+            // returned immediately.
+            return false;
         }
+
+        if (comptime builtin.mode == .Debug) {
+            log.debug(.unknown_prop, "unkown global property", .{
+                .info = "but the property can exist in pure JS",
+                .property = name,
+            });
+        }
+
+        return false;
+    }
+
+    fn isFetch(name: []const u8) bool {
+        if (std.mem.eql(u8, name, "fetch")) return true;
+        if (std.mem.eql(u8, name, "Request")) return true;
+        if (std.mem.eql(u8, name, "Response")) return true;
+        if (std.mem.eql(u8, name, "Headers")) return true;
         return false;
     }
 };
