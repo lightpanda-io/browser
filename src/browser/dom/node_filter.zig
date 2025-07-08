@@ -22,6 +22,7 @@ pub const NodeFilter = struct {
     pub const _FILTER_ACCEPT: u16 = 1;
     pub const _FILTER_REJECT: u16 = 2;
     pub const _FILTER_SKIP: u16 = 3;
+
     pub const _SHOW_ALL: u32 = std.math.maxInt(u32);
     pub const _SHOW_ELEMENT: u32 = 0b1;
     pub const _SHOW_ATTRIBUTE: u32 = 0b10;

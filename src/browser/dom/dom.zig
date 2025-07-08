@@ -28,6 +28,7 @@ const MutationObserver = @import("mutation_observer.zig");
 const IntersectionObserver = @import("intersection_observer.zig");
 const DOMParser = @import("dom_parser.zig").DOMParser;
 const TreeWalker = @import("tree_walker.zig").TreeWalker;
+const NodeIterator = @import("node_iterator.zig").NodeIterator;
 const NodeFilter = @import("node_filter.zig").NodeFilter;
 const PerformanceObserver = @import("performance_observer.zig").PerformanceObserver;
 
@@ -46,6 +47,7 @@ pub const Interfaces = .{
     IntersectionObserver.Interfaces,
     DOMParser,
     TreeWalker,
+    NodeIterator,
     NodeFilter,
     @import("performance.zig").Interfaces,
     PerformanceObserver,

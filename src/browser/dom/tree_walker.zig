@@ -55,7 +55,7 @@ pub const TreeWalker = struct {
 
     const VerifyResult = enum { accept, skip, reject };
 
-    fn verify(self: *const TreeWalker, node: *parser.Node) !VerifyResult {
+    pub fn verify(self: *const TreeWalker, node: *parser.Node) !VerifyResult {
         const node_type = try parser.nodeType(node);
         const what_to_show = self.what_to_show;
 
@@ -77,7 +77,7 @@ pub const TreeWalker = struct {
 
         // Verify that we aren't filtering it out.
         if (self.filter) |f| {
-            const filter = try f.call(u32, .{node});
+            const filter = try f.call(u16, .{node});
             return switch (filter) {
                 NodeFilter._FILTER_ACCEPT => .accept,
                 NodeFilter._FILTER_REJECT => .reject,
@@ -144,7 +144,7 @@ pub const TreeWalker = struct {
         return null;
     }
 
-    fn nextSibling(self: *const TreeWalker, node: *parser.Node) !?*parser.Node {
+    pub fn nextSibling(self: *const TreeWalker, node: *parser.Node) !?*parser.Node {
         var current = node;
 
         while (true) {
@@ -174,7 +174,7 @@ pub const TreeWalker = struct {
         return null;
     }
 
-    fn parentNode(self: *const TreeWalker, node: *parser.Node) !?*parser.Node {
+    pub fn parentNode(self: *const TreeWalker, node: *parser.Node) !?*parser.Node {
         if (self.root == node) return null;
 
         var current = node;
@@ -245,6 +245,8 @@ pub const TreeWalker = struct {
     }
 
     pub fn _previousNode(self: *TreeWalker) !?*parser.Node {
+        if (self.current_node == self.root) return null;
+
         var current = self.current_node;
         while (try parser.nodePreviousSibling(current)) |previous| {
             current = previous;
