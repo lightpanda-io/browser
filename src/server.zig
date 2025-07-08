@@ -223,7 +223,7 @@ pub const Client = struct {
     }
 
     fn close(self: *Self) void {
-        log.info(.app, "client disconected", .{});
+        log.info(.app, "client disconnected", .{});
         self.connected = false;
         // recv only, because we might have pending writes we'd like to get
         // out (like the HTTP error response)
