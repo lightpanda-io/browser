@@ -15,7 +15,6 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
 const parser = @import("../netsurf.zig");
 
 const Node = @import("node.zig").Node;
@@ -47,7 +46,14 @@ pub const Attr = struct {
     }
 
     pub fn set_value(self: *parser.Attribute, v: []const u8) !?[]const u8 {
-        try parser.attributeSetValue(self, v);
+        if (try parser.attributeGetOwnerElement(self)) |el| {
+            // if possible, go through the element, as that triggers a
+            // DOMAttrModified event (which MutationObserver cares about)
+            const name = try parser.attributeGetName(self);
+            try parser.elementSetAttribute(el, name, v);
+        } else {
+            try parser.attributeSetValue(self, v);
+        }
         return v;
     }
 
