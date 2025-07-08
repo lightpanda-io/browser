@@ -236,7 +236,7 @@ pub const Client = struct {
         return proxy_type == .connect;
     }
 
-    fn isSimpleProxy(self: *const Client) bool {
+    fn isForwardProxy(self: *const Client) bool {
         const proxy_type = self.proxy_type orelse return false;
         return proxy_type == .forward;
     }
@@ -711,7 +711,7 @@ pub const Request = struct {
                     }
                 }
             }
-            if (self._request_secure and !self._proxy_secure) {
+            if (self._request_secure and !self._proxy_secure and !self._client.isForwardProxy()) {
                 self._connection.?.tls = .{
                     .blocking = try tls.client(std.net.Stream{ .handle = socket }, tls_config),
                 };
@@ -851,7 +851,7 @@ pub const Request = struct {
         try self.headers.append(arena, .{ .name = "User-Agent", .value = "Lightpanda/1.0" });
         try self.headers.append(arena, .{ .name = "Accept", .value = "*/*" });
 
-        if (self._client.isSimpleProxy()) {
+        if (self._client.isForwardProxy()) {
             if (self._client.proxy_auth) |proxy_auth| {
                 try self.headers.append(arena, .{ .name = "Proxy-Authorization", .value = proxy_auth });
             }
@@ -934,7 +934,7 @@ pub const Request = struct {
         }
 
         // A simple http proxy to an https destination is made into tls by the proxy, we see it as a plain connection
-        const expect_tls = self._proxy_secure or (self._request_secure and !self._client.isSimpleProxy());
+        const expect_tls = self._proxy_secure or (self._request_secure and !self._client.isForwardProxy());
         return self._client.connection_manager.get(expect_tls, self._connect_host, self._connect_port, blocking);
     }
 
@@ -958,7 +958,7 @@ pub const Request = struct {
     }
 
     fn buildHeader(self: *Request) ![]const u8 {
-        const proxied = self._client.isSimpleProxy();
+        const proxied = self._client.isForwardProxy();
 
         const buf = self._state.header_buf;
         var fbs = std.io.fixedBufferStream(buf);
