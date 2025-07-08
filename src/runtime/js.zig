@@ -3420,7 +3420,7 @@ fn valueToDetailString(arena: Allocator, value: v8.Value, isolate: v8.Isolate, v
             if (debugValueToString(arena, value.castTo(v8.Object), isolate, v8_context)) |ds| {
                 return ds;
             } else |err| {
-                log.err(.js, "debug serialize value", .{.err = err});
+                log.err(.js, "debug serialize value", .{ .err = err });
             }
         }
     }

@@ -55,7 +55,7 @@ pub const MutationObserver = struct {
             .connected = true,
             .scheduled = false,
             .arena = page.arena,
-            .loop_node = .{.func = callback},
+            .loop_node = .{ .func = callback },
         };
     }
 
@@ -227,7 +227,12 @@ const Observer = struct {
 
     event_node: parser.EventNode,
 
-    fn appliesTo(self: *const Observer, target: *parser.Node, event_type: MutationEventType, event: *parser.MutationEvent,) !bool {
+    fn appliesTo(
+        self: *const Observer,
+        target: *parser.Node,
+        event_type: MutationEventType,
+        event: *parser.MutationEvent,
+    ) !bool {
         if (event_type == .DOMAttrModified and self.options.attributeFilter.len > 0) {
             const attribute_name = try parser.mutationEventAttributeName(event);
             for (self.options.attributeFilter) |needle| blk: {
@@ -366,9 +371,10 @@ test "Browser.DOM.MutationObserver" {
             \\ document.firstElementChild.setAttribute("foo", "bar");
             \\ // ignored b/c it's about another target.
             \\ document.firstElementChild.firstChild.setAttribute("foo", "bar");
-            ,null
+            ,
+            null,
         },
-        .{ "nb", "1"},
+        .{ "nb", "1" },
         .{ "mrs[0].type", "attributes" },
         .{ "mrs[0].target == document.firstElementChild", "true" },
         .{ "mrs[0].target.getAttribute('foo')", "bar" },
@@ -386,9 +392,10 @@ test "Browser.DOM.MutationObserver" {
             \\     nb2++;
             \\ }).observe(node, { characterData: true, characterDataOldValue: true });
             \\ node.data = "foo";
-            , null
+            ,
+            null,
         },
-        .{ "nb2", "1"},
+        .{ "nb2", "1" },
         .{ "mrs2[0].type", "characterData" },
         .{ "mrs2[0].target == node", "true" },
         .{ "mrs2[0].target.data", "foo" },
@@ -405,9 +412,10 @@ test "Browser.DOM.MutationObserver" {
             \\     node.innerText = 'a';
             \\ }).observe(document, { subtree:true,childList:true });
             \\ node.innerText = "2";
-            , null
+            ,
+            null,
         },
-        .{"node.innerText", "a"},
+        .{ "node.innerText", "a" },
     }, .{});
 
     try runner.testCases(&.{
@@ -418,10 +426,11 @@ test "Browser.DOM.MutationObserver" {
             \\     attrWatch++;
             \\ }).observe(document, { attributeFilter: ["name"], subtree: true });
             \\ node.setAttribute("id", "1");
-            , null
+            ,
+            null,
         },
-        .{"attrWatch", "0"},
-        .{ "node.setAttribute('name', 'other');", null},
-        .{ "attrWatch", "1"},
+        .{ "attrWatch", "0" },
+        .{ "node.setAttribute('name', 'other');", null },
+        .{ "attrWatch", "1" },
     }, .{});
 }
