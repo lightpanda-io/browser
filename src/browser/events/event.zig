@@ -205,7 +205,6 @@ pub const EventHandler = struct {
         const callback = (try listener.callback(target)) orelse return null;
 
         if (signal) |s| {
-            std.debug.print("add signal\n", .{});
             const signal_target = parser.toEventTarget(AbortSignal, s);
 
             const scb = try allocator.create(SignalCallback);
