@@ -23,6 +23,7 @@ const NamedNodeMap = @import("namednodemap.zig").NamedNodeMap;
 const DOMTokenList = @import("token_list.zig");
 const NodeList = @import("nodelist.zig");
 const Node = @import("node.zig");
+const ResizeObserver = @import("resize_observer.zig");
 const MutationObserver = @import("mutation_observer.zig");
 const IntersectionObserver = @import("intersection_observer.zig");
 const DOMParser = @import("dom_parser.zig").DOMParser;
@@ -40,6 +41,7 @@ pub const Interfaces = .{
     NodeList.Interfaces,
     Node.Node,
     Node.Interfaces,
+    ResizeObserver.Interfaces,
     MutationObserver.Interfaces,
     IntersectionObserver.Interfaces,
     DOMParser,
