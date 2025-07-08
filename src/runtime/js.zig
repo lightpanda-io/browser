@@ -2002,7 +2002,6 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
                     var caller = Caller(Self, State).init(info);
                     defer caller.deinit();
-
                     // See comment above. We generateConstructor on all types
                     // in order to create the FunctionTemplate, but there might
                     // not be an actual "constructor" function. So if someone
@@ -2010,6 +2009,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     // a constructor function, we'll return an error.
                     if (@hasDecl(Struct, "constructor") == false) {
                         const iso = caller.isolate;
+                        log.warn(.js, "Illegal constructor call", .{ .name = @typeName(Struct) });
                         const js_exception = iso.throwException(createException(iso, "Illegal Constructor"));
                         info.getReturnValue().set(js_exception);
                         return;
@@ -3420,7 +3420,7 @@ fn valueToDetailString(arena: Allocator, value: v8.Value, isolate: v8.Isolate, v
             if (debugValueToString(arena, value.castTo(v8.Object), isolate, v8_context)) |ds| {
                 return ds;
             } else |err| {
-                log.err(.js, "debug serialize value", .{.err = err});
+                log.err(.js, "debug serialize value", .{ .err = err });
             }
         }
     }
