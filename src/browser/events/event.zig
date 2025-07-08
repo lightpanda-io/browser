@@ -215,7 +215,7 @@ pub const EventHandler = struct {
                 .typ = try allocator.dupe(u8, typ),
                 .signal_target = signal_target,
                 .signal_listener = undefined,
-                .node = .{.func = SignalCallback.handle },
+                .node = .{ .func = SignalCallback.handle },
             };
 
             scb.signal_listener = try parser.eventTargetAddEventListener(
@@ -285,7 +285,7 @@ const SignalCallback = struct {
     typ: []const u8,
     capture: bool,
     callback_id: usize,
-    node : parser.EventNode,
+    node: parser.EventNode,
     target: *parser.EventTarget,
     signal_target: *parser.EventTarget,
     signal_listener: *parser.EventListener,
@@ -435,11 +435,11 @@ test "Browser.Event" {
 
     try runner.testCases(&.{
         .{ "nb = 0; function cbk(event) { nb ++; }", null },
-        .{ "let ac = new AbortController()", null},
+        .{ "let ac = new AbortController()", null },
         .{ "document.addEventListener('count', cbk, {signal: ac.signal})", null },
         .{ "document.dispatchEvent(new Event('count'))", "true" },
         .{ "document.dispatchEvent(new Event('count'))", "true" },
-        .{ "ac.abort()", null},
+        .{ "ac.abort()", null },
         .{ "document.dispatchEvent(new Event('count'))", "true" },
         .{ "nb", "2" },
         .{ "document.removeEventListener('count', cbk)", "undefined" },
