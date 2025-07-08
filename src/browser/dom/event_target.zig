@@ -35,6 +35,9 @@ pub const EventTarget = struct {
     pub const Self = parser.EventTarget;
     pub const Exception = DOMException;
 
+    // Extend libdom event target for pure zig struct.
+    base: parser.EventTargetTBase = parser.EventTargetTBase{},
+
     pub fn toInterface(e: *parser.Event, et: *parser.EventTarget, page: *Page) !Union {
         // libdom assumes that all event targets are libdom nodes. They are not.
 
@@ -63,6 +66,11 @@ pub const EventTarget = struct {
 
     // JS funcs
     // --------
+    pub fn constructor(page: *Page) !*parser.EventTarget {
+        const et = try page.arena.create(EventTarget);
+        return @ptrCast(&et.base);
+    }
+
     pub fn _addEventListener(
         self: *parser.EventTarget,
         typ: []const u8,
@@ -127,6 +135,10 @@ const testing = @import("../../testing.zig");
 test "Browser.DOM.EventTarget" {
     var runner = try testing.jsRunner(testing.tracking_allocator, .{});
     defer runner.deinit();
+
+    try runner.testCases(&.{
+        .{ "new EventTarget()", "[object EventTarget]" },
+    }, .{});
 
     try runner.testCases(&.{
         .{ "let content = document.getElementById('content')", "undefined" },
