@@ -16,8 +16,12 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const css = @import("css.zig");
 const parser = @import("../netsurf.zig");
 const Page = @import("../page.zig").Page;
+const NodeList = @import("nodelist.zig").NodeList;
+const Element = @import("element.zig").Element;
+const ElementUnion = @import("element.zig").Union;
 
 const Node = @import("node.zig").Node;
 
@@ -53,6 +57,20 @@ pub const DocumentFragment = struct {
     pub fn _replaceChildren(self: *parser.DocumentFragment, nodes: []const Node.NodeOrText) !void {
         return Node.replaceChildren(parser.documentFragmentToNode(self), nodes);
     }
+
+    pub fn _querySelector(self: *parser.DocumentFragment, selector: []const u8, page: *Page) !?ElementUnion {
+        if (selector.len == 0) return null;
+
+        const n = try css.querySelector(page.call_arena, parser.documentFragmentToNode(self), selector);
+
+        if (n == null) return null;
+
+        return try Element.toInterface(parser.nodeToElement(n.?));
+    }
+
+    pub fn _querySelectorAll(self: *parser.DocumentFragment, selector: []const u8, page: *Page) !NodeList {
+        return css.querySelectorAll(page.arena, parser.documentFragmentToNode(self), selector);
+    }
 };
 
 const testing = @import("../../testing.zig");
@@ -83,5 +101,11 @@ test "Browser.DOM.DocumentFragment" {
 
         .{ "document.getElementsByTagName('body')[0].append(f.cloneNode(true));", null },
         .{ "document.getElementById('x') != null;", "true" },
+
+        .{ "document.querySelector('.hello')", "null" },
+        .{ "document.querySelectorAll('.hello').length", "0" },
+
+        .{ "document.querySelector('#x').id", "x" },
+        .{ "document.querySelectorAll('#x')[0].id", "x" },
     }, .{});
 }
