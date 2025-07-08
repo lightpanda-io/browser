@@ -27,6 +27,7 @@ const Page = @import("../page.zig").Page;
 const DOMException = @import("../dom/exceptions.zig").DOMException;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const EventTargetUnion = @import("../dom/event_target.zig").Union;
+const AbortSignal = @import("../html/AbortController.zig").AbortSignal;
 
 const CustomEvent = @import("custom_event.zig").CustomEvent;
 const ProgressEvent = @import("../xhr/progress_event.zig").ProgressEvent;
@@ -175,7 +176,7 @@ pub const EventHandler = struct {
             // that the listener won't call preventDefault() and thus can safely
             // run the default as needed).
             passive: ?bool,
-            signal: ?bool, // currently does nothing
+            signal: ?*AbortSignal, // currently does nothing
         };
     };
 
@@ -188,24 +189,43 @@ pub const EventHandler = struct {
     ) !?*EventHandler {
         var once = false;
         var capture = false;
+        var signal: ?*AbortSignal = null;
+
         if (opts_) |opts| {
             switch (opts) {
                 .capture => |c| capture = c,
                 .flags => |f| {
-                    // Done this way so that, for common cases that _only_ set
-                    // capture, i.e. {captrue: true}, it works.
-                    // But for any case that sets any of the other flags, we
-                    // error. If we don't error, this function call would succeed
-                    // but the behavior might be wrong. At this point, it's
-                    // better to be explicit and error.
-                    if (f.signal orelse false) return error.NotImplemented;
                     once = f.once orelse false;
+                    signal = f.signal orelse null;
                     capture = f.capture orelse false;
                 },
             }
         }
 
         const callback = (try listener.callback(target)) orelse return null;
+
+        if (signal) |s| {
+            std.debug.print("add signal\n", .{});
+            const signal_target = parser.toEventTarget(AbortSignal, s);
+
+            const scb = try allocator.create(SignalCallback);
+            scb.* = .{
+                .target = target,
+                .capture = capture,
+                .callback_id = callback.id,
+                .typ = try allocator.dupe(u8, typ),
+                .signal_target = signal_target,
+                .signal_listener = undefined,
+                .node = .{.func = SignalCallback.handle },
+            };
+
+            scb.signal_listener = try parser.eventTargetAddEventListener(
+                signal_target,
+                "abort",
+                &scb.node,
+                false,
+            );
+        }
 
         // check if event target has already this listener
         if (try parser.eventTargetHasListener(target, typ, capture, callback.id) != null) {
@@ -259,6 +279,50 @@ pub const EventHandler = struct {
                 self.capture,
             ) catch {};
         }
+    }
+};
+
+const SignalCallback = struct {
+    typ: []const u8,
+    capture: bool,
+    callback_id: usize,
+    node : parser.EventNode,
+    target: *parser.EventTarget,
+    signal_target: *parser.EventTarget,
+    signal_listener: *parser.EventListener,
+
+    fn handle(node: *parser.EventNode, _: *parser.Event) void {
+        const self: *SignalCallback = @fieldParentPtr("node", node);
+        self._handle() catch |err| {
+            log.err(.app, "event signal handler", .{ .err = err });
+        };
+    }
+
+    fn _handle(self: *SignalCallback) !void {
+        const lst = try parser.eventTargetHasListener(
+            self.target,
+            self.typ,
+            self.capture,
+            self.callback_id,
+        );
+        if (lst == null) {
+            return;
+        }
+
+        try parser.eventTargetRemoveEventListener(
+            self.target,
+            self.typ,
+            lst.?,
+            self.capture,
+        );
+
+        // remove the abort signal listener itself
+        try parser.eventTargetRemoveEventListener(
+            self.signal_target,
+            "abort",
+            self.signal_listener,
+            false,
+        );
     }
 };
 
@@ -367,5 +431,18 @@ test "Browser.Event" {
         .{ "document.dispatchEvent(new Event('count'))", "true" },
         .{ "document.dispatchEvent(new Event('count'))", "true" },
         .{ "nb", "1" },
+        .{ "document.removeEventListener('count', cbk)", "undefined" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "nb = 0; function cbk(event) { nb ++; }", null },
+        .{ "let ac = new AbortController()", null},
+        .{ "document.addEventListener('count', cbk, {signal: ac.signal})", null },
+        .{ "document.dispatchEvent(new Event('count'))", "true" },
+        .{ "document.dispatchEvent(new Event('count'))", "true" },
+        .{ "ac.abort()", null},
+        .{ "document.dispatchEvent(new Event('count'))", "true" },
+        .{ "nb", "2" },
+        .{ "document.removeEventListener('count', cbk)", "undefined" },
     }, .{});
 }
