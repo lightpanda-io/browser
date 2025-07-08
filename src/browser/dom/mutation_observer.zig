@@ -22,6 +22,7 @@ const Allocator = std.mem.Allocator;
 const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 const Page = @import("../page.zig").Page;
+const Loop = @import("../../runtime/loop.zig").Loop;
 
 const Env = @import("../env.zig").Env;
 const NodeList = @import("nodelist.zig").NodeList;
@@ -35,25 +36,37 @@ const Walker = @import("../dom/walker.zig").WalkerChildren;
 
 // WEB IDL https://dom.spec.whatwg.org/#interface-mutationobserver
 pub const MutationObserver = struct {
+    loop: *Loop,
     cbk: Env.Function,
     arena: Allocator,
+    connected: bool,
+    scheduled: bool,
+    loop_node: Loop.CallbackNode,
 
     // List of records which were observed. When the call scope ends, we need to
     // execute our callback with it.
-    observed: std.ArrayListUnmanaged(*MutationRecord),
+    observed: std.ArrayListUnmanaged(MutationRecord),
 
     pub fn constructor(cbk: Env.Function, page: *Page) !MutationObserver {
         return .{
             .cbk = cbk,
+            .loop = page.loop,
             .observed = .{},
+            .connected = true,
+            .scheduled = false,
             .arena = page.arena,
+            .loop_node = .{.func = callback},
         };
     }
 
-    pub fn _observe(self: *MutationObserver, node: *parser.Node, options_: ?MutationObserverInit) !void {
-        const options = options_ orelse MutationObserverInit{};
+    pub fn _observe(self: *MutationObserver, node: *parser.Node, options_: ?Options) !void {
+        const arena = self.arena;
+        var options = options_ orelse Options{};
+        if (options.attributeFilter.len > 0) {
+            options.attributeFilter = try arena.dupe([]const u8, options.attributeFilter);
+        }
 
-        const observer = try self.arena.create(Observer);
+        const observer = try arena.create(Observer);
         observer.* = .{
             .node = node,
             .options = options,
@@ -102,30 +115,34 @@ pub const MutationObserver = struct {
         }
     }
 
-    pub fn jsCallScopeEnd(self: *MutationObserver) void {
-        const record = self.observed.items;
-        if (record.len == 0) {
+    fn callback(node: *Loop.CallbackNode, _: *?u63) void {
+        const self: *MutationObserver = @fieldParentPtr("loop_node", node);
+        if (self.connected == false) {
+            self.scheduled = true;
+            return;
+        }
+        self.scheduled = false;
+
+        const records = self.observed.items;
+        if (records.len == 0) {
             return;
         }
 
         defer self.observed.clearRetainingCapacity();
 
-        for (record) |r| {
-            const records = [_]MutationRecord{r.*};
-            var result: Env.Function.Result = undefined;
-            self.cbk.tryCall(void, .{records}, &result) catch {
-                log.debug(.user_script, "callback error", .{
-                    .err = result.exception,
-                    .stack = result.stack,
-                    .source = "mutation observer",
-                });
-            };
-        }
+        var result: Env.Function.Result = undefined;
+        self.cbk.tryCall(void, .{records}, &result) catch {
+            log.debug(.user_script, "callback error", .{
+                .err = result.exception,
+                .stack = result.stack,
+                .source = "mutation observer",
+            });
+        };
     }
 
     // TODO
-    pub fn _disconnect(_: *MutationObserver) !void {
-        // TODO unregister listeners.
+    pub fn _disconnect(self: *MutationObserver) !void {
+        self.connected = false;
     }
 
     // TODO
@@ -182,31 +199,27 @@ pub const MutationRecord = struct {
     }
 };
 
-const MutationObserverInit = struct {
+const Options = struct {
     childList: bool = false,
     attributes: bool = false,
     characterData: bool = false,
     subtree: bool = false,
     attributeOldValue: bool = false,
     characterDataOldValue: bool = false,
-    // TODO
-    // attributeFilter: [][]const u8,
+    attributeFilter: [][]const u8 = &.{},
 
-    fn attr(self: MutationObserverInit) bool {
-        return self.attributes or self.attributeOldValue;
+    fn attr(self: Options) bool {
+        return self.attributes or self.attributeOldValue or self.attributeFilter.len > 0;
     }
 
-    fn cdata(self: MutationObserverInit) bool {
+    fn cdata(self: Options) bool {
         return self.characterData or self.characterDataOldValue;
     }
 };
 
 const Observer = struct {
     node: *parser.Node,
-    options: MutationObserverInit,
-
-    // record of the mutation, all observed changes in 1 call are batched
-    record: ?MutationRecord = null,
+    options: Options,
 
     // reference back to the MutationObserver so that we can access the arena
     // and batch the mutation records.
@@ -214,19 +227,29 @@ const Observer = struct {
 
     event_node: parser.EventNode,
 
-    fn appliesTo(o: *const Observer, target: *parser.Node) bool {
+    fn appliesTo(self: *const Observer, target: *parser.Node, event_type: MutationEventType, event: *parser.MutationEvent,) !bool {
+        if (event_type == .DOMAttrModified and self.options.attributeFilter.len > 0) {
+            const attribute_name = try parser.mutationEventAttributeName(event);
+            for (self.options.attributeFilter) |needle| blk: {
+                if (std.mem.eql(u8, attribute_name, needle)) {
+                    break :blk;
+                }
+            }
+            return false;
+        }
+
         // mutation on any target is always ok.
-        if (o.options.subtree) {
+        if (self.options.subtree) {
             return true;
         }
 
         // if target equals node, alway ok.
-        if (target == o.node) {
+        if (target == self.node) {
             return true;
         }
 
         // no subtree, no same target and no childlist, always noky.
-        if (!o.options.childList) {
+        if (!self.options.childList) {
             return false;
         }
 
@@ -234,7 +257,7 @@ const Observer = struct {
         const walker = Walker{};
         var next: ?*parser.Node = null;
         while (true) {
-            next = walker.get_next(o.node, next) catch break orelse break;
+            next = walker.get_next(self.node, next) catch break orelse break;
             if (next.? == target) {
                 return true;
             }
@@ -258,27 +281,22 @@ const Observer = struct {
             break :blk parser.eventTargetToNode(event_target);
         };
 
-        if (self.appliesTo(node) == false) {
-            return;
-        }
-
+        const mutation_event = parser.eventToMutationEvent(event);
         const event_type = blk: {
             const t = try parser.eventType(event);
             break :blk std.meta.stringToEnum(MutationEventType, t) orelse return;
         };
 
-        const arena = mutation_observer.arena;
-        if (self.record == null) {
-            self.record = .{
-                .target = self.node,
-                .type = event_type.recordType(),
-            };
-            try mutation_observer.observed.append(arena, &self.record.?);
+        if (try self.appliesTo(node, event_type, mutation_event) == false) {
+            return;
         }
 
-        var record = &self.record.?;
-        const mutation_event = parser.eventToMutationEvent(event);
+        var record = MutationRecord{
+            .target = self.node,
+            .type = event_type.recordType(),
+        };
 
+        const arena = mutation_observer.arena;
         switch (event_type) {
             .DOMAttrModified => {
                 record.attribute_name = parser.mutationEventAttributeName(mutation_event) catch null;
@@ -301,6 +319,13 @@ const Observer = struct {
                     try record.removed_nodes.append(arena, related_node);
                 }
             },
+        }
+
+        try mutation_observer.observed.append(arena, record);
+
+        if (mutation_observer.scheduled == false) {
+            mutation_observer.scheduled = true;
+            _ = try mutation_observer.loop.timeout(0, &mutation_observer.loop_node);
         }
     }
 };
@@ -341,10 +366,9 @@ test "Browser.DOM.MutationObserver" {
             \\ document.firstElementChild.setAttribute("foo", "bar");
             \\ // ignored b/c it's about another target.
             \\ document.firstElementChild.firstChild.setAttribute("foo", "bar");
-            \\ nb;
-            ,
-            "1",
+            ,null
         },
+        .{ "nb", "1"},
         .{ "mrs[0].type", "attributes" },
         .{ "mrs[0].target == document.firstElementChild", "true" },
         .{ "mrs[0].target.getAttribute('foo')", "bar" },
@@ -362,10 +386,9 @@ test "Browser.DOM.MutationObserver" {
             \\     nb2++;
             \\ }).observe(node, { characterData: true, characterDataOldValue: true });
             \\ node.data = "foo";
-            \\ nb2;
-            ,
-            "1",
+            , null
         },
+        .{ "nb2", "1"},
         .{ "mrs2[0].type", "characterData" },
         .{ "mrs2[0].target == node", "true" },
         .{ "mrs2[0].target.data", "foo" },
@@ -382,8 +405,23 @@ test "Browser.DOM.MutationObserver" {
             \\     node.innerText = 'a';
             \\ }).observe(document, { subtree:true,childList:true });
             \\ node.innerText = "2";
-            ,
-            "2",
+            , null
         },
+        .{"node.innerText", "a"},
+    }, .{});
+
+    try runner.testCases(&.{
+        .{
+            \\ var node = document.getElementById("para");
+            \\ var attrWatch = 0;
+            \\ new MutationObserver(() => {
+            \\     attrWatch++;
+            \\ }).observe(document, { attributeFilter: ["name"], subtree: true });
+            \\ node.setAttribute("id", "1");
+            , null
+        },
+        .{"attrWatch", "0"},
+        .{ "node.setAttribute('name', 'other');", null},
+        .{ "attrWatch", "1"},
     }, .{});
 }

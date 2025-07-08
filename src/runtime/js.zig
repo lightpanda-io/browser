@@ -595,9 +595,6 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // Some Zig types have code to execute to cleanup
             destructor_callbacks: std.ArrayListUnmanaged(DestructorCallback) = .empty,
 
-            // Some Zig types have code to execute when the call scope ends
-            call_scope_end_callbacks: std.ArrayListUnmanaged(CallScopeEndCallback) = .empty,
-
             // Our module cache: normalized module specifier => module.
             module_cache: std.StringHashMapUnmanaged(PersistentModule) = .empty,
 
@@ -826,10 +823,6 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
                         if (comptime @hasDecl(ptr.child, "destructor")) {
                             try self.destructor_callbacks.append(context_arena, DestructorCallback.init(value));
-                        }
-
-                        if (comptime @hasDecl(ptr.child, "jsCallScopeEnd")) {
-                            try self.call_scope_end_callbacks.append(context_arena, CallScopeEndCallback.init(value));
                         }
 
                         // Sometimes we're creating a new v8.Object, like when
@@ -2639,10 +2632,6 @@ fn Caller(comptime E: type, comptime State: type) type {
             // Therefore, we keep a call_depth, and only reset the call_arena
             // when a top-level (call_depth == 0) function ends.
             if (call_depth == 0) {
-                for (js_context.call_scope_end_callbacks.items) |cb| {
-                    cb.callScopeEnd();
-                }
-
                 const arena: *ArenaAllocator = @alignCast(@ptrCast(js_context.call_arena.ptr));
                 _ = arena.reset(.{ .retain_with_limit = CALL_ARENA_RETAIN });
             }
