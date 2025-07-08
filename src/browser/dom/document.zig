@@ -33,6 +33,7 @@ const Element = @import("element.zig").Element;
 const ElementUnion = @import("element.zig").Union;
 const TreeWalker = @import("tree_walker.zig").TreeWalker;
 const CSSStyleSheet = @import("../cssom/css_stylesheet.zig").CSSStyleSheet;
+const NodeIterator = @import("node_iterator.zig").NodeIterator;
 const Range = @import("range.zig").Range;
 
 const Env = @import("../env.zig").Env;
@@ -263,6 +264,10 @@ pub const Document = struct {
 
     pub fn _createTreeWalker(_: *parser.Document, root: *parser.Node, what_to_show: ?u32, filter: ?TreeWalker.TreeWalkerOpts) !TreeWalker {
         return try TreeWalker.init(root, what_to_show, filter);
+    }
+
+    pub fn _createNodeIterator(_: *parser.Document, root: *parser.Node, what_to_show: ?u32, filter: ?TreeWalker.TreeWalkerOpts) !NodeIterator {
+        return try NodeIterator.init(root, what_to_show, filter);
     }
 
     pub fn getActiveElement(self: *parser.Document, page: *Page) !?*parser.Element {

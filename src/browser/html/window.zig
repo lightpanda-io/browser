@@ -360,7 +360,7 @@ const TimerCallback = struct {
         }
 
         call catch {
-            log.debug(.user_script, "callback error", .{
+            log.warn(.user_script, "callback error", .{
                 .err = result.exception,
                 .stack = result.stack,
                 .source = "window timeout",
