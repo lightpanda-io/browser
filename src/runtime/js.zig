@@ -1421,7 +1421,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 const this_obj = if (@TypeOf(value) == JsObject)
                     value.js_obj
                 else
-                    try self.js_context.valueToExistingObject(value);
+                    (try self.js_context.zigValueToJs(value)).castTo(v8.Object);
 
                 return .{
                     .id = self.id,
