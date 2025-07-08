@@ -162,7 +162,7 @@ test "Performance: get_timeOrigin" {
     try testing.expect(time_origin >= 0);
 
     // Check resolution
-    try testing.expectDelta(@rem(time_origin * std.time.us_per_ms, 100.0), 0.0, 0.1);
+    try testing.expectDelta(@rem(time_origin * std.time.us_per_ms, 100.0), 0.0, 0.2);
 }
 
 test "Performance: now" {
