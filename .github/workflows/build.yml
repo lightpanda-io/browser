@@ -98,7 +98,7 @@ jobs:
       ARCH: aarch64
       OS: macos
 
-    runs-on: macos-latest
+    runs-on: macos-14
     timeout-minutes: 15
 
     steps:
@@ -136,7 +136,7 @@ jobs:
       ARCH: x86_64
       OS: macos
 
-    runs-on: macos-13
+    runs-on: macos-14
     timeout-minutes: 15
 
     steps:
