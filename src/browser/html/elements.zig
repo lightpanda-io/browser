@@ -895,6 +895,15 @@ pub const HTMLLinkElement = struct {
     pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
         return constructHtmlElement(page, js_this);
     }
+
+    pub fn get_href(self: *parser.Link) ![]const u8 {
+        return try parser.linkGetHref(self);
+    }
+
+    pub fn set_href(self: *parser.Link, href: []const u8, page: *const Page) !void {
+        const full = try urlStitch(page.call_arena, href, page.url.raw, .{});
+        return try parser.linkSetHref(self, full);
+    }
 };
 
 pub const HTMLMapElement = struct {
@@ -1580,6 +1589,16 @@ test "Browser.HTML.Element" {
         .{ "const focused = document.activeElement", null },
         .{ "document.createElement('a').focus()", null },
         .{ "document.activeElement === focused", "true" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "let l2 = document.createElement('link');", null },
+        .{ "l2.href", "" },
+        .{ "l2.href = 'https://lightpanda.io/opensource-browser/15'", null },
+        .{ "l2.href", "https://lightpanda.io/opensource-browser/15" },
+
+        .{ "l2.href = '/over/9000'", null },
+        .{ "l2.href", "https://lightpanda.io/over/9000" },
     }, .{});
 }
 
