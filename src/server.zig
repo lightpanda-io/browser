@@ -39,7 +39,7 @@ const CDP = @import("cdp/cdp.zig").CDP;
 
 const TimeoutCheck = std.time.ns_per_ms * 100;
 
-const MAX_HTTP_REQUEST_SIZE = 2048;
+const MAX_HTTP_REQUEST_SIZE = 4096;
 
 // max message size
 // +14 for max websocket payload overhead
@@ -1142,7 +1142,7 @@ test "Client: http invalid request" {
     var c = try createTestClient();
     defer c.deinit();
 
-    const res = try c.httpRequest("GET /over/9000 HTTP/1.1\r\n" ++ "Header: " ++ ("a" ** 2050) ++ "\r\n\r\n");
+    const res = try c.httpRequest("GET /over/9000 HTTP/1.1\r\n" ++ "Header: " ++ ("a" ** 4100) ++ "\r\n\r\n");
     try testing.expectEqualStrings("HTTP/1.1 413 \r\n" ++
         "Connection: Close\r\n" ++
         "Content-Length: 17\r\n\r\n" ++
