@@ -42,8 +42,12 @@ pub const HTMLDocument = struct {
     // JS funcs
     // --------
 
-    pub fn get_domain(self: *parser.DocumentHTML) ![]const u8 {
-        return try parser.documentHTMLGetDomain(self);
+    pub fn get_domain(self: *parser.DocumentHTML, page: *Page) ![]const u8 {
+        // libdom's document_html get_domain always returns null, this is
+        // the way MDN recommends getting the domain anyways, since document.domain
+        // is deprecated.
+        const location = try parser.documentHTMLGetLocation(Location, self) orelse return "";
+        return location.get_host(page);
     }
 
     pub fn set_domain(_: *parser.DocumentHTML, _: []const u8) ![]const u8 {
@@ -307,7 +311,7 @@ test "Browser.HTML.Document" {
     }, .{});
 
     try runner.testCases(&.{
-        .{ "document.domain", "" },
+        .{ "document.domain", "lightpanda.io" },
         .{ "document.referrer", "" },
         .{ "document.title", "" },
         .{ "document.body.localName", "body" },

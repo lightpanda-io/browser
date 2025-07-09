@@ -2369,14 +2369,6 @@ pub inline fn documentHTMLSetBody(doc_html: *DocumentHTML, elt: ?*ElementHTML) !
     try DOMErr(err);
 }
 
-pub inline fn documentHTMLGetDomain(doc: *DocumentHTML) ![]const u8 {
-    var s: ?*String = undefined;
-    const err = documentHTMLVtable(doc).get_domain.?(doc, &s);
-    try DOMErr(err);
-    if (s == null) return "";
-    return strToData(s.?);
-}
-
 pub inline fn documentHTMLGetReferrer(doc: *DocumentHTML) ![]const u8 {
     var s: ?*String = undefined;
     const err = documentHTMLVtable(doc).get_referrer.?(doc, &s);
