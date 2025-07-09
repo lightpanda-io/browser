@@ -1593,8 +1593,9 @@ test "Browser.HTML.Element" {
 
     try runner.testCases(&.{
         .{ "let l2 = document.createElement('link');", null },
-        .{ "l2.href = 'https://lightpanda.io/'", null },
-        .{ "l2.href", "https://lightpanda.io/" },
+        .{ "l2.href", "" },
+        .{ "l2.href = 15", null },
+        .{ "l2.href", "https://lightpanda.io/15" },
     }, .{});
 }
 
