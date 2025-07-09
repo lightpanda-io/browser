@@ -98,6 +98,8 @@ jobs:
       ARCH: aarch64
       OS: macos
 
+    # macos-14 runs on arm CPU. see
+    # https://github.com/actions/runner-images?tab=readme-ov-file
     runs-on: macos-14
     timeout-minutes: 15
 
@@ -136,7 +138,12 @@ jobs:
       ARCH: x86_64
       OS: macos
 
-    runs-on: macos-14
+    # macos-13 runs on x86 CPU. see
+    # https://github.com/actions/runner-images?tab=readme-ov-file
+    # If we want to build for macos-14 or superior, we need to switch to
+    # macos-14-large.
+    # No need for now, but maybe we will need it in the short term.
+    runs-on: macos-13
     timeout-minutes: 15
 
     steps:
