@@ -160,8 +160,14 @@ pub const Element = struct {
         }
     }
 
+    // don't use parser.nodeHasAttributes(...) because that returns true/false
+    // based on the type, e.g. a node never as attributes, an element always has
+    // attributes. But, Element.hasAttributes is supposed to return true only
+    // if the element has at least 1 attribute.
     pub fn _hasAttributes(self: *parser.Element) !bool {
-        return try parser.nodeHasAttributes(parser.elementToNode(self));
+        // an element _must_ have at least an empty attribute
+        const node_map = try parser.nodeGetAttributes(parser.elementToNode(self)) orelse unreachable;
+        return try parser.namedNodeMapGetLength(node_map) > 0;
     }
 
     pub fn _getAttribute(self: *parser.Element, qname: []const u8) !?[]const u8 {
@@ -678,5 +684,9 @@ test "Browser.DOM.Element" {
         .{ "var div1 = document.createElement('div');", null },
         .{ "div1.innerHTML = \"  <link/><table></table><a href='/a'>a</a><input type='checkbox'/>\"", null },
         .{ "div1.getElementsByTagName('a').length", "1" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "document.createElement('a').hasAttributes()", "false" },
     }, .{});
 }
