@@ -343,7 +343,7 @@ pub const Element = struct {
     }
 
     pub fn _querySelectorAll(self: *parser.Element, selector: []const u8, page: *Page) !NodeList {
-        return css.querySelectorAll(page.call_arena, parser.elementToNode(self), selector);
+        return css.querySelectorAll(page.arena, parser.elementToNode(self), selector);
     }
 
     pub fn _prepend(self: *parser.Element, nodes: []const Node.NodeOrText) !void {
