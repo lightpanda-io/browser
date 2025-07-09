@@ -1830,6 +1830,21 @@ pub fn anchorSetRel(a: *Anchor, rel: []const u8) !void {
     try DOMErr(err);
 }
 
+// HTMLLinkElement
+
+pub fn linkGetHref(link: *Link) ![]const u8 {
+    var res: ?*String = undefined;
+    const err = c.dom_html_link_element_get_href(link, &res);
+    try DOMErr(err);
+    if (res == null) return "";
+    return strToData(res.?);
+}
+
+pub fn linkSetHref(link: *Link, href: []const u8) !void {
+    const err = c.dom_html_link_element_set_href(link, try strFromData(href));
+    try DOMErr(err);
+}
+
 // ElementsHTML
 
 pub const MediaElement = struct { base: *c.dom_html_element };
