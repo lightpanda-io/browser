@@ -229,6 +229,19 @@ pub const URL = struct {
     pub fn _toJSON(self: *URL, page: *Page) ![]const u8 {
         return self.get_href(page);
     }
+
+    pub fn set_pathname(self: *URL, fragment: []const u8, page: *Page) !void {
+        // pathname must always start with a '/';
+        const real_path = blk: {
+            if (std.mem.startsWith(u8, fragment, "/")) {
+                break :blk try page.arena.dupe(u8, fragment);
+            } else {
+                break :blk try std.fmt.allocPrint(page.arena, "/{s}", .{fragment});
+            }
+        };
+
+        self.uri.path = .{ .percent_encoded = real_path };
+    }
 };
 
 // uriComponentNullStr converts an optional std.Uri.Component to string value.
