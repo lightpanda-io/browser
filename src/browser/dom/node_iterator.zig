@@ -19,19 +19,47 @@
 const std = @import("std");
 const parser = @import("../netsurf.zig");
 const Env = @import("../env.zig").Env;
-const TreeWalker = @import("tree_walker.zig").TreeWalker;
+const NodeFilter = @import("node_filter.zig");
 
 // https://developer.mozilla.org/en-US/docs/Web/API/NodeIterator
+// While this is similar to TreeWalker it has it's own implementation as there are several suttle differences
+// For example:
+// - nextNode returns the reference node, whereas TreeWalker returns the next node
+// - Skip and reject are equivalent for NodeIterator, for TreeWalker they are different
 pub const NodeIterator = struct {
-    walker: TreeWalker,
+    root: *parser.Node,
+    reference_node: *parser.Node,
+    what_to_show: u32,
+    filter: ?NodeIteratorOpts,
+    filter_func: ?Env.Function,
+
     pointer_before_current: bool = true,
 
-    pub fn init(node: *parser.Node, what_to_show: ?u32, filter: ?TreeWalker.TreeWalkerOpts) !NodeIterator {
-        return .{ .walker = try TreeWalker.init(node, what_to_show, filter) };
+    pub const NodeIteratorOpts = union(enum) {
+        function: Env.Function,
+        object: struct { acceptNode: Env.Function },
+    };
+
+    pub fn init(node: *parser.Node, what_to_show: ?u32, filter: ?NodeIteratorOpts) !NodeIterator {
+        var filter_func: ?Env.Function = null;
+        if (filter) |f| {
+            filter_func = switch (f) {
+                .function => |func| func,
+                .object => |o| o.acceptNode,
+            };
+        }
+
+        return .{
+            .root = node,
+            .reference_node = node,
+            .what_to_show = what_to_show orelse NodeFilter.NodeFilter._SHOW_ALL,
+            .filter = filter,
+            .filter_func = filter_func,
+        };
     }
 
-    pub fn get_filter(self: *const NodeIterator) ?Env.Function {
-        return self.walker.filter;
+    pub fn get_filter(self: *const NodeIterator) ?NodeIteratorOpts {
+        return self.filter;
     }
 
     pub fn get_pointerBeforeReferenceNode(self: *const NodeIterator) bool {
@@ -39,34 +67,34 @@ pub const NodeIterator = struct {
     }
 
     pub fn get_referenceNode(self: *const NodeIterator) *parser.Node {
-        return self.walker.current_node;
+        return self.reference_node;
     }
 
     pub fn get_root(self: *const NodeIterator) *parser.Node {
-        return self.walker.root;
+        return self.root;
     }
 
     pub fn get_whatToShow(self: *const NodeIterator) u32 {
-        return self.walker.what_to_show;
+        return self.what_to_show;
     }
 
     pub fn _nextNode(self: *NodeIterator) !?*parser.Node {
         if (self.pointer_before_current) { // Unlike TreeWalker, NodeIterator starts at the first node
             self.pointer_before_current = false;
-            if (.accept == try self.walker.verify(self.walker.current_node)) {
-                return self.walker.current_node;
+            if (.accept == try NodeFilter.verify(self.what_to_show, self.filter_func, self.reference_node)) {
+                return self.reference_node;
             }
         }
 
-        if (try self.firstChild(self.walker.current_node)) |child| {
-            self.walker.current_node = child;
+        if (try self.firstChild(self.reference_node)) |child| {
+            self.reference_node = child;
             return child;
         }
 
-        var current = self.walker.current_node;
-        while (current != self.walker.root) {
-            if (try self.walker.nextSibling(current)) |sibling| {
-                self.walker.current_node = sibling;
+        var current = self.reference_node;
+        while (current != self.root) {
+            if (try self.nextSibling(current)) |sibling| {
+                self.reference_node = sibling;
                 return sibling;
             }
 
@@ -79,41 +107,41 @@ pub const NodeIterator = struct {
     pub fn _previousNode(self: *NodeIterator) !?*parser.Node {
         if (!self.pointer_before_current) {
             self.pointer_before_current = true;
-            if (.accept == try self.walker.verify(self.walker.current_node)) {
-                return self.walker.current_node; // Still need to verify as last may be first as well
+            if (.accept == try NodeFilter.verify(self.what_to_show, self.filter_func, self.reference_node)) {
+                return self.reference_node; // Still need to verify as last may be first as well
             }
         }
-        if (self.walker.current_node == self.walker.root) return null;
+        if (self.reference_node == self.root) return null;
 
-        var current = self.walker.current_node;
+        var current = self.reference_node;
         while (try parser.nodePreviousSibling(current)) |previous| {
             current = previous;
 
-            switch (try self.walker.verify(current)) {
+            switch (try NodeFilter.verify(self.what_to_show, self.filter_func, current)) {
                 .accept => {
                     // Get last child if it has one.
                     if (try self.lastChild(current)) |child| {
-                        self.walker.current_node = child;
+                        self.reference_node = child;
                         return child;
                     }
 
                     // Otherwise, this node is our previous one.
-                    self.walker.current_node = current;
+                    self.reference_node = current;
                     return current;
                 },
                 .reject, .skip => {
                     // Get last child if it has one.
                     if (try self.lastChild(current)) |child| {
-                        self.walker.current_node = child;
+                        self.reference_node = child;
                         return child;
                     }
                 },
             }
         }
 
-        if (current != self.walker.root) {
-            if (try self.walker.parentNode(current)) |parent| {
-                self.walker.current_node = parent;
+        if (current != self.root) {
+            if (try self.parentNode(current)) |parent| {
+                self.reference_node = parent;
                 return parent;
             }
         }
@@ -129,7 +157,7 @@ pub const NodeIterator = struct {
             const index: u32 = @intCast(i);
             const child = (try parser.nodeListItem(children, index)) orelse return null;
 
-            switch (try self.walker.verify(child)) {
+            switch (try NodeFilter.verify(self.what_to_show, self.filter_func, child)) {
                 .accept => return child, // NOTE: Skip and reject are equivalent for NodeIterator, this is different from TreeWalker
                 .reject, .skip => if (try self.firstChild(child)) |gchild| return gchild,
             }
@@ -147,9 +175,41 @@ pub const NodeIterator = struct {
             index -= 1;
             const child = (try parser.nodeListItem(children, index)) orelse return null;
 
-            switch (try self.walker.verify(child)) {
+            switch (try NodeFilter.verify(self.what_to_show, self.filter_func, child)) {
                 .accept => return child, // NOTE: Skip and reject are equivalent for NodeIterator, this is different from TreeWalker
                 .reject, .skip => if (try self.lastChild(child)) |gchild| return gchild,
+            }
+        }
+
+        return null;
+    }
+
+    // This implementation is actually the same as :TreeWalker
+    fn parentNode(self: *const NodeIterator, node: *parser.Node) !?*parser.Node {
+        if (self.root == node) return null;
+
+        var current = node;
+        while (true) {
+            if (current == self.root) return null;
+            current = (try parser.nodeParentNode(current)) orelse return null;
+
+            switch (try NodeFilter.verify(self.what_to_show, self.filter_func, current)) {
+                .accept => return current,
+                .reject, .skip => continue,
+            }
+        }
+    }
+
+    // This implementation is actually the same as :TreeWalker
+    fn nextSibling(self: *const NodeIterator, node: *parser.Node) !?*parser.Node {
+        var current = node;
+
+        while (true) {
+            current = (try parser.nodeNextSibling(current)) orelse return null;
+
+            switch (try NodeFilter.verify(self.what_to_show, self.filter_func, current)) {
+                .accept => return current,
+                .skip, .reject => continue,
             }
         }
 
@@ -209,5 +269,20 @@ test "Browser.DOM.NodeFilter" {
             "null",
         },
         .{ "notationIterator.previousNode()", "null" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "nodeIterator.filter.acceptNode(document.body)", "1" },
+        .{ "notationIterator.filter", "null" },
+        .{
+            \\ const rejectIterator = document.createNodeIterator(
+            \\   document.body,
+            \\   NodeFilter.SHOW_ALL,
+            \\   (e => { return NodeFilter.FILTER_REJECT}),
+            \\ );
+            \\ rejectIterator.filter(document.body);
+            ,
+            "2",
+        },
     }, .{});
 }
