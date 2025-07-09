@@ -605,7 +605,7 @@ pub const Parser = struct {
             .after, .backdrop, .before, .cue, .first_letter => return .{ .pseudo_element = pseudo_class },
             .first_line, .grammar_error, .marker, .placeholder => return .{ .pseudo_element = pseudo_class },
             .selection, .spelling_error => return .{ .pseudo_element = pseudo_class },
-            .modal => return .{ .pseudo_element = pseudo_class },
+            .modal, .popover_open => return .{ .pseudo_element = pseudo_class },
         }
     }
 
