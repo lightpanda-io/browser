@@ -266,7 +266,7 @@ pub const Document = struct {
         return try TreeWalker.init(root, what_to_show, filter);
     }
 
-    pub fn _createNodeIterator(_: *parser.Document, root: *parser.Node, what_to_show: ?u32, filter: ?TreeWalker.TreeWalkerOpts) !NodeIterator {
+    pub fn _createNodeIterator(_: *parser.Document, root: *parser.Node, what_to_show: ?u32, filter: ?NodeIterator.NodeIteratorOpts) !NodeIterator {
         return try NodeIterator.init(root, what_to_show, filter);
     }
 

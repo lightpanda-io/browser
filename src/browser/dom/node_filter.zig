@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const parser = @import("../netsurf.zig");
+const Env = @import("../env.zig").Env;
 
 pub const NodeFilter = struct {
     pub const _FILTER_ACCEPT: u16 = 1;
@@ -37,6 +39,39 @@ pub const NodeFilter = struct {
     pub const _SHOW_DOCUMENT_FRAGMENT: u32 = 0b10000000000;
     pub const _SHOW_NOTATION: u32 = 0b100000000000;
 };
+
+const VerifyResult = enum { accept, skip, reject };
+
+pub fn verify(what_to_show: u32, filter: ?Env.Function, node: *parser.Node) !VerifyResult {
+    const node_type = try parser.nodeType(node);
+
+    // Verify that we can show this node type.
+    if (!switch (node_type) {
+        .attribute => what_to_show & NodeFilter._SHOW_ATTRIBUTE != 0,
+        .cdata_section => what_to_show & NodeFilter._SHOW_CDATA_SECTION != 0,
+        .comment => what_to_show & NodeFilter._SHOW_COMMENT != 0,
+        .document => what_to_show & NodeFilter._SHOW_DOCUMENT != 0,
+        .document_fragment => what_to_show & NodeFilter._SHOW_DOCUMENT_FRAGMENT != 0,
+        .document_type => what_to_show & NodeFilter._SHOW_DOCUMENT_TYPE != 0,
+        .element => what_to_show & NodeFilter._SHOW_ELEMENT != 0,
+        .entity => what_to_show & NodeFilter._SHOW_ENTITY != 0,
+        .entity_reference => what_to_show & NodeFilter._SHOW_ENTITY_REFERENCE != 0,
+        .notation => what_to_show & NodeFilter._SHOW_NOTATION != 0,
+        .processing_instruction => what_to_show & NodeFilter._SHOW_PROCESSING_INSTRUCTION != 0,
+        .text => what_to_show & NodeFilter._SHOW_TEXT != 0,
+    }) return .reject;
+
+    // Verify that we aren't filtering it out.
+    if (filter) |f| {
+        const acceptance = try f.call(u16, .{node});
+        return switch (acceptance) {
+            NodeFilter._FILTER_ACCEPT => .accept,
+            NodeFilter._FILTER_REJECT => .reject,
+            NodeFilter._FILTER_SKIP => .skip,
+            else => .reject,
+        };
+    } else return .accept;
+}
 
 const testing = @import("../../testing.zig");
 test "Browser.DOM.NodeFilter" {

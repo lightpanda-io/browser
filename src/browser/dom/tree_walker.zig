@@ -19,7 +19,7 @@
 const std = @import("std");
 const parser = @import("../netsurf.zig");
 
-const NodeFilter = @import("node_filter.zig").NodeFilter;
+const NodeFilter = @import("node_filter.zig");
 const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
 
@@ -28,7 +28,8 @@ pub const TreeWalker = struct {
     root: *parser.Node,
     current_node: *parser.Node,
     what_to_show: u32,
-    filter: ?Env.Function,
+    filter: ?TreeWalkerOpts,
+    filter_func: ?Env.Function,
 
     pub const TreeWalkerOpts = union(enum) {
         function: Env.Function,
@@ -48,43 +49,10 @@ pub const TreeWalker = struct {
         return .{
             .root = node,
             .current_node = node,
-            .what_to_show = what_to_show orelse NodeFilter._SHOW_ALL,
-            .filter = filter_func,
+            .what_to_show = what_to_show orelse NodeFilter.NodeFilter._SHOW_ALL,
+            .filter = filter,
+            .filter_func = filter_func,
         };
-    }
-
-    const VerifyResult = enum { accept, skip, reject };
-
-    pub fn verify(self: *const TreeWalker, node: *parser.Node) !VerifyResult {
-        const node_type = try parser.nodeType(node);
-        const what_to_show = self.what_to_show;
-
-        // Verify that we can show this node type.
-        if (!switch (node_type) {
-            .attribute => what_to_show & NodeFilter._SHOW_ATTRIBUTE != 0,
-            .cdata_section => what_to_show & NodeFilter._SHOW_CDATA_SECTION != 0,
-            .comment => what_to_show & NodeFilter._SHOW_COMMENT != 0,
-            .document => what_to_show & NodeFilter._SHOW_DOCUMENT != 0,
-            .document_fragment => what_to_show & NodeFilter._SHOW_DOCUMENT_FRAGMENT != 0,
-            .document_type => what_to_show & NodeFilter._SHOW_DOCUMENT_TYPE != 0,
-            .element => what_to_show & NodeFilter._SHOW_ELEMENT != 0,
-            .entity => what_to_show & NodeFilter._SHOW_ENTITY != 0,
-            .entity_reference => what_to_show & NodeFilter._SHOW_ENTITY_REFERENCE != 0,
-            .notation => what_to_show & NodeFilter._SHOW_NOTATION != 0,
-            .processing_instruction => what_to_show & NodeFilter._SHOW_PROCESSING_INSTRUCTION != 0,
-            .text => what_to_show & NodeFilter._SHOW_TEXT != 0,
-        }) return .reject;
-
-        // Verify that we aren't filtering it out.
-        if (self.filter) |f| {
-            const filter = try f.call(u16, .{node});
-            return switch (filter) {
-                NodeFilter._FILTER_ACCEPT => .accept,
-                NodeFilter._FILTER_REJECT => .reject,
-                NodeFilter._FILTER_SKIP => .skip,
-                else => .reject,
-            };
-        } else return .accept;
     }
 
     pub fn get_root(self: *TreeWalker) *parser.Node {
@@ -99,7 +67,7 @@ pub const TreeWalker = struct {
         return self.what_to_show;
     }
 
-    pub fn get_filter(self: *TreeWalker) ?Env.Function {
+    pub fn get_filter(self: *TreeWalker) ?TreeWalkerOpts {
         return self.filter;
     }
 
@@ -115,7 +83,7 @@ pub const TreeWalker = struct {
             const index: u32 = @intCast(i);
             const child = (try parser.nodeListItem(children, index)) orelse return null;
 
-            switch (try self.verify(child)) {
+            switch (try NodeFilter.verify(self.what_to_show, self.filter_func, child)) {
                 .accept => return child,
                 .reject => continue,
                 .skip => if (try self.firstChild(child)) |gchild| return gchild,
@@ -134,7 +102,7 @@ pub const TreeWalker = struct {
             index -= 1;
             const child = (try parser.nodeListItem(children, index)) orelse return null;
 
-            switch (try self.verify(child)) {
+            switch (try NodeFilter.verify(self.what_to_show, self.filter_func, child)) {
                 .accept => return child,
                 .reject => continue,
                 .skip => if (try self.lastChild(child)) |gchild| return gchild,
@@ -144,13 +112,13 @@ pub const TreeWalker = struct {
         return null;
     }
 
-    pub fn nextSibling(self: *const TreeWalker, node: *parser.Node) !?*parser.Node {
+    fn nextSibling(self: *const TreeWalker, node: *parser.Node) !?*parser.Node {
         var current = node;
 
         while (true) {
             current = (try parser.nodeNextSibling(current)) orelse return null;
 
-            switch (try self.verify(current)) {
+            switch (try NodeFilter.verify(self.what_to_show, self.filter_func, current)) {
                 .accept => return current,
                 .skip, .reject => continue,
             }
@@ -165,7 +133,7 @@ pub const TreeWalker = struct {
         while (true) {
             current = (try parser.nodePreviousSibling(current)) orelse return null;
 
-            switch (try self.verify(current)) {
+            switch (try NodeFilter.verify(self.what_to_show, self.filter_func, current)) {
                 .accept => return current,
                 .skip, .reject => continue,
             }
@@ -174,7 +142,7 @@ pub const TreeWalker = struct {
         return null;
     }
 
-    pub fn parentNode(self: *const TreeWalker, node: *parser.Node) !?*parser.Node {
+    fn parentNode(self: *const TreeWalker, node: *parser.Node) !?*parser.Node {
         if (self.root == node) return null;
 
         var current = node;
@@ -182,7 +150,7 @@ pub const TreeWalker = struct {
             if (current == self.root) return null;
             current = (try parser.nodeParentNode(current)) orelse return null;
 
-            switch (try self.verify(current)) {
+            switch (try NodeFilter.verify(self.what_to_show, self.filter_func, current)) {
                 .accept => return current,
                 .reject, .skip => continue,
             }
@@ -251,7 +219,7 @@ pub const TreeWalker = struct {
         while (try parser.nodePreviousSibling(current)) |previous| {
             current = previous;
 
-            switch (try self.verify(current)) {
+            switch (try NodeFilter.verify(self.what_to_show, self.filter_func, current)) {
                 .accept => {
                     // Get last child if it has one.
                     if (try self.lastChild(current)) |child| {
