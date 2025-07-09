@@ -335,7 +335,7 @@ pub const Element = struct {
     pub fn _querySelector(self: *parser.Element, selector: []const u8, page: *Page) !?Union {
         if (selector.len == 0) return null;
 
-        const n = try css.querySelector(page.arena, parser.elementToNode(self), selector);
+        const n = try css.querySelector(page.call_arena, parser.elementToNode(self), selector);
 
         if (n == null) return null;
 
