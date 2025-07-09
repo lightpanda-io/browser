@@ -77,6 +77,117 @@ pub const MyAPI = struct {
     }
 };
 
+pub const Parent = packed struct {
+    parent_id: i32 = 0,
+
+    pub fn get_parent(self: *const Parent) i32 {
+        return self.parent_id;
+    }
+    pub fn set_parent(self: *Parent, id: i32) void {
+        self.parent_id = id;
+    }
+};
+
+pub const Middle = struct {
+    pub const prototype = *Parent;
+
+    middle_id: i32 = 0,
+    _padding_1: u8 = 0,
+    _padding_2: u8 = 1,
+    _padding_3: u8 = 2,
+    proto: Parent,
+
+    pub fn constructor() Middle {
+        return .{
+            .middle_id = 0,
+            .proto = .{ .parent_id = 0 },
+        };
+    }
+
+    pub fn get_middle(self: *const Middle) i32 {
+        return self.middle_id;
+    }
+    pub fn set_middle(self: *Middle, id: i32) void {
+        self.middle_id = id;
+    }
+};
+
+pub const Child = struct {
+    pub const prototype = *Middle;
+
+    child_id: i32 = 0,
+    _padding_1: u8 = 0,
+    proto: Middle,
+
+    pub fn constructor() Child {
+        return .{
+            .child_id = 0,
+            .proto = .{ .middle_id = 0, .proto = .{ .parent_id = 0 } },
+        };
+    }
+
+    pub fn get_child(self: *const Child) i32 {
+        return self.child_id;
+    }
+    pub fn set_child(self: *Child, id: i32) void {
+        self.child_id = id;
+    }
+};
+
+pub const MiddlePtr = packed struct {
+    pub const prototype = *Parent;
+
+    middle_id: i32 = 0,
+    _padding_1: u8 = 0,
+    _padding_2: u8 = 1,
+    _padding_3: u8 = 2,
+    proto: *Parent,
+
+    pub fn constructor(state: State) !MiddlePtr {
+        const parent = try state.arena.create(Parent);
+        parent.* = .{ .parent_id = 0 };
+        return .{
+            .middle_id = 0,
+            .proto = parent,
+        };
+    }
+
+    pub fn get_middle(self: *const MiddlePtr) i32 {
+        return self.middle_id;
+    }
+    pub fn set_middle(self: *MiddlePtr, id: i32) void {
+        self.middle_id = id;
+    }
+};
+
+pub const ChildPtr = packed struct {
+    pub const prototype = *MiddlePtr;
+
+    child_id: i32 = 0,
+    _padding_1: u8 = 0,
+    _padding_2: u8 = 1,
+    proto: *MiddlePtr,
+
+    pub fn constructor(state: State) !ChildPtr {
+        const parent = try state.arena.create(Parent);
+        const middle = try state.arena.create(MiddlePtr);
+
+        parent.* = .{ .parent_id = 0 };
+        middle.* = .{ .middle_id = 0, .proto = parent };
+        return .{
+            .child_id = 0,
+            .proto = middle,
+        };
+    }
+
+    pub fn get_child(self: *const ChildPtr) i32 {
+        return self.child_id;
+    }
+    pub fn set_child(self: *ChildPtr, id: i32) void {
+        self.child_id = id;
+    }
+};
+
 const State = struct {
     arena: Allocator,
 };
@@ -90,6 +201,11 @@ test "JS: object types" {
         Other,
         MyObject,
         MyAPI,
+        Parent,
+        Middle,
+        Child,
+        MiddlePtr,
+        ChildPtr,
     }).init(.{ .arena = arena.allocator() }, {});
 
     defer runner.deinit();
@@ -119,5 +235,41 @@ test "JS: object types" {
         .{ "let myObjIndirect = myAPI.obj();", "undefined" },
         // check object property
         .{ "myObjIndirect.a.val()", "4" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "let m1 = new Middle();", null },
+        .{ "m1.middle = 2", null },
+        .{ "m1.parent = 3", null },
+        .{ "m1.middle", "2" },
+        .{ "m1.parent", "3" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "let c1 = new Child();", null },
+        .{ "c1.child = 1", null },
+        .{ "c1.middle = 2", null },
+        .{ "c1.parent = 3", null },
+        .{ "c1.child", "1" },
+        .{ "c1.middle", "2" },
+        .{ "c1.parent", "3" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "let m2 = new MiddlePtr();", null },
+        .{ "m2.middle = 2", null },
+        .{ "m2.parent = 3", null },
+        .{ "m2.middle", "2" },
+        .{ "m2.parent", "3" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "let c2 = new ChildPtr();", null },
+        .{ "c2.child = 1", null },
+        .{ "c2.middle = 2", null },
+        .{ "c2.parent = 3", null },
+        .{ "c2.child", "1" },
+        .{ "c2.middle", "2" },
+        .{ "c2.parent", "3" },
     }, .{});
 }

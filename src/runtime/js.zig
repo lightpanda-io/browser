@@ -81,14 +81,14 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
     // that looks like:
     //
     // const TypeLookup = struct {
-    //     comptime cat: usize = TypeMeta{.index = 0, ...},
-    //     comptime owner: usize = TypeMeta{.index = 1, ...},
+    //     comptime cat: usize = 0,
+    //     comptime owner: usize = 1,
     //     ...
     // }
     //
     // So to get the template index of `owner`, we can do:
     //
-    //  const index_id = @field(type_lookup, @typeName(@TypeOf(res)).index;
+    //  const index_id = @field(type_lookup, @typeName(@TypeOf(res));
     //
     const TypeLookup = comptime blk: {
         var fields: [Types.len]std.builtin.Type.StructField = undefined;
@@ -103,15 +103,12 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 @compileError(std.fmt.comptimePrint("Prototype '{s}' for type '{s} must be a pointer", .{ @typeName(Struct.prototype), @typeName(Struct) }));
             }
 
-            const subtype: ?SubType = if (@hasDecl(Struct, "subtype")) Struct.subtype else null;
-
-            const R = Receiver(Struct);
             fields[i] = .{
-                .name = @typeName(R),
-                .type = TypeMeta,
+                .name = @typeName(Receiver(Struct)),
+                .type = usize,
                 .is_comptime = true,
                 .alignment = @alignOf(usize),
-                .default_value_ptr = &TypeMeta{ .index = i, .subtype = subtype },
+                .default_value_ptr = &i,
             };
         }
         break :blk @Type(.{ .@"struct" = .{
@@ -146,7 +143,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             if (@hasDecl(Struct, "prototype")) {
                 const TI = @typeInfo(Struct.prototype);
                 const proto_name = @typeName(Receiver(TI.pointer.child));
-                prototype_index = @field(TYPE_LOOKUP, proto_name).index;
+                prototype_index = @field(TYPE_LOOKUP, proto_name);
             }
             table[i] = prototype_index;
         }
@@ -168,7 +165,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
         // access to its TunctionTemplate (the thing we need to create an instance
         // of it)
         // I.e.:
-        // const index = @field(TYPE_LOOKUP, @typeName(type_name)).index
+        // const index = @field(TYPE_LOOKUP, @typeName(type_name))
         // const template = templates[index];
         templates: [Types.len]v8.FunctionTemplate,
 
@@ -176,6 +173,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
         // the index of its prototype. Types without a prototype have their own
         // index.
         prototype_lookup: [Types.len]u16,
+
+        meta_lookup: [Types.len]TypeMeta,
 
         const Self = @This();
 
@@ -222,13 +221,14 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 .templates = undefined,
                 .allocator = allocator,
                 .isolate_params = params,
+                .meta_lookup = undefined,
                 .prototype_lookup = undefined,
             };
 
             // Populate our templates lookup. generateClass creates the
             // v8.FunctionTemplate, which we store in our env.templates.
             // The ordering doesn't matter. What matters is that, given a type
-            // we can get its index via: @field(TYPE_LOOKUP, type_name).index
+            // we can get its index via: @field(TYPE_LOOKUP, type_name)
             const templates = &env.templates;
             inline for (Types, 0..) |s, i| {
                 @setEvalBranchQuota(10_000);
@@ -237,6 +237,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             // Above, we've created all our our FunctionTemplates. Now that we
             // have them all, we can hook up the prototypes.
+            const meta_lookup = &env.meta_lookup;
             inline for (Types, 0..) |s, i| {
                 const Struct = s.defaultValue().?;
                 if (@hasDecl(Struct, "prototype")) {
@@ -249,9 +250,32 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     // Just like we said above, given a type, we can get its
                     // template index.
 
-                    const proto_index = @field(TYPE_LOOKUP, proto_name).index;
+                    const proto_index = @field(TYPE_LOOKUP, proto_name);
                     templates[i].inherit(templates[proto_index]);
                 }
+
+                // while we're here, let's populate our meta lookup
+                const subtype: ?SubType = if (@hasDecl(Struct, "subtype")) Struct.subtype else null;
+
+                const proto_offset = comptime blk: {
+                    if (!@hasField(Struct, "proto")) {
+                        break :blk 0;
+                    }
+                    const proto_info = std.meta.fieldInfo(Struct, .proto);
+                    if (@typeInfo(proto_info.type) == .pointer) {
+                        // we store the offset as a negative, to so that,
+                        // when we reverse this, we know that it's
+                        // behind a pointer that we need to resolve.
+                        break :blk -@offsetOf(Struct, "proto");
+                    }
+                    break :blk @offsetOf(Struct, "proto");
+                };
+
+                meta_lookup[i] = .{
+                    .index = i,
+                    .subtype = subtype,
+                    .proto_offset = proto_offset,
+                };
             }
 
             return env;
@@ -391,7 +415,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     if (@hasDecl(Global, "prototype")) {
                         const proto_type = Receiver(@typeInfo(Global.prototype).pointer.child);
                         const proto_name = @typeName(proto_type);
-                        const proto_index = @field(TYPE_LOOKUP, proto_name).index;
+                        const proto_index = @field(TYPE_LOOKUP, proto_name);
                         js_global.inherit(templates[proto_index]);
                     }
 
@@ -414,7 +438,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                                 @compileError("Type '" ++ @typeName(Struct) ++ "' defines an unknown prototype: " ++ proto_name);
                             }
 
-                            const proto_index = @field(TYPE_LOOKUP, proto_name).index;
+                            const proto_index = @field(TYPE_LOOKUP, proto_name);
                             const proto_obj = templates[proto_index].getFunction(v8_context).toObject();
 
                             const self_obj = templates[i].getFunction(v8_context).toObject();
@@ -449,6 +473,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     .isolate = isolate,
                     .v8_context = v8_context,
                     .templates = &env.templates,
+                    .meta_lookup = &env.meta_lookup,
                     .handle_scope = handle_scope,
                     .call_arena = self.call_arena.allocator(),
                     .context_arena = self.context_arena.allocator(),
@@ -551,8 +576,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             v8_context: v8.Context,
             handle_scope: ?v8.HandleScope,
 
-            // references the Env.template array
+            // references Env.templates
             templates: []v8.FunctionTemplate,
+
+            // references the Env.meta_lookup
+            meta_lookup: []TypeMeta,
 
             // An arena for the lifetime of a call-group. Gets reset whenever
             // call_depth reaches 0.
@@ -845,12 +873,13 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             // well as any meta data we'll need to use it later.
                             // See the TaggedAnyOpaque struct for more details.
                             const tao = try context_arena.create(TaggedAnyOpaque);
-                            const meta = @field(TYPE_LOOKUP, @typeName(ptr.child));
+                            const meta_index = @field(TYPE_LOOKUP, @typeName(ptr.child));
+                            const meta = self.meta_lookup[meta_index];
+
                             tao.* = .{
                                 .ptr = value,
                                 .index = meta.index,
                                 .subtype = meta.subtype,
-                                .offset = if (@typeInfo(ptr.child) != .@"opaque" and @hasField(ptr.child, "proto")) @offsetOf(ptr.child, "proto") else -1,
                             };
 
                             js_obj.setInternalField(0, v8.External.init(isolate, tao));
@@ -906,7 +935,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             }
                             if (@hasField(TypeLookup, @typeName(ptr.child))) {
                                 const js_obj = js_value.castTo(v8.Object);
-                                return typeTaggedAnyOpaque(named_function, *Receiver(ptr.child), js_obj);
+                                return self.typeTaggedAnyOpaque(named_function, *Receiver(ptr.child), js_obj);
                             }
                         },
                         .slice => {
@@ -1201,7 +1230,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                                 // of having a version of typeTaggedAnyOpaque which
                                 // returns a boolean or an optional, we rely on the
                                 // main implementation and just handle the error.
-                                const attempt = typeTaggedAnyOpaque(named_function, *Receiver(ptr.child), js_obj);
+                                const attempt = self.typeTaggedAnyOpaque(named_function, *Receiver(ptr.child), js_obj);
                                 if (attempt) |value| {
                                     return .{ .value = value };
                                 } else |_| {
@@ -1386,6 +1415,78 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 try self.module_cache.put(arena, owned_specifier, PersistentModule.init(self.isolate, m));
                 try self.module_identifier.putNoClobber(arena, m.getIdentityHash(), owned_specifier);
                 return m.handle;
+            }
+
+            // Reverses the mapZigInstanceToJs, making sure that our TaggedAnyOpaque
+            // contains a ptr to the correct type.
+            fn typeTaggedAnyOpaque(self: *const JsContext, comptime named_function: NamedFunction, comptime R: type, js_obj: v8.Object) !R {
+                const ti = @typeInfo(R);
+                if (ti != .pointer) {
+                    @compileError(named_function.full_name ++ "has a non-pointer Zig parameter type: " ++ @typeName(R));
+                }
+
+                const T = ti.pointer.child;
+                if (comptime isEmpty(T)) {
+                    // Empty structs aren't stored as TOAs and there's no data
+                    // stored in the JSObject's IntenrnalField. Why bother when
+                    // we can just return an empty struct here?
+                    return @constCast(@as(*const T, &.{}));
+                }
+
+                // if it isn't an empty struct, then the v8.Object should have an
+                // InternalFieldCount > 0, since our toa pointer should be embedded
+                // at index 0 of the internal field count.
+                if (js_obj.internalFieldCount() == 0) {
+                    return error.InvalidArgument;
+                }
+
+                const type_name = @typeName(T);
+                if (@hasField(TypeLookup, type_name) == false) {
+                    @compileError(named_function.full_name ++ "has an unknown Zig type: " ++ @typeName(R));
+                }
+
+                const op = js_obj.getInternalField(0).castTo(v8.External).get();
+                const toa: *TaggedAnyOpaque = @alignCast(@ptrCast(op));
+                const expected_type_index = @field(TYPE_LOOKUP, type_name);
+
+                var type_index = toa.index;
+                if (type_index == expected_type_index) {
+                    return @alignCast(@ptrCast(toa.ptr));
+                }
+
+                const meta_lookup = self.meta_lookup;
+
+                // If we have N levels deep of prototypes, then the offset is the
+                // sum at each level...
+                var total_offset: usize = 0;
+
+                // ...unless, the proto is behind a pointer, then total_offset will
+                // get reset to 0, and our base_ptr will move to the address
+                // referenced by the proto field.
+                var base_ptr: usize = @intFromPtr(toa.ptr);
+
+                // search through the prototype tree
+                while (true) {
+                    const proto_offset = meta_lookup[type_index].proto_offset;
+                    if (proto_offset < 0) {
+                        base_ptr = @as(*align(1) usize, @ptrFromInt(base_ptr + total_offset + @as(usize, @intCast(-proto_offset)))).*;
+                        total_offset = 0;
+                    } else {
+                        total_offset += @intCast(proto_offset);
+                    }
+
+                    const prototype_index = PROTOTYPE_TABLE[type_index];
+                    if (prototype_index == expected_type_index) {
+                        return @ptrFromInt(base_ptr + total_offset);
+                    }
+
+                    if (prototype_index == type_index) {
+                        // When a type has itself as the prototype, then we've
+                        // reached the end of the chain.
+                        return error.InvalidArgument;
+                    }
+                    type_index = prototype_index;
+                }
             }
         };
 
@@ -2000,7 +2101,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             const template = v8.FunctionTemplate.initCallback(isolate, struct {
                 fn callback(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
                     const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
-                    var caller = Caller(Self, State).init(info);
+                    var caller = Caller(JsContext, State).init(info);
                     defer caller.deinit();
 
                     // See comment above. We generateConstructor on all types
@@ -2045,7 +2146,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             const function_template = v8.FunctionTemplate.initCallback(isolate, struct {
                 fn callback(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
                     const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
-                    var caller = Caller(Self, State).init(info);
+                    var caller = Caller(JsContext, State).init(info);
                     defer caller.deinit();
 
                     const named_function = comptime NamedFunction.init(Struct, name);
@@ -2062,7 +2163,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             const function_template = v8.FunctionTemplate.initCallback(isolate, struct {
                 fn callback(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
                     const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
-                    var caller = Caller(Self, State).init(info);
+                    var caller = Caller(JsContext, State).init(info);
                     defer caller.deinit();
 
                     const named_function = comptime NamedFunction.init(Struct, "static_" ++ name);
@@ -2098,7 +2199,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             const getter_callback = v8.FunctionTemplate.initCallback(isolate, struct {
                 fn callback(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
                     const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
-                    var caller = Caller(Self, State).init(info);
+                    var caller = Caller(JsContext, State).init(info);
                     defer caller.deinit();
 
                     const named_function = comptime NamedFunction.init(Struct, "get_" ++ name);
@@ -2119,7 +2220,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
                     std.debug.assert(info.length() == 1);
 
-                    var caller = Caller(Self, State).init(info);
+                    var caller = Caller(JsContext, State).init(info);
                     defer caller.deinit();
 
                     const named_function = comptime NamedFunction.init(Struct, "set_" ++ name);
@@ -2140,7 +2241,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 .getter = struct {
                     fn callback(idx: u32, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
                         const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
-                        var caller = Caller(Self, State).init(info);
+                        var caller = Caller(JsContext, State).init(info);
                         defer caller.deinit();
 
                         const named_function = comptime NamedFunction.init(Struct, "indexed_get");
@@ -2176,7 +2277,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 .getter = struct {
                     fn callback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
                         const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
-                        var caller = Caller(Self, State).init(info);
+                        var caller = Caller(JsContext, State).init(info);
                         defer caller.deinit();
 
                         const named_function = comptime NamedFunction.init(Struct, "named_get");
@@ -2198,7 +2299,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 configuration.setter = struct {
                     fn callback(c_name: ?*const v8.C_Name, c_value: ?*const v8.C_Value, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
                         const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
-                        var caller = Caller(Self, State).init(info);
+                        var caller = Caller(JsContext, State).init(info);
                         defer caller.deinit();
 
                         const named_function = comptime NamedFunction.init(Struct, "named_set");
@@ -2214,7 +2315,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 configuration.deleter = struct {
                     fn callback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
                         const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
-                        var caller = Caller(Self, State).init(info);
+                        var caller = Caller(JsContext, State).init(info);
                         defer caller.deinit();
 
                         const named_function = comptime NamedFunction.init(Struct, "named_delete");
@@ -2260,7 +2361,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 template.setCallAsFunctionHandler(struct {
                     fn callback(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
                         const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
-                        var caller = Caller(Self, State).init(info);
+                        var caller = Caller(JsContext, State).init(info);
                         defer caller.deinit();
 
                         const named_function = comptime NamedFunction.init(Struct, "jsCallAsFunction");
@@ -2315,7 +2416,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     .one => {
                         const type_name = @typeName(ptr.child);
                         if (@hasField(TypeLookup, type_name)) {
-                            const template = templates[@field(TYPE_LOOKUP, type_name).index];
+                            const template = templates[@field(TYPE_LOOKUP, type_name)];
                             const js_obj = try JsContext.mapZigInstanceToJs(v8_context, template, value);
                             return js_obj.toValue();
                         }
@@ -2351,7 +2452,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 .@"struct" => |s| {
                     const type_name = @typeName(T);
                     if (@hasField(TypeLookup, type_name)) {
-                        const template = templates[@field(TYPE_LOOKUP, type_name).index];
+                        const template = templates[@field(TYPE_LOOKUP, type_name)];
                         const js_obj = try JsContext.mapZigInstanceToJs(v8_context, template, value);
                         return js_obj.toValue();
                     }
@@ -2420,69 +2521,6 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             @compileError("A function returns an unsupported type: " ++ @typeName(T));
         }
-        // Reverses the mapZigInstanceToJs, making sure that our TaggedAnyOpaque
-        // contains a ptr to the correct type.
-        fn typeTaggedAnyOpaque(comptime named_function: NamedFunction, comptime R: type, js_obj: v8.Object) !R {
-            const ti = @typeInfo(R);
-            if (ti != .pointer) {
-                @compileError(named_function.full_name ++ "has a non-pointer Zig parameter type: " ++ @typeName(R));
-            }
-
-            const T = ti.pointer.child;
-            if (comptime isEmpty(T)) {
-                // Empty structs aren't stored as TOAs and there's no data
-                // stored in the JSObject's IntenrnalField. Why bother when
-                // we can just return an empty struct here?
-                return @constCast(@as(*const T, &.{}));
-            }
-
-            // if it isn't an empty struct, then the v8.Object should have an
-            // InternalFieldCount > 0, since our toa pointer should be embedded
-            // at index 0 of the internal field count.
-            if (js_obj.internalFieldCount() == 0) {
-                return error.InvalidArgument;
-            }
-
-            const type_name = @typeName(T);
-            if (@hasField(TypeLookup, type_name) == false) {
-                @compileError(named_function.full_name ++ "has an unknown Zig type: " ++ @typeName(R));
-            }
-
-            const op = js_obj.getInternalField(0).castTo(v8.External).get();
-            const toa: *TaggedAnyOpaque = @alignCast(@ptrCast(op));
-            const expected_type_index = @field(TYPE_LOOKUP, type_name).index;
-
-            var type_index = toa.index;
-            if (type_index == expected_type_index) {
-                return @alignCast(@ptrCast(toa.ptr));
-            }
-
-            // search through the prototype tree
-            while (true) {
-                const prototype_index = PROTOTYPE_TABLE[type_index];
-                if (prototype_index == expected_type_index) {
-                    // -1 is a sentinel value used for non-composition prototype
-                    // This is used with netsurf and we just unsafely cast one
-                    // type to another
-                    const offset = toa.offset;
-                    if (offset == -1) {
-                        return @alignCast(@ptrCast(toa.ptr));
-                    }
-
-                    // A non-negative offset means we're using composition prototype
-                    // (i.e. our struct has a "proto" field). the offset
-                    // reresents the byte offset of the field. We can use that
-                    // + the toa.ptr to get the field
-                    return @ptrFromInt(@intFromPtr(toa.ptr) + @as(usize, @intCast(offset)));
-                }
-                if (prototype_index == type_index) {
-                    // When a type has itself as the prototype, then we've
-                    // reached the end of the chain.
-                    return error.InvalidArgument;
-                }
-                type_index = prototype_index;
-            }
-        }
 
         // An interface for types that want to have their jsDeinit function to be
         // called when the call context ends
@@ -2542,24 +2580,24 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
     };
 }
 
-// We'll create a struct with all the types we want to bind to JavaScript. The
-// fields for this struct will be the type names. The values, will be an
-// instance of this struct.
-// const TypeLookup = struct {
-//     comptime cat: usize = TypeMeta{.index = 0, subtype = null},
-//     comptime owner: usize = TypeMeta{.index = 1, subtype = .array}.
-//     ...
-// }
-// This is essentially meta data for each type.
+// This is essentially meta data for each type. Each is stored in env.meta_lookup
+// The index for a type can be retrieved via:
+//   const index = @field(TYPE_LOOKUP, @typeName(Receiver(Struct)));
+//   const meta = env.meta_lookup[index];
 const TypeMeta = struct {
     // Every type is given a unique index. That index is used to lookup various
     // things, i.e. the prototype chain.
-    index: usize,
+    index: u16,
 
     // We store the type's subtype here, so that when we create an instance of
     // the type, and bind it to JavaScript, we can store the subtype along with
     // the created TaggedAnyOpaque.s
     subtype: ?SubType,
+
+    // If this type has composition-based prototype, represents the byte-offset
+    // from ptr where the `proto` field is located. A negative offsets is used
+    // to indicate that the prototype field is behind a pointer.
+    proto_offset: i32,
 };
 
 // When we map a Zig instance into a JsObject, we'll normally store the a
@@ -2590,9 +2628,9 @@ fn isComplexAttributeType(ti: std.builtin.Type) bool {
 // probably just contained in ExecutionWorld, but having this specific logic, which
 // is somewhat repetitive between constructors, functions, getters, etc contained
 // here does feel like it makes it clenaer.
-fn Caller(comptime E: type, comptime State: type) type {
+fn Caller(comptime JsContext: type, comptime State: type) type {
     return struct {
-        js_context: *E.JsContext,
+        js_context: *JsContext,
         v8_context: v8.Context,
         isolate: v8.Isolate,
         call_arena: Allocator,
@@ -2605,7 +2643,7 @@ fn Caller(comptime E: type, comptime State: type) type {
         fn init(info: anytype) Self {
             const isolate = info.getIsolate();
             const v8_context = isolate.getCurrentContext();
-            const js_context: *E.JsContext = @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
+            const js_context: *JsContext = @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
 
             js_context.call_depth += 1;
             return .{
@@ -2653,9 +2691,9 @@ fn Caller(comptime E: type, comptime State: type) type {
             const this = info.getThis();
             if (@typeInfo(ReturnType) == .error_union) {
                 const non_error_res = res catch |err| return err;
-                _ = try E.JsContext.mapZigInstanceToJs(self.v8_context, this, non_error_res);
+                _ = try JsContext.mapZigInstanceToJs(self.v8_context, this, non_error_res);
             } else {
-                _ = try E.JsContext.mapZigInstanceToJs(self.v8_context, this, res);
+                _ = try JsContext.mapZigInstanceToJs(self.v8_context, this, res);
             }
             info.getReturnValue().set(this);
         }
@@ -2668,7 +2706,7 @@ fn Caller(comptime E: type, comptime State: type) type {
             const js_context = self.js_context;
             const func = @field(Struct, named_function.name);
             var args = try self.getArgs(Struct, named_function, 1, info);
-            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
+            const zig_instance = try js_context.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
 
             // inject 'self' as the first parameter
             @field(args, "0") = zig_instance;
@@ -2700,7 +2738,7 @@ fn Caller(comptime E: type, comptime State: type) type {
             switch (arg_fields.len) {
                 0, 1, 2 => @compileError(named_function.full_name ++ " must take at least a u32 and *bool parameter"),
                 3, 4 => {
-                    const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
+                    const zig_instance = try js_context.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
                     comptime assertSelfReceiver(Struct, named_function);
                     @field(args, "0") = zig_instance;
                     @field(args, "1") = idx;
@@ -2722,12 +2760,13 @@ fn Caller(comptime E: type, comptime State: type) type {
         }
 
         fn getNamedIndex(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, name: v8.Name, info: v8.PropertyCallbackInfo) !u8 {
+            const js_context = self.js_context;
             const func = @field(Struct, named_function.name);
             comptime assertSelfReceiver(Struct, named_function);
 
             var has_value = true;
             var args = try self.getArgs(Struct, named_function, 3, info);
-            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
+            const zig_instance = try js_context.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
             @field(args, "0") = zig_instance;
             @field(args, "1") = try self.nameToString(name);
             @field(args, "2") = &has_value;
@@ -2747,7 +2786,7 @@ fn Caller(comptime E: type, comptime State: type) type {
 
             var has_value = true;
             var args = try self.getArgs(Struct, named_function, 4, info);
-            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
+            const zig_instance = try js_context.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
             @field(args, "0") = zig_instance;
             @field(args, "1") = try self.nameToString(name);
             @field(args, "2") = try js_context.jsValueToZig(named_function, @TypeOf(@field(args, "2")), js_value);
@@ -2758,12 +2797,13 @@ fn Caller(comptime E: type, comptime State: type) type {
         }
 
         fn deleteNamedIndex(self: *Self, comptime Struct: type, comptime named_function: NamedFunction, name: v8.Name, info: v8.PropertyCallbackInfo) !u8 {
+            const js_context = self.js_context;
             const func = @field(Struct, named_function.name);
             comptime assertSelfReceiver(Struct, named_function);
 
             var has_value = true;
             var args = try self.getArgs(Struct, named_function, 3, info);
-            const zig_instance = try E.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
+            const zig_instance = try js_context.typeTaggedAnyOpaque(named_function, *Receiver(Struct), info.getThis());
             @field(args, "0") = zig_instance;
             @field(args, "1") = try self.nameToString(name);
             @field(args, "2") = &has_value;
@@ -3378,12 +3418,6 @@ const TaggedAnyOpaque = struct {
     // corresponds to both a field in TYPE_LOOKUP and the index of
     // PROTOTYPE_TABLE
     index: u16,
-
-    // If this type has composition-based prototype, represents the byte-offset
-    // from ptr where the `proto` field is located. The value -1 represents
-    // unsafe prototype where we can just cast ptr to the destination type
-    // (this is used extensively with netsurf)
-    offset: i32,
 
     // Ptr to the Zig instance. Between the context where it's called (i.e.
     // we have the comptime parameter info for all functions), and the index field
