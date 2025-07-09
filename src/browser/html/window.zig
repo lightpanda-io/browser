@@ -169,9 +169,9 @@ pub const Window = struct {
         return &self.performance;
     }
 
-    pub fn get_customElements(self: *Window) *CustomElementRegistry {
-        return &self.custom_elements;
-    }
+    // pub fn get_customElements(self: *Window) *CustomElementRegistry {
+    //     return &self.custom_elements;
+    // }
 
     pub fn get_screen(self: *Window) *Screen {
         return &self.screen;
