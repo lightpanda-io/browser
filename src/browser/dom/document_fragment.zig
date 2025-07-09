@@ -69,7 +69,7 @@ pub const DocumentFragment = struct {
     }
 
     pub fn _querySelectorAll(self: *parser.DocumentFragment, selector: []const u8, page: *Page) !NodeList {
-        return css.querySelectorAll(page.arena, parser.documentFragmentToNode(self), selector);
+        return css.querySelectorAll(page.call_arena, parser.documentFragmentToNode(self), selector);
     }
 };
 
