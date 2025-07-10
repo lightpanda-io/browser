@@ -801,7 +801,7 @@ pub const Request = struct {
         }
 
         const is_proxy = self._client.isProxy();
-        if ((is_proxy and self._proxy_secure) or (!is_proxy and self._request_secure)) {
+        if ((is_proxy and self._proxy_secure) or (!is_forward_proxy and self._request_secure)) {
             if (self._connection_from_keepalive) {
                 // If the connection came from the keepalive pool, than we already
                 // have a TLS Connection.
