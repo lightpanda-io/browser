@@ -22,6 +22,8 @@ const parser = @import("../netsurf.zig");
 const NodeFilter = @import("node_filter.zig");
 const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
+const Node = @import("node.zig").Node;
+const NodeUnion = @import("node.zig").Union;
 
 // https://developer.mozilla.org/en-US/docs/Web/API/TreeWalker
 pub const TreeWalker = struct {
@@ -55,12 +57,12 @@ pub const TreeWalker = struct {
         };
     }
 
-    pub fn get_root(self: *TreeWalker) *parser.Node {
-        return self.root;
+    pub fn get_root(self: *TreeWalker) !NodeUnion {
+        return try Node.toInterface(self.root);
     }
 
-    pub fn get_currentNode(self: *TreeWalker) *parser.Node {
-        return self.current_node;
+    pub fn get_currentNode(self: *TreeWalker) !NodeUnion {
+        return try Node.toInterface(self.current_node);
     }
 
     pub fn get_whatToShow(self: *TreeWalker) u32 {
@@ -157,35 +159,35 @@ pub const TreeWalker = struct {
         }
     }
 
-    pub fn _firstChild(self: *TreeWalker) !?*parser.Node {
+    pub fn _firstChild(self: *TreeWalker) !?NodeUnion {
         if (try self.firstChild(self.current_node)) |child| {
             self.current_node = child;
-            return child;
+            return try Node.toInterface(child);
         }
 
         return null;
     }
 
-    pub fn _lastChild(self: *TreeWalker) !?*parser.Node {
+    pub fn _lastChild(self: *TreeWalker) !?NodeUnion {
         if (try self.lastChild(self.current_node)) |child| {
             self.current_node = child;
-            return child;
+            return try Node.toInterface(child);
         }
 
         return null;
     }
 
-    pub fn _nextNode(self: *TreeWalker) !?*parser.Node {
+    pub fn _nextNode(self: *TreeWalker) !?NodeUnion {
         if (try self.firstChild(self.current_node)) |child| {
             self.current_node = child;
-            return child;
+            return try Node.toInterface(child);
         }
 
         var current = self.current_node;
         while (current != self.root) {
             if (try self.nextSibling(current)) |sibling| {
                 self.current_node = sibling;
-                return sibling;
+                return try Node.toInterface(sibling);
             }
 
             current = (try parser.nodeParentNode(current)) orelse break;
@@ -194,25 +196,25 @@ pub const TreeWalker = struct {
         return null;
     }
 
-    pub fn _nextSibling(self: *TreeWalker) !?*parser.Node {
+    pub fn _nextSibling(self: *TreeWalker) !?NodeUnion {
         if (try self.nextSibling(self.current_node)) |sibling| {
             self.current_node = sibling;
-            return sibling;
+            return try Node.toInterface(sibling);
         }
 
         return null;
     }
 
-    pub fn _parentNode(self: *TreeWalker) !?*parser.Node {
+    pub fn _parentNode(self: *TreeWalker) !?NodeUnion {
         if (try self.parentNode(self.current_node)) |parent| {
             self.current_node = parent;
-            return parent;
+            return try Node.toInterface(parent);
         }
 
         return null;
     }
 
-    pub fn _previousNode(self: *TreeWalker) !?*parser.Node {
+    pub fn _previousNode(self: *TreeWalker) !?NodeUnion {
         if (self.current_node == self.root) return null;
 
         var current = self.current_node;
@@ -224,19 +226,19 @@ pub const TreeWalker = struct {
                     // Get last child if it has one.
                     if (try self.lastChild(current)) |child| {
                         self.current_node = child;
-                        return child;
+                        return try Node.toInterface(child);
                     }
 
                     // Otherwise, this node is our previous one.
                     self.current_node = current;
-                    return current;
+                    return try Node.toInterface(current);
                 },
                 .reject => continue,
                 .skip => {
                     // Get last child if it has one.
                     if (try self.lastChild(current)) |child| {
                         self.current_node = child;
-                        return child;
+                        return try Node.toInterface(child);
                     }
                 },
             }
@@ -245,17 +247,17 @@ pub const TreeWalker = struct {
         if (current != self.root) {
             if (try self.parentNode(current)) |parent| {
                 self.current_node = parent;
-                return parent;
+                return try Node.toInterface(parent);
             }
         }
 
         return null;
     }
 
-    pub fn _previousSibling(self: *TreeWalker) !?*parser.Node {
+    pub fn _previousSibling(self: *TreeWalker) !?NodeUnion {
         if (try self.previousSibling(self.current_node)) |sibling| {
             self.current_node = sibling;
-            return sibling;
+            return try Node.toInterface(sibling);
         }
 
         return null;
