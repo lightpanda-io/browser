@@ -28,6 +28,7 @@ const nod = @import("node.zig");
 pub const Union = union(enum) {
     node: nod.Union,
     xhr: *@import("../xhr/xhr.zig").XMLHttpRequest,
+    plain: *parser.EventTarget,
 };
 
 // EventTarget implementation
@@ -36,7 +37,7 @@ pub const EventTarget = struct {
     pub const Exception = DOMException;
 
     // Extend libdom event target for pure zig struct.
-    base: parser.EventTargetTBase = parser.EventTargetTBase{},
+    base: parser.EventTargetTBase = parser.EventTargetTBase{ .internal_target_type = .plain },
 
     pub fn toInterface(e: *parser.Event, et: *parser.EventTarget, page: *Page) !Union {
         // libdom assumes that all event targets are libdom nodes. They are not.
@@ -45,6 +46,10 @@ pub const EventTarget = struct {
         // its a singleton.
         if (@intFromPtr(et) == @intFromPtr(&page.window.base)) {
             return .{ .node = .{ .Window = &page.window } };
+        }
+
+        if (try parser.eventTargetInternalType(et) == .plain) {
+            return .{ .plain = et };
         }
 
         // AbortSignal is another non-node target. It has a distinct usage though
