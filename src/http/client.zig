@@ -240,6 +240,10 @@ pub const Client = struct {
         const proxy_type = self.proxy_type orelse return false;
         return proxy_type == .forward;
     }
+
+    fn isProxy(self: *const Client) bool {
+        return self.proxy_type != null;
+    }
 };
 
 const RequestOpts = struct {
@@ -792,8 +796,12 @@ pub const Request = struct {
             .conn = .{ .handler = async_handler, .protocol = .{ .plain = {} } },
         };
 
-        if (self._client.isConnectProxy() and self._proxy_secure) log.warn(.http, "ASYNC TLS CONNECT no impl.", .{});
-        if (self._request_secure) {
+        if (self._client.isConnectProxy() and self._proxy_secure) {
+            log.warn(.http, "not implemented", .{ .feature = "async tls connect" });
+        }
+
+        const is_proxy = self._client.isProxy();
+        if ((is_proxy and self._proxy_secure) or (!is_proxy and self._request_secure)) {
             if (self._connection_from_keepalive) {
                 // If the connection came from the keepalive pool, than we already
                 // have a TLS Connection.
