@@ -469,6 +469,9 @@ test "Browser.DOM.Document" {
             ,
             "1",
         },
+
+        .{ "document.querySelectorAll('.\\\\:popover-open').length", "0" },
+        .{ "document.querySelectorAll('.foo\\\\:bar').length", "0" },
     }, .{});
 
     try runner.testCases(&.{
