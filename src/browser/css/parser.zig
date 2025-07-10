@@ -204,7 +204,7 @@ pub const Parser = struct {
         }
 
         const c = p.s[p.i];
-        if (!nameStart(c) or c == '\\') {
+        if (!nameStart(c) and c != '\\') {
             return ParseError.ExpectedSelector;
         }
 
@@ -945,6 +945,39 @@ test "parser.parseString" {
         };
         std.testing.expectEqualDeep(tc.exp, buf.items) catch |e| {
             std.debug.print("test case {s} : {s}\n", .{ tc.s, buf.items });
+            return e;
+        };
+    }
+}
+
+test "parser.parse" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const testcases = [_]struct {
+        s: []const u8, // given value
+        exp: Selector, // expected value
+        err: bool = false,
+    }{
+        .{ .s = "root", .exp = .{ .tag = "root" } },
+        .{ .s = ".root", .exp = .{ .class = "root" } },
+        .{ .s = ":root", .exp = .{ .pseudo_class = .root } },
+        .{ .s = ".\\:bar", .exp = .{ .class = ":bar" } },
+        .{ .s = ".foo\\:bar", .exp = .{ .class = "foo:bar" } },
+    };
+
+    for (testcases) |tc| {
+        var p = Parser{ .s = tc.s, .opts = .{} };
+        const sel = p.parse(alloc) catch |e| {
+            // if error was expected, continue.
+            if (tc.err) continue;
+
+            std.debug.print("test case {s}\n", .{tc.s});
+            return e;
+        };
+        std.testing.expectEqualDeep(tc.exp, sel) catch |e| {
+            std.debug.print("test case {s} : {}\n", .{ tc.s, sel });
             return e;
         };
     }
