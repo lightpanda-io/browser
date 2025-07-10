@@ -19,6 +19,7 @@
 const std = @import("std");
 const parser = @import("../netsurf.zig");
 const Env = @import("../env.zig").Env;
+const Node = @import("node.zig").Node;
 
 pub const NodeFilter = struct {
     pub const _FILTER_ACCEPT: u16 = 1;
@@ -63,7 +64,7 @@ pub fn verify(what_to_show: u32, filter: ?Env.Function, node: *parser.Node) !Ver
 
     // Verify that we aren't filtering it out.
     if (filter) |f| {
-        const acceptance = try f.call(u16, .{node});
+        const acceptance = try f.call(u16, .{try Node.toInterface(node)});
         return switch (acceptance) {
             NodeFilter._FILTER_ACCEPT => .accept,
             NodeFilter._FILTER_REJECT => .reject,

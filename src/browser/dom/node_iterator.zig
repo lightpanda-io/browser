@@ -20,9 +20,11 @@ const std = @import("std");
 const parser = @import("../netsurf.zig");
 const Env = @import("../env.zig").Env;
 const NodeFilter = @import("node_filter.zig");
+const Node = @import("node.zig").Node;
+const NodeUnion = @import("node.zig").Union;
 
 // https://developer.mozilla.org/en-US/docs/Web/API/NodeIterator
-// While this is similar to TreeWalker it has it's own implementation as there are several suttle differences
+// While this is similar to TreeWalker it has its own implementation as there are several subtle differences
 // For example:
 // - nextNode returns the reference node, whereas TreeWalker returns the next node
 // - Skip and reject are equivalent for NodeIterator, for TreeWalker they are different
@@ -66,36 +68,36 @@ pub const NodeIterator = struct {
         return self.pointer_before_current;
     }
 
-    pub fn get_referenceNode(self: *const NodeIterator) *parser.Node {
-        return self.reference_node;
+    pub fn get_referenceNode(self: *const NodeIterator) !NodeUnion {
+        return try Node.toInterface(self.reference_node);
     }
 
-    pub fn get_root(self: *const NodeIterator) *parser.Node {
-        return self.root;
+    pub fn get_root(self: *const NodeIterator) !NodeUnion {
+        return try Node.toInterface(self.root);
     }
 
     pub fn get_whatToShow(self: *const NodeIterator) u32 {
         return self.what_to_show;
     }
 
-    pub fn _nextNode(self: *NodeIterator) !?*parser.Node {
+    pub fn _nextNode(self: *NodeIterator) !?NodeUnion {
         if (self.pointer_before_current) { // Unlike TreeWalker, NodeIterator starts at the first node
             self.pointer_before_current = false;
             if (.accept == try NodeFilter.verify(self.what_to_show, self.filter_func, self.reference_node)) {
-                return self.reference_node;
+                return try Node.toInterface(self.reference_node);
             }
         }
 
         if (try self.firstChild(self.reference_node)) |child| {
             self.reference_node = child;
-            return child;
+            return try Node.toInterface(child);
         }
 
         var current = self.reference_node;
         while (current != self.root) {
             if (try self.nextSibling(current)) |sibling| {
                 self.reference_node = sibling;
-                return sibling;
+                return try Node.toInterface(sibling);
             }
 
             current = (try parser.nodeParentNode(current)) orelse break;
@@ -104,11 +106,11 @@ pub const NodeIterator = struct {
         return null;
     }
 
-    pub fn _previousNode(self: *NodeIterator) !?*parser.Node {
+    pub fn _previousNode(self: *NodeIterator) !?NodeUnion {
         if (!self.pointer_before_current) {
             self.pointer_before_current = true;
             if (.accept == try NodeFilter.verify(self.what_to_show, self.filter_func, self.reference_node)) {
-                return self.reference_node; // Still need to verify as last may be first as well
+                return try Node.toInterface(self.reference_node); // Still need to verify as last may be first as well
             }
         }
         if (self.reference_node == self.root) return null;
@@ -122,18 +124,18 @@ pub const NodeIterator = struct {
                     // Get last child if it has one.
                     if (try self.lastChild(current)) |child| {
                         self.reference_node = child;
-                        return child;
+                        return try Node.toInterface(child);
                     }
 
                     // Otherwise, this node is our previous one.
                     self.reference_node = current;
-                    return current;
+                    return try Node.toInterface(current);
                 },
                 .reject, .skip => {
                     // Get last child if it has one.
                     if (try self.lastChild(current)) |child| {
                         self.reference_node = child;
-                        return child;
+                        return try Node.toInterface(child);
                     }
                 },
             }
@@ -142,7 +144,7 @@ pub const NodeIterator = struct {
         if (current != self.root) {
             if (try self.parentNode(current)) |parent| {
                 self.reference_node = parent;
-                return parent;
+                return try Node.toInterface(parent);
             }
         }
 
