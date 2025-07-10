@@ -582,6 +582,7 @@ pub const Parser = struct {
             .only_of_type => return .{ .pseudo_class_only_child = true },
             .input, .empty, .root, .link => return .{ .pseudo_class = pseudo_class },
             .enabled, .disabled, .checked => return .{ .pseudo_class = pseudo_class },
+            .visible => return .{ .pseudo_class = pseudo_class },
             .lang => {
                 if (!p.consumeParenthesis()) return ParseError.ExpectedParenthesis;
                 if (p.i == p.s.len) return ParseError.UnmatchParenthesis;
