@@ -1018,12 +1018,16 @@ const Script = struct {
             .cacheable = cacheable,
         });
 
-        const result = switch (self.kind) {
-            .javascript => page.main_context.eval(body, src),
-            .module => page.main_context.module(body, src, cacheable),
+        const failed = blk: {
+            switch (self.kind) {
+                .javascript => _ = page.main_context.eval(body, src) catch break :blk true,
+                // We don't care about waiting for the evaluation here.
+                .module => _ = page.main_context.module(body, src, cacheable) catch break :blk true,
+            }
+            break :blk false;
         };
 
-        result catch {
+        if (failed) {
             if (page.delayed_navigation) {
                 return error.Terminated;
             }
@@ -1038,7 +1042,8 @@ const Script = struct {
 
             try self.executeCallback("onerror", page);
             return error.JsErr;
-        };
+        }
+
         try self.executeCallback("onload", page);
     }
 

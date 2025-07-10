@@ -762,17 +762,14 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             }
 
             // compile and eval a JS module
-            // It doesn't wait for callbacks execution
-            pub fn module(self: *JsContext, src: []const u8, url: []const u8, cacheable: bool) !void {
-                if (!cacheable) {
-                    return self.moduleNoCache(src, url);
-                }
-
+            // It returns null if the module is already compiled and in the cache.
+            // It returns a v8.Promise if the module must be evaluated.
+            pub fn module(self: *JsContext, src: []const u8, url: []const u8, cacheable: bool) !?v8.Promise {
                 const arena = self.context_arena;
 
-                const gop = try self.module_cache.getOrPut(arena, url);
-                if (gop.found_existing) {
-                    return;
+                if (cacheable) {
+                    const value = self.module_cache.get(url);
+                    if (value != null) return null;
                 }
                 errdefer _ = self.module_cache.remove(url);
 
@@ -782,8 +779,9 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 try self.module_identifier.putNoClobber(arena, m.getIdentityHash(), owned_url);
                 errdefer _ = self.module_identifier.remove(m.getIdentityHash());
 
-                gop.key_ptr.* = owned_url;
-                gop.value_ptr.* = PersistentModule.init(self.isolate, m);
+                if (cacheable) {
+                    try self.module_cache.put(arena, owned_url, PersistentModule.init(self.isolate, m));
+                }
 
                 // resolveModuleCallback loads module's dependencies.
                 const v8_context = self.v8_context;
@@ -791,21 +789,12 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     return error.ModuleInstantiationError;
                 }
 
-                _ = try m.evaluate(v8_context);
-            }
-
-            fn moduleNoCache(self: *JsContext, src: []const u8, url: []const u8) !void {
-                const m = try compileModule(self.isolate, src, url);
-
-                const arena = self.context_arena;
-                const owned_url = try arena.dupe(u8, url);
-                try self.module_identifier.putNoClobber(arena, m.getIdentityHash(), owned_url);
-
-                const v8_context = self.v8_context;
-                if (try m.instantiate(v8_context, resolveModuleCallback) == false) {
-                    return error.ModuleInstantiationError;
-                }
-                _ = try m.evaluate(v8_context);
+                const evaluated = try m.evaluate(v8_context);
+                // https://v8.github.io/api/head/classv8_1_1Module.html#a1f1758265a4082595757c3251bb40e0f
+                // Must be a promise that gets returned here.
+                std.debug.assert(evaluated.isPromise());
+                const promise = v8.Promise{ .handle = evaluated.handle };
+                return promise;
             }
 
             // Wrap a v8.Exception
@@ -1564,31 +1553,31 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     .{ .alloc = .if_needed },
                 ) catch unreachable;
 
-                _dynamicModuleCallback(context, resource_str, normalized_specifier, &resolver);
+                log.debug(.js, "dynamic import", .{
+                    .specifier = specifier_str,
+                    .resource = resource_str,
+                    .referrer_full = referrer_full_url,
+                    .normalized_specifier = normalized_specifier,
+                });
+
+                _dynamicModuleCallback(context, normalized_specifier, &resolver) catch |err| {
+                    log.err(.js, "dynamic module callback", .{
+                        .err = err,
+                    });
+                    // Must be rejected at this point
+                    // otherwise, we will just wait on a pending promise.
+                    std.debug.assert(resolver.getPromise().getState() == .kRejected);
+                };
                 return @constCast(resolver.getPromise().handle);
             }
 
             fn _dynamicModuleCallback(
                 context: *JsContext,
-                resource: []const u8,
                 specifier: []const u8,
                 resolver: *const v8.PromiseResolver,
-            ) void {
+            ) !void {
                 const iso = context.isolate;
                 const ctx = context.v8_context;
-
-                // Check module cache first.
-                if (context.module_cache.get(specifier)) |cached_module| {
-                    const namespace = cached_module.castToModule().getModuleNamespace();
-                    _ = resolver.resolve(ctx, namespace);
-                    return;
-                }
-
-                log.info(.js, "dynamic import", .{
-                    .specifier = specifier,
-                    .resource = resource,
-                    .normalized = specifier,
-                });
 
                 const module_loader = context.module_loader;
                 const source = module_loader.func(module_loader.ptr, specifier) catch {
@@ -1605,48 +1594,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 try_catch.init(context);
                 defer try_catch.deinit();
 
-                const new_module = compileModule(iso, source, specifier) catch {
+                const maybe_promise = context.module(source, specifier, true) catch {
                     log.err(.js, "module compilation failed", .{
-                        .specifier = specifier,
-                        .exception = try_catch.exception(context.call_arena) catch "unknown error",
-                        .stack = try_catch.stack(context.call_arena) catch null,
-                    });
-                    const error_msg = if (try_catch.hasCaught()) blk: {
-                        const exception_str = try_catch.exception(context.call_arena) catch "Compilation error";
-                        break :blk v8.String.initUtf8(iso, exception_str orelse "Compilation error");
-                    } else v8.String.initUtf8(iso, "Module compilation failed");
-
-                    _ = resolver.reject(ctx, error_msg.toValue());
-                    return;
-                };
-
-                // Insert into Module Cache.
-                context.module_identifier.putNoClobber(context.context_arena, new_module.getIdentityHash(), specifier) catch unreachable;
-                context.module_cache.putNoClobber(context.context_arena, specifier, v8.Persistent(v8.Module).init(iso, new_module)) catch unreachable;
-
-                const instantiated = new_module.instantiate(ctx, JsContext.resolveModuleCallback) catch {
-                    log.err(.js, "module instantiation failed", .{
-                        .specifier = specifier,
-                        .exception = try_catch.exception(context.call_arena) catch "unknown error",
-                        .stack = try_catch.stack(context.call_arena) catch null,
-                    });
-                    const error_msg = if (try_catch.hasCaught()) blk: {
-                        const exception_str = try_catch.exception(context.call_arena) catch "Instantiation error";
-                        break :blk v8.String.initUtf8(iso, exception_str orelse "Instantiation error");
-                    } else v8.String.initUtf8(iso, "Module instantiation failed");
-
-                    _ = resolver.reject(ctx, error_msg.toValue());
-                    return;
-                };
-
-                if (!instantiated) {
-                    const error_msg = v8.String.initUtf8(iso, "Module did not instantiate");
-                    _ = resolver.reject(ctx, error_msg.toValue());
-                    return;
-                }
-
-                const evaluated = new_module.evaluate(ctx) catch {
-                    log.err(.js, "module evaluation failed", .{
                         .specifier = specifier,
                         .exception = try_catch.exception(context.call_arena) catch "unknown error",
                         .stack = try_catch.stack(context.call_arena) catch null,
@@ -1656,20 +1605,19 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         const exception_str = try_catch.exception(context.call_arena) catch "Evaluation error";
                         break :blk v8.String.initUtf8(iso, exception_str orelse "Evaluation error");
                     } else v8.String.initUtf8(iso, "Module evaluation failed");
-
                     _ = resolver.reject(ctx, error_msg.toValue());
                     return;
                 };
+                const new_module = context.module_cache.get(specifier).?.castToModule();
 
-                if (evaluated.isPromise()) {
-                    const promise = v8.Promise{ .handle = evaluated.handle };
-
+                if (maybe_promise) |promise| {
+                    // This means we must wait for the evaluation.
                     const EvaluationData = struct {
                         module: v8.Persistent(v8.Module),
                         resolver: v8.Persistent(v8.PromiseResolver),
                     };
 
-                    const ev_data = context.context_arena.create(EvaluationData) catch unreachable;
+                    const ev_data = try context.context_arena.create(EvaluationData);
                     ev_data.* = .{
                         .module = v8.Persistent(v8.Module).init(iso, new_module),
                         .resolver = v8.Persistent(v8.PromiseResolver).init(iso, resolver.*),
@@ -1686,7 +1634,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             const cb_resolver = data.resolver.castToPromiseResolver();
 
                             const namespace = cb_module.getModuleNamespace();
-                            log.warn(.js, "module then promise", .{
+                            log.info(.js, "dynamic import complete", .{
+                                .module = cb_module,
                                 .namespace = namespace,
                             });
                             _ = cb_resolver.resolve(cb_context, namespace);
@@ -1695,11 +1644,15 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
                     const catch_callback = v8.Function.initWithData(ctx, struct {
                         pub fn callback(info: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
-                            log.warn(.js, "module catch promise", .{});
                             const cb_info = v8.FunctionCallbackInfo{ .handle = info.? };
                             const cb_context = cb_info.getIsolate().getCurrentContext();
                             const data: *EvaluationData = @ptrCast(@alignCast(cb_info.getExternalValue()));
+                            const cb_module = data.module.castToModule();
                             const cb_resolver = data.resolver.castToPromiseResolver();
+
+                            log.err(.js, "dynamic import failed", .{
+                                .module = cb_module,
+                            });
                             _ = cb_resolver.reject(cb_context, cb_info.getData());
                         }
                     }.callback, external);
@@ -1714,8 +1667,14 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         return;
                     };
                 } else {
+                    // This means it is already present in the cache.
                     const namespace = new_module.getModuleNamespace();
+                    log.info(.js, "dynamic import complete", .{
+                        .module = new_module,
+                        .namespace = namespace,
+                    });
                     _ = resolver.resolve(ctx, namespace);
+                    return;
                 }
             }
         };
