@@ -749,6 +749,13 @@ pub fn eventTargetDispatchEvent(et: *EventTarget, event: *Event) !bool {
     return res;
 }
 
+pub fn eventTargetInternalType(et: *EventTarget) !EventTargetTBase.InternalType {
+    var res: u32 = undefined;
+    const err = eventTargetVtable(et).internal_type.?(et, &res);
+    try DOMErr(err);
+    return @enumFromInt(res);
+}
+
 pub fn elementDispatchEvent(element: *Element, event: *Event) !bool {
     const et: *EventTarget = toEventTarget(Element, element);
     return eventTargetDispatchEvent(et, @ptrCast(event));
@@ -771,12 +778,17 @@ pub fn eventTargetTBaseFieldName(comptime T: type) ?[]const u8 {
 // EventTargetBase is used to implement EventTarget for pure zig struct.
 pub const EventTargetTBase = extern struct {
     const Self = @This();
+    const InternalType = enum(u32) {
+        libdom = 0,
+        plain = 1,
+    };
 
     vtable: ?*const c.struct_dom_event_target_vtable = &c.struct_dom_event_target_vtable{
         .dispatch_event = dispatch_event,
         .remove_event_listener = remove_event_listener,
         .add_event_listener = add_event_listener,
         .iter_event_listener = iter_event_listener,
+        .internal_type = internal_type,
     },
 
     // When we dispatch the event, we need to provide a target. In reality, the
@@ -790,6 +802,7 @@ pub const EventTargetTBase = extern struct {
     refcnt: u32 = 0,
 
     eti: c.dom_event_target_internal = c.dom_event_target_internal{ .listeners = null },
+    internal_target_type: InternalType = .libdom,
 
     pub fn add_event_listener(et: [*c]c.dom_event_target, t: [*c]c.dom_string, l: ?*c.struct_dom_event_listener, capture: bool) callconv(.C) c.dom_exception {
         const self = @as(*Self, @ptrCast(et));
@@ -821,6 +834,12 @@ pub const EventTargetTBase = extern struct {
     ) callconv(.C) c.dom_exception {
         const self = @as(*Self, @ptrCast(et));
         return c._dom_event_target_iter_event_listener(self.eti, t, capture, cur, next, l);
+    }
+
+    pub fn internal_type(et: [*c]c.dom_event_target, internal_type_: [*c]u32) callconv(.C) c.dom_exception {
+        const self = @as(*Self, @ptrCast(et));
+        internal_type_.* = @intFromEnum(self.internal_target_type);
+        return c.DOM_NO_ERR;
     }
 };
 
