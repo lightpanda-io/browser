@@ -370,7 +370,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // when the handle_scope is freed.
             // We also maintain our own "context_arena" which allows us to have
             // all page related memory easily managed.
-            pub fn createJsContext(self: *ExecutionWorld, global: anytype, state: State, module_loader: anytype, enter: bool) !*JsContext {
+            pub fn createJsContext(self: *ExecutionWorld, global: anytype, state: State, module_loader: anytype, enter: bool, global_callback: ?GlobalMissingCallback) !*JsContext {
                 std.debug.assert(self.js_context == null);
 
                 const ModuleLoader = switch (@typeInfo(@TypeOf(module_loader))) {
@@ -398,6 +398,30 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
                     const global_template = js_global.getInstanceTemplate();
                     global_template.setInternalFieldCount(1);
+
+                    // Configure the missing property callback on the global
+                    // object.
+                    if (global_callback != null) {
+                        const configuration = v8.NamedPropertyHandlerConfiguration{
+                            .getter = struct {
+                                fn callback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
+                                    const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
+                                    const _isolate = info.getIsolate();
+                                    const v8_context = _isolate.getCurrentContext();
+
+                                    const js_context: *JsContext = @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
+
+                                    const property = valueToString(js_context.call_arena, .{ .handle = c_name.? }, _isolate, v8_context) catch "???";
+                                    if (js_context.global_callback.?.missing(property, js_context)) {
+                                        return v8.Intercepted.Yes;
+                                    }
+                                    return v8.Intercepted.No;
+                                }
+                            }.callback,
+                            .flags = v8.PropertyHandlerFlags.NonMasking | v8.PropertyHandlerFlags.OnlyInterceptStrings,
+                        };
+                        global_template.setNamedProperty(configuration, null);
+                    }
 
                     // All the FunctionTemplates that we created and setup in Env.init
                     // are now going to get associated with our global instance.
@@ -481,6 +505,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         .ptr = safe_module_loader,
                         .func = ModuleLoader.fetchModuleSource,
                     },
+                    .global_callback = global_callback,
                 };
 
                 var js_context = &self.js_context.?;
@@ -632,6 +657,9 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // given is the specifier, we can form the full path. The full path is
             // necessary to lookup/store the dependent module in the module_cache.
             module_identifier: std.AutoHashMapUnmanaged(u32, []const u8) = .empty,
+
+            // Global callback is called on missing property.
+            global_callback: ?GlobalMissingCallback = null,
 
             const ModuleLoader = struct {
                 ptr: *anyopaque,
@@ -2265,11 +2293,6 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
         fn generateNamedIndexer(comptime Struct: type, template_proto: v8.ObjectTemplate) void {
             if (@hasDecl(Struct, "named_get") == false) {
-                if (comptime builtin.mode == .Debug) {
-                    if (log.enabled(.unknown_prop, .debug)) {
-                        generateDebugNamedIndexer(Struct, template_proto);
-                    }
-                }
                 return;
             }
 
@@ -2326,31 +2349,6 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     }
                 }.callback;
             }
-            template_proto.setNamedProperty(configuration, null);
-        }
-
-        fn generateDebugNamedIndexer(comptime Struct: type, template_proto: v8.ObjectTemplate) void {
-            const configuration = v8.NamedPropertyHandlerConfiguration{
-                .getter = struct {
-                    fn callback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
-                        const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
-                        const isolate = info.getIsolate();
-                        const v8_context = isolate.getCurrentContext();
-
-                        const js_context: *JsContext = @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
-
-                        const property = valueToString(js_context.call_arena, .{ .handle = c_name.? }, isolate, v8_context) catch "???";
-                        log.debug(.unknown_prop, "unkown property", .{ .@"struct" = @typeName(Struct), .property = property });
-                        return v8.Intercepted.No;
-                    }
-                }.callback,
-
-                // This is really cool. Without this, we'd intercept _all_ properties
-                // even those explicitly set. So, node.length for example would get routed
-                // to our `named_get`, rather than a `get_length`. This might be
-                // useful if we run into a type that we can't model properly in Zig.
-                .flags = v8.PropertyHandlerFlags.OnlyInterceptStrings | v8.PropertyHandlerFlags.NonMasking,
-            };
             template_proto.setNamedProperty(configuration, null);
         }
 
@@ -2575,6 +2573,35 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             pub fn callScopeEnd(self: CallScopeEndCallback) void {
                 self.callScopeEndFn(self.ptr);
+            }
+        };
+
+        // Callback called on global's property mssing.
+        // Return true to intercept the exectution or false to let the call
+        // continue the chain.
+        pub const GlobalMissingCallback = struct {
+            ptr: *anyopaque,
+            missingFn: *const fn (ptr: *anyopaque, name: []const u8, ctx: *JsContext) bool,
+
+            pub fn init(ptr: anytype) GlobalMissingCallback {
+                const T = @TypeOf(ptr);
+                const ptr_info = @typeInfo(T);
+
+                const gen = struct {
+                    pub fn missing(pointer: *anyopaque, name: []const u8, ctx: *JsContext) bool {
+                        const self: T = @ptrCast(@alignCast(pointer));
+                        return ptr_info.pointer.child.missing(self, name, ctx);
+                    }
+                };
+
+                return .{
+                    .ptr = ptr,
+                    .missingFn = gen.missing,
+                };
+            }
+
+            pub fn missing(self: GlobalMissingCallback, name: []const u8, ctx: *JsContext) bool {
+                return self.missingFn(self.ptr, name, ctx);
             }
         };
     };

@@ -30,6 +30,8 @@ const Inspector = @import("../browser/env.zig").Env.Inspector;
 const Incrementing = @import("../id.zig").Incrementing;
 const Notification = @import("../notification.zig").Notification;
 
+const polyfill = @import("../browser/polyfill/polyfill.zig");
+
 pub const URL_BASE = "chrome://newtab/";
 pub const LOADER_ID = "LOADERID24DD2FD56CF1EF33C965C79C";
 
@@ -554,6 +556,10 @@ const IsolatedWorld = struct {
     executor: Env.ExecutionWorld,
     grant_universal_access: bool,
 
+    // Polyfill loader for the isolated world.
+    // We want to load polyfill in the world's context.
+    polyfill_loader: polyfill.Loader = .{},
+
     pub fn deinit(self: *IsolatedWorld) void {
         self.executor.deinit();
     }
@@ -569,7 +575,13 @@ const IsolatedWorld = struct {
     // Currently we have only 1 page/frame and thus also only 1 state in the isolate world.
     pub fn createContext(self: *IsolatedWorld, page: *Page) !void {
         if (self.executor.js_context != null) return error.Only1IsolatedContextSupported;
-        _ = try self.executor.createJsContext(&page.window, page, {}, false);
+        _ = try self.executor.createJsContext(
+            &page.window,
+            page,
+            {},
+            false,
+            Env.GlobalMissingCallback.init(&self.polyfill_loader),
+        );
     }
 };
 

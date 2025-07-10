@@ -23,25 +23,69 @@ const log = @import("../../log.zig");
 const Allocator = std.mem.Allocator;
 const Env = @import("../env.zig").Env;
 
-const modules = [_]struct {
-    name: []const u8,
-    source: []const u8,
-}{
-    .{ .name = "polyfill-fetch", .source = @import("fetch.zig").source },
-};
+pub const Loader = struct {
+    state: enum { empty, loading } = .empty,
 
-pub fn load(allocator: Allocator, js_context: *Env.JsContext) !void {
-    var try_catch: Env.TryCatch = undefined;
-    try_catch.init(js_context);
-    defer try_catch.deinit();
+    done: struct {
+        fetch: bool = false,
+    } = .{},
 
-    for (modules) |m| {
-        _ = js_context.exec(m.source, m.name) catch |err| {
-            if (try try_catch.err(allocator)) |msg| {
-                defer allocator.free(msg);
-                log.fatal(.app, "polyfill error", .{ .name = m.name, .err = msg });
+    pub fn load(name: []const u8, source: []const u8, js_context: *Env.JsContext) !void {
+        var try_catch: Env.TryCatch = undefined;
+        try_catch.init(js_context);
+        defer try_catch.deinit();
+
+        _ = js_context.exec(source, name) catch |err| {
+            if (try try_catch.err(js_context.call_arena)) |msg| {
+                log.fatal(.app, "polyfill error", .{ .name = name, .err = msg });
             }
             return err;
         };
     }
-}
+
+    pub fn missing(self: *Loader, name: []const u8, js_context: *Env.JsContext) bool {
+        // Avoid recursive calls during polyfill loading.
+        if (self.state == .loading) {
+            return false;
+        }
+
+        if (!self.done.fetch and isFetch(name)) {
+            self.state = .loading;
+            defer self.state = .empty;
+
+            const _name = "fetch";
+            const source = @import("fetch.zig").source;
+            log.debug(.polyfill, "dynamic load", .{ .property = name });
+            load(_name, source, js_context) catch |err| {
+                log.fatal(.app, "polyfill load", .{ .name = name, .err = err });
+            };
+
+            // load the polyfill once.
+            self.done.fetch = true;
+
+            // We return false here: We want v8 to continue the calling chain
+            // to finally find the polyfill we just inserted. If we want to
+            // return false and stops the call chain, we have to use
+            // `info.GetReturnValue.Set()` function, or `undefined` will be
+            // returned immediately.
+            return false;
+        }
+
+        if (comptime builtin.mode == .Debug) {
+            log.debug(.unknown_prop, "unkown global property", .{
+                .info = "but the property can exist in pure JS",
+                .property = name,
+            });
+        }
+
+        return false;
+    }
+
+    fn isFetch(name: []const u8) bool {
+        if (std.mem.eql(u8, name, "fetch")) return true;
+        if (std.mem.eql(u8, name, "Request")) return true;
+        if (std.mem.eql(u8, name, "Response")) return true;
+        if (std.mem.eql(u8, name, "Headers")) return true;
+        return false;
+    }
+};
