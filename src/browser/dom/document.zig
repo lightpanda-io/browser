@@ -32,6 +32,7 @@ const css = @import("css.zig");
 const Element = @import("element.zig").Element;
 const ElementUnion = @import("element.zig").Union;
 const TreeWalker = @import("tree_walker.zig").TreeWalker;
+const CSSStyleSheet = @import("../cssom/css_stylesheet.zig").CSSStyleSheet;
 const Range = @import("range.zig").Range;
 
 const Env = @import("../env.zig").Env;
@@ -295,6 +296,11 @@ pub const Document = struct {
     pub fn _createRange(_: *parser.Document, page: *Page) Range {
         return Range.constructor(page);
     }
+
+    // TODO: dummy implementation
+    pub fn get_styleSheets(_: *parser.Document) []CSSStyleSheet {
+        return &.{};
+    }
 };
 
 const testing = @import("../../testing.zig");
@@ -469,6 +475,10 @@ test "Browser.DOM.Document" {
         .{ "document.activeElement === document.body", "true" },
         .{ "document.getElementById('link').focus()", "undefined" },
         .{ "document.activeElement === document.getElementById('link')", "true" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "document.styleSheets.length", "0" },
     }, .{});
 
     // this test breaks the doc structure, keep it at the end of the test
