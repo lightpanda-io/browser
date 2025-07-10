@@ -297,6 +297,7 @@ pub const Document = struct {
         return Range.constructor(page);
     }
 
+    // TODO: dummy implementation
     pub fn get_styleSheets(_: *parser.Document) []CSSStyleSheet {
         return &.{};
     }
