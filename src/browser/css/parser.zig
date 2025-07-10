@@ -204,7 +204,7 @@ pub const Parser = struct {
         }
 
         const c = p.s[p.i];
-        if (!nameStart(c) and c != '\\') {
+        if (!(nameStart(c) or c == '\\')) {
             return ParseError.ExpectedSelector;
         }
 
