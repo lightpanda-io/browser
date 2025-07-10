@@ -99,6 +99,7 @@ pub const PseudoClass = enum {
     selection,
     spelling_error,
     modal,
+    popover_open,
 
     pub const Error = error{
         InvalidPseudoClass,
@@ -114,51 +115,106 @@ pub const PseudoClass = enum {
     }
 
     pub fn parse(s: []const u8) Error!PseudoClass {
-        if (std.ascii.eqlIgnoreCase(s, "not")) return .not;
-        if (std.ascii.eqlIgnoreCase(s, "has")) return .has;
-        if (std.ascii.eqlIgnoreCase(s, "haschild")) return .haschild;
-        if (std.ascii.eqlIgnoreCase(s, "contains")) return .contains;
-        if (std.ascii.eqlIgnoreCase(s, "containsown")) return .containsown;
-        if (std.ascii.eqlIgnoreCase(s, "matches")) return .matches;
-        if (std.ascii.eqlIgnoreCase(s, "matchesown")) return .matchesown;
-        if (std.ascii.eqlIgnoreCase(s, "nth-child")) return .nth_child;
-        if (std.ascii.eqlIgnoreCase(s, "nth-last-child")) return .nth_last_child;
-        if (std.ascii.eqlIgnoreCase(s, "nth-of-type")) return .nth_of_type;
-        if (std.ascii.eqlIgnoreCase(s, "nth-last-of-type")) return .nth_last_of_type;
-        if (std.ascii.eqlIgnoreCase(s, "first-child")) return .first_child;
-        if (std.ascii.eqlIgnoreCase(s, "last-child")) return .last_child;
-        if (std.ascii.eqlIgnoreCase(s, "first-of-type")) return .first_of_type;
-        if (std.ascii.eqlIgnoreCase(s, "last-of-type")) return .last_of_type;
-        if (std.ascii.eqlIgnoreCase(s, "only-child")) return .only_child;
-        if (std.ascii.eqlIgnoreCase(s, "only-of-type")) return .only_of_type;
-        if (std.ascii.eqlIgnoreCase(s, "input")) return .input;
-        if (std.ascii.eqlIgnoreCase(s, "empty")) return .empty;
-        if (std.ascii.eqlIgnoreCase(s, "root")) return .root;
-        if (std.ascii.eqlIgnoreCase(s, "link")) return .link;
-        if (std.ascii.eqlIgnoreCase(s, "lang")) return .lang;
-        if (std.ascii.eqlIgnoreCase(s, "enabled")) return .enabled;
-        if (std.ascii.eqlIgnoreCase(s, "disabled")) return .disabled;
-        if (std.ascii.eqlIgnoreCase(s, "checked")) return .checked;
-        if (std.ascii.eqlIgnoreCase(s, "visited")) return .visited;
-        if (std.ascii.eqlIgnoreCase(s, "hover")) return .hover;
-        if (std.ascii.eqlIgnoreCase(s, "active")) return .active;
-        if (std.ascii.eqlIgnoreCase(s, "focus")) return .focus;
-        if (std.ascii.eqlIgnoreCase(s, "target")) return .target;
-        if (std.ascii.eqlIgnoreCase(s, "after")) return .after;
-        if (std.ascii.eqlIgnoreCase(s, "backdrop")) return .backdrop;
-        if (std.ascii.eqlIgnoreCase(s, "before")) return .before;
-        if (std.ascii.eqlIgnoreCase(s, "cue")) return .cue;
-        if (std.ascii.eqlIgnoreCase(s, "first-letter")) return .first_letter;
-        if (std.ascii.eqlIgnoreCase(s, "first-line")) return .first_line;
-        if (std.ascii.eqlIgnoreCase(s, "grammar-error")) return .grammar_error;
-        if (std.ascii.eqlIgnoreCase(s, "marker")) return .marker;
-        if (std.ascii.eqlIgnoreCase(s, "placeholder")) return .placeholder;
-        if (std.ascii.eqlIgnoreCase(s, "selection")) return .selection;
-        if (std.ascii.eqlIgnoreCase(s, "spelling-error")) return .spelling_error;
-        if (std.ascii.eqlIgnoreCase(s, "modal")) return .modal;
+        const longest_selector = "nth-last-of-type";
+        if (s.len > longest_selector.len) {
+            return Error.InvalidPseudoClass;
+        }
+
+        var buf: [longest_selector.len]u8 = undefined;
+        const selector = std.ascii.lowerString(&buf, s);
+
+        switch (selector.len) {
+            3 => switch (@as(u24, @bitCast(selector[0..3].*))) {
+                asUint(u24, "cue") => return .cue,
+                asUint(u24, "has") => return .has,
+                asUint(u24, "not") => return .not,
+                else => {},
+            },
+            4 => switch (@as(u32, @bitCast(selector[0..4].*))) {
+                asUint(u32, "lang") => return .lang,
+                asUint(u32, "link") => return .link,
+                asUint(u32, "root") => return .root,
+                else => {},
+            },
+            5 => switch (@as(u40, @bitCast(selector[0..5].*))) {
+                asUint(u40, "after") => return .after,
+                asUint(u40, "empty") => return .empty,
+                asUint(u40, "focus") => return .focus,
+                asUint(u40, "hover") => return .hover,
+                asUint(u40, "input") => return .input,
+                asUint(u40, "modal") => return .modal,
+                else => {},
+            },
+            6 => switch (@as(u48, @bitCast(selector[0..6].*))) {
+                asUint(u48, "active") => return .active,
+                asUint(u48, "before") => return .before,
+                asUint(u48, "marker") => return .marker,
+                asUint(u48, "target") => return .target,
+                else => {},
+            },
+            7 => switch (@as(u56, @bitCast(selector[0..7].*))) {
+                asUint(u56, "checked") => return .checked,
+                asUint(u56, "enabled") => return .enabled,
+                asUint(u56, "matches") => return .matches,
+                asUint(u56, "visited") => return .visited,
+                else => {},
+            },
+            8 => switch (@as(u64, @bitCast(selector[0..8].*))) {
+                asUint(u64, "backdrop") => return .backdrop,
+                asUint(u64, "contains") => return .contains,
+                asUint(u64, "disabled") => return .disabled,
+                asUint(u64, "haschild") => return .haschild,
+                else => {},
+            },
+            9 => switch (@as(u72, @bitCast(selector[0..9].*))) {
+                asUint(u72, "nth-child") => return .nth_child,
+                asUint(u72, "selection") => return .selection,
+                else => {},
+            },
+            10 => switch (@as(u80, @bitCast(selector[0..10].*))) {
+                asUint(u80, "first-line") => return .first_line,
+                asUint(u80, "last-child") => return .last_child,
+                asUint(u80, "matchesown") => return .matchesown,
+                asUint(u80, "only-child") => return .only_child,
+                else => {},
+            },
+            11 => switch (@as(u88, @bitCast(selector[0..11].*))) {
+                asUint(u88, "containsown") => return .containsown,
+                asUint(u88, "first-child") => return .first_child,
+                asUint(u88, "nth-of-type") => return .nth_of_type,
+                asUint(u88, "placeholder") => return .placeholder,
+                else => {},
+            },
+            12 => switch (@as(u96, @bitCast(selector[0..12].*))) {
+                asUint(u96, "first-letter") => return .first_letter,
+                asUint(u96, "last-of-type") => return .last_of_type,
+                asUint(u96, "only-of-type") => return .only_of_type,
+                asUint(u96, "popover-open") => return .popover_open,
+                else => {},
+            },
+            13 => switch (@as(u104, @bitCast(selector[0..13].*))) {
+                asUint(u104, "first-of-type") => return .first_of_type,
+                asUint(u104, "grammar-error") => return .grammar_error,
+                else => {},
+            },
+            14 => switch (@as(u112, @bitCast(selector[0..14].*))) {
+                asUint(u112, "nth-last-child") => return .nth_last_child,
+                asUint(u112, "spelling-error") => return .spelling_error,
+                else => {},
+            },
+            16 => switch (@as(u128, @bitCast(selector[0..16].*))) {
+                asUint(u128, "nth-last-of-type") => return .nth_last_of_type,
+                else => {},
+            },
+            else => {},
+        }
         return Error.InvalidPseudoClass;
     }
 };
+
+fn asUint(comptime T: type, comptime string: []const u8) T {
+    return @bitCast(string[0..string.len].*);
+}
 
 pub const Selector = union(enum) {
     pub const Error = error{
