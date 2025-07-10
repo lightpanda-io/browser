@@ -100,6 +100,7 @@ pub const PseudoClass = enum {
     spelling_error,
     modal,
     popover_open,
+    visible,
 
     pub const Error = error{
         InvalidPseudoClass,
@@ -157,6 +158,7 @@ pub const PseudoClass = enum {
                 asUint(u56, "enabled") => return .enabled,
                 asUint(u56, "matches") => return .matches,
                 asUint(u56, "visited") => return .visited,
+                asUint(u56, "visible") => return .visible,
                 else => {},
             },
             8 => switch (@as(u64, @bitCast(selector[0..8].*))) {
@@ -567,6 +569,8 @@ pub const Selector = union(enum) {
                     // TODO implement using the url fragment.
                     // see https://developer.mozilla.org/en-US/docs/Web/CSS/:target
                     .target => return false,
+                    // visible always returns true.
+                    .visible => return true,
 
                     // all others pseudo class are handled by specialized
                     // pseudo_class_X selectors.
