@@ -114,10 +114,6 @@ pub const HTMLElement = struct {
     pub const prototype = *Element;
     pub const subtype = .node;
 
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
-
     pub fn get_style(e: *parser.ElementHTML, page: *Page) !*CSSStyleDeclaration {
         const state = try page.getOrCreateNodeState(@ptrCast(e));
         return &state.style;
@@ -189,10 +185,6 @@ pub const HTMLMediaElement = struct {
     pub const Self = parser.MediaElement;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 // HTML elements
@@ -202,10 +194,6 @@ pub const HTMLUnknownElement = struct {
     pub const Self = parser.Unknown;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 // https://html.spec.whatwg.org/#the-a-element
@@ -213,10 +201,6 @@ pub const HTMLAnchorElement = struct {
     pub const Self = parser.Anchor;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 
     pub fn get_target(self: *parser.Anchor) ![]const u8 {
         return try parser.anchorGetTarget(self);
@@ -465,250 +449,150 @@ pub const HTMLAppletElement = struct {
     pub const Self = parser.Applet;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLAreaElement = struct {
     pub const Self = parser.Area;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLAudioElement = struct {
     pub const Self = parser.Audio;
     pub const prototype = *HTMLMediaElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLBRElement = struct {
     pub const Self = parser.BR;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLBaseElement = struct {
     pub const Self = parser.Base;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLBodyElement = struct {
     pub const Self = parser.Body;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLButtonElement = struct {
     pub const Self = parser.Button;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLCanvasElement = struct {
     pub const Self = parser.Canvas;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLDListElement = struct {
     pub const Self = parser.DList;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLDataElement = struct {
     pub const Self = parser.Data;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLDataListElement = struct {
     pub const Self = parser.DataList;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLDialogElement = struct {
     pub const Self = parser.Dialog;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLDirectoryElement = struct {
     pub const Self = parser.Directory;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLDivElement = struct {
     pub const Self = parser.Div;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLEmbedElement = struct {
     pub const Self = parser.Embed;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLFieldSetElement = struct {
     pub const Self = parser.FieldSet;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLFontElement = struct {
     pub const Self = parser.Font;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLFrameElement = struct {
     pub const Self = parser.Frame;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLFrameSetElement = struct {
     pub const Self = parser.FrameSet;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLHRElement = struct {
     pub const Self = parser.HR;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLHeadElement = struct {
     pub const Self = parser.Head;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLHeadingElement = struct {
     pub const Self = parser.Heading;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLHtmlElement = struct {
     pub const Self = parser.Html;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLIFrameElement = struct {
     pub const Self = parser.IFrame;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLImageElement = struct {
     pub const Self = parser.Image;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 
     pub fn get_alt(self: *parser.Image) ![]const u8 {
         return try parser.imageGetAlt(self);
@@ -768,10 +652,6 @@ pub const HTMLInputElement = struct {
     pub const Self = parser.Input;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 
     pub fn get_defaultValue(self: *parser.Input) ![]const u8 {
         return try parser.inputGetDefaultValue(self);
@@ -861,40 +741,24 @@ pub const HTMLLIElement = struct {
     pub const Self = parser.LI;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLLabelElement = struct {
     pub const Self = parser.Label;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLLegendElement = struct {
     pub const Self = parser.Legend;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLLinkElement = struct {
     pub const Self = parser.Link;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 
     pub fn get_href(self: *parser.Link) ![]const u8 {
         return try parser.linkGetHref(self);
@@ -910,150 +774,90 @@ pub const HTMLMapElement = struct {
     pub const Self = parser.Map;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLMetaElement = struct {
     pub const Self = parser.Meta;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLMeterElement = struct {
     pub const Self = parser.Meter;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLModElement = struct {
     pub const Self = parser.Mod;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLOListElement = struct {
     pub const Self = parser.OList;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLObjectElement = struct {
     pub const Self = parser.Object;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLOptGroupElement = struct {
     pub const Self = parser.OptGroup;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLOptionElement = struct {
     pub const Self = parser.Option;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLOutputElement = struct {
     pub const Self = parser.Output;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLParagraphElement = struct {
     pub const Self = parser.Paragraph;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLParamElement = struct {
     pub const Self = parser.Param;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLPictureElement = struct {
     pub const Self = parser.Picture;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLPreElement = struct {
     pub const Self = parser.Pre;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLProgressElement = struct {
     pub const Self = parser.Progress;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLQuoteElement = struct {
     pub const Self = parser.Quote;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 // https://html.spec.whatwg.org/#the-script-element
@@ -1061,10 +865,6 @@ pub const HTMLScriptElement = struct {
     pub const Self = parser.Script;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 
     pub fn get_src(self: *parser.Script) !?[]const u8 {
         return try parser.elementGetAttribute(
@@ -1200,100 +1000,60 @@ pub const HTMLSourceElement = struct {
     pub const Self = parser.Source;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLSpanElement = struct {
     pub const Self = parser.Span;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLStyleElement = struct {
     pub const Self = parser.Style;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLTableElement = struct {
     pub const Self = parser.Table;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLTableCaptionElement = struct {
     pub const Self = parser.TableCaption;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLTableCellElement = struct {
     pub const Self = parser.TableCell;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLTableColElement = struct {
     pub const Self = parser.TableCol;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLTableRowElement = struct {
     pub const Self = parser.TableRow;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLTableSectionElement = struct {
     pub const Self = parser.TableSection;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLTemplateElement = struct {
     pub const Self = parser.Template;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 
     pub fn get_content(self: *parser.Template, page: *Page) !*parser.DocumentFragment {
         const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(self)));
@@ -1310,60 +1070,36 @@ pub const HTMLTextAreaElement = struct {
     pub const Self = parser.TextArea;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLTimeElement = struct {
     pub const Self = parser.Time;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLTitleElement = struct {
     pub const Self = parser.Title;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLTrackElement = struct {
     pub const Self = parser.Track;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLUListElement = struct {
     pub const Self = parser.UList;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub const HTMLVideoElement = struct {
     pub const Self = parser.Video;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
-
-    pub fn constructor(page: *Page, js_this: Env.JsThis) !*parser.Element {
-        return constructHtmlElement(page, js_this);
-    }
 };
 
 pub fn toInterface(comptime T: type, e: *parser.Element) !T {
@@ -1439,16 +1175,6 @@ pub fn toInterface(comptime T: type, e: *parser.Element) !T {
         .video => .{ .HTMLVideoElement = @as(*parser.Video, @ptrCast(elem)) },
         .undef => .{ .HTMLUnknownElement = @as(*parser.Unknown, @ptrCast(elem)) },
     };
-}
-
-fn constructHtmlElement(page: *Page, js_this: Env.JsThis) !*parser.Element {
-    const constructor_name = try js_this.constructorName(page.call_arena);
-    if (!page.window.custom_elements.lookup.contains(constructor_name)) {
-        return error.IllegalContructor;
-    }
-
-    const el = try parser.documentCreateElement(@ptrCast(page.window.document), constructor_name);
-    return el;
 }
 
 const testing = @import("../../testing.zig");

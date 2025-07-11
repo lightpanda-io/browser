@@ -33,7 +33,6 @@ const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const MediaQueryList = @import("media_query_list.zig").MediaQueryList;
 const Performance = @import("../dom/performance.zig").Performance;
 const CSSStyleDeclaration = @import("../cssom/css_style_declaration.zig").CSSStyleDeclaration;
-const CustomElementRegistry = @import("../webcomponents/custom_element_registry.zig").CustomElementRegistry;
 const Screen = @import("screen.zig").Screen;
 const Css = @import("../css/css.zig").Css;
 
@@ -61,7 +60,6 @@ pub const Window = struct {
     console: Console = .{},
     navigator: Navigator = .{},
     performance: Performance,
-    custom_elements: CustomElementRegistry = .{},
     screen: Screen = .{},
     css: Css = .{},
 
@@ -167,10 +165,6 @@ pub const Window = struct {
 
     pub fn get_performance(self: *Window) *Performance {
         return &self.performance;
-    }
-
-    pub fn get_customElements(self: *Window) *CustomElementRegistry {
-        return &self.custom_elements;
     }
 
     pub fn get_screen(self: *Window) *Screen {

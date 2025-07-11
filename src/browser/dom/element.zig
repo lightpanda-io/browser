@@ -30,6 +30,8 @@ const Node = @import("node.zig").Node;
 const Walker = @import("walker.zig").WalkerDepthFirst;
 const NodeList = @import("nodelist.zig").NodeList;
 const HTMLElem = @import("../html/elements.zig");
+const ShadowRoot = @import("../dom/shadow_root.zig").ShadowRoot;
+
 pub const Union = @import("../html/elements.zig").Union;
 
 // WEB IDL https://dom.spec.whatwg.org/#element
@@ -458,6 +460,44 @@ pub const Element = struct {
         _ = self;
         _ = opts;
         return true;
+    }
+
+    const AttachShadowOpts = struct {
+        mode: []const u8, // must be specified
+    };
+    pub fn _attachShadow(self: *parser.Element, opts: AttachShadowOpts, page: *Page) !*ShadowRoot {
+        const mode = std.meta.stringToEnum(ShadowRoot.Mode, opts.mode) orelse return error.InvalidArgument;
+        const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(self)));
+        if (state.shadow_root) |sr| {
+            if (mode != sr.mode) {
+                // this is the behavior per the spec
+                return error.NotSupportedError;
+            }
+
+            // TODO: the existing shadow root should be cleared!
+            return sr;
+        }
+
+        // Not sure what to do if there is no owner document
+        const doc = try parser.nodeOwnerDocument(@ptrCast(self)) orelse return error.InvalidArgument;
+        const fragment = try parser.documentCreateDocumentFragment(doc);
+        const sr = try page.arena.create(ShadowRoot);
+        sr.* = .{
+            .host = self,
+            .mode = mode,
+            .proto = fragment,
+        };
+        state.shadow_root = sr;
+        return sr;
+    }
+
+    pub fn get_shadowRoot(self: *parser.Element, page: *Page) ?*ShadowRoot {
+        const state = page.getNodeState(@alignCast(@ptrCast(self))) orelse return null;
+        const sr = state.shadow_root orelse return null;
+        if (sr.mode == .closed) {
+            return null;
+        }
+        return sr;
     }
 };
 
