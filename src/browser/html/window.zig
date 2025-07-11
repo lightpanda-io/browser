@@ -190,7 +190,6 @@ pub const Window = struct {
         return page.loop.cancel(kv.value.loop_id);
     }
 
-    // TODO handle callback arguments.
     pub fn _setTimeout(self: *Window, cbk: Function, delay: ?u32, page: *Page) !u32 {
         return self.createTimeout(cbk, delay, page, .{});
     }
@@ -208,6 +207,10 @@ pub const Window = struct {
     pub fn _clearInterval(self: *Window, id: u32, page: *Page) !void {
         const kv = self.timers.fetchRemove(id) orelse return;
         return page.loop.cancel(kv.value.loop_id);
+    }
+
+    pub fn _queueMicrotask(self: *Window, cbk: Function, page: *Page) !u32 {
+        return self.createTimeout(cbk, 0, page, .{});
     }
 
     pub fn _matchMedia(_: *const Window, media: []const u8, page: *Page) !MediaQueryList {
@@ -467,5 +470,10 @@ test "Browser.HTML.Window" {
         .{ "window.scrollTo(0)", null },
         .{ "scroll", "true" },
         .{ "scrollend", "true" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "var qm = false; window.queueMicrotask(() => {qm = true });", null },
+        .{ "qm", "true" },
     }, .{});
 }
