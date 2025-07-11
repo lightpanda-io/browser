@@ -767,9 +767,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             pub fn module(self: *JsContext, src: []const u8, url: []const u8, cacheable: bool) !?v8.Promise {
                 const arena = self.context_arena;
 
-                if (cacheable) {
-                    const value = self.module_cache.get(url);
-                    if (value != null) return null;
+                if (cacheable and self.module_cache.contains(url)) {
+                    return null;
                 }
                 errdefer _ = self.module_cache.remove(url);
 
@@ -780,7 +779,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 errdefer _ = self.module_identifier.remove(m.getIdentityHash());
 
                 if (cacheable) {
-                    try self.module_cache.put(arena, owned_url, PersistentModule.init(self.isolate, m));
+                    try self.module_cache.putNoClobber(
+                        arena,
+                        owned_url,
+                        PersistentModule.init(self.isolate, m),
+                    );
                 }
 
                 // resolveModuleCallback loads module's dependencies.
@@ -1552,14 +1555,14 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             }
 
             fn _dynamicModuleCallback(
-                context: *JsContext,
+                self: *JsContext,
                 specifier: []const u8,
                 resolver: *const v8.PromiseResolver,
             ) !void {
-                const iso = context.isolate;
-                const ctx = context.v8_context;
+                const iso = self.isolate;
+                const ctx = self.v8_context;
 
-                const module_loader = context.module_loader;
+                const module_loader = self.module_loader;
                 const source = module_loader.func(module_loader.ptr, specifier) catch {
                     const error_msg = v8.String.initUtf8(iso, "Failed to load module");
                     _ = resolver.reject(ctx, error_msg.toValue());
@@ -1571,34 +1574,36 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 };
 
                 var try_catch: TryCatch = undefined;
-                try_catch.init(context);
+                try_catch.init(self);
                 defer try_catch.deinit();
 
-                const maybe_promise = context.module(source, specifier, true) catch {
+                const maybe_promise = self.module(source, specifier, true) catch {
                     log.err(.js, "module compilation failed", .{
                         .specifier = specifier,
-                        .exception = try_catch.exception(context.call_arena) catch "unknown error",
-                        .stack = try_catch.stack(context.call_arena) catch null,
+                        .exception = try_catch.exception(self.call_arena) catch "unknown error",
+                        .stack = try_catch.stack(self.call_arena) catch null,
                         .line = try_catch.sourceLineNumber() orelse 0,
                     });
                     const error_msg = if (try_catch.hasCaught()) blk: {
-                        const exception_str = try_catch.exception(context.call_arena) catch "Evaluation error";
+                        const exception_str = try_catch.exception(self.call_arena) catch "Evaluation error";
                         break :blk v8.String.initUtf8(iso, exception_str orelse "Evaluation error");
                     } else v8.String.initUtf8(iso, "Module evaluation failed");
                     _ = resolver.reject(ctx, error_msg.toValue());
                     return;
                 };
-                const new_module = context.module_cache.get(specifier).?.castToModule();
+                const new_module = self.module_cache.get(specifier).?.castToModule();
 
                 if (maybe_promise) |promise| {
                     // This means we must wait for the evaluation.
                     const EvaluationData = struct {
+                        specifier: []const u8,
                         module: v8.Persistent(v8.Module),
                         resolver: v8.Persistent(v8.PromiseResolver),
                     };
 
-                    const ev_data = try context.context_arena.create(EvaluationData);
+                    const ev_data = try self.context_arena.create(EvaluationData);
                     ev_data.* = .{
+                        .specifier = specifier,
                         .module = v8.Persistent(v8.Module).init(iso, new_module),
                         .resolver = v8.Persistent(v8.PromiseResolver).init(iso, resolver.*),
                     };
@@ -1614,10 +1619,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             const cb_resolver = data.resolver.castToPromiseResolver();
 
                             const namespace = cb_module.getModuleNamespace();
-                            log.info(.js, "dynamic import complete", .{
-                                .module = cb_module,
-                                .namespace = namespace,
-                            });
+                            log.info(.js, "dynamic import complete", .{ .specifier = data.specifier });
                             _ = cb_resolver.resolve(cb_context, namespace);
                         }
                     }.callback, external);
@@ -1627,12 +1629,9 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             const cb_info = v8.FunctionCallbackInfo{ .handle = info.? };
                             const cb_context = cb_info.getIsolate().getCurrentContext();
                             const data: *EvaluationData = @ptrCast(@alignCast(cb_info.getExternalValue()));
-                            const cb_module = data.module.castToModule();
                             const cb_resolver = data.resolver.castToPromiseResolver();
 
-                            log.err(.js, "dynamic import failed", .{
-                                .module = cb_module,
-                            });
+                            log.err(.js, "dynamic import failed", .{ .specifier = data.specifier });
                             _ = cb_resolver.reject(cb_context, cb_info.getData());
                         }
                     }.callback, external);
