@@ -17,10 +17,39 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const Env = @import("../env.zig").Env;
+
+const PerformanceEntry = @import("performance.zig").PerformanceEntry;
 
 // https://developer.mozilla.org/en-US/docs/Web/API/PerformanceObserver
 pub const PerformanceObserver = struct {
     pub const _supportedEntryTypes = [0][]const u8{};
+
+    pub fn constructor(cbk: Env.Function) PerformanceObserver {
+        _ = cbk;
+        return .{};
+    }
+
+    pub fn _observe(self: *const PerformanceObserver, options_: ?Options) void {
+        _ = self;
+        _ = options_;
+        return;
+    }
+
+    pub fn _disconnect(self: *PerformanceObserver) void {
+        _ = self;
+    }
+
+    pub fn _takeRecords(_: *const PerformanceObserver) []PerformanceEntry {
+        return &[_]PerformanceEntry{};
+    }
+};
+
+const Options = struct {
+    buffered: ?bool = null,
+    durationThreshold: ?f64 = null,
+    entryTypes: ?[]const []const u8 = null,
+    type: ?[]const u8 = null,
 };
 
 const testing = @import("../../testing.zig");
