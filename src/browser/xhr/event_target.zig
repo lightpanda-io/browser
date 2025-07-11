@@ -31,7 +31,7 @@ pub const XMLHttpRequestEventTarget = struct {
     pub const prototype = *EventTarget;
 
     // Extend libdom event target for pure zig struct.
-    base: parser.EventTargetTBase = parser.EventTargetTBase{},
+    base: parser.EventTargetTBase = parser.EventTargetTBase{ .internal_target_type = .xhr },
 
     onloadstart_cbk: ?Function = null,
     onprogress_cbk: ?Function = null,

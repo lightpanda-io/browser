@@ -56,13 +56,12 @@ pub const AbortSignal = struct {
     const DEFAULT_REASON = "AbortError";
 
     pub const prototype = *EventTarget;
-    proto: parser.EventTargetTBase = .{},
+    proto: parser.EventTargetTBase = .{ .internal_target_type = .abort_signal },
 
     aborted: bool,
     reason: ?[]const u8,
 
     pub const init: AbortSignal = .{
-        .proto = .{},
         .reason = null,
         .aborted = false,
     };

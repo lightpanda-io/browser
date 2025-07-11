@@ -45,7 +45,7 @@ pub const Window = struct {
     pub const prototype = *EventTarget;
 
     // Extend libdom event target for pure zig struct.
-    base: parser.EventTargetTBase = parser.EventTargetTBase{},
+    base: parser.EventTargetTBase = parser.EventTargetTBase{ .internal_target_type = .window },
 
     document: *parser.DocumentHTML,
     target: []const u8 = "",

@@ -78,13 +78,13 @@ pub const Event = struct {
     pub fn get_target(self: *parser.Event, page: *Page) !?EventTargetUnion {
         const et = try parser.eventTarget(self);
         if (et == null) return null;
-        return try EventTarget.toInterface(self, et.?, page);
+        return try EventTarget.toInterface(et.?, page);
     }
 
     pub fn get_currentTarget(self: *parser.Event, page: *Page) !?EventTargetUnion {
         const et = try parser.eventCurrentTarget(self);
         if (et == null) return null;
-        return try EventTarget.toInterface(self, et.?, page);
+        return try EventTarget.toInterface(et.?, page);
     }
 
     pub fn get_eventPhase(self: *parser.Event) !u8 {
