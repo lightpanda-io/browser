@@ -1515,48 +1515,28 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 const resolver = v8.PromiseResolver.init(context.v8_context);
 
                 const specifier: v8.String = .{ .handle = v8_specifier.? };
-                const specifier_str = jsStringToZig(context.call_arena, specifier, iso) catch {
+                const specifier_str = jsStringToZig(context.context_arena, specifier, iso) catch {
                     const error_msg = v8.String.initUtf8(iso, "Failed to parse module specifier");
                     _ = resolver.reject(ctx, error_msg.toValue());
                     return @constCast(resolver.getPromise().handle);
                 };
                 const resource: v8.String = .{ .handle = resource_name.? };
-                const resource_str = jsStringToZig(context.call_arena, resource, iso) catch {
+                const resource_str = jsStringToZig(context.context_arena, resource, iso) catch {
                     const error_msg = v8.String.initUtf8(iso, "Failed to parse module resource");
                     _ = resolver.reject(ctx, error_msg.toValue());
                     return @constCast(resolver.getPromise().handle);
                 };
 
-                const referrer_full_url = blk: {
-                    var it = context.module_identifier.valueIterator();
-                    while (it.next()) |full_url| {
-                        const last_slash = std.mem.lastIndexOfScalar(u8, full_url.*, '/') orelse 0;
-                        const filename = full_url.*[last_slash + 1 ..];
-
-                        const resource_clean = if (std.mem.startsWith(u8, resource_str, "./"))
-                            resource_str[2..]
-                        else
-                            resource_str;
-
-                        if (std.mem.eql(u8, filename, resource_clean)) {
-                            break :blk full_url.*;
-                        }
-                    }
-
-                    break :blk resource_str;
-                };
-
                 const normalized_specifier = @import("../url.zig").stitch(
                     context.context_arena,
                     specifier_str,
-                    referrer_full_url,
+                    resource_str,
                     .{ .alloc = .if_needed },
                 ) catch unreachable;
 
                 log.debug(.js, "dynamic import", .{
                     .specifier = specifier_str,
                     .resource = resource_str,
-                    .referrer_full = referrer_full_url,
                     .normalized_specifier = normalized_specifier,
                 });
 
