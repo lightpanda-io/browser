@@ -779,8 +779,13 @@ pub fn eventTargetTBaseFieldName(comptime T: type) ?[]const u8 {
 pub const EventTargetTBase = extern struct {
     const Self = @This();
     const InternalType = enum(u32) {
-        libdom = 0,
+        libdom_node = 0,
         plain = 1,
+        abort_signal = 2,
+        xhr = 3,
+        window = 4,
+        performance = 5,
+        media_query_list = 6,
     };
 
     vtable: ?*const c.struct_dom_event_target_vtable = &c.struct_dom_event_target_vtable{
@@ -802,7 +807,7 @@ pub const EventTargetTBase = extern struct {
     refcnt: u32 = 0,
 
     eti: c.dom_event_target_internal = c.dom_event_target_internal{ .listeners = null },
-    internal_target_type: InternalType = .libdom,
+    internal_target_type: InternalType,
 
     pub fn add_event_listener(et: [*c]c.dom_event_target, t: [*c]c.dom_string, l: ?*c.struct_dom_event_listener, capture: bool) callconv(.C) c.dom_exception {
         const self = @as(*Self, @ptrCast(et));

@@ -26,7 +26,7 @@ pub const MediaQueryList = struct {
 
     // Extend libdom event target for pure zig struct.
     // This is not safe as it relies on a structure layout that isn't guaranteed
-    base: parser.EventTargetTBase = parser.EventTargetTBase{},
+    base: parser.EventTargetTBase = parser.EventTargetTBase{ .internal_target_type = .media_query_list },
 
     matches: bool,
     media: []const u8,

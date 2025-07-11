@@ -39,7 +39,7 @@ pub const Performance = struct {
     pub const prototype = *EventTarget;
 
     // Extend libdom event target for pure zig struct.
-    base: parser.EventTargetTBase = parser.EventTargetTBase{},
+    base: parser.EventTargetTBase = parser.EventTargetTBase{ .internal_target_type = .performance },
 
     time_origin: std.time.Timer,
     // if (Window.crossOriginIsolated) -> Resolution in isolated contexts:       5 microseconds

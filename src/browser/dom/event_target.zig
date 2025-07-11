@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const Env = @import("../env.zig").Env;
 const parser = @import("../netsurf.zig");
 const Page = @import("../page.zig").Page;
@@ -39,33 +40,30 @@ pub const EventTarget = struct {
     // Extend libdom event target for pure zig struct.
     base: parser.EventTargetTBase = parser.EventTargetTBase{ .internal_target_type = .plain },
 
-    pub fn toInterface(e: *parser.Event, et: *parser.EventTarget, page: *Page) !Union {
+    pub fn toInterface(et: *parser.EventTarget, page: *Page) !Union {
         // libdom assumes that all event targets are libdom nodes. They are not.
 
-        // The window is a common non-node target, but it's easy to handle as
-        // its a singleton.
-        if (@intFromPtr(et) == @intFromPtr(&page.window.base)) {
-            return .{ .node = .{ .Window = &page.window } };
-        }
-
-        if (try parser.eventTargetInternalType(et) == .plain) {
-            return .{ .plain = et };
-        }
-
-        // AbortSignal is another non-node target. It has a distinct usage though
-        // so we hijack the event internal type to identity if.
-        switch (try parser.eventGetInternalType(e)) {
+        switch (try parser.eventTargetInternalType(et)) {
+            .libdom_node => {
+                return .{ .node = try nod.Node.toInterface(@as(*parser.Node, @ptrCast(et))) };
+            },
+            .plain => return .{ .plain = et },
             .abort_signal => {
+                // AbortSignal is a special case, it has its own internal type.
+                // We return it as a node, but we need to handle it differently.
                 return .{ .node = .{ .AbortSignal = @fieldParentPtr("proto", @as(*parser.EventTargetTBase, @ptrCast(et))) } };
             },
-            .xhr_event => {
+            .window => {
+                // The window is a common non-node target, but it's easy to handle as its a singleton.
+                std.debug.assert(@intFromPtr(et) == @intFromPtr(&page.window.base));
+                return .{ .node = .{ .Window = &page.window } };
+            },
+            .xhr => {
                 const XMLHttpRequestEventTarget = @import("../xhr/event_target.zig").XMLHttpRequestEventTarget;
                 const base: *XMLHttpRequestEventTarget = @fieldParentPtr("base", @as(*parser.EventTargetTBase, @ptrCast(et)));
                 return .{ .xhr = @fieldParentPtr("proto", base) };
             },
-            else => {
-                return .{ .node = try nod.Node.toInterface(@as(*parser.Node, @ptrCast(et))) };
-            },
+            else => return error.MissingEventTargetType,
         }
     }
 
