@@ -127,16 +127,40 @@ pub const Element = struct {
         // remove existing children
         try Node.removeChildren(node);
 
-        // get fragment body children
-        const children = try parser.documentFragmentBodyChildren(fragment) orelse return;
+        // I'm not sure what the exact behavior is supposed to be. Initially,
+        // we were only copying the body of the document fragment. But it seems
+        // like head elements should be copied too. Specifically, some sites
+        // create script tags via innerHTML, which we need to capture.
+        // If you play with this in a browser, you should notice that the
+        // behavior is different depending on whether you're in a blank page
+        // or an actual document. In a blank page, something like:
+        //    x.innerHTML = '<script></script>';
+        // does _not_ create an empty script, but in a real page, it does. Weird.
+        const fragment_node = parser.documentFragmentToNode(fragment);
+        const html = try parser.nodeFirstChild(fragment_node) orelse return;
+        const head = try parser.nodeFirstChild(html) orelse return;
+        {
+            // First, copy some of the head element
+            const children = try parser.nodeGetChildNodes(head);
+            const ln = try parser.nodeListLength(children);
+            for (0..ln) |_| {
+                // always index 0, because nodeAppendChild moves the node out of
+                // the nodeList and into the new tree
+                const child = try parser.nodeListItem(children, 0) orelse continue;
+                _ = try parser.nodeAppendChild(node, child);
+            }
+        }
 
-        // append children to the node
-        const ln = try parser.nodeListLength(children);
-        for (0..ln) |_| {
-            // always index 0, because ndoeAppendChild moves the node out of
-            // the nodeList and into the new tree
-            const child = try parser.nodeListItem(children, 0) orelse continue;
-            _ = try parser.nodeAppendChild(node, child);
+        {
+            const body = try parser.nodeNextSibling(head) orelse return;
+            const children = try parser.nodeGetChildNodes(body);
+            const ln = try parser.nodeListLength(children);
+            for (0..ln) |_| {
+                // always index 0, because nodeAppendChild moves the node out of
+                // the nodeList and into the new tree
+                const child = try parser.nodeListItem(children, 0) orelse continue;
+                _ = try parser.nodeAppendChild(node, child);
+            }
         }
     }
 
@@ -688,5 +712,10 @@ test "Browser.DOM.Element" {
 
     try runner.testCases(&.{
         .{ "document.createElement('a').hasAttributes()", "false" },
+        .{ "var fc; (fc = document.createElement('div')).innerHTML = '<script><\\/script>'", null },
+        .{ "fc.outerHTML", "<div><script></script></div>" },
+
+        .{ "fc; (fc = document.createElement('div')).innerHTML = '<script><\\/script><p>hello</p>'", null },
+        .{ "fc.outerHTML", "<div><script></script><p>hello</p></div>" },
     }, .{});
 }

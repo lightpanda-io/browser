@@ -1925,18 +1925,6 @@ pub inline fn documentFragmentToNode(doc: *DocumentFragment) *Node {
     return @as(*Node, @alignCast(@ptrCast(doc)));
 }
 
-pub fn documentFragmentBodyChildren(doc: *DocumentFragment) !?*NodeList {
-    const node = documentFragmentToNode(doc);
-    const html = try nodeFirstChild(node) orelse return null;
-    // TODO unref
-    const head = try nodeFirstChild(html) orelse return null;
-    // TODO unref
-    const body = try nodeNextSibling(head) orelse return null;
-    // TODO unref
-
-    return try nodeGetChildNodes(body);
-}
-
 // Document Position
 
 pub const DocumentPosition = enum(u32) {
