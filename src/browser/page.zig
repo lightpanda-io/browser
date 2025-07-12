@@ -119,7 +119,10 @@ pub const Page = struct {
             }),
             .main_context = undefined,
         };
-        self.main_context = try session.executor.createJsContext(&self.window, self, self, true, Env.GlobalMissingCallback.init(&self.polyfill_loader));
+        self.main_context = try session.executor.createJsContext(&self.window, self, self, true, .{
+            .global_callback = Env.GlobalMissingCallback.init(&self.polyfill_loader),
+            .compilation_callback = Env.CompilationCallback.init(&self.polyfill_loader),
+        });
 
         // message loop must run only non-test env
         if (comptime !builtin.is_test) {

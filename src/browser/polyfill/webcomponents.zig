@@ -13,8 +13,6 @@ test "Browser.webcomponents" {
 
     try runner.testCases(&.{
         .{
-            \\ window.customElements; // temporarily needed, lazy loading doesn't work!
-            \\
             \\ class LightPanda extends HTMLElement {
             \\   constructor() {
             \\     super();
