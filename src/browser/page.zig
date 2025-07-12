@@ -120,6 +120,7 @@ pub const Page = struct {
             .main_context = undefined,
         };
         self.main_context = try session.executor.createJsContext(&self.window, self, self, true, Env.GlobalMissingCallback.init(&self.polyfill_loader));
+        try polyfill.preload(self.arena, self.main_context);
 
         // message loop must run only non-test env
         if (comptime !builtin.is_test) {

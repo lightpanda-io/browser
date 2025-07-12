@@ -71,7 +71,6 @@ pub const Loader = struct {
         if (!self.done.webcomponents and isWebcomponents(name)) {
             const source = @import("webcomponents.zig").source;
             self.load("webcomponents", source, js_context);
-
             // We return false here: We want v8 to continue the calling chain
             // to finally find the polyfill we just inserted. If we want to
             // return false and stops the call chain, we have to use
@@ -103,3 +102,19 @@ pub const Loader = struct {
         return false;
     }
 };
+
+pub fn preload(allocator: Allocator, js_context: *Env.JsContext) !void {
+    var try_catch: Env.TryCatch = undefined;
+    try_catch.init(js_context);
+    defer try_catch.deinit();
+
+    const name = "webcomponents-pre";
+    const source = @import("webcomponents.zig").pre;
+    _ = js_context.exec(source, name) catch |err| {
+        if (try try_catch.err(allocator)) |msg| {
+            defer allocator.free(msg);
+            log.fatal(.app, "polyfill error", .{ .name = name, .err = msg });
+        }
+        return err;
+    };
+}
