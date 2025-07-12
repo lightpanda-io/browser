@@ -25,6 +25,7 @@ const WebApis = struct {
         @import("css/css.zig").Interfaces,
         @import("cssom/cssom.zig").Interfaces,
         @import("dom/dom.zig").Interfaces,
+        @import("dom/shadow_root.zig").ShadowRoot,
         @import("encoding/text_encoder.zig").Interfaces,
         @import("events/event.zig").Interfaces,
         @import("html/html.zig").Interfaces,
@@ -34,7 +35,6 @@ const WebApis = struct {
         @import("xhr/xhr.zig").Interfaces,
         @import("xhr/form_data.zig").Interfaces,
         @import("xmlserializer/xmlserializer.zig").Interfaces,
-        @import("webcomponents/webcomponents.zig").Interfaces,
     });
 };
 

@@ -120,6 +120,7 @@ pub const Page = struct {
             .main_context = undefined,
         };
         self.main_context = try session.executor.createJsContext(&self.window, self, self, true, Env.GlobalMissingCallback.init(&self.polyfill_loader));
+        try polyfill.preload(self.arena, self.main_context);
 
         // message loop must run only non-test env
         if (comptime !builtin.is_test) {
@@ -365,18 +366,6 @@ pub const Page = struct {
 
             const e = parser.nodeToElement(current);
             const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(e)));
-
-            // if (tag == .undef) {
-            //     const tag_name = try parser.nodeLocalName(@ptrCast(e));
-            //     const custom_elements = &self.window.custom_elements;
-            //     if (custom_elements._get(tag_name)) |construct| {
-            //         try construct.printFunc();
-            //         // This is just here for testing for now.
-            //         // var result: Env.Function.Result = undefined;
-            //         // _ = try construct.newInstance(*parser.Element, &result);
-            //         log.info(.browser, "Registered WebComponent Found", .{ .element_name = tag_name });
-            //     }
-            // }
 
             if (tag != .script) {
                 // ignore non-js script.

@@ -29,6 +29,7 @@
 const Env = @import("env.zig").Env;
 const parser = @import("netsurf.zig");
 const DataSet = @import("html/DataSet.zig");
+const ShadowRoot = @import("dom/shadow_root.zig").ShadowRoot;
 const CSSStyleDeclaration = @import("cssom/css_style_declaration.zig").CSSStyleDeclaration;
 
 // for HTMLScript (but probably needs to be added to more)
@@ -61,6 +62,8 @@ active_element: ?*parser.Element = null,
 explicit_index_set: bool = false,
 
 template_content: ?*parser.DocumentFragment = null,
+
+shadow_root: ?*ShadowRoot = null,
 
 const ReadyState = enum {
     loading,
