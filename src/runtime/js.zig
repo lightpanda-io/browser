@@ -364,13 +364,25 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 self.context_arena.deinit();
             }
 
+            pub const CreateJsContextOpt = struct {
+                global_callback: ?GlobalMissingCallback = null,
+                compilation_callback: ?CompilationCallback = null,
+            };
+
             // Only the top JsContext in the Main ExecutionWorld should hold a handle_scope.
             // A v8.HandleScope is like an arena. Once created, any "Local" that
             // v8 creates will be released (or at least, releasable by the v8 GC)
             // when the handle_scope is freed.
             // We also maintain our own "context_arena" which allows us to have
             // all page related memory easily managed.
-            pub fn createJsContext(self: *ExecutionWorld, global: anytype, state: State, module_loader: anytype, enter: bool, global_callback: ?GlobalMissingCallback) !*JsContext {
+            pub fn createJsContext(
+                self: *ExecutionWorld,
+                global: anytype,
+                state: State,
+                module_loader: anytype,
+                enter: bool,
+                opt: CreateJsContextOpt,
+            ) !*JsContext {
                 std.debug.assert(self.js_context == null);
 
                 const ModuleLoader = switch (@typeInfo(@TypeOf(module_loader))) {
@@ -401,7 +413,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
                     // Configure the missing property callback on the global
                     // object.
-                    if (global_callback != null) {
+                    if (opt.global_callback != null) {
                         const configuration = v8.NamedPropertyHandlerConfiguration{
                             .getter = struct {
                                 fn callback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
@@ -505,7 +517,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         .ptr = safe_module_loader,
                         .func = ModuleLoader.fetchModuleSource,
                     },
-                    .global_callback = global_callback,
+                    .global_callback = opt.global_callback,
+                    .compilation_callback = opt.compilation_callback,
                 };
 
                 var js_context = &self.js_context.?;
@@ -658,8 +671,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // necessary to lookup/store the dependent module in the module_cache.
             module_identifier: std.AutoHashMapUnmanaged(u32, []const u8) = .empty,
 
-            // Global callback is called on missing property.
+            // Global callback is called when a property is missing on the
+            // global object.
             global_callback: ?GlobalMissingCallback = null,
+
+            compilation_callback: ?CompilationCallback = null,
 
             const ModuleLoader = struct {
                 ptr: *anyopaque,
@@ -747,6 +763,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             }
 
             pub fn exec(self: *JsContext, src: []const u8, name: ?[]const u8) !Value {
+                if (self.compilation_callback) |cbk| cbk.script(src, name, self);
+
                 const isolate = self.isolate;
                 const v8_context = self.v8_context;
 
@@ -770,6 +788,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // compile and eval a JS module
             // It doesn't wait for callbacks execution
             pub fn module(self: *JsContext, src: []const u8, url: []const u8, cacheable: bool) !void {
+                if (self.compilation_callback) |cbk| cbk.module(src, url, self);
+
                 if (!cacheable) {
                     return self.moduleNoCache(src, url);
                 }
@@ -2602,6 +2622,43 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             pub fn missing(self: GlobalMissingCallback, name: []const u8, ctx: *JsContext) bool {
                 return self.missingFn(self.ptr, name, ctx);
+            }
+        };
+
+        // CompilationCallback called before script and module compilation.
+        pub const CompilationCallback = struct {
+            ptr: *anyopaque,
+            scriptFn: *const fn (ptr: *anyopaque, source: []const u8, name: ?[]const u8, ctx: *JsContext) void,
+            moduleFn: *const fn (ptr: *anyopaque, source: []const u8, url: []const u8, ctx: *JsContext) void,
+
+            pub fn init(ptr: anytype) CompilationCallback {
+                const T = @TypeOf(ptr);
+                const ptr_info = @typeInfo(T);
+
+                const gen = struct {
+                    pub fn script(pointer: *anyopaque, source: []const u8, name: ?[]const u8, ctx: *JsContext) void {
+                        const self: T = @ptrCast(@alignCast(pointer));
+                        return ptr_info.pointer.child.script(self, source, name, ctx);
+                    }
+                    pub fn module(pointer: *anyopaque, source: []const u8, url: []const u8, ctx: *JsContext) void {
+                        const self: T = @ptrCast(@alignCast(pointer));
+                        return ptr_info.pointer.child.module(self, source, url, ctx);
+                    }
+                };
+
+                return .{
+                    .ptr = ptr,
+                    .scriptFn = gen.script,
+                    .moduleFn = gen.module,
+                };
+            }
+
+            pub fn script(self: CompilationCallback, source: []const u8, name: ?[]const u8, ctx: *JsContext) void {
+                return self.scriptFn(self.ptr, source, name, ctx);
+            }
+
+            pub fn module(self: CompilationCallback, source: []const u8, url: []const u8, ctx: *JsContext) void {
+                return self.moduleFn(self.ptr, source, url, ctx);
             }
         };
     };

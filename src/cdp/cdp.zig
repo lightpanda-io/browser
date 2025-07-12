@@ -580,7 +580,10 @@ const IsolatedWorld = struct {
             page,
             {},
             false,
-            Env.GlobalMissingCallback.init(&self.polyfill_loader),
+            .{
+                .global_callback = Env.GlobalMissingCallback.init(&self.polyfill_loader),
+                .compilation_callback = Env.CompilationCallback.init(&self.polyfill_loader),
+            },
         );
     }
 };

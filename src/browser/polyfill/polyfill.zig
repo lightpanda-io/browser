@@ -50,6 +50,23 @@ pub const Loader = struct {
         @field(self.done, name) = true;
     }
 
+    // CompilationCallback implementation
+    pub fn script(self: *Loader, src: []const u8, _: ?[]const u8, js_context: *Env.JsContext) void {
+        if (!self.done.webcomponents and containsWebcomponents(src)) {
+            const source = @import("webcomponents.zig").source;
+            self.load("webcomponents", source, js_context);
+        }
+    }
+
+    // CompilationCallback implementation
+    pub fn module(self: *Loader, src: []const u8, _: []const u8, js_context: *Env.JsContext) void {
+        if (!self.done.webcomponents and containsWebcomponents(src)) {
+            const source = @import("webcomponents.zig").source;
+            self.load("webcomponents", source, js_context);
+        }
+    }
+
+    // GlobalMissingCallback implementation
     pub fn missing(self: *Loader, name: []const u8, js_context: *Env.JsContext) bool {
         // Avoid recursive calls during polyfill loading.
         if (self.state == .loading) {
@@ -101,5 +118,9 @@ pub const Loader = struct {
     fn isWebcomponents(name: []const u8) bool {
         if (std.mem.eql(u8, name, "customElements")) return true;
         return false;
+    }
+
+    fn containsWebcomponents(src: []const u8) bool {
+        return std.mem.indexOf(u8, src, " extends ") != null;
     }
 };
