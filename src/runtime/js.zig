@@ -747,18 +747,9 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             }
 
             pub fn exec(self: *JsContext, src: []const u8, name: ?[]const u8) !Value {
-                const isolate = self.isolate;
                 const v8_context = self.v8_context;
 
-                var origin: ?v8.ScriptOrigin = null;
-                if (name) |n| {
-                    const scr_name = v8.String.initUtf8(isolate, n);
-                    origin = v8.ScriptOrigin.initDefault(scr_name.toValue());
-                }
-                const scr_js = v8.String.initUtf8(isolate, src);
-                const scr = v8.Script.compile(v8_context, scr_js, origin) catch {
-                    return error.CompilationError;
-                };
+                const scr = try compileScript(self.isolate, v8_context, src, name);
 
                 const value = scr.run(v8_context) catch {
                     return error.ExecutionError;
@@ -2033,6 +2024,25 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 undefined: void,
                 value: T,
             };
+        }
+
+        fn compileScript(isolate: v8.Isolate, ctx: v8.Context, src: []const u8, name: ?[]const u8) !v8.Script {
+            // compile
+            const script_name = v8.String.initUtf8(isolate, name orelse "anonymous");
+            const script_source = v8.String.initUtf8(isolate, src);
+
+            const origin = v8.ScriptOrigin.initDefault(script_name.toValue());
+
+            var script_comp_source: v8.ScriptCompilerSource = undefined;
+            v8.ScriptCompilerSource.init(&script_comp_source, script_source, origin, null);
+            defer script_comp_source.deinit();
+
+            return v8.ScriptCompiler.compile(
+                ctx,
+                &script_comp_source,
+                .kNoCompileOptions,
+                .kNoCacheNoReason,
+            ) catch return error.CompilationError;
         }
 
         fn compileModule(isolate: v8.Isolate, src: []const u8, name: []const u8) !v8.Module {
