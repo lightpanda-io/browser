@@ -201,49 +201,69 @@ pub const Search = struct {
 // (For now, we only support direct children)
 
 pub const Writer = struct {
-    opts: Opts,
-    node: *const Node,
+    depth: i32,
+    exclude_root: bool,
+    root: *const Node,
     registry: *Registry,
 
-    pub const Opts = struct {};
+    pub const Opts = struct {
+        depth: i32 = 0,
+        exclude_root: bool = false,
+    };
 
     pub fn jsonStringify(self: *const Writer, w: anytype) !void {
-        self.toJSON(w) catch |err| {
-            // The only error our jsonStringify method can return is
-            // @TypeOf(w).Error. In other words, our code can't return its own
-            // error, we can only return a writer error. Kinda sucks.
-            log.err(.cdp, "json stringify", .{ .err = err });
-            return error.OutOfMemory;
-        };
+        if (self.exclude_root) {
+            _ = self.writeChildren(self.root, 0, w) catch |err| {
+                log.err(.cdp, "node writeChildren", .{ .err = err });
+                return error.OutOfMemory;
+            };
+        } else {
+            self.toJSON(self.root, 0, w) catch |err| {
+                // The only error our jsonStringify method can return is
+                // @TypeOf(w).Error. In other words, our code can't return its own
+                // error, we can only return a writer error. Kinda sucks.
+                log.err(.cdp, "node toJSON stringify", .{ .err = err });
+                return error.OutOfMemory;
+            };
+        }
     }
 
-    fn toJSON(self: *const Writer, w: anytype) !void {
+    fn toJSON(self: *const Writer, node: *const Node, depth: usize, w: anytype) !void {
         try w.beginObject();
-        try self.writeCommon(self.node, false, w);
+        try self.writeCommon(node, false, w);
 
-        {
-            var registry = self.registry;
-            const child_nodes = try parser.nodeGetChildNodes(self.node._node);
-            const child_count = try parser.nodeListLength(child_nodes);
+        try w.objectField("children");
+        const child_count = try self.writeChildren(node, depth, w);
+        try w.objectField("childNodeCount");
+        try w.write(child_count);
 
-            var i: usize = 0;
-            try w.objectField("children");
-            try w.beginArray();
-            for (0..child_count) |_| {
-                const child = (try parser.nodeListItem(child_nodes, @intCast(i))) orelse break;
-                const child_node = try registry.register(child);
+        try w.endObject();
+    }
+
+    fn writeChildren(self: *const Writer, node: *const Node, depth: usize, w: anytype) anyerror!usize {
+        var registry = self.registry;
+        const child_nodes = try parser.nodeGetChildNodes(node._node);
+        const child_count = try parser.nodeListLength(child_nodes);
+        const full_child = self.depth < 0 or self.depth < depth;
+
+        var i: usize = 0;
+        try w.beginArray();
+        for (0..child_count) |_| {
+            const child = (try parser.nodeListItem(child_nodes, @intCast(i))) orelse break;
+            const child_node = try registry.register(child);
+            if (full_child) {
+                try self.toJSON(child_node, depth + 1, w);
+            } else {
                 try w.beginObject();
                 try self.writeCommon(child_node, true, w);
                 try w.endObject();
-                i += 1;
             }
-            try w.endArray();
 
-            try w.objectField("childNodeCount");
-            try w.write(i);
+            i += 1;
         }
+        try w.endArray();
 
-        try w.endObject();
+        return i;
     }
 
     fn writeCommon(self: *const Writer, node: *const Node, include_child_count: bool, w: anytype) !void {
@@ -400,14 +420,15 @@ test "cdp Node: Writer" {
     var registry = Registry.init(testing.allocator);
     defer registry.deinit();
 
-    var doc = try testing.Document.init("<a id=a1></a><a id=a2></a>");
+    var doc = try testing.Document.init("<a id=a1></a><div id=d2><a id=a2></a></div>");
     defer doc.deinit();
 
     {
         const node = try registry.register(doc.asNode());
         const json = try std.json.stringifyAlloc(testing.allocator, Writer{
-            .node = node,
-            .opts = .{},
+            .root = node,
+            .depth = 0,
+            .exclude_root = false,
             .registry = &registry,
         }, .{});
         defer testing.allocator.free(json);
@@ -445,8 +466,9 @@ test "cdp Node: Writer" {
     {
         const node = registry.lookup_by_id.get(1).?;
         const json = try std.json.stringifyAlloc(testing.allocator, Writer{
-            .node = node,
-            .opts = .{},
+            .root = node,
+            .depth = 0,
+            .exclude_root = false,
             .registry = &registry,
         }, .{});
         defer testing.allocator.free(json);
@@ -494,5 +516,62 @@ test "cdp Node: Writer" {
                 .parentId = 1,
             } },
         }, json);
+    }
+
+    {
+        const node = registry.lookup_by_id.get(1).?;
+        const json = try std.json.stringifyAlloc(testing.allocator, Writer{
+            .root = node,
+            .depth = -1,
+            .exclude_root = true,
+            .registry = &registry,
+        }, .{});
+        defer testing.allocator.free(json);
+
+        try testing.expectJson(&.{ .{
+            .nodeId = 2,
+            .backendNodeId = 2,
+            .nodeType = 1,
+            .nodeName = "HEAD",
+            .localName = "head",
+            .nodeValue = "",
+            .childNodeCount = 0,
+            .documentURL = null,
+            .baseURL = null,
+            .xmlVersion = "",
+            .compatibilityMode = "NoQuirksMode",
+            .isScrollable = false,
+            .parentId = 1,
+        }, .{
+            .nodeId = 3,
+            .backendNodeId = 3,
+            .nodeType = 1,
+            .nodeName = "BODY",
+            .localName = "body",
+            .nodeValue = "",
+            .childNodeCount = 2,
+            .documentURL = null,
+            .baseURL = null,
+            .xmlVersion = "",
+            .compatibilityMode = "NoQuirksMode",
+            .isScrollable = false,
+            .children = &.{ .{
+                .nodeId = 4,
+                .localName = "a",
+                .childNodeCount = 0,
+                .parentId = 3,
+            }, .{
+                .nodeId = 5,
+                .localName = "div",
+                .childNodeCount = 1,
+                .parentId = 3,
+                .children = &.{ .{
+                    .nodeId = 6,
+                    .localName = "a",
+                    .childNodeCount = 0,
+                    .parentId = 5,
+                }}
+            }
+        } } }, json);
     }
 }

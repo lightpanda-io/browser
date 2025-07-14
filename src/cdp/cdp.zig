@@ -402,10 +402,11 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             return &self.isolated_world.?;
         }
 
-        pub fn nodeWriter(self: *Self, node: *const Node, opts: Node.Writer.Opts) Node.Writer {
+        pub fn nodeWriter(self: *Self, root: *const Node, opts: Node.Writer.Opts) Node.Writer {
             return .{
-                .node = node,
-                .opts = opts,
+                .root = root,
+                .depth = opts.depth,
+                .exclude_root = opts.exclude_root,
                 .registry = &self.node_registry,
             };
         }

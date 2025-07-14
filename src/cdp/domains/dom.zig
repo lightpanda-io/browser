@@ -38,6 +38,7 @@ pub fn processMessage(cmd: anytype) !void {
         scrollIntoViewIfNeeded,
         getContentQuads,
         getBoxModel,
+        requestChildNodes,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -53,6 +54,7 @@ pub fn processMessage(cmd: anytype) !void {
         .scrollIntoViewIfNeeded => return scrollIntoViewIfNeeded(cmd),
         .getContentQuads => return getContentQuads(cmd),
         .getBoxModel => return getBoxModel(cmd),
+        .requestChildNodes => return requestChildNodes(cmd),
     }
 }
 
@@ -431,6 +433,29 @@ fn getBoxModel(cmd: anytype) !void {
         .width = @intFromFloat(rect.width),
         .height = @intFromFloat(rect.height),
     } }, .{});
+}
+
+fn requestChildNodes(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        nodeId: Node.Id,
+        depth: i32 = 1,
+        pierce: bool = false,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const session_id = bc.session_id orelse return error.SessionIdNotLoaded;
+    const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse {
+        return error.InvalidNode;
+    };
+
+    try cmd.sendEvent("DOM.setChildNodes", .{
+        .parentId = node.id,
+        .nodes = bc.nodeWriter(node, .{.depth = params.depth, .exclude_root = true}),
+    }, .{
+        .session_id = session_id,
+    });
+
+    return cmd.sendResult(null, .{});
 }
 
 const testing = @import("../testing.zig");
