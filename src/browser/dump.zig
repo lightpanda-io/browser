@@ -247,6 +247,6 @@ fn testWriteFullHTML(comptime expected: []const u8, src: []const u8) !void {
     defer parser.documentHTMLClose(doc_html) catch {};
 
     const doc = parser.documentHTMLToDocument(doc_html);
-    try writeHTML(doc, buf.writer(testing.allocator));
+    try writeHTML(doc, .{}, buf.writer(testing.allocator));
     try testing.expectEqualStrings(expected, buf.items);
 }
