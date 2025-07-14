@@ -22,6 +22,7 @@ const Page = @import("../page.zig").Page;
 const NodeList = @import("nodelist.zig").NodeList;
 const Element = @import("element.zig").Element;
 const ElementUnion = @import("element.zig").Union;
+const collection = @import("html_collection.zig");
 
 const Node = @import("node.zig").Node;
 
@@ -71,6 +72,15 @@ pub const DocumentFragment = struct {
     pub fn _querySelectorAll(self: *parser.DocumentFragment, selector: []const u8, page: *Page) !NodeList {
         return css.querySelectorAll(page.arena, parser.documentFragmentToNode(self), selector);
     }
+
+    pub fn get_childElementCount(self: *parser.DocumentFragment) !u32 {
+        var children = try get_children(self);
+        return children.get_length();
+    }
+
+    pub fn get_children(self: *parser.DocumentFragment) !collection.HTMLCollection {
+        return collection.HTMLCollectionChildren(parser.documentFragmentToNode(self), false);
+    }
 };
 
 const testing = @import("../../testing.zig");
@@ -93,10 +103,13 @@ test "Browser.DOM.DocumentFragment" {
     try runner.testCases(&.{
         .{ "let f = document.createDocumentFragment()", null },
         .{ "let d = document.createElement('div');", null },
+        .{ "d.childElementCount", "0" },
+
         .{ "d.id = 'x';", null },
         .{ "document.getElementById('x') == null;", "true" },
-
         .{ "f.append(d);", null },
+        .{ "f.childElementCount", "1" },
+        .{ "f.children[0].id", "x" },
         .{ "document.getElementById('x') == null;", "true" },
 
         .{ "document.getElementsByTagName('body')[0].append(f.cloneNode(true));", null },
