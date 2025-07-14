@@ -21,10 +21,14 @@ const std = @import("std");
 const parser = @import("netsurf.zig");
 const Walker = @import("dom/walker.zig").WalkerChildren;
 
+pub const Opts = struct {
+    exclude_scripts: bool = false,
+};
+
 // writer must be a std.io.Writer
-pub fn writeHTML(doc: *parser.Document, writer: anytype) !void {
+pub fn writeHTML(doc: *parser.Document, opts: Opts, writer: anytype) !void {
     try writer.writeAll("<!DOCTYPE html>\n");
-    try writeChildren(parser.documentToNode(doc), writer);
+    try writeChildren(parser.documentToNode(doc), opts, writer);
     try writer.writeAll("\n");
 }
 
@@ -54,10 +58,15 @@ pub fn writeDocType(doc_type: *parser.DocumentType, writer: anytype) !void {
     try writer.writeAll(">");
 }
 
-pub fn writeNode(node: *parser.Node, writer: anytype) anyerror!void {
+pub fn writeNode(node: *parser.Node, opts: Opts, writer: anytype) anyerror!void {
     switch (try parser.nodeType(node)) {
         .element => {
             // open the tag
+            const tag_type = try parser.elementHTMLGetTagType(@ptrCast(node));
+            if (tag_type == .script and opts.exclude_scripts) {
+                return;
+            }
+
             const tag = try parser.nodeLocalName(node);
             try writer.writeAll("<");
             try writer.writeAll(tag);
@@ -82,12 +91,12 @@ pub fn writeNode(node: *parser.Node, writer: anytype) anyerror!void {
             // void elements can't have any content.
             if (try isVoid(parser.nodeToElement(node))) return;
 
-            if (try parser.elementHTMLGetTagType(@ptrCast(node)) == .script) {
+            if (tag_type == .script) {
                 try writer.writeAll(try parser.nodeTextContent(node) orelse "");
             } else {
                 // write the children
                 // TODO avoid recursion
-                try writeChildren(node, writer);
+                try writeChildren(node, opts, writer);
             }
 
             // close the tag
@@ -129,12 +138,12 @@ pub fn writeNode(node: *parser.Node, writer: anytype) anyerror!void {
 }
 
 // writer must be a std.io.Writer
-pub fn writeChildren(root: *parser.Node, writer: anytype) !void {
+pub fn writeChildren(root: *parser.Node, opts: Opts, writer: anytype) !void {
     const walker = Walker{};
     var next: ?*parser.Node = null;
     while (true) {
         next = try walker.get_next(root, next) orelse break;
-        try writeNode(next.?, writer);
+        try writeNode(next.?, opts, writer);
     }
 }
 

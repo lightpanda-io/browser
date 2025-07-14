@@ -142,7 +142,7 @@ pub const Page = struct {
     }
 
     // dump writes the page content into the given file.
-    pub fn dump(self: *const Page, out: std.fs.File) !void {
+    pub fn dump(self: *const Page, opts: Dump.Opts, out: std.fs.File) !void {
         if (self.raw_data) |raw_data| {
             // raw_data was set if the document was not HTML, dump the data content only.
             return try out.writeAll(raw_data);
@@ -150,7 +150,7 @@ pub const Page = struct {
 
         // if the page has a pointer to a document, dumps the HTML.
         const doc = parser.documentHTMLToDocument(self.window.document);
-        try Dump.writeHTML(doc, out);
+        try Dump.writeHTML(doc, opts, out);
     }
 
     pub fn fetchModuleSource(ctx: *anyopaque, src: []const u8) !?[]const u8 {
