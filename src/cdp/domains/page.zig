@@ -284,6 +284,9 @@ pub fn pageCreated(bc: anytype, page: *Page) !void {
     if (bc.isolated_world) |*isolated_world| {
         // We need to recreate the isolated world context
         try isolated_world.createContext(page);
+
+        const polyfill = @import("../../browser/polyfill/polyfill.zig");
+        try polyfill.preload(bc.arena, &isolated_world.executor.js_context.?);
     }
 }
 

@@ -126,6 +126,8 @@ fn run(
     });
     defer runner.deinit();
 
+    try polyfill.preload(arena, runner.page.main_context);
+
     // loop over the scripts.
     const doc = parser.documentHTMLToDocument(runner.page.window.document);
     const scripts = try parser.documentGetElementsByTagName(doc, "script");
