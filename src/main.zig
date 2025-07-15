@@ -134,7 +134,7 @@ fn run(alloc: Allocator) !void {
 
             // dump
             if (opts.dump) {
-                try page.dump(std.io.getStdOut());
+                try page.dump(.{ .exclude_scripts = opts.noscript }, std.io.getStdOut());
             }
         },
         else => unreachable,
@@ -212,6 +212,7 @@ const Command = struct {
         url: []const u8,
         dump: bool = false,
         common: Common,
+        noscript: bool = false,
     };
 
     const Common = struct {
@@ -275,6 +276,7 @@ const Command = struct {
             \\Options:
             \\--dump          Dumps document to stdout.
             \\                Defaults to false.
+            \\--noscript      Exclude <script> tags in dump. Defaults to false.
             \\
         ++ common_options ++
             \\
@@ -350,6 +352,9 @@ fn inferMode(opt: []const u8) ?App.RunMode {
     }
 
     if (std.mem.eql(u8, opt, "--dump")) {
+        return .fetch;
+    }
+    if (std.mem.eql(u8, opt, "--noscript")) {
         return .fetch;
     }
     if (std.mem.startsWith(u8, opt, "--") == false) {
@@ -437,12 +442,18 @@ fn parseFetchArgs(
     args: *std.process.ArgIterator,
 ) !Command.Fetch {
     var dump: bool = false;
+    var noscript: bool = true;
     var url: ?[]const u8 = null;
     var common: Command.Common = .{};
 
     while (args.next()) |opt| {
         if (std.mem.eql(u8, "--dump", opt)) {
             dump = true;
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--noscript", opt)) {
+            noscript = true;
             continue;
         }
 
@@ -471,6 +482,7 @@ fn parseFetchArgs(
         .url = url.?,
         .dump = dump,
         .common = common,
+        .noscript = noscript,
     };
 }
 

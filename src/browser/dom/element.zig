@@ -110,13 +110,13 @@ pub const Element = struct {
 
     pub fn get_innerHTML(self: *parser.Element, page: *Page) ![]const u8 {
         var buf = std.ArrayList(u8).init(page.arena);
-        try dump.writeChildren(parser.elementToNode(self), buf.writer());
+        try dump.writeChildren(parser.elementToNode(self), .{}, buf.writer());
         return buf.items;
     }
 
     pub fn get_outerHTML(self: *parser.Element, page: *Page) ![]const u8 {
         var buf = std.ArrayList(u8).init(page.arena);
-        try dump.writeNode(parser.elementToNode(self), buf.writer());
+        try dump.writeNode(parser.elementToNode(self), .{}, buf.writer());
         return buf.items;
     }
 
