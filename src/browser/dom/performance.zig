@@ -29,11 +29,6 @@ pub const Interfaces = .{
     PerformanceMark,
 };
 
-const MarkOptions = struct {
-    detail: ?Env.JsObject = null,
-    start_time: ?f64 = null,
-};
-
 // https://developer.mozilla.org/en-US/docs/Web/API/Performance
 pub const Performance = struct {
     pub const prototype = *EventTarget;
@@ -66,10 +61,20 @@ pub const Performance = struct {
         return limitedResolutionMs(self.time_origin.read());
     }
 
-    pub fn _mark(_: *Performance, name: []const u8, _options: ?MarkOptions, page: *Page) !PerformanceMark {
+    pub fn _mark(_: *Performance, name: []const u8, _options: ?PerformanceMark.Options, page: *Page) !PerformanceMark {
         const mark: PerformanceMark = try .constructor(name, _options, page);
         // TODO: Should store this in an entries list
         return mark;
+    }
+
+    // TODO: fn _mark should record the marks in a lookup
+    pub fn _clearMarks(_: *Performance, name: ?[]const u8) void {
+        _ = name;
+    }
+
+    // TODO: fn _measures should record the marks in a lookup
+    pub fn _clearMeasures(_: *Performance, name: ?[]const u8) void {
+        _ = name;
     }
 };
 
@@ -132,16 +137,22 @@ pub const PerformanceMark = struct {
     proto: PerformanceEntry,
     detail: ?Env.JsObject,
 
-    pub fn constructor(name: []const u8, _options: ?MarkOptions, page: *Page) !PerformanceMark {
+    const Options = struct {
+        detail: ?Env.JsObject = null,
+        start_time: ?f64 = null,
+    };
+
+    pub fn constructor(name: []const u8, _options: ?Options, page: *Page) !PerformanceMark {
         const perf = &page.window.performance;
 
-        const options = _options orelse MarkOptions{};
+        const options = _options orelse Options{};
         const start_time = options.start_time orelse perf._now();
-        const detail = if (options.detail) |d| try d.persist() else null;
 
         if (start_time < 0.0) {
             return error.TypeError;
         }
+
+        const detail = if (options.detail) |d| try d.persist() else null;
 
         const duped_name = try page.arena.dupe(u8, name);
         const proto = PerformanceEntry{ .name = duped_name, .entry_type = .mark, .start_time = start_time };
