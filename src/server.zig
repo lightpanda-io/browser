@@ -633,6 +633,10 @@ pub const Client = struct {
     }
 
     fn queueSend(self: *Self) void {
+        if (self.connected == false) {
+            return;
+        }
+
         const node = self.send_queue.first orelse {
             // no more messages to send;
             return;
