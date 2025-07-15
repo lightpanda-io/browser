@@ -55,6 +55,13 @@ test "Browser.DOM.ShadowRoot" {
         .{ "div1.shadowRoot == sr1", "true" },
 
         .{ "try { div1.attachShadow({mode: 'closed'}) } catch (e) { e }", "Error: NotSupportedError" },
+
+        .{ " sr1.append(document.createElement('div'))", null },
+        .{ " sr1.append(document.createElement('span'))", null },
+        .{ "sr1.childElementCount", "2" },
+        // re-attaching clears it
+        .{ "div1.attachShadow({mode: 'open'}) == sr1", "true" },
+        .{ "sr1.childElementCount", "0" },
     }, .{});
 
     try runner.testCases(&.{

@@ -477,7 +477,7 @@ pub const Element = struct {
                 return error.NotSupportedError;
             }
 
-            // TODO: the existing shadow root should be cleared!
+            try Node.removeChildren(@alignCast(@ptrCast(sr.proto)));
             return sr;
         }
 
