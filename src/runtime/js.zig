@@ -1164,6 +1164,13 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 };
             }
 
+            pub fn createPromiseResolver(self: *JsContext) PromiseResolver {
+                return .{
+                    .js_context = self,
+                    .resolver = v8.PromiseResolver.init(self.v8_context),
+                };
+            }
+
             // Probing is part of trying to map a JS value to a Zig union. There's
             // a lot of ambiguity in this process, in part because some JS values
             // can almost always be coerced. For example, anything can be coerced
@@ -1871,6 +1878,32 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             };
         }
 
+        pub const PromiseResolver = struct {
+            js_context: *JsContext,
+            resolver: v8.PromiseResolver,
+
+            pub fn promise(self: PromiseResolver) Promise {
+                return .{
+                    .promise = self.resolver.getPromise(),
+                };
+            }
+
+            pub fn resolve(self: PromiseResolver, value: anytype) !void {
+                const js_context = self.js_context;
+                const js_value = try js_context.zigValueToJs(value);
+
+                // resolver.resolve will return null if the promise isn't pending
+                const ok = self.resolver.resolve(js_context.v8_context, js_value) orelse return;
+                if (!ok) {
+                    return error.FailedToResolvePromise;
+                }
+            }
+        };
+
+        pub const Promise = struct {
+            promise: v8.Promise,
+        };
+
         pub const Inspector = struct {
             isolate: v8.Isolate,
             inner: *v8.Inspector,
@@ -2473,6 +2506,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     if (T == JsObject) {
                         // we're returning a v8.Object
                         return value.js_obj.toValue();
+                    }
+
+                    if (T == Promise) {
+                        // we're returning a v8.Promise
+                        return value.promise.toObject().toValue();
                     }
 
                     if (@hasDecl(T, "_EXCEPTION_ID_KLUDGE")) {

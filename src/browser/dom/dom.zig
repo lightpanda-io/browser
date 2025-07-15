@@ -52,4 +52,5 @@ pub const Interfaces = .{
     @import("performance.zig").Interfaces,
     PerformanceObserver,
     @import("range.zig").Interfaces,
+    @import("Animation.zig"),
 };

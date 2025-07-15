@@ -41,5 +41,8 @@ const WebApis = struct {
 pub const JsThis = Env.JsThis;
 pub const JsObject = Env.JsObject;
 pub const Function = Env.Function;
+pub const Promise = Env.Promise;
+pub const PromiseResolver = Env.PromiseResolver;
+
 pub const Env = js.Env(*Page, WebApis);
 pub const Global = @import("html/window.zig").Window;
