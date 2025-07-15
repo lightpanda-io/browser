@@ -287,6 +287,12 @@ const AsyncQueue = struct {
 
     fn _check(self: *AsyncQueue, repeat_delay: *?u63) !void {
         const client = self.client;
+        if (client.freeSlotCount() == 1) {
+            // always leave 1 free connection for sync requests
+            repeat_delay.* = 10 * std.time.ns_per_ms;
+            return;
+        }
+
         const state = client.state_pool.acquireOrNull() orelse {
             // re-run this function in 10 milliseconds
             repeat_delay.* = 10 * std.time.ns_per_ms;
@@ -3802,7 +3808,7 @@ const TestContext = struct {
         errdefer loop.deinit();
 
         var o = opts;
-        o.max_concurrent = 1;
+        o.max_concurrent = 2;
 
         const client = try Client.init(testing.allocator, loop, o);
         errdefer client.deinit();
