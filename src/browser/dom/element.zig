@@ -32,6 +32,9 @@ const NodeList = @import("nodelist.zig").NodeList;
 const HTMLElem = @import("../html/elements.zig");
 const ShadowRoot = @import("../dom/shadow_root.zig").ShadowRoot;
 
+const Animation = @import("Animation.zig");
+const JsObject = @import("../env.zig").JsObject;
+
 pub const Union = @import("../html/elements.zig").Union;
 
 // WEB IDL https://dom.spec.whatwg.org/#element
@@ -498,6 +501,12 @@ pub const Element = struct {
             return null;
         }
         return sr;
+    }
+
+    pub fn _animate(self: *parser.Element, effect: JsObject, opts: JsObject) !Animation {
+        _ = self;
+        _ = opts;
+        return Animation.constructor(effect, null);
     }
 };
 
