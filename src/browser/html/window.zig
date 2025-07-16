@@ -20,7 +20,7 @@ const std = @import("std");
 
 const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
-const Function = @import("../env.zig").Function;
+const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
 const Loop = @import("../../runtime/loop.zig").Loop;
 
@@ -35,6 +35,9 @@ const Performance = @import("../dom/performance.zig").Performance;
 const CSSStyleDeclaration = @import("../cssom/css_style_declaration.zig").CSSStyleDeclaration;
 const Screen = @import("screen.zig").Screen;
 const Css = @import("../css/css.zig").Css;
+
+const Function = Env.Function;
+const JsObject = Env.JsObject;
 
 const storage = @import("../storage/storage.zig");
 
@@ -184,13 +187,12 @@ pub const Window = struct {
         return page.loop.cancel(kv.value.loop_id);
     }
 
-    pub fn _setTimeout(self: *Window, cbk: Function, delay: ?u32, page: *Page) !u32 {
-        return self.createTimeout(cbk, delay, page, .{});
+    pub fn _setTimeout(self: *Window, cbk: Function, delay: ?u32, params: []Env.JsObject, page: *Page) !u32 {
+        return self.createTimeout(cbk, delay, page, .{ .args = params });
     }
 
-    // TODO handle callback arguments.
-    pub fn _setInterval(self: *Window, cbk: Function, delay: ?u32, page: *Page) !u32 {
-        return self.createTimeout(cbk, delay, page, .{ .repeat = true });
+    pub fn _setInterval(self: *Window, cbk: Function, delay: ?u32, params: []Env.JsObject, page: *Page) !u32 {
+        return self.createTimeout(cbk, delay, page, .{ .repeat = true, .args = params });
     }
 
     pub fn _clearTimeout(self: *Window, id: u32, page: *Page) !void {
@@ -230,10 +232,11 @@ pub const Window = struct {
     }
 
     const CreateTimeoutOpts = struct {
+        args: []Env.JsObject = &.{},
         repeat: bool = false,
         animation_frame: bool = false,
     };
-    fn createTimeout(self: *Window, cbk: Function, delay_: ?u32, page: *Page, comptime opts: CreateTimeoutOpts) !u32 {
+    fn createTimeout(self: *Window, cbk: Function, delay_: ?u32, page: *Page, opts: CreateTimeoutOpts) !u32 {
         const delay = delay_ orelse 0;
         if (delay > 5000) {
             log.warn(.user_script, "long timeout ignored", .{ .delay = delay, .interval = opts.repeat });
@@ -258,6 +261,15 @@ pub const Window = struct {
         }
         errdefer _ = self.timers.remove(timer_id);
 
+        const args = opts.args;
+        var persisted_args: []Env.JsObject = &.{};
+        if (args.len > 0) {
+            persisted_args = try page.arena.alloc(Env.JsObject, args.len);
+            for (args, persisted_args) |a, *ca| {
+                ca.* = try a.persist();
+            }
+        }
+
         const delay_ms: u63 = @as(u63, delay) * std.time.ns_per_ms;
         const callback = try arena.create(TimerCallback);
 
@@ -266,6 +278,7 @@ pub const Window = struct {
             .loop_id = 0, // we're going to set this to a real value shortly
             .window = self,
             .timer_id = timer_id,
+            .args = persisted_args,
             .node = .{ .func = TimerCallback.run },
             .repeat = if (opts.repeat) delay_ms else null,
             .animation_frame = opts.animation_frame,
@@ -344,6 +357,8 @@ const TimerCallback = struct {
 
     window: *Window,
 
+    args: []Env.JsObject = &.{},
+
     fn run(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
         const self: *TimerCallback = @fieldParentPtr("node", node);
 
@@ -353,7 +368,7 @@ const TimerCallback = struct {
         if (self.animation_frame) {
             call = self.cbk.tryCall(void, .{self.window.performance._now()}, &result);
         } else {
-            call = self.cbk.tryCall(void, .{}, &result);
+            call = self.cbk.tryCall(void, self.args, &result);
         }
 
         call catch {
@@ -427,11 +442,17 @@ test "Browser.HTML.Window" {
         .{ "innerWidth", "2" },
     }, .{});
 
-    // cancelAnimationFrame should be able to cancel a request with the given id
     try runner.testCases(&.{
         .{ "let longCall = false;", null },
         .{ "window.setTimeout(() => {longCall = true}, 5001);", null },
         .{ "longCall;", "false" },
+
+        .{ "let wst = 0;", null },
+        .{ "window.setTimeout(() => {wst += 1}, 1)", null },
+        .{ "wst", "1" },
+
+        .{ "window.setTimeout((a, b) => {wst = a + b}, 1, 2, 3)", null },
+        .{ "wst", "5" },
     }, .{});
 
     // window event target

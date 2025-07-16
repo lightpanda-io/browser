@@ -1766,13 +1766,28 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 const js_this = try js_context.valueToExistingObject(this);
 
                 const aargs = if (comptime @typeInfo(@TypeOf(args)) == .null) struct {}{} else args;
-                const fields = @typeInfo(@TypeOf(aargs)).@"struct".fields;
-                var js_args: [fields.len]v8.Value = undefined;
-                inline for (fields, 0..) |f, i| {
-                    js_args[i] = try js_context.zigValueToJs(@field(aargs, f.name));
-                }
 
-                const result = self.func.castToFunction().call(js_context.v8_context, js_this, &js_args);
+                const js_args: []const v8.Value = switch (@typeInfo(@TypeOf(aargs))) {
+                    .@"struct" => |s| blk: {
+                        const fields = s.fields;
+                        var js_args: [fields.len]v8.Value = undefined;
+                        inline for (fields, 0..) |f, i| {
+                            js_args[i] = try js_context.zigValueToJs(@field(aargs, f.name));
+                        }
+                        const cargs: [fields.len]v8.Value = js_args;
+                        break :blk &cargs;
+                    },
+                    .pointer => blk: {
+                        var values = try js_context.call_arena.alloc(v8.Value, args.len);
+                        for (args, 0..) |a, i| {
+                            values[i] = try js_context.zigValueToJs(a);
+                        }
+                        break :blk values;
+                    },
+                    else => @compileError("JS Function called with invalid paremter type"),
+                };
+
+                const result = self.func.castToFunction().call(js_context.v8_context, js_this, js_args);
                 if (result == null) {
                     return error.JSExecCallback;
                 }
