@@ -31,6 +31,7 @@ pub fn processMessage(cmd: anytype) !void {
         addScriptToEvaluateOnNewDocument,
         createIsolatedWorld,
         navigate,
+        stopLoading,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -40,6 +41,7 @@ pub fn processMessage(cmd: anytype) !void {
         .addScriptToEvaluateOnNewDocument => return addScriptToEvaluateOnNewDocument(cmd),
         .createIsolatedWorld => return createIsolatedWorld(cmd),
         .navigate => return navigate(cmd),
+        .stopLoading => return cmd.sendResult(null, .{}),
     }
 }
 
