@@ -30,6 +30,7 @@ const Env = @import("env.zig").Env;
 const parser = @import("netsurf.zig");
 const DataSet = @import("html/DataSet.zig");
 const ShadowRoot = @import("dom/shadow_root.zig").ShadowRoot;
+const StyleSheet = @import("cssom/stylesheet.zig").StyleSheet;
 const CSSStyleDeclaration = @import("cssom/css_style_declaration.zig").CSSStyleDeclaration;
 
 // for HTMLScript (but probably needs to be added to more)
@@ -39,9 +40,16 @@ onerror: ?Env.Function = null,
 // for HTMLElement
 style: CSSStyleDeclaration = .empty,
 dataset: ?DataSet = null,
+template_content: ?*parser.DocumentFragment = null,
+
+// For dom/element
+shadow_root: ?*ShadowRoot = null,
 
 // for html/document
 ready_state: ReadyState = .loading,
+
+// for html/HTMLStyleElement
+style_sheet: ?*StyleSheet = null,
 
 // for dom/document
 active_element: ?*parser.Element = null,
@@ -60,10 +68,6 @@ active_element: ?*parser.Element = null,
 // AND if it isn't a multi select, we can make the 1st item selected by
 // default (by returning selectedIndex == 0).
 explicit_index_set: bool = false,
-
-template_content: ?*parser.DocumentFragment = null,
-
-shadow_root: ?*ShadowRoot = null,
 
 const ReadyState = enum {
     loading,

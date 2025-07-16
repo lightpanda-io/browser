@@ -29,6 +29,7 @@ const Node = @import("../dom/node.zig").Node;
 const Element = @import("../dom/element.zig").Element;
 const DataSet = @import("DataSet.zig");
 
+const StyleSheet = @import("../cssom/stylesheet.zig").StyleSheet;
 const CSSStyleDeclaration = @import("../cssom/css_style_declaration.zig").CSSStyleDeclaration;
 
 // HTMLElement interfaces
@@ -1012,6 +1013,18 @@ pub const HTMLStyleElement = struct {
     pub const Self = parser.Style;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
+
+    pub fn get_sheet(self: *parser.Style, page: *Page) !*StyleSheet {
+        const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(self)));
+        if (state.style_sheet) |ss| {
+            return ss;
+        }
+
+        const ss = try page.arena.create(StyleSheet);
+        ss.* = .{};
+        state.style_sheet = ss;
+        return ss;
+    }
 };
 
 pub const HTMLTableElement = struct {
@@ -1450,6 +1463,18 @@ test "Browser.HTML.HTMLTemplateElement" {
         .{ "document.getElementById('abc')", "null" },
         .{ "document.getElementById('c').appendChild(t.content.cloneNode(true))", null },
         .{ "document.getElementById('abc').id", "abc" },
+    }, .{});
+}
+
+test "Browser.HTML.HTMLStyleElement" {
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html = "" });
+    defer runner.deinit();
+
+    try runner.testCases(&.{
+        .{ "let s = document.createElement('style')", null },
+        .{ "s.sheet.type", "text/css" },
+        .{ "s.sheet == s.sheet", "true" },
+        .{ "document.createElement('style').sheet == s.sheet", "false" },
     }, .{});
 }
 
