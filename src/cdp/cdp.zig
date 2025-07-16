@@ -322,6 +322,10 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         inspector: Inspector,
         isolated_world: ?IsolatedWorld,
+
+        // Used to restore the proxy after the CDP session ends. If CDP never over-wrote it, it won't restore it (the first null).
+        // If the CDP is restoring it, but the original value was null, that's the 2nd null.
+        // If you only have 1 null it would be ambiguous, does null mean it shouldn't be restored, or should it be restored to null?
         http_proxy_before: ??std.Uri = null,
 
         const Self = @This();
