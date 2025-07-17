@@ -565,13 +565,13 @@ test "cdp Node: Writer" {
                 .localName = "div",
                 .childNodeCount = 1,
                 .parentId = 3,
-                .children = &.{ .{
+                .children = &.{.{
                     .nodeId = 6,
                     .localName = "a",
                     .childNodeCount = 0,
                     .parentId = 5,
-                }}
-            }
-        } } }, json);
+                }},
+            } },
+        } }, json);
     }
 }
