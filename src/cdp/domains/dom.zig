@@ -442,6 +442,7 @@ fn requestChildNodes(cmd: anytype) !void {
         pierce: bool = false,
     })) orelse return error.InvalidParams;
 
+    if (params.depth == 0) return error.InvalidParams;
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const session_id = bc.session_id orelse return error.SessionIdNotLoaded;
     const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse {

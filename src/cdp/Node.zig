@@ -213,7 +213,7 @@ pub const Writer = struct {
 
     pub fn jsonStringify(self: *const Writer, w: anytype) !void {
         if (self.exclude_root) {
-            _ = self.writeChildren(self.root, 0, w) catch |err| {
+            _ = self.writeChildren(self.root, 1, w) catch |err| {
                 log.err(.cdp, "node writeChildren", .{ .err = err });
                 return error.OutOfMemory;
             };
@@ -467,7 +467,7 @@ test "cdp Node: Writer" {
         const node = registry.lookup_by_id.get(1).?;
         const json = try std.json.stringifyAlloc(testing.allocator, Writer{
             .root = node,
-            .depth = 0,
+            .depth = 1,
             .exclude_root = false,
             .registry = &registry,
         }, .{});
