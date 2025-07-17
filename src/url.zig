@@ -100,52 +100,72 @@ pub const URL = struct {
     /// For URLs without a path, it will add src as the path.
     pub fn stitch(
         allocator: Allocator,
-        src: []const u8,
+        path: []const u8,
         base: []const u8,
         opts: StitchOpts,
     ) ![]const u8 {
-        if (base.len == 0 or isURL(src)) {
+        if (base.len == 0 or isComleteHTTPUrl(path)) {
             if (opts.alloc == .always) {
-                return allocator.dupe(u8, src);
+                return allocator.dupe(u8, path);
             }
-            return src;
+            return path;
         }
 
-        var normalized_src = src;
-        while (std.mem.startsWith(u8, normalized_src, "./")) {
-            normalized_src = normalized_src[2..];
-        }
-
-        if (normalized_src.len == 0) {
+        if (path.len == 0) {
             if (opts.alloc == .always) {
                 return allocator.dupe(u8, base);
             }
             return base;
         }
 
-        const protocol_end: usize = blk: {
-            if (std.mem.indexOf(u8, base, "://")) |protocol_index| {
-                break :blk protocol_index + 3;
-            } else {
-                break :blk 0;
-            }
-        };
+        // Quick hack because domains have to be at least 3 characters.
+        // Given https://a.b  this will point to 'a'
+        // Given http://a.b  this will point '.'
+        // Either way, we just care about this value to find the start of the path
+        const protocol_end: usize = if (isComleteHTTPUrl(base)) 8 else 0;
 
-        if (normalized_src[0] == '/') {
-            if (std.mem.indexOfScalarPos(u8, base, protocol_end, '/')) |pos| {
-                return std.fmt.allocPrint(allocator, "{s}{s}", .{ base[0..pos], normalized_src });
-            }
-            // not sure what to do here...error? Just let it fallthrough for now.
+        if (path[0] == '/') {
+            const pos = std.mem.indexOfScalarPos(u8, base, protocol_end, '/') orelse base.len;
+            return std.fmt.allocPrint(allocator, "{s}{s}", .{ base[0..pos], path });
         }
 
-        if (std.mem.lastIndexOfScalar(u8, base[protocol_end..], '/')) |index| {
-            const last_slash_pos = index + protocol_end;
-            if (last_slash_pos == base.len - 1) {
-                return std.fmt.allocPrint(allocator, "{s}{s}", .{ base, normalized_src });
-            }
-            return std.fmt.allocPrint(allocator, "{s}/{s}", .{ base[0..last_slash_pos], normalized_src });
+        var normalized_base = base;
+        if (std.mem.lastIndexOfScalar(u8, base[protocol_end..], '/')) |pos| {
+            normalized_base = base[0 .. pos + protocol_end];
         }
-        return std.fmt.allocPrint(allocator, "{s}/{s}", .{ base, normalized_src });
+
+        var out = try std.fmt.allocPrint(allocator, "{s}/{s}", .{
+            normalized_base,
+            path,
+        });
+
+        // Strip out ./ and ../. This is done in-place, because doing so can
+        // only ever make `out` smaller. After this, `out` cannot be freed by
+        // an allocator, which is ok, because we expect allocator to be an arena.
+        var in_i: usize = 0;
+        var out_i: usize = 0;
+        while (in_i < out.len) {
+            if (std.mem.startsWith(u8, out[in_i..], "./")) {
+                in_i += 2;
+                continue;
+            }
+            if (std.mem.startsWith(u8, out[in_i..], "../")) {
+                std.debug.assert(out[out_i - 1] == '/');
+
+                out_i -= 2;
+                while (out_i > 1 and out[out_i - 1] != '/') {
+                    out_i -= 1;
+                }
+                // <= to deal with the hack-ish protocol_end which will be off-by-one between http and https
+                if (out_i <= protocol_end) return error.InvalidURL;
+                in_i += 3;
+                continue;
+            }
+            out[out_i] = out[in_i];
+            in_i += 1;
+            out_i += 1;
+        }
+        return out[0..out_i];
     }
 
     pub fn concatQueryString(arena: Allocator, url: []const u8, query_string: []const u8) ![]const u8 {
@@ -174,7 +194,7 @@ pub const URL = struct {
     }
 };
 
-fn isURL(url: []const u8) bool {
+fn isComleteHTTPUrl(url: []const u8) bool {
     if (std.mem.startsWith(u8, url, "://")) {
         return true;
     }
@@ -195,17 +215,17 @@ fn isURL(url: []const u8) bool {
 }
 
 const testing = @import("testing.zig");
-test "URL: isURL" {
-    try testing.expectEqual(true, isURL("://lightpanda.io"));
-    try testing.expectEqual(true, isURL("://lightpanda.io/about"));
-    try testing.expectEqual(true, isURL("http://lightpanda.io/about"));
-    try testing.expectEqual(true, isURL("HttP://lightpanda.io/about"));
-    try testing.expectEqual(true, isURL("httpS://lightpanda.io/about"));
-    try testing.expectEqual(true, isURL("HTTPs://lightpanda.io/about"));
+test "URL: isComleteHTTPUrl" {
+    try testing.expectEqual(true, isComleteHTTPUrl("://lightpanda.io"));
+    try testing.expectEqual(true, isComleteHTTPUrl("://lightpanda.io/about"));
+    try testing.expectEqual(true, isComleteHTTPUrl("http://lightpanda.io/about"));
+    try testing.expectEqual(true, isComleteHTTPUrl("HttP://lightpanda.io/about"));
+    try testing.expectEqual(true, isComleteHTTPUrl("httpS://lightpanda.io/about"));
+    try testing.expectEqual(true, isComleteHTTPUrl("HTTPs://lightpanda.io/about"));
 
-    try testing.expectEqual(false, isURL("/lightpanda.io"));
-    try testing.expectEqual(false, isURL("../../about"));
-    try testing.expectEqual(false, isURL("about"));
+    try testing.expectEqual(false, isComleteHTTPUrl("/lightpanda.io"));
+    try testing.expectEqual(false, isComleteHTTPUrl("../../about"));
+    try testing.expectEqual(false, isComleteHTTPUrl("about"));
 }
 
 test "URL: resolve size" {
@@ -224,93 +244,122 @@ test "URL: resolve size" {
     try std.testing.expectEqualStrings(out_url.raw[26..], &url_string);
 }
 
-test "URL: Stitching Base & Src URLs (Basic)" {
-    const allocator = testing.allocator;
+test "URL: stitch" {
+    defer testing.reset();
 
-    const base = "https://lightpanda.io/xyz/abc/123";
-    const src = "something.js";
-    const result = try URL.stitch(allocator, src, base, .{});
-    defer allocator.free(result);
-    try testing.expectString("https://lightpanda.io/xyz/abc/something.js", result);
-}
+    const Case = struct {
+        base: []const u8,
+        path: []const u8,
+        expected: []const u8,
+    };
 
-test "URL: Stitching Base & Src URLs (Just Ending Slash)" {
-    const allocator = testing.allocator;
+    const cases = [_]Case{
+        .{
+            .base = "https://lightpanda.io/xyz/abc/123",
+            .path = "something.js",
+            .expected = "https://lightpanda.io/xyz/abc/something.js",
+        },
+        .{
+            .base = "https://lightpanda.io/xyz/abc/123",
+            .path = "/something.js",
+            .expected = "https://lightpanda.io/something.js",
+        },
+        .{
+            .base = "https://lightpanda.io/",
+            .path = "something.js",
+            .expected = "https://lightpanda.io/something.js",
+        },
+        .{
+            .base = "https://lightpanda.io/",
+            .path = "/something.js",
+            .expected = "https://lightpanda.io/something.js",
+        },
+        .{
+            .base = "https://lightpanda.io",
+            .path = "something.js",
+            .expected = "https://lightpanda.io/something.js",
+        },
+        .{
+            .base = "https://lightpanda.io",
+            .path = "abc/something.js",
+            .expected = "https://lightpanda.io/abc/something.js",
+        },
+        .{
+            .base = "https://lightpanda.io/nested",
+            .path = "abc/something.js",
+            .expected = "https://lightpanda.io/abc/something.js",
+        },
+        .{
+            .base = "https://lightpanda.io/nested/",
+            .path = "abc/something.js",
+            .expected = "https://lightpanda.io/nested/abc/something.js",
+        },
+        .{
+            .base = "https://lightpanda.io/nested/",
+            .path = "/abc/something.js",
+            .expected = "https://lightpanda.io/abc/something.js",
+        },
+        .{
+            .base = "https://lightpanda.io/nested/",
+            .path = "http://www.github.com/lightpanda-io/",
+            .expected = "http://www.github.com/lightpanda-io/",
+        },
+        .{
+            .base = "https://lightpanda.io/nested/",
+            .path = "",
+            .expected = "https://lightpanda.io/nested/",
+        },
+        .{
+            .base = "https://lightpanda.io/abc/aaa",
+            .path = "./hello/./world",
+            .expected = "https://lightpanda.io/abc/hello/world",
+        },
+        .{
+            .base = "https://lightpanda.io/abc/aaa/",
+            .path = "../hello",
+            .expected = "https://lightpanda.io/abc/hello",
+        },
+        .{
+            .base = "https://lightpanda.io/abc/aaa",
+            .path = "../hello",
+            .expected = "https://lightpanda.io/hello",
+        },
+        .{
+            .base = "https://lightpanda.io/abc/aaa/",
+            .path = "./.././.././hello",
+            .expected = "https://lightpanda.io/hello",
+        },
+        .{
+            .base = "some/page",
+            .path = "hello",
+            .expected = "some/hello",
+        },
+        .{
+            .base = "some/page/",
+            .path = "hello",
+            .expected = "some/page/hello",
+        },
 
-    const base = "https://lightpanda.io/";
-    const src = "something.js";
-    const result = try URL.stitch(allocator, src, base, .{});
-    defer allocator.free(result);
-    try testing.expectString("https://lightpanda.io/something.js", result);
-}
+        .{
+            .base = "some/page/other",
+            .path = ".././hello",
+            .expected = "some/hello",
+        },
+    };
 
-test "URL: Stitching Base & Src URLs with leading slash" {
-    const allocator = testing.allocator;
+    for (cases) |case| {
+        const result = try stitch(testing.arena_allocator, case.path, case.base, .{});
+        try testing.expectString(case.expected, result);
+    }
 
-    const base = "https://lightpanda.io/";
-    const src = "/something.js";
-    const result = try URL.stitch(allocator, src, base, .{});
-    defer allocator.free(result);
-    try testing.expectString("https://lightpanda.io/something.js", result);
-}
-
-test "URL: Stitching Base & Src URLs (No Ending Slash)" {
-    const allocator = testing.allocator;
-
-    const base = "https://lightpanda.io";
-    const src = "something.js";
-    const result = try URL.stitch(allocator, src, base, .{});
-    defer allocator.free(result);
-    try testing.expectString("https://lightpanda.io/something.js", result);
-}
-
-test "URL: Stitching Base with absolute src" {
-    const allocator = testing.allocator;
-
-    const base = "https://lightpanda.io/hello";
-    const src = "/abc/something.js";
-    const result = try URL.stitch(allocator, src, base, .{});
-    defer allocator.free(result);
-    try testing.expectString("https://lightpanda.io/abc/something.js", result);
-}
-
-test "URL: Stiching Base & Src URLs (Both Local)" {
-    const allocator = testing.allocator;
-
-    const base = "./abcdef/123.js";
-    const src = "something.js";
-    const result = try URL.stitch(allocator, src, base, .{});
-    defer allocator.free(result);
-    try testing.expectString("./abcdef/something.js", result);
-}
-
-test "URL: Stiching src as full path" {
-    const allocator = testing.allocator;
-
-    const base = "https://www.lightpanda.io/";
-    const src = "https://lightpanda.io/something.js";
-    const result = try URL.stitch(allocator, src, base, .{ .alloc = .if_needed });
-    try testing.expectString("https://lightpanda.io/something.js", result);
-}
-
-test "URL: Stitching Base & Src URLs (empty src)" {
-    const allocator = testing.allocator;
-
-    const base = "https://lightpanda.io/xyz/abc/123";
-    const src = "";
-    const result = try URL.stitch(allocator, src, base, .{});
-    defer allocator.free(result);
-    try testing.expectString("https://lightpanda.io/xyz/abc/123", result);
-}
-
-test "URL: Stitching dotslash" {
-    const allocator = testing.allocator;
-
-    const base = "https://lightpanda.io/hello/";
-    const src = "./something.js";
-    const result = try URL.stitch(allocator, src, base, .{});
-    defer allocator.free(result);
-    try testing.expectString("https://lightpanda.io/hello/something.js", result);
+    try testing.expectError(
+        error.InvalidURL,
+        stitch(testing.arena_allocator, "../hello", "https://lightpanda.io/", .{}),
+    );
+    try testing.expectError(
+        error.InvalidURL,
+        stitch(testing.arena_allocator, "../hello", "http://lightpanda.io/", .{}),
+    );
 }
 
 test "URL: concatQueryString" {
