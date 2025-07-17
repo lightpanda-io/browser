@@ -60,17 +60,18 @@ pub fn processMessage(cmd: anytype) !void {
 
 // https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-getDocument
 fn getDocument(cmd: anytype) !void {
-    // const params = (try cmd.params(struct {
-    //     depth: ?u32 = null,
-    //     pierce: ?bool = null,
-    // })) orelse return error.InvalidParams;
+    const params = (try cmd.params(struct {
+        // CDP documentation implies that 0 isn't valid, but it _does_ work in Chrome
+        depth: ?i32 = null,
+        pierce: ?bool = null,
+    })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
     const doc = parser.documentHTMLToDocument(page.window.document);
 
     const node = try bc.node_registry.register(parser.documentToNode(doc));
-    return cmd.sendResult(.{ .root = bc.nodeWriter(node, .{}) }, .{});
+    return cmd.sendResult(.{ .root = bc.nodeWriter(node, .{ .depth = params.depth orelse 3 }) }, .{});
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-performSearch
@@ -451,7 +452,7 @@ fn requestChildNodes(cmd: anytype) !void {
 
     try cmd.sendEvent("DOM.setChildNodes", .{
         .parentId = node.id,
-        .nodes = bc.nodeWriter(node, .{.depth = params.depth, .exclude_root = true}),
+        .nodes = bc.nodeWriter(node, .{ .depth = params.depth, .exclude_root = true }),
     }, .{
         .session_id = session_id,
     });
@@ -610,6 +611,7 @@ test "cdp.dom: getBoxModel" {
     try ctx.processMessage(.{ // Hacky way to make sure nodeId 0 exists in the registry
         .id = 3,
         .method = "DOM.getDocument",
+        .params = .{ .depth = 3 },
     });
 
     try ctx.processMessage(.{
