@@ -118,7 +118,7 @@ pub const URL = struct {
             return base;
         }
 
-        // Quick hack becauste domains have to be at least 3 characters.
+        // Quick hack because domains have to be at least 3 characters.
         // Given https://a.b  this will point to 'a'
         // Given http://a.b  this will point '.'
         // Either way, we just care about this value to find the start of the path
