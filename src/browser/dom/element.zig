@@ -508,6 +508,12 @@ pub const Element = struct {
         _ = opts;
         return Animation.constructor(effect, null);
     }
+
+    pub fn _remove(self: *parser.Element) !void {
+        const as_node: *parser.Node = @ptrCast(self);
+        const parent = try parser.nodeParentNode(as_node) orelse return;
+        _ = try Node._removeChild(parent, as_node);
+    }
 };
 
 // Tests
@@ -766,5 +772,14 @@ test "Browser.DOM.Element" {
 
         .{ "fc; (fc = document.createElement('div')).innerHTML = '<script><\\/script><p>hello</p>'", null },
         .{ "fc.outerHTML", "<div><script></script><p>hello</p></div>" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "const rm = document.createElement('div')", null },
+        .{ "rm.id = 'to-remove'", null },
+        .{ "document.getElementsByTagName('body')[0].appendChild(rm)", null },
+        .{ "document.getElementById('to-remove') != null", "true" },
+        .{ "rm.remove()", "undefined" },
+        .{ "document.getElementById('to-remove') != null", "false" },
     }, .{});
 }
