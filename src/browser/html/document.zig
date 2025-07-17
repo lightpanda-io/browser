@@ -278,15 +278,17 @@ pub const HTMLDocument = struct {
         const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(self)));
         state.ready_state = .interactive;
 
-        const evt = try parser.eventCreate();
-        defer parser.eventDestroy(evt);
-
         log.debug(.script_event, "dispatch event", .{
             .type = "DOMContentLoaded",
             .source = "document",
         });
+
+        const evt = try parser.eventCreate();
+        defer parser.eventDestroy(evt);
         try parser.eventInit(evt, "DOMContentLoaded", .{ .bubbles = true, .cancelable = true });
         _ = try parser.eventTargetDispatchEvent(parser.toEventTarget(parser.DocumentHTML, self), evt);
+
+        try page.window.dispatchForDocumentTarget(evt);
     }
 
     pub fn documentIsComplete(self: *parser.DocumentHTML, page: *Page) !void {

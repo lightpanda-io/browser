@@ -334,6 +334,23 @@ pub const Window = struct {
             );
         }
     }
+
+    // libdom's document doesn't have a parent, which is correct, but
+    // breaks the event bubbling that happens for many events from
+    // document -> window.
+    // We need to force dispatch this event on the window, with the
+    // document target.
+    // In theory, we should do this for a lot of events and might need
+    // to come up with a good way to solve this more generically. But
+    // this specific event, and maybe a few others in the near future,
+    // are blockers.
+    // Worth noting that NetSurf itself appears to do something similar:
+    // https://github.com/netsurf-browser/netsurf/blob/a32e1a03e1c91ee9f0aa211937dbae7a96831149/content/handlers/html/html.c#L380
+    pub fn dispatchForDocumentTarget(self: *Window, evt: *parser.Event) !void {
+        // we assume that this evt has already been dispatched on the document
+        // and thus the target has already been set to the document.
+        return self.base.redispatchEvent(evt);
+    }
 };
 
 const TimerCallback = struct {
@@ -491,4 +508,21 @@ test "Browser.HTML.Window" {
         .{ "var qm = false; window.queueMicrotask(() => {qm = true });", null },
         .{ "qm", "true" },
     }, .{});
+
+    {
+        try runner.testCases(&.{
+            .{
+                \\ let dcl = false;
+                \\ window.addEventListener('DOMContentLoaded', (e) => {
+                \\   dcl = e.target == document;
+                \\ });
+                ,
+                null,
+            },
+        }, .{});
+        try runner.dispatchDOMContentLoaded();
+        try runner.testCases(&.{
+            .{ "dcl", "true" },
+        }, .{});
+    }
 }
