@@ -154,7 +154,7 @@ pub const URL = struct {
 
                 out_i -= 2;
                 while (out_i > 1 and out[out_i - 1] != '/') {
-                    out_i -= 1; 
+                    out_i -= 1;
                 }
                 // <= to deal with the hack-ish protocol_end which will be off-by-one between http and https
                 if (out_i <= protocol_end) return error.InvalidURL;
