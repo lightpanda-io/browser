@@ -510,6 +510,10 @@ pub const Element = struct {
     }
 
     pub fn _remove(self: *parser.Element) !void {
+        // TODO: This hasn't been tested to make sure all references to this
+        // node are properly updated. A lot of libdom is lazy and will look
+        // for related elements JIT by walking the tree, but there could be
+        // cases in libdom or the Zig WebAPI where this reference is kept
         const as_node: *parser.Node = @ptrCast(self);
         const parent = try parser.nodeParentNode(as_node) orelse return;
         _ = try Node._removeChild(parent, as_node);
