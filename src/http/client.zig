@@ -806,27 +806,12 @@ pub const Request = struct {
             log.warn(.http, "not implemented", .{ .feature = "async tls connect" });
         }
 
-        const is_proxy = self._client.isProxy();
-        if ((is_proxy and self._proxy_secure) or (!self._client.isForwardProxy() and self._request_secure)) {
-            if (self._connection_from_keepalive) {
-                // If the connection came from the keepalive pool, than we already
-                // have a TLS Connection.
-                async_handler.conn.protocol = .{ .encrypted = .{ .conn = &connection.tls.?.nonblocking } };
-            } else {
-                std.debug.assert(connection.tls == null);
-                async_handler.conn.protocol = .{
-                    .handshake = tls.nonblock.Client.init(.{
-                        .host = if (self._client.isConnectProxy()) self._request_host else self._connect_host, // looks wrong
-                        .root_ca = self._client.root_ca,
-                        .insecure_skip_verify = self._tls_verify_host == false,
-                        .key_log_callback = tls.config.key_log.callback,
-                    }),
-                };
-            }
-        }
-
-        if (self._connection_from_keepalive) {
-            // we're already connected
+        if (self._connection_from_keepalive and
+            ((self._client.isProxy() and self._proxy_secure) or (!self._client.isForwardProxy() and self._request_secure)))
+        {
+            // If the connection came from the keepalive pool, than we already have a TLS Connection.
+            async_handler.conn.protocol = .{ .encrypted = .{ .conn = &connection.tls.?.nonblocking } };
+            // and we're already connected
             async_handler.pending_connect = false;
             return async_handler.conn.connected();
         }
@@ -1155,6 +1140,19 @@ fn AsyncHandler(comptime H: type) type {
             }
 
             result catch |err| return self.handleError("Connection failed", err);
+
+            const request = self.request;
+            if ((request._client.isProxy() and request._proxy_secure) or (!request._client.isForwardProxy() and request._request_secure)) {
+                std.debug.assert(request._connection.?.tls == null);
+                self.conn.protocol = .{
+                    .handshake = tls.nonblock.Client.init(.{
+                        .host = if (request._client.isConnectProxy()) request._request_host else request._connect_host,
+                        .root_ca = request._client.root_ca,
+                        .insecure_skip_verify = request._tls_verify_host == false,
+                        .key_log_callback = tls.config.key_log.callback,
+                    }),
+                };
+            }
 
             if (self.request.shouldProxyConnect()) {
                 self.state = .connect;
