@@ -634,13 +634,15 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // The key is the @intFromPtr of the Zig value
             identity_map: std.AutoHashMapUnmanaged(usize, PersistentObject) = .empty,
 
-            // Similar to the identity map, but used much less frequently. Some
-            // web APIs have to manage opaque values. Ideally, they use an
+            // Some web APIs have to manage opaque values. Ideally, they use an
             // JsObject, but the JsObject has no lifetime guarantee beyond the
             // current call. They can call .persist() on their JsObject to get
             // a `*PersistentObject()`. We need to track these to free them.
-            // The key is the @intFromPtr of the v8.Object.handle.
-            js_object_map: std.AutoHashMapUnmanaged(usize, PersistentObject) = .empty,
+            // This used to be a map and acted like identity_map; the key was
+            // the @intFromPtr(js_obj.handle). But v8 can re-use address. Without
+            // a reliable way to know if an object has already been persisted,
+            // we now simply persist every time persist() is called.
+            js_object_list: std.ArrayListUnmanaged(PersistentObject) = .empty,
 
             // When we need to load a resource (i.e. an external script), we call
             // this function to get the source. This is always a reference to the
@@ -690,11 +692,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     }
                 }
 
-                {
-                    var it = self.js_object_map.valueIterator();
-                    while (it.next()) |p| {
-                        p.deinit();
-                    }
+                for (self.js_object_list.items) |*p| {
+                    p.deinit();
                 }
 
                 {
@@ -1883,16 +1882,13 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             pub fn persist(self: JsObject) !JsObject {
                 var js_context = self.js_context;
                 const js_obj = self.js_obj;
-                const handle = js_obj.handle;
 
-                const gop = try js_context.js_object_map.getOrPut(js_context.context_arena, @intFromPtr(handle));
-                if (gop.found_existing == false) {
-                    gop.value_ptr.* = PersistentObject.init(js_context.isolate, js_obj);
-                }
+                const persisted = PersistentObject.init(js_context.isolate, js_obj);
+                try js_context.js_object_list.append(js_context.context_arena, persisted);
 
                 return .{
                     .js_context = js_context,
-                    .js_obj = gop.value_ptr.castToObject(),
+                    .js_obj = persisted.castToObject(),
                 };
             }
 
