@@ -30,6 +30,7 @@ pub const Union = union(enum) {
     node: nod.Union,
     xhr: *@import("../xhr/xhr.zig").XMLHttpRequest,
     plain: *parser.EventTarget,
+    message_port: *@import("MessageChannel.zig").MessagePort,
 };
 
 // EventTarget implementation
@@ -62,6 +63,9 @@ pub const EventTarget = struct {
                 const XMLHttpRequestEventTarget = @import("../xhr/event_target.zig").XMLHttpRequestEventTarget;
                 const base: *XMLHttpRequestEventTarget = @fieldParentPtr("base", @as(*parser.EventTargetTBase, @ptrCast(et)));
                 return .{ .xhr = @fieldParentPtr("proto", base) };
+            },
+            .message_port => {
+                return .{ .message_port = @fieldParentPtr("proto", @as(*parser.EventTargetTBase, @ptrCast(et))) };
             },
             else => return error.MissingEventTargetType,
         }

@@ -528,6 +528,7 @@ pub const EventType = enum(u8) {
     error_event = 4,
     abort_signal = 5,
     xhr_event = 6,
+    message_event = 7,
 };
 
 pub const MutationEvent = c.dom_mutation_event;
@@ -786,6 +787,7 @@ pub const EventTargetTBase = extern struct {
         window = 4,
         performance = 5,
         media_query_list = 6,
+        message_port = 7,
     };
 
     vtable: ?*const c.struct_dom_event_target_vtable = &c.struct_dom_event_target_vtable{
