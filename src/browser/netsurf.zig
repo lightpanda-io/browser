@@ -846,6 +846,14 @@ pub const EventTargetTBase = extern struct {
         internal_type_.* = @intFromEnum(self.internal_target_type);
         return c.DOM_NO_ERR;
     }
+
+    // Called to simulate bubbling from a libdom node (e.g. the Document) to a
+    // Zig instance (e.g. the Window).
+    pub fn redispatchEvent(self: *EventTargetTBase, evt: *Event) !void {
+        var res: bool = undefined;
+        const err = c._dom_event_target_dispatch(@ptrCast(self), &self.eti, evt, c.DOM_BUBBLING_PHASE, &res);
+        try DOMErr(err);
+    }
 };
 
 // MouseEvent

@@ -474,6 +474,12 @@ pub const JsRunner = struct {
             return err;
         };
     }
+
+    pub fn dispatchDOMContentLoaded(self: *JsRunner) !void {
+        const HTMLDocument = @import("browser/html/document.zig").HTMLDocument;
+        const html_doc = self.page.window.document;
+        try HTMLDocument.documentIsLoaded(html_doc, self.page);
+    }
 };
 
 const RunnerOpts = struct {
