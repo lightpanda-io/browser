@@ -451,6 +451,12 @@ pub const Page = struct {
     // if no src is present, we evaluate the text source.
     // https://html.spec.whatwg.org/multipage/scripting.html#script-processing-model
     fn tryEvalScript(self: *Page, script: *const Script) !void {
+        if (try script.alreadyProcessed()) {
+            return;
+        }
+
+        try script.markAsProcessed();
+
         const html_doc = self.window.document;
         try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(script.element));
 
@@ -996,6 +1002,21 @@ const Script = struct {
         if (std.ascii.eqlIgnoreCase(script_type, "module")) return .module;
 
         return null;
+    }
+
+    // If a script tag gets dynamically created and added to the dom:
+    //    document.getElementsByTagName('head')[0].appendChild(script)
+    // that script tag will immediately get executed by our scriptAddedCallback.
+    // However, if the location where the script tag is inserted happens to be
+    // below where processHTMLDoc curently is, then we'll re-run that same script
+    // again in processHTMLDoc. This flag is used to let us know if a specific
+    // <script> has already been processed.
+    fn alreadyProcessed(self: *const Script) !bool {
+        return parser.scriptGetProcessed(@ptrCast(self.element));
+    }
+
+    fn markAsProcessed(self: *const Script) !void {
+        return parser.scriptSetProcessed(@ptrCast(self.element), true);
     }
 
     fn eval(self: *const Script, page: *Page, body: []const u8) !void {

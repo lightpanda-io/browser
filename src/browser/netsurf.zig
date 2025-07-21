@@ -2885,3 +2885,15 @@ pub fn buttonGetType(button: *Button) ![]const u8 {
     const s = s_ orelse return "button";
     return strToData(s);
 }
+
+pub fn scriptGetProcessed(script: *Script) !bool {
+    var processed: bool = false;
+    const err = c.dom_html_script_element_get_processed(script, &processed);
+    try DOMErr(err);
+    return processed;
+}
+
+pub fn scriptSetProcessed(script: *Script, processed: bool) !void {
+    const err = c.dom_html_script_element_set_processed(script, processed);
+    try DOMErr(err);
+}
