@@ -26,7 +26,7 @@ const WebApis = struct {
         @import("cssom/cssom.zig").Interfaces,
         @import("dom/dom.zig").Interfaces,
         @import("dom/shadow_root.zig").ShadowRoot,
-        @import("encoding/text_encoder.zig").Interfaces,
+        @import("encoding/encoding.zig").Interfaces,
         @import("events/event.zig").Interfaces,
         @import("html/html.zig").Interfaces,
         @import("iterator/iterator.zig").Interfaces,

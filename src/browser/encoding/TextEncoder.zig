@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2024  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -20,39 +20,37 @@ const std = @import("std");
 
 const Env = @import("../env.zig").Env;
 
-pub const Interfaces = .{
-    TextEncoder,
-};
-
 // https://encoding.spec.whatwg.org/#interface-textencoder
-pub const TextEncoder = struct {
-    pub fn constructor() !TextEncoder {
-        return .{};
+const TextEncoder = @This();
+
+pub fn constructor() !TextEncoder {
+    return .{};
+}
+
+pub fn get_encoding(_: *const TextEncoder) []const u8 {
+    return "utf-8";
+}
+
+pub fn _encode(_: *const TextEncoder, v: []const u8) !Env.TypedArray(u8) {
+    // Ensure the input is a valid utf-8
+    // It seems chrome accepts invalid utf-8 sequence.
+    //
+    if (!std.unicode.utf8ValidateSlice(v)) {
+        return error.InvalidUtf8;
     }
 
-    pub fn get_encoding(_: *const TextEncoder) []const u8 {
-        return "utf-8";
-    }
-
-    pub fn _encode(_: *const TextEncoder, v: []const u8) !Env.TypedArray(u8) {
-        // Ensure the input is a valid utf-8
-        // It seems chrome accepts invalid utf-8 sequence.
-        //
-        if (!std.unicode.utf8ValidateSlice(v)) {
-            return error.InvalidUtf8;
-        }
-
-        return .{ .values = v };
-    }
-};
+    return .{ .values = v };
+}
 
 const testing = @import("../../testing.zig");
 test "Browser.Encoding.TextEncoder" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{
+        .html = "",
+    });
     defer runner.deinit();
 
     try runner.testCases(&.{
-        .{ "var encoder = new TextEncoder();", "undefined" },
+        .{ "var encoder = new TextEncoder();", null },
         .{ "encoder.encoding;", "utf-8" },
         .{ "encoder.encode('€');", "226,130,172" },
 
