@@ -92,6 +92,7 @@ test "Browser.Encoding.TextDecoder" {
         .{ "d1.ignoreBOM", "false" },
         .{ "d1.decode(new Uint8Array([240, 160, 174, 183]))", "𠮷" },
         .{ "d1.decode(new Uint8Array([0xEF, 0xBB, 0xBF, 240, 160, 174, 183]))", "𠮷" },
+        .{ "d1.decode(new Uint8Array([49, 50]).buffer)", "12" },
 
         .{ "let d2 = new TextDecoder('utf8', {fatal: true})", null },
         .{

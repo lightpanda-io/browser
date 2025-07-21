@@ -952,9 +952,21 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             }
                         },
                         .slice => {
+                            var force_u8 = false;
+                            var array_buffer: ?v8.ArrayBuffer = null;
                             if (js_value.isTypedArray()) {
                                 const buffer_view = js_value.castTo(v8.ArrayBufferView);
-                                const buffer = buffer_view.getBuffer();
+                                array_buffer = buffer_view.getBuffer();
+                            } else if (js_value.isArrayBufferView()) {
+                                force_u8 = true;
+                                const buffer_view = js_value.castTo(v8.ArrayBufferView);
+                                array_buffer = buffer_view.getBuffer();
+                            } else if (js_value.isArrayBuffer()) {
+                                force_u8 = true;
+                                array_buffer = js_value.castTo(v8.ArrayBuffer);
+                            }
+
+                            if (array_buffer) |buffer| {
                                 const backing_store = v8.BackingStore.sharedPtrGet(&buffer.getBackingStore());
                                 const data = backing_store.getData();
                                 const byte_len = backing_store.getByteLength();
@@ -963,7 +975,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                                     u8 => {
                                         // need this sentinel check to keep the compiler happy
                                         if (ptr.sentinel() == null) {
-                                            if (js_value.isUint8Array() or js_value.isUint8ClampedArray()) {
+                                            if (force_u8 or js_value.isUint8Array() or js_value.isUint8ClampedArray()) {
                                                 const arr_ptr = @as([*]u8, @alignCast(@ptrCast(data)));
                                                 return arr_ptr[0..byte_len];
                                             }
