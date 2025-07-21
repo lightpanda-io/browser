@@ -806,12 +806,12 @@ pub const Request = struct {
             log.warn(.http, "not implemented", .{ .feature = "async tls connect" });
         }
 
-        if (self._connection_from_keepalive and
-            ((self._client.isProxy() and self._proxy_secure) or (!self._client.isForwardProxy() and self._request_secure)))
-        {
-            // If the connection came from the keepalive pool, than we already have a TLS Connection.
-            async_handler.conn.protocol = .{ .encrypted = .{ .conn = &connection.tls.?.nonblocking } };
-            // and we're already connected
+        if (self._connection_from_keepalive) {
+            if ((self._client.isProxy() and self._proxy_secure) or (!self._client.isForwardProxy() and self._request_secure)) {
+                // If the connection came from the keepalive pool, than we already have a TLS Connection.
+                async_handler.conn.protocol = .{ .encrypted = .{ .conn = &connection.tls.?.nonblocking } };
+            }
+            // We're already connected
             async_handler.pending_connect = false;
             return async_handler.conn.connected();
         }
