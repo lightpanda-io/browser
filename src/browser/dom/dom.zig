@@ -53,4 +53,5 @@ pub const Interfaces = .{
     PerformanceObserver,
     @import("range.zig").Interfaces,
     @import("Animation.zig"),
+    @import("MessageChannel.zig").Interfaces,
 };
