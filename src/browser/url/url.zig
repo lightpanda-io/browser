@@ -89,7 +89,17 @@ pub const URL = struct {
             raw = if (url == .url) url_str else try arena.dupe(u8, url_str);
         }
 
-        const uri = std.Uri.parse(raw.?) catch return error.TypeError;
+        const uri = std.Uri.parse(raw.?) catch blk: {
+            if (!std.mem.endsWith(u8, raw.?, "://")) {
+                return error.TypeError;
+            }
+            // schema only is valid!
+            break :blk std.Uri{
+                .scheme = raw.?[0..raw.?.len - 3],
+                .host = .{.percent_encoded = ""},
+            };
+        };
+
         return init(arena, uri);
     }
 
@@ -557,6 +567,14 @@ test "Browser.URL" {
     try runner.testCases(&.{
         .{ "var url = new URL('over?9000', 'https://lightpanda.io')", null },
         .{ "url.href", "https://lightpanda.io/over?9000" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "let sk = new URL('sveltekit-internal://')", null },
+        .{ "sk.protocol", "sveltekit-internal:"},
+        .{ "sk.host", ""},
+        .{ "sk.hostname", ""},
+        .{ "sk.href", "sveltekit-internal://"}
     }, .{});
 }
 
