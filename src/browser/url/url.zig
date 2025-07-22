@@ -95,8 +95,8 @@ pub const URL = struct {
             }
             // schema only is valid!
             break :blk std.Uri{
-                .scheme = raw.?[0..raw.?.len - 3],
-                .host = .{.percent_encoded = ""},
+                .scheme = raw.?[0 .. raw.?.len - 3],
+                .host = .{ .percent_encoded = "" },
             };
         };
 
@@ -571,10 +571,10 @@ test "Browser.URL" {
 
     try runner.testCases(&.{
         .{ "let sk = new URL('sveltekit-internal://')", null },
-        .{ "sk.protocol", "sveltekit-internal:"},
-        .{ "sk.host", ""},
-        .{ "sk.hostname", ""},
-        .{ "sk.href", "sveltekit-internal://"}
+        .{ "sk.protocol", "sveltekit-internal:" },
+        .{ "sk.host", "" },
+        .{ "sk.hostname", "" },
+        .{ "sk.href", "sveltekit-internal://" },
     }, .{});
 }
 
