@@ -76,6 +76,19 @@ pub const Performance = struct {
     pub fn _clearMeasures(_: *Performance, name: ?[]const u8) void {
         _ = name;
     }
+
+    // TODO: fn _measures should record the marks in a lookup
+    pub fn _getEntriesByName(_: *Performance, name: []const u8, typ: ?[]const u8) []PerformanceEntry {
+        _ = name;
+        _ = typ;
+        return &.{};
+    }
+
+    // TODO: fn _measures should record the marks in a lookup
+    pub fn _getEntriesByType(_: *Performance, typ: []const u8) []PerformanceEntry {
+        _ = typ;
+        return &.{};
+    }
 };
 
 // https://developer.mozilla.org/en-US/docs/Web/API/PerformanceEntry
