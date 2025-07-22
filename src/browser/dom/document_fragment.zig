@@ -79,7 +79,9 @@ pub const DocumentFragment = struct {
     }
 
     pub fn get_children(self: *parser.DocumentFragment) !collection.HTMLCollection {
-        return collection.HTMLCollectionChildren(parser.documentFragmentToNode(self), false);
+        return collection.HTMLCollectionChildren(parser.documentFragmentToNode(self), .{
+            .include_root = false,
+        });
     }
 };
 

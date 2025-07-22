@@ -75,7 +75,6 @@ pub const Interfaces = .{
     HTMLOListElement,
     HTMLObjectElement,
     HTMLOptGroupElement,
-    HTMLOptionElement,
     HTMLOutputElement,
     HTMLParagraphElement,
     HTMLParamElement,
@@ -102,7 +101,7 @@ pub const Interfaces = .{
     HTMLVideoElement,
 
     @import("form.zig").HTMLFormElement,
-    @import("select.zig").HTMLSelectElement,
+    @import("select.zig").Interfaces,
 };
 
 pub const Union = generate.Union(Interfaces);
@@ -809,12 +808,6 @@ pub const HTMLObjectElement = struct {
 
 pub const HTMLOptGroupElement = struct {
     pub const Self = parser.OptGroup;
-    pub const prototype = *HTMLElement;
-    pub const subtype = .node;
-};
-
-pub const HTMLOptionElement = struct {
-    pub const Self = parser.Option;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
 };

@@ -149,7 +149,9 @@ pub const Document = struct {
         tag_name: []const u8,
         page: *Page,
     ) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(page.arena, parser.documentToNode(self), tag_name, true);
+        return try collection.HTMLCollectionByTagName(page.arena, parser.documentToNode(self), tag_name, .{
+            .include_root = true,
+        });
     }
 
     pub fn _getElementsByClassName(
@@ -157,7 +159,9 @@ pub const Document = struct {
         classNames: []const u8,
         page: *Page,
     ) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByClassName(page.arena, parser.documentToNode(self), classNames, true);
+        return try collection.HTMLCollectionByClassName(page.arena, parser.documentToNode(self), classNames, .{
+            .include_root = true,
+        });
     }
 
     pub fn _createDocumentFragment(self: *parser.Document) !*parser.DocumentFragment {
@@ -201,7 +205,9 @@ pub const Document = struct {
     // ParentNode
     // https://dom.spec.whatwg.org/#parentnode
     pub fn get_children(self: *parser.Document) !collection.HTMLCollection {
-        return try collection.HTMLCollectionChildren(parser.documentToNode(self), false);
+        return collection.HTMLCollectionChildren(parser.documentToNode(self), .{
+            .include_root = false,
+        });
     }
 
     pub fn get_firstElementChild(self: *parser.Document) !?ElementUnion {

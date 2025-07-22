@@ -118,7 +118,9 @@ pub const HTMLDocument = struct {
         if (name.len == 0) return list;
 
         const root = parser.documentHTMLToNode(self);
-        var c = try collection.HTMLCollectionByName(arena, root, name, false);
+        var c = try collection.HTMLCollectionByName(arena, root, name, .{
+            .include_root = false,
+        });
 
         const ln = try c.get_length();
         var i: u32 = 0;
@@ -132,11 +134,15 @@ pub const HTMLDocument = struct {
     }
 
     pub fn get_images(self: *parser.DocumentHTML, page: *Page) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(page.arena, parser.documentHTMLToNode(self), "img", false);
+        return try collection.HTMLCollectionByTagName(page.arena, parser.documentHTMLToNode(self), "img", .{
+            .include_root = false,
+        });
     }
 
     pub fn get_embeds(self: *parser.DocumentHTML, page: *Page) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(page.arena, parser.documentHTMLToNode(self), "embed", false);
+        return try collection.HTMLCollectionByTagName(page.arena, parser.documentHTMLToNode(self), "embed", .{
+            .include_root = false,
+        });
     }
 
     pub fn get_plugins(self: *parser.DocumentHTML, page: *Page) !collection.HTMLCollection {
@@ -144,11 +150,15 @@ pub const HTMLDocument = struct {
     }
 
     pub fn get_forms(self: *parser.DocumentHTML, page: *Page) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(page.arena, parser.documentHTMLToNode(self), "form", false);
+        return try collection.HTMLCollectionByTagName(page.arena, parser.documentHTMLToNode(self), "form", .{
+            .include_root = false,
+        });
     }
 
     pub fn get_scripts(self: *parser.DocumentHTML, page: *Page) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(page.arena, parser.documentHTMLToNode(self), "script", false);
+        return try collection.HTMLCollectionByTagName(page.arena, parser.documentHTMLToNode(self), "script", .{
+            .include_root = false,
+        });
     }
 
     pub fn get_applets(_: *parser.DocumentHTML) !collection.HTMLCollection {
@@ -156,11 +166,15 @@ pub const HTMLDocument = struct {
     }
 
     pub fn get_links(self: *parser.DocumentHTML) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByLinks(parser.documentHTMLToNode(self), false);
+        return try collection.HTMLCollectionByLinks(parser.documentHTMLToNode(self), .{
+            .include_root = false,
+        });
     }
 
     pub fn get_anchors(self: *parser.DocumentHTML) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByAnchors(parser.documentHTMLToNode(self), false);
+        return try collection.HTMLCollectionByAnchors(parser.documentHTMLToNode(self), .{
+            .include_root = false,
+        });
     }
 
     pub fn get_all(self: *parser.DocumentHTML) collection.HTMLAllCollection {

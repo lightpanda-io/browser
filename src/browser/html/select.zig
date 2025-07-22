@@ -18,8 +18,16 @@
 const std = @import("std");
 
 const parser = @import("../netsurf.zig");
-const HTMLElement = @import("elements.zig").HTMLElement;
+const collection = @import("../dom/html_collection.zig");
+
 const Page = @import("../page.zig").Page;
+const HTMLElement = @import("elements.zig").HTMLElement;
+
+pub const Interfaces = .{
+    HTMLSelectElement,
+    HTMLOptionElement,
+    HTMLOptionsCollection,
+};
 
 pub const HTMLSelectElement = struct {
     pub const Self = parser.Select;
@@ -89,6 +97,105 @@ pub const HTMLSelectElement = struct {
             try parser.optionSetSelected(option, true);
         }
     }
+
+    pub fn get_options(select: *parser.Select) HTMLOptionsCollection {
+        return .{
+            .select = select,
+            .proto = collection.HTMLCollectionChildren(@alignCast(@ptrCast(select)), .{
+                .mutable = true,
+                .include_root = false,
+            }),
+        };
+    }
+};
+
+pub const HTMLOptionElement = struct {
+    pub const Self = parser.Option;
+    pub const prototype = *HTMLElement;
+    pub const subtype = .node;
+
+    pub fn get_value(self: *parser.Option) ![]const u8 {
+        return parser.optionGetValue(self);
+    }
+    pub fn set_value(self: *parser.Option, value: []const u8) !void {
+        return parser.optionSetValue(self, value);
+    }
+
+    pub fn get_label(self: *parser.Option) ![]const u8 {
+        return parser.optionGetLabel(self);
+    }
+    pub fn set_label(self: *parser.Option, label: []const u8) !void {
+        return parser.optionSetLabel(self, label);
+    }
+
+    pub fn get_selected(self: *parser.Option) !bool {
+        return parser.optionGetSelected(self);
+    }
+    pub fn set_selected(self: *parser.Option, value: bool) !void {
+        return parser.optionSetSelected(self, value);
+    }
+
+    pub fn get_disabled(self: *parser.Option) !bool {
+        return parser.optionGetDisabled(self);
+    }
+    pub fn set_disabled(self: *parser.Option, value: bool) !void {
+        return parser.optionSetDisabled(self, value);
+    }
+
+    pub fn get_text(self: *parser.Option) ![]const u8 {
+        return parser.optionGetText(self);
+    }
+
+    pub fn get_form(self: *parser.Option) !?*parser.Form {
+        return parser.optionGetForm(self);
+    }
+};
+
+pub const HTMLOptionsCollection = struct {
+    pub const prototype = *collection.HTMLCollection;
+
+    proto: collection.HTMLCollection,
+    select: *parser.Select,
+
+    pub fn get_selectedIndex(self: *HTMLOptionsCollection, page: *Page) !i32 {
+        return HTMLSelectElement.get_selectedIndex(self.select, page);
+    }
+
+    pub fn set_selectedIndex(self: *HTMLOptionsCollection, index: i32, page: *Page) !void {
+        return HTMLSelectElement.set_selectedIndex(self.select, index, page);
+    }
+
+    const BeforeOpts = union(enum) {
+        index: u32,
+        option: *parser.Option,
+    };
+    pub fn _add(self: *HTMLOptionsCollection, option: *parser.Option, before_: ?BeforeOpts) !void {
+        const Node = @import("../dom/node.zig").Node;
+        const before = before_ orelse {
+            return self.appendOption(option);
+        };
+
+        const insert_before: *parser.Node = switch (before) {
+            .option => |o| @alignCast(@ptrCast(o)),
+            .index => |i| (try self.proto.item(i)) orelse return self.appendOption(option),
+        };
+        return Node.before(insert_before, &.{
+            .{ .node = @alignCast(@ptrCast(option)) },
+        });
+    }
+
+    pub fn _remove(self: *HTMLOptionsCollection, index: u32) !void {
+        const Node = @import("../dom/node.zig").Node;
+        const option = (try self.proto.item(index)) orelse return;
+        _ = try Node._removeChild(@alignCast(@ptrCast(self.select)), option);
+    }
+
+    fn appendOption(self: *HTMLOptionsCollection, option: *parser.Option) !void {
+        const Node = @import("../dom/node.zig").Node;
+        return Node.append(@alignCast(@ptrCast(self.select)), &.{
+            .{ .node = @alignCast(@ptrCast(option)) },
+        });
+    }
 };
 
 const testing = @import("../../testing.zig");
@@ -140,5 +247,32 @@ test "Browser.HTML.Select" {
 
         .{ "s.selectedIndex = -323", null },
         .{ "s.selectedIndex", "-1" },
+
+        .{ "let options = s.options", null },
+        .{ "options.length", "2" },
+        .{ "options.item(1).value", "o2" },
+        .{ "options.selectedIndex", "-1" },
+
+        .{ "let o3 = document.createElement('option');", null },
+        .{ "o3.value = 'o3';", null },
+        .{ "options.add(o3)", null },
+        .{ "options.length", "3" },
+        .{ "options.item(2).value", "o3" },
+
+        .{ "let o4 = document.createElement('option');", null },
+        .{ "o4.value = 'o4';", null },
+        .{ "options.add(o4, 1)", null },
+        .{ "options.length", "4" },
+        .{ "options.item(1).value", "o4" },
+
+        .{ "let o5 = document.createElement('option');", null },
+        .{ "o5.value = 'o5';", null },
+        .{ "options.add(o5, o3)", null },
+        .{ "options.length", "5" },
+        .{ "options.item(3).value", "o5" },
+
+        .{ "options.remove(3)", null },
+        .{ "options.length", "4" },
+        .{ "options.item(3).value", "o3" },
     }, .{});
 }
