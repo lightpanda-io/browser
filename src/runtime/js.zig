@@ -1580,38 +1580,54 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 const iso = self.isolate;
                 const ctx = self.v8_context;
 
-                const module_loader = self.module_loader;
-                const source = module_loader.func(module_loader.ptr, specifier) catch {
-                    const error_msg = v8.String.initUtf8(iso, "Failed to load module");
-                    _ = resolver.reject(ctx, error_msg.toValue());
-                    return;
-                } orelse {
-                    const error_msg = v8.String.initUtf8(iso, "Module source not available");
-                    _ = resolver.reject(ctx, error_msg.toValue());
-                    return;
-                };
+                if (self.module_cache.get(specifier)) |cached_module| {
+                    const new_module = cached_module.castToModule();
+                    const status = new_module.getStatus();
 
-                var try_catch: TryCatch = undefined;
-                try_catch.init(self);
-                defer try_catch.deinit();
+                    switch (status) {
+                        .kEvaluated, .kEvaluating => {
+                            const namespace = new_module.getModuleNamespace();
+                            log.info(.js, "dynamic import complete", .{
+                                .specifier = specifier,
+                            });
+                            _ = resolver.resolve(ctx, namespace);
+                            return;
+                        },
+                        else => {},
+                    }
+                } else {
+                    const module_loader = self.module_loader;
+                    const source = module_loader.func(module_loader.ptr, specifier) catch {
+                        const error_msg = v8.String.initUtf8(iso, "Failed to load module");
+                        _ = resolver.reject(ctx, error_msg.toValue());
+                        return;
+                    } orelse {
+                        const error_msg = v8.String.initUtf8(iso, "Module source not available");
+                        _ = resolver.reject(ctx, error_msg.toValue());
+                        return;
+                    };
 
-                const maybe_promise = self.module(source, specifier, true) catch {
-                    log.err(.js, "module compilation failed", .{
-                        .specifier = specifier,
-                        .exception = try_catch.exception(self.call_arena) catch "unknown error",
-                        .stack = try_catch.stack(self.call_arena) catch null,
-                        .line = try_catch.sourceLineNumber() orelse 0,
-                    });
-                    const error_msg = if (try_catch.hasCaught()) blk: {
-                        const exception_str = try_catch.exception(self.call_arena) catch "Evaluation error";
-                        break :blk v8.String.initUtf8(iso, exception_str orelse "Evaluation error");
-                    } else v8.String.initUtf8(iso, "Module evaluation failed");
-                    _ = resolver.reject(ctx, error_msg.toValue());
-                    return;
-                };
-                const new_module = self.module_cache.get(specifier).?.castToModule();
+                    var try_catch: TryCatch = undefined;
+                    try_catch.init(self);
+                    defer try_catch.deinit();
 
-                if (maybe_promise) |promise| {
+                    const promise = self.module(source, specifier, true) catch {
+                        log.err(.js, "module compilation failed", .{
+                            .specifier = specifier,
+                            .exception = try_catch.exception(self.call_arena) catch "unknown error",
+                            .stack = try_catch.stack(self.call_arena) catch null,
+                            .line = try_catch.sourceLineNumber() orelse 0,
+                        });
+                        const error_msg = if (try_catch.hasCaught()) blk: {
+                            const exception_str = try_catch.exception(self.call_arena) catch "Evaluation error";
+                            break :blk v8.String.initUtf8(iso, exception_str orelse "Evaluation error");
+                        } else v8.String.initUtf8(iso, "Module evaluation failed");
+                        _ = resolver.reject(ctx, error_msg.toValue());
+                        return;
+                    } orelse unreachable;
+
+                    const new_module = self.module_cache.get(specifier).?.castToModule();
+
                     // This means we must wait for the evaluation.
                     const EvaluationData = struct {
                         specifier: []const u8,
@@ -1663,15 +1679,6 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         _ = resolver.reject(ctx, error_msg.toValue());
                         return;
                     };
-                } else {
-                    // This means it is already present in the cache.
-                    const namespace = new_module.getModuleNamespace();
-                    log.info(.js, "dynamic import complete", .{
-                        .module = new_module,
-                        .namespace = namespace,
-                    });
-                    _ = resolver.resolve(ctx, namespace);
-                    return;
                 }
             }
         };
