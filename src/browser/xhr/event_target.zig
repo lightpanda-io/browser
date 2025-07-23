@@ -48,12 +48,7 @@ pub const XMLHttpRequestEventTarget = struct {
         listener: EventHandler.Listener,
     ) !?Function {
         const target = @as(*parser.EventTarget, @ptrCast(self));
-
-        // The only time this can return null if the listener is already
-        // registered. But before calling `register`, all of our functions
-        // remove any existing listener, so it should be impossible to get null
-        // from this function call.
-        const eh = (try EventHandler.register(alloc, target, typ, listener, null)) orelse unreachable;
+        const eh = (try EventHandler.register(alloc, target, typ, listener, null)) orelse return null;
         return eh.callback;
     }
 
