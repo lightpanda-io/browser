@@ -294,7 +294,7 @@ pub const Element = struct {
             page.arena,
             parser.elementToNode(self),
             tag_name,
-            false,
+            .{ .include_root = false },
         );
     }
 
@@ -307,14 +307,16 @@ pub const Element = struct {
             page.arena,
             parser.elementToNode(self),
             classNames,
-            false,
+            .{ .include_root = false },
         );
     }
 
     // ParentNode
     // https://dom.spec.whatwg.org/#parentnode
     pub fn get_children(self: *parser.Element) !collection.HTMLCollection {
-        return try collection.HTMLCollectionChildren(parser.elementToNode(self), false);
+        return collection.HTMLCollectionChildren(parser.elementToNode(self), .{
+            .include_root = false,
+        });
     }
 
     pub fn get_firstElementChild(self: *parser.Element) !?Union {

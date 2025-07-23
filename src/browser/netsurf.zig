@@ -2590,6 +2590,24 @@ pub fn optionGetValue(option: *Option) ![]const u8 {
     return strToData(s);
 }
 
+pub fn optionSetLabel(input: *Option, label: []const u8) !void {
+    const err = c.dom_html_option_element_set_label(input, try strFromData(label));
+    try DOMErr(err);
+}
+
+pub fn optionGetLabel(option: *Option) ![]const u8 {
+    var s_: ?*String = null;
+    const err = c.dom_html_option_element_get_label(option, &s_);
+    try DOMErr(err);
+    const s = s_ orelse return "";
+    return strToData(s);
+}
+
+pub fn optionSetValue(input: *Option, value: []const u8) !void {
+    const err = c.dom_html_option_element_set_value(input, try strFromData(value));
+    try DOMErr(err);
+}
+
 pub fn optionGetSelected(option: *Option) !bool {
     var selected: bool = false;
     const err = c.dom_html_option_element_get_selected(option, &selected);
@@ -2597,9 +2615,36 @@ pub fn optionGetSelected(option: *Option) !bool {
     return selected;
 }
 
+pub fn optionSetDisabled(option: *Option, disabled: bool) !void {
+    const err = c.dom_html_option_element_set_disabled(option, disabled);
+    try DOMErr(err);
+}
+
+pub fn optionGetDisabled(option: *Option) !bool {
+    var disabled: bool = false;
+    const err = c.dom_html_option_element_get_disabled(option, &disabled);
+    try DOMErr(err);
+    return disabled;
+}
+
 pub fn optionSetSelected(option: *Option, selected: bool) !void {
     const err = c.dom_html_option_element_set_selected(option, selected);
     try DOMErr(err);
+}
+
+pub fn optionGetText(option: *Option) ![]const u8 {
+    var s_: ?*String = null;
+    const err = c.dom_html_option_element_get_text(option, &s_);
+    try DOMErr(err);
+    const s = s_ orelse return "";
+    return strToData(s);
+}
+
+pub fn optionGetForm(option: *Option) !?*Form {
+    var form: ?*Form = null;
+    const err = c.dom_html_option_element_get_form(option, &form);
+    try DOMErr(err);
+    return form;
 }
 
 // HtmlCollection

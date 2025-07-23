@@ -72,13 +72,14 @@ pub fn HTMLCollectionByTagName(
     arena: Allocator,
     root: ?*parser.Node,
     tag_name: []const u8,
-    include_root: bool,
+    opts: Opts,
 ) !HTMLCollection {
     return HTMLCollection{
         .root = root,
         .walker = .{ .walkerDepthFirst = .{} },
         .matcher = .{ .matchByTagName = try MatchByTagName.init(arena, tag_name) },
-        .include_root = include_root,
+        .mutable = opts.mutable,
+        .include_root = opts.include_root,
     };
 }
 
@@ -109,13 +110,14 @@ pub fn HTMLCollectionByClassName(
     arena: Allocator,
     root: ?*parser.Node,
     classNames: []const u8,
-    include_root: bool,
+    opts: Opts,
 ) !HTMLCollection {
     return HTMLCollection{
         .root = root,
         .walker = .{ .walkerDepthFirst = .{} },
         .matcher = .{ .matchByClassName = try MatchByClassName.init(arena, classNames) },
-        .include_root = include_root,
+        .mutable = opts.mutable,
+        .include_root = opts.include_root,
     };
 }
 
@@ -139,13 +141,14 @@ pub fn HTMLCollectionByName(
     arena: Allocator,
     root: ?*parser.Node,
     name: []const u8,
-    include_root: bool,
+    opts: Opts,
 ) !HTMLCollection {
     return HTMLCollection{
         .root = root,
         .walker = .{ .walkerDepthFirst = .{} },
         .matcher = .{ .matchByName = try MatchByName.init(arena, name) },
-        .include_root = include_root,
+        .mutable = opts.mutable,
+        .include_root = opts.include_root,
     };
 }
 
@@ -189,13 +192,14 @@ pub const HTMLAllCollection = struct {
 
 pub fn HTMLCollectionChildren(
     root: ?*parser.Node,
-    include_root: bool,
-) !HTMLCollection {
+    opts: Opts,
+) HTMLCollection {
     return HTMLCollection{
         .root = root,
         .walker = .{ .walkerChildren = .{} },
         .matcher = .{ .matchTrue = .{} },
-        .include_root = include_root,
+        .mutable = opts.mutable,
+        .include_root = opts.include_root,
     };
 }
 
@@ -224,13 +228,14 @@ pub const MatchByLinks = struct {
 
 pub fn HTMLCollectionByLinks(
     root: ?*parser.Node,
-    include_root: bool,
+    opts: Opts,
 ) !HTMLCollection {
     return HTMLCollection{
         .root = root,
         .walker = .{ .walkerDepthFirst = .{} },
         .matcher = .{ .matchByLinks = MatchByLinks{} },
-        .include_root = include_root,
+        .mutable = opts.mutable,
+        .include_root = opts.include_root,
     };
 }
 
@@ -249,13 +254,14 @@ pub const MatchByAnchors = struct {
 
 pub fn HTMLCollectionByAnchors(
     root: ?*parser.Node,
-    include_root: bool,
+    opts: Opts,
 ) !HTMLCollection {
     return HTMLCollection{
         .root = root,
         .walker = .{ .walkerDepthFirst = .{} },
         .matcher = .{ .matchByAnchors = MatchByAnchors{} },
-        .include_root = include_root,
+        .mutable = opts.mutable,
+        .include_root = opts.include_root,
     };
 }
 
@@ -285,6 +291,11 @@ pub const HTMLCollectionIterator = struct {
     }
 };
 
+const Opts = struct {
+    include_root: bool,
+    mutable: bool = false,
+};
+
 // WEB IDL https://dom.spec.whatwg.org/#htmlcollection
 // HTMLCollection is re implemented in zig here because libdom
 // dom_html_collection expects a comparison function callback as arguement.
@@ -299,6 +310,8 @@ pub const HTMLCollection = struct {
     // But on somes cases, like for dom document, we want to walk over the root
     // itself.
     include_root: bool = false,
+
+    mutable: bool = false,
 
     // save a state for the collection to improve the _item speed.
     cur_idx: ?u32 = null,
@@ -350,7 +363,7 @@ pub const HTMLCollection = struct {
         var node: *parser.Node = undefined;
 
         // Use the current state to improve speed if possible.
-        if (self.cur_idx != null and index >= self.cur_idx.?) {
+        if (self.mutable == false and self.cur_idx != null and index >= self.cur_idx.?) {
             i = self.cur_idx.?;
             node = self.cur_node.?;
         } else {
