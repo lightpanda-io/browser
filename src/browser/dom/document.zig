@@ -32,7 +32,7 @@ const css = @import("css.zig");
 const Element = @import("element.zig").Element;
 const ElementUnion = @import("element.zig").Union;
 const TreeWalker = @import("tree_walker.zig").TreeWalker;
-const CSSStyleSheet = @import("../cssom/css_stylesheet.zig").CSSStyleSheet;
+const CSSStyleSheet = @import("../cssom/CSSStyleSheet.zig");
 const NodeIterator = @import("node_iterator.zig").NodeIterator;
 const Range = @import("range.zig").Range;
 

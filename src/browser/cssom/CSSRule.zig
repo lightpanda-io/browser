@@ -18,7 +18,7 @@
 
 const std = @import("std");
 
-const CSSStyleSheet = @import("css_stylesheet.zig").CSSStyleSheet;
+const CSSStyleSheet = @import("CSSStyleSheet.zig");
 
 pub const Interfaces = .{
     CSSRule,
@@ -26,11 +26,10 @@ pub const Interfaces = .{
 };
 
 // https://developer.mozilla.org/en-US/docs/Web/API/CSSRule
-pub const CSSRule = struct {
-    css_text: []const u8,
-    parent_rule: ?*CSSRule = null,
-    parent_stylesheet: ?*CSSStyleSheet = null,
-};
+const CSSRule = @This();
+css_text: []const u8,
+parent_rule: ?*CSSRule = null,
+parent_stylesheet: ?*CSSStyleSheet = null,
 
 pub const CSSImportRule = struct {
     pub const prototype = *CSSRule;

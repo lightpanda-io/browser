@@ -16,15 +16,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pub const Stylesheet = @import("stylesheet.zig").StyleSheet;
-pub const CSSStylesheet = @import("css_stylesheet.zig").CSSStyleSheet;
-pub const CSSStyleDeclaration = @import("css_style_declaration.zig").CSSStyleDeclaration;
-pub const CSSRuleList = @import("css_rule_list.zig").CSSRuleList;
-
 pub const Interfaces = .{
-    Stylesheet,
-    CSSStylesheet,
-    CSSStyleDeclaration,
-    CSSRuleList,
-    @import("css_rule.zig").Interfaces,
+    @import("StyleSheet.zig"),
+    @import("CSSStyleSheet.zig"),
+    @import("CSSStyleDeclaration.zig"),
+    @import("CSSRuleList.zig"),
+    @import("CSSRule.zig").Interfaces,
 };

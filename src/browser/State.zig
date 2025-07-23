@@ -30,8 +30,8 @@ const Env = @import("env.zig").Env;
 const parser = @import("netsurf.zig");
 const DataSet = @import("html/DataSet.zig");
 const ShadowRoot = @import("dom/shadow_root.zig").ShadowRoot;
-const StyleSheet = @import("cssom/stylesheet.zig").StyleSheet;
-const CSSStyleDeclaration = @import("cssom/css_style_declaration.zig").CSSStyleDeclaration;
+const StyleSheet = @import("cssom/StyleSheet.zig");
+const CSSStyleDeclaration = @import("cssom/CSSStyleDeclaration.zig");
 
 // for HTMLScript (but probably needs to be added to more)
 onload: ?Env.Function = null,

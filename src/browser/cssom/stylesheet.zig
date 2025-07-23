@@ -19,37 +19,37 @@
 const parser = @import("../netsurf.zig");
 
 // https://developer.mozilla.org/en-US/docs/Web/API/StyleSheet#specifications
-pub const StyleSheet = struct {
-    disabled: bool = false,
-    href: []const u8 = "",
-    owner_node: ?*parser.Node = null,
-    parent_stylesheet: ?*StyleSheet = null,
-    title: []const u8 = "",
-    type: []const u8 = "text/css",
+const StyleSheet = @This();
 
-    pub fn get_disabled(self: *const StyleSheet) bool {
-        return self.disabled;
-    }
+disabled: bool = false,
+href: []const u8 = "",
+owner_node: ?*parser.Node = null,
+parent_stylesheet: ?*StyleSheet = null,
+title: []const u8 = "",
+type: []const u8 = "text/css",
 
-    pub fn get_href(self: *const StyleSheet) []const u8 {
-        return self.href;
-    }
+pub fn get_disabled(self: *const StyleSheet) bool {
+    return self.disabled;
+}
 
-    // TODO: media
+pub fn get_href(self: *const StyleSheet) []const u8 {
+    return self.href;
+}
 
-    pub fn get_ownerNode(self: *const StyleSheet) ?*parser.Node {
-        return self.owner_node;
-    }
+// TODO: media
 
-    pub fn get_parentStyleSheet(self: *const StyleSheet) ?*StyleSheet {
-        return self.parent_stylesheet;
-    }
+pub fn get_ownerNode(self: *const StyleSheet) ?*parser.Node {
+    return self.owner_node;
+}
 
-    pub fn get_title(self: *const StyleSheet) []const u8 {
-        return self.title;
-    }
+pub fn get_parentStyleSheet(self: *const StyleSheet) ?*StyleSheet {
+    return self.parent_stylesheet;
+}
 
-    pub fn get_type(self: *const StyleSheet) []const u8 {
-        return self.type;
-    }
-};
+pub fn get_title(self: *const StyleSheet) []const u8 {
+    return self.title;
+}
+
+pub fn get_type(self: *const StyleSheet) []const u8 {
+    return self.type;
+}
