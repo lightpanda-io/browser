@@ -369,8 +369,6 @@ pub const HTMLCollection = struct {
         } else {
             node = try self.start() orelse return null;
         }
-        // i = 0;
-        // node = try self.start() orelse return null;
 
         while (true) {
             if (try parser.nodeType(node) == .element) {
