@@ -18,33 +18,33 @@
 
 const std = @import("std");
 
-const StyleSheet = @import("stylesheet.zig").StyleSheet;
-const CSSRule = @import("css_rule.zig").CSSRule;
-const CSSImportRule = @import("css_rule.zig").CSSImportRule;
+const CSSRule = @import("CSSRule.zig");
+const StyleSheet = @import("StyleSheet.zig").StyleSheet;
 
-pub const CSSRuleList = struct {
-    list: std.ArrayListUnmanaged([]const u8),
+const CSSImportRule = CSSRule.CSSImportRule;
 
-    pub fn constructor() CSSRuleList {
-        return .{ .list = .empty };
-    }
+const CSSRuleList = @This();
+list: std.ArrayListUnmanaged([]const u8),
 
-    pub fn _item(self: *CSSRuleList, _index: u32) ?CSSRule {
-        const index: usize = @intCast(_index);
+pub fn constructor() CSSRuleList {
+    return .{ .list = .empty };
+}
 
-        if (index > self.list.items.len) {
-            return null;
-        }
+pub fn _item(self: *CSSRuleList, _index: u32) ?CSSRule {
+    const index: usize = @intCast(_index);
 
-        // todo: for now, just return null.
-        // this depends on properly parsing CSSRule
+    if (index > self.list.items.len) {
         return null;
     }
 
-    pub fn get_length(self: *CSSRuleList) u32 {
-        return @intCast(self.list.items.len);
-    }
-};
+    // todo: for now, just return null.
+    // this depends on properly parsing CSSRule
+    return null;
+}
+
+pub fn get_length(self: *CSSRuleList) u32 {
+    return @intCast(self.list.items.len);
+}
 
 const testing = @import("../../testing.zig");
 test "Browser.CSS.CSSRuleList" {

@@ -32,7 +32,7 @@ const Console = @import("../console/console.zig").Console;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const MediaQueryList = @import("media_query_list.zig").MediaQueryList;
 const Performance = @import("../dom/performance.zig").Performance;
-const CSSStyleDeclaration = @import("../cssom/css_style_declaration.zig").CSSStyleDeclaration;
+const CSSStyleDeclaration = @import("../cssom/CSSStyleDeclaration.zig");
 const Screen = @import("screen.zig").Screen;
 const Css = @import("../css/css.zig").Css;
 

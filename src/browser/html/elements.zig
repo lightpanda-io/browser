@@ -29,8 +29,8 @@ const Node = @import("../dom/node.zig").Node;
 const Element = @import("../dom/element.zig").Element;
 const DataSet = @import("DataSet.zig");
 
-const StyleSheet = @import("../cssom/stylesheet.zig").StyleSheet;
-const CSSStyleDeclaration = @import("../cssom/css_style_declaration.zig").CSSStyleDeclaration;
+const StyleSheet = @import("../cssom/StyleSheet.zig");
+const CSSStyleDeclaration = @import("../cssom/CSSStyleDeclaration.zig");
 
 // HTMLElement interfaces
 pub const Interfaces = .{
