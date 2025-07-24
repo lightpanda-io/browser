@@ -91,32 +91,49 @@ pub const XMLHttpRequestEventTarget = struct {
         return self.onreadystatechange_cbk;
     }
 
-    pub fn set_onloadstart(self: *XMLHttpRequestEventTarget, listener: EventHandler.Listener, page: *Page) !void {
+    pub fn set_onloadstart(self: *XMLHttpRequestEventTarget, listener: ?EventHandler.Listener, page: *Page) !void {
         if (self.onloadstart_cbk) |cbk| try self.unregister("loadstart", cbk.id);
-        self.onloadstart_cbk = try self.register(page.arena, "loadstart", listener);
+        if (listener) |listen| {
+            self.onloadstart_cbk = try self.register(page.arena, "loadstart", listen);
+        }
     }
-    pub fn set_onprogress(self: *XMLHttpRequestEventTarget, listener: EventHandler.Listener, page: *Page) !void {
+    pub fn set_onprogress(self: *XMLHttpRequestEventTarget, listener: ?EventHandler.Listener, page: *Page) !void {
         if (self.onprogress_cbk) |cbk| try self.unregister("progress", cbk.id);
-        self.onprogress_cbk = try self.register(page.arena, "progress", listener);
+        if (listener) |listen| {
+            self.onprogress_cbk = try self.register(page.arena, "progress", listen);
+        }
     }
-    pub fn set_onabort(self: *XMLHttpRequestEventTarget, listener: EventHandler.Listener, page: *Page) !void {
+    pub fn set_onabort(self: *XMLHttpRequestEventTarget, listener: ?EventHandler.Listener, page: *Page) !void {
         if (self.onabort_cbk) |cbk| try self.unregister("abort", cbk.id);
-        self.onabort_cbk = try self.register(page.arena, "abort", listener);
+        if (listener) |listen| {
+            self.onabort_cbk = try self.register(page.arena, "abort", listen);
+        }
     }
-    pub fn set_onload(self: *XMLHttpRequestEventTarget, listener: EventHandler.Listener, page: *Page) !void {
+    pub fn set_onload(self: *XMLHttpRequestEventTarget, listener: ?EventHandler.Listener, page: *Page) !void {
         if (self.onload_cbk) |cbk| try self.unregister("load", cbk.id);
-        self.onload_cbk = try self.register(page.arena, "load", listener);
+        if (listener) |listen| {
+            self.onload_cbk = try self.register(page.arena, "load", listen);
+        }
     }
-    pub fn set_ontimeout(self: *XMLHttpRequestEventTarget, listener: EventHandler.Listener, page: *Page) !void {
+    pub fn set_ontimeout(self: *XMLHttpRequestEventTarget, listener: ?EventHandler.Listener, page: *Page) !void {
         if (self.ontimeout_cbk) |cbk| try self.unregister("timeout", cbk.id);
-        self.ontimeout_cbk = try self.register(page.arena, "timeout", listener);
+
+        if (listener) |listen| {
+            self.ontimeout_cbk = try self.register(page.arena, "timeout", listen);
+        }
     }
-    pub fn set_onloadend(self: *XMLHttpRequestEventTarget, listener: EventHandler.Listener, page: *Page) !void {
+    pub fn set_onloadend(self: *XMLHttpRequestEventTarget, listener: ?EventHandler.Listener, page: *Page) !void {
         if (self.onloadend_cbk) |cbk| try self.unregister("loadend", cbk.id);
-        self.onloadend_cbk = try self.register(page.arena, "loadend", listener);
+
+        if (listener) |listen| {
+            self.onloadend_cbk = try self.register(page.arena, "loadend", listen);
+        }
     }
-    pub fn set_onreadystatechange(self: *XMLHttpRequestEventTarget, listener: EventHandler.Listener, page: *Page) !void {
+    pub fn set_onreadystatechange(self: *XMLHttpRequestEventTarget, listener: ?EventHandler.Listener, page: *Page) !void {
         if (self.onreadystatechange_cbk) |cbk| try self.unregister("readystatechange", cbk.id);
-        self.onreadystatechange_cbk = try self.register(page.arena, "readystatechange", listener);
+
+        if (listener) |listen| {
+            self.onreadystatechange_cbk = try self.register(page.arena, "readystatechange", listen);
+        }
     }
 };
