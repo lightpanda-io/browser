@@ -128,6 +128,7 @@ pub const Session = struct {
         // window.setTimeout and running microtasks should be ignored
         self.browser.app.loop.reset();
 
+        self.page.?.deinit();
         self.page = null;
 
         // clear netsurf memory arena.

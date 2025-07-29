@@ -4,10 +4,6 @@
     .version = "0.0.0",
     .fingerprint = 0xda130f3af836cea0,
     .dependencies = .{
-        .tls = .{
-            .url = "https://github.com/ianic/tls.zig/archive/55845f755d9e2e821458ea55693f85c737cd0c7a.tar.gz",
-            .hash = "tls-0.1.0-ER2e0m43BQAshi8ixj1qf3w2u2lqKtXtkrxUJ4AGZDcl",
-        },
         .tigerbeetle_io = .{
             .url = "https://github.com/lightpanda-io/tigerbeetle-io/archive/61d9652f1a957b7f4db723ea6aa0ce9635e840ce.tar.gz",
             .hash = "tigerbeetle_io-0.0.0-ViLgxpyRBAB5BMfIcj3KMXfbJzwARs9uSl8aRy2OXULd",

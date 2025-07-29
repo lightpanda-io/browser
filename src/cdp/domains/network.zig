@@ -236,11 +236,12 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, request: *const Notificat
     const page = bc.session.currentPage() orelse unreachable;
 
     // Modify request with extra CDP headers
-    try request.headers.ensureTotalCapacity(request.arena, request.headers.items.len + cdp.extra_headers.items.len);
-    for (cdp.extra_headers.items) |extra| {
-        const new = putAssumeCapacity(request.headers, extra);
-        if (!new) log.debug(.cdp, "request header overwritten", .{ .name = extra.name });
-    }
+    // @newhttp
+    // try request.headers.ensureTotalCapacity(request.arena, request.headers.items.len + cdp.extra_headers.items.len);
+    // for (cdp.extra_headers.items) |extra| {
+    //     const new = putAssumeCapacity(request.headers, extra);
+    //     if (!new) log.debug(.cdp, "request header overwritten", .{ .name = extra.name });
+    // }
 
     const document_url = try urlToString(arena, &page.url.uri, .{
         .scheme = true,
@@ -262,11 +263,12 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, request: *const Notificat
         .fragment = true,
     });
 
-    var headers: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try headers.ensureTotalCapacity(arena, request.headers.items.len);
-    for (request.headers.items) |header| {
-        headers.putAssumeCapacity(header.name, header.value);
-    }
+    // @newhttp
+    const headers: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    // try headers.ensureTotalCapacity(arena, request.headers.items.len);
+    // for (request.headers.items) |header| {
+    //     headers.putAssumeCapacity(header.name, header.value);
+    // }
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try cdp.sendEvent("Network.requestWillBeSent", .{
@@ -303,11 +305,12 @@ pub fn httpRequestComplete(arena: Allocator, bc: anytype, request: *const Notifi
         .query = true,
     });
 
-    var headers: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try headers.ensureTotalCapacity(arena, request.headers.len);
-    for (request.headers) |header| {
-        headers.putAssumeCapacity(header.name, header.value);
-    }
+    // @newhttp
+    const headers: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    // try headers.ensureTotalCapacity(arena, request.headers.len);
+    // for (request.headers) |header| {
+    //     headers.putAssumeCapacity(header.name, header.value);
+    // }
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try cdp.sendEvent("Network.responseReceived", .{
