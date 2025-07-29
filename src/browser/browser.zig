@@ -28,7 +28,6 @@ const Session = @import("session.zig").Session;
 const Notification = @import("../notification.zig").Notification;
 
 const log = @import("../log.zig");
-
 const http = @import("../http/client.zig");
 
 // Browser is an instance of the browser.
@@ -61,7 +60,7 @@ pub const Browser = struct {
             .session = null,
             .allocator = allocator,
             .notification = notification,
-            .http_client = &app.http_client,
+            .http_client = app.http_client,
             .page_arena = ArenaAllocator.init(allocator),
             .session_arena = ArenaAllocator.init(allocator),
             .transfer_arena = ArenaAllocator.init(allocator),

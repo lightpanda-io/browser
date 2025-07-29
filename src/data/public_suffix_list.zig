@@ -8,7 +8,8 @@ pub fn lookup(value: []const u8) bool {
 const public_suffix_list = std.StaticStringMap(void).initComptime(entries);
 
 const entries: []const struct { []const u8, void } =
-    if (builtin.is_test) &.{
+    // @newhttp
+    if (builtin.is_test or true) &.{
         .{ "api.gov.uk", {} },
         .{ "gov.uk", {} },
     } else &.{

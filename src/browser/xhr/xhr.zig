@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+
 const Allocator = std.mem.Allocator;
 
 const DOMError = @import("../netsurf.zig").DOMError;
@@ -28,8 +29,8 @@ const log = @import("../../log.zig");
 const URL = @import("../../url.zig").URL;
 const Mime = @import("../mime.zig").Mime;
 const parser = @import("../netsurf.zig");
-const http = @import("../../http/client.zig");
 const Page = @import("../page.zig").Page;
+const http = @import("../../http/client.zig");
 const Loop = @import("../../runtime/loop.zig").Loop;
 const CookieJar = @import("../storage/storage.zig").CookieJar;
 
@@ -83,7 +84,7 @@ pub const XMLHttpRequest = struct {
     arena: Allocator,
     request: ?*http.Request = null,
 
-    method: http.Request.Method,
+    method: http.Method,
     state: State,
     url: ?URL = null,
     origin_url: *const URL,
@@ -264,10 +265,11 @@ pub const XMLHttpRequest = struct {
     }
 
     pub fn destructor(self: *XMLHttpRequest) void {
-        if (self.request) |req| {
-            req.abort();
-            self.request = null;
-        }
+        // @newhttp
+        // if (self.request) |req| {
+        // req.abort();
+        self.request = null;
+        // }
     }
 
     pub fn reset(self: *XMLHttpRequest) void {
@@ -414,7 +416,7 @@ pub const XMLHttpRequest = struct {
     }
 
     const methods = [_]struct {
-        tag: http.Request.Method,
+        tag: http.Method,
         name: []const u8,
     }{
         .{ .tag = .DELETE, .name = "DELETE" },
@@ -424,18 +426,10 @@ pub const XMLHttpRequest = struct {
         .{ .tag = .POST, .name = "POST" },
         .{ .tag = .PUT, .name = "PUT" },
     };
-    const methods_forbidden = [_][]const u8{ "CONNECT", "TRACE", "TRACK" };
-
-    pub fn validMethod(m: []const u8) DOMError!http.Request.Method {
+    pub fn validMethod(m: []const u8) DOMError!http.Method {
         for (methods) |method| {
             if (std.ascii.eqlIgnoreCase(method.name, m)) {
                 return method.tag;
-            }
-        }
-        // If method is a forbidden method, then throw a "SecurityError" DOMException.
-        for (methods_forbidden) |method| {
-            if (std.ascii.eqlIgnoreCase(method, m)) {
-                return DOMError.Security;
             }
         }
 
@@ -461,13 +455,15 @@ pub const XMLHttpRequest = struct {
             self.request_body = try self.arena.dupe(u8, b);
         }
 
-        try page.request_factory.initAsync(
-            page.arena,
-            self.method,
-            &self.url.?.uri,
-            self,
-            onHttpRequestReady,
-        );
+        // @newhttp
+        _ = page;
+        // try page.request_factory.initAsync(
+        //     page.arena,
+        //     self.method,
+        //     &self.url.?.uri,
+        //     self,
+        //     onHttpRequestReady,
+        // );
     }
 
     fn onHttpRequestReady(ctx: *anyopaque, request: *http.Request) !void {

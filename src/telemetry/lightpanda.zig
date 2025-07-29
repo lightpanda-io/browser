@@ -7,8 +7,8 @@ const Allocator = std.mem.Allocator;
 
 const log = @import("../log.zig");
 const App = @import("../app.zig").App;
+const http = @import("../http/client.zig");
 const telemetry = @import("telemetry.zig");
-const HttpClient = @import("../http/client.zig").Client;
 
 const URL = "https://telemetry.lightpanda.io";
 const MAX_BATCH_SIZE = 20;
@@ -21,7 +21,7 @@ pub const LightPanda = struct {
     allocator: Allocator,
     mutex: std.Thread.Mutex,
     cond: Thread.Condition,
-    client: *HttpClient,
+    client: *http.Client,
     node_pool: std.heap.MemoryPool(List.Node),
 
     const List = std.DoublyLinkedList(LightPandaEvent);

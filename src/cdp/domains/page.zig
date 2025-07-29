@@ -148,12 +148,10 @@ fn navigate(cmd: anytype) !void {
         return error.SessionIdNotLoaded;
     }
 
-    const url = try URL.parse(params.url, "https");
-
     var page = bc.session.currentPage() orelse return error.PageNotLoaded;
     bc.loader_id = bc.cdp.loader_id_gen.next();
 
-    try page.navigate(url, .{
+    try page.navigate(params.url, .{
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
     });
