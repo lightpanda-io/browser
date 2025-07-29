@@ -406,8 +406,8 @@ pub const JsRunner = struct {
             .url = try page.url.toWebApi(page.arena),
         });
 
-        var html = std.io.fixedBufferStream(opts.html);
-        try page.loadHTMLDoc(html.reader(), "UTF-8");
+        const html_doc = try parser.documentHTMLParseFromStr(opts.html);
+        try page.setDocument(html_doc);
 
         return .{
             .app = app,

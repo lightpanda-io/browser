@@ -121,6 +121,10 @@ pub const Loop = struct {
         }
     }
 
+    pub fn hasPendingTimeout(self: *Self) bool {
+        return self.pending_timeout_count > 0;
+    }
+
     // JS callbacks APIs
     // -----------------
 

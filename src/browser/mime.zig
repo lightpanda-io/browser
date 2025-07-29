@@ -22,11 +22,11 @@ const Allocator = std.mem.Allocator;
 pub const Mime = struct {
     content_type: ContentType,
     params: []const u8 = "",
-    charset: ?[]const u8 = null,
+    charset: ?[:0]const u8 = null,
 
     pub const unknown = Mime{
         .params = "",
-        .charset = "",
+        .charset = null,
         .content_type = .{ .unknown = {} },
     };
 
@@ -52,7 +52,7 @@ pub const Mime = struct {
         other: struct { type: []const u8, sub_type: []const u8 },
     };
 
-    pub fn parse(arena: Allocator, input: []u8) !Mime {
+    pub fn parse(input: []u8) !Mime {
         if (input.len > 255) {
             return error.TooBig;
         }
@@ -69,7 +69,7 @@ pub const Mime = struct {
 
         const params = trimLeft(normalized[type_len..]);
 
-        var charset: ?[]const u8 = null;
+        var charset: ?[:0]const u8 = null;
 
         var it = std.mem.splitScalar(u8, params, ';');
         while (it.next()) |attr| {
@@ -86,7 +86,24 @@ pub const Mime = struct {
             }, name) orelse continue;
 
             switch (attribute_name) {
-                .charset => charset = try parseAttributeValue(arena, value),
+                .charset => {
+                    // We used to have a proper value parser, but we currently
+                    // only care about the charset attribute, plus only about
+                    // the UTF-8 value. It's a lot easier to do it this way,
+                    // and it doesn't require an allocation to (a) unescape the
+                    // value or (b) ensure the correct lifetime.
+                    if (value.len == 0) {
+                        break;
+                    }
+                    var attribute_value = value;
+                    if (value[0] == '"' and value[value.len - 1] == '"') {
+                        attribute_value = value[1 .. value.len - 1];
+                    }
+
+                    if (std.ascii.eqlIgnoreCase(attribute_value, "utf-8")) {
+                        charset = "UTF-8";
+                    }
+                },
             }
         }
 
@@ -224,58 +241,6 @@ pub const Mime = struct {
         break :blk v;
     };
 
-    fn parseAttributeValue(arena: Allocator, value: []const u8) ![]const u8 {
-        if (value[0] != '"') {
-            // almost certainly referenced from an http.Request which has its
-            // own lifetime.
-            return arena.dupe(u8, value);
-        }
-
-        // 1 to skip the opening quote
-        var value_pos: usize = 1;
-        var unescaped_len: usize = 0;
-        const last = value.len - 1;
-
-        while (value_pos < value.len) {
-            switch (value[value_pos]) {
-                '"' => break,
-                '\\' => {
-                    if (value_pos == last) {
-                        return error.Invalid;
-                    }
-                    const next = value[value_pos + 1];
-                    if (T_SPECIAL[next] == false) {
-                        return error.Invalid;
-                    }
-                    value_pos += 2;
-                },
-                else => value_pos += 1,
-            }
-            unescaped_len += 1;
-        }
-
-        if (unescaped_len == 0) {
-            return error.Invalid;
-        }
-
-        value_pos = 1;
-        const owned = try arena.alloc(u8, unescaped_len);
-        for (0..unescaped_len) |i| {
-            switch (value[value_pos]) {
-                '"' => break,
-                '\\' => {
-                    owned[i] = value[value_pos + 1];
-                    value_pos += 2;
-                },
-                else => |c| {
-                    owned[i] = c;
-                    value_pos += 1;
-                },
-            }
-        }
-        return owned;
-    }
-
     const VALID_CODEPOINTS = blk: {
         var v: [256]bool = undefined;
         for (0..256) |i| {
@@ -329,7 +294,7 @@ test "Mime: invalid " {
 
     for (invalids) |invalid| {
         const mutable_input = try testing.arena_allocator.dupe(u8, invalid);
-        try testing.expectError(error.Invalid, Mime.parse(undefined, mutable_input));
+        try testing.expectError(error.Invalid, Mime.parse(mutable_input));
     }
 }
 
@@ -409,7 +374,7 @@ test "Mime: isHTML" {
     const isHTML = struct {
         fn isHTML(expected: bool, input: []const u8) !void {
             const mutable_input = try testing.arena_allocator.dupe(u8, input);
-            var mime = try Mime.parse(testing.arena_allocator, mutable_input);
+            var mime = try Mime.parse(mutable_input);
             try testing.expectEqual(expected, mime.isHTML());
         }
     }.isHTML;
@@ -495,7 +460,7 @@ const Expectation = struct {
 fn expect(expected: Expectation, input: []const u8) !void {
     const mutable_input = try testing.arena_allocator.dupe(u8, input);
 
-    const actual = try Mime.parse(testing.arena_allocator, mutable_input);
+    const actual = try Mime.parse(mutable_input);
     try testing.expectEqual(
         std.meta.activeTag(expected.content_type),
         std.meta.activeTag(actual.content_type),

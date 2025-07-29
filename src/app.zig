@@ -1,10 +1,11 @@
 const std = @import("std");
+
 const Allocator = std.mem.Allocator;
 
 const log = @import("log.zig");
 const Loop = @import("runtime/loop.zig").Loop;
-const http = @import("http/client.zig");
 const Platform = @import("runtime/js.zig").Platform;
+const http = @import("http/client.zig");
 
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
 const Notification = @import("notification.zig").Notification;
@@ -17,7 +18,7 @@ pub const App = struct {
     platform: ?*const Platform,
     allocator: Allocator,
     telemetry: Telemetry,
-    http_client: http.Client,
+    http_client: *http.Client,
     app_dir_path: ?[]const u8,
     notification: *Notification,
 
@@ -59,12 +60,8 @@ pub const App = struct {
             .platform = config.platform,
             .app_dir_path = app_dir_path,
             .notification = notification,
-            .http_client = try http.Client.init(allocator, loop, .{
-                .max_concurrent = 3,
-                .http_proxy = config.http_proxy,
-                .proxy_type = config.proxy_type,
-                .proxy_auth = config.proxy_auth,
-                .tls_verify_host = config.tls_verify_host,
+            .http_client = try http.Client.init(allocator, .{
+                .max_concurrent_transfers = 3,
             }),
             .config = config,
         };

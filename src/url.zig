@@ -87,6 +87,7 @@ pub const URL = struct {
 
     const StitchOpts = struct {
         alloc: AllocWhen = .always,
+        null_terminated: bool = false,
 
         const AllocWhen = enum {
             always,
@@ -102,9 +103,13 @@ pub const URL = struct {
         allocator: Allocator,
         path: []const u8,
         base: []const u8,
-        opts: StitchOpts,
-    ) ![]const u8 {
+        comptime opts: StitchOpts,
+    ) !StitchReturn(opts) {
         if (base.len == 0 or isComleteHTTPUrl(path)) {
+            if (comptime opts.null_terminated) {
+                return allocator.dupeZ(u8, path);
+            }
+
             if (opts.alloc == .always) {
                 return allocator.dupe(u8, path);
             }
@@ -112,6 +117,10 @@ pub const URL = struct {
         }
 
         if (path.len == 0) {
+            if (comptime opts.null_terminated) {
+                return allocator.dupeZ(u8, base);
+            }
+
             if (opts.alloc == .always) {
                 return allocator.dupe(u8, base);
             }
@@ -126,6 +135,9 @@ pub const URL = struct {
 
         if (path[0] == '/') {
             const pos = std.mem.indexOfScalarPos(u8, base, protocol_end, '/') orelse base.len;
+            if (comptime opts.null_terminated) {
+                return std.fmt.allocPrintZ(allocator, "{s}{s}", .{ base[0..pos], path });
+            }
             return std.fmt.allocPrint(allocator, "{s}{s}", .{ base[0..pos], path });
         }
 
@@ -134,17 +146,22 @@ pub const URL = struct {
             normalized_base = base[0 .. pos + protocol_end];
         }
 
-        var out = try std.fmt.allocPrint(allocator, "{s}/{s}", .{
+        // that extra spacelets us handle opts.null_terminated. If we end up
+        // not trimming anything, it ensures that we have 1 extra byte to store
+        // our null terminator.
+        var out = try std.fmt.allocPrint(allocator, "{s}/{s}" ++ if (comptime opts.null_terminated) " " else "", .{
             normalized_base,
             path,
         });
+
+        const end = if (comptime opts.null_terminated) out.len - 1 else out.len;
 
         // Strip out ./ and ../. This is done in-place, because doing so can
         // only ever make `out` smaller. After this, `out` cannot be freed by
         // an allocator, which is ok, because we expect allocator to be an arena.
         var in_i: usize = 0;
         var out_i: usize = 0;
-        while (in_i < out.len) {
+        while (in_i < end) {
             if (std.mem.startsWith(u8, out[in_i..], "./")) {
                 in_i += 2;
                 continue;
@@ -165,7 +182,17 @@ pub const URL = struct {
             in_i += 1;
             out_i += 1;
         }
+
+        if (comptime opts.null_terminated) {
+            // we always have an extra space
+            out[out_i] = 0;
+            return out[0..out_i :0];
+        }
         return out[0..out_i];
+    }
+
+    fn StitchReturn(comptime opts: StitchOpts) type {
+        return if (opts.null_terminated) [:0]const u8 else []const u8;
     }
 
     pub fn concatQueryString(arena: Allocator, url: []const u8, query_string: []const u8) ![]const u8 {
@@ -359,6 +386,124 @@ test "URL: stitch" {
     try testing.expectError(
         error.InvalidURL,
         stitch(testing.arena_allocator, "../hello", "http://lightpanda.io/", .{}),
+    );
+}
+
+test "URL: stitch null terminated" {
+    defer testing.reset();
+
+    const Case = struct {
+        base: []const u8,
+        path: []const u8,
+        expected: []const u8,
+    };
+
+    const cases = [_]Case{
+        .{
+            .base = "https://lightpanda.io/xyz/abc/123",
+            .path = "something.js",
+            .expected = "https://lightpanda.io/xyz/abc/something.js",
+        },
+        .{
+            .base = "https://lightpanda.io/xyz/abc/123",
+            .path = "/something.js",
+            .expected = "https://lightpanda.io/something.js",
+        },
+        .{
+            .base = "https://lightpanda.io/",
+            .path = "something.js",
+            .expected = "https://lightpanda.io/something.js",
+        },
+        .{
+            .base = "https://lightpanda.io/",
+            .path = "/something.js",
+            .expected = "https://lightpanda.io/something.js",
+        },
+        .{
+            .base = "https://lightpanda.io",
+            .path = "something.js",
+            .expected = "https://lightpanda.io/something.js",
+        },
+        .{
+            .base = "https://lightpanda.io",
+            .path = "abc/something.js",
+            .expected = "https://lightpanda.io/abc/something.js",
+        },
+        .{
+            .base = "https://lightpanda.io/nested",
+            .path = "abc/something.js",
+            .expected = "https://lightpanda.io/abc/something.js",
+        },
+        .{
+            .base = "https://lightpanda.io/nested/",
+            .path = "abc/something.js",
+            .expected = "https://lightpanda.io/nested/abc/something.js",
+        },
+        .{
+            .base = "https://lightpanda.io/nested/",
+            .path = "/abc/something.js",
+            .expected = "https://lightpanda.io/abc/something.js",
+        },
+        .{
+            .base = "https://lightpanda.io/nested/",
+            .path = "http://www.github.com/lightpanda-io/",
+            .expected = "http://www.github.com/lightpanda-io/",
+        },
+        .{
+            .base = "https://lightpanda.io/nested/",
+            .path = "",
+            .expected = "https://lightpanda.io/nested/",
+        },
+        .{
+            .base = "https://lightpanda.io/abc/aaa",
+            .path = "./hello/./world",
+            .expected = "https://lightpanda.io/abc/hello/world",
+        },
+        .{
+            .base = "https://lightpanda.io/abc/aaa/",
+            .path = "../hello",
+            .expected = "https://lightpanda.io/abc/hello",
+        },
+        .{
+            .base = "https://lightpanda.io/abc/aaa",
+            .path = "../hello",
+            .expected = "https://lightpanda.io/hello",
+        },
+        .{
+            .base = "https://lightpanda.io/abc/aaa/",
+            .path = "./.././.././hello",
+            .expected = "https://lightpanda.io/hello",
+        },
+        .{
+            .base = "some/page",
+            .path = "hello",
+            .expected = "some/hello",
+        },
+        .{
+            .base = "some/page/",
+            .path = "hello",
+            .expected = "some/page/hello",
+        },
+
+        .{
+            .base = "some/page/other",
+            .path = ".././hello",
+            .expected = "some/hello",
+        },
+    };
+
+    for (cases) |case| {
+        const result = try stitch(testing.arena_allocator, case.path, case.base, .{ .null_terminated = true });
+        try testing.expectString(case.expected, result);
+    }
+
+    try testing.expectError(
+        error.InvalidURL,
+        stitch(testing.arena_allocator, "../hello", "https://lightpanda.io/", .{ .null_terminated = true }),
+    );
+    try testing.expectError(
+        error.InvalidURL,
+        stitch(testing.arena_allocator, "../hello", "http://lightpanda.io/", .{ .null_terminated = true }),
     );
 }
 

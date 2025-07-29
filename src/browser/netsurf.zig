@@ -2362,6 +2362,31 @@ fn parserErr(err: HubbubErr) ParserError!void {
     };
 }
 
+pub const Parser = struct {
+    html_doc: *DocumentHTML,
+    parser: *c.dom_hubbub_parser,
+
+    pub fn init(encoding: ?[:0]const u8) !Parser {
+        var params = parseParams(encoding);
+        var doc: ?*c.dom_document = undefined;
+        var parser: ?*c.dom_hubbub_parser = undefined;
+
+        try parserErr(c.dom_hubbub_parser_create(&params, &parser, &doc));
+        return .{
+            .parser = parser.?,
+            .html_doc = @ptrCast(doc.?),
+        };
+    }
+
+    pub fn deinit(self: *Parser) void {
+        c.dom_hubbub_parser_destroy(self.parser);
+    }
+
+    pub fn process(self: *Parser, data: []const u8) !void {
+        try parserErr(c.dom_hubbub_parser_parse_chunk(self.parser, data.ptr, data.len));
+    }
+};
+
 // documentHTMLParseFromStr parses the given HTML string.
 // The caller is responsible for closing the document.
 pub fn documentHTMLParseFromStr(str: []const u8) !*DocumentHTML {
@@ -2370,18 +2395,10 @@ pub fn documentHTMLParseFromStr(str: []const u8) !*DocumentHTML {
 }
 
 pub fn documentHTMLParse(reader: anytype, enc: ?[:0]const u8) !*DocumentHTML {
-    var parser: ?*c.dom_hubbub_parser = undefined;
-    var doc: ?*c.dom_document = undefined;
-    var err: c.hubbub_error = undefined;
-    var params = parseParams(enc);
-
-    err = c.dom_hubbub_parser_create(&params, &parser, &doc);
-    try parserErr(err);
-    defer c.dom_hubbub_parser_destroy(parser);
-
-    try parseData(parser.?, reader);
-
-    return @as(*DocumentHTML, @ptrCast(doc.?));
+    var parser = try Parser.init(enc);
+    defer parser.deinit();
+    try parseData(parser.parser, reader);
+    return parser.html_doc;
 }
 
 pub fn documentParseFragmentFromStr(self: *Document, str: []const u8) !*DocumentFragment {

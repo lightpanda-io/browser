@@ -4,7 +4,6 @@ const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
 const log = @import("../../log.zig");
-const http = @import("../../http/client.zig");
 const DateTime = @import("../../datetime.zig").DateTime;
 const public_suffix_list = @import("../../data/public_suffix_list.zig").lookup;
 
@@ -104,17 +103,18 @@ pub const Jar = struct {
         }
     }
 
-    pub fn populateFromResponse(self: *Jar, uri: *const Uri, header: *const http.ResponseHeader) !void {
-        const now = std.time.timestamp();
-        var it = header.iterate("set-cookie");
-        while (it.next()) |set_cookie| {
-            const c = Cookie.parse(self.allocator, uri, set_cookie) catch |err| {
-                log.warn(.web_api, "cookie parse failed", .{ .raw = set_cookie, .err = err });
-                continue;
-            };
-            try self.add(c, now);
-        }
-    }
+    // @newhttp
+    // pub fn populateFromResponse(self: *Jar, uri: *const Uri, header: *const http.ResponseHeader) !void {
+    //     const now = std.time.timestamp();
+    //     var it = header.iterate("set-cookie");
+    //     while (it.next()) |set_cookie| {
+    //         const c = Cookie.parse(self.allocator, uri, set_cookie) catch |err| {
+    //             log.warn(.web_api, "cookie parse failed", .{ .raw = set_cookie, .err = err });
+    //             continue;
+    //         };
+    //         try self.add(c, now);
+    //     }
+    // }
 
     fn writeCookie(cookie: *const Cookie, writer: anytype) !void {
         if (cookie.name.len > 0) {

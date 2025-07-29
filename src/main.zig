@@ -22,8 +22,8 @@ const Allocator = std.mem.Allocator;
 
 const log = @import("log.zig");
 const server = @import("server.zig");
-const App = @import("app.zig").App;
 const http = @import("http/client.zig");
+const App = @import("app.zig").App;
 const Platform = @import("runtime/js.zig").Platform;
 const Browser = @import("browser/browser.zig").Browser;
 
@@ -107,8 +107,8 @@ fn run(alloc: Allocator) !void {
             };
         },
         .fetch => |opts| {
-            log.debug(.app, "startup", .{ .mode = "fetch", .dump = opts.dump, .url = opts.url });
-            const url = try @import("url.zig").URL.parse(opts.url, null);
+            const url = opts.url;
+            log.debug(.app, "startup", .{ .mode = "fetch", .dump = opts.dump, .url = url });
 
             // browser
             var browser = try Browser.init(app);
@@ -130,7 +130,7 @@ fn run(alloc: Allocator) !void {
                 },
             };
 
-            try page.wait(std.time.ns_per_s * 3);
+            try page.wait(5); // 5 seconds
 
             // dump
             if (opts.dump) {
@@ -633,18 +633,12 @@ test "tests:beforeAll" {
     log.opts.level = .err;
     log.opts.format = .logfmt;
 
-    test_wg.startMany(3);
+    test_wg.startMany(2);
     const platform = try Platform.init();
 
     {
         const address = try std.net.Address.parseIp("127.0.0.1", 9582);
         const thread = try std.Thread.spawn(.{}, serveHTTP, .{address});
-        thread.detach();
-    }
-
-    {
-        const address = try std.net.Address.parseIp("127.0.0.1", 9581);
-        const thread = try std.Thread.spawn(.{}, serveHTTPS, .{address});
         thread.detach();
     }
 
@@ -755,79 +749,6 @@ fn serveHTTP(address: std.net.Address) !void {
                 });
             }
             continue :ACCEPT;
-        }
-    }
-}
-
-// This is a lot of work for testing TLS, but the TLS (async) code is complicated
-// This "server" is written specifically to test the client. It assumes the client
-// isn't a jerk.
-fn serveHTTPS(address: std.net.Address) !void {
-    const tls = @import("tls");
-
-    var listener = try address.listen(.{ .reuse_address = true });
-    defer listener.deinit();
-
-    test_wg.finish();
-
-    var seed: u64 = undefined;
-    std.posix.getrandom(std.mem.asBytes(&seed)) catch unreachable;
-    var r = std.Random.DefaultPrng.init(seed);
-    const rand = r.random();
-
-    var read_buffer: [1024]u8 = undefined;
-    while (true) {
-        const stream = blk: {
-            const conn = try listener.accept();
-            break :blk conn.stream;
-        };
-        defer stream.close();
-
-        var conn = try tls.server(stream, .{ .auth = null });
-        defer conn.close() catch {};
-
-        var pos: usize = 0;
-        while (true) {
-            const n = try conn.read(read_buffer[pos..]);
-            if (n == 0) {
-                break;
-            }
-            pos += n;
-            const header_end = std.mem.indexOf(u8, read_buffer[0..pos], "\r\n\r\n") orelse {
-                continue;
-            };
-            var it = std.mem.splitScalar(u8, read_buffer[0..header_end], ' ');
-            _ = it.next() orelse unreachable; // method
-            const path = it.next() orelse unreachable;
-
-            var fragment = false;
-            var response: []const u8 = undefined;
-            if (std.mem.eql(u8, path, "/http_client/simple")) {
-                fragment = true;
-                response = "HTTP/1.1 200 \r\nContent-Length: 0\r\nConnection: Close\r\n\r\n";
-            } else if (std.mem.eql(u8, path, "/http_client/body")) {
-                fragment = true;
-                response = "HTTP/1.1 201 CREATED\r\nContent-Length: 20\r\nConnection: Close\r\n   Another :  HEaDer  \r\n\r\n1234567890abcdefhijk";
-            } else if (std.mem.eql(u8, path, "/http_client/redirect/insecure")) {
-                fragment = true;
-                response = "HTTP/1.1 307 GOTO\r\nLocation: http://127.0.0.1:9582/http_client/redirect\r\nConnection: Close\r\n\r\n";
-            } else if (std.mem.eql(u8, path, "/xhr")) {
-                response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 100\r\nConnection: Close\r\n\r\n" ++ ("1234567890" ** 10);
-            } else if (std.mem.eql(u8, path, "/xhr/json")) {
-                response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 18\r\nConnection: Close\r\n\r\n{\"over\":\"9000!!!\"}";
-            } else {
-                // should not have an unknown path
-                unreachable;
-            }
-
-            var unsent = response;
-            while (unsent.len > 0) {
-                const to_send = if (fragment) rand.intRangeAtMost(usize, 1, unsent.len) else unsent.len;
-                const sent = try conn.write(unsent[0..to_send]);
-                unsent = unsent[sent..];
-                std.time.sleep(std.time.ns_per_us * 5);
-            }
-            break;
         }
     }
 }
