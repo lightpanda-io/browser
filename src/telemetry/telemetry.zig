@@ -79,7 +79,7 @@ fn TelemetryT(comptime P: type) type {
             const self: *Self = @alignCast(@ptrCast(ctx));
             self.record(.{ .navigate = .{
                 .proxy = false,
-                .tls = std.ascii.eqlIgnoreCase(data.url.scheme(), "https"),
+                .tls = std.ascii.startsWithIgnoreCase(data.url, "https://"),
             } });
         }
     };

@@ -23,6 +23,7 @@ pub const c = @cImport({
 const ENABLE_DEBUG = false;
 
 const std = @import("std");
+const log = @import("../log.zig");
 const builtin = @import("builtin");
 const errors = @import("errors.zig");
 
@@ -36,14 +37,11 @@ pub fn init() !void {
     }
 }
 
-const LogFn = *const fn(ctx: []const u8, err: anyerror) void;
-
 pub fn deinit() void {
     c.curl_global_cleanup();
 }
 
 pub const Client = struct {
-    log: LogFn,
     active: usize,
     multi: *c.CURLM,
     handles: Handles,
@@ -57,7 +55,6 @@ pub const Client = struct {
     const RequestQueue = std.DoublyLinkedList(Request);
 
     const Opts = struct {
-        log: ?LogFn = null,
         timeout_ms: u31 = 0,
         max_redirects: u8 = 10,
         connect_timeout_ms: u31 = 5000,
@@ -80,7 +77,6 @@ pub const Client = struct {
         errdefer _ = c.curl_multi_cleanup(multi);
 
         client.* = .{
-            .log = opts.log orelse noopLog,
             .queue = .{},
             .active = 0,
             .multi = multi,
@@ -101,7 +97,7 @@ pub const Client = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn tick(self: *Client, timeout_ms: usize) !usize {
+    pub fn tick(self: *Client, timeout_ms: usize) !void {
         var handles = &self.handles.available;
         while (true) {
             if (handles.first == null) {
@@ -116,7 +112,6 @@ pub const Client = struct {
         }
 
         try self.perform(@intCast(timeout_ms));
-        return self.active;
     }
 
     pub fn request(self: *Client, req: Request) !void {
@@ -144,15 +139,10 @@ pub const Client = struct {
                 .OPTIONS => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, "options")),
             }
 
-
-            const header_list = c.curl_slist_append(null, "User-Agent: lightpanda/1");
+            const header_list = c.curl_slist_append(null, "User-Agent: Lightpanda/1.0");
             errdefer c.curl_slist_free_all(header_list);
 
             try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPHEADER, header_list));
-
-
-            //try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_POSTFIELDSIZE, @as(c_long, @intCast(STRING.len))));
-            //try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_POSTFIELDS, STRING.ptr));
 
             break :blk header_list;
         };
@@ -345,8 +335,9 @@ pub const Request = struct {
     // arbitrary data that can be associated with this request
     ctx: *anyopaque = undefined,
 
-    start_callback: ?*const fn(req: *Transfer) anyerror!void = noopStart,
-    header_callback: *const fn (req: *Transfer) anyerror!void,
+    start_callback: ?*const fn(req: *Transfer) anyerror!void = null,
+    header_callback: ?*const fn (req: *Transfer, header: []const u8) anyerror!void = null ,
+    header_done_callback: *const fn (req: *Transfer) anyerror!void,
     data_callback: *const fn(req: *Transfer, data: []const u8) anyerror!void,
     done_callback: *const fn(req: *Transfer) anyerror!void,
     error_callback: *const fn(req: *Transfer, err: anyerror) void,
@@ -366,6 +357,12 @@ pub const Transfer = struct {
     // needs to be freed when we're done
     _request_header_list: ?*c.curl_slist = null,
 
+    fn deinit(self: *Transfer) void {
+        if (self._request_header_list) |list| {
+            c.curl_slist_free_all(list);
+        }
+    }
+
     pub fn format(self: *const Transfer, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         const req = self.req;
         return writer.print("[{d}] {s} {s}", .{self.id, @tagName(req.method), req.url});
@@ -375,10 +372,23 @@ pub const Transfer = struct {
         self.req.error_callback(self, err);
     }
 
-    fn deinit(self: *Transfer) void {
-        if (self._request_header_list) |list| {
-            c.curl_slist_free_all(list);
-        }
+    pub fn setBody(self: *Transfer, body: []const u8) !void {
+        const easy = self.handle.easy;
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_POSTFIELDSIZE, @as(c_long, @intCast(body.len))));
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_POSTFIELDS, body.ptr));
+    }
+
+    pub fn addHeader(self: *Transfer, value: [:0]const u8) !void {
+        self._request_header_list = c.curl_slist_append(self._request_header_list, value);
+    }
+
+    pub fn abort(self: *Transfer) void {
+        var client = self.handle.client;
+        errorMCheck(c.curl_multi_remove_handle(client.multi, self.handle.easy)) catch |err| {
+            log.err(.http, "Failed to abort", .{.err = err});
+        };
+        client.active -= 1;
+        self.deinit();
     }
 
     fn headerCallback(buffer: [*]const u8, header_count: usize, buf_len: usize, data: *anyopaque) callconv(.c) usize {
@@ -387,11 +397,13 @@ pub const Transfer = struct {
 
         const handle: *Handle = @alignCast(@ptrCast(data));
         var transfer = fromEasy(handle.easy) catch |err| {
-            handle.client.log("retrieve private info", err);
+            log.err(.http, "retrive private info", .{.err = err});
             return 0;
         };
 
-        const header = buffer[0..buf_len];
+        std.debug.assert(std.mem.endsWith(u8, buffer[0..buf_len], "\r\n"));
+
+        const header = buffer[0..buf_len - 2];
 
         if (transfer.response_header == null) {
             if (buf_len < 13 or std.mem.startsWith(u8, header, "HTTP/") == false) {
@@ -439,8 +451,7 @@ pub const Transfer = struct {
             if (buf_len > CONTENT_TYPE_LEN) {
                 if (std.ascii.eqlIgnoreCase(header[0..CONTENT_TYPE_LEN], "content-type:")) {
                     const value = std.mem.trimLeft(u8, header[CONTENT_TYPE_LEN..], " ");
-                    // -2 to trim the trailing \r\n
-                    const len = @min(value.len - 2, hdr._content_type.len);
+                    const len = @min(value.len, hdr._content_type.len);
                     hdr._content_type_len = len;
                     @memcpy(hdr._content_type[0..len], value[0..len]);
                 }
@@ -448,10 +459,14 @@ pub const Transfer = struct {
         }
 
         if (buf_len == 2) {
-            transfer.req.header_callback(transfer) catch {
+            transfer.req.header_done_callback(transfer) catch {
                 // returning < buf_len terminates the request
                 return 0;
             };
+        } else {
+            if (transfer.req.header_callback) |cb| {
+                cb(transfer, header) catch return 0;
+            }
         }
         return buf_len;
     }
@@ -462,8 +477,8 @@ pub const Transfer = struct {
 
         const handle: *Handle = @alignCast(@ptrCast(data));
         var transfer = fromEasy(handle.easy) catch |err| {
-            handle.client.log("retrieve private info", err);
-            return 0;
+            log.err(.http, "retrive private info", .{.err = err});
+            return c.CURL_WRITEFUNC_ERROR;
         };
 
         if (transfer._redirecting) {
@@ -535,10 +550,3 @@ pub const ProxyAuth = union(enum) {
     bearer: struct { token: []const u8 },
 };
 
-fn noopLog(ctx: []const u8, _: anyerror) void {
-    _ = ctx;
-}
-
-fn noopStart(transfer: *Transfer) !void {
-    _ = transfer;
-}

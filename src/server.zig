@@ -1052,7 +1052,15 @@ pub fn run(
     // infinite loop on I/O events, either:
     // - cmd from incoming connection on server socket
     // - JS callbacks events from scripts
+    // var http_client = app.http_client;
     while (true) {
+        // // @newhttp
+        // // This is a temporary hack for the newhttp work. The issue is that we
+        // // now have 2 event loops.
+        // if (http_client.active > 0) {
+        //     _ = try http_client.tick(10);
+        // }
+
         try loop.io.run_for_ns(10 * std.time.ns_per_ms);
     }
 }

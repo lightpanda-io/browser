@@ -96,12 +96,23 @@ pub const Mime = struct {
                         break;
                     }
                     var attribute_value = value;
-                    if (value[0] == '"' and value[value.len - 1] == '"') {
+                    if (value[0] == '"') {
+                        if (value.len < 3 or value[value.len - 1] != '"') {
+                            return error.Invalid;
+                        }
                         attribute_value = value[1 .. value.len - 1];
                     }
 
                     if (std.ascii.eqlIgnoreCase(attribute_value, "utf-8")) {
                         charset = "UTF-8";
+                    } else {
+                        // we only care about null (which we default to UTF-8)
+                        // or UTF-8. If this is actually set (i.e. not null)
+                        // and isn't UTF-8, we'll just put a dummy value. If
+                        // we want to capture the actual value, we'll need to
+                        // dupe/allocate it. Since, for now, we don't need that
+                        // we can avoid the allocation.
+                        charset = "lightpanda:UNSUPPORTED";
                     }
                 },
             }
@@ -271,7 +282,7 @@ pub const Mime = struct {
 };
 
 const testing = @import("../testing.zig");
-test "Mime: invalid " {
+test "Mime: invalid" {
     defer testing.reset();
 
     const invalids = [_][]const u8{
@@ -289,7 +300,6 @@ test "Mime: invalid " {
         "text/html; charset=\"\"",
         "text/html; charset=\"",
         "text/html; charset=\"\\",
-        "text/html; charset=\"\\a\"", // invalid to escape non special characters
     };
 
     for (invalids) |invalid| {
@@ -351,19 +361,19 @@ test "Mime: parse charset" {
 
     try expect(.{
         .content_type = .{ .text_xml = {} },
-        .charset = "utf-8",
+        .charset = "UTF-8",
         .params = "charset=utf-8",
     }, "text/xml; charset=utf-8");
 
     try expect(.{
         .content_type = .{ .text_xml = {} },
-        .charset = "utf-8",
+        .charset = "UTF-8",
         .params = "charset=\"utf-8\"",
     }, "text/xml;charset=\"utf-8\"");
 
     try expect(.{
         .content_type = .{ .text_xml = {} },
-        .charset = "\\ \" ",
+        .charset = "lightpanda:UNSUPPORTED",
         .params = "charset=\"\\\\ \\\" \"",
     }, "text/xml;charset=\"\\\\ \\\" \"   ");
 }
