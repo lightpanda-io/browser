@@ -180,7 +180,7 @@ pub const Client = struct {
         var running: c_int = undefined;
         try errorMCheck(c.curl_multi_perform(multi, &running));
 
-        if (timeout_ms > 0) {
+        if (running > 0 and timeout_ms > 0) {
             try errorMCheck(c.curl_multi_poll(multi, null, 0, timeout_ms, null));
         }
 
