@@ -38,6 +38,10 @@ page: *Page,
 // Only once this is true can deferred scripts be run
 static_scripts_done: bool,
 
+// when async_count == 0 and static_script_done == true, the document is completed
+// loading (i.e. page.documentIsComplete should be called).
+async_count: usize,
+
 // Normal scripts (non-deffered & non-async). These must be executed ni order
 scripts: OrderList,
 
@@ -58,6 +62,7 @@ pub fn init(app: *App, page: *Page) ScriptManager {
         .page = page,
         .scripts = .{},
         .deferred = .{},
+        .async_count = 0,
         .allocator = allocator,
         .client = app.http_client,
         .static_scripts_done = false,
@@ -183,7 +188,7 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
         .ctx = pending_script,
         .method = .GET,
         .start_callback = startCallback,
-        .header_callback = headerCallback,
+        .header_done_callback = headerCallback,
         .data_callback = dataCallback,
         .done_callback = doneCallback,
         .error_callback = errorCallback,
@@ -229,7 +234,31 @@ fn evaluate(self: *ScriptManager) void {
         pending_script.script.eval(page);
     }
 
+    // When all scripts (normal and deferred) are done loading, the document
+    // state changes (this ultimately triggers the DOMContentLoaded event)
     page.documentIsLoaded();
+
+    if (self.async_count == 0) {
+        // if we're here, then its like `asyncDone`
+        // 1 - there are no async scripts pending
+        // 2 - we checkecked static_scripts_done == true above
+        // 3 - we drained self.scripts above
+        // 4 - we drained self.deferred above
+        page.documentIsComplete();
+    }
+}
+
+fn asyncDone(self: *ScriptManager) void {
+    self.async_count -= 1;
+    if (
+        self.async_count == 0 and      // there are no more async scripts
+        self.static_scripts_done and   // and we've finished parsing the HTML to queue all <scripts>
+        self.scripts.first == null and // and there are no more <script src=> to wait for
+        self.deferred.first == null    // and there are no more <script defer src=> to wait for
+    ) {
+        // then the document is considered complete
+        self.page.documentIsComplete();
+    }
 }
 
 fn getList(self: *ScriptManager, script: *const Script) ?*OrderList {
@@ -334,10 +363,13 @@ const PendingScript = struct {
 
     fn doneCallback(self: *PendingScript, transfer: *http.Transfer) void {
         log.debug(.http, "script fetch complete", .{ .req = transfer });
+
+        const manager = self.manager;
         if (self.script.is_async) {
             // async script can be evaluated immediately
             defer self.deinit();
             self.script.eval(self.manager.page);
+            manager.asyncDone();
         } else {
             self.complete = true;
             self.manager.evaluate();
@@ -348,6 +380,7 @@ const PendingScript = struct {
         log.warn(.http, "script fetch error", .{ .req = transfer, .err = err });
         self.deinit();
     }
+
 };
 
 const Script = struct {

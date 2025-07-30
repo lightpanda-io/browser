@@ -35,7 +35,7 @@ pub const LightPanda = struct {
             .thread = null,
             .running = true,
             .allocator = allocator,
-            .client = &app.http_client,
+            .client = app.http_client,
             .uri = std.Uri.parse(URL) catch unreachable,
             .node_pool = std.heap.MemoryPool(List.Node).init(allocator),
         };

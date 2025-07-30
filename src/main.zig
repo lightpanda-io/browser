@@ -667,88 +667,42 @@ fn serveHTTP(address: std.net.Address) !void {
     test_wg.finish();
 
     var read_buffer: [1024]u8 = undefined;
-    ACCEPT: while (true) {
-        defer _ = arena.reset(.{ .free_all = {} });
-        const aa = arena.allocator();
-
+    while (true) {
         var conn = try listener.accept();
         defer conn.stream.close();
         var http_server = std.http.Server.init(conn, &read_buffer);
-        var connect_headers: std.ArrayListUnmanaged(std.http.Header) = .{};
-        REQUEST: while (true) {
-            var request = http_server.receiveHead() catch |err| switch (err) {
-                error.HttpConnectionClosing => continue :ACCEPT,
-                else => {
-                    std.debug.print("Test HTTP Server error: {}\n", .{err});
-                    return err;
+
+        var request = http_server.receiveHead() catch |err| switch (err) {
+            error.HttpConnectionClosing => continue,
+            else => {
+                std.debug.print("Test HTTP Server error: {}\n", .{err});
+                return err;
+            },
+        };
+
+        const path = request.head.target;
+
+        if (std.mem.eql(u8, path, "/loader")) {
+            try request.respond("Hello!", .{
+                .extra_headers = &.{.{ .name = "Connection", .value = "close" }},
+            });
+        } else if (std.mem.eql(u8, path, "/xhr")) {
+            try request.respond("1234567890" ** 10, .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+                    .{ .name = "Connection", .value = "Close" },
                 },
-            };
-
-            if (request.head.method == .CONNECT) {
-                try request.respond("", .{ .status = .ok });
-
-                // Proxy headers and destination headers are separated in the case of a CONNECT proxy
-                // We store the CONNECT headers, then continue with the request for the destination
-                var it = request.iterateHeaders();
-                while (it.next()) |hdr| {
-                    try connect_headers.append(aa, .{
-                        .name = try std.fmt.allocPrint(aa, "__{s}", .{hdr.name}),
-                        .value = try aa.dupe(u8, hdr.value),
-                    });
-                }
-                continue :REQUEST;
-            }
-
-            const path = request.head.target;
-            if (std.mem.eql(u8, path, "/loader")) {
-                try request.respond("Hello!", .{
-                    .extra_headers = &.{.{ .name = "Connection", .value = "close" }},
-                });
-            } else if (std.mem.eql(u8, path, "/http_client/simple")) {
-                try request.respond("", .{
-                    .extra_headers = &.{.{ .name = "Connection", .value = "close" }},
-                });
-            } else if (std.mem.eql(u8, path, "/http_client/redirect")) {
-                try request.respond("", .{
-                    .status = .moved_permanently,
-                    .extra_headers = &.{
-                        .{ .name = "Connection", .value = "close" },
-                        .{ .name = "LOCATION", .value = "../http_client/echo" },
-                    },
-                });
-            } else if (std.mem.eql(u8, path, "/http_client/redirect/secure")) {
-                try request.respond("", .{
-                    .status = .moved_permanently,
-                    .extra_headers = &.{ .{ .name = "Connection", .value = "close" }, .{ .name = "LOCATION", .value = "https://127.0.0.1:9581/http_client/body" } },
-                });
-            } else if (std.mem.eql(u8, path, "/http_client/gzip")) {
-                const body = &.{ 0x1f, 0x8b, 0x08, 0x08, 0x01, 0xc6, 0x19, 0x68, 0x00, 0x03, 0x74, 0x65, 0x73, 0x74, 0x2e, 0x68, 0x74, 0x6d, 0x6c, 0x00, 0x73, 0x54, 0xc8, 0x4b, 0x2d, 0x57, 0x48, 0x2a, 0xca, 0x2f, 0x2f, 0x4e, 0x2d, 0x52, 0x48, 0x2a, 0xcd, 0xcc, 0x29, 0x51, 0x48, 0xcb, 0x2f, 0x52, 0xc8, 0x4d, 0x4c, 0xce, 0xc8, 0xcc, 0x4b, 0x2d, 0xe6, 0x02, 0x00, 0xe7, 0xc3, 0x4b, 0x27, 0x21, 0x00, 0x00, 0x00 };
-                try request.respond(body, .{
-                    .extra_headers = &.{ .{ .name = "Connection", .value = "close" }, .{ .name = "Content-Encoding", .value = "gzip" } },
-                });
-            } else if (std.mem.eql(u8, path, "/http_client/echo")) {
-                var headers: std.ArrayListUnmanaged(std.http.Header) = .{};
-
-                var it = request.iterateHeaders();
-                while (it.next()) |hdr| {
-                    try headers.append(aa, .{
-                        .name = try std.fmt.allocPrint(aa, "_{s}", .{hdr.name}),
-                        .value = hdr.value,
-                    });
-                }
-
-                if (connect_headers.items.len > 0) {
-                    try headers.appendSlice(aa, connect_headers.items);
-                    connect_headers.clearRetainingCapacity();
-                }
-                try headers.append(aa, .{ .name = "Connection", .value = "Close" });
-
-                try request.respond("over 9000!", .{
-                    .status = .created,
-                    .extra_headers = headers.items,
-                });
-            }
-            continue :ACCEPT;
+            });
+        } else if (std.mem.eql(u8, path, "/xhr/json")) {
+            try request.respond("{\"over\":\"9000!!!\"}", .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "application/json" },
+                    .{ .name = "Connection", .value = "Close" },
+                },
+            });
+        } else {
+            // should not have an unknown path
+            unreachable;
         }
     }
 }

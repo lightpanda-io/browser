@@ -131,6 +131,7 @@ pub const Page = struct {
             .messageloop_node = .{ .func = messageLoopCallback },
             .keydown_event_node = .{ .func = keydownCallback },
             .window_clicked_event_node = .{ .func = windowClicked },
+            // @newhttp
             // .request_factory = browser.http_client.requestFactory(.{
             //     .notification = browser.notification,
             // }),
@@ -233,32 +234,32 @@ pub const Page = struct {
     pub fn wait(self: *Page, wait_sec: usize) !void {
         switch (self.mode) {
             .pre, .html, .raw, .parsed => {
-                // The HTML page was parsed. We're now either have JS scripts to
+                // The HTML page was parsed. We now either have JS scripts to
                 // download, or timeouts to execute, or both.
 
                 const cutoff = timestamp() + wait_sec;
-
-                var loop = self.session.browser.app.loop;
 
                 var try_catch: Env.TryCatch = undefined;
                 try_catch.init(self.main_context);
                 defer try_catch.deinit();
 
+                var http_client = self.http_client;
+                var loop = self.session.browser.app.loop;
+
                 // @newhttp Not sure about the timing / the order / any of this.
                 // I think I want to remove the loop. Implement our own timeouts
                 // and switch the CDP server to blocking. For now, just try this.`
                 while (timestamp() < cutoff) {
-                    const active = try self.http_client.tick(10); // 10ms
+                    const has_pending_timeouts = loop.hasPendingTimeout();
+                    if (http_client.active > 0) {
+                        try http_client.tick(10); // 10ms
+                    } else if (self.loaded and self.loaded and !has_pending_timeouts) {
+                        // we have no active HTTP requests, and no timeouts pending
+                        return;
+                    }
 
-                    if (active == 0) {
-                        if (!self.loaded) {
-                            // We have no pending HTTP requests and we haven't
-                            // triggered the load event. Trigger the load event.
-                            self.documentIsComplete();
-                        } else if (loop.hasPendingTimeout() == false) {
-                            // we have no active HTTP requests, and no timeouts pending
-                            return;
-                        }
+                    if (!has_pending_timeouts) {
+                        continue;
                     }
 
                     // 10ms
@@ -308,10 +309,16 @@ pub const Page = struct {
             .ctx = self,
             .url = owned_url,
             .method = opts.method,
-            .header_callback = pageHeaderCallback,
+            .header_done_callback = pageHeaderCallback,
             .data_callback = pageDataCallback,
             .done_callback = pageDoneCallback,
             .error_callback = pageErrorCallback,
+        });
+
+        self.session.browser.notification.dispatch(.page_navigate, &.{
+            .opts = opts,
+            .url = owned_url,
+            .timestamp = timestamp(),
         });
     }
 
@@ -321,11 +328,18 @@ pub const Page = struct {
         };
     }
 
-    fn documentIsComplete(self: *Page) void {
+    pub fn documentIsComplete(self: *Page) void {
+        std.debug.assert(self.loaded == false);
+
         self.loaded = true;
         self._documentIsComplete() catch |err| {
             log.err(.browser, "document is complete", .{ .err = err });
         };
+
+        self.session.browser.notification.dispatch(.page_navigated, &.{
+            .url = self.url.raw,
+            .timestamp = timestamp(),
+        });
     }
     fn _documentIsComplete(self: *Page) !void {
         try HTMLDocument.documentIsComplete(self.window.document, self);
