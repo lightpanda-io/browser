@@ -81,13 +81,13 @@ pub const Notification = struct {
 
     pub const PageNavigate = struct {
         timestamp: u32,
-        url: *const URL,
+        url: []const u8,
         opts: page.NavigateOpts,
     };
 
     pub const PageNavigated = struct {
         timestamp: u32,
-        url: *const URL,
+        url: []const u8,
     };
 
     pub const RequestStart = struct {
