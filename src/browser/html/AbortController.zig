@@ -21,7 +21,6 @@ const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
-const Loop = @import("../../runtime/loop.zig").Loop;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 
 pub const Interfaces = .{
@@ -77,11 +76,9 @@ pub const AbortSignal = struct {
         const callback = try page.arena.create(TimeoutCallback);
         callback.* = .{
             .signal = .init,
-            .node = .{ .func = TimeoutCallback.run },
         };
 
-        const delay_ms: u63 = @as(u63, delay) * std.time.ns_per_ms;
-        _ = try page.loop.timeout(delay_ms, &callback.node);
+        try page.scheduler.add(callback, TimeoutCallback.run, delay, .{ .name = "abort_signal" });
         return &callback.signal;
     }
 
@@ -131,15 +128,12 @@ pub const AbortSignal = struct {
 const TimeoutCallback = struct {
     signal: AbortSignal,
 
-    // This is the internal data that the event loop tracks. We'll get this
-    // back in run and, from it, can get our TimeoutCallback instance
-    node: Loop.CallbackNode = undefined,
-
-    fn run(node: *Loop.CallbackNode, _: *?u63) void {
-        const self: *TimeoutCallback = @fieldParentPtr("node", node);
+    fn run(ctx: *anyopaque) ?u32 {
+        const self: *TimeoutCallback = @alignCast(@ptrCast(ctx));
         self.signal.abort("TimeoutError") catch |err| {
             log.warn(.app, "abort signal timeout", .{ .err = err });
         };
+        return null;
     }
 };
 

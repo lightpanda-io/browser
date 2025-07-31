@@ -249,13 +249,13 @@ const Handles = struct {
 
             node.data = &handles[i];
             available.append(node);
-         }
+        }
 
-         return .{
+        return .{
             .handles = handles,
             .available = available,
             .cert_arena = cert_arena,
-         };
+        };
     }
 
     fn deinit(self: *Handles, allocator: Allocator) void {
@@ -335,12 +335,12 @@ pub const Request = struct {
     // arbitrary data that can be associated with this request
     ctx: *anyopaque = undefined,
 
-    start_callback: ?*const fn(req: *Transfer) anyerror!void = null,
-    header_callback: ?*const fn (req: *Transfer, header: []const u8) anyerror!void = null ,
+    start_callback: ?*const fn (req: *Transfer) anyerror!void = null,
+    header_callback: ?*const fn (req: *Transfer, header: []const u8) anyerror!void = null,
     header_done_callback: *const fn (req: *Transfer) anyerror!void,
-    data_callback: *const fn(req: *Transfer, data: []const u8) anyerror!void,
-    done_callback: *const fn(req: *Transfer) anyerror!void,
-    error_callback: *const fn(req: *Transfer, err: anyerror) void,
+    data_callback: *const fn (req: *Transfer, data: []const u8) anyerror!void,
+    done_callback: *const fn (req: *Transfer) anyerror!void,
+    error_callback: *const fn (req: *Transfer, err: anyerror) void,
 };
 
 pub const Transfer = struct {
@@ -365,7 +365,7 @@ pub const Transfer = struct {
 
     pub fn format(self: *const Transfer, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         const req = self.req;
-        return writer.print("[{d}] {s} {s}", .{self.id, @tagName(req.method), req.url});
+        return writer.print("[{d}] {s} {s}", .{ self.id, @tagName(req.method), req.url });
     }
 
     fn onError(self: *Transfer, err: anyerror) void {
@@ -385,7 +385,7 @@ pub const Transfer = struct {
     pub fn abort(self: *Transfer) void {
         var client = self.handle.client;
         errorMCheck(c.curl_multi_remove_handle(client.multi, self.handle.easy)) catch |err| {
-            log.err(.http, "Failed to abort", .{.err = err});
+            log.err(.http, "Failed to abort", .{ .err = err });
         };
         client.active -= 1;
         self.deinit();
@@ -397,13 +397,13 @@ pub const Transfer = struct {
 
         const handle: *Handle = @alignCast(@ptrCast(data));
         var transfer = fromEasy(handle.easy) catch |err| {
-            log.err(.http, "retrive private info", .{.err = err});
+            log.err(.http, "retrive private info", .{ .err = err });
             return 0;
         };
 
         std.debug.assert(std.mem.endsWith(u8, buffer[0..buf_len], "\r\n"));
 
-        const header = buffer[0..buf_len - 2];
+        const header = buffer[0 .. buf_len - 2];
 
         if (transfer.response_header == null) {
             if (buf_len < 13 or std.mem.startsWith(u8, header, "HTTP/") == false) {
@@ -477,7 +477,7 @@ pub const Transfer = struct {
 
         const handle: *Handle = @alignCast(@ptrCast(data));
         var transfer = fromEasy(handle.easy) catch |err| {
-            log.err(.http, "retrive private info", .{.err = err});
+            log.err(.http, "retrive private info", .{ .err = err });
             return c.CURL_WRITEFUNC_ERROR;
         };
 
@@ -549,4 +549,3 @@ pub const ProxyAuth = union(enum) {
     basic: struct { user_pass: []const u8 },
     bearer: struct { token: []const u8 },
 };
-
