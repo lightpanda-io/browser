@@ -19,7 +19,7 @@
 const std = @import("std");
 const c = @import("client.zig").c;
 
-pub const Error = error {
+pub const Error = error{
     UnsupportedProtocol,
     FailedInit,
     UrlMalformat,
@@ -201,7 +201,7 @@ pub fn fromCode(code: c.CURLcode) Error {
     };
 }
 
-pub const Multi = error {
+pub const Multi = error{
     BadHandle,
     BadEasyHandle,
     OutOfMemory,

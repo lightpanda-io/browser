@@ -31,6 +31,7 @@ const Renderer = @import("renderer.zig").Renderer;
 const Window = @import("html/window.zig").Window;
 const Walker = @import("dom/walker.zig").WalkerDepthFirst;
 const Loop = @import("../runtime/loop.zig").Loop;
+const Scheduler = @import("Scheduler.zig");
 const ScriptManager = @import("ScriptManager.zig");
 const HTMLDocument = @import("html/document.zig").HTMLDocument;
 
@@ -75,11 +76,6 @@ pub const Page = struct {
 
     renderer: Renderer,
 
-    // run v8 micro tasks
-    microtask_node: Loop.CallbackNode,
-    // run v8 pump message loop and idle tasks
-    messageloop_node: Loop.CallbackNode,
-
     keydown_event_node: parser.EventNode,
     window_clicked_event_node: parser.EventNode,
 
@@ -94,9 +90,9 @@ pub const Page = struct {
 
     polyfill_loader: polyfill.Loader = .{},
 
+    scheduler: Scheduler,
     http_client: *http.Client,
     script_manager: ScriptManager,
-
     mode: Mode,
 
     loaded: bool = false,
@@ -127,8 +123,7 @@ pub const Page = struct {
             .cookie_jar = &session.cookie_jar,
             .script_manager = script_manager,
             .http_client = browser.http_client,
-            .microtask_node = .{ .func = microtaskCallback },
-            .messageloop_node = .{ .func = messageLoopCallback },
+            .scheduler = Scheduler.init(arena),
             .keydown_event_node = .{ .func = keydownCallback },
             .window_clicked_event_node = .{ .func = windowClicked },
             // @newhttp
@@ -140,10 +135,10 @@ pub const Page = struct {
         self.main_context = try session.executor.createJsContext(&self.window, self, self, true, Env.GlobalMissingCallback.init(&self.polyfill_loader));
         try polyfill.preload(self.arena, self.main_context);
 
+        try self.scheduler.add(self, runMicrotasks, 5, .{ .name = "page.microtasks" });
         // message loop must run only non-test env
         if (comptime !builtin.is_test) {
-            _ = try session.browser.app.loop.timeout(1 * std.time.ns_per_ms, &self.microtask_node);
-            _ = try session.browser.app.loop.timeout(100 * std.time.ns_per_ms, &self.messageloop_node);
+            try self.scheduler.add(self, runMessageLoop, 5, .{ .name = "page.messageLoop" });
         }
     }
 
@@ -151,16 +146,16 @@ pub const Page = struct {
         self.script_manager.deinit();
     }
 
-    fn microtaskCallback(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
-        const self: *Page = @fieldParentPtr("microtask_node", node);
+    fn runMicrotasks(ctx: *anyopaque) ?u32 {
+        const self: *Page = @alignCast(@ptrCast(ctx));
         self.session.browser.runMicrotasks();
-        repeat_delay.* = 1 * std.time.ns_per_ms;
+        return 5;
     }
 
-    fn messageLoopCallback(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
-        const self: *Page = @fieldParentPtr("messageloop_node", node);
+    fn runMessageLoop(ctx: *anyopaque) ?u32 {
+        const self: *Page = @alignCast(@ptrCast(ctx));
         self.session.browser.runMessageLoop();
-        repeat_delay.* = 100 * std.time.ns_per_ms;
+        return 100;
     }
 
     pub const DumpOpts = struct {
@@ -237,39 +232,66 @@ pub const Page = struct {
                 // The HTML page was parsed. We now either have JS scripts to
                 // download, or timeouts to execute, or both.
 
-                const cutoff = timestamp() + wait_sec;
-
                 var try_catch: Env.TryCatch = undefined;
                 try_catch.init(self.main_context);
                 defer try_catch.deinit();
 
+                var scheduler = &self.scheduler;
                 var http_client = self.http_client;
-                var loop = self.session.browser.app.loop;
 
-                // @newhttp Not sure about the timing / the order / any of this.
-                // I think I want to remove the loop. Implement our own timeouts
-                // and switch the CDP server to blocking. For now, just try this.`
-                while (timestamp() < cutoff) {
-                    const has_pending_timeouts = loop.hasPendingTimeout();
-                    if (http_client.active > 0) {
-                        try http_client.tick(10); // 10ms
-                    } else if (self.loaded and self.loaded and !has_pending_timeouts) {
-                        // we have no active HTTP requests, and no timeouts pending
-                        return;
-                    }
+                var ms_remaining = wait_sec * 1000;
+                var timer = try std.time.Timer.start();
 
-                    if (!has_pending_timeouts) {
-                        continue;
-                    }
+                while (true) {
+                    const has_active_http = http_client.active > 0;
 
-                    // 10ms
-                    try loop.run(std.time.ns_per_ms * 10);
+                    const ms_to_next_task = try scheduler.run(has_active_http);
 
                     if (try_catch.hasCaught()) {
                         const msg = (try try_catch.err(self.arena)) orelse "unknown";
                         log.err(.browser, "page wait error", .{ .err = msg });
                         return error.JsError;
                     }
+
+                    if (has_active_http == false) {
+                        if (ms_to_next_task) |ms| {
+                            // There are no HTTP transfers, so there's no point calling
+                            // http_client.tick.
+                            // TODO: should we just force-run the scheduler??
+
+                            if (ms > ms_remaining) {
+                                // we'd wait to long, might as well exit early.
+                                return;
+                            }
+
+                            std.time.sleep(std.time.ns_per_ms * ms);
+                            ms_remaining -= ms;
+                            continue;
+                        }
+
+                        // We have no active http transfer and no pending
+                        // schedule tasks. We're done
+                        return;
+                    }
+
+                    // We'll block here, waiting for network IO. We know
+                    // when the next timeout is scheduled, and we know how long
+                    // the caller wants to wait for, so we can pick a good wait
+                    // duration
+                    const ms_to_wait = @min(ms_remaining, ms_to_next_task orelse 1000);
+                    try http_client.tick(ms_to_wait);
+
+                    if (try_catch.hasCaught()) {
+                        const msg = (try try_catch.err(self.arena)) orelse "unknown";
+                        log.err(.browser, "page wait error", .{ .err = msg });
+                        return error.JsError;
+                    }
+
+                    const ms_elapsed = timer.lap() / 100_000;
+                    if (ms_elapsed > ms_remaining) {
+                        return;
+                    }
+                    ms_remaining -= ms_elapsed;
                 }
             },
             .err => |err| return err,

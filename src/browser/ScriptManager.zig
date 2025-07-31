@@ -18,7 +18,6 @@
 
 const std = @import("std");
 
-
 const log = @import("../log.zig");
 const parser = @import("netsurf.zig");
 const http = @import("../http/client.zig");
@@ -250,11 +249,10 @@ fn evaluate(self: *ScriptManager) void {
 
 fn asyncDone(self: *ScriptManager) void {
     self.async_count -= 1;
-    if (
-        self.async_count == 0 and      // there are no more async scripts
-        self.static_scripts_done and   // and we've finished parsing the HTML to queue all <scripts>
+    if (self.async_count == 0 and // there are no more async scripts
+        self.static_scripts_done and // and we've finished parsing the HTML to queue all <scripts>
         self.scripts.first == null and // and there are no more <script src=> to wait for
-        self.deferred.first == null    // and there are no more <script defer src=> to wait for
+        self.deferred.first == null // and there are no more <script defer src=> to wait for
     ) {
         // then the document is considered complete
         self.page.documentIsComplete();
@@ -380,7 +378,6 @@ const PendingScript = struct {
         log.warn(.http, "script fetch error", .{ .req = transfer, .err = err });
         self.deinit();
     }
-
 };
 
 const Script = struct {

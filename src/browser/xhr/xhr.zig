@@ -354,7 +354,7 @@ pub const XMLHttpRequest = struct {
 
         return self.headers.append(
             self.arena,
-            try std.fmt.allocPrintZ(self.arena, "{s}: {s}", .{name, value}),
+            try std.fmt.allocPrintZ(self.arena, "{s}: {s}", .{ name, value }),
         );
     }
 
@@ -424,9 +424,9 @@ pub const XMLHttpRequest = struct {
         const header = &transfer.response_header.?;
 
         log.debug(.http, "request header", .{
-          .source = "xhr",
-          .url = self.url,
-          .status = header.status,
+            .source = "xhr",
+            .url = self.url,
+            .status = header.status,
         });
 
         if (header.contentType()) |ct| {
@@ -731,7 +731,7 @@ pub const XMLHttpRequest = struct {
             if (entry[name.len] != ':') {
                 continue;
             }
-            return std.mem.trimLeft(u8, entry[name.len + 1..], " ");
+            return std.mem.trimLeft(u8, entry[name.len + 1 ..], " ");
         }
         return null;
     }
@@ -793,12 +793,9 @@ test "Browser.XHR.XMLHttpRequest" {
         .{ "req.status", "200" },
         .{ "req.statusText", "OK" },
         .{ "req.getResponseHeader('Content-Type')", "text/html; charset=utf-8" },
-        .{
-            "req.getAllResponseHeaders()",
-            "content-length: 100\r\n" ++
+        .{ "req.getAllResponseHeaders()", "content-length: 100\r\n" ++
             "Content-Type: text/html; charset=utf-8\r\n" ++
-            "Connection: Close\r\n"
-        },
+            "Connection: Close\r\n" },
         .{ "req.responseText.length", "100" },
         .{ "req.response.length == req.responseText.length", "true" },
         .{ "req.responseXML instanceof Document", "true" },

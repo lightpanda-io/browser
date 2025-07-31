@@ -38,8 +38,8 @@ pub fn load(allocator: Allocator, arena: Allocator) !c.curl_blob {
 
     const encoded_size = encoder.calcSize(bytes.len);
     const buffer_size = encoded_size +
-        (bundle.map.count() * 75) +  // start / end per certificate + extra, just in case
-        (encoded_size / 64)          // newline per 64 characters
+        (bundle.map.count() * 75) + // start / end per certificate + extra, just in case
+        (encoded_size / 64) // newline per 64 characters
     ;
     try arr.ensureTotalCapacity(arena, buffer_size);
     var writer = arr.writer(arena);
@@ -48,7 +48,7 @@ pub fn load(allocator: Allocator, arena: Allocator) !c.curl_blob {
         const cert = try std.crypto.Certificate.der.Element.parse(bytes, index.*);
 
         try writer.writeAll("-----BEGIN CERTIFICATE-----\n");
-        var line_writer = LineWriter{.inner = writer};
+        var line_writer = LineWriter{ .inner = writer };
         try encoder.encodeWriter(&line_writer, bytes[index.*..cert.slice.end]);
         try writer.writeAll("\n-----END CERTIFICATE-----\n");
     }
