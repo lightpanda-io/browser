@@ -7,26 +7,31 @@ const Allocator = std.mem.Allocator;
 
 const log = @import("../log.zig");
 const App = @import("../app.zig").App;
-const http = @import("../http/client.zig");
+const Http = @import("../http/Http.zig");
 const telemetry = @import("telemetry.zig");
 
 const URL = "https://telemetry.lightpanda.io";
 const MAX_BATCH_SIZE = 20;
 
 pub const LightPanda = struct {
-    uri: std.Uri,
     pending: List,
     running: bool,
     thread: ?std.Thread,
     allocator: Allocator,
     mutex: std.Thread.Mutex,
     cond: Thread.Condition,
-    client: *http.Client,
+    connection: Http.Connection,
     node_pool: std.heap.MemoryPool(List.Node),
 
     const List = std.DoublyLinkedList(LightPandaEvent);
 
-    pub fn init(app: *App) LightPanda {
+    pub fn init(app: *App) !LightPanda {
+        const connection = try app.http.newConnection();
+        errdefer connection.deinit();
+
+        try connection.setURL(URL);
+        try connection.setMethod(.POST);
+
         const allocator = app.allocator;
         return .{
             .cond = .{},
@@ -35,8 +40,7 @@ pub const LightPanda = struct {
             .thread = null,
             .running = true,
             .allocator = allocator,
-            .client = app.http_client,
-            .uri = std.Uri.parse(URL) catch unreachable,
+            .connection = connection,
             .node_pool = std.heap.MemoryPool(List.Node).init(allocator),
         };
     }
@@ -50,6 +54,7 @@ pub const LightPanda = struct {
             thread.join();
         }
         self.node_pool.deinit();
+        self.connection.deinit();
     }
 
     pub fn send(self: *LightPanda, iid: ?[]const u8, run_mode: App.RunMode, raw_event: telemetry.Event) !void {
@@ -102,15 +107,11 @@ pub const LightPanda = struct {
             try writer.writeByte('\n');
         }
 
-        var req = try self.client.request(.POST, &self.uri);
-        defer req.deinit();
-        req.body = arr.items;
+        try self.connection.setBody(arr.items);
+        const status = try self.connection.request();
 
-        // drain the response
-        var res = try req.sendSync(.{});
-        while (try res.next()) |_| {}
-        if (res.header.status != 200) {
-            log.warn(.telemetry, "server error", .{ .status = res.header.status });
+        if (status != 200) {
+            log.warn(.telemetry, "server error", .{ .status = status });
         }
     }
 
