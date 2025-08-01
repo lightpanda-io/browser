@@ -258,7 +258,7 @@ pub const HTMLDocument = struct {
     pub fn _elementFromPoint(_: *parser.DocumentHTML, x: i32, y: i32, page: *Page) !?ElementUnion {
         const element = page.renderer.getElementAtPosition(x, y) orelse return null;
         // TODO if pointer-events set to none the underlying element should be returned (parser.documentGetDocumentElement(self.document);?)
-        return try Element.toInterface(element);
+        return try Element.toInterface(ElementUnion, element);
     }
 
     // Returns an array of all elements at the specified coordinates (relative to the viewport). The elements are ordered from the topmost to the bottommost box of the viewport.
@@ -272,7 +272,7 @@ pub const HTMLDocument = struct {
 
         var list: std.ArrayListUnmanaged(ElementUnion) = .empty;
         try list.ensureTotalCapacity(page.call_arena, 3);
-        list.appendAssumeCapacity(try Element.toInterface(element));
+        list.appendAssumeCapacity(try Element.toInterface(ElementUnion, element));
 
         // Since we are using a flat renderer there is no hierarchy of elements. What we do know is that the element is part of the main document.
         // Thus we can add the HtmlHtmlElement and it's child HTMLBodyElement to the returned list.
@@ -282,9 +282,9 @@ pub const HTMLDocument = struct {
             return list.items;
         };
         if (try parser.documentHTMLBody(page.window.document)) |body| {
-            list.appendAssumeCapacity(try Element.toInterface(parser.bodyToElement(body)));
+            list.appendAssumeCapacity(try Element.toInterface(ElementUnion, parser.bodyToElement(body)));
         }
-        list.appendAssumeCapacity(try Element.toInterface(doc_elem));
+        list.appendAssumeCapacity(try Element.toInterface(ElementUnion, doc_elem));
         return list.items;
     }
 

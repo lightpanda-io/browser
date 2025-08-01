@@ -67,10 +67,7 @@ pub const Node = struct {
 
     pub fn toInterface(node: *parser.Node) !Union {
         return switch (try parser.nodeType(node)) {
-            .element => try HTMLElem.toInterface(
-                Union,
-                @as(*parser.Element, @ptrCast(node)),
-            ),
+            .element => try Element.toInterface(Union, @as(*parser.Element, @ptrCast(node))),
             .comment => .{ .Comment = @as(*parser.Comment, @ptrCast(node)) },
             .text => .{ .Text = @as(*parser.Text, @ptrCast(node)) },
             .cdata_section => .{ .CDATASection = @as(*parser.CDATASection, @ptrCast(node)) },

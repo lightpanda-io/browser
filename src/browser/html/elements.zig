@@ -34,6 +34,7 @@ const CSSStyleDeclaration = @import("../cssom/CSSStyleDeclaration.zig");
 
 // HTMLElement interfaces
 pub const Interfaces = .{
+    Element,
     HTMLElement,
     HTMLUnknownElement,
     HTMLAnchorElement,

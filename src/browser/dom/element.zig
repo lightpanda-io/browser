@@ -54,9 +54,17 @@ pub const Element = struct {
         left: f64,
     };
 
-    pub fn toInterface(e: *parser.Element) !Union {
-        return try HTMLElem.toInterface(Union, e);
+    pub fn toInterface(comptime T: type, e: *parser.Element) !T {
+        const tagname = try parser.elementGetTagName(e) orelse {
+            // in case of null tagname, return the element as it.
+            return .{ .Element = e };
+        };
+        _ = parser.Tag.fromString(tagname) catch {
+            // if the tag is invalid, we don't have an HTMLElement.
+            return .{ .Element = e };
+        };
         // SVGElement and MathML are not supported yet.
+        return try HTMLElem.toInterface(T, e);
     }
 
     // JS funcs
@@ -376,7 +384,7 @@ pub const Element = struct {
 
         if (n == null) return null;
 
-        return try toInterface(parser.nodeToElement(n.?));
+        return try toInterface(Union, parser.nodeToElement(n.?));
     }
 
     pub fn _querySelectorAll(self: *parser.Element, selector: []const u8, page: *Page) !NodeList {
