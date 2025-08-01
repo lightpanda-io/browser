@@ -141,7 +141,7 @@ fn collectForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page
             continue;
         }
 
-        const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(element)));
+        const tag = try parser.elementTag(element);
         switch (tag) {
             .input => {
                 const tpe = try parser.inputGetType(@ptrCast(element));
@@ -246,7 +246,7 @@ fn collectSelectValues(arena: Allocator, select: *parser.Select, name: []const u
 fn getSubmitterName(submitter_: ?*parser.ElementHTML) !?[]const u8 {
     const submitter = submitter_ orelse return null;
 
-    const tag = try parser.elementHTMLGetTagType(submitter);
+    const tag = try parser.elementTag(@ptrCast(submitter));
     const element: *parser.Element = @ptrCast(submitter);
     const name = try parser.elementGetAttribute(element, "name");
 

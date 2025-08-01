@@ -1110,11 +1110,7 @@ pub const HTMLVideoElement = struct {
 };
 
 pub fn toInterface(comptime T: type, e: *parser.Element) !T {
-    const tagname = try parser.elementGetTagName(e) orelse {
-        // in case of null tagname, return an uknonwn HTMLElement.
-        return .{ .HTMLUnknownElement = @as(*parser.Unknown, @ptrCast(e)) };
-    };
-    const tag = try parser.Tag.fromString(tagname);
+    const tag = try parser.elementTag(e);
 
     return toInterfaceFromTag(T, e, tag);
 }
