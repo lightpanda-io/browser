@@ -62,7 +62,7 @@ pub fn writeNode(node: *parser.Node, opts: Opts, writer: anytype) anyerror!void 
     switch (try parser.nodeType(node)) {
         .element => {
             // open the tag
-            const tag_type = try parser.elementHTMLGetTagType(@ptrCast(node));
+            const tag_type = try parser.nodeHTMLGetTagType(node) orelse .undef;
             if (tag_type == .script and opts.exclude_scripts) {
                 return;
             }
@@ -150,7 +150,7 @@ pub fn writeChildren(root: *parser.Node, opts: Opts, writer: anytype) !void {
 // area, base, br, col, embed, hr, img, input, link, meta, source, track, wbr
 // https://html.spec.whatwg.org/#void-elements
 fn isVoid(elem: *parser.Element) !bool {
-    const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(elem)));
+    const tag = try parser.elementTag(elem);
     return switch (tag) {
         .area, .base, .br, .col, .embed, .hr, .img, .input, .link => true,
         .meta, .source, .track, .wbr => true,
