@@ -34,6 +34,7 @@ const CSSStyleDeclaration = @import("../cssom/CSSStyleDeclaration.zig");
 
 // HTMLElement interfaces
 pub const Interfaces = .{
+    Element,
     HTMLElement,
     HTMLUnknownElement,
     HTMLAnchorElement,
@@ -639,7 +640,7 @@ pub const HTMLImageElement = struct {
         pub const prototype = *HTMLImageElement;
 
         pub fn constructor(width: ?u32, height: ?u32, page: *const Page) !*parser.Image {
-            const element = try parser.documentCreateElement(parser.documentHTMLToDocument(page.window.document), "img");
+            const element = try parser.documentCreateHTMLElement(parser.documentHTMLToDocument(page.window.document), "img");
             const image: *parser.Image = @ptrCast(element);
             if (width) |width_| try parser.imageSetWidth(image, width_);
             if (height) |height_| try parser.imageSetHeight(image, height_);
@@ -1108,13 +1109,7 @@ pub const HTMLVideoElement = struct {
     pub const subtype = .node;
 };
 
-pub fn toInterface(comptime T: type, e: *parser.Element) !T {
-    const tagname = try parser.elementGetTagName(e) orelse {
-        // in case of null tagname, return an uknonwn HTMLElement.
-        return .{ .HTMLUnknownElement = @as(*parser.Unknown, @ptrCast(e)) };
-    };
-    const tag = try parser.Tag.fromString(tagname);
-
+pub fn toInterfaceFromTag(comptime T: type, e: *parser.Element, tag: parser.Tag) !T {
     return switch (tag) {
         .abbr, .acronym, .address, .article, .aside, .b, .basefont, .bdi, .bdo, .bgsound, .big, .center, .cite, .code, .dd, .details, .dfn, .dt, .em, .figcaption, .figure, .footer, .header, .hgroup, .i, .isindex, .keygen, .kbd, .main, .mark, .marquee, .menu, .menuitem, .nav, .nobr, .noframes, .noscript, .rp, .rt, .ruby, .s, .samp, .section, .small, .spacer, .strike, .strong, .sub, .summary, .sup, .tt, .u, .wbr, ._var => .{ .HTMLElement = @as(*parser.ElementHTML, @ptrCast(e)) },
         .a => .{ .HTMLAnchorElement = @as(*parser.Anchor, @ptrCast(e)) },

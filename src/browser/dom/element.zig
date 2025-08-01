@@ -55,8 +55,23 @@ pub const Element = struct {
     };
 
     pub fn toInterface(e: *parser.Element) !Union {
-        return try HTMLElem.toInterface(Union, e);
-        // SVGElement and MathML are not supported yet.
+        return toInterfaceT(Union, e);
+    }
+
+    pub fn toInterfaceT(comptime T: type, e: *parser.Element) !T {
+        const tagname = try parser.elementGetTagName(e) orelse {
+            // in case of null tagname, return the element as it.
+            return .{ .Element = e };
+        };
+
+        // TODO SVGElement and MathML are not supported yet.
+
+        const tag = parser.Tag.fromString(tagname) catch {
+            // if the tag is invalid, we don't have an HTMLElement.
+            return .{ .Element = e };
+        };
+
+        return HTMLElem.toInterfaceFromTag(T, e, tag);
     }
 
     // JS funcs
@@ -344,13 +359,13 @@ pub const Element = struct {
     pub fn get_previousElementSibling(self: *parser.Element) !?Union {
         const res = try parser.nodePreviousElementSibling(parser.elementToNode(self));
         if (res == null) return null;
-        return try HTMLElem.toInterface(HTMLElem.Union, res.?);
+        return try toInterface(res.?);
     }
 
     pub fn get_nextElementSibling(self: *parser.Element) !?Union {
         const res = try parser.nodeNextElementSibling(parser.elementToNode(self));
         if (res == null) return null;
-        return try HTMLElem.toInterface(HTMLElem.Union, res.?);
+        return try toInterface(res.?);
     }
 
     fn getElementById(self: *parser.Element, id: []const u8) !?*parser.Node {
