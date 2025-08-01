@@ -328,6 +328,24 @@ pub const Tag = enum(u8) {
             else => upperName(@tagName(tag)),
         };
     }
+
+    pub fn fromString(tagname: []const u8) !Tag {
+        inline for (@typeInfo(Tag).@"enum".fields) |field| {
+            if (std.ascii.eqlIgnoreCase(field.name, tagname)) {
+                return @enumFromInt(field.value);
+            }
+        }
+
+        return error.Invalid;
+    }
+
+    const testing = @import("../testing.zig");
+    test "Tag.elementTag" {
+        try testing.expect(try Tag.fromString("ABBR") == .abbr);
+        try testing.expect(try Tag.fromString("abbr") == .abbr);
+
+        try testing.expect(Tag.fromString("foo") == error.Invalid);
+    }
 };
 
 // DOMException
@@ -1575,6 +1593,15 @@ pub const Element = c.dom_element;
 
 fn elementVtable(elem: *Element) c.dom_element_vtable {
     return getVtable(c.dom_element_vtable, Element, elem);
+}
+
+pub fn elementGetTagName(elem: *Element) !?[]const u8 {
+    var s: ?*String = undefined;
+    const err = elementVtable(elem).dom_element_get_tag_name.?(elem, &s);
+    try DOMErr(err);
+    if (s == null) return null;
+
+    return strToData(s.?);
 }
 
 pub fn elementGetAttribute(elem: *Element, name: []const u8) !?[]const u8 {
