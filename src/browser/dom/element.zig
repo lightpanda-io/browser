@@ -59,12 +59,15 @@ pub const Element = struct {
             // in case of null tagname, return the element as it.
             return .{ .Element = e };
         };
-        _ = parser.Tag.fromString(tagname) catch {
+
+        // TODO SVGElement and MathML are not supported yet.
+
+        const tag = parser.Tag.fromString(tagname) catch {
             // if the tag is invalid, we don't have an HTMLElement.
             return .{ .Element = e };
         };
-        // SVGElement and MathML are not supported yet.
-        return try HTMLElem.toInterface(T, e);
+
+        return HTMLElem.toInterfaceFromTag(T, e, tag);
     }
 
     // JS funcs

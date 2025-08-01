@@ -1116,6 +1116,10 @@ pub fn toInterface(comptime T: type, e: *parser.Element) !T {
     };
     const tag = try parser.Tag.fromString(tagname);
 
+    return toInterfaceFromTag(T, e, tag);
+}
+
+pub fn toInterfaceFromTag(comptime T: type, e: *parser.Element, tag: parser.Tag) !T {
     return switch (tag) {
         .abbr, .acronym, .address, .article, .aside, .b, .basefont, .bdi, .bdo, .bgsound, .big, .center, .cite, .code, .dd, .details, .dfn, .dt, .em, .figcaption, .figure, .footer, .header, .hgroup, .i, .isindex, .keygen, .kbd, .main, .mark, .marquee, .menu, .menuitem, .nav, .nobr, .noframes, .noscript, .rp, .rt, .ruby, .s, .samp, .section, .small, .spacer, .strike, .strong, .sub, .summary, .sup, .tt, .u, .wbr, ._var => .{ .HTMLElement = @as(*parser.ElementHTML, @ptrCast(e)) },
         .a => .{ .HTMLAnchorElement = @as(*parser.Anchor, @ptrCast(e)) },
