@@ -104,6 +104,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
         pub fn handleMessage(self: *Self, msg: []const u8) bool {
             // if there's an error, it's already been logged
             self.processMessage(msg) catch return false;
+            self.pageWait();
             return true;
         }
 
@@ -111,6 +112,22 @@ pub fn CDPT(comptime TypeProvider: type) type {
             const arena = &self.message_arena;
             defer _ = arena.reset(.{ .retain_with_limit = 1024 * 16 });
             return self.dispatch(arena.allocator(), self, msg);
+        }
+
+        // @newhttp
+        // A bit hacky right now. The main server loop blocks only for CDP
+        // messages. It no longer blocks for page timeouts of page HTTP
+        // transfers. So we need to call this more ourselves.
+        // This is called after every message and [very hackily] from the server
+        // loop.
+        // This is hopefully temporary.
+        pub fn pageWait(self: *Self) void {
+            const session = &(self.browser.session orelse return);
+            var page = session.currentPage() orelse return;
+
+            // exits early if there's nothing to do, so a large value like
+            // 5 seconds should be ok
+            page.wait(5);
         }
 
         // Called from above, in processMessage which handles client messages

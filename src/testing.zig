@@ -409,10 +409,6 @@ pub const JsRunner = struct {
         const html_doc = try parser.documentHTMLParseFromStr(opts.html);
         try page.setDocument(html_doc);
 
-        // after the page is considered loaded, page.wait can exit early if
-        // there's no IO/timeouts. So setting this speeds up our tests
-        page.loaded = true;
-
         return .{
             .app = app,
             .page = page,
@@ -445,7 +441,7 @@ pub const JsRunner = struct {
                 }
                 return err;
             };
-            try self.page.wait(1);
+            self.page.wait(1);
             @import("root").js_runner_duration += std.time.Instant.since(try std.time.Instant.now(), start);
 
             if (case.@"1") |expected| {

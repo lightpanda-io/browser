@@ -20,11 +20,11 @@ const std = @import("std");
 
 const log = @import("../log.zig");
 const parser = @import("netsurf.zig");
-const http = @import("../http/client.zig");
 
-const App = @import("../app.zig").App;
 const Env = @import("env.zig").Env;
 const Page = @import("page.zig").Page;
+const Browser = @import("browser.zig").Browser;
+const HttpClient = @import("../http/Client.zig");
 const URL = @import("../url.zig").URL;
 
 const Allocator = std.mem.Allocator;
@@ -48,22 +48,23 @@ scripts: OrderList,
 // dom_loaded == true,
 deferred: OrderList,
 
-client: *http.Client,
+client: *HttpClient,
 allocator: Allocator,
 buffer_pool: BufferPool,
 script_pool: std.heap.MemoryPool(PendingScript),
 
 const OrderList = std.DoublyLinkedList(*PendingScript);
 
-pub fn init(app: *App, page: *Page) ScriptManager {
-    const allocator = app.allocator;
+pub fn init(browser: *Browser, page: *Page) ScriptManager {
+    // page isn't fully initialized, we can setup our reference, but that's it.
+    const allocator = browser.allocator;
     return .{
         .page = page,
         .scripts = .{},
         .deferred = .{},
         .async_count = 0,
         .allocator = allocator,
-        .client = app.http_client,
+        .client = browser.http_client,
         .static_scripts_done = false,
         .buffer_pool = BufferPool.init(allocator, 5),
         .script_pool = std.heap.MemoryPool(PendingScript).init(allocator),
@@ -247,13 +248,16 @@ fn evaluate(self: *ScriptManager) void {
     }
 }
 
-fn asyncDone(self: *ScriptManager) void {
-    self.async_count -= 1;
-    if (self.async_count == 0 and // there are no more async scripts
+pub fn isDone(self: *const ScriptManager) bool {
+    return self.async_count == 0 and // there are no more async scripts
         self.static_scripts_done and // and we've finished parsing the HTML to queue all <scripts>
         self.scripts.first == null and // and there are no more <script src=> to wait for
-        self.deferred.first == null // and there are no more <script defer src=> to wait for
-    ) {
+        self.deferred.first == null; // and there are no more <script defer src=> to wait for
+}
+
+fn asyncDone(self: *ScriptManager) void {
+    self.async_count -= 1;
+    if (self.isDone()) {
         // then the document is considered complete
         self.page.documentIsComplete();
     }
@@ -272,7 +276,7 @@ fn getList(self: *ScriptManager, script: *const Script) ?*OrderList {
     return &self.scripts;
 }
 
-fn startCallback(transfer: *http.Transfer) !void {
+fn startCallback(transfer: *HttpClient.Transfer) !void {
     const script: *PendingScript = @alignCast(@ptrCast(transfer.ctx));
     script.startCallback(transfer) catch |err| {
         log.err(.http, "SM.startCallback", .{ .err = err, .transfer = transfer });
@@ -280,7 +284,7 @@ fn startCallback(transfer: *http.Transfer) !void {
     };
 }
 
-fn headerCallback(transfer: *http.Transfer) !void {
+fn headerCallback(transfer: *HttpClient.Transfer) !void {
     const script: *PendingScript = @alignCast(@ptrCast(transfer.ctx));
     script.headerCallback(transfer) catch |err| {
         log.err(.http, "SM.headerCallback", .{ .err = err, .transfer = transfer });
@@ -288,7 +292,7 @@ fn headerCallback(transfer: *http.Transfer) !void {
     };
 }
 
-fn dataCallback(transfer: *http.Transfer, data: []const u8) !void {
+fn dataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
     const script: *PendingScript = @alignCast(@ptrCast(transfer.ctx));
     script.dataCallback(data) catch |err| {
         log.err(.http, "SM.dataCallback", .{ .err = err, .transfer = transfer, .len = data.len });
@@ -296,14 +300,14 @@ fn dataCallback(transfer: *http.Transfer, data: []const u8) !void {
     };
 }
 
-fn doneCallback(transfer: *http.Transfer) !void {
-    const script: *PendingScript = @alignCast(@ptrCast(transfer.ctx));
-    script.doneCallback(transfer);
+fn doneCallback(ctx: *anyopaque) !void {
+    const script: *PendingScript = @alignCast(@ptrCast(ctx));
+    script.doneCallback();
 }
 
-fn errorCallback(transfer: *http.Transfer, err: anyerror) void {
-    const script: *PendingScript = @alignCast(@ptrCast(transfer.ctx));
-    script.errorCallback(transfer, err);
+fn errorCallback(ctx: *anyopaque, err: anyerror) void {
+    const script: *PendingScript = @alignCast(@ptrCast(ctx));
+    script.errorCallback(err);
 }
 
 // A script which is pending execution.
@@ -326,7 +330,7 @@ const PendingScript = struct {
         }
     }
 
-    fn startCallback(self: *PendingScript, transfer: *http.Transfer) !void {
+    fn startCallback(self: *PendingScript, transfer: *HttpClient.Transfer) !void {
         if (self.manager.getList(&self.script)) |list| {
             self.node.data = self;
             list.append(&self.node);
@@ -337,7 +341,7 @@ const PendingScript = struct {
         log.debug(.http, "script fetch start", .{ .req = transfer });
     }
 
-    fn headerCallback(self: *PendingScript, transfer: *http.Transfer) !void {
+    fn headerCallback(self: *PendingScript, transfer: *HttpClient.Transfer) !void {
         const header = &transfer.response_header.?;
         if (header.status != 200) {
             return error.InvalidStatusCode;
@@ -359,8 +363,8 @@ const PendingScript = struct {
         try self.script.source.remote.appendSlice(self.manager.allocator, data);
     }
 
-    fn doneCallback(self: *PendingScript, transfer: *http.Transfer) void {
-        log.debug(.http, "script fetch complete", .{ .req = transfer });
+    fn doneCallback(self: *PendingScript) void {
+        log.debug(.http, "script fetch complete", .{ .req = self.script.url });
 
         const manager = self.manager;
         if (self.script.is_async) {
@@ -374,8 +378,8 @@ const PendingScript = struct {
         }
     }
 
-    fn errorCallback(self: *PendingScript, transfer: *http.Transfer, err: anyerror) void {
-        log.warn(.http, "script fetch error", .{ .req = transfer, .err = err });
+    fn errorCallback(self: *PendingScript, err: anyerror) void {
+        log.warn(.http, "script fetch error", .{ .req = self.script.url, .err = err });
         self.deinit();
     }
 };
