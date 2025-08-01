@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const c = @import("client.zig").c;
+const c = @import("Http.zig").c;
 
 pub const Error = error{
     UnsupportedProtocol,

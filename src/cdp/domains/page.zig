@@ -155,7 +155,6 @@ fn navigate(cmd: anytype) !void {
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
     });
-    try page.wait(5);
 }
 
 pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.PageNavigate) !void {

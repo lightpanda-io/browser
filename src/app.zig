@@ -3,9 +3,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const log = @import("log.zig");
+const Http = @import("http/Http.zig");
 const Loop = @import("runtime/loop.zig").Loop;
 const Platform = @import("runtime/js.zig").Platform;
-const http = @import("http/client.zig");
 
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
 const Notification = @import("notification.zig").Notification;
@@ -13,12 +13,12 @@ const Notification = @import("notification.zig").Notification;
 // Container for global state / objects that various parts of the system
 // might need.
 pub const App = struct {
+    http: Http,
     loop: *Loop,
     config: Config,
     platform: ?*const Platform,
     allocator: Allocator,
     telemetry: Telemetry,
-    http_client: *http.Client,
     app_dir_path: ?[]const u8,
     notification: *Notification,
 
@@ -34,8 +34,8 @@ pub const App = struct {
         platform: ?*const Platform = null,
         tls_verify_host: bool = true,
         http_proxy: ?std.Uri = null,
-        proxy_type: ?http.ProxyType = null,
-        proxy_auth: ?http.ProxyAuth = null,
+        proxy_type: ?Http.ProxyType = null,
+        proxy_auth: ?Http.ProxyAuth = null,
     };
 
     pub fn init(allocator: Allocator, config: Config) !*App {
@@ -51,21 +51,27 @@ pub const App = struct {
         const notification = try Notification.init(allocator, null);
         errdefer notification.deinit();
 
+        var http = try Http.init(allocator, .{
+            .max_concurrent_transfers = 3,
+        });
+        errdefer http.deinit();
+
         const app_dir_path = getAndMakeAppDir(allocator);
 
         app.* = .{
             .loop = loop,
+            .http = http,
             .allocator = allocator,
             .telemetry = undefined,
             .platform = config.platform,
             .app_dir_path = app_dir_path,
             .notification = notification,
-            .http_client = try http.Client.init(allocator, .{
-                .max_concurrent_transfers = 3,
-            }),
             .config = config,
         };
-        app.telemetry = Telemetry.init(app, config.run_mode);
+
+        app.telemetry = try Telemetry.init(app, config.run_mode);
+        errdefer app.telemetry.deinit();
+
         try app.telemetry.register(app.notification);
 
         return app;
@@ -79,8 +85,8 @@ pub const App = struct {
         self.telemetry.deinit();
         self.loop.deinit();
         allocator.destroy(self.loop);
-        self.http_client.deinit();
         self.notification.deinit();
+        self.http.deinit();
         allocator.destroy(self);
     }
 };

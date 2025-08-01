@@ -30,8 +30,8 @@ const Session = @import("session.zig").Session;
 const Renderer = @import("renderer.zig").Renderer;
 const Window = @import("html/window.zig").Window;
 const Walker = @import("dom/walker.zig").WalkerDepthFirst;
-const Loop = @import("../runtime/loop.zig").Loop;
 const Scheduler = @import("Scheduler.zig");
+const HttpClient = @import("../http/Client.zig");
 const ScriptManager = @import("ScriptManager.zig");
 const HTMLDocument = @import("html/document.zig").HTMLDocument;
 
@@ -39,7 +39,6 @@ const URL = @import("../url.zig").URL;
 
 const log = @import("../log.zig");
 const parser = @import("netsurf.zig");
-const http = @import("../http/client.zig");
 const storage = @import("storage/storage.zig");
 
 const polyfill = @import("polyfill/polyfill.zig");
@@ -50,9 +49,6 @@ const polyfill = @import("polyfill/polyfill.zig");
 // The page handle all its memory in an arena allocator. The arena is reseted
 // when end() is called.
 pub const Page = struct {
-    // Our event loop
-    loop: *Loop,
-
     cookie_jar: *storage.CookieJar,
 
     // Pre-configured http/cilent.zig used to make HTTP requests.
@@ -91,11 +87,11 @@ pub const Page = struct {
     polyfill_loader: polyfill.Loader = .{},
 
     scheduler: Scheduler,
-    http_client: *http.Client,
+    http_client: *HttpClient,
     script_manager: ScriptManager,
     mode: Mode,
 
-    loaded: bool = false,
+    document_state: DocumentState = .parsing,
 
     const Mode = union(enum) {
         pre: void,
@@ -106,9 +102,15 @@ pub const Page = struct {
         raw_done: []const u8,
     };
 
+    const DocumentState = enum {
+        parsing,
+        load,
+        complete,
+    };
+
     pub fn init(self: *Page, arena: Allocator, session: *Session) !void {
         const browser = session.browser;
-        const script_manager = ScriptManager.init(browser.app, self);
+        const script_manager = ScriptManager.init(browser, self);
 
         self.* = .{
             .url = URL.empty,
@@ -117,7 +119,6 @@ pub const Page = struct {
             .arena = arena,
             .session = session,
             .call_arena = undefined,
-            .loop = browser.app.loop,
             .renderer = Renderer.init(arena),
             .state_pool = &browser.state_pool,
             .cookie_jar = &session.cookie_jar,
@@ -143,7 +144,16 @@ pub const Page = struct {
     }
 
     pub fn deinit(self: *Page) void {
+        self.http_client.abort();
         self.script_manager.deinit();
+    }
+
+    fn reset(self: *Page) void {
+        _ = self.session.browser.page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
+        self.http_client.abort();
+        self.scheduler.reset();
+        self.document_state = .parsing;
+        self.mode = .{ .pre = {} };
     }
 
     fn runMicrotasks(ctx: *anyopaque) ?u32 {
@@ -226,7 +236,21 @@ pub const Page = struct {
         // return self.fetchData("module", src);
     }
 
-    pub fn wait(self: *Page, wait_sec: usize) !void {
+    pub fn wait(self: *Page, wait_sec: usize) void {
+        self._wait(wait_sec) catch |err| switch (err) {
+            error.JsError => {}, // already logged (with hopefully more context)
+            else => {
+                // There may be errors from the http/client or ScriptManager
+                // that we should not treat as an error like this. Will need
+                // to run this through more real-world sites and see if we need
+                // to expand the switch (err) to have more customized logs for
+                // specific messages.
+                log.err(.browser, "page wait", .{ .err = err });
+            },
+        };
+    }
+
+    fn _wait(self: *Page, wait_sec: usize) !void {
         switch (self.mode) {
             .pre, .html, .raw, .parsed => {
                 // The HTML page was parsed. We now either have JS scripts to
@@ -243,17 +267,21 @@ pub const Page = struct {
                 var timer = try std.time.Timer.start();
 
                 while (true) {
-                    const has_active_http = http_client.active > 0;
-
-                    const ms_to_next_task = try scheduler.run(has_active_http);
+                    // If we have active http transfers, we might as well run
+                    // any "secondary" task, since we won't be exiting this loop
+                    // anyways.
+                    // scheduler.run could trigger new http transfers, so do not
+                    // store http_client.active BEFORE this call and then use
+                    // it AFTER.
+                    const ms_to_next_task = try scheduler.run(http_client.active > 0);
 
                     if (try_catch.hasCaught()) {
                         const msg = (try try_catch.err(self.arena)) orelse "unknown";
-                        log.err(.browser, "page wait error", .{ .err = msg });
+                        log.warn(.user_script, "page wait", .{ .err = msg, .src = "scheduler" });
                         return error.JsError;
                     }
 
-                    if (has_active_http == false) {
+                    if (http_client.active == 0) {
                         if (ms_to_next_task) |ms| {
                             // There are no HTTP transfers, so there's no point calling
                             // http_client.tick.
@@ -283,7 +311,7 @@ pub const Page = struct {
 
                     if (try_catch.hasCaught()) {
                         const msg = (try try_catch.err(self.arena)) orelse "unknown";
-                        log.err(.browser, "page wait error", .{ .err = msg });
+                        log.warn(.user_script, "page wait", .{ .err = msg, .src = "data" });
                         return error.JsError;
                     }
 
@@ -307,7 +335,13 @@ pub const Page = struct {
 
     // spec reference: https://html.spec.whatwg.org/#document-lifecycle
     pub fn navigate(self: *Page, request_url: []const u8, opts: NavigateOpts) !void {
-        log.debug(.http, "navigate", .{
+        if (self.mode != .pre) {
+            // it's possible for navigate to be called multiple times on the
+            // same page (via CDP). We want to reset the page between each call.
+            self.reset();
+        }
+
+        log.info(.http, "navigate", .{
             .url = request_url,
             .method = opts.method,
             .reason = opts.reason,
@@ -331,7 +365,8 @@ pub const Page = struct {
             .ctx = self,
             .url = owned_url,
             .method = opts.method,
-            .header_done_callback = pageHeaderCallback,
+            .body = opts.body,
+            .header_done_callback = pageHeaderDoneCallback,
             .data_callback = pageDataCallback,
             .done_callback = pageDoneCallback,
             .error_callback = pageErrorCallback,
@@ -345,15 +380,23 @@ pub const Page = struct {
     }
 
     pub fn documentIsLoaded(self: *Page) void {
+        std.debug.assert(self.document_state == .parsing);
+        self.document_state = .load;
         HTMLDocument.documentIsLoaded(self.window.document, self) catch |err| {
             log.err(.browser, "document is loaded", .{ .err = err });
         };
     }
 
     pub fn documentIsComplete(self: *Page) void {
-        std.debug.assert(self.loaded == false);
+        std.debug.assert(self.document_state != .complete);
 
-        self.loaded = true;
+        // documentIsComplete could be called directly, without first calling
+        // documentIsLoaded, if there were _only_ async scrypts
+        if (self.document_state == .parsing) {
+            self.documentIsLoaded();
+        }
+
+        self.document_state = .complete;
         self._documentIsComplete() catch |err| {
             log.err(.browser, "document is complete", .{ .err = err });
         };
@@ -378,7 +421,7 @@ pub const Page = struct {
         );
     }
 
-    fn pageHeaderCallback(transfer: *http.Transfer) !void {
+    fn pageHeaderDoneCallback(transfer: *HttpClient.Transfer) !void {
         var self: *Page = @alignCast(@ptrCast(transfer.ctx));
 
         // would be different than self.url in the case of a redirect
@@ -393,7 +436,7 @@ pub const Page = struct {
         });
     }
 
-    fn pageDataCallback(transfer: *http.Transfer, data: []const u8) !void {
+    fn pageDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
         var self: *Page = @alignCast(@ptrCast(transfer.ctx));
 
         if (self.mode == .pre) {
@@ -426,10 +469,11 @@ pub const Page = struct {
         }
     }
 
-    fn pageDoneCallback(transfer: *http.Transfer) !void {
+    fn pageDoneCallback(ctx: *anyopaque) !void {
         log.debug(.http, "navigate done", .{});
 
-        var self: *Page = @alignCast(@ptrCast(transfer.ctx));
+        var self: *Page = @alignCast(@ptrCast(ctx));
+        self.clearTransferArena();
 
         switch (self.mode) {
             .raw => |buf| self.mode = .{ .raw_done = buf.items },
@@ -475,19 +519,45 @@ pub const Page = struct {
                 }
 
                 self.script_manager.staticScriptsDone();
+
+                if (self.script_manager.isDone()) {
+                    // No scripts, or just inline scripts that were already processed
+                    // we need to trigger this ourselves
+                    self.documentIsComplete();
+                }
             },
             else => unreachable,
         }
     }
 
-    fn pageErrorCallback(transfer: *http.Transfer, err: anyerror) void {
+    fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
         log.err(.http, "navigate failed", .{ .err = err });
-        var self: *Page = @alignCast(@ptrCast(transfer.ctx));
+
+        var self: *Page = @alignCast(@ptrCast(ctx));
+        self.clearTransferArena();
+
         switch (self.mode) {
             .html => |*p| p.deinit(), // don't need the parser anymore
             else => {},
         }
         self.mode = .{ .err = err };
+    }
+
+    // The transfer arena is useful and interesting, but has a weird lifetime.
+    // When we're transfering from one page to another (via delayed navigation)
+    // we need things in memory: like the URL that we're navigating to and
+    // optionally the body to POST. That cannot exist in the page.arena, because
+    // the page that we have is going to be destroyed and a new page is going
+    // to be created. If we used the page.arena, we'd wouldn't be able to reset
+    // it between navigations.
+    // So the transfer arena is meant to exist between a navigation event. It's
+    // freed when the main html navigation is complete, either in pageDoneCallback
+    // or pageErrorCallback. It needs to exist for this long because, if we set
+    // a body, CURLOPT_POSTFIELDS does not copy the body (it optionally can, but
+    // why would we want to) and requires the body to live until the transfer
+    // is complete.
+    fn clearTransferArena(self: *Page) void {
+        _ = self.session.browser.transfer_arena.reset(.{ .retain_with_limit = 4 * 1024 });
     }
 
     // extracted because this sis called from tests to set things up.
@@ -671,12 +741,14 @@ pub const Page = struct {
         navi.* = .{
             .opts = opts,
             .session = session,
-            .url = try self.url.resolve(arena, url),
+            .url = try URL.stitch(arena, url, self.url.raw, .{ .alloc = .always }),
         };
+
+        self.http_client.abort();
 
         // In v8, this throws an exception which JS code cannot catch.
         session.executor.terminateExecution();
-        _ = try self.loop.timeout(0, &navi.navigate_node);
+        _ = try self.scheduler.add(navi, DelayedNavigation.run, 0, .{ .name = "delayed navigation" });
     }
 
     pub fn getOrCreateNodeState(self: *Page, node: *parser.Node) !*State {
@@ -762,11 +834,9 @@ pub const Page = struct {
 };
 
 const DelayedNavigation = struct {
-    url: URL,
+    url: []const u8,
     session: *Session,
     opts: NavigateOpts,
-    initial: bool = true,
-    navigate_node: Loop.CallbackNode = .{ .func = delayNavigate },
 
     // Navigation is blocking, which is problem because it can seize up
     // the loop and deadlock. We can only safely try to navigate to a
@@ -783,66 +853,31 @@ const DelayedNavigation = struct {
     // navigate definetly won't block (which could deadlock the system if there
     // are still pending async requests, which we've seen happen, even after
     // an abort).
-    fn delayNavigate(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
-        _ = node;
-        _ = repeat_delay;
-        // @newhttp
-        // const self: *DelayedNavigation = @fieldParentPtr("navigate_node", node);
+    fn run(ctx: *anyopaque) ?u32 {
+        const self: *DelayedNavigation = @alignCast(@ptrCast(ctx));
+        const session = self.session;
 
-        // const session = self.session;
-        // const initial = self.initial;
+        // abort any pending requests or active tranfers;
+        session.browser.http_client.abort();
 
-        // if (initial) {
-        //     // Prior to schedule this task, we terminated excution to stop
-        //     // the running script. If we don't resume it before doing a shutdown
-        //     // we'll get an error.
-        //     session.executor.resumeExecution();
+        // Prior to schedule this task, we terminated excution to stop
+        // the running script. If we don't resume it before doing a shutdown
+        // we'll get an error.
+        session.executor.resumeExecution();
+        session.removePage();
+        const page = session.createPage() catch |err| {
+            log.err(.browser, "delayed navigation page error", .{
+                .err = err,
+                .url = self.url,
+            });
+            return null;
+        };
 
-        //     session.removePage();
-        //     _ = session.createPage() catch |err| {
-        //         log.err(.browser, "delayed navigation page error", .{
-        //             .err = err,
-        //             .url = self.url,
-        //         });
-        //         return;
-        //     };
-        //     self.initial = false;
-        // }
+        page.navigate(self.url, self.opts) catch |err| {
+            log.err(.browser, "delayed navigation error", .{ .err = err, .url = self.url });
+        };
 
-        // if (session.browser.http_client.freeSlotCount() == 0) {
-        //     log.debug(.browser, "delayed navigate waiting", .{});
-        //     const delay = 0 * std.time.ns_per_ms;
-
-        //     // If this isn't the initial check, we can safely re-use the timer
-        //     // to check again.
-        //     if (initial == false) {
-        //         repeat_delay.* = delay;
-        //         return;
-        //     }
-
-        //     // However, if this _is_ the initial check, we called
-        //     // session.removePage above, and that reset the loop ctx_id.
-        //     // We can't re-use this timer, because it has the previous ctx_id.
-        //     // We can create a new timeout though, and that'll get the new ctx_id.
-        //     //
-        //     // Page has to be not-null here because we called createPage above.
-        //     _ = session.page.?.loop.timeout(delay, &self.navigate_node) catch |err| {
-        //         log.err(.browser, "delayed navigation loop err", .{ .err = err });
-        //     };
-        //     return;
-        // }
-
-        // const page = session.currentPage() orelse return;
-        // defer if (!page.delayed_navigation) {
-        //     // If, while loading the page, we intend to navigate to another
-        //     // page, then we need to keep the transfer_arena around, as this
-        //     // sub-navigation is probably using it.
-        //     _ = session.browser.transfer_arena.reset(.{ .retain_with_limit = 64 * 1024 });
-        // };
-
-        // return page.navigate(self.url, self.opts) catch |err| {
-        //     log.err(.browser, "delayed navigation error", .{ .err = err, .url = self.url });
-        // };
+        return null;
     }
 };
 
@@ -856,7 +891,7 @@ pub const NavigateReason = enum {
 pub const NavigateOpts = struct {
     cdp_id: ?i64 = null,
     reason: NavigateReason = .address_bar,
-    method: http.Method = .GET,
+    method: HttpClient.Method = .GET,
     body: ?[]const u8 = null,
 };
 

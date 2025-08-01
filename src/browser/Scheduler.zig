@@ -37,6 +37,11 @@ pub fn init(allocator: Allocator) Scheduler {
     };
 }
 
+pub fn reset(self: *Scheduler) void {
+    self.primary.clearRetainingCapacity();
+    self.secondary.clearRetainingCapacity();
+}
+
 const AddOpts = struct {
     name: []const u8 = "",
 };

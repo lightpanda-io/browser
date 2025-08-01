@@ -22,8 +22,8 @@ const Allocator = std.mem.Allocator;
 
 const log = @import("log.zig");
 const server = @import("server.zig");
-const http = @import("http/client.zig");
 const App = @import("app.zig").App;
+const Http = @import("http/Http.zig");
 const Platform = @import("runtime/js.zig").Platform;
 const Browser = @import("browser/browser.zig").Browser;
 
@@ -130,7 +130,7 @@ fn run(alloc: Allocator) !void {
                 },
             };
 
-            try page.wait(5); // 5 seconds
+            page.wait(5); // 5 seconds
 
             // dump
             if (opts.dump) {
@@ -163,14 +163,14 @@ const Command = struct {
         };
     }
 
-    fn proxyType(self: *const Command) ?http.ProxyType {
+    fn proxyType(self: *const Command) ?Http.ProxyType {
         return switch (self.mode) {
             inline .serve, .fetch => |opts| opts.common.proxy_type,
             else => unreachable,
         };
     }
 
-    fn proxyAuth(self: *const Command) ?http.ProxyAuth {
+    fn proxyAuth(self: *const Command) ?Http.ProxyAuth {
         return switch (self.mode) {
             inline .serve, .fetch => |opts| opts.common.proxy_auth,
             else => unreachable,
@@ -222,8 +222,8 @@ const Command = struct {
 
     const Common = struct {
         http_proxy: ?std.Uri = null,
-        proxy_type: ?http.ProxyType = null,
-        proxy_auth: ?http.ProxyAuth = null,
+        proxy_type: ?Http.ProxyType = null,
+        proxy_auth: ?Http.ProxyAuth = null,
         tls_verify_host: bool = true,
         log_level: ?log.Level = null,
         log_format: ?log.Format = null,
@@ -534,7 +534,7 @@ fn parseCommonArg(
             log.fatal(.app, "missing argument value", .{ .arg = "--proxy_type" });
             return error.InvalidArgument;
         };
-        common.proxy_type = std.meta.stringToEnum(http.ProxyType, str) orelse {
+        common.proxy_type = std.meta.stringToEnum(Http.ProxyType, str) orelse {
             log.fatal(.app, "invalid option choice", .{ .arg = "--proxy_type", .value = str });
             return error.InvalidArgument;
         };

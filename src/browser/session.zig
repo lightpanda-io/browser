@@ -116,17 +116,9 @@ pub const Session = struct {
         // phase. It's important that we clean these up, as they're holding onto
         // limited resources (like our fixed-sized http state pool).
         //
-        // First thing we do, is removeJsContext() which will execute the destructor
-        // of any type that registered a destructor (e.g. XMLHttpRequest).
-        // This will shutdown any pending sockets, which begins our cleaning
-        // processed
+        // RemoveJsContext() will execute the destructor of any type that
+        // registered a destructor (e.g. XMLHttpRequest).
         self.executor.removeJsContext();
-
-        // Second thing we do is reset the loop. This increments the loop ctx_id
-        // so that any "stale" timeouts we process will get ignored. We need to
-        // do this BEFORE running the loop because, at this point, things like
-        // window.setTimeout and running microtasks should be ignored
-        self.browser.app.loop.reset();
 
         self.page.?.deinit();
         self.page = null;

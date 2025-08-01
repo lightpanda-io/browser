@@ -1,0 +1,269 @@
+// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+const std = @import("std");
+
+pub const c = @cImport({
+    @cInclude("curl/curl.h");
+});
+const errors = @import("errors.zig");
+const Client = @import("Client.zig");
+
+const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
+
+pub const ENABLE_DEBUG = false;
+
+// Client.zig does the bulk of the work and is loosely tied to a browser Page.
+// But we still need something above Client.zig for the "utility" http stuff
+// we need to do, like telemetry. The most important thing we want from this
+// is to be able to share the ca_blob, which can be quite large - loading it
+// once for all http connections is a win.
+const Http = @This();
+
+opts: Opts,
+client: *Client,
+ca_blob: ?c.curl_blob,
+cert_arena: ArenaAllocator,
+
+pub fn init(allocator: Allocator, opts: Opts) !Http {
+    try errorCheck(c.curl_global_init(c.CURL_GLOBAL_SSL));
+    errdefer c.curl_global_cleanup();
+
+    if (comptime ENABLE_DEBUG) {
+        std.debug.print("curl version: {s}\n\n", .{c.curl_version()});
+    }
+
+    var cert_arena = ArenaAllocator.init(allocator);
+    errdefer cert_arena.deinit();
+    const ca_blob = try loadCerts(allocator, cert_arena.allocator());
+
+    var client = try Client.init(allocator, ca_blob, opts);
+    errdefer client.deinit();
+
+    return .{
+        .opts = opts,
+        .client = client,
+        .ca_blob = ca_blob,
+        .cert_arena = cert_arena,
+    };
+}
+
+pub fn deinit(self: *Http) void {
+    self.client.deinit();
+    c.curl_global_cleanup();
+    self.cert_arena.deinit();
+}
+
+pub fn newConnection(self: *Http) !Connection {
+    return Connection.init(self.ca_blob, self.opts);
+}
+
+pub const Connection = struct {
+    easy: *c.CURL,
+
+    // Is called by Handles when already partially initialized. Done like this
+    // so that we have a stable pointer to error_buffer.
+    pub fn init(ca_blob_: ?c.curl_blob, opts: Opts) !Connection {
+        const easy = c.curl_easy_init() orelse return error.FailedToInitializeEasy;
+        errdefer _ = c.curl_easy_cleanup(easy);
+
+        // timeouts
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, @intCast(opts.timeout_ms))));
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CONNECTTIMEOUT_MS, @as(c_long, @intCast(opts.connect_timeout_ms))));
+
+        // redirect behavior
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_MAXREDIRS, @as(c_long, @intCast(opts.max_redirects))));
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_FOLLOWLOCATION, @as(c_long, 2)));
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_REDIR_PROTOCOLS_STR, "HTTP,HTTPS")); // remove FTP and FTPS from the default
+
+        // tls
+        // try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 0)));
+        // try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 0)));
+        if (ca_blob_) |ca_blob| {
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CAINFO_BLOB, ca_blob));
+        }
+
+        // debug
+        if (comptime Http.ENABLE_DEBUG) {
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_VERBOSE, @as(c_long, 1)));
+        }
+
+        return .{
+            .easy = easy,
+        };
+    }
+
+    pub fn deinit(self: *const Connection) void {
+        c.curl_easy_cleanup(self.easy);
+    }
+
+    pub fn setURL(self: *const Connection, url: [:0]const u8) !void {
+        try errorCheck(c.curl_easy_setopt(self.easy, c.CURLOPT_URL, url.ptr));
+    }
+
+    pub fn setMethod(self: *const Connection, method: Method) !void {
+        try Http.setMethod(self.easy, method);
+    }
+
+    pub fn setBody(self: *const Connection, body: []const u8) !void {
+        const easy = self.easy;
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_POSTFIELDSIZE, @as(c_long, @intCast(body.len))));
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_POSTFIELDS, body.ptr));
+    }
+
+    pub fn request(self: *const Connection) !u16 {
+        try errorCheck(c.curl_easy_perform(self.easy));
+        var http_code: c_long = undefined;
+        try errorCheck(c.curl_easy_getinfo(self.easy, c.CURLINFO_RESPONSE_CODE, &http_code));
+        if (http_code < 0 or http_code > std.math.maxInt(u16)) {
+            return 0;
+        }
+        return @intCast(http_code);
+    }
+};
+
+// used by Connection and Handle
+pub fn setMethod(easy: *c.CURL, method: Method) !void {
+    switch (method) {
+        .GET => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPGET, @as(c_long, 1))),
+        .POST => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPPOST, @as(c_long, 1))),
+        .PUT => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, "put")),
+        .DELETE => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, "delete")),
+        .HEAD => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, "head")),
+        .OPTIONS => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, "options")),
+    }
+}
+
+pub fn errorCheck(code: c.CURLcode) errors.Error!void {
+    if (code == c.CURLE_OK) {
+        return;
+    }
+    return errors.fromCode(code);
+}
+
+pub fn errorMCheck(code: c.CURLMcode) errors.Multi!void {
+    if (code == c.CURLM_OK) {
+        return;
+    }
+    if (code == c.CURLM_CALL_MULTI_PERFORM) {
+        // should we can client.perform() here?
+        // or just wait until the next time we naturally call it?
+        return;
+    }
+    return errors.fromMCode(code);
+}
+
+pub const Opts = struct {
+    timeout_ms: u31 = 0,
+    max_redirects: u8 = 10,
+    connect_timeout_ms: u31 = 5000,
+    max_concurrent_transfers: u8 = 5,
+};
+
+pub const Method = enum {
+    GET,
+    PUT,
+    POST,
+    DELETE,
+    HEAD,
+    OPTIONS,
+};
+
+pub const ProxyType = enum {
+    forward,
+    connect,
+};
+
+pub const ProxyAuth = union(enum) {
+    basic: struct { user_pass: []const u8 },
+    bearer: struct { token: []const u8 },
+};
+
+// TODO: on BSD / Linux, we could just read the PEM file directly.
+// This whole rescan + decode is really just needed for MacOS. On Linux
+// bundle.rescan does find the .pem file(s) which could be in a few different
+// places, so it's still useful, just not efficient.
+fn loadCerts(allocator: Allocator, arena: Allocator) !c.curl_blob {
+    var bundle: std.crypto.Certificate.Bundle = .{};
+    try bundle.rescan(allocator);
+    defer bundle.deinit(allocator);
+
+    var it = bundle.map.valueIterator();
+    const bytes = bundle.bytes.items;
+
+    const encoder = std.base64.standard.Encoder;
+    var arr: std.ArrayListUnmanaged(u8) = .empty;
+
+    const encoded_size = encoder.calcSize(bytes.len);
+    const buffer_size = encoded_size +
+        (bundle.map.count() * 75) + // start / end per certificate + extra, just in case
+        (encoded_size / 64) // newline per 64 characters
+    ;
+    try arr.ensureTotalCapacity(arena, buffer_size);
+    var writer = arr.writer(arena);
+
+    while (it.next()) |index| {
+        const cert = try std.crypto.Certificate.der.Element.parse(bytes, index.*);
+
+        try writer.writeAll("-----BEGIN CERTIFICATE-----\n");
+        var line_writer = LineWriter{ .inner = writer };
+        try encoder.encodeWriter(&line_writer, bytes[index.*..cert.slice.end]);
+        try writer.writeAll("\n-----END CERTIFICATE-----\n");
+    }
+
+    // Final encoding should not be larger than our initial size estimate
+    std.debug.assert(buffer_size > arr.items.len);
+
+    return .{
+        .len = arr.items.len,
+        .data = arr.items.ptr,
+        .flags = 0,
+    };
+}
+
+// Wraps lines @ 64 columns. A PEM is basically a base64 encoded DER (which is
+// what Zig has), with lines wrapped at 64 characters and with a basic header
+// and footer
+const LineWriter = struct {
+    col: usize = 0,
+    inner: std.ArrayListUnmanaged(u8).Writer,
+
+    pub fn writeAll(self: *LineWriter, data: []const u8) !void {
+        var writer = self.inner;
+
+        var col = self.col;
+        const len = 64 - col;
+
+        var remain = data;
+        if (remain.len > len) {
+            col = 0;
+            try writer.writeAll(data[0..len]);
+            try writer.writeByte('\n');
+            remain = data[len..];
+        }
+
+        while (remain.len > 64) {
+            try writer.writeAll(remain[0..64]);
+            try writer.writeByte('\n');
+            remain = data[len..];
+        }
+        try writer.writeAll(remain);
+        self.col = col + remain.len;
+    }
+};
