@@ -66,10 +66,8 @@ pub const Document = struct {
         return DOMImplementation{};
     }
 
-    pub fn get_documentElement(self: *parser.Document) !?ElementUnion {
-        const e = try parser.documentGetDocumentElement(self);
-        if (e == null) return null;
-        return try Element.toInterface(e.?);
+    pub fn get_documentElement(self: *parser.Document) !?*parser.Element {
+        return try parser.documentGetDocumentElement(self);
     }
 
     pub fn get_documentURI(self: *parser.Document) ![]const u8 {
@@ -121,19 +119,19 @@ pub const Document = struct {
 
     pub fn _getElementById(self: *parser.Document, id: []const u8) !?ElementUnion {
         const e = try parser.documentGetElementById(self, id) orelse return null;
-        return try Element.toInterface(e);
+        return try Element.toInterface(ElementUnion, e);
     }
 
     pub fn _createElement(self: *parser.Document, tag_name: []const u8) !ElementUnion {
         // The element’s namespace is the HTML namespace when document is an HTML document
         // https://dom.spec.whatwg.org/#ref-for-dom-document-createelement%E2%91%A0
         const e = try parser.documentCreateElementNS(self, "http://www.w3.org/1999/xhtml", tag_name);
-        return Element.toInterface(e);
+        return Element.toInterface(ElementUnion, e);
     }
 
     pub fn _createElementNS(self: *parser.Document, ns: []const u8, tag_name: []const u8) !ElementUnion {
         const e = try parser.documentCreateElementNS(self, ns, tag_name);
-        return try Element.toInterface(e);
+        return try Element.toInterface(ElementUnion, e);
     }
 
     // We can't simply use libdom dom_document_get_elements_by_tag_name here.
@@ -212,12 +210,12 @@ pub const Document = struct {
 
     pub fn get_firstElementChild(self: *parser.Document) !?ElementUnion {
         const elt = try parser.documentGetDocumentElement(self) orelse return null;
-        return try Element.toInterface(elt);
+        return try Element.toInterface(ElementUnion, elt);
     }
 
     pub fn get_lastElementChild(self: *parser.Document) !?ElementUnion {
         const elt = try parser.documentGetDocumentElement(self) orelse return null;
-        return try Element.toInterface(elt);
+        return try Element.toInterface(ElementUnion, elt);
     }
 
     pub fn get_childElementCount(self: *parser.Document) !u32 {
@@ -232,7 +230,7 @@ pub const Document = struct {
 
         if (n == null) return null;
 
-        return try Element.toInterface(parser.nodeToElement(n.?));
+        return try Element.toInterface(ElementUnion, parser.nodeToElement(n.?));
     }
 
     pub fn _querySelectorAll(self: *parser.Document, selector: []const u8, page: *Page) !NodeList {
@@ -275,7 +273,7 @@ pub const Document = struct {
 
     pub fn get_activeElement(self: *parser.Document, page: *Page) !?ElementUnion {
         const ae = (try getActiveElement(self, page)) orelse return null;
-        return try Element.toInterface(ae);
+        return try Element.toInterface(ElementUnion, ae);
     }
 
     // TODO: some elements can't be focused, like if they're disabled

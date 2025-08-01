@@ -36,7 +36,7 @@ pub const ShadowRoot = struct {
     };
 
     pub fn get_host(self: *const ShadowRoot) !ElementUnion {
-        return Element.toInterface(self.host);
+        return Element.toInterface(ElementUnion, self.host);
     }
 };
 

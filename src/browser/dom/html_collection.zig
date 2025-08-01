@@ -22,6 +22,7 @@ const Allocator = std.mem.Allocator;
 const parser = @import("../netsurf.zig");
 
 const Element = @import("element.zig").Element;
+const ElementUnion = @import("element.zig").Union;
 const Union = @import("element.zig").Union;
 const JsThis = @import("../env.zig").JsThis;
 const Walker = @import("walker.zig").Walker;
@@ -395,7 +396,7 @@ pub const HTMLCollection = struct {
     pub fn _item(self: *HTMLCollection, index: u32) !?Union {
         const node = try self.item(index) orelse return null;
         const e = @as(*parser.Element, @ptrCast(node));
-        return try Element.toInterface(e);
+        return try Element.toInterface(ElementUnion, e);
     }
 
     pub fn _namedItem(self: *const HTMLCollection, name: []const u8) !?Union {
@@ -412,13 +413,13 @@ pub const HTMLCollection = struct {
                     var attr = try parser.elementGetAttribute(elem, "id");
                     // check if the node id corresponds to the name argument.
                     if (attr != null and std.mem.eql(u8, name, attr.?)) {
-                        return try Element.toInterface(elem);
+                        return try Element.toInterface(ElementUnion, elem);
                     }
 
                     attr = try parser.elementGetAttribute(elem, "name");
                     // check if the node id corresponds to the name argument.
                     if (attr != null and std.mem.eql(u8, name, attr.?)) {
-                        return try Element.toInterface(elem);
+                        return try Element.toInterface(ElementUnion, elem);
                     }
                 }
             }
@@ -445,7 +446,7 @@ pub const HTMLCollection = struct {
         for (0..len) |i| {
             const node = try self.item(@intCast(i)) orelse unreachable;
             const e = @as(*parser.Element, @ptrCast(node));
-            const as_interface = try Element.toInterface(e);
+            const as_interface = try Element.toInterface(ElementUnion, e);
             try js_this.setIndex(@intCast(i), as_interface, .{});
 
             if (try item_name(e)) |name| {

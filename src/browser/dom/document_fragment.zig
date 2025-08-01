@@ -66,7 +66,7 @@ pub const DocumentFragment = struct {
 
         if (n == null) return null;
 
-        return try Element.toInterface(parser.nodeToElement(n.?));
+        return try Element.toInterface(ElementUnion, parser.nodeToElement(n.?));
     }
 
     pub fn _querySelectorAll(self: *parser.DocumentFragment, selector: []const u8, page: *Page) !NodeList {
