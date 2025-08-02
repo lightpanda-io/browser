@@ -222,7 +222,7 @@ fn perform(self: *Client, timeout_ms: c_int) !void {
             if (errorCheck(msg.data.result)) {
                 done_callback(ctx) catch |err| {
                     // transfer isn't valid at this point, don't use it.
-                    log.err(.http, "done_callback", .{.err = err});
+                    log.err(.http, "done_callback", .{ .err = err });
                     error_callback(ctx, err);
                 };
             } else |err| {
@@ -495,14 +495,14 @@ pub const Transfer = struct {
 
         if (buf_len == 2) {
             transfer.req.header_done_callback(transfer) catch |err| {
-                log.err(.http, "header_done_callback", .{.err = err, .req = transfer});
+                log.err(.http, "header_done_callback", .{ .err = err, .req = transfer });
                 // returning < buf_len terminates the request
                 return 0;
             };
         } else {
             if (transfer.req.header_callback) |cb| {
                 cb(transfer, header) catch |err| {
-                    log.err(.http, "header_callback", .{.err = err, .req = transfer});
+                    log.err(.http, "header_callback", .{ .err = err, .req = transfer });
                     return 0;
                 };
             }
@@ -525,7 +525,7 @@ pub const Transfer = struct {
         }
 
         transfer.req.data_callback(transfer, buffer[0..chunk_len]) catch |err| {
-            log.err(.http, "data_callback", .{.err = err, .req = transfer});
+            log.err(.http, "data_callback", .{ .err = err, .req = transfer });
             return c.CURL_WRITEFUNC_ERROR;
         };
         return chunk_len;

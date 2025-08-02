@@ -105,6 +105,8 @@ pub const Mime = struct {
 
                     if (std.ascii.eqlIgnoreCase(attribute_value, "utf-8")) {
                         charset = "UTF-8";
+                    } else if (std.ascii.eqlIgnoreCase(attribute_value, "iso-8859-1")) {
+                        charset = "ISO-8859-1";
                     } else {
                         // we only care about null (which we default to UTF-8)
                         // or UTF-8. If this is actually set (i.e. not null)
