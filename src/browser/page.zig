@@ -253,22 +253,35 @@ pub const Page = struct {
     }
 
     fn _wait(self: *Page, wait_sec: usize) !void {
-        switch (self.mode) {
-            .pre, .html, .raw, .parsed => {
-                // The HTML page was parsed. We now either have JS scripts to
-                // download, or timeouts to execute, or both.
+        var ms_remaining = wait_sec * 1000;
+        var timer = try std.time.Timer.start();
 
-                var try_catch: Env.TryCatch = undefined;
-                try_catch.init(self.main_context);
-                defer try_catch.deinit();
+        var try_catch: Env.TryCatch = undefined;
+        try_catch.init(self.main_context);
+        defer try_catch.deinit();
 
-                var scheduler = &self.scheduler;
-                var http_client = self.http_client;
+        var scheduler = &self.scheduler;
+        var http_client = self.http_client;
 
-                var ms_remaining = wait_sec * 1000;
-                var timer = try std.time.Timer.start();
+        while (true) {
+            SW: switch (self.mode) {
+                .pre, .raw => {
+                    // The main page hasn't started/finished navigating.
+                    // There's no JS to run, and no reason to run the scheduler.
 
-                while (true) {
+                    if (http_client.active == 0) {
+                        // haven't started navigating, I guess.
+                        return;
+                    }
+
+                    // There should only be 1 active http transfer, the main page
+                    std.debug.assert(http_client.active == 1);
+                    try http_client.tick(ms_remaining);
+                },
+                .html, .parsed => {
+                    // The HTML page was parsed. We now either have JS scripts to
+                    // download, or timeouts to execute, or both.
+
                     // If we have active http transfers, we might as well run
                     // any "secondary" task, since we won't be exiting this loop
                     // anyways.
@@ -295,8 +308,7 @@ pub const Page = struct {
                             }
 
                             std.time.sleep(std.time.ns_per_ms * ms);
-                            ms_remaining -= ms;
-                            continue;
+                            break :SW;
                         }
 
                         // We have no active http transfer and no pending
@@ -316,16 +328,16 @@ pub const Page = struct {
                         log.warn(.user_script, "page wait", .{ .err = msg, .src = "data" });
                         return error.JsError;
                     }
+                },
+                .err => |err| return err,
+                .raw_done => return,
+            }
 
-                    const ms_elapsed = timer.lap() / 1_000_000;
-                    if (ms_elapsed > ms_remaining) {
-                        return;
-                    }
-                    ms_remaining -= ms_elapsed;
-                }
-            },
-            .err => |err| return err,
-            .raw_done => return,
+            const ms_elapsed = timer.lap() / 1_000_000;
+            if (ms_elapsed > ms_remaining) {
+                return;
+            }
+            ms_remaining -= ms_elapsed;
         }
     }
 
