@@ -38,7 +38,7 @@ const Http = @This();
 
 opts: Opts,
 client: *Client,
-ca_blob: ?c.curl_blob,
+ca_blob: c.curl_blob,
 cert_arena: ArenaAllocator,
 
 pub fn init(allocator: Allocator, opts: Opts) !Http {
@@ -79,7 +79,7 @@ pub const Connection = struct {
 
     // Is called by Handles when already partially initialized. Done like this
     // so that we have a stable pointer to error_buffer.
-    pub fn init(ca_blob_: ?c.curl_blob, opts: Opts) !Connection {
+    pub fn init(ca_blob: c.curl_blob, opts: Opts) !Connection {
         const easy = c.curl_easy_init() orelse return error.FailedToInitializeEasy;
         errdefer _ = c.curl_easy_cleanup(easy);
 
@@ -95,9 +95,7 @@ pub const Connection = struct {
         // tls
         // try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 0)));
         // try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 0)));
-        if (ca_blob_) |ca_blob| {
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CAINFO_BLOB, ca_blob));
-        }
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CAINFO_BLOB, ca_blob));
 
         // debug
         if (comptime Http.ENABLE_DEBUG) {
