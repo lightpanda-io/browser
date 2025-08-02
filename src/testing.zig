@@ -408,6 +408,7 @@ pub const JsRunner = struct {
 
         const html_doc = try parser.documentHTMLParseFromStr(opts.html);
         try page.setDocument(html_doc);
+        page.mode = .{ .parsed = {} };
 
         return .{
             .app = app,
