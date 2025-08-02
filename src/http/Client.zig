@@ -220,7 +220,11 @@ fn perform(self: *Client, timeout_ms: c_int) !void {
             self.endTransfer(transfer);
 
             if (errorCheck(msg.data.result)) {
-                done_callback(ctx) catch |err| error_callback(ctx, err);
+                done_callback(ctx) catch |err| {
+                    // transfer isn't valid at this point, don't use it.
+                    log.err(.http, "done_callback", .{.err = err});
+                    error_callback(ctx, err);
+                };
             } else |err| {
                 error_callback(ctx, err);
             }
@@ -350,9 +354,14 @@ const Handle = struct {
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, Transfer.bodyCallback));
 
         // tls
-        // try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 0)));
-        // try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 0)));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CAINFO_BLOB, ca_blob));
+        if (opts.tls_verify_host) {
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CAINFO_BLOB, ca_blob));
+        } else {
+            // Verify peer checks that the cert is signed by a CA, verify host makes sure the
+            // cert contains the server name.
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 0)));
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 0)));
+        }
 
         // debug
         if (comptime Http.ENABLE_DEBUG) {
@@ -423,7 +432,7 @@ pub const Transfer = struct {
 
         const handle: *Handle = @alignCast(@ptrCast(data));
         var transfer = fromEasy(handle.easy) catch |err| {
-            log.err(.http, "retrive private info", .{ .err = err });
+            log.err(.http, "get private info", .{ .err = err });
             return 0;
         };
 
@@ -485,13 +494,17 @@ pub const Transfer = struct {
         }
 
         if (buf_len == 2) {
-            transfer.req.header_done_callback(transfer) catch {
+            transfer.req.header_done_callback(transfer) catch |err| {
+                log.err(.http, "header_done_callback", .{.err = err, .req = transfer});
                 // returning < buf_len terminates the request
                 return 0;
             };
         } else {
             if (transfer.req.header_callback) |cb| {
-                cb(transfer, header) catch return 0;
+                cb(transfer, header) catch |err| {
+                    log.err(.http, "header_callback", .{.err = err, .req = transfer});
+                    return 0;
+                };
             }
         }
         return buf_len;
@@ -503,7 +516,7 @@ pub const Transfer = struct {
 
         const handle: *Handle = @alignCast(@ptrCast(data));
         var transfer = fromEasy(handle.easy) catch |err| {
-            log.err(.http, "retrive private info", .{ .err = err });
+            log.err(.http, "get private info", .{ .err = err });
             return c.CURL_WRITEFUNC_ERROR;
         };
 
@@ -511,7 +524,8 @@ pub const Transfer = struct {
             return chunk_len;
         }
 
-        transfer.req.data_callback(transfer, buffer[0..chunk_len]) catch {
+        transfer.req.data_callback(transfer, buffer[0..chunk_len]) catch |err| {
+            log.err(.http, "data_callback", .{.err = err, .req = transfer});
             return c.CURL_WRITEFUNC_ERROR;
         };
         return chunk_len;

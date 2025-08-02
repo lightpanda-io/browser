@@ -53,6 +53,7 @@ pub const App = struct {
 
         var http = try Http.init(allocator, .{
             .max_concurrent_transfers = 3,
+            .tls_verify_host = config.tls_verify_host,
         });
         errdefer http.deinit();
 
