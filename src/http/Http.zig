@@ -172,6 +172,7 @@ pub fn errorMCheck(code: c.CURLMcode) errors.Multi!void {
 pub const Opts = struct {
     timeout_ms: u31 = 0,
     max_redirects: u8 = 10,
+    tls_verify_host: bool = true,
     connect_timeout_ms: u31 = 5000,
     max_concurrent_transfers: u8 = 5,
 };

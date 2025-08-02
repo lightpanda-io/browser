@@ -317,7 +317,7 @@ pub const Page = struct {
                         return error.JsError;
                     }
 
-                    const ms_elapsed = timer.lap() / 100_000;
+                    const ms_elapsed = timer.lap() / 1_000_000;
                     if (ms_elapsed > ms_remaining) {
                         return;
                     }
