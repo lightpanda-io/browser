@@ -441,7 +441,7 @@ pub const JsRunner = struct {
                 }
                 return err;
             };
-            self.page.wait(1);
+            self.page.session.wait(1);
             @import("root").js_runner_duration += std.time.Instant.since(try std.time.Instant.now(), start);
 
             if (case.@"1") |expected| {
