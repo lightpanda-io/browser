@@ -884,19 +884,12 @@ fn timestamp() u32 {
 // after the document is loaded, it's ok to execute any async and defer scripts
 // immediately.
 pub export fn scriptAddedCallback(ctx: ?*anyopaque, element: ?*parser.Element) callconv(.C) void {
-    _ = ctx;
-    _ = element;
-    // @newhttp
-    // const self: *Page = @alignCast(@ptrCast(ctx.?));
-    // if (self.delayed_navigation) {
-    //     // if we're planning on navigating to another page, don't run this script
-    //     return;
-    // }
-
-    // var script = Script.init(element.?, self) catch |err| {
-    //     log.warn(.browser, "script added init error", .{ .err = err });
-    //     return;
-    // } orelse return;
-
-    // _ = self.evalScript(&script);
+    const self: *Page = @alignCast(@ptrCast(ctx.?));
+    if (self.delayed_navigation) {
+        // if we're planning on navigating to another page, don't run this script
+        return;
+    }
+    self.script_manager.addFromElement(element.?) catch |err| {
+        log.warn(.browser, "dynamcic script", .{ .err = err });
+    };
 }
