@@ -2,8 +2,8 @@ const std = @import("std");
 
 const log = @import("log.zig");
 const URL = @import("url.zig").URL;
-const http = @import("http/client.zig");
 const page = @import("browser/page.zig");
+const Http = @import("http/Http.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -94,7 +94,7 @@ pub const Notification = struct {
         arena: Allocator,
         id: usize,
         url: *const std.Uri,
-        method: http.Method,
+        method: Http.Method,
         has_body: bool,
     };
 
