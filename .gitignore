@@ -5,4 +5,3 @@ zig-out
 /vendor/libiconv/
 lightpanda.id
 /v8/
-/vendor/nghttp2/lib/includes/nghttp2/nghttp2ver.h

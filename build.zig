@@ -150,6 +150,8 @@ fn common(b: *Build, opts: *Build.Step.Options, step: *Build.Step.Compile) !void
     mod.addImport("build_config", opts.createModule());
     mod.addImport("tigerbeetle-io", b.dependency("tigerbeetle_io", .{}).module("tigerbeetle_io"));
 
+    mod.addIncludePath(b.path("vendor/lightpanda"));
+
     {
         // v8
         mod.link_libcpp = true;
@@ -605,16 +607,6 @@ fn buildNghttp2(b: *Build, m: *Build.Module) !void {
         .name = "nghttp2",
         .root_module = m,
     });
-
-    const nghttp2_version_file = b.addWriteFile(
-        "vendor/nghttp2/lib/includes/nghttp2/nghttp2ver.h",
-        \\ #ifndef NGHTTP2VER_H
-        \\ #define NGHTTP2VER_H
-        \\ #define NGHTTP2_VERSION "1.66"
-        \\ #define NGHTTP2_VERSION_NUM 0x014300
-        \\ #endif /* NGHTTP2VER_H */
-    );
-    nghttp2.step.dependOn(&nghttp2_version_file.step);
 
     const root = "vendor/nghttp2/";
     nghttp2.addIncludePath(b.path(root ++ "lib"));
