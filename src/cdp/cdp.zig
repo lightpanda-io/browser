@@ -123,11 +123,9 @@ pub fn CDPT(comptime TypeProvider: type) type {
         // This is hopefully temporary.
         pub fn pageWait(self: *Self) void {
             const session = &(self.browser.session orelse return);
-            var page = session.currentPage() orelse return;
-
             // exits early if there's nothing to do, so a large value like
             // 5 seconds should be ok
-            page.wait(5);
+            session.wait(5);
         }
 
         // Called from above, in processMessage which handles client messages

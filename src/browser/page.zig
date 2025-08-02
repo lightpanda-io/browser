@@ -48,6 +48,7 @@ const polyfill = @import("polyfill/polyfill.zig");
 // end() to stop the previous navigation before starting a new one.
 // The page handle all its memory in an arena allocator. The arena is reseted
 // when end() is called.
+
 pub const Page = struct {
     cookie_jar: *storage.CookieJar,
 
@@ -150,7 +151,8 @@ pub const Page = struct {
 
     fn reset(self: *Page) void {
         _ = self.session.browser.page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
-        self.http_client.abort();
+        // this will reset the http_client
+        self.script_manager.reset();
         self.scheduler.reset();
         self.document_state = .parsing;
         self.mode = .{ .pre = {} };
@@ -729,26 +731,36 @@ pub const Page = struct {
     // The page.arena is safe to use here, but the transfer_arena exists
     // specifically for this type of lifetime.
     pub fn navigateFromWebAPI(self: *Page, url: []const u8, opts: NavigateOpts) !void {
+        const session = self.session;
+        if (session.queued_navigation != null) {
+            // It might seem like this should never happen. And it might not,
+            // BUT..consider the case where we have script like:
+            //   top.location = X;
+            //   top.location = Y;
+            // Will the 2nd top.location execute? You'd think not, since,
+            // when we're in this function for the 1st, we'll call:
+            //    session.executor.terminateExecution();
+            // But, this doesn't seem guaranteed to stop on the current line.
+            // My best guess is that v8 groups executes in chunks (how they are
+            // chunked, I can't guess) and always executes them together.
+            return;
+        }
+
         log.debug(.browser, "delayed navigation", .{
             .url = url,
             .reason = opts.reason,
         });
         self.delayed_navigation = true;
 
-        const session = self.session;
-        const arena = session.transfer_arena;
-        const navi = try arena.create(DelayedNavigation);
-        navi.* = .{
+        session.queued_navigation = .{
             .opts = opts,
-            .session = session,
-            .url = try URL.stitch(arena, url, self.url.raw, .{ .alloc = .always }),
+            .url = try URL.stitch(session.transfer_arena, url, self.url.raw, .{ .alloc = .always }),
         };
 
         self.http_client.abort();
 
         // In v8, this throws an exception which JS code cannot catch.
         session.executor.terminateExecution();
-        _ = try self.scheduler.add(navi, DelayedNavigation.run, 0, .{ .name = "delayed navigation" });
     }
 
     pub fn getOrCreateNodeState(self: *Page, node: *parser.Node) !*State {
@@ -829,54 +841,6 @@ pub const Page = struct {
         if (comptime builtin.mode == .Debug) {
             return self.main_context.stackTrace();
         }
-        return null;
-    }
-};
-
-const DelayedNavigation = struct {
-    url: []const u8,
-    session: *Session,
-    opts: NavigateOpts,
-
-    // Navigation is blocking, which is problem because it can seize up
-    // the loop and deadlock. We can only safely try to navigate to a
-    // new page when we're sure there's at least 1 free slot in the
-    // http client. We handle this in two phases:
-    //
-    // In the first phase, when self.initial == true, we'll shutdown the page
-    // and create a new one. The shutdown is important, because it resets the
-    // loop ctx_id and removes the JsContext. Removing the context calls our XHR
-    // destructors which aborts requests. This is necessary to make sure our
-    // [blocking] navigate won't block.
-    //
-    // In the 2nd phase, we wait until there's a free http slot so that our
-    // navigate definetly won't block (which could deadlock the system if there
-    // are still pending async requests, which we've seen happen, even after
-    // an abort).
-    fn run(ctx: *anyopaque) ?u32 {
-        const self: *DelayedNavigation = @alignCast(@ptrCast(ctx));
-        const session = self.session;
-
-        // abort any pending requests or active tranfers;
-        session.browser.http_client.abort();
-
-        // Prior to schedule this task, we terminated excution to stop
-        // the running script. If we don't resume it before doing a shutdown
-        // we'll get an error.
-        session.executor.resumeExecution();
-        session.removePage();
-        const page = session.createPage() catch |err| {
-            log.err(.browser, "delayed navigation page error", .{
-                .err = err,
-                .url = self.url,
-            });
-            return null;
-        };
-
-        page.navigate(self.url, self.opts) catch |err| {
-            log.err(.browser, "delayed navigation error", .{ .err = err, .url = self.url });
-        };
-
         return null;
     }
 };

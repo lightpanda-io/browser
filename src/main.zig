@@ -130,7 +130,7 @@ fn run(alloc: Allocator) !void {
                 },
             };
 
-            page.wait(5); // 5 seconds
+            session.wait(5); // 5 seconds
 
             // dump
             if (opts.dump) {

@@ -76,6 +76,22 @@ pub fn deinit(self: *ScriptManager) void {
     self.script_pool.deinit();
 }
 
+pub fn reset(self: *ScriptManager) void {
+    self.client.abort();
+    self.clearList(&self.scripts);
+    self.clearList(&self.deferred);
+    self.static_scripts_done = false;
+}
+
+fn clearList(_: *const ScriptManager, list: *OrderList) void {
+    while (list.first) |node| {
+        const pending_script = node.data;
+        // this removes it from the list
+        pending_script.deinit();
+    }
+    std.debug.assert(list.first == null);
+}
+
 pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
     if (try parser.elementGetAttribute(element, "nomodule") != null) {
         // these scripts should only be loaded if we don't support modules

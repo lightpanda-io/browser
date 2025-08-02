@@ -56,6 +56,12 @@ pub const Session = struct {
 
     page: ?Page = null,
 
+    // If the current page want to navigate to a new page
+    //  (form submit, link click, top.location = xxx)
+    // the details are stored here so that, on the next call to session.wait
+    // we can destroy the current page and start a new one.
+    queued_navigation: ?QueuedNavigation,
+
     pub fn init(self: *Session, browser: *Browser) !void {
         var executor = try browser.env.newExecutionWorld();
         errdefer executor.deinit();
@@ -64,6 +70,7 @@ pub const Session = struct {
         self.* = .{
             .browser = browser,
             .executor = executor,
+            .queued_navigation = null,
             .arena = browser.session_arena.allocator(),
             .storage_shed = storage.Shed.init(allocator),
             .cookie_jar = storage.CookieJar.init(allocator),
@@ -132,4 +139,40 @@ pub const Session = struct {
     pub fn currentPage(self: *Session) ?*Page {
         return &(self.page orelse return null);
     }
+
+    pub fn wait(self: *Session, wait_sec: usize) void {
+        if (self.queued_navigation) |qn| {
+            // This was already aborted on the page, but it would be pretty
+            // bad if old requests went to the new page, so let's make double sure
+            self.browser.http_client.abort();
+
+            // Page.navigateFromWebAPI terminatedExecution. If we don't resume
+            // it before doing a shutdown we'll get an error.
+            self.executor.resumeExecution();
+            self.removePage();
+            self.queued_navigation = null;
+
+            const page = self.createPage() catch |err| {
+                log.err(.browser, "queued navigation page error", .{
+                    .err = err,
+                    .url = qn.url,
+                });
+                return;
+            };
+
+            page.navigate(qn.url, qn.opts) catch |err| {
+                log.err(.browser, "queued navigation error", .{ .err = err, .url = qn.url });
+                return;
+            };
+        }
+
+        if (self.page) |*page| {
+            page.wait(wait_sec);
+        }
+    }
+};
+
+const QueuedNavigation = struct {
+    url: []const u8,
+    opts: NavigateOpts,
 };
