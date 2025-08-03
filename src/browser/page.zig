@@ -150,12 +150,13 @@ pub const Page = struct {
     }
 
     fn reset(self: *Page) void {
-        _ = self.session.browser.page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
-        // this will reset the http_client
-        self.script_manager.reset();
         self.scheduler.reset();
+        self.http_client.abort();
+        self.script_manager.reset();
+
         self.document_state = .parsing;
         self.mode = .{ .pre = {} };
+        _ = self.session.browser.page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
     }
 
     fn runMicrotasks(ctx: *anyopaque) ?u32 {
@@ -229,13 +230,9 @@ pub const Page = struct {
         try Node.prepend(head, &[_]Node.NodeOrText{.{ .node = parser.elementToNode(base) }});
     }
 
-    pub fn fetchModuleSource(ctx: *anyopaque, src: []const u8) !?[]const u8 {
-        _ = ctx;
-        _ = src;
-        // @newhttp
-        return error.NewHTTP;
-        // const self: *Page = @ptrCast(@alignCast(ctx));
-        // return self.fetchData("module", src);
+    pub fn fetchModuleSource(ctx: *anyopaque, src: [:0]const u8) !ScriptManager.BlockingResult {
+        const self: *Page = @ptrCast(@alignCast(ctx));
+        return self.script_manager.blockingGet(src);
     }
 
     pub fn wait(self: *Page, wait_sec: usize) void {

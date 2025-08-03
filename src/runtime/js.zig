@@ -668,7 +668,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             const ModuleLoader = struct {
                 ptr: *anyopaque,
-                func: *const fn (ptr: *anyopaque, specifier: []const u8) anyerror!?[]const u8,
+                func: *const fn (ptr: *anyopaque, url: [:0]const u8) anyerror!BlockingResult,
+
+                // Don't like having to reach into ../browser/ here. But can't think
+                // of a good way to fix this.
+                const BlockingResult = @import("../browser/ScriptManager.zig").BlockingResult;
             };
 
             // no init, started with executor.createJsContext()
@@ -1416,11 +1420,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 };
             }
 
-            fn _resolveModuleCallback(
-                self: *JsContext,
-                referrer: v8.Module,
-                specifier: []const u8,
-            ) !?*const v8.C_Module {
+            fn _resolveModuleCallback(self: *JsContext, referrer: v8.Module, specifier: []const u8) !?*const v8.C_Module {
                 const referrer_path = self.module_identifier.get(referrer.getIdentityHash()) orelse {
                     // Shouldn't be possible.
                     return error.UnknownModuleReferrer;
@@ -1430,29 +1430,32 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     self.call_arena,
                     specifier,
                     referrer_path,
-                    .{ .alloc = .if_needed },
+                    .{ .alloc = .if_needed, .null_terminated = true },
                 );
 
                 if (self.module_cache.get(normalized_specifier)) |pm| {
                     return pm.handle;
                 }
 
-                const module_loader = self.module_loader;
-                const source = try module_loader.func(module_loader.ptr, normalized_specifier) orelse return null;
+                const m: v8.Module = blk: {
+                    const module_loader = self.module_loader;
+                    var fetch_result = try module_loader.func(module_loader.ptr, normalized_specifier);
+                    defer fetch_result.deinit();
 
-                var try_catch: TryCatch = undefined;
-                try_catch.init(self);
-                defer try_catch.deinit();
+                    var try_catch: TryCatch = undefined;
+                    try_catch.init(self);
+                    defer try_catch.deinit();
 
-                const m = compileModule(self.isolate, source, normalized_specifier) catch |err| {
-                    log.warn(.js, "compile resolved module", .{
-                        .specifier = specifier,
-                        .stack = try_catch.stack(self.call_arena) catch null,
-                        .src = try_catch.sourceLine(self.call_arena) catch "err",
-                        .line = try_catch.sourceLineNumber() orelse 0,
-                        .exception = (try_catch.exception(self.call_arena) catch @errorName(err)) orelse @errorName(err),
-                    });
-                    return null;
+                    break :blk compileModule(self.isolate, fetch_result.src(), normalized_specifier) catch |err| {
+                        log.warn(.js, "compile resolved module", .{
+                            .specifier = specifier,
+                            .stack = try_catch.stack(self.call_arena) catch null,
+                            .src = try_catch.sourceLine(self.call_arena) catch "err",
+                            .line = try_catch.sourceLineNumber() orelse 0,
+                            .exception = (try_catch.exception(self.call_arena) catch @errorName(err)) orelse @errorName(err),
+                        });
+                        return null;
+                    };
                 };
 
                 // We were hoping to find the module in our cache, and thus used
@@ -1568,7 +1571,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     context.context_arena,
                     specifier_str,
                     resource_str,
-                    .{ .alloc = .if_needed },
+                    .{ .alloc = .if_needed, .null_terminated = true },
                 ) catch unreachable;
 
                 log.debug(.js, "dynamic import", .{
@@ -1590,41 +1593,41 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             fn _dynamicModuleCallback(
                 self: *JsContext,
-                specifier: []const u8,
+                specifier: [:0]const u8,
                 resolver: *const v8.PromiseResolver,
             ) !void {
                 const iso = self.isolate;
                 const ctx = self.v8_context;
 
-                const module_loader = self.module_loader;
-                const source = module_loader.func(module_loader.ptr, specifier) catch {
-                    const error_msg = v8.String.initUtf8(iso, "Failed to load module");
-                    _ = resolver.reject(ctx, error_msg.toValue());
-                    return;
-                } orelse {
-                    const error_msg = v8.String.initUtf8(iso, "Module source not available");
-                    _ = resolver.reject(ctx, error_msg.toValue());
-                    return;
-                };
-
                 var try_catch: TryCatch = undefined;
                 try_catch.init(self);
                 defer try_catch.deinit();
 
-                const maybe_promise = self.module(source, specifier, true) catch {
-                    log.err(.js, "module compilation failed", .{
-                        .specifier = specifier,
-                        .exception = try_catch.exception(self.call_arena) catch "unknown error",
-                        .stack = try_catch.stack(self.call_arena) catch null,
-                        .line = try_catch.sourceLineNumber() orelse 0,
-                    });
-                    const error_msg = if (try_catch.hasCaught()) blk: {
-                        const exception_str = try_catch.exception(self.call_arena) catch "Evaluation error";
-                        break :blk v8.String.initUtf8(iso, exception_str orelse "Evaluation error");
-                    } else v8.String.initUtf8(iso, "Module evaluation failed");
-                    _ = resolver.reject(ctx, error_msg.toValue());
-                    return;
+                const maybe_promise: ?v8.Promise = blk: {
+                    const module_loader = self.module_loader;
+                    var fetch_result = module_loader.func(module_loader.ptr, specifier) catch {
+                        const error_msg = v8.String.initUtf8(iso, "Failed to load module");
+                        _ = resolver.reject(ctx, error_msg.toValue());
+                        return;
+                    };
+                    defer fetch_result.deinit();
+
+                    break :blk self.module(fetch_result.src(), specifier, true) catch {
+                        log.err(.js, "module compilation failed", .{
+                            .specifier = specifier,
+                            .exception = try_catch.exception(self.call_arena) catch "unknown error",
+                            .stack = try_catch.stack(self.call_arena) catch null,
+                            .line = try_catch.sourceLineNumber() orelse 0,
+                        });
+                        const error_msg = if (try_catch.hasCaught()) eblk: {
+                            const exception_str = try_catch.exception(self.call_arena) catch "Evaluation error";
+                            break :eblk v8.String.initUtf8(iso, exception_str orelse "Evaluation error");
+                        } else v8.String.initUtf8(iso, "Module evaluation failed");
+                        _ = resolver.reject(ctx, error_msg.toValue());
+                        return;
+                    };
                 };
+
                 const new_module = self.module_cache.get(specifier).?.castToModule();
 
                 if (maybe_promise) |promise| {
@@ -3815,7 +3818,11 @@ const NoopInspector = struct {
 };
 
 const ErrorModuleLoader = struct {
-    pub fn fetchModuleSource(_: *anyopaque, _: []const u8) !?[]const u8 {
+    // Don't like having to reach into ../browser/ here. But can't think
+    // of a good way to fix this.
+    const BlockingResult = @import("../browser/ScriptManager.zig").BlockingResult;
+
+    pub fn fetchModuleSource(_: *anyopaque, _: [:0]const u8) !BlockingResult {
         return error.NoModuleLoadConfigured;
     }
 };
