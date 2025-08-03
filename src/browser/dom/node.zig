@@ -198,6 +198,20 @@ pub const Node = struct {
     // Methods
 
     pub fn _appendChild(self: *parser.Node, child: *parser.Node) !Union {
+        const self_owner = try parser.nodeOwnerDocument(self);
+        const new_node_owner = try parser.nodeOwnerDocument(child);
+
+        if (new_node_owner == null or (new_node_owner.? != self_owner.?)) {
+            child.owner = self_owner;
+            // recursively set the owner for all children
+            var next: ?*parser.Node = child;
+            while (next) |n| {
+                next = try parser.nodeFirstChild(n) orelse break;
+                if (next) |child_next| {
+                    child_next.owner = self_owner;
+                }
+            }
+        }
         // TODO: DocumentFragment special case
         const res = try parser.nodeAppendChild(self, child);
         return try Node.toInterface(res);
@@ -290,6 +304,18 @@ pub const Node = struct {
     }
 
     pub fn _insertBefore(self: *parser.Node, new_node: *parser.Node, ref_node_: ?*parser.Node) !Union {
+        const self_owner = try parser.nodeOwnerDocument(self);
+        const new_node_owner = try parser.nodeOwnerDocument(new_node);
+        if (new_node_owner == null or (new_node_owner.? != self_owner.?)) {
+            new_node.owner = self_owner;
+            var next: ?*parser.Node = new_node;
+            while (next) |n| {
+                next = try parser.nodeFirstChild(n) orelse break;
+                if (next) |child_next| {
+                    child_next.owner = self_owner;
+                }
+            }
+        }
         if (ref_node_) |ref_node| {
             return Node.toInterface(try parser.nodeInsertBefore(self, new_node, ref_node));
         }
