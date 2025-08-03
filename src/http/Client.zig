@@ -52,6 +52,8 @@ transfer_pool: std.heap.MemoryPool(Transfer),
 queue_node_pool: std.heap.MemoryPool(RequestQueue.Node),
 //@newhttp
 http_proxy: ?std.Uri = null,
+blocking: Handle,
+blocking_active: if (builtin.mode == .Debug) bool else void = if (builtin.mode == .Debug) false else {},
 
 const RequestQueue = std.DoublyLinkedList(Request);
 
@@ -69,13 +71,17 @@ pub fn init(allocator: Allocator, ca_blob: c.curl_blob, opts: Http.Opts) !*Clien
     errdefer _ = c.curl_multi_cleanup(multi);
 
     var handles = try Handles.init(allocator, client, ca_blob, opts);
-    errdefer handles.deinit(allocator, multi);
+    errdefer handles.deinit(allocator);
+
+    var blocking = try Handle.init(client, ca_blob, opts);
+    errdefer blocking.deinit();
 
     client.* = .{
         .queue = .{},
         .active = 0,
         .multi = multi,
         .handles = handles,
+        .blocking = blocking,
         .allocator = allocator,
         .transfer_pool = transfer_pool,
         .queue_node_pool = queue_node_pool,
@@ -85,7 +91,10 @@ pub fn init(allocator: Allocator, ca_blob: c.curl_blob, opts: Http.Opts) !*Clien
 }
 
 pub fn deinit(self: *Client) void {
-    self.handles.deinit(self.allocator, self.multi);
+    self.abort();
+    self.blocking.deinit();
+    self.handles.deinit(self.allocator);
+
     _ = c.curl_multi_cleanup(self.multi);
 
     self.transfer_pool.deinit();
@@ -94,7 +103,15 @@ pub fn deinit(self: *Client) void {
 }
 
 pub fn abort(self: *Client) void {
-    self.handles.abort(self.multi);
+    while (self.handles.in_use.first) |node| {
+        var transfer = Transfer.fromEasy(node.data.easy) catch |err| {
+            log.err(.http, "get private info", .{ .err = err, .source = "abort" });
+            continue;
+        };
+        transfer.req.error_callback(transfer.ctx, error.Abort);
+        self.endTransfer(transfer);
+    }
+    std.debug.assert(self.active == 0);
 
     var n = self.queue.first;
     while (n) |node| {
@@ -102,7 +119,6 @@ pub fn abort(self: *Client) void {
         self.queue_node_pool.destroy(node);
     }
     self.queue = .{};
-    self.active = 0;
 
     // Maybe a bit of overkill
     // We can remove some (all?) of these once we're confident its right.
@@ -116,17 +132,18 @@ pub fn abort(self: *Client) void {
 }
 
 pub fn tick(self: *Client, timeout_ms: usize) !void {
-    var handles = &self.handles.available;
+    var handles = &self.handles;
     while (true) {
-        if (handles.first == null) {
+        if (handles.isEmpty()) {
             break;
         }
         const queue_node = self.queue.popFirst() orelse break;
+        const req = queue_node.data;
+        self.queue_node_pool.destroy(queue_node);
 
-        defer self.queue_node_pool.destroy(queue_node);
-
-        const handle = handles.popFirst().?.data;
-        try self.makeRequest(handle, queue_node.data);
+        // we know this exists, because we checked isEmpty() above
+        const handle = handles.getFreeHandle().?;
+        try self.makeRequest(handle, req);
     }
 
     try self.perform(@intCast(timeout_ms));
@@ -140,6 +157,19 @@ pub fn request(self: *Client, req: Request) !void {
     const node = try self.queue_node_pool.create();
     node.data = req;
     self.queue.append(node);
+}
+
+// See ScriptManager.blockingGet
+pub fn blockingRequest(self: *Client, req: Request) !void {
+    if (comptime builtin.mode == .Debug) {
+        std.debug.assert(self.blocking_active == false);
+        self.blocking_active = true;
+    }
+    defer if (comptime builtin.mode == .Debug) {
+        self.blocking_active = false;
+    };
+
+    return self.makeRequest(&self.blocking, req);
 }
 
 fn makeRequest(self: *Client, handle: *Handle, req: Request) !void {
@@ -215,8 +245,9 @@ fn perform(self: *Client, timeout_ms: c_int) !void {
             const ctx = transfer.ctx;
             const done_callback = transfer.req.done_callback;
             const error_callback = transfer.req.error_callback;
-            // release it ASAP so that it's avaiable (since some done_callbacks
-            // will load more resources).
+
+            // release it ASAP so that it's available; some done_callbacks
+            // will load more resources.
             self.endTransfer(transfer);
 
             if (errorCheck(msg.data.result)) {
@@ -266,18 +297,9 @@ const Handles = struct {
 
         var available: HandleList = .{};
         for (0..count) |i| {
-            const easy = c.curl_easy_init() orelse return error.FailedToInitializeEasy;
-            errdefer _ = c.curl_easy_cleanup(easy);
-
-            handles[i] = .{
-                .easy = easy,
-                .client = client,
-                .node = undefined,
-            };
-            try handles[i].configure(ca_blob, opts);
-
-            handles[i].node.data = &handles[i];
-            available.append(&handles[i].node);
+            handles[i] = try Handle.init(client, ca_blob, opts);
+            handles[i].node = .{ .data = &handles[i] };
+            available.append(&handles[i].node.?);
         }
 
         return .{
@@ -287,22 +309,15 @@ const Handles = struct {
         };
     }
 
-    fn deinit(self: *Handles, allocator: Allocator, multi: *c.CURLM) void {
-        self.abort(multi);
+    fn deinit(self: *Handles, allocator: Allocator) void {
         for (self.handles) |*h| {
-            _ = c.curl_easy_cleanup(h.easy);
+            h.deinit();
         }
         allocator.free(self.handles);
     }
 
-    fn abort(self: *Handles, multi: *c.CURLM) void {
-        while (self.in_use.first) |node| {
-            const handle = node.data;
-            errorMCheck(c.curl_multi_remove_handle(multi, handle.easy)) catch |err| {
-                log.err(.http, "remove handle", .{ .err = err });
-            };
-            self.release(handle);
-        }
+    fn isEmpty(self: *const Handles) bool {
+        return self.available.first == null;
     }
 
     fn getFreeHandle(self: *Handles) ?*Handle {
@@ -316,7 +331,10 @@ const Handles = struct {
     }
 
     fn release(self: *Handles, handle: *Handle) void {
-        const node = &handle.node;
+        // client.blocking is a handle without a node, it doesn't exist in the
+        // eitehr the in_use or available lists.
+        const node = &(handle.node orelse return);
+
         self.in_use.remove(node);
         node.prev = null;
         node.next = null;
@@ -324,19 +342,15 @@ const Handles = struct {
     }
 };
 
-// wraps a c.CURL (an easy handle), mostly to make it easier to keep a
-// handle_pool and error_buffer associated with each easy handle
+// wraps a c.CURL (an easy handle)
 const Handle = struct {
     easy: *c.CURL,
     client: *Client,
-    node: Handles.HandleList.Node,
-    error_buffer: [c.CURL_ERROR_SIZE:0]u8 = undefined,
+    node: ?Handles.HandleList.Node,
 
-    // Is called by Handles when already partially initialized. Done like this
-    // so that we have a stable pointer to error_buffer.
-    fn configure(self: *Handle, ca_blob: c.curl_blob, opts: Http.Opts) !void {
-        const easy = self.easy;
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_ERRORBUFFER, &self.error_buffer));
+    fn init(client: *Client, ca_blob: c.curl_blob, opts: Http.Opts) !Handle {
+        const easy = c.curl_easy_init() orelse return error.FailedToInitializeEasy;
+        errdefer _ = c.curl_easy_cleanup(easy);
 
         // timeouts
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, @intCast(opts.timeout_ms))));
@@ -348,9 +362,9 @@ const Handle = struct {
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_REDIR_PROTOCOLS_STR, "HTTP,HTTPS")); // remove FTP and FTPS from the default
 
         // callbacks
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HEADERDATA, self));
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HEADERDATA, easy));
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HEADERFUNCTION, Transfer.headerCallback));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, self));
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, easy));
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, Transfer.bodyCallback));
 
         // tls
@@ -367,6 +381,16 @@ const Handle = struct {
         if (comptime Http.ENABLE_DEBUG) {
             try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_VERBOSE, @as(c_long, 1)));
         }
+
+        return .{
+            .easy = easy,
+            .node = null,
+            .client = client,
+        };
+    }
+
+    fn deinit(self: *const Handle) void {
+        _ = c.curl_easy_cleanup(self.easy);
     }
 };
 
@@ -430,9 +454,9 @@ pub const Transfer = struct {
         // libcurl should only ever emit 1 header at a time
         std.debug.assert(header_count == 1);
 
-        const handle: *Handle = @alignCast(@ptrCast(data));
-        var transfer = fromEasy(handle.easy) catch |err| {
-            log.err(.http, "get private info", .{ .err = err });
+        const easy: *c.CURL = @alignCast(@ptrCast(data));
+        var transfer = fromEasy(easy) catch |err| {
+            log.err(.http, "get private info", .{ .err = err, .source = "header callback" });
             return 0;
         };
 
@@ -467,7 +491,7 @@ pub const Transfer = struct {
             transfer._redirecting = false;
 
             var url: [*c]u8 = undefined;
-            errorCheck(c.curl_easy_getinfo(handle.easy, c.CURLINFO_EFFECTIVE_URL, &url)) catch |err| {
+            errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_EFFECTIVE_URL, &url)) catch |err| {
                 log.err(.http, "failed to get URL", .{ .err = err });
                 return 0;
             };
@@ -514,9 +538,9 @@ pub const Transfer = struct {
         // libcurl should only ever emit 1 chunk at a time
         std.debug.assert(chunk_count == 1);
 
-        const handle: *Handle = @alignCast(@ptrCast(data));
-        var transfer = fromEasy(handle.easy) catch |err| {
-            log.err(.http, "get private info", .{ .err = err });
+        const easy: *c.CURL = @alignCast(@ptrCast(data));
+        var transfer = fromEasy(easy) catch |err| {
+            log.err(.http, "get private info", .{ .err = err, .source = "body callback" });
             return c.CURL_WRITEFUNC_ERROR;
         };
 

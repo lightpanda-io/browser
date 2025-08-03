@@ -77,7 +77,6 @@ pub fn deinit(self: *ScriptManager) void {
 }
 
 pub fn reset(self: *ScriptManager) void {
-    self.client.abort();
     self.clearList(&self.scripts);
     self.clearList(&self.deferred);
     self.static_scripts_done = false;
@@ -178,6 +177,8 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
 
     if (source == .@"inline" and self.scripts.first == null) {
         // inline script with no pending scripts, execute it immediately.
+        // (if there is a pending script, then we cannot execute this immediately
+        // as it needs to be executed in order)
         return script.eval(page);
     }
 
@@ -187,7 +188,7 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
         .script = script,
         .complete = false,
         .manager = self,
-        .node = undefined,
+        .node = .{ .data = pending_script },
     };
 
     if (source == .@"inline") {
@@ -209,6 +210,34 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
         .done_callback = doneCallback,
         .error_callback = errorCallback,
     });
+}
+
+pub fn blockingGet(self: *ScriptManager, url: [:0]const u8) !BlockingResult {
+    var blocking = Blocking{
+        .allocator = self.allocator,
+        .buffer_pool = &self.buffer_pool,
+    };
+
+    var client = self.client;
+    try client.request(.{
+        .url = url,
+        .method = .GET,
+        .ctx = &blocking,
+        .header_done_callback = Blocking.headerCallback,
+        .data_callback = Blocking.dataCallback,
+        .done_callback = Blocking.doneCallback,
+        .error_callback = Blocking.errorCallback,
+    });
+
+    // rely on http's timeout settings to avoid an endless/long loop.
+    while (true) {
+        try client.tick(1000);
+        switch (blocking.state) {
+            .running => {},
+            .done => |result| return result,
+            .err => |err| return err,
+        }
+    }
 }
 
 pub fn staticScriptsDone(self: *ScriptManager) void {
@@ -350,6 +379,11 @@ const PendingScript = struct {
         if (self.manager.getList(&self.script)) |list| {
             self.node.data = self;
             list.append(&self.node);
+        } else {
+            // async scripts don't get added to a list, because we can execute
+            // them in any order
+            std.debug.assert(self.script.is_async);
+            self.manager.async_count += 1;
         }
 
         // if the script is async, it isn't tracked in a list, because we can
@@ -530,8 +564,8 @@ const Script = struct {
 };
 
 const BufferPool = struct {
-    free: List = .{},
-    available: usize,
+    count: usize,
+    available: List = .{},
     allocator: Allocator,
     max_concurrent_transfers: u8,
     node_pool: std.heap.MemoryPool(List.Node),
@@ -540,8 +574,8 @@ const BufferPool = struct {
 
     fn init(allocator: Allocator, max_concurrent_transfers: u8) BufferPool {
         return .{
-            .free = .{},
-            .available = 0,
+            .available = .{},
+            .count = 0,
             .allocator = allocator,
             .max_concurrent_transfers = max_concurrent_transfers,
             .node_pool = std.heap.MemoryPool(List.Node).init(allocator),
@@ -551,20 +585,21 @@ const BufferPool = struct {
     fn deinit(self: *BufferPool) void {
         const allocator = self.allocator;
 
-        var node = self.free.first;
+        var node = self.available.first;
         while (node) |n| {
-            node = n.next;
             n.data.deinit(allocator);
+            node = n.next;
         }
         self.node_pool.deinit();
     }
 
     fn get(self: *BufferPool) ArrayListUnmanaged(u8) {
-        const node = self.free.popFirst() orelse {
+        const node = self.available.popFirst() orelse {
             // return a new buffer
             return .{};
         };
 
+        self.count -= 1;
         defer self.node_pool.destroy(node);
         return node.data;
     }
@@ -575,8 +610,9 @@ const BufferPool = struct {
         // create mutable copy
         var b = buffer;
 
-        if (self.available == self.max_concurrent_transfers) {
+        if (self.count == self.max_concurrent_transfers) {
             b.deinit(self.allocator);
+            return;
         }
 
         const node = self.node_pool.create() catch |err| {
@@ -587,7 +623,81 @@ const BufferPool = struct {
 
         b.clearRetainingCapacity();
         node.data = b;
-        self.available += 1;
-        self.free.append(node);
+        self.count += 1;
+        self.available.append(node);
+    }
+};
+
+const Blocking = struct {
+    allocator: Allocator,
+    buffer_pool: *BufferPool,
+    state: State = .{ .running = {} },
+    buffer: std.ArrayListUnmanaged(u8) = .{},
+
+    const State = union(enum) {
+        running: void,
+        err: anyerror,
+        done: BlockingResult,
+    };
+
+    fn startCallback(transfer: *HttpClient.Transfer) !void {
+        log.debug(.http, "script fetch start", .{ .req = transfer, .blocking = true });
+    }
+
+    fn headerCallback(transfer: *HttpClient.Transfer) !void {
+        const header = &transfer.response_header.?;
+        log.debug(.http, "script header", .{
+            .req = transfer,
+            .blocking = true,
+            .status = header.status,
+            .content_type = header.contentType(),
+        });
+
+        if (header.status != 200) {
+            return error.InvalidStatusCode;
+        }
+
+        var self: *Blocking = @alignCast(@ptrCast(transfer.ctx));
+        self.buffer = self.buffer_pool.get();
+    }
+
+    fn dataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
+        var self: *Blocking = @alignCast(@ptrCast(transfer.ctx));
+        self.buffer.appendSlice(self.allocator, data) catch |err| {
+            log.err(.http, "SM.dataCallback", .{
+                .err = err,
+                .len = data.len,
+                .blocking = true,
+                .transfer = transfer,
+            });
+            return err;
+        };
+    }
+
+    fn doneCallback(ctx: *anyopaque) !void {
+        var self: *Blocking = @alignCast(@ptrCast(ctx));
+        self.state = .{ .done = .{
+            .buffer = self.buffer,
+            .buffer_pool = self.buffer_pool,
+        } };
+    }
+
+    fn errorCallback(ctx: *anyopaque, err: anyerror) void {
+        var self: *Blocking = @alignCast(@ptrCast(ctx));
+        self.state = .{ .err = err };
+        self.buffer_pool.release(self.buffer);
+    }
+};
+
+pub const BlockingResult = struct {
+    buffer: std.ArrayListUnmanaged(u8),
+    buffer_pool: *BufferPool,
+
+    pub fn deinit(self: *BlockingResult) void {
+        self.buffer_pool.release(self.buffer);
+    }
+
+    pub fn src(self: *const BlockingResult) []const u8 {
+        return self.buffer.items;
     }
 };
