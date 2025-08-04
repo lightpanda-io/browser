@@ -100,7 +100,7 @@ pub const Connection = struct {
         const easy = c.curl_easy_init() orelse return error.FailedToInitializeEasy;
         errdefer _ = c.curl_easy_cleanup(easy);
 
-      // timeouts
+        // timeouts
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, @intCast(opts.timeout_ms))));
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CONNECTTIMEOUT_MS, @as(c_long, @intCast(opts.connect_timeout_ms))));
 
@@ -121,7 +121,7 @@ pub const Connection = struct {
                 // Note, this can be difference for the proxy and for the main
                 // request. Might be something worth exposting as command
                 // line arguments at some point.
-                try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_CAINFO_BLOB , ca_blob));
+                try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_CAINFO_BLOB, ca_blob));
             }
         } else {
             std.debug.assert(opts.tls_verify_host == false);
@@ -136,7 +136,7 @@ pub const Connection = struct {
                 // request. Might be something worth exposting as command
                 // line arguments at some point.
                 try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_SSL_VERIFYHOST, @as(c_long, 0)));
-                try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_SSL_VERIFYPEER , @as(c_long, 0)));
+                try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_SSL_VERIFYPEER, @as(c_long, 0)));
             }
         }
 
@@ -203,7 +203,6 @@ pub const Connection = struct {
         return @intCast(http_code);
     }
 };
-
 
 pub fn errorCheck(code: c.CURLcode) errors.Error!void {
     if (code == c.CURLE_OK) {
