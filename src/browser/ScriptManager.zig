@@ -200,6 +200,18 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
         return;
     }
 
+    if (self.getList(&pending_script.script)) |list| {
+        pending_script.node = .{.data = pending_script};
+        list.append(&pending_script.node);
+    } else {
+        // async scripts don't get added to a list, because we can execute
+        // them in any order
+        std.debug.assert(script.is_async);
+        self.async_count += 1;
+    }
+
+    errdefer pending_script.deinit();
+
     try self.client.request(.{
         .url = remote_url.?,
         .ctx = pending_script,
@@ -332,14 +344,18 @@ fn startCallback(transfer: *HttpClient.Transfer) !void {
 fn headerCallback(transfer: *HttpClient.Transfer) !void {
     const script: *PendingScript = @alignCast(@ptrCast(transfer.ctx));
     script.headerCallback(transfer) catch |err| {
-        log.err(.http, "SM.headerCallback", .{ .err = err, .transfer = transfer });
+        log.err(.http, "SM.headerCallback", .{
+            .err = err,
+            .transfer = transfer,
+            .status = transfer.response_header.?.status,
+        });
         return err;
     };
 }
 
 fn dataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
     const script: *PendingScript = @alignCast(@ptrCast(transfer.ctx));
-    script.dataCallback(data) catch |err| {
+    script.dataCallback(transfer, data) catch |err| {
         log.err(.http, "SM.dataCallback", .{ .err = err, .transfer = transfer, .len = data.len });
         return err;
     };
@@ -367,27 +383,22 @@ const PendingScript = struct {
 
     fn deinit(self: *PendingScript) void {
         var manager = self.manager;
-        if (self.script.source == .remote) {
-            manager.buffer_pool.release(self.script.source.remote);
+        const script = &self.script;
+
+        if (script.source == .remote) {
+            manager.buffer_pool.release(script.source.remote);
         }
-        if (manager.getList(&self.script)) |list| {
+
+        if (manager.getList(script)) |list| {
             list.remove(&self.node);
+        } else {
+            std.debug.assert(script.is_async);
+            manager.asyncDone();
         }
     }
 
     fn startCallback(self: *PendingScript, transfer: *HttpClient.Transfer) !void {
-        if (self.manager.getList(&self.script)) |list| {
-            self.node.data = self;
-            list.append(&self.node);
-        } else {
-            // async scripts don't get added to a list, because we can execute
-            // them in any order
-            std.debug.assert(self.script.is_async);
-            self.manager.async_count += 1;
-        }
-
-        // if the script is async, it isn't tracked in a list, because we can
-        // execute it as soon as it's done loading.
+        _ = self;
         log.debug(.http, "script fetch start", .{ .req = transfer });
     }
 
@@ -408,9 +419,17 @@ const PendingScript = struct {
         });
     }
 
-    fn dataCallback(self: *PendingScript, data: []const u8) !void {
-        // @newhttp TODO: max-length enforcement
+    fn dataCallback(self: *PendingScript, transfer: *HttpClient.Transfer, data: []const u8) !void {
+        _ = transfer;
+        // too verbose
+        // log.debug(.http, "script data chunk", .{
+        //     .req = transfer,
+        //     .len = data.len,
+        // });
+
+        // @newhttp TODO: max-length enforcement ??
         try self.script.source.remote.appendSlice(self.manager.allocator, data);
+
     }
 
     fn doneCallback(self: *PendingScript) void {
@@ -421,16 +440,18 @@ const PendingScript = struct {
             // async script can be evaluated immediately
             defer self.deinit();
             self.script.eval(self.manager.page);
-            manager.asyncDone();
         } else {
             self.complete = true;
-            self.manager.evaluate();
+            manager.evaluate();
         }
     }
 
     fn errorCallback(self: *PendingScript, err: anyerror) void {
         log.warn(.http, "script fetch error", .{ .req = self.script.url, .err = err });
-        self.deinit();
+        defer self.deinit();
+
+        // this script might have been blocking others;
+        self.manager.evaluate();
     }
 };
 
@@ -473,7 +494,7 @@ const Script = struct {
 
         const url = self.url;
 
-        log.debug(.browser, "executing script", .{
+        log.info(.browser, "executing script", .{
             .src = url,
             .kind = self.kind,
             .cacheable = cacheable,
@@ -662,6 +683,12 @@ const Blocking = struct {
     }
 
     fn dataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
+        // too verbose
+        // log.debug(.http, "script data chunk", .{
+        //     .req = transfer,
+        //     .blocking = true,
+        // });
+
         var self: *Blocking = @alignCast(@ptrCast(transfer.ctx));
         self.buffer.appendSlice(self.allocator, data) catch |err| {
             log.err(.http, "SM.dataCallback", .{
