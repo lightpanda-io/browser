@@ -90,9 +90,10 @@ pub const Page = struct {
     scheduler: Scheduler,
     http_client: *HttpClient,
     script_manager: ScriptManager,
+
     mode: Mode,
 
-    document_state: DocumentState = .parsing,
+    load_state: LoadState = .parsing,
 
     const Mode = union(enum) {
         pre: void,
@@ -103,9 +104,16 @@ pub const Page = struct {
         raw_done: []const u8,
     };
 
-    const DocumentState = enum {
+    const LoadState = enum {
+        // the main HTML is being parsed (or downloaded)
         parsing,
+
+        // the main HTML has been parsed and the JavaScript (including deferred
+        // scripts) have been loaded. Corresponds to the DOMContentLoaded event
         load,
+
+        // the page has been loaded and all async scripts (if any) are done
+        // Corresponds to the load event
         complete,
     };
 
@@ -154,7 +162,7 @@ pub const Page = struct {
         self.http_client.abort();
         self.script_manager.reset();
 
-        self.document_state = .parsing;
+        self.load_state = .parsing;
         self.mode = .{ .pre = {} };
         _ = self.session.browser.page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
     }
@@ -391,23 +399,38 @@ pub const Page = struct {
     }
 
     pub fn documentIsLoaded(self: *Page) void {
-        std.debug.assert(self.document_state == .parsing);
-        self.document_state = .load;
+        if (self.load_state != .parsing) {
+            // Ideally, documentIsLoaded would only be called once, but if a
+            // script is dynamically added from an async script after
+            // documentIsLoaded is already called, then ScriptManager will call
+            // it again.
+            return;
+        }
+
+        self.load_state = .load;
         HTMLDocument.documentIsLoaded(self.window.document, self) catch |err| {
             log.err(.browser, "document is loaded", .{ .err = err });
         };
     }
 
     pub fn documentIsComplete(self: *Page) void {
-        std.debug.assert(self.document_state != .complete);
+        if (self.load_state == .complete) {
+            // Ideally, documentIsComplete would only be called once, but with
+            // dynamic scripts, it can be hard to keep track of that. An async
+            // script could be evaluated AFTER Loaded and Complete and load its
+            // own non non-async script - which, upon completion, needs to check
+            // whether Laoded/Complete have already been called, which is what
+            // this guard is.
+            return;
+        }
 
         // documentIsComplete could be called directly, without first calling
-        // documentIsLoaded, if there were _only_ async scrypts
-        if (self.document_state == .parsing) {
+        // documentIsLoaded, if there were _only_ async scripts
+        if (self.load_state == .parsing) {
             self.documentIsLoaded();
         }
 
-        self.document_state = .complete;
+        self.load_state = .complete;
         self._documentIsComplete() catch |err| {
             log.err(.browser, "document is complete", .{ .err = err });
         };

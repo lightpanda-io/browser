@@ -134,7 +134,7 @@ pub fn abort(self: *Client) void {
 pub fn tick(self: *Client, timeout_ms: usize) !void {
     var handles = &self.handles;
     while (true) {
-        if (handles.isEmpty()) {
+        if (handles.hasAvailable() == false) {
             break;
         }
         const queue_node = self.queue.popFirst() orelse break;
@@ -234,35 +234,31 @@ fn perform(self: *Client, timeout_ms: c_int) !void {
         try errorMCheck(c.curl_multi_poll(multi, null, 0, timeout_ms, null));
     }
 
-    while (true) {
-        var remaining: c_int = undefined;
-        const msg: *c.CURLMsg = c.curl_multi_info_read(multi, &remaining) orelse break;
-        if (msg.msg == c.CURLMSG_DONE) {
-            const easy = msg.easy_handle.?;
+    var messages_count: c_int = 0;
+    while (c.curl_multi_info_read(multi, &messages_count)) |msg_| {
+        const msg: *c.CURLMsg = @ptrCast(msg_);
+        // This is the only possible mesage type from CURL for now.
+        std.debug.assert(msg.msg == c.CURLMSG_DONE);
 
-            const transfer = try Transfer.fromEasy(easy);
+        const easy = msg.easy_handle.?;
 
-            const ctx = transfer.ctx;
-            const done_callback = transfer.req.done_callback;
-            const error_callback = transfer.req.error_callback;
+        const transfer = try Transfer.fromEasy(easy);
+        const ctx = transfer.ctx;
+        const done_callback = transfer.req.done_callback;
+        const error_callback = transfer.req.error_callback;
 
-            // release it ASAP so that it's available; some done_callbacks
-            // will load more resources.
-            self.endTransfer(transfer);
+        // release it ASAP so that it's available; some done_callbacks
+        // will load more resources.
+        self.endTransfer(transfer);
 
-            if (errorCheck(msg.data.result)) {
-                done_callback(ctx) catch |err| {
-                    // transfer isn't valid at this point, don't use it.
-                    log.err(.http, "done_callback", .{ .err = err });
-                    error_callback(ctx, err);
-                };
-            } else |err| {
+        if (errorCheck(msg.data.result)) {
+            done_callback(ctx) catch |err| {
+                // transfer isn't valid at this point, don't use it.
+                log.err(.http, "done_callback", .{ .err = err });
                 error_callback(ctx, err);
-            }
-        }
-
-        if (remaining == 0) {
-            break;
+            };
+        } else |err| {
+            error_callback(ctx, err);
         }
     }
 }
@@ -316,8 +312,8 @@ const Handles = struct {
         allocator.free(self.handles);
     }
 
-    fn isEmpty(self: *const Handles) bool {
-        return self.available.first == null;
+    fn hasAvailable(self: *const Handles) bool {
+        return self.available.first != null;
     }
 
     fn getFreeHandle(self: *Handles) ?*Handle {
@@ -365,7 +361,7 @@ const Handle = struct {
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HEADERDATA, easy));
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HEADERFUNCTION, Transfer.headerCallback));
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, easy));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, Transfer.bodyCallback));
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, Transfer.dataCallback));
 
         // tls
         if (opts.tls_verify_host) {
@@ -534,7 +530,7 @@ pub const Transfer = struct {
         return buf_len;
     }
 
-    fn bodyCallback(buffer: [*]const u8, chunk_count: usize, chunk_len: usize, data: *anyopaque) callconv(.c) usize {
+    fn dataCallback(buffer: [*]const u8, chunk_count: usize, chunk_len: usize, data: *anyopaque) callconv(.c) usize {
         // libcurl should only ever emit 1 chunk at a time
         std.debug.assert(chunk_count == 1);
 
