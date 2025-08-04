@@ -57,7 +57,7 @@ blocking_active: if (builtin.mode == .Debug) bool else void = if (builtin.mode =
 
 const RequestQueue = std.DoublyLinkedList(Request);
 
-pub fn init(allocator: Allocator, ca_blob: c.curl_blob, opts: Http.Opts) !*Client {
+pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts) !*Client {
     var transfer_pool = std.heap.MemoryPool(Transfer).init(allocator);
     errdefer transfer_pool.deinit();
 
@@ -70,10 +70,10 @@ pub fn init(allocator: Allocator, ca_blob: c.curl_blob, opts: Http.Opts) !*Clien
     const multi = c.curl_multi_init() orelse return error.FailedToInitializeMulti;
     errdefer _ = c.curl_multi_cleanup(multi);
 
-    var handles = try Handles.init(allocator, client, ca_blob, opts);
+    var handles = try Handles.init(allocator, client, ca_blob, &opts);
     errdefer handles.deinit(allocator);
 
-    var blocking = try Handle.init(client, ca_blob, opts);
+    var blocking = try Handle.init(client, ca_blob, &opts);
     errdefer blocking.deinit();
 
     client.* = .{
@@ -104,7 +104,7 @@ pub fn deinit(self: *Client) void {
 
 pub fn abort(self: *Client) void {
     while (self.handles.in_use.first) |node| {
-        var transfer = Transfer.fromEasy(node.data.easy) catch |err| {
+        var transfer = Transfer.fromEasy(node.data.conn.easy) catch |err| {
             log.err(.http, "get private info", .{ .err = err, .source = "abort" });
             continue;
         };
@@ -173,19 +173,19 @@ pub fn blockingRequest(self: *Client, req: Request) !void {
 }
 
 fn makeRequest(self: *Client, handle: *Handle, req: Request) !void {
-    const easy = handle.easy;
+    const conn = handle.conn;
+    const easy = conn.easy;
 
     const header_list = blk: {
         errdefer self.handles.release(handle);
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_URL, req.url.ptr));
+        try conn.setMethod(req.method);
+        try conn.setURL(req.url);
 
-        try Http.setMethod(easy, req.method);
         if (req.body) |b| {
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_POSTFIELDS, b.ptr));
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_POSTFIELDSIZE, @as(c_long, @intCast(b.len))));
+            try conn.setBody(b);
         }
 
-        var header_list = c.curl_slist_append(null, "User-Agent: Lightpanda/1.0");
+        var header_list = conn.commonHeaders();
         errdefer c.curl_slist_free_all(header_list);
 
         if (req.content_type) |ct| {
@@ -269,7 +269,7 @@ fn endTransfer(self: *Client, transfer: *Transfer) void {
     transfer.deinit();
     self.transfer_pool.destroy(transfer);
 
-    errorMCheck(c.curl_multi_remove_handle(self.multi, handle.easy)) catch |err| {
+    errorMCheck(c.curl_multi_remove_handle(self.multi, handle.conn.easy)) catch |err| {
         log.fatal(.http, "Failed to abort", .{ .err = err });
     };
 
@@ -284,7 +284,8 @@ const Handles = struct {
 
     const HandleList = std.DoublyLinkedList(*Handle);
 
-    fn init(allocator: Allocator, client: *Client, ca_blob: c.curl_blob, opts: Http.Opts) !Handles {
+    // pointer to opts is not stable, don't hold a reference to it!
+    fn init(allocator: Allocator, client: *Client, ca_blob: ?c.curl_blob, opts: *const Http.Opts) !Handles {
         const count = opts.max_concurrent_transfers;
         std.debug.assert(count > 0);
 
@@ -340,22 +341,16 @@ const Handles = struct {
 
 // wraps a c.CURL (an easy handle)
 const Handle = struct {
-    easy: *c.CURL,
     client: *Client,
+    conn: Http.Connection,
     node: ?Handles.HandleList.Node,
 
-    fn init(client: *Client, ca_blob: c.curl_blob, opts: Http.Opts) !Handle {
-        const easy = c.curl_easy_init() orelse return error.FailedToInitializeEasy;
-        errdefer _ = c.curl_easy_cleanup(easy);
+    // pointer to opts is not stable, don't hold a reference to it!
+    fn init(client: *Client, ca_blob: ?c.curl_blob, opts: *const Http.Opts) !Handle {
+        const conn = try Http.Connection.init(ca_blob, opts);
+        errdefer conn.deinit();
 
-        // timeouts
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, @intCast(opts.timeout_ms))));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CONNECTTIMEOUT_MS, @as(c_long, @intCast(opts.connect_timeout_ms))));
-
-        // redirect behavior
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_MAXREDIRS, @as(c_long, @intCast(opts.max_redirects))));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_FOLLOWLOCATION, @as(c_long, 2)));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_REDIR_PROTOCOLS_STR, "HTTP,HTTPS")); // remove FTP and FTPS from the default
+        const easy = conn.easy;
 
         // callbacks
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HEADERDATA, easy));
@@ -363,30 +358,15 @@ const Handle = struct {
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, easy));
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, Transfer.dataCallback));
 
-        // tls
-        if (opts.tls_verify_host) {
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CAINFO_BLOB, ca_blob));
-        } else {
-            // Verify peer checks that the cert is signed by a CA, verify host makes sure the
-            // cert contains the server name.
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 0)));
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 0)));
-        }
-
-        // debug
-        if (comptime Http.ENABLE_DEBUG) {
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_VERBOSE, @as(c_long, 1)));
-        }
-
         return .{
-            .easy = easy,
+            .conn = conn,
             .node = null,
             .client = client,
         };
     }
 
     fn deinit(self: *const Handle) void {
-        _ = c.curl_easy_cleanup(self.easy);
+        self.conn.deinit();
     }
 };
 

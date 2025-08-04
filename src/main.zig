@@ -85,8 +85,7 @@ fn run(alloc: Allocator) !void {
         .run_mode = args.mode,
         .platform = &platform,
         .http_proxy = args.httpProxy(),
-        .proxy_type = args.proxyType(),
-        .proxy_auth = args.proxyAuth(),
+        .proxy_bearer_token = args.proxyBearerToken(),
         .tls_verify_host = args.tlsVerifyHost(),
     });
     defer app.deinit();
@@ -156,23 +155,16 @@ const Command = struct {
         };
     }
 
-    fn httpProxy(self: *const Command) ?std.Uri {
+    fn httpProxy(self: *const Command) ?[:0]const u8 {
         return switch (self.mode) {
             inline .serve, .fetch => |opts| opts.common.http_proxy,
             else => unreachable,
         };
     }
 
-    fn proxyType(self: *const Command) ?Http.ProxyType {
+    fn proxyBearerToken(self: *const Command) ?[:0]const u8 {
         return switch (self.mode) {
-            inline .serve, .fetch => |opts| opts.common.proxy_type,
-            else => unreachable,
-        };
-    }
-
-    fn proxyAuth(self: *const Command) ?Http.ProxyAuth {
-        return switch (self.mode) {
-            inline .serve, .fetch => |opts| opts.common.proxy_auth,
+            inline .serve, .fetch => |opts| opts.common.proxy_bearer_token,
             else => unreachable,
         };
     }
@@ -221,9 +213,8 @@ const Command = struct {
     };
 
     const Common = struct {
-        http_proxy: ?std.Uri = null,
-        proxy_type: ?Http.ProxyType = null,
-        proxy_auth: ?Http.ProxyAuth = null,
+        http_proxy: ?[:0]const u8 = null,
+        proxy_bearer_token: ?[:0]const u8 = null,
         tls_verify_host: bool = true,
         log_level: ?log.Level = null,
         log_format: ?log.Format = null,
@@ -242,20 +233,9 @@ const Command = struct {
             \\--http_proxy    The HTTP proxy to use for all HTTP requests.
             \\                Defaults to none.
             \\
-            \\--proxy_type   The type of proxy: connect, forward.
-            \\               'connect' creates a tunnel through the proxy via
-            \\               and initial CONNECT request.
-            \\               'forward' sends the full URL in the request target
-            \\               and expects the proxy to MITM the request.
-            \\               Defaults to connect when --http_proxy is set.
-            \\
             \\--proxy_bearer_token
-            \\               The token to send for bearer authentication with the proxy
+            \\               The <token> to send for bearer authentication with the proxy
             \\               Proxy-Authorization: Bearer <token>
-            \\
-            \\--proxy_basic_auth
-            \\               The user:password to send for basic authentication with the proxy
-            \\               Proxy-Authorization: Basic <base64(user:password)>
             \\
             \\--log_level     The log level: debug, info, warn, error or fatal.
             \\                Defaults to
@@ -521,48 +501,16 @@ fn parseCommonArg(
             log.fatal(.app, "missing argument value", .{ .arg = "--http_proxy" });
             return error.InvalidArgument;
         };
-        common.http_proxy = try std.Uri.parse(try allocator.dupe(u8, str));
-        if (common.http_proxy.?.host == null) {
-            log.fatal(.app, "invalid http proxy", .{ .arg = "--http_proxy", .hint = "missing scheme?" });
-            return error.InvalidArgument;
-        }
-        return true;
-    }
-
-    if (std.mem.eql(u8, "--proxy_type", opt)) {
-        const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--proxy_type" });
-            return error.InvalidArgument;
-        };
-        common.proxy_type = std.meta.stringToEnum(Http.ProxyType, str) orelse {
-            log.fatal(.app, "invalid option choice", .{ .arg = "--proxy_type", .value = str });
-            return error.InvalidArgument;
-        };
+        common.http_proxy = try allocator.dupeZ(u8, str);
         return true;
     }
 
     if (std.mem.eql(u8, "--proxy_bearer_token", opt)) {
-        if (common.proxy_auth != null) {
-            log.fatal(.app, "proxy auth already set", .{ .arg = "--proxy_bearer_token" });
-            return error.InvalidArgument;
-        }
         const str = args.next() orelse {
             log.fatal(.app, "missing argument value", .{ .arg = "--proxy_bearer_token" });
             return error.InvalidArgument;
         };
-        common.proxy_auth = .{ .bearer = .{ .token = str } };
-        return true;
-    }
-    if (std.mem.eql(u8, "--proxy_basic_auth", opt)) {
-        if (common.proxy_auth != null) {
-            log.fatal(.app, "proxy auth already set", .{ .arg = "--proxy_basic_auth" });
-            return error.InvalidArgument;
-        }
-        const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--proxy_basic_auth" });
-            return error.InvalidArgument;
-        };
-        common.proxy_auth = .{ .basic = .{ .user_pass = str } };
+        common.proxy_bearer_token = try allocator.dupeZ(u8, str);
         return true;
     }
 
