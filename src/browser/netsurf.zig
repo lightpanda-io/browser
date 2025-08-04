@@ -2062,20 +2062,20 @@ pub inline fn domImplementationCreateHTMLDocument(title: ?[]const u8) !*Document
     const doc = documentHTMLToDocument(doc_html);
 
     // add hierarchy: html, head, body.
-    const html = try documentCreateElement(doc, "html");
+    const html = try documentCreateHTMLElement(doc, "html");
     _ = try nodeAppendChild(documentToNode(doc), elementToNode(html));
 
-    const head = try documentCreateElement(doc, "head");
+    const head = try documentCreateHTMLElement(doc, "head");
     _ = try nodeAppendChild(elementToNode(html), elementToNode(head));
 
     if (title) |t| {
-        const htitle = try documentCreateElement(doc, "title");
+        const htitle = try documentCreateHTMLElement(doc, "title");
         const txt = try documentCreateTextNode(doc, t);
         _ = try nodeAppendChild(elementToNode(htitle), @as(*Node, @alignCast(@ptrCast(txt))));
         _ = try nodeAppendChild(elementToNode(head), elementToNode(htitle));
     }
 
-    const body = try documentCreateElement(doc, "body");
+    const body = try documentCreateHTMLElement(doc, "body");
     _ = try nodeAppendChild(elementToNode(html), elementToNode(body));
 
     return doc_html;
@@ -2156,9 +2156,28 @@ pub inline fn documentCreateDocument(title: ?[]const u8) !*DocumentHTML {
     return doc_html;
 }
 
+pub inline fn documentCreateHTMLElement(doc: *Document, tag_name: []const u8) !*Element {
+    var elem: ?*Element = undefined;
+    const err = c._dom_html_document_create_element(doc, try strFromData(tag_name), &elem);
+    try DOMErr(err);
+    return elem.?;
+}
+
 pub inline fn documentCreateElement(doc: *Document, tag_name: []const u8) !*Element {
     var elem: ?*Element = undefined;
     const err = documentVtable(doc).dom_document_create_element.?(doc, try strFromData(tag_name), &elem);
+    try DOMErr(err);
+    return elem.?;
+}
+
+pub inline fn documentCreateHTMLElementNS(doc: *Document, ns: []const u8, tag_name: []const u8) !*Element {
+    var elem: ?*Element = undefined;
+    const err = c._dom_html_document_create_element_ns(
+        doc,
+        try strFromData(ns),
+        try strFromData(tag_name),
+        &elem,
+    );
     try DOMErr(err);
     return elem.?;
 }
