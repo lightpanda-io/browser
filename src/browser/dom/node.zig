@@ -199,26 +199,15 @@ pub const Node = struct {
 
     pub fn _appendChild(self: *parser.Node, child: *parser.Node) !Union {
         const self_owner = try parser.nodeOwnerDocument(self);
-        const new_node_owner = try parser.nodeOwnerDocument(child);
+        const child_owner = try parser.nodeOwnerDocument(child);
 
-        if (new_node_owner == null or (new_node_owner.? != self_owner.?)) {
-            var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-            defer arena.deinit();
-
-            const allocator = arena.allocator();
-            var worklist = std.ArrayList(*parser.Node).init(allocator);
-
+        if (child_owner == null or (child_owner.? != self_owner.?)) {
+            const w = Walker{};
             child.owner = self_owner;
-            try worklist.append(child);  
-
-            // change ownerDocument of all children of a given node
-            while (worklist.pop()) |current_node| {
-                var maybe_child: ?*parser.Node = try parser.nodeFirstChild(current_node);
-                while (maybe_child) |child_node| {
-                    child_node.owner = self_owner;
-                    try worklist.append(child_node);
-                    maybe_child = try parser.nodeNextSibling(child_node);
-                }
+            var current = child;
+            while (try w.get_next(child, current)) |current_node| {
+                current_node.owner = self_owner;
+                current = current_node;
             }
         }
 
@@ -318,25 +307,15 @@ pub const Node = struct {
         const new_node_owner = try parser.nodeOwnerDocument(new_node);
 
         if (new_node_owner == null or (new_node_owner.? != self_owner.?)) {
-
-            var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-            defer arena.deinit();
-            const allocator = arena.allocator();
-
-            var worklist = std.ArrayList(*parser.Node).init(allocator);
+            const w = Walker{};
             new_node.owner = self_owner;
-            try worklist.append(new_node);  
-
-            while (worklist.pop()) |current_node| {
-                var maybe_child: ?*parser.Node = try parser.nodeFirstChild(current_node);
-                while (maybe_child) |child| {
-                    child.owner = self_owner;
-                    try worklist.append(child);
-                    maybe_child = try parser.nodeNextSibling(child);
-                }
+            var current = new_node;
+            while (try w.get_next(new_node, current)) |current_node| {
+                current_node.owner = self_owner;
+                current = current_node;
             }
-            
         }
+
         if (ref_node_) |ref_node| {
             return Node.toInterface(try parser.nodeInsertBefore(self, new_node, ref_node));
         }
