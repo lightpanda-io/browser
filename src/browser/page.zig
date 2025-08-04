@@ -609,6 +609,7 @@ pub const Page = struct {
         self.window.setStorageShelf(
             try self.session.storage_shed.getOrPut(try self.origin(self.arena)),
         );
+        try self.window.replaceLocation(.{ .url = try self.url.toWebApi(self.arena) });
     }
 
     pub const MouseEvent = struct {
