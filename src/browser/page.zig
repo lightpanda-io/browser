@@ -398,6 +398,11 @@ pub const Page = struct {
         });
     }
 
+    pub fn setCurrentScript(self: *Page, script: ?*parser.Script) !void {
+        const html_doc = self.window.document;
+        try parser.documentHTMLSetCurrentScript(html_doc, script);
+    }
+
     pub fn documentIsLoaded(self: *Page) void {
         if (self.load_state != .parsing) {
             // Ideally, documentIsLoaded would only be called once, but if a
@@ -909,6 +914,7 @@ pub export fn scriptAddedCallback(ctx: ?*anyopaque, element: ?*parser.Element) c
         // if we're planning on navigating to another page, don't run this script
         return;
     }
+
     self.script_manager.addFromElement(element.?) catch |err| {
         log.warn(.browser, "dynamcic script", .{ .err = err });
     };

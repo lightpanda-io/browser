@@ -231,6 +231,8 @@ const Command = struct {
             \\                disabling host verification.
             \\
             \\--http_proxy    The HTTP proxy to use for all HTTP requests.
+            \\                A username:password can be included to use basic
+            \\                authentication.
             \\                Defaults to none.
             \\
             \\--proxy_bearer_token

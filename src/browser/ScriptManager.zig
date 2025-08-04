@@ -37,16 +37,16 @@ page: *Page,
 // Only once this is true can deferred scripts be run
 static_scripts_done: bool,
 
-// when async_count == 0 and static_script_done == true, the document is completed
-// loading (i.e. page.documentIsComplete should be called).
-async_count: usize,
+// List of async scripts. We don't care about the execution order of these, but
+// on shutdown/abort, we need to co cleanup any pending ones.
+asyncs: OrderList,
 
 // Normal scripts (non-deffered & non-async). These must be executed ni order
 scripts: OrderList,
 
 // List of deferred scripts. These must be executed in order, but only once
 // dom_loaded == true,
-deferred: OrderList,
+deferreds: OrderList,
 
 client: *HttpClient,
 allocator: Allocator,
@@ -60,9 +60,9 @@ pub fn init(browser: *Browser, page: *Page) ScriptManager {
     const allocator = browser.allocator;
     return .{
         .page = page,
+        .asyncs = .{},
         .scripts = .{},
-        .deferred = .{},
-        .async_count = 0,
+        .deferreds = .{},
         .allocator = allocator,
         .client = browser.http_client,
         .static_scripts_done = false,
@@ -77,8 +77,9 @@ pub fn deinit(self: *ScriptManager) void {
 }
 
 pub fn reset(self: *ScriptManager) void {
+    self.clearList(&self.asyncs);
     self.clearList(&self.scripts);
-    self.clearList(&self.deferred);
+    self.clearList(&self.deferreds);
     self.static_scripts_done = false;
 }
 
@@ -200,15 +201,9 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
         return;
     }
 
-    if (self.getList(&pending_script.script)) |list| {
-        pending_script.node = .{.data = pending_script};
-        list.append(&pending_script.node);
-    } else {
-        // async scripts don't get added to a list, because we can execute
-        // them in any order
-        std.debug.assert(script.is_async);
-        self.async_count += 1;
-    }
+    const list = self.getList(&pending_script.script);
+    pending_script.node = .{ .data = pending_script };
+    list.append(&pending_script.node);
 
     errdefer pending_script.deinit();
 
@@ -282,7 +277,7 @@ fn evaluate(self: *ScriptManager) void {
         return;
     }
 
-    while (self.deferred.first) |n| {
+    while (self.deferreds.first) |n| {
         var pending_script = n.data;
         if (pending_script.complete == false) {
             return;
@@ -295,7 +290,7 @@ fn evaluate(self: *ScriptManager) void {
     // state changes (this ultimately triggers the DOMContentLoaded event)
     page.documentIsLoaded();
 
-    if (self.async_count == 0) {
+    if (self.asyncs.first == null) {
         // if we're here, then its like `asyncDone`
         // 1 - there are no async scripts pending
         // 2 - we checkecked static_scripts_done == true above
@@ -306,28 +301,26 @@ fn evaluate(self: *ScriptManager) void {
 }
 
 pub fn isDone(self: *const ScriptManager) bool {
-    return self.async_count == 0 and // there are no more async scripts
+    return self.asyncs.first == null and // there are no more async scripts
         self.static_scripts_done and // and we've finished parsing the HTML to queue all <scripts>
         self.scripts.first == null and // and there are no more <script src=> to wait for
-        self.deferred.first == null; // and there are no more <script defer src=> to wait for
+        self.deferreds.first == null; // and there are no more <script defer src=> to wait for
 }
 
 fn asyncDone(self: *ScriptManager) void {
-    self.async_count -= 1;
     if (self.isDone()) {
         // then the document is considered complete
         self.page.documentIsComplete();
     }
 }
 
-fn getList(self: *ScriptManager, script: *const Script) ?*OrderList {
+fn getList(self: *ScriptManager, script: *const Script) *OrderList {
     if (script.is_defer) {
-        return &self.deferred;
+        return &self.deferreds;
     }
 
     if (script.is_async) {
-        // async don't need to execute in order.
-        return null;
+        return &self.asyncs;
     }
 
     return &self.scripts;
@@ -389,12 +382,7 @@ const PendingScript = struct {
             manager.buffer_pool.release(script.source.remote);
         }
 
-        if (manager.getList(script)) |list| {
-            list.remove(&self.node);
-        } else {
-            std.debug.assert(script.is_async);
-            manager.asyncDone();
-        }
+        manager.getList(script).remove(&self.node);
     }
 
     fn startCallback(self: *PendingScript, transfer: *HttpClient.Transfer) !void {
@@ -429,7 +417,6 @@ const PendingScript = struct {
 
         // @newhttp TODO: max-length enforcement ??
         try self.script.source.remote.appendSlice(self.manager.allocator, data);
-
     }
 
     fn doneCallback(self: *PendingScript) void {
@@ -438,8 +425,9 @@ const PendingScript = struct {
         const manager = self.manager;
         if (self.script.is_async) {
             // async script can be evaluated immediately
-            defer self.deinit();
             self.script.eval(self.manager.page);
+            self.deinit();
+            manager.asyncDone();
         } else {
             self.complete = true;
             manager.evaluate();
@@ -448,10 +436,10 @@ const PendingScript = struct {
 
     fn errorCallback(self: *PendingScript, err: anyerror) void {
         log.warn(.http, "script fetch error", .{ .req = self.script.url, .err = err });
-        defer self.deinit();
+        const manager = self.manager;
+        self.deinit();
 
-        // this script might have been blocking others;
-        self.manager.evaluate();
+        manager.evaluate();
     }
 };
 
@@ -488,6 +476,14 @@ const Script = struct {
     };
 
     fn eval(self: *Script, page: *Page) void {
+        page.setCurrentScript(@ptrCast(self.element)) catch |err| {
+            log.err(.browser, "set document script", .{ .err = err });
+            return;
+        };
+
+        defer page.setCurrentScript(null) catch |err| {
+            log.err(.browser, "clear document script", .{ .err = err });
+        };
 
         // inline scripts aren't cached. remote ones are.
         const cacheable = self.source == .remote;
@@ -643,7 +639,7 @@ const BufferPool = struct {
         };
 
         b.clearRetainingCapacity();
-        node.data = b;
+        node.* = .{ .data = b };
         self.count += 1;
         self.available.append(node);
     }
