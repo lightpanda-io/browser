@@ -38,8 +38,8 @@ const Http = @This();
 
 opts: Opts,
 client: *Client,
-ca_blob: c.curl_blob,
-cert_arena: ArenaAllocator,
+ca_blob: ?c.curl_blob,
+arena: ArenaAllocator,
 
 pub fn init(allocator: Allocator, opts: Opts) !Http {
     try errorCheck(c.curl_global_init(c.CURL_GLOBAL_SSL));
@@ -49,41 +49,58 @@ pub fn init(allocator: Allocator, opts: Opts) !Http {
         std.debug.print("curl version: {s}\n\n", .{c.curl_version()});
     }
 
-    var cert_arena = ArenaAllocator.init(allocator);
-    errdefer cert_arena.deinit();
-    const ca_blob = try loadCerts(allocator, cert_arena.allocator());
+    var arena = ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
 
-    var client = try Client.init(allocator, ca_blob, opts);
+    var adjusted_opts = opts;
+    if (opts.proxy_bearer_token) |bt| {
+        adjusted_opts.proxy_bearer_token = try std.fmt.allocPrintZ(
+            arena.allocator(),
+            "Proxy-Authorization: Bearer {s}",
+            .{bt},
+        );
+    }
+
+    var ca_blob: ?c.curl_blob = null;
+    if (opts.tls_verify_host) {
+        ca_blob = try loadCerts(allocator, arena.allocator());
+    }
+
+    var client = try Client.init(allocator, ca_blob, adjusted_opts);
     errdefer client.deinit();
 
     return .{
-        .opts = opts,
+        .arena = arena,
         .client = client,
         .ca_blob = ca_blob,
-        .cert_arena = cert_arena,
+        .opts = adjusted_opts,
     };
 }
 
 pub fn deinit(self: *Http) void {
     self.client.deinit();
     c.curl_global_cleanup();
-    self.cert_arena.deinit();
+    self.arena.deinit();
 }
 
 pub fn newConnection(self: *Http) !Connection {
-    return Connection.init(self.ca_blob, self.opts);
+    return Connection.init(self.ca_blob, &self.opts);
 }
 
 pub const Connection = struct {
     easy: *c.CURL,
+    opts: Connection.Opts,
 
-    // Is called by Handles when already partially initialized. Done like this
-    // so that we have a stable pointer to error_buffer.
-    pub fn init(ca_blob: c.curl_blob, opts: Opts) !Connection {
+    const Opts = struct {
+        proxy_bearer_token: ?[:0]const u8,
+    };
+
+    // pointer to opts is not stable, don't hold a reference to it!
+    pub fn init(ca_blob_: ?c.curl_blob, opts: *const Http.Opts) !Connection {
         const easy = c.curl_easy_init() orelse return error.FailedToInitializeEasy;
         errdefer _ = c.curl_easy_cleanup(easy);
 
-        // timeouts
+      // timeouts
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, @intCast(opts.timeout_ms))));
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CONNECTTIMEOUT_MS, @as(c_long, @intCast(opts.connect_timeout_ms))));
 
@@ -92,10 +109,36 @@ pub const Connection = struct {
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_FOLLOWLOCATION, @as(c_long, 2)));
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_REDIR_PROTOCOLS_STR, "HTTP,HTTPS")); // remove FTP and FTPS from the default
 
+        // proxy
+        if (opts.http_proxy) |proxy| {
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY, proxy.ptr));
+        }
+
         // tls
-        // try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 0)));
-        // try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 0)));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CAINFO_BLOB, ca_blob));
+        if (ca_blob_) |ca_blob| {
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CAINFO_BLOB, ca_blob));
+            if (opts.http_proxy != null) {
+                // Note, this can be difference for the proxy and for the main
+                // request. Might be something worth exposting as command
+                // line arguments at some point.
+                try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_CAINFO_BLOB , ca_blob));
+            }
+        } else {
+            std.debug.assert(opts.tls_verify_host == false);
+
+            // Verify peer checks that the cert is signed by a CA, verify host makes sure the
+            // cert contains the server name.
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 0)));
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 0)));
+
+            if (opts.http_proxy != null) {
+                // Note, this can be difference for the proxy and for the main
+                // request. Might be something worth exposting as command
+                // line arguments at some point.
+                try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_SSL_VERIFYHOST, @as(c_long, 0)));
+                try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_SSL_VERIFYPEER , @as(c_long, 0)));
+            }
+        }
 
         // debug
         if (comptime Http.ENABLE_DEBUG) {
@@ -104,6 +147,9 @@ pub const Connection = struct {
 
         return .{
             .easy = easy,
+            .opts = .{
+                .proxy_bearer_token = opts.proxy_bearer_token,
+            },
         };
     }
 
@@ -116,7 +162,15 @@ pub const Connection = struct {
     }
 
     pub fn setMethod(self: *const Connection, method: Method) !void {
-        try Http.setMethod(self.easy, method);
+        const easy = self.easy;
+        switch (method) {
+            .GET => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPGET, @as(c_long, 1))),
+            .POST => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPPOST, @as(c_long, 1))),
+            .PUT => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, "put")),
+            .DELETE => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, "delete")),
+            .HEAD => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, "head")),
+            .OPTIONS => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, "options")),
+        }
     }
 
     pub fn setBody(self: *const Connection, body: []const u8) !void {
@@ -125,10 +179,24 @@ pub const Connection = struct {
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_POSTFIELDS, body.ptr));
     }
 
+    pub fn commonHeaders(self: *const Connection) *c.curl_slist {
+        var header_list = c.curl_slist_append(null, "User-Agent: Lightpanda/1.0");
+        if (self.opts.proxy_bearer_token) |hdr| {
+            header_list = c.curl_slist_append(header_list, hdr);
+        }
+        return header_list;
+    }
+
     pub fn request(self: *const Connection) !u16 {
-        try errorCheck(c.curl_easy_perform(self.easy));
+        const easy = self.easy;
+
+        const header_list = self.commonHeaders();
+        defer c.curl_slist_free_all(header_list);
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPHEADER, header_list));
+
+        try errorCheck(c.curl_easy_perform(easy));
         var http_code: c_long = undefined;
-        try errorCheck(c.curl_easy_getinfo(self.easy, c.CURLINFO_RESPONSE_CODE, &http_code));
+        try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_RESPONSE_CODE, &http_code));
         if (http_code < 0 or http_code > std.math.maxInt(u16)) {
             return 0;
         }
@@ -136,17 +204,6 @@ pub const Connection = struct {
     }
 };
 
-// used by Connection and Handle
-pub fn setMethod(easy: *c.CURL, method: Method) !void {
-    switch (method) {
-        .GET => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPGET, @as(c_long, 1))),
-        .POST => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPPOST, @as(c_long, 1))),
-        .PUT => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, "put")),
-        .DELETE => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, "delete")),
-        .HEAD => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, "head")),
-        .OPTIONS => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, "options")),
-    }
-}
 
 pub fn errorCheck(code: c.CURLcode) errors.Error!void {
     if (code == c.CURLE_OK) {
@@ -173,6 +230,8 @@ pub const Opts = struct {
     tls_verify_host: bool = true,
     connect_timeout_ms: u31 = 5000,
     max_concurrent_transfers: u8 = 5,
+    http_proxy: ?[:0]const u8 = null,
+    proxy_bearer_token: ?[:0]const u8 = null,
 };
 
 pub const Method = enum {
@@ -182,16 +241,6 @@ pub const Method = enum {
     DELETE,
     HEAD,
     OPTIONS,
-};
-
-pub const ProxyType = enum {
-    forward,
-    connect,
-};
-
-pub const ProxyAuth = union(enum) {
-    basic: struct { user_pass: []const u8 },
-    bearer: struct { token: []const u8 },
 };
 
 // TODO: on BSD / Linux, we could just read the PEM file directly.
