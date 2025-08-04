@@ -202,16 +202,26 @@ pub const Node = struct {
         const new_node_owner = try parser.nodeOwnerDocument(child);
 
         if (new_node_owner == null or (new_node_owner.? != self_owner.?)) {
+            var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            defer arena.deinit();
+
+            const allocator = arena.allocator();
+            var worklist = std.ArrayList(*parser.Node).init(allocator);
+
             child.owner = self_owner;
-            // recursively set the owner for all children
-            var next: ?*parser.Node = child;
-            while (next) |n| {
-                next = try parser.nodeFirstChild(n) orelse break;
-                if (next) |child_next| {
-                    child_next.owner = self_owner;
+            try worklist.append(child);  
+
+            // change ownerDocument of all children of a given node
+            while (worklist.pop()) |current_node| {
+                var maybe_child: ?*parser.Node = try parser.nodeFirstChild(current_node);
+                while (maybe_child) |child_node| {
+                    child_node.owner = self_owner;
+                    try worklist.append(child_node);
+                    maybe_child = try parser.nodeNextSibling(child_node);
                 }
             }
         }
+
         // TODO: DocumentFragment special case
         const res = try parser.nodeAppendChild(self, child);
         return try Node.toInterface(res);
@@ -306,15 +316,26 @@ pub const Node = struct {
     pub fn _insertBefore(self: *parser.Node, new_node: *parser.Node, ref_node_: ?*parser.Node) !Union {
         const self_owner = try parser.nodeOwnerDocument(self);
         const new_node_owner = try parser.nodeOwnerDocument(new_node);
+
         if (new_node_owner == null or (new_node_owner.? != self_owner.?)) {
+
+            var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            defer arena.deinit();
+            const allocator = arena.allocator();
+
+            var worklist = std.ArrayList(*parser.Node).init(allocator);
             new_node.owner = self_owner;
-            var next: ?*parser.Node = new_node;
-            while (next) |n| {
-                next = try parser.nodeFirstChild(n) orelse break;
-                if (next) |child_next| {
-                    child_next.owner = self_owner;
+            try worklist.append(new_node);  
+
+            while (worklist.pop()) |current_node| {
+                var maybe_child: ?*parser.Node = try parser.nodeFirstChild(current_node);
+                while (maybe_child) |child| {
+                    child.owner = self_owner;
+                    try worklist.append(child);
+                    maybe_child = try parser.nodeNextSibling(child);
                 }
             }
+            
         }
         if (ref_node_) |ref_node| {
             return Node.toInterface(try parser.nodeInsertBefore(self, new_node, ref_node));
