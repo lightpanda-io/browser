@@ -34,6 +34,9 @@ const ScriptManager = @This();
 
 page: *Page,
 
+// used to prevent recursive evalution
+is_evaluating: bool,
+
 // Only once this is true can deferred scripts be run
 static_scripts_done: bool,
 
@@ -47,6 +50,8 @@ scripts: OrderList,
 // List of deferred scripts. These must be executed in order, but only once
 // dom_loaded == true,
 deferreds: OrderList,
+
+shutdown: bool = false,
 
 client: *HttpClient,
 allocator: Allocator,
@@ -63,6 +68,7 @@ pub fn init(browser: *Browser, page: *Page) ScriptManager {
         .asyncs = .{},
         .scripts = .{},
         .deferreds = .{},
+        .is_evaluating = false,
         .allocator = allocator,
         .client = browser.http_client,
         .static_scripts_done = false,
@@ -72,6 +78,7 @@ pub fn init(browser: *Browser, page: *Page) ScriptManager {
 }
 
 pub fn deinit(self: *ScriptManager) void {
+    self.reset();
     self.buffer_pool.deinit();
     self.script_pool.deinit();
 }
@@ -193,7 +200,7 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
     };
 
     if (source == .@"inline") {
-        // if we're here, it means that we have pending scripts (i.e. self.ordered
+        // if we're here, it means that we have pending scripts (i.e. self.scripts
         // is not empty). Because the script is inline, it's complete/ready, but
         // we need to process them in order
         pending_script.complete = true;
@@ -201,9 +208,8 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
         return;
     }
 
-    const list = self.getList(&pending_script.script);
     pending_script.node = .{ .data = pending_script };
-    list.append(&pending_script.node);
+    self.getList(&pending_script.script).append(&pending_script.node);
 
     errdefer pending_script.deinit();
 
@@ -255,7 +261,17 @@ pub fn staticScriptsDone(self: *ScriptManager) void {
 // try to evaluate completed scripts (in order). This is called whenever a script
 // is completed.
 fn evaluate(self: *ScriptManager) void {
+    if (self.is_evaluating) {
+        // It's possible for a script.eval to cause evaluate to be called again.
+        // This is particularly true with blockingGet, but even without this,
+        // it's theoretically possible (but unlikely). We could make this work
+        // but there's little reason to support the complexity.
+        return;
+    }
+
     const page = self.page;
+    self.is_evaluating = true;
+    defer self.is_evaluating = false;
 
     while (self.scripts.first) |n| {
         var pending_script = n.data;
@@ -269,8 +285,8 @@ fn evaluate(self: *ScriptManager) void {
     if (self.static_scripts_done == false) {
         // We can only execute deferred scripts if
         // 1 - all the normal scripts are done
-        // 2 - and we've loaded all the normal scripts
-        // The last one isn't obvious, but it's possible for self.scripts to/
+        // 2 - we've finished parsing the HTML and at least queued all the scripts
+        // The last one isn't obvious, but it's possible for self.scripts to
         // be empty not because we're done executing all the normal scripts
         // but because we're done executing some (or maybe none), but we're still
         // parsing the HTML.
@@ -315,12 +331,15 @@ fn asyncDone(self: *ScriptManager) void {
 }
 
 fn getList(self: *ScriptManager, script: *const Script) *OrderList {
-    if (script.is_defer) {
-        return &self.deferreds;
-    }
-
+    // When a script has both the async and defer flag set, it should be
+    // treated as async. Async is newer, so some websites use both so that
+    // if async isn't known, it'll fallback to defer.
     if (script.is_async) {
         return &self.asyncs;
+    }
+
+    if (script.is_defer) {
+        return &self.deferreds;
     }
 
     return &self.scripts;
@@ -375,14 +394,20 @@ const PendingScript = struct {
     manager: *ScriptManager,
 
     fn deinit(self: *PendingScript) void {
-        var manager = self.manager;
         const script = &self.script;
+        const manager = self.manager;
 
         if (script.source == .remote) {
             manager.buffer_pool.release(script.source.remote);
         }
-
         manager.getList(script).remove(&self.node);
+    }
+
+    fn remove(self: *PendingScript) void {
+        if (self.node) |*node| {
+            self.manager.getList(&self.script).remove(node);
+            self.node = null;
+        }
     }
 
     fn startCallback(self: *PendingScript, transfer: *HttpClient.Transfer) !void {
@@ -392,19 +417,25 @@ const PendingScript = struct {
 
     fn headerCallback(self: *PendingScript, transfer: *HttpClient.Transfer) !void {
         const header = &transfer.response_header.?;
-        if (header.status != 200) {
-            return error.InvalidStatusCode;
-        }
-
-        // @newhttp TODO: pre size based on content-length
-        // @newhttp TODO: max-length enfocement
-        self.script.source = .{ .remote = self.manager.buffer_pool.get() };
-
         log.debug(.http, "script header", .{
             .req = transfer,
             .status = header.status,
             .content_type = header.contentType(),
         });
+
+        if (header.status != 200) {
+            return error.InvalidStatusCode;
+        }
+
+        // If this isn't true, then we'll likely leak memory. If you don't
+        // set `CURLOPT_SUPPRESS_CONNECT_HEADERS` and CONNECT to a proxy, this
+        // will fail. This assertion exists to catch incorrect assumptions about
+        // how libcurl works, or about how we've configured it.
+        std.debug.assert(self.script.source.remote.capacity == 0);
+
+        // @newhttp TODO: pre size based on content-length
+        // @newhttp TODO: max-length enfocement
+        self.script.source = .{ .remote = self.manager.buffer_pool.get() };
     }
 
     fn dataCallback(self: *PendingScript, transfer: *HttpClient.Transfer, data: []const u8) !void {
@@ -436,8 +467,14 @@ const PendingScript = struct {
 
     fn errorCallback(self: *PendingScript, err: anyerror) void {
         log.warn(.http, "script fetch error", .{ .req = self.script.url, .err = err });
+
         const manager = self.manager;
+
         self.deinit();
+
+        if (manager.shutdown) {
+            return;
+        }
 
         manager.evaluate();
     }

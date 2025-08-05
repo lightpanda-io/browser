@@ -118,17 +118,12 @@ pub const Session = struct {
 
         std.debug.assert(self.page != null);
 
-        // Cleanup is a bit sensitive. We could still have inflight I/O. For
-        // example, we could have an XHR request which is still in the connect
-        // phase. It's important that we clean these up, as they're holding onto
-        // limited resources (like our fixed-sized http state pool).
-        //
+        self.page.?.deinit();
+        self.page = null;
+
         // RemoveJsContext() will execute the destructor of any type that
         // registered a destructor (e.g. XMLHttpRequest).
         self.executor.removeJsContext();
-
-        self.page.?.deinit();
-        self.page = null;
 
         // clear netsurf memory arena.
         parser.deinit();
