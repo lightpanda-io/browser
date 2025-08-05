@@ -307,27 +307,28 @@ pub const Node = struct {
     }
 
     pub fn _insertBefore(self: *parser.Node, new_node: *parser.Node, ref_node_: ?*parser.Node) !Union {
+        if (ref_node_ == null) {
+            return _appendChild(self, new_node);
+        }
+
         const self_owner = try parser.nodeOwnerDocument(self);
         const new_node_owner = try parser.nodeOwnerDocument(new_node);
 
-        // If the node to be inserted has a different ownerDocument than the parent node, 
-        // modern browsers automatically adopt the node and its descendants into 
-        // the parent's ownerDocument. 
+        // If the node to be inserted has a different ownerDocument than the parent node,
+        // modern browsers automatically adopt the node and its descendants into
+        // the parent's ownerDocument.
         // This process is known as adoption.
-        // (7.1) https://dom.spec.whatwg.org/#concept-node-insert 
+        // (7.1) https://dom.spec.whatwg.org/#concept-node-insert
         if (new_node_owner == null or (new_node_owner.? != self_owner.?)) {
             const w = Walker{};
             var current = new_node;
-            while(true) {
+            while (true) {
                 current.owner = self_owner;
                 current = try w.get_next(new_node, current) orelse break;
             }
         }
 
-        if (ref_node_) |ref_node| {
-            return Node.toInterface(try parser.nodeInsertBefore(self, new_node, ref_node));
-        }
-        return _appendChild(self, new_node);
+        return Node.toInterface(try parser.nodeInsertBefore(self, new_node, ref_node_.?));
     }
 
     pub fn _isDefaultNamespace(self: *parser.Node, namespace: ?[]const u8) !bool {
