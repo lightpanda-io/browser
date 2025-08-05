@@ -206,7 +206,7 @@ pub const Node = struct {
         // the parent's ownerDocument.
         // This process is known as adoption.
         // (7.1) https://dom.spec.whatwg.org/#concept-node-insert
-        if (child_owner == null or (child_owner.? != self_owner.?)) {
+        if (child_owner == null or (self_owner != null and child_owner.? != self_owner.?)) {
             const w = Walker{};
             var current = child;
             while (true) {
@@ -319,7 +319,7 @@ pub const Node = struct {
         // the parent's ownerDocument.
         // This process is known as adoption.
         // (7.1) https://dom.spec.whatwg.org/#concept-node-insert
-        if (new_node_owner == null or (new_node_owner.? != self_owner.?)) {
+        if (new_node_owner == null or (self_owner != null and new_node_owner.? != self_owner.?)) {
             const w = Walker{};
             var current = new_node;
             while (true) {
