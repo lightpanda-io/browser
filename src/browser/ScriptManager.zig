@@ -23,6 +23,7 @@ const parser = @import("netsurf.zig");
 
 const Env = @import("env.zig").Env;
 const Page = @import("page.zig").Page;
+const DataURI = @import("DataURI.zig");
 const Browser = @import("browser.zig").Browser;
 const HttpClient = @import("../http/Client.zig");
 const URL = @import("../url.zig").URL;
@@ -168,6 +169,9 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
     var source: Script.Source = undefined;
     var remote_url: ?[:0]const u8 = null;
     if (try parser.elementGetAttribute(element, "src")) |src| {
+        if (try DataURI.parse(page.arena, src)) |data_uri| {
+            source = .{ .@"inline" = data_uri };
+        }
         remote_url = try URL.stitch(page.arena, src, page.url.raw, .{ .null_terminated = true });
         source = .{ .remote = .{} };
     } else {
