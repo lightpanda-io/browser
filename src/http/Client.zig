@@ -24,6 +24,7 @@ const Http = @import("Http.zig");
 const c = Http.c;
 
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 
 const errorCheck = Http.errorCheck;
 const errorMCheck = Http.errorMCheck;
@@ -43,17 +44,48 @@ pub const Method = Http.Method;
 // those other http requests.
 pub const Client = @This();
 
+// count of active requests
 active: usize,
+
+// curl has 2 APIs: easy and multi. Multi is like a combination of some I/O block
+// (e.g. epoll) and a bunch of pools. You add/remove easys to the multiple and
+// then poll the multi.
 multi: *c.CURLM,
+
+// Our easy handles. Although the multi contains buffer pools and connections
+// pools, re-using the easys is still recommended. This acts as our own pool
+// of easys.
 handles: Handles,
+
+// When handles has no more available easys, requests get queued.
 queue: RequestQueue,
-allocator: Allocator,
-transfer_pool: std.heap.MemoryPool(Transfer),
+
+// Memory pool for Queue nodes.
 queue_node_pool: std.heap.MemoryPool(RequestQueue.Node),
+
+// The main app allocator
+allocator: Allocator,
+
+// Once we have a handle/easy to process a request with, we create a Transfer
+// which contains the Request as well as any state we need to process the
+// request. These wil come and go with each request.
+transfer_pool: std.heap.MemoryPool(Transfer),
+
 //@newhttp
 http_proxy: ?std.Uri = null,
+
+// see ScriptManager.blockingGet
 blocking: Handle,
+
+// Boolean to check that we don't make a blocking request while an existing
+// blocking request is already being processed.
 blocking_active: if (builtin.mode == .Debug) bool else void = if (builtin.mode == .Debug) false else {},
+
+// The only place this is meant to be used is in `makeRequest` BEFORE `perform`
+// is called. It is used to generate our Cookie header. It can be used for other
+// purposes, but keep in mind that, while single-threaded, calls like makeRequest
+// can result in makeRequest being re-called (from a doneCallback).
+arena: ArenaAllocator,
 
 const RequestQueue = std.DoublyLinkedList(Request);
 
@@ -85,6 +117,7 @@ pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts) !*Clie
         .allocator = allocator,
         .transfer_pool = transfer_pool,
         .queue_node_pool = queue_node_pool,
+        .arena = ArenaAllocator.init(allocator),
     };
 
     return client;
@@ -99,6 +132,7 @@ pub fn deinit(self: *Client) void {
 
     self.transfer_pool.deinit();
     self.queue_node_pool.deinit();
+    self.arena.deinit();
     self.allocator.destroy(self);
 }
 
@@ -176,6 +210,13 @@ fn makeRequest(self: *Client, handle: *Handle, req: Request) !void {
     const conn = handle.conn;
     const easy = conn.easy;
 
+    // we need this for cookies
+    const uri = std.Uri.parse(req.url) catch |err| {
+        self.handles.release(handle);
+        log.warn(.http, "invalid url", .{ .err = err, .url = req.url });
+        return;
+    };
+
     const header_list = blk: {
         errdefer self.handles.release(handle);
         try conn.setMethod(req.method);
@@ -192,6 +233,23 @@ fn makeRequest(self: *Client, handle: *Handle, req: Request) !void {
             header_list = c.curl_slist_append(header_list, ct);
         }
 
+        {
+            const COOKIE_HEADER = "Cookie: ";
+            const aa = self.arena.allocator();
+            defer _ = self.arena.reset(.{ .retain_with_limit = 2048 });
+
+            var arr: std.ArrayListUnmanaged(u8) = .{};
+            try arr.appendSlice(aa, COOKIE_HEADER);
+            try req.cookie.forRequest(&uri, arr.writer(aa));
+
+            if (arr.items.len > COOKIE_HEADER.len) {
+                try arr.append(aa, 0); //null terminate
+
+                // copies the value
+                header_list = c.curl_slist_append(header_list, @ptrCast(arr.items.ptr));
+            }
+        }
+
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPHEADER, header_list));
 
         break :blk header_list;
@@ -203,12 +261,14 @@ fn makeRequest(self: *Client, handle: *Handle, req: Request) !void {
         const transfer = try self.transfer_pool.create();
         transfer.* = .{
             .id = 0,
+            .uri = uri,
             .req = req,
             .ctx = req.ctx,
             .handle = handle,
             ._request_header_list = header_list,
         };
         errdefer self.transfer_pool.destroy(transfer);
+
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PRIVATE, transfer));
 
         try errorMCheck(c.curl_multi_add_handle(self.multi, easy));
@@ -370,11 +430,27 @@ const Handle = struct {
     }
 };
 
+pub const RequestCookie = struct {
+    is_http: bool,
+    is_navigation: bool,
+    origin: *const std.Uri,
+    jar: *@import("../browser/storage/cookie.zig").Jar,
+
+    fn forRequest(self: *const RequestCookie, uri: *const std.Uri, writer: anytype) !void {
+        return self.jar.forRequest(uri, writer, .{
+            .is_http = self.is_http,
+            .is_navigation = self.is_navigation,
+            .origin_uri = self.origin,
+        });
+    }
+};
+
 pub const Request = struct {
     method: Method,
     url: [:0]const u8,
     body: ?[]const u8 = null,
     content_type: ?[:0]const u8 = null,
+    cookie: RequestCookie,
 
     // arbitrary data that can be associated with this request
     ctx: *anyopaque = undefined,
@@ -391,6 +467,7 @@ pub const Transfer = struct {
     id: usize,
     req: Request,
     ctx: *anyopaque,
+    uri: std.Uri, // used for setting/getting the cookie
 
     // We'll store the response header here
     response_header: ?Header = null,
@@ -479,16 +556,28 @@ pub const Transfer = struct {
             return buf_len;
         }
 
-        const CONTENT_TYPE_LEN = "content-type:".len;
-
         var hdr = &transfer.response_header.?;
+
         if (hdr._content_type_len == 0) {
+            const CONTENT_TYPE_LEN = "content-type:".len;
             if (buf_len > CONTENT_TYPE_LEN) {
                 if (std.ascii.eqlIgnoreCase(header[0..CONTENT_TYPE_LEN], "content-type:")) {
                     const value = std.mem.trimLeft(u8, header[CONTENT_TYPE_LEN..], " ");
                     const len = @min(value.len, hdr._content_type.len);
                     hdr._content_type_len = len;
                     @memcpy(hdr._content_type[0..len], value[0..len]);
+                }
+            }
+        }
+
+        {
+            const SET_COOKIE_LEN = "set-cookie:".len;
+            if (buf_len > SET_COOKIE_LEN) {
+                if (std.ascii.eqlIgnoreCase(header[0..SET_COOKIE_LEN], "set-cookie:")) {
+                    const value = std.mem.trimLeft(u8, header[SET_COOKIE_LEN..], " ");
+                    transfer.req.cookie.jar.populateFromResponse(&transfer.uri, value) catch |err| {
+                        log.err(.http, "set cookie", .{ .err = err, .req = transfer });
+                    };
                 }
             }
         }

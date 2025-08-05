@@ -426,6 +426,19 @@ pub const Page = struct {
         return arr.items;
     }
 
+    const RequestCookieOpts = struct {
+        is_http: bool = true,
+        is_navigation: bool = false,
+    };
+    pub fn requestCookie(self: *const Page, opts: RequestCookieOpts) HttpClient.RequestCookie {
+        return .{
+            .jar = self.cookie_jar,
+            .origin = &self.url.uri,
+            .is_http = opts.is_http,
+            .is_navigation = opts.is_navigation,
+        };
+    }
+
     // spec reference: https://html.spec.whatwg.org/#document-lifecycle
     pub fn navigate(self: *Page, request_url: []const u8, opts: NavigateOpts) !void {
         if (self.mode != .pre) {
@@ -453,17 +466,22 @@ pub const Page = struct {
         }
 
         const owned_url = try self.arena.dupeZ(u8, request_url);
+        self.url = try URL.parse(owned_url, null);
 
-        try self.http_client.request(.{
+        self.http_client.request(.{
             .ctx = self,
             .url = owned_url,
             .method = opts.method,
             .body = opts.body,
+            .cookie = self.requestCookie(.{ .is_navigation = true }),
             .header_done_callback = pageHeaderDoneCallback,
             .data_callback = pageDataCallback,
             .done_callback = pageDoneCallback,
             .error_callback = pageErrorCallback,
-        });
+        }) catch |err| {
+            log.err(.http, "navigate request", .{ .url = owned_url, .err = err });
+            return err;
+        };
 
         self.session.browser.notification.dispatch(.page_navigate, &.{
             .opts = opts,
