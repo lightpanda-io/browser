@@ -640,7 +640,7 @@ pub const HTMLImageElement = struct {
         pub const prototype = *HTMLImageElement;
 
         pub fn constructor(width: ?u32, height: ?u32, page: *const Page) !*parser.Image {
-            const element = try parser.documentCreateHTMLElement(parser.documentHTMLToDocument(page.window.document), "img");
+            const element = try parser.documentCreateElement(parser.documentHTMLToDocument(page.window.document), "img");
             const image: *parser.Image = @ptrCast(element);
             if (width) |width_| try parser.imageSetWidth(image, width_);
             if (height) |height_| try parser.imageSetHeight(image, height_);
