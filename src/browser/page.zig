@@ -153,6 +153,8 @@ pub const Page = struct {
     }
 
     pub fn deinit(self: *Page) void {
+        self.script_manager.shutdown = true;
+
         self.http_client.abort();
         self.script_manager.deinit();
     }
@@ -268,6 +270,9 @@ pub const Page = struct {
         var scheduler = &self.scheduler;
         var http_client = self.http_client;
 
+        // for debugging
+        // defer self.printWaitAnalysis();
+
         while (true) {
             SW: switch (self.mode) {
                 .pre, .raw => {
@@ -343,6 +348,56 @@ pub const Page = struct {
                 return;
             }
             ms_remaining -= ms_elapsed;
+        }
+    }
+
+    fn printWaitAnalysis(self: *Page) void {
+        std.debug.print("mode: {s}\n", .{@tagName(std.meta.activeTag(self.mode))});
+        std.debug.print("load: {s}\n", .{@tagName(self.load_state)});
+        std.debug.print("active requests: {d}\n", .{self.http_client.active});
+
+        {
+            std.debug.print("\nscripts: {d}\n", .{self.script_manager.scripts.len});
+            var n_ = self.script_manager.scripts.first;
+            while (n_) |n| {
+                std.debug.print(" - {s} complete: {any}\n", .{ n.data.script.url, n.data.complete });
+                n_ = n.next;
+            }
+        }
+
+        {
+            std.debug.print("\ndeferreds: {d}\n", .{self.script_manager.deferreds.len});
+            var n_ = self.script_manager.deferreds.first;
+            while (n_) |n| {
+                std.debug.print(" - {s} complete: {any}\n", .{ n.data.script.url, n.data.complete });
+                n_ = n.next;
+            }
+        }
+
+        const now = std.time.milliTimestamp();
+        {
+            std.debug.print("\nasyncs: {d}\n", .{self.script_manager.asyncs.len});
+            var n_ = self.script_manager.asyncs.first;
+            while (n_) |n| {
+                std.debug.print(" - {s} complete: {any}\n", .{ n.data.script.url, n.data.complete });
+                n_ = n.next;
+            }
+        }
+
+        {
+            std.debug.print("\nprimary schedule: {d}\n", .{self.scheduler.primary.count()});
+            var it = self.scheduler.primary.iterator();
+            while (it.next()) |task| {
+                std.debug.print(" - {s} complete: {any}\n", .{ task.name, task.ms - now });
+            }
+        }
+
+        {
+            std.debug.print("\nsecondary schedule: {d}\n", .{self.scheduler.secondary.count()});
+            var it = self.scheduler.secondary.iterator();
+            while (it.next()) |task| {
+                std.debug.print(" - {s} complete: {any}\n", .{ task.name, task.ms - now });
+            }
         }
     }
 

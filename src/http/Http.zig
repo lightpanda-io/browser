@@ -141,6 +141,11 @@ pub const Connection = struct {
             }
         }
 
+        // compression, don't remove this. CloudFront will send gzip content
+        // even if we don't support it, and then it won't be decompressed.
+        // empty string means: use whatever's available
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_ACCEPT_ENCODING, ""));
+
         // debug
         if (comptime Http.ENABLE_DEBUG) {
             try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_VERBOSE, @as(c_long, 1)));
