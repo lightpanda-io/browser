@@ -85,7 +85,10 @@ pub const HTMLDocument = struct {
 
     pub fn get_cookie(_: *parser.DocumentHTML, page: *Page) ![]const u8 {
         var buf: std.ArrayListUnmanaged(u8) = .{};
-        try page.cookie_jar.forRequest(&page.url.uri, buf.writer(page.arena), .{ .navigation = true, .is_http = false });
+        try page.cookie_jar.forRequest(&page.url.uri, buf.writer(page.arena), .{
+            .is_http = false,
+            .is_navigation = true,
+        });
         return buf.items;
     }
 

@@ -81,7 +81,6 @@ pub const XMLHttpRequest = struct {
     proto: XMLHttpRequestEventTarget = XMLHttpRequestEventTarget{},
     arena: Allocator,
     transfer: ?*HttpClient.Transfer = null,
-    cookie_jar: *CookieJar,
     err: ?anyerror = null,
     last_dispatch: i64 = 0,
     send_flag: bool = false,
@@ -169,7 +168,6 @@ pub const XMLHttpRequest = struct {
             .headers = .{},
             .method = undefined,
             .state = .unsent,
-            .cookie_jar = page.cookie_jar,
         };
     }
 
@@ -378,6 +376,7 @@ pub const XMLHttpRequest = struct {
             .method = self.method,
             .body = self.request_body,
             .content_type = "Content-Type: text/plain; charset=UTF-8", // @newhttp TODO
+            .cookie = page.requestCookie(.{}),
             .start_callback = httpStartCallback,
             .header_callback = httpHeaderCallback,
             .header_done_callback = httpHeaderDoneCallback,
@@ -395,20 +394,6 @@ pub const XMLHttpRequest = struct {
         }
 
         log.debug(.http, "request start", .{ .method = self.method, .url = self.url, .source = "xhr" });
-
-        // @newhttp
-        // {
-        //     var arr: std.ArrayListUnmanaged(u8) = .{};
-        //     try self.cookie_jar.forRequest(&self.url.?.uri, arr.writer(self.arena), .{
-        //         .navigation = false,
-        //         .origin_uri = &self.origin_url.uri,
-        //         .is_http = true,
-        //     });
-
-        //     if (arr.items.len > 0) {
-        //         try request.addHeader("Cookie", arr.items, .{});
-        //     }
-        // }
         self.transfer = transfer;
     }
 
@@ -445,9 +430,6 @@ pub const XMLHttpRequest = struct {
 
         self.state = .loading;
         self.dispatchEvt("readystatechange");
-
-        // @newhttp
-        // try self.cookie_jar.populateFromResponse(self.request.?.request_uri, &header);
     }
 
     fn httpDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
