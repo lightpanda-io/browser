@@ -25,7 +25,6 @@ const Dump = @import("dump.zig");
 const State = @import("State.zig");
 const Env = @import("env.zig").Env;
 const Mime = @import("mime.zig").Mime;
-const DataURI = @import("datauri.zig").DataURI;
 const Session = @import("session.zig").Session;
 const Renderer = @import("renderer.zig").Renderer;
 const Window = @import("html/window.zig").Window;
