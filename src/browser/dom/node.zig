@@ -198,6 +198,23 @@ pub const Node = struct {
     // Methods
 
     pub fn _appendChild(self: *parser.Node, child: *parser.Node) !Union {
+        const self_owner = try parser.nodeOwnerDocument(self);
+        const child_owner = try parser.nodeOwnerDocument(child);
+
+        // If the node to be inserted has a different ownerDocument than the parent node, 
+        // modern browsers automatically adopt the node and its descendants into 
+        // the parent's ownerDocument. 
+        // This process is known as adoption.
+        // (7.1) https://dom.spec.whatwg.org/#concept-node-insert 
+        if (child_owner == null or (child_owner.? != self_owner.?)) {
+            const w = Walker{};
+            var current = child;
+            while (true) {
+                current.owner = self_owner;
+                current = try w.get_next(child, current) orelse break;
+            }
+        }
+
         // TODO: DocumentFragment special case
         const res = try parser.nodeAppendChild(self, child);
         return try Node.toInterface(res);
@@ -290,6 +307,23 @@ pub const Node = struct {
     }
 
     pub fn _insertBefore(self: *parser.Node, new_node: *parser.Node, ref_node_: ?*parser.Node) !Union {
+        const self_owner = try parser.nodeOwnerDocument(self);
+        const new_node_owner = try parser.nodeOwnerDocument(new_node);
+
+        // If the node to be inserted has a different ownerDocument than the parent node, 
+        // modern browsers automatically adopt the node and its descendants into 
+        // the parent's ownerDocument. 
+        // This process is known as adoption.
+        // (7.1) https://dom.spec.whatwg.org/#concept-node-insert 
+        if (new_node_owner == null or (new_node_owner.? != self_owner.?)) {
+            const w = Walker{};
+            var current = new_node;
+            while(true) {
+                current.owner = self_owner;
+                current = try w.get_next(new_node, current) orelse break;
+            }
+        }
+
         if (ref_node_) |ref_node| {
             return Node.toInterface(try parser.nodeInsertBefore(self, new_node, ref_node));
         }
@@ -718,5 +752,50 @@ test "Browser.DOM.node" {
         .{ "Node.ENTITY_REFERENCE_NODE", "5" },
         .{ "Node.ENTITY_NODE", "6" },
         .{ "Node.NOTATION_NODE", "12" },
+    }, .{});
+}
+
+test "Browser.DOM.node.owner" {
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html= 
+        \\  <div id="target-container">
+        \\     <p id="reference-node">
+        \\         I am the original reference node.
+        \\     </p>
+        \\  </div>"
+    });
+
+    defer runner.deinit();
+
+    try runner.testCases(&.{
+        .{
+            \\ const parser = new DOMParser();
+            \\ const newDoc = parser.parseFromString('<div id="new-node"><p>Hey</p><span>Marked</span></div>', 'text/html');
+         
+            \\ const newNode = newDoc.getElementById('new-node');
+
+            \\ const parent = document.getElementById('target-container');
+            \\ const referenceNode = document.getElementById('reference-node');
+            
+            \\ parent.insertBefore(newNode, referenceNode);
+            \\ const k = document.getElementById('new-node');
+            \\ const ptag = k.querySelector('p');
+            \\ const spanTag = k.querySelector('span');
+            \\ const anotherDoc = parser.parseFromString('<div id="another-new-node"></div>', 'text/html');
+            \\ const anotherNewNode = anotherDoc.getElementById('another-new-node');
+            \\
+            \\ parent.appendChild(anotherNewNode)
+            , 
+            "[object HTMLDivElement]",
+        },
+        
+        .{"parent.ownerDocument === newNode.ownerDocument", "true" },
+        .{"parent.ownerDocument === anotherNewNode.ownerDocument", "true"},
+        .{"newNode.firstChild.nodeName", "P"},
+        .{"ptag.ownerDocument === parent.ownerDocument", "true"},
+        .{"spanTag.ownerDocument === parent.ownerDocument", "true"},
+        .{"parent.contains(newNode)", "true"},
+        .{"parent.contains(anotherNewNode)", "true"},
+        .{"anotherDoc.contains(anotherNewNode)", "false"},
+        .{"newDoc.contains(newNode)", "false"},
     }, .{});
 }
