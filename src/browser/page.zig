@@ -292,13 +292,10 @@ pub const Page = struct {
                     // The HTML page was parsed. We now either have JS scripts to
                     // download, or timeouts to execute, or both.
 
-                    // If we have active http transfers, we might as well run
-                    // any "secondary" task, since we won't be exiting this loop
-                    // anyways.
                     // scheduler.run could trigger new http transfers, so do not
                     // store http_client.active BEFORE this call and then use
                     // it AFTER.
-                    const ms_to_next_task = try scheduler.run(http_client.active > 0);
+                    const ms_to_next_task = try scheduler.runHighPriority();
 
                     if (try_catch.hasCaught()) {
                         const msg = (try try_catch.err(self.arena)) orelse "unknown";
@@ -316,7 +313,7 @@ pub const Page = struct {
                                 // we'd wait to long, might as well exit early.
                                 return;
                             }
-
+                            _ = try scheduler.runLowPriority();
                             std.time.sleep(std.time.ns_per_ms * ms);
                             break :SW;
                         }
@@ -325,6 +322,8 @@ pub const Page = struct {
                         // schedule tasks. We're done
                         return;
                     }
+
+                    _ = try scheduler.runLowPriority();
 
                     // We'll block here, waiting for network IO. We know
                     // when the next timeout is scheduled, and we know how long
@@ -344,7 +343,7 @@ pub const Page = struct {
             }
 
             const ms_elapsed = timer.lap() / 1_000_000;
-            if (ms_elapsed > ms_remaining) {
+            if (ms_elapsed >= ms_remaining) {
                 return;
             }
             ms_remaining -= ms_elapsed;
@@ -354,7 +353,27 @@ pub const Page = struct {
     fn printWaitAnalysis(self: *Page) void {
         std.debug.print("mode: {s}\n", .{@tagName(std.meta.activeTag(self.mode))});
         std.debug.print("load: {s}\n", .{@tagName(self.load_state)});
-        std.debug.print("active requests: {d}\n", .{self.http_client.active});
+        {
+            std.debug.print("\nactive requests: {d}\n", .{self.http_client.active});
+            var n_ = self.http_client.handles.in_use.first;
+            while (n_) |n| {
+                const transfer = HttpClient.Transfer.fromEasy(n.data.conn.easy) catch |err| {
+                    std.debug.print(" - failed to load transfer: {any}\n", .{err});
+                    break;
+                };
+                std.debug.print(" - {s}\n", .{transfer});
+                n_ = n.next;
+            }
+        }
+
+        {
+            std.debug.print("\nqueued requests: {d}\n", .{self.http_client.queue.len});
+            var n_ = self.http_client.queue.first;
+            while (n_) |n| {
+                std.debug.print(" - {s}\n", .{n.data.url});
+                n_ = n.next;
+            }
+        }
 
         {
             std.debug.print("\nscripts: {d}\n", .{self.script_manager.scripts.len});

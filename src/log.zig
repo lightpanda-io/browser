@@ -320,22 +320,18 @@ fn timestamp() i64 {
     return std.time.milliTimestamp();
 }
 
-var last_log: i64 = 0;
+var first_log: i64 = 0;
 fn elapsed() i64 {
     const now = timestamp();
 
     last_log_lock.lock();
-    const previous = last_log;
-    last_log = now;
-    last_log_lock.unlock();
+    defer last_log_lock.unlock();
 
-    if (previous == 0) {
-        return 0;
+    if (first_log == 0) {
+        first_log = now;
     }
-    if (previous > now) {
-        return 0;
-    }
-    return now - previous;
+
+    return now - first_log;
 }
 
 const testing = @import("testing.zig");

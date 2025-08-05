@@ -531,7 +531,8 @@ pub const Transfer = struct {
         return chunk_len;
     }
 
-    fn fromEasy(easy: *c.CURL) !*Transfer {
+    // pub because Page.printWaitAnalysis uses it
+    pub fn fromEasy(easy: *c.CURL) !*Transfer {
         var private: *anyopaque = undefined;
         try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_PRIVATE, &private));
         return @alignCast(@ptrCast(private));
