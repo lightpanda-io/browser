@@ -132,6 +132,9 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
         if (std.ascii.eqlIgnoreCase(script_type, "module")) {
             break :blk .module;
         }
+        if (std.ascii.eqlIgnoreCase(script_type, "application/json")) {
+            return;
+        }
         log.warn(.user_script, "unknown script type", .{ .type = script_type });
         return;
     };
@@ -206,6 +209,8 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
         pending_script.complete = true;
         self.scripts.append(&pending_script.node);
         return;
+    } else {
+        log.debug(.http, "script queue", .{ .url = remote_url.? });
     }
 
     pending_script.node = .{ .data = pending_script };
@@ -217,7 +222,7 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
         .url = remote_url.?,
         .ctx = pending_script,
         .method = .GET,
-        .start_callback = startCallback,
+        .start_callback = if (log.enabled(.http, .debug)) startCallback else null,
         .header_done_callback = headerCallback,
         .data_callback = dataCallback,
         .done_callback = doneCallback,
@@ -225,6 +230,39 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
     });
 }
 
+// @TODO: Improving this would have the simplest biggest performance improvement
+// for most sites.
+//
+// For JS imports (both static and dynamic), we currently block to get the
+// result (the content of the file).
+//
+// For static imports, this is necessary, since v8 is expecting the compiled module
+// as part of the function return. (we should try to pre-load the JavaScript
+// source via module.GetModuleRequests(), but that's for a later time).
+//
+// For dynamic dynamic imports, this is not strictly necessary since the v8
+// call returns a Promise; we could make this a normal get call, associated with
+// the promise, and when done, resolve the promise.
+//
+// In both cases, for now at least, we just issue a "blocking" request. We block
+// by ticking the http client until the script is complete.
+//
+// This uses the client.blockingRequest call which has a dedicated handle for
+// these blocking requests. Because they are blocking, we're guaranteed to have
+// only 1 at a time, thus the 1 reserved handle.
+//
+// You almost don't need the http client's blocking handle. In most cases, you
+// should always have 1 free handle whenever you get here, because we always
+// release the handle before executing the doneCallback. So, if a module does:
+//    import * as x from 'blah'
+// And we need to load 'blah', there should always be 1 free handle - the handle
+// of the http GET we just completed before executing the module.
+// The exception to this, and the reason we need a special blocking handle, is
+// for inline modules within the HTML page itself:
+//    <script type=module>import ....</script>
+// Unlike external modules which can only ever be executed after releasing an
+// http handle, these are executed without there necessarily being a free handle.
+// Thus, Http/Client.zig maintains a dedicated handle for these calls.
 pub fn blockingGet(self: *ScriptManager, url: [:0]const u8) !BlockingResult {
     var blocking = Blocking{
         .allocator = self.allocator,
@@ -232,10 +270,11 @@ pub fn blockingGet(self: *ScriptManager, url: [:0]const u8) !BlockingResult {
     };
 
     var client = self.client;
-    try client.request(.{
+    try client.blockingRequest(.{
         .url = url,
         .method = .GET,
         .ctx = &blocking,
+        .start_callback = if (log.enabled(.http, .debug)) Blocking.startCallback else null,
         .header_done_callback = Blocking.headerCallback,
         .data_callback = Blocking.dataCallback,
         .done_callback = Blocking.doneCallback,
@@ -244,7 +283,7 @@ pub fn blockingGet(self: *ScriptManager, url: [:0]const u8) !BlockingResult {
 
     // rely on http's timeout settings to avoid an endless/long loop.
     while (true) {
-        try client.tick(1000);
+        try client.tick(200);
         switch (blocking.state) {
             .running => {},
             .done => |result| return result,

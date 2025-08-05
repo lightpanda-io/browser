@@ -51,7 +51,7 @@ pub const App = struct {
         errdefer notification.deinit();
 
         var http = try Http.init(allocator, .{
-            .max_concurrent_transfers = 3,
+            .max_concurrent_transfers = 10,
             .http_proxy = config.http_proxy,
             .tls_verify_host = config.tls_verify_host,
             .proxy_bearer_token = config.proxy_bearer_token,

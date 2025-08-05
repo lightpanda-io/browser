@@ -59,32 +59,22 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, func: Task.Func, ms: u32, opts: Ad
     });
 }
 
-// fn debug(self: *Scheduler) void {
-//     var it = self.primary.iterator();
-//     while (it.next()) |task| {
-//         std.debug.print("- {s}\n", .{task.name});
-//     }
-// }
+pub fn runHighPriority(self: *Scheduler) !?u32 {
+    return self.runQueue(&self.primary);
+}
 
-pub fn run(self: *Scheduler, force_secondary: bool) !?u32 {
-    if (self.primary.count() == 0 and force_secondary == false) {
+pub fn runLowPriority(self: *Scheduler) !?u32 {
+    return self.runQueue(&self.secondary);
+}
+
+fn runQueue(self: *Scheduler, queue: *Queue) !?u32 {
+    // this is O(1)
+    if (queue.count() == 0) {
         return null;
     }
 
     const now = std.time.milliTimestamp();
-    const time_to_next_primary = try self.runQueue(&self.primary, now);
-    const time_to_next_secondary = try self.runQueue(&self.secondary, now);
 
-    if (time_to_next_primary == null) {
-        return time_to_next_secondary;
-    }
-    if (time_to_next_secondary == null) {
-        return time_to_next_primary;
-    }
-    return @min(time_to_next_primary.?, time_to_next_secondary.?);
-}
-
-fn runQueue(self: *Scheduler, queue: *Queue, now: i64) !?u32 {
     var next = queue.peek();
     while (next) |task| {
         const time_to_next = task.ms - now;
@@ -131,32 +121,32 @@ test "Scheduler" {
     var task = TestTask{ .allocator = testing.arena_allocator };
 
     var s = Scheduler.init(testing.arena_allocator);
-    try testing.expectEqual(null, s.run(false));
+    try testing.expectEqual(null, s.runHighPriority());
     try testing.expectEqual(0, task.calls.items.len);
 
     try s.add(&task, TestTask.run1, 3, .{});
 
-    try testing.expectDelta(3, try s.run(false), 1);
+    try testing.expectDelta(3, try s.runHighPriority(), 1);
     try testing.expectEqual(0, task.calls.items.len);
 
     std.time.sleep(std.time.ns_per_ms * 5);
-    try testing.expectEqual(null, s.run(false));
+    try testing.expectEqual(null, s.runHighPriority());
     try testing.expectEqualSlices(u32, &.{1}, task.calls.items);
 
     try s.add(&task, TestTask.run2, 3, .{});
     try s.add(&task, TestTask.run1, 2, .{});
 
     std.time.sleep(std.time.ns_per_ms * 5);
-    try testing.expectDelta(2, try s.run(false), 1);
+    try testing.expectDelta(null, try s.runHighPriority(), 1);
     try testing.expectEqualSlices(u32, &.{ 1, 1, 2 }, task.calls.items);
 
     std.time.sleep(std.time.ns_per_ms * 5);
-    // only secondary won't be run unless forced
-    try testing.expectEqual(null, try s.run(false));
+    // wont' run secondary
+    try testing.expectEqual(null, try s.runHighPriority());
     try testing.expectEqualSlices(u32, &.{ 1, 1, 2 }, task.calls.items);
 
-    // only secondary will be run when forced
-    try testing.expectDelta(2, try s.run(true), 1);
+    //runs secondary
+    try testing.expectDelta(2, try s.runLowPriority(), 1);
     try testing.expectEqualSlices(u32, &.{ 1, 1, 2, 2 }, task.calls.items);
 }
 

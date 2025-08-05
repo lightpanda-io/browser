@@ -363,7 +363,7 @@ pub const XMLHttpRequest = struct {
         if (self.state != .opened) return DOMError.InvalidState;
         if (self.send_flag) return DOMError.InvalidState;
 
-        log.debug(.http, "request", .{ .method = self.method, .url = self.url, .source = "xhr" });
+        log.debug(.http, "request queued", .{ .method = self.method, .url = self.url, .source = "xhr" });
 
         self.send_flag = true;
         if (body) |b| {
@@ -393,6 +393,8 @@ pub const XMLHttpRequest = struct {
         for (self.headers.items) |hdr| {
             try transfer.addHeader(hdr);
         }
+
+        log.debug(.http, "request start", .{ .method = self.method, .url = self.url, .source = "xhr" });
 
         // @newhttp
         // {
