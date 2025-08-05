@@ -560,7 +560,7 @@ pub const Transfer = struct {
 
         if (hdr._content_type_len == 0) {
             const CONTENT_TYPE_LEN = "content-type:".len;
-            if (buf_len > CONTENT_TYPE_LEN) {
+            if (header.len > CONTENT_TYPE_LEN) {
                 if (std.ascii.eqlIgnoreCase(header[0..CONTENT_TYPE_LEN], "content-type:")) {
                     const value = std.mem.trimLeft(u8, header[CONTENT_TYPE_LEN..], " ");
                     const len = @min(value.len, hdr._content_type.len);
@@ -572,7 +572,7 @@ pub const Transfer = struct {
 
         {
             const SET_COOKIE_LEN = "set-cookie:".len;
-            if (buf_len > SET_COOKIE_LEN) {
+            if (header.len > SET_COOKIE_LEN) {
                 if (std.ascii.eqlIgnoreCase(header[0..SET_COOKIE_LEN], "set-cookie:")) {
                     const value = std.mem.trimLeft(u8, header[SET_COOKIE_LEN..], " ");
                     transfer.req.cookie.jar.populateFromResponse(&transfer.uri, value) catch |err| {

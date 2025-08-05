@@ -406,7 +406,7 @@ pub const Page = struct {
             std.debug.print("\nprimary schedule: {d}\n", .{self.scheduler.primary.count()});
             var it = self.scheduler.primary.iterator();
             while (it.next()) |task| {
-                std.debug.print(" - {s} complete: {any}\n", .{ task.name, task.ms - now });
+                std.debug.print(" - {s} schedule: {d}ms\n", .{ task.name, task.ms - now });
             }
         }
 
@@ -414,7 +414,7 @@ pub const Page = struct {
             std.debug.print("\nsecondary schedule: {d}\n", .{self.scheduler.secondary.count()});
             var it = self.scheduler.secondary.iterator();
             while (it.next()) |task| {
-                std.debug.print(" - {s} complete: {any}\n", .{ task.name, task.ms - now });
+                std.debug.print(" - {s} schedule: {d}ms\n", .{ task.name, task.ms - now });
             }
         }
     }
