@@ -2156,7 +2156,7 @@ pub inline fn documentCreateDocument(title: ?[]const u8) !*DocumentHTML {
     return doc_html;
 }
 
-pub inline fn documentCreateHTMLElement(doc: *Document, tag_name: []const u8) !*Element {
+pub fn documentCreateHTMLElement(doc: *Document, tag_name: []const u8) !*Element {
     var elem: ?*Element = undefined;
     const err = c._dom_html_document_create_element(doc, try strFromData(tag_name), &elem);
     try DOMErr(err);
@@ -2170,7 +2170,7 @@ pub inline fn documentCreateElement(doc: *Document, tag_name: []const u8) !*Elem
     return elem.?;
 }
 
-pub inline fn documentCreateHTMLElementNS(doc: *Document, ns: []const u8, tag_name: []const u8) !*Element {
+pub fn documentCreateHTMLElementNS(doc: *Document, ns: []const u8, tag_name: []const u8) !*Element {
     var elem: ?*Element = undefined;
     const err = c._dom_html_document_create_element_ns(
         doc,
