@@ -375,7 +375,6 @@ pub const XMLHttpRequest = struct {
             .url = self.url.?,
             .method = self.method,
             .body = self.request_body,
-            .content_type = "Content-Type: text/plain; charset=UTF-8", // @newhttp TODO
             .cookie = page.requestCookie(.{}),
             .start_callback = httpStartCallback,
             .header_callback = httpHeaderCallback,

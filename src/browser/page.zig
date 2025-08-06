@@ -472,6 +472,7 @@ pub const Page = struct {
             .url = owned_url,
             .method = opts.method,
             .body = opts.body,
+            .header = opts.header,
             .cookie = self.requestCookie(.{ .is_navigation = true }),
             .header_done_callback = pageHeaderDoneCallback,
             .data_callback = pageDataCallback,
@@ -931,6 +932,8 @@ pub const Page = struct {
         if (std.ascii.eqlIgnoreCase(method, "post")) {
             opts.method = .POST;
             opts.body = buf.items;
+            // form_data.write currently only supports this encoding, so we know this has to be the content type
+            opts.header = "Content-Type: application/x-www-form-urlencoded";
         } else {
             action = try URL.concatQueryString(transfer_arena, action, buf.items);
         }
@@ -986,6 +989,7 @@ pub const NavigateOpts = struct {
     reason: NavigateReason = .address_bar,
     method: HttpClient.Method = .GET,
     body: ?[]const u8 = null,
+    header: ?[:0]const u8 = null,
 };
 
 fn timestamp() u32 {

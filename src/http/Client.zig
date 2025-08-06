@@ -263,24 +263,21 @@ fn makeRequest(self: *Client, handle: *Handle, req: Request) !void {
         var header_list = conn.commonHeaders();
         errdefer c.curl_slist_free_all(header_list);
 
-        if (req.content_type) |ct| {
-            header_list = c.curl_slist_append(header_list, ct);
+        if (req.header) |hdr| {
+            header_list = c.curl_slist_append(header_list, hdr);
         }
 
         {
-            const COOKIE_HEADER = "Cookie: ";
             const aa = self.arena.allocator();
-            defer _ = self.arena.reset(.{ .retain_with_limit = 2048 });
-
             var arr: std.ArrayListUnmanaged(u8) = .{};
-            try arr.appendSlice(aa, COOKIE_HEADER);
             try req.cookie.forRequest(&uri, arr.writer(aa));
 
-            if (arr.items.len > COOKIE_HEADER.len) {
+            if (arr.items.len > 0) {
                 try arr.append(aa, 0); //null terminate
 
                 // copies the value
                 header_list = c.curl_slist_append(header_list, @ptrCast(arr.items.ptr));
+                defer _ = self.arena.reset(.{ .retain_with_limit = 2048 });
             }
         }
 
@@ -485,6 +482,7 @@ pub const RequestCookie = struct {
             .is_http = self.is_http,
             .is_navigation = self.is_navigation,
             .origin_uri = self.origin,
+            .prefix = "Cookie: ",
         });
     }
 };
@@ -493,7 +491,7 @@ pub const Request = struct {
     method: Method,
     url: [:0]const u8,
     body: ?[]const u8 = null,
-    content_type: ?[:0]const u8 = null,
+    header: ?[:0]const u8 = null,
     cookie: RequestCookie,
 
     // arbitrary data that can be associated with this request
