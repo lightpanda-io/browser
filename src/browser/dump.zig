@@ -63,7 +63,7 @@ pub fn writeNode(node: *parser.Node, opts: Opts, writer: anytype) anyerror!void 
         .element => {
             // open the tag
             const tag_type = try parser.nodeHTMLGetTagType(node) orelse .undef;
-            if (tag_type == .script and opts.exclude_scripts) {
+            if (opts.exclude_scripts and try isScriptOrRelated(tag_type, node)) {
                 return;
             }
 
@@ -145,6 +145,25 @@ pub fn writeChildren(root: *parser.Node, opts: Opts, writer: anytype) !void {
         next = try walker.get_next(root, next) orelse break;
         try writeNode(next.?, opts, writer);
     }
+}
+
+// When `exclude_scripts` is passed to dump, we don't include <script> tags.
+// We also want to omit <link rel=preload as=ascript>
+fn isScriptOrRelated(tag_type: parser.Tag, node: *parser.Node) !bool {
+    if (tag_type == .script) {
+        return true;
+    }
+    if (tag_type == .link) {
+        const el = parser.nodeToElement(node);
+        const as = try parser.elementGetAttribute(el, "as") orelse return false;
+        if (!std.ascii.eqlIgnoreCase(as, "script")) {
+            return false;
+        }
+
+        const rel = try parser.elementGetAttribute(el, "rel") orelse return false;
+        return std.ascii.eqlIgnoreCase(rel, "preload");
+    }
+    return false;
 }
 
 // area, base, br, col, embed, hr, img, input, link, meta, source, track, wbr
