@@ -136,6 +136,24 @@ pub const Window = struct {
         return self;
     }
 
+    pub fn indexed_get(self: *Window, index: u32, has_value: *bool, page: *Page) !*Window {
+        const frames = try domcss.querySelectorAll(
+            page.call_arena,
+            parser.documentHTMLToNode(self.document),
+            "frame,iframe",
+        );
+
+        if (index >= frames.nodes.items.len) {
+            has_value.* = false;
+            return undefined;
+        }
+
+        has_value.* = true;
+        // TODO return the correct frame's window
+        // frames.nodes.items[indexed]
+        return error.TODO;
+    }
+
     // Retrieve the numbre of frames/iframes from the DOM dynamically.
     pub fn get_length(self: *const Window, page: *Page) !u32 {
         const frames = try domcss.querySelectorAll(
@@ -552,4 +570,27 @@ test "Browser.HTML.Window" {
             .{ "dcl", "true" },
         }, .{});
     }
+}
+
+test "Browser.HTML.Window.frames" {
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html = 
+        \\<body>
+        \\ <iframe
+        \\   src="https://httpbin.io/html"
+        \\   title="iframea">
+        \\ </iframe>
+        \\ <iframe
+        \\   src="https://httpbin.io/html"
+        \\   title="iframeb">
+        \\ </iframe>
+        \\</body>
+    });
+
+    defer runner.deinit();
+
+    try runner.testCases(&.{
+        .{ "frames.length", "2" },
+        .{ "try { frames[1] } catch (e) { e }", "Error: TODO" }, // TODO fixme
+        .{ "frames[3]", "undefined" },
+    }, .{});
 }
