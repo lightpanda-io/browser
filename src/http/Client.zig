@@ -102,6 +102,8 @@ pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts) !*Clie
     const multi = c.curl_multi_init() orelse return error.FailedToInitializeMulti;
     errdefer _ = c.curl_multi_cleanup(multi);
 
+    try errorMCheck(c.curl_multi_setopt(multi, c.CURLMOPT_MAX_HOST_CONNECTIONS, @as(c_long, opts.max_host_open)));
+
     var handles = try Handles.init(allocator, client, ca_blob, &opts);
     errdefer handles.deinit(allocator);
 
@@ -346,8 +348,7 @@ const Handles = struct {
 
     // pointer to opts is not stable, don't hold a reference to it!
     fn init(allocator: Allocator, client: *Client, ca_blob: ?c.curl_blob, opts: *const Http.Opts) !Handles {
-        const count = opts.max_concurrent_transfers;
-        std.debug.assert(count > 0);
+        const count = if (opts.max_concurrent == 0) 1 else opts.max_concurrent;
 
         const handles = try allocator.alloc(Handle, count);
         errdefer allocator.free(handles);

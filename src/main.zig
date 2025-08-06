@@ -87,6 +87,10 @@ fn run(alloc: Allocator) !void {
         .http_proxy = args.httpProxy(),
         .proxy_bearer_token = args.proxyBearerToken(),
         .tls_verify_host = args.tlsVerifyHost(),
+        .http_timeout_ms = args.httpTimeout(),
+        .http_connect_timeout_ms = args.httpConnectTiemout(),
+        .http_max_host_open = args.httpMaxHostOpen(),
+        .http_max_concurrent = args.httpMaxConcurrent(),
     });
     defer app.deinit();
     app.telemetry.record(.{ .run = {} });
@@ -169,6 +173,34 @@ const Command = struct {
         };
     }
 
+    fn httpMaxConcurrent(self: *const Command) ?u8 {
+        return switch (self.mode) {
+            inline .serve, .fetch => |opts| opts.common.http_max_concurrent,
+            else => unreachable,
+        };
+    }
+
+    fn httpMaxHostOpen(self: *const Command) ?u8 {
+        return switch (self.mode) {
+            inline .serve, .fetch => |opts| opts.common.http_max_host_open,
+            else => unreachable,
+        };
+    }
+
+    fn httpConnectTiemout(self: *const Command) ?u31 {
+        return switch (self.mode) {
+            inline .serve, .fetch => |opts| opts.common.http_connect_timeout,
+            else => unreachable,
+        };
+    }
+
+    fn httpTimeout(self: *const Command) ?u31 {
+        return switch (self.mode) {
+            inline .serve, .fetch => |opts| opts.common.http_timeout,
+            else => unreachable,
+        };
+    }
+
     fn logLevel(self: *const Command) ?log.Level {
         return switch (self.mode) {
             inline .serve, .fetch => |opts| opts.common.log_level,
@@ -213,8 +245,12 @@ const Command = struct {
     };
 
     const Common = struct {
-        http_proxy: ?[:0]const u8 = null,
         proxy_bearer_token: ?[:0]const u8 = null,
+        http_proxy: ?[:0]const u8 = null,
+        http_max_concurrent: ?u8 = null,
+        http_max_host_open: ?u8 = null,
+        http_timeout: ?u31 = null,
+        http_connect_timeout: ?u31 = null,
         tls_verify_host: bool = true,
         log_level: ?log.Level = null,
         log_format: ?log.Format = null,
@@ -222,22 +258,39 @@ const Command = struct {
     };
 
     fn printUsageAndExit(self: *const Command, success: bool) void {
+        //                                                                MAX_HELP_LEN|
         const common_options =
             \\
             \\--insecure_disable_tls_host_verification
-            \\                Disables host verification on all HTTP requests.
-            \\                This is an advanced option which should only be
-            \\                set if you understand and accept the risk of
-            \\                disabling host verification.
+            \\                Disables host verification on all HTTP requests. This is an
+            \\                advanced option which should only be set if you understand
+            \\                and accept the risk of disabling host verification.
             \\
             \\--http_proxy    The HTTP proxy to use for all HTTP requests.
-            \\                A username:password can be included to use basic
-            \\                authentication.
+            \\                A username:password can be included for basic authentication.
             \\                Defaults to none.
             \\
             \\--proxy_bearer_token
-            \\               The <token> to send for bearer authentication with the proxy
-            \\               Proxy-Authorization: Bearer <token>
+            \\                The <token> to send for bearer authentication with the proxy
+            \\                Proxy-Authorization: Bearer <token>
+            \\
+            \\--http_max_concurrent
+            \\                The maximum number of concurrent HTTP requests.
+            \\                Defaults to 10.
+            \\
+            \\--http_max_host_open
+            \\                The maximum number of open connection to a given host:port.
+            \\                Defaults to 4.
+            \\
+            \\--http_connect_timeout
+            \\                The time, in milliseconds, for establishing an HTTP connection
+            \\                before timing out. 0 means it never times out.
+            \\                Defaults to 0.
+            \\
+            \\--http_timeout
+            \\                The maximum time, in milliseconds, the transfer is allowed
+            \\                to complete. 0 means it never times out.
+            \\                Defaults to 10000.
             \\
             \\--log_level     The log level: debug, info, warn, error or fatal.
             \\                Defaults to
@@ -248,9 +301,9 @@ const Command = struct {
             \\                Defaults to
         ++ (if (builtin.mode == .Debug) " pretty." else " logfmt.") ++
             \\
-            \\
         ;
 
+        //                                                                MAX_HELP_LEN|
         const usage =
             \\usage: {s} command [options] [URL]
             \\
@@ -516,6 +569,58 @@ fn parseCommonArg(
         return true;
     }
 
+    if (std.mem.eql(u8, "--http_max_concurrent", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--http_max_concurrent" });
+            return error.InvalidArgument;
+        };
+
+        common.http_max_concurrent = std.fmt.parseInt(u8, str, 10) catch |err| {
+            log.fatal(.app, "invalid argument value", .{ .arg = "--http_max_concurrent", .err = err });
+            return error.InvalidArgument;
+        };
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--http_max_host_open", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--http_max_host_open" });
+            return error.InvalidArgument;
+        };
+
+        common.http_max_host_open = std.fmt.parseInt(u8, str, 10) catch |err| {
+            log.fatal(.app, "invalid argument value", .{ .arg = "--http_max_host_open", .err = err });
+            return error.InvalidArgument;
+        };
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--http_connect_timeout", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--http_connect_timeout" });
+            return error.InvalidArgument;
+        };
+
+        common.http_connect_timeout = std.fmt.parseInt(u31, str, 10) catch |err| {
+            log.fatal(.app, "invalid argument value", .{ .arg = "--http_connect_timeout", .err = err });
+            return error.InvalidArgument;
+        };
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--http_timeout", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--http_timeout" });
+            return error.InvalidArgument;
+        };
+
+        common.http_timeout = std.fmt.parseInt(u31, str, 10) catch |err| {
+            log.fatal(.app, "invalid argument value", .{ .arg = "--http_timeout", .err = err });
+            return error.InvalidArgument;
+        };
+        return true;
+    }
+
     if (std.mem.eql(u8, "--log_level", opt)) {
         const str = args.next() orelse {
             log.fatal(.app, "missing argument value", .{ .arg = "--log_level" });
@@ -663,6 +768,7 @@ fn serveCDP(address: std.net.Address, platform: *const Platform) !void {
         .run_mode = .serve,
         .tls_verify_host = false,
         .platform = platform,
+        .max_concurrent_transfers = 2,
     });
     defer app.deinit();
 

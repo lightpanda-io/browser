@@ -35,6 +35,10 @@ pub const App = struct {
         tls_verify_host: bool = true,
         http_proxy: ?[:0]const u8 = null,
         proxy_bearer_token: ?[:0]const u8 = null,
+        http_timeout_ms: ?u31 = null,
+        http_connect_timeout_ms: ?u31 = null,
+        http_max_host_open: ?u8 = null,
+        http_max_concurrent: ?u8 = null,
     };
 
     pub fn init(allocator: Allocator, config: Config) !*App {
@@ -51,7 +55,10 @@ pub const App = struct {
         errdefer notification.deinit();
 
         var http = try Http.init(allocator, .{
-            .max_concurrent_transfers = 10,
+            .max_host_open = config.http_max_host_open orelse 4,
+            .max_concurrent = config.http_max_concurrent orelse 10,
+            .timeout_ms = config.http_timeout_ms orelse 5000,
+            .connect_timeout_ms = config.http_connect_timeout_ms orelse 0,
             .http_proxy = config.http_proxy,
             .tls_verify_host = config.tls_verify_host,
             .proxy_bearer_token = config.proxy_bearer_token,
