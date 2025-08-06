@@ -127,7 +127,18 @@ pub const Window = struct {
         return self;
     }
 
+    // frames return the window itself, but accessing it via a pseudo
+    // array returns the Window object corresponding to the given frame or
+    // iframe.
+    // https://developer.mozilla.org/en-US/docs/Web/API/Window/frames
+    pub fn get_frames(self: *Window) *Window {
+        return self;
+    }
     // TODO: frames
+    pub fn get_length(_: *Window) u32 {
+        return 0;
+    }
+
     pub fn get_top(self: *Window) *Window {
         return self;
     }
@@ -502,6 +513,14 @@ test "Browser.HTML.Window" {
         .{ "window.scrollTo(0)", null },
         .{ "scroll", "true" },
         .{ "scrollend", "true" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "window == window.self", "true" },
+        .{ "window == window.parent", "true" },
+        .{ "window == window.top", "true" },
+        .{ "window == window.frames", "true" },
+        .{ "window.frames.length", "0" },
     }, .{});
 
     try runner.testCases(&.{
