@@ -258,7 +258,7 @@ const Command = struct {
     };
 
     fn printUsageAndExit(self: *const Command, success: bool) void {
-        //                                                                MAX_HELP_LEN|
+        //                                                                     MAX_HELP_LEN|
         const common_options =
             \\
             \\--insecure_disable_tls_host_verification
@@ -303,7 +303,7 @@ const Command = struct {
             \\
         ;
 
-        //                                                                MAX_HELP_LEN|
+        //                                                                     MAX_HELP_LEN|
         const usage =
             \\usage: {s} command [options] [URL]
             \\
@@ -768,7 +768,7 @@ fn serveCDP(address: std.net.Address, platform: *const Platform) !void {
         .run_mode = .serve,
         .tls_verify_host = false,
         .platform = platform,
-        .max_concurrent_transfers = 2,
+        .http_max_concurrent = 2,
     });
     defer app.deinit();
 
