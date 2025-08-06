@@ -34,6 +34,7 @@ const MediaQueryList = @import("media_query_list.zig").MediaQueryList;
 const Performance = @import("../dom/performance.zig").Performance;
 const CSSStyleDeclaration = @import("../cssom/CSSStyleDeclaration.zig");
 const Screen = @import("screen.zig").Screen;
+const domcss = @import("../dom/css.zig");
 const Css = @import("../css/css.zig").Css;
 
 const Function = Env.Function;
@@ -134,9 +135,16 @@ pub const Window = struct {
     pub fn get_frames(self: *Window) *Window {
         return self;
     }
-    // TODO: frames
-    pub fn get_length(_: *Window) u32 {
-        return 0;
+
+    // Retrieve the numbre of frames/iframes from the DOM dynamically.
+    pub fn get_length(self: *const Window, page: *Page) !u32 {
+        const frames = try domcss.querySelectorAll(
+            page.call_arena,
+            parser.documentHTMLToNode(self.document),
+            "frame,iframe",
+        );
+
+        return frames.get_length();
     }
 
     pub fn get_top(self: *Window) *Window {
