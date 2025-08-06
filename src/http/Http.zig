@@ -230,11 +230,12 @@ pub fn errorMCheck(code: c.CURLMcode) errors.Multi!void {
 }
 
 pub const Opts = struct {
-    timeout_ms: u31 = 0,
+    timeout_ms: u31,
+    max_host_open: u8,
+    max_concurrent: u8,
+    connect_timeout_ms: u31,
     max_redirects: u8 = 10,
     tls_verify_host: bool = true,
-    connect_timeout_ms: u31 = 5000,
-    max_concurrent_transfers: u8 = 5,
     http_proxy: ?[:0]const u8 = null,
     proxy_bearer_token: ?[:0]const u8 = null,
 };
