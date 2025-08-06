@@ -12,6 +12,7 @@ pub const LookupOpts = struct {
     origin_uri: ?*const Uri = null,
     is_http: bool,
     is_navigation: bool = true,
+    prefix: ?[]const u8 = null,
 };
 
 pub const Jar = struct {
@@ -91,10 +92,15 @@ pub const Jar = struct {
 
         var first = true;
         for (self.cookies.items) |*cookie| {
-            if (!cookie.appliesTo(&target, same_site, opts.is_navigation, opts.is_http)) continue;
+            if (!cookie.appliesTo(&target, same_site, opts.is_navigation, opts.is_http)) {
+                continue;
+            }
 
             // we have a match!
             if (first) {
+                if (opts.prefix) |prefix| {
+                    try writer.writeAll(prefix);
+                }
                 first = false;
             } else {
                 try writer.writeAll("; ");
