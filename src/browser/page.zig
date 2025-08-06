@@ -537,6 +537,7 @@ pub const Page = struct {
             .timestamp = timestamp(),
         });
     }
+
     fn _documentIsComplete(self: *Page) !void {
         try HTMLDocument.documentIsComplete(self.window.document, self);
 
@@ -641,7 +642,8 @@ pub const Page = struct {
                 while (try walker.get_next(root, next)) |n| {
                     next = n;
                     const node = next.?;
-                    const tag = (try parser.nodeHTMLGetTagType(node)) orelse continue;
+                    const e = parser.nodeToElement(node);
+                    const tag = try parser.elementTag(e);
                     if (tag != .script) {
                         // ignore non-js script.
                         continue;
