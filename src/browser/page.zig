@@ -504,123 +504,8 @@ pub const Page = struct {
         });
     }
 
-<<<<<<< HEAD
-        // we want to be notified of any dynamically added script tags
-        // so that we can load the script
-        parser.documentSetScriptAddedCallback(doc, self, scriptAddedCallback);
-
-        const document_element = (try parser.documentGetDocumentElement(doc)) orelse return error.DocumentElementError;
-        _ = try parser.eventTargetAddEventListener(
-            parser.toEventTarget(parser.Element, document_element),
-            "click",
-            &self.window_clicked_event_node,
-            false,
-        );
-        _ = try parser.eventTargetAddEventListener(
-            parser.toEventTarget(parser.Element, document_element),
-            "keydown",
-            &self.keydown_event_node,
-            false,
-        );
-
-        // https://html.spec.whatwg.org/#read-html
-
-        // browse the DOM tree to retrieve scripts
-        // TODO execute the synchronous scripts during the HTL parsing.
-        // TODO fetch the script resources concurrently but execute them in the
-        // declaration order for synchronous ones.
-
-        // async_scripts stores scripts which can be run asynchronously.
-        // for now they are just run after the non-async one in order to
-        // dispatch DOMContentLoaded the sooner as possible.
-        var async_scripts: std.ArrayListUnmanaged(Script) = .{};
-
-        // defer_scripts stores scripts which are meant to be deferred. For now
-        // this doesn't have a huge impact, since normal scripts are parsed
-        // after the document is loaded. But (a) we should fix that and (b)
-        // this results in JavaScript being loaded in the same order as browsers
-        // which can help debug issues (and might actually fix issues if websites
-        // are expecting this execution order)
-        var defer_scripts: std.ArrayListUnmanaged(Script) = .{};
-
-        const root = parser.documentToNode(doc);
-        const walker = Walker{};
-        var next: ?*parser.Node = null;
-        while (true) {
-            next = try walker.get_next(root, next) orelse break;
-
-            // ignore non-elements nodes.
-            if (try parser.nodeType(next.?) != .element) {
-                continue;
-            }
-
-            const current = next.?;
-
-            const e = parser.nodeToElement(current);
-            const tag = try parser.elementTag(e);
-
-            if (tag != .script) {
-                // ignore non-js script.
-                continue;
-            }
-
-            const script = try Script.init(e, null) orelse continue;
-
-            // TODO use fetchpriority
-            // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#fetchpriority
-
-            // > async
-            // > For classic scripts, if the async attribute is present,
-            // > then the classic script will be fetched in parallel to
-            // > parsing and evaluated as soon as it is available.
-            // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#async
-            if (script.is_async) {
-                try async_scripts.append(self.arena, script);
-                continue;
-            }
-
-            if (script.is_defer) {
-                try defer_scripts.append(self.arena, script);
-                continue;
-            }
-
-            // TODO handle for attribute
-            // TODO handle event attribute
-
-            // > Scripts without async, defer or type="module"
-            // > attributes, as well as inline scripts without the
-            // > type="module" attribute, are fetched and executed
-            // > immediately before the browser continues to parse the
-            // > page.
-            // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#notes
-            if (self.evalScript(&script) == false) {
-                return;
-            }
-        }
-
-        for (defer_scripts.items) |*script| {
-            if (self.evalScript(script) == false) {
-                return;
-            }
-        }
-        // dispatch DOMContentLoaded before the transition to "complete",
-        // at the point where all subresources apart from async script elements
-        // have loaded.
-        // https://html.spec.whatwg.org/#reporting-document-loading-status
-        try HTMLDocument.documentIsLoaded(html_doc, self);
-
-        // eval async scripts.
-        for (async_scripts.items) |*script| {
-            if (self.evalScript(script) == false) {
-                return;
-            }
-        }
-
-        try HTMLDocument.documentIsComplete(html_doc, self);
-=======
     fn _documentIsComplete(self: *Page) !void {
         try HTMLDocument.documentIsComplete(self.window.document, self);
->>>>>>> 709a903 (Initial work on integrating libcurl and making all http nonblocking)
 
         // dispatch window.load event
         const loadevt = try parser.eventCreate();
@@ -723,7 +608,8 @@ pub const Page = struct {
                 while (try walker.get_next(root, next)) |n| {
                     next = n;
                     const node = next.?;
-                    const tag = (try parser.nodeHTMLGetTagType(node)) orelse continue;
+                    const e = parser.nodeToElement(node);
+                    const tag = try parser.elementTag(e);
                     if (tag != .script) {
                         // ignore non-js script.
                         continue;

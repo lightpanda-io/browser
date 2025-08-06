@@ -477,9 +477,6 @@ const PendingScript = struct {
         // will fail. This assertion exists to catch incorrect assumptions about
         // how libcurl works, or about how we've configured it.
         std.debug.assert(self.script.source.remote.capacity == 0);
-
-        // @newhttp TODO: pre size based on content-length
-        // @newhttp TODO: max-length enfocement
         self.script.source = .{ .remote = self.manager.buffer_pool.get() };
     }
 
@@ -491,7 +488,6 @@ const PendingScript = struct {
         //     .len = data.len,
         // });
 
-        // @newhttp TODO: max-length enforcement ??
         try self.script.source.remote.appendSlice(self.manager.allocator, data);
     }
 
@@ -704,8 +700,6 @@ const BufferPool = struct {
     }
 
     fn release(self: *BufferPool, buffer: ArrayListUnmanaged(u8)) void {
-        // @newhttp TODO: discard buffers that are larger than some configured max?
-
         // create mutable copy
         var b = buffer;
 
