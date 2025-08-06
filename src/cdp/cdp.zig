@@ -338,10 +338,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         inspector: Inspector,
         isolated_world: ?IsolatedWorld,
 
-        // Used to restore the proxy after the CDP session ends. If CDP never over-wrote it, it won't restore it (the first null).
-        // If the CDP is restoring it, but the original value was null, that's the 2nd null.
-        // If you only have 1 null it would be ambiguous, does null mean it shouldn't be restored, or should it be restored to null?
-        http_proxy_before: ??std.Uri = null,
+        http_proxy_changed: bool = false,
 
         const Self = @This();
 
@@ -397,7 +394,13 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             self.node_search_list.deinit();
             self.cdp.browser.notification.unregisterAll(self);
 
-            if (self.http_proxy_before) |prev_proxy| self.cdp.browser.http_client.http_proxy = prev_proxy;
+            if (self.http_proxy_changed) {
+                // has to be called after browser.closeSession, since it won't
+                // work if there are active connections.
+                self.cdp.browser.http_client.restoreOriginalProxy() catch |err| {
+                    log.warn(.http, "restoreOriginalProxy", .{ .err = err });
+                };
+            }
         }
 
         pub fn reset(self: *Self) void {

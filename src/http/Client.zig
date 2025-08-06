@@ -71,9 +71,6 @@ allocator: Allocator,
 // request. These wil come and go with each request.
 transfer_pool: std.heap.MemoryPool(Transfer),
 
-//@newhttp
-http_proxy: ?std.Uri = null,
-
 // see ScriptManager.blockingGet
 blocking: Handle,
 
@@ -86,6 +83,10 @@ blocking_active: if (builtin.mode == .Debug) bool else void = if (builtin.mode =
 // purposes, but keep in mind that, while single-threaded, calls like makeRequest
 // can result in makeRequest being re-called (from a doneCallback).
 arena: ArenaAllocator,
+
+// only needed for CDP which can change the proxy and then restore it. When
+// restoring, this originally-configured value is what it goes to.
+http_proxy: ?[:0]const u8 = null,
 
 const RequestQueue = std.DoublyLinkedList(Request);
 
@@ -117,6 +118,7 @@ pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts) !*Clie
         .handles = handles,
         .blocking = blocking,
         .allocator = allocator,
+        .http_proxy = opts.http_proxy,
         .transfer_pool = transfer_pool,
         .queue_node_pool = queue_node_pool,
         .arena = ArenaAllocator.init(allocator),
@@ -206,6 +208,36 @@ pub fn blockingRequest(self: *Client, req: Request) !void {
     };
 
     return self.makeRequest(&self.blocking, req);
+}
+
+// Restrictive since it'll only work if there are no inflight requests. In some
+// cases, the libcurl documentation is clear that changing settings while a
+// connection is inflight is undefined. It doesn't say anything about CURLOPT_PROXY,
+// but better to be safe than sorry.
+// For now, this restriction is ok, since it's only called by CDP on
+// createBrowserContext, at which point, if we do have an active connection,
+// that's probably a bug (a previous abort failed?). But if we need to call this
+// at any point in time, it could be worth digging into libcurl to see if this
+// can be changed at any point in the easy's lifecycle.
+pub fn changeProxy(self: *Client, proxy: [:0]const u8) !void {
+    try self.ensureNoActiveConnection();
+
+    for (self.handles.handles) |h| {
+        try errorCheck(c.curl_easy_setopt(h.conn.easy, c.CURLOPT_PROXY, proxy.ptr));
+    }
+    try errorCheck(c.curl_easy_setopt(self.blocking.conn.easy, c.CURLOPT_PROXY, proxy.ptr));
+}
+
+// Same restriction as changeProxy. Should be ok since this is only called on
+// BrowserContext deinit.
+pub fn restoreOriginalProxy(self: *Client) !void {
+    try self.ensureNoActiveConnection();
+
+    const proxy = if (self.http_proxy) |p| p.ptr else null;
+    for (self.handles.handles) |h| {
+        try errorCheck(c.curl_easy_setopt(h.conn.easy, c.CURLOPT_PROXY, proxy));
+    }
+    try errorCheck(c.curl_easy_setopt(self.blocking.conn.easy, c.CURLOPT_PROXY, proxy));
 }
 
 fn makeRequest(self: *Client, handle: *Handle, req: Request) !void {
@@ -337,6 +369,17 @@ fn endTransfer(self: *Client, transfer: *Transfer) void {
 
     self.handles.release(handle);
     self.active -= 1;
+}
+
+fn ensureNoActiveConnection(self: *const Client) !void {
+    if (self.active > 0) {
+        return error.InflightConnection;
+    }
+    if (comptime builtin.mode == .Debug) {
+        if (self.blocking_active) {
+            return error.InflightConnection;
+        }
+    }
 }
 
 const Handles = struct {
