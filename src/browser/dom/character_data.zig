@@ -24,7 +24,8 @@ const Node = @import("node.zig").Node;
 const Comment = @import("comment.zig").Comment;
 const Text = @import("text.zig");
 const ProcessingInstruction = @import("processing_instruction.zig").ProcessingInstruction;
-const HTMLElem = @import("../html/elements.zig");
+const Element = @import("element.zig").Element;
+const ElementUnion = @import("element.zig").Union;
 
 // CharacterData interfaces
 pub const Interfaces = .{
@@ -49,20 +50,20 @@ pub const CharacterData = struct {
         return try parser.characterDataLength(self);
     }
 
-    pub fn get_nextElementSibling(self: *parser.CharacterData) !?HTMLElem.Union {
+    pub fn get_nextElementSibling(self: *parser.CharacterData) !?ElementUnion {
         const res = try parser.nodeNextElementSibling(parser.characterDataToNode(self));
         if (res == null) {
             return null;
         }
-        return try HTMLElem.toInterface(HTMLElem.Union, res.?);
+        return try Element.toInterface(res.?);
     }
 
-    pub fn get_previousElementSibling(self: *parser.CharacterData) !?HTMLElem.Union {
+    pub fn get_previousElementSibling(self: *parser.CharacterData) !?ElementUnion {
         const res = try parser.nodePreviousElementSibling(parser.characterDataToNode(self));
         if (res == null) {
             return null;
         }
-        return try HTMLElem.toInterface(HTMLElem.Union, res.?);
+        return try Element.toInterface(res.?);
     }
 
     // Read/Write attributes

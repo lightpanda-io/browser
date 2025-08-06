@@ -66,10 +66,8 @@ pub const Document = struct {
         return DOMImplementation{};
     }
 
-    pub fn get_documentElement(self: *parser.Document) !?ElementUnion {
-        const e = try parser.documentGetDocumentElement(self);
-        if (e == null) return null;
-        return try Element.toInterface(e.?);
+    pub fn get_documentElement(self: *parser.Document) !?*parser.Element {
+        return try parser.documentGetDocumentElement(self);
     }
 
     pub fn get_documentURI(self: *parser.Document) ![]const u8 {

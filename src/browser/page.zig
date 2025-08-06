@@ -365,7 +365,7 @@ pub const Page = struct {
             const current = next.?;
 
             const e = parser.nodeToElement(current);
-            const tag = try parser.elementHTMLGetTagType(@as(*parser.ElementHTML, @ptrCast(e)));
+            const tag = try parser.elementTag(e);
 
             if (tag != .script) {
                 // ignore non-js script.
@@ -809,7 +809,7 @@ pub const Page = struct {
         if (try parser.elementGetAttribute(element, "form")) |form_id| {
             const document = parser.documentHTMLToDocument(self.window.document);
             const form_element = try parser.documentGetElementById(document, form_id) orelse return null;
-            if (try parser.elementHTMLGetTagType(@ptrCast(form_element)) == .form) {
+            if (try parser.elementTag(@ptrCast(form_element)) == .form) {
                 return @ptrCast(form_element);
             }
             return null;

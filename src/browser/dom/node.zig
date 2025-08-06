@@ -29,6 +29,7 @@ const EventTarget = @import("event_target.zig").EventTarget;
 const Attr = @import("attribute.zig").Attr;
 const CData = @import("character_data.zig");
 const Element = @import("element.zig").Element;
+const ElementUnion = @import("element.zig").Union;
 const NodeList = @import("nodelist.zig").NodeList;
 const Document = @import("document.zig").Document;
 const DocumentType = @import("document_type.zig").DocumentType;
@@ -40,7 +41,6 @@ const Walker = @import("walker.zig").WalkerDepthFirst;
 
 // HTML
 const HTML = @import("../html/html.zig");
-const HTMLElem = @import("../html/elements.zig");
 
 // Node interfaces
 pub const Interfaces = .{
@@ -67,7 +67,7 @@ pub const Node = struct {
 
     pub fn toInterface(node: *parser.Node) !Union {
         return switch (try parser.nodeType(node)) {
-            .element => try HTMLElem.toInterface(
+            .element => try Element.toInterfaceT(
                 Union,
                 @as(*parser.Element, @ptrCast(node)),
             ),
@@ -145,12 +145,12 @@ pub const Node = struct {
         return try Node.toInterface(res.?);
     }
 
-    pub fn get_parentElement(self: *parser.Node) !?HTMLElem.Union {
+    pub fn get_parentElement(self: *parser.Node) !?ElementUnion {
         const res = try parser.nodeParentElement(self);
         if (res == null) {
             return null;
         }
-        return try HTMLElem.toInterface(HTMLElem.Union, @as(*parser.Element, @ptrCast(res.?)));
+        return try Element.toInterface(res.?);
     }
 
     pub fn get_nodeName(self: *parser.Node) ![]const u8 {

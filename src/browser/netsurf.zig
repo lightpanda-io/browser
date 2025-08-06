@@ -328,6 +328,24 @@ pub const Tag = enum(u8) {
             else => upperName(@tagName(tag)),
         };
     }
+
+    pub fn fromString(tagname: []const u8) !Tag {
+        inline for (@typeInfo(Tag).@"enum".fields) |field| {
+            if (std.ascii.eqlIgnoreCase(field.name, tagname)) {
+                return @enumFromInt(field.value);
+            }
+        }
+
+        return error.Invalid;
+    }
+
+    const testing = @import("../testing.zig");
+    test "Tag.fromString" {
+        try testing.expect(try Tag.fromString("ABBR") == .abbr);
+        try testing.expect(try Tag.fromString("abbr") == .abbr);
+
+        try testing.expect(Tag.fromString("foo") == error.Invalid);
+    }
 };
 
 // DOMException
@@ -1410,13 +1428,13 @@ pub inline fn nodeToDocument(node: *Node) *Document {
     return @as(*Document, @ptrCast(node));
 }
 
-// Combination of nodeToElement + elementHTMLGetTagType
+// Combination of nodeToElement + elementTag
 pub fn nodeHTMLGetTagType(node: *Node) !?Tag {
     if (try nodeType(node) != .element) {
         return null;
     }
-    const html_element: *ElementHTML = @ptrCast(node);
-    return try elementHTMLGetTagType(html_element);
+
+    return try elementTag(@ptrCast(node));
 }
 
 // CharacterData
@@ -1575,6 +1593,20 @@ pub const Element = c.dom_element;
 
 fn elementVtable(elem: *Element) c.dom_element_vtable {
     return getVtable(c.dom_element_vtable, Element, elem);
+}
+
+pub fn elementTag(elem: *Element) !Tag {
+    const tagname = try elementGetTagName(elem) orelse return .undef;
+    return Tag.fromString(tagname) catch .undef;
+}
+
+pub fn elementGetTagName(elem: *Element) !?[]const u8 {
+    var s: ?*String = undefined;
+    const err = elementVtable(elem).dom_element_get_tag_name.?(elem, &s);
+    try DOMErr(err);
+    if (s == null) return null;
+
+    return strToData(s.?);
 }
 
 pub fn elementGetAttribute(elem: *Element, name: []const u8) !?[]const u8 {
@@ -1768,21 +1800,6 @@ pub const ElementHTML = c.dom_html_element;
 
 fn elementHTMLVtable(elem_html: *ElementHTML) c.dom_html_element_vtable {
     return getVtable(c.dom_html_element_vtable, ElementHTML, elem_html);
-}
-
-pub fn elementHTMLGetTagType(elem_html: *ElementHTML) !Tag {
-    var tag_type: c.dom_html_element_type = undefined;
-    const err = elementHTMLVtable(elem_html).dom_html_element_get_tag_type.?(elem_html, &tag_type);
-    try DOMErr(err);
-
-    if (tag_type >= 255) {
-        // This is questionable, but std.meta.intToEnum has more overhead
-        // Added this because this WPT test started to fail once we
-        // introduced an SVGElement:
-        //   html/dom/documents/dom-tree-accessors/document.title-09.html
-        return Tag.undef;
-    }
-    return @as(Tag, @enumFromInt(tag_type));
 }
 
 // HTMLScriptElement
@@ -2139,14 +2156,45 @@ pub inline fn documentCreateDocument(title: ?[]const u8) !*DocumentHTML {
     return doc_html;
 }
 
-pub inline fn documentCreateElement(doc: *Document, tag_name: []const u8) !*Element {
+fn documentCreateHTMLElement(doc: *Document, tag_name: []const u8) !*Element {
+    std.debug.assert(doc.is_html);
+
+    var elem: ?*Element = undefined;
+    const err = c._dom_html_document_create_element(doc, try strFromData(tag_name), &elem);
+    try DOMErr(err);
+    return elem.?;
+}
+
+pub fn documentCreateElement(doc: *Document, tag_name: []const u8) !*Element {
+    if (doc.is_html) {
+        return documentCreateHTMLElement(doc, tag_name);
+    }
+
     var elem: ?*Element = undefined;
     const err = documentVtable(doc).dom_document_create_element.?(doc, try strFromData(tag_name), &elem);
     try DOMErr(err);
     return elem.?;
 }
 
-pub inline fn documentCreateElementNS(doc: *Document, ns: []const u8, tag_name: []const u8) !*Element {
+fn documentCreateHTMLElementNS(doc: *Document, ns: []const u8, tag_name: []const u8) !*Element {
+    std.debug.assert(doc.is_html);
+
+    var elem: ?*Element = undefined;
+    const err = c._dom_html_document_create_element_ns(
+        doc,
+        try strFromData(ns),
+        try strFromData(tag_name),
+        &elem,
+    );
+    try DOMErr(err);
+    return elem.?;
+}
+
+pub fn documentCreateElementNS(doc: *Document, ns: []const u8, tag_name: []const u8) !*Element {
+    if (doc.is_html) {
+        return documentCreateHTMLElementNS(doc, ns, tag_name);
+    }
+
     var elem: ?*Element = undefined;
     const err = documentVtable(doc).dom_document_create_element_ns.?(
         doc,
