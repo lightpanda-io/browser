@@ -140,7 +140,7 @@ pub const Window = struct {
         const frames = try domcss.querySelectorAll(
             page.call_arena,
             parser.documentHTMLToNode(self.document),
-            "frame,iframe",
+            "iframe",
         );
 
         if (index >= frames.nodes.items.len) {
@@ -159,7 +159,7 @@ pub const Window = struct {
         const frames = try domcss.querySelectorAll(
             page.call_arena,
             parser.documentHTMLToNode(self.document),
-            "frame,iframe",
+            "iframe",
         );
 
         return frames.get_length();
