@@ -74,10 +74,6 @@ transfer_pool: std.heap.MemoryPool(Transfer),
 // see ScriptManager.blockingGet
 blocking: Handle,
 
-// Boolean to check that we don't make a blocking request while an existing
-// blocking request is already being processed.
-blocking_active: if (builtin.mode == .Debug) bool else void = if (builtin.mode == .Debug) false else {},
-
 // The only place this is meant to be used is in `makeRequest` BEFORE `perform`
 // is called. It is used to generate our Cookie header. It can be used for other
 // purposes, but keep in mind that, while single-threaded, calls like makeRequest
@@ -199,14 +195,6 @@ pub fn request(self: *Client, req: Request) !void {
 
 // See ScriptManager.blockingGet
 pub fn blockingRequest(self: *Client, req: Request) !void {
-    if (comptime builtin.mode == .Debug) {
-        std.debug.assert(self.blocking_active == false);
-        self.blocking_active = true;
-    }
-    defer if (comptime builtin.mode == .Debug) {
-        self.blocking_active = false;
-    };
-
     return self.makeRequest(&self.blocking, req);
 }
 
@@ -361,7 +349,7 @@ fn endTransfer(self: *Client, transfer: *Transfer) void {
     self.transfer_pool.destroy(transfer);
 
     errorMCheck(c.curl_multi_remove_handle(self.multi, handle.conn.easy)) catch |err| {
-        log.fatal(.http, "Failed to abort", .{ .err = err });
+        log.fatal(.http, "Failed to remove handle", .{ .err = err });
     };
 
     self.handles.release(handle);
@@ -371,11 +359,6 @@ fn endTransfer(self: *Client, transfer: *Transfer) void {
 fn ensureNoActiveConnection(self: *const Client) !void {
     if (self.active > 0) {
         return error.InflightConnection;
-    }
-    if (comptime builtin.mode == .Debug) {
-        if (self.blocking_active) {
-            return error.InflightConnection;
-        }
     }
 }
 
@@ -429,8 +412,8 @@ const Handles = struct {
     }
 
     fn release(self: *Handles, handle: *Handle) void {
-        // client.blocking is a handle without a node, it doesn't exist in the
-        // eitehr the in_use or available lists.
+        // client.blocking is a handle without a node, it doesn't exist in
+        // either the in_use or available lists.
         const node = &(handle.node orelse return);
 
         self.in_use.remove(node);

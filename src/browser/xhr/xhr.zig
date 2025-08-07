@@ -171,12 +171,12 @@ pub const XMLHttpRequest = struct {
         };
     }
 
-    // pub fn destructor(self: *XMLHttpRequest) void {
-    //     if (self.transfer) |transfer| {
-    //         transfer.abort();
-    //         self.transfer = null;
-    //     }
-    // }
+    pub fn destructor(self: *XMLHttpRequest) void {
+        if (self.transfer) |transfer| {
+            transfer.abort();
+            self.transfer = null;
+        }
+    }
 
     pub fn reset(self: *XMLHttpRequest) void {
         self.url = null;

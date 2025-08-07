@@ -38,6 +38,9 @@ page: *Page,
 // used to prevent recursive evalution
 is_evaluating: bool,
 
+// used to prevent executing scripts while we're doing a blocking load
+is_blocking: bool = false,
+
 // Only once this is true can deferred scripts be run
 static_scripts_done: bool,
 
@@ -53,6 +56,7 @@ scripts: OrderList,
 deferreds: OrderList,
 
 shutdown: bool = false,
+
 
 client: *HttpClient,
 allocator: Allocator,
@@ -269,6 +273,17 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
 // http handle, these are executed without there necessarily being a free handle.
 // Thus, Http/Client.zig maintains a dedicated handle for these calls.
 pub fn blockingGet(self: *ScriptManager, url: [:0]const u8) !BlockingResult {
+    std.debug.assert(self.is_blocking == false);
+
+    self.is_blocking = true;
+    defer {
+        self.is_blocking = false;
+
+        // we blocked evaluation while loading this script, there could be
+        // scripts ready to process.
+        self.evaluate();
+    }
+
     var blocking = Blocking{
         .allocator = self.allocator,
         .buffer_pool = &self.buffer_pool,
@@ -311,6 +326,13 @@ fn evaluate(self: *ScriptManager) void {
         // This is particularly true with blockingGet, but even without this,
         // it's theoretically possible (but unlikely). We could make this work
         // but there's little reason to support the complexity.
+        return;
+    }
+
+    if (self.is_blocking) {
+        // Cannot evaluate scripts while a blocking-load is in progress. Not
+        // only could that result in incorrect evaluation order, it could
+        // triger another blocking request, while we're doing a blocking request.
         return;
     }
 
