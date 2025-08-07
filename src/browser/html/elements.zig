@@ -61,7 +61,6 @@ pub const Interfaces = .{
     HTMLHeadElement,
     HTMLHeadingElement,
     HTMLHtmlElement,
-    HTMLIFrameElement,
     HTMLImageElement,
     HTMLImageElement.Factory,
     HTMLInputElement,
@@ -102,6 +101,7 @@ pub const Interfaces = .{
     HTMLVideoElement,
 
     @import("form.zig").HTMLFormElement,
+    @import("iframe.zig").HTMLIFrameElement,
     @import("select.zig").Interfaces,
 };
 
@@ -580,12 +580,6 @@ pub const HTMLHeadingElement = struct {
 
 pub const HTMLHtmlElement = struct {
     pub const Self = parser.Html;
-    pub const prototype = *HTMLElement;
-    pub const subtype = .node;
-};
-
-pub const HTMLIFrameElement = struct {
-    pub const Self = parser.IFrame;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
 };
