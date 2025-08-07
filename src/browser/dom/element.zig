@@ -60,14 +60,24 @@ pub const Element = struct {
 
     pub fn toInterfaceT(comptime T: type, e: *parser.Element) !T {
         const tagname = try parser.elementGetTagName(e) orelse {
-            // in case of null tagname, return the element as it.
+            // If the owner's document is HTML, assume we have an HTMLElement.
+            const doc = try parser.nodeOwnerDocument(parser.elementToNode(e));
+            if (doc != null and !doc.?.is_html) {
+                return .{ .HTMLElement = @as(*parser.ElementHTML, @ptrCast(e)) };
+            }
+
             return .{ .Element = e };
         };
 
         // TODO SVGElement and MathML are not supported yet.
 
         const tag = parser.Tag.fromString(tagname) catch {
-            // if the tag is invalid, we don't have an HTMLElement.
+            // If the owner's document is HTML, assume we have an HTMLElement.
+            const doc = try parser.nodeOwnerDocument(parser.elementToNode(e));
+            if (doc != null and doc.?.is_html) {
+                return .{ .HTMLElement = @as(*parser.ElementHTML, @ptrCast(e)) };
+            }
+
             return .{ .Element = e };
         };
 

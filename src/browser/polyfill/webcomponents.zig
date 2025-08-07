@@ -61,5 +61,7 @@ test "Browser.webcomponents" {
         },
 
         .{ "main.innerHTML", "<lightpanda-test>connected</lightpanda-test>" },
+        .{ "document.createElement('lightpanda-test').dataset", "[object DataSet]" },
+        .{ "document.createElement('lightpanda-test.x').dataset", "[object DataSet]" },
     }, .{});
 }
