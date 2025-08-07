@@ -29,6 +29,7 @@ const Page = @import("../browser/page.zig").Page;
 const Inspector = @import("../browser/env.zig").Env.Inspector;
 const Incrementing = @import("../id.zig").Incrementing;
 const Notification = @import("../notification.zig").Notification;
+const InterceptState = @import("domains/fetch.zig").InterceptState;
 
 const polyfill = @import("../browser/polyfill/polyfill.zig");
 
@@ -75,6 +76,8 @@ pub fn CDPT(comptime TypeProvider: type) type {
         // Extra headers to add to all requests. TBD under which conditions this should be reset.
         extra_headers: std.ArrayListUnmanaged(std.http.Header) = .empty,
 
+        intercept_state: InterceptState,
+
         const Self = @This();
 
         pub fn init(app: *App, client: TypeProvider.Client) !Self {
@@ -89,6 +92,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
                 .browser_context = null,
                 .message_arena = std.heap.ArenaAllocator.init(allocator),
                 .notification_arena = std.heap.ArenaAllocator.init(allocator),
+                .intercept_state = try InterceptState.init(allocator), // TBD or browser session arena?
             };
         }
 
@@ -96,6 +100,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
             if (self.browser_context) |*bc| {
                 bc.deinit();
             }
+            self.intercept_state.deinit(); // TBD Should this live in BC?
             self.browser.deinit();
             self.message_arena.deinit();
             self.notification_arena.deinit();
@@ -451,6 +456,14 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             self.cdp.browser.notification.unregister(.http_request_complete, self);
         }
 
+        pub fn fetchEnable(self: *Self) !void {
+            try self.cdp.browser.notification.register(.http_request_intercept, self, onHttpRequestIntercept);
+        }
+
+        pub fn fetchDisable(self: *Self) void {
+            self.cdp.browser.notification.unregister(.http_request_intercept, self);
+        }
+
         pub fn onPageRemove(ctx: *anyopaque, _: Notification.PageRemove) !void {
             const self: *Self = @alignCast(@ptrCast(ctx));
             return @import("domains/page.zig").pageRemove(self);
@@ -475,7 +488,13 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         pub fn onHttpRequestStart(ctx: *anyopaque, data: *const Notification.RequestStart) !void {
             const self: *Self = @alignCast(@ptrCast(ctx));
             defer self.resetNotificationArena();
-            return @import("domains/network.zig").httpRequestStart(self.notification_arena, self, data);
+            try @import("domains/network.zig").httpRequestStart(self.notification_arena, self, data);
+        }
+
+        pub fn onHttpRequestIntercept(ctx: *anyopaque, data: *const Notification.RequestIntercept) !void {
+            const self: *Self = @alignCast(@ptrCast(ctx));
+            defer self.resetNotificationArena();
+            try @import("domains/fetch.zig").requestPaused(self.notification_arena, self, data);
         }
 
         pub fn onHttpRequestFail(ctx: *anyopaque, data: *const Notification.RequestFail) !void {

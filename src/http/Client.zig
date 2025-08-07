@@ -20,6 +20,7 @@ const std = @import("std");
 const log = @import("../log.zig");
 const builtin = @import("builtin");
 const Http = @import("Http.zig");
+const Notification = @import("../notification.zig").Notification;
 
 const c = Http.c;
 
@@ -57,6 +58,9 @@ multi: *c.CURLM,
 // of easys.
 handles: Handles,
 
+// Use to generate the next request ID
+next_request_id: u64 = 0,
+
 // When handles has no more available easys, requests get queued.
 queue: RequestQueue,
 
@@ -73,6 +77,9 @@ transfer_pool: std.heap.MemoryPool(Transfer),
 
 // see ScriptManager.blockingGet
 blocking: Handle,
+
+// To notify registered subscribers of events
+notification: ?*Notification = null,
 
 // The only place this is meant to be used is in `makeRequest` BEFORE `perform`
 // is called. It is used to generate our Cookie header. It can be used for other
@@ -184,12 +191,26 @@ pub fn tick(self: *Client, timeout_ms: usize) !void {
 }
 
 pub fn request(self: *Client, req: Request) !void {
+    var req_copy = req; // We need it mutable
+
+    if (req_copy.id == null) { // If the ID has already been set that means the request was previously intercepted
+        req_copy.id = self.next_request_id;
+        self.next_request_id += 1;
+        if (self.notification) |notification| {
+            notification.dispatch(.http_request_start, &.{ .request = &req_copy });
+
+            var wait_for_interception = false;
+            notification.dispatch(.http_request_intercept, &.{ .request = &req_copy, .wait_for_interception = &wait_for_interception });
+            if (wait_for_interception) return; // The user is send an invitation to intercept this request.
+        }
+    }
+
     if (self.handles.getFreeHandle()) |handle| {
-        return self.makeRequest(handle, req);
+        return self.makeRequest(handle, req_copy);
     }
 
     const node = try self.queue_node_pool.create();
-    node.data = req;
+    node.data = req_copy;
     self.queue.append(node);
 }
 
@@ -471,6 +492,7 @@ pub const RequestCookie = struct {
 };
 
 pub const Request = struct {
+    id: ?u64 = null,
     method: Method,
     url: [:0]const u8,
     body: ?[]const u8 = null,

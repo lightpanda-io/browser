@@ -52,6 +52,7 @@ pub const Browser = struct {
         errdefer env.deinit();
 
         const notification = try Notification.init(allocator, app.notification);
+        app.http.client.notification = notification;
         errdefer notification.deinit();
 
         return .{
