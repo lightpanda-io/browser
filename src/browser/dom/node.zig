@@ -75,7 +75,14 @@ pub const Node = struct {
             .text => .{ .Text = @as(*parser.Text, @ptrCast(node)) },
             .cdata_section => .{ .CDATASection = @as(*parser.CDATASection, @ptrCast(node)) },
             .processing_instruction => .{ .ProcessingInstruction = @as(*parser.ProcessingInstruction, @ptrCast(node)) },
-            .document => .{ .HTMLDocument = @as(*parser.DocumentHTML, @ptrCast(node)) },
+            .document => blk: {
+                const doc: *parser.Document = @ptrCast(node);
+                if (doc.is_html) {
+                    break :blk .{ .HTMLDocument = @as(*parser.DocumentHTML, @ptrCast(node)) };
+                }
+
+                break :blk .{ .Document = doc };
+            },
             .document_type => .{ .DocumentType = @as(*parser.DocumentType, @ptrCast(node)) },
             .attribute => .{ .Attr = @as(*parser.Attribute, @ptrCast(node)) },
             .document_fragment => .{ .DocumentFragment = @as(*parser.DocumentFragment, @ptrCast(node)) },
