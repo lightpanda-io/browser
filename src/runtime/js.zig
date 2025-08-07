@@ -799,6 +799,14 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 return promise;
             }
 
+            pub fn newArray(self: *JsContext, len: u32) JsObject {
+                const arr = v8.Array.init(self.isolate, len);
+                return .{
+                    .js_context = self,
+                    .js_obj = arr.castTo(v8.Object),
+                };
+            }
+
             // Wrap a v8.Exception
             fn createException(self: *const JsContext, e: v8.Value) Exception {
                 return .{
