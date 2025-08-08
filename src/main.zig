@@ -134,7 +134,10 @@ fn run(alloc: Allocator) !void {
 
             // dump
             if (opts.dump) {
-                try page.dump(.{ .exclude_scripts = opts.noscript }, std.io.getStdOut());
+                try page.dump(.{
+                    .exclude_scripts = opts.noscript,
+                    .with_base = opts.withbase,
+                }, std.io.getStdOut());
             }
         },
         else => unreachable,
@@ -213,6 +216,7 @@ const Command = struct {
         dump: bool = false,
         common: Common,
         noscript: bool = false,
+        withbase: bool = false,
     };
 
     const Common = struct {
@@ -277,6 +281,7 @@ const Command = struct {
             \\--dump          Dumps document to stdout.
             \\                Defaults to false.
             \\--noscript      Exclude <script> tags in dump. Defaults to false.
+            \\--with_base     Add a <base> tag in dump. Defaults to false.
             \\
         ++ common_options ++
             \\
@@ -351,13 +356,19 @@ fn inferMode(opt: []const u8) ?App.RunMode {
         return .serve;
     }
 
+    if (std.mem.startsWith(u8, opt, "--") == false) {
+        return .fetch;
+    }
+
     if (std.mem.eql(u8, opt, "--dump")) {
         return .fetch;
     }
+
     if (std.mem.eql(u8, opt, "--noscript")) {
         return .fetch;
     }
-    if (std.mem.startsWith(u8, opt, "--") == false) {
+
+    if (std.mem.eql(u8, opt, "--with_base")) {
         return .fetch;
     }
 
@@ -442,7 +453,8 @@ fn parseFetchArgs(
     args: *std.process.ArgIterator,
 ) !Command.Fetch {
     var dump: bool = false;
-    var noscript: bool = true;
+    var noscript: bool = false;
+    var withbase: bool = false;
     var url: ?[]const u8 = null;
     var common: Command.Common = .{};
 
@@ -454,6 +466,11 @@ fn parseFetchArgs(
 
         if (std.mem.eql(u8, "--noscript", opt)) {
             noscript = true;
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--with_base", opt)) {
+            withbase = true;
             continue;
         }
 
@@ -483,6 +500,7 @@ fn parseFetchArgs(
         .dump = dump,
         .common = common,
         .noscript = noscript,
+        .withbase = withbase,
     };
 }
 

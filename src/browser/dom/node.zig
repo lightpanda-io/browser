@@ -111,6 +111,9 @@ pub const Node = struct {
     // --------
 
     // Read-only attributes
+    pub fn get_baseURI(_: *parser.Node, page: *Page) ![]const u8 {
+        return page.url.raw;
+    }
 
     pub fn get_firstChild(self: *parser.Node) !?Union {
         const res = try parser.nodeFirstChild(self);
@@ -735,6 +738,10 @@ test "Browser.DOM.node" {
     try runner.testCases(&.{
         // TODO: no test
         .{ "link.normalize()", "undefined" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "link.baseURI", "https://lightpanda.io/opensource-browser/" },
     }, .{});
 
     try runner.testCases(&.{
