@@ -115,8 +115,8 @@ fn disable(cmd: anytype) !void {
 
 fn enable(cmd: anytype) !void {
     const params = (try cmd.params(EnableParam)) orelse EnableParam{};
-    if (params.patterns.len != 0) std.debug.print("Fetch.enable: Not implemented patterns set\n", .{});
-    if (params.handleAuthRequests) std.debug.print("Fetch.enable: Not implemented handleAuthRequests set\n", .{});
+    if (params.patterns.len != 0) log.warn(.cdp, "Fetch.enable No patterns yet", .{});
+    if (params.handleAuthRequests) log.warn(.cdp, "Fetch.enable No auth yet", .{});
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     try bc.fetchEnable();
@@ -170,7 +170,7 @@ pub fn requestPaused(arena: Allocator, bc: anytype, intercept: *const Notificati
         .networkId = try std.fmt.allocPrint(arena, "REQ-{d}", .{intercept.request.id.?}),
     }, .{ .session_id = session_id });
 
-    // TODO await either continueRequest, failRequest or fulfillRequest
+    // Await either continueRequest, failRequest or fulfillRequest
     intercept.wait_for_interception.* = true;
 }
 
@@ -191,7 +191,7 @@ fn continueRequest(cmd: anytype) !void {
     })) orelse return error.InvalidParams;
     if (params.postData != null or params.headers != null or params.interceptResponse) return error.NotYetImplementedParams;
 
-    const request_id = try id_from_request_id(params.requestId);
+    const request_id = try idFromRequestId(params.requestId);
     var waiting_request = (bc.cdp.intercept_state.waiting.fetchSwapRemove(request_id) orelse return error.RequestNotFound).value;
 
     // Update the request with the new parameters
@@ -203,7 +203,7 @@ fn continueRequest(cmd: anytype) !void {
         waiting_request.method = std.meta.stringToEnum(Method, method) orelse return error.InvalidParams;
     }
 
-    log.info(.cdp, "Request continued by intercept", .{params.requestId});
+    log.info(.cdp, "Request continued by intercept", .{ .id = params.requestId });
     try bc.cdp.browser.http_client.request(waiting_request);
 
     return cmd.sendResult(null, .{});
@@ -217,17 +217,15 @@ fn failRequest(cmd: anytype) !void {
         errorReason: ErrorReason,
     })) orelse return error.InvalidParams;
 
-    const request_id = try id_from_request_id(params.requestId);
+    const request_id = try idFromRequestId(params.requestId);
     if (state.waiting.fetchSwapRemove(request_id) == null) return error.RequestNotFound;
 
-    log.info(.cdp, "Request aborted by intercept", .{params.errorReason});
+    log.info(.cdp, "Request aborted by intercept", .{ .reason = params.errorReason });
     return cmd.sendResult(null, .{});
 }
 
 // Get u64 from requestId which is formatted as: "INTERCEPT-{d}"
-fn id_from_request_id(request_id: []const u8) !u64 {
-    return std.fmt.parseInt(u64, request_id[10..], 10) catch |err| {
-        log.err(.cdp, "Failed to parse requestId", .{request_id});
-        return err;
-    };
+fn idFromRequestId(request_id: []const u8) !u64 {
+    if (!std.mem.startsWith(u8, request_id, "INTERCEPT-")) return error.InvalidParams;
+    return std.fmt.parseInt(u64, request_id[10..], 10) catch return error.InvalidParams;
 }

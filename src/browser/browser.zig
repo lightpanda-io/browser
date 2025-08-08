@@ -53,6 +53,7 @@ pub const Browser = struct {
 
         const notification = try Notification.init(allocator, app.notification);
         app.http.client.notification = notification;
+        app.http.client.next_request_id = 0; // Should we track ids in CDP only?
         errdefer notification.deinit();
 
         return .{
@@ -75,6 +76,7 @@ pub const Browser = struct {
         self.page_arena.deinit();
         self.session_arena.deinit();
         self.transfer_arena.deinit();
+        self.http_client.notification = null;
         self.notification.deinit();
         self.state_pool.deinit();
     }

@@ -78,7 +78,7 @@ transfer_pool: std.heap.MemoryPool(Transfer),
 // see ScriptManager.blockingGet
 blocking: Handle,
 
-// To notify registered subscribers of events
+// To notify registered subscribers of events, the browser sets/nulls this for us.
 notification: ?*Notification = null,
 
 // The only place this is meant to be used is in `makeRequest` BEFORE `perform`
