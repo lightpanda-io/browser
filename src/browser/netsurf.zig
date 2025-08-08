@@ -1633,9 +1633,14 @@ pub fn elementGetAttributeNS(elem: *Element, ns: []const u8, name: []const u8) !
 }
 
 pub fn elementSetAttribute(elem: *Element, qname: []const u8, value: []const u8) !void {
+    const dom_str = try strFromData(qname);
+    if (!c._dom_validate_name(dom_str)) {
+        return error.InvalidCharacterError;
+    }
+
     const err = elementVtable(elem).dom_element_set_attribute.?(
         elem,
-        try strFromData(qname),
+        dom_str,
         try strFromData(value),
     );
     try DOMErr(err);
@@ -1647,10 +1652,15 @@ pub fn elementSetAttributeNS(
     qname: []const u8,
     value: []const u8,
 ) !void {
+    const dom_str = try strFromData(qname);
+    if (!c._dom_validate_name(dom_str)) {
+        return error.InvalidCharacterError;
+    }
+
     const err = elementVtable(elem).dom_element_set_attribute_ns.?(
         elem,
         try strFromData(ns),
-        try strFromData(qname),
+        dom_str,
         try strFromData(value),
     );
     try DOMErr(err);
