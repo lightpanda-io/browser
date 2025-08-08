@@ -263,12 +263,7 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, data: *const Notification
         .fragment = true, // TODO since path is false, this likely does not work as intended
     });
 
-    // @newhttp
-    const headers: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    // try headers.ensureTotalCapacity(arena, request.headers.items.len);
-    // for (request.headers.items) |header| {
-    //     headers.putAssumeCapacity(header.name, header.value);
-    // }
+    const headers = try data.request.headers.asHashMap(arena);
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try cdp.sendEvent("Network.requestWillBeSent", .{

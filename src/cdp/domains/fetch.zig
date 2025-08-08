@@ -149,11 +149,7 @@ pub fn requestPaused(arena: Allocator, bc: anytype, intercept: *const Notificati
     const request_fragment = try @import("network.zig").urlToString(arena, &full_request_url, .{
         .fragment = true,
     });
-    const headers: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    // try headers.ensureTotalCapacity(arena, request.headers.items.len);
-    // for (request.headers.items) |header| {
-    //     headers.putAssumeCapacity(header.name, header.value);
-    // }
+    const headers = try intercept.request.headers.asHashMap(arena);
     // End of duped code
 
     try cdp.sendEvent("Fetch.requestPaused", .{

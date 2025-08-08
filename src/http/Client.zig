@@ -20,6 +20,7 @@ const std = @import("std");
 const log = @import("../log.zig");
 const builtin = @import("builtin");
 const Http = @import("Http.zig");
+pub const Headers = Http.Headers;
 const Notification = @import("../notification.zig").Notification;
 
 const c = Http.c;
@@ -260,7 +261,8 @@ fn makeRequest(self: *Client, handle: *Handle, req: Request) !void {
         return;
     };
 
-    const header_list = blk: {
+    var header_list = req.headers;
+    {
         errdefer self.handles.release(handle);
         try conn.setMethod(req.method);
         try conn.setURL(req.url);
@@ -269,31 +271,23 @@ fn makeRequest(self: *Client, handle: *Handle, req: Request) !void {
             try conn.setBody(b);
         }
 
-        var header_list = conn.commonHeaders();
-        errdefer c.curl_slist_free_all(header_list);
+        // { // TODO move up to `fn request()`
+        //     const aa = self.arena.allocator();
+        //     var arr: std.ArrayListUnmanaged(u8) = .{};
+        //     try req.cookie.forRequest(&uri, arr.writer(aa));
 
-        if (req.header) |hdr| {
-            header_list = c.curl_slist_append(header_list, hdr);
-        }
+        //     if (arr.items.len > 0) {
+        //         try arr.append(aa, 0); //null terminate
 
-        {
-            const aa = self.arena.allocator();
-            var arr: std.ArrayListUnmanaged(u8) = .{};
-            try req.cookie.forRequest(&uri, arr.writer(aa));
+        //         // copies the value
+        //         header_list = c.curl_slist_append(header_list, @ptrCast(arr.items.ptr));
+        //         defer _ = self.arena.reset(.{ .retain_with_limit = 2048 });
+        //     }
+        // }
 
-            if (arr.items.len > 0) {
-                try arr.append(aa, 0); //null terminate
-
-                // copies the value
-                header_list = c.curl_slist_append(header_list, @ptrCast(arr.items.ptr));
-                defer _ = self.arena.reset(.{ .retain_with_limit = 2048 });
-            }
-        }
-
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPHEADER, header_list));
-
-        break :blk header_list;
-    };
+        try conn.secretHeaders(&header_list); // Add headers that must be hidden from intercepts
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPHEADER, header_list.headers));
+    }
 
     {
         errdefer self.handles.release(handle);
@@ -305,7 +299,7 @@ fn makeRequest(self: *Client, handle: *Handle, req: Request) !void {
             .req = req,
             .ctx = req.ctx,
             .handle = handle,
-            ._request_header_list = header_list,
+            ._request_header_list = header_list.headers,
         };
         errdefer self.transfer_pool.destroy(transfer);
 
@@ -495,8 +489,8 @@ pub const Request = struct {
     id: ?u64 = null,
     method: Method,
     url: [:0]const u8,
+    headers: Headers,
     body: ?[]const u8 = null,
-    header: ?[:0]const u8 = null,
     cookie: RequestCookie,
 
     // arbitrary data that can be associated with this request
