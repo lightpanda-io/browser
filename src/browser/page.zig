@@ -141,8 +141,13 @@ pub const Page = struct {
         repeat_delay.* = 100 * std.time.ns_per_ms;
     }
 
+    pub const DumpOpts = struct {
+        exclude_scripts: bool = false,
+        with_base: bool = false,
+    };
+
     // dump writes the page content into the given file.
-    pub fn dump(self: *const Page, opts: Dump.Opts, out: std.fs.File) !void {
+    pub fn dump(self: *const Page, opts: DumpOpts, out: std.fs.File) !void {
         if (self.raw_data) |raw_data| {
             // raw_data was set if the document was not HTML, dump the data content only.
             return try out.writeAll(raw_data);
@@ -150,7 +155,33 @@ pub const Page = struct {
 
         // if the page has a pointer to a document, dumps the HTML.
         const doc = parser.documentHTMLToDocument(self.window.document);
-        try Dump.writeHTML(doc, opts, out);
+
+        // if the base si requested, add the base's node in the document's headers.
+        if (opts.with_base) {
+            try self.addDOMTreeBase();
+        }
+
+        try Dump.writeHTML(doc, .{
+            .exclude_scripts = opts.exclude_scripts,
+        }, out);
+    }
+
+    // addDOMTreeBase modifies the page's document to add a <base> tag after
+    // <head>.
+    // If <head> is missing, the function returns silently.
+    fn addDOMTreeBase(self: *const Page) !void {
+        const doc = parser.documentHTMLToDocument(self.window.document);
+        std.debug.assert(doc.is_html);
+
+        // find <head> tag
+        const list = try parser.documentGetElementsByTagName(doc, "head");
+        const head = try parser.nodeListItem(list, 0) orelse return;
+
+        const base = try parser.documentCreateElement(doc, "base");
+        try parser.elementSetAttribute(base, "href", self.url.raw);
+
+        const Node = @import("dom/node.zig").Node;
+        try Node.prepend(head, &[_]Node.NodeOrText{.{ .node = parser.elementToNode(base) }});
     }
 
     pub fn fetchModuleSource(ctx: *anyopaque, src: []const u8) !?[]const u8 {
