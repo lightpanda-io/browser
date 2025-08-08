@@ -1418,6 +1418,13 @@ pub fn nodeSetEmbedderData(node: *Node, data: *anyopaque) void {
     c._dom_node_set_embedder_data(node, data);
 }
 
+pub fn nodeGetElementById(node: *Node, id: []const u8) !?*Element {
+    var el: ?*Element = undefined;
+    const str_id = try strFromData(id);
+    try DOMErr(c._dom_find_element_by_id(node, str_id, &el));
+    return el;
+}
+
 // nodeToElement is an helper to convert a node to an element.
 pub inline fn nodeToElement(node: *Node) *Element {
     return @as(*Element, @ptrCast(node));
