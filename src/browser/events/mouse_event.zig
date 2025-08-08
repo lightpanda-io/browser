@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const log = std.log.scoped(.mouse_event);
+const log = @import("../../log.zig");
 
 const parser = @import("../netsurf.zig");
 const Event = @import("event.zig").Event;
@@ -69,7 +69,7 @@ pub const MouseEvent = struct {
         });
 
         if (!std.mem.eql(u8, event_type, "click")) {
-            log.warn("MouseEvent currently only supports listeners for 'click' events!", .{});
+            log.warn(.mouse_event, "unsupported mouse event", .{ .event = event_type });
         }
 
         return mouse_event;
