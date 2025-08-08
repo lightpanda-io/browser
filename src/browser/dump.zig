@@ -23,6 +23,7 @@ const Walker = @import("dom/walker.zig").WalkerChildren;
 
 pub const Opts = struct {
     exclude_scripts: bool = false,
+    include_base: ?[]const u8 = null,
 };
 
 // writer must be a std.io.Writer
@@ -90,6 +91,14 @@ pub fn writeNode(node: *parser.Node, opts: Opts, writer: anytype) anyerror!void 
 
             // void elements can't have any content.
             if (try isVoid(parser.nodeToElement(node))) return;
+
+            // If we wrote the <header> and we want to include a <base>, add it
+            // now.
+            if (opts.include_base != null and tag_type == .head) {
+                try writer.writeAll("<base href=\"");
+                try writer.writeAll(opts.include_base.?);
+                try writer.writeAll("\">");
+            }
 
             if (tag_type == .script) {
                 try writer.writeAll(try parser.nodeTextContent(node) orelse "");
