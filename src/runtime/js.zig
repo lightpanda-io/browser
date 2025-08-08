@@ -3469,11 +3469,16 @@ fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bool) 
                     else => @compileError("Invalid TypeArray type: " ++ @typeName(value_type)),
                 };
 
-                const buffer_len = len * bits / 8;
-                const backing_store = v8.BackingStore.init(isolate, buffer_len);
-                const data: [*]u8 = @alignCast(@ptrCast(backing_store.getData()));
-                @memcpy(data[0..buffer_len], @as([]const u8, @ptrCast(values))[0..buffer_len]);
-                const array_buffer = v8.ArrayBuffer.initWithBackingStore(isolate, &backing_store.toSharedPtr());
+                var array_buffer: v8.ArrayBuffer = undefined;
+                if (len == 0) {
+                    array_buffer = v8.ArrayBuffer.init(isolate, 0);
+                } else {
+                    const buffer_len = len * bits / 8;
+                    const backing_store = v8.BackingStore.init(isolate, buffer_len);
+                    const data: [*]u8 = @alignCast(@ptrCast(backing_store.getData()));
+                    @memcpy(data[0..buffer_len], @as([]const u8, @ptrCast(values))[0..buffer_len]);
+                    array_buffer = v8.ArrayBuffer.initWithBackingStore(isolate, &backing_store.toSharedPtr());
+                }
 
                 switch (@typeInfo(value_type)) {
                     .int => |n| switch (n.signedness) {

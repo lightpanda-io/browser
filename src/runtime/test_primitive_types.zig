@@ -118,6 +118,10 @@ const Primitives = struct {
         }
     }
 
+    pub fn _returnEmptyUint8(_: *const Primitives) Env.TypedArray(u8) {
+        return .{ .values = &.{} };
+    }
+
     pub fn _returnUint8(_: *const Primitives) Env.TypedArray(u8) {
         return .{ .values = &.{ 10, 20, 250 } };
     }
@@ -325,6 +329,7 @@ test "JS: primitive types" {
         .{ "try { p.intu64(arr_i64) } catch(e) { e instanceof TypeError; }", "true" },
         .{ "try { p.intu64(arr_u32) } catch(e) { e instanceof TypeError; }", "true" },
 
+        .{ "p.returnEmptyUint8()", "" },
         .{ "p.returnUint8()", "10,20,250" },
         .{ "p.returnInt8()", "10,-20,-120" },
         .{ "p.returnUint16()", "10,200,2050" },
