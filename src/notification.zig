@@ -3,7 +3,7 @@ const std = @import("std");
 const log = @import("log.zig");
 const URL = @import("url.zig").URL;
 const page = @import("browser/page.zig");
-const http_client = @import("http/client.zig");
+const Http = @import("http/Http.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -81,21 +81,20 @@ pub const Notification = struct {
 
     pub const PageNavigate = struct {
         timestamp: u32,
-        url: *const URL,
+        url: []const u8,
         opts: page.NavigateOpts,
     };
 
     pub const PageNavigated = struct {
         timestamp: u32,
-        url: *const URL,
+        url: []const u8,
     };
 
     pub const RequestStart = struct {
         arena: Allocator,
         id: usize,
         url: *const std.Uri,
-        method: http_client.Request.Method,
-        headers: *std.ArrayListUnmanaged(std.http.Header),
+        method: Http.Method,
         has_body: bool,
     };
 
@@ -109,7 +108,6 @@ pub const Notification = struct {
         id: usize,
         url: *const std.Uri,
         status: u16,
-        headers: []http_client.Header,
     };
 
     pub fn init(allocator: Allocator, parent: ?*Notification) !*Notification {

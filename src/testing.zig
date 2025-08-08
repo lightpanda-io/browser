@@ -406,8 +406,9 @@ pub const JsRunner = struct {
             .url = try page.url.toWebApi(page.arena),
         });
 
-        var html = std.io.fixedBufferStream(opts.html);
-        try page.loadHTMLDoc(html.reader(), "UTF-8");
+        const html_doc = try parser.documentHTMLParseFromStr(opts.html);
+        try page.setDocument(html_doc);
+        page.mode = .{ .parsed = {} };
 
         return .{
             .app = app,
@@ -441,7 +442,7 @@ pub const JsRunner = struct {
                 }
                 return err;
             };
-            try self.page.loop.run(std.time.ns_per_ms * 200);
+            self.page.session.wait(1);
             @import("root").js_runner_duration += std.time.Instant.since(try std.time.Instant.now(), start);
 
             if (case.@"1") |expected| {

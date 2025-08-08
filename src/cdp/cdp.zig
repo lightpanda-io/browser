@@ -104,6 +104,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
         pub fn handleMessage(self: *Self, msg: []const u8) bool {
             // if there's an error, it's already been logged
             self.processMessage(msg) catch return false;
+            self.pageWait();
             return true;
         }
 
@@ -111,6 +112,20 @@ pub fn CDPT(comptime TypeProvider: type) type {
             const arena = &self.message_arena;
             defer _ = arena.reset(.{ .retain_with_limit = 1024 * 16 });
             return self.dispatch(arena.allocator(), self, msg);
+        }
+
+        // @newhttp
+        // A bit hacky right now. The main server loop blocks only for CDP
+        // messages. It no longer blocks for page timeouts of page HTTP
+        // transfers. So we need to call this more ourselves.
+        // This is called after every message and [very hackily] from the server
+        // loop.
+        // This is hopefully temporary.
+        pub fn pageWait(self: *Self) void {
+            const session = &(self.browser.session orelse return);
+            // exits early if there's nothing to do, so a large value like
+            // 5 seconds should be ok
+            session.wait(5);
         }
 
         // Called from above, in processMessage which handles client messages
@@ -323,10 +338,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         inspector: Inspector,
         isolated_world: ?IsolatedWorld,
 
-        // Used to restore the proxy after the CDP session ends. If CDP never over-wrote it, it won't restore it (the first null).
-        // If the CDP is restoring it, but the original value was null, that's the 2nd null.
-        // If you only have 1 null it would be ambiguous, does null mean it shouldn't be restored, or should it be restored to null?
-        http_proxy_before: ??std.Uri = null,
+        http_proxy_changed: bool = false,
 
         const Self = @This();
 
@@ -382,7 +394,13 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             self.node_search_list.deinit();
             self.cdp.browser.notification.unregisterAll(self);
 
-            if (self.http_proxy_before) |prev_proxy| self.cdp.browser.http_client.http_proxy = prev_proxy;
+            if (self.http_proxy_changed) {
+                // has to be called after browser.closeSession, since it won't
+                // work if there are active connections.
+                self.cdp.browser.http_client.restoreOriginalProxy() catch |err| {
+                    log.warn(.http, "restoreOriginalProxy", .{ .err = err });
+                };
+            }
         }
 
         pub fn reset(self: *Self) void {
