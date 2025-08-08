@@ -442,7 +442,7 @@ fn parseFetchArgs(
     args: *std.process.ArgIterator,
 ) !Command.Fetch {
     var dump: bool = false;
-    var noscript: bool = true;
+    var noscript: bool = false;
     var url: ?[]const u8 = null;
     var common: Command.Common = .{};
 
