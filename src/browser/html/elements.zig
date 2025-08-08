@@ -1454,6 +1454,12 @@ test "Browser.HTML.HTMLTemplateElement" {
         .{ "document.getElementById('abc')", "null" },
         .{ "document.getElementById('c').appendChild(t.content.cloneNode(true))", null },
         .{ "document.getElementById('abc').id", "abc" },
+        .{ "t.innerHTML = '<span>over</span><p>9000!</p>';", null },
+        .{ "t.content.childNodes.length", "2" },
+        .{ "t.content.childNodes[0].tagName", "SPAN" },
+        .{ "t.content.childNodes[0].innerHTML", "over" },
+        .{ "t.content.childNodes[1].tagName", "P" },
+        .{ "t.content.childNodes[1].innerHTML", "9000!" },
     }, .{});
 }
 

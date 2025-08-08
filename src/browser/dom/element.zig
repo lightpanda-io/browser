@@ -137,18 +137,18 @@ pub const Element = struct {
     }
 
     pub fn get_innerHTML(self: *parser.Element, page: *Page) ![]const u8 {
-        var buf = std.ArrayList(u8).init(page.arena);
+        var buf = std.ArrayList(u8).init(page.call_arena);
         try dump.writeChildren(parser.elementToNode(self), .{}, buf.writer());
         return buf.items;
     }
 
     pub fn get_outerHTML(self: *parser.Element, page: *Page) ![]const u8 {
-        var buf = std.ArrayList(u8).init(page.arena);
+        var buf = std.ArrayList(u8).init(page.call_arena);
         try dump.writeNode(parser.elementToNode(self), .{}, buf.writer());
         return buf.items;
     }
 
-    pub fn set_innerHTML(self: *parser.Element, str: []const u8) !void {
+    pub fn set_innerHTML(self: *parser.Element, str: []const u8, page: *Page) !void {
         const node = parser.elementToNode(self);
         const doc = try parser.nodeOwnerDocument(node) orelse return parser.DOMError.WrongDocument;
         // parse the fragment
@@ -156,6 +156,8 @@ pub const Element = struct {
 
         // remove existing children
         try Node.removeChildren(node);
+
+        const fragment_node = parser.documentFragmentToNode(fragment);
 
         // I'm not sure what the exact behavior is supposed to be. Initially,
         // we were only copying the body of the document fragment. But it seems
@@ -166,9 +168,32 @@ pub const Element = struct {
         // or an actual document. In a blank page, something like:
         //    x.innerHTML = '<script></script>';
         // does _not_ create an empty script, but in a real page, it does. Weird.
-        const fragment_node = parser.documentFragmentToNode(fragment);
         const html = try parser.nodeFirstChild(fragment_node) orelse return;
         const head = try parser.nodeFirstChild(html) orelse return;
+        const body = try parser.nodeNextSibling(head) orelse return;
+
+        if (try parser.elementTag(self) == .template) {
+            // HTMLElementTemplate is special. We don't append these as children
+            // of the template, but instead set its content as the body of the
+            // fragment. Simpler to do this by copying the body children into
+            // a new fragment
+            const clean = try parser.documentCreateDocumentFragment(doc);
+            const children = try parser.nodeGetChildNodes(body);
+            const ln = try parser.nodeListLength(children);
+            for (0..ln) |_| {
+                // always index 0, because nodeAppendChild moves the node out of
+                // the nodeList and into the new tree
+                const child = try parser.nodeListItem(children, 0) orelse continue;
+                _ = try parser.nodeAppendChild(@alignCast(@ptrCast(clean)), child);
+            }
+
+            const state = try page.getOrCreateNodeState(node);
+            state.template_content = clean;
+            return;
+        }
+
+        // For any node other than a template, we copy the head and body elements
+        // as child nodes of the element
         {
             // First, copy some of the head element
             const children = try parser.nodeGetChildNodes(head);
@@ -182,7 +207,6 @@ pub const Element = struct {
         }
 
         {
-            const body = try parser.nodeNextSibling(head) orelse return;
             const children = try parser.nodeGetChildNodes(body);
             const ln = try parser.nodeListLength(children);
             for (0..ln) |_| {

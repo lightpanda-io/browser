@@ -142,8 +142,10 @@ pub const Page = struct {
     }
 
     pub const DumpOpts = struct {
-        exclude_scripts: bool = false,
+        // set to include element shadowroots in the dump
+        page: ?*const Page = null,
         with_base: bool = false,
+        exclude_scripts: bool = false,
     };
 
     // dump writes the page content into the given file.
@@ -162,6 +164,7 @@ pub const Page = struct {
         }
 
         try Dump.writeHTML(doc, .{
+            .page = opts.page,
             .exclude_scripts = opts.exclude_scripts,
         }, out);
     }

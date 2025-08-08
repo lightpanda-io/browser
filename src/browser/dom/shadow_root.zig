@@ -18,6 +18,9 @@
 
 const std = @import("std");
 const parser = @import("../netsurf.zig");
+
+const Env = @import("../env.zig").Env;
+const Page = @import("../page.zig").Page;
 const Element = @import("element.zig").Element;
 const ElementUnion = @import("element.zig").Union;
 
@@ -29,6 +32,7 @@ pub const ShadowRoot = struct {
     mode: Mode,
     host: *parser.Element,
     proto: *parser.DocumentFragment,
+    adopted_style_sheets: ?Env.JsObject = null,
 
     pub const Mode = enum {
         open,
@@ -37,6 +41,20 @@ pub const ShadowRoot = struct {
 
     pub fn get_host(self: *const ShadowRoot) !ElementUnion {
         return Element.toInterface(self.host);
+    }
+
+    pub fn get_adoptedStyleSheets(self: *ShadowRoot, page: *Page) !Env.JsObject {
+        if (self.adopted_style_sheets) |obj| {
+            return obj;
+        }
+
+        const obj = try page.main_context.newArray(0).persist();
+        self.adopted_style_sheets = obj;
+        return obj;
+    }
+
+    pub fn set_adoptedStyleSheets(self: *ShadowRoot, sheets: Env.JsObject) !void {
+        self.adopted_style_sheets = try sheets.persist();
     }
 };
 
@@ -79,5 +97,12 @@ test "Browser.DOM.ShadowRoot" {
         .{ "n1.id = 'conflict'", null},
         .{ "sr2.append(n1)", null},
         .{ "sr2.getElementById('conflict') == n1", "true" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "const acss = sr2.adoptedStyleSheets", null },
+        .{ "acss.length", "0" },
+        .{ "acss.push(new CSSStyleSheet())", null },
+        .{ "sr2.adoptedStyleSheets.length", "1" },
     }, .{});
 }

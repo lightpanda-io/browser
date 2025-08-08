@@ -19,9 +19,13 @@
 const std = @import("std");
 
 const parser = @import("netsurf.zig");
+const Page = @import("page.zig").Page;
 const Walker = @import("dom/walker.zig").WalkerChildren;
 
 pub const Opts = struct {
+    // set to include element shadowroots in the dump
+    page: ?*const Page = null,
+
     exclude_scripts: bool = false,
 };
 
@@ -87,6 +91,14 @@ pub fn writeNode(node: *parser.Node, opts: Opts, writer: anytype) anyerror!void 
             }
 
             try writer.writeAll(">");
+
+            if (opts.page) |page| {
+                if (page.getNodeState(node)) |state| {
+                    if (state.shadow_root) |sr| {
+                        try writeChildren(@alignCast(@ptrCast(sr.proto)), opts, writer);
+                    }
+                }
+            }
 
             // void elements can't have any content.
             if (try isVoid(parser.nodeToElement(node))) return;

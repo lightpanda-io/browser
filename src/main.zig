@@ -135,8 +135,9 @@ fn run(alloc: Allocator) !void {
             // dump
             if (opts.dump) {
                 try page.dump(.{
-                    .exclude_scripts = opts.noscript,
+                    .page = page,
                     .with_base = opts.withbase,
+                    .exclude_scripts = opts.noscript,
                 }, std.io.getStdOut());
             }
         },

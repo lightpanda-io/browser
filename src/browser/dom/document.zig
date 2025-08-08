@@ -293,6 +293,22 @@ pub const Document = struct {
     pub fn get_styleSheets(_: *parser.Document) []CSSStyleSheet {
         return &.{};
     }
+
+    pub fn get_adoptedStyleSheets(self: *parser.Document, page: *Page) !Env.JsObject {
+        const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(self)));
+        if (state.adopted_style_sheets) |obj| {
+            return obj;
+        }
+
+        const obj = try page.main_context.newArray(0).persist();
+        state.adopted_style_sheets = obj;
+        return obj;
+    }
+
+    pub fn set_adoptedStyleSheets(self: *parser.Document, sheets: Env.JsObject, page: *Page) !void {
+        const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(self)));
+        state.adopted_style_sheets = try sheets.persist();
+    }
 };
 
 const testing = @import("../../testing.zig");
@@ -482,6 +498,13 @@ test "Browser.DOM.Document" {
         .{ "let nadop = document.getElementById('content')", "undefined" },
         .{ "var v = document.adoptNode(nadop)", "undefined" },
         .{ "v.nodeName", "DIV" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "const acss = document.adoptedStyleSheets", null },
+        .{ "acss.length", "0" },
+        .{ "acss.push(new CSSStyleSheet())", null },
+        .{ "document.adoptedStyleSheets.length", "1" },
     }, .{});
 
     const Case = testing.JsRunner.Case;

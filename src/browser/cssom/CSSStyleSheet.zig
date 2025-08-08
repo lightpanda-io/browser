@@ -18,6 +18,7 @@
 
 const std = @import("std");
 
+const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
 const StyleSheet = @import("StyleSheet.zig");
 const CSSRuleList = @import("CSSRuleList.zig");
@@ -39,7 +40,7 @@ const CSSStyleSheetOpts = struct {
 pub fn constructor(_opts: ?CSSStyleSheetOpts) !CSSStyleSheet {
     const opts = _opts orelse CSSStyleSheetOpts{};
     return .{
-        .proto = StyleSheet{ .disabled = opts.disabled },
+        .proto = .{ .disabled = opts.disabled },
         .css_rules = .constructor(),
         .owner_rule = null,
     };
@@ -72,6 +73,24 @@ pub fn _deleteRule(self: *CSSStyleSheet, index: usize) !void {
     _ = self.css_rules.list.orderedRemove(index);
 }
 
+pub fn _replace(self: *CSSStyleSheet, text: []const u8, page: *Page) !Env.Promise {
+    _ = self;
+    _ = text;
+    // TODO: clear self.css_rules
+    // parse text and re-populate self.css_rules
+
+    const resolver = page.main_context.createPromiseResolver();
+    try resolver.resolve({});
+    return resolver.promise();
+}
+
+pub fn _replaceSync(self: *CSSStyleSheet, text: []const u8) !void {
+    _ = self;
+    _ = text;
+    // TODO: clear self.css_rules
+    // parse text and re-populate self.css_rules
+}
+
 const testing = @import("../../testing.zig");
 test "Browser.CSS.StyleSheet" {
     var runner = try testing.jsRunner(testing.tracking_allocator, .{});
@@ -85,5 +104,14 @@ test "Browser.CSS.StyleSheet" {
         .{ "let index1 = css.insertRule('body { color: red; }', 0)", "undefined" },
         .{ "index1", "0" },
         .{ "css.cssRules.length", "1" },
+
+        .{
+            \\ let replaced = false;
+            \\ css.replace('body{}').then(() => replaced = true);
+            ,
+            null,
+        },
+        // microtasks are run between each statement
+        .{ "replaced", "true" },
     }, .{});
 }
