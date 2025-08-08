@@ -290,6 +290,22 @@ pub const Element = struct {
         return true;
     }
 
+    pub fn _getAttributeNames(self: *parser.Element, page: *Page) ![]const []const u8 {
+        const attributes = try parser.nodeGetAttributes(@ptrCast(self)) orelse return &.{};
+        const ln = try parser.namedNodeMapGetLength(attributes);
+
+        const names = try page.call_arena.alloc([]const u8, ln);
+        var at: usize = 0;
+
+        for (0..ln) |i| {
+            const attribute = try parser.namedNodeMapItem(attributes, @intCast(i)) orelse break;
+            names[at] = try parser.attributeGetName(attribute);
+            at += 1;
+        }
+
+        return names[0..at];
+    }
+
     pub fn _getAttributeNode(self: *parser.Element, name: []const u8) !?*parser.Attribute {
         return try parser.elementGetAttributeNode(self, name);
     }
@@ -597,6 +613,7 @@ test "Browser.DOM.Element" {
         .{ "let a = document.getElementById('content')", "undefined" },
         .{ "a.hasAttributes()", "true" },
         .{ "a.attributes.length", "1" },
+        .{ "a.getAttributeNames()", "id" },
         .{ "a.getAttribute('id')", "content" },
         .{ "a.attributes['id'].value", "content" },
         .{
@@ -615,6 +632,7 @@ test "Browser.DOM.Element" {
         .{ "a.setAttribute('foo', 'bar')", "undefined" },
         .{ "a.hasAttribute('foo')", "true" },
         .{ "a.getAttribute('foo')", "bar" },
+        .{ "a.getAttributeNames()", "id,foo" },
 
         .{ "a.setAttribute('foo', 'baz')", "undefined" },
         .{ "a.hasAttribute('foo')", "true" },
@@ -807,6 +825,7 @@ test "Browser.DOM.Element" {
 
     try runner.testCases(&.{
         .{ "const rm = document.createElement('div')", null },
+        .{ "rm.getAttributeNames()", "" },
         .{ "rm.id = 'to-remove'", null },
         .{ "document.getElementsByTagName('body')[0].appendChild(rm)", null },
         .{ "document.getElementById('to-remove') != null", "true" },
