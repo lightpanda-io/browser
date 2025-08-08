@@ -633,6 +633,7 @@ test "Browser.DOM.Element" {
         .{ "a.hasAttribute('foo')", "true" },
         .{ "a.getAttribute('foo')", "bar" },
         .{ "a.getAttributeNames()", "id,foo" },
+        .{ " try { a.setAttribute('.foo', 'invalid') } catch (e) { e }", "Error: InvalidCharacterError" },
 
         .{ "a.setAttribute('foo', 'baz')", "undefined" },
         .{ "a.hasAttribute('foo')", "true" },
@@ -831,5 +832,12 @@ test "Browser.DOM.Element" {
         .{ "document.getElementById('to-remove') != null", "true" },
         .{ "rm.remove()", "undefined" },
         .{ "document.getElementById('to-remove') != null", "false" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "const div2 = document.createElement('div');", null },
+        .{ "div2.innerHTML = '<p id=1 .lit$id=9>a</p>';", null },
+        .{ "div2.innerHTML", "<p id=\"1\" .lit$id=\"9\">a</p>" },
+        .{ "div2.childNodes[0].getAttributeNames()", "id,.lit$id" },
     }, .{});
 }
