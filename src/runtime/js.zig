@@ -976,6 +976,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                                         // need this sentinel check to keep the compiler happy
                                         if (ptr.sentinel() == null) {
                                             if (force_u8 or js_value.isUint8Array() or js_value.isUint8ClampedArray()) {
+                                                if (byte_len == 0) return &[_]u8{};
                                                 const arr_ptr = @as([*]u8, @alignCast(@ptrCast(data)));
                                                 return arr_ptr[0..byte_len];
                                             }
@@ -983,42 +984,49 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                                     },
                                     i8 => {
                                         if (js_value.isInt8Array()) {
+                                            if (byte_len == 0) return &[_]i8{};
                                             const arr_ptr = @as([*]i8, @alignCast(@ptrCast(data)));
                                             return arr_ptr[0..byte_len];
                                         }
                                     },
                                     u16 => {
                                         if (js_value.isUint16Array()) {
+                                            if (byte_len == 0) return &[_]u16{};
                                             const arr_ptr = @as([*]u16, @alignCast(@ptrCast(data)));
                                             return arr_ptr[0 .. byte_len / 2];
                                         }
                                     },
                                     i16 => {
                                         if (js_value.isInt16Array()) {
+                                            if (byte_len == 0) return &[_]i16{};
                                             const arr_ptr = @as([*]i16, @alignCast(@ptrCast(data)));
                                             return arr_ptr[0 .. byte_len / 2];
                                         }
                                     },
                                     u32 => {
                                         if (js_value.isUint32Array()) {
+                                            if (byte_len == 0) return &[_]u32{};
                                             const arr_ptr = @as([*]u32, @alignCast(@ptrCast(data)));
                                             return arr_ptr[0 .. byte_len / 4];
                                         }
                                     },
                                     i32 => {
                                         if (js_value.isInt32Array()) {
+                                            if (byte_len == 0) return &[_]i32{};
                                             const arr_ptr = @as([*]i32, @alignCast(@ptrCast(data)));
                                             return arr_ptr[0 .. byte_len / 4];
                                         }
                                     },
                                     u64 => {
                                         if (js_value.isBigUint64Array()) {
+                                            if (byte_len == 0) return &[_]u64{};
                                             const arr_ptr = @as([*]u64, @alignCast(@ptrCast(data)));
                                             return arr_ptr[0 .. byte_len / 8];
                                         }
                                     },
                                     i64 => {
                                         if (js_value.isBigInt64Array()) {
+                                            if (byte_len == 0) return &[_]i64{};
                                             const arr_ptr = @as([*]i64, @alignCast(@ptrCast(data)));
                                             return arr_ptr[0 .. byte_len / 8];
                                         }

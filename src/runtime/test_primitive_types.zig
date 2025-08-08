@@ -281,6 +281,10 @@ test "JS: primitive types" {
 
     // typed arrays
     try runner.testCases(&.{
+        .{ "let empty_arr = new Int8Array([]);", "undefined" },
+        .{ "p.int8(empty_arr)", "undefined" },
+        .{ "empty_arr;", "" },
+
         .{ "let arr_i8 = new Int8Array([-10, -20, -30]);", "undefined" },
         .{ "p.int8(arr_i8)", "undefined" },
         .{ "arr_i8;", "-13,-23,-33" },
