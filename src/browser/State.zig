@@ -31,6 +31,7 @@ const parser = @import("netsurf.zig");
 const DataSet = @import("html/DataSet.zig");
 const ShadowRoot = @import("dom/shadow_root.zig").ShadowRoot;
 const StyleSheet = @import("cssom/StyleSheet.zig");
+const CSSStyleSheet = @import("cssom/CSSStyleSheet.zig");
 const CSSStyleDeclaration = @import("cssom/CSSStyleDeclaration.zig");
 
 // for HTMLScript (but probably needs to be added to more)
@@ -53,6 +54,7 @@ style_sheet: ?*StyleSheet = null,
 
 // for dom/document
 active_element: ?*parser.Element = null,
+adopted_style_sheets: ?Env.JsObject = null,
 
 // for HTMLSelectElement
 // By default, if no option is explicitly selected, the first option should
