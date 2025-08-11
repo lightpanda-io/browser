@@ -558,6 +558,8 @@ pub const Element = struct {
             .proto = fragment,
         };
         state.shadow_root = sr;
+        parser.documentFragmentSetHost(sr.proto, @alignCast(@ptrCast(self)));
+
         return sr;
     }
 

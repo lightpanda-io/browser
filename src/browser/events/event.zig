@@ -24,6 +24,7 @@ const parser = @import("../netsurf.zig");
 const generate = @import("../../runtime/generate.zig");
 
 const Page = @import("../page.zig").Page;
+const Node = @import("../dom/node.zig").Node;
 const DOMException = @import("../dom/exceptions.zig").DOMException;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const EventTargetUnion = @import("../dom/event_target.zig").Union;
@@ -138,6 +139,64 @@ pub const Event = struct {
 
     pub fn _preventDefault(self: *parser.Event) !void {
         return try parser.eventPreventDefault(self);
+    }
+
+    pub fn _composedPath(self: *parser.Event, page: *Page) ![]const EventTargetUnion {
+        const et_ = try parser.eventTarget(self);
+        const et = et_ orelse return &.{};
+
+        var node: ?*parser.Node = switch (try parser.eventTargetInternalType(et)) {
+            .libdom_node => @as(*parser.Node, @ptrCast(et)),
+            .plain => parser.eventTargetToNode(et),
+            else => {
+                // Window, XHR, MessagePort, etc...no path beyond the event itself
+                return &.{try EventTarget.toInterface(et, page)};
+            },
+        };
+
+        const arena = page.call_arena;
+        var path: std.ArrayListUnmanaged(EventTargetUnion) = .empty;
+        while (node) |n| {
+            try path.append(arena, .{
+                .node = try Node.toInterface(n),
+            });
+
+            node = try parser.nodeParentNode(n);
+            if (node == null and try parser.nodeType(n) == .document_fragment) {
+                // we have a non-continuous hook from a shadowroot to its host (
+                // it's parent element). libdom doesn't really support ShdowRoots
+                // and, for the most part, that works out well since it naturally
+                // provides isolation. But events don't follow the same
+                // shadowroot isolation as most other things, so, if this is
+                // a parent-less document fragment, we need to check if it has
+                // a host.
+                if (parser.documentFragmentGetHost(@ptrCast(n))) |host| {
+                    node = host;
+
+                    // If a document fragment has a host, then that host
+                    // _has_ to have a state and that state _has_ to have
+                    // a shadow_root field. All of this is set in Element._attachShadow
+                    if (page.getNodeState(host).?.shadow_root.?.mode == .closed) {
+                        // if the shadow root is closed, then the composedPath
+                        // starts at the host element.
+                        path.clearRetainingCapacity();
+                    }
+                } else {
+                    // Our document fragement has no parent and no host, we
+                    // can break out of the loop.
+                    break;
+                }
+            }
+        }
+
+        if (path.getLastOrNull()) |last| {
+            // the Window isn't part of the DOM hierarchy, but for events, it
+            // is, so we need to glue it on.
+            if (last.node == .HTMLDocument and last.node.HTMLDocument == page.window.document) {
+                try path.append(arena, .{ .node = .{ .Window = &page.window } });
+            }
+        }
+        return path.items;
     }
 };
 
@@ -445,5 +504,38 @@ test "Browser.Event" {
         .{ "document.dispatchEvent(new Event('count'))", "true" },
         .{ "nb", "2" },
         .{ "document.removeEventListener('count', cbk)", "undefined" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "new Event('').composedPath()", "" },
+        .{
+            \\ let div1 = document.createElement('div');
+            \\ let sr1 = div1.attachShadow({mode: 'open'});
+            \\ sr1.innerHTML = "<p id=srp1></p>";
+            \\ document.getElementsByTagName('body')[0].appendChild(div1);
+            \\ let cp = null;
+            \\ div1.addEventListener('click', (e) => {
+            \\    cp = e.composedPath().map((n) => n.id || n.nodeName || n.toString());
+            \\ });
+            \\ sr1.getElementById('srp1').click();
+            \\ cp.join(', ');
+            ,
+            "srp1, #document-fragment, DIV, BODY, HTML, #document, [object Window]",
+        },
+
+        .{
+            \\ let div2 = document.createElement('div');
+            \\ let sr2 = div2.attachShadow({mode: 'closed'});
+            \\ sr2.innerHTML = "<p id=srp2></p>";
+            \\ document.getElementsByTagName('body')[0].appendChild(div2);
+            \\ cp = null;
+            \\ div2.addEventListener('click', (e) => {
+            \\    cp = e.composedPath().map((n) => n.id || n.nodeName || n.toString());
+            \\ });
+            \\ sr2.getElementById('srp2').click();
+            \\ cp.join(', ');
+            ,
+            "DIV, BODY, HTML, #document, [object Window]",
+        },
     }, .{});
 }

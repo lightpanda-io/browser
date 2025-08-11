@@ -1993,6 +1993,15 @@ pub inline fn documentFragmentToNode(doc: *DocumentFragment) *Node {
     return @as(*Node, @alignCast(@ptrCast(doc)));
 }
 
+pub fn documentFragmentGetHost(frag: *DocumentFragment) ?*Node {
+    var node: ?*NodeExternal = undefined;
+    c._dom_document_fragment_get_host(frag, &node);
+    return if (node) |n| @ptrCast(n) else null;
+}
+pub fn documentFragmentSetHost(frag: *DocumentFragment, host: *Node) void {
+    c._dom_document_fragment_set_host(frag, host);
+}
+
 // Document Position
 
 pub const DocumentPosition = enum(u32) {
