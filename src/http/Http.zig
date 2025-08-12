@@ -185,20 +185,20 @@ pub const Connection = struct {
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_POSTFIELDS, body.ptr));
     }
 
-    pub fn commonHeaders(self: *const Connection) *c.curl_slist {
-        var header_list = c.curl_slist_append(null, "User-Agent: Lightpanda/1.0");
+    // These are headers that may not be send to the users for inteception.
+    pub fn secretHeaders(self: *const Connection, headers: *Headers) !void {
         if (self.opts.proxy_bearer_token) |hdr| {
-            header_list = c.curl_slist_append(header_list, hdr);
+            try headers.add(hdr);
         }
-        return header_list;
     }
 
     pub fn request(self: *const Connection) !u16 {
         const easy = self.easy;
 
-        const header_list = self.commonHeaders();
-        defer c.curl_slist_free_all(header_list);
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPHEADER, header_list));
+        const header_list = try Headers.init();
+        defer header_list.deinit();
+        try self.secretHeaders(&header_list);
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPHEADER, header_list.headers));
 
         try errorCheck(c.curl_easy_perform(easy));
         var http_code: c_long = undefined;
@@ -207,6 +207,59 @@ pub const Connection = struct {
             return 0;
         }
         return @intCast(http_code);
+    }
+};
+
+pub const Headers = struct {
+    headers: *c.curl_slist,
+
+    pub fn init() !Headers {
+        const header_list = c.curl_slist_append(null, "User-Agent: Lightpanda/1.0");
+        if (header_list == null) return error.OutOfMemory;
+        return .{ .headers = header_list };
+    }
+
+    pub fn deinit(self: *Headers) void {
+        c.curl_slist_free_all(self.headers);
+    }
+
+    pub fn add(self: *Headers, header: [*c]const u8) !void {
+        const updated_headers = c.curl_slist_append(self.headers, header);
+        if (updated_headers == null) return error.OutOfMemory;
+        self.headers = updated_headers;
+    }
+
+    pub fn asHashMap(self: *const Headers, allocator: Allocator) !std.StringArrayHashMapUnmanaged([]const u8) {
+        var list: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+        try list.ensureTotalCapacity(allocator, self.count());
+
+        var current: [*c]c.curl_slist = self.headers;
+        while (current) |node| {
+            const str = std.mem.span(@as([*:0]const u8, @ptrCast(node.*.data)));
+            const header = parseHeader(str) orelse return error.InvalidHeader;
+            list.putAssumeCapacity(header.name, header.value);
+            current = node.*.next;
+        }
+        return list;
+    }
+
+    fn parseHeader(header_str: []const u8) ?struct { name: []const u8, value: []const u8 } {
+        const colon_pos = std.mem.indexOf(u8, header_str, ":") orelse return null;
+
+        const name = std.mem.trim(u8, header_str[0..colon_pos], " \t");
+        const value = std.mem.trim(u8, header_str[colon_pos + 1 ..], " \t");
+
+        return .{ .name = name, .value = value };
+    }
+
+    pub fn count(self: *const Headers) usize {
+        var current: [*c]c.curl_slist = self.headers;
+        var num: usize = 0;
+        while (current) |node| {
+            num += 1;
+            current = node.*.next;
+        }
+        return num;
     }
 };
 

@@ -370,10 +370,16 @@ pub const XMLHttpRequest = struct {
             }
         }
 
+        var headers = try HttpClient.Headers.init();
+        for (self.headers.items) |hdr| {
+            try headers.add(hdr);
+        }
+
         try page.http_client.request(.{
             .ctx = self,
             .url = self.url.?,
             .method = self.method,
+            .headers = headers,
             .body = self.request_body,
             .cookie = page.requestCookie(.{}),
             .start_callback = httpStartCallback,
@@ -387,11 +393,6 @@ pub const XMLHttpRequest = struct {
 
     fn httpStartCallback(transfer: *HttpClient.Transfer) !void {
         const self: *XMLHttpRequest = @alignCast(@ptrCast(transfer.ctx));
-
-        for (self.headers.items) |hdr| {
-            try transfer.addHeader(hdr);
-        }
-
         log.debug(.http, "request start", .{ .method = self.method, .url = self.url, .source = "xhr" });
         self.transfer = transfer;
     }

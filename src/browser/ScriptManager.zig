@@ -57,7 +57,6 @@ deferreds: OrderList,
 
 shutdown: bool = false,
 
-
 client: *HttpClient,
 allocator: Allocator,
 buffer_pool: BufferPool,
@@ -234,6 +233,7 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
         .url = remote_url.?,
         .ctx = pending_script,
         .method = .GET,
+        .headers = try HttpClient.Headers.init(),
         .cookie = page.requestCookie(.{}),
         .start_callback = if (log.enabled(.http, .debug)) startCallback else null,
         .header_done_callback = headerCallback,
@@ -297,6 +297,7 @@ pub fn blockingGet(self: *ScriptManager, url: [:0]const u8) !BlockingResult {
     try client.blockingRequest(.{
         .url = url,
         .method = .GET,
+        .headers = try HttpClient.Headers.init(),
         .ctx = &blocking,
         .cookie = self.page.requestCookie(.{}),
         .start_callback = if (log.enabled(.http, .debug)) Blocking.startCallback else null,

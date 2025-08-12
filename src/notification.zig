@@ -4,6 +4,7 @@ const log = @import("log.zig");
 const URL = @import("url.zig").URL;
 const page = @import("browser/page.zig");
 const Http = @import("http/Http.zig");
+const Request = @import("http/Client.zig").Request;
 
 const Allocator = std.mem.Allocator;
 
@@ -61,6 +62,7 @@ pub const Notification = struct {
         page_navigated: List = .{},
         http_request_fail: List = .{},
         http_request_start: List = .{},
+        http_request_intercept: List = .{},
         http_request_complete: List = .{},
         notification_created: List = .{},
     };
@@ -72,6 +74,7 @@ pub const Notification = struct {
         page_navigated: *const PageNavigated,
         http_request_fail: *const RequestFail,
         http_request_start: *const RequestStart,
+        http_request_intercept: *const RequestIntercept,
         http_request_complete: *const RequestComplete,
         notification_created: *Notification,
     };
@@ -91,11 +94,12 @@ pub const Notification = struct {
     };
 
     pub const RequestStart = struct {
-        arena: Allocator,
-        id: usize,
-        url: *const std.Uri,
-        method: Http.Method,
-        has_body: bool,
+        request: *Request,
+    };
+
+    pub const RequestIntercept = struct {
+        request: *Request,
+        wait_for_interception: *bool,
     };
 
     pub const RequestFail = struct {
