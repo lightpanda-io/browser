@@ -180,11 +180,35 @@ pub const Node = struct {
     }
 
     pub fn get_isConnected(self: *parser.Node) !bool {
-        // TODO: handle Shadow DOM
-        if (try parser.nodeType(self) == .document) {
-            return true;
+        var node = self;
+        while (true) {
+            const node_type = try parser.nodeType(node);
+            if (node_type == .document) {
+                return true;
+            }
+
+            if (try parser.nodeParentNode(node)) |parent| {
+                // didn't find a document, but node has a parent, let's see
+                // if it's connected;
+                node = parent;
+                continue;
+            }
+
+            if (node_type != .document_fragment) {
+                // doesn't have a parent and isn't a document_fragment
+                // can't be connected
+                return false;
+            }
+
+            if (parser.documentFragmentGetHost(@ptrCast(node))) |host| {
+                // node doesn't have a parent, but it's a document fragment
+                // with a host. The host is like the parent, but we only want to
+                // traverse up (or down) to it in specific cases, like isConnected.
+                node = host;
+                continue;
+            }
+            return false;
         }
-        return try Node.get_parentNode(self) != null;
     }
 
     // Read/Write attributes
@@ -652,7 +676,13 @@ test "Browser.DOM.node" {
     try runner.testCases(&.{
         .{ "content.isConnected", "true" },
         .{ "document.isConnected", "true" },
-        .{ "document.createElement('div').isConnected", "false" },
+        .{ "const connDiv = document.createElement('div')", null },
+        .{ "connDiv.isConnected", "false" },
+        .{ "const connParentDiv = document.createElement('div')", null },
+        .{ "connParentDiv.appendChild(connDiv)", null },
+        .{ "connDiv.isConnected", "false" },
+        .{ "content.appendChild(connParentDiv)", null },
+        .{ "connDiv.isConnected", "true" },
     }, .{});
 
     try runner.testCases(&.{
