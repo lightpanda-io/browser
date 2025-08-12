@@ -203,7 +203,7 @@ fn putAssumeCapacity(headers: *std.ArrayListUnmanaged(std.http.Header), extra: s
     return true;
 }
 
-pub fn httpRequestFail(arena: Allocator, bc: anytype, request: *const Notification.RequestFail) !void {
+pub fn httpRequestFail(arena: Allocator, bc: anytype, data: *const Notification.RequestFail) !void {
     // It's possible that the request failed because we aborted when the client
     // sent Target.closeTarget. In that case, bc.session_id will be cleared
     // already, and we can skip sending these messages to the client.
@@ -215,10 +215,10 @@ pub fn httpRequestFail(arena: Allocator, bc: anytype, request: *const Notificati
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{
-        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{request.id}),
+        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{data.request.id.?}),
         // Seems to be what chrome answers with. I assume it depends on the type of error?
         .type = "Ping",
-        .errorText = request.err,
+        .errorText = data.err,
         .canceled = false,
     }, .{ .session_id = session_id });
 }

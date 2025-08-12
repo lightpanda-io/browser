@@ -103,9 +103,8 @@ pub const Notification = struct {
     };
 
     pub const RequestFail = struct {
-        id: usize,
-        url: *const std.Uri,
-        err: []const u8,
+        request: *Request,
+        err: anyerror,
     };
 
     pub const RequestComplete = struct {

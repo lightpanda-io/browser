@@ -151,7 +151,7 @@ pub fn abort(self: *Client) void {
             log.err(.http, "get private info", .{ .err = err, .source = "abort" });
             continue;
         };
-        transfer.req.error_callback(transfer.ctx, error.Abort);
+        self.requestFailed(&transfer.req, error.Abort);
         self.endTransfer(transfer);
     }
     std.debug.assert(self.active == 0);
@@ -219,6 +219,20 @@ pub fn request(self: *Client, req: Request) !void {
 // See ScriptManager.blockingGet
 pub fn blockingRequest(self: *Client, req: Request) !void {
     return self.makeRequest(&self.blocking, req);
+}
+
+fn requestFailed(self: *Client, req: *Request, err: anyerror) void {
+    if (req._notified_fail) return;
+    req._notified_fail = true;
+
+    if (self.notification) |notification| {
+        notification.dispatch(.http_request_fail, &.{
+            .request = req,
+            .err = err,
+        });
+    }
+
+    req.error_callback(req.ctx, err);
 }
 
 // Restrictive since it'll only work if there are no inflight requests. In some
@@ -326,7 +340,6 @@ fn perform(self: *Client, timeout_ms: c_int) !void {
         const transfer = try Transfer.fromEasy(easy);
         const ctx = transfer.ctx;
         const done_callback = transfer.req.done_callback;
-        const error_callback = transfer.req.error_callback;
 
         // release it ASAP so that it's available; some done_callbacks
         // will load more resources.
@@ -336,10 +349,10 @@ fn perform(self: *Client, timeout_ms: c_int) !void {
             done_callback(ctx) catch |err| {
                 // transfer isn't valid at this point, don't use it.
                 log.err(.http, "done_callback", .{ .err = err });
-                error_callback(ctx, err);
+                self.requestFailed(&transfer.req, err);
             };
         } else |err| {
-            error_callback(ctx, err);
+            self.requestFailed(&transfer.req, err);
         }
     }
 }
@@ -490,6 +503,8 @@ pub const Request = struct {
     headers: Headers,
     body: ?[]const u8 = null,
     cookie_jar: *storage.CookieJar,
+
+    _notified_fail: bool = false,
 
     // arbitrary data that can be associated with this request
     ctx: *anyopaque = undefined,
