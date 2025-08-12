@@ -608,7 +608,10 @@ pub const Page = struct {
         self.clearTransferArena();
 
         switch (self.mode) {
-            .raw => |buf| self.mode = .{ .raw_done = buf.items },
+            .raw => |buf| {
+                self.mode = .{ .raw_done = buf.items };
+                self.documentIsComplete();
+            },
             .html => |*p| {
                 const html_doc = p.html_doc;
                 p.deinit(); // don't need the parser anymore
