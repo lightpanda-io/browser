@@ -185,12 +185,14 @@ pub fn tick(self: *Client, timeout_ms: usize) !void {
 
 pub fn request(self: *Client, req: Request) !void {
     if (self.handles.getFreeHandle()) |handle| {
+        self.active += 1;
         return self.makeRequest(handle, req);
     }
 
     const node = try self.queue_node_pool.create();
     node.data = req;
     self.queue.append(node);
+    self.active += 1;
 }
 
 // See ScriptManager.blockingGet
@@ -234,13 +236,18 @@ fn makeRequest(self: *Client, handle: *Handle, req: Request) !void {
 
     // we need this for cookies
     const uri = std.Uri.parse(req.url) catch |err| {
+        self.active -= 1;
         self.handles.release(handle);
         log.warn(.http, "invalid url", .{ .err = err, .url = req.url });
         return;
     };
 
     const header_list = blk: {
-        errdefer self.handles.release(handle);
+        errdefer {
+            self.active -= 1;
+            self.handles.release(handle);
+        }
+
         try conn.setMethod(req.method);
         try conn.setURL(req.url);
 
@@ -275,7 +282,10 @@ fn makeRequest(self: *Client, handle: *Handle, req: Request) !void {
     };
 
     {
-        errdefer self.handles.release(handle);
+        errdefer {
+            self.active -= 1;
+            self.handles.release(handle);
+        }
 
         const transfer = try self.transfer_pool.create();
         transfer.* = .{
@@ -299,7 +309,6 @@ fn makeRequest(self: *Client, handle: *Handle, req: Request) !void {
         }
     }
 
-    self.active += 1;
     return self.perform(0);
 }
 
