@@ -22,6 +22,7 @@ const builtin = @import("builtin");
 const Http = @import("Http.zig");
 pub const Headers = Http.Headers;
 const Notification = @import("../notification.zig").Notification;
+const storage = @import("../browser/storage/storage.zig");
 
 const c = Http.c;
 
@@ -271,20 +272,6 @@ fn makeRequest(self: *Client, handle: *Handle, req: Request) !void {
             try conn.setBody(b);
         }
 
-        // { // TODO move up to `fn request()`
-        //     const aa = self.arena.allocator();
-        //     var arr: std.ArrayListUnmanaged(u8) = .{};
-        //     try req.cookie.forRequest(&uri, arr.writer(aa));
-
-        //     if (arr.items.len > 0) {
-        //         try arr.append(aa, 0); //null terminate
-
-        //         // copies the value
-        //         header_list = c.curl_slist_append(header_list, @ptrCast(arr.items.ptr));
-        //         defer _ = self.arena.reset(.{ .retain_with_limit = 2048 });
-        //     }
-        // }
-
         try conn.secretHeaders(&header_list); // Add headers that must be hidden from intercepts
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPHEADER, header_list.headers));
     }
@@ -475,13 +462,24 @@ pub const RequestCookie = struct {
     origin: *const std.Uri,
     jar: *@import("../browser/storage/cookie.zig").Jar,
 
-    fn forRequest(self: *const RequestCookie, uri: *const std.Uri, writer: anytype) !void {
-        return self.jar.forRequest(uri, writer, .{
+    pub fn headersForRequest(self: *const RequestCookie, temp: Allocator, url: [:0]const u8, headers: *Headers) !void {
+        const uri = std.Uri.parse(url) catch |err| {
+            log.warn(.http, "invalid url", .{ .err = err, .url = url });
+            return error.InvalidUrl;
+        };
+
+        var arr: std.ArrayListUnmanaged(u8) = .{};
+        try self.jar.forRequest(&uri, arr.writer(temp), .{
             .is_http = self.is_http,
             .is_navigation = self.is_navigation,
             .origin_uri = self.origin,
             .prefix = "Cookie: ",
         });
+
+        if (arr.items.len > 0) {
+            try arr.append(temp, 0); //null terminate
+            try headers.add(@ptrCast(arr.items.ptr));
+        }
     }
 };
 
@@ -491,7 +489,7 @@ pub const Request = struct {
     url: [:0]const u8,
     headers: Headers,
     body: ?[]const u8 = null,
-    cookie: RequestCookie,
+    cookie_jar: *storage.CookieJar,
 
     // arbitrary data that can be associated with this request
     ctx: *anyopaque = undefined,
@@ -616,7 +614,7 @@ pub const Transfer = struct {
             if (header.len > SET_COOKIE_LEN) {
                 if (std.ascii.eqlIgnoreCase(header[0..SET_COOKIE_LEN], "set-cookie:")) {
                     const value = std.mem.trimLeft(u8, header[SET_COOKIE_LEN..], " ");
-                    transfer.req.cookie.jar.populateFromResponse(&transfer.uri, value) catch |err| {
+                    transfer.req.cookie_jar.populateFromResponse(&transfer.uri, value) catch |err| {
                         log.err(.http, "set cookie", .{ .err = err, .req = transfer });
                     };
                 }

@@ -229,12 +229,15 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
 
     errdefer pending_script.deinit();
 
+    var headers = try HttpClient.Headers.init();
+    try page.requestCookie(.{}).headersForRequest(self.allocator, remote_url.?, &headers);
+
     try self.client.request(.{
         .url = remote_url.?,
         .ctx = pending_script,
         .method = .GET,
-        .headers = try HttpClient.Headers.init(),
-        .cookie = page.requestCookie(.{}),
+        .headers = headers,
+        .cookie_jar = page.cookie_jar,
         .start_callback = if (log.enabled(.http, .debug)) startCallback else null,
         .header_done_callback = headerCallback,
         .data_callback = dataCallback,
@@ -293,13 +296,16 @@ pub fn blockingGet(self: *ScriptManager, url: [:0]const u8) !BlockingResult {
         .buffer_pool = &self.buffer_pool,
     };
 
+    var headers = try HttpClient.Headers.init();
+    try self.page.requestCookie(.{}).headersForRequest(self.allocator, url, &headers);
+
     var client = self.client;
     try client.blockingRequest(.{
         .url = url,
         .method = .GET,
-        .headers = try HttpClient.Headers.init(),
+        .headers = headers,
+        .cookie_jar = self.page.cookie_jar,
         .ctx = &blocking,
-        .cookie = self.page.requestCookie(.{}),
         .start_callback = if (log.enabled(.http, .debug)) Blocking.startCallback else null,
         .header_done_callback = Blocking.headerCallback,
         .data_callback = Blocking.dataCallback,

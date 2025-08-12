@@ -469,6 +469,7 @@ pub const Page = struct {
 
         var headers = try HttpClient.Headers.init();
         if (opts.header) |hdr| try headers.add(hdr);
+        try self.requestCookie(.{ .is_navigation = true }).headersForRequest(self.arena, owned_url, &headers);
 
         self.http_client.request(.{
             .ctx = self,
@@ -476,7 +477,7 @@ pub const Page = struct {
             .method = opts.method,
             .headers = headers,
             .body = opts.body,
-            .cookie = self.requestCookie(.{ .is_navigation = true }),
+            .cookie_jar = self.cookie_jar,
             .header_done_callback = pageHeaderDoneCallback,
             .data_callback = pageDataCallback,
             .done_callback = pageDoneCallback,

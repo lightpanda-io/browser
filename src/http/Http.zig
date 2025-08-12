@@ -224,6 +224,7 @@ pub const Headers = struct {
     }
 
     pub fn add(self: *Headers, header: [*c]const u8) !void {
+        // Copies the value
         const updated_headers = c.curl_slist_append(self.headers, header);
         if (updated_headers == null) return error.OutOfMemory;
         self.headers = updated_headers;

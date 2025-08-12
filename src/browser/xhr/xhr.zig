@@ -374,6 +374,7 @@ pub const XMLHttpRequest = struct {
         for (self.headers.items) |hdr| {
             try headers.add(hdr);
         }
+        try page.requestCookie(.{}).headersForRequest(self.arena, self.url.?, &headers);
 
         try page.http_client.request(.{
             .ctx = self,
@@ -381,7 +382,7 @@ pub const XMLHttpRequest = struct {
             .method = self.method,
             .headers = headers,
             .body = self.request_body,
-            .cookie = page.requestCookie(.{}),
+            .cookie_jar = page.cookie_jar,
             .start_callback = httpStartCallback,
             .header_callback = httpHeaderCallback,
             .header_done_callback = httpHeaderDoneCallback,
