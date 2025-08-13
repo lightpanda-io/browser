@@ -62,7 +62,7 @@ const testing = @import("../../testing.zig");
 test "Browser.DOM.ShadowRoot" {
     defer testing.reset();
 
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html =
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html = 
         \\ <div id=conflict>nope</div>
     });
     defer runner.deinit();
@@ -94,8 +94,8 @@ test "Browser.DOM.ShadowRoot" {
     try runner.testCases(&.{
         .{ "sr2.getElementById('conflict')", "null" },
         .{ "const n1 = document.createElement('div')", null },
-        .{ "n1.id = 'conflict'", null},
-        .{ "sr2.append(n1)", null},
+        .{ "n1.id = 'conflict'", null },
+        .{ "sr2.append(n1)", null },
         .{ "sr2.getElementById('conflict') == n1", "true" },
     }, .{});
 
