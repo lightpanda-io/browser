@@ -29,6 +29,7 @@ const Page = @import("../browser/page.zig").Page;
 const Inspector = @import("../browser/env.zig").Env.Inspector;
 const Incrementing = @import("../id.zig").Incrementing;
 const Notification = @import("../notification.zig").Notification;
+const NetworkState = @import("domains/network.zig").NetworkState;
 const InterceptState = @import("domains/fetch.zig").InterceptState;
 
 const polyfill = @import("../browser/polyfill/polyfill.zig");
@@ -76,6 +77,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
         // Extra headers to add to all requests. TBD under which conditions this should be reset.
         extra_headers: std.ArrayListUnmanaged(std.http.Header) = .empty,
 
+        network_state: NetworkState,
         intercept_state: InterceptState,
 
         const Self = @This();
@@ -92,6 +94,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
                 .browser_context = null,
                 .message_arena = std.heap.ArenaAllocator.init(allocator),
                 .notification_arena = std.heap.ArenaAllocator.init(allocator),
+                .network_state = try NetworkState.init(allocator),
                 .intercept_state = try InterceptState.init(allocator), // TBD or browser session arena?
             };
         }
@@ -101,6 +104,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
                 bc.deinit();
             }
             self.intercept_state.deinit(); // TBD Should this live in BC?
+            self.network_state.deinit();
             self.browser.deinit();
             self.message_arena.deinit();
             self.notification_arena.deinit();
@@ -447,13 +451,15 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         pub fn networkEnable(self: *Self) !void {
             try self.cdp.browser.notification.register(.http_request_fail, self, onHttpRequestFail);
             try self.cdp.browser.notification.register(.http_request_start, self, onHttpRequestStart);
-            try self.cdp.browser.notification.register(.http_request_complete, self, onHttpRequestComplete);
+            try self.cdp.browser.notification.register(.http_header_received, self, onHttpHeaderReceived);
+            try self.cdp.browser.notification.register(.http_headers_done_receiving, self, onHttpHeadersDoneReceiving);
         }
 
         pub fn networkDisable(self: *Self) void {
             self.cdp.browser.notification.unregister(.http_request_fail, self);
             self.cdp.browser.notification.unregister(.http_request_start, self);
-            self.cdp.browser.notification.unregister(.http_request_complete, self);
+            self.cdp.browser.notification.unregister(.http_header_received, self);
+            self.cdp.browser.notification.unregister(.http_headers_done_receiving, self);
         }
 
         pub fn fetchEnable(self: *Self) !void {
@@ -466,7 +472,8 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         pub fn onPageRemove(ctx: *anyopaque, _: Notification.PageRemove) !void {
             const self: *Self = @alignCast(@ptrCast(ctx));
-            return @import("domains/page.zig").pageRemove(self);
+            try @import("domains/page.zig").pageRemove(self);
+            try @import("domains/network.zig").pageRemove(self);
         }
 
         pub fn onPageCreated(ctx: *anyopaque, page: *Page) !void {
@@ -497,16 +504,22 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             try @import("domains/fetch.zig").requestPaused(self.notification_arena, self, data);
         }
 
+        pub fn onHttpHeaderReceived(ctx: *anyopaque, data: *const Notification.ResponseHeader) !void {
+            const self: *Self = @alignCast(@ptrCast(ctx));
+            defer self.resetNotificationArena();
+            try self.cdp.network_state.putOrAppendReceivedHeader(data.request_id, data.status, data.header);
+        }
+
         pub fn onHttpRequestFail(ctx: *anyopaque, data: *const Notification.RequestFail) !void {
             const self: *Self = @alignCast(@ptrCast(ctx));
             defer self.resetNotificationArena();
             return @import("domains/network.zig").httpRequestFail(self.notification_arena, self, data);
         }
 
-        pub fn onHttpRequestComplete(ctx: *anyopaque, data: *const Notification.RequestComplete) !void {
+        pub fn onHttpHeadersDoneReceiving(ctx: *anyopaque, data: *const Notification.ResponseHeadersDone) !void {
             const self: *Self = @alignCast(@ptrCast(ctx));
             defer self.resetNotificationArena();
-            return @import("domains/network.zig").httpRequestComplete(self.notification_arena, self, data);
+            return @import("domains/network.zig").httpHeadersDoneReceiving(self.notification_arena, self, data);
         }
 
         fn resetNotificationArena(self: *Self) void {

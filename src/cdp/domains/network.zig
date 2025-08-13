@@ -51,6 +51,49 @@ pub fn processMessage(cmd: anytype) !void {
     }
 }
 
+const Response = struct {
+    status: u16,
+    headers: std.StringArrayHashMapUnmanaged([]const u8) = .empty, // These may not be complete yet, but we only tell the client Network.responseReceived when all the headers are in
+    // Later should store body as well to support getResponseBody which should only work once Network.loadingFinished is sent
+    // but the body itself would be loaded with each chunks as Network.dataReceiveds are coming in.
+};
+
+// Stored in CDP
+pub const NetworkState = struct {
+    const Self = @This();
+    received: std.AutoArrayHashMap(u64, Response),
+    arena: std.heap.ArenaAllocator,
+
+    pub fn init(allocator: Allocator) !NetworkState {
+        return .{
+            .received = std.AutoArrayHashMap(u64, Response).init(allocator),
+            .arena = std.heap.ArenaAllocator.init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.received.deinit();
+        self.arena.deinit();
+    }
+
+    pub fn putOrAppendReceivedHeader(self: *NetworkState, request_id: u64, status: u16, header: std.http.Header) !void {
+        const kv = try self.received.getOrPut(request_id);
+        if (!kv.found_existing) kv.value_ptr.* = .{ .status = status };
+
+        const a = self.arena.allocator();
+        const name = try a.dupe(u8, header.name);
+        const value = try a.dupe(u8, header.value);
+        try kv.value_ptr.headers.put(a, name, value);
+    }
+};
+
+pub fn pageRemove(bc: anytype) !void {
+    // The main page is going to be removed
+    const state = &bc.cdp.network_state;
+    state.received.clearRetainingCapacity(); // May need to be in pageRemoved
+    _ = state.arena.reset(.{ .retain_with_limit = 1024 });
+}
+
 fn enable(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     try bc.networkEnable();
@@ -282,7 +325,7 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, data: *const Notification
     }, .{ .session_id = session_id });
 }
 
-pub fn httpRequestComplete(arena: Allocator, bc: anytype, request: *const Notification.RequestComplete) !void {
+pub fn httpHeadersDoneReceiving(arena: Allocator, bc: anytype, request: *const Notification.ResponseHeadersDone) !void {
     // Isn't possible to do a network request within a Browser (which our
     // notification is tied to), without a page.
     std.debug.assert(bc.session.page != null);
@@ -293,7 +336,7 @@ pub fn httpRequestComplete(arena: Allocator, bc: anytype, request: *const Notifi
     const session_id = bc.session_id orelse unreachable;
     const target_id = bc.target_id orelse unreachable;
 
-    const url = try urlToString(arena, request.url, .{
+    const url = try urlToString(arena, &request.transfer.uri, .{
         .scheme = true,
         .authentication = true,
         .authority = true,
@@ -301,22 +344,17 @@ pub fn httpRequestComplete(arena: Allocator, bc: anytype, request: *const Notifi
         .query = true,
     });
 
-    // @newhttp
-    const headers: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    // try headers.ensureTotalCapacity(arena, request.headers.len);
-    // for (request.headers) |header| {
-    //     headers.putAssumeCapacity(header.name, header.value);
-    // }
+    const response = bc.cdp.network_state.received.get(request.transfer.id) orelse return error.ResponseNotFound;
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try cdp.sendEvent("Network.responseReceived", .{
-        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{request.id}),
+        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{request.transfer.id}),
         .loaderId = bc.loader_id,
         .response = .{
             .url = url,
-            .status = request.status,
-            .statusText = @as(std.http.Status, @enumFromInt(request.status)).phrase() orelse "Unknown",
-            .headers = std.json.ArrayHashMap([]const u8){ .map = headers },
+            .status = response.status,
+            .statusText = @as(std.http.Status, @enumFromInt(response.status)).phrase() orelse "Unknown",
+            .headers = std.json.ArrayHashMap([]const u8){ .map = response.headers },
         },
         .frameId = target_id,
     }, .{ .session_id = session_id });

@@ -244,8 +244,8 @@ pub const Headers = struct {
         return list;
     }
 
-    fn parseHeader(header_str: []const u8) ?struct { name: []const u8, value: []const u8 } {
-        const colon_pos = std.mem.indexOf(u8, header_str, ":") orelse return null;
+    pub fn parseHeader(header_str: []const u8) ?std.http.Header {
+        const colon_pos = std.mem.indexOfScalar(u8, header_str, ':') orelse return null;
 
         const name = std.mem.trim(u8, header_str[0..colon_pos], " \t");
         const value = std.mem.trim(u8, header_str[colon_pos + 1 ..], " \t");
