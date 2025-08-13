@@ -603,6 +603,22 @@ pub const Transfer = struct {
         const header = buffer[0 .. buf_len - 2];
 
         if (transfer.response_header == null) {
+            if (transfer._redirecting and buf_len == 2) {
+                // retrieve cookies from the redirect's response.
+                var i: usize = 0;
+                while (true) {
+                    const ct = getResponseHeader(easy, "set-cookie", i);
+                    if (ct == null) break;
+                    transfer.req.cookie_jar.populateFromResponse(&transfer.uri, ct.?.value) catch |err| {
+                        log.err(.http, "set cookie", .{ .err = err, .req = transfer });
+                    };
+                    i += 1;
+                    if (i >= ct.?.amount) break;
+                }
+
+                return buf_len;
+            }
+
             if (buf_len < 13 or std.mem.startsWith(u8, header, "HTTP/") == false) {
                 if (transfer._redirecting) {
                     return buf_len;
@@ -641,18 +657,6 @@ pub const Transfer = struct {
             return buf_len;
         }
 
-        {
-            const SET_COOKIE_LEN = "set-cookie:".len;
-            if (header.len > SET_COOKIE_LEN) {
-                if (std.ascii.eqlIgnoreCase(header[0..SET_COOKIE_LEN], "set-cookie:")) {
-                    const value = std.mem.trimLeft(u8, header[SET_COOKIE_LEN..], " ");
-                    transfer.req.cookie_jar.populateFromResponse(&transfer.uri, value) catch |err| {
-                        log.err(.http, "set cookie", .{ .err = err, .req = transfer });
-                    };
-                }
-            }
-        }
-
         if (buf_len == 2) {
             if (getResponseHeader(easy, "content-type", 0)) |ct| {
                 var hdr = &transfer.response_header.?;
@@ -660,6 +664,17 @@ pub const Transfer = struct {
                 const len = @min(value.len, hdr._content_type.len);
                 hdr._content_type_len = len;
                 @memcpy(hdr._content_type[0..len], value[0..len]);
+            }
+
+            var i: usize = 0;
+            while (true) {
+                const ct = getResponseHeader(easy, "set-cookie", i);
+                if (ct == null) break;
+                transfer.req.cookie_jar.populateFromResponse(&transfer.uri, ct.?.value) catch |err| {
+                    log.err(.http, "set cookie", .{ .err = err, .req = transfer });
+                };
+                i += 1;
+                if (i >= ct.?.amount) break;
             }
 
             transfer.req.header_done_callback(transfer) catch |err| {
