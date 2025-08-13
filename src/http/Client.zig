@@ -319,6 +319,14 @@ fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) !void {
         var header_list = req.headers;
         try conn.secretHeaders(&header_list); // Add headers that must be hidden from intercepts
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPHEADER, header_list.headers));
+
+        // Add cookies.
+        // Clear cookies from Curl's engine.
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COOKIELIST, "ALL"));
+        if (header_list.cookies) |cookies| {
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COOKIE, cookies));
+        }
+
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PRIVATE, transfer));
     }
 
@@ -506,12 +514,11 @@ pub const RequestCookie = struct {
             .is_http = self.is_http,
             .is_navigation = self.is_navigation,
             .origin_uri = self.origin,
-            .prefix = "Cookie: ",
         });
 
         if (arr.items.len > 0) {
             try arr.append(temp, 0); //null terminate
-            try headers.add(@ptrCast(arr.items.ptr));
+            headers.cookies = @ptrCast(arr.items.ptr);
         }
     }
 };
