@@ -219,7 +219,7 @@ pub const Headers = struct {
         return .{ .headers = header_list };
     }
 
-    pub fn deinit(self: *Headers) void {
+    pub fn deinit(self: *const Headers) void {
         c.curl_slist_free_all(self.headers);
     }
 

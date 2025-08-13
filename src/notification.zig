@@ -4,7 +4,7 @@ const log = @import("log.zig");
 const URL = @import("url.zig").URL;
 const page = @import("browser/page.zig");
 const Http = @import("http/Http.zig");
-const Request = @import("http/Client.zig").Request;
+const Transfer = @import("http/Client.zig").Transfer;
 
 const Allocator = std.mem.Allocator;
 
@@ -94,16 +94,16 @@ pub const Notification = struct {
     };
 
     pub const RequestStart = struct {
-        request: *Request,
+        transfer: *Transfer,
     };
 
     pub const RequestIntercept = struct {
-        request: *Request,
+        transfer: *Transfer,
         wait_for_interception: *bool,
     };
 
     pub const RequestFail = struct {
-        request: *Request,
+        transfer: *Transfer,
         err: anyerror,
     };
 

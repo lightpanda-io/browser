@@ -215,7 +215,7 @@ pub fn httpRequestFail(arena: Allocator, bc: anytype, data: *const Notification.
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{
-        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{data.request.id.?}),
+        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{data.transfer.id}),
         // Seems to be what chrome answers with. I assume it depends on the type of error?
         .type = "Ping",
         .errorText = data.err,
@@ -251,7 +251,8 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, data: *const Notification
         .query = true,
     });
 
-    const full_request_url = try std.Uri.parse(data.request.url);
+    const transfer = data.transfer;
+    const full_request_url = transfer.uri;
     const request_url = try urlToString(arena, &full_request_url, .{
         .scheme = true,
         .authentication = true,
@@ -263,19 +264,19 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, data: *const Notification
         .fragment = true, // TODO since path is false, this likely does not work as intended
     });
 
-    const headers = try data.request.headers.asHashMap(arena);
+    const headers = try transfer.req.headers.asHashMap(arena);
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try cdp.sendEvent("Network.requestWillBeSent", .{
-        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{data.request.id.?}),
+        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id}),
         .frameId = target_id,
         .loaderId = bc.loader_id,
         .documentUrl = document_url,
         .request = .{
             .url = request_url,
             .urlFragment = request_fragment,
-            .method = @tagName(data.request.method),
-            .hasPostData = data.request.body != null,
+            .method = @tagName(transfer.req.method),
+            .hasPostData = transfer.req.body != null,
             .headers = std.json.ArrayHashMap([]const u8){ .map = headers },
         },
     }, .{ .session_id = session_id });
