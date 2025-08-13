@@ -215,7 +215,8 @@ fn logPrettyPrefix(comptime scope: Scope, level: Level, comptime msg: []const u8
         if (@mod(padding, 2) == 1) {
             try writer.writeByte(' ');
         }
-        try writer.print(" \x1b[0m[+{d}ms]", .{elapsed()});
+        const el = elapsed();
+        try writer.print(" \x1b[0m[+{d}{s}]", .{ el.time, el.unit });
         try writer.writeByte('\n');
     }
 }
@@ -321,7 +322,7 @@ fn timestamp() i64 {
 }
 
 var first_log: i64 = 0;
-fn elapsed() i64 {
+fn elapsed() struct { time: f64, unit: []const u8 } {
     const now = timestamp();
 
     last_log_lock.lock();
@@ -331,7 +332,11 @@ fn elapsed() i64 {
         first_log = now;
     }
 
-    return now - first_log;
+    const e = now - first_log;
+    if (e < 10_000) {
+        return .{ .time = @floatFromInt(e), .unit = "ms" };
+    }
+    return .{ .time = @as(f64, @floatFromInt(e)) / @as(f64, 1000), .unit = "s" };
 }
 
 const testing = @import("testing.zig");
