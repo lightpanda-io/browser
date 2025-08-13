@@ -203,7 +203,7 @@ fn putAssumeCapacity(headers: *std.ArrayListUnmanaged(std.http.Header), extra: s
     return true;
 }
 
-pub fn httpRequestFail(arena: Allocator, bc: anytype, request: *const Notification.RequestFail) !void {
+pub fn httpRequestFail(arena: Allocator, bc: anytype, data: *const Notification.RequestFail) !void {
     // It's possible that the request failed because we aborted when the client
     // sent Target.closeTarget. In that case, bc.session_id will be cleared
     // already, and we can skip sending these messages to the client.
@@ -215,15 +215,15 @@ pub fn httpRequestFail(arena: Allocator, bc: anytype, request: *const Notificati
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{
-        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{request.id}),
+        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{data.request.id.?}),
         // Seems to be what chrome answers with. I assume it depends on the type of error?
         .type = "Ping",
-        .errorText = request.err,
+        .errorText = data.err,
         .canceled = false,
     }, .{ .session_id = session_id });
 }
 
-pub fn httpRequestStart(arena: Allocator, bc: anytype, request: *const Notification.RequestStart) !void {
+pub fn httpRequestStart(arena: Allocator, bc: anytype, data: *const Notification.RequestStart) !void {
     // Isn't possible to do a network request within a Browser (which our
     // notification is tied to), without a page.
     std.debug.assert(bc.session.page != null);
@@ -251,36 +251,31 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, request: *const Notificat
         .query = true,
     });
 
-    const request_url = try urlToString(arena, request.url, .{
+    const full_request_url = try std.Uri.parse(data.request.url);
+    const request_url = try urlToString(arena, &full_request_url, .{
         .scheme = true,
         .authentication = true,
         .authority = true,
         .path = true,
         .query = true,
     });
-
-    const request_fragment = try urlToString(arena, request.url, .{
-        .fragment = true,
+    const request_fragment = try urlToString(arena, &full_request_url, .{
+        .fragment = true, // TODO since path is false, this likely does not work as intended
     });
 
-    // @newhttp
-    const headers: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    // try headers.ensureTotalCapacity(arena, request.headers.items.len);
-    // for (request.headers.items) |header| {
-    //     headers.putAssumeCapacity(header.name, header.value);
-    // }
+    const headers = try data.request.headers.asHashMap(arena);
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try cdp.sendEvent("Network.requestWillBeSent", .{
-        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{request.id}),
+        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{data.request.id.?}),
         .frameId = target_id,
         .loaderId = bc.loader_id,
         .documentUrl = document_url,
         .request = .{
             .url = request_url,
             .urlFragment = request_fragment,
-            .method = @tagName(request.method),
-            .hasPostData = request.has_body,
+            .method = @tagName(data.request.method),
+            .hasPostData = data.request.body != null,
             .headers = std.json.ArrayHashMap([]const u8){ .map = headers },
         },
     }, .{ .session_id = session_id });
@@ -326,7 +321,7 @@ pub fn httpRequestComplete(arena: Allocator, bc: anytype, request: *const Notifi
     }, .{ .session_id = session_id });
 }
 
-fn urlToString(arena: Allocator, url: *const std.Uri, opts: std.Uri.WriteToStreamOptions) ![]const u8 {
+pub fn urlToString(arena: Allocator, url: *const std.Uri, opts: std.Uri.WriteToStreamOptions) ![]const u8 {
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     try url.writeToStream(opts, buf.writer(arena));
     return buf.items;

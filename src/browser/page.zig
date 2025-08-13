@@ -467,13 +467,17 @@ pub const Page = struct {
         const owned_url = try self.arena.dupeZ(u8, request_url);
         self.url = try URL.parse(owned_url, null);
 
+        var headers = try HttpClient.Headers.init();
+        if (opts.header) |hdr| try headers.add(hdr);
+        try self.requestCookie(.{ .is_navigation = true }).headersForRequest(self.arena, owned_url, &headers);
+
         self.http_client.request(.{
             .ctx = self,
             .url = owned_url,
             .method = opts.method,
+            .headers = headers,
             .body = opts.body,
-            .header = opts.header,
-            .cookie = self.requestCookie(.{ .is_navigation = true }),
+            .cookie_jar = self.cookie_jar,
             .header_done_callback = pageHeaderDoneCallback,
             .data_callback = pageDataCallback,
             .done_callback = pageDoneCallback,
