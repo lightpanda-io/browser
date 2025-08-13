@@ -75,7 +75,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
         notification_arena: std.heap.ArenaAllocator,
 
         // Extra headers to add to all requests. TBD under which conditions this should be reset.
-        extra_headers: std.ArrayListUnmanaged(std.http.Header) = .empty,
+        extra_headers: std.ArrayListUnmanaged([*c]const u8) = .empty,
 
         network_state: NetworkState,
         intercept_state: InterceptState,

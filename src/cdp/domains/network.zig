@@ -121,7 +121,8 @@ fn setExtraHTTPHeaders(cmd: anytype) !void {
     try extra_headers.ensureTotalCapacity(arena, params.headers.map.count());
     var it = params.headers.map.iterator();
     while (it.next()) |header| {
-        extra_headers.appendAssumeCapacity(.{ .name = try arena.dupe(u8, header.key_ptr.*), .value = try arena.dupe(u8, header.value_ptr.*) });
+        const header_string = try std.fmt.allocPrintZ(arena, "{s}: {s}", .{ header.key_ptr.*, header.value_ptr.* });
+        extra_headers.appendAssumeCapacity(header_string);
     }
 
     return cmd.sendResult(null, .{});
@@ -233,19 +234,6 @@ fn getCookies(cmd: anytype) !void {
     try cmd.sendResult(.{ .cookies = writer }, .{});
 }
 
-// Upsert a header into the headers array.
-// returns true if the header was added, false if it was updated
-fn putAssumeCapacity(headers: *std.ArrayListUnmanaged(std.http.Header), extra: std.http.Header) bool {
-    for (headers.items) |*header| {
-        if (std.mem.eql(u8, header.name, extra.name)) {
-            header.value = extra.value;
-            return false;
-        }
-    }
-    headers.appendAssumeCapacity(extra);
-    return true;
-}
-
 pub fn httpRequestFail(arena: Allocator, bc: anytype, data: *const Notification.RequestFail) !void {
     // It's possible that the request failed because we aborted when the client
     // sent Target.closeTarget. In that case, bc.session_id will be cleared
@@ -279,12 +267,9 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, data: *const Notification
     const page = bc.session.currentPage() orelse unreachable;
 
     // Modify request with extra CDP headers
-    // @newhttp
-    // try request.headers.ensureTotalCapacity(request.arena, request.headers.items.len + cdp.extra_headers.items.len);
-    // for (cdp.extra_headers.items) |extra| {
-    //     const new = putAssumeCapacity(request.headers, extra);
-    //     if (!new) log.debug(.cdp, "request header overwritten", .{ .name = extra.name });
-    // }
+    for (cdp.extra_headers.items) |extra| {
+        try data.transfer.req.headers.add(extra);
+    }
 
     const document_url = try urlToString(arena, &page.url.uri, .{
         .scheme = true,
