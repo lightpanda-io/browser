@@ -313,7 +313,13 @@ pub const Page = struct {
                                 return;
                             }
                             _ = try scheduler.runLowPriority();
-                            std.time.sleep(std.time.ns_per_ms * ms);
+
+                            // We must use a u64 here b/c ms is a u32 and the
+                            // conversion to ns can generate an integer
+                            // overflow.
+                            const _ms: u64 = @intCast(ms);
+
+                            std.time.sleep(std.time.ns_per_ms * _ms);
                             break :SW;
                         }
 
