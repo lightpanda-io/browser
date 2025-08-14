@@ -110,9 +110,6 @@ pub const Connection = struct {
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_FOLLOWLOCATION, @as(c_long, 2)));
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_REDIR_PROTOCOLS_STR, "HTTP,HTTPS")); // remove FTP and FTPS from the default
 
-        // enable cookie engine for redirections handled directly by Curl.
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COOKIEFILE, ""));
-
         // proxy
         if (opts.http_proxy) |proxy| {
             try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY, proxy.ptr));
@@ -205,8 +202,6 @@ pub const Connection = struct {
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPHEADER, header_list.headers));
 
         // Add cookies.
-        // Clear cookies from Curl's engine.
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COOKIELIST, "ALL"));
         if (header_list.cookies) |cookies| {
             try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COOKIE, cookies));
         }

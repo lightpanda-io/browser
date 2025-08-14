@@ -24,6 +24,8 @@ pub const Headers = Http.Headers;
 const Notification = @import("../notification.zig").Notification;
 const storage = @import("../browser/storage/storage.zig");
 
+const urlStitch = @import("../url.zig").URL.stitch;
+
 const c = Http.c;
 
 const Allocator = std.mem.Allocator;
@@ -321,8 +323,6 @@ fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) !void {
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPHEADER, header_list.headers));
 
         // Add cookies.
-        // Clear cookies from Curl's engine.
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COOKIELIST, "ALL"));
         if (header_list.cookies) |cookies| {
             try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COOKIE, cookies));
         }
@@ -595,6 +595,42 @@ pub const Transfer = struct {
         self.deinit();
     }
 
+    // redirectionCookies manages cookies during redirections handled by Curl.
+    // It sets the cookies from the current response to the cookie jar.
+    // It also immediately sets cookies for the following request.
+    fn redirectionCookies(arena: std.mem.Allocator, easy: *c.CURL, cookie_jar: *storage.CookieJar, origin: *const std.Uri) !void {
+        // retrieve cookies from the redirect's response.
+        var i: usize = 0;
+        while (true) {
+            const ct = getResponseHeader(easy, "set-cookie", i);
+            if (ct == null) break;
+            try cookie_jar.populateFromResponse(origin, ct.?.value);
+            i += 1;
+            if (i >= ct.?.amount) break;
+        }
+
+        // set cookies for the following redirection's request.
+        const hlocation = getResponseHeader(easy, "location", 0);
+        if (hlocation == null) {
+            return error.LocationNotFound;
+        }
+
+        var baseurl: [*c]u8 = undefined;
+        try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_EFFECTIVE_URL, &baseurl));
+
+        const url = try urlStitch(arena, hlocation.?.value, std.mem.span(baseurl), .{});
+        const uri = try std.Uri.parse(url);
+
+        var cookies: std.ArrayListUnmanaged(u8) = .{};
+        try cookie_jar.forRequest(&uri, cookies.writer(arena), .{
+            .is_http = true,
+            .is_navigation = true,
+            .origin_uri = origin,
+        });
+        try cookies.append(arena, 0); //null terminate
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COOKIE, @as([*c]const u8, @ptrCast(cookies.items.ptr))));
+    }
+
     fn headerCallback(buffer: [*]const u8, header_count: usize, buf_len: usize, data: *anyopaque) callconv(.c) usize {
         // libcurl should only ever emit 1 header at a time
         std.debug.assert(header_count == 1);
@@ -611,18 +647,16 @@ pub const Transfer = struct {
 
         if (transfer.response_header == null) {
             if (transfer._redirecting and buf_len == 2) {
-                // retrieve cookies from the redirect's response.
-                var i: usize = 0;
-                while (true) {
-                    const ct = getResponseHeader(easy, "set-cookie", i);
-                    if (ct == null) break;
-                    transfer.req.cookie_jar.populateFromResponse(&transfer.uri, ct.?.value) catch |err| {
-                        log.err(.http, "set cookie", .{ .err = err, .req = transfer });
-                    };
-                    i += 1;
-                    if (i >= ct.?.amount) break;
-                }
-
+                // parse and set cookies for the redirection.
+                redirectionCookies(
+                    transfer.client.arena.allocator(),
+                    easy,
+                    transfer.req.cookie_jar,
+                    &transfer.uri,
+                ) catch |err| {
+                    log.debug(.http, "redirection cookies", .{ .err = err });
+                    return 0;
+                };
                 return buf_len;
             }
 
