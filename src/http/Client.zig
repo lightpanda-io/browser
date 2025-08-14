@@ -668,6 +668,12 @@ pub const Transfer = struct {
         }
 
         if (buf_len == 2) {
+            if (getResponseHeader(easy, "content-type")) |value| {
+                const len = @min(value.len, hdr._content_type.len);
+                hdr._content_type_len = len;
+                @memcpy(hdr._content_type[0..len], value[0..len]);
+            }
+
             transfer.req.header_done_callback(transfer) catch |err| {
                 log.err(.http, "header_done_callback", .{ .err = err, .req = transfer });
                 // returning < buf_len terminates the request
@@ -675,7 +681,7 @@ pub const Transfer = struct {
             };
 
             if (transfer.client.notification) |notification| {
-                notification.dispatch(.http_headers_done_receiving, &.{
+                notification.dispatch(.http_headers_done, &.{
                     .transfer = transfer,
                 });
             }
@@ -685,16 +691,6 @@ pub const Transfer = struct {
                     log.err(.http, "header_callback", .{ .err = err, .req = transfer });
                     return 0;
                 };
-            }
-
-            if (transfer.client.notification) |notification| {
-                if (Http.Headers.parseHeader(header)) |hdr_name_value| {
-                    notification.dispatch(.http_header_received, &.{
-                        .request_id = transfer.id,
-                        .status = hdr.status,
-                        .header = hdr_name_value,
-                    });
-                } else log.err(.http, "invalid header", .{ .line = header });
             }
         }
         return buf_len;
@@ -721,6 +717,12 @@ pub const Transfer = struct {
         return chunk_len;
     }
 
+    // we assume that the caller is smart and only calling this after being
+    // told that the header was ready.
+    pub fn responseHeaderIterator(self: *Transfer) HeaderIterator {
+        return .{ .easy = self._handle.?.conn.easy };
+    }
+
     // pub because Page.printWaitAnalysis uses it
     pub fn fromEasy(easy: *c.CURL) !*Transfer {
         var private: *anyopaque = undefined;
@@ -742,3 +744,37 @@ pub const Header = struct {
         return self._content_type[0..self._content_type_len];
     }
 };
+
+const HeaderIterator = struct {
+    easy: *c.CURL,
+    prev: ?*c.curl_header = null,
+
+    pub fn next(self: *HeaderIterator) ?struct { name: []const u8, value: []const u8 } {
+        const h = c.curl_easy_nextheader(self.easy, c.CURLH_HEADER, -1, self.prev) orelse return null;
+        self.prev = h;
+
+        const header = h.*;
+        return .{
+            .name = std.mem.span(header.name),
+            .value = std.mem.span(header.value),
+        };
+    }
+};
+
+fn getResponseHeader(easy: *c.CURL, name: [:0]const u8) ?[]const u8 {
+    var hdr: [*c]c.curl_header = null;
+    const result = c.curl_easy_header(easy, name, 0, c.CURLH_HEADER, -1, &hdr);
+    if (result == c.CURLE_OK) {
+        return std.mem.span(hdr.*.value);
+    }
+
+    if (result == c.CURLE_FAILED_INIT) {
+        // seems to be what it returns if the header isn't found
+        return null;
+    }
+    log.err(.http, "get response header", .{
+        .name = name,
+        .err = @import("errors.zig").fromCode(result),
+    });
+    return null;
+}

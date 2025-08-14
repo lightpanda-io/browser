@@ -63,8 +63,7 @@ pub const Notification = struct {
         http_request_fail: List = .{},
         http_request_start: List = .{},
         http_request_intercept: List = .{},
-        http_header_received: List = .{},
-        http_headers_done_receiving: List = .{},
+        http_headers_done: List = .{},
         notification_created: List = .{},
     };
 
@@ -76,8 +75,7 @@ pub const Notification = struct {
         http_request_fail: *const RequestFail,
         http_request_start: *const RequestStart,
         http_request_intercept: *const RequestIntercept,
-        http_header_received: *const ResponseHeader,
-        http_headers_done_receiving: *const ResponseHeadersDone,
+        http_headers_done: *const ResponseHeadersDone,
         notification_created: *Notification,
     };
     const EventType = std.meta.FieldEnum(Events);
@@ -102,12 +100,6 @@ pub const Notification = struct {
     pub const RequestIntercept = struct {
         transfer: *Transfer,
         wait_for_interception: *bool,
-    };
-
-    pub const ResponseHeader = struct {
-        request_id: u64,
-        status: u16,
-        header: std.http.Header,
     };
 
     pub const ResponseHeadersDone = struct {

@@ -22,6 +22,7 @@ const Allocator = std.mem.Allocator;
 const Notification = @import("../../notification.zig").Notification;
 const log = @import("../../log.zig");
 const CdpStorage = @import("storage.zig");
+const Transfer = @import("../../http/Client.zig").Transfer;
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -60,43 +61,6 @@ const Response = struct {
     // only work once Network.loadingFinished is sent but the body itself would
     // be loaded with each chunks as Network.dataReceiveds are coming in.
 };
-
-// Stored in CDP
-pub const NetworkState = struct {
-    arena: std.heap.ArenaAllocator,
-    received: std.AutoArrayHashMap(u64, Response),
-
-    pub fn init(allocator: Allocator) !NetworkState {
-        return .{
-            .arena = std.heap.ArenaAllocator.init(allocator),
-            .received = std.AutoArrayHashMap(u64, Response).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *NetworkState) void {
-        self.received.deinit();
-        self.arena.deinit();
-    }
-
-    pub fn putOrAppendReceivedHeader(self: *NetworkState, request_id: u64, status: u16, header: std.http.Header) !void {
-        const kv = try self.received.getOrPut(request_id);
-        if (!kv.found_existing) {
-            kv.value_ptr.* = .{ .status = status };
-        }
-
-        const a = self.arena.allocator();
-        const name = try a.dupe(u8, header.name);
-        const value = try a.dupe(u8, header.value);
-        try kv.value_ptr.headers.put(a, name, value);
-    }
-};
-
-pub fn pageRemove(bc: anytype) !void {
-    // The main page is going to be removed
-    const state = &bc.cdp.network_state;
-    state.received.clearRetainingCapacity(); // May need to be in pageRemoved
-    _ = state.arena.reset(.{ .retain_with_limit = 1024 });
-}
 
 fn enable(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
@@ -314,7 +278,7 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, data: *const Notification
     }, .{ .session_id = session_id });
 }
 
-pub fn httpHeadersDoneReceiving(arena: Allocator, bc: anytype, request: *const Notification.ResponseHeadersDone) !void {
+pub fn httpHeadersDone(arena: Allocator, bc: anytype, request: *const Notification.ResponseHeadersDone) !void {
     // Isn't possible to do a network request within a Browser (which our
     // notification is tied to), without a page.
     std.debug.assert(bc.session.page != null);
@@ -333,7 +297,7 @@ pub fn httpHeadersDoneReceiving(arena: Allocator, bc: anytype, request: *const N
         .query = true,
     });
 
-    const response = bc.cdp.network_state.received.get(request.transfer.id) orelse return error.ResponseNotFound;
+    const status = request.transfer.response_header.?.status;
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try cdp.sendEvent("Network.responseReceived", .{
@@ -341,9 +305,9 @@ pub fn httpHeadersDoneReceiving(arena: Allocator, bc: anytype, request: *const N
         .loaderId = bc.loader_id,
         .response = .{
             .url = url,
-            .status = response.status,
-            .statusText = @as(std.http.Status, @enumFromInt(response.status)).phrase() orelse "Unknown",
-            .headers = std.json.ArrayHashMap([]const u8){ .map = response.headers },
+            .status = status,
+            .statusText = @as(std.http.Status, @enumFromInt(status)).phrase() orelse "Unknown",
+            .headers = ResponseHeaderWriter.init(request.transfer),
         },
         .frameId = target_id,
     }, .{ .session_id = session_id });
@@ -354,6 +318,26 @@ pub fn urlToString(arena: Allocator, url: *const std.Uri, opts: std.Uri.WriteToS
     try url.writeToStream(opts, buf.writer(arena));
     return buf.items;
 }
+
+const ResponseHeaderWriter = struct {
+    transfer: *Transfer,
+
+    fn init(transfer: *Transfer) ResponseHeaderWriter {
+        return .{
+            .transfer = transfer,
+        };
+    }
+
+    pub fn jsonStringify(self: *const ResponseHeaderWriter, writer: anytype) !void {
+        try writer.beginObject();
+        var it = self.transfer.responseHeaderIterator();
+        while (it.next()) |hdr| {
+            try writer.objectField(hdr.name);
+            try writer.write(hdr.value);
+        }
+        try writer.endObject();
+    }
+};
 
 const testing = @import("../testing.zig");
 test "cdp.network setExtraHTTPHeaders" {

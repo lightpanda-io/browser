@@ -21,8 +21,9 @@ const std = @import("std");
 pub const c = @cImport({
     @cInclude("curl/curl.h");
 });
-const errors = @import("errors.zig");
+
 const Client = @import("Client.zig");
+const errors = @import("errors.zig");
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
