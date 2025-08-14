@@ -25,20 +25,19 @@ const Dump = @import("dump.zig");
 const State = @import("State.zig");
 const Env = @import("env.zig").Env;
 const Mime = @import("mime.zig").Mime;
-const DataURI = @import("datauri.zig").DataURI;
 const Session = @import("session.zig").Session;
 const Renderer = @import("renderer.zig").Renderer;
 const Window = @import("html/window.zig").Window;
 const Walker = @import("dom/walker.zig").WalkerDepthFirst;
-const Loop = @import("../runtime/loop.zig").Loop;
+const Scheduler = @import("Scheduler.zig");
+const HttpClient = @import("../http/Client.zig");
+const ScriptManager = @import("ScriptManager.zig");
 const HTMLDocument = @import("html/document.zig").HTMLDocument;
-const RequestFactory = @import("../http/client.zig").RequestFactory;
 
 const URL = @import("../url.zig").URL;
 
 const log = @import("../log.zig");
 const parser = @import("netsurf.zig");
-const http = @import("../http/client.zig");
 const storage = @import("storage/storage.zig");
 
 const polyfill = @import("polyfill/polyfill.zig");
@@ -48,14 +47,13 @@ const polyfill = @import("polyfill/polyfill.zig");
 // end() to stop the previous navigation before starting a new one.
 // The page handle all its memory in an arena allocator. The arena is reseted
 // when end() is called.
-pub const Page = struct {
-    // Our event loop
-    loop: *Loop,
 
+pub const Page = struct {
     cookie_jar: *storage.CookieJar,
 
     // Pre-configured http/cilent.zig used to make HTTP requests.
-    request_factory: RequestFactory,
+    // @newhttp
+    // request_factory: RequestFactory,
 
     session: *Session,
 
@@ -66,22 +64,13 @@ pub const Page = struct {
     // above arena. It should only be used by WebAPIs.
     call_arena: Allocator,
 
-    // Serves are the root object of our JavaScript environment
+    // Serves as the root object of our JavaScript environment
     window: Window,
 
     // The URL of the page
     url: URL,
 
-    // If the body of the main page isn't HTML, we capture its raw bytes here
-    // (currently, this is only useful in fetch mode with the --dump option)
-    raw_data: ?[]const u8,
-
     renderer: Renderer,
-
-    // run v8 micro tasks
-    microtask_node: Loop.CallbackNode,
-    // run v8 pump message loop and idle tasks
-    messageloop_node: Loop.CallbackNode,
 
     keydown_event_node: parser.EventNode,
     window_clicked_event_node: parser.EventNode,
@@ -97,48 +86,98 @@ pub const Page = struct {
 
     polyfill_loader: polyfill.Loader = .{},
 
+    scheduler: Scheduler,
+    http_client: *HttpClient,
+    script_manager: ScriptManager,
+
+    mode: Mode,
+
+    load_state: LoadState = .parsing,
+
+    const Mode = union(enum) {
+        pre: void,
+        err: anyerror,
+        parsed: void,
+        html: parser.Parser,
+        raw: std.ArrayListUnmanaged(u8),
+        raw_done: []const u8,
+    };
+
+    const LoadState = enum {
+        // the main HTML is being parsed (or downloaded)
+        parsing,
+
+        // the main HTML has been parsed and the JavaScript (including deferred
+        // scripts) have been loaded. Corresponds to the DOMContentLoaded event
+        load,
+
+        // the page has been loaded and all async scripts (if any) are done
+        // Corresponds to the load event
+        complete,
+    };
+
     pub fn init(self: *Page, arena: Allocator, session: *Session) !void {
         const browser = session.browser;
+        const script_manager = ScriptManager.init(browser, self);
+
         self.* = .{
+            .url = URL.empty,
+            .mode = .{ .pre = {} },
             .window = try Window.create(null, null),
             .arena = arena,
-            .raw_data = null,
-            .url = URL.empty,
             .session = session,
             .call_arena = undefined,
-            .loop = browser.app.loop,
             .renderer = Renderer.init(arena),
             .state_pool = &browser.state_pool,
             .cookie_jar = &session.cookie_jar,
-            .microtask_node = .{ .func = microtaskCallback },
-            .messageloop_node = .{ .func = messageLoopCallback },
+            .script_manager = script_manager,
+            .http_client = browser.http_client,
+            .scheduler = Scheduler.init(arena),
             .keydown_event_node = .{ .func = keydownCallback },
             .window_clicked_event_node = .{ .func = windowClicked },
-            .request_factory = browser.http_client.requestFactory(.{
-                .notification = browser.notification,
-            }),
+            // @newhttp
+            // .request_factory = browser.http_client.requestFactory(.{
+            //     .notification = browser.notification,
+            // }),
             .main_context = undefined,
         };
         self.main_context = try session.executor.createJsContext(&self.window, self, self, true, Env.GlobalMissingCallback.init(&self.polyfill_loader));
         try polyfill.preload(self.arena, self.main_context);
 
+        try self.scheduler.add(self, runMicrotasks, 5, .{ .name = "page.microtasks" });
         // message loop must run only non-test env
         if (comptime !builtin.is_test) {
-            _ = try session.browser.app.loop.timeout(1 * std.time.ns_per_ms, &self.microtask_node);
-            _ = try session.browser.app.loop.timeout(100 * std.time.ns_per_ms, &self.messageloop_node);
+            try self.scheduler.add(self, runMessageLoop, 5, .{ .name = "page.messageLoop" });
         }
     }
 
-    fn microtaskCallback(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
-        const self: *Page = @fieldParentPtr("microtask_node", node);
-        self.session.browser.runMicrotasks();
-        repeat_delay.* = 1 * std.time.ns_per_ms;
+    pub fn deinit(self: *Page) void {
+        self.script_manager.shutdown = true;
+
+        self.http_client.abort();
+        self.script_manager.deinit();
     }
 
-    fn messageLoopCallback(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
-        const self: *Page = @fieldParentPtr("messageloop_node", node);
+    fn reset(self: *Page) void {
+        self.scheduler.reset();
+        self.http_client.abort();
+        self.script_manager.reset();
+
+        self.load_state = .parsing;
+        self.mode = .{ .pre = {} };
+        _ = self.session.browser.page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
+    }
+
+    fn runMicrotasks(ctx: *anyopaque) ?u32 {
+        const self: *Page = @alignCast(@ptrCast(ctx));
+        self.session.browser.runMicrotasks();
+        return 5;
+    }
+
+    fn runMessageLoop(ctx: *anyopaque) ?u32 {
+        const self: *Page = @alignCast(@ptrCast(ctx));
         self.session.browser.runMessageLoop();
-        repeat_delay.* = 100 * std.time.ns_per_ms;
+        return 100;
     }
 
     pub const DumpOpts = struct {
@@ -150,12 +189,25 @@ pub const Page = struct {
 
     // dump writes the page content into the given file.
     pub fn dump(self: *const Page, opts: DumpOpts, out: std.fs.File) !void {
-        if (self.raw_data) |raw_data| {
-            // raw_data was set if the document was not HTML, dump the data content only.
-            return try out.writeAll(raw_data);
+        switch (self.mode) {
+            .pre => return error.PageNotLoaded,
+            .raw => |buf| {
+                // maybe page.wait timed-out, print what we have
+                log.warn(.http, "incomplete load", .{ .mode = "raw" });
+                return out.writeAll(buf.items);
+            },
+            .raw_done => |data| return out.writeAll(data),
+            .html => {
+                // maybe page.wait timed-out, print what we have
+                log.warn(.http, "incomplete load", .{ .mode = "html" });
+                // processed below, along with .html
+            },
+            .parsed => {
+                // processed below, along with .html
+            },
+            .err => |err| return err,
         }
 
-        // if the page has a pointer to a document, dumps the HTML.
         const doc = parser.documentHTMLToDocument(self.window.document);
 
         // if the base si requested, add the base's node in the document's headers.
@@ -187,25 +239,190 @@ pub const Page = struct {
         try Node.prepend(head, &[_]Node.NodeOrText{.{ .node = parser.elementToNode(base) }});
     }
 
-    pub fn fetchModuleSource(ctx: *anyopaque, src: []const u8) !?[]const u8 {
+    pub fn fetchModuleSource(ctx: *anyopaque, src: [:0]const u8) !ScriptManager.BlockingResult {
         const self: *Page = @ptrCast(@alignCast(ctx));
-        return self.fetchData("module", src);
+        return self.script_manager.blockingGet(src);
     }
 
-    pub fn wait(self: *Page, wait_ns: usize) !void {
+    pub fn wait(self: *Page, wait_sec: usize) void {
+        self._wait(wait_sec) catch |err| switch (err) {
+            error.JsError => {}, // already logged (with hopefully more context)
+            else => {
+                // There may be errors from the http/client or ScriptManager
+                // that we should not treat as an error like this. Will need
+                // to run this through more real-world sites and see if we need
+                // to expand the switch (err) to have more customized logs for
+                // specific messages.
+                log.err(.browser, "page wait", .{ .err = err });
+            },
+        };
+    }
+
+    fn _wait(self: *Page, wait_sec: usize) !void {
+        var ms_remaining = wait_sec * 1000;
+        var timer = try std.time.Timer.start();
+
         var try_catch: Env.TryCatch = undefined;
         try_catch.init(self.main_context);
         defer try_catch.deinit();
 
-        try self.session.browser.app.loop.run(wait_ns);
+        var scheduler = &self.scheduler;
+        var http_client = self.http_client;
 
-        if (try_catch.hasCaught() == false) {
-            log.debug(.browser, "page wait complete", .{});
-            return;
+        // for debugging
+        // defer self.printWaitAnalysis();
+
+        while (true) {
+            SW: switch (self.mode) {
+                .pre, .raw => {
+                    // The main page hasn't started/finished navigating.
+                    // There's no JS to run, and no reason to run the scheduler.
+
+                    if (http_client.active == 0) {
+                        // haven't started navigating, I guess.
+                        return;
+                    }
+
+                    // There should only be 1 active http transfer, the main page
+                    std.debug.assert(http_client.active == 1);
+                    try http_client.tick(ms_remaining);
+                },
+                .html, .parsed => {
+                    // The HTML page was parsed. We now either have JS scripts to
+                    // download, or timeouts to execute, or both.
+
+                    // scheduler.run could trigger new http transfers, so do not
+                    // store http_client.active BEFORE this call and then use
+                    // it AFTER.
+                    const ms_to_next_task = try scheduler.runHighPriority();
+
+                    if (try_catch.hasCaught()) {
+                        const msg = (try try_catch.err(self.arena)) orelse "unknown";
+                        log.warn(.user_script, "page wait", .{ .err = msg, .src = "scheduler" });
+                        return error.JsError;
+                    }
+
+                    if (http_client.active == 0) {
+                        if (ms_to_next_task) |ms| {
+                            // There are no HTTP transfers, so there's no point calling
+                            // http_client.tick.
+                            // TODO: should we just force-run the scheduler??
+
+                            if (ms > ms_remaining) {
+                                // we'd wait to long, might as well exit early.
+                                return;
+                            }
+                            _ = try scheduler.runLowPriority();
+
+                            // We must use a u64 here b/c ms is a u32 and the
+                            // conversion to ns can generate an integer
+                            // overflow.
+                            const _ms: u64 = @intCast(ms);
+
+                            std.time.sleep(std.time.ns_per_ms * _ms);
+                            break :SW;
+                        }
+
+                        // We have no active http transfer and no pending
+                        // schedule tasks. We're done
+                        return;
+                    }
+
+                    _ = try scheduler.runLowPriority();
+
+                    // We'll block here, waiting for network IO. We know
+                    // when the next timeout is scheduled, and we know how long
+                    // the caller wants to wait for, so we can pick a good wait
+                    // duration
+                    const ms_to_wait = @min(ms_remaining, ms_to_next_task orelse 1000);
+                    try http_client.tick(ms_to_wait);
+
+                    if (try_catch.hasCaught()) {
+                        const msg = (try try_catch.err(self.arena)) orelse "unknown";
+                        log.warn(.user_script, "page wait", .{ .err = msg, .src = "data" });
+                        return error.JsError;
+                    }
+                },
+                .err => |err| return err,
+                .raw_done => return,
+            }
+
+            const ms_elapsed = timer.lap() / 1_000_000;
+            if (ms_elapsed >= ms_remaining) {
+                return;
+            }
+            ms_remaining -= ms_elapsed;
+        }
+    }
+
+    fn printWaitAnalysis(self: *Page) void {
+        std.debug.print("mode: {s}\n", .{@tagName(std.meta.activeTag(self.mode))});
+        std.debug.print("load: {s}\n", .{@tagName(self.load_state)});
+        {
+            std.debug.print("\nactive requests: {d}\n", .{self.http_client.active});
+            var n_ = self.http_client.handles.in_use.first;
+            while (n_) |n| {
+                const transfer = HttpClient.Transfer.fromEasy(n.data.conn.easy) catch |err| {
+                    std.debug.print(" - failed to load transfer: {any}\n", .{err});
+                    break;
+                };
+                std.debug.print(" - {s}\n", .{transfer});
+                n_ = n.next;
+            }
         }
 
-        const msg = (try try_catch.err(self.arena)) orelse "unknown";
-        log.err(.browser, "page wait error", .{ .err = msg });
+        {
+            std.debug.print("\nqueued requests: {d}\n", .{self.http_client.queue.len});
+            var n_ = self.http_client.queue.first;
+            while (n_) |n| {
+                std.debug.print(" - {s}\n", .{n.data.url});
+                n_ = n.next;
+            }
+        }
+
+        {
+            std.debug.print("\nscripts: {d}\n", .{self.script_manager.scripts.len});
+            var n_ = self.script_manager.scripts.first;
+            while (n_) |n| {
+                std.debug.print(" - {s} complete: {any}\n", .{ n.data.script.url, n.data.complete });
+                n_ = n.next;
+            }
+        }
+
+        {
+            std.debug.print("\ndeferreds: {d}\n", .{self.script_manager.deferreds.len});
+            var n_ = self.script_manager.deferreds.first;
+            while (n_) |n| {
+                std.debug.print(" - {s} complete: {any}\n", .{ n.data.script.url, n.data.complete });
+                n_ = n.next;
+            }
+        }
+
+        const now = std.time.milliTimestamp();
+        {
+            std.debug.print("\nasyncs: {d}\n", .{self.script_manager.asyncs.len});
+            var n_ = self.script_manager.asyncs.first;
+            while (n_) |n| {
+                std.debug.print(" - {s} complete: {any}\n", .{ n.data.script.url, n.data.complete });
+                n_ = n.next;
+            }
+        }
+
+        {
+            std.debug.print("\nprimary schedule: {d}\n", .{self.scheduler.primary.count()});
+            var it = self.scheduler.primary.iterator();
+            while (it.next()) |task| {
+                std.debug.print(" - {s} schedule: {d}ms\n", .{ task.name, task.ms - now });
+            }
+        }
+
+        {
+            std.debug.print("\nsecondary schedule: {d}\n", .{self.scheduler.secondary.count()});
+            var it = self.scheduler.secondary.iterator();
+            while (it.next()) |task| {
+                std.debug.print(" - {s} schedule: {d}ms\n", .{ task.name, task.ms - now });
+            }
+        }
     }
 
     pub fn origin(self: *const Page, arena: Allocator) ![]const u8 {
@@ -214,13 +431,28 @@ pub const Page = struct {
         return arr.items;
     }
 
-    // spec reference: https://html.spec.whatwg.org/#document-lifecycle
-    pub fn navigate(self: *Page, request_url: URL, opts: NavigateOpts) !void {
-        const arena = self.arena;
-        const session = self.session;
-        const notification = session.browser.notification;
+    const RequestCookieOpts = struct {
+        is_http: bool = true,
+        is_navigation: bool = false,
+    };
+    pub fn requestCookie(self: *const Page, opts: RequestCookieOpts) HttpClient.RequestCookie {
+        return .{
+            .jar = self.cookie_jar,
+            .origin = &self.url.uri,
+            .is_http = opts.is_http,
+            .is_navigation = opts.is_navigation,
+        };
+    }
 
-        log.debug(.http, "navigate", .{
+    // spec reference: https://html.spec.whatwg.org/#document-lifecycle
+    pub fn navigate(self: *Page, request_url: []const u8, opts: NavigateOpts) !void {
+        if (self.mode != .pre) {
+            // it's possible for navigate to be called multiple times on the
+            // same page (via CDP). We want to reset the page between each call.
+            self.reset();
+        }
+
+        log.info(.http, "navigate", .{
             .url = request_url,
             .method = opts.method,
             .reason = opts.reason,
@@ -228,237 +460,96 @@ pub const Page = struct {
         });
 
         // if the url is about:blank, nothing to do.
-        if (std.mem.eql(u8, "about:blank", request_url.raw)) {
-            var fbs = std.io.fixedBufferStream("");
-            try self.loadHTMLDoc(fbs.reader(), "utf-8");
+        if (std.mem.eql(u8, "about:blank", request_url)) {
+            const html_doc = try parser.documentHTMLParseFromStr("");
+            try self.setDocument(html_doc);
+
             // We do not processHTMLDoc here as we know we don't have any scripts
             // This assumption may be false when CDP Page.addScriptToEvaluateOnNewDocument is implemented
             try HTMLDocument.documentIsComplete(self.window.document, self);
             return;
         }
 
-        // we don't clone url, because we're going to replace self.url
-        // later in this function, with the final request url (since we might
-        // redirect)
-        self.url = request_url;
+        const owned_url = try self.arena.dupeZ(u8, request_url);
+        self.url = try URL.parse(owned_url, null);
 
-        {
-            // block exists to limit the lifetime of the request, which holds
-            // onto a connection
-            var request = try self.newHTTPRequest(opts.method, &self.url, .{ .navigation = true, .is_http = true });
-            defer request.deinit();
+        var headers = try HttpClient.Headers.init();
+        if (opts.header) |hdr| try headers.add(hdr);
+        try self.requestCookie(.{ .is_navigation = true }).headersForRequest(self.arena, owned_url, &headers);
 
-            request.body = opts.body;
-            request.notification = notification;
+        self.http_client.request(.{
+            .ctx = self,
+            .url = owned_url,
+            .method = opts.method,
+            .headers = headers,
+            .body = opts.body,
+            .cookie_jar = self.cookie_jar,
+            .header_done_callback = pageHeaderDoneCallback,
+            .data_callback = pageDataCallback,
+            .done_callback = pageDoneCallback,
+            .error_callback = pageErrorCallback,
+        }) catch |err| {
+            log.err(.http, "navigate request", .{ .url = owned_url, .err = err });
+            return err;
+        };
 
-            notification.dispatch(.page_navigate, &.{
-                .opts = opts,
-                .url = &self.url,
-                .timestamp = timestamp(),
-            });
-
-            var response = try request.sendSync(.{});
-
-            // would be different than self.url in the case of a redirect
-            self.url = try URL.fromURI(arena, request.request_uri);
-
-            const header = response.header;
-            try session.cookie_jar.populateFromResponse(&self.url.uri, &header);
-
-            // TODO handle fragment in url.
-            try self.window.replaceLocation(.{ .url = try self.url.toWebApi(arena) });
-
-            const content_type = header.get("content-type");
-
-            const mime: Mime = blk: {
-                if (content_type) |ct| {
-                    break :blk try Mime.parse(arena, ct);
-                }
-                break :blk Mime.sniff(try response.peek());
-            } orelse .unknown;
-
-            log.info(.http, "navigation", .{
-                .status = header.status,
-                .content_type = content_type,
-                .charset = mime.charset,
-                .url = request_url,
-                .method = opts.method,
-                .reason = opts.reason,
-            });
-
-            if (mime.isHTML()) {
-                // the page is an HTML, load it as it.
-                try self.loadHTMLDoc(&response, mime.charset orelse "utf-8");
-            } else {
-                // the page isn't an HTML
-                var arr: std.ArrayListUnmanaged(u8) = .{};
-                while (try response.next()) |data| {
-                    try arr.appendSlice(arena, try arena.dupe(u8, data));
-                }
-                // save the body into the page.
-                self.raw_data = arr.items;
-
-                // construct a pseudo HTML containing the response body.
-                var buf: std.ArrayListUnmanaged(u8) = .{};
-
-                switch (mime.content_type) {
-                    .application_json, .text_plain, .text_javascript, .text_css => {
-                        try buf.appendSlice(arena, "<html><head><meta charset=\"utf-8\"></head><body><pre>");
-                        try buf.appendSlice(arena, self.raw_data.?);
-                        try buf.appendSlice(arena, "</pre></body></html>\n");
-                    },
-                    // In other cases, we prefer to not integrate the content into the HTML document page iself.
-                    else => {},
-                }
-                var fbs = std.io.fixedBufferStream(buf.items);
-                try self.loadHTMLDoc(fbs.reader(), mime.charset orelse "utf-8");
-            }
-        }
-
-        try self.processHTMLDoc();
-
-        notification.dispatch(.page_navigated, &.{
-            .url = &self.url,
+        self.session.browser.notification.dispatch(.page_navigate, &.{
+            .opts = opts,
+            .url = owned_url,
             .timestamp = timestamp(),
         });
-        log.debug(.http, "navigation complete", .{
-            .url = request_url,
+    }
+
+    pub fn setCurrentScript(self: *Page, script: ?*parser.Script) !void {
+        const html_doc = self.window.document;
+        try parser.documentHTMLSetCurrentScript(html_doc, script);
+    }
+
+    pub fn documentIsLoaded(self: *Page) void {
+        if (self.load_state != .parsing) {
+            // Ideally, documentIsLoaded would only be called once, but if a
+            // script is dynamically added from an async script after
+            // documentIsLoaded is already called, then ScriptManager will call
+            // it again.
+            return;
+        }
+
+        self.load_state = .load;
+        HTMLDocument.documentIsLoaded(self.window.document, self) catch |err| {
+            log.err(.browser, "document is loaded", .{ .err = err });
+        };
+    }
+
+    pub fn documentIsComplete(self: *Page) void {
+        if (self.load_state == .complete) {
+            // Ideally, documentIsComplete would only be called once, but with
+            // dynamic scripts, it can be hard to keep track of that. An async
+            // script could be evaluated AFTER Loaded and Complete and load its
+            // own non non-async script - which, upon completion, needs to check
+            // whether Laoded/Complete have already been called, which is what
+            // this guard is.
+            return;
+        }
+
+        // documentIsComplete could be called directly, without first calling
+        // documentIsLoaded, if there were _only_ async scripts
+        if (self.load_state == .parsing) {
+            self.documentIsLoaded();
+        }
+
+        self.load_state = .complete;
+        self._documentIsComplete() catch |err| {
+            log.err(.browser, "document is complete", .{ .err = err });
+        };
+
+        self.session.browser.notification.dispatch(.page_navigated, &.{
+            .url = self.url.raw,
+            .timestamp = timestamp(),
         });
     }
 
-    // https://html.spec.whatwg.org/#read-html
-    pub fn loadHTMLDoc(self: *Page, reader: anytype, charset: []const u8) !void {
-        const ccharset = try self.arena.dupeZ(u8, charset);
-
-        const html_doc = try parser.documentHTMLParse(reader, ccharset);
-        const doc = parser.documentHTMLToDocument(html_doc);
-
-        // inject the URL to the document including the fragment.
-        try parser.documentSetDocumentURI(doc, self.url.raw);
-
-        // TODO set the referrer to the document.
-        try self.window.replaceDocument(html_doc);
-        self.window.setStorageShelf(
-            try self.session.storage_shed.getOrPut(try self.origin(self.arena)),
-        );
-    }
-
-    fn processHTMLDoc(self: *Page) !void {
-        const html_doc = self.window.document;
-        const doc = parser.documentHTMLToDocument(html_doc);
-
-        // we want to be notified of any dynamically added script tags
-        // so that we can load the script
-        parser.documentSetScriptAddedCallback(doc, self, scriptAddedCallback);
-
-        const document_element = (try parser.documentGetDocumentElement(doc)) orelse return error.DocumentElementError;
-        _ = try parser.eventTargetAddEventListener(
-            parser.toEventTarget(parser.Element, document_element),
-            "click",
-            &self.window_clicked_event_node,
-            false,
-        );
-        _ = try parser.eventTargetAddEventListener(
-            parser.toEventTarget(parser.Element, document_element),
-            "keydown",
-            &self.keydown_event_node,
-            false,
-        );
-
-        // https://html.spec.whatwg.org/#read-html
-
-        // browse the DOM tree to retrieve scripts
-        // TODO execute the synchronous scripts during the HTL parsing.
-        // TODO fetch the script resources concurrently but execute them in the
-        // declaration order for synchronous ones.
-
-        // async_scripts stores scripts which can be run asynchronously.
-        // for now they are just run after the non-async one in order to
-        // dispatch DOMContentLoaded the sooner as possible.
-        var async_scripts: std.ArrayListUnmanaged(Script) = .{};
-
-        // defer_scripts stores scripts which are meant to be deferred. For now
-        // this doesn't have a huge impact, since normal scripts are parsed
-        // after the document is loaded. But (a) we should fix that and (b)
-        // this results in JavaScript being loaded in the same order as browsers
-        // which can help debug issues (and might actually fix issues if websites
-        // are expecting this execution order)
-        var defer_scripts: std.ArrayListUnmanaged(Script) = .{};
-
-        const root = parser.documentToNode(doc);
-        const walker = Walker{};
-        var next: ?*parser.Node = null;
-        while (true) {
-            next = try walker.get_next(root, next) orelse break;
-
-            // ignore non-elements nodes.
-            if (try parser.nodeType(next.?) != .element) {
-                continue;
-            }
-
-            const current = next.?;
-
-            const e = parser.nodeToElement(current);
-            const tag = try parser.elementTag(e);
-
-            if (tag != .script) {
-                // ignore non-js script.
-                continue;
-            }
-
-            const script = try Script.init(e, null) orelse continue;
-
-            // TODO use fetchpriority
-            // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#fetchpriority
-
-            // > async
-            // > For classic scripts, if the async attribute is present,
-            // > then the classic script will be fetched in parallel to
-            // > parsing and evaluated as soon as it is available.
-            // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#async
-            if (script.is_async) {
-                try async_scripts.append(self.arena, script);
-                continue;
-            }
-
-            if (script.is_defer) {
-                try defer_scripts.append(self.arena, script);
-                continue;
-            }
-
-            // TODO handle for attribute
-            // TODO handle event attribute
-
-            // > Scripts without async, defer or type="module"
-            // > attributes, as well as inline scripts without the
-            // > type="module" attribute, are fetched and executed
-            // > immediately before the browser continues to parse the
-            // > page.
-            // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#notes
-            if (self.evalScript(&script) == false) {
-                return;
-            }
-        }
-
-        for (defer_scripts.items) |*script| {
-            if (self.evalScript(script) == false) {
-                return;
-            }
-        }
-        // dispatch DOMContentLoaded before the transition to "complete",
-        // at the point where all subresources apart from async script elements
-        // have loaded.
-        // https://html.spec.whatwg.org/#reporting-document-loading-status
-        try HTMLDocument.documentIsLoaded(html_doc, self);
-
-        // eval async scripts.
-        for (async_scripts.items) |*script| {
-            if (self.evalScript(script) == false) {
-                return;
-            }
-        }
-
-        try HTMLDocument.documentIsComplete(html_doc, self);
+    fn _documentIsComplete(self: *Page) !void {
+        try HTMLDocument.documentIsComplete(self.window.document, self);
 
         // dispatch window.load event
         const loadevt = try parser.eventCreate();
@@ -472,135 +563,160 @@ pub const Page = struct {
         );
     }
 
-    fn evalScript(self: *Page, script: *const Script) bool {
-        self.tryEvalScript(script) catch |err| switch (err) {
-            error.JsErr => {}, // already been logged with detail
-            error.Terminated => return false,
-            else => log.err(.js, "eval script error", .{ .err = err, .src = script.src }),
-        };
-        return true;
+    fn pageHeaderDoneCallback(transfer: *HttpClient.Transfer) !void {
+        var self: *Page = @alignCast(@ptrCast(transfer.ctx));
+
+        // would be different than self.url in the case of a redirect
+        const header = &transfer.response_header.?;
+        const owned_url = try self.arena.dupe(u8, std.mem.span(header.url));
+        self.url = try URL.parse(owned_url, null);
+
+        log.debug(.http, "navigate header", .{
+            .url = self.url,
+            .status = header.status,
+            .content_type = header.contentType(),
+        });
     }
 
-    // evalScript evaluates the src in priority.
-    // if no src is present, we evaluate the text source.
-    // https://html.spec.whatwg.org/multipage/scripting.html#script-processing-model
-    fn tryEvalScript(self: *Page, script: *const Script) !void {
-        if (try script.alreadyProcessed()) {
-            return;
+    fn pageDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
+        var self: *Page = @alignCast(@ptrCast(transfer.ctx));
+
+        if (self.mode == .pre) {
+            // we lazily do this, because we might need the first chunk of data
+            // to sniff the content type
+            const mime: Mime = blk: {
+                if (transfer.response_header.?.contentType()) |ct| {
+                    break :blk try Mime.parse(ct);
+                }
+                break :blk Mime.sniff(data);
+            } orelse .unknown;
+
+            const is_html = mime.isHTML();
+            log.debug(.http, "navigate first chunk", .{ .html = is_html, .len = data.len });
+
+            if (is_html) {
+                self.mode = .{ .html = try parser.Parser.init(mime.charset orelse "UTF-8") };
+            } else {
+                self.mode = .{ .raw = .{} };
+            }
         }
 
-        try script.markAsProcessed();
-
-        const html_doc = self.window.document;
-        try parser.documentHTMLSetCurrentScript(html_doc, @ptrCast(script.element));
-
-        defer parser.documentHTMLSetCurrentScript(html_doc, null) catch |err| {
-            log.err(.browser, "clear document script", .{ .err = err });
-        };
-
-        const src = script.src orelse {
-            // source is inline
-            // TODO handle charset attribute
-            const script_source = try parser.nodeTextContent(parser.elementToNode(script.element)) orelse return;
-            return script.eval(self, script_source);
-        };
-
-        // https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-classic-script
-        const script_source = (try self.fetchData("script", src)) orelse {
-            // TODO If el's result is null, then fire an event named error at
-            // el, and return
-            return;
-        };
-        return script.eval(self, script_source);
-
-        // TODO If el's from an external file is true, then fire an event
-        // named load at el.
+        switch (self.mode) {
+            .html => |*p| try p.process(data),
+            .raw => |*buf| try buf.appendSlice(self.arena, data),
+            .pre => unreachable,
+            .parsed => unreachable,
+            .err => unreachable,
+            .raw_done => unreachable,
+        }
     }
 
-    // fetchData returns the data corresponding to the src target.
-    // It resolves src using the page's uri.
-    // If a base path is given, src is resolved according to the base first.
-    // the caller owns the returned string
-    fn fetchData(
-        self: *const Page,
-        comptime reason: []const u8,
-        src: []const u8,
-    ) !?[]const u8 {
-        const arena = self.arena;
+    fn pageDoneCallback(ctx: *anyopaque) !void {
+        log.debug(.http, "navigate done", .{});
 
-        // Handle data URIs.
-        if (try DataURI.parse(arena, src)) |data_uri| {
-            return data_uri.data;
+        var self: *Page = @alignCast(@ptrCast(ctx));
+        self.clearTransferArena();
+
+        switch (self.mode) {
+            .raw => |buf| {
+                self.mode = .{ .raw_done = buf.items };
+                self.documentIsComplete();
+            },
+            .html => |*p| {
+                const html_doc = p.html_doc;
+                p.deinit(); // don't need the parser anymore
+
+                self.mode = .{ .parsed = {} };
+
+                try self.setDocument(html_doc);
+                const doc = parser.documentHTMLToDocument(html_doc);
+
+                // we want to be notified of any dynamically added script tags
+                // so that we can load the script
+                parser.documentSetScriptAddedCallback(doc, self, scriptAddedCallback);
+
+                const document_element = (try parser.documentGetDocumentElement(doc)) orelse return error.DocumentElementError;
+                _ = try parser.eventTargetAddEventListener(
+                    parser.toEventTarget(parser.Element, document_element),
+                    "click",
+                    &self.window_clicked_event_node,
+                    false,
+                );
+                _ = try parser.eventTargetAddEventListener(
+                    parser.toEventTarget(parser.Element, document_element),
+                    "keydown",
+                    &self.keydown_event_node,
+                    false,
+                );
+
+                const root = parser.documentToNode(doc);
+                const walker = Walker{};
+                var next: ?*parser.Node = null;
+                while (try walker.get_next(root, next)) |n| {
+                    next = n;
+                    const node = next.?;
+                    const e = parser.nodeToElement(node);
+                    const tag = try parser.elementTag(e);
+                    if (tag != .script) {
+                        // ignore non-js script.
+                        continue;
+                    }
+                    try self.script_manager.addFromElement(@ptrCast(node));
+                }
+
+                self.script_manager.staticScriptsDone();
+
+                if (self.script_manager.isDone()) {
+                    // No scripts, or just inline scripts that were already processed
+                    // we need to trigger this ourselves
+                    self.documentIsComplete();
+                }
+            },
+            else => unreachable,
         }
-
-        var origin_url = &self.url;
-        const url = try origin_url.resolve(arena, src);
-
-        var status_code: u16 = 0;
-        log.debug(.http, "fetching script", .{
-            .url = url,
-            .src = src,
-            .reason = reason,
-        });
-
-        errdefer |err| log.err(.http, "fetch error", .{
-            .err = err,
-            .url = url,
-            .reason = reason,
-            .status = status_code,
-        });
-
-        var request = try self.newHTTPRequest(.GET, &url, .{
-            .origin_uri = &origin_url.uri,
-            .navigation = false,
-            .is_http = true,
-        });
-        defer request.deinit();
-
-        var response = try request.sendSync(.{});
-        var header = response.header;
-        try self.session.cookie_jar.populateFromResponse(&url.uri, &header);
-
-        status_code = header.status;
-        if (status_code < 200 or status_code > 299) {
-            return error.BadStatusCode;
-        }
-
-        var arr: std.ArrayListUnmanaged(u8) = .{};
-        while (try response.next()) |data| {
-            try arr.appendSlice(arena, try arena.dupe(u8, data));
-        }
-
-        // TODO check content-type
-
-        // check no body
-        if (arr.items.len == 0) {
-            return null;
-        }
-
-        log.info(.http, "fetch complete", .{
-            .url = url,
-            .reason = reason,
-            .status = status_code,
-            .content_length = arr.items.len,
-        });
-        return arr.items;
     }
 
-    fn newHTTPRequest(self: *const Page, method: http.Request.Method, url: *const URL, opts: storage.cookie.LookupOpts) !*http.Request {
-        // Don't use the state's request_factory here, since requests made by the
-        // page (i.e. to load <scripts>) should not generate notifications.
-        var request = try self.session.browser.http_client.request(method, &url.uri);
-        errdefer request.deinit();
+    fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
+        log.err(.http, "navigate failed", .{ .err = err });
 
-        var arr: std.ArrayListUnmanaged(u8) = .{};
-        try self.cookie_jar.forRequest(&url.uri, arr.writer(self.arena), opts);
+        var self: *Page = @alignCast(@ptrCast(ctx));
+        self.clearTransferArena();
 
-        if (arr.items.len > 0) {
-            try request.addHeader("Cookie", arr.items, .{});
+        switch (self.mode) {
+            .html => |*p| p.deinit(), // don't need the parser anymore
+            else => {},
         }
+        self.mode = .{ .err = err };
+    }
 
-        return request;
+    // The transfer arena is useful and interesting, but has a weird lifetime.
+    // When we're transfering from one page to another (via delayed navigation)
+    // we need things in memory: like the URL that we're navigating to and
+    // optionally the body to POST. That cannot exist in the page.arena, because
+    // the page that we have is going to be destroyed and a new page is going
+    // to be created. If we used the page.arena, we'd wouldn't be able to reset
+    // it between navigations.
+    // So the transfer arena is meant to exist between a navigation event. It's
+    // freed when the main html navigation is complete, either in pageDoneCallback
+    // or pageErrorCallback. It needs to exist for this long because, if we set
+    // a body, CURLOPT_POSTFIELDS does not copy the body (it optionally can, but
+    // why would we want to) and requires the body to live until the transfer
+    // is complete.
+    fn clearTransferArena(self: *Page) void {
+        _ = self.session.browser.transfer_arena.reset(.{ .retain_with_limit = 4 * 1024 });
+    }
+
+    // extracted because this sis called from tests to set things up.
+    pub fn setDocument(self: *Page, html_doc: *parser.DocumentHTML) !void {
+        const doc = parser.documentHTMLToDocument(html_doc);
+        try parser.documentSetDocumentURI(doc, self.url.raw);
+
+        // TODO set the referrer to the document.
+        try self.window.replaceDocument(html_doc);
+        self.window.setStorageShelf(
+            try self.session.storage_shed.getOrPut(try self.origin(self.arena)),
+        );
+        try self.window.replaceLocation(.{ .url = try self.url.toWebApi(self.arena) });
     }
 
     pub const MouseEvent = struct {
@@ -760,24 +876,36 @@ pub const Page = struct {
     // The page.arena is safe to use here, but the transfer_arena exists
     // specifically for this type of lifetime.
     pub fn navigateFromWebAPI(self: *Page, url: []const u8, opts: NavigateOpts) !void {
+        const session = self.session;
+        if (session.queued_navigation != null) {
+            // It might seem like this should never happen. And it might not,
+            // BUT..consider the case where we have script like:
+            //   top.location = X;
+            //   top.location = Y;
+            // Will the 2nd top.location execute? You'd think not, since,
+            // when we're in this function for the 1st, we'll call:
+            //    session.executor.terminateExecution();
+            // But, this doesn't seem guaranteed to stop on the current line.
+            // My best guess is that v8 groups executes in chunks (how they are
+            // chunked, I can't guess) and always executes them together.
+            return;
+        }
+
         log.debug(.browser, "delayed navigation", .{
             .url = url,
             .reason = opts.reason,
         });
         self.delayed_navigation = true;
 
-        const session = self.session;
-        const arena = session.transfer_arena;
-        const navi = try arena.create(DelayedNavigation);
-        navi.* = .{
+        session.queued_navigation = .{
             .opts = opts,
-            .session = session,
-            .url = try self.url.resolve(arena, url),
+            .url = try URL.stitch(session.transfer_arena, url, self.url.raw, .{ .alloc = .always }),
         };
+
+        self.http_client.abort();
 
         // In v8, this throws an exception which JS code cannot catch.
         session.executor.terminateExecution();
-        _ = try self.loop.timeout(0, &navi.navigate_node);
     }
 
     pub fn getOrCreateNodeState(self: *Page, node: *parser.Node) !*State {
@@ -819,6 +947,8 @@ pub const Page = struct {
         if (std.ascii.eqlIgnoreCase(method, "post")) {
             opts.method = .POST;
             opts.body = buf.items;
+            // form_data.write currently only supports this encoding, so we know this has to be the content type
+            opts.header = "Content-Type: application/x-www-form-urlencoded";
         } else {
             action = try URL.concatQueryString(transfer_arena, action, buf.items);
         }
@@ -862,284 +992,6 @@ pub const Page = struct {
     }
 };
 
-const DelayedNavigation = struct {
-    url: URL,
-    session: *Session,
-    opts: NavigateOpts,
-    initial: bool = true,
-    navigate_node: Loop.CallbackNode = .{ .func = delayNavigate },
-
-    // Navigation is blocking, which is problem because it can seize up
-    // the loop and deadlock. We can only safely try to navigate to a
-    // new page when we're sure there's at least 1 free slot in the
-    // http client. We handle this in two phases:
-    //
-    // In the first phase, when self.initial == true, we'll shutdown the page
-    // and create a new one. The shutdown is important, because it resets the
-    // loop ctx_id and removes the JsContext. Removing the context calls our XHR
-    // destructors which aborts requests. This is necessary to make sure our
-    // [blocking] navigate won't block.
-    //
-    // In the 2nd phase, we wait until there's a free http slot so that our
-    // navigate definetly won't block (which could deadlock the system if there
-    // are still pending async requests, which we've seen happen, even after
-    // an abort).
-    fn delayNavigate(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
-        const self: *DelayedNavigation = @fieldParentPtr("navigate_node", node);
-
-        const session = self.session;
-        const initial = self.initial;
-
-        if (initial) {
-            // Prior to schedule this task, we terminated excution to stop
-            // the running script. If we don't resume it before doing a shutdown
-            // we'll get an error.
-            session.executor.resumeExecution();
-
-            session.removePage();
-            _ = session.createPage() catch |err| {
-                log.err(.browser, "delayed navigation page error", .{
-                    .err = err,
-                    .url = self.url,
-                });
-                return;
-            };
-            self.initial = false;
-        }
-
-        if (session.browser.http_client.freeSlotCount() == 0) {
-            log.debug(.browser, "delayed navigate waiting", .{});
-            const delay = 0 * std.time.ns_per_ms;
-
-            // If this isn't the initial check, we can safely re-use the timer
-            // to check again.
-            if (initial == false) {
-                repeat_delay.* = delay;
-                return;
-            }
-
-            // However, if this _is_ the initial check, we called
-            // session.removePage above, and that reset the loop ctx_id.
-            // We can't re-use this timer, because it has the previous ctx_id.
-            // We can create a new timeout though, and that'll get the new ctx_id.
-            //
-            // Page has to be not-null here because we called createPage above.
-            _ = session.page.?.loop.timeout(delay, &self.navigate_node) catch |err| {
-                log.err(.browser, "delayed navigation loop err", .{ .err = err });
-            };
-            return;
-        }
-
-        const page = session.currentPage() orelse return;
-        defer if (!page.delayed_navigation) {
-            // If, while loading the page, we intend to navigate to another
-            // page, then we need to keep the transfer_arena around, as this
-            // sub-navigation is probably using it.
-            _ = session.browser.transfer_arena.reset(.{ .retain_with_limit = 64 * 1024 });
-        };
-
-        return page.navigate(self.url, self.opts) catch |err| {
-            log.err(.browser, "delayed navigation error", .{ .err = err, .url = self.url });
-        };
-    }
-};
-
-const Script = struct {
-    kind: Kind,
-    is_async: bool,
-    is_defer: bool,
-    src: ?[]const u8,
-    element: *parser.Element,
-    // The javascript to load after we successfully load the script
-    onload: ?Callback,
-    onerror: ?Callback,
-
-    // The javascript to load if we have an error executing the script
-    // For now, we ignore this, since we still have a lot of errors that we
-    // shouldn't
-    //onerror: ?[]const u8,
-
-    const Kind = enum {
-        module,
-        javascript,
-    };
-
-    const Callback = union(enum) {
-        string: []const u8,
-        function: Env.Function,
-    };
-
-    fn init(e: *parser.Element, page_: ?*const Page) !?Script {
-        if (try parser.elementGetAttribute(e, "nomodule") != null) {
-            // these scripts should only be loaded if we don't support modules
-            // but since we do support modules, we can just skip them.
-            return null;
-        }
-
-        const kind = parseKind(try parser.elementGetAttribute(e, "type")) orelse {
-            return null;
-        };
-
-        var onload: ?Callback = null;
-        var onerror: ?Callback = null;
-
-        if (page_) |page| {
-            // If we're given the page, then it means the script is dynamic
-            // and we need to load the onload and onerror function (if there are
-            // any) from our WebAPI.
-            // This page == null is an optimization which isn't technically
-            // correct, as a static script could have a dynamic onload/onerror
-            // attached to it. But this seems quite unlikely and it does help
-            // optimize loading scripts, of which there can be hundreds for a
-            // page.
-            if (page.getNodeState(@ptrCast(e))) |se| {
-                if (se.onload) |function| {
-                    onload = .{ .function = function };
-                }
-                if (se.onerror) |function| {
-                    onerror = .{ .function = function };
-                }
-            }
-        } else {
-            if (try parser.elementGetAttribute(e, "onload")) |string| {
-                onload = .{ .string = string };
-            }
-            if (try parser.elementGetAttribute(e, "onerror")) |string| {
-                onerror = .{ .string = string };
-            }
-        }
-
-        return .{
-            .kind = kind,
-            .element = e,
-            .onload = onload,
-            .onerror = onerror,
-            .src = try parser.elementGetAttribute(e, "src"),
-            .is_async = try parser.elementGetAttribute(e, "async") != null,
-            .is_defer = try parser.elementGetAttribute(e, "defer") != null,
-        };
-    }
-
-    // > type
-    // > Attribute is not set (default), an empty string, or a JavaScript MIME
-    // > type indicates that the script is a "classic script", containing
-    // > JavaScript code.
-    // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#attribute_is_not_set_default_an_empty_string_or_a_javascript_mime_type
-    fn parseKind(script_type_: ?[]const u8) ?Kind {
-        const script_type = script_type_ orelse return .javascript;
-        if (script_type.len == 0) {
-            return .javascript;
-        }
-
-        if (std.ascii.eqlIgnoreCase(script_type, "application/javascript")) return .javascript;
-        if (std.ascii.eqlIgnoreCase(script_type, "text/javascript")) return .javascript;
-        if (std.ascii.eqlIgnoreCase(script_type, "module")) return .module;
-
-        return null;
-    }
-
-    // If a script tag gets dynamically created and added to the dom:
-    //    document.getElementsByTagName('head')[0].appendChild(script)
-    // that script tag will immediately get executed by our scriptAddedCallback.
-    // However, if the location where the script tag is inserted happens to be
-    // below where processHTMLDoc curently is, then we'll re-run that same script
-    // again in processHTMLDoc. This flag is used to let us know if a specific
-    // <script> has already been processed.
-    fn alreadyProcessed(self: *const Script) !bool {
-        return parser.scriptGetProcessed(@ptrCast(self.element));
-    }
-
-    fn markAsProcessed(self: *const Script) !void {
-        return parser.scriptSetProcessed(@ptrCast(self.element), true);
-    }
-
-    fn eval(self: *const Script, page: *Page, body: []const u8) !void {
-        var try_catch: Env.TryCatch = undefined;
-        try_catch.init(page.main_context);
-        defer try_catch.deinit();
-
-        const src: []const u8 = blk: {
-            const s = self.src orelse break :blk page.url.raw;
-            break :blk try URL.stitch(page.arena, s, page.url.raw, .{ .alloc = .if_needed });
-        };
-
-        // if self.src is null, then this is an inline script, and it should
-        // not be cached.
-        const cacheable = self.src != null;
-
-        log.debug(.browser, "executing script", .{
-            .src = src,
-            .kind = self.kind,
-            .cacheable = cacheable,
-        });
-
-        const failed = blk: {
-            switch (self.kind) {
-                .javascript => _ = page.main_context.eval(body, src) catch break :blk true,
-                // We don't care about waiting for the evaluation here.
-                .module => _ = page.main_context.module(body, src, cacheable) catch break :blk true,
-            }
-            break :blk false;
-        };
-
-        if (failed) {
-            if (page.delayed_navigation) {
-                return error.Terminated;
-            }
-
-            if (try try_catch.err(page.arena)) |msg| {
-                log.warn(.user_script, "eval script", .{
-                    .src = src,
-                    .err = msg,
-                    .cacheable = cacheable,
-                });
-            }
-
-            try self.executeCallback("onerror", page);
-            return error.JsErr;
-        }
-
-        try self.executeCallback("onload", page);
-    }
-
-    fn executeCallback(self: *const Script, comptime typ: []const u8, page: *Page) !void {
-        const callback = @field(self, typ) orelse return;
-        switch (callback) {
-            .string => |str| {
-                var try_catch: Env.TryCatch = undefined;
-                try_catch.init(page.main_context);
-                defer try_catch.deinit();
-                _ = page.main_context.exec(str, typ) catch {
-                    if (try try_catch.err(page.arena)) |msg| {
-                        log.warn(.user_script, "script callback", .{
-                            .src = self.src,
-                            .err = msg,
-                            .type = typ,
-                            .@"inline" = true,
-                        });
-                    }
-                };
-            },
-            .function => |f| {
-                const Event = @import("events/event.zig").Event;
-                const loadevt = try parser.eventCreate();
-                defer parser.eventDestroy(loadevt);
-
-                var result: Env.Function.Result = undefined;
-                f.tryCall(void, .{try Event.toInterface(loadevt)}, &result) catch {
-                    log.warn(.user_script, "script callback", .{
-                        .src = self.src,
-                        .type = typ,
-                        .err = result.exception,
-                        .stack = result.stack,
-                        .@"inline" = false,
-                    });
-                };
-            },
-        }
-    }
-};
-
 pub const NavigateReason = enum {
     anchor,
     address_bar,
@@ -1150,8 +1002,9 @@ pub const NavigateReason = enum {
 pub const NavigateOpts = struct {
     cdp_id: ?i64 = null,
     reason: NavigateReason = .address_bar,
-    method: http.Request.Method = .GET,
+    method: HttpClient.Method = .GET,
     body: ?[]const u8 = null,
+    header: ?[:0]const u8 = null,
 };
 
 fn timestamp() u32 {
@@ -1173,10 +1026,7 @@ pub export fn scriptAddedCallback(ctx: ?*anyopaque, element: ?*parser.Element) c
         return;
     }
 
-    var script = Script.init(element.?, self) catch |err| {
-        log.warn(.browser, "script added init error", .{ .err = err });
-        return;
-    } orelse return;
-
-    _ = self.evalScript(&script);
+    self.script_manager.addFromElement(element.?) catch |err| {
+        log.warn(.browser, "dynamcic script", .{ .err = err });
+    };
 }

@@ -68,7 +68,7 @@ fn getBrowserContexts(cmd: anytype) !void {
 fn createBrowserContext(cmd: anytype) !void {
     const params = try cmd.params(struct {
         disposeOnDetach: bool = false,
-        proxyServer: ?[]const u8 = null,
+        proxyServer: ?[:0]const u8 = null,
         proxyBypassList: ?[]const u8 = null,
         originsWithUniversalNetworkAccess: ?[]const []const u8 = null,
     });
@@ -84,9 +84,8 @@ fn createBrowserContext(cmd: anytype) !void {
     if (params) |p| {
         if (p.proxyServer) |proxy| {
             // For now the http client is not in the browser context so we assume there is just 1.
-            bc.http_proxy_before = cmd.cdp.browser.http_client.http_proxy;
-            const proxy_cp = try cmd.cdp.browser.http_client.allocator.dupe(u8, proxy);
-            cmd.cdp.browser.http_client.http_proxy = try std.Uri.parse(proxy_cp);
+            try cmd.cdp.browser.http_client.changeProxy(proxy);
+            bc.http_proxy_changed = true;
         }
     }
 

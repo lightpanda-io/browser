@@ -23,7 +23,7 @@ const Allocator = std.mem.Allocator;
 const log = @import("log.zig");
 const server = @import("server.zig");
 const App = @import("app.zig").App;
-const http = @import("http/client.zig");
+const Http = @import("http/Http.zig");
 const Platform = @import("runtime/js.zig").Platform;
 const Browser = @import("browser/browser.zig").Browser;
 
@@ -85,9 +85,12 @@ fn run(alloc: Allocator) !void {
         .run_mode = args.mode,
         .platform = &platform,
         .http_proxy = args.httpProxy(),
-        .proxy_type = args.proxyType(),
-        .proxy_auth = args.proxyAuth(),
+        .proxy_bearer_token = args.proxyBearerToken(),
         .tls_verify_host = args.tlsVerifyHost(),
+        .http_timeout_ms = args.httpTimeout(),
+        .http_connect_timeout_ms = args.httpConnectTiemout(),
+        .http_max_host_open = args.httpMaxHostOpen(),
+        .http_max_concurrent = args.httpMaxConcurrent(),
     });
     defer app.deinit();
     app.telemetry.record(.{ .run = {} });
@@ -107,8 +110,8 @@ fn run(alloc: Allocator) !void {
             };
         },
         .fetch => |opts| {
-            log.debug(.app, "startup", .{ .mode = "fetch", .dump = opts.dump, .url = opts.url });
-            const url = try @import("url.zig").URL.parse(opts.url, null);
+            const url = opts.url;
+            log.debug(.app, "startup", .{ .mode = "fetch", .dump = opts.dump, .url = url });
 
             // browser
             var browser = try Browser.init(app);
@@ -130,7 +133,7 @@ fn run(alloc: Allocator) !void {
                 },
             };
 
-            try page.wait(std.time.ns_per_s * 3);
+            session.wait(5); // 5 seconds
 
             // dump
             if (opts.dump) {
@@ -156,23 +159,44 @@ const Command = struct {
         };
     }
 
-    fn httpProxy(self: *const Command) ?std.Uri {
+    fn httpProxy(self: *const Command) ?[:0]const u8 {
         return switch (self.mode) {
             inline .serve, .fetch => |opts| opts.common.http_proxy,
             else => unreachable,
         };
     }
 
-    fn proxyType(self: *const Command) ?http.ProxyType {
+    fn proxyBearerToken(self: *const Command) ?[:0]const u8 {
         return switch (self.mode) {
-            inline .serve, .fetch => |opts| opts.common.proxy_type,
+            inline .serve, .fetch => |opts| opts.common.proxy_bearer_token,
             else => unreachable,
         };
     }
 
-    fn proxyAuth(self: *const Command) ?http.ProxyAuth {
+    fn httpMaxConcurrent(self: *const Command) ?u8 {
         return switch (self.mode) {
-            inline .serve, .fetch => |opts| opts.common.proxy_auth,
+            inline .serve, .fetch => |opts| opts.common.http_max_concurrent,
+            else => unreachable,
+        };
+    }
+
+    fn httpMaxHostOpen(self: *const Command) ?u8 {
+        return switch (self.mode) {
+            inline .serve, .fetch => |opts| opts.common.http_max_host_open,
+            else => unreachable,
+        };
+    }
+
+    fn httpConnectTiemout(self: *const Command) ?u31 {
+        return switch (self.mode) {
+            inline .serve, .fetch => |opts| opts.common.http_connect_timeout,
+            else => unreachable,
+        };
+    }
+
+    fn httpTimeout(self: *const Command) ?u31 {
+        return switch (self.mode) {
+            inline .serve, .fetch => |opts| opts.common.http_timeout,
             else => unreachable,
         };
     }
@@ -221,9 +245,12 @@ const Command = struct {
     };
 
     const Common = struct {
-        http_proxy: ?std.Uri = null,
-        proxy_type: ?http.ProxyType = null,
-        proxy_auth: ?http.ProxyAuth = null,
+        proxy_bearer_token: ?[:0]const u8 = null,
+        http_proxy: ?[:0]const u8 = null,
+        http_max_concurrent: ?u8 = null,
+        http_max_host_open: ?u8 = null,
+        http_timeout: ?u31 = null,
+        http_connect_timeout: ?u31 = null,
         tls_verify_host: bool = true,
         log_level: ?log.Level = null,
         log_format: ?log.Format = null,
@@ -231,31 +258,39 @@ const Command = struct {
     };
 
     fn printUsageAndExit(self: *const Command, success: bool) void {
+        //                                                                     MAX_HELP_LEN|
         const common_options =
             \\
             \\--insecure_disable_tls_host_verification
-            \\                Disables host verification on all HTTP requests.
-            \\                This is an advanced option which should only be
-            \\                set if you understand and accept the risk of
-            \\                disabling host verification.
+            \\                Disables host verification on all HTTP requests. This is an
+            \\                advanced option which should only be set if you understand
+            \\                and accept the risk of disabling host verification.
             \\
             \\--http_proxy    The HTTP proxy to use for all HTTP requests.
+            \\                A username:password can be included for basic authentication.
             \\                Defaults to none.
             \\
-            \\--proxy_type   The type of proxy: connect, forward.
-            \\               'connect' creates a tunnel through the proxy via
-            \\               and initial CONNECT request.
-            \\               'forward' sends the full URL in the request target
-            \\               and expects the proxy to MITM the request.
-            \\               Defaults to connect when --http_proxy is set.
-            \\
             \\--proxy_bearer_token
-            \\               The token to send for bearer authentication with the proxy
-            \\               Proxy-Authorization: Bearer <token>
+            \\                The <token> to send for bearer authentication with the proxy
+            \\                Proxy-Authorization: Bearer <token>
             \\
-            \\--proxy_basic_auth
-            \\               The user:password to send for basic authentication with the proxy
-            \\               Proxy-Authorization: Basic <base64(user:password)>
+            \\--http_max_concurrent
+            \\                The maximum number of concurrent HTTP requests.
+            \\                Defaults to 10.
+            \\
+            \\--http_max_host_open
+            \\                The maximum number of open connection to a given host:port.
+            \\                Defaults to 4.
+            \\
+            \\--http_connect_timeout
+            \\                The time, in milliseconds, for establishing an HTTP connection
+            \\                before timing out. 0 means it never times out.
+            \\                Defaults to 0.
+            \\
+            \\--http_timeout
+            \\                The maximum time, in milliseconds, the transfer is allowed
+            \\                to complete. 0 means it never times out.
+            \\                Defaults to 10000.
             \\
             \\--log_level     The log level: debug, info, warn, error or fatal.
             \\                Defaults to
@@ -266,9 +301,9 @@ const Command = struct {
             \\                Defaults to
         ++ (if (builtin.mode == .Debug) " pretty." else " logfmt.") ++
             \\
-            \\
         ;
 
+        //                                                                     MAX_HELP_LEN|
         const usage =
             \\usage: {s} command [options] [URL]
             \\
@@ -521,48 +556,68 @@ fn parseCommonArg(
             log.fatal(.app, "missing argument value", .{ .arg = "--http_proxy" });
             return error.InvalidArgument;
         };
-        common.http_proxy = try std.Uri.parse(try allocator.dupe(u8, str));
-        if (common.http_proxy.?.host == null) {
-            log.fatal(.app, "invalid http proxy", .{ .arg = "--http_proxy", .hint = "missing scheme?" });
-            return error.InvalidArgument;
-        }
-        return true;
-    }
-
-    if (std.mem.eql(u8, "--proxy_type", opt)) {
-        const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--proxy_type" });
-            return error.InvalidArgument;
-        };
-        common.proxy_type = std.meta.stringToEnum(http.ProxyType, str) orelse {
-            log.fatal(.app, "invalid option choice", .{ .arg = "--proxy_type", .value = str });
-            return error.InvalidArgument;
-        };
+        common.http_proxy = try allocator.dupeZ(u8, str);
         return true;
     }
 
     if (std.mem.eql(u8, "--proxy_bearer_token", opt)) {
-        if (common.proxy_auth != null) {
-            log.fatal(.app, "proxy auth already set", .{ .arg = "--proxy_bearer_token" });
-            return error.InvalidArgument;
-        }
         const str = args.next() orelse {
             log.fatal(.app, "missing argument value", .{ .arg = "--proxy_bearer_token" });
             return error.InvalidArgument;
         };
-        common.proxy_auth = .{ .bearer = .{ .token = str } };
+        common.proxy_bearer_token = try allocator.dupeZ(u8, str);
         return true;
     }
-    if (std.mem.eql(u8, "--proxy_basic_auth", opt)) {
-        if (common.proxy_auth != null) {
-            log.fatal(.app, "proxy auth already set", .{ .arg = "--proxy_basic_auth" });
-            return error.InvalidArgument;
-        }
+
+    if (std.mem.eql(u8, "--http_max_concurrent", opt)) {
         const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--proxy_basic_auth" });
+            log.fatal(.app, "missing argument value", .{ .arg = "--http_max_concurrent" });
             return error.InvalidArgument;
         };
-        common.proxy_auth = .{ .basic = .{ .user_pass = str } };
+
+        common.http_max_concurrent = std.fmt.parseInt(u8, str, 10) catch |err| {
+            log.fatal(.app, "invalid argument value", .{ .arg = "--http_max_concurrent", .err = err });
+            return error.InvalidArgument;
+        };
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--http_max_host_open", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--http_max_host_open" });
+            return error.InvalidArgument;
+        };
+
+        common.http_max_host_open = std.fmt.parseInt(u8, str, 10) catch |err| {
+            log.fatal(.app, "invalid argument value", .{ .arg = "--http_max_host_open", .err = err });
+            return error.InvalidArgument;
+        };
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--http_connect_timeout", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--http_connect_timeout" });
+            return error.InvalidArgument;
+        };
+
+        common.http_connect_timeout = std.fmt.parseInt(u31, str, 10) catch |err| {
+            log.fatal(.app, "invalid argument value", .{ .arg = "--http_connect_timeout", .err = err });
+            return error.InvalidArgument;
+        };
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--http_timeout", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--http_timeout" });
+            return error.InvalidArgument;
+        };
+
+        common.http_timeout = std.fmt.parseInt(u31, str, 10) catch |err| {
+            log.fatal(.app, "invalid argument value", .{ .arg = "--http_timeout", .err = err });
+            return error.InvalidArgument;
+        };
         return true;
     }
 
@@ -633,18 +688,12 @@ test "tests:beforeAll" {
     log.opts.level = .err;
     log.opts.format = .logfmt;
 
-    test_wg.startMany(3);
+    test_wg.startMany(2);
     const platform = try Platform.init();
 
     {
         const address = try std.net.Address.parseIp("127.0.0.1", 9582);
         const thread = try std.Thread.spawn(.{}, serveHTTP, .{address});
-        thread.detach();
-    }
-
-    {
-        const address = try std.net.Address.parseIp("127.0.0.1", 9581);
-        const thread = try std.Thread.spawn(.{}, serveHTTPS, .{address});
         thread.detach();
     }
 
@@ -673,161 +722,42 @@ fn serveHTTP(address: std.net.Address) !void {
     test_wg.finish();
 
     var read_buffer: [1024]u8 = undefined;
-    ACCEPT: while (true) {
-        defer _ = arena.reset(.{ .free_all = {} });
-        const aa = arena.allocator();
-
+    while (true) {
         var conn = try listener.accept();
         defer conn.stream.close();
         var http_server = std.http.Server.init(conn, &read_buffer);
-        var connect_headers: std.ArrayListUnmanaged(std.http.Header) = .{};
-        REQUEST: while (true) {
-            var request = http_server.receiveHead() catch |err| switch (err) {
-                error.HttpConnectionClosing => continue :ACCEPT,
-                else => {
-                    std.debug.print("Test HTTP Server error: {}\n", .{err});
-                    return err;
-                },
-            };
 
-            if (request.head.method == .CONNECT) {
-                try request.respond("", .{ .status = .ok });
-
-                // Proxy headers and destination headers are separated in the case of a CONNECT proxy
-                // We store the CONNECT headers, then continue with the request for the destination
-                var it = request.iterateHeaders();
-                while (it.next()) |hdr| {
-                    try connect_headers.append(aa, .{
-                        .name = try std.fmt.allocPrint(aa, "__{s}", .{hdr.name}),
-                        .value = try aa.dupe(u8, hdr.value),
-                    });
-                }
-                continue :REQUEST;
-            }
-
-            const path = request.head.target;
-            if (std.mem.eql(u8, path, "/loader")) {
-                try request.respond("Hello!", .{
-                    .extra_headers = &.{.{ .name = "Connection", .value = "close" }},
-                });
-            } else if (std.mem.eql(u8, path, "/http_client/simple")) {
-                try request.respond("", .{
-                    .extra_headers = &.{.{ .name = "Connection", .value = "close" }},
-                });
-            } else if (std.mem.eql(u8, path, "/http_client/redirect")) {
-                try request.respond("", .{
-                    .status = .moved_permanently,
-                    .extra_headers = &.{
-                        .{ .name = "Connection", .value = "close" },
-                        .{ .name = "LOCATION", .value = "../http_client/echo" },
-                    },
-                });
-            } else if (std.mem.eql(u8, path, "/http_client/redirect/secure")) {
-                try request.respond("", .{
-                    .status = .moved_permanently,
-                    .extra_headers = &.{ .{ .name = "Connection", .value = "close" }, .{ .name = "LOCATION", .value = "https://127.0.0.1:9581/http_client/body" } },
-                });
-            } else if (std.mem.eql(u8, path, "/http_client/gzip")) {
-                const body = &.{ 0x1f, 0x8b, 0x08, 0x08, 0x01, 0xc6, 0x19, 0x68, 0x00, 0x03, 0x74, 0x65, 0x73, 0x74, 0x2e, 0x68, 0x74, 0x6d, 0x6c, 0x00, 0x73, 0x54, 0xc8, 0x4b, 0x2d, 0x57, 0x48, 0x2a, 0xca, 0x2f, 0x2f, 0x4e, 0x2d, 0x52, 0x48, 0x2a, 0xcd, 0xcc, 0x29, 0x51, 0x48, 0xcb, 0x2f, 0x52, 0xc8, 0x4d, 0x4c, 0xce, 0xc8, 0xcc, 0x4b, 0x2d, 0xe6, 0x02, 0x00, 0xe7, 0xc3, 0x4b, 0x27, 0x21, 0x00, 0x00, 0x00 };
-                try request.respond(body, .{
-                    .extra_headers = &.{ .{ .name = "Connection", .value = "close" }, .{ .name = "Content-Encoding", .value = "gzip" } },
-                });
-            } else if (std.mem.eql(u8, path, "/http_client/echo")) {
-                var headers: std.ArrayListUnmanaged(std.http.Header) = .{};
-
-                var it = request.iterateHeaders();
-                while (it.next()) |hdr| {
-                    try headers.append(aa, .{
-                        .name = try std.fmt.allocPrint(aa, "_{s}", .{hdr.name}),
-                        .value = hdr.value,
-                    });
-                }
-
-                if (connect_headers.items.len > 0) {
-                    try headers.appendSlice(aa, connect_headers.items);
-                    connect_headers.clearRetainingCapacity();
-                }
-                try headers.append(aa, .{ .name = "Connection", .value = "Close" });
-
-                try request.respond("over 9000!", .{
-                    .status = .created,
-                    .extra_headers = headers.items,
-                });
-            }
-            continue :ACCEPT;
-        }
-    }
-}
-
-// This is a lot of work for testing TLS, but the TLS (async) code is complicated
-// This "server" is written specifically to test the client. It assumes the client
-// isn't a jerk.
-fn serveHTTPS(address: std.net.Address) !void {
-    const tls = @import("tls");
-
-    var listener = try address.listen(.{ .reuse_address = true });
-    defer listener.deinit();
-
-    test_wg.finish();
-
-    var seed: u64 = undefined;
-    std.posix.getrandom(std.mem.asBytes(&seed)) catch unreachable;
-    var r = std.Random.DefaultPrng.init(seed);
-    const rand = r.random();
-
-    var read_buffer: [1024]u8 = undefined;
-    while (true) {
-        const stream = blk: {
-            const conn = try listener.accept();
-            break :blk conn.stream;
+        var request = http_server.receiveHead() catch |err| switch (err) {
+            error.HttpConnectionClosing => continue,
+            else => {
+                std.debug.print("Test HTTP Server error: {}\n", .{err});
+                return err;
+            },
         };
-        defer stream.close();
 
-        var conn = try tls.server(stream, .{ .auth = null });
-        defer conn.close() catch {};
+        const path = request.head.target;
 
-        var pos: usize = 0;
-        while (true) {
-            const n = try conn.read(read_buffer[pos..]);
-            if (n == 0) {
-                break;
-            }
-            pos += n;
-            const header_end = std.mem.indexOf(u8, read_buffer[0..pos], "\r\n\r\n") orelse {
-                continue;
-            };
-            var it = std.mem.splitScalar(u8, read_buffer[0..header_end], ' ');
-            _ = it.next() orelse unreachable; // method
-            const path = it.next() orelse unreachable;
-
-            var fragment = false;
-            var response: []const u8 = undefined;
-            if (std.mem.eql(u8, path, "/http_client/simple")) {
-                fragment = true;
-                response = "HTTP/1.1 200 \r\nContent-Length: 0\r\nConnection: Close\r\n\r\n";
-            } else if (std.mem.eql(u8, path, "/http_client/body")) {
-                fragment = true;
-                response = "HTTP/1.1 201 CREATED\r\nContent-Length: 20\r\nConnection: Close\r\n   Another :  HEaDer  \r\n\r\n1234567890abcdefhijk";
-            } else if (std.mem.eql(u8, path, "/http_client/redirect/insecure")) {
-                fragment = true;
-                response = "HTTP/1.1 307 GOTO\r\nLocation: http://127.0.0.1:9582/http_client/redirect\r\nConnection: Close\r\n\r\n";
-            } else if (std.mem.eql(u8, path, "/xhr")) {
-                response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 100\r\nConnection: Close\r\n\r\n" ++ ("1234567890" ** 10);
-            } else if (std.mem.eql(u8, path, "/xhr/json")) {
-                response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 18\r\nConnection: Close\r\n\r\n{\"over\":\"9000!!!\"}";
-            } else {
-                // should not have an unknown path
-                unreachable;
-            }
-
-            var unsent = response;
-            while (unsent.len > 0) {
-                const to_send = if (fragment) rand.intRangeAtMost(usize, 1, unsent.len) else unsent.len;
-                const sent = try conn.write(unsent[0..to_send]);
-                unsent = unsent[sent..];
-                std.time.sleep(std.time.ns_per_us * 5);
-            }
-            break;
+        if (std.mem.eql(u8, path, "/loader")) {
+            try request.respond("Hello!", .{
+                .extra_headers = &.{.{ .name = "Connection", .value = "close" }},
+            });
+        } else if (std.mem.eql(u8, path, "/xhr")) {
+            try request.respond("1234567890" ** 10, .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+                    .{ .name = "Connection", .value = "Close" },
+                },
+            });
+        } else if (std.mem.eql(u8, path, "/xhr/json")) {
+            try request.respond("{\"over\":\"9000!!!\"}", .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "application/json" },
+                    .{ .name = "Connection", .value = "Close" },
+                },
+            });
+        } else {
+            // should not have an unknown path
+            unreachable;
         }
     }
 }
@@ -838,6 +768,7 @@ fn serveCDP(address: std.net.Address, platform: *const Platform) !void {
         .run_mode = .serve,
         .tls_verify_host = false,
         .platform = platform,
+        .http_max_concurrent = 2,
     });
     defer app.deinit();
 

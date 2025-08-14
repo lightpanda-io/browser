@@ -1,9 +1,10 @@
 const std = @import("std");
+
 const Allocator = std.mem.Allocator;
 
 const log = @import("log.zig");
+const Http = @import("http/Http.zig");
 const Loop = @import("runtime/loop.zig").Loop;
-const http = @import("http/client.zig");
 const Platform = @import("runtime/js.zig").Platform;
 
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
@@ -12,12 +13,12 @@ const Notification = @import("notification.zig").Notification;
 // Container for global state / objects that various parts of the system
 // might need.
 pub const App = struct {
+    http: Http,
     loop: *Loop,
     config: Config,
     platform: ?*const Platform,
     allocator: Allocator,
     telemetry: Telemetry,
-    http_client: http.Client,
     app_dir_path: ?[]const u8,
     notification: *Notification,
 
@@ -32,9 +33,12 @@ pub const App = struct {
         run_mode: RunMode,
         platform: ?*const Platform = null,
         tls_verify_host: bool = true,
-        http_proxy: ?std.Uri = null,
-        proxy_type: ?http.ProxyType = null,
-        proxy_auth: ?http.ProxyAuth = null,
+        http_proxy: ?[:0]const u8 = null,
+        proxy_bearer_token: ?[:0]const u8 = null,
+        http_timeout_ms: ?u31 = null,
+        http_connect_timeout_ms: ?u31 = null,
+        http_max_host_open: ?u8 = null,
+        http_max_concurrent: ?u8 = null,
     };
 
     pub fn init(allocator: Allocator, config: Config) !*App {
@@ -50,25 +54,33 @@ pub const App = struct {
         const notification = try Notification.init(allocator, null);
         errdefer notification.deinit();
 
+        var http = try Http.init(allocator, .{
+            .max_host_open = config.http_max_host_open orelse 4,
+            .max_concurrent = config.http_max_concurrent orelse 10,
+            .timeout_ms = config.http_timeout_ms orelse 5000,
+            .connect_timeout_ms = config.http_connect_timeout_ms orelse 0,
+            .http_proxy = config.http_proxy,
+            .tls_verify_host = config.tls_verify_host,
+            .proxy_bearer_token = config.proxy_bearer_token,
+        });
+        errdefer http.deinit();
+
         const app_dir_path = getAndMakeAppDir(allocator);
 
         app.* = .{
             .loop = loop,
+            .http = http,
             .allocator = allocator,
             .telemetry = undefined,
             .platform = config.platform,
             .app_dir_path = app_dir_path,
             .notification = notification,
-            .http_client = try http.Client.init(allocator, loop, .{
-                .max_concurrent = 3,
-                .http_proxy = config.http_proxy,
-                .proxy_type = config.proxy_type,
-                .proxy_auth = config.proxy_auth,
-                .tls_verify_host = config.tls_verify_host,
-            }),
             .config = config,
         };
-        app.telemetry = Telemetry.init(app, config.run_mode);
+
+        app.telemetry = try Telemetry.init(app, config.run_mode);
+        errdefer app.telemetry.deinit();
+
         try app.telemetry.register(app.notification);
 
         return app;
@@ -82,8 +94,8 @@ pub const App = struct {
         self.telemetry.deinit();
         self.loop.deinit();
         allocator.destroy(self.loop);
-        self.http_client.deinit();
         self.notification.deinit();
+        self.http.deinit();
         allocator.destroy(self);
     }
 };

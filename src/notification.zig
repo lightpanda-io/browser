@@ -3,7 +3,8 @@ const std = @import("std");
 const log = @import("log.zig");
 const URL = @import("url.zig").URL;
 const page = @import("browser/page.zig");
-const http_client = @import("http/client.zig");
+const Http = @import("http/Http.zig");
+const Transfer = @import("http/Client.zig").Transfer;
 
 const Allocator = std.mem.Allocator;
 
@@ -61,7 +62,8 @@ pub const Notification = struct {
         page_navigated: List = .{},
         http_request_fail: List = .{},
         http_request_start: List = .{},
-        http_request_complete: List = .{},
+        http_request_intercept: List = .{},
+        http_headers_done: List = .{},
         notification_created: List = .{},
     };
 
@@ -72,7 +74,8 @@ pub const Notification = struct {
         page_navigated: *const PageNavigated,
         http_request_fail: *const RequestFail,
         http_request_start: *const RequestStart,
-        http_request_complete: *const RequestComplete,
+        http_request_intercept: *const RequestIntercept,
+        http_headers_done: *const ResponseHeadersDone,
         notification_created: *Notification,
     };
     const EventType = std.meta.FieldEnum(Events);
@@ -81,35 +84,31 @@ pub const Notification = struct {
 
     pub const PageNavigate = struct {
         timestamp: u32,
-        url: *const URL,
+        url: []const u8,
         opts: page.NavigateOpts,
     };
 
     pub const PageNavigated = struct {
         timestamp: u32,
-        url: *const URL,
+        url: []const u8,
     };
 
     pub const RequestStart = struct {
-        arena: Allocator,
-        id: usize,
-        url: *const std.Uri,
-        method: http_client.Request.Method,
-        headers: *std.ArrayListUnmanaged(std.http.Header),
-        has_body: bool,
+        transfer: *Transfer,
+    };
+
+    pub const RequestIntercept = struct {
+        transfer: *Transfer,
+        wait_for_interception: *bool,
+    };
+
+    pub const ResponseHeadersDone = struct {
+        transfer: *Transfer,
     };
 
     pub const RequestFail = struct {
-        id: usize,
-        url: *const std.Uri,
-        err: []const u8,
-    };
-
-    pub const RequestComplete = struct {
-        id: usize,
-        url: *const std.Uri,
-        status: u16,
-        headers: []http_client.Header,
+        transfer: *Transfer,
+        err: anyerror,
     };
 
     pub fn init(allocator: Allocator, parent: ?*Notification) !*Notification {

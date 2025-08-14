@@ -4,15 +4,15 @@ const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
 const log = @import("../../log.zig");
-const http = @import("../../http/client.zig");
 const DateTime = @import("../../datetime.zig").DateTime;
 const public_suffix_list = @import("../../data/public_suffix_list.zig").lookup;
 
 pub const LookupOpts = struct {
     request_time: ?i64 = null,
     origin_uri: ?*const Uri = null,
-    navigation: bool = true,
     is_http: bool,
+    is_navigation: bool = true,
+    prefix: ?[]const u8 = null,
 };
 
 pub const Jar = struct {
@@ -92,10 +92,15 @@ pub const Jar = struct {
 
         var first = true;
         for (self.cookies.items) |*cookie| {
-            if (!cookie.appliesTo(&target, same_site, opts.navigation, opts.is_http)) continue;
+            if (!cookie.appliesTo(&target, same_site, opts.is_navigation, opts.is_http)) {
+                continue;
+            }
 
             // we have a match!
             if (first) {
+                if (opts.prefix) |prefix| {
+                    try writer.writeAll(prefix);
+                }
                 first = false;
             } else {
                 try writer.writeAll("; ");
@@ -104,16 +109,14 @@ pub const Jar = struct {
         }
     }
 
-    pub fn populateFromResponse(self: *Jar, uri: *const Uri, header: *const http.ResponseHeader) !void {
+    pub fn populateFromResponse(self: *Jar, uri: *const Uri, set_cookie: []const u8) !void {
+        const c = Cookie.parse(self.allocator, uri, set_cookie) catch |err| {
+            log.warn(.web_api, "cookie parse failed", .{ .raw = set_cookie, .err = err });
+            return;
+        };
+
         const now = std.time.timestamp();
-        var it = header.iterate("set-cookie");
-        while (it.next()) |set_cookie| {
-            const c = Cookie.parse(self.allocator, uri, set_cookie) catch |err| {
-                log.warn(.web_api, "cookie parse failed", .{ .raw = set_cookie, .err = err });
-                continue;
-            };
-            try self.add(c, now);
-        }
+        try self.add(c, now);
     }
 
     fn writeCookie(cookie: *const Cookie, writer: anytype) !void {
@@ -429,7 +432,7 @@ pub const Cookie = struct {
         return .{ name, value, rest };
     }
 
-    pub fn appliesTo(self: *const Cookie, url: *const PreparedUri, same_site: bool, navigation: bool, is_http: bool) bool {
+    pub fn appliesTo(self: *const Cookie, url: *const PreparedUri, same_site: bool, is_navigation: bool, is_http: bool) bool {
         if (self.http_only and is_http == false) {
             // http only cookies can be accessed from Javascript
             return false;
@@ -448,7 +451,7 @@ pub const Cookie = struct {
             // and cookie.same_site == .lax
             switch (self.same_site) {
                 .strict => return false,
-                .lax => if (navigation == false) return false,
+                .lax => if (is_navigation == false) return false,
                 .none => {},
             }
         }
@@ -619,7 +622,7 @@ test "Jar: forRequest" {
 
     // nothing fancy here
     try expectCookies("global1=1; global2=2", &jar, test_uri, .{ .is_http = true });
-    try expectCookies("global1=1; global2=2", &jar, test_uri, .{ .origin_uri = &test_uri, .navigation = false, .is_http = true });
+    try expectCookies("global1=1; global2=2", &jar, test_uri, .{ .origin_uri = &test_uri, .is_navigation = false, .is_http = true });
 
     // We have a cookie where Domain=lightpanda.io
     // This should _not_ match xyxlightpanda.io
@@ -685,22 +688,22 @@ test "Jar: forRequest" {
     // non-navigational cross domain, insecure
     try expectCookies("", &jar, try std.Uri.parse("http://lightpanda.io/x/"), .{
         .origin_uri = &(try std.Uri.parse("https://example.com/")),
-        .navigation = false,
         .is_http = true,
+        .is_navigation = false,
     });
 
     // non-navigational cross domain, secure
     try expectCookies("sitenone=6", &jar, try std.Uri.parse("https://lightpanda.io/x/"), .{
         .origin_uri = &(try std.Uri.parse("https://example.com/")),
-        .navigation = false,
         .is_http = true,
+        .is_navigation = false,
     });
 
     // non-navigational same origin
     try expectCookies("global1=1; global2=2; sitelax=7; sitestrict=8", &jar, try std.Uri.parse("http://lightpanda.io/x/"), .{
         .origin_uri = &(try std.Uri.parse("https://lightpanda.io/")),
-        .navigation = false,
         .is_http = true,
+        .is_navigation = false,
     });
 
     // exact domain match + suffix

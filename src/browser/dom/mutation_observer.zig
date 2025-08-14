@@ -22,7 +22,6 @@ const Allocator = std.mem.Allocator;
 const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 const Page = @import("../page.zig").Page;
-const Loop = @import("../../runtime/loop.zig").Loop;
 
 const Env = @import("../env.zig").Env;
 const NodeList = @import("nodelist.zig").NodeList;
@@ -36,12 +35,10 @@ const Walker = @import("../dom/walker.zig").WalkerChildren;
 
 // WEB IDL https://dom.spec.whatwg.org/#interface-mutationobserver
 pub const MutationObserver = struct {
-    loop: *Loop,
+    page: *Page,
     cbk: Env.Function,
-    arena: Allocator,
     connected: bool,
     scheduled: bool,
-    loop_node: Loop.CallbackNode,
 
     // List of records which were observed. When the call scope ends, we need to
     // execute our callback with it.
@@ -50,17 +47,15 @@ pub const MutationObserver = struct {
     pub fn constructor(cbk: Env.Function, page: *Page) !MutationObserver {
         return .{
             .cbk = cbk,
-            .loop = page.loop,
+            .page = page,
             .observed = .{},
             .connected = true,
             .scheduled = false,
-            .arena = page.arena,
-            .loop_node = .{ .func = callback },
         };
     }
 
     pub fn _observe(self: *MutationObserver, node: *parser.Node, options_: ?Options) !void {
-        const arena = self.arena;
+        const arena = self.page.arena;
         var options = options_ orelse Options{};
         if (options.attributeFilter.len > 0) {
             options.attributeFilter = try arena.dupe([]const u8, options.attributeFilter);
@@ -115,17 +110,17 @@ pub const MutationObserver = struct {
         }
     }
 
-    fn callback(node: *Loop.CallbackNode, _: *?u63) void {
-        const self: *MutationObserver = @fieldParentPtr("loop_node", node);
+    fn callback(ctx: *anyopaque) ?u32 {
+        const self: *MutationObserver = @alignCast(@ptrCast(ctx));
         if (self.connected == false) {
             self.scheduled = true;
-            return;
+            return null;
         }
         self.scheduled = false;
 
         const records = self.observed.items;
         if (records.len == 0) {
-            return;
+            return null;
         }
 
         defer self.observed.clearRetainingCapacity();
@@ -138,6 +133,7 @@ pub const MutationObserver = struct {
                 .source = "mutation observer",
             });
         };
+        return null;
     }
 
     // TODO
@@ -301,7 +297,7 @@ const Observer = struct {
             .type = event_type.recordType(),
         };
 
-        const arena = mutation_observer.arena;
+        const arena = mutation_observer.page.arena;
         switch (event_type) {
             .DOMAttrModified => {
                 record.attribute_name = parser.mutationEventAttributeName(mutation_event) catch null;
@@ -330,7 +326,12 @@ const Observer = struct {
 
         if (mutation_observer.scheduled == false) {
             mutation_observer.scheduled = true;
-            _ = try mutation_observer.loop.timeout(0, &mutation_observer.loop_node);
+            try mutation_observer.page.scheduler.add(
+                mutation_observer,
+                MutationObserver.callback,
+                0,
+                .{ .name = "mutation_observer" },
+            );
         }
     }
 };

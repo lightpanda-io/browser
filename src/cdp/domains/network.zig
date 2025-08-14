@@ -22,6 +22,7 @@ const Allocator = std.mem.Allocator;
 const Notification = @import("../../notification.zig").Notification;
 const log = @import("../../log.zig");
 const CdpStorage = @import("storage.zig");
+const Transfer = @import("../../http/Client.zig").Transfer;
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -51,6 +52,16 @@ pub fn processMessage(cmd: anytype) !void {
     }
 }
 
+const Response = struct {
+    status: u16,
+    headers: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
+    // These may not be complete yet, but we only tell the client
+    // Network.responseReceived when all the headers are in.
+    // Later should store body as well to support getResponseBody which should
+    // only work once Network.loadingFinished is sent but the body itself would
+    // be loaded with each chunks as Network.dataReceiveds are coming in.
+};
+
 fn enable(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     try bc.networkEnable();
@@ -78,7 +89,8 @@ fn setExtraHTTPHeaders(cmd: anytype) !void {
     try extra_headers.ensureTotalCapacity(arena, params.headers.map.count());
     var it = params.headers.map.iterator();
     while (it.next()) |header| {
-        extra_headers.appendAssumeCapacity(.{ .name = try arena.dupe(u8, header.key_ptr.*), .value = try arena.dupe(u8, header.value_ptr.*) });
+        const header_string = try std.fmt.allocPrintZ(arena, "{s}: {s}", .{ header.key_ptr.*, header.value_ptr.* });
+        extra_headers.appendAssumeCapacity(header_string);
     }
 
     return cmd.sendResult(null, .{});
@@ -190,20 +202,7 @@ fn getCookies(cmd: anytype) !void {
     try cmd.sendResult(.{ .cookies = writer }, .{});
 }
 
-// Upsert a header into the headers array.
-// returns true if the header was added, false if it was updated
-fn putAssumeCapacity(headers: *std.ArrayListUnmanaged(std.http.Header), extra: std.http.Header) bool {
-    for (headers.items) |*header| {
-        if (std.mem.eql(u8, header.name, extra.name)) {
-            header.value = extra.value;
-            return false;
-        }
-    }
-    headers.appendAssumeCapacity(extra);
-    return true;
-}
-
-pub fn httpRequestFail(arena: Allocator, bc: anytype, request: *const Notification.RequestFail) !void {
+pub fn httpRequestFail(arena: Allocator, bc: anytype, data: *const Notification.RequestFail) !void {
     // It's possible that the request failed because we aborted when the client
     // sent Target.closeTarget. In that case, bc.session_id will be cleared
     // already, and we can skip sending these messages to the client.
@@ -215,15 +214,15 @@ pub fn httpRequestFail(arena: Allocator, bc: anytype, request: *const Notificati
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{
-        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{request.id}),
+        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{data.transfer.id}),
         // Seems to be what chrome answers with. I assume it depends on the type of error?
         .type = "Ping",
-        .errorText = request.err,
+        .errorText = data.err,
         .canceled = false,
     }, .{ .session_id = session_id });
 }
 
-pub fn httpRequestStart(arena: Allocator, bc: anytype, request: *const Notification.RequestStart) !void {
+pub fn httpRequestStart(arena: Allocator, bc: anytype, data: *const Notification.RequestStart) !void {
     // Isn't possible to do a network request within a Browser (which our
     // notification is tied to), without a page.
     std.debug.assert(bc.session.page != null);
@@ -236,10 +235,8 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, request: *const Notificat
     const page = bc.session.currentPage() orelse unreachable;
 
     // Modify request with extra CDP headers
-    try request.headers.ensureTotalCapacity(request.arena, request.headers.items.len + cdp.extra_headers.items.len);
     for (cdp.extra_headers.items) |extra| {
-        const new = putAssumeCapacity(request.headers, extra);
-        if (!new) log.debug(.cdp, "request header overwritten", .{ .name = extra.name });
+        try data.transfer.req.headers.add(extra);
     }
 
     const document_url = try urlToString(arena, &page.url.uri, .{
@@ -250,41 +247,38 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, request: *const Notificat
         .query = true,
     });
 
-    const request_url = try urlToString(arena, request.url, .{
+    const transfer = data.transfer;
+    const full_request_url = transfer.uri;
+    const request_url = try urlToString(arena, &full_request_url, .{
         .scheme = true,
         .authentication = true,
         .authority = true,
         .path = true,
         .query = true,
     });
-
-    const request_fragment = try urlToString(arena, request.url, .{
-        .fragment = true,
+    const request_fragment = try urlToString(arena, &full_request_url, .{
+        .fragment = true, // TODO since path is false, this likely does not work as intended
     });
 
-    var headers: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try headers.ensureTotalCapacity(arena, request.headers.items.len);
-    for (request.headers.items) |header| {
-        headers.putAssumeCapacity(header.name, header.value);
-    }
+    const headers = try transfer.req.headers.asHashMap(arena);
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try cdp.sendEvent("Network.requestWillBeSent", .{
-        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{request.id}),
+        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id}),
         .frameId = target_id,
         .loaderId = bc.loader_id,
         .documentUrl = document_url,
         .request = .{
             .url = request_url,
             .urlFragment = request_fragment,
-            .method = @tagName(request.method),
-            .hasPostData = request.has_body,
+            .method = @tagName(transfer.req.method),
+            .hasPostData = transfer.req.body != null,
             .headers = std.json.ArrayHashMap([]const u8){ .map = headers },
         },
     }, .{ .session_id = session_id });
 }
 
-pub fn httpRequestComplete(arena: Allocator, bc: anytype, request: *const Notification.RequestComplete) !void {
+pub fn httpHeadersDone(arena: Allocator, bc: anytype, request: *const Notification.ResponseHeadersDone) !void {
     // Isn't possible to do a network request within a Browser (which our
     // notification is tied to), without a page.
     std.debug.assert(bc.session.page != null);
@@ -295,7 +289,7 @@ pub fn httpRequestComplete(arena: Allocator, bc: anytype, request: *const Notifi
     const session_id = bc.session_id orelse unreachable;
     const target_id = bc.target_id orelse unreachable;
 
-    const url = try urlToString(arena, request.url, .{
+    const url = try urlToString(arena, &request.transfer.uri, .{
         .scheme = true,
         .authentication = true,
         .authority = true,
@@ -303,31 +297,47 @@ pub fn httpRequestComplete(arena: Allocator, bc: anytype, request: *const Notifi
         .query = true,
     });
 
-    var headers: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    try headers.ensureTotalCapacity(arena, request.headers.len);
-    for (request.headers) |header| {
-        headers.putAssumeCapacity(header.name, header.value);
-    }
+    const status = request.transfer.response_header.?.status;
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try cdp.sendEvent("Network.responseReceived", .{
-        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{request.id}),
+        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{request.transfer.id}),
         .loaderId = bc.loader_id,
         .response = .{
             .url = url,
-            .status = request.status,
-            .statusText = @as(std.http.Status, @enumFromInt(request.status)).phrase() orelse "Unknown",
-            .headers = std.json.ArrayHashMap([]const u8){ .map = headers },
+            .status = status,
+            .statusText = @as(std.http.Status, @enumFromInt(status)).phrase() orelse "Unknown",
+            .headers = ResponseHeaderWriter.init(request.transfer),
         },
         .frameId = target_id,
     }, .{ .session_id = session_id });
 }
 
-fn urlToString(arena: Allocator, url: *const std.Uri, opts: std.Uri.WriteToStreamOptions) ![]const u8 {
+pub fn urlToString(arena: Allocator, url: *const std.Uri, opts: std.Uri.WriteToStreamOptions) ![]const u8 {
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     try url.writeToStream(opts, buf.writer(arena));
     return buf.items;
 }
+
+const ResponseHeaderWriter = struct {
+    transfer: *Transfer,
+
+    fn init(transfer: *Transfer) ResponseHeaderWriter {
+        return .{
+            .transfer = transfer,
+        };
+    }
+
+    pub fn jsonStringify(self: *const ResponseHeaderWriter, writer: anytype) !void {
+        try writer.beginObject();
+        var it = self.transfer.responseHeaderIterator();
+        while (it.next()) |hdr| {
+            try writer.objectField(hdr.name);
+            try writer.write(hdr.value);
+        }
+        try writer.endObject();
+    }
+};
 
 const testing = @import("../testing.zig");
 test "cdp.network setExtraHTTPHeaders" {

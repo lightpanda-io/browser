@@ -49,6 +49,7 @@
               glib.dev
               glibc.dev
               zlib
+              zlib.dev
             ];
         };
       in

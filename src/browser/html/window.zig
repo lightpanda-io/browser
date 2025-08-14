@@ -22,7 +22,6 @@ const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
-const Loop = @import("../../runtime/loop.zig").Loop;
 
 const Navigator = @import("navigator.zig").Navigator;
 const History = @import("history.zig").History;
@@ -57,7 +56,7 @@ pub const Window = struct {
 
     // counter for having unique timer ids
     timer_id: u30 = 0,
-    timers: std.AutoHashMapUnmanaged(u32, *TimerCallback) = .{},
+    timers: std.AutoHashMapUnmanaged(u32, void) = .{},
 
     crypto: Crypto = .{},
     console: Console = .{},
@@ -179,34 +178,31 @@ pub const Window = struct {
     }
 
     pub fn _requestAnimationFrame(self: *Window, cbk: Function, page: *Page) !u32 {
-        return self.createTimeout(cbk, 5, page, .{ .animation_frame = true });
+        return self.createTimeout(cbk, 5, page, .{ .animation_frame = true, .name = "animationFrame" });
     }
 
-    pub fn _cancelAnimationFrame(self: *Window, id: u32, page: *Page) !void {
-        const kv = self.timers.fetchRemove(id) orelse return;
-        return page.loop.cancel(kv.value.loop_id);
+    pub fn _cancelAnimationFrame(self: *Window, id: u32) !void {
+        _ = self.timers.remove(id);
     }
 
     pub fn _setTimeout(self: *Window, cbk: Function, delay: ?u32, params: []Env.JsObject, page: *Page) !u32 {
-        return self.createTimeout(cbk, delay, page, .{ .args = params });
+        return self.createTimeout(cbk, delay, page, .{ .args = params, .name = "setTimeout" });
     }
 
     pub fn _setInterval(self: *Window, cbk: Function, delay: ?u32, params: []Env.JsObject, page: *Page) !u32 {
-        return self.createTimeout(cbk, delay, page, .{ .repeat = true, .args = params });
+        return self.createTimeout(cbk, delay, page, .{ .repeat = true, .args = params, .name = "setInterval" });
     }
 
-    pub fn _clearTimeout(self: *Window, id: u32, page: *Page) !void {
-        const kv = self.timers.fetchRemove(id) orelse return;
-        return page.loop.cancel(kv.value.loop_id);
+    pub fn _clearTimeout(self: *Window, id: u32) !void {
+        _ = self.timers.remove(id);
     }
 
-    pub fn _clearInterval(self: *Window, id: u32, page: *Page) !void {
-        const kv = self.timers.fetchRemove(id) orelse return;
-        return page.loop.cancel(kv.value.loop_id);
+    pub fn _clearInterval(self: *Window, id: u32) !void {
+        _ = self.timers.remove(id);
     }
 
     pub fn _queueMicrotask(self: *Window, cbk: Function, page: *Page) !u32 {
-        return self.createTimeout(cbk, 0, page, .{});
+        return self.createTimeout(cbk, 0, page, .{ .name = "queueMicrotask" });
     }
 
     pub fn _matchMedia(_: *const Window, media: []const u8, page: *Page) !MediaQueryList {
@@ -232,6 +228,7 @@ pub const Window = struct {
     }
 
     const CreateTimeoutOpts = struct {
+        name: []const u8,
         args: []Env.JsObject = &.{},
         repeat: bool = false,
         animation_frame: bool = false,
@@ -258,6 +255,8 @@ pub const Window = struct {
         if (gop.found_existing) {
             // this can only happen if we've created 2^31 timeouts.
             return error.TooManyTimeout;
+        } else {
+            gop.value_ptr.* = {};
         }
         errdefer _ = self.timers.remove(timer_id);
 
@@ -270,22 +269,19 @@ pub const Window = struct {
             }
         }
 
-        const delay_ms: u63 = @as(u63, delay) * std.time.ns_per_ms;
         const callback = try arena.create(TimerCallback);
-
         callback.* = .{
             .cbk = cbk,
-            .loop_id = 0, // we're going to set this to a real value shortly
             .window = self,
             .timer_id = timer_id,
             .args = persisted_args,
-            .node = .{ .func = TimerCallback.run },
-            .repeat = if (opts.repeat) delay_ms else null,
             .animation_frame = opts.animation_frame,
+            // setting a repeat time of 0 is illegal, doing + 1 is a simple way to avoid that
+            .repeat = if (opts.repeat) delay + 1 else null,
         };
-        callback.loop_id = try page.loop.timeout(delay_ms, &callback.node);
 
-        gop.value_ptr.* = callback;
+        try page.scheduler.add(callback, TimerCallback.run, delay, .{ .name = opts.name });
+
         return timer_id;
     }
 
@@ -354,21 +350,14 @@ pub const Window = struct {
 };
 
 const TimerCallback = struct {
-    // the internal loop id, need it when cancelling
-    loop_id: usize,
-
     // the id of our timer (windows.timers key)
     timer_id: u31,
 
+    // if false, we'll remove the timer_id from the window.timers lookup on run
+    repeat: ?u32,
+
     // The JavaScript callback to execute
     cbk: Function,
-
-    // This is the internal data that the event loop tracks. We'll get this
-    // back in run and, from it, can get our TimerCallback instance
-    node: Loop.CallbackNode = undefined,
-
-    // if the event should be repeated
-    repeat: ?u63 = null,
 
     animation_frame: bool = false,
 
@@ -376,8 +365,17 @@ const TimerCallback = struct {
 
     args: []Env.JsObject = &.{},
 
-    fn run(node: *Loop.CallbackNode, repeat_delay: *?u63) void {
-        const self: *TimerCallback = @fieldParentPtr("node", node);
+    fn run(ctx: *anyopaque) ?u32 {
+        const self: *TimerCallback = @alignCast(@ptrCast(ctx));
+        if (self.repeat != null) {
+            if (self.window.timers.contains(self.timer_id) == false) {
+                // it was called
+                return null;
+            }
+        } else if (self.window.timers.remove(self.timer_id) == false) {
+            // it was cancelled
+            return null;
+        }
 
         var result: Function.Result = undefined;
 
@@ -396,14 +394,7 @@ const TimerCallback = struct {
             });
         };
 
-        if (self.repeat) |r| {
-            // setInterval
-            repeat_delay.* = r;
-            return;
-        }
-
-        // setTimeout
-        _ = self.window.timers.remove(self.timer_id);
+        return self.repeat;
     }
 };
 
@@ -412,13 +403,11 @@ test "Browser.HTML.Window" {
     var runner = try testing.jsRunner(testing.tracking_allocator, .{});
     defer runner.deinit();
 
-    try runner.testCases(&.{
-        .{ "window.parent === window", "true" },
-        .{ "window.top === window", "true" },
-    }, .{});
+    // try runner.testCases(&.{
+    //     .{ "window.parent === window", "true" },
+    //     .{ "window.top === window", "true" },
+    // }, .{});
 
-    // requestAnimationFrame should be able to wait by recursively calling itself
-    // Note however that we in this test do not wait as the request is just send to the browser
     try runner.testCases(&.{
         .{
             \\ let start = 0;

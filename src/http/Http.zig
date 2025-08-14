@@ -1,0 +1,378 @@
+// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+const std = @import("std");
+
+pub const c = @cImport({
+    @cInclude("curl/curl.h");
+});
+
+const Client = @import("Client.zig");
+const errors = @import("errors.zig");
+
+const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
+
+pub const ENABLE_DEBUG = false;
+
+// Client.zig does the bulk of the work and is loosely tied to a browser Page.
+// But we still need something above Client.zig for the "utility" http stuff
+// we need to do, like telemetry. The most important thing we want from this
+// is to be able to share the ca_blob, which can be quite large - loading it
+// once for all http connections is a win.
+const Http = @This();
+
+opts: Opts,
+client: *Client,
+ca_blob: ?c.curl_blob,
+arena: ArenaAllocator,
+
+pub fn init(allocator: Allocator, opts: Opts) !Http {
+    try errorCheck(c.curl_global_init(c.CURL_GLOBAL_SSL));
+    errdefer c.curl_global_cleanup();
+
+    if (comptime ENABLE_DEBUG) {
+        std.debug.print("curl version: {s}\n\n", .{c.curl_version()});
+    }
+
+    var arena = ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+
+    var adjusted_opts = opts;
+    if (opts.proxy_bearer_token) |bt| {
+        adjusted_opts.proxy_bearer_token = try std.fmt.allocPrintZ(
+            arena.allocator(),
+            "Proxy-Authorization: Bearer {s}",
+            .{bt},
+        );
+    }
+
+    var ca_blob: ?c.curl_blob = null;
+    if (opts.tls_verify_host) {
+        ca_blob = try loadCerts(allocator, arena.allocator());
+    }
+
+    var client = try Client.init(allocator, ca_blob, adjusted_opts);
+    errdefer client.deinit();
+
+    return .{
+        .arena = arena,
+        .client = client,
+        .ca_blob = ca_blob,
+        .opts = adjusted_opts,
+    };
+}
+
+pub fn deinit(self: *Http) void {
+    self.client.deinit();
+    c.curl_global_cleanup();
+    self.arena.deinit();
+}
+
+pub fn newConnection(self: *Http) !Connection {
+    return Connection.init(self.ca_blob, &self.opts);
+}
+
+pub const Connection = struct {
+    easy: *c.CURL,
+    opts: Connection.Opts,
+
+    const Opts = struct {
+        proxy_bearer_token: ?[:0]const u8,
+    };
+
+    // pointer to opts is not stable, don't hold a reference to it!
+    pub fn init(ca_blob_: ?c.curl_blob, opts: *const Http.Opts) !Connection {
+        const easy = c.curl_easy_init() orelse return error.FailedToInitializeEasy;
+        errdefer _ = c.curl_easy_cleanup(easy);
+
+        // timeouts
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, @intCast(opts.timeout_ms))));
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CONNECTTIMEOUT_MS, @as(c_long, @intCast(opts.connect_timeout_ms))));
+
+        // redirect behavior
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_MAXREDIRS, @as(c_long, @intCast(opts.max_redirects))));
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_FOLLOWLOCATION, @as(c_long, 2)));
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_REDIR_PROTOCOLS_STR, "HTTP,HTTPS")); // remove FTP and FTPS from the default
+
+        // proxy
+        if (opts.http_proxy) |proxy| {
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY, proxy.ptr));
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SUPPRESS_CONNECT_HEADERS, @as(c_long, 1)));
+        }
+
+        // tls
+        if (ca_blob_) |ca_blob| {
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CAINFO_BLOB, ca_blob));
+            if (opts.http_proxy != null) {
+                // Note, this can be difference for the proxy and for the main
+                // request. Might be something worth exposting as command
+                // line arguments at some point.
+                try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_CAINFO_BLOB, ca_blob));
+            }
+        } else {
+            std.debug.assert(opts.tls_verify_host == false);
+
+            // Verify peer checks that the cert is signed by a CA, verify host makes sure the
+            // cert contains the server name.
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 0)));
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 0)));
+
+            if (opts.http_proxy != null) {
+                // Note, this can be difference for the proxy and for the main
+                // request. Might be something worth exposting as command
+                // line arguments at some point.
+                try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_SSL_VERIFYHOST, @as(c_long, 0)));
+                try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_SSL_VERIFYPEER, @as(c_long, 0)));
+            }
+        }
+
+        // compression, don't remove this. CloudFront will send gzip content
+        // even if we don't support it, and then it won't be decompressed.
+        // empty string means: use whatever's available
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_ACCEPT_ENCODING, ""));
+
+        // debug
+        if (comptime Http.ENABLE_DEBUG) {
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_VERBOSE, @as(c_long, 1)));
+        }
+
+        return .{
+            .easy = easy,
+            .opts = .{
+                .proxy_bearer_token = opts.proxy_bearer_token,
+            },
+        };
+    }
+
+    pub fn deinit(self: *const Connection) void {
+        c.curl_easy_cleanup(self.easy);
+    }
+
+    pub fn setURL(self: *const Connection, url: [:0]const u8) !void {
+        try errorCheck(c.curl_easy_setopt(self.easy, c.CURLOPT_URL, url.ptr));
+    }
+
+    pub fn setMethod(self: *const Connection, method: Method) !void {
+        const easy = self.easy;
+        switch (method) {
+            .GET => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPGET, @as(c_long, 1))),
+            .POST => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPPOST, @as(c_long, 1))),
+            .PUT => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, "put")),
+            .DELETE => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, "delete")),
+            .HEAD => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, "head")),
+            .OPTIONS => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, "options")),
+        }
+    }
+
+    pub fn setBody(self: *const Connection, body: []const u8) !void {
+        const easy = self.easy;
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_POSTFIELDSIZE, @as(c_long, @intCast(body.len))));
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_POSTFIELDS, body.ptr));
+    }
+
+    // These are headers that may not be send to the users for inteception.
+    pub fn secretHeaders(self: *const Connection, headers: *Headers) !void {
+        if (self.opts.proxy_bearer_token) |hdr| {
+            try headers.add(hdr);
+        }
+    }
+
+    pub fn request(self: *const Connection) !u16 {
+        const easy = self.easy;
+
+        var header_list = try Headers.init();
+        defer header_list.deinit();
+        try self.secretHeaders(&header_list);
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPHEADER, header_list.headers));
+
+        try errorCheck(c.curl_easy_perform(easy));
+        var http_code: c_long = undefined;
+        try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_RESPONSE_CODE, &http_code));
+        if (http_code < 0 or http_code > std.math.maxInt(u16)) {
+            return 0;
+        }
+        return @intCast(http_code);
+    }
+};
+
+pub const Headers = struct {
+    headers: *c.curl_slist,
+
+    pub fn init() !Headers {
+        const header_list = c.curl_slist_append(null, "User-Agent: Lightpanda/1.0");
+        if (header_list == null) return error.OutOfMemory;
+        return .{ .headers = header_list };
+    }
+
+    pub fn deinit(self: *const Headers) void {
+        c.curl_slist_free_all(self.headers);
+    }
+
+    pub fn add(self: *Headers, header: [*c]const u8) !void {
+        // Copies the value
+        const updated_headers = c.curl_slist_append(self.headers, header);
+        if (updated_headers == null) return error.OutOfMemory;
+        self.headers = updated_headers;
+    }
+
+    pub fn asHashMap(self: *const Headers, allocator: Allocator) !std.StringArrayHashMapUnmanaged([]const u8) {
+        var list: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+        try list.ensureTotalCapacity(allocator, self.count());
+
+        var current: [*c]c.curl_slist = self.headers;
+        while (current) |node| {
+            const str = std.mem.span(@as([*:0]const u8, @ptrCast(node.*.data)));
+            const header = parseHeader(str) orelse return error.InvalidHeader;
+            list.putAssumeCapacity(header.name, header.value);
+            current = node.*.next;
+        }
+        return list;
+    }
+
+    pub fn parseHeader(header_str: []const u8) ?std.http.Header {
+        const colon_pos = std.mem.indexOfScalar(u8, header_str, ':') orelse return null;
+
+        const name = std.mem.trim(u8, header_str[0..colon_pos], " \t");
+        const value = std.mem.trim(u8, header_str[colon_pos + 1 ..], " \t");
+
+        return .{ .name = name, .value = value };
+    }
+
+    pub fn count(self: *const Headers) usize {
+        var current: [*c]c.curl_slist = self.headers;
+        var num: usize = 0;
+        while (current) |node| {
+            num += 1;
+            current = node.*.next;
+        }
+        return num;
+    }
+};
+
+pub fn errorCheck(code: c.CURLcode) errors.Error!void {
+    if (code == c.CURLE_OK) {
+        return;
+    }
+    return errors.fromCode(code);
+}
+
+pub fn errorMCheck(code: c.CURLMcode) errors.Multi!void {
+    if (code == c.CURLM_OK) {
+        return;
+    }
+    if (code == c.CURLM_CALL_MULTI_PERFORM) {
+        // should we can client.perform() here?
+        // or just wait until the next time we naturally call it?
+        return;
+    }
+    return errors.fromMCode(code);
+}
+
+pub const Opts = struct {
+    timeout_ms: u31,
+    max_host_open: u8,
+    max_concurrent: u8,
+    connect_timeout_ms: u31,
+    max_redirects: u8 = 10,
+    tls_verify_host: bool = true,
+    http_proxy: ?[:0]const u8 = null,
+    proxy_bearer_token: ?[:0]const u8 = null,
+};
+
+pub const Method = enum {
+    GET,
+    PUT,
+    POST,
+    DELETE,
+    HEAD,
+    OPTIONS,
+};
+
+// TODO: on BSD / Linux, we could just read the PEM file directly.
+// This whole rescan + decode is really just needed for MacOS. On Linux
+// bundle.rescan does find the .pem file(s) which could be in a few different
+// places, so it's still useful, just not efficient.
+fn loadCerts(allocator: Allocator, arena: Allocator) !c.curl_blob {
+    var bundle: std.crypto.Certificate.Bundle = .{};
+    try bundle.rescan(allocator);
+    defer bundle.deinit(allocator);
+
+    var it = bundle.map.valueIterator();
+    const bytes = bundle.bytes.items;
+
+    const encoder = std.base64.standard.Encoder;
+    var arr: std.ArrayListUnmanaged(u8) = .empty;
+
+    const encoded_size = encoder.calcSize(bytes.len);
+    const buffer_size = encoded_size +
+        (bundle.map.count() * 75) + // start / end per certificate + extra, just in case
+        (encoded_size / 64) // newline per 64 characters
+    ;
+    try arr.ensureTotalCapacity(arena, buffer_size);
+    var writer = arr.writer(arena);
+
+    while (it.next()) |index| {
+        const cert = try std.crypto.Certificate.der.Element.parse(bytes, index.*);
+
+        try writer.writeAll("-----BEGIN CERTIFICATE-----\n");
+        var line_writer = LineWriter{ .inner = writer };
+        try encoder.encodeWriter(&line_writer, bytes[index.*..cert.slice.end]);
+        try writer.writeAll("\n-----END CERTIFICATE-----\n");
+    }
+
+    // Final encoding should not be larger than our initial size estimate
+    std.debug.assert(buffer_size > arr.items.len);
+
+    return .{
+        .len = arr.items.len,
+        .data = arr.items.ptr,
+        .flags = 0,
+    };
+}
+
+// Wraps lines @ 64 columns. A PEM is basically a base64 encoded DER (which is
+// what Zig has), with lines wrapped at 64 characters and with a basic header
+// and footer
+const LineWriter = struct {
+    col: usize = 0,
+    inner: std.ArrayListUnmanaged(u8).Writer,
+
+    pub fn writeAll(self: *LineWriter, data: []const u8) !void {
+        var writer = self.inner;
+
+        var col = self.col;
+        const len = 64 - col;
+
+        var remain = data;
+        if (remain.len > len) {
+            col = 0;
+            try writer.writeAll(data[0..len]);
+            try writer.writeByte('\n');
+            remain = data[len..];
+        }
+
+        while (remain.len > 64) {
+            try writer.writeAll(remain[0..64]);
+            try writer.writeByte('\n');
+            remain = data[len..];
+        }
+        try writer.writeAll(remain);
+        self.col = col + remain.len;
+    }
+};

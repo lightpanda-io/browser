@@ -29,6 +29,8 @@ const Page = @import("../browser/page.zig").Page;
 const Inspector = @import("../browser/env.zig").Env.Inspector;
 const Incrementing = @import("../id.zig").Incrementing;
 const Notification = @import("../notification.zig").Notification;
+const NetworkState = @import("domains/network.zig").NetworkState;
+const InterceptState = @import("domains/fetch.zig").InterceptState;
 
 const polyfill = @import("../browser/polyfill/polyfill.zig");
 
@@ -73,7 +75,9 @@ pub fn CDPT(comptime TypeProvider: type) type {
         notification_arena: std.heap.ArenaAllocator,
 
         // Extra headers to add to all requests. TBD under which conditions this should be reset.
-        extra_headers: std.ArrayListUnmanaged(std.http.Header) = .empty,
+        extra_headers: std.ArrayListUnmanaged([*c]const u8) = .empty,
+
+        intercept_state: InterceptState,
 
         const Self = @This();
 
@@ -89,6 +93,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
                 .browser_context = null,
                 .message_arena = std.heap.ArenaAllocator.init(allocator),
                 .notification_arena = std.heap.ArenaAllocator.init(allocator),
+                .intercept_state = try InterceptState.init(allocator), // TBD or browser session arena?
             };
         }
 
@@ -96,6 +101,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
             if (self.browser_context) |*bc| {
                 bc.deinit();
             }
+            self.intercept_state.deinit(); // TBD Should this live in BC?
             self.browser.deinit();
             self.message_arena.deinit();
             self.notification_arena.deinit();
@@ -104,6 +110,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
         pub fn handleMessage(self: *Self, msg: []const u8) bool {
             // if there's an error, it's already been logged
             self.processMessage(msg) catch return false;
+            self.pageWait();
             return true;
         }
 
@@ -111,6 +118,20 @@ pub fn CDPT(comptime TypeProvider: type) type {
             const arena = &self.message_arena;
             defer _ = arena.reset(.{ .retain_with_limit = 1024 * 16 });
             return self.dispatch(arena.allocator(), self, msg);
+        }
+
+        // @newhttp
+        // A bit hacky right now. The main server loop blocks only for CDP
+        // messages. It no longer blocks for page timeouts of page HTTP
+        // transfers. So we need to call this more ourselves.
+        // This is called after every message and [very hackily] from the server
+        // loop.
+        // This is hopefully temporary.
+        pub fn pageWait(self: *Self) void {
+            const session = &(self.browser.session orelse return);
+            // exits early if there's nothing to do, so a large value like
+            // 5 seconds should be ok
+            session.wait(5);
         }
 
         // Called from above, in processMessage which handles client messages
@@ -323,10 +344,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         inspector: Inspector,
         isolated_world: ?IsolatedWorld,
 
-        // Used to restore the proxy after the CDP session ends. If CDP never over-wrote it, it won't restore it (the first null).
-        // If the CDP is restoring it, but the original value was null, that's the 2nd null.
-        // If you only have 1 null it would be ambiguous, does null mean it shouldn't be restored, or should it be restored to null?
-        http_proxy_before: ??std.Uri = null,
+        http_proxy_changed: bool = false,
 
         const Self = @This();
 
@@ -382,7 +400,13 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             self.node_search_list.deinit();
             self.cdp.browser.notification.unregisterAll(self);
 
-            if (self.http_proxy_before) |prev_proxy| self.cdp.browser.http_client.http_proxy = prev_proxy;
+            if (self.http_proxy_changed) {
+                // has to be called after browser.closeSession, since it won't
+                // work if there are active connections.
+                self.cdp.browser.http_client.restoreOriginalProxy() catch |err| {
+                    log.warn(.http, "restoreOriginalProxy", .{ .err = err });
+                };
+            }
         }
 
         pub fn reset(self: *Self) void {
@@ -424,18 +448,26 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         pub fn networkEnable(self: *Self) !void {
             try self.cdp.browser.notification.register(.http_request_fail, self, onHttpRequestFail);
             try self.cdp.browser.notification.register(.http_request_start, self, onHttpRequestStart);
-            try self.cdp.browser.notification.register(.http_request_complete, self, onHttpRequestComplete);
+            try self.cdp.browser.notification.register(.http_headers_done, self, onHttpHeadersDone);
         }
 
         pub fn networkDisable(self: *Self) void {
             self.cdp.browser.notification.unregister(.http_request_fail, self);
             self.cdp.browser.notification.unregister(.http_request_start, self);
-            self.cdp.browser.notification.unregister(.http_request_complete, self);
+            self.cdp.browser.notification.unregister(.http_headers_done, self);
+        }
+
+        pub fn fetchEnable(self: *Self) !void {
+            try self.cdp.browser.notification.register(.http_request_intercept, self, onHttpRequestIntercept);
+        }
+
+        pub fn fetchDisable(self: *Self) void {
+            self.cdp.browser.notification.unregister(.http_request_intercept, self);
         }
 
         pub fn onPageRemove(ctx: *anyopaque, _: Notification.PageRemove) !void {
             const self: *Self = @alignCast(@ptrCast(ctx));
-            return @import("domains/page.zig").pageRemove(self);
+            try @import("domains/page.zig").pageRemove(self);
         }
 
         pub fn onPageCreated(ctx: *anyopaque, page: *Page) !void {
@@ -457,7 +489,13 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         pub fn onHttpRequestStart(ctx: *anyopaque, data: *const Notification.RequestStart) !void {
             const self: *Self = @alignCast(@ptrCast(ctx));
             defer self.resetNotificationArena();
-            return @import("domains/network.zig").httpRequestStart(self.notification_arena, self, data);
+            try @import("domains/network.zig").httpRequestStart(self.notification_arena, self, data);
+        }
+
+        pub fn onHttpRequestIntercept(ctx: *anyopaque, data: *const Notification.RequestIntercept) !void {
+            const self: *Self = @alignCast(@ptrCast(ctx));
+            defer self.resetNotificationArena();
+            try @import("domains/fetch.zig").requestPaused(self.notification_arena, self, data);
         }
 
         pub fn onHttpRequestFail(ctx: *anyopaque, data: *const Notification.RequestFail) !void {
@@ -466,10 +504,10 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             return @import("domains/network.zig").httpRequestFail(self.notification_arena, self, data);
         }
 
-        pub fn onHttpRequestComplete(ctx: *anyopaque, data: *const Notification.RequestComplete) !void {
+        pub fn onHttpHeadersDone(ctx: *anyopaque, data: *const Notification.ResponseHeadersDone) !void {
             const self: *Self = @alignCast(@ptrCast(ctx));
             defer self.resetNotificationArena();
-            return @import("domains/network.zig").httpRequestComplete(self.notification_arena, self, data);
+            return @import("domains/network.zig").httpHeadersDone(self.notification_arena, self, data);
         }
 
         fn resetNotificationArena(self: *Self) void {

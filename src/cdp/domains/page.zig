@@ -148,12 +148,10 @@ fn navigate(cmd: anytype) !void {
         return error.SessionIdNotLoaded;
     }
 
-    const url = try URL.parse(params.url, "https");
-
     var page = bc.session.currentPage() orelse return error.PageNotLoaded;
     bc.loader_id = bc.cdp.loader_id_gen.next();
 
-    try page.navigate(url, .{
+    try page.navigate(params.url, .{
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
     });
@@ -191,13 +189,13 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
             .frameId = target_id,
             .delay = 0,
             .reason = reason,
-            .url = event.url.raw,
+            .url = event.url,
         }, .{ .session_id = session_id });
 
         try cdp.sendEvent("Page.frameRequestedNavigation", .{
             .frameId = target_id,
             .reason = reason,
-            .url = event.url.raw,
+            .url = event.url,
             .disposition = "currentTab",
         }, .{ .session_id = session_id });
     }
@@ -205,7 +203,7 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
     // frameStartedNavigating event
     try cdp.sendEvent("Page.frameStartedNavigating", .{
         .frameId = target_id,
-        .url = event.url.raw,
+        .url = event.url,
         .loaderId = loader_id,
         .navigationType = "differentDocument",
     }, .{ .session_id = session_id });
@@ -308,7 +306,7 @@ pub fn pageNavigated(bc: anytype, event: *const Notification.PageNavigated) !voi
         .type = "Navigation",
         .frame = Frame{
             .id = target_id,
-            .url = event.url.raw,
+            .url = event.url,
             .loaderId = bc.loader_id,
             .securityOrigin = bc.security_origin,
             .secureContextType = bc.secure_context_type,
