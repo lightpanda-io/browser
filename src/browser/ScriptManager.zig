@@ -230,7 +230,7 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
     errdefer pending_script.deinit();
 
     var headers = try HttpClient.Headers.init();
-    try page.requestCookie(.{}).headersForRequest(self.allocator, remote_url.?, &headers);
+    try page.requestCookie(.{}).headersForRequest(page.arena, remote_url.?, &headers);
 
     try self.client.request(.{
         .url = remote_url.?,
@@ -297,7 +297,7 @@ pub fn blockingGet(self: *ScriptManager, url: [:0]const u8) !BlockingResult {
     };
 
     var headers = try HttpClient.Headers.init();
-    try self.page.requestCookie(.{}).headersForRequest(self.allocator, url, &headers);
+    try self.page.requestCookie(.{}).headersForRequest(self.page.arena, url, &headers);
 
     var client = self.client;
     try client.blockingRequest(.{
