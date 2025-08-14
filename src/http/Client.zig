@@ -641,20 +641,6 @@ pub const Transfer = struct {
             return buf_len;
         }
 
-        var hdr = &transfer.response_header.?;
-
-        if (hdr._content_type_len == 0) {
-            const CONTENT_TYPE_LEN = "content-type:".len;
-            if (header.len > CONTENT_TYPE_LEN) {
-                if (std.ascii.eqlIgnoreCase(header[0..CONTENT_TYPE_LEN], "content-type:")) {
-                    const value = std.mem.trimLeft(u8, header[CONTENT_TYPE_LEN..], " ");
-                    const len = @min(value.len, hdr._content_type.len);
-                    hdr._content_type_len = len;
-                    @memcpy(hdr._content_type[0..len], value[0..len]);
-                }
-            }
-        }
-
         {
             const SET_COOKIE_LEN = "set-cookie:".len;
             if (header.len > SET_COOKIE_LEN) {
@@ -668,7 +654,9 @@ pub const Transfer = struct {
         }
 
         if (buf_len == 2) {
-            if (getResponseHeader(easy, "content-type")) |value| {
+            if (getResponseHeader(easy, "content-type", 0)) |ct| {
+                var hdr = &transfer.response_header.?;
+                const value = ct.value;
                 const len = @min(value.len, hdr._content_type.len);
                 hdr._content_type_len = len;
                 @memcpy(hdr._content_type[0..len], value[0..len]);
@@ -761,11 +749,19 @@ const HeaderIterator = struct {
     }
 };
 
-fn getResponseHeader(easy: *c.CURL, name: [:0]const u8) ?[]const u8 {
+const ResponseHeader = struct {
+    value: []const u8,
+    amount: usize,
+};
+
+fn getResponseHeader(easy: *c.CURL, name: [:0]const u8, index: usize) ?ResponseHeader {
     var hdr: [*c]c.curl_header = null;
-    const result = c.curl_easy_header(easy, name, 0, c.CURLH_HEADER, -1, &hdr);
+    const result = c.curl_easy_header(easy, name, index, c.CURLH_HEADER, -1, &hdr);
     if (result == c.CURLE_OK) {
-        return std.mem.span(hdr.*.value);
+        return .{
+            .amount = hdr.*.amount,
+            .value = std.mem.span(hdr.*.value),
+        };
     }
 
     if (result == c.CURLE_FAILED_INIT) {
