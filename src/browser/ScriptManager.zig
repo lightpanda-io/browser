@@ -297,7 +297,7 @@ pub fn blockingGet(self: *ScriptManager, url: [:0]const u8) !BlockingResult {
     };
 
     var headers = try HttpClient.Headers.init();
-    try self.page.requestCookie(.{}).headersForRequest(self.allocator, url, &headers);
+    try self.page.requestCookie(.{}).headersForRequest(page.arena, url, &headers);
 
     var client = self.client;
     try client.blockingRequest(.{
