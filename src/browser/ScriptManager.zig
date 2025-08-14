@@ -230,7 +230,7 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
     errdefer pending_script.deinit();
 
     var headers = try HttpClient.Headers.init();
-    try page.requestCookie(.{}).headersForRequest(self.allocator, remote_url.?, &headers);
+    try page.requestCookie(.{}).headersForRequest(page.arena, remote_url.?, &headers);
 
     try self.client.request(.{
         .url = remote_url.?,
