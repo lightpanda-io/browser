@@ -53,32 +53,36 @@ pub fn processMessage(cmd: anytype) !void {
 
 const Response = struct {
     status: u16,
-    headers: std.StringArrayHashMapUnmanaged([]const u8) = .empty, // These may not be complete yet, but we only tell the client Network.responseReceived when all the headers are in
-    // Later should store body as well to support getResponseBody which should only work once Network.loadingFinished is sent
-    // but the body itself would be loaded with each chunks as Network.dataReceiveds are coming in.
+    headers: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
+    // These may not be complete yet, but we only tell the client
+    // Network.responseReceived when all the headers are in.
+    // Later should store body as well to support getResponseBody which should
+    // only work once Network.loadingFinished is sent but the body itself would
+    // be loaded with each chunks as Network.dataReceiveds are coming in.
 };
 
 // Stored in CDP
 pub const NetworkState = struct {
-    const Self = @This();
-    received: std.AutoArrayHashMap(u64, Response),
     arena: std.heap.ArenaAllocator,
+    received: std.AutoArrayHashMap(u64, Response),
 
     pub fn init(allocator: Allocator) !NetworkState {
         return .{
-            .received = std.AutoArrayHashMap(u64, Response).init(allocator),
             .arena = std.heap.ArenaAllocator.init(allocator),
+            .received = std.AutoArrayHashMap(u64, Response).init(allocator),
         };
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *NetworkState) void {
         self.received.deinit();
         self.arena.deinit();
     }
 
     pub fn putOrAppendReceivedHeader(self: *NetworkState, request_id: u64, status: u16, header: std.http.Header) !void {
         const kv = try self.received.getOrPut(request_id);
-        if (!kv.found_existing) kv.value_ptr.* = .{ .status = status };
+        if (!kv.found_existing) {
+            kv.value_ptr.* = .{ .status = status };
+        }
 
         const a = self.arena.allocator();
         const name = try a.dupe(u8, header.name);

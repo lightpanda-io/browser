@@ -247,13 +247,12 @@ fn makeTransfer(self: *Client, req: Request) !*Transfer {
         .req = req,
         .ctx = req.ctx,
         .client = self,
-        .notification = &self.notification,
     };
     return transfer;
 }
 
 fn requestFailed(self: *Client, transfer: *Transfer, err: anyerror) void {
-    // this shoudln't happen, we'll crash in debug mode. But in release, we'll
+    // this shouldn't happen, we'll crash in debug mode. But in release, we'll
     // just noop this state.
     std.debug.assert(transfer._notified_fail == false);
     if (transfer._notified_fail) {
@@ -550,8 +549,6 @@ pub const Transfer = struct {
 
     _redirecting: bool = false,
 
-    notification: *?*Notification, // Points to the Client's notification. TBD if a Browser can remove the notification before all Transfers are gone.
-
     fn deinit(self: *Transfer) void {
         self.req.headers.deinit();
         if (self._handle) |handle| {
@@ -676,7 +673,8 @@ pub const Transfer = struct {
                 // returning < buf_len terminates the request
                 return 0;
             };
-            if (transfer.notification.*) |notification| { // TBD before or after callback?
+
+            if (transfer.client.notification) |notification| {
                 notification.dispatch(.http_headers_done_receiving, &.{
                     .transfer = transfer,
                 });
@@ -687,15 +685,16 @@ pub const Transfer = struct {
                     log.err(.http, "header_callback", .{ .err = err, .req = transfer });
                     return 0;
                 };
-                if (transfer.notification.*) |notification| { // TBD before or after callback?
-                    if (Http.Headers.parseHeader(header)) |hdr_name_value| {
-                        notification.dispatch(.http_header_received, &.{
-                            .request_id = transfer.id,
-                            .status = hdr.status,
-                            .header = hdr_name_value,
-                        });
-                    } else log.err(.http, "invalid header", .{ .line = header });
-                }
+            }
+
+            if (transfer.client.notification) |notification| {
+                if (Http.Headers.parseHeader(header)) |hdr_name_value| {
+                    notification.dispatch(.http_header_received, &.{
+                        .request_id = transfer.id,
+                        .status = hdr.status,
+                        .header = hdr_name_value,
+                    });
+                } else log.err(.http, "invalid header", .{ .line = header });
             }
         }
         return buf_len;
