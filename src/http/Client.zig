@@ -654,8 +654,9 @@ pub const Transfer = struct {
         }
 
         if (buf_len == 2) {
-            if (getResponseHeader(easy, "content-type", 0)) |value| {
+            if (getResponseHeader(easy, "content-type", 0)) |ct| {
                 var hdr = &transfer.response_header.?;
+                const value = ct.value;
                 const len = @min(value.len, hdr._content_type.len);
                 hdr._content_type_len = len;
                 @memcpy(hdr._content_type[0..len], value[0..len]);
@@ -748,11 +749,19 @@ const HeaderIterator = struct {
     }
 };
 
-fn getResponseHeader(easy: *c.CURL, name: [:0]const u8, index: usize) ?[]const u8 {
+const ResponseHeader = struct {
+    value: []const u8,
+    amount: usize,
+};
+
+fn getResponseHeader(easy: *c.CURL, name: [:0]const u8, index: usize) ?ResponseHeader {
     var hdr: [*c]c.curl_header = null;
     const result = c.curl_easy_header(easy, name, index, c.CURLH_HEADER, -1, &hdr);
     if (result == c.CURLE_OK) {
-        return std.mem.span(hdr.*.value);
+        return .{
+            .amount = hdr.*.amount,
+            .value = std.mem.span(hdr.*.value),
+        };
     }
 
     if (result == c.CURLE_FAILED_INIT) {
