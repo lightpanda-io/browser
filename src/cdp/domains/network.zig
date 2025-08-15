@@ -19,10 +19,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const Notification = @import("../../notification.zig").Notification;
 const log = @import("../../log.zig");
 const CdpStorage = @import("storage.zig");
 const Transfer = @import("../../http/Client.zig").Transfer;
+const Notification = @import("../../notification.zig").Notification;
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -239,46 +239,12 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, data: *const Notification
         try data.transfer.req.headers.add(extra);
     }
 
-    const document_url = try urlToString(arena, &page.url.uri, .{
-        .scheme = true,
-        .authentication = true,
-        .authority = true,
-        .path = true,
-        .query = true,
-    });
-
     const transfer = data.transfer;
-    const full_request_url = transfer.uri;
-    const request_url = try urlToString(arena, &full_request_url, .{
-        .scheme = true,
-        .authentication = true,
-        .authority = true,
-        .path = true,
-        .query = true,
-    });
-    const request_fragment = try urlToString(arena, &full_request_url, .{
-        .fragment = true, // TODO since path is false, this likely does not work as intended
-    });
-
-    const headers = try transfer.req.headers.asHashMap(arena);
-
     // We're missing a bunch of fields, but, for now, this seems like enough
-    try cdp.sendEvent("Network.requestWillBeSent", .{
-        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id}),
-        .frameId = target_id,
-        .loaderId = bc.loader_id,
-        .documentUrl = document_url,
-        .request = .{
-            .url = request_url,
-            .urlFragment = request_fragment,
-            .method = @tagName(transfer.req.method),
-            .hasPostData = transfer.req.body != null,
-            .headers = std.json.ArrayHashMap([]const u8){ .map = headers },
-        },
-    }, .{ .session_id = session_id });
+    try cdp.sendEvent("Network.requestWillBeSent", .{ .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id}), .frameId = target_id, .loaderId = bc.loader_id, .documentUrl = DocumentUrlWriter.init(&page.url.uri), .request = TransferAsRequestWriter.init(transfer) }, .{ .session_id = session_id });
 }
 
-pub fn httpHeadersDone(arena: Allocator, bc: anytype, request: *const Notification.ResponseHeadersDone) !void {
+pub fn httpHeadersDone(arena: Allocator, bc: anytype, data: *const Notification.ResponseHeadersDone) !void {
     // Isn't possible to do a network request within a Browser (which our
     // notification is tied to), without a page.
     std.debug.assert(bc.session.page != null);
@@ -289,53 +255,156 @@ pub fn httpHeadersDone(arena: Allocator, bc: anytype, request: *const Notificati
     const session_id = bc.session_id orelse unreachable;
     const target_id = bc.target_id orelse unreachable;
 
-    const url = try urlToString(arena, &request.transfer.uri, .{
-        .scheme = true,
-        .authentication = true,
-        .authority = true,
-        .path = true,
-        .query = true,
-    });
-
-    const status = request.transfer.response_header.?.status;
-
     // We're missing a bunch of fields, but, for now, this seems like enough
     try cdp.sendEvent("Network.responseReceived", .{
-        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{request.transfer.id}),
+        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{data.transfer.id}),
         .loaderId = bc.loader_id,
-        .response = .{
-            .url = url,
-            .status = status,
-            .statusText = @as(std.http.Status, @enumFromInt(status)).phrase() orelse "Unknown",
-            .headers = ResponseHeaderWriter.init(request.transfer),
-        },
         .frameId = target_id,
+        .response = TransferAsResponseWriter.init(data.transfer),
     }, .{ .session_id = session_id });
 }
 
-pub fn urlToString(arena: Allocator, url: *const std.Uri, opts: std.Uri.WriteToStreamOptions) ![]const u8 {
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    try url.writeToStream(opts, buf.writer(arena));
-    return buf.items;
-}
-
-const ResponseHeaderWriter = struct {
+pub const TransferAsRequestWriter = struct {
     transfer: *Transfer,
 
-    fn init(transfer: *Transfer) ResponseHeaderWriter {
+    pub fn init(transfer: *Transfer) TransferAsRequestWriter {
         return .{
             .transfer = transfer,
         };
     }
 
-    pub fn jsonStringify(self: *const ResponseHeaderWriter, writer: anytype) !void {
+    pub fn jsonStringify(self: *const TransferAsRequestWriter, writer: anytype) !void {
+        const stream = writer.stream;
+        const transfer = self.transfer;
+
         try writer.beginObject();
-        var it = self.transfer.responseHeaderIterator();
-        while (it.next()) |hdr| {
-            try writer.objectField(hdr.name);
-            try writer.write(hdr.value);
+        {
+            try writer.objectField("url");
+            try writer.beginWriteRaw();
+            try stream.writeByte('\"');
+            try transfer.uri.writeToStream(.{
+                .scheme = true,
+                .authentication = true,
+                .authority = true,
+                .path = true,
+                .query = true,
+            }, stream);
+            try stream.writeByte('\"');
+            writer.endWriteRaw();
+        }
+
+        {
+            if (transfer.uri.fragment) |frag| {
+                try writer.objectField("urlFragment");
+                try writer.beginWriteRaw();
+                try stream.writeAll("\"#");
+                try stream.writeAll(frag.percent_encoded);
+                try stream.writeByte('\"');
+                writer.endWriteRaw();
+            }
+        }
+
+        {
+            try writer.objectField("method");
+            try writer.write(@tagName(transfer.req.method));
+        }
+
+        {
+            try writer.objectField("hasPostData");
+            try writer.write(transfer.req.body != null);
+        }
+
+        {
+            try writer.objectField("headers");
+            try writer.beginObject();
+            var it = transfer.req.headers.iterator();
+            while (it.next()) |hdr| {
+                try writer.objectField(hdr.name);
+                try writer.write(hdr.value);
+            }
+            try writer.endObject();
         }
         try writer.endObject();
+    }
+};
+
+const TransferAsResponseWriter = struct {
+    transfer: *Transfer,
+
+    fn init(transfer: *Transfer) TransferAsResponseWriter {
+        return .{
+            .transfer = transfer,
+        };
+    }
+
+    pub fn jsonStringify(self: *const TransferAsResponseWriter, writer: anytype) !void {
+        const stream = writer.stream;
+        const transfer = self.transfer;
+
+        try writer.beginObject();
+        {
+            try writer.objectField("url");
+            try writer.beginWriteRaw();
+            try stream.writeByte('\"');
+            try transfer.uri.writeToStream(.{
+                .scheme = true,
+                .authentication = true,
+                .authority = true,
+                .path = true,
+                .query = true,
+            }, stream);
+            try stream.writeByte('\"');
+            writer.endWriteRaw();
+        }
+
+        if (transfer.response_header) |*rh| {
+            // it should not be possible for this to be false, but I'm not
+            // feeling brave today.
+            const status = rh.status;
+            try writer.objectField("status");
+            try writer.write(status);
+
+            try writer.objectField("statusText");
+            try writer.write(@as(std.http.Status, @enumFromInt(status)).phrase() orelse "Unknown");
+        }
+
+        {
+            try writer.objectField("headers");
+            try writer.beginObject();
+            var it = transfer.responseHeaderIterator();
+            while (it.next()) |hdr| {
+                try writer.objectField(hdr.name);
+                try writer.write(hdr.value);
+            }
+            try writer.endObject();
+        }
+        try writer.endObject();
+    }
+};
+
+const DocumentUrlWriter = struct {
+    uri: *std.Uri,
+
+    fn init(uri: *std.Uri) DocumentUrlWriter {
+        return .{
+            .uri = uri,
+        };
+    }
+
+    pub fn jsonStringify(self: *const DocumentUrlWriter, writer: anytype) !void {
+        const stream = writer.stream;
+
+        try writer.beginWriteRaw();
+        try stream.writeByte('\"');
+        try self.uri.writeToStream(.{
+            .scheme = true,
+            .authentication = true,
+            .authority = true,
+            .path = true,
+            .query = true,
+        }, stream);
+        try stream.writeByte('\"');
+        writer.endWriteRaw();
     }
 };
 

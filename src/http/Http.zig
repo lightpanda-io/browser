@@ -225,6 +225,11 @@ pub const Headers = struct {
     headers: *c.curl_slist,
     cookies: ?[*c]const u8,
 
+    const Header = struct {
+        name: []const u8,
+        value: []const u8,
+    };
+
     pub fn init() !Headers {
         const header_list = c.curl_slist_append(null, "User-Agent: Lightpanda/1.0");
         if (header_list == null) return error.OutOfMemory;
@@ -242,25 +247,7 @@ pub const Headers = struct {
         self.headers = updated_headers;
     }
 
-    pub fn asHashMap(self: *const Headers, allocator: Allocator) !std.StringArrayHashMapUnmanaged([]const u8) {
-        var list: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-        try list.ensureTotalCapacity(allocator, self.count());
-
-        var current: [*c]c.curl_slist = self.headers;
-        while (current) |node| {
-            const str = std.mem.span(@as([*:0]const u8, @ptrCast(node.*.data)));
-            const header = parseHeader(str) orelse return error.InvalidHeader;
-            list.putAssumeCapacity(header.name, header.value);
-            current = node.*.next;
-        }
-        // special case for cookies
-        if (self.cookies) |v| {
-            list.putAssumeCapacity("Cookie", std.mem.span(@as([*:0]const u8, @ptrCast(v))));
-        }
-        return list;
-    }
-
-    pub fn parseHeader(header_str: []const u8) ?std.http.Header {
+    pub fn parseHeader(header_str: []const u8) ?Header {
         const colon_pos = std.mem.indexOfScalar(u8, header_str, ':') orelse return null;
 
         const name = std.mem.trim(u8, header_str[0..colon_pos], " \t");
@@ -269,19 +256,28 @@ pub const Headers = struct {
         return .{ .name = name, .value = value };
     }
 
-    pub fn count(self: *const Headers) usize {
-        var current: [*c]c.curl_slist = self.headers;
-        var num: usize = 0;
-        while (current) |node| {
-            num += 1;
-            current = node.*.next;
-        }
-        // special case for cookies
-        if (self.cookies != null) {
-            num += 1;
-        }
-        return num;
+    pub fn iterator(self: *Headers) Iterator {
+        return .{
+            .header = self.headers,
+            .cookies = self.cookies,
+        };
     }
+
+    const Iterator = struct {
+        header: [*c]c.curl_slist,
+        cookies: ?[*c]const u8,
+
+        pub fn next(self: *Iterator) ?Header {
+            const h = self.header orelse {
+                const cookies = self.cookies orelse return null;
+                self.cookies = null;
+                return .{ .name = "Cookie", .value = std.mem.span(@as([*:0]const u8, cookies)) };
+            };
+
+            self.header = h.*.next;
+            return parseHeader(std.mem.span(@as([*:0]const u8, @ptrCast(h.*.data))));
+        }
+    };
 };
 
 pub fn errorCheck(code: c.CURLcode) errors.Error!void {

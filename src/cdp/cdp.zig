@@ -495,7 +495,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         pub fn onHttpRequestIntercept(ctx: *anyopaque, data: *const Notification.RequestIntercept) !void {
             const self: *Self = @alignCast(@ptrCast(ctx));
             defer self.resetNotificationArena();
-            try @import("domains/fetch.zig").requestPaused(self.notification_arena, self, data);
+            try @import("domains/fetch.zig").requestIntercept(self.notification_arena, self, data);
         }
 
         pub fn onHttpRequestFail(ctx: *anyopaque, data: *const Notification.RequestFail) !void {
