@@ -110,7 +110,7 @@ pub const NodeList = struct {
         try self.nodes.append(alloc, node);
     }
 
-    pub fn get_length(self: *NodeList) u32 {
+    pub fn get_length(self: *const NodeList) u32 {
         return @intCast(self.nodes.items.len);
     }
 

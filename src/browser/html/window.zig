@@ -33,6 +33,7 @@ const MediaQueryList = @import("media_query_list.zig").MediaQueryList;
 const Performance = @import("../dom/performance.zig").Performance;
 const CSSStyleDeclaration = @import("../cssom/CSSStyleDeclaration.zig");
 const Screen = @import("screen.zig").Screen;
+const domcss = @import("../dom/css.zig");
 const Css = @import("../css/css.zig").Css;
 
 const Function = Env.Function;
@@ -126,7 +127,43 @@ pub const Window = struct {
         return self;
     }
 
-    // TODO: frames
+    // frames return the window itself, but accessing it via a pseudo
+    // array returns the Window object corresponding to the given frame or
+    // iframe.
+    // https://developer.mozilla.org/en-US/docs/Web/API/Window/frames
+    pub fn get_frames(self: *Window) *Window {
+        return self;
+    }
+
+    pub fn indexed_get(self: *Window, index: u32, has_value: *bool, page: *Page) !*Window {
+        const frames = try domcss.querySelectorAll(
+            page.call_arena,
+            parser.documentHTMLToNode(self.document),
+            "iframe",
+        );
+
+        if (index >= frames.nodes.items.len) {
+            has_value.* = false;
+            return undefined;
+        }
+
+        has_value.* = true;
+        // TODO return the correct frame's window
+        // frames.nodes.items[indexed]
+        return error.TODO;
+    }
+
+    // Retrieve the numbre of frames/iframes from the DOM dynamically.
+    pub fn get_length(self: *const Window, page: *Page) !u32 {
+        const frames = try domcss.querySelectorAll(
+            page.call_arena,
+            parser.documentHTMLToNode(self.document),
+            "iframe",
+        );
+
+        return frames.get_length();
+    }
+
     pub fn get_top(self: *Window) *Window {
         return self;
     }
@@ -494,6 +531,14 @@ test "Browser.HTML.Window" {
     }, .{});
 
     try runner.testCases(&.{
+        .{ "window == window.self", "true" },
+        .{ "window == window.parent", "true" },
+        .{ "window == window.top", "true" },
+        .{ "window == window.frames", "true" },
+        .{ "window.frames.length", "0" },
+    }, .{});
+
+    try runner.testCases(&.{
         .{ "var qm = false; window.queueMicrotask(() => {qm = true });", null },
         .{ "qm", "true" },
     }, .{});
@@ -514,4 +559,27 @@ test "Browser.HTML.Window" {
             .{ "dcl", "true" },
         }, .{});
     }
+}
+
+test "Browser.HTML.Window.frames" {
+    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html = 
+        \\<body>
+        \\ <iframe
+        \\   src="https://httpbin.io/html"
+        \\   title="iframea">
+        \\ </iframe>
+        \\ <iframe
+        \\   src="https://httpbin.io/html"
+        \\   title="iframeb">
+        \\ </iframe>
+        \\</body>
+    });
+
+    defer runner.deinit();
+
+    try runner.testCases(&.{
+        .{ "frames.length", "2" },
+        .{ "try { frames[1] } catch (e) { e }", "Error: TODO" }, // TODO fixme
+        .{ "frames[3]", "undefined" },
+    }, .{});
 }
