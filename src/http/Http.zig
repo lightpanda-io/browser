@@ -110,6 +110,9 @@ pub const Connection = struct {
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_FOLLOWLOCATION, @as(c_long, 2)));
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_REDIR_PROTOCOLS_STR, "HTTP,HTTPS")); // remove FTP and FTPS from the default
 
+        // enable cookie engine for redirections handled directly by Curl.
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COOKIEFILE, ""));
+
         // proxy
         if (opts.http_proxy) |proxy| {
             try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY, proxy.ptr));
@@ -201,6 +204,13 @@ pub const Connection = struct {
         try self.secretHeaders(&header_list);
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPHEADER, header_list.headers));
 
+        // Add cookies.
+        // Clear cookies from Curl's engine.
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COOKIELIST, "ALL"));
+        if (header_list.cookies) |cookies| {
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COOKIE, cookies));
+        }
+
         try errorCheck(c.curl_easy_perform(easy));
         var http_code: c_long = undefined;
         try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_RESPONSE_CODE, &http_code));
@@ -213,11 +223,12 @@ pub const Connection = struct {
 
 pub const Headers = struct {
     headers: *c.curl_slist,
+    cookies: ?[*c]const u8,
 
     pub fn init() !Headers {
         const header_list = c.curl_slist_append(null, "User-Agent: Lightpanda/1.0");
         if (header_list == null) return error.OutOfMemory;
-        return .{ .headers = header_list };
+        return .{ .headers = header_list, .cookies = null };
     }
 
     pub fn deinit(self: *const Headers) void {
@@ -242,6 +253,10 @@ pub const Headers = struct {
             list.putAssumeCapacity(header.name, header.value);
             current = node.*.next;
         }
+        // special case for cookies
+        if (self.cookies) |v| {
+            list.putAssumeCapacity("Cookie", std.mem.span(@as([*:0]const u8, @ptrCast(v))));
+        }
         return list;
     }
 
@@ -260,6 +275,10 @@ pub const Headers = struct {
         while (current) |node| {
             num += 1;
             current = node.*.next;
+        }
+        // special case for cookies
+        if (self.cookies != null) {
+            num += 1;
         }
         return num;
     }
