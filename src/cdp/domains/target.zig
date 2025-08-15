@@ -73,7 +73,9 @@ fn createBrowserContext(cmd: anytype) !void {
         originsWithUniversalNetworkAccess: ?[]const []const u8 = null,
     });
     if (params) |p| {
-        if (p.disposeOnDetach or p.proxyBypassList != null or p.originsWithUniversalNetworkAccess != null) std.debug.print("Target.createBrowserContext: Not implemented param set\n", .{});
+        if (p.disposeOnDetach or p.proxyBypassList != null or p.originsWithUniversalNetworkAccess != null) {
+            log.warn(.cdp, "not implemented", .{ .feature = "Target.createBrowserContext: Not implemented param set" });
+        }
     }
 
     const bc = cmd.createBrowserContext() catch |err| switch (err) {
