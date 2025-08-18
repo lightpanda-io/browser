@@ -516,6 +516,7 @@ pub const Page = struct {
             .headers = headers,
             .body = opts.body,
             .cookie_jar = self.cookie_jar,
+            .resource_type = .document,
             .header_done_callback = pageHeaderDoneCallback,
             .data_callback = pageDataCallback,
             .done_callback = pageDoneCallback,

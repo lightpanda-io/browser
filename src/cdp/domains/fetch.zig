@@ -166,7 +166,11 @@ pub fn requestIntercept(arena: Allocator, bc: anytype, intercept: *const Notific
         .requestId = try std.fmt.allocPrint(arena, "INTERCEPT-{d}", .{transfer.id}),
         .request = network.TransferAsRequestWriter.init(transfer),
         .frameId = target_id,
-        .resourceType = ResourceType.Document, //  TODO!
+        .resourceType = switch (transfer.req.resource_type) {
+            .script => "Script",
+            .xhr => "XHR",
+            .document => "Document",
+        },
         .networkId = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id}),
     }, .{ .session_id = session_id });
 

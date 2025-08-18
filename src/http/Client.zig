@@ -529,6 +529,7 @@ pub const Request = struct {
     headers: Headers,
     body: ?[]const u8 = null,
     cookie_jar: *storage.CookieJar,
+    resource_type: ResourceType,
 
     // arbitrary data that can be associated with this request
     ctx: *anyopaque = undefined,
@@ -539,6 +540,12 @@ pub const Request = struct {
     data_callback: *const fn (transfer: *Transfer, data: []const u8) anyerror!void,
     done_callback: *const fn (ctx: *anyopaque) anyerror!void,
     error_callback: *const fn (ctx: *anyopaque, err: anyerror) void,
+
+    const ResourceType = enum {
+        document,
+        xhr,
+        script,
+    };
 };
 
 pub const Transfer = struct {

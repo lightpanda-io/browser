@@ -383,6 +383,7 @@ pub const XMLHttpRequest = struct {
             .headers = headers,
             .body = self.request_body,
             .cookie_jar = page.cookie_jar,
+            .resource_type = .xhr,
             .start_callback = httpStartCallback,
             .header_callback = httpHeaderCallback,
             .header_done_callback = httpHeaderDoneCallback,
