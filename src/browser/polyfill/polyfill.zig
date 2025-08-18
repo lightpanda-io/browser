@@ -27,7 +27,6 @@ pub const Loader = struct {
     state: enum { empty, loading } = .empty,
 
     done: struct {
-        fetch: bool = false,
         webcomponents: bool = false,
     } = .{},
 
@@ -56,18 +55,6 @@ pub const Loader = struct {
             return false;
         }
 
-        if (!self.done.fetch and isFetch(name)) {
-            const source = @import("fetch.zig").source;
-            self.load("fetch", source, js_context);
-
-            // We return false here: We want v8 to continue the calling chain
-            // to finally find the polyfill we just inserted. If we want to
-            // return false and stops the call chain, we have to use
-            // `info.GetReturnValue.Set()` function, or `undefined` will be
-            // returned immediately.
-            return false;
-        }
-
         if (!self.done.webcomponents and isWebcomponents(name)) {
             const source = @import("webcomponents.zig").source;
             self.load("webcomponents", source, js_context);
@@ -86,14 +73,6 @@ pub const Loader = struct {
             });
         }
 
-        return false;
-    }
-
-    fn isFetch(name: []const u8) bool {
-        if (std.mem.eql(u8, name, "fetch")) return true;
-        if (std.mem.eql(u8, name, "Request")) return true;
-        if (std.mem.eql(u8, name, "Response")) return true;
-        if (std.mem.eql(u8, name, "Headers")) return true;
         return false;
     }
 
