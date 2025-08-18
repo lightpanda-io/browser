@@ -70,6 +70,10 @@ pub const InterceptState = struct {
     pub fn deinit(self: *InterceptState) void {
         self.waiting.deinit(self.allocator);
     }
+
+    pub fn pendingTransfers(self: *const InterceptState) []*Transfer {
+        return self.waiting.values();
+    }
 };
 
 const RequestPattern = struct {
@@ -134,11 +138,13 @@ fn disable(cmd: anytype) !void {
 
 fn enable(cmd: anytype) !void {
     const params = (try cmd.params(EnableParam)) orelse EnableParam{};
-    if (params.patterns.len != 0) {
-        log.warn(.cdp, "not implemented", .{ .feature = "Fetch.enable No patterns yet" });
+    if (!arePatternsSupported(params.patterns)) {
+        log.warn(.cdp, "not implemented", .{ .feature = "Fetch.enable advanced patterns are not" });
+        return cmd.sendResult(null, .{});
     }
+
     if (params.handleAuthRequests) {
-        log.warn(.cdp, "not implemented", .{ .feature = "Fetch.enable No auth yet" });
+        log.warn(.cdp, "not implemented", .{ .feature = "Fetch.enable handleAuthRequests is not supported yet" });
     }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
@@ -147,9 +153,33 @@ fn enable(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
-pub fn requestIntercept(arena: Allocator, bc: anytype, intercept: *const Notification.RequestIntercept) !void {
-    var cdp = bc.cdp;
+fn arePatternsSupported(patterns: []RequestPattern) bool {
+    if (patterns.len == 0) {
+        return true;
+    }
+    if (patterns.len > 1) {
+        return false;
+    }
 
+    // While we don't support patterns, yet, both Playwright and Puppeteer send
+    // a default pattern which happens to be what we support:
+    // [{"urlPattern":"*","requestStage":"Request"}]
+    // So, rather than erroring on this case because we don't support patterns,
+    // we'll allow it, because this pattern is how it works as-is.
+    const pattern = patterns[0];
+    if (!std.mem.eql(u8, pattern.urlPattern, "*")) {
+        return false;
+    }
+    if (pattern.resourceType != null) {
+        return false;
+    }
+    if (pattern.requestStage != .Request) {
+        return false;
+    }
+    return true;
+}
+
+pub fn requestIntercept(arena: Allocator, bc: anytype, intercept: *const Notification.RequestIntercept) !void {
     // unreachable because we _have_ to have a page.
     const session_id = bc.session_id orelse unreachable;
     const target_id = bc.target_id orelse unreachable;
@@ -160,9 +190,9 @@ pub fn requestIntercept(arena: Allocator, bc: anytype, intercept: *const Notific
     // TODO: What to do when receiving replies for a previous page's requests?
 
     const transfer = intercept.transfer;
-    try cdp.intercept_state.put(transfer);
+    try bc.intercept_state.put(transfer);
 
-    try cdp.sendEvent("Fetch.requestPaused", .{
+    try bc.cdp.sendEvent("Fetch.requestPaused", .{
         .requestId = try std.fmt.allocPrint(arena, "INTERCEPT-{d}", .{transfer.id}),
         .request = network.TransferAsRequestWriter.init(transfer),
         .frameId = target_id,
@@ -202,7 +232,7 @@ fn continueRequest(cmd: anytype) !void {
 
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
-    var intercept_state = &bc.cdp.intercept_state;
+    var intercept_state = &bc.intercept_state;
     const request_id = try idFromRequestId(params.requestId);
     const transfer = intercept_state.remove(request_id) orelse return error.RequestNotFound;
 
@@ -238,7 +268,7 @@ fn failRequest(cmd: anytype) !void {
 
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
-    var intercept_state = &bc.cdp.intercept_state;
+    var intercept_state = &bc.intercept_state;
     const request_id = try idFromRequestId(params.requestId);
 
     const transfer = intercept_state.remove(request_id) orelse return error.RequestNotFound;

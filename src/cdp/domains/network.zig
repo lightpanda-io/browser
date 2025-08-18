@@ -83,7 +83,7 @@ fn setExtraHTTPHeaders(cmd: anytype) !void {
 
     // Copy the headers onto the browser context arena
     const arena = bc.arena;
-    const extra_headers = &bc.cdp.extra_headers;
+    const extra_headers = &bc.extra_headers;
 
     extra_headers.clearRetainingCapacity();
     try extra_headers.ensureTotalCapacity(arena, params.headers.map.count());
@@ -235,7 +235,7 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, data: *const Notification
     const page = bc.session.currentPage() orelse unreachable;
 
     // Modify request with extra CDP headers
-    for (cdp.extra_headers.items) |extra| {
+    for (bc.extra_headers.items) |extra| {
         try data.transfer.req.headers.add(extra);
     }
 
@@ -429,10 +429,10 @@ test "cdp.network setExtraHTTPHeaders" {
     });
 
     const bc = ctx.cdp().browser_context.?;
-    try testing.expectEqual(bc.cdp.extra_headers.items.len, 1);
+    try testing.expectEqual(bc.extra_headers.items.len, 1);
 
     try ctx.processMessage(.{ .id = 5, .method = "Target.attachToTarget", .params = .{ .targetId = bc.target_id.? } });
-    try testing.expectEqual(bc.cdp.extra_headers.items.len, 0);
+    try testing.expectEqual(bc.extra_headers.items.len, 0);
 }
 
 test "cdp.Network: cookies" {
