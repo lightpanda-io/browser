@@ -24,8 +24,8 @@ const parser = @import("netsurf.zig");
 const Env = @import("env.zig").Env;
 const Page = @import("page.zig").Page;
 const DataURI = @import("DataURI.zig");
+const Http = @import("../http/Http.zig");
 const Browser = @import("browser.zig").Browser;
-const HttpClient = @import("../http/Client.zig");
 const URL = @import("../url.zig").URL;
 
 const Allocator = std.mem.Allocator;
@@ -57,7 +57,7 @@ deferreds: OrderList,
 
 shutdown: bool = false,
 
-client: *HttpClient,
+client: *Http.Client,
 allocator: Allocator,
 buffer_pool: BufferPool,
 script_pool: std.heap.MemoryPool(PendingScript),
@@ -229,7 +229,7 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
 
     errdefer pending_script.deinit();
 
-    var headers = try HttpClient.Headers.init();
+    var headers = try Http.Headers.init();
     try page.requestCookie(.{}).headersForRequest(page.arena, remote_url.?, &headers);
 
     try self.client.request(.{
@@ -297,7 +297,7 @@ pub fn blockingGet(self: *ScriptManager, url: [:0]const u8) !BlockingResult {
         .buffer_pool = &self.buffer_pool,
     };
 
-    var headers = try HttpClient.Headers.init();
+    var headers = try Http.Headers.init();
     try self.page.requestCookie(.{}).headersForRequest(self.page.arena, url, &headers);
 
     var client = self.client;
@@ -425,7 +425,7 @@ fn getList(self: *ScriptManager, script: *const Script) *OrderList {
     return &self.scripts;
 }
 
-fn startCallback(transfer: *HttpClient.Transfer) !void {
+fn startCallback(transfer: *Http.Transfer) !void {
     const script: *PendingScript = @alignCast(@ptrCast(transfer.ctx));
     script.startCallback(transfer) catch |err| {
         log.err(.http, "SM.startCallback", .{ .err = err, .transfer = transfer });
@@ -433,7 +433,7 @@ fn startCallback(transfer: *HttpClient.Transfer) !void {
     };
 }
 
-fn headerCallback(transfer: *HttpClient.Transfer) !void {
+fn headerCallback(transfer: *Http.Transfer) !void {
     const script: *PendingScript = @alignCast(@ptrCast(transfer.ctx));
     script.headerCallback(transfer) catch |err| {
         log.err(.http, "SM.headerCallback", .{
@@ -445,7 +445,7 @@ fn headerCallback(transfer: *HttpClient.Transfer) !void {
     };
 }
 
-fn dataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
+fn dataCallback(transfer: *Http.Transfer, data: []const u8) !void {
     const script: *PendingScript = @alignCast(@ptrCast(transfer.ctx));
     script.dataCallback(transfer, data) catch |err| {
         log.err(.http, "SM.dataCallback", .{ .err = err, .transfer = transfer, .len = data.len });
@@ -490,12 +490,12 @@ const PendingScript = struct {
         }
     }
 
-    fn startCallback(self: *PendingScript, transfer: *HttpClient.Transfer) !void {
+    fn startCallback(self: *PendingScript, transfer: *Http.Transfer) !void {
         _ = self;
         log.debug(.http, "script fetch start", .{ .req = transfer });
     }
 
-    fn headerCallback(self: *PendingScript, transfer: *HttpClient.Transfer) !void {
+    fn headerCallback(self: *PendingScript, transfer: *Http.Transfer) !void {
         const header = &transfer.response_header.?;
         log.debug(.http, "script header", .{
             .req = transfer,
@@ -515,7 +515,7 @@ const PendingScript = struct {
         self.script.source = .{ .remote = self.manager.buffer_pool.get() };
     }
 
-    fn dataCallback(self: *PendingScript, transfer: *HttpClient.Transfer, data: []const u8) !void {
+    fn dataCallback(self: *PendingScript, transfer: *Http.Transfer, data: []const u8) !void {
         _ = transfer;
         // too verbose
         // log.debug(.http, "script data chunk", .{
@@ -768,11 +768,11 @@ const Blocking = struct {
         done: BlockingResult,
     };
 
-    fn startCallback(transfer: *HttpClient.Transfer) !void {
+    fn startCallback(transfer: *Http.Transfer) !void {
         log.debug(.http, "script fetch start", .{ .req = transfer, .blocking = true });
     }
 
-    fn headerCallback(transfer: *HttpClient.Transfer) !void {
+    fn headerCallback(transfer: *Http.Transfer) !void {
         const header = &transfer.response_header.?;
         log.debug(.http, "script header", .{
             .req = transfer,
@@ -789,7 +789,7 @@ const Blocking = struct {
         self.buffer = self.buffer_pool.get();
     }
 
-    fn dataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
+    fn dataCallback(transfer: *Http.Transfer, data: []const u8) !void {
         // too verbose
         // log.debug(.http, "script data chunk", .{
         //     .req = transfer,

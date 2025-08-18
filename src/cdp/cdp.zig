@@ -387,6 +387,12 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         pub fn deinit(self: *Self) void {
             self.inspector.deinit();
 
+            // abort all intercepted requests before closing the sesion/page
+            // since some of these might callback into the page/scriptmanager
+            for (self.intercept_state.pendingTransfers()) |transfer| {
+                transfer.abort();
+            }
+
             // If the session has a page, we need to clear it first. The page
             // context is always nested inside of the isolated world context,
             // so we need to shutdown the page one first.
@@ -405,10 +411,6 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 self.cdp.browser.http_client.restoreOriginalProxy() catch |err| {
                     log.warn(.http, "restoreOriginalProxy", .{ .err = err });
                 };
-            }
-
-            for (self.intercept_state.pendingTransfers()) |transfer| {
-                transfer.abort();
             }
             self.intercept_state.deinit();
         }

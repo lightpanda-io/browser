@@ -30,7 +30,7 @@ const Renderer = @import("renderer.zig").Renderer;
 const Window = @import("html/window.zig").Window;
 const Walker = @import("dom/walker.zig").WalkerDepthFirst;
 const Scheduler = @import("Scheduler.zig");
-const HttpClient = @import("../http/Client.zig");
+const Http = @import("../http/Http.zig");
 const ScriptManager = @import("ScriptManager.zig");
 const HTMLDocument = @import("html/document.zig").HTMLDocument;
 
@@ -87,7 +87,7 @@ pub const Page = struct {
     polyfill_loader: polyfill.Loader = .{},
 
     scheduler: Scheduler,
-    http_client: *HttpClient,
+    http_client: *Http.Client,
     script_manager: ScriptManager,
 
     mode: Mode,
@@ -375,7 +375,10 @@ pub const Page = struct {
                         return;
                     }
                 },
-                .err => |err| return err,
+                .err => |err| {
+                    self.mode = .{ .raw_done = @errorName(err) };
+                    return err;
+                },
                 .raw_done => return,
             }
 
@@ -394,7 +397,7 @@ pub const Page = struct {
             std.debug.print("\nactive requests: {d}\n", .{self.http_client.active});
             var n_ = self.http_client.handles.in_use.first;
             while (n_) |n| {
-                const transfer = HttpClient.Transfer.fromEasy(n.data.conn.easy) catch |err| {
+                const transfer = Http.Transfer.fromEasy(n.data.conn.easy) catch |err| {
                     std.debug.print(" - failed to load transfer: {any}\n", .{err});
                     break;
                 };
@@ -467,7 +470,7 @@ pub const Page = struct {
         is_http: bool = true,
         is_navigation: bool = false,
     };
-    pub fn requestCookie(self: *const Page, opts: RequestCookieOpts) HttpClient.RequestCookie {
+    pub fn requestCookie(self: *const Page, opts: RequestCookieOpts) Http.Client.RequestCookie {
         return .{
             .jar = self.cookie_jar,
             .origin = &self.url.uri,
@@ -505,7 +508,7 @@ pub const Page = struct {
         const owned_url = try self.arena.dupeZ(u8, request_url);
         self.url = try URL.parse(owned_url, null);
 
-        var headers = try HttpClient.Headers.init();
+        var headers = try Http.Headers.init();
         if (opts.header) |hdr| try headers.add(hdr);
         try self.requestCookie(.{ .is_navigation = true }).headersForRequest(self.arena, owned_url, &headers);
 
@@ -596,7 +599,7 @@ pub const Page = struct {
         );
     }
 
-    fn pageHeaderDoneCallback(transfer: *HttpClient.Transfer) !void {
+    fn pageHeaderDoneCallback(transfer: *Http.Transfer) !void {
         var self: *Page = @alignCast(@ptrCast(transfer.ctx));
 
         // would be different than self.url in the case of a redirect
@@ -611,7 +614,7 @@ pub const Page = struct {
         });
     }
 
-    fn pageDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
+    fn pageDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
         var self: *Page = @alignCast(@ptrCast(transfer.ctx));
 
         if (self.mode == .pre) {
@@ -1035,7 +1038,7 @@ pub const NavigateReason = enum {
 pub const NavigateOpts = struct {
     cdp_id: ?i64 = null,
     reason: NavigateReason = .address_bar,
-    method: HttpClient.Method = .GET,
+    method: Http.Method = .GET,
     body: ?[]const u8 = null,
     header: ?[:0]const u8 = null,
 };

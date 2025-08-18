@@ -129,7 +129,7 @@ pub const CdpCookie = struct {
 
 pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
     if (param.priority != .Medium or param.sameParty != null or param.sourceScheme != null or param.partitionKey != null) {
-        return error.NotYetImplementedParams;
+        return error.NotImplemented;
     }
 
     var arena = std.heap.ArenaAllocator.init(cookie_jar.allocator);

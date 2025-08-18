@@ -22,13 +22,14 @@ pub const c = @cImport({
     @cInclude("curl/curl.h");
 });
 
-const Client = @import("Client.zig");
+pub const ENABLE_DEBUG = false;
+pub const Client = @import("Client.zig");
+pub const Transfer = Client.Transfer;
+
 const errors = @import("errors.zig");
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
-
-pub const ENABLE_DEBUG = false;
 
 // Client.zig does the bulk of the work and is loosely tied to a browser Page.
 // But we still need something above Client.zig for the "utility" http stuff
@@ -221,14 +222,14 @@ pub const Connection = struct {
     }
 };
 
+pub const Header = struct {
+    name: []const u8,
+    value: []const u8,
+};
+
 pub const Headers = struct {
     headers: *c.curl_slist,
     cookies: ?[*c]const u8,
-
-    const Header = struct {
-        name: []const u8,
-        value: []const u8,
-    };
 
     pub fn init() !Headers {
         const header_list = c.curl_slist_append(null, "User-Agent: Lightpanda/1.0");

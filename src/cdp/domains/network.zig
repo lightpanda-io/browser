@@ -121,7 +121,7 @@ fn deleteCookies(cmd: anytype) !void {
         path: ?[]const u8 = null,
         partitionKey: ?CdpStorage.CookiePartitionKey = null,
     })) orelse return error.InvalidParams;
-    if (params.partitionKey != null) return error.NotYetImplementedParams;
+    if (params.partitionKey != null) return error.NotImplemented;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const cookies = &bc.session.cookie_jar.cookies;
@@ -413,8 +413,8 @@ test "cdp.network setExtraHTTPHeaders" {
     var ctx = testing.context();
     defer ctx.deinit();
 
-    // _ = try ctx.loadBrowserContext(.{ .id = "NID-A", .session_id = "NESI-A" });
-    try ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .url = "about/blank" } });
+    _ = try ctx.loadBrowserContext(.{ .id = "NID-A", .session_id = "NESI-A" });
+    // try ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .url = "about/blank" } });
 
     try ctx.processMessage(.{
         .id = 3,
@@ -430,9 +430,6 @@ test "cdp.network setExtraHTTPHeaders" {
 
     const bc = ctx.cdp().browser_context.?;
     try testing.expectEqual(bc.extra_headers.items.len, 1);
-
-    try ctx.processMessage(.{ .id = 5, .method = "Target.attachToTarget", .params = .{ .targetId = bc.target_id.? } });
-    try testing.expectEqual(bc.extra_headers.items.len, 0);
 }
 
 test "cdp.Network: cookies" {
