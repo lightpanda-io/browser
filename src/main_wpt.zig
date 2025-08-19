@@ -18,6 +18,7 @@
 
 const std = @import("std");
 
+const log = @import("log.zig");
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
@@ -29,11 +30,6 @@ const polyfill = @import("browser/polyfill/polyfill.zig");
 
 const WPT_DIR = "tests/wpt";
 
-pub const std_options = std.Options{
-    // Set the log level to info
-    .log_level = .info,
-};
-
 // TODO For now the WPT tests run is specific to WPT.
 // It manually load js framwork libs, and run the first script w/ js content in
 // the HTML page.
@@ -43,6 +39,7 @@ pub fn main() !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+    log.opts.level = .warn;
 
     // An arena for the runner itself, lives for the duration of the the process
     var ra = ArenaAllocator.init(allocator);

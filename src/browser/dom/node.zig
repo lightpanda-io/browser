@@ -107,6 +107,13 @@ pub const Node = struct {
     pub const _ENTITY_NODE = @intFromEnum(parser.NodeType.entity);
     pub const _NOTATION_NODE = @intFromEnum(parser.NodeType.notation);
 
+    pub const _DOCUMENT_POSITION_DISCONNECTED = @intFromEnum(parser.DocumentPosition.disconnected);
+    pub const _DOCUMENT_POSITION_PRECEDING = @intFromEnum(parser.DocumentPosition.preceding);
+    pub const _DOCUMENT_POSITION_FOLLOWING = @intFromEnum(parser.DocumentPosition.following);
+    pub const _DOCUMENT_POSITION_CONTAINS = @intFromEnum(parser.DocumentPosition.contains);
+    pub const _DOCUMENT_POSITION_CONTAINED_BY = @intFromEnum(parser.DocumentPosition.contained_by);
+    pub const _DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC = @intFromEnum(parser.DocumentPosition.implementation_specific);
+
     // JS funcs
     // --------
 
@@ -266,8 +273,18 @@ pub const Node = struct {
         const docother = try parser.nodeOwnerDocument(other);
 
         // Both are in different document.
-        if (docself == null or docother == null or docother.? != docself.?) {
-            return @intFromEnum(parser.DocumentPosition.disconnected);
+        if (docself == null or docother == null or docself.? != docother.?) {
+            return @intFromEnum(parser.DocumentPosition.disconnected) +
+                @intFromEnum(parser.DocumentPosition.implementation_specific) +
+                @intFromEnum(parser.DocumentPosition.preceding);
+        }
+
+        const rootself = try parser.nodeGetRootNode(self);
+        const rootother = try parser.nodeGetRootNode(other);
+        if (rootself != rootother) {
+            return @intFromEnum(parser.DocumentPosition.disconnected) +
+                @intFromEnum(parser.DocumentPosition.implementation_specific) +
+                @intFromEnum(parser.DocumentPosition.preceding);
         }
 
         // TODO Both are in a different trees in the same document.
