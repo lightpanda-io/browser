@@ -24,7 +24,7 @@ pub const Headers = Http.Headers;
 const Notification = @import("../notification.zig").Notification;
 const storage = @import("../browser/storage/storage.zig");
 
-const urlStitch = @import("../url.zig").URL.stitch;
+const urlStitch = @import("../url.zig").stitch;
 
 const c = Http.c;
 
@@ -598,7 +598,7 @@ pub const Transfer = struct {
     // redirectionCookies manages cookies during redirections handled by Curl.
     // It sets the cookies from the current response to the cookie jar.
     // It also immediately sets cookies for the following request.
-    fn redirectionCookies(arena: std.mem.Allocator, easy: *c.CURL, cookie_jar: *storage.CookieJar, origin: *const std.Uri) !void {
+    fn redirectionCookies(arena: Allocator, easy: *c.CURL, cookie_jar: *storage.CookieJar, origin: *const std.Uri) !void {
         // retrieve cookies from the redirect's response.
         var i: usize = 0;
         while (true) {
