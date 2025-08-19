@@ -85,12 +85,6 @@ blocking: Handle,
 // To notify registered subscribers of events, the browser sets/nulls this for us.
 notification: ?*Notification = null,
 
-// The only place this is meant to be used is in `makeRequest` BEFORE `perform`
-// is called. It is used to generate our Cookie header. It can be used for other
-// purposes, but keep in mind that, while single-threaded, calls like makeRequest
-// can result in makeRequest being re-called (from a doneCallback).
-arena: ArenaAllocator,
-
 // only needed for CDP which can change the proxy and then restore it. When
 // restoring, this originally-configured value is what it goes to.
 http_proxy: ?[:0]const u8 = null,
@@ -128,7 +122,6 @@ pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts) !*Clie
         .http_proxy = opts.http_proxy,
         .transfer_pool = transfer_pool,
         .queue_node_pool = queue_node_pool,
-        .arena = ArenaAllocator.init(allocator),
     };
 
     return client;
@@ -143,7 +136,6 @@ pub fn deinit(self: *Client) void {
 
     self.transfer_pool.deinit();
     self.queue_node_pool.deinit();
-    self.arena.deinit();
     self.allocator.destroy(self);
 }
 
