@@ -236,6 +236,7 @@ fn makeTransfer(self: *Client, req: Request) !*Transfer {
     const id = self.next_request_id + 1;
     self.next_request_id = id;
     transfer.* = .{
+        .arena = ArenaAllocator.init(self.allocator),
         .id = id,
         .uri = uri,
         .req = req,
@@ -534,6 +535,7 @@ pub const Request = struct {
 };
 
 pub const Transfer = struct {
+    arena: ArenaAllocator,
     id: usize = 0,
     req: Request,
     uri: std.Uri, // used for setting/getting the cookie
@@ -553,6 +555,7 @@ pub const Transfer = struct {
         if (self._handle) |handle| {
             self.client.handles.release(handle);
         }
+        self.arena.deinit();
         self.client.transfer_pool.destroy(self);
     }
 
@@ -641,7 +644,7 @@ pub const Transfer = struct {
             if (transfer._redirecting and buf_len == 2) {
                 // parse and set cookies for the redirection.
                 redirectionCookies(
-                    transfer.client.arena.allocator(),
+                    transfer.arena.allocator(),
                     easy,
                     transfer.req.cookie_jar,
                     &transfer.uri,
