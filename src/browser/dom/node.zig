@@ -295,7 +295,7 @@ pub const Node = struct {
             // if self is the document, and we already know other is in the
             // document, then other is contained by and following self.
             return @intFromEnum(parser.DocumentPosition.following) +
-                    @intFromEnum(parser.DocumentPosition.contained_by);
+                @intFromEnum(parser.DocumentPosition.contained_by);
         }
 
         const rootself = try parser.nodeGetRootNode(self);
