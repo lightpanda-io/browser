@@ -19,10 +19,10 @@
 const std = @import("std");
 const log = @import("../log.zig");
 const builtin = @import("builtin");
+
 const Http = @import("Http.zig");
-pub const Headers = Http.Headers;
 const Notification = @import("../notification.zig").Notification;
-const storage = @import("../browser/storage/storage.zig");
+const CookieJar = @import("../browser/storage/storage.zig").CookieJar;
 
 const urlStitch = @import("../url.zig").stitch;
 
@@ -34,7 +34,7 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const errorCheck = Http.errorCheck;
 const errorMCheck = Http.errorMCheck;
 
-pub const Method = Http.Method;
+const Method = Http.Method;
 
 // This is loosely tied to a browser Page. Loading all the <scripts>, doing
 // XHR requests, and loading imports all happens through here. Sine the app
@@ -309,6 +309,10 @@ fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) !void {
         try conn.setMethod(req.method);
         if (req.body) |b| {
             try conn.setBody(b);
+        } else if (req.method == .POST) {
+            // libcurl will crash if the method is POST but there's no body
+            // TODO: is there a setting for that..seems weird.
+            try conn.setBody("");
         }
 
         var header_list = req.headers;
@@ -496,7 +500,7 @@ pub const RequestCookie = struct {
     origin: *const std.Uri,
     jar: *@import("../browser/storage/cookie.zig").Jar,
 
-    pub fn headersForRequest(self: *const RequestCookie, temp: Allocator, url: [:0]const u8, headers: *Headers) !void {
+    pub fn headersForRequest(self: *const RequestCookie, temp: Allocator, url: [:0]const u8, headers: *Http.Headers) !void {
         const uri = std.Uri.parse(url) catch |err| {
             log.warn(.http, "invalid url", .{ .err = err, .url = url });
             return error.InvalidUrl;
@@ -519,19 +523,26 @@ pub const RequestCookie = struct {
 pub const Request = struct {
     method: Method,
     url: [:0]const u8,
-    headers: Headers,
+    headers: Http.Headers,
     body: ?[]const u8 = null,
-    cookie_jar: *storage.CookieJar,
+    cookie_jar: *CookieJar,
+    resource_type: ResourceType,
 
     // arbitrary data that can be associated with this request
     ctx: *anyopaque = undefined,
 
     start_callback: ?*const fn (transfer: *Transfer) anyerror!void = null,
-    header_callback: ?*const fn (transfer: *Transfer, header: []const u8) anyerror!void = null,
+    header_callback: ?*const fn (transfer: *Transfer, header: Http.Header) anyerror!void = null,
     header_done_callback: *const fn (transfer: *Transfer) anyerror!void,
     data_callback: *const fn (transfer: *Transfer, data: []const u8) anyerror!void,
     done_callback: *const fn (ctx: *anyopaque) anyerror!void,
     error_callback: *const fn (ctx: *anyopaque, err: anyerror) void,
+
+    const ResourceType = enum {
+        document,
+        xhr,
+        script,
+    };
 };
 
 pub const Transfer = struct {
@@ -544,7 +555,7 @@ pub const Transfer = struct {
     _notified_fail: bool = false,
 
     // We'll store the response header here
-    response_header: ?Header = null,
+    response_header: ?ResponseHeader = null,
 
     _handle: ?*Handle = null,
 
@@ -580,6 +591,22 @@ pub const Transfer = struct {
 
         // for the request itself
         self.req.url = url;
+    }
+
+    pub fn replaceRequestHeaders(self: *Transfer, allocator: Allocator, headers: []const Http.Header) !void {
+        self.req.headers.deinit();
+
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        var new_headers = try Http.Headers.init();
+        for (headers) |hdr| {
+            // safe to re-use this buffer, because Headers.add because curl copies
+            // the value we pass into curl_slist_append.
+            defer buf.clearRetainingCapacity();
+            try std.fmt.format(buf.writer(allocator), "{s}: {s}", .{ hdr.name, hdr.value });
+            try buf.append(allocator, 0); // null terminated
+            try new_headers.add(buf.items[0 .. buf.items.len - 1 :0]);
+        }
+        self.req.headers = new_headers;
     }
 
     pub fn abort(self: *Transfer) void {
@@ -697,7 +724,7 @@ pub const Transfer = struct {
             if (getResponseHeader(easy, "content-type", 0)) |ct| {
                 var hdr = &transfer.response_header.?;
                 const value = ct.value;
-                const len = @min(value.len, hdr._content_type.len);
+                const len = @min(value.len, ResponseHeader.MAX_CONTENT_TYPE_LEN);
                 hdr._content_type_len = len;
                 @memcpy(hdr._content_type[0..len], value[0..len]);
             }
@@ -726,10 +753,12 @@ pub const Transfer = struct {
             }
         } else {
             if (transfer.req.header_callback) |cb| {
-                cb(transfer, header) catch |err| {
-                    log.err(.http, "header_callback", .{ .err = err, .req = transfer });
-                    return 0;
-                };
+                if (Http.Headers.parseHeader(header)) |hdr| {
+                    cb(transfer, hdr) catch |err| {
+                        log.err(.http, "header_callback", .{ .err = err, .req = transfer });
+                        return 0;
+                    };
+                }
             }
         }
         return buf_len;
@@ -768,15 +797,64 @@ pub const Transfer = struct {
         try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_PRIVATE, &private));
         return @alignCast(@ptrCast(private));
     }
+
+    pub fn fulfill(transfer: *Transfer, status: u16, headers: []const Http.Header, body: ?[]const u8) !void {
+        if (transfer._handle != null) {
+            // should never happen, should have been intercepted/paused, and then
+            // either continued, aborted and fulfilled once.
+            @branchHint(.unlikely);
+            return error.RequestInProgress;
+        }
+
+        transfer._fulfill(status, headers, body) catch |err| {
+            transfer.req.error_callback(transfer.req.ctx, err);
+            return err;
+        };
+    }
+
+    fn _fulfill(transfer: *Transfer, status: u16, headers: []const Http.Header, body: ?[]const u8) !void {
+        const req = &transfer.req;
+        if (req.start_callback) |cb| {
+            try cb(transfer);
+        }
+
+        if (req.header_callback) |cb| {
+            for (headers) |hdr| {
+                try cb(transfer, hdr);
+            }
+        }
+
+        transfer.response_header = .{
+            .status = status,
+            .url = req.url,
+        };
+        for (headers) |hdr| {
+            if (std.ascii.eqlIgnoreCase(hdr.name, "content-type")) {
+                const len = @min(hdr.value.len, ResponseHeader.MAX_CONTENT_TYPE_LEN);
+                @memcpy(transfer.response_header.?._content_type[0..len], hdr.value[0..len]);
+                break;
+            }
+        }
+
+        try req.header_done_callback(transfer);
+
+        if (body) |b| {
+            try req.data_callback(transfer, b);
+        }
+
+        try req.done_callback(req.ctx);
+    }
 };
 
-pub const Header = struct {
+pub const ResponseHeader = struct {
+    const MAX_CONTENT_TYPE_LEN = 64;
+
     status: u16,
     url: [*c]const u8,
     _content_type_len: usize = 0,
-    _content_type: [64]u8 = undefined,
+    _content_type: [MAX_CONTENT_TYPE_LEN]u8 = undefined,
 
-    pub fn contentType(self: *Header) ?[]u8 {
+    pub fn contentType(self: *ResponseHeader) ?[]u8 {
         if (self._content_type_len == 0) {
             return null;
         }
@@ -788,7 +866,7 @@ const HeaderIterator = struct {
     easy: *c.CURL,
     prev: ?*c.curl_header = null,
 
-    pub fn next(self: *HeaderIterator) ?struct { name: []const u8, value: []const u8 } {
+    pub fn next(self: *HeaderIterator) ?Http.Header {
         const h = c.curl_easy_nextheader(self.easy, c.CURLH_HEADER, -1, self.prev) orelse return null;
         self.prev = h;
 
@@ -800,12 +878,12 @@ const HeaderIterator = struct {
     }
 };
 
-const ResponseHeader = struct {
+const CurlHeaderValue = struct {
     value: []const u8,
     amount: usize,
 };
 
-fn getResponseHeader(easy: *c.CURL, name: [:0]const u8, index: usize) ?ResponseHeader {
+fn getResponseHeader(easy: *c.CURL, name: [:0]const u8, index: usize) ?CurlHeaderValue {
     var hdr: [*c]c.curl_header = null;
     const result = c.curl_easy_header(easy, name, index, c.CURLH_HEADER, -1, &hdr);
     if (result == c.CURLE_OK) {

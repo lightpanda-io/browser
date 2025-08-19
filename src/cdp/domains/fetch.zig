@@ -18,10 +18,12 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Notification = @import("../../notification.zig").Notification;
+
 const log = @import("../../log.zig");
-const Method = @import("../../http/Client.zig").Method;
-const Transfer = @import("../../http/Client.zig").Transfer;
+const network = @import("network.zig");
+
+const Http = @import("../../http/Http.zig");
+const Notification = @import("../../notification.zig").Notification;
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -29,6 +31,7 @@ pub fn processMessage(cmd: anytype) !void {
         enable,
         continueRequest,
         failRequest,
+        fulfillRequest,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -36,27 +39,48 @@ pub fn processMessage(cmd: anytype) !void {
         .enable => return enable(cmd),
         .continueRequest => return continueRequest(cmd),
         .failRequest => return failRequest(cmd),
+        .fulfillRequest => return fulfillRequest(cmd),
     }
 }
 
 // Stored in CDP
 pub const InterceptState = struct {
-    const Self = @This();
-    waiting: std.AutoArrayHashMap(u64, *Transfer),
+    allocator: Allocator,
+    waiting: std.AutoArrayHashMapUnmanaged(u64, *Http.Transfer),
 
     pub fn init(allocator: Allocator) !InterceptState {
         return .{
-            .waiting = std.AutoArrayHashMap(u64, *Transfer).init(allocator),
+            .waiting = .empty,
+            .allocator = allocator,
         };
     }
 
-    pub fn deinit(self: *Self) void {
-        self.waiting.deinit();
+    pub fn empty(self: *const InterceptState) bool {
+        return self.waiting.count() == 0;
+    }
+
+    pub fn put(self: *InterceptState, transfer: *Http.Transfer) !void {
+        return self.waiting.put(self.allocator, transfer.id, transfer);
+    }
+
+    pub fn remove(self: *InterceptState, id: u64) ?*Http.Transfer {
+        const entry = self.waiting.fetchSwapRemove(id) orelse return null;
+        return entry.value;
+    }
+
+    pub fn deinit(self: *InterceptState) void {
+        self.waiting.deinit(self.allocator);
+    }
+
+    pub fn pendingTransfers(self: *const InterceptState) []*Http.Transfer {
+        return self.waiting.values();
     }
 };
 
 const RequestPattern = struct {
-    urlPattern: []const u8 = "*", // Wildcards ('*' -> zero or more, '?' -> exactly one) are allowed. Escape character is backslash. Omitting is equivalent to "*".
+    // Wildcards ('*' -> zero or more, '?' -> exactly one) are allowed.
+    // Escape character is backslash. Omitting is equivalent to "*".
+    urlPattern: []const u8 = "*",
     resourceType: ?ResourceType = null,
     requestStage: RequestStage = .Request,
 };
@@ -115,8 +139,14 @@ fn disable(cmd: anytype) !void {
 
 fn enable(cmd: anytype) !void {
     const params = (try cmd.params(EnableParam)) orelse EnableParam{};
-    if (params.patterns.len != 0) log.warn(.cdp, "Fetch.enable No patterns yet", .{});
-    if (params.handleAuthRequests) log.warn(.cdp, "Fetch.enable No auth yet", .{});
+    if (!arePatternsSupported(params.patterns)) {
+        log.warn(.cdp, "not implemented", .{ .feature = "Fetch.enable advanced patterns are not" });
+        return cmd.sendResult(null, .{});
+    }
+
+    if (params.handleAuthRequests) {
+        log.warn(.cdp, "not implemented", .{ .feature = "Fetch.enable handleAuthRequests is not supported yet" });
+    }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     try bc.fetchEnable();
@@ -124,57 +154,67 @@ fn enable(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
-pub fn requestPaused(arena: Allocator, bc: anytype, intercept: *const Notification.RequestIntercept) !void {
-    var cdp = bc.cdp;
+fn arePatternsSupported(patterns: []RequestPattern) bool {
+    if (patterns.len == 0) {
+        return true;
+    }
+    if (patterns.len > 1) {
+        return false;
+    }
 
+    // While we don't support patterns, yet, both Playwright and Puppeteer send
+    // a default pattern which happens to be what we support:
+    // [{"urlPattern":"*","requestStage":"Request"}]
+    // So, rather than erroring on this case because we don't support patterns,
+    // we'll allow it, because this pattern is how it works as-is.
+    const pattern = patterns[0];
+    if (!std.mem.eql(u8, pattern.urlPattern, "*")) {
+        return false;
+    }
+    if (pattern.resourceType != null) {
+        return false;
+    }
+    if (pattern.requestStage != .Request) {
+        return false;
+    }
+    return true;
+}
+
+pub fn requestIntercept(arena: Allocator, bc: anytype, intercept: *const Notification.RequestIntercept) !void {
     // unreachable because we _have_ to have a page.
     const session_id = bc.session_id orelse unreachable;
     const target_id = bc.target_id orelse unreachable;
+    const page = bc.session.currentPage() orelse unreachable;
 
     // We keep it around to wait for modifications to the request.
     // NOTE: we assume whomever created the request created it with a lifetime of the Page.
     // TODO: What to do when receiving replies for a previous page's requests?
 
     const transfer = intercept.transfer;
-    try cdp.intercept_state.waiting.put(transfer.id, transfer);
+    try bc.intercept_state.put(transfer);
 
-    // NOTE: .request data preparation is duped from network.zig
-    const full_request_url = transfer.uri;
-    const request_url = try @import("network.zig").urlToString(arena, &full_request_url, .{
-        .scheme = true,
-        .authentication = true,
-        .authority = true,
-        .path = true,
-        .query = true,
-    });
-    const request_fragment = try @import("network.zig").urlToString(arena, &full_request_url, .{
-        .fragment = true,
-    });
-    const headers = try transfer.req.headers.asHashMap(arena);
-    // End of duped code
-
-    try cdp.sendEvent("Fetch.requestPaused", .{
+    try bc.cdp.sendEvent("Fetch.requestPaused", .{
         .requestId = try std.fmt.allocPrint(arena, "INTERCEPT-{d}", .{transfer.id}),
-        .request = .{
-            .url = request_url,
-            .urlFragment = request_fragment,
-            .method = @tagName(transfer.req.method),
-            .hasPostData = transfer.req.body != null,
-            .headers = std.json.ArrayHashMap([]const u8){ .map = headers },
-        },
+        .request = network.TransferAsRequestWriter.init(transfer),
         .frameId = target_id,
-        .resourceType = ResourceType.Document, //  TODO!
+        .resourceType = switch (transfer.req.resource_type) {
+            .script => "Script",
+            .xhr => "XHR",
+            .document => "Document",
+        },
         .networkId = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id}),
     }, .{ .session_id = session_id });
 
+    log.debug(.cdp, "request intercept", .{
+        .state = "paused",
+        .id = transfer.id,
+        .url = transfer.uri,
+    });
     // Await either continueRequest, failRequest or fulfillRequest
-    intercept.wait_for_interception.* = true;
-}
 
-const HeaderEntry = struct {
-    name: []const u8,
-    value: []const u8,
-};
+    intercept.wait_for_interception.* = true;
+    page.request_intercepted = true;
+}
 
 fn continueRequest(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
@@ -183,49 +223,129 @@ fn continueRequest(cmd: anytype) !void {
         url: ?[]const u8 = null,
         method: ?[]const u8 = null,
         postData: ?[]const u8 = null,
-        headers: ?[]const HeaderEntry = null,
+        headers: ?[]const Http.Header = null,
         interceptResponse: bool = false,
     })) orelse return error.InvalidParams;
-    if (params.postData != null or params.headers != null or params.interceptResponse) return error.NotYetImplementedParams;
 
+    if (params.interceptResponse) {
+        return error.NotImplemented;
+    }
+
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+
+    var intercept_state = &bc.intercept_state;
     const request_id = try idFromRequestId(params.requestId);
-    const entry = bc.cdp.intercept_state.waiting.fetchSwapRemove(request_id) orelse return error.RequestNotFound;
-    const transfer = entry.value;
+    const transfer = intercept_state.remove(request_id) orelse return error.RequestNotFound;
+
+    log.debug(.cdp, "request intercept", .{
+        .state = "contiune",
+        .id = transfer.id,
+        .url = transfer.uri,
+        .new_url = params.url,
+    });
 
     // Update the request with the new parameters
     if (params.url) |url| {
-        // The request url must be modified in a way that's not observable by page. So page.url is not updated.
-        try transfer.updateURL(try bc.cdp.browser.page_arena.allocator().dupeZ(u8, url));
+        try transfer.updateURL(try page.arena.dupeZ(u8, url));
     }
     if (params.method) |method| {
-        transfer.req.method = std.meta.stringToEnum(Method, method) orelse return error.InvalidParams;
+        transfer.req.method = std.meta.stringToEnum(Http.Method, method) orelse return error.InvalidParams;
     }
 
-    log.info(.cdp, "Request continued by intercept", .{ .id = params.requestId });
+    if (params.headers) |headers| {
+        try transfer.replaceRequestHeaders(cmd.arena, headers);
+    }
+
+    if (params.postData) |b| {
+        const decoder = std.base64.standard.Decoder;
+        const body = try bc.arena.alloc(u8, try decoder.calcSizeForSlice(b));
+        try decoder.decode(body, b);
+        transfer.req.body = body;
+    }
+
     try bc.cdp.browser.http_client.process(transfer);
+
+    if (intercept_state.empty()) {
+        page.request_intercepted = false;
+    }
+
+    return cmd.sendResult(null, .{});
+}
+
+fn fulfillRequest(cmd: anytype) !void {
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    const params = (try cmd.params(struct {
+        requestId: []const u8, // "INTERCEPT-{d}"
+        responseCode: u16,
+        responseHeaders: ?[]const Http.Header = null,
+        binaryResponseHeaders: ?[]const u8 = null,
+        body: ?[]const u8 = null,
+        responsePhrase: ?[]const u8 = null,
+    })) orelse return error.InvalidParams;
+
+    if (params.binaryResponseHeaders != null) {
+        log.warn(.cdp, "not implemented", .{ .feature = "Fetch.fulfillRequest binaryResponseHeade" });
+        return error.NotImplemented;
+    }
+
+    var intercept_state = &bc.intercept_state;
+    const request_id = try idFromRequestId(params.requestId);
+    const transfer = intercept_state.remove(request_id) orelse return error.RequestNotFound;
+
+    log.debug(.cdp, "request intercept", .{
+        .state = "fulfilled",
+        .id = transfer.id,
+        .url = transfer.uri,
+        .status = params.responseCode,
+        .body = params.body != null,
+    });
+
+    var body: ?[]const u8 = null;
+    if (params.body) |b| {
+        const decoder = std.base64.standard.Decoder;
+        const buf = try cmd.arena.alloc(u8, try decoder.calcSizeForSlice(b));
+        try decoder.decode(buf, b);
+        body = buf;
+    }
+
+    try transfer.fulfill(params.responseCode, params.responseHeaders orelse &.{}, body);
 
     return cmd.sendResult(null, .{});
 }
 
 fn failRequest(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    var state = &bc.cdp.intercept_state;
     const params = (try cmd.params(struct {
         requestId: []const u8, // "INTERCEPT-{d}"
         errorReason: ErrorReason,
     })) orelse return error.InvalidParams;
 
-    const request_id = try idFromRequestId(params.requestId);
-    const entry = state.waiting.fetchSwapRemove(request_id) orelse return error.RequestNotFound;
-    // entry.value is the transfer
-    entry.value.abort();
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
-    log.info(.cdp, "Request aborted by intercept", .{ .reason = params.errorReason });
+    var intercept_state = &bc.intercept_state;
+    const request_id = try idFromRequestId(params.requestId);
+
+    const transfer = intercept_state.remove(request_id) orelse return error.RequestNotFound;
+    defer transfer.abort();
+
+    log.info(.cdp, "request intercept", .{
+        .state = "fail",
+        .id = request_id,
+        .url = transfer.uri,
+        .reason = params.errorReason,
+    });
+
+    if (intercept_state.empty()) {
+        page.request_intercepted = false;
+    }
     return cmd.sendResult(null, .{});
 }
 
 // Get u64 from requestId which is formatted as: "INTERCEPT-{d}"
 fn idFromRequestId(request_id: []const u8) !u64 {
-    if (!std.mem.startsWith(u8, request_id, "INTERCEPT-")) return error.InvalidParams;
+    if (!std.mem.startsWith(u8, request_id, "INTERCEPT-")) {
+        return error.InvalidParams;
+    }
     return std.fmt.parseInt(u64, request_id[10..], 10) catch return error.InvalidParams;
 }

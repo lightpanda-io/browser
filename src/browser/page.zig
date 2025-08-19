@@ -30,7 +30,7 @@ const Renderer = @import("renderer.zig").Renderer;
 const Window = @import("html/window.zig").Window;
 const Walker = @import("dom/walker.zig").WalkerDepthFirst;
 const Scheduler = @import("Scheduler.zig");
-const HttpClient = @import("../http/Client.zig");
+const Http = @import("../http/Http.zig");
 const ScriptManager = @import("ScriptManager.zig");
 const HTMLDocument = @import("html/document.zig").HTMLDocument;
 
@@ -87,12 +87,22 @@ pub const Page = struct {
     polyfill_loader: polyfill.Loader = .{},
 
     scheduler: Scheduler,
-    http_client: *HttpClient,
+    http_client: *Http.Client,
     script_manager: ScriptManager,
 
     mode: Mode,
 
     load_state: LoadState = .parsing,
+
+    // Page.wait balances waiting for resources / tasks and producing an output.
+    // Up until a timeout, Page.wait will always wait for inflight or pending
+    // HTTP requests, via the Http.Client.active counter. However, intercepted
+    // requests (via CDP, but it could be anything), aren't considered "active"
+    // connection. So it's possible that we have intercepted requests (which are
+    // pending on some driver to continue/abort) while Http.Client.active == 0.
+    // This boolean exists to supplment Http.Client.active and inform Page.wait
+    // of pending connections.
+    request_intercepted: bool = false,
 
     const Mode = union(enum) {
         pre: void,
@@ -275,16 +285,26 @@ pub const Page = struct {
         while (true) {
             SW: switch (self.mode) {
                 .pre, .raw => {
+                    if (self.request_intercepted) {
+                        // the page request was intercepted.
+
+                        // there shouldn't be any active requests;
+                        std.debug.assert(http_client.active == 0);
+
+                        // nothing we can do for this, need to kick the can up
+                        // the chain and wait for activity (e.g. a CDP message)
+                        // to unblock this.
+                        return;
+                    }
+
                     // The main page hasn't started/finished navigating.
                     // There's no JS to run, and no reason to run the scheduler.
-
                     if (http_client.active == 0) {
                         // haven't started navigating, I guess.
                         return;
                     }
 
                     // There should only be 1 active http transfer, the main page
-                    std.debug.assert(http_client.active == 1);
                     try http_client.tick(ms_remaining);
                 },
                 .html, .parsed => {
@@ -330,20 +350,35 @@ pub const Page = struct {
 
                     _ = try scheduler.runLowPriority();
 
-                    // We'll block here, waiting for network IO. We know
-                    // when the next timeout is scheduled, and we know how long
-                    // the caller wants to wait for, so we can pick a good wait
-                    // duration
-                    const ms_to_wait = @min(ms_remaining, ms_to_next_task orelse 1000);
+                    const request_intercepted = self.request_intercepted;
+
+                    // We want to prioritize processing intercepted requests
+                    // because, the sooner they get unblocked, the sooner we
+                    // can start the HTTP request. But we still want to advanced
+                    // existing HTTP requests, if possible. So, if we have
+                    // intercepted requests, we'll still look at existing HTTP
+                    // requests, but we won't block waiting for more data.
+                    const ms_to_wait =
+                        if (request_intercepted) 0
+
+                        // But if we have no intercepted requests, we'll wait
+                        // for as long as we can for data to our existing
+                        // inflight requests
+                        else @min(ms_remaining, ms_to_next_task orelse 1000);
+
                     try http_client.tick(ms_to_wait);
 
-                    if (try_catch.hasCaught()) {
-                        const msg = (try try_catch.err(self.arena)) orelse "unknown";
-                        log.warn(.user_script, "page wait", .{ .err = msg, .src = "data" });
-                        return error.JsError;
+                    if (request_intercepted) {
+                        // Again, proritizing intercepted requests. Exit this
+                        // loop so that our caller can hopefully resolve them
+                        // (i.e. continue or abort them);
+                        return;
                     }
                 },
-                .err => |err| return err,
+                .err => |err| {
+                    self.mode = .{ .raw_done = @errorName(err) };
+                    return err;
+                },
                 .raw_done => return,
             }
 
@@ -362,7 +397,7 @@ pub const Page = struct {
             std.debug.print("\nactive requests: {d}\n", .{self.http_client.active});
             var n_ = self.http_client.handles.in_use.first;
             while (n_) |n| {
-                const transfer = HttpClient.Transfer.fromEasy(n.data.conn.easy) catch |err| {
+                const transfer = Http.Transfer.fromEasy(n.data.conn.easy) catch |err| {
                     std.debug.print(" - failed to load transfer: {any}\n", .{err});
                     break;
                 };
@@ -435,7 +470,7 @@ pub const Page = struct {
         is_http: bool = true,
         is_navigation: bool = false,
     };
-    pub fn requestCookie(self: *const Page, opts: RequestCookieOpts) HttpClient.RequestCookie {
+    pub fn requestCookie(self: *const Page, opts: RequestCookieOpts) Http.Client.RequestCookie {
         return .{
             .jar = self.cookie_jar,
             .origin = &self.url.uri,
@@ -473,7 +508,7 @@ pub const Page = struct {
         const owned_url = try self.arena.dupeZ(u8, request_url);
         self.url = try URL.parse(owned_url, null);
 
-        var headers = try HttpClient.Headers.init();
+        var headers = try Http.Headers.init();
         if (opts.header) |hdr| try headers.add(hdr);
         try self.requestCookie(.{ .is_navigation = true }).headersForRequest(self.arena, owned_url, &headers);
 
@@ -484,6 +519,7 @@ pub const Page = struct {
             .headers = headers,
             .body = opts.body,
             .cookie_jar = self.cookie_jar,
+            .resource_type = .document,
             .header_done_callback = pageHeaderDoneCallback,
             .data_callback = pageDataCallback,
             .done_callback = pageDoneCallback,
@@ -563,7 +599,7 @@ pub const Page = struct {
         );
     }
 
-    fn pageHeaderDoneCallback(transfer: *HttpClient.Transfer) !void {
+    fn pageHeaderDoneCallback(transfer: *Http.Transfer) !void {
         var self: *Page = @alignCast(@ptrCast(transfer.ctx));
 
         // would be different than self.url in the case of a redirect
@@ -578,7 +614,7 @@ pub const Page = struct {
         });
     }
 
-    fn pageDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
+    fn pageDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
         var self: *Page = @alignCast(@ptrCast(transfer.ctx));
 
         if (self.mode == .pre) {
@@ -1002,7 +1038,7 @@ pub const NavigateReason = enum {
 pub const NavigateOpts = struct {
     cdp_id: ?i64 = null,
     reason: NavigateReason = .address_bar,
-    method: HttpClient.Method = .GET,
+    method: Http.Method = .GET,
     body: ?[]const u8 = null,
     header: ?[:0]const u8 = null,
 };

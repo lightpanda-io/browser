@@ -74,11 +74,6 @@ pub fn CDPT(comptime TypeProvider: type) type {
         // Used for processing notifications within a browser context.
         notification_arena: std.heap.ArenaAllocator,
 
-        // Extra headers to add to all requests. TBD under which conditions this should be reset.
-        extra_headers: std.ArrayListUnmanaged([*c]const u8) = .empty,
-
-        intercept_state: InterceptState,
-
         const Self = @This();
 
         pub fn init(app: *App, client: TypeProvider.Client) !Self {
@@ -93,7 +88,6 @@ pub fn CDPT(comptime TypeProvider: type) type {
                 .browser_context = null,
                 .message_arena = std.heap.ArenaAllocator.init(allocator),
                 .notification_arena = std.heap.ArenaAllocator.init(allocator),
-                .intercept_state = try InterceptState.init(allocator), // TBD or browser session arena?
             };
         }
 
@@ -101,7 +95,6 @@ pub fn CDPT(comptime TypeProvider: type) type {
             if (self.browser_context) |*bc| {
                 bc.deinit();
             }
-            self.intercept_state.deinit(); // TBD Should this live in BC?
             self.browser.deinit();
             self.message_arena.deinit();
             self.notification_arena.deinit();
@@ -346,6 +339,11 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         http_proxy_changed: bool = false,
 
+        // Extra headers to add to all requests.
+        extra_headers: std.ArrayListUnmanaged([*c]const u8) = .empty,
+
+        intercept_state: InterceptState,
+
         const Self = @This();
 
         fn init(self: *Self, id: []const u8, cdp: *CDP_T) !void {
@@ -375,6 +373,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .isolated_world = null,
                 .inspector = inspector,
                 .notification_arena = cdp.notification_arena.allocator(),
+                .intercept_state = try InterceptState.init(allocator),
             };
             self.node_search_list = Node.Search.List.init(allocator, &self.node_registry);
             errdefer self.deinit();
@@ -387,6 +386,12 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         pub fn deinit(self: *Self) void {
             self.inspector.deinit();
+
+            // abort all intercepted requests before closing the sesion/page
+            // since some of these might callback into the page/scriptmanager
+            for (self.intercept_state.pendingTransfers()) |transfer| {
+                transfer.abort();
+            }
 
             // If the session has a page, we need to clear it first. The page
             // context is always nested inside of the isolated world context,
@@ -407,6 +412,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                     log.warn(.http, "restoreOriginalProxy", .{ .err = err });
                 };
             }
+            self.intercept_state.deinit();
         }
 
         pub fn reset(self: *Self) void {
@@ -495,7 +501,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         pub fn onHttpRequestIntercept(ctx: *anyopaque, data: *const Notification.RequestIntercept) !void {
             const self: *Self = @alignCast(@ptrCast(ctx));
             defer self.resetNotificationArena();
-            try @import("domains/fetch.zig").requestPaused(self.notification_arena, self, data);
+            try @import("domains/fetch.zig").requestIntercept(self.notification_arena, self, data);
         }
 
         pub fn onHttpRequestFail(ctx: *anyopaque, data: *const Notification.RequestFail) !void {

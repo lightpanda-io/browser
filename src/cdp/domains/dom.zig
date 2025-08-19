@@ -304,7 +304,7 @@ fn describeNode(cmd: anytype) !void {
         pierce: bool = false,
     })) orelse return error.InvalidParams;
 
-    if (params.depth != 1 or params.pierce) return error.NotYetImplementedParams;
+    if (params.depth != 1 or params.pierce) return error.NotImplemented;
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);

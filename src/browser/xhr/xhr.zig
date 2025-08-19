@@ -30,7 +30,7 @@ const URL = @import("../../url.zig").URL;
 const Mime = @import("../mime.zig").Mime;
 const parser = @import("../netsurf.zig");
 const Page = @import("../page.zig").Page;
-const HttpClient = @import("../../http/Client.zig");
+const Http = @import("../../http/Http.zig");
 const CookieJar = @import("../storage/storage.zig").CookieJar;
 
 // XHR interfaces
@@ -80,12 +80,12 @@ const XMLHttpRequestBodyInit = union(enum) {
 pub const XMLHttpRequest = struct {
     proto: XMLHttpRequestEventTarget = XMLHttpRequestEventTarget{},
     arena: Allocator,
-    transfer: ?*HttpClient.Transfer = null,
+    transfer: ?*Http.Transfer = null,
     err: ?anyerror = null,
     last_dispatch: i64 = 0,
     send_flag: bool = false,
 
-    method: HttpClient.Method,
+    method: Http.Method,
     state: State,
     url: ?[:0]const u8 = null,
 
@@ -320,7 +320,7 @@ pub const XMLHttpRequest = struct {
     }
 
     const methods = [_]struct {
-        tag: HttpClient.Method,
+        tag: Http.Method,
         name: []const u8,
     }{
         .{ .tag = .DELETE, .name = "DELETE" },
@@ -330,7 +330,7 @@ pub const XMLHttpRequest = struct {
         .{ .tag = .POST, .name = "POST" },
         .{ .tag = .PUT, .name = "PUT" },
     };
-    pub fn validMethod(m: []const u8) DOMError!HttpClient.Method {
+    pub fn validMethod(m: []const u8) DOMError!Http.Method {
         for (methods) |method| {
             if (std.ascii.eqlIgnoreCase(method.name, m)) {
                 return method.tag;
@@ -370,7 +370,7 @@ pub const XMLHttpRequest = struct {
             }
         }
 
-        var headers = try HttpClient.Headers.init();
+        var headers = try Http.Headers.init();
         for (self.headers.items) |hdr| {
             try headers.add(hdr);
         }
@@ -383,6 +383,7 @@ pub const XMLHttpRequest = struct {
             .headers = headers,
             .body = self.request_body,
             .cookie_jar = page.cookie_jar,
+            .resource_type = .xhr,
             .start_callback = httpStartCallback,
             .header_callback = httpHeaderCallback,
             .header_done_callback = httpHeaderDoneCallback,
@@ -392,18 +393,19 @@ pub const XMLHttpRequest = struct {
         });
     }
 
-    fn httpStartCallback(transfer: *HttpClient.Transfer) !void {
+    fn httpStartCallback(transfer: *Http.Transfer) !void {
         const self: *XMLHttpRequest = @alignCast(@ptrCast(transfer.ctx));
         log.debug(.http, "request start", .{ .method = self.method, .url = self.url, .source = "xhr" });
         self.transfer = transfer;
     }
 
-    fn httpHeaderCallback(transfer: *HttpClient.Transfer, header: []const u8) !void {
+    fn httpHeaderCallback(transfer: *Http.Transfer, header: Http.Header) !void {
         const self: *XMLHttpRequest = @alignCast(@ptrCast(transfer.ctx));
-        try self.response_headers.append(self.arena, try self.arena.dupe(u8, header));
+        const joined = try std.fmt.allocPrint(self.arena, "{s}: {s}", .{ header.name, header.value });
+        try self.response_headers.append(self.arena, joined);
     }
 
-    fn httpHeaderDoneCallback(transfer: *HttpClient.Transfer) !void {
+    fn httpHeaderDoneCallback(transfer: *Http.Transfer) !void {
         const self: *XMLHttpRequest = @alignCast(@ptrCast(transfer.ctx));
 
         const header = &transfer.response_header.?;
@@ -433,7 +435,7 @@ pub const XMLHttpRequest = struct {
         self.dispatchEvt("readystatechange");
     }
 
-    fn httpDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
+    fn httpDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
         const self: *XMLHttpRequest = @alignCast(@ptrCast(transfer.ctx));
         try self.response_bytes.appendSlice(self.arena, data);
 

@@ -73,7 +73,9 @@ fn createBrowserContext(cmd: anytype) !void {
         originsWithUniversalNetworkAccess: ?[]const []const u8 = null,
     });
     if (params) |p| {
-        if (p.disposeOnDetach or p.proxyBypassList != null or p.originsWithUniversalNetworkAccess != null) std.debug.print("Target.createBrowserContext: Not implemented param set\n", .{});
+        if (p.disposeOnDetach or p.proxyBypassList != null or p.originsWithUniversalNetworkAccess != null) {
+            log.warn(.cdp, "not implemented", .{ .feature = "Target.createBrowserContext: Not implemented param set" });
+        }
     }
 
     const bc = cmd.createBrowserContext() catch |err| switch (err) {
@@ -407,8 +409,9 @@ fn doAttachtoTarget(cmd: anytype, target_id: []const u8) !void {
     std.debug.assert(bc.session_id == null);
     const session_id = cmd.cdp.session_id_gen.next();
 
-    // extra_headers should not be kept on a new page or tab, currently we have only 1 page, we clear it just in case
-    bc.cdp.extra_headers.clearRetainingCapacity();
+    // extra_headers should not be kept on a new page or tab,
+    // currently we have only 1 page, we clear it just in case
+    bc.extra_headers.clearRetainingCapacity();
 
     try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
         .sessionId = session_id,
