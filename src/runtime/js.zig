@@ -3866,7 +3866,7 @@ const NamedFunction = struct {
 // this can add as much as 10 seconds of compilation time.
 fn logFunctionCallError(arena: Allocator, isolate: v8.Isolate, context: v8.Context, err: anyerror, function_name: []const u8, info: v8.FunctionCallbackInfo) void {
     const args_dump = serializeFunctionArgs(arena, isolate, context, info) catch "failed to serialize args";
-    log.warn(.js, "function call error", .{
+    log.info(.js, "function call error", .{
         .name = function_name,
         .err = err,
         .args = args_dump,

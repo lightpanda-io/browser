@@ -107,6 +107,13 @@ pub const Node = struct {
     pub const _ENTITY_NODE = @intFromEnum(parser.NodeType.entity);
     pub const _NOTATION_NODE = @intFromEnum(parser.NodeType.notation);
 
+    pub const _DOCUMENT_POSITION_DISCONNECTED = @intFromEnum(parser.DocumentPosition.disconnected);
+    pub const _DOCUMENT_POSITION_PRECEDING = @intFromEnum(parser.DocumentPosition.preceding);
+    pub const _DOCUMENT_POSITION_FOLLOWING = @intFromEnum(parser.DocumentPosition.following);
+    pub const _DOCUMENT_POSITION_CONTAINS = @intFromEnum(parser.DocumentPosition.contains);
+    pub const _DOCUMENT_POSITION_CONTAINED_BY = @intFromEnum(parser.DocumentPosition.contained_by);
+    pub const _DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC = @intFromEnum(parser.DocumentPosition.implementation_specific);
+
     // JS funcs
     // --------
 
@@ -260,14 +267,43 @@ pub const Node = struct {
     }
 
     pub fn _compareDocumentPosition(self: *parser.Node, other: *parser.Node) !u32 {
-        if (self == other) return 0;
+        if (self == other) {
+            return 0;
+        }
 
-        const docself = try parser.nodeOwnerDocument(self);
-        const docother = try parser.nodeOwnerDocument(other);
+        const docself = try parser.nodeOwnerDocument(self) orelse blk: {
+            if (try parser.nodeType(self) == .document) {
+                break :blk @as(*parser.Document, @ptrCast(self));
+            }
+            break :blk null;
+        };
+        const docother = try parser.nodeOwnerDocument(other) orelse blk: {
+            if (try parser.nodeType(other) == .document) {
+                break :blk @as(*parser.Document, @ptrCast(other));
+            }
+            break :blk null;
+        };
 
         // Both are in different document.
-        if (docself == null or docother == null or docother.? != docself.?) {
-            return @intFromEnum(parser.DocumentPosition.disconnected);
+        if (docself == null or docother == null or docself.? != docother.?) {
+            return @intFromEnum(parser.DocumentPosition.disconnected) +
+                @intFromEnum(parser.DocumentPosition.implementation_specific) +
+                @intFromEnum(parser.DocumentPosition.preceding);
+        }
+
+        if (@intFromPtr(self) == @intFromPtr(docself.?)) {
+            // if self is the document, and we already know other is in the
+            // document, then other is contained by and following self.
+            return @intFromEnum(parser.DocumentPosition.following) +
+                @intFromEnum(parser.DocumentPosition.contained_by);
+        }
+
+        const rootself = try parser.nodeGetRootNode(self);
+        const rootother = try parser.nodeGetRootNode(other);
+        if (rootself != rootother) {
+            return @intFromEnum(parser.DocumentPosition.disconnected) +
+                @intFromEnum(parser.DocumentPosition.implementation_specific) +
+                @intFromEnum(parser.DocumentPosition.preceding);
         }
 
         // TODO Both are in a different trees in the same document.

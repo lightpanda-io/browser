@@ -68,23 +68,24 @@ pub const DOMException = struct {
     }
 
     // TODO: deinit
-    pub fn init(alloc: std.mem.Allocator, err: anyerror, callerName: []const u8) !DOMException {
-        const errCast = @as(parser.DOMError, @errorCast(err));
-        const errName = DOMException.name(errCast);
-        const str = switch (errCast) {
+    pub fn init(alloc: std.mem.Allocator, err: anyerror, caller_name: []const u8) !DOMException {
+        const dom_error = @as(parser.DOMError, @errorCast(err));
+        const error_name = DOMException.name(dom_error);
+        const str = switch (dom_error) {
             error.HierarchyRequest => try allocPrint(
                 alloc,
                 "{s}: Failed to execute '{s}' on 'Node': The new child element contains the parent.",
-                .{ errName, callerName },
+                .{ error_name, caller_name },
             ),
-            error.NoError => unreachable,
+            // todo add more custom error messages
             else => try allocPrint(
                 alloc,
-                "{s}: TODO message", // TODO: implement other messages
-                .{DOMException.name(errCast)},
+                "{s}: Failed to execute '{s}' : {s}",
+                .{ error_name, caller_name, error_name },
             ),
+            error.NoError => unreachable,
         };
-        return .{ .err = errCast, .str = str };
+        return .{ .err = dom_error, .str = str };
     }
 
     fn error_from_str(name_: []const u8) ?parser.DOMError {
