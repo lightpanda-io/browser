@@ -267,16 +267,35 @@ pub const Node = struct {
     }
 
     pub fn _compareDocumentPosition(self: *parser.Node, other: *parser.Node) !u32 {
-        if (self == other) return 0;
+        if (self == other) {
+            return 0;
+        }
 
-        const docself = try parser.nodeOwnerDocument(self);
-        const docother = try parser.nodeOwnerDocument(other);
+        const docself = try parser.nodeOwnerDocument(self) orelse blk: {
+            if (try parser.nodeType(self) == .document) {
+                break :blk @as(*parser.Document, @ptrCast(self));
+            }
+            break :blk null;
+        };
+        const docother = try parser.nodeOwnerDocument(other) orelse blk: {
+            if (try parser.nodeType(other) == .document) {
+                break :blk @as(*parser.Document, @ptrCast(other));
+            }
+            break :blk null;
+        };
 
         // Both are in different document.
         if (docself == null or docother == null or docself.? != docother.?) {
             return @intFromEnum(parser.DocumentPosition.disconnected) +
                 @intFromEnum(parser.DocumentPosition.implementation_specific) +
                 @intFromEnum(parser.DocumentPosition.preceding);
+        }
+
+        if (@intFromPtr(self) == @intFromPtr(docself.?)) {
+            // if self is the document, and we already know other is in the
+            // document, then other is contained by and following self.
+            return @intFromEnum(parser.DocumentPosition.following) +
+                    @intFromEnum(parser.DocumentPosition.contained_by);
         }
 
         const rootself = try parser.nodeGetRootNode(self);

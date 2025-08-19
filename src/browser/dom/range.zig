@@ -85,11 +85,10 @@ pub const Range = struct {
     }
 
     pub fn _setStart(self: *Range, node: *parser.Node, offset_: i32) !void {
-        const relative = self._comparePoint(node, offset_) catch |err| switch (err) {
+        try ensureValidOffset(node, offset_);
+        const offset: u32 = @intCast(offset_);
+        const position = compare(node, offset, self.proto.start_container, self.proto.start_offset) catch |err| switch (err) {
             error.WrongDocument => blk: {
-                // comparePoint doesn't check this on WrongDocument.
-                try ensureValidOffset(node, offset_);
-
                 // allow a node with a different root than the current, or
                 // a disconnected one. Treat it as if it's "after", so that
                 // we also update the end_offset and end_container.
@@ -98,8 +97,7 @@ pub const Range = struct {
             else => return err,
         };
 
-        const offset: u32 = @intCast(offset_);
-        if (relative == 1) {
+        if (position == 1) {
             // if we're setting the node after the current start, the end must
             // be set too.
             self.proto.end_offset = offset;
@@ -123,11 +121,11 @@ pub const Range = struct {
     }
 
     pub fn _setEnd(self: *Range, node: *parser.Node, offset_: i32) !void {
-        const relative = self._comparePoint(node, offset_) catch |err| switch (err) {
-            error.WrongDocument => blk: {
-                // comparePoint doesn't check this on WrongDocument.
-                try ensureValidOffset(node, offset_);
+        try ensureValidOffset(node, offset_);
+        const offset: u32 = @intCast(offset_);
 
+        const position = compare(node, offset, self.proto.start_container, self.proto.start_offset) catch |err| switch (err) {
+            error.WrongDocument => blk: {
                 // allow a node with a different root than the current, or
                 // a disconnected one. Treat it as if it's "before", so that
                 // we also update the end_offset and end_container.
@@ -136,10 +134,9 @@ pub const Range = struct {
             else => return err,
         };
 
-        const offset: u32 = @intCast(offset_);
-        if (relative == -1) {
+        if (position == -1) {
             // if we're setting the node before the current start, the start
-            // must be
+            // must be set too.
             self.proto.start_offset = offset;
             self.proto.start_container = node;
         }
@@ -207,9 +204,9 @@ pub const Range = struct {
         };
     }
 
-    pub fn _comparePoint(self: *const Range, ref_node: *parser.Node, offset_: i32) !i32 {
+    pub fn _comparePoint(self: *const Range, node: *parser.Node, offset_: i32) !i32 {
         const start = self.proto.start_container;
-        if (try parser.nodeGetRootNode(start) != try parser.nodeGetRootNode(ref_node)) {
+        if (try parser.nodeGetRootNode(start) != try parser.nodeGetRootNode(node)) {
             // WPT really wants this error to be first. Later, when we check
             // if the relative position is 'disconnected', it'll also catch this
             // case, but WPT will complain because it sometimes also sends
@@ -217,59 +214,54 @@ pub const Range = struct {
             return error.WrongDocument;
         }
 
-        if (try parser.nodeType(ref_node) == .document_type) {
+        if (try parser.nodeType(node) == .document_type) {
             return error.InvalidNodeType;
         }
 
-        try ensureValidOffset(ref_node, offset_);
+        try ensureValidOffset(node, offset_);
 
         const offset: u32 = @intCast(offset_);
-        if (ref_node == start) {
-            // This is a simple and common case, where the reference node and
-            // our start node are the same, so we just have to compare the offsets
-            const start_offset = self.proto.start_offset;
-            if (offset == start_offset) {
-                return 0;
-            }
-            return if (offset < start_offset) -1 else 1;
-        }
-
-        // We're probably comparing two different nodes. "Probably", because the
-        // above case on considered the offset if the two nodes were the same
-        // as-is. They could still be the same here, if we first consider the
-        // offset.
-        // Furthermore, as far as I can tell, if either or both nodes are textual,
-        // then we're doing a node comparison of their parents. This kind of
-        // makes sense, one/two text nodes which aren't the same, can only
-        // be positionally compared in relation to it/their parents.
-
-        const adjusted_start = try getNodeForCompare(start, self.proto.start_offset);
-        const adjusted_ref_node = try getNodeForCompare(ref_node, offset);
-
-        const relative = try Node._compareDocumentPosition(adjusted_start, adjusted_ref_node);
-
-        if (relative & @intFromEnum(parser.DocumentPosition.disconnected) == @intFromEnum(parser.DocumentPosition.disconnected)) {
-            return error.WrongDocument;
-        }
-
-        if (relative & @intFromEnum(parser.DocumentPosition.preceding) == @intFromEnum(parser.DocumentPosition.preceding)) {
+        if (try compare(node, offset, start, self.proto.start_offset) == -1) {
             return -1;
         }
 
-        if (relative & @intFromEnum(parser.DocumentPosition.following) == @intFromEnum(parser.DocumentPosition.following)) {
+        if (try compare(node, offset, self.proto.end_container, self.proto.end_offset) == 1) {
             return 1;
         }
 
-        // DUNNO
-        // unreachable??
         return 0;
     }
 
-    pub fn _isPointInRange(self: *const Range, ref_node: *parser.Node, offset_: i32) !bool {
-        return self._comparePoint(ref_node, offset_) catch |err| switch (err) {
+    pub fn _isPointInRange(self: *const Range, node: *parser.Node, offset_: i32) !bool {
+        return self._comparePoint(node, offset_) catch |err| switch (err) {
             error.WrongDocument => return false,
             else => return err,
         } == 0;
+    }
+
+    pub fn _intersectsNode(self: *const Range, node: *parser.Node) !bool {
+        const start_root = try parser.nodeGetRootNode(self.proto.start_container);
+        const node_root = try parser.nodeGetRootNode(node);
+        if (start_root != node_root) {
+            return false;
+        }
+
+        const parent, const index = getParentAndIndex(node) catch |err| switch (err) {
+            error.InvalidNodeType => return true, // if node has no parent, we return true.
+            else => return err,
+        };
+
+        if (try compare(parent, index + 1, self.proto.start_container, self.proto.start_offset) != 1) {
+            // node isn't after start, can't intersect
+            return false;
+        }
+
+        if (try compare(parent, index, self.proto.end_container, self.proto.end_offset) != -1) {
+            // node isn't before end, can't intersect
+            return false;
+        }
+
+        return true;
     }
 
     // The Range.detach() method does nothing. It used to disable the Range
@@ -278,29 +270,6 @@ pub const Range = struct {
     // https://developer.mozilla.org/en-US/docs/Web/API/Range/detach
     pub fn _detach(_: *Range) void {}
 };
-
-fn getNodeForCompare(node: *parser.Node, offset: u32) !*parser.Node {
-    if (try isTextual(node)) {
-        // when we're comparing a text node to another node which is not the same
-        // then we're really compare the position of the parent. It doesn't
-        // matter if the other node is a text node itself or not, all that matters
-        // is we're sure it isn't the same text node (because if they are the
-        // same text node, then we're comparing the offset (character position)
-        // of the text node)
-
-        // not sure this is the correct error
-        return (try parser.nodeParentNode(node)) orelse return error.WrongDocument;
-    }
-    if (offset == 0) {
-        return node;
-    }
-
-    const children = try parser.nodeGetChildNodes(node);
-
-    // not sure about this error
-    // - 1 because, while the offset is 0 based, 0 seems to represent the parent
-    return (try parser.nodeListItem(children, offset - 1)) orelse error.IndexSize;
-}
 
 fn ensureValidOffset(node: *parser.Node, offset: i32) !void {
     if (offset < 0) {
@@ -345,6 +314,59 @@ fn getParentAndIndex(child: *parser.Node) !struct { *parser.Node, u32 } {
 
     // should not be possible to reach this point
     return error.InvalidNodeType;
+}
+
+// implementation is largely copied from the WPT helper called getPosition in
+// the common.js of the dom folder.
+fn compare(node_a: *parser.Node, offset_a: u32, node_b: *parser.Node, offset_b: u32) !i32 {
+    if (node_a == node_b) {
+        // This is a simple and common case, where the two nodes are the same
+        // We just need to compare their offsets
+        if (offset_a == offset_b) {
+            return 0;
+        }
+        return if (offset_a < offset_b) -1 else 1;
+    }
+
+    // We're probably comparing two different nodes. "Probably", because the
+    // above case on considered the offset if the two nodes were the same
+    // as-is. They could still be the same here, if we first consider the
+    // offset.
+    const position = try Node._compareDocumentPosition(node_b, node_a);
+    if (position & @intFromEnum(parser.DocumentPosition.disconnected) == @intFromEnum(parser.DocumentPosition.disconnected)) {
+        return error.WrongDocument;
+    }
+
+    if (position & @intFromEnum(parser.DocumentPosition.following) == @intFromEnum(parser.DocumentPosition.following)) {
+        return switch (try compare(node_b, offset_b, node_a, offset_a)) {
+            -1 => 1,
+            1 => -1,
+            else => unreachable,
+        };
+    }
+
+    if (position & @intFromEnum(parser.DocumentPosition.contains) == @intFromEnum(parser.DocumentPosition.contains)) {
+        // node_a contains node_b
+        var child = node_b;
+        while (try parser.nodeParentNode(child)) |parent| {
+            if (parent == node_a) {
+                // child.parentNode == node_a
+                break;
+            }
+            child = parent;
+        } else {
+            // this should not happen, because  Node._compareDocumentPosition
+            // has told us that node_a contains node_b, so one of node_b's
+            // parent's MUST be node_a. But somehow we do end up here sometimes.
+            return -1;
+        }
+
+        const child_parent, const child_index = try getParentAndIndex(child);
+        std.debug.assert(node_a == child_parent);
+        return if (child_index < offset_a) -1 else 1;
+    }
+
+    return -1;
 }
 
 const testing = @import("../../testing.zig");
