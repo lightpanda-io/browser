@@ -114,7 +114,7 @@ pub const URL = struct {
     }
 
     pub fn get_origin(self: *URL, page: *Page) ![]const u8 {
-        var buf = std.ArrayList(u8).init(page.arena);
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         try self.uri.writeToStream(.{
             .scheme = true,
             .authentication = false,
@@ -122,7 +122,7 @@ pub const URL = struct {
             .path = false,
             .query = false,
             .fragment = false,
-        }, buf.writer());
+        }, buf.writer(page.arena));
         return buf.items;
     }
 
@@ -174,7 +174,7 @@ pub const URL = struct {
     }
 
     pub fn get_host(self: *URL, page: *Page) ![]const u8 {
-        var buf = std.ArrayList(u8).init(page.arena);
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
 
         try self.uri.writeToStream(.{
             .scheme = false,
@@ -183,7 +183,7 @@ pub const URL = struct {
             .path = false,
             .query = false,
             .fragment = false,
-        }, buf.writer());
+        }, buf.writer(page.arena));
         return buf.items;
     }
 
@@ -195,8 +195,8 @@ pub const URL = struct {
         const arena = page.arena;
         if (self.uri.port == null) return try arena.dupe(u8, "");
 
-        var buf = std.ArrayList(u8).init(arena);
-        try std.fmt.formatInt(self.uri.port.?, 10, .lower, .{}, buf.writer());
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        try std.fmt.formatInt(self.uri.port.?, 10, .lower, .{}, buf.writer(arena));
         return buf.items;
     }
 

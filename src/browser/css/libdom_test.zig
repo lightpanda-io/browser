@@ -20,18 +20,23 @@ const std = @import("std");
 const css = @import("css.zig");
 const Node = @import("libdom.zig").Node;
 const parser = @import("../netsurf.zig");
+const Allocator = std.mem.Allocator;
 
 const Matcher = struct {
-    const Nodes = std.ArrayList(Node);
+    const Nodes = std.ArrayListUnmanaged(Node);
 
     nodes: Nodes,
+    allocator: Allocator,
 
-    fn init(alloc: std.mem.Allocator) Matcher {
-        return .{ .nodes = Nodes.init(alloc) };
+    fn init(allocator: Allocator) Matcher {
+        return .{
+            .nodes = .empty,
+            .allocator = allocator,
+        };
     }
 
     fn deinit(m: *Matcher) void {
-        m.nodes.deinit();
+        m.nodes.deinit(m.allocator);
     }
 
     fn reset(m: *Matcher) void {
@@ -39,7 +44,7 @@ const Matcher = struct {
     }
 
     pub fn match(m: *Matcher, n: Node) !void {
-        try m.nodes.append(n);
+        try m.nodes.append(m.allocator, n);
     }
 };
 

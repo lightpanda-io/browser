@@ -137,14 +137,14 @@ pub const Element = struct {
     }
 
     pub fn get_innerHTML(self: *parser.Element, page: *Page) ![]const u8 {
-        var buf = std.ArrayList(u8).init(page.call_arena);
-        try dump.writeChildren(parser.elementToNode(self), .{}, buf.writer());
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        try dump.writeChildren(parser.elementToNode(self), .{}, buf.writer(page.call_arena));
         return buf.items;
     }
 
     pub fn get_outerHTML(self: *parser.Element, page: *Page) ![]const u8 {
-        var buf = std.ArrayList(u8).init(page.call_arena);
-        try dump.writeNode(parser.elementToNode(self), .{}, buf.writer());
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        try dump.writeNode(parser.elementToNode(self), .{}, buf.writer(page.call_arena));
         return buf.items;
     }
 

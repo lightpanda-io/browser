@@ -84,16 +84,20 @@ pub const Node = struct {
 };
 
 const Matcher = struct {
-    const Nodes = std.ArrayList(*const Node);
+    const Nodes = std.ArrayListUnmanaged(*const Node);
 
     nodes: Nodes,
+    allocator: Allocator,
 
-    fn init(alloc: std.mem.Allocator) Matcher {
-        return .{ .nodes = Nodes.init(alloc) };
+    fn init(allocator: Allocator) Matcher {
+        return .{
+            .nodes = .empty,
+            .allocator = allocator,
+        };
     }
 
     fn deinit(m: *Matcher) void {
-        m.nodes.deinit();
+        m.nodes.deinit(self.allocator);
     }
 
     fn reset(m: *Matcher) void {
@@ -101,7 +105,7 @@ const Matcher = struct {
     }
 
     pub fn match(m: *Matcher, n: *const Node) !void {
-        try m.nodes.append(n);
+        try m.nodes.append(self.allocator, n);
     }
 };
 
