@@ -209,12 +209,18 @@ pub const Page = struct {
             },
             .raw_done => |data| return out.writeAll(data),
             .text => {
-                // processed below, along with .html
-                // return the <pre> element from the HTML
+                // returns the <pre> element from the HTML
                 const doc = parser.documentHTMLToDocument(self.window.document);
                 const list = try parser.documentGetElementsByTagName(doc, "pre");
                 const pre = try parser.nodeListItem(list, 0) orelse return error.InvalidHTML;
-                return Dump.writeChildren(pre, .{}, out);
+                const walker = Walker{};
+                var next: ?*parser.Node = null;
+                while (true) {
+                    next = try walker.get_next(pre, next) orelse break;
+                    const v = try parser.nodeTextContent(next.?) orelse return;
+                    try out.writeAll(v);
+                }
+                return;
             },
             .html => {
                 // maybe page.wait timed-out, print what we have
@@ -656,7 +662,24 @@ pub const Page = struct {
         }
 
         switch (self.mode) {
-            .html, .text => |*p| try p.process(data),
+            .html => |*p| try p.process(data),
+            .text => |*p| {
+                // we have to escape the data...
+                var v = data;
+                while (v.len > 0) {
+                    const index = std.mem.indexOfAnyPos(u8, v, 0, &.{ '<', '>' }) orelse {
+                        try p.process(v);
+                        return;
+                    };
+                    try p.process(v[0..index]);
+                    switch (v[index]) {
+                        '<' => try p.process("&lt;"),
+                        '>' => try p.process("&gt;"),
+                        else => unreachable,
+                    }
+                    v = v[index + 1 ..];
+                }
+            },
             .raw => |*buf| try buf.appendSlice(self.arena, data),
             .pre => unreachable,
             .parsed => unreachable,
