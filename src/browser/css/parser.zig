@@ -22,6 +22,7 @@
 // see https://github.com/andybalholm/cascadia/blob/master/parser.go
 const std = @import("std");
 const ascii = std.ascii;
+const Allocator = std.mem.Allocator;
 
 const selector = @import("selector.zig");
 const Selector = selector.Selector;
@@ -77,8 +78,8 @@ pub const Parser = struct {
 
     opts: ParseOptions,
 
-    pub fn parse(p: *Parser, alloc: std.mem.Allocator) ParseError!Selector {
-        return p.parseSelectorGroup(alloc);
+    pub fn parse(p: *Parser, allocator: Allocator) ParseError!Selector {
+        return p.parseSelectorGroup(allocator);
     }
 
     // skipWhitespace consumes whitespace characters and comments.
@@ -115,13 +116,13 @@ pub const Parser = struct {
 
     // parseSimpleSelectorSequence parses a selector sequence that applies to
     // a single element.
-    fn parseSimpleSelectorSequence(p: *Parser, alloc: std.mem.Allocator) ParseError!Selector {
+    fn parseSimpleSelectorSequence(p: *Parser, allocator: Allocator) ParseError!Selector {
         if (p.i >= p.s.len) {
             return ParseError.ExpectedSelector;
         }
 
-        var buf = std.ArrayList(Selector).init(alloc);
-        defer buf.deinit();
+        var buf: std.ArrayListUnmanaged(Selector) = .empty;
+        defer buf.deinit(allocator);
 
         switch (p.s[p.i]) {
             '*' => {
@@ -138,20 +139,20 @@ pub const Parser = struct {
                 // There's no type selector. Wait to process the other till the
                 // main loop.
             },
-            else => try buf.append(try p.parseTypeSelector(alloc)),
+            else => try buf.append(allocator, try p.parseTypeSelector(allocator)),
         }
 
         var pseudo_elt: ?PseudoClass = null;
 
         loop: while (p.i < p.s.len) {
             var ns: Selector = switch (p.s[p.i]) {
-                '#' => try p.parseIDSelector(alloc),
-                '.' => try p.parseClassSelector(alloc),
-                '[' => try p.parseAttributeSelector(alloc),
-                ':' => try p.parsePseudoclassSelector(alloc),
+                '#' => try p.parseIDSelector(allocator),
+                '.' => try p.parseClassSelector(allocator),
+                '[' => try p.parseAttributeSelector(allocator),
+                ':' => try p.parsePseudoclassSelector(allocator),
                 else => break :loop,
             };
-            errdefer ns.deinit(alloc);
+            errdefer ns.deinit(allocator);
 
             // From https://drafts.csswg.org/selectors-3/#pseudo-elements :
             // "Only one pseudo-element may appear per selector, and if present
@@ -165,28 +166,32 @@ pub const Parser = struct {
                     if (!p.opts.accept_pseudo_elts) return ParseError.PseudoElementDisabled;
 
                     pseudo_elt = e;
-                    ns.deinit(alloc);
+                    ns.deinit(allocator);
                 },
                 else => {
                     if (pseudo_elt != null) return ParseError.PseudoElementNotAtSelectorEnd;
-                    try buf.append(ns);
+                    try buf.append(allocator, ns);
                 },
             }
         }
 
         // no need wrap the selectors in compoundSelector
-        if (buf.items.len == 1 and pseudo_elt == null) return buf.items[0];
+        if (buf.items.len == 1 and pseudo_elt == null) {
+            return buf.items[0];
+        }
 
-        return .{ .compound = .{ .selectors = try buf.toOwnedSlice(), .pseudo_elt = pseudo_elt } };
+        return .{
+            .compound = .{ .selectors = try buf.toOwnedSlice(allocator), .pseudo_elt = pseudo_elt },
+        };
     }
 
     // parseTypeSelector parses a type selector (one that matches by tag name).
-    fn parseTypeSelector(p: *Parser, alloc: std.mem.Allocator) ParseError!Selector {
-        var buf = std.ArrayList(u8).init(alloc);
-        defer buf.deinit();
-        try p.parseIdentifier(buf.writer());
+    fn parseTypeSelector(p: *Parser, allocator: Allocator) ParseError!Selector {
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer buf.deinit(allocator);
+        try p.parseIdentifier(buf.writer(allocator));
 
-        return .{ .tag = try buf.toOwnedSlice() };
+        return .{ .tag = try buf.toOwnedSlice(allocator) };
     }
 
     // parseIdentifier parses an identifier.
@@ -314,47 +319,47 @@ pub const Parser = struct {
     }
 
     // parseIDSelector parses a selector that matches by id attribute.
-    fn parseIDSelector(p: *Parser, alloc: std.mem.Allocator) ParseError!Selector {
+    fn parseIDSelector(p: *Parser, allocator: Allocator) ParseError!Selector {
         if (p.i >= p.s.len) return ParseError.ExpectedIDSelector;
         if (p.s[p.i] != '#') return ParseError.ExpectedIDSelector;
 
         p.i += 1;
 
-        var buf = std.ArrayList(u8).init(alloc);
-        defer buf.deinit();
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer buf.deinit(allocator);
 
-        try p.parseName(buf.writer());
-        return .{ .id = try buf.toOwnedSlice() };
+        try p.parseName(buf.writer(allocator));
+        return .{ .id = try buf.toOwnedSlice(allocator) };
     }
 
     // parseClassSelector parses a selector that matches by class attribute.
-    fn parseClassSelector(p: *Parser, alloc: std.mem.Allocator) ParseError!Selector {
+    fn parseClassSelector(p: *Parser, allocator: Allocator) ParseError!Selector {
         if (p.i >= p.s.len) return ParseError.ExpectedClassSelector;
         if (p.s[p.i] != '.') return ParseError.ExpectedClassSelector;
 
         p.i += 1;
 
-        var buf = std.ArrayList(u8).init(alloc);
-        defer buf.deinit();
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer buf.deinit(allocator);
 
-        try p.parseIdentifier(buf.writer());
-        return .{ .class = try buf.toOwnedSlice() };
+        try p.parseIdentifier(buf.writer(allocator));
+        return .{ .class = try buf.toOwnedSlice(allocator) };
     }
 
     // parseAttributeSelector parses a selector that matches by attribute value.
-    fn parseAttributeSelector(p: *Parser, alloc: std.mem.Allocator) ParseError!Selector {
+    fn parseAttributeSelector(p: *Parser, allocator: Allocator) ParseError!Selector {
         if (p.i >= p.s.len) return ParseError.ExpectedAttributeSelector;
         if (p.s[p.i] != '[') return ParseError.ExpectedAttributeSelector;
 
         p.i += 1;
         _ = p.skipWhitespace();
 
-        var buf = std.ArrayList(u8).init(alloc);
-        defer buf.deinit();
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer buf.deinit(allocator);
 
-        try p.parseIdentifier(buf.writer());
-        const key = try buf.toOwnedSlice();
-        errdefer alloc.free(key);
+        try p.parseIdentifier(buf.writer(allocator));
+        const key = try buf.toOwnedSlice(allocator);
+        errdefer allocator.free(key);
 
         lowerstr(key);
 
@@ -377,12 +382,12 @@ pub const Parser = struct {
         var is_val: bool = undefined;
         if (op == .regexp) {
             is_val = false;
-            try p.parseRegex(buf.writer());
+            try p.parseRegex(buf.writer(allocator));
         } else {
             is_val = true;
             switch (p.s[p.i]) {
-                '\'', '"' => try p.parseString(buf.writer()),
-                else => try p.parseIdentifier(buf.writer()),
+                '\'', '"' => try p.parseString(buf.writer(allocator)),
+                else => try p.parseIdentifier(buf.writer(allocator)),
             }
         }
 
@@ -404,8 +409,8 @@ pub const Parser = struct {
 
         return .{ .attribute = .{
             .key = key,
-            .val = if (is_val) try buf.toOwnedSlice() else null,
-            .regexp = if (!is_val) try buf.toOwnedSlice() else null,
+            .val = if (is_val) try buf.toOwnedSlice(allocator) else null,
+            .regexp = if (!is_val) try buf.toOwnedSlice(allocator) else null,
             .op = op,
             .ci = ci,
         } };
@@ -498,7 +503,7 @@ pub const Parser = struct {
     // parsePseudoclassSelector parses a pseudoclass selector like :not(p) or a pseudo-element
     // For backwards compatibility, both ':' and '::' prefix are allowed for pseudo-elements.
     // https://drafts.csswg.org/selectors-3/#pseudo-elements
-    fn parsePseudoclassSelector(p: *Parser, alloc: std.mem.Allocator) ParseError!Selector {
+    fn parsePseudoclassSelector(p: *Parser, allocator: Allocator) ParseError!Selector {
         if (p.i >= p.s.len) return ParseError.ExpectedPseudoClassSelector;
         if (p.s[p.i] != ':') return ParseError.ExpectedPseudoClassSelector;
 
@@ -511,10 +516,10 @@ pub const Parser = struct {
             p.i += 1;
         }
 
-        var buf = std.ArrayList(u8).init(alloc);
-        defer buf.deinit();
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer buf.deinit(allocator);
 
-        try p.parseIdentifier(buf.writer());
+        try p.parseIdentifier(buf.writer(allocator));
 
         const pseudo_class = try PseudoClass.parse(buf.items);
 
@@ -527,11 +532,11 @@ pub const Parser = struct {
             .not, .has, .haschild => {
                 if (!p.consumeParenthesis()) return ParseError.ExpectedParenthesis;
 
-                const sel = try p.parseSelectorGroup(alloc);
+                const sel = try p.parseSelectorGroup(allocator);
                 if (!p.consumeClosingParenthesis()) return ParseError.ExpectedParenthesisClose;
 
-                const s = try alloc.create(Selector);
-                errdefer alloc.destroy(s);
+                const s = try allocator.create(Selector);
+                errdefer allocator.destroy(s);
                 s.* = sel;
 
                 return .{ .pseudo_class_relative = .{ .pseudo_class = pseudo_class, .match = s } };
@@ -541,16 +546,16 @@ pub const Parser = struct {
                 if (p.i == p.s.len) return ParseError.UnmatchParenthesis;
 
                 switch (p.s[p.i]) {
-                    '\'', '"' => try p.parseString(buf.writer()),
-                    else => try p.parseString(buf.writer()),
+                    '\'', '"' => try p.parseString(buf.writer(allocator)),
+                    else => try p.parseString(buf.writer(allocator)),
                 }
 
                 _ = p.skipWhitespace();
                 if (p.i >= p.s.len) return ParseError.InvalidPseudoClass;
                 if (!p.consumeClosingParenthesis()) return ParseError.ExpectedParenthesisClose;
 
-                const val = try buf.toOwnedSlice();
-                errdefer alloc.free(val);
+                const val = try buf.toOwnedSlice(allocator);
+                errdefer allocator.free(val);
 
                 lowerstr(val);
 
@@ -559,15 +564,15 @@ pub const Parser = struct {
             .matches, .matchesown => {
                 if (!p.consumeParenthesis()) return ParseError.ExpectedParenthesis;
 
-                try p.parseRegex(buf.writer());
+                try p.parseRegex(buf.writer(allocator));
                 if (p.i >= p.s.len) return ParseError.InvalidPseudoClassSelector;
                 if (!p.consumeClosingParenthesis()) return ParseError.ExpectedParenthesisClose;
 
-                return .{ .pseudo_class_regexp = .{ .own = pseudo_class == .matchesown, .regexp = try buf.toOwnedSlice() } };
+                return .{ .pseudo_class_regexp = .{ .own = pseudo_class == .matchesown, .regexp = try buf.toOwnedSlice(allocator) } };
             },
             .nth_child, .nth_last_child, .nth_of_type, .nth_last_of_type => {
                 if (!p.consumeParenthesis()) return ParseError.ExpectedParenthesis;
-                const nth = try p.parseNth(alloc);
+                const nth = try p.parseNth(allocator);
                 if (!p.consumeClosingParenthesis()) return ParseError.ExpectedParenthesisClose;
 
                 const last = pseudo_class == .nth_last_child or pseudo_class == .nth_last_of_type;
@@ -587,14 +592,14 @@ pub const Parser = struct {
                 if (!p.consumeParenthesis()) return ParseError.ExpectedParenthesis;
                 if (p.i == p.s.len) return ParseError.UnmatchParenthesis;
 
-                try p.parseIdentifier(buf.writer());
+                try p.parseIdentifier(buf.writer(allocator));
 
                 _ = p.skipWhitespace();
                 if (p.i >= p.s.len) return ParseError.InvalidPseudoClass;
                 if (!p.consumeClosingParenthesis()) return ParseError.ExpectedParenthesisClose;
 
-                const val = try buf.toOwnedSlice();
-                errdefer alloc.free(val);
+                const val = try buf.toOwnedSlice(allocator);
+                errdefer allocator.free(val);
                 lowerstr(val);
 
                 return .{ .pseudo_class_lang = val };
@@ -622,30 +627,32 @@ pub const Parser = struct {
     }
 
     // parseSelectorGroup parses a group of selectors, separated by commas.
-    fn parseSelectorGroup(p: *Parser, alloc: std.mem.Allocator) ParseError!Selector {
-        const s = try p.parseSelector(alloc);
+    fn parseSelectorGroup(p: *Parser, allocator: Allocator) ParseError!Selector {
+        const s = try p.parseSelector(allocator);
 
-        var buf = std.ArrayList(Selector).init(alloc);
-        defer buf.deinit();
+        var buf: std.ArrayListUnmanaged(Selector) = .empty;
+        defer buf.deinit(allocator);
 
-        try buf.append(s);
+        try buf.append(allocator, s);
 
         while (p.i < p.s.len) {
             if (p.s[p.i] != ',') break;
             p.i += 1;
-            const ss = try p.parseSelector(alloc);
-            try buf.append(ss);
+            const ss = try p.parseSelector(allocator);
+            try buf.append(allocator, ss);
         }
 
-        if (buf.items.len == 1) return buf.items[0];
+        if (buf.items.len == 1) {
+            return buf.items[0];
+        }
 
-        return .{ .group = try buf.toOwnedSlice() };
+        return .{ .group = try buf.toOwnedSlice(allocator) };
     }
 
     // parseSelector parses a selector that may include combinators.
-    fn parseSelector(p: *Parser, alloc: std.mem.Allocator) ParseError!Selector {
+    fn parseSelector(p: *Parser, allocator: Allocator) ParseError!Selector {
         _ = p.skipWhitespace();
-        var s = try p.parseSimpleSelectorSequence(alloc);
+        var s = try p.parseSimpleSelectorSequence(allocator);
 
         while (true) {
             var combinator: Combinator = .empty;
@@ -673,17 +680,21 @@ pub const Parser = struct {
                 return s;
             }
 
-            const c = try p.parseSimpleSelectorSequence(alloc);
+            const c = try p.parseSimpleSelectorSequence(allocator);
 
-            const first = try alloc.create(Selector);
-            errdefer alloc.destroy(first);
+            const first = try allocator.create(Selector);
+            errdefer allocator.destroy(first);
             first.* = s;
 
-            const second = try alloc.create(Selector);
-            errdefer alloc.destroy(second);
+            const second = try allocator.create(Selector);
+            errdefer allocator.destroy(second);
             second.* = c;
 
-            s = Selector{ .combined = .{ .first = first, .second = second, .combinator = combinator } };
+            s = Selector{ .combined = .{
+                .first = first,
+                .second = second,
+                .combinator = combinator,
+            } };
         }
 
         return s;
@@ -776,7 +787,7 @@ pub const Parser = struct {
     }
 
     // parseNth parses the argument for :nth-child (normally of the form an+b).
-    fn parseNth(p: *Parser, alloc: std.mem.Allocator) ParseError![2]isize {
+    fn parseNth(p: *Parser, allocator: Allocator) ParseError![2]isize {
         // initial state
         if (p.i >= p.s.len) return ParseError.ExpectedNthExpression;
         return switch (p.s[p.i]) {
@@ -794,10 +805,10 @@ pub const Parser = struct {
                 return p.parseNthReadN(1);
             },
             'o', 'O', 'e', 'E' => {
-                var buf = std.ArrayList(u8).init(alloc);
-                defer buf.deinit();
+                var buf: std.ArrayListUnmanaged(u8) = .empty;
+                defer buf.deinit(allocator);
 
-                try p.parseName(buf.writer());
+                try p.parseName(buf.writer(allocator));
 
                 if (std.ascii.eqlIgnoreCase("odd", buf.items)) return .{ 2, 1 };
                 if (std.ascii.eqlIgnoreCase("even", buf.items)) return .{ 2, 0 };
@@ -873,7 +884,7 @@ test "parser.skipWhitespace" {
 }
 
 test "parser.parseIdentifier" {
-    const alloc = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
     const testcases = [_]struct {
         s: []const u8, // given value
@@ -889,14 +900,14 @@ test "parser.parseIdentifier" {
         .{ .s = "a\\\"b", .exp = "a\"b" },
     };
 
-    var buf = std.ArrayList(u8).init(alloc);
-    defer buf.deinit();
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(allocator);
 
     for (testcases) |tc| {
         buf.clearRetainingCapacity();
 
         var p = Parser{ .s = tc.s, .opts = .{} };
-        p.parseIdentifier(buf.writer()) catch |e| {
+        p.parseIdentifier(buf.writer(allocator)) catch |e| {
             // if error was expected, continue.
             if (tc.err) continue;
 
@@ -911,7 +922,7 @@ test "parser.parseIdentifier" {
 }
 
 test "parser.parseString" {
-    const alloc = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
     const testcases = [_]struct {
         s: []const u8, // given value
@@ -930,14 +941,14 @@ test "parser.parseString" {
         .{ .s = "\"hello world\"", .exp = "hello world" },
     };
 
-    var buf = std.ArrayList(u8).init(alloc);
-    defer buf.deinit();
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(allocator);
 
     for (testcases) |tc| {
         buf.clearRetainingCapacity();
 
         var p = Parser{ .s = tc.s, .opts = .{} };
-        p.parseString(buf.writer()) catch |e| {
+        p.parseString(buf.writer(allocator)) catch |e| {
             // if error was expected, continue.
             if (tc.err) continue;
 
@@ -954,7 +965,7 @@ test "parser.parseString" {
 test "parser.parse" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const alloc = arena.allocator();
+    const allocator = arena.allocator();
 
     const testcases = [_]struct {
         s: []const u8, // given value
@@ -970,7 +981,7 @@ test "parser.parse" {
 
     for (testcases) |tc| {
         var p = Parser{ .s = tc.s, .opts = .{} };
-        const sel = p.parse(alloc) catch |e| {
+        const sel = p.parse(allocator) catch |e| {
             // if error was expected, continue.
             if (tc.err) continue;
 

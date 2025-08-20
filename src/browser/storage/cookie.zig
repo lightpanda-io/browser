@@ -358,10 +358,12 @@ pub const Cookie = struct {
             if (domain.len > 0) {
                 const no_leading_dot = if (domain[0] == '.') domain[1..] else domain;
 
-                var list = std.ArrayList(u8).init(arena);
-                try list.ensureTotalCapacity(no_leading_dot.len + 1); // Expect no precents needed
+                var list: std.ArrayListUnmanaged(u8) = .empty;
+                try list.ensureTotalCapacity(arena, no_leading_dot.len + 1); // Expect no precents needed
                 list.appendAssumeCapacity('.');
-                try std.Uri.Component.percentEncode(list.writer(), no_leading_dot, isHostChar);
+                try std.Uri.Component.percentEncode(list.writer(
+                    arena,
+                ), no_leading_dot, isHostChar);
                 var owned_domain: []u8 = list.items; // @memory retains memory used before growing
                 _ = toLower(owned_domain);
 
@@ -385,9 +387,9 @@ pub const Cookie = struct {
     pub fn percentEncode(arena: Allocator, component: std.Uri.Component, comptime isValidChar: fn (u8) bool) ![]u8 {
         switch (component) {
             .raw => |str| {
-                var list = std.ArrayList(u8).init(arena);
-                try list.ensureTotalCapacity(str.len); // Expect no precents needed
-                try std.Uri.Component.percentEncode(list.writer(), str, isValidChar);
+                var list: std.ArrayListUnmanaged(u8) = .empty;
+                try list.ensureTotalCapacity(arena, str.len); // Expect no precents needed
+                try std.Uri.Component.percentEncode(list.writer(arena), str, isValidChar);
                 return list.items; // @memory retains memory used before growing
             },
             .percent_encoded => |str| {
@@ -591,7 +593,7 @@ test "Jar: add" {
 test "Jar: forRequest" {
     const expectCookies = struct {
         fn expect(expected: []const u8, jar: *Jar, target_uri: Uri, opts: LookupOpts) !void {
-            var arr: std.ArrayListUnmanaged(u8) = .{};
+            var arr: std.ArrayListUnmanaged(u8) = .empty;
             defer arr.deinit(testing.allocator);
             try jar.forRequest(&target_uri, arr.writer(testing.allocator), opts);
             try testing.expectEqual(expected, arr.items);

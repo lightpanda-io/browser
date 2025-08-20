@@ -34,11 +34,11 @@ pub const XMLSerializer = struct {
     }
 
     pub fn _serializeToString(_: *const XMLSerializer, root: *parser.Node, page: *Page) ![]const u8 {
-        var buf = std.ArrayList(u8).init(page.arena);
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         switch (try parser.nodeType(root)) {
-            .document => try dump.writeHTML(@as(*parser.Document, @ptrCast(root)), .{}, buf.writer()),
-            .document_type => try dump.writeDocType(@as(*parser.DocumentType, @ptrCast(root)), buf.writer()),
-            else => try dump.writeNode(root, .{}, buf.writer()),
+            .document => try dump.writeHTML(@as(*parser.Document, @ptrCast(root)), .{}, buf.writer(page.call_arena)),
+            .document_type => try dump.writeDocType(@as(*parser.DocumentType, @ptrCast(root)), buf.writer(page.call_arena)),
+            else => try dump.writeNode(root, .{}, buf.writer(page.call_arena)),
         }
         return buf.items;
     }
