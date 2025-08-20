@@ -1111,6 +1111,6 @@ pub export fn scriptAddedCallback(ctx: ?*anyopaque, element: ?*parser.Element) c
     }
 
     self.script_manager.addFromElement(element.?) catch |err| {
-        log.warn(.browser, "dynamcic script", .{ .err = err });
+        log.warn(.browser, "dynamic script", .{ .err = err });
     };
 }
