@@ -49,6 +49,13 @@ pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const lightpanda_module = b.addModule("lightpanda", .{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    try addDependencies(b, lightpanda_module, opts);
+
     {
         // browser
         // -------
@@ -56,12 +63,8 @@ pub fn build(b: *Build) !void {
         // compile and install
         const exe = b.addExecutable(.{
             .name = "lightpanda",
-            .target = target,
-            .optimize = optimize,
-            .root_source_file = b.path("src/main.zig"),
+            .root_module = lightpanda_module,
         });
-
-        try common(b, opts, exe);
         b.installArtifact(exe);
 
         // run
@@ -73,6 +76,52 @@ pub fn build(b: *Build) !void {
         // step
         const run_step = b.step("run", "Run the app");
         run_step.dependOn(&run_cmd.step);
+    }
+
+    {
+        // tests
+        // ----
+
+        // compile
+        const tests = b.addTest(.{
+            .root_module = lightpanda_module,
+            .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple },
+        });
+
+        const run_tests = b.addRunArtifact(tests);
+        if (b.args) |args| {
+            run_tests.addArgs(args);
+        }
+
+        // step
+        const tests_step = b.step("test", "Run unit tests");
+        tests_step.dependOn(&run_tests.step);
+    }
+
+    {
+        // wpt
+        // -----
+        const wpt_module = b.addModule("lightpanda", .{
+            .root_source_file = b.path("src/main_wpt.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        try addDependencies(b, wpt_module, opts);
+
+        // compile and install
+        const wpt = b.addExecutable(.{
+            .name = "lightpanda-wpt",
+            .root_module = wpt_module,
+        });
+
+        // run
+        const wpt_cmd = b.addRunArtifact(wpt);
+        if (b.args) |args| {
+            wpt_cmd.addArgs(args);
+        }
+        // step
+        const wpt_step = b.step("wpt", "WPT tests");
+        wpt_step.dependOn(&wpt_cmd.step);
     }
 
     {
@@ -92,70 +141,24 @@ pub fn build(b: *Build) !void {
         const build_step = b.step("build-v8", "Build v8");
         build_step.dependOn(&build_v8.step);
     }
-
-    {
-        // tests
-        // ----
-
-        // compile
-        const tests = b.addTest(.{
-            .root_source_file = b.path("src/main.zig"),
-            .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple },
-            .target = target,
-            .optimize = optimize,
-        });
-        try common(b, opts, tests);
-
-        const run_tests = b.addRunArtifact(tests);
-        if (b.args) |args| {
-            run_tests.addArgs(args);
-        }
-
-        // step
-        const tests_step = b.step("test", "Run unit tests");
-        tests_step.dependOn(&run_tests.step);
-    }
-
-    {
-        // wpt
-        // -----
-
-        // compile and install
-        const wpt = b.addExecutable(.{
-            .name = "lightpanda-wpt",
-            .root_source_file = b.path("src/main_wpt.zig"),
-            .target = target,
-            .optimize = optimize,
-        });
-        try common(b, opts, wpt);
-
-        // run
-        const wpt_cmd = b.addRunArtifact(wpt);
-        if (b.args) |args| {
-            wpt_cmd.addArgs(args);
-        }
-        // step
-        const wpt_step = b.step("wpt", "WPT tests");
-        wpt_step.dependOn(&wpt_cmd.step);
-    }
 }
 
-fn common(b: *Build, opts: *Build.Step.Options, step: *Build.Step.Compile) !void {
-    const mod = step.root_module;
-    const target = mod.resolved_target.?;
-    const optimize = mod.optimize.?;
-    const dep_opts = .{ .target = target, .optimize = optimize };
-
-    try moduleNetSurf(b, step, target);
+fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !void {
+    try moduleNetSurf(b, mod);
     mod.addImport("build_config", opts.createModule());
+
+    const target = mod.resolved_target.?;
+    const dep_opts = .{
+        .target = target,
+        .optimize = mod.optimize.?,
+    };
+
     mod.addImport("tigerbeetle-io", b.dependency("tigerbeetle_io", .{}).module("tigerbeetle_io"));
 
     mod.addIncludePath(b.path("vendor/lightpanda"));
 
     {
         // v8
-        mod.link_libcpp = true;
-
         const v8_opts = b.addOptions();
         v8_opts.addOption(bool, "inspector_subtype", false);
 
@@ -386,7 +389,8 @@ fn common(b: *Build, opts: *Build.Step.Options, step: *Build.Step.Compile) !void
     }
 }
 
-fn moduleNetSurf(b: *Build, step: *Build.Step.Compile, target: std.Build.ResolvedTarget) !void {
+fn moduleNetSurf(b: *Build, mod: *Build.Module) !void {
+    const target = mod.resolved_target.?;
     const os = target.result.os.tag;
     const arch = target.result.cpu.arch;
 
@@ -401,8 +405,8 @@ fn moduleNetSurf(b: *Build, step: *Build.Step.Compile, target: std.Build.Resolve
         "vendor/libiconv/out/{s}-{s}/lib/libiconv.a",
         .{ @tagName(os), @tagName(arch) },
     );
-    step.addObjectFile(b.path(libiconv_lib_path));
-    step.addIncludePath(b.path(libiconv_include_path));
+    mod.addObjectFile(b.path(libiconv_lib_path));
+    mod.addIncludePath(b.path(libiconv_include_path));
 
     {
         // mimalloc
@@ -412,8 +416,8 @@ fn moduleNetSurf(b: *Build, step: *Build.Step.Compile, target: std.Build.Resolve
             mimalloc ++ "/out/{s}-{s}/lib/libmimalloc.a",
             .{ @tagName(os), @tagName(arch) },
         );
-        step.addObjectFile(b.path(lib_path));
-        step.addIncludePath(b.path(mimalloc ++ "/include"));
+        mod.addObjectFile(b.path(lib_path));
+        mod.addIncludePath(b.path(mimalloc ++ "/include"));
     }
 
     // netsurf libs
@@ -423,7 +427,7 @@ fn moduleNetSurf(b: *Build, step: *Build.Step.Compile, target: std.Build.Resolve
         ns ++ "/out/{s}-{s}/include",
         .{ @tagName(os), @tagName(arch) },
     );
-    step.addIncludePath(b.path(ns_include_path));
+    mod.addIncludePath(b.path(ns_include_path));
 
     const libs: [4][]const u8 = .{
         "libdom",
@@ -437,8 +441,8 @@ fn moduleNetSurf(b: *Build, step: *Build.Step.Compile, target: std.Build.Resolve
             ns ++ "/out/{s}-{s}/lib/" ++ lib ++ ".a",
             .{ @tagName(os), @tagName(arch) },
         );
-        step.addObjectFile(b.path(ns_lib_path));
-        step.addIncludePath(b.path(ns ++ "/" ++ lib ++ "/src"));
+        mod.addObjectFile(b.path(ns_lib_path));
+        mod.addIncludePath(b.path(ns ++ "/" ++ lib ++ "/src"));
     }
 }
 
