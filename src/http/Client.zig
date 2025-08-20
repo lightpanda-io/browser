@@ -620,13 +620,16 @@ pub const Transfer = struct {
     // redirectionCookies manages cookies during redirections handled by Curl.
     // It sets the cookies from the current response to the cookie jar.
     // It also immediately sets cookies for the following request.
-    fn redirectionCookies(arena: Allocator, easy: *c.CURL, cookie_jar: *CookieJar, origin: *const std.Uri) !void {
+    fn redirectionCookies(transfer: *Transfer, easy: *c.CURL) !void {
+        const req = &transfer.req;
+        const arena = transfer.arena.allocator();
+
         // retrieve cookies from the redirect's response.
         var i: usize = 0;
         while (true) {
             const ct = getResponseHeader(easy, "set-cookie", i);
             if (ct == null) break;
-            try cookie_jar.populateFromResponse(origin, ct.?.value);
+            try req.cookie_jar.populateFromResponse(&transfer.uri, ct.?.value);
             i += 1;
             if (i >= ct.?.amount) break;
         }
@@ -644,10 +647,11 @@ pub const Transfer = struct {
         const uri = try std.Uri.parse(url);
 
         var cookies: std.ArrayListUnmanaged(u8) = .{};
-        try cookie_jar.forRequest(&uri, cookies.writer(arena), .{
+        try req.cookie_jar.forRequest(&uri, cookies.writer(arena), .{
             .is_http = true,
-            .is_navigation = true,
-            .origin_uri = origin,
+            .origin_uri = &transfer.uri,
+            // used to enforce samesite cookie rules
+            .is_navigation = req.resource_type == .document,
         });
         try cookies.append(arena, 0); //null terminate
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COOKIE, @as([*c]const u8, @ptrCast(cookies.items.ptr))));
@@ -670,12 +674,7 @@ pub const Transfer = struct {
         if (transfer.response_header == null) {
             if (transfer._redirecting and buf_len == 2) {
                 // parse and set cookies for the redirection.
-                redirectionCookies(
-                    transfer.arena.allocator(),
-                    easy,
-                    transfer.req.cookie_jar,
-                    &transfer.uri,
-                ) catch |err| {
+                redirectionCookies(transfer, easy) catch |err| {
                     log.debug(.http, "redirection cookies", .{ .err = err });
                     return 0;
                 };
