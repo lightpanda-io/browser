@@ -244,21 +244,25 @@ fn continueRequest(cmd: anytype) !void {
         .new_url = params.url,
     });
 
+    const arena = transfer.arena.allocator();
     // Update the request with the new parameters
     if (params.url) |url| {
-        try transfer.updateURL(try page.arena.dupeZ(u8, url));
+        try transfer.updateURL(try arena.dupeZ(u8, url));
     }
     if (params.method) |method| {
         transfer.req.method = std.meta.stringToEnum(Http.Method, method) orelse return error.InvalidParams;
     }
 
     if (params.headers) |headers| {
+        // Not obvious, but cmd.arena is safe here, since the headers will get
+        // duped by libcurl. transfer.arena is more obvious/safe, but cmd.arena
+        // is more efficient (it's re-used)
         try transfer.replaceRequestHeaders(cmd.arena, headers);
     }
 
     if (params.postData) |b| {
         const decoder = std.base64.standard.Decoder;
-        const body = try bc.arena.alloc(u8, try decoder.calcSizeForSlice(b));
+        const body = try arena.alloc(u8, try decoder.calcSizeForSlice(b));
         try decoder.decode(body, b);
         transfer.req.body = body;
     }
@@ -304,7 +308,7 @@ fn fulfillRequest(cmd: anytype) !void {
     var body: ?[]const u8 = null;
     if (params.body) |b| {
         const decoder = std.base64.standard.Decoder;
-        const buf = try cmd.arena.alloc(u8, try decoder.calcSizeForSlice(b));
+        const buf = try transfer.arena.allocator().alloc(u8, try decoder.calcSizeForSlice(b));
         try decoder.decode(buf, b);
         body = buf;
     }
