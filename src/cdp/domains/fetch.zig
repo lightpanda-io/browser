@@ -238,7 +238,7 @@ fn continueRequest(cmd: anytype) !void {
     const transfer = intercept_state.remove(request_id) orelse return error.RequestNotFound;
 
     log.debug(.cdp, "request intercept", .{
-        .state = "contiune",
+        .state = "continue",
         .id = transfer.id,
         .url = transfer.uri,
         .new_url = params.url,
