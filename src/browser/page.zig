@@ -109,6 +109,7 @@ pub const Page = struct {
         err: anyerror,
         parsed: void,
         html: parser.Parser,
+        text: parser.Parser,
         raw: std.ArrayListUnmanaged(u8),
         raw_done: []const u8,
     };
@@ -207,6 +208,14 @@ pub const Page = struct {
                 return out.writeAll(buf.items);
             },
             .raw_done => |data| return out.writeAll(data),
+            .text => {
+                // processed below, along with .html
+                // return the <pre> element from the HTML
+                const doc = parser.documentHTMLToDocument(self.window.document);
+                const list = try parser.documentGetElementsByTagName(doc, "pre");
+                const pre = try parser.nodeListItem(list, 0) orelse return error.InvalidHTML;
+                return Dump.writeChildren(pre, .{}, out);
+            },
             .html => {
                 // maybe page.wait timed-out, print what we have
                 log.warn(.http, "incomplete load", .{ .mode = "html" });
@@ -284,7 +293,7 @@ pub const Page = struct {
 
         while (true) {
             SW: switch (self.mode) {
-                .pre, .raw => {
+                .pre, .raw, .text => {
                     if (self.request_intercepted) {
                         // the page request was intercepted.
 
@@ -627,18 +636,27 @@ pub const Page = struct {
                 break :blk Mime.sniff(data);
             } orelse .unknown;
 
-            const is_html = mime.isHTML();
-            log.debug(.http, "navigate first chunk", .{ .html = is_html, .len = data.len });
+            log.debug(.http, "navigate first chunk", .{ .content_type = mime.content_type, .len = data.len });
 
-            if (is_html) {
-                self.mode = .{ .html = try parser.Parser.init(mime.charset orelse "UTF-8") };
-            } else {
-                self.mode = .{ .raw = .{} };
-            }
+            self.mode = switch (mime.content_type) {
+                .text_html => .{ .html = try parser.Parser.init(mime.charset orelse "UTF-8") },
+
+                .application_json,
+                .text_javascript,
+                .text_css,
+                .text_plain,
+                => blk: {
+                    var p = try parser.Parser.init(mime.charset orelse "UTF-8");
+                    try p.process("<html><head><meta charset=\"utf-8\"></head><body><pre>");
+                    break :blk .{ .text = p };
+                },
+
+                else => .{ .raw = .{} },
+            };
         }
 
         switch (self.mode) {
-            .html => |*p| try p.process(data),
+            .html, .text => |*p| try p.process(data),
             .raw => |*buf| try buf.appendSlice(self.arena, data),
             .pre => unreachable,
             .parsed => unreachable,
@@ -656,6 +674,13 @@ pub const Page = struct {
         switch (self.mode) {
             .raw => |buf| {
                 self.mode = .{ .raw_done = buf.items };
+                self.documentIsComplete();
+            },
+            .text => |*p| {
+                try p.process("</pre></body></html>");
+                const html_doc = p.html_doc;
+                p.deinit(); // don't need the parser anymore
+                try self.setDocument(html_doc);
                 self.documentIsComplete();
             },
             .html => |*p| {
@@ -719,7 +744,7 @@ pub const Page = struct {
         self.clearTransferArena();
 
         switch (self.mode) {
-            .html => |*p| p.deinit(), // don't need the parser anymore
+            .html, .text => |*p| p.deinit(), // don't need the parser anymore
             else => {},
         }
         self.mode = .{ .err = err };
