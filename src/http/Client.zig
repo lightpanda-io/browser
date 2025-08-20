@@ -620,7 +620,7 @@ pub const Transfer = struct {
     // redirectionCookies manages cookies during redirections handled by Curl.
     // It sets the cookies from the current response to the cookie jar.
     // It also immediately sets cookies for the following request.
-    fn redirectionCookies(arena: Allocator, easy: *c.CURL, cookie_jar: *storage.CookieJar, origin: *const std.Uri) !void {
+    fn redirectionCookies(arena: Allocator, easy: *c.CURL, cookie_jar: *CookieJar, origin: *const std.Uri) !void {
         // retrieve cookies from the redirect's response.
         var i: usize = 0;
         while (true) {
