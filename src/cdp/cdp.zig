@@ -455,12 +455,14 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             try self.cdp.browser.notification.register(.http_request_fail, self, onHttpRequestFail);
             try self.cdp.browser.notification.register(.http_request_start, self, onHttpRequestStart);
             try self.cdp.browser.notification.register(.http_headers_done, self, onHttpHeadersDone);
+            try self.cdp.browser.notification.register(.http_request_done, self, onHttpRequestDone);
         }
 
         pub fn networkDisable(self: *Self) void {
             self.cdp.browser.notification.unregister(.http_request_fail, self);
             self.cdp.browser.notification.unregister(.http_request_start, self);
             self.cdp.browser.notification.unregister(.http_headers_done, self);
+            self.cdp.browser.notification.unregister(.http_request_done, self);
         }
 
         pub fn fetchEnable(self: *Self) !void {
@@ -514,6 +516,12 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             const self: *Self = @alignCast(@ptrCast(ctx));
             defer self.resetNotificationArena();
             return @import("domains/network.zig").httpHeadersDone(self.notification_arena, self, data);
+        }
+
+        pub fn onHttpRequestDone(ctx: *anyopaque, data: *const Notification.RequestDone) !void {
+            const self: *Self = @alignCast(@ptrCast(ctx));
+            defer self.resetNotificationArena();
+            return @import("domains/network.zig").httpRequestDone(self.notification_arena, self, data);
         }
 
         fn resetNotificationArena(self: *Self) void {

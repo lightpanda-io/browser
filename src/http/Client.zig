@@ -376,8 +376,14 @@ fn perform(self: *Client, timeout_ms: c_int) !void {
                 // transfer isn't valid at this point, don't use it.
                 log.err(.http, "done_callback", .{ .err = err });
                 self.requestFailed(transfer, err);
+                continue;
             };
-            // self.requestComplete(transfer);
+
+            if (transfer.client.notification) |notification| {
+                notification.dispatch(.http_request_done, &.{
+                    .transfer = transfer,
+                });
+            }
         } else |err| {
             self.requestFailed(transfer, err);
         }
@@ -552,10 +558,14 @@ pub const Transfer = struct {
     uri: std.Uri, // used for setting/getting the cookie
     ctx: *anyopaque, // copied from req.ctx to make it easier for callback handlers
     client: *Client,
-    _notified_fail: bool = false,
+    // total bytes received in the response, including the response status line,
+    // the headers, and the [encoded] body.
+    bytes_received: usize = 0,
 
     // We'll store the response header here
     response_header: ?ResponseHeader = null,
+
+    _notified_fail: bool = false,
 
     _handle: ?*Handle = null,
 
@@ -716,9 +726,11 @@ pub const Transfer = struct {
                 .url = url,
                 .status = status,
             };
+            transfer.bytes_received = buf_len;
             return buf_len;
         }
 
+        transfer.bytes_received += buf_len;
         if (buf_len == 2) {
             if (getResponseHeader(easy, "content-type", 0)) |ct| {
                 var hdr = &transfer.response_header.?;
@@ -777,6 +789,7 @@ pub const Transfer = struct {
             return chunk_len;
         }
 
+        transfer.bytes_received += chunk_len;
         transfer.req.data_callback(transfer, buffer[0..chunk_len]) catch |err| {
             log.err(.http, "data_callback", .{ .err = err, .req = transfer });
             return c.CURL_WRITEFUNC_ERROR;
