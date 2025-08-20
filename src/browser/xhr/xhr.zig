@@ -385,8 +385,7 @@ pub const XMLHttpRequest = struct {
             .cookie_jar = page.cookie_jar,
             .resource_type = .xhr,
             .start_callback = httpStartCallback,
-            .header_callback = httpHeaderCallback,
-            .header_done_callback = httpHeaderDoneCallback,
+            .header_callback = httpHeaderDoneCallback,
             .data_callback = httpDataCallback,
             .done_callback = httpDoneCallback,
             .error_callback = httpErrorCallback,
@@ -420,6 +419,12 @@ pub const XMLHttpRequest = struct {
             self.response_mime = Mime.parse(ct) catch |e| {
                 return self.onErr(e);
             };
+        }
+
+        var it = transfer.responseHeaderIterator();
+        while (it.next()) |hdr| {
+            const joined = try std.fmt.allocPrint(self.arena, "{s}: {s}", .{ hdr.name, hdr.value });
+            try self.response_headers.append(self.arena, joined);
         }
 
         // TODO handle override mime type

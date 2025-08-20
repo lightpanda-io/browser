@@ -532,8 +532,7 @@ pub const Request = struct {
     ctx: *anyopaque = undefined,
 
     start_callback: ?*const fn (transfer: *Transfer) anyerror!void = null,
-    header_callback: ?*const fn (transfer: *Transfer, header: Http.Header) anyerror!void = null,
-    header_done_callback: *const fn (transfer: *Transfer) anyerror!void,
+    header_callback: *const fn (transfer: *Transfer) anyerror!void,
     data_callback: *const fn (transfer: *Transfer, data: []const u8) anyerror!void,
     done_callback: *const fn (ctx: *anyopaque) anyerror!void,
     error_callback: *const fn (ctx: *anyopaque, err: anyerror) void,
@@ -739,8 +738,8 @@ pub const Transfer = struct {
                 if (i >= ct.?.amount) break;
             }
 
-            transfer.req.header_done_callback(transfer) catch |err| {
-                log.err(.http, "header_done_callback", .{ .err = err, .req = transfer });
+            transfer.req.header_callback(transfer) catch |err| {
+                log.err(.http, "header_callback", .{ .err = err, .req = transfer });
                 // returning < buf_len terminates the request
                 return 0;
             };
@@ -749,15 +748,6 @@ pub const Transfer = struct {
                 notification.dispatch(.http_headers_done, &.{
                     .transfer = transfer,
                 });
-            }
-        } else {
-            if (transfer.req.header_callback) |cb| {
-                if (Http.Headers.parseHeader(header)) |hdr| {
-                    cb(transfer, hdr) catch |err| {
-                        log.err(.http, "header_callback", .{ .err = err, .req = transfer });
-                        return 0;
-                    };
-                }
             }
         }
         return buf_len;
@@ -784,10 +774,17 @@ pub const Transfer = struct {
         return chunk_len;
     }
 
-    // we assume that the caller is smart and only calling this after being
-    // told that the header was ready.
     pub fn responseHeaderIterator(self: *Transfer) HeaderIterator {
-        return .{ .easy = self._handle.?.conn.easy };
+        if (self._handle) |handle| {
+            // If we have a handle, than this is a real curl request and we
+            // iterate through the header that curl maintains.
+            return .{ .curl = .{ .easy = handle.conn.easy } };
+        }
+        // If there's no handle, it either means this is being called before
+        // the request is even being made (which would be a bug in the code)
+        // or when a response was injected via transfer.fulfill. The injected
+        // header should be iterated, since there is no handle/easy.
+        return .{ .list = .{ .list = self.response_header.?._injected_headers } };
     }
 
     // pub because Page.printWaitAnalysis uses it
@@ -817,15 +814,10 @@ pub const Transfer = struct {
             try cb(transfer);
         }
 
-        if (req.header_callback) |cb| {
-            for (headers) |hdr| {
-                try cb(transfer, hdr);
-            }
-        }
-
         transfer.response_header = .{
             .status = status,
             .url = req.url,
+            ._injected_headers = headers,
         };
         for (headers) |hdr| {
             if (std.ascii.eqlIgnoreCase(hdr.name, "content-type")) {
@@ -835,7 +827,7 @@ pub const Transfer = struct {
             }
         }
 
-        try req.header_done_callback(transfer);
+        try req.header_callback(transfer);
 
         if (body) |b| {
             try req.data_callback(transfer, b);
@@ -852,6 +844,11 @@ pub const ResponseHeader = struct {
     url: [*c]const u8,
     _content_type_len: usize = 0,
     _content_type: [MAX_CONTENT_TYPE_LEN]u8 = undefined,
+    // this is normally an empty list, but if the response is being injected
+    // than it'll be populated. It isn't meant to be used directly, but should
+    // be used through the transfer.responseHeaderIterator() which abstracts
+    // whether the headers are from a live curl easy handle, or injected.
+    _injected_headers: []const Http.Header = &.{},
 
     pub fn contentType(self: *ResponseHeader) ?[]u8 {
         if (self._content_type_len == 0) {
@@ -861,20 +858,49 @@ pub const ResponseHeader = struct {
     }
 };
 
-const HeaderIterator = struct {
-    easy: *c.CURL,
-    prev: ?*c.curl_header = null,
+// In normal cases, the header iterator comes from the curl linked list.
+// But it's also possible to inject a response, via `transfer.fulfill`. In that
+// case, the resposne headers are a list, []const Http.Header.
+// This union, is an iterator that exposes the same API for either case.
+const HeaderIterator = union(enum) {
+    curl: CurlHeaderIterator,
+    list: ListHeaderIterator,
 
     pub fn next(self: *HeaderIterator) ?Http.Header {
-        const h = c.curl_easy_nextheader(self.easy, c.CURLH_HEADER, -1, self.prev) orelse return null;
-        self.prev = h;
-
-        const header = h.*;
-        return .{
-            .name = std.mem.span(header.name),
-            .value = std.mem.span(header.value),
-        };
+        switch (self.*) {
+            inline else => |*it| return it.next(),
+        }
     }
+
+    const CurlHeaderIterator = struct {
+        easy: *c.CURL,
+        prev: ?*c.curl_header = null,
+
+        pub fn next(self: *CurlHeaderIterator) ?Http.Header {
+            const h = c.curl_easy_nextheader(self.easy, c.CURLH_HEADER, -1, self.prev) orelse return null;
+            self.prev = h;
+
+            const header = h.*;
+            return .{
+                .name = std.mem.span(header.name),
+                .value = std.mem.span(header.value),
+            };
+        }
+    };
+
+    const ListHeaderIterator = struct {
+        index: usize = 0,
+        list: []const Http.Header,
+
+        pub fn next(self: *ListHeaderIterator) ?Http.Header {
+            const index = self.index;
+            if (index == self.list.len) {
+                return null;
+            }
+            self.index = index + 1;
+            return self.list[index];
+        }
+    };
 };
 
 const CurlHeaderValue = struct {
