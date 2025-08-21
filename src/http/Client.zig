@@ -278,9 +278,11 @@ fn requestFailed(self: *Client, transfer: *Transfer, err: anyerror) void {
 pub fn changeProxy(self: *Client, proxy: [:0]const u8) !void {
     try self.ensureNoActiveConnection();
 
-    for (self.handles.handles) |h| {
+    for (self.handles.handles) |*h| {
+        h.conn.opts.use_proxy = true;
         try errorCheck(c.curl_easy_setopt(h.conn.easy, c.CURLOPT_PROXY, proxy.ptr));
     }
+    self.blocking.conn.opts.use_proxy = true;
     try errorCheck(c.curl_easy_setopt(self.blocking.conn.easy, c.CURLOPT_PROXY, proxy.ptr));
 }
 
@@ -290,10 +292,12 @@ pub fn restoreOriginalProxy(self: *Client) !void {
     try self.ensureNoActiveConnection();
 
     const proxy = if (self.http_proxy) |p| p.ptr else null;
-    for (self.handles.handles) |h| {
+    for (self.handles.handles) |*h| {
+        h.conn.opts.use_proxy = proxy != null;
         try errorCheck(c.curl_easy_setopt(h.conn.easy, c.CURLOPT_PROXY, proxy));
     }
     try errorCheck(c.curl_easy_setopt(self.blocking.conn.easy, c.CURLOPT_PROXY, proxy));
+    self.blocking.conn.opts.use_proxy = proxy != null;
 }
 
 fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) !void {
