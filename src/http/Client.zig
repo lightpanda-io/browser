@@ -359,7 +359,7 @@ fn perform(self: *Client, timeout_ms: c_int) !void {
     var messages_count: c_int = 0;
     while (c.curl_multi_info_read(multi, &messages_count)) |msg_| {
         const msg: *c.CURLMsg = @ptrCast(msg_);
-        // This is the only possible mesage type from CURL for now.
+        // This is the only possible message type from CURL for now.
         std.debug.assert(msg.msg == c.CURLMSG_DONE);
 
         const easy = msg.easy_handle.?;
