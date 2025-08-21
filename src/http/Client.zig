@@ -569,6 +569,7 @@ pub const Transfer = struct {
     bytes_received: usize = 0,
 
     // We'll store the response header here
+    proxy_response_header: ?ResponseHeader = null,
     response_header: ?ResponseHeader = null,
 
     _notified_fail: bool = false,
@@ -705,8 +706,6 @@ pub const Transfer = struct {
         // mark the end of parsing headers
         if (buf_len == 2) transfer._resp_header_status = .end;
 
-        log.debug(.http, "header parsing", .{ .status = transfer._resp_header_status });
-
         switch (transfer._resp_header_status) {
             .empty => unreachable,
             .first => {
@@ -726,17 +725,35 @@ pub const Transfer = struct {
                     return 0;
                 };
 
-                if (status >= 300 and status <= 399) {
-                    transfer._redirecting = true;
-                    return buf_len;
-                }
-                transfer._redirecting = false;
-
                 var url: [*c]u8 = undefined;
                 errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_EFFECTIVE_URL, &url)) catch |err| {
                     log.err(.http, "failed to get URL", .{ .err = err });
                     return 0;
                 };
+
+                // When using proxy, curl call the header function for all HTTP
+                // requests, including the CONNECT one used tunneling requests.
+                if (transfer._use_proxy and transfer.proxy_response_header == null) {
+                    transfer.proxy_response_header = .{
+                        .url = "",
+                        .status = status,
+                    };
+
+                    // We want to ignore the successful proxy's CONNECT request.
+                    // But there is no proper way to detect if the current
+                    // request is a proxy CONNECT one.
+                    // We know curl uses a CONNECT when it establishes a TLS
+                    // conn.
+                    if (status == 200 and std.mem.startsWith(u8, std.mem.span(url), "https")) {
+                        return buf_len;
+                    }
+                }
+
+                if (status >= 300 and status <= 399) {
+                    transfer._redirecting = true;
+                    return buf_len;
+                }
+                transfer._redirecting = false;
 
                 transfer.response_header = .{
                     .url = url,
@@ -752,6 +769,11 @@ pub const Transfer = struct {
                         log.debug(.http, "redirection cookies", .{ .err = err });
                         return 0;
                     };
+                    return buf_len;
+                }
+
+                if (transfer._use_proxy and transfer.response_header == null) {
+                    // we are in a successful CONNECT proxy request, ignore it.
                     return buf_len;
                 }
 

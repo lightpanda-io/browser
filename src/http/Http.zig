@@ -116,7 +116,6 @@ pub const Connection = struct {
         var use_proxy = false;
         if (opts.http_proxy) |proxy| {
             try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY, proxy.ptr));
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SUPPRESS_CONNECT_HEADERS, @as(c_long, 1)));
             use_proxy = true;
         }
 
