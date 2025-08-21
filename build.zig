@@ -101,7 +101,7 @@ pub fn build(b: *Build) !void {
     {
         // wpt
         // -----
-        const wpt_module = b.addModule("lightpanda", .{
+        const wpt_module = b.createModule(.{
             .root_source_file = b.path("src/main_wpt.zig"),
             .target = target,
             .optimize = optimize,
