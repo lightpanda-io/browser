@@ -9,7 +9,7 @@
             .hash = "tigerbeetle_io-0.0.0-ViLgxjqSBADhuHO_RZm4yNzuoKDXWP39hDn60Kht40OC",
         },
         .v8 = .{
-            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/13f64a747c65a6b97ce08b89a2a1c9eb922e5495.tar.gz",
+            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/4caba1c389af70b5083418da055987ecfd771120.tar.gz",
             .hash = "v8-0.0.0-xddH6-3DAwAi5Enn3IxrIUvsSa7vBBqxZBAHZzAAyKeq",
         },
         //.v8 = .{ .path = "../zig-v8-fork" },
