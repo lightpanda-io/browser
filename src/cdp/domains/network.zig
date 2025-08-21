@@ -54,16 +54,6 @@ pub fn processMessage(cmd: anytype) !void {
     }
 }
 
-const Response = struct {
-    status: u16,
-    headers: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
-    // These may not be complete yet, but we only tell the client
-    // Network.responseReceived when all the headers are in.
-    // Later should store body as well to support getResponseBody which should
-    // only work once Network.loadingFinished is sent but the body itself would
-    // be loaded with each chunks as Network.dataReceiveds are coming in.
-};
-
 fn enable(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     try bc.networkEnable();
@@ -209,15 +199,17 @@ fn getResponseBody(cmd: anytype) !void {
         requestId: []const u8, // "REQ-{d}"
     })) orelse return error.InvalidParams;
 
-    _ = params;
+    const request_id = try idFromRequestId(params.requestId);
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const buf = bc.captured_responses.getPtr(request_id) orelse return error.RequestNotFound;
 
     try cmd.sendResult(.{
-        .body = "TODO",
+        .body = buf.items,
         .base64Encoded = false,
     }, .{});
 }
 
-pub fn httpRequestFail(arena: Allocator, bc: anytype, data: *const Notification.RequestFail) !void {
+pub fn httpRequestFail(arena: Allocator, bc: anytype, msg: *const Notification.RequestFail) !void {
     // It's possible that the request failed because we aborted when the client
     // sent Target.closeTarget. In that case, bc.session_id will be cleared
     // already, and we can skip sending these messages to the client.
@@ -229,15 +221,15 @@ pub fn httpRequestFail(arena: Allocator, bc: anytype, data: *const Notification.
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{
-        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{data.transfer.id}),
+        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{msg.transfer.id}),
         // Seems to be what chrome answers with. I assume it depends on the type of error?
         .type = "Ping",
-        .errorText = data.err,
+        .errorText = msg.err,
         .canceled = false,
     }, .{ .session_id = session_id });
 }
 
-pub fn httpRequestStart(arena: Allocator, bc: anytype, data: *const Notification.RequestStart) !void {
+pub fn httpRequestStart(arena: Allocator, bc: anytype, msg: *const Notification.RequestStart) !void {
     // Isn't possible to do a network request within a Browser (which our
     // notification is tied to), without a page.
     std.debug.assert(bc.session.page != null);
@@ -251,15 +243,15 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, data: *const Notification
 
     // Modify request with extra CDP headers
     for (bc.extra_headers.items) |extra| {
-        try data.transfer.req.headers.add(extra);
+        try msg.transfer.req.headers.add(extra);
     }
 
-    const transfer = data.transfer;
+    const transfer = msg.transfer;
     // We're missing a bunch of fields, but, for now, this seems like enough
     try cdp.sendEvent("Network.requestWillBeSent", .{ .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id}), .frameId = target_id, .loaderId = bc.loader_id, .documentUrl = DocumentUrlWriter.init(&page.url.uri), .request = TransferAsRequestWriter.init(transfer) }, .{ .session_id = session_id });
 }
 
-pub fn httpHeadersDone(arena: Allocator, bc: anytype, data: *const Notification.ResponseHeadersDone) !void {
+pub fn httpResponseHeaderDone(arena: Allocator, bc: anytype, msg: *const Notification.ResponseHeaderDone) !void {
     // Isn't possible to do a network request within a Browser (which our
     // notification is tied to), without a page.
     std.debug.assert(bc.session.page != null);
@@ -272,14 +264,14 @@ pub fn httpHeadersDone(arena: Allocator, bc: anytype, data: *const Notification.
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try cdp.sendEvent("Network.responseReceived", .{
-        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{data.transfer.id}),
+        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{msg.transfer.id}),
         .loaderId = bc.loader_id,
         .frameId = target_id,
-        .response = TransferAsResponseWriter.init(data.transfer),
+        .response = TransferAsResponseWriter.init(msg.transfer),
     }, .{ .session_id = session_id });
 }
 
-pub fn httpRequestDone(arena: Allocator, bc: anytype, data: *const Notification.RequestDone) !void {
+pub fn httpRequestDone(arena: Allocator, bc: anytype, msg: *const Notification.RequestDone) !void {
     // Isn't possible to do a network request within a Browser (which our
     // notification is tied to), without a page.
     std.debug.assert(bc.session.page != null);
@@ -290,8 +282,8 @@ pub fn httpRequestDone(arena: Allocator, bc: anytype, data: *const Notification.
     const session_id = bc.session_id orelse unreachable;
 
     try cdp.sendEvent("Network.loadingFinished", .{
-        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{data.transfer.id}),
-        .encodedDataLength = data.transfer.bytes_received,
+        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{msg.transfer.id}),
+        .encodedDataLength = msg.transfer.bytes_received,
     }, .{ .session_id = session_id });
 }
 
@@ -438,6 +430,13 @@ const DocumentUrlWriter = struct {
         writer.endWriteRaw();
     }
 };
+
+fn idFromRequestId(request_id: []const u8) !u64 {
+    if (!std.mem.startsWith(u8, request_id, "REQ-")) {
+        return error.InvalidParams;
+    }
+    return std.fmt.parseInt(u64, request_id[4..], 10) catch return error.InvalidParams;
+}
 
 const testing = @import("../testing.zig");
 test "cdp.network setExtraHTTPHeaders" {

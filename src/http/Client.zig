@@ -757,7 +757,7 @@ pub const Transfer = struct {
             };
 
             if (transfer.client.notification) |notification| {
-                notification.dispatch(.http_headers_done, &.{
+                notification.dispatch(.http_response_header_done, &.{
                     .transfer = transfer,
                 });
             }
@@ -780,10 +780,19 @@ pub const Transfer = struct {
         }
 
         transfer.bytes_received += chunk_len;
-        transfer.req.data_callback(transfer, buffer[0..chunk_len]) catch |err| {
+        const chunk = buffer[0..chunk_len];
+        transfer.req.data_callback(transfer, chunk) catch |err| {
             log.err(.http, "data_callback", .{ .err = err, .req = transfer });
             return c.CURL_WRITEFUNC_ERROR;
         };
+
+        if (transfer.client.notification) |notification| {
+            notification.dispatch(.http_response_data, &.{
+                .data = chunk,
+                .transfer = transfer,
+            });
+        }
+
         return chunk_len;
     }
 
