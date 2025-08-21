@@ -309,6 +309,9 @@ fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) !void {
         transfer._handle = handle;
         errdefer transfer.deinit();
 
+        // Store the proxy's information in transfer to ease headers parsing.
+        transfer._use_proxy = conn.opts.use_proxy;
+
         try conn.setURL(req.url);
         try conn.setMethod(req.method);
         if (req.body) |b| {
@@ -574,6 +577,13 @@ pub const Transfer = struct {
 
     _redirecting: bool = false,
 
+    // use_proxy is set when the transfer has been associated to a given
+    // connection in makeRequest().
+    _use_proxy: bool = undefined,
+
+    // stateful variables used to parse responses headers.
+    _resp_header_status: enum { empty, first, next, end } = .empty,
+
     fn deinit(self: *Transfer) void {
         self.req.headers.deinit();
         if (self._handle) |handle| {
@@ -684,88 +694,101 @@ pub const Transfer = struct {
 
         const header = buffer[0 .. buf_len - 2];
 
-        if (transfer.response_header == null) {
-            if (transfer._redirecting and buf_len == 2) {
-                // parse and set cookies for the redirection.
-                redirectionCookies(transfer, easy) catch |err| {
-                    log.debug(.http, "redirection cookies", .{ .err = err });
+        // transition the status dependending the previous one.
+        transfer._resp_header_status = switch (transfer._resp_header_status) {
+            .empty => .first,
+            .first => .next,
+            .next => .next,
+            .end => .first,
+        };
+
+        // mark the end of parsing headers
+        if (buf_len == 2) transfer._resp_header_status = .end;
+
+        log.debug(.http, "header parsing", .{ .status = transfer._resp_header_status });
+
+        switch (transfer._resp_header_status) {
+            .empty => unreachable,
+            .first => {
+                if (buf_len < 13) {
+                    log.debug(.http, "invalid response line", .{ .line = header });
+                    return 0;
+                }
+                const version_start: usize = if (header[5] == '2') 7 else 9;
+                const version_end = version_start + 3;
+
+                // a bit silly, but it makes sure that we don't change the length check
+                // above in a way that could break this.
+                std.debug.assert(version_end < 13);
+
+                const status = std.fmt.parseInt(u16, header[version_start..version_end], 10) catch {
+                    log.debug(.http, "invalid status code", .{ .line = header });
                     return 0;
                 };
-                return buf_len;
-            }
 
-            if (buf_len < 13 or std.mem.startsWith(u8, header, "HTTP/") == false) {
-                if (transfer._redirecting) {
+                if (status >= 300 and status <= 399) {
+                    transfer._redirecting = true;
                     return buf_len;
                 }
-                log.debug(.http, "invalid response line", .{ .line = header });
-                return 0;
-            }
-            const version_start: usize = if (header[5] == '2') 7 else 9;
-            const version_end = version_start + 3;
+                transfer._redirecting = false;
 
-            // a bit silly, but it makes sure that we don't change the length check
-            // above in a way that could break this.
-            std.debug.assert(version_end < 13);
+                var url: [*c]u8 = undefined;
+                errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_EFFECTIVE_URL, &url)) catch |err| {
+                    log.err(.http, "failed to get URL", .{ .err = err });
+                    return 0;
+                };
 
-            const status = std.fmt.parseInt(u16, header[version_start..version_end], 10) catch {
-                log.debug(.http, "invalid status code", .{ .line = header });
-                return 0;
-            };
+                transfer.response_header = .{
+                    .url = url,
+                    .status = status,
+                };
+            },
+            .next => {},
+            .end => {
+                // If we are in a redirection, take care of cookies only.
+                if (transfer._redirecting) {
+                    // parse and set cookies for the redirection.
+                    redirectionCookies(transfer, easy) catch |err| {
+                        log.debug(.http, "redirection cookies", .{ .err = err });
+                        return 0;
+                    };
+                    return buf_len;
+                }
 
-            if (status >= 300 and status <= 399) {
-                transfer._redirecting = true;
-                return buf_len;
-            }
-            transfer._redirecting = false;
+                if (getResponseHeader(easy, "content-type", 0)) |ct| {
+                    var hdr = &transfer.response_header.?;
+                    const value = ct.value;
+                    const len = @min(value.len, ResponseHeader.MAX_CONTENT_TYPE_LEN);
+                    hdr._content_type_len = len;
+                    @memcpy(hdr._content_type[0..len], value[0..len]);
+                }
 
-            var url: [*c]u8 = undefined;
-            errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_EFFECTIVE_URL, &url)) catch |err| {
-                log.err(.http, "failed to get URL", .{ .err = err });
-                return 0;
-            };
+                var i: usize = 0;
+                while (true) {
+                    const ct = getResponseHeader(easy, "set-cookie", i);
+                    if (ct == null) break;
+                    transfer.req.cookie_jar.populateFromResponse(&transfer.uri, ct.?.value) catch |err| {
+                        log.err(.http, "set cookie", .{ .err = err, .req = transfer });
+                    };
+                    i += 1;
+                    if (i >= ct.?.amount) break;
+                }
 
-            transfer.response_header = .{
-                .url = url,
-                .status = status,
-            };
-            transfer.bytes_received = buf_len;
-            return buf_len;
+                transfer.req.header_callback(transfer) catch |err| {
+                    log.err(.http, "header_callback", .{ .err = err, .req = transfer });
+                    // returning < buf_len terminates the request
+                    return 0;
+                };
+
+                if (transfer.client.notification) |notification| {
+                    notification.dispatch(.http_response_header_done, &.{
+                        .transfer = transfer,
+                    });
+                }
+            },
         }
 
         transfer.bytes_received += buf_len;
-        if (buf_len == 2) {
-            if (getResponseHeader(easy, "content-type", 0)) |ct| {
-                var hdr = &transfer.response_header.?;
-                const value = ct.value;
-                const len = @min(value.len, ResponseHeader.MAX_CONTENT_TYPE_LEN);
-                hdr._content_type_len = len;
-                @memcpy(hdr._content_type[0..len], value[0..len]);
-            }
-
-            var i: usize = 0;
-            while (true) {
-                const ct = getResponseHeader(easy, "set-cookie", i);
-                if (ct == null) break;
-                transfer.req.cookie_jar.populateFromResponse(&transfer.uri, ct.?.value) catch |err| {
-                    log.err(.http, "set cookie", .{ .err = err, .req = transfer });
-                };
-                i += 1;
-                if (i >= ct.?.amount) break;
-            }
-
-            transfer.req.header_callback(transfer) catch |err| {
-                log.err(.http, "header_callback", .{ .err = err, .req = transfer });
-                // returning < buf_len terminates the request
-                return 0;
-            };
-
-            if (transfer.client.notification) |notification| {
-                notification.dispatch(.http_response_header_done, &.{
-                    .transfer = transfer,
-                });
-            }
-        }
         return buf_len;
     }
 
