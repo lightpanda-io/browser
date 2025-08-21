@@ -17,11 +17,13 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+
 const parser = @import("../netsurf.zig");
 const Env = @import("../env.zig").Env;
 const NodeFilter = @import("node_filter.zig");
 const Node = @import("node.zig").Node;
 const NodeUnion = @import("node.zig").Union;
+const DOMException = @import("exceptions.zig").DOMException;
 
 // https://developer.mozilla.org/en-US/docs/Web/API/NodeIterator
 // While this is similar to TreeWalker it has its own implementation as there are several subtle differences
@@ -29,20 +31,28 @@ const NodeUnion = @import("node.zig").Union;
 // - nextNode returns the reference node, whereas TreeWalker returns the next node
 // - Skip and reject are equivalent for NodeIterator, for TreeWalker they are different
 pub const NodeIterator = struct {
+    pub const Exception = DOMException;
+
     root: *parser.Node,
     reference_node: *parser.Node,
     what_to_show: u32,
     filter: ?NodeIteratorOpts,
     filter_func: ?Env.Function,
-
     pointer_before_current: bool = true,
+    // used to track / block recursive filters
+    is_in_callback: bool = false,
+
+    // One of the few cases where null and undefined resolve to different default.
+    // We need the raw JsObject so that we can probe the tri state:
+    // null, undefined or i32.
+    pub const WhatToShow = Env.JsObject;
 
     pub const NodeIteratorOpts = union(enum) {
         function: Env.Function,
         object: struct { acceptNode: Env.Function },
     };
 
-    pub fn init(node: *parser.Node, what_to_show: ?u32, filter: ?NodeIteratorOpts) !NodeIterator {
+    pub fn init(node: *parser.Node, what_to_show_: ?WhatToShow, filter: ?NodeIteratorOpts) !NodeIterator {
         var filter_func: ?Env.Function = null;
         if (filter) |f| {
             filter_func = switch (f) {
@@ -51,10 +61,21 @@ pub const NodeIterator = struct {
             };
         }
 
+        var what_to_show: u32 = undefined;
+        if (what_to_show_) |wts| {
+            switch (try wts.triState(NodeIterator, "what_to_show", u32)) {
+                .null => what_to_show = 0,
+                .undefined => what_to_show = NodeFilter.NodeFilter._SHOW_ALL,
+                .value => |v| what_to_show = v,
+            }
+        } else {
+            what_to_show = NodeFilter.NodeFilter._SHOW_ALL;
+        }
+
         return .{
             .root = node,
             .reference_node = node,
-            .what_to_show = what_to_show orelse NodeFilter.NodeFilter._SHOW_ALL,
+            .what_to_show = what_to_show,
             .filter = filter,
             .filter_func = filter_func,
         };
@@ -81,9 +102,13 @@ pub const NodeIterator = struct {
     }
 
     pub fn _nextNode(self: *NodeIterator) !?NodeUnion {
-        if (self.pointer_before_current) { // Unlike TreeWalker, NodeIterator starts at the first node
-            self.pointer_before_current = false;
+        try self.callbackStart();
+        defer self.callbackEnd();
+
+        if (self.pointer_before_current) {
+            // Unlike TreeWalker, NodeIterator starts at the first node
             if (.accept == try NodeFilter.verify(self.what_to_show, self.filter_func, self.reference_node)) {
+                self.pointer_before_current = false;
                 return try Node.toInterface(self.reference_node);
             }
         }
@@ -107,13 +132,19 @@ pub const NodeIterator = struct {
     }
 
     pub fn _previousNode(self: *NodeIterator) !?NodeUnion {
+        try self.callbackStart();
+        defer self.callbackEnd();
+
         if (!self.pointer_before_current) {
-            self.pointer_before_current = true;
             if (.accept == try NodeFilter.verify(self.what_to_show, self.filter_func, self.reference_node)) {
-                return try Node.toInterface(self.reference_node); // Still need to verify as last may be first as well
+                self.pointer_before_current = true;
+                // Still need to verify as last may be first as well
+                return try Node.toInterface(self.reference_node);
             }
         }
-        if (self.reference_node == self.root) return null;
+        if (self.reference_node == self.root) {
+            return null;
+        }
 
         var current = self.reference_node;
         while (try parser.nodePreviousSibling(current)) |previous| {
@@ -149,6 +180,11 @@ pub const NodeIterator = struct {
         }
 
         return null;
+    }
+
+    pub fn _detach(self: *const NodeIterator) void {
+        // no-op as per spec
+        _ = self;
     }
 
     fn firstChild(self: *const NodeIterator, node: *parser.Node) !?*parser.Node {
@@ -216,6 +252,18 @@ pub const NodeIterator = struct {
         }
 
         return null;
+    }
+
+    fn callbackStart(self: *NodeIterator) !void {
+        if (self.is_in_callback) {
+            // this is the correct DOMExeption
+            return error.InvalidState;
+        }
+        self.is_in_callback = true;
+    }
+
+    fn callbackEnd(self: *NodeIterator) void {
+        self.is_in_callback = false;
     }
 };
 

@@ -249,12 +249,12 @@ pub const Document = struct {
         return Node.replaceChildren(parser.documentToNode(self), nodes);
     }
 
-    pub fn _createTreeWalker(_: *parser.Document, root: *parser.Node, what_to_show: ?u32, filter: ?TreeWalker.TreeWalkerOpts) !TreeWalker {
-        return try TreeWalker.init(root, what_to_show, filter);
+    pub fn _createTreeWalker(_: *parser.Document, root: *parser.Node, what_to_show: ?TreeWalker.WhatToShow, filter: ?TreeWalker.TreeWalkerOpts) !TreeWalker {
+        return TreeWalker.init(root, what_to_show, filter);
     }
 
-    pub fn _createNodeIterator(_: *parser.Document, root: *parser.Node, what_to_show: ?u32, filter: ?NodeIterator.NodeIteratorOpts) !NodeIterator {
-        return try NodeIterator.init(root, what_to_show, filter);
+    pub fn _createNodeIterator(_: *parser.Document, root: *parser.Node, what_to_show: ?NodeIterator.WhatToShow, filter: ?NodeIterator.NodeIteratorOpts) !NodeIterator {
+        return NodeIterator.init(root, what_to_show, filter);
     }
 
     pub fn getActiveElement(self: *parser.Document, page: *Page) !?*parser.Element {
