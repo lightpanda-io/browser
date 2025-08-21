@@ -64,6 +64,7 @@ pub const Notification = struct {
         http_request_start: List = .{},
         http_request_intercept: List = .{},
         http_headers_done: List = .{},
+        http_request_done: List = .{},
         notification_created: List = .{},
     };
 
@@ -76,6 +77,7 @@ pub const Notification = struct {
         http_request_start: *const RequestStart,
         http_request_intercept: *const RequestIntercept,
         http_headers_done: *const ResponseHeadersDone,
+        http_request_done: *const RequestDone,
         notification_created: *Notification,
     };
     const EventType = std.meta.FieldEnum(Events);
@@ -103,6 +105,10 @@ pub const Notification = struct {
     };
 
     pub const ResponseHeadersDone = struct {
+        transfer: *Transfer,
+    };
+
+    pub const RequestDone = struct {
         transfer: *Transfer,
     };
 

@@ -36,6 +36,7 @@ pub fn processMessage(cmd: anytype) !void {
         setCookie,
         setCookies,
         getCookies,
+        getResponseBody,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -49,6 +50,7 @@ pub fn processMessage(cmd: anytype) !void {
         .setCookie => return setCookie(cmd),
         .setCookies => return setCookies(cmd),
         .getCookies => return getCookies(cmd),
+        .getResponseBody => return getResponseBody(cmd),
     }
 }
 
@@ -202,6 +204,19 @@ fn getCookies(cmd: anytype) !void {
     try cmd.sendResult(.{ .cookies = writer }, .{});
 }
 
+fn getResponseBody(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        requestId: []const u8, // "REQ-{d}"
+    })) orelse return error.InvalidParams;
+
+    _ = params;
+
+    try cmd.sendResult(.{
+        .body = "TODO",
+        .base64Encoded = false,
+    }, .{});
+}
+
 pub fn httpRequestFail(arena: Allocator, bc: anytype, data: *const Notification.RequestFail) !void {
     // It's possible that the request failed because we aborted when the client
     // sent Target.closeTarget. In that case, bc.session_id will be cleared
@@ -261,6 +276,22 @@ pub fn httpHeadersDone(arena: Allocator, bc: anytype, data: *const Notification.
         .loaderId = bc.loader_id,
         .frameId = target_id,
         .response = TransferAsResponseWriter.init(data.transfer),
+    }, .{ .session_id = session_id });
+}
+
+pub fn httpRequestDone(arena: Allocator, bc: anytype, data: *const Notification.RequestDone) !void {
+    // Isn't possible to do a network request within a Browser (which our
+    // notification is tied to), without a page.
+    std.debug.assert(bc.session.page != null);
+
+    var cdp = bc.cdp;
+
+    // all unreachable because we _have_ to have a page.
+    const session_id = bc.session_id orelse unreachable;
+
+    try cdp.sendEvent("Network.loadingFinished", .{
+        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{data.transfer.id}),
+        .encodedDataLength = data.transfer.bytes_received,
     }, .{ .session_id = session_id });
 }
 
