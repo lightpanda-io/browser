@@ -344,6 +344,15 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         intercept_state: InterceptState,
 
+        // When network is enabled, we'll capture the transfer.id -> body
+        // This is awfully memory intensive, but our underlying http client and
+        // its users (script manager and page) correctly do not hold the body
+        // memory longer than they have to. In fact, the main request is only
+        // ever streamed. So if CDP is the only thing that needs bodies in
+        // memory for an arbitrary amount of time, then that's where we're going
+        // to store the,
+        captured_responses: std.AutoHashMapUnmanaged(usize, std.ArrayListUnmanaged(u8)),
+
         const Self = @This();
 
         fn init(self: *Self, id: []const u8, cdp: *CDP_T) !void {
@@ -374,6 +383,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .inspector = inspector,
                 .notification_arena = cdp.notification_arena.allocator(),
                 .intercept_state = try InterceptState.init(allocator),
+                .captured_responses = .empty,
             };
             self.node_search_list = Node.Search.List.init(allocator, &self.node_registry);
             errdefer self.deinit();
@@ -454,15 +464,17 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         pub fn networkEnable(self: *Self) !void {
             try self.cdp.browser.notification.register(.http_request_fail, self, onHttpRequestFail);
             try self.cdp.browser.notification.register(.http_request_start, self, onHttpRequestStart);
-            try self.cdp.browser.notification.register(.http_headers_done, self, onHttpHeadersDone);
             try self.cdp.browser.notification.register(.http_request_done, self, onHttpRequestDone);
+            try self.cdp.browser.notification.register(.http_response_data, self, onHttpResponseData);
+            try self.cdp.browser.notification.register(.http_response_header_done, self, onHttpResponseHeadersDone);
         }
 
         pub fn networkDisable(self: *Self) void {
             self.cdp.browser.notification.unregister(.http_request_fail, self);
             self.cdp.browser.notification.unregister(.http_request_start, self);
-            self.cdp.browser.notification.unregister(.http_headers_done, self);
             self.cdp.browser.notification.unregister(.http_request_done, self);
+            self.cdp.browser.notification.unregister(.http_response_data, self);
+            self.cdp.browser.notification.unregister(.http_response_header_done, self);
         }
 
         pub fn fetchEnable(self: *Self) !void {
@@ -483,45 +495,57 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             return @import("domains/page.zig").pageCreated(self, page);
         }
 
-        pub fn onPageNavigate(ctx: *anyopaque, data: *const Notification.PageNavigate) !void {
+        pub fn onPageNavigate(ctx: *anyopaque, msg: *const Notification.PageNavigate) !void {
             const self: *Self = @alignCast(@ptrCast(ctx));
             defer self.resetNotificationArena();
-            return @import("domains/page.zig").pageNavigate(self.notification_arena, self, data);
+            return @import("domains/page.zig").pageNavigate(self.notification_arena, self, msg);
         }
 
-        pub fn onPageNavigated(ctx: *anyopaque, data: *const Notification.PageNavigated) !void {
+        pub fn onPageNavigated(ctx: *anyopaque, msg: *const Notification.PageNavigated) !void {
             const self: *Self = @alignCast(@ptrCast(ctx));
-            return @import("domains/page.zig").pageNavigated(self, data);
+            return @import("domains/page.zig").pageNavigated(self, msg);
         }
 
-        pub fn onHttpRequestStart(ctx: *anyopaque, data: *const Notification.RequestStart) !void {
-            const self: *Self = @alignCast(@ptrCast(ctx));
-            defer self.resetNotificationArena();
-            try @import("domains/network.zig").httpRequestStart(self.notification_arena, self, data);
-        }
-
-        pub fn onHttpRequestIntercept(ctx: *anyopaque, data: *const Notification.RequestIntercept) !void {
+        pub fn onHttpRequestStart(ctx: *anyopaque, msg: *const Notification.RequestStart) !void {
             const self: *Self = @alignCast(@ptrCast(ctx));
             defer self.resetNotificationArena();
-            try @import("domains/fetch.zig").requestIntercept(self.notification_arena, self, data);
+            try @import("domains/network.zig").httpRequestStart(self.notification_arena, self, msg);
         }
 
-        pub fn onHttpRequestFail(ctx: *anyopaque, data: *const Notification.RequestFail) !void {
+        pub fn onHttpRequestIntercept(ctx: *anyopaque, msg: *const Notification.RequestIntercept) !void {
             const self: *Self = @alignCast(@ptrCast(ctx));
             defer self.resetNotificationArena();
-            return @import("domains/network.zig").httpRequestFail(self.notification_arena, self, data);
+            try @import("domains/fetch.zig").requestIntercept(self.notification_arena, self, msg);
         }
 
-        pub fn onHttpHeadersDone(ctx: *anyopaque, data: *const Notification.ResponseHeadersDone) !void {
+        pub fn onHttpRequestFail(ctx: *anyopaque, msg: *const Notification.RequestFail) !void {
             const self: *Self = @alignCast(@ptrCast(ctx));
             defer self.resetNotificationArena();
-            return @import("domains/network.zig").httpHeadersDone(self.notification_arena, self, data);
+            return @import("domains/network.zig").httpRequestFail(self.notification_arena, self, msg);
         }
 
-        pub fn onHttpRequestDone(ctx: *anyopaque, data: *const Notification.RequestDone) !void {
+        pub fn onHttpResponseHeadersDone(ctx: *anyopaque, msg: *const Notification.ResponseHeaderDone) !void {
             const self: *Self = @alignCast(@ptrCast(ctx));
             defer self.resetNotificationArena();
-            return @import("domains/network.zig").httpRequestDone(self.notification_arena, self, data);
+            return @import("domains/network.zig").httpResponseHeaderDone(self.notification_arena, self, msg);
+        }
+
+        pub fn onHttpRequestDone(ctx: *anyopaque, msg: *const Notification.RequestDone) !void {
+            const self: *Self = @alignCast(@ptrCast(ctx));
+            defer self.resetNotificationArena();
+            return @import("domains/network.zig").httpRequestDone(self.notification_arena, self, msg);
+        }
+
+        pub fn onHttpResponseData(ctx: *anyopaque, msg: *const Notification.ResponseData) !void {
+            const self: *Self = @alignCast(@ptrCast(ctx));
+            const arena = self.arena;
+
+            const id = msg.transfer.id;
+            const gop = try self.captured_responses.getOrPut(arena, id);
+            if (!gop.found_existing) {
+                gop.value_ptr.* = .{};
+            }
+            try gop.value_ptr.appendSlice(arena, try arena.dupe(u8, msg.data));
         }
 
         fn resetNotificationArena(self: *Self) void {
