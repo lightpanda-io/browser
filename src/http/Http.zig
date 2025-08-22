@@ -94,7 +94,6 @@ pub const Connection = struct {
     opts: Connection.Opts,
 
     const Opts = struct {
-        use_proxy: bool,
         proxy_bearer_token: ?[:0]const u8,
     };
 
@@ -113,10 +112,8 @@ pub const Connection = struct {
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_REDIR_PROTOCOLS_STR, "HTTP,HTTPS")); // remove FTP and FTPS from the default
 
         // proxy
-        var use_proxy = false;
         if (opts.http_proxy) |proxy| {
             try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY, proxy.ptr));
-            use_proxy = true;
         }
 
         // tls
@@ -158,7 +155,6 @@ pub const Connection = struct {
         return .{
             .easy = easy,
             .opts = .{
-                .use_proxy = use_proxy,
                 .proxy_bearer_token = opts.proxy_bearer_token,
             },
         };

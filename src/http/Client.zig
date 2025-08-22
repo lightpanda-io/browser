@@ -89,6 +89,9 @@ notification: ?*Notification = null,
 // restoring, this originally-configured value is what it goes to.
 http_proxy: ?[:0]const u8 = null,
 
+// does the client use a proxy?
+use_proxy: bool = false,
+
 const TransferQueue = std.DoublyLinkedList(*Transfer);
 
 pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts) !*Client {
@@ -120,6 +123,7 @@ pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts) !*Clie
         .blocking = blocking,
         .allocator = allocator,
         .http_proxy = opts.http_proxy,
+        .use_proxy = opts.http_proxy != null,
         .transfer_pool = transfer_pool,
         .queue_node_pool = queue_node_pool,
     };
@@ -242,6 +246,7 @@ fn makeTransfer(self: *Client, req: Request) !*Transfer {
         .req = req,
         .ctx = req.ctx,
         .client = self,
+        ._use_proxy = self.use_proxy,
     };
     return transfer;
 }
@@ -278,11 +283,10 @@ fn requestFailed(self: *Client, transfer: *Transfer, err: anyerror) void {
 pub fn changeProxy(self: *Client, proxy: [:0]const u8) !void {
     try self.ensureNoActiveConnection();
 
+    self.use_proxy = true;
     for (self.handles.handles) |*h| {
-        h.conn.opts.use_proxy = true;
         try errorCheck(c.curl_easy_setopt(h.conn.easy, c.CURLOPT_PROXY, proxy.ptr));
     }
-    self.blocking.conn.opts.use_proxy = true;
     try errorCheck(c.curl_easy_setopt(self.blocking.conn.easy, c.CURLOPT_PROXY, proxy.ptr));
 }
 
@@ -291,13 +295,12 @@ pub fn changeProxy(self: *Client, proxy: [:0]const u8) !void {
 pub fn restoreOriginalProxy(self: *Client) !void {
     try self.ensureNoActiveConnection();
 
+    self.use_proxy = self.http_proxy != null;
     const proxy = if (self.http_proxy) |p| p.ptr else null;
     for (self.handles.handles) |*h| {
-        h.conn.opts.use_proxy = proxy != null;
         try errorCheck(c.curl_easy_setopt(h.conn.easy, c.CURLOPT_PROXY, proxy));
     }
     try errorCheck(c.curl_easy_setopt(self.blocking.conn.easy, c.CURLOPT_PROXY, proxy));
-    self.blocking.conn.opts.use_proxy = proxy != null;
 }
 
 fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) !void {
@@ -308,9 +311,6 @@ fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) !void {
     {
         transfer._handle = handle;
         errdefer transfer.deinit();
-
-        // Store the proxy's information in transfer to ease headers parsing.
-        transfer._use_proxy = conn.opts.use_proxy;
 
         try conn.setURL(req.url);
         try conn.setMethod(req.method);
