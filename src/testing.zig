@@ -175,11 +175,6 @@ pub fn print(comptime fmt: []const u8, args: anytype) void {
     }
 }
 
-// dummy opts incase we want to add something, and not have to break all the callers
-pub fn createApp(_: anytype) *App {
-    return App.init(allocator, .{ .run_mode = .serve }) catch unreachable;
-}
-
 pub const Random = struct {
     var instance: ?std.Random.DefaultPrng = null;
 
@@ -375,24 +370,17 @@ pub const JsRunner = struct {
     const Page = @import("browser/page.zig").Page;
     const Browser = @import("browser/browser.zig").Browser;
 
-    app: *App,
     page: *Page,
     browser: *Browser,
+    allocator: Allocator,
 
     fn init(alloc: Allocator, opts: RunnerOpts) !JsRunner {
         parser.deinit();
 
-        var app = try App.init(alloc, .{
-            .run_mode = .serve,
-            .tls_verify_host = false,
-            .platform = opts.platform,
-        });
-        errdefer app.deinit();
-
         const browser = try alloc.create(Browser);
         errdefer alloc.destroy(browser);
 
-        browser.* = try Browser.init(app);
+        browser.* = try Browser.init(test_app);
         errdefer browser.deinit();
 
         var session = try browser.newSession();
@@ -411,16 +399,15 @@ pub const JsRunner = struct {
         page.mode = .{ .parsed = {} };
 
         return .{
-            .app = app,
             .page = page,
             .browser = browser,
+            .allocator = alloc,
         };
     }
 
     pub fn deinit(self: *JsRunner) void {
         self.browser.deinit();
-        self.app.allocator.destroy(self.browser);
-        self.app.deinit();
+        self.allocator.destroy(self.browser);
     }
 
     const RunOpts = struct {};
@@ -484,7 +471,6 @@ pub const JsRunner = struct {
 };
 
 const RunnerOpts = struct {
-    platform: ?*const Platform = null,
     url: []const u8 = "https://lightpanda.io/opensource-browser/",
     html: []const u8 =
         \\ <div id="content">
@@ -501,4 +487,20 @@ const RunnerOpts = struct {
 
 pub fn jsRunner(alloc: Allocator, opts: RunnerOpts) !JsRunner {
     return JsRunner.init(alloc, opts);
+}
+
+var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
+pub var test_app: *App = undefined;
+
+pub fn setup() !void {
+    try parser.init();
+
+    test_app = try App.init(gpa.allocator(), .{
+        .run_mode = .serve,
+        .tls_verify_host = false,
+    });
+}
+pub fn shutdown() void {
+    parser.deinit();
+    test_app.deinit();
 }

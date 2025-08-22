@@ -14,7 +14,7 @@ const Notification = @import("notification.zig").Notification;
 pub const App = struct {
     http: Http,
     config: Config,
-    platform: ?*const Platform,
+    platform: Platform,
     allocator: Allocator,
     telemetry: Telemetry,
     app_dir_path: ?[]const u8,
@@ -29,7 +29,6 @@ pub const App = struct {
 
     pub const Config = struct {
         run_mode: RunMode,
-        platform: ?*const Platform = null,
         tls_verify_host: bool = true,
         http_proxy: ?[:0]const u8 = null,
         proxy_bearer_token: ?[:0]const u8 = null,
@@ -57,13 +56,16 @@ pub const App = struct {
         });
         errdefer http.deinit();
 
+        const platform = try Platform.init();
+        errdefer platform.deinit();
+
         const app_dir_path = getAndMakeAppDir(allocator);
 
         app.* = .{
             .http = http,
             .allocator = allocator,
             .telemetry = undefined,
-            .platform = config.platform,
+            .platform = platform,
             .app_dir_path = app_dir_path,
             .notification = notification,
             .config = config,
@@ -85,6 +87,7 @@ pub const App = struct {
         self.telemetry.deinit();
         self.notification.deinit();
         self.http.deinit();
+        self.platform.deinit();
         allocator.destroy(self);
     }
 };

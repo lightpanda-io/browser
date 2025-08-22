@@ -109,13 +109,9 @@ fn run(alloc: Allocator) !void {
         log.opts.filter_scopes = lfs;
     }
 
-    const platform = try Platform.init();
-    defer platform.deinit();
-
     // _app is global to handle graceful shutdown.
     _app = try App.init(alloc, .{
         .run_mode = args.mode,
-        .platform = &platform,
         .http_proxy = args.httpProxy(),
         .proxy_bearer_token = args.proxyBearerToken(),
         .tls_verify_host = args.tlsVerifyHost(),
@@ -124,6 +120,7 @@ fn run(alloc: Allocator) !void {
         .http_max_host_open = args.httpMaxHostOpen(),
         .http_max_concurrent = args.httpMaxConcurrent(),
     });
+
     const app = _app.?;
     defer app.deinit();
     app.telemetry.record(.{ .run = {} });
@@ -715,48 +712,46 @@ fn parseCommonArg(
     return false;
 }
 
+const testing = @import("testing.zig");
 test {
     std.testing.refAllDecls(@This());
 }
 
-var test_wg: std.Thread.WaitGroup = .{};
 test "tests:beforeAll" {
-    try parser.init();
     log.opts.level = .err;
     log.opts.format = .logfmt;
 
-    test_wg.startMany(2);
-    const platform = try Platform.init();
+    try testing.setup();
+
+    var wg: std.Thread.WaitGroup = .{};
+    wg.startMany(2);
 
     {
-        const address = try std.net.Address.parseIp("127.0.0.1", 9582);
-        const thread = try std.Thread.spawn(.{}, serveHTTP, .{address});
+        const thread = try std.Thread.spawn(.{}, serveHTTP, .{&wg});
         thread.detach();
     }
 
     {
-        const address = try std.net.Address.parseIp("127.0.0.1", 9583);
-        const thread = try std.Thread.spawn(.{}, serveCDP, .{ address, &platform });
+        const thread = try std.Thread.spawn(.{}, serveCDP, .{&wg});
         thread.detach();
     }
 
     // need to wait for the servers to be listening, else tests will fail because
     // they aren't able to connect.
-    test_wg.wait();
+    wg.wait();
 }
 
 test "tests:afterAll" {
-    parser.deinit();
+    testing.shutdown();
 }
 
-fn serveHTTP(address: std.net.Address) !void {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
+fn serveHTTP(wg: *std.Thread.WaitGroup) !void {
+    const address = try std.net.Address.parseIp("127.0.0.1", 9582);
 
     var listener = try address.listen(.{ .reuse_address = true });
     defer listener.deinit();
 
-    test_wg.finish();
+    wg.finish();
 
     var read_buffer: [1024]u8 = undefined;
     while (true) {
@@ -799,19 +794,12 @@ fn serveHTTP(address: std.net.Address) !void {
     }
 }
 
-fn serveCDP(address: std.net.Address, platform: *const Platform) !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
-    var app = try App.init(gpa.allocator(), .{
-        .run_mode = .serve,
-        .tls_verify_host = false,
-        .platform = platform,
-        .http_max_concurrent = 2,
-    });
-    defer app.deinit();
+fn serveCDP(wg: *std.Thread.WaitGroup) !void {
+    const address = try std.net.Address.parseIp("127.0.0.1", 9583);
 
-    test_wg.finish();
-    var server = try Server.init(app, address);
+    var server = try Server.init(testing.test_app, address);
     defer server.deinit();
+    wg.finish();
     server.run(address, 5) catch |err| {
         std.debug.print("CDP server error: {}", .{err});
         return err;
