@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const js = @import("js.zig");
+const base = @import("../testing.zig");
 const generate = @import("generate.zig");
 
 pub const allocator = std.testing.allocator;
@@ -42,7 +43,7 @@ pub fn Runner(comptime State: type, comptime Global: type, comptime types: anyty
             const self = try allocator.create(Self);
             errdefer allocator.destroy(self);
 
-            self.env = try Env.init(allocator, null, .{});
+            self.env = try Env.init(allocator, &base.test_app.platform, .{});
             errdefer self.env.deinit();
 
             self.executor = try self.env.newExecutionWorld();

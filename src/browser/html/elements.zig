@@ -1336,7 +1336,7 @@ test "Browser.HTML.Element.DataSet" {
 test "Browser.HTML.HtmlInputElement.properties" {
     var runner = try testing.jsRunner(testing.tracking_allocator, .{ .url = "https://lightpanda.io/noslashattheend" });
     defer runner.deinit();
-    var alloc = std.heap.ArenaAllocator.init(runner.app.allocator);
+    var alloc = std.heap.ArenaAllocator.init(runner.allocator);
     defer alloc.deinit();
     const arena = alloc.allocator();
 

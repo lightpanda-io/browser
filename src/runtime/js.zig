@@ -153,7 +153,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
     return struct {
         allocator: Allocator,
 
-        platform: ?*const Platform,
+        platform: *const Platform,
 
         // the global isolate
         isolate: v8.Isolate,
@@ -182,7 +182,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
         const Opts = struct {};
 
-        pub fn init(allocator: Allocator, platform: ?*const Platform, _: Opts) !*Self {
+        pub fn init(allocator: Allocator, platform: *const Platform, _: Opts) !*Self {
             // var params = v8.initCreateParams();
             var params = try allocator.create(v8.CreateParams);
             errdefer allocator.destroy(params);
@@ -301,13 +301,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
         }
 
         pub fn pumpMessageLoop(self: *const Self) bool {
-            // assume it's not-null.
-            return self.platform.?.inner.pumpMessageLoop(self.isolate, false);
+            return self.platform.inner.pumpMessageLoop(self.isolate, false);
         }
 
         pub fn runIdleTasks(self: *const Self) void {
-            // assume it's not-null.
-            return self.platform.?.inner.runIdleTasks(self.isolate, 1);
+            return self.platform.inner.runIdleTasks(self.isolate, 1);
         }
 
         pub fn newExecutionWorld(self: *Self) !ExecutionWorld {

@@ -48,8 +48,8 @@ pub fn main() !void {
 
     const cmd = try parseArgs(runner_arena);
 
-    const platform = try Platform.init();
-    defer platform.deinit();
+    try @import("testing.zig").setup();
+    defer @import("testing.zig").shutdown();
 
     // prepare libraries to load on each test case.
     var loader = FileLoader.init(runner_arena, WPT_DIR);
@@ -69,7 +69,6 @@ pub fn main() !void {
         var err_out: ?[]const u8 = null;
         const result = run(
             test_arena.allocator(),
-            &platform,
             test_file,
             &loader,
             &err_out,
@@ -81,12 +80,11 @@ pub fn main() !void {
         };
 
         if (result == null and err_out == null) {
-            // We somtimes pass a non-test to `run` (we don't know it's a non
+            // We sometimes pass a non-test to `run` (we don't know it's a non
             // test, we need to open the contents of the test file to find out
             // and that's in run).
             continue;
         }
-
         try writer.process(test_file, result, err_out);
     }
     try writer.finalize();
@@ -94,7 +92,6 @@ pub fn main() !void {
 
 fn run(
     arena: Allocator,
-    platform: *const Platform,
     test_file: []const u8,
     loader: *FileLoader,
     err_out: *?[]const u8,
@@ -119,9 +116,14 @@ fn run(
     var runner = try @import("testing.zig").jsRunner(arena, .{
         .url = "http://127.0.0.1",
         .html = html,
-        .platform = platform,
     });
     defer runner.deinit();
+
+    defer if (err_out.*) |eo| {
+        // the error might be owned by the runner, we'll dupe it with our
+        // own arena so that it can be returned out of this function.
+        err_out.* = arena.dupe(u8, eo) catch "failed to dupe error";
+    };
 
     try polyfill.preload(arena, runner.page.main_context);
 
@@ -179,6 +181,7 @@ fn run(
 
     // return the detailed result.
     const res = try runner.eval("report.log", "report", err_out);
+
     return try res.toString(arena);
 }
 
