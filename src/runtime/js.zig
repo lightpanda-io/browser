@@ -941,6 +941,27 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             fn jsValueToZig(self: *JsContext, comptime named_function: NamedFunction, comptime T: type, js_value: v8.Value) !T {
                 switch (@typeInfo(T)) {
                     .optional => |o| {
+                        if (comptime isJsObject(o.child)) {
+                            // If type type is a ?JsObject, then we want to pass
+                            // a JsObject, not null. Consider a function,
+                            //    _doSomething(arg: ?Env.JsObjet) void { ... }
+                            //
+                            // And then these two calls:
+                            //   doSomething();
+                            //   doSomething(null);
+                            //
+                            // In the first case, we'll pass `null`. But in the
+                            // second, we'll pass a JsObject which represents
+                            // null.
+                            // If we don't have this code, both cases will
+                            // pass in `null` and the the doSomething won't
+                            // be able to tell if `null` was explicitly passed
+                            // or whether no parameter was passed.
+                            return JsObject{
+                                .js_obj = js_value.castTo(v8.Object),
+                                .js_context = self,
+                            };
+                        }
                         if (js_value.isNullOrUndefined()) {
                             return null;
                         }
@@ -1938,6 +1959,24 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 return try js_context.createFunction(js_value);
             }
 
+            pub fn isNull(self: JsObject) bool {
+                return self.js_obj.toValue().isNull();
+            }
+
+            pub fn isUndefined(self: JsObject) bool {
+                return self.js_obj.toValue().isUndefined();
+            }
+
+            pub fn triState(self: JsObject, comptime Struct: type, comptime name: []const u8, comptime T: type) !TriState(T) {
+                if (self.isNull()) {
+                    return .{ .null = {} };
+                }
+                if (self.isUndefined()) {
+                    return .{ .undefined = {} };
+                }
+                return .{ .value = try self.toZig(Struct, name, T) };
+            }
+
             pub fn isNullOrUndefined(self: JsObject) bool {
                 return self.js_obj.toValue().isNullOrUndefined();
             }
@@ -1964,6 +2003,14 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             pub fn toZig(self: JsObject, comptime Struct: type, comptime name: []const u8, comptime T: type) !T {
                 const named_function = comptime NamedFunction.init(Struct, name);
                 return self.js_context.jsValueToZig(named_function, T, self.js_obj.toValue());
+            }
+
+            pub fn TriState(comptime T: type) type {
+                return union(enum) {
+                    null: void,
+                    undefined: void,
+                    value: T,
+                };
             }
         };
 

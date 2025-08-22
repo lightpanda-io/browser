@@ -33,12 +33,17 @@ pub const TreeWalker = struct {
     filter: ?TreeWalkerOpts,
     filter_func: ?Env.Function,
 
+    // One of the few cases where null and undefined resolve to different default.
+    // We need the raw JsObject so that we can probe the tri state:
+    // null, undefined or i32.
+    pub const WhatToShow = Env.JsObject;
+
     pub const TreeWalkerOpts = union(enum) {
         function: Env.Function,
         object: struct { acceptNode: Env.Function },
     };
 
-    pub fn init(node: *parser.Node, what_to_show: ?u32, filter: ?TreeWalkerOpts) !TreeWalker {
+    pub fn init(node: *parser.Node, what_to_show_: ?WhatToShow, filter: ?TreeWalkerOpts) !TreeWalker {
         var filter_func: ?Env.Function = null;
 
         if (filter) |f| {
@@ -48,10 +53,21 @@ pub const TreeWalker = struct {
             };
         }
 
+        var what_to_show: u32 = undefined;
+        if (what_to_show_) |wts| {
+            switch (try wts.triState(TreeWalker, "what_to_show", u32)) {
+                .null => what_to_show = 0,
+                .undefined => what_to_show = NodeFilter.NodeFilter._SHOW_ALL,
+                .value => |v| what_to_show = v,
+            }
+        } else {
+            what_to_show = NodeFilter.NodeFilter._SHOW_ALL;
+        }
+
         return .{
             .root = node,
             .current_node = node,
-            .what_to_show = what_to_show orelse NodeFilter.NodeFilter._SHOW_ALL,
+            .what_to_show = what_to_show,
             .filter = filter,
             .filter_func = filter_func,
         };

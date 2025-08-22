@@ -263,22 +263,25 @@ const Writer = struct {
             if (line.len == 0) {
                 break;
             }
-            var fields = std.mem.splitScalar(u8, line, '|');
-            const case_name = fields.next() orelse {
-                std.debug.print("invalid result line: {s}\n", .{line});
-                return error.InvalidResult;
-            };
+            // case names can have | in them, so we can't simply split on |
+            var case_name = line;
+            var case_pass = false; // so pessimistic!
+            var case_message: []const u8 = "";
 
-            const text_status = fields.next() orelse {
-                std.debug.print("invalid result line: {s}\n", .{line});
-                return error.InvalidResult;
-            };
-
-            const case_pass = std.mem.eql(u8, text_status, "Pass");
-            if (case_pass) {
+            if (std.mem.endsWith(u8, line, "|Pass")) {
+                case_name = line[0 .. line.len - 5];
+                case_pass = true;
                 case_pass_count += 1;
             } else {
-                // If 1 case fails, we treat the entire file as a fail.
+                // both cases names and messages can have | in them. Our only
+                // chance to "parse" this is to anchor off the |Fail.
+                const pos = std.mem.indexOf(u8, line, "|Fail") orelse {
+                    std.debug.print("invalid result line: {s}\n", .{line});
+                    return error.InvalidResult;
+                };
+
+                case_name = line[0..pos];
+                case_message = line[pos + 1 ..];
                 pass = false;
                 case_fail_count += 1;
             }
@@ -286,7 +289,7 @@ const Writer = struct {
             try cases.append(self.arena, .{
                 .name = case_name,
                 .pass = case_pass,
-                .message = fields.next(),
+                .message = case_message,
             });
         }
 
