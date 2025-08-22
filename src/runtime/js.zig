@@ -946,7 +946,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             // a JsObject, not null. Consider a function,
                             //    _doSomething(arg: ?Env.JsObjet) void { ... }
                             //
-                            // And then these three calls:
+                            // And then these two calls:
                             //   doSomething();
                             //   doSomething(null);
                             //
