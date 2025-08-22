@@ -21,10 +21,9 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const log = @import("log.zig");
-const server = @import("server.zig");
 const App = @import("app.zig").App;
 const Http = @import("http/Http.zig");
-const Platform = @import("runtime/js.zig").Platform;
+const Server = @import("server.zig").Server;
 const Browser = @import("browser/browser.zig").Browser;
 
 const build_config = @import("build_config");
@@ -100,7 +99,11 @@ fn run(alloc: Allocator) !void {
             };
 
             const timeout = std.time.ns_per_s * @as(u64, opts.timeout);
-            server.run(app, address, timeout) catch |err| {
+            var server = try Server.init(app, address, timeout);
+            defer server.deinit();
+
+            // address is only passed again so we can print it nicely.
+            server.run(address) catch |err| {
                 log.fatal(.app, "server run error", .{ .err = err });
                 return err;
             };
@@ -679,6 +682,7 @@ test {
     std.testing.refAllDecls(@This());
 }
 
+var test_cdp_server: ?Server = null;
 test "tests:beforeAll" {
     log.opts.level = .err;
     log.opts.format = .logfmt;
@@ -704,6 +708,9 @@ test "tests:beforeAll" {
 }
 
 test "tests:afterAll" {
+    if (test_cdp_server) |*server| {
+        server.deinit();
+    }
     testing.shutdown();
 }
 
@@ -758,9 +765,10 @@ fn serveHTTP(wg: *std.Thread.WaitGroup) !void {
 
 fn serveCDP(wg: *std.Thread.WaitGroup) !void {
     const address = try std.net.Address.parseIp("127.0.0.1", 9583);
+    test_cdp_server = try Server.init(testing.test_app, address, std.time.ns_per_s * 2);
 
     wg.finish();
-    server.run(testing.test_app, address, std.time.ns_per_s * 2) catch |err| {
+    test_cdp_server.?.run(address) catch |err| {
         std.debug.print("CDP server error: {}", .{err});
         return err;
     };

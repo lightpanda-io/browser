@@ -46,7 +46,7 @@ const MAX_HTTP_REQUEST_SIZE = 4096;
 // +140 for the max control packet that might be interleaved in a message
 const MAX_MESSAGE_SIZE = 512 * 1024 + 14;
 
-const Server = struct {
+pub const Server = struct {
     app: *App,
     loop: *Loop,
     allocator: Allocator,
@@ -62,8 +62,74 @@ const Server = struct {
     // The response to send on a GET /json/version request
     json_version_response: []const u8,
 
-    fn deinit(self: *Server) void {
-        _ = self;
+    pub fn init(
+        app: *App,
+        address: net.Address,
+        timeout: u64,
+    ) !Server {
+        // create socket
+        const flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK;
+        const listener = try posix.socket(address.any.family, flags, posix.IPPROTO.TCP);
+        errdefer posix.close(listener);
+
+        try posix.setsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+        // TODO: Broken on darwin
+        // https://github.com/ziglang/zig/issues/17260  (fixed in Zig 0.14)
+        // if (@hasDecl(os.TCP, "NODELAY")) {
+        //  try os.setsockopt(socket.sockfd.?, os.IPPROTO.TCP, os.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
+        // }
+        try posix.setsockopt(listener, posix.IPPROTO.TCP, 1, &std.mem.toBytes(@as(c_int, 1)));
+
+        // bind & listen
+        try posix.bind(listener, &address.any, address.getOsSockLen());
+        try posix.listen(listener, 1);
+
+        const allocator = app.allocator;
+        const json_version_response = try buildJSONVersionResponse(allocator, address);
+        errdefer allocator.free(json_version_response);
+
+        return .{
+            .app = app,
+            .loop = app.loop,
+            .timeout = timeout,
+            .listener = listener,
+            .allocator = allocator,
+            .accept_completion = undefined,
+            .json_version_response = json_version_response,
+        };
+    }
+
+    pub fn deinit(self: *Server) void {
+        posix.close(self.listener);
+        self.allocator.free(self.json_version_response);
+    }
+
+    pub fn run(self: *Server, address: net.Address) !void {
+        // accept an connection
+        self.queueAccept();
+        log.info(.app, "server running", .{ .address = address });
+
+        // infinite loop on I/O events, either:
+        // - cmd from incoming connection on server socket
+        // - JS callbacks events from scripts
+        while (true) {
+            // @newhttp. This is a hack. We used to just have 1 loop, so we could
+            // sleep it it "forever" and any activity (message to this server,
+            // JS callback, http data) would wake it up.
+            // Now we have 2 loops. If we block on one, the other won't get woken
+            // up. We don't block "forever" but even 10ms adds a bunch of latency
+            // since this is called in a loop.
+            // Hopefully this is temporary and we can remove the io loop and then
+            // only have 1 loop. But, until then, we need to check both loops and
+            // pay some blocking penalty.
+            if (self.client) |client| {
+                if (client.cdp) |*cdp| {
+                    cdp.pageWait();
+                }
+            }
+
+            try self.loop.io.run_for_ns(10 * std.time.ns_per_ms);
+        }
     }
 
     fn queueAccept(self: *Server) void {
@@ -1006,72 +1072,6 @@ fn websocketHeader(buf: []u8, op_code: OpCode, payload_len: usize) []const u8 {
     buf[8] = @intCast((len >> 8) & 0xFF);
     buf[9] = @intCast(len & 0xFF);
     return buf[0..10];
-}
-
-pub fn run(
-    app: *App,
-    address: net.Address,
-    timeout: u64,
-) !void {
-    // create socket
-    const flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK;
-    const listener = try posix.socket(address.any.family, flags, posix.IPPROTO.TCP);
-    defer posix.close(listener);
-
-    try posix.setsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-    // TODO: Broken on darwin
-    // https://github.com/ziglang/zig/issues/17260  (fixed in Zig 0.14)
-    // if (@hasDecl(os.TCP, "NODELAY")) {
-    //  try os.setsockopt(socket.sockfd.?, os.IPPROTO.TCP, os.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
-    // }
-    try posix.setsockopt(listener, posix.IPPROTO.TCP, 1, &std.mem.toBytes(@as(c_int, 1)));
-
-    // bind & listen
-    try posix.bind(listener, &address.any, address.getOsSockLen());
-    try posix.listen(listener, 1);
-
-    var loop = app.loop;
-    const allocator = app.allocator;
-    const json_version_response = try buildJSONVersionResponse(allocator, address);
-    defer allocator.free(json_version_response);
-
-    var server = Server{
-        .app = app,
-        .loop = loop,
-        .timeout = timeout,
-        .listener = listener,
-        .allocator = allocator,
-        .accept_completion = undefined,
-        .json_version_response = json_version_response,
-    };
-    defer server.deinit();
-
-    // accept an connection
-    server.queueAccept();
-    log.info(.app, "server running", .{ .address = address });
-
-    // infinite loop on I/O events, either:
-    // - cmd from incoming connection on server socket
-    // - JS callbacks events from scripts
-    // var http_client = app.http_client;
-    while (true) {
-        // @newhttp. This is a hack. We used to just have 1 loop, so we could
-        // sleep it it "forever" and any activity (message to this server,
-        // JS callback, http data) would wake it up.
-        // Now we have 2 loops. If we block on one, the other won't get woken
-        // up. We don't block "forever" but even 10ms adds a bunch of latency
-        // since this is called in a loop.
-        // Hopefully this is temporary and we can remove the io loop and then
-        // only have 1 loop. But, until then, we need to check both loops and
-        // pay some blocking penalty.
-        if (server.client) |client| {
-            if (client.cdp) |*cdp| {
-                cdp.pageWait();
-            }
-        }
-
-        try loop.io.run_for_ns(10 * std.time.ns_per_ms);
-    }
 }
 
 // Utils
