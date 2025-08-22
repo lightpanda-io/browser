@@ -32,9 +32,9 @@ pub const Interfaces = .{
 
 pub const AbstractRange = struct {
     collapsed: bool,
-    end_container: *parser.Node,
+    end_node: *parser.Node,
     end_offset: u32,
-    start_container: *parser.Node,
+    start_node: *parser.Node,
     start_offset: u32,
 
     pub fn updateCollapsed(self: *AbstractRange) void {
@@ -47,7 +47,7 @@ pub const AbstractRange = struct {
     }
 
     pub fn get_endContainer(self: *const AbstractRange) !NodeUnion {
-        return Node.toInterface(self.end_container);
+        return Node.toInterface(self.end_node);
     }
 
     pub fn get_endOffset(self: *const AbstractRange) u32 {
@@ -55,7 +55,7 @@ pub const AbstractRange = struct {
     }
 
     pub fn get_startContainer(self: *const AbstractRange) !NodeUnion {
-        return Node.toInterface(self.start_container);
+        return Node.toInterface(self.start_node);
     }
 
     pub fn get_startOffset(self: *const AbstractRange) u32 {
@@ -69,15 +69,20 @@ pub const Range = struct {
 
     proto: AbstractRange,
 
+    pub const _START_TO_START = 0;
+    pub const _START_TO_END = 1;
+    pub const _END_TO_END = 2;
+    pub const _END_TO_START = 3;
+
     // The Range() constructor returns a newly created Range object whose start
     // and end is the global Document object.
     // https://developer.mozilla.org/en-US/docs/Web/API/Range/Range
     pub fn constructor(page: *Page) Range {
         const proto: AbstractRange = .{
             .collapsed = true,
-            .end_container = parser.documentHTMLToNode(page.window.document),
+            .end_node = parser.documentHTMLToNode(page.window.document),
             .end_offset = 0,
-            .start_container = parser.documentHTMLToNode(page.window.document),
+            .start_node = parser.documentHTMLToNode(page.window.document),
             .start_offset = 0,
         };
 
@@ -87,11 +92,11 @@ pub const Range = struct {
     pub fn _setStart(self: *Range, node: *parser.Node, offset_: i32) !void {
         try ensureValidOffset(node, offset_);
         const offset: u32 = @intCast(offset_);
-        const position = compare(node, offset, self.proto.start_container, self.proto.start_offset) catch |err| switch (err) {
+        const position = compare(node, offset, self.proto.start_node, self.proto.start_offset) catch |err| switch (err) {
             error.WrongDocument => blk: {
                 // allow a node with a different root than the current, or
                 // a disconnected one. Treat it as if it's "after", so that
-                // we also update the end_offset and end_container.
+                // we also update the end_offset and end_node.
                 break :blk 1;
             },
             else => return err,
@@ -101,22 +106,22 @@ pub const Range = struct {
             // if we're setting the node after the current start, the end must
             // be set too.
             self.proto.end_offset = offset;
-            self.proto.end_container = node;
+            self.proto.end_node = node;
         }
-        self.proto.start_container = node;
+        self.proto.start_node = node;
         self.proto.start_offset = offset;
         self.proto.updateCollapsed();
     }
 
     pub fn _setStartBefore(self: *Range, node: *parser.Node) !void {
         const parent, const index = try getParentAndIndex(node);
-        self.proto.start_container = parent;
+        self.proto.start_node = parent;
         self.proto.start_offset = index;
     }
 
     pub fn _setStartAfter(self: *Range, node: *parser.Node) !void {
         const parent, const index = try getParentAndIndex(node);
-        self.proto.start_container = parent;
+        self.proto.start_node = parent;
         self.proto.start_offset = index + 1;
     }
 
@@ -124,11 +129,11 @@ pub const Range = struct {
         try ensureValidOffset(node, offset_);
         const offset: u32 = @intCast(offset_);
 
-        const position = compare(node, offset, self.proto.start_container, self.proto.start_offset) catch |err| switch (err) {
+        const position = compare(node, offset, self.proto.start_node, self.proto.start_offset) catch |err| switch (err) {
             error.WrongDocument => blk: {
                 // allow a node with a different root than the current, or
                 // a disconnected one. Treat it as if it's "before", so that
-                // we also update the end_offset and end_container.
+                // we also update the end_offset and end_node.
                 break :blk -1;
             },
             else => return err,
@@ -138,23 +143,23 @@ pub const Range = struct {
             // if we're setting the node before the current start, the start
             // must be set too.
             self.proto.start_offset = offset;
-            self.proto.start_container = node;
+            self.proto.start_node = node;
         }
 
-        self.proto.end_container = node;
+        self.proto.end_node = node;
         self.proto.end_offset = offset;
         self.proto.updateCollapsed();
     }
 
     pub fn _setEndBefore(self: *Range, node: *parser.Node) !void {
         const parent, const index = try getParentAndIndex(node);
-        self.proto.end_container = parent;
+        self.proto.end_node = parent;
         self.proto.end_offset = index;
     }
 
     pub fn _setEndAfter(self: *Range, node: *parser.Node) !void {
         const parent, const index = try getParentAndIndex(node);
-        self.proto.end_container = parent;
+        self.proto.end_node = parent;
         self.proto.end_offset = index + 1;
     }
 
@@ -166,9 +171,9 @@ pub const Range = struct {
     }
 
     pub fn _selectNodeContents(self: *Range, node: *parser.Node) !void {
-        self.proto.start_container = node;
+        self.proto.start_node = node;
         self.proto.start_offset = 0;
-        self.proto.end_container = node;
+        self.proto.end_node = node;
 
         // Set end_offset
         switch (try parser.nodeType(node)) {
@@ -196,16 +201,16 @@ pub const Range = struct {
         return .{
             .proto = .{
                 .collapsed = self.proto.collapsed,
-                .end_container = self.proto.end_container,
+                .end_node = self.proto.end_node,
                 .end_offset = self.proto.end_offset,
-                .start_container = self.proto.start_container,
+                .start_node = self.proto.start_node,
                 .start_offset = self.proto.start_offset,
             },
         };
     }
 
     pub fn _comparePoint(self: *const Range, node: *parser.Node, offset_: i32) !i32 {
-        const start = self.proto.start_container;
+        const start = self.proto.start_node;
         if (try parser.nodeGetRootNode(start) != try parser.nodeGetRootNode(node)) {
             // WPT really wants this error to be first. Later, when we check
             // if the relative position is 'disconnected', it'll also catch this
@@ -225,7 +230,7 @@ pub const Range = struct {
             return -1;
         }
 
-        if (try compare(node, offset, self.proto.end_container, self.proto.end_offset) == 1) {
+        if (try compare(node, offset, self.proto.end_node, self.proto.end_offset) == 1) {
             return 1;
         }
 
@@ -240,7 +245,7 @@ pub const Range = struct {
     }
 
     pub fn _intersectsNode(self: *const Range, node: *parser.Node) !bool {
-        const start_root = try parser.nodeGetRootNode(self.proto.start_container);
+        const start_root = try parser.nodeGetRootNode(self.proto.start_node);
         const node_root = try parser.nodeGetRootNode(node);
         if (start_root != node_root) {
             return false;
@@ -251,17 +256,27 @@ pub const Range = struct {
             else => return err,
         };
 
-        if (try compare(parent, index + 1, self.proto.start_container, self.proto.start_offset) != 1) {
+        if (try compare(parent, index + 1, self.proto.start_node, self.proto.start_offset) != 1) {
             // node isn't after start, can't intersect
             return false;
         }
 
-        if (try compare(parent, index, self.proto.end_container, self.proto.end_offset) != -1) {
+        if (try compare(parent, index, self.proto.end_node, self.proto.end_offset) != -1) {
             // node isn't before end, can't intersect
             return false;
         }
 
         return true;
+    }
+
+    pub fn _compareBoundaryPoints(self: *const Range, how: i32, other: *const Range) !i32 {
+        return switch (how) {
+            _START_TO_START => compare(self.proto.start_node, self.proto.start_offset, other.proto.start_node, other.proto.start_offset),
+            _START_TO_END => compare(self.proto.start_node, self.proto.start_offset, other.proto.end_node, other.proto.end_offset),
+            _END_TO_END => compare(self.proto.end_node, self.proto.end_offset, other.proto.end_node, other.proto.end_offset),
+            _END_TO_START => compare(self.proto.end_node, self.proto.end_offset, other.proto.start_node, other.proto.start_offset),
+            else => error.NotSupported, // this is the correct DOM Exception to return
+        };
     }
 
     // The Range.detach() method does nothing. It used to disable the Range
