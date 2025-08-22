@@ -44,7 +44,7 @@ pub const RequestInit = struct {
 const Request = @This();
 
 method: Http.Method,
-url: []const u8,
+url: [:0]const u8,
 body: []const u8,
 
 pub fn constructor(input: RequestInput, _options: ?RequestInit, page: *Page) !Request {
@@ -53,10 +53,10 @@ pub fn constructor(input: RequestInput, _options: ?RequestInit, page: *Page) !Re
 
     const url = blk: switch (input) {
         .string => |str| {
-            break :blk try URL.stitch(arena, str, page.url.raw, .{});
+            break :blk try URL.stitch(arena, str, page.url.raw, .{ .null_terminated = true });
         },
         .request => |req| {
-            break :blk try arena.dupe(u8, req.url);
+            break :blk try arena.dupeZ(u8, req.url);
         },
     };
 
@@ -129,14 +129,14 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
 
     const fetch_ctx = try arena.create(FetchContext);
     fetch_ctx.* = .{
-        .arena = page.arena,
+        .arena = arena,
         .js_ctx = page.main_context,
         .promise_resolver = v8.Persistent(v8.PromiseResolver).init(page.main_context.isolate, resolver.resolver),
     };
 
     try client.request(.{
         .method = req.method,
-        .url = try arena.dupeZ(u8, req.url),
+        .url = req.url,
         .headers = headers,
         .body = req.body,
         .cookie_jar = page.cookie_jar,
