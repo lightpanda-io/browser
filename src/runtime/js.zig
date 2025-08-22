@@ -2150,6 +2150,17 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     return error.FailedToResolvePromise;
                 }
             }
+
+            pub fn reject(self: PromiseResolver, value: anytype) !void {
+                const js_context = self.js_context;
+                const js_value = try js_context.zigValueToJs(value);
+
+                // resolver.reject will return null if the promise isn't pending
+                const ok = self.resolver.reject(js_context.v8_context, js_value) orelse return;
+                if (!ok) {
+                    return error.FailedToRejectPromise;
+                }
+            }
         };
 
         pub const Promise = struct {
