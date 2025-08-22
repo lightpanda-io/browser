@@ -582,9 +582,6 @@ pub const Transfer = struct {
     // connection in makeRequest().
     _use_proxy: bool = undefined,
 
-    // stateful variables used to parse responses headers.
-    _resp_header_status: enum { empty, first, next, end } = .empty,
-
     fn deinit(self: *Transfer) void {
         self.req.headers.deinit();
         if (self._handle) |handle| {
@@ -695,122 +692,124 @@ pub const Transfer = struct {
 
         const header = buffer[0 .. buf_len - 2];
 
-        // transition the status dependending the previous one.
-        transfer._resp_header_status = switch (transfer._resp_header_status) {
-            .empty => .first,
-            .first => .next,
-            .next => .next,
-            .end => .first,
-        };
-
-        // mark the end of parsing headers
-        if (buf_len == 2) transfer._resp_header_status = .end;
-
-        switch (transfer._resp_header_status) {
-            .empty => unreachable,
-            .first => {
-                if (buf_len < 13) {
-                    log.debug(.http, "invalid response line", .{ .line = header });
-                    return 0;
-                }
-                const version_start: usize = if (header[5] == '2') 7 else 9;
-                const version_end = version_start + 3;
-
-                // a bit silly, but it makes sure that we don't change the length check
-                // above in a way that could break this.
-                std.debug.assert(version_end < 13);
-
-                const status = std.fmt.parseInt(u16, header[version_start..version_end], 10) catch {
-                    log.debug(.http, "invalid status code", .{ .line = header });
+        if (transfer.response_header == null) {
+            if (transfer._redirecting and buf_len == 2) {
+                // parse and set cookies for the redirection.
+                redirectionCookies(transfer, easy) catch |err| {
+                    log.debug(.http, "redirection cookies", .{ .err = err });
                     return 0;
                 };
+                return buf_len;
+            }
 
-                var url: [*c]u8 = undefined;
-                errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_EFFECTIVE_URL, &url)) catch |err| {
-                    log.err(.http, "failed to get URL", .{ .err = err });
-                    return 0;
-                };
-
-                // When using proxy, curl call the header function for all HTTP
-                // requests, including the CONNECT one used tunneling requests.
-                if (transfer._use_proxy and transfer.proxy_response_header == null) {
-                    transfer.proxy_response_header = .{
-                        .url = "",
-                        .status = status,
-                    };
-
-                    // We want to ignore the successful proxy's CONNECT request.
-                    // But there is no proper way to detect if the current
-                    // request is a proxy CONNECT one.
-                    // We know curl uses a CONNECT when it establishes a TLS
-                    // conn.
-                    if (status == 200 and std.mem.startsWith(u8, std.mem.span(url), "https")) {
-                        return buf_len;
-                    }
-                }
-
-                if (status >= 300 and status <= 399) {
-                    transfer._redirecting = true;
-                    return buf_len;
-                }
-                transfer._redirecting = false;
-
-                transfer.response_header = .{
-                    .url = url,
-                    .status = status,
-                };
-            },
-            .next => {},
-            .end => {
-                // If we are in a redirection, take care of cookies only.
+            if (buf_len < 13 or std.mem.startsWith(u8, header, "HTTP/") == false) {
                 if (transfer._redirecting) {
-                    // parse and set cookies for the redirection.
-                    redirectionCookies(transfer, easy) catch |err| {
-                        log.debug(.http, "redirection cookies", .{ .err = err });
-                        return 0;
-                    };
                     return buf_len;
                 }
+                log.debug(.http, "invalid response line", .{ .line = header });
+                return 0;
+            }
+            const version_start: usize = if (header[5] == '2') 7 else 9;
+            const version_end = version_start + 3;
 
-                if (transfer._use_proxy and transfer.response_header == null) {
-                    // we are in a successful CONNECT proxy request, ignore it.
-                    return buf_len;
-                }
+            // a bit silly, but it makes sure that we don't change the length check
+            // above in a way that could break this.
+            std.debug.assert(version_end < 13);
 
-                if (getResponseHeader(easy, "content-type", 0)) |ct| {
-                    var hdr = &transfer.response_header.?;
-                    const value = ct.value;
-                    const len = @min(value.len, ResponseHeader.MAX_CONTENT_TYPE_LEN);
-                    hdr._content_type_len = len;
-                    @memcpy(hdr._content_type[0..len], value[0..len]);
-                }
+            const status = std.fmt.parseInt(u16, header[version_start..version_end], 10) catch {
+                log.debug(.http, "invalid status code", .{ .line = header });
+                return 0;
+            };
 
-                var i: usize = 0;
-                while (true) {
-                    const ct = getResponseHeader(easy, "set-cookie", i);
-                    if (ct == null) break;
-                    transfer.req.cookie_jar.populateFromResponse(&transfer.uri, ct.?.value) catch |err| {
-                        log.err(.http, "set cookie", .{ .err = err, .req = transfer });
-                    };
-                    i += 1;
-                    if (i >= ct.?.amount) break;
-                }
+            if (status >= 300 and status <= 399) {
+                transfer._redirecting = true;
+                return buf_len;
+            }
+            transfer._redirecting = false;
 
-                transfer.req.header_callback(transfer) catch |err| {
-                    log.err(.http, "header_callback", .{ .err = err, .req = transfer });
-                    // returning < buf_len terminates the request
-                    return 0;
-                };
+            var url: [*c]u8 = undefined;
+            errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_EFFECTIVE_URL, &url)) catch |err| {
+                log.err(.http, "failed to get URL", .{ .err = err });
+                return 0;
+            };
 
-                if (transfer.client.notification) |notification| {
-                    notification.dispatch(.http_response_header_done, &.{
-                        .transfer = transfer,
-                    });
-                }
-            },
+            transfer.response_header = .{
+                .url = url,
+                .status = status,
+            };
+            transfer.bytes_received = buf_len;
+            return buf_len;
         }
 
         transfer.bytes_received += buf_len;
+
+        if (buf_len != 2) {
+            return buf_len;
+        }
+
+        // Starting here, we get the last header line.
+
+        // We're connecting to a proxy. Consider the first request to the
+        // proxy's result.
+        if (transfer._use_proxy and transfer.proxy_response_header == null) {
+            // We have to cases:
+            // 1. for http://, we have one request. So both
+            // proxy_response_header and response_header will have the same
+            // value.
+            //
+            // 2. for https://, we two successive requests, a CONNECT to the
+            // proxy and a final request. So proxy_response_header and
+            // response_header may have different values.
+            transfer.proxy_response_header = transfer.response_header;
+
+            // Detect if the request is a CONNECT to the proxy. There might be
+            // a better way to detect this, but I didn't find a better one.
+            // When we don't force curl to always use tunneling, it uses
+            // CONNECT tunnel only for https requests.
+            const is_connect = std.mem.startsWith(u8, std.mem.span(transfer.proxy_response_header.?.url), "https");
+
+            // If the CONNECT is successful, curl will create a following
+            // request to the final target, so we reset
+            // transfer.response_header to get the "real" data.
+            if (is_connect and transfer.proxy_response_header.?.status == 200) {
+                transfer.response_header = null;
+                return buf_len;
+            }
+
+            // If the CONNECT fails, use the request result as it would be our
+            // final request.
+        }
+
+        if (getResponseHeader(easy, "content-type", 0)) |ct| {
+            var hdr = &transfer.response_header.?;
+            const value = ct.value;
+            const len = @min(value.len, ResponseHeader.MAX_CONTENT_TYPE_LEN);
+            hdr._content_type_len = len;
+            @memcpy(hdr._content_type[0..len], value[0..len]);
+        }
+
+        var i: usize = 0;
+        while (true) {
+            const ct = getResponseHeader(easy, "set-cookie", i);
+            if (ct == null) break;
+            transfer.req.cookie_jar.populateFromResponse(&transfer.uri, ct.?.value) catch |err| {
+                log.err(.http, "set cookie", .{ .err = err, .req = transfer });
+            };
+            i += 1;
+            if (i >= ct.?.amount) break;
+        }
+
+        transfer.req.header_callback(transfer) catch |err| {
+            log.err(.http, "header_callback", .{ .err = err, .req = transfer });
+            // returning < buf_len terminates the request
+            return 0;
+        };
+
+        if (transfer.client.notification) |notification| {
+            notification.dispatch(.http_response_header_done, &.{
+                .transfer = transfer,
+            });
+        }
         return buf_len;
     }
 
