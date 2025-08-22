@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const log = @import("../../log.zig");
+
 const URL = @import("../../url.zig").URL;
 const Page = @import("../page.zig").Page;
 
@@ -94,6 +96,8 @@ const FetchContext = struct {
     js_ctx: *Env.JsContext,
     promise_resolver: v8.Persistent(v8.PromiseResolver),
 
+    method: Http.Method,
+    url: []const u8,
     body: std.ArrayListUnmanaged(u8) = .empty,
     headers: std.ArrayListUnmanaged([]const u8) = .empty,
     status: u16 = 0,
@@ -104,7 +108,7 @@ const FetchContext = struct {
     ///
     /// We just return the underlying slices used for `headers`
     /// and for `body` here to avoid an allocation.
-    pub fn toResponse(self: FetchContext) !Response {
+    pub fn toResponse(self: *const FetchContext) !Response {
         return Response{
             .status = self.status,
             .headers = self.headers.items,
@@ -131,7 +135,12 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
     fetch_ctx.* = .{
         .arena = arena,
         .js_ctx = page.main_context,
-        .promise_resolver = v8.Persistent(v8.PromiseResolver).init(page.main_context.isolate, resolver.resolver),
+        .promise_resolver = v8.Persistent(v8.PromiseResolver).init(
+            page.main_context.isolate,
+            resolver.resolver,
+        ),
+        .method = req.method,
+        .url = req.url,
     };
 
     try client.request(.{
@@ -145,6 +154,7 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
         .start_callback = struct {
             fn startCallback(transfer: *HttpClient.Transfer) !void {
                 const self: *FetchContext = @alignCast(@ptrCast(transfer.ctx));
+                log.debug(.http, "request start", .{ .method = self.method, .url = self.url, .source = "fetch" });
                 self.transfer = transfer;
             }
         }.startCallback,
@@ -158,6 +168,12 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
             fn headerDoneCallback(transfer: *HttpClient.Transfer) !void {
                 const self: *FetchContext = @alignCast(@ptrCast(transfer.ctx));
                 const header = &transfer.response_header.?;
+
+                log.debug(.http, "request header", .{
+                    .source = "fetch",
+                    .url = self.url,
+                    .status = header.status,
+                });
 
                 if (header.contentType()) |ct| {
                     self.mime = Mime.parse(ct) catch {
@@ -177,6 +193,13 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
         .done_callback = struct {
             fn doneCallback(ctx: *anyopaque) !void {
                 const self: *FetchContext = @alignCast(@ptrCast(ctx));
+
+                log.info(.http, "request complete", .{
+                    .source = "fetch",
+                    .url = self.url,
+                    .status = self.status,
+                });
+
                 const response = try self.toResponse();
                 const promise_resolver: Env.PromiseResolver = .{
                     .js_context = self.js_ctx,
