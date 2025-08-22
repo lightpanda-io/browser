@@ -89,9 +89,6 @@ notification: ?*Notification = null,
 // restoring, this originally-configured value is what it goes to.
 http_proxy: ?[:0]const u8 = null,
 
-// does the client use a proxy?
-use_proxy: bool = false,
-
 const TransferQueue = std.DoublyLinkedList(*Transfer);
 
 pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts) !*Client {
@@ -123,7 +120,6 @@ pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts) !*Clie
         .blocking = blocking,
         .allocator = allocator,
         .http_proxy = opts.http_proxy,
-        .use_proxy = opts.http_proxy != null,
         .transfer_pool = transfer_pool,
         .queue_node_pool = queue_node_pool,
     };
@@ -246,7 +242,6 @@ fn makeTransfer(self: *Client, req: Request) !*Transfer {
         .req = req,
         .ctx = req.ctx,
         .client = self,
-        ._use_proxy = self.use_proxy,
     };
     return transfer;
 }
@@ -283,7 +278,6 @@ fn requestFailed(self: *Client, transfer: *Transfer, err: anyerror) void {
 pub fn changeProxy(self: *Client, proxy: [:0]const u8) !void {
     try self.ensureNoActiveConnection();
 
-    self.use_proxy = true;
     for (self.handles.handles) |*h| {
         try errorCheck(c.curl_easy_setopt(h.conn.easy, c.CURLOPT_PROXY, proxy.ptr));
     }
@@ -295,7 +289,6 @@ pub fn changeProxy(self: *Client, proxy: [:0]const u8) !void {
 pub fn restoreOriginalProxy(self: *Client) !void {
     try self.ensureNoActiveConnection();
 
-    self.use_proxy = self.http_proxy != null;
     const proxy = if (self.http_proxy) |p| p.ptr else null;
     for (self.handles.handles) |*h| {
         try errorCheck(c.curl_easy_setopt(h.conn.easy, c.CURLOPT_PROXY, proxy));
@@ -589,10 +582,7 @@ pub const Transfer = struct {
     _handle: ?*Handle = null,
 
     _redirecting: bool = false,
-
-    // use_proxy is set when the transfer has been associated to a given
-    // connection in makeRequest().
-    _use_proxy: bool = undefined,
+    _forbidden: bool = false,
 
     fn deinit(self: *Transfer) void {
         self.req.headers.deinit();
@@ -603,15 +593,32 @@ pub const Transfer = struct {
         self.client.transfer_pool.destroy(self);
     }
 
+    fn buildResponseHeader(self: *Transfer, easy: *c.CURL) !void {
+        std.debug.assert(self.response_header == null);
+
+        var url: [*c]u8 = undefined;
+        try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_EFFECTIVE_URL, &url));
+
+        var status: c_long = undefined;
+        try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_RESPONSE_CODE, &status));
+
+        self.response_header = .{
+            .url = url,
+            .status = @intCast(status),
+        };
+
+        if (getResponseHeader(easy, "content-type", 0)) |ct| {
+            var hdr = &self.response_header.?;
+            const value = ct.value;
+            const len = @min(value.len, ResponseHeader.MAX_CONTENT_TYPE_LEN);
+            hdr._content_type_len = len;
+            @memcpy(hdr._content_type[0..len], value[0..len]);
+        }
+    }
+
     pub fn format(self: *const Transfer, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         const req = self.req;
         return writer.print("{s} {s}", .{ @tagName(req.method), req.url });
-    }
-
-    pub fn setBody(self: *Transfer, body: []const u8) !void {
-        const easy = self.handle.easy;
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_POSTFIELDS, body.ptr));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_POSTFIELDSIZE, @as(c_long, @intCast(body.len))));
     }
 
     pub fn addHeader(self: *Transfer, value: [:0]const u8) !void {
@@ -695,9 +702,9 @@ pub const Transfer = struct {
     // w/o body.
     fn headerDoneCallback(transfer: *Transfer, easy: *c.CURL) !void {
         std.debug.assert(transfer._header_done_called == false);
-        std.debug.assert(transfer.response_header != null);
-
         defer transfer._header_done_called = true;
+
+        try transfer.buildResponseHeader(easy);
 
         if (getResponseHeader(easy, "content-type", 0)) |ct| {
             var hdr = &transfer.response_header.?;
@@ -746,8 +753,12 @@ pub const Transfer = struct {
 
         const header = buffer[0 .. buf_len - 2];
 
-        // Is it the first header line?
+        // We need to parse the first line headers for each request b/c curl's
+        // CURLINFO_RESPONSE_CODE returns the status code of the final request.
+        // If a redirection or a proxy's CONNECT forbidden happens, we won't
+        // get this intermediary status code.
         if (std.mem.startsWith(u8, header, "HTTP/")) {
+            // Is it the first header line.
             if (buf_len < 13) {
                 log.debug(.http, "invalid response line", .{ .line = header });
                 return 0;
@@ -770,21 +781,17 @@ pub const Transfer = struct {
             }
             transfer._redirecting = false;
 
-            var url: [*c]u8 = undefined;
-            errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_EFFECTIVE_URL, &url)) catch |err| {
-                log.err(.http, "failed to get URL", .{ .err = err });
-                return 0;
-            };
+            if (status == 401 or status == 407) {
+                transfer._forbidden = true;
+                return buf_len;
+            }
+            transfer._forbidden = false;
 
-            transfer.response_header = .{
-                .url = url,
-                .status = status,
-            };
             transfer.bytes_received = buf_len;
             return buf_len;
         }
 
-        if (transfer._redirecting == false) {
+        if (transfer._redirecting == false and transfer._forbidden == false) {
             transfer.bytes_received += buf_len;
         }
 
@@ -793,12 +800,6 @@ pub const Transfer = struct {
         }
 
         // Starting here, we get the last header line.
-
-        // We're connecting to a proxy. Consider the first request to be the
-        // proxy's result.
-        if (transfer._use_proxy and transfer.proxy_response_header == null) {
-            transfer.proxy_response_header = transfer.response_header;
-        }
 
         if (transfer._redirecting) {
             // parse and set cookies for the redirection.
