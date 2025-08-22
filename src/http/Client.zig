@@ -379,6 +379,15 @@ fn perform(self: *Client, timeout_ms: c_int) !void {
         defer transfer.deinit();
 
         if (errorCheck(msg.data.result)) {
+            // In case of request w/o data, we need to call the header done
+            // callback now.
+            if (!transfer._header_done_called) {
+                transfer.headerDoneCallback(easy) catch |err| {
+                    log.err(.http, "header_done_callback", .{ .err = err });
+                    self.requestFailed(transfer, err);
+                    continue;
+                };
+            }
             transfer.req.done_callback(transfer.ctx) catch |err| {
                 // transfer isn't valid at this point, don't use it.
                 log.err(.http, "done_callback", .{ .err = err });
@@ -572,6 +581,9 @@ pub const Transfer = struct {
     proxy_response_header: ?ResponseHeader = null,
     response_header: ?ResponseHeader = null,
 
+    // track if the header callbacks done have been called.
+    _header_done_called: bool = false,
+
     _notified_fail: bool = false,
 
     _handle: ?*Handle = null,
@@ -678,6 +690,48 @@ pub const Transfer = struct {
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COOKIE, @as([*c]const u8, @ptrCast(cookies.items.ptr))));
     }
 
+    // headerDoneCallback is called once the headers have been read.
+    // It can be called either on dataCallback or once the request for those
+    // w/o body.
+    fn headerDoneCallback(transfer: *Transfer, easy: *c.CURL) !void {
+        std.debug.assert(transfer._header_done_called == false);
+        std.debug.assert(transfer.response_header != null);
+
+        defer transfer._header_done_called = true;
+
+        if (getResponseHeader(easy, "content-type", 0)) |ct| {
+            var hdr = &transfer.response_header.?;
+            const value = ct.value;
+            const len = @min(value.len, ResponseHeader.MAX_CONTENT_TYPE_LEN);
+            hdr._content_type_len = len;
+            @memcpy(hdr._content_type[0..len], value[0..len]);
+        }
+
+        var i: usize = 0;
+        while (true) {
+            const ct = getResponseHeader(easy, "set-cookie", i);
+            if (ct == null) break;
+            transfer.req.cookie_jar.populateFromResponse(&transfer.uri, ct.?.value) catch |err| {
+                log.err(.http, "set cookie", .{ .err = err, .req = transfer });
+                return err;
+            };
+            i += 1;
+            if (i >= ct.?.amount) break;
+        }
+
+        transfer.req.header_callback(transfer) catch |err| {
+            log.err(.http, "header_callback", .{ .err = err, .req = transfer });
+            return err;
+        };
+
+        if (transfer.client.notification) |notification| {
+            notification.dispatch(.http_response_header_done, &.{
+                .transfer = transfer,
+            });
+        }
+    }
+
+    // headerCallback is called by curl on each request's header line read.
     fn headerCallback(buffer: [*]const u8, header_count: usize, buf_len: usize, data: *anyopaque) callconv(.c) usize {
         // libcurl should only ever emit 1 header at a time
         std.debug.assert(header_count == 1);
@@ -692,20 +746,9 @@ pub const Transfer = struct {
 
         const header = buffer[0 .. buf_len - 2];
 
-        if (transfer.response_header == null) {
-            if (transfer._redirecting and buf_len == 2) {
-                // parse and set cookies for the redirection.
-                redirectionCookies(transfer, easy) catch |err| {
-                    log.debug(.http, "redirection cookies", .{ .err = err });
-                    return 0;
-                };
-                return buf_len;
-            }
-
-            if (buf_len < 13 or std.mem.startsWith(u8, header, "HTTP/") == false) {
-                if (transfer._redirecting) {
-                    return buf_len;
-                }
+        // Is it the first header line?
+        if (std.mem.startsWith(u8, header, "HTTP/")) {
+            if (buf_len < 13) {
                 log.debug(.http, "invalid response line", .{ .line = header });
                 return 0;
             }
@@ -741,7 +784,9 @@ pub const Transfer = struct {
             return buf_len;
         }
 
-        transfer.bytes_received += buf_len;
+        if (transfer._redirecting == false) {
+            transfer.bytes_received += buf_len;
+        }
 
         if (buf_len != 2) {
             return buf_len;
@@ -749,67 +794,21 @@ pub const Transfer = struct {
 
         // Starting here, we get the last header line.
 
-        // We're connecting to a proxy. Consider the first request to the
+        // We're connecting to a proxy. Consider the first request to be the
         // proxy's result.
         if (transfer._use_proxy and transfer.proxy_response_header == null) {
-            // We have to cases:
-            // 1. for http://, we have one request. So both
-            // proxy_response_header and response_header will have the same
-            // value.
-            //
-            // 2. for https://, we two successive requests, a CONNECT to the
-            // proxy and a final request. So proxy_response_header and
-            // response_header may have different values.
             transfer.proxy_response_header = transfer.response_header;
-
-            // Detect if the request is a CONNECT to the proxy. There might be
-            // a better way to detect this, but I didn't find a better one.
-            // When we don't force curl to always use tunneling, it uses
-            // CONNECT tunnel only for https requests.
-            const is_connect = std.mem.startsWith(u8, std.mem.span(transfer.proxy_response_header.?.url), "https");
-
-            // If the CONNECT is successful, curl will create a following
-            // request to the final target, so we reset
-            // transfer.response_header to get the "real" data.
-            if (is_connect and transfer.proxy_response_header.?.status == 200) {
-                transfer.response_header = null;
-                return buf_len;
-            }
-
-            // If the CONNECT fails, use the request result as it would be our
-            // final request.
         }
 
-        if (getResponseHeader(easy, "content-type", 0)) |ct| {
-            var hdr = &transfer.response_header.?;
-            const value = ct.value;
-            const len = @min(value.len, ResponseHeader.MAX_CONTENT_TYPE_LEN);
-            hdr._content_type_len = len;
-            @memcpy(hdr._content_type[0..len], value[0..len]);
-        }
-
-        var i: usize = 0;
-        while (true) {
-            const ct = getResponseHeader(easy, "set-cookie", i);
-            if (ct == null) break;
-            transfer.req.cookie_jar.populateFromResponse(&transfer.uri, ct.?.value) catch |err| {
-                log.err(.http, "set cookie", .{ .err = err, .req = transfer });
+        if (transfer._redirecting) {
+            // parse and set cookies for the redirection.
+            redirectionCookies(transfer, easy) catch |err| {
+                log.debug(.http, "redirection cookies", .{ .err = err });
+                return 0;
             };
-            i += 1;
-            if (i >= ct.?.amount) break;
+            return buf_len;
         }
 
-        transfer.req.header_callback(transfer) catch |err| {
-            log.err(.http, "header_callback", .{ .err = err, .req = transfer });
-            // returning < buf_len terminates the request
-            return 0;
-        };
-
-        if (transfer.client.notification) |notification| {
-            notification.dispatch(.http_response_header_done, &.{
-                .transfer = transfer,
-            });
-        }
         return buf_len;
     }
 
@@ -825,6 +824,13 @@ pub const Transfer = struct {
 
         if (transfer._redirecting) {
             return chunk_len;
+        }
+
+        if (!transfer._header_done_called) {
+            transfer.headerDoneCallback(easy) catch |err| {
+                log.err(.http, "header_done_callback", .{ .err = err, .req = transfer });
+                return c.CURL_WRITEFUNC_ERROR;
+            };
         }
 
         transfer.bytes_received += chunk_len;
