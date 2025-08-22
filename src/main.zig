@@ -22,9 +22,8 @@ const Allocator = std.mem.Allocator;
 
 const log = @import("log.zig");
 const App = @import("app.zig").App;
-const Server = @import("server.zig").Server;
 const Http = @import("http/Http.zig");
-const Platform = @import("runtime/js.zig").Platform;
+const Server = @import("server.zig").Server;
 const Browser = @import("browser/browser.zig").Browser;
 
 const build_config = @import("build_config");
@@ -717,6 +716,7 @@ test {
     std.testing.refAllDecls(@This());
 }
 
+var test_cdp_server: ?Server = null;
 test "tests:beforeAll" {
     log.opts.level = .err;
     log.opts.format = .logfmt;
@@ -742,6 +742,9 @@ test "tests:beforeAll" {
 }
 
 test "tests:afterAll" {
+    if (test_cdp_server) |*server| {
+        server.deinit();
+    }
     testing.shutdown();
 }
 
@@ -796,11 +799,13 @@ fn serveHTTP(wg: *std.Thread.WaitGroup) !void {
 
 fn serveCDP(wg: *std.Thread.WaitGroup) !void {
     const address = try std.net.Address.parseIp("127.0.0.1", 9583);
+    test_cdp_server = try Server.init(testing.test_app, address);
 
     var server = try Server.init(testing.test_app, address);
     defer server.deinit();
     wg.finish();
-    server.run(address, 5) catch |err| {
+
+    test_cdp_server.?.run(address, 5) catch |err| {
         std.debug.print("CDP server error: {}", .{err});
         return err;
     };
