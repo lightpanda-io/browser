@@ -38,8 +38,8 @@ pub const RequestInput = union(enum) {
 
 // https://developer.mozilla.org/en-US/docs/Web/API/RequestInit
 pub const RequestInit = struct {
-    method: []const u8 = "GET",
-    body: []const u8 = "",
+    method: ?[]const u8 = null,
+    body: ?[]const u8 = null,
 };
 
 // https://developer.mozilla.org/en-US/docs/Web/API/Request/Request
@@ -47,7 +47,7 @@ const Request = @This();
 
 method: Http.Method,
 url: [:0]const u8,
-body: []const u8,
+body: ?[]const u8,
 
 pub fn constructor(input: RequestInput, _options: ?RequestInit, page: *Page) !Request {
     const arena = page.arena;
@@ -62,15 +62,21 @@ pub fn constructor(input: RequestInput, _options: ?RequestInit, page: *Page) !Re
         },
     };
 
-    const method: Http.Method = blk: for (std.enums.values(Http.Method)) |method| {
-        if (std.ascii.eqlIgnoreCase(options.method, @tagName(method))) {
-            break :blk method;
+    const method: Http.Method = blk: {
+        if (options.method) |given_method| {
+            for (std.enums.values(Http.Method)) |method| {
+                if (std.ascii.eqlIgnoreCase(given_method, @tagName(method))) {
+                    break :blk method;
+                }
+            } else {
+                return error.TypeError;
+            }
+        } else {
+            break :blk Http.Method.GET;
         }
-    } else {
-        return error.InvalidMethod;
     };
 
-    const body = try arena.dupe(u8, options.body);
+    const body = if (options.body) |body| try arena.dupe(u8, body) else null;
 
     return .{
         .method = method,
@@ -87,9 +93,9 @@ pub fn get_method(self: *const Request) []const u8 {
     return @tagName(self.method);
 }
 
-pub fn get_body(self: *const Request) []const u8 {
-    return self.body;
-}
+// pub fn get_body(self: *const Request) ?[]const u8 {
+//     return self.body;
+// }
 
 const FetchContext = struct {
     arena: std.mem.Allocator,
@@ -123,13 +129,14 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
     const arena = page.arena;
 
     const req = try Request.constructor(input, options, page);
+
     const resolver = Env.PromiseResolver{
         .js_context = page.main_context,
         .resolver = v8.PromiseResolver.init(page.main_context.v8_context),
     };
 
-    const client = page.http_client;
-    const headers = try HttpClient.Headers.init();
+    var headers = try Http.Headers.init();
+    try page.requestCookie(.{}).headersForRequest(arena, req.url, &headers);
 
     const fetch_ctx = try arena.create(FetchContext);
     fetch_ctx.* = .{
@@ -143,47 +150,51 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
         .url = req.url,
     };
 
-    try client.request(.{
-        .method = req.method,
+    try page.http_client.request(.{
+        .ctx = @ptrCast(fetch_ctx),
         .url = req.url,
+        .method = req.method,
         .headers = headers,
         .body = req.body,
         .cookie_jar = page.cookie_jar,
-        .ctx = @ptrCast(fetch_ctx),
+        .resource_type = .fetch,
 
         .start_callback = struct {
             fn startCallback(transfer: *HttpClient.Transfer) !void {
                 const self: *FetchContext = @alignCast(@ptrCast(transfer.ctx));
                 log.debug(.http, "request start", .{ .method = self.method, .url = self.url, .source = "fetch" });
+
                 self.transfer = transfer;
             }
         }.startCallback,
         .header_callback = struct {
-            fn headerCallback(transfer: *HttpClient.Transfer, header: []const u8) !void {
+            fn headerCallback(transfer: *HttpClient.Transfer) !void {
                 const self: *FetchContext = @alignCast(@ptrCast(transfer.ctx));
-                try self.headers.append(self.arena, try self.arena.dupe(u8, header));
-            }
-        }.headerCallback,
-        .header_done_callback = struct {
-            fn headerDoneCallback(transfer: *HttpClient.Transfer) !void {
-                const self: *FetchContext = @alignCast(@ptrCast(transfer.ctx));
+
                 const header = &transfer.response_header.?;
 
                 log.debug(.http, "request header", .{
                     .source = "fetch",
+                    .method = self.method,
                     .url = self.url,
                     .status = header.status,
                 });
 
                 if (header.contentType()) |ct| {
                     self.mime = Mime.parse(ct) catch {
-                        return error.Todo;
+                        return error.MimeParsing;
                     };
+                }
+
+                var it = transfer.responseHeaderIterator();
+                while (it.next()) |hdr| {
+                    const joined = try std.fmt.allocPrint(self.arena, "{s}: {s}", .{ hdr.name, hdr.value });
+                    try self.headers.append(self.arena, joined);
                 }
 
                 self.status = header.status;
             }
-        }.headerDoneCallback,
+        }.headerCallback,
         .data_callback = struct {
             fn dataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
                 const self: *FetchContext = @alignCast(@ptrCast(transfer.ctx));
@@ -196,6 +207,7 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
 
                 log.info(.http, "request complete", .{
                     .source = "fetch",
+                    .method = self.method,
                     .url = self.url,
                     .status = self.status,
                 });
@@ -212,6 +224,8 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
         .error_callback = struct {
             fn errorCallback(ctx: *anyopaque, err: anyerror) void {
                 const self: *FetchContext = @alignCast(@ptrCast(ctx));
+
+                self.transfer = null;
                 const promise_resolver: Env.PromiseResolver = .{
                     .js_context = self.js_ctx,
                     .resolver = self.promise_resolver.castToPromiseResolver(),

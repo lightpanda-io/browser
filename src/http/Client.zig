@@ -649,6 +649,7 @@ pub const Request = struct {
         document,
         xhr,
         script,
+        fetch,
     };
 };
 
