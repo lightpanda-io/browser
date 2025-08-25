@@ -180,8 +180,7 @@ const TestContext = struct {
     pub fn expectSentError(self: *TestContext, code: i32, message: []const u8, opts: ExpectErrorOpts) !void {
         const expected_message = .{
             .id = opts.id,
-            .code = code,
-            .message = message,
+            .@"error" = .{ .code = code, .message = message },
         };
         try self.expectSent(expected_message, .{ .index = opts.index });
     }
