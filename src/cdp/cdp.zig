@@ -733,8 +733,7 @@ pub fn Command(comptime CDP_T: type, comptime Sender: type) type {
         pub fn sendError(self: *Self, code: i32, message: []const u8) !void {
             return self.sender.sendJSON(.{
                 .id = self.input.id,
-                .code = code,
-                .message = message,
+                .@"error" = .{ .code = code, .message = message },
             });
         }
 
