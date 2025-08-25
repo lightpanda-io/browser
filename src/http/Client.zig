@@ -325,6 +325,11 @@ fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) !void {
         }
 
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PRIVATE, transfer));
+
+        // add credentials
+        if (req.credentials) |creds| {
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXYUSERPWD, creds.ptr));
+        }
     }
 
     // Once soon as this is called, our "perform" loop is responsible for
@@ -365,6 +370,23 @@ fn perform(self: *Client, timeout_ms: c_int) !void {
         const easy = msg.easy_handle.?;
         const transfer = try Transfer.fromEasy(easy);
 
+        // In case of forbidden
+        if (transfer._forbidden) {
+            if (transfer.client.notification) |notification| {
+                var wait_for_interception = false;
+                notification.dispatch(.http_request_auth_required, &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception });
+                if (wait_for_interception) {
+                    log.debug(.http, "WAIT FOR INTERCEPT", .{});
+                    // the request is put on hold to be intercepted.
+                    // In this case we ignore callbacks for now.
+                    // Note: we don't deinit transfer on purpose: we want to keep
+                    // using it for the following request.
+                    self.endTransfer(transfer);
+                    continue;
+                }
+            }
+        }
+
         // release it ASAP so that it's available; some done_callbacks
         // will load more resources.
         self.endTransfer(transfer);
@@ -372,6 +394,7 @@ fn perform(self: *Client, timeout_ms: c_int) !void {
         defer transfer.deinit();
 
         if (errorCheck(msg.data.result)) {
+
             // In case of request w/o data, we need to call the header done
             // callback now.
             if (!transfer._header_done_called) {
@@ -542,6 +565,7 @@ pub const Request = struct {
     body: ?[]const u8 = null,
     cookie_jar: *CookieJar,
     resource_type: ResourceType,
+    credentials: ?[:0]const u8 = null,
 
     // arbitrary data that can be associated with this request
     ctx: *anyopaque = undefined,
@@ -584,7 +608,7 @@ pub const Transfer = struct {
     _redirecting: bool = false,
     _forbidden: bool = false,
 
-    fn deinit(self: *Transfer) void {
+    pub fn deinit(self: *Transfer) void {
         self.req.headers.deinit();
         if (self._handle) |handle| {
             self.client.handles.release(handle);
@@ -631,6 +655,10 @@ pub const Transfer = struct {
 
         // for the request itself
         self.req.url = url;
+    }
+
+    pub fn updateCredentials(self: *Transfer, userpwd: [:0]const u8) void {
+        self.req.credentials = userpwd;
     }
 
     pub fn replaceRequestHeaders(self: *Transfer, allocator: Allocator, headers: []const Http.Header) !void {
@@ -823,7 +851,7 @@ pub const Transfer = struct {
             return c.CURL_WRITEFUNC_ERROR;
         };
 
-        if (transfer._redirecting) {
+        if (transfer._redirecting or transfer._forbidden) {
             return chunk_len;
         }
 
