@@ -39,12 +39,14 @@ pub const Document = @import("../testing.zig").Document;
 
 const Client = struct {
     allocator: Allocator,
+    send_arena: ArenaAllocator,
     sent: std.ArrayListUnmanaged(json.Value) = .{},
     serialized: std.ArrayListUnmanaged([]const u8) = .{},
 
     fn init(alloc: Allocator) Client {
         return .{
             .allocator = alloc,
+            .send_arena = ArenaAllocator.init(alloc),
         };
     }
 
@@ -58,7 +60,7 @@ const Client = struct {
         try self.sent.append(self.allocator, value);
     }
 
-    pub fn sendJSONRaw(self: *Client, _: ArenaAllocator, buf: std.ArrayListUnmanaged(u8)) !void {
+    pub fn sendJSONRaw(self: *Client, buf: std.ArrayListUnmanaged(u8)) !void {
         const value = try json.parseFromSliceLeaky(json.Value, self.allocator, buf.items, .{});
         try self.sent.append(self.allocator, value);
     }

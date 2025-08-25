@@ -114,12 +114,9 @@ pub fn CDPT(comptime TypeProvider: type) type {
         }
 
         // @newhttp
-        // A bit hacky right now. The main server loop blocks only for CDP
-        // messages. It no longer blocks for page timeouts of page HTTP
-        // transfers. So we need to call this more ourselves.
-        // This is called after every message and [very hackily] from the server
-        // loop.
-        // This is hopefully temporary.
+        // A bit hacky right now. The main server loop doesn't unblock for
+        // scheduled task. So we run this directly in order to process any
+        // timeouts (or http events) which are ready to be processed.
         pub fn pageWait(self: *Self) void {
             const session = &(self.browser.session orelse return);
             // exits early if there's nothing to do, so a large value like
@@ -592,8 +589,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             };
 
             const cdp = self.cdp;
-            var arena = std.heap.ArenaAllocator.init(cdp.allocator);
-            errdefer arena.deinit();
+            const allocator = cdp.client.send_arena.allocator();
 
             const field = ",\"sessionId\":\"";
 
@@ -602,7 +598,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             const message_len = msg.len + session_id.len + 1 + field.len + 10;
 
             var buf: std.ArrayListUnmanaged(u8) = .{};
-            buf.ensureTotalCapacity(arena.allocator(), message_len) catch |err| {
+            buf.ensureTotalCapacity(allocator, message_len) catch |err| {
                 log.err(.cdp, "inspector buffer", .{ .err = err });
                 return;
             };
@@ -617,7 +613,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             buf.appendSliceAssumeCapacity("\"}");
             std.debug.assert(buf.items.len == message_len);
 
-            try cdp.client.sendJSONRaw(arena, buf);
+            try cdp.client.sendJSONRaw(buf);
         }
     };
 }

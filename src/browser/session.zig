@@ -137,7 +137,7 @@ pub const Session = struct {
         return &(self.page orelse return null);
     }
 
-    pub fn wait(self: *Session, wait_sec: usize) void {
+    pub fn wait(self: *Session, wait_sec: u16) void {
         if (self.queued_navigation) |qn| {
             // This was already aborted on the page, but it would be pretty
             // bad if old requests went to the new page, so let's make double sure

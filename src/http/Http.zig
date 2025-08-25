@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const posix = std.posix;
 
 pub const c = @cImport({
     @cInclude("curl/curl.h");
@@ -26,6 +27,7 @@ pub const ENABLE_DEBUG = false;
 pub const Client = @import("Client.zig");
 pub const Transfer = Client.Transfer;
 
+const log = @import("../log.zig");
 const errors = @import("errors.zig");
 
 const Allocator = std.mem.Allocator;
@@ -83,6 +85,16 @@ pub fn deinit(self: *Http) void {
     self.client.deinit();
     c.curl_global_cleanup();
     self.arena.deinit();
+}
+
+pub fn poll(self: *Http, timeout_ms: i32, socket: posix.socket_t) bool {
+    return self.client.tick(.{
+        .timeout_ms = timeout_ms,
+        .poll_socket = socket,
+    }) catch |err| {
+        log.err(.app, "http poll", .{ .err = err });
+        return false;
+    };
 }
 
 pub fn newConnection(self: *Http) !Connection {
