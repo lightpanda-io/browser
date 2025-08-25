@@ -96,6 +96,18 @@ jobs:
           go run runner/main.go --verbose
           kill `cat LPD.pid`
 
+      - name: build proxy
+        run: |
+          cd proxy
+          go build
+
+      - name: run end to end tests through proxy
+        run: |
+          ./proxy/proxy & echo $! > PROXY.id
+          ./lightpanda serve --http_proxy 'http://127.0.0.1:3000' & echo $! > LPD.pid
+          go run runner/main.go --verbose
+          kill `cat LPD.pid` `cat PROXY.id`
+
   cdp-and-hyperfine-bench:
     name: cdp-and-hyperfine-bench
     needs: zig-build-release

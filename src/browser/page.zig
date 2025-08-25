@@ -756,7 +756,14 @@ pub const Page = struct {
                     self.documentIsComplete();
                 }
             },
-            else => unreachable,
+            .pre => {
+                // we didn't get any data.
+                self.documentIsComplete();
+            },
+            else => {
+                log.err(.app, "unreachable mode", .{ .mode = self.mode });
+                unreachable;
+            },
         }
     }
 
