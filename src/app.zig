@@ -4,7 +4,6 @@ const Allocator = std.mem.Allocator;
 
 const log = @import("log.zig");
 const Http = @import("http/Http.zig");
-const Loop = @import("runtime/loop.zig").Loop;
 const Platform = @import("runtime/js.zig").Platform;
 
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
@@ -14,7 +13,6 @@ const Notification = @import("notification.zig").Notification;
 // might need.
 pub const App = struct {
     http: Http,
-    loop: *Loop,
     config: Config,
     platform: ?*const Platform,
     allocator: Allocator,
@@ -45,12 +43,6 @@ pub const App = struct {
         const app = try allocator.create(App);
         errdefer allocator.destroy(app);
 
-        const loop = try allocator.create(Loop);
-        errdefer allocator.destroy(loop);
-
-        loop.* = try Loop.init(allocator);
-        errdefer loop.deinit();
-
         const notification = try Notification.init(allocator, null);
         errdefer notification.deinit();
 
@@ -68,7 +60,6 @@ pub const App = struct {
         const app_dir_path = getAndMakeAppDir(allocator);
 
         app.* = .{
-            .loop = loop,
             .http = http,
             .allocator = allocator,
             .telemetry = undefined,
@@ -92,8 +83,6 @@ pub const App = struct {
             allocator.free(app_dir_path);
         }
         self.telemetry.deinit();
-        self.loop.deinit();
-        allocator.destroy(self.loop);
         self.notification.deinit();
         self.http.deinit();
         allocator.destroy(self);

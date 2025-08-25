@@ -153,8 +153,6 @@ fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !vo
         .optimize = mod.optimize.?,
     };
 
-    mod.addImport("tigerbeetle-io", b.dependency("tigerbeetle_io", .{}).module("tigerbeetle_io"));
-
     mod.addIncludePath(b.path("vendor/lightpanda"));
 
     {
