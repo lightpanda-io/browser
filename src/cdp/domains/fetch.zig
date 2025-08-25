@@ -200,6 +200,7 @@ pub fn requestIntercept(arena: Allocator, bc: anytype, intercept: *const Notific
             .script => "Script",
             .xhr => "XHR",
             .document => "Document",
+            .fetch => "Fetch",
         },
         .networkId = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id}),
     }, .{ .session_id = session_id });
