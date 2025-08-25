@@ -72,12 +72,9 @@ pub const Server = struct {
         self.listener = listener;
 
         try posix.setsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-        // TODO: Broken on darwin
-        // https://github.com/ziglang/zig/issues/17260  (fixed in Zig 0.14)
-        // if (@hasDecl(os.TCP, "NODELAY")) {
-        //  try os.setsockopt(socket.sockfd.?, os.IPPROTO.TCP, os.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
-        // }
-        try posix.setsockopt(listener, posix.IPPROTO.TCP, 1, &std.mem.toBytes(@as(c_int, 1)));
+        if (@hasDecl(posix.TCP, "NODELAY")) {
+            try posix.setsockopt(listener, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
+        }
 
         try posix.bind(listener, &address.any, address.getOsSockLen());
         try posix.listen(listener, 1);
