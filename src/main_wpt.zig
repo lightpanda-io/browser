@@ -274,14 +274,24 @@ const Writer = struct {
                 case_pass_count += 1;
             } else {
                 // both cases names and messages can have | in them. Our only
-                // chance to "parse" this is to anchor off the |Fail.
-                const pos = std.mem.indexOf(u8, line, "|Fail") orelse {
+                // chance to "parse" this is to anchor off the |$Status.
+                const statuses = [_][]const u8{ "|Fail", "|Timeout", "|Not Run", "|Optional Feature Unsupported" };
+                var pos_: ?usize = null;
+                var message_start: usize = 0;
+                for (statuses) |status| {
+                    if (std.mem.indexOf(u8, line, status)) |idx| {
+                        pos_ = idx;
+                        message_start = idx + status.len;
+                        break;
+                    }
+                }
+                const pos = pos_ orelse {
                     std.debug.print("invalid result line: {s}\n", .{line});
                     return error.InvalidResult;
                 };
 
                 case_name = line[0..pos];
-                case_message = line[pos + 1 ..];
+                case_message = line[message_start..];
                 pass = false;
                 case_fail_count += 1;
             }
