@@ -267,7 +267,7 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: anytype, msg: *const Notific
         .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{msg.transfer.id}),
         .loaderId = bc.loader_id,
         .frameId = target_id,
-        .response = TransferAsResponseWriter.init(msg.transfer),
+        .response = TransferAsResponseWriter.init(arena, msg.transfer),
     }, .{ .session_id = session_id });
 }
 
@@ -352,10 +352,12 @@ pub const TransferAsRequestWriter = struct {
 };
 
 const TransferAsResponseWriter = struct {
+    arena: Allocator,
     transfer: *Transfer,
 
-    fn init(transfer: *Transfer) TransferAsResponseWriter {
+    fn init(arena: Allocator, transfer: *Transfer) TransferAsResponseWriter {
         return .{
+            .arena = arena,
             .transfer = transfer,
         };
     }
@@ -392,14 +394,24 @@ const TransferAsResponseWriter = struct {
         }
 
         {
-            try writer.objectField("headers");
-            try writer.beginObject();
+            // chromedp doesn't like having duplicate header names. It's pretty
+            // common to get these from a server (e.g. for Cache-Control), but
+            // Chrome joins these. So we have to too.
+            const arena = self.arena;
             var it = transfer.responseHeaderIterator();
+            var map: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
             while (it.next()) |hdr| {
-                try writer.objectField(hdr.name);
-                try writer.write(hdr.value);
+                const gop = try map.getOrPut(arena, hdr.name);
+                if (gop.found_existing) {
+                    // yes, chrome joins multi-value headers with a \n
+                    gop.value_ptr.* = try std.mem.join(arena, "\n", &.{ gop.value_ptr.*, hdr.value });
+                } else {
+                    gop.value_ptr.* = hdr.value;
+                }
             }
-            try writer.endObject();
+
+            try writer.objectField("headers");
+            try writer.write(std.json.ArrayHashMap([]const u8){ .map = map });
         }
         try writer.endObject();
     }
