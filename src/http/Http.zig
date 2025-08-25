@@ -22,7 +22,7 @@ pub const c = @cImport({
     @cInclude("curl/curl.h");
 });
 
-pub const ENABLE_DEBUG = false;
+pub const ENABLE_DEBUG = true;
 pub const Client = @import("Client.zig");
 pub const Transfer = Client.Transfer;
 
