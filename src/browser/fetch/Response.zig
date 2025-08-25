@@ -19,6 +19,9 @@
 const std = @import("std");
 const URL = @import("../../url.zig").URL;
 const Page = @import("../page.zig").Page;
+const Env = @import("../env.zig").Env;
+
+const v8 = @import("v8");
 
 const Http = @import("../../http/Http.zig");
 const HttpClient = @import("../../http/Client.zig");
@@ -36,13 +39,26 @@ const ResponseInput = union(enum) {
     string: []const u8,
 };
 
-pub fn constructor(input: ResponseInput, page: *Page) !Response {
+const ResponseOptions = struct {
+    status: u16 = 200,
+    statusText: []const u8 = "",
+    // List of header pairs.
+    headers: []const []const u8 = &[][].{},
+};
+
+pub fn constructor(_input: ?ResponseInput, page: *Page) !Response {
     const arena = page.arena;
 
-    const body = blk: switch (input) {
-        .string => |str| {
-            break :blk try arena.dupe(u8, str);
-        },
+    const body = blk: {
+        if (_input) |input| {
+            switch (input) {
+                .string => |str| {
+                    break :blk try arena.dupe(u8, str);
+                },
+            }
+        } else {
+            break :blk "";
+        }
     };
 
     return .{
@@ -53,6 +69,16 @@ pub fn constructor(input: ResponseInput, page: *Page) !Response {
 
 pub fn get_ok(self: *const Response) bool {
     return self.status >= 200 and self.status <= 299;
+}
+
+pub fn _text(self: *const Response, page: *Page) !Env.Promise {
+    const resolver = Env.PromiseResolver{
+        .js_context = page.main_context,
+        .resolver = v8.PromiseResolver.init(page.main_context.v8_context),
+    };
+
+    try resolver.resolve(self.body);
+    return resolver.promise();
 }
 
 const testing = @import("../../testing.zig");
