@@ -631,7 +631,6 @@ pub const Transfer = struct {
     bytes_received: usize = 0,
 
     // We'll store the response header here
-    proxy_response_header: ?ResponseHeader = null,
     response_header: ?ResponseHeader = null,
 
     // track if the header callbacks done have been called.
