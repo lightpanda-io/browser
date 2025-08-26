@@ -582,12 +582,14 @@ pub const Request = struct {
 };
 
 pub const AuthChallenge = struct {
+    status: u16,
     source: enum { server, proxy },
     scheme: enum { basic, digest },
     realm: []const u8,
 
-    pub fn parse(header: []const u8) !AuthChallenge {
+    pub fn parse(status: u16, header: []const u8) !AuthChallenge {
         var ac: AuthChallenge = .{
+            .status = status,
             .source = undefined,
             .realm = "TODO", // TODO parser and set realm
             .scheme = undefined,
@@ -674,7 +676,11 @@ pub const Transfer = struct {
         try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_EFFECTIVE_URL, &url));
 
         var status: c_long = undefined;
-        try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_RESPONSE_CODE, &status));
+        if (self._auth_challenge) |_| {
+            status = 407;
+        } else {
+            try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_RESPONSE_CODE, &status));
+        }
 
         self.response_header = .{
             .url = url,
@@ -871,6 +877,7 @@ pub const Transfer = struct {
                 // The auth challenge must be parsed from a following
                 // WWW-Authenticate or Proxy-Authenticate header.
                 transfer._auth_challenge = .{
+                    .status = status,
                     .source = undefined,
                     .scheme = undefined,
                     .realm = undefined,
@@ -893,7 +900,10 @@ pub const Transfer = struct {
                 if (std.ascii.startsWithIgnoreCase(header, "WWW-Authenticate") or
                     std.ascii.startsWithIgnoreCase(header, "Proxy-Authenticate"))
                 {
-                    const ac = AuthChallenge.parse(header) catch |err| {
+                    const ac = AuthChallenge.parse(
+                        transfer._auth_challenge.?.status,
+                        header,
+                    ) catch |err| {
                         // We can't parse the auth challenge
                         log.err(.http, "parse auth challenge", .{ .err = err, .header = header });
                         // Should we cancel the request? I don't think so.
