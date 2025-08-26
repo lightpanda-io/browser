@@ -278,7 +278,7 @@ fn requestFailed(self: *Client, transfer: *Transfer, err: anyerror) void {
 pub fn changeProxy(self: *Client, proxy: [:0]const u8) !void {
     try self.ensureNoActiveConnection();
 
-    for (self.handles.handles) |h| {
+    for (self.handles.handles) |*h| {
         try errorCheck(c.curl_easy_setopt(h.conn.easy, c.CURLOPT_PROXY, proxy.ptr));
     }
     try errorCheck(c.curl_easy_setopt(self.blocking.conn.easy, c.CURLOPT_PROXY, proxy.ptr));
@@ -290,7 +290,7 @@ pub fn restoreOriginalProxy(self: *Client) !void {
     try self.ensureNoActiveConnection();
 
     const proxy = if (self.http_proxy) |p| p.ptr else null;
-    for (self.handles.handles) |h| {
+    for (self.handles.handles) |*h| {
         try errorCheck(c.curl_easy_setopt(h.conn.easy, c.CURLOPT_PROXY, proxy));
     }
     try errorCheck(c.curl_easy_setopt(self.blocking.conn.easy, c.CURLOPT_PROXY, proxy));
@@ -359,7 +359,7 @@ fn perform(self: *Client, timeout_ms: c_int) !void {
     var messages_count: c_int = 0;
     while (c.curl_multi_info_read(multi, &messages_count)) |msg_| {
         const msg: *c.CURLMsg = @ptrCast(msg_);
-        // This is the only possible mesage type from CURL for now.
+        // This is the only possible message type from CURL for now.
         std.debug.assert(msg.msg == c.CURLMSG_DONE);
 
         const easy = msg.easy_handle.?;
@@ -372,6 +372,15 @@ fn perform(self: *Client, timeout_ms: c_int) !void {
         defer transfer.deinit();
 
         if (errorCheck(msg.data.result)) {
+            // In case of request w/o data, we need to call the header done
+            // callback now.
+            if (!transfer._header_done_called) {
+                transfer.headerDoneCallback(easy) catch |err| {
+                    log.err(.http, "header_done_callback", .{ .err = err });
+                    self.requestFailed(transfer, err);
+                    continue;
+                };
+            }
             transfer.req.done_callback(transfer.ctx) catch |err| {
                 // transfer isn't valid at this point, don't use it.
                 log.err(.http, "done_callback", .{ .err = err });
@@ -562,13 +571,18 @@ pub const Transfer = struct {
     bytes_received: usize = 0,
 
     // We'll store the response header here
+    proxy_response_header: ?ResponseHeader = null,
     response_header: ?ResponseHeader = null,
+
+    // track if the header callbacks done have been called.
+    _header_done_called: bool = false,
 
     _notified_fail: bool = false,
 
     _handle: ?*Handle = null,
 
     _redirecting: bool = false,
+    _forbidden: bool = false,
 
     fn deinit(self: *Transfer) void {
         self.req.headers.deinit();
@@ -579,15 +593,32 @@ pub const Transfer = struct {
         self.client.transfer_pool.destroy(self);
     }
 
+    fn buildResponseHeader(self: *Transfer, easy: *c.CURL) !void {
+        std.debug.assert(self.response_header == null);
+
+        var url: [*c]u8 = undefined;
+        try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_EFFECTIVE_URL, &url));
+
+        var status: c_long = undefined;
+        try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_RESPONSE_CODE, &status));
+
+        self.response_header = .{
+            .url = url,
+            .status = @intCast(status),
+        };
+
+        if (getResponseHeader(easy, "content-type", 0)) |ct| {
+            var hdr = &self.response_header.?;
+            const value = ct.value;
+            const len = @min(value.len, ResponseHeader.MAX_CONTENT_TYPE_LEN);
+            hdr._content_type_len = len;
+            @memcpy(hdr._content_type[0..len], value[0..len]);
+        }
+    }
+
     pub fn format(self: *const Transfer, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         const req = self.req;
         return writer.print("{s} {s}", .{ @tagName(req.method), req.url });
-    }
-
-    pub fn setBody(self: *Transfer, body: []const u8) !void {
-        const easy = self.handle.easy;
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_POSTFIELDS, body.ptr));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_POSTFIELDSIZE, @as(c_long, @intCast(body.len))));
     }
 
     pub fn addHeader(self: *Transfer, value: [:0]const u8) !void {
@@ -666,6 +697,48 @@ pub const Transfer = struct {
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COOKIE, @as([*c]const u8, @ptrCast(cookies.items.ptr))));
     }
 
+    // headerDoneCallback is called once the headers have been read.
+    // It can be called either on dataCallback or once the request for those
+    // w/o body.
+    fn headerDoneCallback(transfer: *Transfer, easy: *c.CURL) !void {
+        std.debug.assert(transfer._header_done_called == false);
+        defer transfer._header_done_called = true;
+
+        try transfer.buildResponseHeader(easy);
+
+        if (getResponseHeader(easy, "content-type", 0)) |ct| {
+            var hdr = &transfer.response_header.?;
+            const value = ct.value;
+            const len = @min(value.len, ResponseHeader.MAX_CONTENT_TYPE_LEN);
+            hdr._content_type_len = len;
+            @memcpy(hdr._content_type[0..len], value[0..len]);
+        }
+
+        var i: usize = 0;
+        while (true) {
+            const ct = getResponseHeader(easy, "set-cookie", i);
+            if (ct == null) break;
+            transfer.req.cookie_jar.populateFromResponse(&transfer.uri, ct.?.value) catch |err| {
+                log.err(.http, "set cookie", .{ .err = err, .req = transfer });
+                return err;
+            };
+            i += 1;
+            if (i >= ct.?.amount) break;
+        }
+
+        transfer.req.header_callback(transfer) catch |err| {
+            log.err(.http, "header_callback", .{ .err = err, .req = transfer });
+            return err;
+        };
+
+        if (transfer.client.notification) |notification| {
+            notification.dispatch(.http_response_header_done, &.{
+                .transfer = transfer,
+            });
+        }
+    }
+
+    // headerCallback is called by curl on each request's header line read.
     fn headerCallback(buffer: [*]const u8, header_count: usize, buf_len: usize, data: *anyopaque) callconv(.c) usize {
         // libcurl should only ever emit 1 header at a time
         std.debug.assert(header_count == 1);
@@ -680,20 +753,13 @@ pub const Transfer = struct {
 
         const header = buffer[0 .. buf_len - 2];
 
-        if (transfer.response_header == null) {
-            if (transfer._redirecting and buf_len == 2) {
-                // parse and set cookies for the redirection.
-                redirectionCookies(transfer, easy) catch |err| {
-                    log.debug(.http, "redirection cookies", .{ .err = err });
-                    return 0;
-                };
-                return buf_len;
-            }
-
-            if (buf_len < 13 or std.mem.startsWith(u8, header, "HTTP/") == false) {
-                if (transfer._redirecting) {
-                    return buf_len;
-                }
+        // We need to parse the first line headers for each request b/c curl's
+        // CURLINFO_RESPONSE_CODE returns the status code of the final request.
+        // If a redirection or a proxy's CONNECT forbidden happens, we won't
+        // get this intermediary status code.
+        if (std.mem.startsWith(u8, header, "HTTP/")) {
+            // Is it the first header line.
+            if (buf_len < 13) {
                 log.debug(.http, "invalid response line", .{ .line = header });
                 return 0;
             }
@@ -715,53 +781,35 @@ pub const Transfer = struct {
             }
             transfer._redirecting = false;
 
-            var url: [*c]u8 = undefined;
-            errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_EFFECTIVE_URL, &url)) catch |err| {
-                log.err(.http, "failed to get URL", .{ .err = err });
-                return 0;
-            };
+            if (status == 401 or status == 407) {
+                transfer._forbidden = true;
+                return buf_len;
+            }
+            transfer._forbidden = false;
 
-            transfer.response_header = .{
-                .url = url,
-                .status = status,
-            };
             transfer.bytes_received = buf_len;
             return buf_len;
         }
 
-        transfer.bytes_received += buf_len;
-        if (buf_len == 2) {
-            if (getResponseHeader(easy, "content-type", 0)) |ct| {
-                var hdr = &transfer.response_header.?;
-                const value = ct.value;
-                const len = @min(value.len, ResponseHeader.MAX_CONTENT_TYPE_LEN);
-                hdr._content_type_len = len;
-                @memcpy(hdr._content_type[0..len], value[0..len]);
-            }
+        if (transfer._redirecting == false and transfer._forbidden == false) {
+            transfer.bytes_received += buf_len;
+        }
 
-            var i: usize = 0;
-            while (true) {
-                const ct = getResponseHeader(easy, "set-cookie", i);
-                if (ct == null) break;
-                transfer.req.cookie_jar.populateFromResponse(&transfer.uri, ct.?.value) catch |err| {
-                    log.err(.http, "set cookie", .{ .err = err, .req = transfer });
-                };
-                i += 1;
-                if (i >= ct.?.amount) break;
-            }
+        if (buf_len != 2) {
+            return buf_len;
+        }
 
-            transfer.req.header_callback(transfer) catch |err| {
-                log.err(.http, "header_callback", .{ .err = err, .req = transfer });
-                // returning < buf_len terminates the request
+        // Starting here, we get the last header line.
+
+        if (transfer._redirecting) {
+            // parse and set cookies for the redirection.
+            redirectionCookies(transfer, easy) catch |err| {
+                log.debug(.http, "redirection cookies", .{ .err = err });
                 return 0;
             };
-
-            if (transfer.client.notification) |notification| {
-                notification.dispatch(.http_response_header_done, &.{
-                    .transfer = transfer,
-                });
-            }
+            return buf_len;
         }
+
         return buf_len;
     }
 
@@ -777,6 +825,13 @@ pub const Transfer = struct {
 
         if (transfer._redirecting) {
             return chunk_len;
+        }
+
+        if (!transfer._header_done_called) {
+            transfer.headerDoneCallback(easy) catch |err| {
+                log.err(.http, "header_done_callback", .{ .err = err, .req = transfer });
+                return c.CURL_WRITEFUNC_ERROR;
+            };
         }
 
         transfer.bytes_received += chunk_len;
