@@ -370,6 +370,22 @@ fn perform(self: *Client, timeout_ms: c_int) !void {
         const easy = msg.easy_handle.?;
         const transfer = try Transfer.fromEasy(easy);
 
+        // In case of auth challenge
+        if (transfer._auth_challenge != null) {
+            if (transfer.client.notification) |notification| {
+                var wait_for_interception = false;
+                notification.dispatch(.http_request_auth_required, &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception });
+                if (wait_for_interception) {
+                    // the request is put on hold to be intercepted.
+                    // In this case we ignore callbacks for now.
+                    // Note: we don't deinit transfer on purpose: we want to keep
+                    // using it for the following request.
+                    self.endTransfer(transfer);
+                    continue;
+                }
+            }
+        }
+
         // release it ASAP so that it's available; some done_callbacks
         // will load more resources.
         self.endTransfer(transfer);
@@ -565,6 +581,44 @@ pub const Request = struct {
     };
 };
 
+pub const AuthChallenge = struct {
+    source: enum { server, proxy },
+    scheme: enum { basic, digest },
+    realm: []const u8,
+
+    pub fn parse(header: []const u8) !AuthChallenge {
+        var ac: AuthChallenge = .{
+            .source = undefined,
+            .realm = "TODO", // TODO parser and set realm
+            .scheme = undefined,
+        };
+
+        const sep = std.mem.indexOfPos(u8, header, 0, ": ") orelse return error.InvalidHeader;
+        const hname = header[0..sep];
+        const hvalue = header[sep + 2 ..];
+
+        if (std.ascii.eqlIgnoreCase("WWW-Authenticate", hname)) {
+            ac.source = .server;
+        } else if (std.ascii.eqlIgnoreCase("Proxy-Authenticate", hname)) {
+            ac.source = .proxy;
+        } else {
+            return error.InvalidAuthChallenge;
+        }
+
+        const pos = std.mem.indexOfPos(u8, std.mem.trim(u8, hvalue, std.ascii.whitespace[0..]), 0, " ") orelse hvalue.len;
+        const _scheme = hvalue[0..pos];
+        if (std.ascii.eqlIgnoreCase(_scheme, "basic")) {
+            ac.scheme = .basic;
+        } else if (std.ascii.eqlIgnoreCase(_scheme, "digest")) {
+            ac.scheme = .digest;
+        } else {
+            return error.UnknownAuthChallengeScheme;
+        }
+
+        return ac;
+    }
+};
+
 pub const Transfer = struct {
     arena: ArenaAllocator,
     id: usize = 0,
@@ -588,7 +642,7 @@ pub const Transfer = struct {
     _handle: ?*Handle = null,
 
     _redirecting: bool = false,
-    _forbidden: bool = false,
+    _auth_challenge: ?AuthChallenge = null,
 
     fn deinit(self: *Transfer) void {
         self.req.headers.deinit();
@@ -664,6 +718,14 @@ pub const Transfer = struct {
         if (self._handle != null) {
             self.client.endTransfer(self);
         }
+        self.deinit();
+    }
+
+    // abortAuthChallenge is called when an auth chanllenge interception is
+    // abort. We don't call self.client.endTransfer here b/c it has been done
+    // before interception process.
+    pub fn abortAuthChallenge(self: *Transfer) void {
+        self.client.requestFailed(self, error.AbortAuthChallenge);
         self.deinit();
     }
 
@@ -792,20 +854,40 @@ pub const Transfer = struct {
             transfer._redirecting = false;
 
             if (status == 401 or status == 407) {
-                transfer._forbidden = true;
+                // The auth challenge must be parsed from a following
+                // WWW-Authenticate or Proxy-Authenticate header.
+                transfer._auth_challenge = .{
+                    .source = undefined,
+                    .scheme = undefined,
+                    .realm = undefined,
+                };
                 return buf_len;
             }
-            transfer._forbidden = false;
+            transfer._auth_challenge = null;
 
             transfer.bytes_received = buf_len;
             return buf_len;
         }
 
-        if (transfer._redirecting == false and transfer._forbidden == false) {
+        if (transfer._redirecting == false and transfer._auth_challenge != null) {
             transfer.bytes_received += buf_len;
         }
 
         if (buf_len != 2) {
+            if (transfer._auth_challenge != null) {
+                // try to parse auth challenge.
+                if (std.ascii.startsWithIgnoreCase(header, "WWW-Authenticate") or
+                    std.ascii.startsWithIgnoreCase(header, "Proxy-Authenticate"))
+                {
+                    const ac = AuthChallenge.parse(header) catch |err| {
+                        // We can't parse the auth challenge
+                        log.err(.http, "parse auth challenge", .{ .err = err, .header = header });
+                        // Should we cancel the request? I don't think so.
+                        return buf_len;
+                    };
+                    transfer._auth_challenge = ac;
+                }
+            }
             return buf_len;
         }
 
@@ -833,7 +915,7 @@ pub const Transfer = struct {
             return c.CURL_WRITEFUNC_ERROR;
         };
 
-        if (transfer._redirecting) {
+        if (transfer._redirecting or transfer._auth_challenge != null) {
             return chunk_len;
         }
 
