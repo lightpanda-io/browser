@@ -136,14 +136,10 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
         if (std.ascii.eqlIgnoreCase(script_type, "module")) {
             break :blk .module;
         }
-        if (std.ascii.eqlIgnoreCase(script_type, "application/json")) {
-            return;
-        }
-        if (std.ascii.eqlIgnoreCase(script_type, "application/ld+json")) {
-            return;
-        }
 
-        log.warn(.user_script, "unknown script type", .{ .type = script_type });
+        // "type" could be anything, but only the above are ones we need to process.
+        // Common other ones are application/json, application/ld+json, text/template
+
         return;
     };
 
