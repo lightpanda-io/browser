@@ -147,32 +147,7 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
         return;
     };
 
-    var onload: ?Script.Callback = null;
-    var onerror: ?Script.Callback = null;
-
     const page = self.page;
-    if (page.getNodeState(@ptrCast(element))) |se| {
-        // if the script has a node state, then it was dynamically added and thus
-        // the onload/onerror were saved in the state (if there are any)
-        if (se.onload) |function| {
-            onload = .{ .function = function };
-        }
-        if (se.onerror) |function| {
-            onerror = .{ .function = function };
-        }
-    } else {
-        // if the script has no node state, then it could still be dynamically
-        // added (could have been dynamically added, but no attributes were set
-        // which required a node state to be created) or it could be a inline
-        // <script>.
-        if (try parser.elementGetAttribute(element, "onload")) |string| {
-            onload = .{ .string = string };
-        }
-        if (try parser.elementGetAttribute(element, "onerror")) |string| {
-            onerror = .{ .string = string };
-        }
-    }
-
     var source: Script.Source = undefined;
     var remote_url: ?[:0]const u8 = null;
     if (try parser.elementGetAttribute(element, "src")) |src| {
@@ -188,8 +163,6 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
 
     var script = Script{
         .kind = kind,
-        .onload = onload,
-        .onerror = onerror,
         .element = element,
         .source = source,
         .url = remote_url orelse page.url.raw,
@@ -562,8 +535,6 @@ const Script = struct {
     is_async: bool,
     is_defer: bool,
     source: Source,
-    onload: ?Callback,
-    onerror: ?Callback,
     element: *parser.Element,
 
     const Kind = enum {
@@ -648,7 +619,7 @@ const Script = struct {
     }
 
     fn executeCallback(self: *const Script, comptime typ: []const u8, page: *Page) void {
-        const callback = @field(self, typ) orelse return;
+        const callback = self.getCallback(typ, page) orelse return;
 
         switch (callback) {
             .string => |str| {
@@ -690,6 +661,23 @@ const Script = struct {
                 };
             },
         }
+    }
+
+    fn getCallback(self: *const Script, comptime typ: []const u8, page: *Page) ?Callback {
+        const element = self.element;
+        // first we check if there was an el.onload set directly on the
+        // element in JavaScript (if so, it'd be stored in the node state)
+        if (page.getNodeState(@ptrCast(element))) |se| {
+            if (@field(se, typ)) |function| {
+                return .{ .function = function };
+            }
+        }
+        // if we have no node state, or if the node state has no onload/onerror
+        // then check for the onload/onerror attribute
+        if (parser.elementGetAttribute(element, typ) catch null) |string| {
+            return .{ .string = string };
+        }
+        return null;
     }
 };
 

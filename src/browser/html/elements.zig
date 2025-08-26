@@ -862,12 +862,23 @@ pub const HTMLScriptElement = struct {
         ) orelse "";
     }
 
-    pub fn set_src(self: *parser.Script, v: []const u8) !void {
-        return try parser.elementSetAttribute(
+    pub fn set_src(self: *parser.Script, v: []const u8, page: *Page) !void {
+        try parser.elementSetAttribute(
             parser.scriptToElt(self),
             "src",
             v,
         );
+
+        if (try Node.get_isConnected(@alignCast(@ptrCast(self)))) {
+            // There are sites which do set the src AFTER appending the script
+            // tag to the document:
+            //    const s = document.createElement('script');
+            //    document.getElementsByTagName('body')[0].appendChild(s);
+            //    s.src = '...';
+            // This should load the script.
+            // addFromElement protects against double execution.
+            try page.script_manager.addFromElement(@alignCast(@ptrCast(self)));
+        }
     }
 
     pub fn get_type(self: *parser.Script) !?[]const u8 {
@@ -878,7 +889,7 @@ pub const HTMLScriptElement = struct {
     }
 
     pub fn set_type(self: *parser.Script, v: []const u8) !void {
-        return try parser.elementSetAttribute(
+        try parser.elementSetAttribute(
             parser.scriptToElt(self),
             "type",
             v,
@@ -893,7 +904,7 @@ pub const HTMLScriptElement = struct {
     }
 
     pub fn set_text(self: *parser.Script, v: []const u8) !void {
-        return try parser.elementSetAttribute(
+        try parser.elementSetAttribute(
             parser.scriptToElt(self),
             "text",
             v,
@@ -908,7 +919,7 @@ pub const HTMLScriptElement = struct {
     }
 
     pub fn set_integrity(self: *parser.Script, v: []const u8) !void {
-        return try parser.elementSetAttribute(
+        try parser.elementSetAttribute(
             parser.scriptToElt(self),
             "integrity",
             v,
