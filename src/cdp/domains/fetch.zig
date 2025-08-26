@@ -32,12 +32,14 @@ pub fn processMessage(cmd: anytype) !void {
         continueRequest,
         failRequest,
         fulfillRequest,
+        continueWithAuth,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
         .disable => return disable(cmd),
         .enable => return enable(cmd),
         .continueRequest => return continueRequest(cmd),
+        .continueWithAuth => return continueWithAuth(cmd),
         .failRequest => return failRequest(cmd),
         .fulfillRequest => return fulfillRequest(cmd),
     }
@@ -144,12 +146,8 @@ fn enable(cmd: anytype) !void {
         return cmd.sendResult(null, .{});
     }
 
-    if (params.handleAuthRequests) {
-        log.warn(.cdp, "not implemented", .{ .feature = "Fetch.enable handleAuthRequests is not supported yet" });
-    }
-
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    try bc.fetchEnable();
+    try bc.fetchEnable(params.handleAuthRequests);
 
     return cmd.sendResult(null, .{});
 }
@@ -276,6 +274,56 @@ fn continueRequest(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
+fn continueWithAuth(cmd: anytype) !void {
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const params = (try cmd.params(struct {
+        requestId: []const u8, // "INTERCEPT-{d}"
+        authChallengeResponse: struct {
+            response: []const u8,
+            username: ?[]const u8 = null,
+            password: ?[]const u8 = null,
+        },
+    })) orelse return error.InvalidParams;
+
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+
+    var intercept_state = &bc.intercept_state;
+    const request_id = try idFromRequestId(params.requestId);
+    const transfer = intercept_state.remove(request_id) orelse return error.RequestNotFound;
+
+    log.debug(.cdp, "request intercept", .{
+        .state = "continue with auth",
+        .id = transfer.id,
+        .response = params.authChallengeResponse.response,
+    });
+
+    if (!std.mem.eql(u8, params.authChallengeResponse.response, "ProvideCredentials")) {
+        transfer.abortAuthChallenge();
+        return cmd.sendResult(null, .{});
+    }
+
+    // cancel the request, deinit the transfer on error.
+    errdefer transfer.abortAuthChallenge();
+
+    const username = params.authChallengeResponse.username orelse "";
+    const password = params.authChallengeResponse.password orelse "";
+
+    // restart the request with the provided credentials.
+    // we need to duplicate the cre
+    const arena = transfer.arena.allocator();
+    transfer.updateCredentials(
+        try std.fmt.allocPrintZ(arena, "{s}:{s}", .{ username, password }),
+    );
+
+    try bc.cdp.browser.http_client.process(transfer);
+
+    if (intercept_state.empty()) {
+        page.request_intercepted = false;
+    }
+
+    return cmd.sendResult(null, .{});
+}
+
 fn fulfillRequest(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
@@ -344,6 +392,50 @@ fn failRequest(cmd: anytype) !void {
         page.request_intercepted = false;
     }
     return cmd.sendResult(null, .{});
+}
+
+pub fn requestAuthRequired(arena: Allocator, bc: anytype, intercept: *const Notification.RequestAuthRequired) !void {
+    // unreachable because we _have_ to have a page.
+    const session_id = bc.session_id orelse unreachable;
+    const target_id = bc.target_id orelse unreachable;
+    const page = bc.session.currentPage() orelse unreachable;
+
+    // We keep it around to wait for modifications to the request.
+    // NOTE: we assume whomever created the request created it with a lifetime of the Page.
+    // TODO: What to do when receiving replies for a previous page's requests?
+
+    const transfer = intercept.transfer;
+    try bc.intercept_state.put(transfer);
+
+    const challenge = transfer._auth_challenge orelse return error.NullAuthChallenge;
+
+    try bc.cdp.sendEvent("Fetch.authRequired", .{
+        .requestId = try std.fmt.allocPrint(arena, "INTERCEPT-{d}", .{transfer.id}),
+        .request = network.TransferAsRequestWriter.init(transfer),
+        .frameId = target_id,
+        .resourceType = switch (transfer.req.resource_type) {
+            .script => "Script",
+            .xhr => "XHR",
+            .document => "Document",
+        },
+        .authChallenge = .{
+            .source = if (challenge.source == .server) "Server" else "Proxy",
+            .origin = "", // TODO get origin, could be the proxy address for example.
+            .scheme = if (challenge.scheme == .digest) "digest" else "basic",
+            .realm = challenge.realm,
+        },
+        .networkId = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id}),
+    }, .{ .session_id = session_id });
+
+    log.debug(.cdp, "request auth required", .{
+        .state = "paused",
+        .id = transfer.id,
+        .url = transfer.uri,
+    });
+    // Await continueWithAuth
+
+    intercept.wait_for_interception.* = true;
+    page.request_intercepted = true;
 }
 
 // Get u64 from requestId which is formatted as: "INTERCEPT-{d}"
