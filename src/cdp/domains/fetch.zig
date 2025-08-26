@@ -274,12 +274,19 @@ fn continueRequest(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
+// https://chromedevtools.github.io/devtools-protocol/tot/Fetch/#type-AuthChallengeResponse
+const AuthChallengeResponse = enum {
+    Default,
+    CancelAuth,
+    ProvideCredentials,
+};
+
 fn continueWithAuth(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const params = (try cmd.params(struct {
         requestId: []const u8, // "INTERCEPT-{d}"
         authChallengeResponse: struct {
-            response: []const u8,
+            response: AuthChallengeResponse,
             username: []const u8 = "",
             password: []const u8 = "",
         },
@@ -297,7 +304,7 @@ fn continueWithAuth(cmd: anytype) !void {
         .response = params.authChallengeResponse.response,
     });
 
-    if (!std.mem.eql(u8, params.authChallengeResponse.response, "ProvideCredentials")) {
+    if (params.authChallengeResponse.response != .ProvideCredentials) {
         transfer.abortAuthChallenge();
         return cmd.sendResult(null, .{});
     }
