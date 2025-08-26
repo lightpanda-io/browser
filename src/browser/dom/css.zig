@@ -38,7 +38,7 @@ pub fn querySelector(alloc: std.mem.Allocator, n: *parser.Node, selector: []cons
 
     var m = MatchFirst{};
 
-    _ = try css.matchFirst(ps, Node{ .node = n }, &m);
+    _ = try css.matchFirst(&ps, Node{ .node = n }, &m);
     return m.n;
 }
 
@@ -75,6 +75,6 @@ pub fn querySelectorAll(alloc: std.mem.Allocator, n: *parser.Node, selector: []c
     var m = MatchAll.init(alloc);
     defer m.deinit();
 
-    try css.matchAll(ps, Node{ .node = n }, &m);
+    try css.matchAll(&ps, Node{ .node = n }, &m);
     return m.toOwnedList();
 }
