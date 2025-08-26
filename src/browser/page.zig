@@ -695,6 +695,17 @@ pub const Page = struct {
         self.clearTransferArena();
 
         switch (self.mode) {
+            .pre => {
+                // Received a response without a body like: https://httpbin.io/status/200
+                // We assume we have received an OK status (checked in Client.headerCallback)
+                // so we load a blank document to navigate away from any prior page.
+                self.mode = .{ .parsed = {} };
+
+                const html_doc = try parser.documentHTMLParseFromStr("");
+                try self.setDocument(html_doc);
+
+                self.documentIsComplete();
+            },
             .raw => |buf| {
                 self.mode = .{ .raw_done = buf.items };
                 self.documentIsComplete();
@@ -755,10 +766,6 @@ pub const Page = struct {
                     // we need to trigger this ourselves
                     self.documentIsComplete();
                 }
-            },
-            .pre => {
-                // we didn't get any data.
-                self.documentIsComplete();
             },
             else => {
                 log.err(.app, "unreachable mode", .{ .mode = self.mode });
