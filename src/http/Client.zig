@@ -325,6 +325,11 @@ fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) !void {
         }
 
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PRIVATE, transfer));
+
+        // add credentials
+        if (req.credentials) |creds| {
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXYUSERPWD, creds.ptr));
+        }
     }
 
     // Once soon as this is called, our "perform" loop is responsible for
@@ -542,6 +547,7 @@ pub const Request = struct {
     body: ?[]const u8 = null,
     cookie_jar: *CookieJar,
     resource_type: ResourceType,
+    credentials: ?[:0]const u8 = null,
 
     // arbitrary data that can be associated with this request
     ctx: *anyopaque = undefined,
@@ -631,6 +637,10 @@ pub const Transfer = struct {
 
         // for the request itself
         self.req.url = url;
+    }
+
+    pub fn updateCredentials(self: *Transfer, userpwd: [:0]const u8) void {
+        self.req.credentials = userpwd;
     }
 
     pub fn replaceRequestHeaders(self: *Transfer, allocator: Allocator, headers: []const Http.Header) !void {
