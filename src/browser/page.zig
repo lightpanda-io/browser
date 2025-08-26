@@ -51,10 +51,6 @@ const polyfill = @import("polyfill/polyfill.zig");
 pub const Page = struct {
     cookie_jar: *storage.CookieJar,
 
-    // Pre-configured http/cilent.zig used to make HTTP requests.
-    // @newhttp
-    // request_factory: RequestFactory,
-
     session: *Session,
 
     // An arena with a lifetime for the entire duration of the page
@@ -146,12 +142,9 @@ pub const Page = struct {
             .scheduler = Scheduler.init(arena),
             .keydown_event_node = .{ .func = keydownCallback },
             .window_clicked_event_node = .{ .func = windowClicked },
-            // @newhttp
-            // .request_factory = browser.http_client.requestFactory(.{
-            //     .notification = browser.notification,
-            // }),
             .main_context = undefined,
         };
+
         self.main_context = try session.executor.createJsContext(&self.window, self, self, true, Env.GlobalMissingCallback.init(&self.polyfill_loader));
         try polyfill.preload(self.arena, self.main_context);
 
@@ -269,7 +262,7 @@ pub const Page = struct {
         return self.script_manager.blockingGet(src);
     }
 
-    pub fn wait(self: *Page, wait_sec: usize) void {
+    pub fn wait(self: *Page, wait_sec: u16) void {
         self._wait(wait_sec) catch |err| switch (err) {
             error.JsError => {}, // already logged (with hopefully more context)
             else => {
@@ -283,9 +276,9 @@ pub const Page = struct {
         };
     }
 
-    fn _wait(self: *Page, wait_sec: usize) !void {
-        var ms_remaining = wait_sec * 1000;
+    fn _wait(self: *Page, wait_sec: u16) !void {
         var timer = try std.time.Timer.start();
+        var ms_remaining: i32 = @intCast(wait_sec * 1000);
 
         var try_catch: Env.TryCatch = undefined;
         try_catch.init(self.main_context);
@@ -320,7 +313,7 @@ pub const Page = struct {
                     }
 
                     // There should only be 1 active http transfer, the main page
-                    try http_client.tick(ms_remaining);
+                    _ = try http_client.tick(.{ .timeout_ms = ms_remaining });
                 },
                 .html, .parsed => {
                     // The HTML page was parsed. We now either have JS scripts to
@@ -381,7 +374,7 @@ pub const Page = struct {
                         // inflight requests
                         else @min(ms_remaining, ms_to_next_task orelse 1000);
 
-                    try http_client.tick(ms_to_wait);
+                    _ = try http_client.tick(.{ .timeout_ms = ms_to_wait });
 
                     if (request_intercepted) {
                         // Again, proritizing intercepted requests. Exit this
@@ -401,7 +394,7 @@ pub const Page = struct {
             if (ms_elapsed >= ms_remaining) {
                 return;
             }
-            ms_remaining -= ms_elapsed;
+            ms_remaining -= @intCast(ms_elapsed);
         }
     }
 

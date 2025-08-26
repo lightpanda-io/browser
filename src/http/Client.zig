@@ -27,6 +27,7 @@ const CookieJar = @import("../browser/storage/storage.zig").CookieJar;
 const urlStitch = @import("../url.zig").stitch;
 
 const c = Http.c;
+const posix = std.posix;
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
@@ -167,10 +168,13 @@ pub fn abort(self: *Client) void {
     }
 }
 
-pub fn tick(self: *Client, timeout_ms: usize) !void {
-    var handles = &self.handles;
+const TickOpts = struct {
+    timeout_ms: i32 = 0,
+    poll_socket: ?posix.socket_t = null,
+};
+pub fn tick(self: *Client, opts: TickOpts) !bool {
     while (true) {
-        if (handles.hasAvailable() == false) {
+        if (self.handles.hasAvailable() == false) {
             break;
         }
         const queue_node = self.queue.popFirst() orelse break;
@@ -178,11 +182,10 @@ pub fn tick(self: *Client, timeout_ms: usize) !void {
         self.queue_node_pool.destroy(queue_node);
 
         // we know this exists, because we checked isEmpty() above
-        const handle = handles.getFreeHandle().?;
+        const handle = self.handles.getFreeHandle().?;
         try self.makeRequest(handle, req);
     }
-
-    try self.perform(@intCast(timeout_ms));
+    return self.perform(opts.timeout_ms, opts.poll_socket);
 }
 
 pub fn request(self: *Client, req: Request) !void {
@@ -343,16 +346,26 @@ fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) !void {
     }
 
     self.active += 1;
-    return self.perform(0);
+    _ = try self.perform(0, null);
 }
 
-fn perform(self: *Client, timeout_ms: c_int) !void {
+fn perform(self: *Client, timeout_ms: c_int, socket: ?posix.socket_t) !bool {
     const multi = self.multi;
-
     var running: c_int = undefined;
     try errorMCheck(c.curl_multi_perform(multi, &running));
 
-    if (running > 0 and timeout_ms > 0) {
+    if (socket) |s| {
+        var wait_fd = c.curl_waitfd{
+            .fd = s,
+            .events = c.CURL_WAIT_POLLIN,
+            .revents = 0,
+        };
+        try errorMCheck(c.curl_multi_poll(multi, &wait_fd, 1, timeout_ms, null));
+        if (wait_fd.revents != 0) {
+            // the extra socket we passed in is ready, let's signal our caller
+            return true;
+        }
+    } else if (running > 0 and timeout_ms > 0) {
         try errorMCheck(c.curl_multi_poll(multi, null, 0, timeout_ms, null));
     }
 
@@ -397,6 +410,8 @@ fn perform(self: *Client, timeout_ms: c_int) !void {
             self.requestFailed(transfer, err);
         }
     }
+
+    return false;
 }
 
 fn endTransfer(self: *Client, transfer: *Transfer) void {

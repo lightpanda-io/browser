@@ -59,15 +59,15 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, func: Task.Func, ms: u32, opts: Ad
     });
 }
 
-pub fn runHighPriority(self: *Scheduler) !?u32 {
+pub fn runHighPriority(self: *Scheduler) !?i32 {
     return self.runQueue(&self.primary);
 }
 
-pub fn runLowPriority(self: *Scheduler) !?u32 {
+pub fn runLowPriority(self: *Scheduler) !?i32 {
     return self.runQueue(&self.secondary);
 }
 
-fn runQueue(self: *Scheduler, queue: *Queue) !?u32 {
+fn runQueue(self: *Scheduler, queue: *Queue) !?i32 {
     // this is O(1)
     if (queue.count() == 0) {
         return null;

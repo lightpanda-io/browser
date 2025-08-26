@@ -167,7 +167,7 @@ fn run(
         var try_catch: Env.TryCatch = undefined;
         try_catch.init(runner.page.main_context);
         defer try_catch.deinit();
-        runner.page.wait(std.time.ns_per_ms * 200);
+        runner.page.wait(2);
 
         if (try_catch.hasCaught()) {
             err_out.* = (try try_catch.err(arena)) orelse "unknwon error";

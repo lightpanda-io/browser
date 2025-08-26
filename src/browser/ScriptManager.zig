@@ -313,7 +313,7 @@ pub fn blockingGet(self: *ScriptManager, url: [:0]const u8) !BlockingResult {
 
     // rely on http's timeout settings to avoid an endless/long loop.
     while (true) {
-        try client.tick(200);
+        _ = try client.tick(.{ .timeout_ms = 200 });
         switch (blocking.state) {
             .running => {},
             .done => |result| return result,

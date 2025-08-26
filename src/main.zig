@@ -21,8 +21,8 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const log = @import("log.zig");
-const server = @import("server.zig");
 const App = @import("app.zig").App;
+const Server = @import("server.zig").Server;
 const Http = @import("http/Http.zig");
 const Platform = @import("runtime/js.zig").Platform;
 const Browser = @import("browser/browser.zig").Browser;
@@ -103,8 +103,10 @@ fn run(alloc: Allocator) !void {
                 return args.printUsageAndExit(false);
             };
 
-            const timeout = std.time.ns_per_s * @as(u64, opts.timeout);
-            server.run(app, address, timeout) catch |err| {
+            var server = try Server.init(app, address);
+            defer server.deinit();
+
+            server.run(address, opts.timeout) catch |err| {
                 log.fatal(.app, "server run error", .{ .err = err });
                 return err;
             };
@@ -773,7 +775,9 @@ fn serveCDP(address: std.net.Address, platform: *const Platform) !void {
     defer app.deinit();
 
     test_wg.finish();
-    server.run(app, address, std.time.ns_per_s * 2) catch |err| {
+    var server = try Server.init(app, address);
+    defer server.deinit();
+    server.run(address, 5) catch |err| {
         std.debug.print("CDP server error: {}", .{err});
         return err;
     };
