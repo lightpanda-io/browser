@@ -313,7 +313,6 @@ fn continueWithAuth(cmd: anytype) !void {
     errdefer transfer.abortAuthChallenge();
 
     // restart the request with the provided credentials.
-    // we need to duplicate the cre
     const arena = transfer.arena.allocator();
     transfer.updateCredentials(
         try std.fmt.allocPrintZ(arena, "{s}:{s}", .{
@@ -322,6 +321,7 @@ fn continueWithAuth(cmd: anytype) !void {
         }),
     );
 
+    transfer.reset();
     try bc.cdp.browser.http_client.process(transfer);
 
     if (intercept_state.empty()) {

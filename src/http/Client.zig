@@ -371,7 +371,7 @@ fn perform(self: *Client, timeout_ms: c_int) !void {
         const transfer = try Transfer.fromEasy(easy);
 
         // In case of auth challenge
-        if (transfer._auth_challenge != null) {
+        if (transfer._auth_challenge != null and transfer._tries < 10) { // TODO give a way to configure the number of auth retries.
             if (transfer.client.notification) |notification| {
                 var wait_for_interception = false;
                 notification.dispatch(.http_request_auth_required, &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception });
@@ -642,6 +642,21 @@ pub const Transfer = struct {
 
     _redirecting: bool = false,
     _auth_challenge: ?AuthChallenge = null,
+
+    // number of times the transfer has been tried.
+    // incremented by reset func.
+    _tries: u8 = 0,
+
+    pub fn reset(self: *Transfer) void {
+        self._redirecting = false;
+        self._auth_challenge = null;
+        self._notified_fail = false;
+        self._header_done_called = false;
+        self.response_header = null;
+        self.bytes_received = 0;
+
+        self._tries += 1;
+    }
 
     fn deinit(self: *Transfer) void {
         self.req.headers.deinit();
