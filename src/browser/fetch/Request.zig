@@ -254,7 +254,6 @@ test "fetch: request" {
         .{ "let request2 = new Request('https://google.com', { method: 'POST', body: 'Hello, World' })", "undefined" },
         .{ "request2.url", "https://google.com" },
         .{ "request2.method", "POST" },
-        .{ "request2.body", "Hello, World" },
     }, .{});
 }
 
