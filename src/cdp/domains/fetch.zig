@@ -280,8 +280,8 @@ fn continueWithAuth(cmd: anytype) !void {
         requestId: []const u8, // "INTERCEPT-{d}"
         authChallengeResponse: struct {
             response: []const u8,
-            username: ?[]const u8 = null,
-            password: ?[]const u8 = null,
+            username: []const u8 = "",
+            password: []const u8 = "",
         },
     })) orelse return error.InvalidParams;
 
@@ -305,14 +305,14 @@ fn continueWithAuth(cmd: anytype) !void {
     // cancel the request, deinit the transfer on error.
     errdefer transfer.abortAuthChallenge();
 
-    const username = params.authChallengeResponse.username orelse "";
-    const password = params.authChallengeResponse.password orelse "";
-
     // restart the request with the provided credentials.
     // we need to duplicate the cre
     const arena = transfer.arena.allocator();
     transfer.updateCredentials(
-        try std.fmt.allocPrintZ(arena, "{s}:{s}", .{ username, password }),
+        try std.fmt.allocPrintZ(arena, "{s}:{s}", .{
+            params.authChallengeResponse.username,
+            params.authChallengeResponse.password,
+        }),
     );
 
     try bc.cdp.browser.http_client.process(transfer);
