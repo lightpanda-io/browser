@@ -36,9 +36,8 @@ const WebApis = struct {
         @import("xhr/form_data.zig").Interfaces,
         @import("xhr/File.zig"),
         @import("xmlserializer/xmlserializer.zig").Interfaces,
-        @import("fetch/Headers.zig"),
-        @import("fetch/Request.zig"),
-        @import("fetch/Response.zig"),
+        @import("fetch/fetch.zig").Interfaces,
+        @import("streams/streams.zig").Interfaces,
     });
 };
 
