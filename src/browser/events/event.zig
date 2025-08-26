@@ -262,7 +262,6 @@ pub const EventHandler = struct {
                 },
             }
         }
-
         const callback = (try listener.callback(target)) orelse return null;
 
         if (signal) |s| {

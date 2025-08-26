@@ -1110,12 +1110,21 @@ fn timestamp() u32 {
 // so that's handled. And because we're only executing the inline <script> tags
 // after the document is loaded, it's ok to execute any async and defer scripts
 // immediately.
-pub export fn scriptAddedCallback(ctx: ?*anyopaque, element: ?*parser.Element) callconv(.C) void {
+pub export fn scriptAddedCallback(ctx: ?*anyopaque, element: ?*parser.Element) callconv(.c) void {
     const self: *Page = @alignCast(@ptrCast(ctx.?));
+
     if (self.delayed_navigation) {
         // if we're planning on navigating to another page, don't run this script
         return;
     }
+
+    // It's posisble for a script to be dynamically added without a src.
+    //   const s = document.createElement('script');
+    //   document.getElementsByTagName('body')[0].appendChild(s);
+    // The src can be set after. We handle that in HTMLScriptElement.set_src,
+    // but it's important we don't pass such elements to the script_manager
+    // here, else the script_manager will flag it as already-processed.
+    _ = parser.elementGetAttribute(element.?, "src") catch return orelse return;
 
     self.script_manager.addFromElement(element.?) catch |err| {
         log.warn(.browser, "dynamic script", .{ .err = err });
