@@ -701,8 +701,7 @@ pub const Page = struct {
                 // so we load a blank document to navigate away from any prior page.
                 self.mode = .{ .parsed = {} };
 
-                var fbs = std.io.fixedBufferStream("");
-                const html_doc = try parser.documentHTMLParse(fbs.reader(), "utf-8");
+                const html_doc = try parser.documentHTMLParseFromStr("");
                 try self.setDocument(html_doc);
 
                 self.documentIsComplete();
@@ -767,10 +766,6 @@ pub const Page = struct {
                     // we need to trigger this ourselves
                     self.documentIsComplete();
                 }
-            },
-            .pre => {
-                // we didn't get any data.
-                self.documentIsComplete();
             },
             else => {
                 log.err(.app, "unreachable mode", .{ .mode = self.mode });
