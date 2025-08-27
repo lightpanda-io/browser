@@ -306,8 +306,8 @@ pub const Selector = union(enum) {
     }
 
     // match returns true if the node matches the selector query.
-    pub fn match(s: Selector, n: anytype) !bool {
-        return switch (s) {
+    pub fn match(s: *const Selector, n: anytype) !bool {
+        return switch (s.*) {
             .tag => |v| n.isElement() and std.ascii.eqlIgnoreCase(v, try n.tag()),
             .id => |v| return n.isElement() and std.mem.eql(u8, v, try n.attr("id") orelse return false),
             .class => |v| return n.isElement() and word(try n.attr("class") orelse return false, v, false),
@@ -794,8 +794,8 @@ pub const Selector = union(enum) {
         return false;
     }
 
-    pub fn deinit(sel: Selector, alloc: std.mem.Allocator) void {
-        switch (sel) {
+    pub fn deinit(sel: *const Selector, alloc: std.mem.Allocator) void {
+        switch (sel.*) {
             .group => |v| {
                 for (v) |vv| vv.deinit(alloc);
                 alloc.free(v);
