@@ -41,7 +41,7 @@ Due to the nature of Playwright, a script that works with the current version of
 
 ## Quick start
 
-### Install 
+### Install
 **Install from the nightly builds**
 
 You can download the last binary from the [nightly
@@ -71,9 +71,8 @@ Lightpanda provides [official Docker
 images](https://hub.docker.com/r/lightpanda/browser) for both Linux amd64 and
 arm64 architectures.
 The following command fetches the Docker image and starts a new container exposing Lightpanda's CDP server on port `9222`.
-The `--privileged` option is required because the browser requires `io_uring` syscalls which are blocked by default by Docker.
 ```console
-docker run -d --name lightpanda -p 9222:9222 --privileged lightpanda/browser:nightly
+docker run -d --name lightpanda -p 9222:9222 lightpanda/browser:nightly
 ```
 
 ### Dump a URL
@@ -155,8 +154,8 @@ Here are the key features we have implemented:
 - [x] Input form
 - [x] Cookies
 - [x] Custom HTTP headers
-- [ ] Proxy support
-- [ ] Network interception 
+- [x] Proxy support
+- [ ] Network interception
 
 NOTE: There are hundreds of Web APIs. Developing a browser (even just for headless mode) is a huge task. Coverage will increase over time.
 
