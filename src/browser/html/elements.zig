@@ -26,6 +26,7 @@ const Page = @import("../page.zig").Page;
 const urlStitch = @import("../../url.zig").URL.stitch;
 const URL = @import("../url/url.zig").URL;
 const Node = @import("../dom/node.zig").Node;
+const NodeUnion = @import("../dom/node.zig").Union;
 const Element = @import("../dom/element.zig").Element;
 const DataSet = @import("DataSet.zig");
 
@@ -85,6 +86,7 @@ pub const Interfaces = .{
     HTMLScriptElement,
     HTMLSourceElement,
     HTMLSpanElement,
+    HTMLSlotElement,
     HTMLStyleElement,
     HTMLTableElement,
     HTMLTableCaptionElement,
@@ -1008,6 +1010,101 @@ pub const HTMLSpanElement = struct {
     pub const subtype = .node;
 };
 
+pub const HTMLSlotElement = struct {
+    pub const Self = parser.Slot;
+    pub const prototype = *HTMLElement;
+    pub const subtype = .node;
+
+    pub fn get_name(self: *parser.Slot) !?[]const u8 {
+        return (try parser.elementGetAttribute(@ptrCast(@alignCast(self)), "name")) orelse "";
+    }
+
+    pub fn set_name(self: *parser.Slot, value: []const u8) !void {
+        return parser.elementSetAttribute(@ptrCast(@alignCast(self)), "name", value);
+    }
+
+    const AssignedNodesOpts = struct {
+        flatten: bool = false,
+    };
+    pub fn _assignedNodes(self: *parser.Slot, opts_: ?AssignedNodesOpts, page: *Page) ![]NodeUnion {
+        const opts = opts_ orelse AssignedNodesOpts{ .flatten = false };
+
+        if (try findAssignedSlotNodes(self, opts, page)) |nodes| {
+            return nodes;
+        }
+
+        if (!opts.flatten) {
+            return &.{};
+        }
+
+        const node: *parser.Node = @ptrCast(@alignCast(self));
+        const nl = try parser.nodeGetChildNodes(node);
+        const len = try parser.nodeListLength(nl);
+        if (len == 0) {
+            return &.{};
+        }
+
+        var assigned = try page.call_arena.alloc(NodeUnion, len);
+        var i: usize = 0;
+        while (true) : (i += 1) {
+            const child = try parser.nodeListItem(nl, @intCast(i)) orelse break;
+            assigned[i] = try Node.toInterface(child);
+        }
+        return assigned[0..i];
+    }
+
+    fn findAssignedSlotNodes(self: *parser.Slot, opts: AssignedNodesOpts, page: *Page) !?[]NodeUnion {
+        if (opts.flatten) {
+            log.warn(.web_api, "not implemented", .{ .feature = "HTMLSlotElement flatten assignedNodes" });
+        }
+
+        const slot_name = try parser.elementGetAttribute(@ptrCast(@alignCast(self)), "name");
+        const node: *parser.Node = @ptrCast(@alignCast(self));
+        var root = try parser.nodeGetRootNode(node);
+        if (page.getNodeState(root)) |state| {
+            if (state.shadow_root) |sr| {
+                root = @ptrCast(@alignCast(sr.host));
+            }
+        }
+
+        var arr: std.ArrayList(NodeUnion) = .empty;
+        const w = @import("../dom/walker.zig").WalkerChildren{};
+        var next: ?*parser.Node = null;
+        while (true) {
+            next = try w.get_next(root, next) orelse break;
+            if (try parser.nodeType(next.?) != .element) {
+                if (slot_name == null) {
+                    // default slot (with no name), takes everything
+                    try arr.append(page.call_arena, try Node.toInterface(next.?));
+                }
+                continue;
+            }
+            const el: *parser.Element = @ptrCast(@alignCast(next.?));
+            const element_slot = try parser.elementGetAttribute(el, "slot");
+
+            if (nullableStringsAreEqual(slot_name, element_slot)) {
+                // either they're the same string or they are both null
+                try arr.append(page.call_arena, try Node.toInterface(next.?));
+                continue;
+            }
+        }
+        return if (arr.items.len == 0) null else arr.items;
+    }
+
+    fn nullableStringsAreEqual(a: ?[]const u8, b: ?[]const u8) bool {
+        if (a == null and b == null) {
+            return true;
+        }
+        if (a) |aa| {
+            const bb = b orelse return false;
+            return std.mem.eql(u8, aa, bb);
+        }
+
+        // a is null, but b isn't (else the first guard clause would have hit)
+        return false;
+    }
+};
+
 pub const HTMLStyleElement = struct {
     pub const Self = parser.Style;
     pub const prototype = *HTMLElement;
@@ -1168,6 +1265,7 @@ pub fn toInterfaceFromTag(comptime T: type, e: *parser.Element, tag: parser.Tag)
         .select => .{ .HTMLSelectElement = @as(*parser.Select, @ptrCast(e)) },
         .source => .{ .HTMLSourceElement = @as(*parser.Source, @ptrCast(e)) },
         .span => .{ .HTMLSpanElement = @as(*parser.Span, @ptrCast(e)) },
+        .slot => .{ .HTMLSlotElement = @as(*parser.Slot, @ptrCast(e)) },
         .style => .{ .HTMLStyleElement = @as(*parser.Style, @ptrCast(e)) },
         .table => .{ .HTMLTableElement = @as(*parser.Table, @ptrCast(e)) },
         .caption => .{ .HTMLTableCaptionElement = @as(*parser.TableCaption, @ptrCast(e)) },
@@ -1482,6 +1580,10 @@ test "Browser.HTML.HTMLStyleElement" {
 
 test "Browser: HTML.HTMLScriptElement" {
     try testing.htmlRunner("html/script/inline_defer.html");
+}
+
+test "Browser: HTML.HTMLSlotElement" {
+    try testing.htmlRunner("html/html_slot_element.html");
 }
 
 const Check = struct {

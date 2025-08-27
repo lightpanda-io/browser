@@ -560,6 +560,17 @@ pub const Element = struct {
         state.shadow_root = sr;
         parser.documentFragmentSetHost(sr.proto, @ptrCast(@alignCast(self)));
 
+        // Storing the ShadowRoot on the element makes sense, it's the ShadowRoot's
+        // parent. When we render, we go top-down, so we'll have the element, get
+        // its shadowroot, and go on. that's what the above code does.
+        // But we sometimes need to go bottom-up, e.g when we have a slot element
+        // and want to find the containing parent. Unforatunately , we don't have
+        // that link, so we need to create it. In the DOM, the ShadowRoot is
+        // represented by this DocumentFragment (it's the ShadowRoot's base prototype)
+        // So we can also store the ShadowRoot in the DocumentFragment's state.
+        const fragment_state = try page.getOrCreateNodeState(@ptrCast(@alignCast(fragment)));
+        fragment_state.shadow_root = sr;
+
         return sr;
     }
 
