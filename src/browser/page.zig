@@ -520,6 +520,14 @@ pub const Page = struct {
         if (opts.header) |hdr| try headers.add(hdr);
         try self.requestCookie(.{ .is_navigation = true }).headersForRequest(self.arena, owned_url, &headers);
 
+        // We dispatch page_navigate event before sending the request.
+        // It ensures the event page_navigated is not dispatched before this one.
+        self.session.browser.notification.dispatch(.page_navigate, &.{
+            .opts = opts,
+            .url = owned_url,
+            .timestamp = timestamp(),
+        });
+
         self.http_client.request(.{
             .ctx = self,
             .url = owned_url,
@@ -536,12 +544,6 @@ pub const Page = struct {
             log.err(.http, "navigate request", .{ .url = owned_url, .err = err });
             return err;
         };
-
-        self.session.browser.notification.dispatch(.page_navigate, &.{
-            .opts = opts,
-            .url = owned_url,
-            .timestamp = timestamp(),
-        });
     }
 
     pub fn setCurrentScript(self: *Page, script: ?*parser.Script) !void {
