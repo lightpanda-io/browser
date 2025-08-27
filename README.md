@@ -154,7 +154,7 @@ Here are the key features we have implemented:
 - [x] Input form
 - [x] Cookies
 - [x] Custom HTTP headers
-- [ ] Proxy support
+- [x] Proxy support
 - [ ] Network interception
 
 NOTE: There are hundreds of Web APIs. Developing a browser (even just for headless mode) is a huge task. Coverage will increase over time.
