@@ -36,7 +36,7 @@ const MAX_HTTP_REQUEST_SIZE = 4096;
 // max message size
 // +14 for max websocket payload overhead
 // +140 for the max control packet that might be interleaved in a message
-const MAX_MESSAGE_SIZE = 512 * 1024 + 14;
+const MAX_MESSAGE_SIZE = 512 * 1024 + 14 + 140;
 
 pub const Server = struct {
     app: *App,
@@ -188,12 +188,15 @@ pub const Client = struct {
         // we expect the socket to come to us as nonblocking
         std.debug.assert(socket_flags & nonblocking == nonblocking);
 
+        var reader = try Reader(true).init(server.allocator);
+        errdefer reader.deinit();
+
         return .{
             .socket = socket,
             .server = server,
+            .reader = reader,
             .mode = .{ .http = {} },
             .socket_flags = socket_flags,
-            .reader = .{ .allocator = server.allocator },
             .send_arena = ArenaAllocator.init(server.allocator),
         };
     }
@@ -537,14 +540,23 @@ fn Reader(comptime EXPECT_MASK: bool) type {
 
         // we add 140 to allow 1 control message (ping/pong/close) to be
         // fragmented into a normal message.
-        buf: [MAX_MESSAGE_SIZE + 140]u8 = undefined,
+        buf: []u8,
 
         fragments: ?Fragments = null,
 
         const Self = @This();
 
+        fn init(allocator: Allocator) !Self {
+            const buf = try allocator.alloc(u8, 32 * 1024);
+            return .{
+                .buf = buf,
+                .allocator = allocator,
+            };
+        }
+
         fn deinit(self: *Self) void {
             self.cleanup();
+            self.allocator.free(self.buf);
         }
 
         fn cleanup(self: *Self) void {
@@ -613,9 +625,17 @@ fn Reader(comptime EXPECT_MASK: bool) type {
                     }
                 } else if (message_len > MAX_MESSAGE_SIZE) {
                     return error.TooLarge;
-                }
-
-                if (buf.len < message_len) {
+                } else if (message_len > self.buf.len) {
+                    const new_buf = try self.allocator.alloc(u8, message_len);
+                    @memcpy(new_buf[0..buf.len], buf);
+                    self.allocator.free(self.buf);
+                    self.buf = new_buf;
+                    self.len = buf.len;
+                    buf = new_buf[0..buf.len];
+                    // we need more data
+                    return null;
+                } else if (buf.len < message_len) {
+                    // we need more data
                     return null;
                 }
 
@@ -753,7 +773,7 @@ fn Reader(comptime EXPECT_MASK: bool) type {
 
             // We're here because we either don't have enough bytes of the next
             // message, or we know that it won't fit in our buffer as-is.
-            std.mem.copyForwards(u8, &self.buf, partial);
+            std.mem.copyForwards(u8, self.buf, partial);
             self.pos = 0;
             self.len = partial_bytes;
         }
