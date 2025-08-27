@@ -1042,84 +1042,68 @@ pub const HTMLSlotElement = struct {
         flatten: bool = false,
     };
     pub fn _assignedNodes(self: *parser.Slot, opts_: ?AssignedNodesOpts, page: *Page) ![]NodeUnion {
-        return findAssignedSlotNodes(self, opts_, false, page);
-    }
-
-    // This should return Union, instead of NodeUnion, but we want to re-use
-    // findAssignedSlotNodes. Returning NodeUnion is fine, as long as every element
-    // within is an Element. This could be more efficient
-    pub fn _assignedElements(self: *parser.Slot, opts_: ?AssignedNodesOpts, page: *Page) ![]NodeUnion {
-        return findAssignedSlotNodes(self, opts_, true, page);
-    }
-
-    fn findAssignedSlotNodes(self: *parser.Slot, opts_: ?AssignedNodesOpts, element_only: bool, page: *Page) ![]NodeUnion {
         const opts = opts_ orelse AssignedNodesOpts{ .flatten = false };
 
-        if (opts.flatten) {
-            log.debug(.web_api, "not implemented", .{ .feature = "HTMLSlotElement flatten assignedNodes" });
+        if (try findAssignedSlotNodes(self, opts, page)) |nodes| {
+            return nodes;
+        }
+
+        if (!opts.flatten) {
+            return &.{};
         }
 
         const node: *parser.Node = @ptrCast(@alignCast(self));
+        const nl = try parser.nodeGetChildNodes(node);
+        const len = try parser.nodeListLength(nl);
+        if (len == 0) {
+            return &.{};
+        }
 
-        // First we look for any explicitly assigned nodes (via the slot attribute)
-        {
-            const slot_name = try parser.elementGetAttribute(@ptrCast(@alignCast(self)), "name");
-            var root = try parser.nodeGetRootNode(node);
-            if (page.getNodeState(root)) |state| {
-                if (state.shadow_root) |sr| {
-                    root = @ptrCast(@alignCast(sr.host));
-                }
+        var assigned = try page.call_arena.alloc(NodeUnion, len);
+        var i: usize = 0;
+        while (true) : (i += 1) {
+            const child = try parser.nodeListItem(nl, @intCast(i)) orelse break;
+            assigned[i] = try Node.toInterface(child);
+        }
+        return assigned[0..i];
+    }
+
+    fn findAssignedSlotNodes(self: *parser.Slot, opts: AssignedNodesOpts, page: *Page) !?[]NodeUnion {
+        if (opts.flatten) {
+            log.warn(.web_api, "not implemented", .{ .feature = "HTMLSlotElement flatten assignedNodes" });
+        }
+
+        const slot_name = try parser.elementGetAttribute(@ptrCast(@alignCast(self)), "name");
+        const node: *parser.Node = @ptrCast(@alignCast(self));
+        var root = try parser.nodeGetRootNode(node);
+        if (page.getNodeState(root)) |state| {
+            if (state.shadow_root) |sr| {
+                root = @ptrCast(@alignCast(sr.host));
             }
+        }
 
-            var arr: std.ArrayList(NodeUnion) = .empty;
-            const w = @import("../dom/walker.zig").WalkerChildren{};
-            var next: ?*parser.Node = null;
-            while (true) {
-                next = try w.get_next(root, next) orelse break;
-                if (try parser.nodeType(next.?) != .element) {
-                    if (slot_name == null and !element_only) {
-                        // default slot (with no name), takes everything
-                        try arr.append(page.call_arena, try Node.toInterface(next.?));
-                    }
-                    continue;
-                }
-                const el: *parser.Element = @ptrCast(@alignCast(next.?));
-                const element_slot = try parser.elementGetAttribute(el, "slot");
-
-                if (nullableStringsAreEqual(slot_name, element_slot)) {
-                    // either they're the same string or they are both null
+        var arr: std.ArrayList(NodeUnion) = .empty;
+        const w = @import("../dom/walker.zig").WalkerChildren{};
+        var next: ?*parser.Node = null;
+        while (true) {
+            next = try w.get_next(root, next) orelse break;
+            if (try parser.nodeType(next.?) != .element) {
+                if (slot_name == null) {
+                    // default slot (with no name), takes everything
                     try arr.append(page.call_arena, try Node.toInterface(next.?));
-                    continue;
                 }
+                continue;
             }
-            if (arr.items.len > 0) {
-                return arr.items;
-            }
+            const el: *parser.Element = @ptrCast(@alignCast(next.?));
+            const element_slot = try parser.elementGetAttribute(el, "slot");
 
-            if (!opts.flatten) {
-                return &.{};
+            if (nullableStringsAreEqual(slot_name, element_slot)) {
+                // either they're the same string or they are both null
+                try arr.append(page.call_arena, try Node.toInterface(next.?));
+                continue;
             }
         }
-
-        // Since, we have no explicitly assigned nodes and flatten == false,
-        // we'll collect the children of the slot - the defaults.
-        {
-            const nl = try parser.nodeGetChildNodes(node);
-            const len = try parser.nodeListLength(nl);
-            if (len == 0) {
-                return &.{};
-            }
-
-            var assigned = try page.call_arena.alloc(NodeUnion, len);
-            var i: usize = 0;
-            while (true) : (i += 1) {
-                const child = try parser.nodeListItem(nl, @intCast(i)) orelse break;
-                if (!element_only or try parser.nodeType(child) == .element) {
-                    assigned[i] = try Node.toInterface(child);
-                }
-            }
-            return assigned[0..i];
-        }
+        return if (arr.items.len == 0) null else arr.items;
     }
 
     fn nullableStringsAreEqual(a: ?[]const u8, b: ?[]const u8) bool {
@@ -1345,6 +1329,39 @@ test "Browser: HTML.HtmlScriptElement" {
     try testing.htmlRunner("html/script/inline_defer.html");
 }
 
-test "Browser: HTML.HtmlSlotElement" {
-    try testing.htmlRunner("html/slot.html");
+test "Browser: HTML.HTMLSlotElement" {
+    try testing.htmlRunner("html/html_slot_element.html");
+}
+
+const Check = struct {
+    input: []const u8,
+    expected: ?[]const u8 = null, // Needed when input != expected
+};
+const bool_valids = [_]Check{
+    .{ .input = "true" },
+    .{ .input = "''", .expected = "false" },
+    .{ .input = "13.5", .expected = "true" },
+};
+const str_valids = [_]Check{
+    .{ .input = "'foo'", .expected = "foo" },
+    .{ .input = "5", .expected = "5" },
+    .{ .input = "''", .expected = "" },
+    .{ .input = "document", .expected = "[object HTMLDocument]" },
+};
+
+// .{ "elem.type = '5'", "5" },
+// .{ "elem.type", "text" },
+fn testProperty(
+    arena: std.mem.Allocator,
+    runner: *testing.JsRunner,
+    elem_dot_prop: []const u8,
+    always: ?[]const u8, // Ignores checks' expected if set
+    checks: []const Check,
+) !void {
+    for (checks) |check| {
+        try runner.testCases(&.{
+            .{ try std.mem.concat(arena, u8, &.{ elem_dot_prop, " = ", check.input }), null },
+            .{ elem_dot_prop, always orelse check.expected orelse check.input },
+        }, .{});
+    }
 }

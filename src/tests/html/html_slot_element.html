@@ -1,0 +1,66 @@
+<script src="../testing.js"></script>
+<script>
+  class LightPanda extends HTMLElement {
+    constructor() {
+      super();
+    }
+
+    connectedCallback() {
+      const shadow = this.attachShadow({ mode: "open" });
+
+      const slot1 = document.createElement('slot');
+      slot1.name = 'slot-1';
+      shadow.appendChild(slot1);
+
+      switch (this.getAttribute('mode')) {
+        case '1':
+          slot1.innerHTML = 'hello';
+          break;
+        case '2':
+          const slot2 = document.createElement('slot');
+          shadow.appendChild(slot2);
+          break;
+      }
+    }
+  }
+  window.customElements.define("lp-test", LightPanda);
+</script>
+
+<lp-test id=lp1 mode=1></lp-test>
+<lp-test id=lp2 mode=0></lp-test>
+<lp-test id=lp3 mode=0>default</lp-test>
+<lp-test id=lp4 mode=1><p slot=other>default</p></lp-test>
+<lp-test id=lp5 mode=1><p slot=slot-1>default</p> xx <b slot=slot-1>other</b></lp-test>
+<lp-test id=lp6 mode=2>More <p slot=slot-1>default2</p> <span>!!</span></lp-test>
+
+<script id=HTMLSlotElement>
+  function assertNodes(expected, actual) {
+    actual = actual.map((n) => n.id || n.textContent)
+    testing.expectEqual(expected, actual);
+  }
+
+  for (let idx of [1, 2, 3, 4]) {
+    const lp = $(`#lp${idx}`);
+    const slot = lp.shadowRoot.querySelector('slot');
+
+    assertNodes([], slot.assignedNodes());
+    assertNodes([], slot.assignedNodes({}));
+    assertNodes([], slot.assignedNodes({flatten: false}));
+    if (lp.getAttribute('mode') === '1') {
+      assertNodes(['hello'], slot.assignedNodes({flatten: true}));
+    } else {
+      assertNodes([], slot.assignedNodes({flatten: true}));
+    }
+  }
+
+  const lp5 = $('#lp5');
+  const s5 = lp5.shadowRoot.querySelector('slot');
+  assertNodes(['default', 'other'], s5.assignedNodes());
+
+  const lp6 = $('#lp6');
+  const s6 = lp6.shadowRoot.querySelectorAll('slot');
+  assertNodes(['default2'], s6[0].assignedNodes({}));
+  assertNodes(['default2'], s6[0].assignedNodes({flatten: true}));
+  assertNodes(['More ', ' ', '!!'], s6[1].assignedNodes({}));
+  assertNodes(['More ', ' ', '!!'], s6[1].assignedNodes({flatten: true}));
+</script>
