@@ -1057,8 +1057,8 @@ test "Client: read invalid websocket message" {
         );
     }
 
-    // length of message is 0000 0401, i.e: 1024 * 512 + 1
-    try assertWebSocketError(1009, &.{ 129, 255, 0, 0, 0, 0, 0, 8, 0, 1, 'm', 'a', 's', 'k' });
+    // length of message is 0000 0810, i.e: 1024 * 512 + 265
+    try assertWebSocketError(1009, &.{ 129, 255, 0, 0, 0, 0, 0, 8, 1, 0, 'm', 'a', 's', 'k' });
 
     // continuation type message must come after a normal message
     // even when not a fin frame
@@ -1280,7 +1280,10 @@ fn createTestClient() !TestClient {
     try posix.setsockopt(stream.handle, posix.SOL.SOCKET, posix.SO.SNDTIMEO, &timeout);
     return .{
         .stream = stream,
-        .reader = .{ .allocator = testing.allocator },
+        .reader = .{
+            .allocator = testing.allocator,
+            .buf = try testing.allocator.alloc(u8, 1024 * 16),
+        },
     };
 }
 
