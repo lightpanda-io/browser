@@ -41,7 +41,7 @@ Due to the nature of Playwright, a script that works with the current version of
 
 ## Quick start
 
-### Install 
+### Install
 **Install from the nightly builds**
 
 You can download the last binary from the [nightly
@@ -155,7 +155,7 @@ Here are the key features we have implemented:
 - [x] Cookies
 - [x] Custom HTTP headers
 - [ ] Proxy support
-- [ ] Network interception 
+- [ ] Network interception
 
 NOTE: There are hundreds of Web APIs. Developing a browser (even just for headless mode) is a huge task. Coverage will increase over time.
 
