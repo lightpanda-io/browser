@@ -474,12 +474,16 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             self.cdp.browser.notification.unregister(.http_response_header_done, self);
         }
 
-        pub fn fetchEnable(self: *Self) !void {
+        pub fn fetchEnable(self: *Self, authRequests: bool) !void {
             try self.cdp.browser.notification.register(.http_request_intercept, self, onHttpRequestIntercept);
+            if (authRequests) {
+                try self.cdp.browser.notification.register(.http_request_auth_required, self, onHttpRequestAuthRequired);
+            }
         }
 
         pub fn fetchDisable(self: *Self) void {
             self.cdp.browser.notification.unregister(.http_request_intercept, self);
+            self.cdp.browser.notification.unregister(.http_request_auth_required, self);
         }
 
         pub fn onPageRemove(ctx: *anyopaque, _: Notification.PageRemove) !void {
@@ -543,6 +547,12 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 gop.value_ptr.* = .{};
             }
             try gop.value_ptr.appendSlice(arena, try arena.dupe(u8, msg.data));
+        }
+
+        pub fn onHttpRequestAuthRequired(ctx: *anyopaque, data: *const Notification.RequestAuthRequired) !void {
+            const self: *Self = @alignCast(@ptrCast(ctx));
+            defer self.resetNotificationArena();
+            try @import("domains/fetch.zig").requestAuthRequired(self.notification_arena, self, data);
         }
 
         fn resetNotificationArena(self: *Self) void {
