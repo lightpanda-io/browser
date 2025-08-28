@@ -41,6 +41,21 @@ pub fn main() !void {
         if (gpa.detectLeaks()) std.posix.exit(1);
     };
 
+    // Exit the program on SIGINT signal. When running the browser in a Docker
+    // container, sending a CTRL-C (SIGINT) signal is catched but doesn't exit
+    // the program. Here we force exiting on SIGINT.
+    std.posix.sigaction(std.posix.SIG.INT, &std.posix.Sigaction{
+        .handler = .{
+            .handler = struct {
+                pub fn handler(_: c_int) callconv(.c) void {
+                    std.posix.exit(0);
+                }
+            }.handler,
+        },
+        .mask = std.posix.empty_sigset,
+        .flags = 0,
+    }, null);
+
     run(alloc) catch |err| {
         // If explicit filters were set, they won't be valid anymore because
         // the args_arena is gone. We need to set it to something that's not
