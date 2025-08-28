@@ -30,6 +30,9 @@ const Browser = @import("browser/browser.zig").Browser;
 const build_config = @import("build_config");
 const parser = @import("browser/netsurf.zig");
 
+var _app: ?*App = null;
+var _server: ?Server = null;
+
 pub fn main() !void {
     // allocator
     // - in Debug mode we use the General Purpose Allocator to detect memory leaks
@@ -41,21 +44,6 @@ pub fn main() !void {
         if (gpa.detectLeaks()) std.posix.exit(1);
     };
 
-    // Exit the program on SIGINT signal. When running the browser in a Docker
-    // container, sending a CTRL-C (SIGINT) signal is catched but doesn't exit
-    // the program. Here we force exiting on SIGINT.
-    std.posix.sigaction(std.posix.SIG.INT, &std.posix.Sigaction{
-        .handler = .{
-            .handler = struct {
-                pub fn handler(_: c_int) callconv(.c) void {
-                    std.posix.exit(0);
-                }
-            }.handler,
-        },
-        .mask = std.posix.empty_sigset,
-        .flags = 0,
-    }, null);
-
     run(alloc) catch |err| {
         // If explicit filters were set, they won't be valid anymore because
         // the args_arena is gone. We need to set it to something that's not
@@ -64,6 +52,34 @@ pub fn main() !void {
         log.fatal(.app, "exit", .{ .err = err });
         std.posix.exit(1);
     };
+}
+
+// Handle app shutdown gracefuly on signals.
+fn shutdown() void {
+    const sigaction: std.posix.Sigaction = .{
+        .handler = .{
+            .handler = struct {
+                pub fn handler(_: c_int) callconv(.c) void {
+                    // Shutdown service gracefuly.
+                    if (_server) |server| {
+                        server.deinit();
+                    }
+                    if (_app) |app| {
+                        app.deinit();
+                    }
+                    std.posix.exit(0);
+                }
+            }.handler,
+        },
+        .mask = std.posix.empty_sigset,
+        .flags = 0,
+    };
+    // Exit the program on SIGINT signal. When running the browser in a Docker
+    // container, sending a CTRL-C (SIGINT) signal is catched but doesn't exit
+    // the program. Here we force exiting on SIGINT.
+    std.posix.sigaction(std.posix.SIG.INT, &sigaction, null);
+    std.posix.sigaction(std.posix.SIG.TERM, &sigaction, null);
+    std.posix.sigaction(std.posix.SIG.QUIT, &sigaction, null);
 }
 
 fn run(alloc: Allocator) !void {
@@ -96,7 +112,8 @@ fn run(alloc: Allocator) !void {
     const platform = try Platform.init();
     defer platform.deinit();
 
-    var app = try App.init(alloc, .{
+    // _app is global to handle graceful shutdown.
+    _app = try App.init(alloc, .{
         .run_mode = args.mode,
         .platform = &platform,
         .http_proxy = args.httpProxy(),
@@ -107,6 +124,7 @@ fn run(alloc: Allocator) !void {
         .http_max_host_open = args.httpMaxHostOpen(),
         .http_max_concurrent = args.httpMaxConcurrent(),
     });
+    const app = _app.?;
     defer app.deinit();
     app.telemetry.record(.{ .run = {} });
 
@@ -118,7 +136,9 @@ fn run(alloc: Allocator) !void {
                 return args.printUsageAndExit(false);
             };
 
-            var server = try Server.init(app, address);
+            // _server is global to handle graceful shutdown.
+            _server = try Server.init(app, address);
+            const server = &_server.?;
             defer server.deinit();
 
             server.run(address, opts.timeout) catch |err| {
