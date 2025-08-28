@@ -1031,6 +1031,7 @@ pub const Transfer = struct {
             if (std.ascii.eqlIgnoreCase(hdr.name, "content-type")) {
                 const len = @min(hdr.value.len, ResponseHeader.MAX_CONTENT_TYPE_LEN);
                 @memcpy(transfer.response_header.?._content_type[0..len], hdr.value[0..len]);
+                transfer.response_header.?._content_type_len = len;
                 break;
             }
         }
