@@ -53,6 +53,8 @@ pub fn build(b: *Build) !void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
+        .link_libcpp = true,
     });
     try addDependencies(b, lightpanda_module, opts);
 
