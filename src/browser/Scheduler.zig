@@ -129,18 +129,18 @@ test "Scheduler" {
     try testing.expectDelta(3, try s.runHighPriority(), 1);
     try testing.expectEqual(0, task.calls.items.len);
 
-    std.time.sleep(std.time.ns_per_ms * 5);
+    std.Thread.sleep(std.time.ns_per_ms * 5);
     try testing.expectEqual(null, s.runHighPriority());
     try testing.expectEqualSlices(u32, &.{1}, task.calls.items);
 
     try s.add(&task, TestTask.run2, 3, .{});
     try s.add(&task, TestTask.run1, 2, .{});
 
-    std.time.sleep(std.time.ns_per_ms * 5);
+    std.Thread.sleep(std.time.ns_per_ms * 5);
     try testing.expectDelta(null, try s.runHighPriority(), 1);
     try testing.expectEqualSlices(u32, &.{ 1, 1, 2 }, task.calls.items);
 
-    std.time.sleep(std.time.ns_per_ms * 5);
+    std.Thread.sleep(std.time.ns_per_ms * 5);
     // wont' run secondary
     try testing.expectEqual(null, try s.runHighPriority());
     try testing.expectEqualSlices(u32, &.{ 1, 1, 2 }, task.calls.items);
@@ -155,13 +155,13 @@ const TestTask = struct {
     calls: std.ArrayListUnmanaged(u32) = .{},
 
     fn run1(ctx: *anyopaque) ?u32 {
-        var self: *TestTask = @alignCast(@ptrCast(ctx));
+        var self: *TestTask = @ptrCast(@alignCast(ctx));
         self.calls.append(self.allocator, 1) catch unreachable;
         return null;
     }
 
     fn run2(ctx: *anyopaque) ?u32 {
-        var self: *TestTask = @alignCast(@ptrCast(ctx));
+        var self: *TestTask = @ptrCast(@alignCast(ctx));
         self.calls.append(self.allocator, 2) catch unreachable;
         return 2;
     }

@@ -129,7 +129,7 @@ const TimeoutCallback = struct {
     signal: AbortSignal,
 
     fn run(ctx: *anyopaque) ?u32 {
-        const self: *TimeoutCallback = @alignCast(@ptrCast(ctx));
+        const self: *TimeoutCallback = @ptrCast(@alignCast(ctx));
         self.signal.abort("TimeoutError") catch |err| {
             log.warn(.app, "abort signal timeout", .{ .err = err });
         };

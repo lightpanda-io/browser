@@ -102,7 +102,7 @@ pub const CharacterData = struct {
     // netsurf's CharacterData (text, comment) doesn't implement the
     // dom_node_get_attributes and thus will crash if we try to call nodeIsEqualNode.
     pub fn _isEqualNode(self: *parser.CharacterData, other_node: *parser.Node) !bool {
-        if (try parser.nodeType(@alignCast(@ptrCast(self))) != try parser.nodeType(other_node)) {
+        if (try parser.nodeType(@ptrCast(@alignCast(self))) != try parser.nodeType(other_node)) {
             return false;
         }
 

@@ -83,7 +83,7 @@ pub const Server = struct {
         while (true) {
             const socket = posix.accept(listener, null, null, posix.SOCK.NONBLOCK) catch |err| {
                 log.err(.app, "CDP accept", .{ .err = err });
-                std.time.sleep(std.time.ns_per_s);
+                std.Thread.sleep(std.time.ns_per_s);
                 continue;
             };
 
@@ -456,17 +456,15 @@ pub const Client = struct {
     // writev, so we need to get creative. We'll JSON serialize to a
     // buffer, where the first 10 bytes are reserved. We can then backfill
     // the header and send the slice.
-    pub fn sendJSON(self: *Client, message: anytype, opts: std.json.StringifyOptions) !void {
+    pub fn sendJSON(self: *Client, message: anytype, opts: std.json.Stringify.Options) !void {
         const allocator = self.send_arena.allocator();
 
-        var buf: std.ArrayListUnmanaged(u8) = .{};
-        try buf.ensureTotalCapacity(allocator, 512);
+        var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 512);
 
         // reserve space for the maximum possible header
-        buf.appendSliceAssumeCapacity(&.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 });
-
-        try std.json.stringify(message, opts, buf.writer(allocator));
-        const framed = fillWebsocketHeader(buf);
+        try aw.writer.writeAll(&.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 });
+        try std.json.Stringify.value(message, opts, &aw.writer);
+        const framed = fillWebsocketHeader(aw.toArrayList());
         return self.send(framed);
     }
 
@@ -844,7 +842,7 @@ fn buildJSONVersionResponse(
     allocator: Allocator,
     address: net.Address,
 ) ![]const u8 {
-    const body_format = "{{\"webSocketDebuggerUrl\": \"ws://{}/\"}}";
+    const body_format = "{{\"webSocketDebuggerUrl\": \"ws://{f}/\"}}";
     const body_len = std.fmt.count(body_format, .{address});
 
     // We send a Connection: Close (and actually close the connection)

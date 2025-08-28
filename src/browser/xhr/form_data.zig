@@ -123,7 +123,7 @@ fn collectForm(form: *parser.Form, submitter_: ?*parser.ElementHTML, page: *Page
     // probably want to implement (like disabled fieldsets), so we might want
     // to stick with our own walker even if fix libdom to properly support
     // dynamically added elements.
-    const node_list = try @import("../dom/css.zig").querySelectorAll(arena, @alignCast(@ptrCast(form)), "input,select,button,textarea");
+    const node_list = try @import("../dom/css.zig").querySelectorAll(arena, @ptrCast(@alignCast(form)), "input,select,button,textarea");
     const nodes = node_list.nodes.items;
 
     var entries: kv.List = .{};
@@ -220,7 +220,7 @@ fn collectSelectValues(arena: Allocator, select: *parser.Select, name: []const u
     if (is_multiple == false) {
         const option = try parser.optionCollectionItem(options, @intCast(selected_index));
 
-        if (try parser.elementGetAttribute(@alignCast(@ptrCast(option)), "disabled") != null) {
+        if (try parser.elementGetAttribute(@ptrCast(@alignCast(option)), "disabled") != null) {
             return;
         }
         const value = try parser.optionGetValue(option);
@@ -232,7 +232,7 @@ fn collectSelectValues(arena: Allocator, select: *parser.Select, name: []const u
     // we can go directly to the first one
     for (@intCast(selected_index)..len) |i| {
         const option = try parser.optionCollectionItem(options, @intCast(i));
-        if (try parser.elementGetAttribute(@alignCast(@ptrCast(option)), "disabled") != null) {
+        if (try parser.elementGetAttribute(@ptrCast(@alignCast(option)), "disabled") != null) {
             continue;
         }
 

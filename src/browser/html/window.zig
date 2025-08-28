@@ -403,7 +403,7 @@ const TimerCallback = struct {
     args: []Env.JsObject = &.{},
 
     fn run(ctx: *anyopaque) ?u32 {
-        const self: *TimerCallback = @alignCast(@ptrCast(ctx));
+        const self: *TimerCallback = @ptrCast(@alignCast(ctx));
         if (self.repeat != null) {
             if (self.window.timers.contains(self.timer_id) == false) {
                 // it was called

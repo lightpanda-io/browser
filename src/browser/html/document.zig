@@ -209,7 +209,7 @@ pub const HTMLDocument = struct {
     }
 
     pub fn get_readyState(self: *parser.DocumentHTML, page: *Page) ![]const u8 {
-        const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(self)));
+        const state = try page.getOrCreateNodeState(@ptrCast(@alignCast(self)));
         return @tagName(state.ready_state);
     }
 
@@ -292,7 +292,7 @@ pub const HTMLDocument = struct {
     }
 
     pub fn documentIsLoaded(self: *parser.DocumentHTML, page: *Page) !void {
-        const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(self)));
+        const state = try page.getOrCreateNodeState(@ptrCast(@alignCast(self)));
         state.ready_state = .interactive;
 
         log.debug(.script_event, "dispatch event", .{
@@ -309,7 +309,7 @@ pub const HTMLDocument = struct {
     }
 
     pub fn documentIsComplete(self: *parser.DocumentHTML, page: *Page) !void {
-        const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(self)));
+        const state = try page.getOrCreateNodeState(@ptrCast(@alignCast(self)));
         state.ready_state = .complete;
     }
 };

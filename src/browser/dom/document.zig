@@ -258,14 +258,14 @@ pub const Document = struct {
     }
 
     pub fn getActiveElement(self: *parser.Document, page: *Page) !?*parser.Element {
-        if (page.getNodeState(@alignCast(@ptrCast(self)))) |state| {
+        if (page.getNodeState(@ptrCast(@alignCast(self)))) |state| {
             if (state.active_element) |ae| {
                 return ae;
             }
         }
 
         if (try parser.documentHTMLBody(page.window.document)) |body| {
-            return @alignCast(@ptrCast(body));
+            return @ptrCast(@alignCast(body));
         }
 
         return try parser.documentGetDocumentElement(self);
@@ -281,7 +281,7 @@ pub const Document = struct {
     // we could look for the "disabled" attribute, but that's only meaningful
     // on certain types, and libdom's vtable doesn't seem to expose this.
     pub fn setFocus(self: *parser.Document, e: *parser.ElementHTML, page: *Page) !void {
-        const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(self)));
+        const state = try page.getOrCreateNodeState(@ptrCast(@alignCast(self)));
         state.active_element = @ptrCast(e);
     }
 
@@ -295,7 +295,7 @@ pub const Document = struct {
     }
 
     pub fn get_adoptedStyleSheets(self: *parser.Document, page: *Page) !Env.JsObject {
-        const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(self)));
+        const state = try page.getOrCreateNodeState(@ptrCast(@alignCast(self)));
         if (state.adopted_style_sheets) |obj| {
             return obj;
         }
@@ -306,7 +306,7 @@ pub const Document = struct {
     }
 
     pub fn set_adoptedStyleSheets(self: *parser.Document, sheets: Env.JsObject, page: *Page) !void {
-        const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(self)));
+        const state = try page.getOrCreateNodeState(@ptrCast(@alignCast(self)));
         state.adopted_style_sheets = try sheets.persist();
     }
 };

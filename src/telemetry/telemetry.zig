@@ -79,7 +79,7 @@ fn TelemetryT(comptime P: type) type {
         }
 
         fn onPageNavigate(ctx: *anyopaque, data: *const Notification.PageNavigate) !void {
-            const self: *Self = @alignCast(@ptrCast(ctx));
+            const self: *Self = @ptrCast(@alignCast(ctx));
             self.record(.{ .navigate = .{
                 .proxy = false,
                 .tls = std.ascii.startsWithIgnoreCase(data.url, "https://"),

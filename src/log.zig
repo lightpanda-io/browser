@@ -121,12 +121,16 @@ pub fn log(comptime scope: Scope, level: Level, comptime msg: []const u8, data: 
     std.debug.lockStdErr();
     defer std.debug.unlockStdErr();
 
-    logTo(scope, level, msg, data, std.io.getStdErr().writer()) catch |log_err| {
+    var buf: [4096]u8 = undefined;
+    var stderr = std.fs.File.stderr();
+    var writer = stderr.writer(&buf);
+
+    logTo(scope, level, msg, data, &writer.interface) catch |log_err| {
         std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"", .{ timestamp(), @errorName(log_err), @tagName(scope), msg });
     };
 }
 
-fn logTo(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, out: anytype) !void {
+fn logTo(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, out: *std.Io.Writer) !void {
     comptime {
         if (msg.len > 30) {
             @compileError("log msg cannot be more than 30 characters: '" ++ msg ++ "'");
@@ -139,12 +143,11 @@ fn logTo(comptime scope: Scope, level: Level, comptime msg: []const u8, data: an
         }
     }
 
-    var bw = std.io.bufferedWriter(out);
     switch (opts.format) {
-        .logfmt => try logLogfmt(scope, level, msg, data, bw.writer()),
-        .pretty => try logPretty(scope, level, msg, data, bw.writer()),
+        .logfmt => try logLogfmt(scope, level, msg, data, out),
+        .pretty => try logPretty(scope, level, msg, data, out),
     }
-    bw.flush() catch return;
+    out.flush() catch return;
 }
 
 fn logLogfmt(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, writer: anytype) !void {
@@ -223,6 +226,10 @@ fn logPrettyPrefix(comptime scope: Scope, level: Level, comptime msg: []const u8
 
 pub fn writeValue(comptime format: Format, value: anytype, writer: anytype) !void {
     const T = @TypeOf(value);
+    if (std.meta.hasMethod(T, "format")) {
+        return writer.print("{f}", .{value});
+    }
+
     switch (@typeInfo(T)) {
         .optional => {
             if (value) |v| {
@@ -248,7 +255,7 @@ pub fn writeValue(comptime format: Format, value: anytype, writer: anytype) !voi
                 .array => |arr| if (arr.child == u8) {
                     return writeString(format, value, writer);
                 },
-                else => return writer.print("{}", .{value}),
+                else => return writer.print("{f}", .{value}),
             },
             else => {},
         },
@@ -341,16 +348,16 @@ fn elapsed() struct { time: f64, unit: []const u8 } {
 
 const testing = @import("testing.zig");
 test "log: data" {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
-    defer buf.deinit(testing.allocator);
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
 
     {
-        try logTo(.browser, .err, "nope", .{}, buf.writer(testing.allocator));
-        try testing.expectEqual("$time=1739795092929 $scope=browser $level=error $msg=nope\n", buf.items);
+        try logTo(.browser, .err, "nope", .{}, &aw.writer);
+        try testing.expectEqual("$time=1739795092929 $scope=browser $level=error $msg=nope\n", aw.written());
     }
 
     {
-        buf.clearRetainingCapacity();
+        aw.clearRetainingCapacity();
         const string = try testing.allocator.dupe(u8, "spice_must_flow");
         defer testing.allocator.free(string);
 
@@ -367,28 +374,28 @@ test "log: data" {
             .slice = string,
             .err = error.Nope,
             .level = Level.warn,
-        }, buf.writer(testing.allocator));
+        }, &aw.writer);
 
         try testing.expectEqual("$time=1739795092929 $scope=http $level=warn $msg=\"a msg\" " ++
             "cint=5 cfloat=3.43 int=-49 float=0.0003232 bt=true bf=false " ++
             "nn=33 n=null lit=over9000! slice=spice_must_flow " ++
-            "err=Nope level=warn\n", buf.items);
+            "err=Nope level=warn\n", aw.written());
     }
 }
 
 test "log: string escape" {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
-    defer buf.deinit(testing.allocator);
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
 
     const prefix = "$time=1739795092929 $scope=app $level=error $msg=test ";
     {
-        try logTo(.app, .err, "test", .{ .string = "hello world" }, buf.writer(testing.allocator));
-        try testing.expectEqual(prefix ++ "string=\"hello world\"\n", buf.items);
+        try logTo(.app, .err, "test", .{ .string = "hello world" }, &aw.writer);
+        try testing.expectEqual(prefix ++ "string=\"hello world\"\n", aw.written());
     }
 
     {
-        buf.clearRetainingCapacity();
-        try logTo(.app, .err, "test", .{ .string = "\n \thi  \" \" " }, buf.writer(testing.allocator));
-        try testing.expectEqual(prefix ++ "string=\"\\n \thi  \\\" \\\" \"\n", buf.items);
+        aw.clearRetainingCapacity();
+        try logTo(.app, .err, "test", .{ .string = "\n \thi  \" \" " }, &aw.writer);
+        try testing.expectEqual(prefix ++ "string=\"\\n \thi  \\\" \\\" \"\n", aw.written());
     }
 }

@@ -81,7 +81,7 @@ fn setExtraHTTPHeaders(cmd: anytype) !void {
     try extra_headers.ensureTotalCapacity(arena, params.headers.map.count());
     var it = params.headers.map.iterator();
     while (it.next()) |header| {
-        const header_string = try std.fmt.allocPrintZ(arena, "{s}: {s}", .{ header.key_ptr.*, header.value_ptr.* });
+        const header_string = try std.fmt.allocPrintSentinel(arena, "{s}: {s}", .{ header.key_ptr.*, header.value_ptr.* }, 0);
         extra_headers.appendAssumeCapacity(header_string);
     }
 
@@ -296,58 +296,61 @@ pub const TransferAsRequestWriter = struct {
         };
     }
 
-    pub fn jsonStringify(self: *const TransferAsRequestWriter, writer: anytype) !void {
-        const stream = writer.stream;
+    pub fn jsonStringify(self: *const TransferAsRequestWriter, jws: anytype) !void {
+        self._jsonStringify(jws) catch return error.WriteFailed;
+    }
+    fn _jsonStringify(self: *const TransferAsRequestWriter, jws: anytype) !void {
+        const writer = jws.writer;
         const transfer = self.transfer;
 
-        try writer.beginObject();
+        try jws.beginObject();
         {
-            try writer.objectField("url");
-            try writer.beginWriteRaw();
-            try stream.writeByte('\"');
-            try transfer.uri.writeToStream(.{
+            try jws.objectField("url");
+            try jws.beginWriteRaw();
+            try writer.writeByte('\"');
+            try transfer.uri.writeToStream(writer, .{
                 .scheme = true,
                 .authentication = true,
                 .authority = true,
                 .path = true,
                 .query = true,
-            }, stream);
-            try stream.writeByte('\"');
-            writer.endWriteRaw();
+            });
+            try writer.writeByte('\"');
+            jws.endWriteRaw();
         }
 
         {
             if (transfer.uri.fragment) |frag| {
-                try writer.objectField("urlFragment");
-                try writer.beginWriteRaw();
-                try stream.writeAll("\"#");
-                try stream.writeAll(frag.percent_encoded);
-                try stream.writeByte('\"');
-                writer.endWriteRaw();
+                try jws.objectField("urlFragment");
+                try jws.beginWriteRaw();
+                try writer.writeAll("\"#");
+                try writer.writeAll(frag.percent_encoded);
+                try writer.writeByte('\"');
+                jws.endWriteRaw();
             }
         }
 
         {
-            try writer.objectField("method");
-            try writer.write(@tagName(transfer.req.method));
+            try jws.objectField("method");
+            try jws.write(@tagName(transfer.req.method));
         }
 
         {
-            try writer.objectField("hasPostData");
-            try writer.write(transfer.req.body != null);
+            try jws.objectField("hasPostData");
+            try jws.write(transfer.req.body != null);
         }
 
         {
-            try writer.objectField("headers");
-            try writer.beginObject();
+            try jws.objectField("headers");
+            try jws.beginObject();
             var it = transfer.req.headers.iterator();
             while (it.next()) |hdr| {
-                try writer.objectField(hdr.name);
-                try writer.write(hdr.value);
+                try jws.objectField(hdr.name);
+                try jws.write(hdr.value);
             }
-            try writer.endObject();
+            try jws.endObject();
         }
-        try writer.endObject();
+        try jws.endObject();
     }
 };
 
@@ -362,35 +365,39 @@ const TransferAsResponseWriter = struct {
         };
     }
 
-    pub fn jsonStringify(self: *const TransferAsResponseWriter, writer: anytype) !void {
-        const stream = writer.stream;
+    pub fn jsonStringify(self: *const TransferAsResponseWriter, jws: anytype) !void {
+        self._jsonStringify(jws) catch return error.WriteFailed;
+    }
+
+    fn _jsonStringify(self: *const TransferAsResponseWriter, jws: anytype) !void {
+        const writer = jws.writer;
         const transfer = self.transfer;
 
-        try writer.beginObject();
+        try jws.beginObject();
         {
-            try writer.objectField("url");
-            try writer.beginWriteRaw();
-            try stream.writeByte('\"');
-            try transfer.uri.writeToStream(.{
+            try jws.objectField("url");
+            try jws.beginWriteRaw();
+            try writer.writeByte('\"');
+            try transfer.uri.writeToStream(writer, .{
                 .scheme = true,
                 .authentication = true,
                 .authority = true,
                 .path = true,
                 .query = true,
-            }, stream);
-            try stream.writeByte('\"');
-            writer.endWriteRaw();
+            });
+            try writer.writeByte('\"');
+            jws.endWriteRaw();
         }
 
         if (transfer.response_header) |*rh| {
             // it should not be possible for this to be false, but I'm not
             // feeling brave today.
             const status = rh.status;
-            try writer.objectField("status");
-            try writer.write(status);
+            try jws.objectField("status");
+            try jws.write(status);
 
-            try writer.objectField("statusText");
-            try writer.write(@as(std.http.Status, @enumFromInt(status)).phrase() orelse "Unknown");
+            try jws.objectField("statusText");
+            try jws.write(@as(std.http.Status, @enumFromInt(status)).phrase() orelse "Unknown");
         }
 
         {
@@ -410,10 +417,10 @@ const TransferAsResponseWriter = struct {
                 }
             }
 
-            try writer.objectField("headers");
-            try writer.write(std.json.ArrayHashMap([]const u8){ .map = map });
+            try jws.objectField("headers");
+            try jws.write(std.json.ArrayHashMap([]const u8){ .map = map });
         }
-        try writer.endObject();
+        try jws.endObject();
     }
 };
 
@@ -426,20 +433,23 @@ const DocumentUrlWriter = struct {
         };
     }
 
-    pub fn jsonStringify(self: *const DocumentUrlWriter, writer: anytype) !void {
-        const stream = writer.stream;
+    pub fn jsonStringify(self: *const DocumentUrlWriter, jws: anytype) !void {
+        self._jsonStringify(jws) catch return error.WriteFailed;
+    }
+    fn _jsonStringify(self: *const DocumentUrlWriter, jws: anytype) !void {
+        const writer = jws.writer;
 
-        try writer.beginWriteRaw();
-        try stream.writeByte('\"');
-        try self.uri.writeToStream(.{
+        try jws.beginWriteRaw();
+        try writer.writeByte('\"');
+        try self.uri.writeToStream(writer, .{
             .scheme = true,
             .authentication = true,
             .authority = true,
             .path = true,
             .query = true,
-        }, stream);
-        try stream.writeByte('\"');
-        writer.endWriteRaw();
+        });
+        try writer.writeByte('\"');
+        jws.endWriteRaw();
     }
 };
 

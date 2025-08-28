@@ -62,7 +62,7 @@ allocator: Allocator,
 buffer_pool: BufferPool,
 script_pool: std.heap.MemoryPool(PendingScript),
 
-const OrderList = std.DoublyLinkedList(*PendingScript);
+const OrderList = std.DoublyLinkedList;
 
 pub fn init(browser: *Browser, page: *Page) ScriptManager {
     // page isn't fully initialized, we can setup our reference, but that's it.
@@ -96,7 +96,7 @@ pub fn reset(self: *ScriptManager) void {
 
 fn clearList(_: *const ScriptManager, list: *OrderList) void {
     while (list.first) |node| {
-        const pending_script = node.data;
+        const pending_script: *PendingScript = @fieldParentPtr("node", node);
         // this removes it from the list
         pending_script.deinit();
     }
@@ -179,7 +179,7 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
         .script = script,
         .complete = false,
         .manager = self,
-        .node = .{ .data = pending_script },
+        .node = .{},
     };
 
     if (source == .@"inline") {
@@ -193,7 +193,6 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
         log.debug(.http, "script queue", .{ .url = remote_url.? });
     }
 
-    pending_script.node = .{ .data = pending_script };
     self.getList(&pending_script.script).append(&pending_script.node);
 
     errdefer pending_script.deinit();
@@ -323,7 +322,7 @@ fn evaluate(self: *ScriptManager) void {
     defer self.is_evaluating = false;
 
     while (self.scripts.first) |n| {
-        var pending_script = n.data;
+        var pending_script: *PendingScript = @fieldParentPtr("node", n);
         if (pending_script.complete == false) {
             return;
         }
@@ -343,7 +342,7 @@ fn evaluate(self: *ScriptManager) void {
     }
 
     while (self.deferreds.first) |n| {
-        var pending_script = n.data;
+        var pending_script: *PendingScript = @fieldParentPtr("node", n);
         if (pending_script.complete == false) {
             return;
         }
@@ -395,7 +394,7 @@ fn getList(self: *ScriptManager, script: *const Script) *OrderList {
 }
 
 fn startCallback(transfer: *Http.Transfer) !void {
-    const script: *PendingScript = @alignCast(@ptrCast(transfer.ctx));
+    const script: *PendingScript = @ptrCast(@alignCast(transfer.ctx));
     script.startCallback(transfer) catch |err| {
         log.err(.http, "SM.startCallback", .{ .err = err, .transfer = transfer });
         return err;
@@ -403,7 +402,7 @@ fn startCallback(transfer: *Http.Transfer) !void {
 }
 
 fn headerCallback(transfer: *Http.Transfer) !void {
-    const script: *PendingScript = @alignCast(@ptrCast(transfer.ctx));
+    const script: *PendingScript = @ptrCast(@alignCast(transfer.ctx));
     script.headerCallback(transfer) catch |err| {
         log.err(.http, "SM.headerCallback", .{
             .err = err,
@@ -415,7 +414,7 @@ fn headerCallback(transfer: *Http.Transfer) !void {
 }
 
 fn dataCallback(transfer: *Http.Transfer, data: []const u8) !void {
-    const script: *PendingScript = @alignCast(@ptrCast(transfer.ctx));
+    const script: *PendingScript = @ptrCast(@alignCast(transfer.ctx));
     script.dataCallback(transfer, data) catch |err| {
         log.err(.http, "SM.dataCallback", .{ .err = err, .transfer = transfer, .len = data.len });
         return err;
@@ -423,12 +422,12 @@ fn dataCallback(transfer: *Http.Transfer, data: []const u8) !void {
 }
 
 fn doneCallback(ctx: *anyopaque) !void {
-    const script: *PendingScript = @alignCast(@ptrCast(ctx));
+    const script: *PendingScript = @ptrCast(@alignCast(ctx));
     script.doneCallback();
 }
 
 fn errorCallback(ctx: *anyopaque, err: anyerror) void {
-    const script: *PendingScript = @alignCast(@ptrCast(ctx));
+    const script: *PendingScript = @ptrCast(@alignCast(ctx));
     script.errorCallback(err);
 }
 
@@ -682,9 +681,14 @@ const BufferPool = struct {
     available: List = .{},
     allocator: Allocator,
     max_concurrent_transfers: u8,
-    node_pool: std.heap.MemoryPool(List.Node),
+    mem_pool: std.heap.MemoryPool(Container),
 
-    const List = std.DoublyLinkedList(std.ArrayListUnmanaged(u8));
+    const List = std.DoublyLinkedList;
+
+    const Container = struct {
+        node: List.Node,
+        buf: std.ArrayListUnmanaged(u8),
+    };
 
     fn init(allocator: Allocator, max_concurrent_transfers: u8) BufferPool {
         return .{
@@ -692,7 +696,7 @@ const BufferPool = struct {
             .count = 0,
             .allocator = allocator,
             .max_concurrent_transfers = max_concurrent_transfers,
-            .node_pool = std.heap.MemoryPool(List.Node).init(allocator),
+            .mem_pool = std.heap.MemoryPool(Container).init(allocator),
         };
     }
 
@@ -701,21 +705,23 @@ const BufferPool = struct {
 
         var node = self.available.first;
         while (node) |n| {
-            n.data.deinit(allocator);
+            const container: *Container = @fieldParentPtr("node", n);
+            container.buf.deinit(allocator);
             node = n.next;
         }
-        self.node_pool.deinit();
+        self.mem_pool.deinit();
     }
 
-    fn get(self: *BufferPool) ArrayListUnmanaged(u8) {
+    fn get(self: *BufferPool) std.ArrayListUnmanaged(u8) {
         const node = self.available.popFirst() orelse {
             // return a new buffer
             return .{};
         };
 
         self.count -= 1;
-        defer self.node_pool.destroy(node);
-        return node.data;
+        const container: *Container = @fieldParentPtr("node", node);
+        defer self.mem_pool.destroy(container);
+        return container.buf;
     }
 
     fn release(self: *BufferPool, buffer: ArrayListUnmanaged(u8)) void {
@@ -727,16 +733,16 @@ const BufferPool = struct {
             return;
         }
 
-        const node = self.node_pool.create() catch |err| {
+        const container = self.mem_pool.create() catch |err| {
             b.deinit(self.allocator);
             log.err(.http, "SM BufferPool release", .{ .err = err });
             return;
         };
 
         b.clearRetainingCapacity();
-        node.* = .{ .data = b };
+        container.* = .{ .buf = b, .node = .{} };
         self.count += 1;
-        self.available.append(node);
+        self.available.append(&container.node);
     }
 };
 
@@ -769,7 +775,7 @@ const Blocking = struct {
             return error.InvalidStatusCode;
         }
 
-        var self: *Blocking = @alignCast(@ptrCast(transfer.ctx));
+        var self: *Blocking = @ptrCast(@alignCast(transfer.ctx));
         self.buffer = self.buffer_pool.get();
     }
 
@@ -780,7 +786,7 @@ const Blocking = struct {
         //     .blocking = true,
         // });
 
-        var self: *Blocking = @alignCast(@ptrCast(transfer.ctx));
+        var self: *Blocking = @ptrCast(@alignCast(transfer.ctx));
         self.buffer.appendSlice(self.allocator, data) catch |err| {
             log.err(.http, "SM.dataCallback", .{
                 .err = err,
@@ -793,7 +799,7 @@ const Blocking = struct {
     }
 
     fn doneCallback(ctx: *anyopaque) !void {
-        var self: *Blocking = @alignCast(@ptrCast(ctx));
+        var self: *Blocking = @ptrCast(@alignCast(ctx));
         self.state = .{ .done = .{
             .buffer = self.buffer,
             .buffer_pool = self.buffer_pool,
@@ -801,7 +807,7 @@ const Blocking = struct {
     }
 
     fn errorCallback(ctx: *anyopaque, err: anyerror) void {
-        var self: *Blocking = @alignCast(@ptrCast(ctx));
+        var self: *Blocking = @ptrCast(@alignCast(ctx));
         self.state = .{ .err = err };
         self.buffer_pool.release(self.buffer);
     }

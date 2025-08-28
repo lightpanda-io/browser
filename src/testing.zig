@@ -254,8 +254,8 @@ pub fn expectJson(a: anytype, b: anytype) !void {
     const b_value = try convertToJson(aa, b);
 
     errdefer {
-        const a_json = std.json.stringifyAlloc(aa, a_value, .{ .whitespace = .indent_2 }) catch unreachable;
-        const b_json = std.json.stringifyAlloc(aa, b_value, .{ .whitespace = .indent_2 }) catch unreachable;
+        const a_json = std.json.Stringify.valueAlloc(aa, a_value, .{ .whitespace = .indent_2 }) catch unreachable;
+        const b_json = std.json.Stringify.valueAlloc(aa, b_value, .{ .whitespace = .indent_2 }) catch unreachable;
         std.debug.print("== Expected ==\n{s}\n\n== Actual ==\n{s}", .{ a_json, b_json });
     }
 
@@ -282,7 +282,7 @@ fn convertToJson(arena: Allocator, value: anytype) !std.json.Value {
     if (T == []u8 or T == []const u8 or comptime isStringArray(T)) {
         str = value;
     } else {
-        str = try std.json.stringifyAlloc(arena, value, .{});
+        str = try std.json.Stringify.valueAlloc(arena, value, .{});
     }
     return std.json.parseFromSliceLeaky(std.json.Value, arena, str, .{});
 }

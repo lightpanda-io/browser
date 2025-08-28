@@ -58,11 +58,7 @@ pub fn init(allocator: Allocator, opts: Opts) !Http {
 
     var adjusted_opts = opts;
     if (opts.proxy_bearer_token) |bt| {
-        adjusted_opts.proxy_bearer_token = try std.fmt.allocPrintZ(
-            arena.allocator(),
-            "Proxy-Authorization: Bearer {s}",
-            .{bt},
-        );
+        adjusted_opts.proxy_bearer_token = try std.fmt.allocPrintSentinel(arena.allocator(), "Proxy-Authorization: Bearer {s}", .{bt}, 0);
     }
 
     var ca_blob: ?c.curl_blob = null;

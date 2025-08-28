@@ -170,7 +170,7 @@ pub const CookieWriter = struct {
         self.writeCookies(w) catch |err| {
             // The only error our jsonStringify method can return is @TypeOf(w).Error.
             log.err(.cdp, "json stringify", .{ .err = err });
-            return error.OutOfMemory;
+            return error.WriteFailed;
         };
     }
 

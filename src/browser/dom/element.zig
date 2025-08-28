@@ -137,15 +137,15 @@ pub const Element = struct {
     }
 
     pub fn get_innerHTML(self: *parser.Element, page: *Page) ![]const u8 {
-        var buf: std.ArrayListUnmanaged(u8) = .empty;
-        try dump.writeChildren(parser.elementToNode(self), .{}, buf.writer(page.call_arena));
-        return buf.items;
+        var aw = std.Io.Writer.Allocating.init(page.call_arena);
+        try dump.writeChildren(parser.elementToNode(self), .{}, &aw.writer);
+        return aw.written();
     }
 
     pub fn get_outerHTML(self: *parser.Element, page: *Page) ![]const u8 {
-        var buf: std.ArrayListUnmanaged(u8) = .empty;
-        try dump.writeNode(parser.elementToNode(self), .{}, buf.writer(page.call_arena));
-        return buf.items;
+        var aw = std.Io.Writer.Allocating.init(page.call_arena);
+        try dump.writeNode(parser.elementToNode(self), .{}, &aw.writer);
+        return aw.written();
     }
 
     pub fn set_innerHTML(self: *parser.Element, str: []const u8, page: *Page) !void {
@@ -184,7 +184,7 @@ pub const Element = struct {
                 // always index 0, because nodeAppendChild moves the node out of
                 // the nodeList and into the new tree
                 const child = try parser.nodeListItem(children, 0) orelse continue;
-                _ = try parser.nodeAppendChild(@alignCast(@ptrCast(clean)), child);
+                _ = try parser.nodeAppendChild(@ptrCast(@alignCast(clean)), child);
             }
 
             const state = try page.getOrCreateNodeState(node);
@@ -537,14 +537,14 @@ pub const Element = struct {
     };
     pub fn _attachShadow(self: *parser.Element, opts: AttachShadowOpts, page: *Page) !*ShadowRoot {
         const mode = std.meta.stringToEnum(ShadowRoot.Mode, opts.mode) orelse return error.InvalidArgument;
-        const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(self)));
+        const state = try page.getOrCreateNodeState(@ptrCast(@alignCast(self)));
         if (state.shadow_root) |sr| {
             if (mode != sr.mode) {
                 // this is the behavior per the spec
                 return error.NotSupportedError;
             }
 
-            try Node.removeChildren(@alignCast(@ptrCast(sr.proto)));
+            try Node.removeChildren(@ptrCast(@alignCast(sr.proto)));
             return sr;
         }
 
@@ -558,13 +558,13 @@ pub const Element = struct {
             .proto = fragment,
         };
         state.shadow_root = sr;
-        parser.documentFragmentSetHost(sr.proto, @alignCast(@ptrCast(self)));
+        parser.documentFragmentSetHost(sr.proto, @ptrCast(@alignCast(self)));
 
         return sr;
     }
 
     pub fn get_shadowRoot(self: *parser.Element, page: *Page) ?*ShadowRoot {
-        const state = page.getNodeState(@alignCast(@ptrCast(self))) orelse return null;
+        const state = page.getNodeState(@ptrCast(@alignCast(self))) orelse return null;
         const sr = state.shadow_root orelse return null;
         if (sr.mode == .closed) {
             return null;

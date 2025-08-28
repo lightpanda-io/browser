@@ -211,11 +211,11 @@ pub const Writer = struct {
         exclude_root: bool = false,
     };
 
-    pub fn jsonStringify(self: *const Writer, w: anytype) !void {
+    pub fn jsonStringify(self: *const Writer, w: anytype) error{WriteFailed}!void {
         if (self.exclude_root) {
             _ = self.writeChildren(self.root, 1, w) catch |err| {
                 log.err(.cdp, "node writeChildren", .{ .err = err });
-                return error.OutOfMemory;
+                return error.WriteFailed;
             };
         } else {
             self.toJSON(self.root, 0, w) catch |err| {
@@ -223,7 +223,7 @@ pub const Writer = struct {
                 // @TypeOf(w).Error. In other words, our code can't return its own
                 // error, we can only return a writer error. Kinda sucks.
                 log.err(.cdp, "node toJSON stringify", .{ .err = err });
-                return error.OutOfMemory;
+                return error.WriteFailed;
             };
         }
     }
@@ -425,7 +425,7 @@ test "cdp Node: Writer" {
 
     {
         const node = try registry.register(doc.asNode());
-        const json = try std.json.stringifyAlloc(testing.allocator, Writer{
+        const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
             .root = node,
             .depth = 0,
             .exclude_root = false,
@@ -465,7 +465,7 @@ test "cdp Node: Writer" {
 
     {
         const node = registry.lookup_by_id.get(1).?;
-        const json = try std.json.stringifyAlloc(testing.allocator, Writer{
+        const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
             .root = node,
             .depth = 1,
             .exclude_root = false,
@@ -520,7 +520,7 @@ test "cdp Node: Writer" {
 
     {
         const node = registry.lookup_by_id.get(1).?;
-        const json = try std.json.stringifyAlloc(testing.allocator, Writer{
+        const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
             .root = node,
             .depth = -1,
             .exclude_root = true,

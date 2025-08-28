@@ -85,7 +85,7 @@ pub const DocumentFragment = struct {
     }
 
     pub fn _getElementById(self: *parser.DocumentFragment, id: []const u8) !?ElementUnion {
-        const e = try parser.nodeGetElementById(@alignCast(@ptrCast(self)), id) orelse return null;
+        const e = try parser.nodeGetElementById(@ptrCast(@alignCast(self)), id) orelse return null;
         return try Element.toInterface(e);
     }
 };

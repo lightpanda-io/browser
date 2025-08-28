@@ -304,19 +304,17 @@ fn sendMessageToTarget(cmd: anytype) !void {
     }
 
     const Capture = struct {
-        allocator: std.mem.Allocator,
-        buf: std.ArrayListUnmanaged(u8),
+        aw: std.Io.Writer.Allocating,
 
         pub fn sendJSON(self: *@This(), message: anytype) !void {
-            return std.json.stringify(message, .{
+            return std.json.Stringify.value(message, .{
                 .emit_null_optional_fields = false,
-            }, self.buf.writer(self.allocator));
+            }, &self.aw.writer);
         }
     };
 
     var capture = Capture{
-        .buf = .{},
-        .allocator = cmd.arena,
+        .aw = .init(cmd.arena),
     };
 
     cmd.cdp.dispatch(cmd.arena, &capture, params.message) catch |err| {
@@ -325,7 +323,7 @@ fn sendMessageToTarget(cmd: anytype) !void {
     };
 
     try cmd.sendEvent("Target.receivedMessageFromTarget", .{
-        .message = capture.buf.items,
+        .message = capture.aw.written(),
         .sessionId = params.sessionId,
     }, .{});
 }

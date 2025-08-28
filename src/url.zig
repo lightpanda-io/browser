@@ -67,17 +67,11 @@ pub const URL = struct {
         return self.uri.scheme;
     }
 
-    pub fn origin(self: *const URL, writer: anytype) !void {
-        return self.uri.writeToStream(.{ .scheme = true, .authority = true }, writer);
+    pub fn origin(self: *const URL, writer: *std.Io.Writer) !void {
+        return self.uri.writeToStream(writer, .{ .scheme = true, .authority = true });
     }
 
-    pub fn resolve(self: *const URL, arena: Allocator, url: []const u8) !URL {
-        var buf = try arena.alloc(u8, 4096);
-        const new_uri = try self.uri.resolve_inplace(url, &buf);
-        return fromURI(arena, &new_uri);
-    }
-
-    pub fn format(self: *const URL, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(self: *const URL, writer: *std.Io.Writer) !void {
         return writer.writeAll(self.raw);
     }
 
@@ -111,7 +105,7 @@ pub const URL = struct {
 
             const protocol = base[0..index];
             if (comptime opts.null_terminated) {
-                return std.fmt.allocPrintZ(allocator, "{s}:{s}", .{ protocol, path });
+                return std.fmt.allocPrintSentinel(allocator, "{s}:{s}", .{ protocol, path }, 0);
             }
             return std.fmt.allocPrint(allocator, "{s}:{s}", .{ protocol, path });
         }
@@ -125,7 +119,7 @@ pub const URL = struct {
         if (path[0] == '/') {
             const pos = std.mem.indexOfScalarPos(u8, base, protocol_end, '/') orelse base.len;
             if (comptime opts.null_terminated) {
-                return std.fmt.allocPrintZ(allocator, "{s}{s}", .{ base[0..pos], path });
+                return std.fmt.allocPrintSentinel(allocator, "{s}{s}", .{ base[0..pos], path }, 0);
             }
             return std.fmt.allocPrint(allocator, "{s}{s}", .{ base[0..pos], path });
         }
@@ -260,22 +254,6 @@ test "URL: isComleteHTTPUrl" {
     try testing.expectEqual(false, isComleteHTTPUrl("about"));
     try testing.expectEqual(false, isComleteHTTPUrl("//lightpanda.io"));
     try testing.expectEqual(false, isComleteHTTPUrl("//lightpanda.io/about"));
-}
-
-test "URL: resolve size" {
-    const base = "https://www.lightpande.io";
-    const url = try URL.parse(base, null);
-
-    var url_string: [511]u8 = undefined; // Currently this is the largest url we support, it is however recommmended to at least support 2000 characters
-    @memset(&url_string, 'a');
-
-    var buf: [8192]u8 = undefined; // This is approximately the required size to support the current largest supported URL
-    var fba = std.heap.FixedBufferAllocator.init(&buf);
-    const out_url = try url.resolve(fba.allocator(), &url_string);
-
-    try std.testing.expectEqualStrings(out_url.raw[0..25], base);
-    try std.testing.expectEqual(out_url.raw[25], '/');
-    try std.testing.expectEqualStrings(out_url.raw[26..], &url_string);
 }
 
 test "URL: stitch" {
