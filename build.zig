@@ -39,7 +39,6 @@ pub fn build(b: *Build) !void {
         },
     }
 
-
     var opts = b.addOptions();
     opts.addOption(
         []const u8,
