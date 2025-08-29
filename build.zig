@@ -39,6 +39,7 @@ pub fn build(b: *Build) !void {
         },
     }
 
+
     var opts = b.addOptions();
     opts.addOption(
         []const u8,
@@ -48,6 +49,9 @@ pub fn build(b: *Build) !void {
 
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    // We're still using llvm because the new x86 backend seems to crash
+    // with v8. This can be reproduced in zig-v8-fork.
 
     const lightpanda_module = b.addModule("lightpanda", .{
         .root_source_file = b.path("src/main.zig"),
@@ -65,6 +69,7 @@ pub fn build(b: *Build) !void {
         // compile and install
         const exe = b.addExecutable(.{
             .name = "lightpanda",
+            .use_llvm = true,
             .root_module = lightpanda_module,
         });
         b.installArtifact(exe);
@@ -87,6 +92,7 @@ pub fn build(b: *Build) !void {
         // compile
         const tests = b.addTest(.{
             .root_module = lightpanda_module,
+            .use_llvm = true,
             .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple },
         });
 
@@ -113,6 +119,7 @@ pub fn build(b: *Build) !void {
         // compile and install
         const wpt = b.addExecutable(.{
             .name = "lightpanda-wpt",
+            .use_llvm = true,
             .root_module = wpt_module,
         });
 
