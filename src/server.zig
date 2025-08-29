@@ -785,6 +785,8 @@ fn growBuffer(allocator: Allocator, buf: []u8, required_capacity: usize) ![]u8 {
         if (new_capacity >= required_capacity) break;
     }
 
+    log.debug(.app, "CDP buffer growth", .{ .from = buf.len, .to = new_capacity });
+
     if (allocator.resize(buf, new_capacity)) {
         return buf.ptr[0..new_capacity];
     }
