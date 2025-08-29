@@ -48,7 +48,7 @@ pub const Browser = struct {
     pub fn init(app: *App) !Browser {
         const allocator = app.allocator;
 
-        const env = try Env.init(allocator, app.platform, .{});
+        const env = try Env.init(allocator, &app.platform, .{});
         errdefer env.deinit();
 
         const notification = try Notification.init(allocator, app.notification);

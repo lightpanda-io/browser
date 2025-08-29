@@ -71,7 +71,6 @@ const TestCDP = main.CDPT(struct {
 });
 
 const TestContext = struct {
-    app: *App,
     client: ?Client = null,
     cdp_: ?TestCDP = null,
     arena: ArenaAllocator,
@@ -80,7 +79,6 @@ const TestContext = struct {
         if (self.cdp_) |*c| {
             c.deinit();
         }
-        self.app.deinit();
         self.arena.deinit();
     }
 
@@ -89,7 +87,7 @@ const TestContext = struct {
             self.client = Client.init(self.arena.allocator());
             // Don't use the arena here. We want to detect leaks in CDP.
             // The arena is only for test-specific stuff
-            self.cdp_ = TestCDP.init(self.app, &self.client.?) catch unreachable;
+            self.cdp_ = TestCDP.init(base.test_app, &self.client.?) catch unreachable;
         }
         return &self.cdp_.?;
     }
@@ -221,7 +219,6 @@ const TestContext = struct {
 
 pub fn context() TestContext {
     return .{
-        .app = App.init(std.testing.allocator, .{ .run_mode = .serve }) catch unreachable,
         .arena = ArenaAllocator.init(std.testing.allocator),
     };
 }

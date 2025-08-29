@@ -186,10 +186,7 @@ test "telemetry: getOrCreateId" {
 }
 
 test "telemetry: sends event to provider" {
-    var app = testing.createApp(.{});
-    defer app.deinit();
-
-    var telemetry = try TelemetryT(MockProvider).init(app, .serve);
+    var telemetry = try TelemetryT(MockProvider).init(testing.test_app, .serve);
     defer telemetry.deinit();
     const mock = &telemetry.provider;
 
