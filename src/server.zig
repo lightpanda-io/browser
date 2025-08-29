@@ -40,6 +40,7 @@ const MAX_MESSAGE_SIZE = 512 * 1024 + 14 + 140;
 
 pub const Server = struct {
     app: *App,
+    shutdown: bool,
     allocator: Allocator,
     client: ?posix.socket_t,
     listener: ?posix.socket_t,
@@ -54,16 +55,20 @@ pub const Server = struct {
             .app = app,
             .client = null,
             .listener = null,
+            .shutdown = false,
             .allocator = allocator,
             .json_version_response = json_version_response,
         };
     }
 
     pub fn deinit(self: *Server) void {
-        self.allocator.free(self.json_version_response);
+        self.shutdown = true;
         if (self.listener) |listener| {
             posix.close(listener);
         }
+        // *if* server.run is running, we should really wait for it to return
+        // before existing from here.
+        self.allocator.free(self.json_version_response);
     }
 
     pub fn run(self: *Server, address: net.Address, timeout_ms: i32) !void {
@@ -82,6 +87,9 @@ pub const Server = struct {
         log.info(.app, "server running", .{ .address = address });
         while (true) {
             const socket = posix.accept(listener, null, null, posix.SOCK.NONBLOCK) catch |err| {
+                if (self.shutdown) {
+                    return;
+                }
                 log.err(.app, "CDP accept", .{ .err = err });
                 std.time.sleep(std.time.ns_per_s);
                 continue;
