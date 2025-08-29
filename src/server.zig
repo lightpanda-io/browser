@@ -547,7 +547,7 @@ fn Reader(comptime EXPECT_MASK: bool) type {
         const Self = @This();
 
         fn init(allocator: Allocator) !Self {
-            const buf = try allocator.alloc(u8, 32 * 1024);
+            const buf = try allocator.alloc(u8, 16 * 1024);
             return .{
                 .buf = buf,
                 .allocator = allocator,
@@ -626,12 +626,9 @@ fn Reader(comptime EXPECT_MASK: bool) type {
                 } else if (message_len > MAX_MESSAGE_SIZE) {
                     return error.TooLarge;
                 } else if (message_len > self.buf.len) {
-                    const new_buf = try self.allocator.alloc(u8, message_len);
-                    @memcpy(new_buf[0..buf.len], buf);
-                    self.allocator.free(self.buf);
-                    self.buf = new_buf;
-                    self.len = buf.len;
-                    buf = new_buf[0..buf.len];
+                    const len = self.buf.len;
+                    self.buf = try growBuffer(self.allocator, self.buf, message_len);
+                    buf = self.buf[0..len];
                     // we need more data
                     return null;
                 } else if (buf.len < message_len) {
@@ -778,6 +775,23 @@ fn Reader(comptime EXPECT_MASK: bool) type {
             self.len = partial_bytes;
         }
     };
+}
+
+fn growBuffer(allocator: Allocator, buf: []u8, required_capacity: usize) ![]u8 {
+    // from std.ArrayList
+    var new_capacity = buf.len;
+    while (true) {
+        new_capacity +|= new_capacity / 2 + 8;
+        if (new_capacity >= required_capacity) break;
+    }
+
+    if (allocator.resize(buf, new_capacity)) {
+        return buf.ptr[0..new_capacity];
+    }
+    const new_buffer = try allocator.alloc(u8, new_capacity);
+    @memcpy(new_buffer[0..buf.len], buf);
+    allocator.free(buf);
+    return new_buffer;
 }
 
 const Fragments = struct {
