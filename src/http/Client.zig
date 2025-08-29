@@ -69,9 +69,6 @@ next_request_id: u64 = 0,
 // When handles has no more available easys, requests get queued.
 queue: TransferQueue,
 
-// Memory pool for Queue nodes.
-queue_node_pool: std.heap.MemoryPool(TransferQueue.Node),
-
 // The main app allocator
 allocator: Allocator,
 
@@ -90,14 +87,11 @@ notification: ?*Notification = null,
 // restoring, this originally-configured value is what it goes to.
 http_proxy: ?[:0]const u8 = null,
 
-const TransferQueue = std.DoublyLinkedList(*Transfer);
+const TransferQueue = std.DoublyLinkedList;
 
 pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts) !*Client {
     var transfer_pool = std.heap.MemoryPool(Transfer).init(allocator);
     errdefer transfer_pool.deinit();
-
-    var queue_node_pool = std.heap.MemoryPool(TransferQueue.Node).init(allocator);
-    errdefer queue_node_pool.deinit();
 
     const client = try allocator.create(Client);
     errdefer allocator.destroy(client);
@@ -122,7 +116,6 @@ pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts) !*Clie
         .allocator = allocator,
         .http_proxy = opts.http_proxy,
         .transfer_pool = transfer_pool,
-        .queue_node_pool = queue_node_pool,
     };
 
     return client;
@@ -136,13 +129,13 @@ pub fn deinit(self: *Client) void {
     _ = c.curl_multi_cleanup(self.multi);
 
     self.transfer_pool.deinit();
-    self.queue_node_pool.deinit();
     self.allocator.destroy(self);
 }
 
 pub fn abort(self: *Client) void {
     while (self.handles.in_use.first) |node| {
-        var transfer = Transfer.fromEasy(node.data.conn.easy) catch |err| {
+        const handle: *Handle = @fieldParentPtr("node", node);
+        var transfer = Transfer.fromEasy(handle.conn.easy) catch |err| {
             log.err(.http, "get private info", .{ .err = err, .source = "abort" });
             continue;
         };
@@ -152,15 +145,16 @@ pub fn abort(self: *Client) void {
 
     var n = self.queue.first;
     while (n) |node| {
+        const transfer: *Transfer = @fieldParentPtr("_node", node);
+        self.transfer_pool.destroy(transfer);
         n = node.next;
-        self.queue_node_pool.destroy(node);
     }
     self.queue = .{};
 
     // Maybe a bit of overkill
     // We can remove some (all?) of these once we're confident its right.
     std.debug.assert(self.handles.in_use.first == null);
-    std.debug.assert(self.handles.available.len == self.handles.handles.len);
+    std.debug.assert(self.handles.available.len() == self.handles.handles.len);
     if (builtin.mode == .Debug) {
         var running: c_int = undefined;
         std.debug.assert(c.curl_multi_perform(self.multi, &running) == c.CURLE_OK);
@@ -178,12 +172,11 @@ pub fn tick(self: *Client, opts: TickOpts) !bool {
             break;
         }
         const queue_node = self.queue.popFirst() orelse break;
-        const req = queue_node.data;
-        self.queue_node_pool.destroy(queue_node);
+        const transfer: *Transfer = @fieldParentPtr("_node", queue_node);
 
         // we know this exists, because we checked isEmpty() above
         const handle = self.handles.getFreeHandle().?;
-        try self.makeRequest(handle, req);
+        try self.makeRequest(handle, transfer);
     }
     return self.perform(opts.timeout_ms, opts.poll_socket);
 }
@@ -213,9 +206,7 @@ pub fn process(self: *Client, transfer: *Transfer) !void {
         return self.makeRequest(handle, transfer);
     }
 
-    const node = try self.queue_node_pool.create();
-    node.data = transfer;
-    self.queue.append(node);
+    self.queue.append(&transfer._node);
 }
 
 // See ScriptManager.blockingGet
@@ -442,7 +433,7 @@ fn endTransfer(self: *Client, transfer: *Transfer) void {
         log.fatal(.http, "Failed to remove handle", .{ .err = err });
     };
 
-    self.handles.release(handle);
+    self.handles.release(self, handle);
     transfer._handle = null;
     self.active -= 1;
 }
@@ -458,7 +449,7 @@ const Handles = struct {
     in_use: HandleList,
     available: HandleList,
 
-    const HandleList = std.DoublyLinkedList(*Handle);
+    const HandleList = std.DoublyLinkedList;
 
     // pointer to opts is not stable, don't hold a reference to it!
     fn init(allocator: Allocator, client: *Client, ca_blob: ?c.curl_blob, opts: *const Http.Opts) !Handles {
@@ -470,8 +461,7 @@ const Handles = struct {
         var available: HandleList = .{};
         for (0..count) |i| {
             handles[i] = try Handle.init(client, ca_blob, opts);
-            handles[i].node = .{ .data = &handles[i] };
-            available.append(&handles[i].node.?);
+            available.append(&handles[i].node);
         }
 
         return .{
@@ -497,16 +487,19 @@ const Handles = struct {
             node.prev = null;
             node.next = null;
             self.in_use.append(node);
-            return node.data;
+            return @as(*Handle, @fieldParentPtr("node", node));
         }
         return null;
     }
 
-    fn release(self: *Handles, handle: *Handle) void {
-        // client.blocking is a handle without a node, it doesn't exist in
-        // either the in_use or available lists.
-        const node = &(handle.node orelse return);
+    fn release(self: *Handles, client: *Client, handle: *Handle) void {
+        if (handle == &client.blocking) {
+            // the handle we've reserved for blocking request doesn't participate
+            // int he in_use/available pools
+            return;
+        }
 
+        var node = &handle.node;
         self.in_use.remove(node);
         node.prev = null;
         node.next = null;
@@ -518,7 +511,7 @@ const Handles = struct {
 const Handle = struct {
     client: *Client,
     conn: Http.Connection,
-    node: ?Handles.HandleList.Node,
+    node: Handles.HandleList.Node,
 
     // pointer to opts is not stable, don't hold a reference to it!
     fn init(client: *Client, ca_blob: ?c.curl_blob, opts: *const Http.Opts) !Handle {
@@ -534,8 +527,8 @@ const Handle = struct {
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, Transfer.dataCallback));
 
         return .{
+            .node = .{},
             .conn = conn,
-            .node = null,
             .client = client,
         };
     }
@@ -664,6 +657,9 @@ pub const Transfer = struct {
     // incremented by reset func.
     _tries: u8 = 0,
 
+    // for when a Transfer is queued in the client.queue
+    _node: std.DoublyLinkedList.Node = .{},
+
     pub fn reset(self: *Transfer) void {
         self._redirecting = false;
         self._auth_challenge = null;
@@ -678,7 +674,7 @@ pub const Transfer = struct {
     fn deinit(self: *Transfer) void {
         self.req.headers.deinit();
         if (self._handle) |handle| {
-            self.client.handles.release(handle);
+            self.client.handles.release(self.client, handle);
         }
         self.arena.deinit();
         self.client.transfer_pool.destroy(self);
@@ -711,7 +707,7 @@ pub const Transfer = struct {
         }
     }
 
-    pub fn format(self: *const Transfer, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(self: *Transfer, writer: *std.Io.Writer) !void {
         const req = self.req;
         return writer.print("{s} {s}", .{ @tagName(req.method), req.url });
     }
@@ -850,7 +846,7 @@ pub const Transfer = struct {
         // libcurl should only ever emit 1 header at a time
         std.debug.assert(header_count == 1);
 
-        const easy: *c.CURL = @alignCast(@ptrCast(data));
+        const easy: *c.CURL = @ptrCast(@alignCast(data));
         var transfer = fromEasy(easy) catch |err| {
             log.err(.http, "get private info", .{ .err = err, .source = "header callback" });
             return 0;
@@ -948,7 +944,7 @@ pub const Transfer = struct {
         // libcurl should only ever emit 1 chunk at a time
         std.debug.assert(chunk_count == 1);
 
-        const easy: *c.CURL = @alignCast(@ptrCast(data));
+        const easy: *c.CURL = @ptrCast(@alignCast(data));
         var transfer = fromEasy(easy) catch |err| {
             log.err(.http, "get private info", .{ .err = err, .source = "body callback" });
             return c.CURL_WRITEFUNC_ERROR;
@@ -999,7 +995,7 @@ pub const Transfer = struct {
     pub fn fromEasy(easy: *c.CURL) !*Transfer {
         var private: *anyopaque = undefined;
         try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_PRIVATE, &private));
-        return @alignCast(@ptrCast(private));
+        return @ptrCast(@alignCast(private));
     }
 
     pub fn fulfill(transfer: *Transfer, status: u16, headers: []const Http.Header, body: ?[]const u8) !void {

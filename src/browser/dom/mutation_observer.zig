@@ -111,7 +111,7 @@ pub const MutationObserver = struct {
     }
 
     fn callback(ctx: *anyopaque) ?u32 {
-        const self: *MutationObserver = @alignCast(@ptrCast(ctx));
+        const self: *MutationObserver = @ptrCast(@alignCast(ctx));
         if (self.connected == false) {
             self.scheduled = true;
             return null;

@@ -192,7 +192,7 @@ const Writer = struct {
     fail_count: usize = 0,
     case_pass_count: usize = 0,
     case_fail_count: usize = 0,
-    out: std.fs.File.Writer,
+    writer: std.fs.File.Writer,
     cases: std.ArrayListUnmanaged(Case) = .{},
 
     const Format = enum {
@@ -202,28 +202,31 @@ const Writer = struct {
     };
 
     fn init(arena: Allocator, format: Format) !Writer {
-        const out = std.io.getStdOut().writer();
+        const out = std.fs.File.stdout();
+        var writer = out.writer(&.{});
+
         if (format == .json) {
-            try out.writeByte('[');
+            try writer.interface.writeByte('[');
         }
 
         return .{
-            .out = out,
             .arena = arena,
             .format = format,
+            .writer = writer,
         };
     }
 
     fn finalize(self: *Writer) !void {
+        var writer = &self.writer.interface;
         if (self.format == .json) {
             // When we write a test output, we add a trailing comma to act as
             // a separator for the next test. We need to add this dummy entry
             // to make it valid json.
             // Better option could be to change the formatter to work on JSONL:
             // https://github.com/lightpanda-io/perf-fmt/blob/main/wpt/wpt.go
-            try self.out.writeAll("{\"name\":\"empty\",\"pass\": true, \"cases\": []}]");
+            try writer.writeAll("{\"name\":\"empty\",\"pass\": true, \"cases\": []}]");
         } else {
-            try self.out.print("\n==Summary==\nTests: {d}/{d}\nCases: {d}/{d}\n", .{
+            try writer.print("\n==Summary==\nTests: {d}/{d}\nCases: {d}/{d}\n", .{
                 self.pass_count,
                 self.pass_count + self.fail_count,
                 self.case_pass_count,
@@ -233,18 +236,19 @@ const Writer = struct {
     }
 
     fn process(self: *Writer, test_file: []const u8, result_: ?[]const u8, err_: ?[]const u8) !void {
+        var writer = &self.writer.interface;
         if (err_) |err| {
             self.fail_count += 1;
             switch (self.format) {
-                .text => return self.out.print("Fail\t{s}\n\t{s}\n", .{ test_file, err }),
-                .summary => return self.out.print("Fail 0/0\t{s}\n", .{test_file}),
+                .text => return writer.print("Fail\t{s}\n\t{s}\n", .{ test_file, err }),
+                .summary => return writer.print("Fail 0/0\t{s}\n", .{test_file}),
                 .json => {
-                    try std.json.stringify(Test{
+                    try std.json.Stringify.value(Test{
                         .pass = false,
                         .name = test_file,
                         .cases = &.{},
-                    }, .{ .whitespace = .indent_2 }, self.out);
-                    return self.out.writeByte(',');
+                    }, .{ .whitespace = .indent_2 }, writer);
+                    return writer.writeByte(',');
                 },
             }
             // just make sure we didn't fall through by mistake
@@ -316,24 +320,24 @@ const Writer = struct {
         self.case_fail_count += case_fail_count;
 
         switch (self.format) {
-            .summary => try self.out.print("{s} {d}/{d}\t{s}\n", .{ statusText(pass), case_pass_count, case_pass_count + case_fail_count, test_file }),
+            .summary => try writer.print("{s} {d}/{d}\t{s}\n", .{ statusText(pass), case_pass_count, case_pass_count + case_fail_count, test_file }),
             .text => {
-                try self.out.print("{s}\t{s}\n", .{ statusText(pass), test_file });
+                try writer.print("{s}\t{s}\n", .{ statusText(pass), test_file });
                 for (cases.items) |c| {
-                    try self.out.print("\t{s}\t{s}\n", .{ statusText(c.pass), c.name });
+                    try writer.print("\t{s}\t{s}\n", .{ statusText(c.pass), c.name });
                     if (c.message) |msg| {
-                        try self.out.print("\t\t{s}\n", .{msg});
+                        try writer.print("\t\t{s}\n", .{msg});
                     }
                 }
             },
             .json => {
-                try std.json.stringify(Test{
+                try std.json.Stringify.value(Test{
                     .pass = pass,
                     .name = test_file,
                     .cases = cases.items,
-                }, .{ .whitespace = .indent_2 }, self.out);
+                }, .{ .whitespace = .indent_2 }, writer);
                 // separator, see `finalize` for the hack we use to terminate this
-                try self.out.writeByte(',');
+                try writer.writeByte(',');
             },
         }
     }
@@ -362,14 +366,14 @@ fn parseArgs(arena: Allocator) !Command {
     var args = try std.process.argsWithAllocator(arena);
 
     // get the exec name.
-    const execname = args.next().?;
+    const exec_name = args.next().?;
 
     var format = Writer.Format.text;
     var filters: std.ArrayListUnmanaged([]const u8) = .{};
 
     while (args.next()) |arg| {
         if (std.mem.eql(u8, "-h", arg) or std.mem.eql(u8, "--help", arg)) {
-            try std.io.getStdErr().writer().print(usage, .{execname});
+            std.debug.print(usage, .{exec_name});
             std.posix.exit(0);
         }
 

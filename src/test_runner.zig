@@ -67,13 +67,12 @@ pub fn main() !void {
     var skip: usize = 0;
     var leak: usize = 0;
 
-    const printer = Printer.init();
-    printer.fmt("\r\x1b[0K", .{}); // beginning of line and clear to end of line
+    Printer.fmt("\r\x1b[0K", .{}); // beginning of line and clear to end of line
 
     for (builtin.test_functions) |t| {
         if (isSetup(t)) {
             t.func() catch |err| {
-                printer.status(.fail, "\nsetup \"{s}\" failed: {}\n", .{ t.name, err });
+                Printer.status(.fail, "\nsetup \"{s}\" failed: {}\n", .{ t.name, err });
                 return err;
             };
         }
@@ -115,7 +114,7 @@ pub fn main() !void {
 
         if (std.testing.allocator_instance.deinit() == .leak) {
             leak += 1;
-            printer.status(.fail, "\n{s}\n\"{s}\" - Memory Leak\n{s}\n", .{ BORDER, friendly_name, BORDER });
+            Printer.status(.fail, "\n{s}\n\"{s}\" - Memory Leak\n{s}\n", .{ BORDER, friendly_name, BORDER });
         }
 
         if (result) |_| {
@@ -130,7 +129,7 @@ pub fn main() !void {
             else => {
                 status = .fail;
                 fail += 1;
-                printer.status(.fail, "\n{s}\n\"{s}\" - {s}\n{s}\n", .{ BORDER, friendly_name, @errorName(err), BORDER });
+                Printer.status(.fail, "\n{s}\n\"{s}\" - {s}\n{s}\n", .{ BORDER, friendly_name, @errorName(err), BORDER });
                 if (@errorReturnTrace()) |trace| {
                     std.debug.dumpStackTrace(trace.*);
                 }
@@ -143,9 +142,9 @@ pub fn main() !void {
         if (is_unnamed_test == false) {
             if (env.verbose) {
                 const ms = @as(f64, @floatFromInt(ns_taken)) / 1_000_000.0;
-                printer.status(status, "{s} ({d:.2}ms)\n", .{ friendly_name, ms });
+                Printer.status(status, "{s} ({d:.2}ms)\n", .{ friendly_name, ms });
             } else {
-                printer.status(status, ".", .{});
+                Printer.status(status, ".", .{});
             }
         }
     }
@@ -153,7 +152,7 @@ pub fn main() !void {
     for (builtin.test_functions) |t| {
         if (isTeardown(t)) {
             t.func() catch |err| {
-                printer.status(.fail, "\nteardown \"{s}\" failed: {}\n", .{ t.name, err });
+                Printer.status(.fail, "\nteardown \"{s}\" failed: {}\n", .{ t.name, err });
                 return err;
             };
         }
@@ -161,21 +160,23 @@ pub fn main() !void {
 
     const total_tests = pass + fail;
     const status = if (fail == 0) Status.pass else Status.fail;
-    printer.status(status, "\n{d} of {d} test{s} passed\n", .{ pass, total_tests, if (total_tests != 1) "s" else "" });
+    Printer.status(status, "\n{d} of {d} test{s} passed\n", .{ pass, total_tests, if (total_tests != 1) "s" else "" });
     if (skip > 0) {
-        printer.status(.skip, "{d} test{s} skipped\n", .{ skip, if (skip != 1) "s" else "" });
+        Printer.status(.skip, "{d} test{s} skipped\n", .{ skip, if (skip != 1) "s" else "" });
     }
     if (leak > 0) {
-        printer.status(.fail, "{d} test{s} leaked\n", .{ leak, if (leak != 1) "s" else "" });
+        Printer.status(.fail, "{d} test{s} leaked\n", .{ leak, if (leak != 1) "s" else "" });
     }
-    printer.fmt("\n", .{});
-    try slowest.display(printer);
-    printer.fmt("\n", .{});
+    Printer.fmt("\n", .{});
+    try slowest.display();
+    Printer.fmt("\n", .{});
 
     // TODO: at the very least, `browser` should return real stats
     if (json_stats) {
+        var stdout = std.fs.File.stdout();
+        var writer = stdout.writer(&.{});
         const stats = tracking_allocator.stats();
-        try std.json.stringify(&.{
+        try std.json.Stringify.value(&.{
             .{ .name = "browser", .bench = .{
                 .duration = js_runner_duration,
                 .alloc_nb = stats.allocation_count,
@@ -200,36 +201,25 @@ pub fn main() !void {
                 .realloc_nb = 0,
                 .alloc_size = 0,
             } },
-        }, .{ .whitespace = .indent_2 }, std.io.getStdOut().writer());
+        }, .{ .whitespace = .indent_2 }, &writer.interface);
     }
 
     std.posix.exit(if (fail == 0) 0 else 1);
 }
 
 const Printer = struct {
-    out: std.fs.File.Writer,
-
-    fn init() Printer {
-        return .{
-            .out = std.io.getStdErr().writer(),
-        };
+    fn fmt(comptime format: []const u8, args: anytype) void {
+        std.debug.print(format, args);
     }
 
-    fn fmt(self: Printer, comptime format: []const u8, args: anytype) void {
-        std.fmt.format(self.out, format, args) catch unreachable;
-    }
-
-    fn status(self: Printer, s: Status, comptime format: []const u8, args: anytype) void {
-        const color = switch (s) {
-            .pass => "\x1b[32m",
-            .fail => "\x1b[31m",
-            .skip => "\x1b[33m",
-            else => "",
-        };
-        const out = self.out;
-        out.writeAll(color) catch @panic("writeAll failed?!");
-        std.fmt.format(out, format, args) catch @panic("std.fmt.format failed?!");
-        self.fmt("\x1b[0m", .{});
+    fn status(s: Status, comptime format: []const u8, args: anytype) void {
+        switch (s) {
+            .pass => std.debug.print("\x1b[32m", .{}),
+            .fail => std.debug.print("\x1b[31m", .{}),
+            .skip => std.debug.print("\x1b[33m", .{}),
+            else => {},
+        }
+        std.debug.print(format ++ "\x1b[0m", args);
     }
 };
 
@@ -302,13 +292,13 @@ const SlowTracker = struct {
         return ns;
     }
 
-    fn display(self: *SlowTracker, printer: Printer) !void {
+    fn display(self: *SlowTracker) !void {
         var slowest = self.slowest;
         const count = slowest.count();
-        printer.fmt("Slowest {d} test{s}: \n", .{ count, if (count != 1) "s" else "" });
+        Printer.fmt("Slowest {d} test{s}: \n", .{ count, if (count != 1) "s" else "" });
         while (slowest.removeMinOrNull()) |info| {
             const ms = @as(f64, @floatFromInt(info.ns)) / 1_000_000.0;
-            printer.fmt("  {d:.2}ms\t{s}\n", .{ ms, info.name });
+            Printer.fmt("  {d:.2}ms\t{s}\n", .{ ms, info.name });
         }
     }
 

@@ -14,16 +14,14 @@ const URL = "https://telemetry.lightpanda.io";
 const MAX_BATCH_SIZE = 20;
 
 pub const LightPanda = struct {
-    pending: List,
     running: bool,
     thread: ?std.Thread,
     allocator: Allocator,
     mutex: std.Thread.Mutex,
     cond: Thread.Condition,
     connection: Http.Connection,
-    node_pool: std.heap.MemoryPool(List.Node),
-
-    const List = std.DoublyLinkedList(LightPandaEvent);
+    pending: std.DoublyLinkedList,
+    mem_pool: std.heap.MemoryPool(LightPandaEvent),
 
     pub fn init(app: *App) !LightPanda {
         const connection = try app.http.newConnection();
@@ -41,7 +39,7 @@ pub const LightPanda = struct {
             .running = true,
             .allocator = allocator,
             .connection = connection,
-            .node_pool = std.heap.MemoryPool(List.Node).init(allocator),
+            .mem_pool = std.heap.MemoryPool(LightPandaEvent).init(allocator),
         };
     }
 
@@ -53,15 +51,17 @@ pub const LightPanda = struct {
             self.cond.signal();
             thread.join();
         }
-        self.node_pool.deinit();
+        self.mem_pool.deinit();
         self.connection.deinit();
     }
 
     pub fn send(self: *LightPanda, iid: ?[]const u8, run_mode: App.RunMode, raw_event: telemetry.Event) !void {
-        const event = LightPandaEvent{
+        const event = try self.mem_pool.create();
+        event.* = .{
             .iid = iid,
             .mode = run_mode,
             .event = raw_event,
+            .node = .{},
         };
 
         self.mutex.lock();
@@ -70,24 +70,20 @@ pub const LightPanda = struct {
             self.thread = try std.Thread.spawn(.{}, run, .{self});
         }
 
-        const node = try self.node_pool.create();
-        errdefer self.node_pool.destroy(node);
-        node.data = event;
-        self.pending.append(node);
+        self.pending.append(&event.node);
         self.cond.signal();
     }
 
     fn run(self: *LightPanda) void {
-        var arr: std.ArrayListUnmanaged(u8) = .{};
-        defer arr.deinit(self.allocator);
+        var aw = std.Io.Writer.Allocating.init(self.allocator);
 
-        var batch: [MAX_BATCH_SIZE]LightPandaEvent = undefined;
+        var batch: [MAX_BATCH_SIZE]*LightPandaEvent = undefined;
         self.mutex.lock();
         while (true) {
             while (self.pending.first != null) {
                 const b = self.collectBatch(&batch);
                 self.mutex.unlock();
-                self.postEvent(b, &arr) catch |err| {
+                self.postEvent(b, &aw) catch |err| {
                     log.warn(.telemetry, "post error", .{ .err = err });
                 };
                 self.mutex.lock();
@@ -99,15 +95,19 @@ pub const LightPanda = struct {
         }
     }
 
-    fn postEvent(self: *const LightPanda, events: []LightPandaEvent, arr: *std.ArrayListUnmanaged(u8)) !void {
-        defer arr.clearRetainingCapacity();
-        var writer = arr.writer(self.allocator);
+    fn postEvent(self: *LightPanda, events: []*LightPandaEvent, aw: *std.Io.Writer.Allocating) !void {
+        defer for (events) |e| {
+            self.mem_pool.destroy(e);
+        };
+
+        defer aw.clearRetainingCapacity();
         for (events) |event| {
-            try std.json.stringify(event, .{ .emit_null_optional_fields = false }, writer);
-            try writer.writeByte('\n');
+            try std.json.Stringify.value(event, .{ .emit_null_optional_fields = false }, &aw.writer);
+            try aw.writer.writeByte('\n');
         }
 
-        try self.connection.setBody(arr.items);
+        try self.connection.setBody(aw.written());
+        std.debug.print("{s}\n", .{aw.written()});
         const status = try self.connection.request();
 
         if (status != 200) {
@@ -115,13 +115,10 @@ pub const LightPanda = struct {
         }
     }
 
-    fn collectBatch(self: *LightPanda, into: []LightPandaEvent) []LightPandaEvent {
+    fn collectBatch(self: *LightPanda, into: []*LightPandaEvent) []*LightPandaEvent {
         var i: usize = 0;
-        const node_pool = &self.node_pool;
         while (self.pending.popFirst()) |node| {
-            into[i] = node.data;
-            node_pool.destroy(node);
-
+            into[i] = @fieldParentPtr("node", node);
             i += 1;
             if (i == MAX_BATCH_SIZE) {
                 break;
@@ -135,6 +132,7 @@ const LightPandaEvent = struct {
     iid: ?[]const u8,
     mode: App.RunMode,
     event: telemetry.Event,
+    node: std.DoublyLinkedList.Node,
 
     pub fn jsonStringify(self: *const LightPandaEvent, writer: anytype) !void {
         try writer.beginObject();

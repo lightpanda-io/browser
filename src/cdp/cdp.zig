@@ -487,58 +487,58 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         }
 
         pub fn onPageRemove(ctx: *anyopaque, _: Notification.PageRemove) !void {
-            const self: *Self = @alignCast(@ptrCast(ctx));
+            const self: *Self = @ptrCast(@alignCast(ctx));
             try @import("domains/page.zig").pageRemove(self);
         }
 
         pub fn onPageCreated(ctx: *anyopaque, page: *Page) !void {
-            const self: *Self = @alignCast(@ptrCast(ctx));
+            const self: *Self = @ptrCast(@alignCast(ctx));
             return @import("domains/page.zig").pageCreated(self, page);
         }
 
         pub fn onPageNavigate(ctx: *anyopaque, msg: *const Notification.PageNavigate) !void {
-            const self: *Self = @alignCast(@ptrCast(ctx));
+            const self: *Self = @ptrCast(@alignCast(ctx));
             defer self.resetNotificationArena();
             return @import("domains/page.zig").pageNavigate(self.notification_arena, self, msg);
         }
 
         pub fn onPageNavigated(ctx: *anyopaque, msg: *const Notification.PageNavigated) !void {
-            const self: *Self = @alignCast(@ptrCast(ctx));
+            const self: *Self = @ptrCast(@alignCast(ctx));
             return @import("domains/page.zig").pageNavigated(self, msg);
         }
 
         pub fn onHttpRequestStart(ctx: *anyopaque, msg: *const Notification.RequestStart) !void {
-            const self: *Self = @alignCast(@ptrCast(ctx));
+            const self: *Self = @ptrCast(@alignCast(ctx));
             defer self.resetNotificationArena();
             try @import("domains/network.zig").httpRequestStart(self.notification_arena, self, msg);
         }
 
         pub fn onHttpRequestIntercept(ctx: *anyopaque, msg: *const Notification.RequestIntercept) !void {
-            const self: *Self = @alignCast(@ptrCast(ctx));
+            const self: *Self = @ptrCast(@alignCast(ctx));
             defer self.resetNotificationArena();
             try @import("domains/fetch.zig").requestIntercept(self.notification_arena, self, msg);
         }
 
         pub fn onHttpRequestFail(ctx: *anyopaque, msg: *const Notification.RequestFail) !void {
-            const self: *Self = @alignCast(@ptrCast(ctx));
+            const self: *Self = @ptrCast(@alignCast(ctx));
             defer self.resetNotificationArena();
             return @import("domains/network.zig").httpRequestFail(self.notification_arena, self, msg);
         }
 
         pub fn onHttpResponseHeadersDone(ctx: *anyopaque, msg: *const Notification.ResponseHeaderDone) !void {
-            const self: *Self = @alignCast(@ptrCast(ctx));
+            const self: *Self = @ptrCast(@alignCast(ctx));
             defer self.resetNotificationArena();
             return @import("domains/network.zig").httpResponseHeaderDone(self.notification_arena, self, msg);
         }
 
         pub fn onHttpRequestDone(ctx: *anyopaque, msg: *const Notification.RequestDone) !void {
-            const self: *Self = @alignCast(@ptrCast(ctx));
+            const self: *Self = @ptrCast(@alignCast(ctx));
             defer self.resetNotificationArena();
             return @import("domains/network.zig").httpRequestDone(self.notification_arena, self, msg);
         }
 
         pub fn onHttpResponseData(ctx: *anyopaque, msg: *const Notification.ResponseData) !void {
-            const self: *Self = @alignCast(@ptrCast(ctx));
+            const self: *Self = @ptrCast(@alignCast(ctx));
             const arena = self.arena;
 
             const id = msg.transfer.id;
@@ -550,7 +550,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         }
 
         pub fn onHttpRequestAuthRequired(ctx: *anyopaque, data: *const Notification.RequestAuthRequired) !void {
-            const self: *Self = @alignCast(@ptrCast(ctx));
+            const self: *Self = @ptrCast(@alignCast(ctx));
             defer self.resetNotificationArena();
             try @import("domains/fetch.zig").requestAuthRequired(self.notification_arena, self, data);
         }
@@ -566,7 +566,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         }
 
         pub fn onInspectorResponse(ctx: *anyopaque, _: u32, msg: []const u8) void {
-            sendInspectorMessage(@alignCast(@ptrCast(ctx)), msg) catch |err| {
+            sendInspectorMessage(@ptrCast(@alignCast(ctx)), msg) catch |err| {
                 log.err(.cdp, "send inspector response", .{ .err = err });
             };
         }
@@ -583,7 +583,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 log.debug(.cdp, "inspector event", .{ .method = method });
             }
 
-            sendInspectorMessage(@alignCast(@ptrCast(ctx)), msg) catch |err| {
+            sendInspectorMessage(@ptrCast(@alignCast(ctx)), msg) catch |err| {
                 log.err(.cdp, "send inspector event", .{ .err = err });
             };
         }

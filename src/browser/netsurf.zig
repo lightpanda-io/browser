@@ -575,7 +575,7 @@ pub fn mutationEventRelatedNode(evt: *MutationEvent) !?*Node {
     const err = c._dom_mutation_event_get_related_node(evt, &n);
     try DOMErr(err);
     if (n == null) return null;
-    return @as(*Node, @alignCast(@ptrCast(n)));
+    return @as(*Node, @ptrCast(@alignCast(n)));
 }
 
 // EventListener
@@ -590,7 +590,7 @@ fn eventListenerGetData(lst: *EventListener) ?*anyopaque {
 pub const EventTarget = c.dom_event_target;
 
 pub fn eventTargetToNode(et: *EventTarget) *Node {
-    return @as(*Node, @alignCast(@ptrCast(et)));
+    return @as(*Node, @ptrCast(@alignCast(et)));
 }
 
 fn eventTargetVtable(et: *EventTarget) c.dom_event_target_vtable {
@@ -631,7 +631,7 @@ pub const EventNode = struct {
 
     fn idFromListener(lst: *EventListener) ?usize {
         const ctx = eventListenerGetData(lst) orelse return null;
-        const node: *EventNode = @alignCast(@ptrCast(ctx));
+        const node: *EventNode = @ptrCast(@alignCast(ctx));
         return node.id;
     }
 };
@@ -643,11 +643,11 @@ pub fn eventTargetAddEventListener(
     capture: bool,
 ) !*EventListener {
     const event_handler = struct {
-        fn handle(event_: ?*Event, ptr_: ?*anyopaque) callconv(.C) void {
+        fn handle(event_: ?*Event, ptr_: ?*anyopaque) callconv(.c) void {
             const ptr = ptr_ orelse return;
             const event = event_ orelse return;
 
-            const node_: *EventNode = @alignCast(@ptrCast(ptr));
+            const node_: *EventNode = @ptrCast(@alignCast(ptr));
             node_.func(node_, event);
         }
     }.handle;
@@ -829,12 +829,12 @@ pub const EventTargetTBase = extern struct {
     eti: c.dom_event_target_internal = c.dom_event_target_internal{ .listeners = null },
     internal_target_type: InternalType,
 
-    pub fn add_event_listener(et: [*c]c.dom_event_target, t: [*c]c.dom_string, l: ?*c.struct_dom_event_listener, capture: bool) callconv(.C) c.dom_exception {
+    pub fn add_event_listener(et: [*c]c.dom_event_target, t: [*c]c.dom_string, l: ?*c.struct_dom_event_listener, capture: bool) callconv(.c) c.dom_exception {
         const self = @as(*Self, @ptrCast(et));
         return c._dom_event_target_add_event_listener(&self.eti, t, l, capture);
     }
 
-    pub fn dispatch_event(et: [*c]c.dom_event_target, evt: ?*c.struct_dom_event, res: [*c]bool) callconv(.C) c.dom_exception {
+    pub fn dispatch_event(et: [*c]c.dom_event_target, evt: ?*c.struct_dom_event, res: [*c]bool) callconv(.c) c.dom_exception {
         const self = @as(*Self, @ptrCast(et));
         // Set the event target to the target dispatched.
         const e = c._dom_event_set_target(evt, et);
@@ -844,7 +844,7 @@ pub const EventTargetTBase = extern struct {
         return c._dom_event_target_dispatch(et, &self.eti, evt, c.DOM_AT_TARGET, res);
     }
 
-    pub fn remove_event_listener(et: [*c]c.dom_event_target, t: [*c]c.dom_string, l: ?*c.struct_dom_event_listener, capture: bool) callconv(.C) c.dom_exception {
+    pub fn remove_event_listener(et: [*c]c.dom_event_target, t: [*c]c.dom_string, l: ?*c.struct_dom_event_listener, capture: bool) callconv(.c) c.dom_exception {
         const self = @as(*Self, @ptrCast(et));
         return c._dom_event_target_remove_event_listener(&self.eti, t, l, capture);
     }
@@ -856,12 +856,12 @@ pub const EventTargetTBase = extern struct {
         cur: [*c]c.struct_listener_entry,
         next: [*c][*c]c.struct_listener_entry,
         l: [*c]?*c.struct_dom_event_listener,
-    ) callconv(.C) c.dom_exception {
+    ) callconv(.c) c.dom_exception {
         const self = @as(*Self, @ptrCast(et));
         return c._dom_event_target_iter_event_listener(self.eti, t, capture, cur, next, l);
     }
 
-    pub fn internal_type(et: [*c]c.dom_event_target, internal_type_: [*c]u32) callconv(.C) c.dom_exception {
+    pub fn internal_type(et: [*c]c.dom_event_target, internal_type_: [*c]u32) callconv(.c) c.dom_exception {
         const self = @as(*Self, @ptrCast(et));
         internal_type_.* = @intFromEnum(self.internal_target_type);
         return c.DOM_NO_ERR;
@@ -1016,7 +1016,7 @@ pub fn nodeListItem(nodeList: *NodeList, index: u32) !?*Node {
     const err = c._dom_nodelist_item(nodeList, index, &n);
     try DOMErr(err);
     if (n == null) return null;
-    return @as(*Node, @alignCast(@ptrCast(n)));
+    return @as(*Node, @ptrCast(@alignCast(n)));
 }
 
 // NodeExternal is the libdom public representation of a Node.
@@ -1452,7 +1452,7 @@ fn characterDataVtable(data: *CharacterData) c.dom_characterdata_vtable {
 }
 
 pub inline fn characterDataToNode(cdata: *CharacterData) *Node {
-    return @as(*Node, @alignCast(@ptrCast(cdata)));
+    return @as(*Node, @ptrCast(@alignCast(cdata)));
 }
 
 pub fn characterDataData(cdata: *CharacterData) ![]const u8 {
@@ -1537,7 +1537,7 @@ pub const ProcessingInstruction = c.dom_processing_instruction;
 
 // processingInstructionToNode is an helper to convert an ProcessingInstruction to a node.
 pub inline fn processingInstructionToNode(pi: *ProcessingInstruction) *Node {
-    return @as(*Node, @alignCast(@ptrCast(pi)));
+    return @as(*Node, @ptrCast(@alignCast(pi)));
 }
 
 pub fn processInstructionCopy(pi: *ProcessingInstruction) !*ProcessingInstruction {
@@ -1592,7 +1592,7 @@ pub fn attributeGetOwnerElement(a: *Attribute) !?*Element {
 
 // attributeToNode is an helper to convert an attribute to a node.
 pub inline fn attributeToNode(a: *Attribute) *Node {
-    return @as(*Node, @alignCast(@ptrCast(a)));
+    return @as(*Node, @ptrCast(@alignCast(a)));
 }
 
 // Element
@@ -1754,7 +1754,7 @@ pub fn elementHasClass(elem: *Element, class: []const u8) !bool {
 
 // elementToNode is an helper to convert an element to a node.
 pub inline fn elementToNode(e: *Element) *Node {
-    return @as(*Node, @alignCast(@ptrCast(e)));
+    return @as(*Node, @ptrCast(@alignCast(e)));
 }
 
 // TokenList
@@ -1823,14 +1823,14 @@ fn elementHTMLVtable(elem_html: *ElementHTML) c.dom_html_element_vtable {
 
 // scriptToElt is an helper to convert an script to an element.
 pub inline fn scriptToElt(s: *Script) *Element {
-    return @as(*Element, @alignCast(@ptrCast(s)));
+    return @as(*Element, @ptrCast(@alignCast(s)));
 }
 
 // HTMLAnchorElement
 
 // anchorToNode is an helper to convert an anchor to a node.
 pub inline fn anchorToNode(a: *Anchor) *Node {
-    return @as(*Node, @alignCast(@ptrCast(a)));
+    return @as(*Node, @ptrCast(@alignCast(a)));
 }
 
 pub fn anchorGetTarget(a: *Anchor) ![]const u8 {
@@ -1990,7 +1990,7 @@ pub const OptionCollection = c.dom_html_options_collection;
 pub const DocumentFragment = c.dom_document_fragment;
 
 pub inline fn documentFragmentToNode(doc: *DocumentFragment) *Node {
-    return @as(*Node, @alignCast(@ptrCast(doc)));
+    return @as(*Node, @ptrCast(@alignCast(doc)));
 }
 
 pub fn documentFragmentGetHost(frag: *DocumentFragment) ?*Node {
@@ -2097,7 +2097,7 @@ pub inline fn domImplementationCreateHTMLDocument(title: ?[]const u8) !*Document
     if (title) |t| {
         const htitle = try documentCreateElement(doc, "title");
         const txt = try documentCreateTextNode(doc, t);
-        _ = try nodeAppendChild(elementToNode(htitle), @as(*Node, @alignCast(@ptrCast(txt))));
+        _ = try nodeAppendChild(elementToNode(htitle), @as(*Node, @ptrCast(@alignCast(txt))));
         _ = try nodeAppendChild(elementToNode(head), elementToNode(htitle));
     }
 
@@ -2115,7 +2115,7 @@ fn documentVtable(doc: *Document) c.dom_document_vtable {
 }
 
 pub inline fn documentToNode(doc: *Document) *Node {
-    return @as(*Node, @alignCast(@ptrCast(doc)));
+    return @as(*Node, @ptrCast(@alignCast(doc)));
 }
 
 pub inline fn documentGetElementById(doc: *Document, id: []const u8) !?*Element {
@@ -2284,7 +2284,7 @@ pub inline fn documentImportNode(doc: *Document, node: *Node, deep: bool) !*Node
     const nodeext = toNodeExternal(Node, node);
     const err = documentVtable(doc).dom_document_import_node.?(doc, nodeext, deep, &res);
     try DOMErr(err);
-    return @as(*Node, @alignCast(@ptrCast(res)));
+    return @as(*Node, @ptrCast(@alignCast(res)));
 }
 
 pub inline fn documentAdoptNode(doc: *Document, node: *Node) !*Node {
@@ -2292,7 +2292,7 @@ pub inline fn documentAdoptNode(doc: *Document, node: *Node) !*Node {
     const nodeext = toNodeExternal(Node, node);
     const err = documentVtable(doc).dom_document_adopt_node.?(doc, nodeext, &res);
     try DOMErr(err);
-    return @as(*Node, @alignCast(@ptrCast(res)));
+    return @as(*Node, @ptrCast(@alignCast(res)));
 }
 
 pub inline fn documentCreateAttribute(doc: *Document, name: []const u8) !*Attribute {
@@ -2327,7 +2327,7 @@ pub const DocumentHTML = c.dom_html_document;
 
 // documentHTMLToNode is an helper to convert a documentHTML to an node.
 pub inline fn documentHTMLToNode(doc: *DocumentHTML) *Node {
-    return @as(*Node, @alignCast(@ptrCast(doc)));
+    return @as(*Node, @ptrCast(@alignCast(doc)));
 }
 
 fn documentHTMLVtable(doc_html: *DocumentHTML) c.dom_html_document_vtable {
@@ -2489,7 +2489,7 @@ pub inline fn documentHTMLBody(doc_html: *DocumentHTML) !?*Body {
 }
 
 pub inline fn bodyToElement(body: *Body) *Element {
-    return @as(*Element, @alignCast(@ptrCast(body)));
+    return @as(*Element, @ptrCast(@alignCast(body)));
 }
 
 pub inline fn documentHTMLSetBody(doc_html: *DocumentHTML, elt: ?*ElementHTML) !void {
@@ -2520,7 +2520,7 @@ pub inline fn documentHTMLSetTitle(doc: *DocumentHTML, v: []const u8) !void {
 
 pub fn documentHTMLSetCurrentScript(doc: *DocumentHTML, script: ?*Script) !void {
     var s: ?*ElementHTML = null;
-    if (script != null) s = @alignCast(@ptrCast(script.?));
+    if (script != null) s = @ptrCast(@alignCast(script.?));
     const err = documentHTMLVtable(doc).set_current_script.?(doc, s);
     try DOMErr(err);
 }
@@ -2999,7 +2999,7 @@ pub fn inputSetType(input: *Input, type_: []const u8) !void {
         }
     }
     const new_type = if (found) type_ else "text";
-    try elementSetAttribute(@alignCast(@ptrCast(input)), "type", new_type);
+    try elementSetAttribute(@ptrCast(@alignCast(input)), "type", new_type);
 }
 
 pub fn inputGetValue(input: *Input) ![]const u8 {

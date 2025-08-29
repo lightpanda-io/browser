@@ -60,9 +60,9 @@ pub const ShadowRoot = struct {
     }
 
     pub fn get_innerHTML(self: *ShadowRoot, page: *Page) ![]const u8 {
-        var buf: std.ArrayListUnmanaged(u8) = .empty;
-        try dump.writeChildren(parser.documentFragmentToNode(self.proto), .{}, buf.writer(page.call_arena));
-        return buf.items;
+        var aw = std.Io.Writer.Allocating.init(page.call_arena);
+        try dump.writeChildren(parser.documentFragmentToNode(self.proto), .{}, &aw.writer);
+        return aw.written();
     }
 
     pub fn set_innerHTML(self: *ShadowRoot, str_: ?[]const u8) !void {

@@ -170,11 +170,14 @@ fn run(alloc: Allocator) !void {
 
             // dump
             if (opts.dump) {
+                var stdout = std.fs.File.stdout();
+                var writer = stdout.writer(&.{});
                 try page.dump(.{
                     .page = page,
                     .with_base = opts.withbase,
                     .exclude_scripts = opts.noscript,
-                }, std.io.getStdOut());
+                }, &writer.interface);
+                try writer.interface.flush();
             }
         },
         else => unreachable,
@@ -756,11 +759,14 @@ fn serveHTTP(wg: *std.Thread.WaitGroup) !void {
 
     wg.finish();
 
-    var read_buffer: [1024]u8 = undefined;
+    var buf: [1024]u8 = undefined;
     while (true) {
         var conn = try listener.accept();
         defer conn.stream.close();
-        var http_server = std.http.Server.init(conn, &read_buffer);
+        var conn_reader = conn.stream.reader(&buf);
+        var conn_writer = conn.stream.writer(&buf);
+
+        var http_server = std.http.Server.init(conn_reader.interface(), &conn_writer.interface);
 
         var request = http_server.receiveHead() catch |err| switch (err) {
             error.HttpConnectionClosing => continue,

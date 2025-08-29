@@ -64,7 +64,7 @@ pub const HTMLSelectElement = struct {
     }
 
     pub fn get_selectedIndex(select: *parser.Select, page: *Page) !i32 {
-        const state = try page.getOrCreateNodeState(@alignCast(@ptrCast(select)));
+        const state = try page.getOrCreateNodeState(@ptrCast(@alignCast(select)));
         const selected_index = try parser.selectGetSelectedIndex(select);
 
         // See the explicit_index_set field documentation
@@ -83,7 +83,7 @@ pub const HTMLSelectElement = struct {
     // Libdom's dom_html_select_select_set_selected_index will crash if index
     // is out of range, and it doesn't properly unset options
     pub fn set_selectedIndex(select: *parser.Select, index: i32, page: *Page) !void {
-        var state = try page.getOrCreateNodeState(@alignCast(@ptrCast(select)));
+        var state = try page.getOrCreateNodeState(@ptrCast(@alignCast(select)));
         state.explicit_index_set = true;
 
         const options = try parser.selectGetOptions(select);
@@ -101,7 +101,7 @@ pub const HTMLSelectElement = struct {
     pub fn get_options(select: *parser.Select) HTMLOptionsCollection {
         return .{
             .select = select,
-            .proto = collection.HTMLCollectionChildren(@alignCast(@ptrCast(select)), .{
+            .proto = collection.HTMLCollectionChildren(@ptrCast(@alignCast(select)), .{
                 .mutable = true,
                 .include_root = false,
             }),
@@ -176,24 +176,24 @@ pub const HTMLOptionsCollection = struct {
         };
 
         const insert_before: *parser.Node = switch (before) {
-            .option => |o| @alignCast(@ptrCast(o)),
+            .option => |o| @ptrCast(@alignCast(o)),
             .index => |i| (try self.proto.item(i)) orelse return self.appendOption(option),
         };
         return Node.before(insert_before, &.{
-            .{ .node = @alignCast(@ptrCast(option)) },
+            .{ .node = @ptrCast(@alignCast(option)) },
         });
     }
 
     pub fn _remove(self: *HTMLOptionsCollection, index: u32) !void {
         const Node = @import("../dom/node.zig").Node;
         const option = (try self.proto.item(index)) orelse return;
-        _ = try Node._removeChild(@alignCast(@ptrCast(self.select)), option);
+        _ = try Node._removeChild(@ptrCast(@alignCast(self.select)), option);
     }
 
     fn appendOption(self: *HTMLOptionsCollection, option: *parser.Option) !void {
         const Node = @import("../dom/node.zig").Node;
-        return Node.append(@alignCast(@ptrCast(self.select)), &.{
-            .{ .node = @alignCast(@ptrCast(option)) },
+        return Node.append(@ptrCast(@alignCast(self.select)), &.{
+            .{ .node = @ptrCast(@alignCast(option)) },
         });
     }
 };

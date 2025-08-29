@@ -352,7 +352,7 @@ pub const XMLHttpRequest = struct {
 
         return self.headers.append(
             self.arena,
-            try std.fmt.allocPrintZ(self.arena, "{s}: {s}", .{ name, value }),
+            try std.fmt.allocPrintSentinel(self.arena, "{s}: {s}", .{ name, value }, 0),
         );
     }
 
@@ -393,19 +393,19 @@ pub const XMLHttpRequest = struct {
     }
 
     fn httpStartCallback(transfer: *Http.Transfer) !void {
-        const self: *XMLHttpRequest = @alignCast(@ptrCast(transfer.ctx));
+        const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
         log.debug(.http, "request start", .{ .method = self.method, .url = self.url, .source = "xhr" });
         self.transfer = transfer;
     }
 
     fn httpHeaderCallback(transfer: *Http.Transfer, header: Http.Header) !void {
-        const self: *XMLHttpRequest = @alignCast(@ptrCast(transfer.ctx));
+        const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
         const joined = try std.fmt.allocPrint(self.arena, "{s}: {s}", .{ header.name, header.value });
         try self.response_headers.append(self.arena, joined);
     }
 
     fn httpHeaderDoneCallback(transfer: *Http.Transfer) !void {
-        const self: *XMLHttpRequest = @alignCast(@ptrCast(transfer.ctx));
+        const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
 
         const header = &transfer.response_header.?;
 
@@ -441,7 +441,7 @@ pub const XMLHttpRequest = struct {
     }
 
     fn httpDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
-        const self: *XMLHttpRequest = @alignCast(@ptrCast(transfer.ctx));
+        const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
         try self.response_bytes.appendSlice(self.arena, data);
 
         const now = std.time.milliTimestamp();
@@ -459,7 +459,7 @@ pub const XMLHttpRequest = struct {
     }
 
     fn httpDoneCallback(ctx: *anyopaque) !void {
-        const self: *XMLHttpRequest = @alignCast(@ptrCast(ctx));
+        const self: *XMLHttpRequest = @ptrCast(@alignCast(ctx));
 
         log.info(.http, "request complete", .{
             .source = "xhr",
@@ -484,7 +484,7 @@ pub const XMLHttpRequest = struct {
     }
 
     fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
-        const self: *XMLHttpRequest = @alignCast(@ptrCast(ctx));
+        const self: *XMLHttpRequest = @ptrCast(@alignCast(ctx));
         // http client will close it after an error, it isn't safe to keep around
         self.transfer = null;
         self.onErr(err);

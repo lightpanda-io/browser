@@ -8,8 +8,7 @@ const Transfer = @import("http/Client.zig").Transfer;
 
 const Allocator = std.mem.Allocator;
 
-const List = std.DoublyLinkedList(Listener);
-const Node = List.Node;
+const List = std.DoublyLinkedList;
 
 // Allows code to register for and emit events.
 // Keeps two lists
@@ -48,12 +47,12 @@ pub const Notification = struct {
     event_listeners: EventListeners,
 
     // list of listeners for a specified receiver
-    // @intFromPtr(listener) -> [@intFromPtr(listener1), @intFromPtr(listener2, ...]
+    // @intFromPtr(receiver) -> [listener1, listener2, ...]
     // Used when `unregisterAll` is called.
-    listeners: std.AutoHashMapUnmanaged(usize, std.ArrayListUnmanaged(*Node)),
+    listeners: std.AutoHashMapUnmanaged(usize, std.ArrayListUnmanaged(*Listener)),
 
     allocator: Allocator,
-    node_pool: std.heap.MemoryPool(Node),
+    mem_pool: std.heap.MemoryPool(Listener),
 
     const EventListeners = struct {
         page_remove: List = .{},
@@ -143,7 +142,7 @@ pub const Notification = struct {
             .listeners = .{},
             .event_listeners = .{},
             .allocator = allocator,
-            .node_pool = std.heap.MemoryPool(Node).init(allocator),
+            .mem_pool = std.heap.MemoryPool(Listener).init(allocator),
         };
 
         if (parent) |pn| {
@@ -161,21 +160,22 @@ pub const Notification = struct {
             listener.deinit(allocator);
         }
         self.listeners.deinit(allocator);
-        self.node_pool.deinit();
+        self.mem_pool.deinit();
         allocator.destroy(self);
     }
 
     pub fn register(self: *Notification, comptime event: EventType, receiver: anytype, func: EventFunc(event)) !void {
         var list = &@field(self.event_listeners, @tagName(event));
 
-        var node = try self.node_pool.create();
-        errdefer self.node_pool.destroy(node);
+        var listener = try self.mem_pool.create();
+        errdefer self.mem_pool.destroy(listener);
 
-        node.data = .{
+        listener.* = .{
+            .node = .{},
             .list = list,
-            .func = @ptrCast(func),
             .receiver = receiver,
             .event = event,
+            .func = @ptrCast(func),
             .struct_name = @typeName(@typeInfo(@TypeOf(receiver)).pointer.child),
         };
 
@@ -184,44 +184,40 @@ pub const Notification = struct {
         if (gop.found_existing == false) {
             gop.value_ptr.* = .{};
         }
-        try gop.value_ptr.append(allocator, node);
+        try gop.value_ptr.append(allocator, listener);
 
         // we don't add this until we've successfully added the entry to
         // self.listeners
-        list.append(node);
+        list.append(&listener.node);
     }
 
     pub fn unregister(self: *Notification, comptime event: EventType, receiver: anytype) void {
-        var nodes = self.listeners.getPtr(@intFromPtr(receiver)) orelse return;
-
-        const node_pool = &self.node_pool;
+        var listeners = self.listeners.getPtr(@intFromPtr(receiver)) orelse return;
 
         var i: usize = 0;
-        while (i < nodes.items.len) {
-            const node = nodes.items[i];
-            if (node.data.event != event) {
+        while (i < listeners.items.len) {
+            const listener = listeners.items[i];
+            if (listener.event != event) {
                 i += 1;
                 continue;
             }
-            node.data.list.remove(node);
-            node_pool.destroy(node);
-            _ = nodes.swapRemove(i);
+            listener.list.remove(&listener.node);
+            self.mem_pool.destroy(listener);
+            _ = listeners.swapRemove(i);
         }
 
-        if (nodes.items.len == 0) {
-            nodes.deinit(self.allocator);
+        if (listeners.items.len == 0) {
+            listeners.deinit(self.allocator);
             const removed = self.listeners.remove(@intFromPtr(receiver));
             std.debug.assert(removed == true);
         }
     }
 
     pub fn unregisterAll(self: *Notification, receiver: *anyopaque) void {
-        const node_pool = &self.node_pool;
-
         var kv = self.listeners.fetchRemove(@intFromPtr(receiver)) orelse return;
-        for (kv.value.items) |node| {
-            node.data.list.remove(node);
-            node_pool.destroy(node);
+        for (kv.value.items) |listener| {
+            listener.list.remove(&listener.node);
+            self.mem_pool.destroy(listener);
         }
         kv.value.deinit(self.allocator);
     }
@@ -231,8 +227,8 @@ pub const Notification = struct {
 
         var node = list.first;
         while (node) |n| {
-            const listener = n.data;
-            const func: EventFunc(event) = @alignCast(@ptrCast(listener.func));
+            const listener: *Listener = @fieldParentPtr("node", n);
+            const func: EventFunc(event) = @ptrCast(@alignCast(listener.func));
             func(listener.receiver, data) catch |err| {
                 log.err(.app, "dispatch error", .{
                     .err = err,
@@ -274,6 +270,9 @@ const Listener = struct {
     struct_name: []const u8,
 
     event: Notification.EventType,
+
+    // intrusive linked list node
+    node: List.Node,
 
     // The event list this listener belongs to.
     // We need this in order to be able to remove the node from the list
@@ -366,12 +365,12 @@ const TestClient = struct {
     page_navigated: u32 = 0,
 
     fn pageNavigate(ptr: *anyopaque, data: *const Notification.PageNavigate) !void {
-        const self: *TestClient = @alignCast(@ptrCast(ptr));
+        const self: *TestClient = @ptrCast(@alignCast(ptr));
         self.page_navigate += data.timestamp;
     }
 
     fn pageNavigated(ptr: *anyopaque, data: *const Notification.PageNavigated) !void {
-        const self: *TestClient = @alignCast(@ptrCast(ptr));
+        const self: *TestClient = @ptrCast(@alignCast(ptr));
         self.page_navigated += data.timestamp;
     }
 };

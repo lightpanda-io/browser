@@ -202,7 +202,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             errdefer isolate.exit();
 
             isolate.setHostInitializeImportMetaObjectCallback(struct {
-                fn callback(c_context: ?*v8.C_Context, c_module: ?*v8.C_Module, c_meta: ?*v8.C_Value) callconv(.C) void {
+                fn callback(c_context: ?*v8.C_Context, c_module: ?*v8.C_Module, c_meta: ?*v8.C_Value) callconv(.c) void {
                     const v8_context = v8.Context{ .handle = c_context.? };
                     const js_context: *JsContext = @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
                     js_context.initializeImportMeta(v8.Module{ .handle = c_module.? }, v8.Object{ .handle = c_meta.? }) catch |err| {
@@ -382,7 +382,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 };
 
                 // If necessary, turn a void context into something we can safely ptrCast
-                const safe_module_loader: *anyopaque = if (ModuleLoader == ErrorModuleLoader) @constCast(@ptrCast(&{})) else module_loader;
+                const safe_module_loader: *anyopaque = if (ModuleLoader == ErrorModuleLoader) @ptrCast(@constCast(&{})) else module_loader;
 
                 const env = self.env;
                 const isolate = env.isolate;
@@ -1008,7 +1008,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                                         if (ptr.sentinel() == null) {
                                             if (force_u8 or js_value.isUint8Array() or js_value.isUint8ClampedArray()) {
                                                 if (byte_len == 0) return &[_]u8{};
-                                                const arr_ptr = @as([*]u8, @alignCast(@ptrCast(data)));
+                                                const arr_ptr = @as([*]u8, @ptrCast(@alignCast(data)));
                                                 return arr_ptr[0..byte_len];
                                             }
                                         }
@@ -1016,49 +1016,49 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                                     i8 => {
                                         if (js_value.isInt8Array()) {
                                             if (byte_len == 0) return &[_]i8{};
-                                            const arr_ptr = @as([*]i8, @alignCast(@ptrCast(data)));
+                                            const arr_ptr = @as([*]i8, @ptrCast(@alignCast(data)));
                                             return arr_ptr[0..byte_len];
                                         }
                                     },
                                     u16 => {
                                         if (js_value.isUint16Array()) {
                                             if (byte_len == 0) return &[_]u16{};
-                                            const arr_ptr = @as([*]u16, @alignCast(@ptrCast(data)));
+                                            const arr_ptr = @as([*]u16, @ptrCast(@alignCast(data)));
                                             return arr_ptr[0 .. byte_len / 2];
                                         }
                                     },
                                     i16 => {
                                         if (js_value.isInt16Array()) {
                                             if (byte_len == 0) return &[_]i16{};
-                                            const arr_ptr = @as([*]i16, @alignCast(@ptrCast(data)));
+                                            const arr_ptr = @as([*]i16, @ptrCast(@alignCast(data)));
                                             return arr_ptr[0 .. byte_len / 2];
                                         }
                                     },
                                     u32 => {
                                         if (js_value.isUint32Array()) {
                                             if (byte_len == 0) return &[_]u32{};
-                                            const arr_ptr = @as([*]u32, @alignCast(@ptrCast(data)));
+                                            const arr_ptr = @as([*]u32, @ptrCast(@alignCast(data)));
                                             return arr_ptr[0 .. byte_len / 4];
                                         }
                                     },
                                     i32 => {
                                         if (js_value.isInt32Array()) {
                                             if (byte_len == 0) return &[_]i32{};
-                                            const arr_ptr = @as([*]i32, @alignCast(@ptrCast(data)));
+                                            const arr_ptr = @as([*]i32, @ptrCast(@alignCast(data)));
                                             return arr_ptr[0 .. byte_len / 4];
                                         }
                                     },
                                     u64 => {
                                         if (js_value.isBigUint64Array()) {
                                             if (byte_len == 0) return &[_]u64{};
-                                            const arr_ptr = @as([*]u64, @alignCast(@ptrCast(data)));
+                                            const arr_ptr = @as([*]u64, @ptrCast(@alignCast(data)));
                                             return arr_ptr[0 .. byte_len / 8];
                                         }
                                     },
                                     i64 => {
                                         if (js_value.isBigInt64Array()) {
                                             if (byte_len == 0) return &[_]i64{};
-                                            const arr_ptr = @as([*]i64, @alignCast(@ptrCast(data)));
+                                            const arr_ptr = @as([*]i64, @ptrCast(@alignCast(data)));
                                             return arr_ptr[0 .. byte_len / 8];
                                         }
                                     },
@@ -1418,7 +1418,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 c_specifier: ?*const v8.C_String,
                 import_attributes: ?*const v8.C_FixedArray,
                 c_referrer: ?*const v8.C_Module,
-            ) callconv(.C) ?*const v8.C_Module {
+            ) callconv(.c) ?*const v8.C_Module {
                 _ = import_attributes;
 
                 const v8_context = v8.Context{ .handle = c_context.? };
@@ -1516,12 +1516,12 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 }
 
                 const op = js_obj.getInternalField(0).castTo(v8.External).get();
-                const toa: *TaggedAnyOpaque = @alignCast(@ptrCast(op));
+                const toa: *TaggedAnyOpaque = @ptrCast(@alignCast(op));
                 const expected_type_index = @field(TYPE_LOOKUP, type_name);
 
                 var type_index = toa.index;
                 if (type_index == expected_type_index) {
-                    return @alignCast(@ptrCast(toa.ptr));
+                    return @ptrCast(@alignCast(toa.ptr));
                 }
 
                 const meta_lookup = self.meta_lookup;
@@ -1882,8 +1882,9 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 _: u29 = 0,
             };
             pub fn setIndex(self: JsObject, index: u32, value: anytype, opts: SetOpts) !void {
+                @setEvalBranchQuota(10000);
                 const key = switch (index) {
-                    inline 0...50 => |i| std.fmt.comptimePrint("{d}", .{i}),
+                    inline 0...20 => |i| std.fmt.comptimePrint("{d}", .{i}),
                     else => try std.fmt.allocPrint(self.js_context.context_arena, "{d}", .{index}),
                 };
                 return self.set(key, value, opts);
@@ -2157,7 +2158,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 };
 
                 // If necessary, turn a void context into something we can safely ptrCast
-                const safe_context: *anyopaque = if (ContextT == void) @constCast(@ptrCast(&{})) else ctx;
+                const safe_context: *anyopaque = if (ContextT == void) @ptrCast(@constCast(&{})) else ctx;
 
                 const channel = v8.InspectorChannel.init(safe_context, InspectorContainer.onInspectorResponse, InspectorContainer.onInspectorEvent, isolate);
 
@@ -2981,7 +2982,7 @@ fn Caller(comptime JsContext: type, comptime State: type) type {
             // Therefore, we keep a call_depth, and only reset the call_arena
             // when a top-level (call_depth == 0) function ends.
             if (call_depth == 0) {
-                const arena: *ArenaAllocator = @alignCast(@ptrCast(js_context.call_arena.ptr));
+                const arena: *ArenaAllocator = @ptrCast(@alignCast(js_context.call_arena.ptr));
                 _ = arena.reset(.{ .retain_with_limit = CALL_ARENA_RETAIN });
             }
 
@@ -3539,7 +3540,7 @@ fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bool) 
                 } else {
                     const buffer_len = len * bits / 8;
                     const backing_store = v8.BackingStore.init(isolate, buffer_len);
-                    const data: [*]u8 = @alignCast(@ptrCast(backing_store.getData()));
+                    const data: [*]u8 = @ptrCast(@alignCast(backing_store.getData()));
                     @memcpy(data[0..buffer_len], @as([]const u8, @ptrCast(values))[0..buffer_len]);
                     array_buffer = v8.ArrayBuffer.initWithBackingStore(isolate, &backing_store.toSharedPtr());
                 }
@@ -3944,7 +3945,7 @@ fn serializeFunctionArgs(arena: Allocator, isolate: v8.Isolate, context: v8.Cont
 pub export fn v8_inspector__Client__IMPL__valueSubtype(
     _: *v8.c.InspectorClientImpl,
     c_value: *const v8.C_Value,
-) callconv(.C) [*c]const u8 {
+) callconv(.c) [*c]const u8 {
     const external_entry = getTaggedAnyOpaque(.{ .handle = c_value }) orelse return null;
     return if (external_entry.subtype) |st| @tagName(st) else null;
 }
@@ -3957,7 +3958,7 @@ pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
     _: *v8.c.InspectorClientImpl,
     v8_context: *const v8.C_Context,
     c_value: *const v8.C_Value,
-) callconv(.C) [*c]const u8 {
+) callconv(.c) [*c]const u8 {
     _ = v8_context;
 
     // We _must_ include a non-null description in order for the subtype value
@@ -3976,7 +3977,7 @@ fn getTaggedAnyOpaque(value: v8.Value) ?*TaggedAnyOpaque {
     }
 
     const external_data = obj.getInternalField(0).castTo(v8.External).get().?;
-    return @alignCast(@ptrCast(external_data));
+    return @ptrCast(@alignCast(external_data));
 }
 
 test {

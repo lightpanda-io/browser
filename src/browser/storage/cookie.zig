@@ -358,14 +358,10 @@ pub const Cookie = struct {
             if (domain.len > 0) {
                 const no_leading_dot = if (domain[0] == '.') domain[1..] else domain;
 
-                var list: std.ArrayListUnmanaged(u8) = .empty;
-                try list.ensureTotalCapacity(arena, no_leading_dot.len + 1); // Expect no precents needed
-                list.appendAssumeCapacity('.');
-                try std.Uri.Component.percentEncode(list.writer(
-                    arena,
-                ), no_leading_dot, isHostChar);
-                var owned_domain: []u8 = list.items; // @memory retains memory used before growing
-                _ = toLower(owned_domain);
+                var aw = try std.Io.Writer.Allocating.initCapacity(arena, no_leading_dot.len + 1);
+                try aw.writer.writeByte('.');
+                try std.Uri.Component.percentEncode(&aw.writer, no_leading_dot, isHostChar);
+                const owned_domain = toLower(aw.written());
 
                 if (std.mem.indexOfScalarPos(u8, owned_domain, 1, '.') == null and std.mem.eql(u8, "localhost", owned_domain[1..]) == false) {
                     // can't set a cookie for a TLD
@@ -387,10 +383,9 @@ pub const Cookie = struct {
     pub fn percentEncode(arena: Allocator, component: std.Uri.Component, comptime isValidChar: fn (u8) bool) ![]u8 {
         switch (component) {
             .raw => |str| {
-                var list: std.ArrayListUnmanaged(u8) = .empty;
-                try list.ensureTotalCapacity(arena, str.len); // Expect no precents needed
-                try std.Uri.Component.percentEncode(list.writer(arena), str, isValidChar);
-                return list.items; // @memory retains memory used before growing
+                var aw = try std.Io.Writer.Allocating.initCapacity(arena, str.len);
+                try std.Uri.Component.percentEncode(&aw.writer, str, isValidChar);
+                return aw.written(); // @memory retains memory used before growing
             },
             .percent_encoded => |str| {
                 return try arena.dupe(u8, str);

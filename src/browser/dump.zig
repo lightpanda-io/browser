@@ -30,14 +30,14 @@ pub const Opts = struct {
 };
 
 // writer must be a std.io.Writer
-pub fn writeHTML(doc: *parser.Document, opts: Opts, writer: anytype) !void {
+pub fn writeHTML(doc: *parser.Document, opts: Opts, writer: *std.Io.Writer) !void {
     try writer.writeAll("<!DOCTYPE html>\n");
     try writeChildren(parser.documentToNode(doc), opts, writer);
     try writer.writeAll("\n");
 }
 
 // Spec: https://www.w3.org/TR/xml/#sec-prolog-dtd
-pub fn writeDocType(doc_type: *parser.DocumentType, writer: anytype) !void {
+pub fn writeDocType(doc_type: *parser.DocumentType, writer: *std.Io.Writer) !void {
     try writer.writeAll("<!DOCTYPE ");
     try writer.writeAll(try parser.documentTypeGetName(doc_type));
 
@@ -62,7 +62,7 @@ pub fn writeDocType(doc_type: *parser.DocumentType, writer: anytype) !void {
     try writer.writeAll(">");
 }
 
-pub fn writeNode(node: *parser.Node, opts: Opts, writer: anytype) anyerror!void {
+pub fn writeNode(node: *parser.Node, opts: Opts, writer: *std.Io.Writer) anyerror!void {
     switch (try parser.nodeType(node)) {
         .element => {
             // open the tag
@@ -95,7 +95,7 @@ pub fn writeNode(node: *parser.Node, opts: Opts, writer: anytype) anyerror!void 
             if (opts.page) |page| {
                 if (page.getNodeState(node)) |state| {
                     if (state.shadow_root) |sr| {
-                        try writeChildren(@alignCast(@ptrCast(sr.proto)), opts, writer);
+                        try writeChildren(@ptrCast(@alignCast(sr.proto)), opts, writer);
                     }
                 }
             }
@@ -150,7 +150,7 @@ pub fn writeNode(node: *parser.Node, opts: Opts, writer: anytype) anyerror!void 
 }
 
 // writer must be a std.io.Writer
-pub fn writeChildren(root: *parser.Node, opts: Opts, writer: anytype) !void {
+pub fn writeChildren(root: *parser.Node, opts: Opts, writer: *std.Io.Writer) !void {
     const walker = Walker{};
     var next: ?*parser.Node = null;
     while (true) {
@@ -271,13 +271,13 @@ fn testWriteHTML(comptime expected_body: []const u8, src: []const u8) !void {
 }
 
 fn testWriteFullHTML(comptime expected: []const u8, src: []const u8) !void {
-    var buf = std.ArrayListUnmanaged(u8){};
-    defer buf.deinit(testing.allocator);
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
 
     const doc_html = try parser.documentHTMLParseFromStr(src);
     defer parser.documentHTMLClose(doc_html) catch {};
 
     const doc = parser.documentHTMLToDocument(doc_html);
-    try writeHTML(doc, .{}, buf.writer(testing.allocator));
-    try testing.expectEqualStrings(expected, buf.items);
+    try writeHTML(doc, .{}, &aw.writer);
+    try testing.expectEqualStrings(expected, aw.written());
 }

@@ -114,16 +114,16 @@ pub const URL = struct {
     }
 
     pub fn get_origin(self: *URL, page: *Page) ![]const u8 {
-        var buf: std.ArrayListUnmanaged(u8) = .empty;
-        try self.uri.writeToStream(.{
+        var aw = std.Io.Writer.Allocating.init(page.arena);
+        try self.uri.writeToStream(&aw.writer, .{
             .scheme = true,
             .authentication = false,
             .authority = true,
             .path = false,
             .query = false,
             .fragment = false,
-        }, buf.writer(page.arena));
-        return buf.items;
+        });
+        return aw.written();
     }
 
     // get_href returns the URL by writing all its components.
@@ -137,28 +137,28 @@ pub const URL = struct {
 
     // format the url with all its components.
     pub fn toString(self: *const URL, arena: Allocator) ![]const u8 {
-        var buf: std.ArrayListUnmanaged(u8) = .empty;
-        try self.uri.writeToStream(.{
+        var aw = std.Io.Writer.Allocating.init(arena);
+        try self.uri.writeToStream(&aw.writer, .{
             .scheme = true,
             .authentication = true,
             .authority = true,
             .path = uriComponentNullStr(self.uri.path).len > 0,
-        }, buf.writer(arena));
+        });
 
         if (self.search_params.get_size() > 0) {
-            try buf.append(arena, '?');
-            try self.search_params.write(buf.writer(arena));
+            try aw.writer.writeByte('?');
+            try self.search_params.write(&aw.writer);
         }
 
         {
             const fragment = uriComponentNullStr(self.uri.fragment);
             if (fragment.len > 0) {
-                try buf.append(arena, '#');
-                try buf.appendSlice(arena, fragment);
+                try aw.writer.writeByte('#');
+                try aw.writer.writeAll(fragment);
             }
         }
 
-        return buf.items;
+        return aw.written();
     }
 
     pub fn get_protocol(self: *URL, page: *Page) ![]const u8 {
@@ -174,17 +174,16 @@ pub const URL = struct {
     }
 
     pub fn get_host(self: *URL, page: *Page) ![]const u8 {
-        var buf: std.ArrayListUnmanaged(u8) = .empty;
-
-        try self.uri.writeToStream(.{
+        var aw = std.Io.Writer.Allocating.init(page.arena);
+        try self.uri.writeToStream(&aw.writer, .{
             .scheme = false,
             .authentication = false,
             .authority = true,
             .path = false,
             .query = false,
             .fragment = false,
-        }, buf.writer(page.arena));
-        return buf.items;
+        });
+        return aw.written();
     }
 
     pub fn get_hostname(self: *URL) []const u8 {
@@ -195,9 +194,9 @@ pub const URL = struct {
         const arena = page.arena;
         if (self.uri.port == null) return try arena.dupe(u8, "");
 
-        var buf: std.ArrayListUnmanaged(u8) = .empty;
-        try std.fmt.formatInt(self.uri.port.?, 10, .lower, .{}, buf.writer(arena));
-        return buf.items;
+        var aw = std.Io.Writer.Allocating.init(arena);
+        try aw.writer.printInt(self.uri.port.?, 10, .lower, .{});
+        return aw.written();
     }
 
     pub fn get_pathname(self: *URL) []const u8 {

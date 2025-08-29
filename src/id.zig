@@ -45,7 +45,7 @@ pub fn Incrementing(comptime T: type, comptime prefix: []const u8) type {
             const n = counter +% 1;
             defer self.counter = n;
 
-            const size = std.fmt.formatIntBuf(self.buffer[NUMERIC_START..], n, 10, .lower, .{});
+            const size = std.fmt.printInt(self.buffer[NUMERIC_START..], n, 10, .lower, .{});
             return self.buffer[0 .. NUMERIC_START + size];
         }
 

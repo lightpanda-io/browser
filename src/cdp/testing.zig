@@ -50,10 +50,10 @@ const Client = struct {
         };
     }
 
-    pub fn sendJSON(self: *Client, message: anytype, opts: json.StringifyOptions) !void {
+    pub fn sendJSON(self: *Client, message: anytype, opts: json.Stringify.Options) !void {
         var opts_copy = opts;
         opts_copy.whitespace = .indent_2;
-        const serialized = try json.stringifyAlloc(self.allocator, message, opts_copy);
+        const serialized = try json.Stringify.valueAlloc(self.allocator, message, opts_copy);
         try self.serialized.append(self.allocator, serialized);
 
         const value = try json.parseFromSliceLeaky(json.Value, self.allocator, serialized, .{});
@@ -131,7 +131,7 @@ const TestContext = struct {
     pub fn processMessage(self: *TestContext, msg: anytype) !void {
         var json_message: []const u8 = undefined;
         if (@typeInfo(@TypeOf(msg)) != .pointer) {
-            json_message = try std.json.stringifyAlloc(self.arena.allocator(), msg, .{});
+            json_message = try std.json.Stringify.valueAlloc(self.arena.allocator(), msg, .{});
         } else {
             // assume this is a string we want to send as-is, if it isn't, we'll
             // get a compile error, so no big deal.
@@ -189,7 +189,7 @@ const TestContext = struct {
         index: ?usize = null,
     };
     pub fn expectSent(self: *TestContext, expected: anytype, opts: SentOpts) !void {
-        const serialized = try json.stringifyAlloc(self.arena.allocator(), expected, .{
+        const serialized = try json.Stringify.valueAlloc(self.arena.allocator(), expected, .{
             .whitespace = .indent_2,
             .emit_null_optional_fields = false,
         });

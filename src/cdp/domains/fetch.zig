@@ -315,10 +315,10 @@ fn continueWithAuth(cmd: anytype) !void {
     // restart the request with the provided credentials.
     const arena = transfer.arena.allocator();
     transfer.updateCredentials(
-        try std.fmt.allocPrintZ(arena, "{s}:{s}", .{
+        try std.fmt.allocPrintSentinel(arena, "{s}:{s}", .{
             params.authChallengeResponse.username,
             params.authChallengeResponse.password,
-        }),
+        }, 0),
     );
 
     transfer.reset();

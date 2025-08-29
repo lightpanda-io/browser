@@ -173,13 +173,13 @@ pub const Page = struct {
     }
 
     fn runMicrotasks(ctx: *anyopaque) ?u32 {
-        const self: *Page = @alignCast(@ptrCast(ctx));
+        const self: *Page = @ptrCast(@alignCast(ctx));
         self.session.browser.runMicrotasks();
         return 5;
     }
 
     fn runMessageLoop(ctx: *anyopaque) ?u32 {
-        const self: *Page = @alignCast(@ptrCast(ctx));
+        const self: *Page = @ptrCast(@alignCast(ctx));
         self.session.browser.runMessageLoop();
         return 100;
     }
@@ -192,7 +192,7 @@ pub const Page = struct {
     };
 
     // dump writes the page content into the given file.
-    pub fn dump(self: *const Page, opts: DumpOpts, out: std.fs.File) !void {
+    pub fn dump(self: *const Page, opts: DumpOpts, out: *std.Io.Writer) !void {
         switch (self.mode) {
             .pre => return error.PageNotLoaded,
             .raw => |buf| {
@@ -347,7 +347,7 @@ pub const Page = struct {
                             // overflow.
                             const _ms: u64 = @intCast(ms);
 
-                            std.time.sleep(std.time.ns_per_ms * _ms);
+                            std.Thread.sleep(std.time.ns_per_ms * _ms);
                             break :SW;
                         }
 
@@ -469,9 +469,9 @@ pub const Page = struct {
     }
 
     pub fn origin(self: *const Page, arena: Allocator) ![]const u8 {
-        var arr: std.ArrayListUnmanaged(u8) = .{};
-        try self.url.origin(arr.writer(arena));
-        return arr.items;
+        var aw = std.Io.Writer.Allocating.init(arena);
+        try self.url.origin(&aw.writer);
+        return aw.written();
     }
 
     const RequestCookieOpts = struct {
@@ -610,7 +610,7 @@ pub const Page = struct {
     }
 
     fn pageHeaderDoneCallback(transfer: *Http.Transfer) !void {
-        var self: *Page = @alignCast(@ptrCast(transfer.ctx));
+        var self: *Page = @ptrCast(@alignCast(transfer.ctx));
 
         // would be different than self.url in the case of a redirect
         const header = &transfer.response_header.?;
@@ -625,7 +625,7 @@ pub const Page = struct {
     }
 
     fn pageDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
-        var self: *Page = @alignCast(@ptrCast(transfer.ctx));
+        var self: *Page = @ptrCast(@alignCast(transfer.ctx));
 
         if (self.mode == .pre) {
             // we lazily do this, because we might need the first chunk of data
@@ -686,7 +686,7 @@ pub const Page = struct {
     fn pageDoneCallback(ctx: *anyopaque) !void {
         log.debug(.http, "navigate done", .{});
 
-        var self: *Page = @alignCast(@ptrCast(ctx));
+        var self: *Page = @ptrCast(@alignCast(ctx));
         self.clearTransferArena();
 
         switch (self.mode) {
@@ -772,7 +772,7 @@ pub const Page = struct {
     fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
         log.err(.http, "navigate failed", .{ .err = err });
 
-        var self: *Page = @alignCast(@ptrCast(ctx));
+        var self: *Page = @ptrCast(@alignCast(ctx));
         self.clearTransferArena();
 
         switch (self.mode) {
@@ -1015,7 +1015,7 @@ pub const Page = struct {
 
     pub fn getNodeState(_: *const Page, node: *parser.Node) ?*State {
         if (parser.nodeGetEmbedderData(node)) |state| {
-            return @alignCast(@ptrCast(state));
+            return @ptrCast(@alignCast(state));
         }
         return null;
     }
@@ -1026,13 +1026,13 @@ pub const Page = struct {
         const transfer_arena = self.session.transfer_arena;
         var form_data = try FormData.fromForm(form, submitter, self);
 
-        const encoding = try parser.elementGetAttribute(@alignCast(@ptrCast(form)), "enctype");
+        const encoding = try parser.elementGetAttribute(@ptrCast(@alignCast(form)), "enctype");
 
         var buf: std.ArrayListUnmanaged(u8) = .empty;
         try form_data.write(encoding, buf.writer(transfer_arena));
 
-        const method = try parser.elementGetAttribute(@alignCast(@ptrCast(form)), "method") orelse "";
-        var action = try parser.elementGetAttribute(@alignCast(@ptrCast(form)), "action") orelse self.url.raw;
+        const method = try parser.elementGetAttribute(@ptrCast(@alignCast(form)), "method") orelse "";
+        var action = try parser.elementGetAttribute(@ptrCast(@alignCast(form)), "action") orelse self.url.raw;
 
         var opts = NavigateOpts{
             .reason = .form,
@@ -1113,7 +1113,7 @@ fn timestamp() u32 {
 // after the document is loaded, it's ok to execute any async and defer scripts
 // immediately.
 pub export fn scriptAddedCallback(ctx: ?*anyopaque, element: ?*parser.Element) callconv(.c) void {
-    const self: *Page = @alignCast(@ptrCast(ctx.?));
+    const self: *Page = @ptrCast(@alignCast(ctx.?));
 
     if (self.delayed_navigation) {
         // if we're planning on navigating to another page, don't run this script

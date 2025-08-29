@@ -23,7 +23,7 @@ const Build = std.Build;
 
 /// Do not rename this constant. It is scanned by some scripts to determine
 /// which zig version to install.
-const recommended_zig_version = "0.14.1";
+const recommended_zig_version = "0.15.1";
 
 pub fn build(b: *Build) !void {
     switch (comptime builtin.zig_version.order(std.SemanticVersion.parse(recommended_zig_version) catch unreachable)) {
@@ -49,10 +49,15 @@ pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // We're still using llvm because the new x86 backend seems to crash
+    // with v8. This can be reproduced in zig-v8-fork.
+
     const lightpanda_module = b.addModule("lightpanda", .{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
+        .link_libcpp = true,
     });
     try addDependencies(b, lightpanda_module, opts);
 
@@ -63,6 +68,7 @@ pub fn build(b: *Build) !void {
         // compile and install
         const exe = b.addExecutable(.{
             .name = "lightpanda",
+            .use_llvm = true,
             .root_module = lightpanda_module,
         });
         b.installArtifact(exe);
@@ -85,6 +91,7 @@ pub fn build(b: *Build) !void {
         // compile
         const tests = b.addTest(.{
             .root_module = lightpanda_module,
+            .use_llvm = true,
             .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple },
         });
 
@@ -111,6 +118,7 @@ pub fn build(b: *Build) !void {
         // compile and install
         const wpt = b.addExecutable(.{
             .name = "lightpanda-wpt",
+            .use_llvm = true,
             .root_module = wpt_module,
         });
 
