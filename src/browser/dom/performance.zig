@@ -23,6 +23,8 @@ const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
 
+const milliTimestamp = @import("../../datetime.zig").milliTimestamp;
+
 pub const Interfaces = .{
     Performance,
     PerformanceEntry,
@@ -36,29 +38,27 @@ pub const Performance = struct {
     // Extend libdom event target for pure zig struct.
     base: parser.EventTargetTBase = parser.EventTargetTBase{ .internal_target_type = .performance },
 
-    time_origin: std.time.Timer,
+    time_origin: u64,
     // if (Window.crossOriginIsolated) -> Resolution in isolated contexts:       5 microseconds
     // else                            -> Resolution in non-isolated contexts: 100 microseconds
     const ms_resolution = 100;
 
-    fn limitedResolutionMs(nanoseconds: u64) f64 {
-        const elapsed_at_resolution = ((nanoseconds / std.time.ns_per_us) + ms_resolution / 2) / ms_resolution * ms_resolution;
-        const elapsed = @as(f64, @floatFromInt(elapsed_at_resolution));
-        return elapsed / @as(f64, std.time.us_per_ms);
-    }
-
-    pub fn get_timeOrigin(self: *const Performance) f64 {
-        const is_posix = switch (@import("builtin").os.tag) { // From std.time.zig L125
-            .windows, .uefi, .wasi => false,
-            else => true,
+    pub fn init() Performance {
+        return .{
+            .time_origin = milliTimestamp(),
         };
-        const zero = std.time.Instant{ .timestamp = if (!is_posix) 0 else .{ .sec = 0, .nsec = 0 } };
-        const started = self.time_origin.started.since(zero);
-        return limitedResolutionMs(started);
     }
 
-    pub fn _now(self: *Performance) f64 {
-        return limitedResolutionMs(self.time_origin.read());
+    pub fn get_timeOrigin(self: *const Performance) u64 {
+        return self.time_origin;
+    }
+
+    pub fn reset(self: *Performance) void {
+        self.time_origin = milliTimestamp();
+    }
+
+    pub fn _now(self: *const Performance) u64 {
+        return milliTimestamp() - self.time_origin;
     }
 
     pub fn _mark(_: *Performance, name: []const u8, _options: ?PerformanceMark.Options, page: *Page) !PerformanceMark {
@@ -152,14 +152,14 @@ pub const PerformanceMark = struct {
 
     const Options = struct {
         detail: ?Env.JsObject = null,
-        start_time: ?f64 = null,
+        startTime: ?f64 = null,
     };
 
     pub fn constructor(name: []const u8, _options: ?Options, page: *Page) !PerformanceMark {
         const perf = &page.window.performance;
 
         const options = _options orelse Options{};
-        const start_time = options.start_time orelse perf._now();
+        const start_time = options.startTime orelse @as(f64, @floatFromInt(perf._now()));
 
         if (start_time < 0.0) {
             return error.TypeError;
@@ -181,16 +181,13 @@ pub const PerformanceMark = struct {
 const testing = @import("./../../testing.zig");
 
 test "Performance: get_timeOrigin" {
-    var perf = Performance{ .time_origin = try std.time.Timer.start() };
+    var perf = Performance.init();
     const time_origin = perf.get_timeOrigin();
     try testing.expect(time_origin >= 0);
-
-    // Check resolution
-    try testing.expectDelta(@rem(time_origin * std.time.us_per_ms, 100.0), 0.0, 0.2);
 }
 
 test "Performance: now" {
-    var perf = Performance{ .time_origin = try std.time.Timer.start() };
+    var perf = Performance.init();
 
     // Monotonically increasing
     var now = perf._now();
@@ -198,16 +195,12 @@ test "Performance: now" {
         try testing.expectEqual(now, 0);
         now = perf._now();
     }
-    // Check resolution
-    try testing.expectDelta(@rem(now * std.time.us_per_ms, 100.0), 0.0, 0.1);
 
     var after = perf._now();
     while (after <= now) { // Loop untill after > now
         try testing.expectEqual(after, now);
         after = perf._now();
     }
-    // Check resolution
-    try testing.expectDelta(@rem(after * std.time.us_per_ms, 100.0), 0.0, 0.1);
 }
 
 test "Browser.Performance.Mark" {
@@ -215,13 +208,17 @@ test "Browser.Performance.Mark" {
     defer runner.deinit();
 
     try runner.testCases(&.{
-        .{ "let performance = window.performance", "undefined" },
+        .{ "let performance = window.performance", null },
         .{ "performance instanceof Performance", "true" },
-        .{ "let mark = performance.mark(\"start\")", "undefined" },
-        .{ "mark instanceof PerformanceMark", "true" },
-        .{ "mark.name", "start" },
-        .{ "mark.entryType", "mark" },
-        .{ "mark.duration", "0" },
-        .{ "mark.detail", "null" },
+
+        .{ "let mark1 = performance.mark(\"start\")", null },
+        .{ "mark1 instanceof PerformanceMark", "true" },
+        .{ "mark1.name", "start" },
+        .{ "mark1.entryType", "mark" },
+        .{ "mark1.duration", "0" },
+        .{ "mark1.detail", "null" },
+
+        .{ "let mark2 = performance.mark(\"start\", {startTime: 32939393.9})", null },
+        .{ "mark2.startTime", "32939393.9" },
     }, .{});
 }

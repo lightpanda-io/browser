@@ -1101,8 +1101,7 @@ pub const NavigateOpts = struct {
 };
 
 fn timestamp() u32 {
-    const ts = std.posix.clock_gettime(std.posix.CLOCK.MONOTONIC) catch unreachable;
-    return @intCast(ts.sec);
+    return @import("../datetime.zig").timestamp();
 }
 
 // A callback from libdom whenever a script tag is added to the DOM.

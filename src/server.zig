@@ -897,8 +897,7 @@ fn buildJSONVersionResponse(
 }
 
 fn timestamp() u32 {
-    const ts = std.posix.clock_gettime(std.posix.CLOCK.MONOTONIC) catch unreachable;
-    return @intCast(ts.sec);
+    return @import("datetime.zig").timestamp();
 }
 
 // In-place string lowercase
