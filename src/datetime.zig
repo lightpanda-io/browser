@@ -502,6 +502,28 @@ pub const DateTime = struct {
     }
 };
 
+pub fn timestamp() u32 {
+    const ts = timespec();
+    return @intCast(ts.sec);
+}
+
+pub fn milliTimestamp() u64 {
+    const ts = timespec();
+    return @as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(@divTrunc(ts.nsec, 1_000_000)));
+}
+
+fn timespec() std.posix.timespec {
+    const clock_id = switch (@import("builtin").os.tag) {
+        .freebsd, .dragonfly => std.posix.CLOCK.MONOTONIC_FAST,
+        .macos, .ios, .tvos, .watchos, .visionos => std.posix.CLOCK.UPTIME_RAW, // continues counting while suspended
+        .linux => std.posix.CLOCK.BOOTTIME, // continues counting while suspended
+        else => std.posix.CLOCK.MONOTONIC,
+    };
+    // we don't currently support platforms where, at the very least,
+    // posix.CLOCK.MONOTONIC wouldn't be available.
+    return std.posix.clock_gettime(clock_id) catch unreachable;
+}
+
 fn writeDate(into: []u8, date: Date) u8 {
     var buf: []u8 = undefined;
     // cast year to a u16 so it doesn't insert a sign

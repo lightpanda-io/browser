@@ -76,7 +76,7 @@ pub const Window = struct {
             .document = html_doc,
             .target = target orelse "",
             .navigator = navigator orelse .{},
-            .performance = .{ .time_origin = try std.time.Timer.start() },
+            .performance = Performance.init(),
         };
     }
 
@@ -86,7 +86,7 @@ pub const Window = struct {
     }
 
     pub fn replaceDocument(self: *Window, doc: *parser.DocumentHTML) !void {
-        self.performance.time_origin.reset(); // When to reset see: https://developer.mozilla.org/en-US/docs/Web/API/Performance/timeOrigin
+        self.performance.reset(); // When to reset see: https://developer.mozilla.org/en-US/docs/Web/API/Performance/timeOrigin
         self.document = doc;
         try parser.documentHTMLSetLocation(Location, doc, &self.location);
     }
