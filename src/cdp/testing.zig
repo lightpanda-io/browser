@@ -121,7 +121,6 @@ const TestContext = struct {
 
         if (opts.html) |html| {
             if (bc.session_id == null) bc.session_id = "SID-X";
-            parser.deinit();
             const page = try bc.session.createPage();
             page.window.document = (try Document.init(html)).doc;
         }

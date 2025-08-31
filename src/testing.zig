@@ -211,9 +211,6 @@ pub const Document = struct {
     arena: std.heap.ArenaAllocator,
 
     pub fn init(html: []const u8) !Document {
-        parser.deinit();
-        try parser.init();
-
         var fbs = std.io.fixedBufferStream(html);
         const html_doc = try parser.documentHTMLParse(fbs.reader(), "utf-8");
 
@@ -224,7 +221,6 @@ pub const Document = struct {
     }
 
     pub fn deinit(self: *Document) void {
-        parser.deinit();
         self.arena.deinit();
     }
 
@@ -375,8 +371,6 @@ pub const JsRunner = struct {
     allocator: Allocator,
 
     fn init(alloc: Allocator, opts: RunnerOpts) !JsRunner {
-        parser.deinit();
-
         const browser = try alloc.create(Browser);
         errdefer alloc.destroy(browser);
 
@@ -493,14 +487,11 @@ var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
 pub var test_app: *App = undefined;
 
 pub fn setup() !void {
-    try parser.init();
-
     test_app = try App.init(gpa.allocator(), .{
         .run_mode = .serve,
         .tls_verify_host = false,
     });
 }
 pub fn shutdown() void {
-    parser.deinit();
     test_app.deinit();
 }
