@@ -719,23 +719,26 @@ test {
     std.testing.refAllDecls(@This());
 }
 
+const TestHTTPServer = @import("TestHTTPServer.zig");
+
 var test_cdp_server: ?Server = null;
+var test_http_server: ?TestHTTPServer = null;
+
 test "tests:beforeAll" {
     log.opts.level = .err;
     log.opts.format = .logfmt;
-
     try testing.setup();
-
     var wg: std.Thread.WaitGroup = .{};
     wg.startMany(2);
 
     {
-        const thread = try std.Thread.spawn(.{}, serveHTTP, .{&wg});
+        const thread = try std.Thread.spawn(.{}, serveCDP, .{&wg});
         thread.detach();
     }
 
+    test_http_server = TestHTTPServer.init(testHTTPHandler);
     {
-        const thread = try std.Thread.spawn(.{}, serveCDP, .{&wg});
+        const thread = try std.Thread.spawn(.{}, TestHTTPServer.run, .{ &test_http_server.?, &wg });
         thread.detach();
     }
 
@@ -748,59 +751,10 @@ test "tests:afterAll" {
     if (test_cdp_server) |*server| {
         server.deinit();
     }
-    testing.shutdown();
-}
-
-fn serveHTTP(wg: *std.Thread.WaitGroup) !void {
-    const address = try std.net.Address.parseIp("127.0.0.1", 9582);
-
-    var listener = try address.listen(.{ .reuse_address = true });
-    defer listener.deinit();
-
-    wg.finish();
-
-    var buf: [1024]u8 = undefined;
-    while (true) {
-        var conn = try listener.accept();
-        defer conn.stream.close();
-        var conn_reader = conn.stream.reader(&buf);
-        var conn_writer = conn.stream.writer(&buf);
-
-        var http_server = std.http.Server.init(conn_reader.interface(), &conn_writer.interface);
-
-        var request = http_server.receiveHead() catch |err| switch (err) {
-            error.HttpConnectionClosing => continue,
-            else => {
-                std.debug.print("Test HTTP Server error: {}\n", .{err});
-                return err;
-            },
-        };
-
-        const path = request.head.target;
-
-        if (std.mem.eql(u8, path, "/loader")) {
-            try request.respond("Hello!", .{
-                .extra_headers = &.{.{ .name = "Connection", .value = "close" }},
-            });
-        } else if (std.mem.eql(u8, path, "/xhr")) {
-            try request.respond("1234567890" ** 10, .{
-                .extra_headers = &.{
-                    .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
-                    .{ .name = "Connection", .value = "Close" },
-                },
-            });
-        } else if (std.mem.eql(u8, path, "/xhr/json")) {
-            try request.respond("{\"over\":\"9000!!!\"}", .{
-                .extra_headers = &.{
-                    .{ .name = "Content-Type", .value = "application/json" },
-                    .{ .name = "Connection", .value = "Close" },
-                },
-            });
-        } else {
-            // should not have an unknown path
-            unreachable;
-        }
+    if (test_http_server) |*server| {
+        server.deinit();
     }
+    testing.shutdown();
 }
 
 fn serveCDP(wg: *std.Thread.WaitGroup) !void {
@@ -815,4 +769,32 @@ fn serveCDP(wg: *std.Thread.WaitGroup) !void {
         std.debug.print("CDP server error: {}", .{err});
         return err;
     };
+}
+
+fn testHTTPHandler(req: *std.http.Server.Request) !void {
+    const path = req.head.target;
+
+    if (std.mem.eql(u8, path, "/loader")) {
+        return req.respond("Hello!", .{
+            .extra_headers = &.{.{ .name = "Connection", .value = "close" }},
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/xhr")) {
+        return req.respond("1234567890" ** 10, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/xhr/json")) {
+        return req.respond("{\"over\":\"9000!!!\"}", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "application/json" },
+            },
+        });
+    }
+
+    unreachable;
 }
