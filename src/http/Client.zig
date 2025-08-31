@@ -1040,6 +1040,16 @@ pub const Transfer = struct {
 
         try req.done_callback(req.ctx);
     }
+
+    pub fn getContentLength(self: *const Transfer) ?u32 {
+        // It's possible for this to be null even with correct code, due to
+        // request fulfillment. If transfer.fulfill is called, we won't have
+        // a handle.
+        const handle = self._handle orelse return null;
+
+        const cl = getResponseHeader(handle.conn.easy, "content-length", 0) orelse return null;
+        return std.fmt.parseInt(u32, cl.value, 10) catch null;
+    }
 };
 
 pub const ResponseHeader = struct {
