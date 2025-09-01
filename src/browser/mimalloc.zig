@@ -20,6 +20,7 @@
 // management.
 // We replace the libdom default usage of allocations with mimalloc heap
 // allocation to be able to free all memory used at once, like an arena usage.
+const std = @import("std");
 
 const c = @cImport({
     @cInclude("mimalloc.h");
@@ -33,39 +34,39 @@ const Error = error{
 var heap: ?*c.mi_heap_t = null;
 
 pub fn create() Error!void {
-    if (heap != null) return Error.HeapNotNull;
+    std.debug.assert(heap == null);
     heap = c.mi_heap_new();
-    if (heap == null) return Error.HeapNull;
+    std.debug.assert(heap != null);
 }
 
 pub fn destroy() void {
-    if (heap == null) return;
+    std.debug.assert(heap != null);
     c.mi_heap_destroy(heap.?);
     heap = null;
 }
 
 pub export fn m_alloc(size: usize) callconv(.c) ?*anyopaque {
-    if (heap == null) return null;
+    std.debug.assert(heap != null);
     return c.mi_heap_malloc(heap.?, size);
 }
 
 pub export fn re_alloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
-    if (heap == null) return null;
+    std.debug.assert(heap != null);
     return c.mi_heap_realloc(heap.?, ptr, size);
 }
 
 pub export fn c_alloc(nmemb: usize, size: usize) callconv(.c) ?*anyopaque {
-    if (heap == null) return null;
+    std.debug.assert(heap != null);
     return c.mi_heap_calloc(heap.?, nmemb, size);
 }
 
 pub export fn str_dup(s: [*c]const u8) callconv(.c) [*c]u8 {
-    if (heap == null) return null;
+    std.debug.assert(heap != null);
     return c.mi_heap_strdup(heap.?, s);
 }
 
 pub export fn strn_dup(s: [*c]const u8, size: usize) callconv(.c) [*c]u8 {
-    if (heap == null) return null;
+    std.debug.assert(heap != null);
     return c.mi_heap_strndup(heap.?, s, size);
 }
 
