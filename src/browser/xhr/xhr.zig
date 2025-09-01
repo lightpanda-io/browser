@@ -438,6 +438,10 @@ pub const XMLHttpRequest = struct {
 
         self.state = .loading;
         self.dispatchEvt("readystatechange");
+
+        if (transfer.getContentLength()) |cl| {
+            try self.response_bytes.ensureTotalCapacity(self.arena, cl);
+        }
     }
 
     fn httpDataCallback(transfer: *Http.Transfer, data: []const u8) !void {

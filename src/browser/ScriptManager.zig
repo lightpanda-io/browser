@@ -480,7 +480,11 @@ const PendingScript = struct {
         // will fail. This assertion exists to catch incorrect assumptions about
         // how libcurl works, or about how we've configured it.
         std.debug.assert(self.script.source.remote.capacity == 0);
-        self.script.source = .{ .remote = self.manager.buffer_pool.get() };
+        var buffer = self.manager.buffer_pool.get();
+        if (transfer.getContentLength()) |cl| {
+            try buffer.ensureTotalCapacity(self.manager.allocator, cl);
+        }
+        self.script.source = .{ .remote = buffer };
     }
 
     fn dataCallback(self: *PendingScript, transfer: *Http.Transfer, data: []const u8) !void {
