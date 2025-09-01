@@ -482,9 +482,6 @@ const PendingScript = struct {
         std.debug.assert(self.script.source.remote.capacity == 0);
         var buffer = self.manager.buffer_pool.get();
         if (transfer.getContentLength()) |cl| {
-            if (cl > 100 * 1024 * 1024) {
-                return error.ResponseTooLarge;
-            }
             try buffer.ensureTotalCapacity(self.manager.allocator, cl);
         }
         self.script.source = .{ .remote = buffer };

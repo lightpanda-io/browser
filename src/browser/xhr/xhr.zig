@@ -440,9 +440,6 @@ pub const XMLHttpRequest = struct {
         self.dispatchEvt("readystatechange");
 
         if (transfer.getContentLength()) |cl| {
-            if (cl > 100 * 1024 * 1024) {
-                return error.ResponseTooLarge;
-            }
             try self.response_bytes.ensureTotalCapacity(self.arena, cl);
         }
     }
