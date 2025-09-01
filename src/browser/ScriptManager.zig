@@ -403,7 +403,7 @@ fn startCallback(transfer: *Http.Transfer) !void {
 
 fn headerCallback(transfer: *Http.Transfer) !void {
     const script: *PendingScript = @ptrCast(@alignCast(transfer.ctx));
-    script.headerCallback(transfer);
+    try script.headerCallback(transfer);
 }
 
 fn dataCallback(transfer: *Http.Transfer, data: []const u8) !void {
@@ -456,7 +456,7 @@ const PendingScript = struct {
         log.debug(.http, "script fetch start", .{ .req = transfer });
     }
 
-    fn headerCallback(self: *PendingScript, transfer: *Http.Transfer) void {
+    fn headerCallback(self: *PendingScript, transfer: *Http.Transfer) !void {
         const header = &transfer.response_header.?;
         if (header.status != 200) {
             log.info(.http, "script header", .{
