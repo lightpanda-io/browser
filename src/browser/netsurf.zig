@@ -107,7 +107,7 @@ inline fn strToData(s: *String) []const u8 {
 }
 
 inline fn strFromData(data: []const u8) !*String {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = c.dom_string_create(data.ptr, data.len, &s);
     try DOMErr(err);
     return s.?;
@@ -120,7 +120,7 @@ const LWCString = c.lwc_string;
 // }
 
 inline fn lwcStringFromData(data: []const u8) !*LWCString {
-    var s: ?*LWCString = undefined;
+    var s: ?*LWCString = null;
     const err = c.lwc_intern_string(data.ptr, data.len, &s);
     try DOMErr(err);
     return s.?;
@@ -422,7 +422,7 @@ fn DOMErr(except: DOMException) DOMError!void {
 pub const Event = c.dom_event;
 
 pub fn eventCreate() !*Event {
-    var evt: ?*Event = undefined;
+    var evt: ?*Event = null;
     const err = c._dom_event_create(&evt);
     try DOMErr(err);
     return evt.?;
@@ -445,7 +445,7 @@ pub fn eventInit(evt: *Event, typ: []const u8, opts: EventInit) !void {
 }
 
 pub fn eventType(evt: *Event) ![]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = c._dom_event_get_type(evt, &s);
     try DOMErr(err);
 
@@ -456,14 +456,14 @@ pub fn eventType(evt: *Event) ![]const u8 {
 }
 
 pub fn eventTarget(evt: *Event) !?*EventTarget {
-    var et: ?*EventTarget = undefined;
+    var et: ?*EventTarget = null;
     const err = c._dom_event_get_target(evt, &et);
     try DOMErr(err);
     return et;
 }
 
 pub fn eventCurrentTarget(evt: *Event) !?*EventTarget {
-    var et: ?*EventTarget = undefined;
+    var et: ?*EventTarget = null;
     const err = c._dom_event_get_current_target(evt, &et);
     try DOMErr(err);
     return et;
@@ -556,14 +556,14 @@ pub fn eventToMutationEvent(evt: *Event) *MutationEvent {
 }
 
 pub fn mutationEventAttributeName(evt: *MutationEvent) ![]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = c._dom_mutation_event_get_attr_name(evt, &s);
     try DOMErr(err);
     return strToData(s.?);
 }
 
 pub fn mutationEventPrevValue(evt: *MutationEvent) !?[]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = c._dom_mutation_event_get_prev_value(evt, &s);
     try DOMErr(err);
     if (s == null) return null;
@@ -652,7 +652,7 @@ pub fn eventTargetAddEventListener(
         }
     }.handle;
 
-    var listener: ?*EventListener = undefined;
+    var listener: ?*EventListener = null;
     const errLst = c.dom_event_listener_create(event_handler, node, &listener);
     try DOMErr(errLst);
     defer c.dom_event_listener_unref(listener);
@@ -673,8 +673,8 @@ pub fn eventTargetHasListener(
     const str = try strFromData(typ);
 
     var current: ?*EventListenerEntry = null;
-    var next: ?*EventListenerEntry = undefined;
-    var lst: ?*EventListener = undefined;
+    var next: ?*EventListenerEntry = null;
+    var lst: ?*EventListener = null;
 
     // iterate over the EventTarget's listeners
     while (true) {
@@ -724,8 +724,8 @@ pub fn eventTargetRemoveEventListener(
 }
 
 pub fn eventTargetRemoveAllEventListeners(et: *EventTarget) !void {
-    var next: ?*EventListenerEntry = undefined;
-    var lst: ?*EventListener = undefined;
+    var next: ?*EventListenerEntry = null;
+    var lst: ?*EventListener = null;
 
     // iterate over the EventTarget's listeners
     while (true) {
@@ -881,7 +881,7 @@ pub const EventTargetTBase = extern struct {
 pub const MouseEvent = c.dom_mouse_event;
 
 pub fn mouseEventCreate() !*MouseEvent {
-    var evt: ?*MouseEvent = undefined;
+    var evt: ?*MouseEvent = null;
     const err = c._dom_mouse_event_create(&evt);
     try DOMErr(err);
     return evt.?;
@@ -936,7 +936,7 @@ pub fn mouseEventDefaultPrevented(evt: *MouseEvent) !bool {
 pub const KeyboardEvent = c.dom_keyboard_event;
 
 pub fn keyboardEventCreate() !*KeyboardEvent {
-    var evt: ?*KeyboardEvent = undefined;
+    var evt: ?*KeyboardEvent = null;
     const err = c._dom_keyboard_event_create(&evt);
     try DOMErr(err);
     return evt.?;
@@ -979,7 +979,7 @@ pub fn keyboardEventInit(evt: *KeyboardEvent, typ: []const u8, opts: KeyboardEve
 }
 
 pub fn keyboardEventGetKey(evt: *KeyboardEvent) ![]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     _ = c._dom_keyboard_event_get_key(evt, &s);
     return strToData(s.?);
 }
@@ -1129,11 +1129,11 @@ fn nodeVtable(node: *Node) c.dom_node_vtable {
 }
 
 pub fn nodeLocalName(node: *Node) ![]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = nodeVtable(node).dom_node_get_local_name.?(node, &s);
     try DOMErr(err);
     if (s == null) return "";
-    var s_lower: ?*String = undefined;
+    var s_lower: ?*String = null;
     const errStr = c.dom_string_tolower(s, true, &s_lower);
     try DOMErr(errStr);
     return strToData(s_lower.?);
@@ -1147,21 +1147,21 @@ pub fn nodeType(node: *Node) !NodeType {
 }
 
 pub fn nodeFirstChild(node: *Node) !?*Node {
-    var res: ?*Node = undefined;
+    var res: ?*Node = null;
     const err = nodeVtable(node).dom_node_get_first_child.?(node, &res);
     try DOMErr(err);
     return res;
 }
 
 pub fn nodeLastChild(node: *Node) !?*Node {
-    var res: ?*Node = undefined;
+    var res: ?*Node = null;
     const err = nodeVtable(node).dom_node_get_last_child.?(node, &res);
     try DOMErr(err);
     return res;
 }
 
 pub fn nodeNextSibling(node: *Node) !?*Node {
-    var res: ?*Node = undefined;
+    var res: ?*Node = null;
     const err = nodeVtable(node).dom_node_get_next_sibling.?(node, &res);
     try DOMErr(err);
     return res;
@@ -1182,7 +1182,7 @@ pub fn nodeNextElementSibling(node: *Node) !?*Element {
 }
 
 pub fn nodePreviousSibling(node: *Node) !?*Node {
-    var res: ?*Node = undefined;
+    var res: ?*Node = null;
     const err = nodeVtable(node).dom_node_get_previous_sibling.?(node, &res);
     try DOMErr(err);
     return res;
@@ -1203,7 +1203,7 @@ pub fn nodePreviousElementSibling(node: *Node) !?*Element {
 }
 
 pub fn nodeParentNode(node: *Node) !?*Node {
-    var res: ?*Node = undefined;
+    var res: ?*Node = null;
     const err = nodeVtable(node).dom_node_get_parent_node.?(node, &res);
     try DOMErr(err);
     return res;
@@ -1220,7 +1220,7 @@ pub fn nodeParentElement(node: *Node) !?*Element {
 }
 
 pub fn nodeName(node: *Node) ![]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = nodeVtable(node).dom_node_get_node_name.?(node, &s);
     try DOMErr(err);
     if (s == null) return "";
@@ -1228,14 +1228,14 @@ pub fn nodeName(node: *Node) ![]const u8 {
 }
 
 pub fn nodeOwnerDocument(node: *Node) !?*Document {
-    var doc: ?*Document = undefined;
+    var doc: ?*Document = null;
     const err = nodeVtable(node).dom_node_get_owner_document.?(node, &doc);
     try DOMErr(err);
     return doc;
 }
 
 pub fn nodeValue(node: *Node) !?[]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = nodeVtable(node).dom_node_get_node_value.?(node, &s);
     try DOMErr(err);
     if (s == null) return null;
@@ -1249,7 +1249,7 @@ pub fn nodeSetValue(node: *Node, value: []const u8) !void {
 }
 
 pub fn nodeTextContent(node: *Node) !?[]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = nodeVtable(node).dom_node_get_text_content.?(node, &s);
     try DOMErr(err);
     if (s == null) {
@@ -1270,7 +1270,7 @@ pub fn nodeSetTextContent(node: *Node, value: []const u8) !void {
 }
 
 pub fn nodeGetChildNodes(node: *Node) !*NodeList {
-    var nlist: ?*NodeList = undefined;
+    var nlist: ?*NodeList = null;
     const err = nodeVtable(node).dom_node_get_child_nodes.?(node, &nlist);
     try DOMErr(err);
     return nlist.?;
@@ -1288,14 +1288,14 @@ pub fn nodeGetRootNode(node: *Node) !*Node {
 }
 
 pub fn nodeAppendChild(node: *Node, child: *Node) !*Node {
-    var res: ?*Node = undefined;
+    var res: ?*Node = null;
     const err = nodeVtable(node).dom_node_append_child.?(node, child, &res);
     try DOMErr(err);
     return res.?;
 }
 
 pub fn nodeCloneNode(node: *Node, is_deep: bool) !*Node {
-    var res: ?*Node = undefined;
+    var res: ?*Node = null;
     const err = nodeVtable(node).dom_node_clone_node.?(node, is_deep, &res);
     try DOMErr(err);
     return res.?;
@@ -1316,7 +1316,7 @@ pub fn nodeHasChildNodes(node: *Node) !bool {
 }
 
 pub fn nodeInsertBefore(node: *Node, new_node: *Node, ref_node: *Node) !*Node {
-    var res: ?*Node = undefined;
+    var res: ?*Node = null;
     const err = nodeVtable(node).dom_node_insert_before.?(node, new_node, ref_node, &res);
     try DOMErr(err);
     return res.?;
@@ -1345,7 +1345,7 @@ pub fn nodeIsSameNode(node: *Node, other: *Node) !bool {
 }
 
 pub fn nodeLookupPrefix(node: *Node, namespace: []const u8) !?[]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = nodeVtable(node).dom_node_lookup_prefix.?(node, try strFromData(namespace), &s);
     try DOMErr(err);
     if (s == null) return null;
@@ -1353,7 +1353,7 @@ pub fn nodeLookupPrefix(node: *Node, namespace: []const u8) !?[]const u8 {
 }
 
 pub fn nodeLookupNamespaceURI(node: *Node, prefix_: ?[]const u8) !?[]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const prefix: ?*String = if (prefix_) |p| try strFromData(p) else null;
     const err = nodeVtable(node).dom_node_lookup_namespace.?(node, prefix, &s);
     try DOMErr(err);
@@ -1367,14 +1367,14 @@ pub fn nodeNormalize(node: *Node) !void {
 }
 
 pub fn nodeRemoveChild(node: *Node, child: *Node) !*Node {
-    var res: ?*Node = undefined;
+    var res: ?*Node = null;
     const err = nodeVtable(node).dom_node_remove_child.?(node, child, &res);
     try DOMErr(err);
     return res.?;
 }
 
 pub fn nodeReplaceChild(node: *Node, new_child: *Node, old_child: *Node) !*Node {
-    var res: ?*Node = undefined;
+    var res: ?*Node = null;
     const err = nodeVtable(node).dom_node_replace_child.?(node, new_child, old_child, &res);
     try DOMErr(err);
     return res.?;
@@ -1388,14 +1388,14 @@ pub fn nodeHasAttributes(node: *Node) !bool {
 }
 
 pub fn nodeGetAttributes(node: *Node) !?*NamedNodeMap {
-    var res: ?*NamedNodeMap = undefined;
+    var res: ?*NamedNodeMap = null;
     const err = nodeVtable(node).dom_node_get_attributes.?(node, &res);
     try DOMErr(err);
     return res;
 }
 
 pub fn nodeGetNamespace(node: *Node) !?[]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = nodeVtable(node).dom_node_get_namespace.?(node, &s);
     try DOMErr(err);
     if (s == null) return null;
@@ -1403,7 +1403,7 @@ pub fn nodeGetNamespace(node: *Node) !?[]const u8 {
 }
 
 pub fn nodeGetPrefix(node: *Node) !?[]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = nodeVtable(node).dom_node_get_prefix.?(node, &s);
     try DOMErr(err);
     if (s == null) return null;
@@ -1419,7 +1419,7 @@ pub fn nodeSetEmbedderData(node: *Node, data: *anyopaque) void {
 }
 
 pub fn nodeGetElementById(node: *Node, id: []const u8) !?*Element {
-    var el: ?*Element = undefined;
+    var el: ?*Element = null;
     const str_id = try strFromData(id);
     try DOMErr(c._dom_find_element_by_id(node, str_id, &el));
     return el;
@@ -1456,7 +1456,7 @@ pub inline fn characterDataToNode(cdata: *CharacterData) *Node {
 }
 
 pub fn characterDataData(cdata: *CharacterData) ![]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = characterDataVtable(cdata).dom_characterdata_get_data.?(cdata, &s);
     try DOMErr(err);
     return strToData(s.?);
@@ -1499,7 +1499,7 @@ pub fn characterDataReplaceData(cdata: *CharacterData, offset: u32, count: u32, 
 }
 
 pub fn characterDataSubstringData(cdata: *CharacterData, offset: u32, count: u32) ![]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = characterDataVtable(cdata).dom_characterdata_substring_data.?(cdata, offset, count, &s);
     try DOMErr(err);
     return strToData(s.?);
@@ -1516,14 +1516,14 @@ fn textVtable(text: *Text) c.dom_text_vtable {
 }
 
 pub fn textWholdeText(text: *Text) ![]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = textVtable(text).dom_text_get_whole_text.?(text, &s);
     try DOMErr(err);
     return strToData(s.?);
 }
 
 pub fn textSplitText(text: *Text, offset: u32) !*Text {
-    var res: ?*Text = undefined;
+    var res: ?*Text = null;
     const err = textVtable(text).dom_text_split_text.?(text, offset, &res);
     try DOMErr(err);
     return res.?;
@@ -1541,7 +1541,7 @@ pub inline fn processingInstructionToNode(pi: *ProcessingInstruction) *Node {
 }
 
 pub fn processInstructionCopy(pi: *ProcessingInstruction) !*ProcessingInstruction {
-    var res: ?*Node = undefined;
+    var res: ?*Node = null;
     const err = c._dom_pi_copy(processingInstructionToNode(pi), &res);
     try DOMErr(err);
     return @as(*ProcessingInstruction, @ptrCast(res.?));
@@ -1555,7 +1555,7 @@ fn attributeVtable(a: *Attribute) c.dom_attr_vtable {
 }
 
 pub fn attributeGetName(a: *Attribute) ![]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = attributeVtable(a).dom_attr_get_name.?(a, &s);
     try DOMErr(err);
 
@@ -1563,7 +1563,7 @@ pub fn attributeGetName(a: *Attribute) ![]const u8 {
 }
 
 pub fn attributeGetValue(a: *Attribute) !?[]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = attributeVtable(a).dom_attr_get_value.?(a, &s);
     try DOMErr(err);
     if (s == null) return null;
@@ -1582,7 +1582,7 @@ pub fn attributeSetValue(a: *Attribute, v: []const u8) !void {
 }
 
 pub fn attributeGetOwnerElement(a: *Attribute) !?*Element {
-    var elt: ?*Element = undefined;
+    var elt: ?*Element = null;
     const err = attributeVtable(a).dom_attr_get_owner_element.?(a, &elt);
     try DOMErr(err);
     if (elt == null) return null;
@@ -1608,7 +1608,7 @@ pub fn elementTag(elem: *Element) !Tag {
 }
 
 pub fn elementGetTagName(elem: *Element) !?[]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = elementVtable(elem).dom_element_get_tag_name.?(elem, &s);
     try DOMErr(err);
     if (s == null) return null;
@@ -1617,7 +1617,7 @@ pub fn elementGetTagName(elem: *Element) !?[]const u8 {
 }
 
 pub fn elementGetAttribute(elem: *Element, name: []const u8) !?[]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = elementVtable(elem).dom_element_get_attribute.?(elem, try strFromData(name), &s);
     try DOMErr(err);
     if (s == null) return null;
@@ -1626,7 +1626,7 @@ pub fn elementGetAttribute(elem: *Element, name: []const u8) !?[]const u8 {
 }
 
 pub fn elementGetAttributeNS(elem: *Element, ns: []const u8, name: []const u8) !?[]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = elementVtable(elem).dom_element_get_attribute_ns.?(
         elem,
         try strFromData(ns),
@@ -1702,14 +1702,14 @@ pub fn elementHasAttributeNS(elem: *Element, ns: []const u8, qname: []const u8) 
 }
 
 pub fn elementGetAttributeNode(elem: *Element, name: []const u8) !?*Attribute {
-    var a: ?*Attribute = undefined;
+    var a: ?*Attribute = null;
     const err = elementVtable(elem).dom_element_get_attribute_node.?(elem, try strFromData(name), &a);
     try DOMErr(err);
     return a;
 }
 
 pub fn elementGetAttributeNodeNS(elem: *Element, ns: []const u8, name: []const u8) !?*Attribute {
-    var a: ?*Attribute = undefined;
+    var a: ?*Attribute = null;
     const err = elementVtable(elem).dom_element_get_attribute_node_ns.?(
         elem,
         if (ns.len == 0) null else try strFromData(ns),
@@ -1721,21 +1721,21 @@ pub fn elementGetAttributeNodeNS(elem: *Element, ns: []const u8, name: []const u
 }
 
 pub fn elementSetAttributeNode(elem: *Element, attr: *Attribute) !?*Attribute {
-    var a: ?*Attribute = undefined;
+    var a: ?*Attribute = null;
     const err = elementVtable(elem).dom_element_set_attribute_node.?(elem, attr, &a);
     try DOMErr(err);
     return a;
 }
 
 pub fn elementSetAttributeNodeNS(elem: *Element, attr: *Attribute) !?*Attribute {
-    var a: ?*Attribute = undefined;
+    var a: ?*Attribute = null;
     const err = elementVtable(elem).dom_element_set_attribute_node_ns.?(elem, attr, &a);
     try DOMErr(err);
     return a;
 }
 
 pub fn elementRemoveAttributeNode(elem: *Element, attr: *Attribute) !*Attribute {
-    var a: ?*Attribute = undefined;
+    var a: ?*Attribute = null;
     const err = elementVtable(elem).dom_element_remove_attribute_node.?(elem, attr, &a);
     try DOMErr(err);
     return a.?;
@@ -1761,7 +1761,7 @@ pub inline fn elementToNode(e: *Element) *Node {
 pub const TokenList = c.dom_tokenlist;
 
 pub fn tokenListCreate(elt: *Element, attr: []const u8) !*TokenList {
-    var list: ?*TokenList = undefined;
+    var list: ?*TokenList = null;
     const err = c.dom_tokenlist_create(elt, try strFromData(attr), &list);
     try DOMErr(err);
     return list.?;
@@ -1775,7 +1775,7 @@ pub fn tokenListGetLength(l: *TokenList) !u32 {
 }
 
 pub fn tokenListItem(l: *TokenList, index: u32) !?[]const u8 {
-    var res: ?*String = undefined;
+    var res: ?*String = null;
     const err = c._dom_tokenlist_item(l, index, &res);
     try DOMErr(err);
     if (res == null) return null;
@@ -1800,7 +1800,7 @@ pub fn tokenListRemove(l: *TokenList, token: []const u8) !void {
 }
 
 pub fn tokenListGetValue(l: *TokenList) !?[]const u8 {
-    var res: ?*String = undefined;
+    var res: ?*String = null;
     const err = c.dom_tokenlist_get_value(l, &res);
     try DOMErr(err);
     if (res == null) return null;
@@ -1834,7 +1834,7 @@ pub inline fn anchorToNode(a: *Anchor) *Node {
 }
 
 pub fn anchorGetTarget(a: *Anchor) ![]const u8 {
-    var res: ?*String = undefined;
+    var res: ?*String = null;
     const err = c.dom_html_anchor_element_get_target(a, &res);
     try DOMErr(err);
     if (res == null) return "";
@@ -1847,7 +1847,7 @@ pub fn anchorSetTarget(a: *Anchor, target: []const u8) !void {
 }
 
 pub fn anchorGetHref(a: *Anchor) ![]const u8 {
-    var res: ?*String = undefined;
+    var res: ?*String = null;
     const err = c.dom_html_anchor_element_get_href(a, &res);
     try DOMErr(err);
     if (res == null) return "";
@@ -1860,7 +1860,7 @@ pub fn anchorSetHref(a: *Anchor, href: []const u8) !void {
 }
 
 pub fn anchorGetHrefLang(a: *Anchor) ![]const u8 {
-    var res: ?*String = undefined;
+    var res: ?*String = null;
     const err = c.dom_html_anchor_element_get_hreflang(a, &res);
     try DOMErr(err);
     if (res == null) return "";
@@ -1873,7 +1873,7 @@ pub fn anchorSetHrefLang(a: *Anchor, href: []const u8) !void {
 }
 
 pub fn anchorGetType(a: *Anchor) ![]const u8 {
-    var res: ?*String = undefined;
+    var res: ?*String = null;
     const err = c.dom_html_anchor_element_get_type(a, &res);
     try DOMErr(err);
     if (res == null) return "";
@@ -1886,7 +1886,7 @@ pub fn anchorSetType(a: *Anchor, t: []const u8) !void {
 }
 
 pub fn anchorGetRel(a: *Anchor) ![]const u8 {
-    var res: ?*String = undefined;
+    var res: ?*String = null;
     const err = c.dom_html_anchor_element_get_rel(a, &res);
     try DOMErr(err);
     if (res == null) return "";
@@ -1901,7 +1901,7 @@ pub fn anchorSetRel(a: *Anchor, rel: []const u8) !void {
 // HTMLLinkElement
 
 pub fn linkGetHref(link: *Link) ![]const u8 {
-    var res: ?*String = undefined;
+    var res: ?*String = null;
     const err = c.dom_html_link_element_get_href(link, &res);
     try DOMErr(err);
     if (res == null) return "";
@@ -1994,7 +1994,7 @@ pub inline fn documentFragmentToNode(doc: *DocumentFragment) *Node {
 }
 
 pub fn documentFragmentGetHost(frag: *DocumentFragment) ?*Node {
-    var node: ?*NodeExternal = undefined;
+    var node: ?*NodeExternal = null;
     c._dom_document_fragment_get_host(frag, &node);
     return if (node) |n| @ptrCast(n) else null;
 }
@@ -2021,21 +2021,21 @@ fn documentTypeVtable(dt: *DocumentType) c.dom_document_type_vtable {
 }
 
 pub inline fn documentTypeGetName(dt: *DocumentType) ![]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = documentTypeVtable(dt).dom_document_type_get_name.?(dt, &s);
     try DOMErr(err);
     return strToData(s.?);
 }
 
 pub inline fn documentTypeGetPublicId(dt: *DocumentType) ![]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = documentTypeVtable(dt).dom_document_type_get_public_id.?(dt, &s);
     try DOMErr(err);
     return strToData(s.?);
 }
 
 pub inline fn documentTypeGetSystemId(dt: *DocumentType) ![]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = documentTypeVtable(dt).dom_document_type_get_system_id.?(dt, &s);
     try DOMErr(err);
     return strToData(s.?);
@@ -2047,7 +2047,7 @@ pub inline fn domImplementationCreateDocument(
     qname: ?[:0]const u8,
     doctype: ?*DocumentType,
 ) !*Document {
-    var doc: ?*Document = undefined;
+    var doc: ?*Document = null;
 
     var ptrnamespace: [*c]const u8 = null;
     if (namespace) |ns| {
@@ -2077,7 +2077,7 @@ pub inline fn domImplementationCreateDocumentType(
     publicId: [:0]const u8,
     systemId: [:0]const u8,
 ) !*DocumentType {
-    var dt: ?*DocumentType = undefined;
+    var dt: ?*DocumentType = null;
     const err = c.dom_implementation_create_document_type(qname.ptr, publicId.ptr, systemId.ptr, &dt);
     try DOMErr(err);
     return dt.?;
@@ -2119,14 +2119,14 @@ pub inline fn documentToNode(doc: *Document) *Node {
 }
 
 pub inline fn documentGetElementById(doc: *Document, id: []const u8) !?*Element {
-    var elem: ?*Element = undefined;
+    var elem: ?*Element = null;
     const err = documentVtable(doc).dom_document_get_element_by_id.?(doc, try strFromData(id), &elem);
     try DOMErr(err);
     return elem;
 }
 
 pub inline fn documentGetElementsByTagName(doc: *Document, tagname: []const u8) !*NodeList {
-    var nlist: ?*NodeList = undefined;
+    var nlist: ?*NodeList = null;
     const err = documentVtable(doc).dom_document_get_elements_by_tag_name.?(doc, try strFromData(tagname), &nlist);
     try DOMErr(err);
     return nlist.?;
@@ -2134,7 +2134,7 @@ pub inline fn documentGetElementsByTagName(doc: *Document, tagname: []const u8) 
 
 // documentGetDocumentElement returns the root document element.
 pub inline fn documentGetDocumentElement(doc: *Document) !?*Element {
-    var elem: ?*Element = undefined;
+    var elem: ?*Element = null;
     const err = documentVtable(doc).dom_document_get_document_element.?(doc, &elem);
     try DOMErr(err);
     if (elem == null) return null;
@@ -2142,7 +2142,7 @@ pub inline fn documentGetDocumentElement(doc: *Document) !?*Element {
 }
 
 pub inline fn documentGetDocumentURI(doc: *Document) ![]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = documentVtable(doc).dom_document_get_uri.?(doc, &s);
     try DOMErr(err);
     return strToData(s.?);
@@ -2154,7 +2154,7 @@ pub fn documentSetDocumentURI(doc: *Document, uri: []const u8) !void {
 }
 
 pub inline fn documentGetInputEncoding(doc: *Document) ![]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = documentVtable(doc).dom_document_get_input_encoding.?(doc, &s);
     try DOMErr(err);
     return strToData(s.?);
@@ -2166,7 +2166,7 @@ pub inline fn documentSetInputEncoding(doc: *Document, enc: []const u8) !void {
 }
 
 pub inline fn documentCreateDocument(title: ?[]const u8) !*DocumentHTML {
-    var doc: ?*Document = undefined;
+    var doc: ?*Document = null;
     const err = c.dom_implementation_create_document(
         c.DOM_IMPLEMENTATION_HTML,
         null,
@@ -2185,7 +2185,7 @@ pub inline fn documentCreateDocument(title: ?[]const u8) !*DocumentHTML {
 fn documentCreateHTMLElement(doc: *Document, tag_name: []const u8) !*Element {
     std.debug.assert(doc.is_html);
 
-    var elem: ?*Element = undefined;
+    var elem: ?*Element = null;
     const err = c._dom_html_document_create_element(doc, try strFromData(tag_name), &elem);
     try DOMErr(err);
     return elem.?;
@@ -2196,7 +2196,7 @@ pub fn documentCreateElement(doc: *Document, tag_name: []const u8) !*Element {
         return documentCreateHTMLElement(doc, tag_name);
     }
 
-    var elem: ?*Element = undefined;
+    var elem: ?*Element = null;
     const err = documentVtable(doc).dom_document_create_element.?(doc, try strFromData(tag_name), &elem);
     try DOMErr(err);
     return elem.?;
@@ -2205,7 +2205,7 @@ pub fn documentCreateElement(doc: *Document, tag_name: []const u8) !*Element {
 fn documentCreateHTMLElementNS(doc: *Document, ns: []const u8, tag_name: []const u8) !*Element {
     std.debug.assert(doc.is_html);
 
-    var elem: ?*Element = undefined;
+    var elem: ?*Element = null;
     const err = c._dom_html_document_create_element_ns(
         doc,
         try strFromData(ns),
@@ -2221,7 +2221,7 @@ pub fn documentCreateElementNS(doc: *Document, ns: []const u8, tag_name: []const
         return documentCreateHTMLElementNS(doc, ns, tag_name);
     }
 
-    var elem: ?*Element = undefined;
+    var elem: ?*Element = null;
     const err = documentVtable(doc).dom_document_create_element_ns.?(
         doc,
         try strFromData(ns),
@@ -2233,42 +2233,42 @@ pub fn documentCreateElementNS(doc: *Document, ns: []const u8, tag_name: []const
 }
 
 pub inline fn documentGetDoctype(doc: *Document) !?*DocumentType {
-    var dt: ?*DocumentType = undefined;
+    var dt: ?*DocumentType = null;
     const err = documentVtable(doc).dom_document_get_doctype.?(doc, &dt);
     try DOMErr(err);
     return dt;
 }
 
 pub inline fn documentCreateDocumentFragment(doc: *Document) !*DocumentFragment {
-    var df: ?*DocumentFragment = undefined;
+    var df: ?*DocumentFragment = null;
     const err = documentVtable(doc).dom_document_create_document_fragment.?(doc, &df);
     try DOMErr(err);
     return df.?;
 }
 
 pub inline fn documentCreateTextNode(doc: *Document, s: []const u8) !*Text {
-    var txt: ?*Text = undefined;
+    var txt: ?*Text = null;
     const err = documentVtable(doc).dom_document_create_text_node.?(doc, try strFromData(s), &txt);
     try DOMErr(err);
     return txt.?;
 }
 
 pub inline fn documentCreateCDATASection(doc: *Document, s: []const u8) !*CDATASection {
-    var cdata: ?*CDATASection = undefined;
+    var cdata: ?*CDATASection = null;
     const err = documentVtable(doc).dom_document_create_cdata_section.?(doc, try strFromData(s), &cdata);
     try DOMErr(err);
     return cdata.?;
 }
 
 pub inline fn documentCreateComment(doc: *Document, s: []const u8) !*Comment {
-    var com: ?*Comment = undefined;
+    var com: ?*Comment = null;
     const err = documentVtable(doc).dom_document_create_comment.?(doc, try strFromData(s), &com);
     try DOMErr(err);
     return com.?;
 }
 
 pub inline fn documentCreateProcessingInstruction(doc: *Document, target: []const u8, data: []const u8) !*ProcessingInstruction {
-    var pi: ?*ProcessingInstruction = undefined;
+    var pi: ?*ProcessingInstruction = null;
     const err = documentVtable(doc).dom_document_create_processing_instruction.?(
         doc,
         try strFromData(target),
@@ -2296,14 +2296,14 @@ pub inline fn documentAdoptNode(doc: *Document, node: *Node) !*Node {
 }
 
 pub inline fn documentCreateAttribute(doc: *Document, name: []const u8) !*Attribute {
-    var attr: ?*Attribute = undefined;
+    var attr: ?*Attribute = null;
     const err = documentVtable(doc).dom_document_create_attribute.?(doc, try strFromData(name), &attr);
     try DOMErr(err);
     return attr.?;
 }
 
 pub inline fn documentCreateAttributeNS(doc: *Document, ns: []const u8, qname: []const u8) !*Attribute {
-    var attr: ?*Attribute = undefined;
+    var attr: ?*Attribute = null;
     const err = documentVtable(doc).dom_document_create_attribute_ns.?(
         doc,
         try strFromData(ns),
@@ -2481,7 +2481,7 @@ pub inline fn documentHTMLToDocument(doc_html: *DocumentHTML) *Document {
 }
 
 pub inline fn documentHTMLBody(doc_html: *DocumentHTML) !?*Body {
-    var body: ?*ElementHTML = undefined;
+    var body: ?*ElementHTML = null;
     const err = documentHTMLVtable(doc_html).get_body.?(doc_html, &body);
     try DOMErr(err);
     if (body == null) return null;
@@ -2498,7 +2498,7 @@ pub inline fn documentHTMLSetBody(doc_html: *DocumentHTML, elt: ?*ElementHTML) !
 }
 
 pub inline fn documentHTMLGetReferrer(doc: *DocumentHTML) ![]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = documentHTMLVtable(doc).get_referrer.?(doc, &s);
     try DOMErr(err);
     if (s == null) return "";
@@ -2506,7 +2506,7 @@ pub inline fn documentHTMLGetReferrer(doc: *DocumentHTML) ![]const u8 {
 }
 
 pub inline fn documentHTMLGetTitle(doc: *DocumentHTML) ![]const u8 {
-    var s: ?*String = undefined;
+    var s: ?*String = null;
     const err = documentHTMLVtable(doc).get_title.?(doc, &s);
     try DOMErr(err);
     if (s == null) return "";
@@ -2526,7 +2526,7 @@ pub fn documentHTMLSetCurrentScript(doc: *DocumentHTML, script: ?*Script) !void 
 }
 
 pub fn documentHTMLGetCurrentScript(doc: *DocumentHTML) !?*Script {
-    var elem: ?*ElementHTML = undefined;
+    var elem: ?*ElementHTML = null;
     const err = documentHTMLVtable(doc).get_current_script.?(doc, &elem);
     try DOMErr(err);
     if (elem == null) return null;
@@ -2540,7 +2540,7 @@ pub fn documentHTMLSetLocation(T: type, doc: *DocumentHTML, location: *T) !void 
 }
 
 pub fn documentHTMLGetLocation(T: type, doc: *DocumentHTML) !?*T {
-    var l: ?*anyopaque = undefined;
+    var l: ?*anyopaque = null;
     const err = documentHTMLVtable(doc).get_location.?(doc, &l);
     try DOMErr(err);
 
@@ -2666,7 +2666,7 @@ pub fn optionCollectionGetLength(collection: *OptionCollection) !u32 {
 }
 
 pub fn optionCollectionItem(collection: *OptionCollection, index: u32) !*Option {
-    var node: ?*NodeExternal = undefined;
+    var node: ?*NodeExternal = null;
     const err = c.dom_html_options_collection_item(collection, index, &node);
     try DOMErr(err);
     return @ptrCast(node.?);
@@ -2747,7 +2747,7 @@ pub fn htmlCollectionGetLength(collection: *HTMLCollection) !u32 {
 }
 
 pub fn htmlCollectionItem(collection: *HTMLCollection, index: u32) !*Node {
-    var node: ?*NodeExternal = undefined;
+    var node: ?*NodeExternal = null;
     const err = c.dom_html_collection_item(collection, index, &node);
     try DOMErr(err);
     return @ptrCast(node.?);
