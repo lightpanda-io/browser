@@ -1041,14 +1041,33 @@ pub const Transfer = struct {
         try req.done_callback(req.ctx);
     }
 
+    // This function should be called during the dataCallback. Calling it after
+    // such as in the doneCallback is guaranteed to return null.
     pub fn getContentLength(self: *const Transfer) ?u32 {
-        // It's possible for this to be null even with correct code, due to
-        // request fulfillment. If transfer.fulfill is called, we won't have
-        // a handle.
-        const handle = self._handle orelse return null;
+        const cl = self.getContentLengthRawValue() orelse return null;
+        return std.fmt.parseInt(u32, cl, 10) catch null;
+    }
 
-        const cl = getResponseHeader(handle.conn.easy, "content-length", 0) orelse return null;
-        return std.fmt.parseInt(u32, cl.value, 10) catch null;
+    fn getContentLengthRawValue(self: *const Transfer) ?[]const u8 {
+        if (self._handle) |handle| {
+            // If we have a handle, than this is a normal request. We can get the
+            // header value from the easy handle.
+            const cl = getResponseHeader(handle.conn.easy, "content-length", 0) orelse return null;
+            return cl.value;
+        }
+
+        // If we have no handle, then maybe this is being called after the
+        // doneCallback. OR, maybe this is a "fulfilled" request. Let's check
+        // the injected headers (if we have any).
+
+        const rh = self.response_header orelse return null;
+        for (rh._injected_headers) |hdr| {
+            if (std.ascii.eqlIgnoreCase(hdr.name, "content-length")) {
+                return hdr.value;
+            }
+        }
+
+        return null;
     }
 };
 
