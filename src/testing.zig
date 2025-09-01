@@ -516,18 +516,6 @@ pub fn newRunner(file: []const u8) !void {
     try_catch.init(js_context);
     defer try_catch.deinit();
 
-    // if you want to make a lot of changes to testing.js, but don't want to reload
-    // every time, use this to dynamically load it during development
-    const content = try std.fs.cwd().readFileAlloc(arena_allocator, "src/browser/tests/testing.js", 1024 * 32);
-
-    // const content = @embedFile("browser/tests/testing.js");
-
-    js_context.eval(content, "testing.js") catch |err| {
-        const msg = try_catch.err(arena_allocator) catch @errorName(err) orelse "unknown";
-        std.debug.print("Failed to setup testing.js: {s}\n", .{msg});
-        return err;
-    };
-
     const url = try std.fmt.allocPrint(arena_allocator, "http://localhost:9582/src/browser/tests/{s}", .{file});
     try page.navigate(url, .{});
     page.wait(2);
