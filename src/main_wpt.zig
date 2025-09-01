@@ -22,24 +22,34 @@ const log = @import("log.zig");
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
+const App = @import("app.zig").App;
 const Env = @import("browser/env.zig").Env;
-const Platform = @import("runtime/js.zig").Platform;
+const Browser = @import("browser/browser.zig").Browser;
+const Session = @import("browser/session.zig").Session;
+const TestHTTPServer = @import("TestHTTPServer.zig");
 
 const parser = @import("browser/netsurf.zig");
 const polyfill = @import("browser/polyfill/polyfill.zig");
 
 const WPT_DIR = "tests/wpt";
 
-// TODO For now the WPT tests run is specific to WPT.
-// It manually load js framwork libs, and run the first script w/ js content in
-// the HTML page.
-// Once lightpanda will have the html loader, it would be useful to refactor
-// this test to use it.
 pub fn main() !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
+
     const allocator = gpa.allocator();
-    log.opts.level = .warn;
+    log.opts.level = .err;
+
+    var http_server = TestHTTPServer.init(httpHandler);
+    defer http_server.deinit();
+
+    {
+        var wg: std.Thread.WaitGroup = .{};
+        wg.startMany(1);
+        var thrd = try std.Thread.spawn(.{}, TestHTTPServer.run, .{ &http_server, &wg });
+        thrd.detach();
+        wg.wait();
+    }
 
     // An arena for the runner itself, lives for the duration of the the process
     var ra = ArenaAllocator.init(allocator);
@@ -48,29 +58,33 @@ pub fn main() !void {
 
     const cmd = try parseArgs(runner_arena);
 
-    try @import("testing.zig").setup();
-    defer @import("testing.zig").shutdown();
-
-    // prepare libraries to load on each test case.
-    var loader = FileLoader.init(runner_arena, WPT_DIR);
-
-    var it = try TestIterator.init(runner_arena, WPT_DIR, cmd.filters);
+    var it = try TestIterator.init(allocator, WPT_DIR, cmd.filters);
     defer it.deinit();
 
-    var writer = try Writer.init(runner_arena, cmd.format);
+    var writer = try Writer.init(allocator, cmd.format);
+    defer writer.deinit();
 
     // An arena for running each tests. Is reset after every test.
     var test_arena = ArenaAllocator.init(allocator);
     defer test_arena.deinit();
 
+    var app = try App.init(allocator, .{
+        .run_mode = .fetch,
+    });
+    defer app.deinit();
+
+    var browser = try Browser.init(app);
+    defer browser.deinit();
+    const session = try browser.newSession();
+
     while (try it.next()) |test_file| {
-        defer _ = test_arena.reset(.{ .retain_capacity = {} });
+        defer _ = test_arena.reset(.retain_capacity);
 
         var err_out: ?[]const u8 = null;
         const result = run(
             test_arena.allocator(),
+            session,
             test_file,
-            &loader,
             &err_out,
         ) catch |err| blk: {
             if (err_out == null) {
@@ -78,13 +92,6 @@ pub fn main() !void {
             }
             break :blk null;
         };
-
-        if (result == null and err_out == null) {
-            // We sometimes pass a non-test to `run` (we don't know it's a non
-            // test, we need to open the contents of the test file to find out
-            // and that's in run).
-            continue;
-        }
         try writer.process(test_file, result, err_out);
     }
     try writer.finalize();
@@ -92,102 +99,41 @@ pub fn main() !void {
 
 fn run(
     arena: Allocator,
+    session: *Session,
     test_file: []const u8,
-    loader: *FileLoader,
     err_out: *?[]const u8,
-) !?[]const u8 {
-    // document
-    const html = blk: {
-        const full_path = try std.fs.path.join(arena, &.{ WPT_DIR, test_file });
-        const file = try std.fs.cwd().openFile(full_path, .{});
-        defer file.close();
-        break :blk try file.readToEndAlloc(arena, 128 * 1024);
-    };
+) ![]const u8 {
+    const page = try session.createPage();
+    defer session.removePage();
 
-    if (std.mem.indexOf(u8, html, "testharness.js") == null) {
-        // This isn't a test. A lot of files are helpers/content for tests to
-        // make use of.
-        return null;
-    }
+    const url = try std.fmt.allocPrint(arena, "http://localhost:9582/{s}", .{test_file});
+    try page.navigate(url, .{});
 
-    // this returns null for the success.html test in the root of tests/wpt
-    const dirname = std.fs.path.dirname(test_file) orelse "";
+    page.wait(2);
 
-    var runner = try @import("testing.zig").jsRunner(arena, .{
-        .url = "http://127.0.0.1",
-        .html = html,
-    });
-    defer runner.deinit();
-
-    defer if (err_out.*) |eo| {
-        // the error might be owned by the runner, we'll dupe it with our
-        // own arena so that it can be returned out of this function.
-        err_out.* = arena.dupe(u8, eo) catch "failed to dupe error";
-    };
-
-    try polyfill.preload(arena, runner.page.main_context);
-
-    // loop over the scripts.
-    const doc = parser.documentHTMLToDocument(runner.page.window.document);
-    const scripts = try parser.documentGetElementsByTagName(doc, "script");
-    const script_count = try parser.nodeListLength(scripts);
-    for (0..script_count) |i| {
-        const s = (try parser.nodeListItem(scripts, @intCast(i))).?;
-
-        // If the script contains an src attribute, load it.
-        if (try parser.elementGetAttribute(@as(*parser.Element, @ptrCast(s)), "src")) |src| {
-            var path = src;
-            if (!std.mem.startsWith(u8, src, "/")) {
-                path = try std.fs.path.join(arena, &.{ "/", dirname, path });
-            }
-            const script_source = loader.get(path) catch |err| {
-                err_out.* = std.fmt.allocPrint(arena, "{s} - {s}", .{ @errorName(err), path }) catch null;
-                return err;
-            };
-            try runner.exec(script_source, src, err_out);
-        }
-
-        // If the script as a source text, execute it.
-        const src = try parser.nodeTextContent(s) orelse continue;
-        try runner.exec(src, null, err_out);
-    }
-
-    {
-        // Mark tests as ready to run.
-        const loadevt = try parser.eventCreate();
-        defer parser.eventDestroy(loadevt);
-
-        try parser.eventInit(loadevt, "load", .{});
-        _ = try parser.eventTargetDispatchEvent(
-            parser.toEventTarget(@TypeOf(runner.page.window), &runner.page.window),
-            loadevt,
-        );
-    }
-
-    {
-        // wait for all async executions
-        var try_catch: Env.TryCatch = undefined;
-        try_catch.init(runner.page.main_context);
-        defer try_catch.deinit();
-        runner.page.wait(2);
-
-        if (try_catch.hasCaught()) {
-            err_out.* = (try try_catch.err(arena)) orelse "unknwon error";
-        }
-    }
+    const js_context = page.main_context;
+    var try_catch: Env.TryCatch = undefined;
+    try_catch.init(js_context);
+    defer try_catch.deinit();
 
     // Check the final test status.
-    try runner.exec("report.status", "teststatus", err_out);
+    js_context.eval("report.status", "teststatus") catch |err| {
+        err_out.* = try_catch.err(arena) catch @errorName(err) orelse "unknown";
+        return err;
+    };
 
     // return the detailed result.
-    const res = try runner.eval("report.log", "report", err_out);
+    const value = js_context.exec("report.log", "report") catch |err| {
+        err_out.* = try_catch.err(arena) catch @errorName(err) orelse "unknown";
+        return err;
+    };
 
-    return try res.toString(arena);
+    return value.toString(arena);
 }
 
 const Writer = struct {
     format: Format,
-    arena: Allocator,
+    allocator: Allocator,
     pass_count: usize = 0,
     fail_count: usize = 0,
     case_pass_count: usize = 0,
@@ -201,7 +147,7 @@ const Writer = struct {
         summary,
     };
 
-    fn init(arena: Allocator, format: Format) !Writer {
+    fn init(allocator: Allocator, format: Format) !Writer {
         const out = std.fs.File.stdout();
         var writer = out.writer(&.{});
 
@@ -210,10 +156,14 @@ const Writer = struct {
         }
 
         return .{
-            .arena = arena,
             .format = format,
             .writer = writer,
+            .allocator = allocator,
         };
+    }
+
+    fn deinit(self: *Writer) void {
+        self.cases.deinit(self.allocator);
     }
 
     fn finalize(self: *Writer) !void {
@@ -303,7 +253,7 @@ const Writer = struct {
                 case_fail_count += 1;
             }
 
-            try cases.append(self.arena, .{
+            try cases.append(self.allocator, .{
                 .name = case_name,
                 .pass = case_pass,
                 .message = case_message,
@@ -396,22 +346,26 @@ const TestIterator = struct {
     dir: Dir,
     walker: Dir.Walker,
     filters: [][]const u8,
+    read_arena: ArenaAllocator,
 
     const Dir = std.fs.Dir;
 
-    fn init(arena: Allocator, root: []const u8, filters: [][]const u8) !TestIterator {
+    fn init(allocator: Allocator, root: []const u8, filters: [][]const u8) !TestIterator {
         var dir = try std.fs.cwd().openDir(root, .{ .iterate = true, .no_follow = true });
         errdefer dir.close();
 
         return .{
             .dir = dir,
             .filters = filters,
-            .walker = try dir.walk(arena),
+            .walker = try dir.walk(allocator),
+            .read_arena = ArenaAllocator.init(allocator),
         };
     }
 
     fn deinit(self: *TestIterator) void {
+        self.walker.deinit();
         self.dir.close();
+        self.read_arena.deinit();
     }
 
     fn next(self: *TestIterator) !?[]const u8 {
@@ -436,6 +390,25 @@ const TestIterator = struct {
                 }
             }
 
+            {
+                defer _ = self.read_arena.reset(.retain_capacity);
+                // We need to read the file's content to see if there's a
+                // "testharness.js" in it. If there isn't, it isn't a test.
+                // Shame we have to do this.
+
+                const arena = self.read_arena.allocator();
+                const full_path = try std.fs.path.join(arena, &.{ WPT_DIR, path });
+                const file = try std.fs.cwd().openFile(full_path, .{});
+                defer file.close();
+                const html = try file.readToEndAlloc(arena, 128 * 1024);
+
+                if (std.mem.indexOf(u8, html, "testharness.js") == null) {
+                    // This isn't a test. A lot of files are helpers/content for tests to
+                    // make use of.
+                    continue :NEXT;
+                }
+            }
+
             return path;
         }
 
@@ -456,35 +429,16 @@ const Test = struct {
     cases: []Case,
 };
 
-pub const FileLoader = struct {
-    path: []const u8,
-    arena: Allocator,
-    files: std.StringHashMapUnmanaged([]const u8),
+fn httpHandler(req: *std.http.Server.Request) !void {
+    const path = req.head.target;
 
-    pub fn init(arena: Allocator, path: []const u8) FileLoader {
-        return .{
-            .path = path,
-            .files = .{},
-            .arena = arena,
-        };
-    }
-    pub fn get(self: *FileLoader, name: []const u8) ![]const u8 {
-        const gop = try self.files.getOrPut(self.arena, name);
-        if (gop.found_existing == false) {
-            gop.key_ptr.* = try self.arena.dupe(u8, name);
-            gop.value_ptr.* = self.load(name) catch |err| {
-                _ = self.files.remove(name);
-                return err;
-            };
-        }
-        return gop.value_ptr.*;
+    if (std.mem.eql(u8, path, "/")) {
+        // There's 1 test that does an XHR request to this, and it just seems
+        // to want a 200 success.
+        return req.respond("Hello!", .{});
     }
 
-    fn load(self: *FileLoader, name: []const u8) ![]const u8 {
-        const filename = try std.fs.path.join(self.arena, &.{ self.path, name });
-        var file = try std.fs.cwd().openFile(filename, .{});
-        defer file.close();
-
-        return file.readToEndAlloc(self.arena, 4 * 1024 * 1024);
-    }
-};
+    var buf: [1024]u8 = undefined;
+    const file_path = try std.fmt.bufPrint(&buf, WPT_DIR ++ "{s}", .{path});
+    return TestHTTPServer.sendFile(req, file_path);
+}

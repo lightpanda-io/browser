@@ -789,8 +789,7 @@ test "Browser.XHR.XMLHttpRequest" {
         .{ "req.statusText", "OK" },
         .{ "req.getResponseHeader('Content-Type')", "text/html; charset=utf-8" },
         .{ "req.getAllResponseHeaders()", "content-length: 100\r\n" ++
-            "Content-Type: text/html; charset=utf-8\r\n" ++
-            "Connection: Close\r\n" },
+            "Content-Type: text/html; charset=utf-8\r\n" },
         .{ "req.responseText.length", "100" },
         .{ "req.response.length == req.responseText.length", "true" },
         .{ "req.responseXML instanceof Document", "true" },

@@ -403,14 +403,7 @@ fn startCallback(transfer: *Http.Transfer) !void {
 
 fn headerCallback(transfer: *Http.Transfer) !void {
     const script: *PendingScript = @ptrCast(@alignCast(transfer.ctx));
-    script.headerCallback(transfer) catch |err| {
-        log.err(.http, "SM.headerCallback", .{
-            .err = err,
-            .transfer = transfer,
-            .status = transfer.response_header.?.status,
-        });
-        return err;
-    };
+    script.headerCallback(transfer);
 }
 
 fn dataCallback(transfer: *Http.Transfer, data: []const u8) !void {
@@ -463,17 +456,22 @@ const PendingScript = struct {
         log.debug(.http, "script fetch start", .{ .req = transfer });
     }
 
-    fn headerCallback(self: *PendingScript, transfer: *Http.Transfer) !void {
+    fn headerCallback(self: *PendingScript, transfer: *Http.Transfer) void {
         const header = &transfer.response_header.?;
+        if (header.status != 200) {
+            log.info(.http, "script header", .{
+                .req = transfer,
+                .status = header.status,
+                .content_type = header.contentType(),
+            });
+            return;
+        }
+
         log.debug(.http, "script header", .{
             .req = transfer,
             .status = header.status,
             .content_type = header.contentType(),
         });
-
-        if (header.status != 200) {
-            return error.InvalidStatusCode;
-        }
 
         // If this isn't true, then we'll likely leak memory. If you don't
         // set `CURLOPT_SUPPRESS_CONNECT_HEADERS` and CONNECT to a proxy, this

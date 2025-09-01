@@ -1516,12 +1516,12 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 }
 
                 const op = js_obj.getInternalField(0).castTo(v8.External).get();
-                const toa: *TaggedAnyOpaque = @ptrCast(@alignCast(op));
+                const tao: *TaggedAnyOpaque = @ptrCast(@alignCast(op));
                 const expected_type_index = @field(TYPE_LOOKUP, type_name);
 
-                var type_index = toa.index;
+                var type_index = tao.index;
                 if (type_index == expected_type_index) {
-                    return @ptrCast(@alignCast(toa.ptr));
+                    return @ptrCast(@alignCast(tao.ptr));
                 }
 
                 const meta_lookup = self.meta_lookup;
@@ -1533,7 +1533,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 // ...unless, the proto is behind a pointer, then total_offset will
                 // get reset to 0, and our base_ptr will move to the address
                 // referenced by the proto field.
-                var base_ptr: usize = @intFromPtr(toa.ptr);
+                var base_ptr: usize = @intFromPtr(tao.ptr);
 
                 // search through the prototype tree
                 while (true) {
