@@ -17,15 +17,16 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const URL = @import("../../url.zig").URL;
-const Page = @import("../page.zig").Page;
-const Env = @import("../env.zig").Env;
+const log = @import("../../log.zig");
 
 const v8 = @import("v8");
 
-const Http = @import("../../http/Http.zig");
 const HttpClient = @import("../../http/Client.zig");
+const Http = @import("../../http/Http.zig");
+const URL = @import("../../url.zig").URL;
+const Env = @import("../env.zig").Env;
 const Mime = @import("../mime.zig").Mime;
+const Page = @import("../page.zig").Page;
 
 // https://developer.mozilla.org/en-US/docs/Web/API/Response
 const Response = @This();
@@ -78,6 +79,26 @@ pub fn _text(self: *const Response, page: *Page) !Env.Promise {
     };
 
     try resolver.resolve(self.body);
+    return resolver.promise();
+}
+
+pub fn _json(self: *const Response, page: *Page) !Env.Promise {
+    const resolver = Env.PromiseResolver{
+        .js_context = page.main_context,
+        .resolver = v8.PromiseResolver.init(page.main_context.v8_context),
+    };
+
+    const p = std.json.parseFromSliceLeaky(
+        std.json.Value,
+        page.arena,
+        self.body,
+        .{},
+    ) catch |e| {
+        log.warn(.browser, "invalid json", .{ .err = e, .source = "fetch" });
+        return error.SyntaxError;
+    };
+
+    try resolver.resolve(p);
     return resolver.promise();
 }
 
