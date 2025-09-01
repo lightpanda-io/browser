@@ -348,6 +348,9 @@ fn elapsed() struct { time: f64, unit: []const u8 } {
 
 const testing = @import("testing.zig");
 test "log: data" {
+    opts.format = .logfmt;
+    defer opts.format = .pretty;
+
     var aw = std.Io.Writer.Allocating.init(testing.allocator);
     defer aw.deinit();
 
@@ -384,6 +387,9 @@ test "log: data" {
 }
 
 test "log: string escape" {
+    opts.format = .logfmt;
+    defer opts.format = .pretty;
+
     var aw = std.Io.Writer.Allocating.init(testing.allocator);
     defer aw.deinit();
 

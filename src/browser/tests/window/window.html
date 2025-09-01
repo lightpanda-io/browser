@@ -1,0 +1,105 @@
+<script src="../testing.js"></script>
+<body></body>
+<script id=aliases>
+  testing.expectEqual(window, window.self);
+  testing.expectEqual(window, window.parent);
+  testing.expectEqual(window, window.top);
+  testing.expectEqual(window, window.frames);
+  testing.expectEqual(0, window.frames.length);
+</script>
+
+<script id=request_animation>
+  let start = 0;
+  function step(timestamp) {
+    start = timestamp;
+  }
+  requestAnimationFrame(step);
+  testing.eventually(() => testing.expectEqual(true, start > 0));
+
+  let request_id = requestAnimationFrame(() => {
+    start = 0;
+  });
+  cancelAnimationFrame(request_id);
+  testing.eventually(() => testing.expectEqual(true, start > 0));
+</script>
+
+<script id=dimensions>
+  testing.expectEqual(1, innerHeight);
+  // Width is 1 even if there are no elements
+  testing.expectEqual(1, innerWidth);
+
+  let div1 = document.createElement('div');
+  document.body.appendChild(div1);
+  div1.getClientRects()
+
+  let div2 = document.createElement('div');
+  document.body.appendChild(div2);
+  div2.getClientRects();
+
+  testing.expectEqual(1, innerHeight);
+  testing.expectEqual(2, innerWidth);
+</script>
+
+<script id=setTimeout>
+  let longCall = false;
+  window.setTimeout(() => {longCall = true}, 5001);
+  testing.eventually(() => testing.expectEqual(false, longCall));
+
+  let wst1 = 0;
+  window.setTimeout(() => {wst1 += 1}, 1);
+  testing.eventually(() => testing.expectEqual(1, wst1));
+
+  let wst2 = 1;
+  window.setTimeout((a, b) => {wst2 = a + b}, 1, 2, 3);
+  testing.eventually(() => testing.expectEqual(5, wst2));
+</script>
+
+<script id=eventTarget>
+  let called = false;
+
+  window.addEventListener("ready", (e) => {
+    called = (e.currentTarget == window);
+  }, {capture: false, once: false});
+
+  const evt = new Event("ready", { bubbles: true, cancelable: false });
+  window.dispatchEvent(evt);
+  testing.expectEqual(true, called);
+</script>
+
+<script id=btoa_atob>
+  const b64 = btoa('https://ziglang.org/documentation/master/std/#std.base64.Base64Decoder')
+  testing.expectEqual('aHR0cHM6Ly96aWdsYW5nLm9yZy9kb2N1bWVudGF0aW9uL21hc3Rlci9zdGQvI3N0ZC5iYXNlNjQuQmFzZTY0RGVjb2Rlcg==', b64);
+
+  const str = atob(b64)
+  testing.expectEqual('https://ziglang.org/documentation/master/std/#std.base64.Base64Decoder', str);
+
+  testing.expectError('Error: InvalidCharacterError', () => {
+    atob('b');
+  });
+</script>
+
+<script id=scroll>
+  let scroll = false;
+  let scrolend = false
+  window.addEventListener('scroll', () => {scroll = true});
+  document.addEventListener('scrollend', () => {scrollend = true});
+  window.scrollTo(0);
+
+  testing.expectEqual(true, scroll);
+  testing.expectEqual(true, scrollend);
+</script>
+
+<script id=queueMicroTask>
+  var qm = false;
+  window.queueMicrotask(() => {qm = true });
+  testing.eventually(() => testing.expectEqual(true, qm));
+</script>
+
+<script id=DOMContentLoaded>
+  let dcl = false;
+  window.queueMicrotask(() => {qm = true });
+  window.addEventListener('DOMContentLoaded', (e) => {
+    dcl = e.target == document;
+  });
+  testing.eventually(() => testing.expectEqual(true, dcl));
+</script>

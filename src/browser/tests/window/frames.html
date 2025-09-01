@@ -1,0 +1,12 @@
+<script src="../testing.js"></script>
+
+<body>
+ <iframe src="https://httpbin.io/html" title="iframea"></iframe>
+ <iframe src="https://httpbin.io/html" title="iframeb"></iframe>
+</body>
+
+<script id=frames>
+  testing.expectEqual(2, frames.length);
+  testing.expectEqual(undefined, frames[3])
+  testing.expectError('Error: TODO', () => { frames[1] });
+</script>

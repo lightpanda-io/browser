@@ -725,8 +725,8 @@ var test_cdp_server: ?Server = null;
 var test_http_server: ?TestHTTPServer = null;
 
 test "tests:beforeAll" {
-    log.opts.level = .err;
-    log.opts.format = .logfmt;
+    log.opts.level = .warn;
+    log.opts.format = .pretty;
     try testing.setup();
     var wg: std.Thread.WaitGroup = .{};
     wg.startMany(2);
@@ -795,6 +795,13 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
             },
         });
     }
+
+    if (std.mem.startsWith(u8, path, "/src/browser/tests/")) {
+        // strip off leading / so that it's relative to CWD
+        return TestHTTPServer.sendFile(req, path[1..]);
+    }
+
+    std.debug.print("TestHTTPServer was asked to serve an unknown file: {s}\n", .{path});
 
     unreachable;
 }
