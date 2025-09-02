@@ -107,34 +107,6 @@ pub const MouseEvent = struct {
 };
 
 const testing = @import("../../testing.zig");
-test "Browser.MouseEvent" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        // Default MouseEvent
-        .{ "let event = new MouseEvent('click')", "undefined" },
-        .{ "event.type", "click" },
-        .{ "event instanceof MouseEvent", "true" },
-        .{ "event instanceof Event", "true" },
-        .{ "event.clientX", "0" },
-        .{ "event.clientY", "0" },
-        .{ "event.screenX", "0" },
-        .{ "event.screenY", "0" },
-        // MouseEvent with parameters
-        .{ "let new_event = new MouseEvent('click', { 'button': 0, 'clientX': 10, 'clientY': 20 })", "undefined" },
-        .{ "new_event.button", "0" },
-        .{ "new_event.x", "10" },
-        .{ "new_event.y", "20" },
-        .{ "new_event.screenX", "10" },
-        .{ "new_event.screenY", "20" },
-        // MouseEvent Listener
-        .{ "let me = new MouseEvent('click')", "undefined" },
-        .{ "me instanceof Event", "true" },
-        .{ "var eevt = null; function ccbk(event) { eevt = event; }", "undefined" },
-        .{ "document.addEventListener('click', ccbk)", "undefined" },
-        .{ "document.dispatchEvent(me)", "true" },
-        .{ "eevt.type", "click" },
-        .{ "eevt instanceof MouseEvent", "true" },
-    }, .{});
+test "Browser: Events.Mouse" {
+    try testing.htmlRunner("events/mouse.html");
 }

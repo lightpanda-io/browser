@@ -110,8 +110,11 @@ pub const Event = struct {
         return try parser.eventIsTrusted(self);
     }
 
-    pub fn get_timestamp(self: *parser.Event) !u32 {
-        return try parser.eventTimestamp(self);
+    // Even though this is supposed to to provide microsecond resolution, browser
+    // return coarser values to protect against fingerprinting. libdom returns
+    // seconds, which is good enough.
+    pub fn get_timeStamp(self: *parser.Event) !u32 {
+        return parser.eventTimestamp(self);
     }
 
     // Methods
@@ -386,155 +389,6 @@ const SignalCallback = struct {
 };
 
 const testing = @import("../../testing.zig");
-test "Browser.Event" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let content = document.getElementById('content')", "undefined" },
-        .{ "let para = document.getElementById('para')", "undefined" },
-        .{ "var nb = 0; var evt", "undefined" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{
-            \\ content.addEventListener('target', function(e) {
-            \\  evt = e; nb = nb + 1;
-            \\  e.preventDefault();
-            \\ })
-            ,
-            "undefined",
-        },
-        .{ "content.dispatchEvent(new Event('target', {bubbles: true, cancelable: true}))", "false" },
-        .{ "nb", "1" },
-        .{ "evt.target === content", "true" },
-        .{ "evt.bubbles", "true" },
-        .{ "evt.cancelable", "true" },
-        .{ "evt.defaultPrevented", "true" },
-        .{ "evt.isTrusted", "true" },
-        .{ "evt.timestamp > 1704063600", "true" }, // 2024/01/01 00:00
-        // event.type, event.currentTarget, event.phase checked in EventTarget
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "nb = 0", "0" },
-        .{
-            \\ content.addEventListener('stop',function(e) {
-            \\    e.stopPropagation();
-            \\    nb = nb + 1;
-            \\  }, true)
-            ,
-            "undefined",
-        },
-        // the following event listener will not be invoked
-        .{
-            \\  para.addEventListener('stop',function(e) {
-            \\    nb = nb + 1;
-            \\  })
-            ,
-            "undefined",
-        },
-        .{ "para.dispatchEvent(new Event('stop'))", "true" },
-        .{ "nb", "1" }, // will be 2 if event was not stopped at content event listener
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "nb = 0", "0" },
-        .{
-            \\  content.addEventListener('immediate', function(e) {
-            \\    e.stopImmediatePropagation();
-            \\    nb = nb + 1;
-            \\  })
-            ,
-            "undefined",
-        },
-        // the following event listener will not be invoked
-        .{
-            \\  content.addEventListener('immediate', function(e) {
-            \\    nb = nb + 1;
-            \\  })
-            ,
-            "undefined",
-        },
-        .{ "content.dispatchEvent(new Event('immediate'))", "true" },
-        .{ "nb", "1" }, // will be 2 if event was not stopped at first content event listener
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "nb = 0", "0" },
-        .{
-            \\  content.addEventListener('legacy', function(e) {
-            \\     evt = e; nb = nb + 1;
-            \\  })
-            ,
-            "undefined",
-        },
-        .{ "let evtLegacy = document.createEvent('Event')", "undefined" },
-        .{ "evtLegacy.initEvent('legacy')", "undefined" },
-        .{ "content.dispatchEvent(evtLegacy)", "true" },
-        .{ "nb", "1" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "var nb = 0; var evt = null; function cbk(event) { nb ++; evt=event; }", "undefined" },
-        .{ "document.addEventListener('count', cbk)", "undefined" },
-        .{ "document.removeEventListener('count', cbk)", "undefined" },
-        .{ "document.dispatchEvent(new Event('count'))", "true" },
-        .{ "nb", "0" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "nb = 0; function cbk(event) { nb ++; }", null },
-        .{ "document.addEventListener('count', cbk, {once: true})", null },
-        .{ "document.dispatchEvent(new Event('count'))", "true" },
-        .{ "document.dispatchEvent(new Event('count'))", "true" },
-        .{ "document.dispatchEvent(new Event('count'))", "true" },
-        .{ "nb", "1" },
-        .{ "document.removeEventListener('count', cbk)", "undefined" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "nb = 0; function cbk(event) { nb ++; }", null },
-        .{ "let ac = new AbortController()", null },
-        .{ "document.addEventListener('count', cbk, {signal: ac.signal})", null },
-        .{ "document.dispatchEvent(new Event('count'))", "true" },
-        .{ "document.dispatchEvent(new Event('count'))", "true" },
-        .{ "ac.abort()", null },
-        .{ "document.dispatchEvent(new Event('count'))", "true" },
-        .{ "nb", "2" },
-        .{ "document.removeEventListener('count', cbk)", "undefined" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "new Event('').composedPath()", "" },
-        .{
-            \\ let div1 = document.createElement('div');
-            \\ let sr1 = div1.attachShadow({mode: 'open'});
-            \\ sr1.innerHTML = "<p id=srp1></p>";
-            \\ document.getElementsByTagName('body')[0].appendChild(div1);
-            \\ let cp = null;
-            \\ div1.addEventListener('click', (e) => {
-            \\    cp = e.composedPath().map((n) => n.id || n.nodeName || n.toString());
-            \\ });
-            \\ sr1.getElementById('srp1').click();
-            \\ cp.join(', ');
-            ,
-            "srp1, #document-fragment, DIV, BODY, HTML, #document, [object Window]",
-        },
-
-        .{
-            \\ let div2 = document.createElement('div');
-            \\ let sr2 = div2.attachShadow({mode: 'closed'});
-            \\ sr2.innerHTML = "<p id=srp2></p>";
-            \\ document.getElementsByTagName('body')[0].appendChild(div2);
-            \\ cp = null;
-            \\ div2.addEventListener('click', (e) => {
-            \\    cp = e.composedPath().map((n) => n.id || n.nodeName || n.toString());
-            \\ });
-            \\ sr2.getElementById('srp2').click();
-            \\ cp.join(', ');
-            ,
-            "DIV, BODY, HTML, #document, [object Window]",
-        },
-    }, .{});
+test "Browser: Event" {
+    try testing.htmlRunner("events/event.html");
 }

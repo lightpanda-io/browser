@@ -79,29 +79,6 @@ pub fn _decode(self: *const TextDecoder, v: []const u8) ![]const u8 {
 }
 
 const testing = @import("../../testing.zig");
-test "Browser.Encoding.TextDecoder" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{
-        .html = "",
-    });
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let d1 = new TextDecoder();", null },
-        .{ "d1.encoding;", "utf-8" },
-        .{ "d1.fatal", "false" },
-        .{ "d1.ignoreBOM", "false" },
-        .{ "d1.decode(new Uint8Array([240, 160, 174, 183]))", "𠮷" },
-        .{ "d1.decode(new Uint8Array([0xEF, 0xBB, 0xBF, 240, 160, 174, 183]))", "𠮷" },
-        .{ "d1.decode(new Uint8Array([49, 50]).buffer)", "12" },
-
-        .{ "let d2 = new TextDecoder('utf8', {fatal: true})", null },
-        .{
-            \\ try {
-            \\    let data  = new Uint8Array([240, 240, 160, 174, 183]);
-            \\    d2.decode(data);
-            \\ } catch (e) {e}
-            ,
-            "Error: InvalidUtf8",
-        },
-    }, .{});
+test "Browser: Encoding.TextDecoder" {
+    try testing.htmlRunner("encoding/decoder.html");
 }

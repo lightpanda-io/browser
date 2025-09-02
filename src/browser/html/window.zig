@@ -439,6 +439,6 @@ const TimerCallback = struct {
 
 const testing = @import("../../testing.zig");
 test "Browser: Window" {
-    try testing.newRunner("window/window.html");
-    try testing.newRunner("window/frames.html");
+    try testing.htmlRunner("window/window.html");
+    try testing.htmlRunner("window/frames.html");
 }

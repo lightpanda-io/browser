@@ -58,23 +58,6 @@ pub const CustomEvent = struct {
 };
 
 const testing = @import("../../testing.zig");
-test "Browser.CustomEvent" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let capture = null", "undefined" },
-        .{ "const el = document.createElement('div');", "undefined" },
-        .{ "el.addEventListener('c1', (e) => { capture = 'c1-' + new String(e.detail)})", "undefined" },
-        .{ "el.addEventListener('c2', (e) => { capture = 'c2-' + new String(e.detail.over)})", "undefined" },
-
-        .{ "el.dispatchEvent(new CustomEvent('c1'));", "true" },
-        .{ "capture", "c1-null" },
-
-        .{ "el.dispatchEvent(new CustomEvent('c1', {detail: '123'}));", "true" },
-        .{ "capture", "c1-123" },
-
-        .{ "el.dispatchEvent(new CustomEvent('c2', {detail: {over: 9000}}));", "true" },
-        .{ "capture", "c2-9000" },
-    }, .{});
+test "Browser: Events.Custom" {
+    try testing.htmlRunner("events/custom.html");
 }

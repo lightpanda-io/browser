@@ -1,0 +1,17 @@
+<script src="../testing.js"></script>
+<script id=decoder>
+  let d1 = new TextDecoder();
+  testing.expectEqual('utf-8', d1.encoding);
+  testing.expectEqual(false, d1.fatal);
+  testing.expectEqual(false, d1.ignoreBOM);
+
+  testing.expectEqual('𠮷', d1.decode(new Uint8Array([240, 160, 174, 183])));
+  testing.expectEqual('𠮷', d1.decode(new Uint8Array([0xEF, 0xBB, 0xBF, 240, 160, 174, 183])));
+  testing.expectEqual('�2', d1.decode(new Uint8Array([249, 50])));
+
+  let d2 = new TextDecoder('utf8', {fatal: true})
+  testing.expectError('Error: InvalidUtf8', () => {
+    let data  = new Uint8Array([240, 240, 160, 174, 183]);
+    d2.decode(data);
+  });
+</script>

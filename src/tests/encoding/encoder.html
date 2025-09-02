@@ -1,0 +1,13 @@
+<script src="../testing.js"></script>
+<script id=encoder>
+  var encoder = new TextEncoder();
+  testing.expectEqual('utf-8', encoder.encoding);
+  testing.expectEqual([226, 130, 172], Array.from(encoder.encode('€')));
+
+  // Invalid utf-8 sequence.
+  // Browsers give a different result for this, they decode it to:
+  //    50, 50, 54, 44, 52, 48, 44, 49, 54, 49
+  testing.expectError('Error: InvalidUtf8', () => {
+    encoder.encode(new Uint8Array([0xE2,0x28,0xA1]));
+  });
+</script>
