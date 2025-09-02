@@ -331,8 +331,15 @@ fn loadCerts(allocator: Allocator, arena: Allocator) !c.curl_blob {
     try bundle.rescan(allocator);
     defer bundle.deinit(allocator);
 
-    var it = bundle.map.valueIterator();
     const bytes = bundle.bytes.items;
+    if (bytes.len == 0) {
+        log.warn(.app, "No system certificates", .{});
+        return .{
+            .len = 0,
+            .flags = 0,
+            .data = bytes.ptr,
+        };
+    }
 
     const encoder = std.base64.standard.Encoder;
     var arr: std.ArrayListUnmanaged(u8) = .empty;
@@ -345,6 +352,7 @@ fn loadCerts(allocator: Allocator, arena: Allocator) !c.curl_blob {
     try arr.ensureTotalCapacity(arena, buffer_size);
     var writer = arr.writer(arena);
 
+    var it = bundle.map.valueIterator();
     while (it.next()) |index| {
         const cert = try std.crypto.Certificate.der.Element.parse(bytes, index.*);
 
