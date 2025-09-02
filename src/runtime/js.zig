@@ -197,6 +197,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             // This is the callback that runs whenever a module is dynamically imported.
             isolate.setHostImportModuleDynamicallyCallback(JsContext.dynamicModuleCallback);
+            isolate.setPromiseRejectCallback(promiseRejectCallback);
 
             isolate.enter();
             errdefer isolate.exit();
@@ -327,6 +328,20 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             defer handle_scope.deinit();
             self.isolate.lowMemoryNotification();
         }
+
+        fn promiseRejectCallback(v8_msg: v8.C_PromiseRejectMessage) callconv(.c) void {
+            const msg = v8.PromiseRejectMessage.initFromC(v8_msg);
+            const isolate =  msg.getPromise().toObject().getIsolate();
+            const v8_context = isolate.getCurrentContext();
+            const context: *JsContext = @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
+
+            const value =
+                if (msg.getValue()) |v8_value| valueToString(context.call_arena, v8_value, isolate, v8_context) catch |err| @errorName(err)
+                else "no value";
+
+            log.debug(.js, "unhandled rejection", .{.value =value});
+        }
+
 
         // ExecutionWorld closely models a JS World.
         // https://chromium.googlesource.com/chromium/src/+/master/third_party/blink/renderer/bindings/core/v8/V8BindingDesign.md#World
