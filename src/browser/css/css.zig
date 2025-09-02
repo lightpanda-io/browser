@@ -190,12 +190,6 @@ test "parse" {
 }
 
 const testing = @import("../../testing.zig");
-test "Browser.HTML.CSS" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "CSS.supports('display: flex')", "true" },
-        .{ "CSS.supports('text-decoration-style', 'blink')", "true" },
-    }, .{});
+test "Browser: CSS" {
+    try testing.htmlRunner("css.html");
 }

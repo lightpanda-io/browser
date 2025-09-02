@@ -506,7 +506,7 @@ pub fn shutdown() void {
     test_app.deinit();
 }
 
-pub fn newRunner(file: []const u8) !void {
+pub fn htmlRunner(file: []const u8) !void {
     defer _ = arena_instance.reset(.retain_capacity);
     const page = try test_session.createPage();
     defer test_session.removePage();
@@ -516,7 +516,7 @@ pub fn newRunner(file: []const u8) !void {
     try_catch.init(js_context);
     defer try_catch.deinit();
 
-    const url = try std.fmt.allocPrint(arena_allocator, "http://localhost:9582/src/browser/tests/{s}", .{file});
+    const url = try std.fmt.allocPrint(arena_allocator, "http://localhost:9582/src/tests/{s}", .{file});
     try page.navigate(url, .{});
     page.wait(2);
 

@@ -66,32 +66,6 @@ const RandomValues = union(enum) {
 };
 
 const testing = @import("../../testing.zig");
-test "Browser.Crypto" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "const a = crypto.randomUUID();", "undefined" },
-        .{ "const b = crypto.randomUUID();", "undefined" },
-        .{ "a.length;", "36" },
-        .{ "b.length;", "36" },
-        .{ "a == b;", "false" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "try { crypto.getRandomValues(new BigUint64Array(8193)) } catch(e) { e.message == 'QuotaExceededError' }", "true" },
-        .{ "let r1 = new Int32Array(5)", "undefined" },
-        .{ "let r2 = crypto.getRandomValues(r1)", "undefined" },
-        .{ "new Set(r1).size", "5" },
-        .{ "new Set(r2).size", "5" },
-        .{ "r1.every((v, i) => v === r2[i])", "true" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "var r3 = new Uint8Array(16)", null },
-        .{ "let r4 = crypto.getRandomValues(r3)", "undefined" },
-        .{ "r4[6] = 10", null },
-        .{ "r4[6]", "10" },
-        .{ "r3[6]", "10" },
-    }, .{});
+test "Browser: Crypto" {
+    try testing.htmlRunner("crypto.html");
 }

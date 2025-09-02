@@ -13,16 +13,17 @@
 (() => {
   function expectEqual(expected, actual) {
     _recordExecution();
-    if (expected !== actual) {
-      testing._status = 'fail';
-      let msg = `expected: ${JSON.stringify(expected)}, got: ${JSON.stringify(actual)}`;
-
-      console.warn(
-        `id: ${testing._captured?.script_id || document.currentScript.id}`,
-        `msg: ${msg}`,
-        `stack: ${testing._captured?.stack || new Error().stack}`,
-      );
+    if (_equal(expected, actual)) {
+      return;
     }
+    testing._status = 'fail';
+    let msg = `expected: ${JSON.stringify(expected)}, got: ${JSON.stringify(actual)}`;
+
+    console.warn(
+      `id: ${testing._captured?.script_id || document.currentScript.id}`,
+      `msg: ${msg}`,
+      `stack: ${testing._captured?.stack || new Error().stack}`,
+    );
   }
 
   function expectError(expected, fn) {
@@ -41,6 +42,7 @@
     expectEqual('an error', null);
   }
 
+  // Should only be called by the test runner
   function getStatus() {
     // if we're already in a fail state, return fail, nothing can recover this
     if (testing._status === 'fail') return 'fail';
@@ -97,6 +99,8 @@
     _registerErrorCallback();
   }
 
+  // We want to attach an onError callback to each <script>, so that we can
+  // properly fail it.
   function _registerErrorCallback() {
     const script = document.currentScript;
     if (!script) {
@@ -118,6 +122,33 @@
         `msg: There was an error executing the <script id=${script.id}>...</script>.\n      There should be a eval error printed above this.`,
       );
     }
+  }
+
+  function _equal(a, b) {
+    if (a === b) {
+      return true;
+    }
+    if (a === null || b === null) {
+      return false;
+    }
+    if (typeof a !== 'object' || typeof b !== 'object') {
+      return false;
+    }
+
+    if (Object.keys(a).length != Object.keys(b).length) {
+      return false;
+    }
+
+    for (property in a) {
+      if (b.hasOwnProperty(property) === false) {
+        return false;
+      }
+      if (_equal(a[property], b[property]) === false) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   window.testing = {

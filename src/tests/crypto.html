@@ -1,0 +1,25 @@
+<script src="testing.js"></script>
+<script id=crypto>
+  const a = crypto.randomUUID();
+  const b = crypto.randomUUID();
+  testing.expectEqual(36, a.length);
+  testing.expectEqual(36, b.length);
+  testing.expectEqual(false, a == b)
+
+  testing.expectError('Error: QuotaExceededError', () => {
+    crypto.getRandomValues(new BigUint64Array(8193));
+  });
+
+  let r1 = new Int32Array(5)
+  let r2 = crypto.getRandomValues(r1)
+  testing.expectEqual(5, new Set(r1).size);
+  testing.expectEqual(5, new Set(r2).size);
+  testing.expectEqual(true, r1.every((v, i) => v === r2[i]));
+
+  var r3 = new Uint8Array(16);
+  let r4 = crypto.getRandomValues(r3);
+
+  r4[6] = 10;
+  testing.expectEqual(10, r4[6]);
+  testing.expectEqual(10, r3[6]);
+</script>

@@ -1,0 +1,16 @@
+<script src="../testing.js"></script>
+<script id=custom>
+  let capture = null;
+  const el = document.createElement('div');
+  el.addEventListener('c1', (e) => { capture = 'c1-' + new String(e.detail)});
+  el.addEventListener('c2', (e) => { capture = 'c2-' + new String(e.detail.over)});
+
+  el.dispatchEvent(new CustomEvent('c1'));
+  testing.expectEqual("c1-null", capture);
+
+  el.dispatchEvent(new CustomEvent('c1', {detail: '123'}));
+  testing.expectEqual("c1-123", capture);
+
+  el.dispatchEvent(new CustomEvent('c2', {detail: {over: 9000}}));
+  testing.expectEqual("c2-9000", capture);
+</script>

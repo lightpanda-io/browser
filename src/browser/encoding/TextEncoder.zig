@@ -43,20 +43,6 @@ pub fn _encode(_: *const TextEncoder, v: []const u8) !Env.TypedArray(u8) {
 }
 
 const testing = @import("../../testing.zig");
-test "Browser.Encoding.TextEncoder" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{
-        .html = "",
-    });
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "var encoder = new TextEncoder();", null },
-        .{ "encoder.encoding;", "utf-8" },
-        .{ "encoder.encode('€');", "226,130,172" },
-
-        // Invalid utf-8 sequence.
-        // Result with chrome:
-        // .{ "encoder.encode(new Uint8Array([0xE2,0x28,0xA1]))", "50,50,54,44,52,48,44,49,54,49" },
-        .{ "try {encoder.encode(new Uint8Array([0xE2,0x28,0xA1])) } catch (e) { e };", "Error: InvalidUtf8" },
-    }, .{});
+test "Browser: Encoding.TextEncoder" {
+    try testing.htmlRunner("encoding/encoder.html");
 }
