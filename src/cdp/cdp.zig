@@ -103,7 +103,6 @@ pub fn CDPT(comptime TypeProvider: type) type {
         pub fn handleMessage(self: *Self, msg: []const u8) bool {
             // if there's an error, it's already been logged
             self.processMessage(msg) catch return false;
-            // self.pageWait();
             return true;
         }
 

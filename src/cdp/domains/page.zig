@@ -164,10 +164,7 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
 
     var cdp = bc.cdp;
 
-    if (event.opts.reason != .address_bar) {
-        bc.loader_id = bc.cdp.loader_id_gen.next();
-    }
-
+    bc.loader_id = bc.cdp.loader_id_gen.next();
     const loader_id = bc.loader_id;
     const target_id = bc.target_id orelse unreachable;
     const session_id = bc.session_id orelse unreachable;
