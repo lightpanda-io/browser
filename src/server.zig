@@ -126,8 +126,12 @@ pub const Server = struct {
 
         var last_message = timestamp();
         var http = &self.app.http;
+
+        http.monitorSocket(socket);
+        defer http.unmonitorSocket();
+
         while (true) {
-            if (http.poll(20, socket)) {
+            if (http.poll(10) == .extra_socket) {
                 const n = posix.read(socket, client.readBuf()) catch |err| {
                     log.warn(.app, "CDP read", .{ .err = err });
                     return;

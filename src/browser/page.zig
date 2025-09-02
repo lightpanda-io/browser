@@ -313,7 +313,10 @@ pub const Page = struct {
                     }
 
                     // There should only be 1 active http transfer, the main page
-                    _ = try http_client.tick(.{ .timeout_ms = ms_remaining });
+                    if (try http_client.tick(ms_remaining) == .extra_socket) {
+                        // data on a socket we aren't handling, return to caller
+                        return;
+                    }
                 },
                 .html, .parsed => {
                     // The HTML page was parsed. We now either have JS scripts to
@@ -374,7 +377,10 @@ pub const Page = struct {
                         // inflight requests
                         else @min(ms_remaining, ms_to_next_task orelse 1000);
 
-                    _ = try http_client.tick(.{ .timeout_ms = ms_to_wait });
+                    if (try http_client.tick(ms_to_wait) == .extra_socket) {
+                        // data on a socket we aren't handling, return to caller
+                        return;
+                    }
 
                     if (request_intercepted) {
                         // Again, proritizing intercepted requests. Exit this
