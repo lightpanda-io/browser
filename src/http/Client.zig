@@ -145,9 +145,9 @@ pub fn abort(self: *Client) void {
 
     var n = self.queue.first;
     while (n) |node| {
+        n = node.next;
         const transfer: *Transfer = @fieldParentPtr("_node", node);
         self.transfer_pool.destroy(transfer);
-        n = node.next;
     }
     self.queue = .{};
 
