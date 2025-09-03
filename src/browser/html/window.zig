@@ -41,6 +41,7 @@ const JsObject = Env.JsObject;
 
 const v8 = @import("v8");
 const Request = @import("../fetch/Request.zig");
+const fetchFn = @import("../fetch/fetch.zig").fetch;
 
 const storage = @import("../storage/storage.zig");
 
@@ -99,7 +100,7 @@ pub const Window = struct {
     }
 
     pub fn _fetch(_: *Window, input: Request.RequestInput, options: ?Request.RequestInit, page: *Page) !Env.Promise {
-        return Request.fetch(input, options, page);
+        return fetchFn(input, options, page);
     }
 
     pub fn get_window(self: *Window) *Window {
