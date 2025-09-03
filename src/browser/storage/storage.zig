@@ -208,29 +208,11 @@ pub const Bottle = struct {
 // -----
 
 const testing = @import("../../testing.zig");
-test "Browser.Storage.LocalStorage" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "localStorage.length", "0" },
-
-        .{ "localStorage.setItem('foo', 'bar')", "undefined" },
-        .{ "localStorage.length", "1" },
-        .{ "localStorage.getItem('foo')", "bar" },
-        .{ "localStorage.removeItem('foo')", "undefined" },
-        .{ "localStorage.length", "0" },
-
-        // .{ "localStorage['foo'] = 'bar'", "undefined" },
-        // .{ "localStorage['foo']", "bar" },
-        // .{ "localStorage.length", "1" },
-
-        .{ "localStorage.clear()", "undefined" },
-        .{ "localStorage.length", "0" },
-    }, .{});
+test "Browser: Storage.LocalStorage" {
+    try testing.htmlRunner("storage/local_storage.html");
 }
 
-test "storage bottle" {
+test "Browser: Storage.Bottle" {
     var bottle = Bottle.init(std.testing.allocator);
     defer bottle.deinit();
 

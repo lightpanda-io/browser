@@ -1,0 +1,25 @@
+<script src="../testing.js"></script>
+
+<script id=localstorage>
+  testing.expectEqual(0, localStorage.length);
+  testing.expectEqual(null, localStorage.getItem('foo'));
+
+  localStorage.setItem('foo', 'bar');
+  testing.expectEqual(1, localStorage.length)
+  testing.expectEqual('bar', localStorage.getItem('foo'));
+
+  localStorage.removeItem('foo');
+  testing.expectEqual(0, localStorage.length)
+  testing.expectEqual(null, localStorage.getItem('foo'));
+
+  localStorage['foo'] = 'bar';
+  testing.expectEqual(1, localStorage.length);
+  testing.expectEqual('bar', localStorage['foo']);
+
+  localStorage.setItem('a', '1');
+  localStorage.setItem('b', '2');
+  localStorage.setItem('c', '3');
+  testing.expectEqual(3, localStorage.length)
+  localStorage.clear();
+  localStorage.length", "0" },
+</script>
