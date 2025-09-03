@@ -55,8 +55,8 @@ pub const ReadableStreamReadResult = struct {
     value: ?[]const u8,
     done: bool,
 
-    pub fn get_value(self: *const ReadableStreamReadResult, page: *Page) !?[]const u8 {
-        return if (self.value) |value| try page.arena.dupe(u8, value) else null;
+    pub fn get_value(self: *const ReadableStreamReadResult) !?[]const u8 {
+        return self.value;
     }
 
     pub fn get_done(self: *const ReadableStreamReadResult) bool {
@@ -85,7 +85,7 @@ pub fn _read(self: *const ReadableStreamDefaultReader, page: *Page) !Env.Promise
         },
         .closed => |_| {
             if (stream.queue.items.len > 0) {
-                const data = try page.arena.dupe(u8, self.stream.queue.orderedRemove(0));
+                const data = self.stream.queue.orderedRemove(0);
                 try resolver.resolve(ReadableStreamReadResult{ .value = data, .done = false });
             } else {
                 try resolver.resolve(ReadableStreamReadResult{ .value = null, .done = true });
