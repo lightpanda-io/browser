@@ -406,6 +406,7 @@ pub fn requestAuthRequired(arena: Allocator, bc: anytype, intercept: *const Noti
             .script => "Script",
             .xhr => "XHR",
             .document => "Document",
+            .fetch => "Fetch",
         },
         .authChallenge = .{
             .source = if (challenge.source == .server) "Server" else "Proxy",
