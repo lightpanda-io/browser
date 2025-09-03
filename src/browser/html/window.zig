@@ -215,7 +215,11 @@ pub const Window = struct {
     }
 
     pub fn _requestAnimationFrame(self: *Window, cbk: Function, page: *Page) !u32 {
-        return self.createTimeout(cbk, 5, page, .{ .animation_frame = true, .name = "animationFrame" });
+        return self.createTimeout(cbk, 5, page, .{
+            .animation_frame = true,
+            .name = "animationFrame",
+            .low_priority = true,
+        });
     }
 
     pub fn _cancelAnimationFrame(self: *Window, id: u32) !void {
@@ -269,6 +273,7 @@ pub const Window = struct {
         args: []Env.JsObject = &.{},
         repeat: bool = false,
         animation_frame: bool = false,
+        low_priority: bool = false,
     };
     fn createTimeout(self: *Window, cbk: Function, delay_: ?u32, page: *Page, opts: CreateTimeoutOpts) !u32 {
         const delay = delay_ orelse 0;
@@ -319,7 +324,10 @@ pub const Window = struct {
             .repeat = if (opts.repeat) delay + 1 else null,
         };
 
-        try page.scheduler.add(callback, TimerCallback.run, delay, .{ .name = opts.name });
+        try page.scheduler.add(callback, TimerCallback.run, delay, .{
+            .name = opts.name,
+            .low_priority = opts.low_priority,
+        });
 
         return timer_id;
     }

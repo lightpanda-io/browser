@@ -109,7 +109,7 @@ fn run(
     const url = try std.fmt.allocPrint(arena, "http://localhost:9582/{s}", .{test_file});
     try page.navigate(url, .{});
 
-    page.wait(2);
+    _ = page.wait(2000);
 
     const js_context = page.main_context;
     var try_catch: Env.TryCatch = undefined;

@@ -44,6 +44,7 @@ pub fn reset(self: *Scheduler) void {
 
 const AddOpts = struct {
     name: []const u8 = "",
+    low_priority: bool = false,
 };
 pub fn add(self: *Scheduler, ctx: *anyopaque, func: Task.Func, ms: u32, opts: AddOpts) !void {
     if (ms > 5_000) {
@@ -51,7 +52,9 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, func: Task.Func, ms: u32, opts: Ad
         // ignore any task that we're almost certainly never going to run
         return;
     }
-    return self.primary.add(.{
+
+    var q = if (opts.low_priority) &self.secondary else &self.primary;
+    return q.add(.{
         .ms = std.time.milliTimestamp() + ms,
         .ctx = ctx,
         .func = func,

@@ -428,7 +428,7 @@ fn errorCallback(ctx: *anyopaque, err: anyerror) void {
 // It could be pending because:
 //   (a) we're still downloading its content or
 //   (b) this is a non-async script that has to be executed in order
-const PendingScript = struct {
+pub const PendingScript = struct {
     script: Script,
     complete: bool,
     node: OrderList.Node,

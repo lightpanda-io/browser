@@ -523,7 +523,7 @@ const Handles = struct {
 };
 
 // wraps a c.CURL (an easy handle)
-const Handle = struct {
+pub const Handle = struct {
     client: *Client,
     conn: Http.Connection,
     node: Handles.HandleList.Node,

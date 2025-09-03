@@ -137,7 +137,7 @@ fn run(alloc: Allocator) !void {
             const server = &_server.?;
             defer server.deinit();
 
-            server.run(address, opts.timeout) catch |err| {
+            server.run(address, opts.timeout * 1000) catch |err| {
                 log.fatal(.app, "server run error", .{ .err = err });
                 return err;
             };
@@ -166,7 +166,7 @@ fn run(alloc: Allocator) !void {
                 },
             };
 
-            session.wait(5); // 5 seconds
+            _ = session.wait(5000); // 5 seconds
 
             // dump
             if (opts.dump) {
