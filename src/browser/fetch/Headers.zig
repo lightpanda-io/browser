@@ -23,39 +23,68 @@ const Page = @import("../page.zig").Page;
 // https://developer.mozilla.org/en-US/docs/Web/API/Headers
 const Headers = @This();
 
-headers: std.StringHashMapUnmanaged([]const u8),
+// Case-Insensitive String HashMap.
+// This allows us to avoid having to allocate lowercase keys all the time.
+const HeaderHashMap = std.HashMapUnmanaged([]const u8, []const u8, struct {
+    pub fn hash(_: @This(), s: []const u8) u64 {
+        var hasher = std.hash.Wyhash.init(s.len);
+        for (s) |c| {
+            hasher.update(&.{std.ascii.toLower(c)});
+        }
+
+        return hasher.final();
+    }
+    pub fn eql(_: @This(), a: []const u8, b: []const u8) bool {
+        if (a.len != b.len) return false;
+
+        for (a, b) |c1, c2| {
+            if (std.ascii.toLower(c1) != std.ascii.toLower(c2)) return false;
+        }
+
+        return true;
+    }
+}, 80);
+
+headers: HeaderHashMap = .empty,
 
 // They can either be:
 //
 // 1. An array of string pairs.
 // 2. An object with string keys to string values.
 // 3. Another Headers object.
-const HeadersInit = union(enum) {
-    strings: []const []const u8,
-    // headers: Headers,
+pub const HeadersInit = union(enum) {
+    // List of Pairs of []const u8
+    strings: []const []const []const u8,
+    headers: *Headers,
 };
 
-pub fn constructor(_init: ?[]const HeadersInit, page: *Page) !Headers {
+pub fn constructor(_init: ?HeadersInit, page: *Page) !Headers {
     const arena = page.arena;
-    var headers = std.StringHashMapUnmanaged([]const u8).empty;
+    var headers: HeaderHashMap = .empty;
 
     if (_init) |init| {
-        for (init) |item| {
-            switch (item) {
-                .strings => |pair| {
+        switch (init) {
+            .strings => |kvs| {
+                for (kvs) |pair| {
                     // Can only have two string elements if in a pair.
                     if (pair.len != 2) {
                         return error.TypeError;
                     }
 
-                    const raw_key = pair[0];
-                    const value = pair[1];
-                    const key = try std.ascii.allocLowerString(arena, raw_key);
+                    const key = try page.arena.dupe(u8, pair[0]);
+                    const value = try page.arena.dupe(u8, pair[1]);
 
                     try headers.put(arena, key, value);
-                },
-                // .headers => |_| {},
-            }
+                }
+            },
+            .headers => |hdrs| {
+                var iter = hdrs.headers.iterator();
+                while (iter.next()) |entry| {
+                    const key = try page.arena.dupe(u8, entry.key_ptr.*);
+                    const value = try page.arena.dupe(u8, entry.value_ptr.*);
+                    try headers.put(arena, key, value);
+                }
+            },
         }
     }
 
@@ -64,13 +93,69 @@ pub fn constructor(_init: ?[]const HeadersInit, page: *Page) !Headers {
     };
 }
 
-pub fn _get(self: *const Headers, header: []const u8, page: *Page) !?[]const u8 {
-    const arena = page.arena;
-    const key = try std.ascii.allocLowerString(arena, header);
+pub fn clone(self: *Headers, allocator: std.mem.Allocator) !Headers {
+    return Headers{
+        .headers = try self.headers.clone(allocator),
+    };
+}
 
-    const value = (self.headers.getEntry(key) orelse return null).value_ptr.*;
+pub fn _append(self: *Headers, name: []const u8, value: []const u8, page: *Page) !void {
+    const arena = page.arena;
+
+    if (self.headers.getEntry(name)) |entry| {
+        // If we found it, append the value.
+        const new_value = try std.fmt.allocPrint(arena, "{s}, {s}", .{ entry.value_ptr.*, value });
+        entry.value_ptr.* = new_value;
+    } else {
+        // Otherwise, we should just put it in.
+        try self.headers.putNoClobber(
+            arena,
+            try arena.dupe(u8, name),
+            try arena.dupe(u8, value),
+        );
+    }
+}
+
+pub fn _delete(self: *Headers, name: []const u8) void {
+    _ = self.headers.remove(name);
+}
+
+// TODO: entries iterator
+// They should be:
+// 1. Sorted in lexicographical order.
+// 2. Duplicate header names should be combined.
+
+// TODO: header for each
+
+pub fn _get(self: *const Headers, name: []const u8, page: *Page) !?[]const u8 {
+    const arena = page.arena;
+    const value = (self.headers.getEntry(name) orelse return null).value_ptr.*;
     return try arena.dupe(u8, value);
 }
+
+pub fn _has(self: *const Headers, name: []const u8) bool {
+    return self.headers.contains(name);
+}
+
+// TODO: keys iterator
+
+pub fn _set(self: *Headers, name: []const u8, value: []const u8, page: *Page) !void {
+    const arena = page.arena;
+
+    if (self.headers.getEntry(name)) |entry| {
+        // If we found it, set the value.
+        entry.value_ptr.* = try arena.dupe(u8, value);
+    } else {
+        // Otherwise, we should just put it in.
+        try self.headers.putNoClobber(
+            arena,
+            try arena.dupe(u8, name),
+            try arena.dupe(u8, value),
+        );
+    }
+}
+
+// TODO: values iterator
 
 const testing = @import("../../testing.zig");
 test "fetch: headers" {
@@ -84,5 +169,20 @@ test "fetch: headers" {
     try runner.testCases(&.{
         .{ "let headers = new Headers([['Set-Cookie', 'name=world']])", "undefined" },
         .{ "headers.get('set-cookie')", "name=world" },
+    }, .{});
+
+    // adapted from the mdn examples
+    try runner.testCases(&.{
+        .{ "const myHeaders = new Headers();", "undefined" },
+        .{ "myHeaders.append('Content-Type', 'image/jpeg')", "undefined" },
+        .{ "myHeaders.has('Picture-Type')", "false" },
+        .{ "myHeaders.get('Content-Type')", "image/jpeg" },
+        .{ "myHeaders.append('Content-Type', 'image/png')", "undefined" },
+        .{ "myHeaders.get('Content-Type')", "image/jpeg, image/png" },
+        .{ "myHeaders.delete('Content-Type')", "undefined" },
+        .{ "myHeaders.get('Content-Type')", "null" },
+        .{ "myHeaders.set('Picture-Type', 'image/svg')", "undefined" },
+        .{ "myHeaders.get('Picture-Type')", "image/svg" },
+        .{ "myHeaders.has('Picture-Type')", "true" },
     }, .{});
 }
