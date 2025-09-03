@@ -25,21 +25,24 @@ const Page = @import("../page.zig").Page;
 const Response = @import("./Response.zig");
 
 const Http = @import("../../http/Http.zig");
-const HttpClient = @import("../../http/Client.zig");
-const Mime = @import("../mime.zig").Mime;
 
 const v8 = @import("v8");
 const Env = @import("../env.zig").Env;
 
+const Headers = @import("Headers.zig");
+const HeadersInit = @import("Headers.zig").HeadersInit;
+
 pub const RequestInput = union(enum) {
     string: []const u8,
-    request: Request,
+    request: *Request,
 };
 
 // https://developer.mozilla.org/en-US/docs/Web/API/RequestInit
 pub const RequestInit = struct {
     method: ?[]const u8 = null,
     body: ?[]const u8 = null,
+    integrity: ?[]const u8 = null,
+    headers: ?HeadersInit = null,
 };
 
 // https://developer.mozilla.org/en-US/docs/Web/API/Request/Request
@@ -47,7 +50,10 @@ const Request = @This();
 
 method: Http.Method,
 url: [:0]const u8,
+headers: Headers,
 body: ?[]const u8,
+body_used: bool = false,
+integrity: []const u8,
 
 pub fn constructor(input: RequestInput, _options: ?RequestInit, page: *Page) !Request {
     const arena = page.arena;
@@ -77,165 +83,115 @@ pub fn constructor(input: RequestInput, _options: ?RequestInit, page: *Page) !Re
     };
 
     const body = if (options.body) |body| try arena.dupe(u8, body) else null;
+    const integrity = if (options.integrity) |integ| try arena.dupe(u8, integ) else "";
+    const headers = if (options.headers) |hdrs| try Headers.constructor(hdrs, page) else Headers{};
 
     return .{
         .method = method,
         .url = url,
+        .headers = headers,
         .body = body,
+        .integrity = integrity,
     };
-}
-
-pub fn get_url(self: *const Request) []const u8 {
-    return self.url;
-}
-
-pub fn get_method(self: *const Request) []const u8 {
-    return @tagName(self.method);
 }
 
 // pub fn get_body(self: *const Request) ?[]const u8 {
 //     return self.body;
 // }
 
-const FetchContext = struct {
-    arena: std.mem.Allocator,
-    js_ctx: *Env.JsContext,
-    promise_resolver: v8.Persistent(v8.PromiseResolver),
+pub fn get_bodyUsed(self: *const Request) bool {
+    return self.body_used;
+}
 
-    method: Http.Method,
-    url: []const u8,
-    body: std.ArrayListUnmanaged(u8) = .empty,
-    headers: std.ArrayListUnmanaged([]const u8) = .empty,
-    status: u16 = 0,
-    mime: ?Mime = null,
-    transfer: ?*HttpClient.Transfer = null,
+pub fn get_headers(self: *Request) *Headers {
+    return &self.headers;
+}
 
-    /// This effectively takes ownership of the FetchContext.
-    ///
-    /// We just return the underlying slices used for `headers`
-    /// and for `body` here to avoid an allocation.
-    pub fn toResponse(self: *const FetchContext) !Response {
-        return Response{
-            .status = self.status,
-            .headers = self.headers.items,
-            .mime = self.mime,
-            .body = self.body.items,
-        };
+pub fn get_integrity(self: *const Request) []const u8 {
+    return self.integrity;
+}
+
+// TODO: If we ever support the Navigation API, we need isHistoryNavigation
+// https://developer.mozilla.org/en-US/docs/Web/API/Request/isHistoryNavigation
+
+pub fn get_method(self: *const Request) []const u8 {
+    return @tagName(self.method);
+}
+
+pub fn get_url(self: *const Request) []const u8 {
+    return self.url;
+}
+
+pub fn _clone(self: *Request, page: *Page) !Request {
+    // Not allowed to clone if the body was used.
+    if (self.body_used) {
+        return error.TypeError;
     }
-};
 
-// https://developer.mozilla.org/en-US/docs/Web/API/Window/fetch
-pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promise {
     const arena = page.arena;
 
-    const req = try Request.constructor(input, options, page);
+    return Request{
+        .body = if (self.body) |body| try arena.dupe(u8, body) else null,
+        .body_used = self.body_used,
+        .headers = try self.headers.clone(arena),
+        .method = self.method,
+        .integrity = try arena.dupe(u8, self.integrity),
+        .url = try arena.dupeZ(u8, self.url),
+    };
+}
+
+pub fn _bytes(self: *Response, page: *Page) !Env.Promise {
+    if (self.body_used) {
+        return error.TypeError;
+    }
 
     const resolver = Env.PromiseResolver{
         .js_context = page.main_context,
         .resolver = v8.PromiseResolver.init(page.main_context.v8_context),
     };
 
-    var headers = try Http.Headers.init();
-    try page.requestCookie(.{}).headersForRequest(arena, req.url, &headers);
+    try resolver.resolve(self.body);
+    self.body_used = true;
+    return resolver.promise();
+}
 
-    const fetch_ctx = try arena.create(FetchContext);
-    fetch_ctx.* = .{
-        .arena = arena,
-        .js_ctx = page.main_context,
-        .promise_resolver = v8.Persistent(v8.PromiseResolver).init(
-            page.main_context.isolate,
-            resolver.resolver,
-        ),
-        .method = req.method,
-        .url = req.url,
+pub fn _json(self: *Response, page: *Page) !Env.Promise {
+    if (self.body_used) {
+        return error.TypeError;
+    }
+
+    const resolver = Env.PromiseResolver{
+        .js_context = page.main_context,
+        .resolver = v8.PromiseResolver.init(page.main_context.v8_context),
     };
 
-    try page.http_client.request(.{
-        .ctx = @ptrCast(fetch_ctx),
-        .url = req.url,
-        .method = req.method,
-        .headers = headers,
-        .body = req.body,
-        .cookie_jar = page.cookie_jar,
-        .resource_type = .fetch,
+    const p = std.json.parseFromSliceLeaky(
+        std.json.Value,
+        page.arena,
+        self.body,
+        .{},
+    ) catch |e| {
+        log.warn(.browser, "invalid json", .{ .err = e, .source = "Request" });
+        return error.SyntaxError;
+    };
 
-        .start_callback = struct {
-            fn startCallback(transfer: *HttpClient.Transfer) !void {
-                const self: *FetchContext = @alignCast(@ptrCast(transfer.ctx));
-                log.debug(.http, "request start", .{ .method = self.method, .url = self.url, .source = "fetch" });
+    try resolver.resolve(p);
+    self.body_used = true;
+    return resolver.promise();
+}
 
-                self.transfer = transfer;
-            }
-        }.startCallback,
-        .header_callback = struct {
-            fn headerCallback(transfer: *HttpClient.Transfer) !void {
-                const self: *FetchContext = @alignCast(@ptrCast(transfer.ctx));
+pub fn _text(self: *Response, page: *Page) !Env.Promise {
+    if (self.body_used) {
+        return error.TypeError;
+    }
 
-                const header = &transfer.response_header.?;
+    const resolver = Env.PromiseResolver{
+        .js_context = page.main_context,
+        .resolver = v8.PromiseResolver.init(page.main_context.v8_context),
+    };
 
-                log.debug(.http, "request header", .{
-                    .source = "fetch",
-                    .method = self.method,
-                    .url = self.url,
-                    .status = header.status,
-                });
-
-                if (header.contentType()) |ct| {
-                    self.mime = Mime.parse(ct) catch {
-                        return error.MimeParsing;
-                    };
-                }
-
-                var it = transfer.responseHeaderIterator();
-                while (it.next()) |hdr| {
-                    const joined = try std.fmt.allocPrint(self.arena, "{s}: {s}", .{ hdr.name, hdr.value });
-                    try self.headers.append(self.arena, joined);
-                }
-
-                self.status = header.status;
-            }
-        }.headerCallback,
-        .data_callback = struct {
-            fn dataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
-                const self: *FetchContext = @alignCast(@ptrCast(transfer.ctx));
-                try self.body.appendSlice(self.arena, data);
-            }
-        }.dataCallback,
-        .done_callback = struct {
-            fn doneCallback(ctx: *anyopaque) !void {
-                const self: *FetchContext = @alignCast(@ptrCast(ctx));
-
-                log.info(.http, "request complete", .{
-                    .source = "fetch",
-                    .method = self.method,
-                    .url = self.url,
-                    .status = self.status,
-                });
-
-                const response = try self.toResponse();
-                const promise_resolver: Env.PromiseResolver = .{
-                    .js_context = self.js_ctx,
-                    .resolver = self.promise_resolver.castToPromiseResolver(),
-                };
-
-                try promise_resolver.resolve(response);
-            }
-        }.doneCallback,
-        .error_callback = struct {
-            fn errorCallback(ctx: *anyopaque, err: anyerror) void {
-                const self: *FetchContext = @alignCast(@ptrCast(ctx));
-
-                self.transfer = null;
-                const promise_resolver: Env.PromiseResolver = .{
-                    .js_context = self.js_ctx,
-                    .resolver = self.promise_resolver.castToPromiseResolver(),
-                };
-
-                promise_resolver.reject(@errorName(err)) catch unreachable;
-            }
-        }.errorCallback,
-    });
-
+    try resolver.resolve(self.body);
+    self.body_used = true;
     return resolver.promise();
 }
 

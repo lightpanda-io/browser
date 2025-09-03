@@ -35,6 +35,8 @@ status: u16 = 0,
 headers: []const []const u8,
 mime: ?Mime = null,
 body: []const u8,
+body_used: bool = false,
+redirected: bool = false,
 
 const ResponseInput = union(enum) {
     string: []const u8,
@@ -72,17 +74,38 @@ pub fn get_ok(self: *const Response) bool {
     return self.status >= 200 and self.status <= 299;
 }
 
-pub fn _text(self: *const Response, page: *Page) !Env.Promise {
+pub fn get_bodyUsed(self: *const Response) bool {
+    return self.body_used;
+}
+
+pub fn get_redirected(self: *const Response) bool {
+    return self.redirected;
+}
+
+pub fn get_status(self: *const Response) u16 {
+    return self.status;
+}
+
+pub fn _bytes(self: *Response, page: *Page) !Env.Promise {
+    if (self.body_used) {
+        return error.TypeError;
+    }
+
     const resolver = Env.PromiseResolver{
         .js_context = page.main_context,
         .resolver = v8.PromiseResolver.init(page.main_context.v8_context),
     };
 
     try resolver.resolve(self.body);
+    self.body_used = true;
     return resolver.promise();
 }
 
-pub fn _json(self: *const Response, page: *Page) !Env.Promise {
+pub fn _json(self: *Response, page: *Page) !Env.Promise {
+    if (self.body_used) {
+        return error.TypeError;
+    }
+
     const resolver = Env.PromiseResolver{
         .js_context = page.main_context,
         .resolver = v8.PromiseResolver.init(page.main_context.v8_context),
@@ -99,6 +122,22 @@ pub fn _json(self: *const Response, page: *Page) !Env.Promise {
     };
 
     try resolver.resolve(p);
+    self.body_used = true;
+    return resolver.promise();
+}
+
+pub fn _text(self: *Response, page: *Page) !Env.Promise {
+    if (self.body_used) {
+        return error.TypeError;
+    }
+
+    const resolver = Env.PromiseResolver{
+        .js_context = page.main_context,
+        .resolver = v8.PromiseResolver.init(page.main_context.v8_context),
+    };
+
+    try resolver.resolve(self.body);
+    self.body_used = true;
     return resolver.promise();
 }
 
