@@ -103,7 +103,6 @@ pub fn CDPT(comptime TypeProvider: type) type {
         pub fn handleMessage(self: *Self, msg: []const u8) bool {
             // if there's an error, it's already been logged
             self.processMessage(msg) catch return false;
-            self.pageWait();
             return true;
         }
 
@@ -117,11 +116,13 @@ pub fn CDPT(comptime TypeProvider: type) type {
         // A bit hacky right now. The main server loop doesn't unblock for
         // scheduled task. So we run this directly in order to process any
         // timeouts (or http events) which are ready to be processed.
-        pub fn pageWait(self: *Self) void {
-            const session = &(self.browser.session orelse return);
-            // exits early if there's nothing to do, so a large value like
-            // 5 seconds should be ok
-            session.wait(5);
+
+        pub fn hasPage() bool {
+
+        }
+        pub fn pageWait(self: *Self, ms: i32) Session.WaitResult {
+            const session = &(self.browser.session orelse return .no_page);
+            return session.wait(ms);
         }
 
         // Called from above, in processMessage which handles client messages

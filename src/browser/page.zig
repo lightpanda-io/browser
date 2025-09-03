@@ -90,16 +90,6 @@ pub const Page = struct {
 
     load_state: LoadState = .parsing,
 
-    // Page.wait balances waiting for resources / tasks and producing an output.
-    // Up until a timeout, Page.wait will always wait for inflight or pending
-    // HTTP requests, via the Http.Client.active counter. However, intercepted
-    // requests (via CDP, but it could be anything), aren't considered "active"
-    // connection. So it's possible that we have intercepted requests (which are
-    // pending on some driver to continue/abort) while Http.Client.active == 0.
-    // This boolean exists to supplment Http.Client.active and inform Page.wait
-    // of pending connections.
-    request_intercepted: bool = false,
-
     const Mode = union(enum) {
         pre: void,
         err: anyerror,
@@ -262,23 +252,26 @@ pub const Page = struct {
         return self.script_manager.blockingGet(src);
     }
 
-    pub fn wait(self: *Page, wait_sec: u16) void {
-        self._wait(wait_sec) catch |err| switch (err) {
-            error.JsError => {}, // already logged (with hopefully more context)
-            else => {
-                // There may be errors from the http/client or ScriptManager
-                // that we should not treat as an error like this. Will need
-                // to run this through more real-world sites and see if we need
-                // to expand the switch (err) to have more customized logs for
-                // specific messages.
-                log.err(.browser, "page wait", .{ .err = err });
-            },
+    pub fn wait(self: *Page, wait_ms: i32) Session.WaitResult {
+        return self._wait(wait_ms) catch |err| {
+            switch (err) {
+                error.JsError => {}, // already logged (with hopefully more context)
+                else => {
+                    // There may be errors from the http/client or ScriptManager
+                    // that we should not treat as an error like this. Will need
+                    // to run this through more real-world sites and see if we need
+                    // to expand the switch (err) to have more customized logs for
+                    // specific messages.
+                    log.err(.browser, "page wait", .{ .err = err });
+                },
+            }
+            return .done;
         };
     }
 
-    fn _wait(self: *Page, wait_sec: u16) !void {
+    fn _wait(self: *Page, wait_ms: i32) !Session.WaitResult {
         var timer = try std.time.Timer.start();
-        var ms_remaining: i32 = @intCast(wait_sec * 1000);
+        var ms_remaining = wait_ms;
 
         var try_catch: Env.TryCatch = undefined;
         try_catch.init(self.main_context);
@@ -287,42 +280,48 @@ pub const Page = struct {
         var scheduler = &self.scheduler;
         var http_client = self.http_client;
 
+        // I'd like the page to know NOTHING about extra_socket / CDP, but the
+        // fact is that the behavior of wait changes depending on whether or
+        // not we're using CDP.
+        // If we aren't using CDP, as soon as we think there's nothing left
+        // to do, we can exit - we'de done.
+        // But if we are using CDP, we should wait for the whole `wait_ms`
+        // because the http_click.tick() also monitors the CDP socket. And while
+        // we could let CDP poll http (like it does for HTTP requests), the fact
+        // is that we know more about the timing of stuff (e.g. how long to
+        // poll/sleep) in the page.
+        const exit_when_done = http_client.extra_socket == null;
+
         // for debugging
         // defer self.printWaitAnalysis();
 
         while (true) {
-            SW: switch (self.mode) {
+            switch (self.mode) {
                 .pre, .raw, .text => {
-                    if (self.request_intercepted) {
-                        // the page request was intercepted.
-
-                        // there shouldn't be any active requests;
-                        std.debug.assert(http_client.active == 0);
-
-                        // nothing we can do for this, need to kick the can up
-                        // the chain and wait for activity (e.g. a CDP message)
-                        // to unblock this.
-                        return;
-                    }
-
                     // The main page hasn't started/finished navigating.
                     // There's no JS to run, and no reason to run the scheduler.
-                    if (http_client.active == 0) {
+                    if (http_client.active == 0 and exit_when_done) {
                         // haven't started navigating, I guess.
-                        return;
+                        return .done;
                     }
 
-                    // There should only be 1 active http transfer, the main page
-                    _ = try http_client.tick(.{ .timeout_ms = ms_remaining });
+                    // Either we have active http connections, or we're in CDP
+                    // mode with an extra socket. Either way, we're waiting
+                    // for http traffic
+                    if (try http_client.tick(ms_remaining) == .extra_socket) {
+                        // data on a socket we aren't handling, return to caller
+                        return .extra_socket;
+                    }
                 },
                 .html, .parsed => {
                     // The HTML page was parsed. We now either have JS scripts to
-                    // download, or timeouts to execute, or both.
+                    // download, or scheduled tasks to execute, or both.
 
                     // scheduler.run could trigger new http transfers, so do not
                     // store http_client.active BEFORE this call and then use
                     // it AFTER.
                     const ms_to_next_task = try scheduler.runHighPriority();
+                    _ = try scheduler.runLowPriority();
 
                     if (try_catch.hasCaught()) {
                         const msg = (try try_catch.err(self.arena)) orelse "unknown";
@@ -330,69 +329,64 @@ pub const Page = struct {
                         return error.JsError;
                     }
 
-                    if (http_client.active == 0) {
-                        if (ms_to_next_task) |ms| {
-                            // There are no HTTP transfers, so there's no point calling
-                            // http_client.tick.
-                            // TODO: should we just force-run the scheduler??
-
-                            if (ms > ms_remaining) {
-                                // we'd wait to long, might as well exit early.
-                                return;
+                    if (http_client.active == 0 and exit_when_done) {
+                        const ms = ms_to_next_task orelse blk: {
+                            // TODO: when jsRunner is fully replaced with the
+                            // htmlRunner, we can remove the first part of this
+                            // condition. jsRunner calls `page.wait` far too
+                            // often to enforce this.
+                            if (wait_ms > 100 and wait_ms - ms_remaining < 100) {
+                                // Look, we want to exit ASAP, but we don't want
+                                // to exit so fast that we've run none of the
+                                // background jobs.
+                                break :blk 50;
                             }
-                            _ = try scheduler.runLowPriority();
+                            // no http transfers, no cdp extra socket, no
+                            // scheduled tasks, we're done.
+                            return .done;
+                        };
 
-                            // We must use a u64 here b/c ms is a u32 and the
-                            // conversion to ns can generate an integer
-                            // overflow.
-                            const _ms: u64 = @intCast(ms);
-
-                            std.Thread.sleep(std.time.ns_per_ms * _ms);
-                            break :SW;
+                        if (ms > ms_remaining) {
+                            // same as above, except we have a scheduled task,
+                            // it just happens to be too far into the future.s
+                            return .done;
                         }
 
-                        // We have no active http transfer and no pending
-                        // schedule tasks. We're done
-                        return;
-                    }
-
-                    _ = try scheduler.runLowPriority();
-
-                    const request_intercepted = self.request_intercepted;
-
-                    // We want to prioritize processing intercepted requests
-                    // because, the sooner they get unblocked, the sooner we
-                    // can start the HTTP request. But we still want to advanced
-                    // existing HTTP requests, if possible. So, if we have
-                    // intercepted requests, we'll still look at existing HTTP
-                    // requests, but we won't block waiting for more data.
-                    const ms_to_wait =
-                        if (request_intercepted) 0
-
-                        // But if we have no intercepted requests, we'll wait
-                        // for as long as we can for data to our existing
-                        // inflight requests
-                        else @min(ms_remaining, ms_to_next_task orelse 1000);
-
-                    _ = try http_client.tick(.{ .timeout_ms = ms_to_wait });
-
-                    if (request_intercepted) {
-                        // Again, proritizing intercepted requests. Exit this
-                        // loop so that our caller can hopefully resolve them
-                        // (i.e. continue or abort them);
-                        return;
+                        // we have a task to run in the not-so-distant future.
+                        // You might think we can just sleep until that task is
+                        // ready, but we should continue to run lowPriority tasks
+                        // in the meantime, and that could unblock things. So
+                        // we'll just sleep for a bit, and then restart our wait
+                        // loop to see what's changed
+                        std.Thread.sleep(std.time.ns_per_ms * @as(u64, @intCast(@min(ms, 20))));
+                    } else {
+                        // We're here because we either have active HTTP
+                        // connections, of exit_when_done == false (aka, there's
+                        // an extra_socket registered with the http client).
+                        const ms_to_wait = @min(ms_remaining, ms_to_next_task orelse 100);
+                        if (try http_client.tick(ms_to_wait) == .extra_socket) {
+                            // data on a socket we aren't handling, return to caller
+                            return .extra_socket;
+                        }
                     }
                 },
                 .err => |err| {
                     self.mode = .{ .raw_done = @errorName(err) };
                     return err;
                 },
-                .raw_done => return,
+                .raw_done => {
+                    if (exit_when_done) {
+                        return .done;
+                    }
+                    // we _could_ http_client.tick(ms_to_wait), but this has
+                    // the same result, and I feel is more correct.
+                    return .no_page;
+                }
             }
 
             const ms_elapsed = timer.lap() / 1_000_000;
             if (ms_elapsed >= ms_remaining) {
-                return;
+                return .done;
             }
             ms_remaining -= @intCast(ms_elapsed);
         }
@@ -405,48 +399,53 @@ pub const Page = struct {
             std.debug.print("\nactive requests: {d}\n", .{self.http_client.active});
             var n_ = self.http_client.handles.in_use.first;
             while (n_) |n| {
-                const transfer = Http.Transfer.fromEasy(n.data.conn.easy) catch |err| {
+                const handle: *Http.Client.Handle = @fieldParentPtr("node", n);
+                const transfer = Http.Transfer.fromEasy(handle.conn.easy) catch |err| {
                     std.debug.print(" - failed to load transfer: {any}\n", .{err});
                     break;
                 };
-                std.debug.print(" - {s}\n", .{transfer});
+                std.debug.print(" - {f}\n", .{transfer});
                 n_ = n.next;
             }
         }
 
         {
-            std.debug.print("\nqueued requests: {d}\n", .{self.http_client.queue.len});
+            std.debug.print("\nqueued requests: {d}\n", .{self.http_client.queue.len()});
             var n_ = self.http_client.queue.first;
             while (n_) |n| {
-                std.debug.print(" - {s}\n", .{n.data.url});
+                const transfer: *Http.Transfer = @fieldParentPtr("_node", n);
+                std.debug.print(" - {f}\n", .{transfer.uri});
                 n_ = n.next;
             }
         }
 
         {
-            std.debug.print("\nscripts: {d}\n", .{self.script_manager.scripts.len});
+            std.debug.print("\nscripts: {d}\n", .{self.script_manager.scripts.len()});
             var n_ = self.script_manager.scripts.first;
             while (n_) |n| {
-                std.debug.print(" - {s} complete: {any}\n", .{ n.data.script.url, n.data.complete });
+                const ps: *ScriptManager.PendingScript = @fieldParentPtr("node", n);
+                std.debug.print(" - {s} complete: {any}\n", .{ ps.script.url, ps.complete });
                 n_ = n.next;
             }
         }
 
         {
-            std.debug.print("\ndeferreds: {d}\n", .{self.script_manager.deferreds.len});
+            std.debug.print("\ndeferreds: {d}\n", .{self.script_manager.deferreds.len()});
             var n_ = self.script_manager.deferreds.first;
             while (n_) |n| {
-                std.debug.print(" - {s} complete: {any}\n", .{ n.data.script.url, n.data.complete });
+                const ps: *ScriptManager.PendingScript = @fieldParentPtr("node", n);
+                std.debug.print(" - {s} complete: {any}\n", .{ ps.script.url, ps.complete });
                 n_ = n.next;
             }
         }
 
         const now = std.time.milliTimestamp();
         {
-            std.debug.print("\nasyncs: {d}\n", .{self.script_manager.asyncs.len});
+            std.debug.print("\nasyncs: {d}\n", .{self.script_manager.asyncs.len()});
             var n_ = self.script_manager.asyncs.first;
             while (n_) |n| {
-                std.debug.print(" - {s} complete: {any}\n", .{ n.data.script.url, n.data.complete });
+                const ps: *ScriptManager.PendingScript = @fieldParentPtr("node", n);
+                std.debug.print(" - {s} complete: {any}\n", .{ ps.script.url, ps.complete });
                 n_ = n.next;
             }
         }

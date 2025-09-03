@@ -285,7 +285,7 @@ pub fn blockingGet(self: *ScriptManager, url: [:0]const u8) !BlockingResult {
 
     // rely on http's timeout settings to avoid an endless/long loop.
     while (true) {
-        _ = try client.tick(.{ .timeout_ms = 200 });
+        _ = try client.tick(200);
         switch (blocking.state) {
             .running => {},
             .done => |result| return result,
@@ -428,7 +428,7 @@ fn errorCallback(ctx: *anyopaque, err: anyerror) void {
 // It could be pending because:
 //   (a) we're still downloading its content or
 //   (b) this is a non-async script that has to be executed in order
-const PendingScript = struct {
+pub const PendingScript = struct {
     script: Script,
     complete: bool,
     node: OrderList.Node,

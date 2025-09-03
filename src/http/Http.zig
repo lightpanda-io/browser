@@ -83,14 +83,19 @@ pub fn deinit(self: *Http) void {
     self.arena.deinit();
 }
 
-pub fn poll(self: *Http, timeout_ms: i32, socket: posix.socket_t) bool {
-    return self.client.tick(.{
-        .timeout_ms = timeout_ms,
-        .poll_socket = socket,
-    }) catch |err| {
+pub fn poll(self: *Http, timeout_ms: i32) Client.PerformStatus {
+    return self.client.tick(timeout_ms) catch |err| {
         log.err(.app, "http poll", .{ .err = err });
-        return false;
+        return .normal;
     };
+}
+
+pub fn monitorSocket(self: *Http, socket: posix.socket_t) void {
+    self.client.extra_socket = socket;
+}
+
+pub fn unmonitorSocket(self: *Http) void {
+    self.client.extra_socket = null;
 }
 
 pub fn newConnection(self: *Http) !Connection {

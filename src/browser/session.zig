@@ -137,7 +137,13 @@ pub const Session = struct {
         return &(self.page orelse return null);
     }
 
-    pub fn wait(self: *Session, wait_sec: u16) void {
+    pub const WaitResult = enum {
+        done,
+        no_page,
+        extra_socket,
+    };
+
+    pub fn wait(self: *Session, wait_ms: i32) WaitResult {
         if (self.queued_navigation) |qn| {
             // This was already aborted on the page, but it would be pretty
             // bad if old requests went to the new page, so let's make double sure
@@ -154,20 +160,23 @@ pub const Session = struct {
                     .err = err,
                     .url = qn.url,
                 });
-                return;
+                return .done;
             };
 
             page.navigate(qn.url, qn.opts) catch |err| {
                 log.err(.browser, "queued navigation error", .{ .err = err, .url = qn.url });
-                return;
+                return .done;
             };
         }
 
         if (self.page) |*page| {
-            page.wait(wait_sec);
+            return page.wait(wait_ms);
         }
+        return .no_page;
     }
 };
+
+
 
 const QueuedNavigation = struct {
     url: []const u8,

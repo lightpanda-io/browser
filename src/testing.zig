@@ -424,7 +424,7 @@ pub const JsRunner = struct {
                 }
                 return err;
             };
-            self.page.session.wait(1);
+            _ = self.page.session.wait(100);
             @import("root").js_runner_duration += std.time.Instant.since(try std.time.Instant.now(), start);
 
             if (case.@"1") |expected| {
@@ -518,7 +518,7 @@ pub fn htmlRunner(file: []const u8) !void {
 
     const url = try std.fmt.allocPrint(arena_allocator, "http://localhost:9582/src/tests/{s}", .{file});
     try page.navigate(url, .{});
-    page.wait(2);
+    _ = page.wait(2000);
 
     const value = js_context.exec("testing.getStatus()", "testing.getStatus()") catch |err| {
         const msg = try_catch.err(arena_allocator) catch @errorName(err) orelse "unknown";

@@ -87,6 +87,11 @@ notification: ?*Notification = null,
 // restoring, this originally-configured value is what it goes to.
 http_proxy: ?[:0]const u8 = null,
 
+// libcurl can monitor arbitrary sockets. Currently, we ever [maybe] want to
+// monitor the CDP client socket, so we've done the simplest thing possible
+// by having this single optional field
+extra_socket: ?posix.socket_t = null,
+
 const TransferQueue = std.DoublyLinkedList;
 
 pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts) !*Client {
@@ -162,11 +167,7 @@ pub fn abort(self: *Client) void {
     }
 }
 
-const TickOpts = struct {
-    timeout_ms: i32 = 0,
-    poll_socket: ?posix.socket_t = null,
-};
-pub fn tick(self: *Client, opts: TickOpts) !bool {
+pub fn tick(self: *Client, timeout_ms: i32) !PerformStatus {
     while (true) {
         if (self.handles.hasAvailable() == false) {
             break;
@@ -178,7 +179,7 @@ pub fn tick(self: *Client, opts: TickOpts) !bool {
         const handle = self.handles.getFreeHandle().?;
         try self.makeRequest(handle, transfer);
     }
-    return self.perform(opts.timeout_ms, opts.poll_socket);
+    return self.perform(timeout_ms);
 }
 
 pub fn request(self: *Client, req: Request) !void {
@@ -342,15 +343,25 @@ fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) !void {
     }
 
     self.active += 1;
-    _ = try self.perform(0, null);
+    _ = try self.perform(0);
 }
 
-fn perform(self: *Client, timeout_ms: c_int, socket: ?posix.socket_t) !bool {
+pub const PerformStatus = enum{
+    extra_socket,
+    normal,
+};
+
+fn perform(self: *Client, timeout_ms: c_int) !PerformStatus {
     const multi = self.multi;
     var running: c_int = undefined;
     try errorMCheck(c.curl_multi_perform(multi, &running));
 
-    if (socket) |s| {
+    // We're potentially going to block for a while until we get data. Process
+    // whatever messages we have waiting ahead of time.
+    try self.processMessages();
+
+    var status = PerformStatus.normal;
+    if (self.extra_socket) |s| {
         var wait_fd = c.curl_waitfd{
             .fd = s,
             .events = c.CURL_WAIT_POLLIN,
@@ -359,12 +370,18 @@ fn perform(self: *Client, timeout_ms: c_int, socket: ?posix.socket_t) !bool {
         try errorMCheck(c.curl_multi_poll(multi, &wait_fd, 1, timeout_ms, null));
         if (wait_fd.revents != 0) {
             // the extra socket we passed in is ready, let's signal our caller
-            return true;
+            status = .extra_socket;
         }
-    } else if (running > 0 and timeout_ms > 0) {
+    } else if (running > 0) {
         try errorMCheck(c.curl_multi_poll(multi, null, 0, timeout_ms, null));
     }
 
+    try self.processMessages();
+    return status;
+}
+
+fn processMessages(self: *Client) !void {
+    const multi = self.multi;
     var messages_count: c_int = 0;
     while (c.curl_multi_info_read(multi, &messages_count)) |msg_| {
         const msg: *c.CURLMsg = @ptrCast(msg_);
@@ -422,8 +439,6 @@ fn perform(self: *Client, timeout_ms: c_int, socket: ?posix.socket_t) !bool {
             self.requestFailed(transfer, err);
         }
     }
-
-    return false;
 }
 
 fn endTransfer(self: *Client, transfer: *Transfer) void {
@@ -508,7 +523,7 @@ const Handles = struct {
 };
 
 // wraps a c.CURL (an easy handle)
-const Handle = struct {
+pub const Handle = struct {
     client: *Client,
     conn: Http.Connection,
     node: Handles.HandleList.Node,
