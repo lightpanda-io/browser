@@ -54,5 +54,4 @@ pub fn _enqueue(self: *ReadableStreamDefaultController, chunk: []const u8, page:
 
 pub fn _error(self: *ReadableStreamDefaultController, err: Env.JsObject) void {
     self.stream.state = .{ .errored = err };
-    // set to error.
 }
