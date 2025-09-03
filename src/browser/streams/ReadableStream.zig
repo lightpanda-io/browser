@@ -34,11 +34,10 @@ const State = union(enum) {
 };
 
 // This promise resolves when a stream is canceled.
-cancel_resolver: Env.PromiseResolver,
+cancel_resolver: v8.Persistent(v8.PromiseResolver),
 locked: bool = false,
 state: State = .readable,
 
-// A queue would be ideal here but I don't want to pay the cost of the priority operation.
 queue: std.ArrayListUnmanaged([]const u8) = .empty,
 
 const UnderlyingSource = struct {
@@ -56,10 +55,10 @@ const QueueingStrategy = struct {
 pub fn constructor(underlying: ?UnderlyingSource, strategy: ?QueueingStrategy, page: *Page) !*ReadableStream {
     _ = strategy;
 
-    const cancel_resolver = Env.PromiseResolver{
-        .js_context = page.main_context,
-        .resolver = v8.PromiseResolver.init(page.main_context.v8_context),
-    };
+    const cancel_resolver = v8.Persistent(v8.PromiseResolver).init(
+        page.main_context.isolate,
+        v8.PromiseResolver.init(page.main_context.v8_context),
+    );
 
     const stream = try page.arena.create(ReadableStream);
     stream.* = ReadableStream{ .cancel_resolver = cancel_resolver };
@@ -76,8 +75,13 @@ pub fn constructor(underlying: ?UnderlyingSource, strategy: ?QueueingStrategy, p
     return stream;
 }
 
-pub fn _cancel(self: *const ReadableStream) Env.Promise {
-    return self.cancel_resolver.promise();
+pub fn _cancel(self: *const ReadableStream, page: *Page) Env.Promise {
+    const resolver = Env.PromiseResolver{
+        .js_context = page.main_context,
+        .resolver = self.cancel_resolver.castToPromiseResolver(),
+    };
+
+    return resolver.promise();
 }
 
 pub fn get_locked(self: *const ReadableStream) bool {

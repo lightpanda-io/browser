@@ -290,6 +290,22 @@ pub const Mime = struct {
     fn trimRight(s: []const u8) []const u8 {
         return std.mem.trimRight(u8, s, &std.ascii.whitespace);
     }
+
+    pub fn clone(self: *const Mime, allocator: Allocator) !Mime {
+        return Mime{
+            .content_type = blk: {
+                switch (self.content_type) {
+                    .other => |data| break :blk ContentType{ .other = .{
+                        .type = try allocator.dupe(u8, data.type),
+                        .sub_type = try allocator.dupe(u8, data.sub_type),
+                    } },
+                    else => break :blk self.content_type,
+                }
+            },
+            .params = try allocator.dupe(u8, self.params),
+            .charset = if (self.charset) |charset| try allocator.dupeZ(u8, charset) else null,
+        };
+    }
 };
 
 const testing = @import("../testing.zig");
