@@ -26,11 +26,12 @@ const Page = @import("../page.zig").Page;
 const Http = @import("../../http/Http.zig");
 const HttpClient = @import("../../http/Client.zig");
 const Mime = @import("../mime.zig").Mime;
+const Headers = @import("Headers.zig");
 
 const RequestInput = @import("Request.zig").RequestInput;
 const RequestInit = @import("Request.zig").RequestInit;
 const Request = @import("Request.zig");
-const Response = @import("./Response.zig");
+const Response = @import("Response.zig");
 
 pub const Interfaces = .{
     @import("Headers.zig"),
@@ -56,11 +57,22 @@ const FetchContext = struct {
     /// We just return the underlying slices used for `headers`
     /// and for `body` here to avoid an allocation.
     pub fn toResponse(self: *const FetchContext) !Response {
+        var headers: Headers = .{};
+
+        // convert into Headers
+        for (self.headers.items) |hdr| {
+            var iter = std.mem.splitScalar(u8, hdr, ':');
+            const name = iter.next() orelse "";
+            const value = iter.next() orelse "";
+            try headers.append(name, value, self.arena);
+        }
+
         return Response{
             .status = self.status,
-            .headers = self.headers.items,
+            .headers = headers,
             .mime = self.mime,
             .body = self.body.items,
+            .url = self.url,
         };
     }
 };
