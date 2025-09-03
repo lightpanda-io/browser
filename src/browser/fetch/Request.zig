@@ -23,8 +23,8 @@ const URL = @import("../../url.zig").URL;
 const Page = @import("../page.zig").Page;
 
 const Response = @import("./Response.zig");
-
 const Http = @import("../../http/Http.zig");
+const ReadableStream = @import("../streams/ReadableStream.zig");
 
 const v8 = @import("v8");
 const Env = @import("../env.zig").Env;
@@ -37,12 +37,49 @@ pub const RequestInput = union(enum) {
     request: *Request,
 };
 
+pub const RequestCache = enum {
+    default,
+    @"no-store",
+    reload,
+    @"no-cache",
+    @"force-cache",
+    @"only-if-cached",
+
+    pub fn fromString(str: []const u8) ?RequestCache {
+        for (std.enums.values(RequestCache)) |cache| {
+            if (std.ascii.eqlIgnoreCase(str, @tagName(cache))) {
+                return cache;
+            }
+        } else {
+            return null;
+        }
+    }
+};
+
+pub const RequestCredentials = enum {
+    omit,
+    @"same-origin",
+    include,
+
+    pub fn fromString(str: []const u8) ?RequestCredentials {
+        for (std.enums.values(RequestCredentials)) |cache| {
+            if (std.ascii.eqlIgnoreCase(str, @tagName(cache))) {
+                return cache;
+            }
+        } else {
+            return null;
+        }
+    }
+};
+
 // https://developer.mozilla.org/en-US/docs/Web/API/RequestInit
 pub const RequestInit = struct {
-    method: ?[]const u8 = null,
     body: ?[]const u8 = null,
-    integrity: ?[]const u8 = null,
+    cache: ?[]const u8 = null,
+    credentials: ?[]const u8 = null,
     headers: ?HeadersInit = null,
+    integrity: ?[]const u8 = null,
+    method: ?[]const u8 = null,
 };
 
 // https://developer.mozilla.org/en-US/docs/Web/API/Request/Request
@@ -50,6 +87,8 @@ const Request = @This();
 
 method: Http.Method,
 url: [:0]const u8,
+cache: RequestCache,
+credentials: RequestCredentials,
 headers: Headers,
 body: ?[]const u8,
 body_used: bool = false,
@@ -68,6 +107,12 @@ pub fn constructor(input: RequestInput, _options: ?RequestInit, page: *Page) !Re
         },
     };
 
+    const body = if (options.body) |body| try arena.dupe(u8, body) else null;
+    const cache = (if (options.cache) |cache| RequestCache.fromString(cache) else null) orelse RequestCache.default;
+    const credentials = (if (options.credentials) |creds| RequestCredentials.fromString(creds) else null) orelse RequestCredentials.@"same-origin";
+    const integrity = if (options.integrity) |integ| try arena.dupe(u8, integ) else "";
+    const headers = if (options.headers) |hdrs| try Headers.constructor(hdrs, page) else Headers{};
+
     const method: Http.Method = blk: {
         if (options.method) |given_method| {
             for (std.enums.values(Http.Method)) |method| {
@@ -82,25 +127,31 @@ pub fn constructor(input: RequestInput, _options: ?RequestInit, page: *Page) !Re
         }
     };
 
-    const body = if (options.body) |body| try arena.dupe(u8, body) else null;
-    const integrity = if (options.integrity) |integ| try arena.dupe(u8, integ) else "";
-    const headers = if (options.headers) |hdrs| try Headers.constructor(hdrs, page) else Headers{};
-
     return .{
         .method = method,
         .url = url,
+        .cache = cache,
+        .credentials = credentials,
         .headers = headers,
         .body = body,
         .integrity = integrity,
     };
 }
 
-// pub fn get_body(self: *const Request) ?[]const u8 {
-//     return self.body;
-// }
+pub fn get_body(self: *const Request, page: *Page) !?*ReadableStream {
+    if (self.body) |body| {
+        const stream = try ReadableStream.constructor(null, null, page);
+        try stream.queue.append(page.arena, body);
+        return stream;
+    } else return null;
+}
 
 pub fn get_bodyUsed(self: *const Request) bool {
     return self.body_used;
+}
+
+pub fn get_cache(self: *const Request) RequestCache {
+    return self.cache;
 }
 
 pub fn get_headers(self: *Request) *Headers {
@@ -133,6 +184,8 @@ pub fn _clone(self: *Request, page: *Page) !Request {
     return Request{
         .body = if (self.body) |body| try arena.dupe(u8, body) else null,
         .body_used = self.body_used,
+        .cache = self.cache,
+        .credentials = self.credentials,
         .headers = try self.headers.clone(arena),
         .method = self.method,
         .integrity = try arena.dupe(u8, self.integrity),

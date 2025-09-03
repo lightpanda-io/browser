@@ -24,6 +24,11 @@ const v8 = @import("v8");
 const HttpClient = @import("../../http/Client.zig");
 const Http = @import("../../http/Http.zig");
 const URL = @import("../../url.zig").URL;
+
+const ReadableStream = @import("../streams/ReadableStream.zig");
+const Headers = @import("Headers.zig");
+const HeadersInit = @import("Headers.zig").HeadersInit;
+
 const Env = @import("../env.zig").Env;
 const Mime = @import("../mime.zig").Mime;
 const Page = @import("../page.zig").Page;
@@ -32,25 +37,27 @@ const Page = @import("../page.zig").Page;
 const Response = @This();
 
 status: u16 = 0,
-headers: []const []const u8,
+headers: Headers = .{},
 mime: ?Mime = null,
-body: []const u8,
+url: []const u8 = "",
+body: []const u8 = "",
 body_used: bool = false,
 redirected: bool = false,
 
-const ResponseInput = union(enum) {
+const ResponseBody = union(enum) {
     string: []const u8,
 };
 
 const ResponseOptions = struct {
     status: u16 = 200,
     statusText: []const u8 = "",
-    // List of header pairs.
-    headers: []const []const u8 = &[][].{},
+    headers: ?HeadersInit = null,
 };
 
-pub fn constructor(_input: ?ResponseInput, page: *Page) !Response {
+pub fn constructor(_input: ?ResponseBody, _options: ?ResponseOptions, page: *Page) !Response {
     const arena = page.arena;
+
+    const options: ResponseOptions = _options orelse .{};
 
     const body = blk: {
         if (_input) |input| {
@@ -64,18 +71,30 @@ pub fn constructor(_input: ?ResponseInput, page: *Page) !Response {
         }
     };
 
+    const headers: Headers = if (options.headers) |hdrs| try Headers.constructor(hdrs, page) else .{};
+
     return .{
         .body = body,
-        .headers = &[_][]const u8{},
+        .headers = headers,
     };
 }
 
-pub fn get_ok(self: *const Response) bool {
-    return self.status >= 200 and self.status <= 299;
+pub fn get_body(self: *const Response, page: *Page) !*ReadableStream {
+    const stream = try ReadableStream.constructor(null, null, page);
+    try stream.queue.append(page.arena, self.body);
+    return stream;
 }
 
 pub fn get_bodyUsed(self: *const Response) bool {
     return self.body_used;
+}
+
+pub fn get_headers(self: *Response) *Headers {
+    return &self.headers;
+}
+
+pub fn get_ok(self: *const Response) bool {
+    return self.status >= 200 and self.status <= 299;
 }
 
 pub fn get_redirected(self: *const Response) bool {
@@ -84,6 +103,28 @@ pub fn get_redirected(self: *const Response) bool {
 
 pub fn get_status(self: *const Response) u16 {
     return self.status;
+}
+
+pub fn get_url(self: *const Response) []const u8 {
+    return self.url;
+}
+
+pub fn _clone(self: *const Response, page: *Page) !Response {
+    if (self.body_used) {
+        return error.TypeError;
+    }
+
+    const arena = page.arena;
+
+    return Response{
+        .body = try arena.dupe(u8, self.body),
+        .body_used = self.body_used,
+        .mime = if (self.mime) |mime| try mime.clone(arena) else null,
+        .headers = try self.headers.clone(arena),
+        .redirected = self.redirected,
+        .status = self.status,
+        .url = try arena.dupe(u8, self.url),
+    };
 }
 
 pub fn _bytes(self: *Response, page: *Page) !Env.Promise {

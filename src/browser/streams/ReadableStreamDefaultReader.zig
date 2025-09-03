@@ -47,8 +47,8 @@ pub fn get_closed(self: *const ReadableStreamDefaultReader) Env.Promise {
     return self.closed_resolver.promise();
 }
 
-pub fn _cancel(self: *ReadableStreamDefaultReader) Env.Promise {
-    return self.stream._cancel();
+pub fn _cancel(self: *ReadableStreamDefaultReader, page: *Page) Env.Promise {
+    return self.stream._cancel(page);
 }
 
 pub const ReadableStreamReadResult = struct {
