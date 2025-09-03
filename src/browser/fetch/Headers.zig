@@ -30,21 +30,26 @@ const Headers = @This();
 // This allows us to avoid having to allocate lowercase keys all the time.
 const HeaderHashMap = std.HashMapUnmanaged([]const u8, []const u8, struct {
     pub fn hash(_: @This(), s: []const u8) u64 {
+        var buf: [64]u8 = undefined;
         var hasher = std.hash.Wyhash.init(s.len);
-        for (s) |c| {
-            hasher.update(&.{std.ascii.toLower(c)});
+
+        var key = s;
+        while (key.len >= 64) {
+            const lower = std.ascii.lowerString(buf[0..], key[0..64]);
+            hasher.update(lower);
+            key = key[64..];
+        }
+
+        if (key.len > 0) {
+            const lower = std.ascii.lowerString(buf[0..key.len], key);
+            hasher.update(lower);
         }
 
         return hasher.final();
     }
+
     pub fn eql(_: @This(), a: []const u8, b: []const u8) bool {
-        if (a.len != b.len) return false;
-
-        for (a, b) |c1, c2| {
-            if (std.ascii.toLower(c1) != std.ascii.toLower(c2)) return false;
-        }
-
-        return true;
+        return std.ascii.eqlIgnoreCase(a, b);
     }
 }, 80);
 
@@ -103,17 +108,15 @@ pub fn clone(self: *const Headers, allocator: std.mem.Allocator) !Headers {
 }
 
 pub fn append(self: *Headers, name: []const u8, value: []const u8, allocator: std.mem.Allocator) !void {
-    if (self.headers.getEntry(name)) |entry| {
+    const gop = try self.headers.getOrPut(allocator, name);
+
+    if (gop.found_existing) {
         // If we found it, append the value.
-        const new_value = try std.fmt.allocPrint(allocator, "{s}, {s}", .{ entry.value_ptr.*, value });
-        entry.value_ptr.* = new_value;
+        const new_value = try std.fmt.allocPrint(allocator, "{s}, {s}", .{ gop.value_ptr.*, value });
+        gop.value_ptr.* = new_value;
     } else {
         // Otherwise, we should just put it in.
-        try self.headers.putNoClobber(
-            allocator,
-            try allocator.dupe(u8, name),
-            try allocator.dupe(u8, value),
-        );
+        gop.value_ptr.* = try allocator.dupe(u8, value);
     }
 }
 
@@ -152,10 +155,8 @@ pub fn _forEach(self: *Headers, callback_fn: Env.Function, this_arg: ?Env.JsObje
     }
 }
 
-pub fn _get(self: *const Headers, name: []const u8, page: *Page) !?[]const u8 {
-    const arena = page.arena;
-    const value = (self.headers.getEntry(name) orelse return null).value_ptr.*;
-    return try arena.dupe(u8, value);
+pub fn _get(self: *const Headers, name: []const u8) ?[]const u8 {
+    return self.headers.get(name);
 }
 
 pub fn _has(self: *const Headers, name: []const u8) bool {
@@ -167,17 +168,8 @@ pub fn _has(self: *const Headers, name: []const u8) bool {
 pub fn _set(self: *Headers, name: []const u8, value: []const u8, page: *Page) !void {
     const arena = page.arena;
 
-    if (self.headers.getEntry(name)) |entry| {
-        // If we found it, set the value.
-        entry.value_ptr.* = try arena.dupe(u8, value);
-    } else {
-        // Otherwise, we should just put it in.
-        try self.headers.putNoClobber(
-            arena,
-            try arena.dupe(u8, name),
-            try arena.dupe(u8, value),
-        );
-    }
+    const gop = try self.headers.getOrPut(arena, name);
+    gop.value_ptr.* = try arena.dupe(u8, value);
 }
 
 // TODO: values iterator
