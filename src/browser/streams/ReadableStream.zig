@@ -73,8 +73,6 @@ pub fn constructor(underlying: ?UnderlyingSource, strategy: ?QueueingStrategy, p
         }
     }
 
-    log.info(.browser, "rs aux", .{ .queue_len = stream.queue.items.len });
-
     return stream;
 }
 
