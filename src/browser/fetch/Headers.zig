@@ -20,6 +20,9 @@ const std = @import("std");
 const URL = @import("../../url.zig").URL;
 const Page = @import("../page.zig").Page;
 
+const v8 = @import("v8");
+const Env = @import("../env.zig").Env;
+
 // https://developer.mozilla.org/en-US/docs/Web/API/Headers
 const Headers = @This();
 
@@ -93,27 +96,30 @@ pub fn constructor(_init: ?HeadersInit, page: *Page) !Headers {
     };
 }
 
-pub fn clone(self: *Headers, allocator: std.mem.Allocator) !Headers {
+pub fn clone(self: *const Headers, allocator: std.mem.Allocator) !Headers {
     return Headers{
         .headers = try self.headers.clone(allocator),
     };
 }
 
-pub fn _append(self: *Headers, name: []const u8, value: []const u8, page: *Page) !void {
-    const arena = page.arena;
-
+pub fn append(self: *Headers, name: []const u8, value: []const u8, allocator: std.mem.Allocator) !void {
     if (self.headers.getEntry(name)) |entry| {
         // If we found it, append the value.
-        const new_value = try std.fmt.allocPrint(arena, "{s}, {s}", .{ entry.value_ptr.*, value });
+        const new_value = try std.fmt.allocPrint(allocator, "{s}, {s}", .{ entry.value_ptr.*, value });
         entry.value_ptr.* = new_value;
     } else {
         // Otherwise, we should just put it in.
         try self.headers.putNoClobber(
-            arena,
-            try arena.dupe(u8, name),
-            try arena.dupe(u8, value),
+            allocator,
+            try allocator.dupe(u8, name),
+            try allocator.dupe(u8, value),
         );
     }
+}
+
+pub fn _append(self: *Headers, name: []const u8, value: []const u8, page: *Page) !void {
+    const arena = page.arena;
+    try self.append(name, value, arena);
 }
 
 pub fn _delete(self: *Headers, name: []const u8) void {
@@ -125,7 +131,26 @@ pub fn _delete(self: *Headers, name: []const u8) void {
 // 1. Sorted in lexicographical order.
 // 2. Duplicate header names should be combined.
 
-// TODO: header for each
+pub fn _forEach(self: *Headers, callback_fn: Env.Function, this_arg: ?Env.JsObject) !void {
+    var iter = self.headers.iterator();
+
+    if (this_arg) |this| {
+        while (iter.next()) |entry| {
+            try callback_fn.callWithThis(
+                void,
+                this,
+                .{ entry.key_ptr.*, entry.value_ptr.*, self },
+            );
+        }
+    } else {
+        while (iter.next()) |entry| {
+            try callback_fn.call(
+                void,
+                .{ entry.key_ptr.*, entry.value_ptr.*, self },
+            );
+        }
+    }
+}
 
 pub fn _get(self: *const Headers, name: []const u8, page: *Page) !?[]const u8 {
     const arena = page.arena;
