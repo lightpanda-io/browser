@@ -93,7 +93,7 @@ jobs:
       - name: run end to end tests
         run: |
           ./lightpanda serve & echo $! > LPD.pid
-          go run runner/main.go --verbose
+          go run runner/main.go
           kill `cat LPD.pid`
 
       - name: build proxy
@@ -105,7 +105,7 @@ jobs:
         run: |
           ./proxy/proxy & echo $! > PROXY.id
           ./lightpanda serve --http_proxy 'http://127.0.0.1:3000' & echo $! > LPD.pid
-          go run runner/main.go --verbose
+          go run runner/main.go
           kill `cat LPD.pid` `cat PROXY.id`
 
   cdp-and-hyperfine-bench:
