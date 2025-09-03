@@ -321,6 +321,7 @@ pub const Page = struct {
                     // store http_client.active BEFORE this call and then use
                     // it AFTER.
                     const ms_to_next_task = try scheduler.runHighPriority();
+                    _ = try scheduler.runLowPriority();
 
                     if (try_catch.hasCaught()) {
                         const msg = (try try_catch.err(self.arena)) orelse "unknown";
@@ -329,7 +330,17 @@ pub const Page = struct {
                     }
 
                     if (http_client.active == 0 and exit_when_done) {
-                        const ms = ms_to_next_task orelse {
+                        const ms = ms_to_next_task orelse blk: {
+                            // TODO: when jsRunner is fully replaced with the
+                            // htmlRunner, we can remove the first part of this
+                            // condition. jsRunner calls `page.wait` far too
+                            // often to enforce this.
+                            if (wait_ms > 100 and wait_ms - ms_remaining < 100) {
+                                // Look, we want to exit ASAP, but we don't want
+                                // to exit so fast that we've run none of the
+                                // background jobs.
+                                break :blk 50;
+                            }
                             // no http transfers, no cdp extra socket, no
                             // scheduled tasks, we're done.
                             return .done;
@@ -341,7 +352,6 @@ pub const Page = struct {
                             return .done;
                         }
 
-                        _ = try scheduler.runLowPriority();
                         // we have a task to run in the not-so-distant future.
                         // You might think we can just sleep until that task is
                         // ready, but we should continue to run lowPriority tasks
@@ -353,7 +363,6 @@ pub const Page = struct {
                         // We're here because we either have active HTTP
                         // connections, of exit_when_done == false (aka, there's
                         // an extra_socket registered with the http client).
-                        _ = try scheduler.runLowPriority();
                         const ms_to_wait = @min(ms_remaining, ms_to_next_task orelse 100);
                         if (try http_client.tick(ms_to_wait) == .extra_socket) {
                             // data on a socket we aren't handling, return to caller

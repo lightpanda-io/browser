@@ -168,7 +168,6 @@ pub const Server = struct {
                     ms_remaining = timeout_ms;
                 },
                 .done => {
-                    std.debug.print("ok\n", .{});
                     const elapsed = timestamp() - last_message;
                     if (elapsed > ms_remaining) {
                         log.info(.app, "CDP timeout", .{});
