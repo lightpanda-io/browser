@@ -75,7 +75,15 @@ pub fn constructor(underlying: ?UnderlyingSource, strategy: ?QueueingStrategy, p
     return stream;
 }
 
-pub fn _cancel(self: *const ReadableStream, page: *Page) Env.Promise {
+pub fn get_locked(self: *const ReadableStream) bool {
+    return self.locked;
+}
+
+pub fn _cancel(self: *const ReadableStream, page: *Page) !Env.Promise {
+    if (self.locked) {
+        return error.TypeError;
+    }
+
     const resolver = Env.PromiseResolver{
         .js_context = page.main_context,
         .resolver = self.cancel_resolver.castToPromiseResolver(),
@@ -84,20 +92,27 @@ pub fn _cancel(self: *const ReadableStream, page: *Page) Env.Promise {
     return resolver.promise();
 }
 
-pub fn get_locked(self: *const ReadableStream) bool {
-    return self.locked;
-}
-
 const GetReaderOptions = struct {
+    // Mode must equal 'byob' or be undefined. RangeError otherwise.
     mode: ?[]const u8 = null,
 };
 
-pub fn _getReader(self: *ReadableStream, _options: ?GetReaderOptions, page: *Page) ReadableStreamDefaultReader {
+pub fn _getReader(self: *ReadableStream, _options: ?GetReaderOptions, page: *Page) !ReadableStreamDefaultReader {
+    if (self.locked) {
+        return error.TypeError;
+    }
+
     const options = _options orelse GetReaderOptions{};
     _ = options;
 
     return ReadableStreamDefaultReader.constructor(self, page);
 }
+
+// TODO: pipeThrough (requires TransformStream)
+
+// TODO: pipeTo (requires WritableStream)
+
+// TODO: tee
 
 const testing = @import("../../testing.zig");
 test "streams: ReadableStream" {
