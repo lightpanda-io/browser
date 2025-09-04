@@ -42,6 +42,10 @@
     expectEqual('an error', null);
   }
 
+  function skip() {
+    _recordExecution();
+  }
+
   // Should only be called by the test runner
   function getStatus() {
     // if we're already in a fail state, return fail, nothing can recover this
@@ -156,6 +160,7 @@
     _eventually: [],
     _executed_scripts: {},
     _captured: null,
+    skip: skip,
     getStatus: getStatus,
     eventually: eventually,
     expectEqual: expectEqual,

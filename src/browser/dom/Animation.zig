@@ -104,23 +104,6 @@ pub fn _reverse(self: *const Animation) void {
 }
 
 const testing = @import("../../testing.zig");
-test "Browser.Animation" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html = "" });
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let a1 = document.createElement('div').animate(null, null)", null },
-        .{ "a1.playState", "finished" },
-        .{ "let cb = [];", null },
-        .{ "a1.ready.then(() => { cb.push('ready') })", null },
-        .{
-            \\ a1.finished.then((x) => {
-            \\   cb.push('finished');
-            \\   cb.push(x == a1);
-            \\ })
-            ,
-            null,
-        },
-        .{ "cb", "finished,true" },
-    }, .{});
+test "Browser: DOM.Animation" {
+    try testing.htmlRunner("dom/animation.html");
 }

@@ -40,15 +40,6 @@ pub const Comment = struct {
 // -----
 
 const testing = @import("../../testing.zig");
-test "Browser.DOM.Comment" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let comment = new Comment('foo')", "undefined" },
-        .{ "comment.data", "foo" },
-
-        .{ "let emptycomment = new Comment()", "undefined" },
-        .{ "emptycomment.data", "" },
-    }, .{});
+test "Browser: DOM.Comment" {
+    try testing.htmlRunner("dom/comment.html");
 }

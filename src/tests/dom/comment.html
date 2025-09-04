@@ -1,0 +1,8 @@
+<script src="../testing.js"></script>
+<script id=comment>
+  let comment = new Comment('foo');
+  testing.expectEqual('foo', comment.data);
+
+  let empty = new Comment()
+  testing.expectEqual('', empty.data);
+</script>

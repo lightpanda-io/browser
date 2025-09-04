@@ -1,0 +1,47 @@
+<script src="../testing.js"></script>
+
+<a id="link" href="foo" class="ok">OK</a>
+
+<script id=character_data>
+  let link = document.getElementById('link');
+  let cdata = link.firstChild;
+  testing.expectEqual('OK', cdata.data);
+
+  cdata.data = 'OK modified';
+  testing.expectEqual('OK modified', cdata.data);
+  cdata.data = 'OK';
+
+  testing.expectEqual(2, cdata.length);
+
+  testing.expectEqual(true, cdata.nextElementSibling === null);
+
+  // create a next element
+  let next = document.createElement('a');
+  testing.expectEqual(true, link.appendChild(next, cdata) !== undefined);
+  testing.expectEqual(true, cdata.nextElementSibling.localName === 'a');
+
+  testing.expectEqual(true, cdata.previousElementSibling === null);
+
+  // create a prev element
+  let prev = document.createElement('div');
+  testing.expectEqual(true, link.insertBefore(prev, cdata) !== undefined);
+  testing.expectEqual('div', cdata.previousElementSibling.localName);
+
+  cdata.appendData(' modified');
+  testing.expectEqual('OK modified', cdata.data);
+
+  cdata.deleteData('OK'.length, ' modified'.length);
+  testing.expectEqual('OK', cdata.data)
+
+  cdata.insertData('OK'.length-1, 'modified');
+  testing.expectEqual('OmodifiedK', cdata.data);
+
+  cdata.replaceData('OK'.length-1, 'modified'.length, 'replaced');
+  testing.expectEqual('OreplacedK', cdata.data);
+
+  testing.expectEqual('replaced', cdata.substringData('OK'.length-1, 'replaced'.length));
+  testing.expectEqual('', cdata.substringData('OK'.length-1, 0));
+
+  testing.expectEqual('replaced', cdata.substringData('OK'.length-1, 'replaced'.length));
+  testing.expectEqual('', cdata.substringData('OK'.length-1, 0));
+</script>
