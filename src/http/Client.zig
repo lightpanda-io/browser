@@ -50,8 +50,17 @@ const Method = Http.Method;
 // those other http requests.
 pub const Client = @This();
 
-// count of active requests
+// Count of active requests
 active: usize,
+
+// Count of intercepted requests. This is to help deal with intercepted requests.
+// The client doesn't track intercepted transfers. If a request is intercepted,
+// the client forgets about it and requires the interceptor to continue or abort
+// it. That works well, except if we only rely on active, we might think there's
+// no more network activity when, with interecepted requests, there might be more
+// in the future. (We really only need this to properly emit a 'networkIdle' and
+// 'networkAlmostIdle' Page.lifecycleEvent in CDP).
+intercepted: usize,
 
 // curl has 2 APIs: easy and multi. Multi is like a combination of some I/O block
 // (e.g. epoll) and a bunch of pools. You add/remove easys to the multiple and
@@ -115,6 +124,7 @@ pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts) !*Clie
     client.* = .{
         .queue = .{},
         .active = 0,
+        .intercepted = 0,
         .multi = multi,
         .handles = handles,
         .blocking = blocking,
@@ -191,6 +201,10 @@ pub fn request(self: *Client, req: Request) !void {
         var wait_for_interception = false;
         notification.dispatch(.http_request_intercept, &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception });
         if (wait_for_interception) {
+            self.intercepted += 1;
+            if (builtin.mode == .Debug) {
+                transfer._intercepted = true;
+            }
             // The user is send an invitation to intercept this request.
             return;
         }
@@ -200,14 +214,41 @@ pub fn request(self: *Client, req: Request) !void {
 }
 
 // Above, request will not process if there's an interception request. In such
-// cases, the interecptor is expected to call process to continue the transfer
+// cases, the interecptor is expected to call resume to continue the transfer
 // or transfer.abort() to abort it.
-pub fn process(self: *Client, transfer: *Transfer) !void {
+fn process(self: *Client, transfer: *Transfer) !void {
     if (self.handles.getFreeHandle()) |handle| {
         return self.makeRequest(handle, transfer);
     }
 
     self.queue.append(&transfer._node);
+}
+
+// For an intercepted request
+pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
+    if (builtin.mode == .Debug) {
+        std.debug.assert(transfer._intercepted);
+    }
+    self.intercepted -= 1;
+    return self.process(transfer);
+}
+
+// For an intercepted request
+pub fn abortTransfer(self: *Client, transfer: *Transfer) void {
+    if (builtin.mode == .Debug) {
+        std.debug.assert(transfer._intercepted);
+    }
+    self.intercepted -= 1;
+    transfer.abort();
+}
+
+// For an intercepted request
+pub fn fulfillTransfer(self: *Client, transfer: *Transfer, status: u16, headers: []const Http.Header, body: ?[]const u8) !void {
+    if (builtin.mode == .Debug) {
+        std.debug.assert(transfer._intercepted);
+    }
+    self.intercepted -= 1;
+    return transfer.fulfill(status, headers, body);
 }
 
 // See ScriptManager.blockingGet
@@ -674,6 +715,7 @@ pub const Transfer = struct {
 
     // for when a Transfer is queued in the client.queue
     _node: std.DoublyLinkedList.Node = .{},
+    _intercepted: if (builtin.mode == .Debug) bool else void = if (builtin.mode == .Debug) false else {},
 
     pub fn reset(self: *Transfer) void {
         self._redirecting = false;
