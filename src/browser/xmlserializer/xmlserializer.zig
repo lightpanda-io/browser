@@ -45,20 +45,6 @@ pub const XMLSerializer = struct {
 };
 
 const testing = @import("../../testing.zig");
-test "Browser.XMLSerializer" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "const s = new XMLSerializer()", "undefined" },
-        .{ "s.serializeToString(document.getElementById('para'))", "<p id=\"para\"> And</p>" },
-    }, .{});
-}
-test "Browser.XMLSerializer with DOCTYPE" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html = "<!DOCTYPE html><html><head></head><body></body></html>" });
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "new XMLSerializer().serializeToString(document.doctype)", "<!DOCTYPE html>" },
-    }, .{});
+test "Browser: XMLSerializer" {
+    try testing.htmlRunner("xmlserializer.html");
 }

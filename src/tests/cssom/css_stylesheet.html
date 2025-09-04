@@ -1,0 +1,15 @@
+<script src="../testing.js"></script>
+<script id=css_stylesheet>
+  let css = new CSSStyleSheet()
+  testing.expectEqual(true, css instanceof CSSStyleSheet);
+  testing.expectEqual(0, css.cssRules.length);
+  testing.expectEqual(null, css.ownerRule);
+
+  let index1 = css.insertRule('body { color: red; }', 0);
+  testing.expectEqual(0, index1);
+  testing.expectEqual(1, css.cssRules.length);
+
+  let replaced = false;
+  css.replace('body{}').then(() => replaced = true);
+  testing.eventually(() => testing.expectEqual(true, replaced));
+</script>

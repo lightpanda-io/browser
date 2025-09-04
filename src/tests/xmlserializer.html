@@ -1,0 +1,8 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+<p id="para"> And</p>
+<script id=xmlserializer>
+  const s = new XMLSerializer();
+  testing.expectEqual('<p id="para"> And</p>', s.serializeToString($('#para')));
+  testing.expectEqual('<!DOCTYPE html>', s.serializeToString(document.doctype));
+</script>

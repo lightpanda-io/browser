@@ -1,0 +1,7 @@
+<script src="../testing.js"></script>
+<script id=css_rule_list>
+  let list = new CSSRuleList();
+  testing.expectEqual(true, list instanceof CSSRuleList);
+  testing.expectEqual(0, list.length);
+  testing.expectEqual(null, list.item(0));
+</script>

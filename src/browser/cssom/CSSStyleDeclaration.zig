@@ -507,117 +507,11 @@ fn lengthOfLongestValue(values: []const []const u8) usize {
 }
 
 const testing = @import("../../testing.zig");
-test "CSSOM.CSSStyleDeclaration" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{
-        .html = "",
-    });
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let style = document.createElement('div').style", null },
-        .{ "style.cssText = 'color: red; font-size: 12px; margin: 5px !important;'", "color: red; font-size: 12px; margin: 5px !important;" },
-        .{ "style.length", "3" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "style.getPropertyValue('color')", "red" },
-        .{ "style.getPropertyValue('font-size')", "12px" },
-        .{ "style.getPropertyValue('unknown-property')", "" },
-
-        .{ "style.getPropertyPriority('margin')", "important" },
-        .{ "style.getPropertyPriority('color')", "" },
-        .{ "style.getPropertyPriority('unknown-property')", "" },
-
-        .{ "style.item(0)", "color" },
-        .{ "style.item(1)", "font-size" },
-        .{ "style.item(2)", "margin" },
-        .{ "style.item(3)", "" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "style.setProperty('background-color', 'blue')", "undefined" },
-        .{ "style.getPropertyValue('background-color')", "blue" },
-        .{ "style.length", "4" },
-
-        .{ "style.setProperty('color', 'green')", "undefined" },
-        .{ "style.getPropertyValue('color')", "green" },
-        .{ "style.length", "4" },
-        .{ "style.color", "green" },
-
-        .{ "style.setProperty('padding', '10px', 'important')", "undefined" },
-        .{ "style.getPropertyValue('padding')", "10px" },
-        .{ "style.getPropertyPriority('padding')", "important" },
-
-        .{ "style.setProperty('border', '1px solid black', 'IMPORTANT')", "undefined" },
-        .{ "style.getPropertyPriority('border')", "important" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "style.removeProperty('color')", "green" },
-        .{ "style.getPropertyValue('color')", "" },
-        .{ "style.length", "5" },
-
-        .{ "style.removeProperty('unknown-property')", "" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "style.cssText.includes('font-size: 12px;')", "true" },
-        .{ "style.cssText.includes('margin: 5px !important;')", "true" },
-        .{ "style.cssText.includes('padding: 10px !important;')", "true" },
-        .{ "style.cssText.includes('border: 1px solid black !important;')", "true" },
-
-        .{ "style.cssText = 'color: purple; text-align: center;'", "color: purple; text-align: center;" },
-        .{ "style.length", "2" },
-        .{ "style.getPropertyValue('color')", "purple" },
-        .{ "style.getPropertyValue('text-align')", "center" },
-        .{ "style.getPropertyValue('font-size')", "" },
-
-        .{ "style.setProperty('cont', 'Hello; world!')", "undefined" },
-        .{ "style.getPropertyValue('cont')", "Hello; world!" },
-
-        .{ "style.cssText = 'content: \"Hello; world!\"; background-image: url(\"test.png\");'", "content: \"Hello; world!\"; background-image: url(\"test.png\");" },
-        .{ "style.getPropertyValue('content')", "\"Hello; world!\"" },
-        .{ "style.getPropertyValue('background-image')", "url(\"test.png\")" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "style.cssFloat", "" },
-        .{ "style.cssFloat = 'left'", "left" },
-        .{ "style.cssFloat", "left" },
-        .{ "style.getPropertyValue('float')", "left" },
-
-        .{ "style.cssFloat = 'right'", "right" },
-        .{ "style.cssFloat", "right" },
-
-        .{ "style.cssFloat = null", "null" },
-        .{ "style.cssFloat", "" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "style.setProperty('display', '')", "undefined" },
-        .{ "style.getPropertyValue('display')", "" },
-
-        .{ "style.cssText = '  color  :  purple  ;  margin  :  10px  ;  '", "  color  :  purple  ;  margin  :  10px  ;  " },
-        .{ "style.getPropertyValue('color')", "purple" },
-        .{ "style.getPropertyValue('margin')", "10px" },
-
-        .{ "style.setProperty('border-bottom-left-radius', '5px')", "undefined" },
-        .{ "style.getPropertyValue('border-bottom-left-radius')", "5px" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "style.visibility", "visible" },
-        .{ "style.getPropertyValue('visibility')", "visible" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "style.margin", "10px" },
-        .{ "style.margin = 'auto'", null },
-        .{ "style.margin", "auto" },
-    }, .{});
+test "Browser: CSS.StyleDeclaration" {
+    try testing.htmlRunner("cssom/css_style_declaration.html");
 }
 
-test "CSSOM.CSSStyleDeclaration: isNumericWithUnit - valid numbers with units" {
+test "Browser: CSS.StyleDeclaration: isNumericWithUnit - valid numbers with units" {
     try testing.expect(isNumericWithUnit("10px"));
     try testing.expect(isNumericWithUnit("3.14em"));
     try testing.expect(isNumericWithUnit("-5rem"));
@@ -626,14 +520,14 @@ test "CSSOM.CSSStyleDeclaration: isNumericWithUnit - valid numbers with units" {
     try testing.expect(isNumericWithUnit(".5vw"));
 }
 
-test "CSSOM.CSSStyleDeclaration: isNumericWithUnit - scientific notation" {
+test "Browser: CSS.StyleDeclaration: isNumericWithUnit - scientific notation" {
     try testing.expect(isNumericWithUnit("1e5px"));
     try testing.expect(isNumericWithUnit("2.5E-3em"));
     try testing.expect(isNumericWithUnit("1e+2rem"));
     try testing.expect(isNumericWithUnit("-3.14e10px"));
 }
 
-test "CSSOM.CSSStyleDeclaration: isNumericWithUnit - edge cases and invalid inputs" {
+test "Browser: CSS.StyleDeclaration: isNumericWithUnit - edge cases and invalid inputs" {
     try testing.expect(!isNumericWithUnit(""));
 
     try testing.expect(!isNumericWithUnit("px"));
@@ -655,7 +549,7 @@ test "CSSOM.CSSStyleDeclaration: isNumericWithUnit - edge cases and invalid inpu
     try testing.expect(isNumericWithUnit("-5"));
 }
 
-test "CSSOM.CSSStyleDeclaration: isHexColor - valid hex colors" {
+test "Browser: CSS.StyleDeclaration: isHexColor - valid hex colors" {
     try testing.expect(isHexColor("#000"));
     try testing.expect(isHexColor("#fff"));
     try testing.expect(isHexColor("#123456"));
@@ -664,7 +558,7 @@ test "CSSOM.CSSStyleDeclaration: isHexColor - valid hex colors" {
     try testing.expect(isHexColor("#12345678"));
 }
 
-test "CSSOM.CSSStyleDeclaration: isHexColor - invalid hex colors" {
+test "Browser: CSS.StyleDeclaration: isHexColor - invalid hex colors" {
     try testing.expect(!isHexColor(""));
     try testing.expect(!isHexColor("#"));
     try testing.expect(!isHexColor("000"));
@@ -677,7 +571,7 @@ test "CSSOM.CSSStyleDeclaration: isHexColor - invalid hex colors" {
     try testing.expect(!isHexColor("#123xyz"));
 }
 
-test "CSSOM.CSSStyleDeclaration: isMultiValueProperty - valid multi-value properties" {
+test "Browser: CSS.StyleDeclaration: isMultiValueProperty - valid multi-value properties" {
     try testing.expect(isMultiValueProperty("10px 20px"));
     try testing.expect(isMultiValueProperty("solid red"));
     try testing.expect(isMultiValueProperty("#fff black"));
@@ -685,7 +579,7 @@ test "CSSOM.CSSStyleDeclaration: isMultiValueProperty - valid multi-value proper
     try testing.expect(isMultiValueProperty("rgb(255,0,0) solid"));
 }
 
-test "CSSOM.CSSStyleDeclaration: isMultiValueProperty - invalid multi-value properties" {
+test "Browser: CSS.StyleDeclaration: isMultiValueProperty - invalid multi-value properties" {
     try testing.expect(!isMultiValueProperty(""));
     try testing.expect(!isMultiValueProperty("10px"));
     try testing.expect(!isMultiValueProperty("invalid unknown"));
@@ -693,7 +587,7 @@ test "CSSOM.CSSStyleDeclaration: isMultiValueProperty - invalid multi-value prop
     try testing.expect(!isMultiValueProperty("   "));
 }
 
-test "CSSOM.CSSStyleDeclaration: isAlreadyQuoted - various quoting scenarios" {
+test "Browser: CSS.StyleDeclaration: isAlreadyQuoted - various quoting scenarios" {
     try testing.expect(isAlreadyQuoted("\"hello\""));
     try testing.expect(isAlreadyQuoted("'world'"));
     try testing.expect(isAlreadyQuoted("\"\""));
@@ -709,7 +603,7 @@ test "CSSOM.CSSStyleDeclaration: isAlreadyQuoted - various quoting scenarios" {
     try testing.expect(!isAlreadyQuoted("hello\""));
 }
 
-test "CSSOM.CSSStyleDeclaration: isValidPropertyName - valid property names" {
+test "Browser: CSS.StyleDeclaration: isValidPropertyName - valid property names" {
     try testing.expect(isValidPropertyName("color"));
     try testing.expect(isValidPropertyName("background-color"));
     try testing.expect(isValidPropertyName("-webkit-transform"));
@@ -719,7 +613,7 @@ test "CSSOM.CSSStyleDeclaration: isValidPropertyName - valid property names" {
     try testing.expect(isValidPropertyName("line-height"));
 }
 
-test "CSSOM.CSSStyleDeclaration: isValidPropertyName - invalid property names" {
+test "Browser: CSS.StyleDeclaration: isValidPropertyName - invalid property names" {
     try testing.expect(!isValidPropertyName(""));
     try testing.expect(!isValidPropertyName("123color"));
     try testing.expect(!isValidPropertyName("color!"));
@@ -729,7 +623,7 @@ test "CSSOM.CSSStyleDeclaration: isValidPropertyName - invalid property names" {
     try testing.expect(!isValidPropertyName("color_test"));
 }
 
-test "CSSOM.CSSStyleDeclaration: extractImportant - with and without !important" {
+test "Browser: CSS.StyleDeclaration: extractImportant - with and without !important" {
     var result = extractImportant("red !important");
     try testing.expect(result.is_important);
     try testing.expectEqual("red", result.value);
@@ -751,7 +645,7 @@ test "CSSOM.CSSStyleDeclaration: extractImportant - with and without !important"
     try testing.expectEqual("important", result.value);
 }
 
-test "CSSOM.CSSStyleDeclaration: needsQuotes - various scenarios" {
+test "Browser: CSS.StyleDeclaration: needsQuotes - various scenarios" {
     try testing.expect(needsQuotes(""));
     try testing.expect(needsQuotes("hello world"));
     try testing.expect(needsQuotes("test;"));
@@ -766,7 +660,7 @@ test "CSSOM.CSSStyleDeclaration: needsQuotes - various scenarios" {
     try testing.expect(!needsQuotes("simple"));
 }
 
-test "CSSOM.CSSStyleDeclaration: escapeCSSValue - escaping various characters" {
+test "Browser: CSS.StyleDeclaration: escapeCSSValue - escaping various characters" {
     const allocator = testing.arena_allocator;
 
     var result = try escapeCSSValue(allocator, "simple");
@@ -785,7 +679,7 @@ test "CSSOM.CSSStyleDeclaration: escapeCSSValue - escaping various characters" {
     try testing.expectEqual("\"test\\\\back\"", result);
 }
 
-test "CSSOM.CSSStyleDeclaration: CSSKeywords.isKnownKeyword - case sensitivity" {
+test "Browser: CSS.StyleDeclaration: CSSKeywords.isKnownKeyword - case sensitivity" {
     try testing.expect(CSSKeywords.isKnownKeyword("red"));
     try testing.expect(CSSKeywords.isKnownKeyword("solid"));
     try testing.expect(CSSKeywords.isKnownKeyword("center"));
@@ -801,7 +695,7 @@ test "CSSOM.CSSStyleDeclaration: CSSKeywords.isKnownKeyword - case sensitivity" 
     try testing.expect(!CSSKeywords.isKnownKeyword(""));
 }
 
-test "CSSOM.CSSStyleDeclaration: CSSKeywords.containsSpecialChar - various special characters" {
+test "Browser: CSS.StyleDeclaration: CSSKeywords.containsSpecialChar - various special characters" {
     try testing.expect(CSSKeywords.containsSpecialChar("test\"quote"));
     try testing.expect(CSSKeywords.containsSpecialChar("test'quote"));
     try testing.expect(CSSKeywords.containsSpecialChar("test;end"));
@@ -817,7 +711,7 @@ test "CSSOM.CSSStyleDeclaration: CSSKeywords.containsSpecialChar - various speci
     try testing.expect(!CSSKeywords.containsSpecialChar(""));
 }
 
-test "CSSOM.CSSStyleDeclaration: CSSKeywords.isValidUnit - various units" {
+test "Browser: CSS.StyleDeclaration: CSSKeywords.isValidUnit - various units" {
     try testing.expect(CSSKeywords.isValidUnit("px"));
     try testing.expect(CSSKeywords.isValidUnit("em"));
     try testing.expect(CSSKeywords.isValidUnit("rem"));
@@ -835,7 +729,7 @@ test "CSSOM.CSSStyleDeclaration: CSSKeywords.isValidUnit - various units" {
     try testing.expect(!CSSKeywords.isValidUnit(""));
 }
 
-test "CSSOM.CSSStyleDeclaration: CSSKeywords.startsWithFunction - function detection" {
+test "Browser: CSS.StyleDeclaration: CSSKeywords.startsWithFunction - function detection" {
     try testing.expect(CSSKeywords.startsWithFunction("rgb(255, 0, 0)"));
     try testing.expect(CSSKeywords.startsWithFunction("rgba(255, 0, 0, 0.5)"));
     try testing.expect(CSSKeywords.startsWithFunction("url(image.png)"));
@@ -853,14 +747,14 @@ test "CSSOM.CSSStyleDeclaration: CSSKeywords.startsWithFunction - function detec
     try testing.expect(!CSSKeywords.startsWithFunction("rgb"));
 }
 
-test "CSSOM.CSSStyleDeclaration: isNumericWithUnit - whitespace handling" {
+test "Browser: CSS.StyleDeclaration: isNumericWithUnit - whitespace handling" {
     try testing.expect(!isNumericWithUnit(" 10px"));
     try testing.expect(!isNumericWithUnit("10 px"));
     try testing.expect(!isNumericWithUnit("10px "));
     try testing.expect(!isNumericWithUnit(" 10 px "));
 }
 
-test "CSSOM.CSSStyleDeclaration: extractImportant - whitespace edge cases" {
+test "Browser: CSS.StyleDeclaration: extractImportant - whitespace edge cases" {
     var result = extractImportant("   ");
     try testing.expect(!result.is_important);
     try testing.expectEqual("", result.value);
@@ -874,14 +768,14 @@ test "CSSOM.CSSStyleDeclaration: extractImportant - whitespace edge cases" {
     try testing.expectEqual("red", result.value);
 }
 
-test "CSSOM.CSSStyleDeclaration: isHexColor - mixed case handling" {
+test "Browser: CSS.StyleDeclaration: isHexColor - mixed case handling" {
     try testing.expect(isHexColor("#AbC"));
     try testing.expect(isHexColor("#123aBc"));
     try testing.expect(isHexColor("#FFffFF"));
     try testing.expect(isHexColor("#000FFF"));
 }
 
-test "CSSOM.CSSStyleDeclaration: edge case - very long inputs" {
+test "Browser: CSS.StyleDeclaration: edge case - very long inputs" {
     const long_valid = "a" ** 1000 ++ "px";
     try testing.expect(!isNumericWithUnit(long_valid)); // not numeric
 
@@ -892,7 +786,7 @@ test "CSSOM.CSSStyleDeclaration: edge case - very long inputs" {
     try testing.expect(!isHexColor(long_hex));
 }
 
-test "CSSOM.CSSStyleDeclaration: boundary conditions - numeric parsing" {
+test "Browser: CSS.StyleDeclaration: boundary conditions - numeric parsing" {
     try testing.expect(isNumericWithUnit("0px"));
     try testing.expect(isNumericWithUnit("0.0px"));
     try testing.expect(isNumericWithUnit(".0px"));
@@ -905,7 +799,7 @@ test "CSSOM.CSSStyleDeclaration: boundary conditions - numeric parsing" {
     try testing.expect(isNumericWithUnit("1e-100px"));
 }
 
-test "CSSOM.CSSStyleDeclaration: extractImportant - malformed important declarations" {
+test "Browser: CSS.StyleDeclaration: extractImportant - malformed important declarations" {
     var result = extractImportant("red ! important");
     try testing.expect(!result.is_important);
     try testing.expectEqual("red ! important", result.value);
@@ -927,7 +821,7 @@ test "CSSOM.CSSStyleDeclaration: extractImportant - malformed important declarat
     try testing.expectEqual("red !important", result.value);
 }
 
-test "CSSOM.CSSStyleDeclaration: isMultiValueProperty - complex spacing scenarios" {
+test "Browser: CSS.StyleDeclaration: isMultiValueProperty - complex spacing scenarios" {
     try testing.expect(isMultiValueProperty("10px    20px"));
     try testing.expect(isMultiValueProperty("solid     red"));
 
@@ -939,7 +833,7 @@ test "CSSOM.CSSStyleDeclaration: isMultiValueProperty - complex spacing scenario
     try testing.expect(isMultiValueProperty("10px   20px   30px"));
 }
 
-test "CSSOM.CSSStyleDeclaration: isAlreadyQuoted - edge cases with quotes" {
+test "Browser: CSS.StyleDeclaration: isAlreadyQuoted - edge cases with quotes" {
     try testing.expect(isAlreadyQuoted("\"'hello'\""));
     try testing.expect(isAlreadyQuoted("'\"hello\"'"));
 
@@ -955,7 +849,7 @@ test "CSSOM.CSSStyleDeclaration: isAlreadyQuoted - edge cases with quotes" {
     try testing.expect(isAlreadyQuoted("'b'"));
 }
 
-test "CSSOM.CSSStyleDeclaration: needsQuotes - function and URL edge cases" {
+test "Browser: CSS.StyleDeclaration: needsQuotes - function and URL edge cases" {
     try testing.expect(!needsQuotes("rgb(255, 0, 0)"));
     try testing.expect(!needsQuotes("calc(100% - 20px)"));
 
@@ -966,7 +860,7 @@ test "CSSOM.CSSStyleDeclaration: needsQuotes - function and URL edge cases" {
     try testing.expect(needsQuotes("rgb(255, 0, 0"));
 }
 
-test "CSSOM.CSSStyleDeclaration: escapeCSSValue - control characters and Unicode" {
+test "Browser: CSS.StyleDeclaration: escapeCSSValue - control characters and Unicode" {
     const allocator = testing.arena_allocator;
 
     var result = try escapeCSSValue(allocator, "test\ttab");
@@ -985,7 +879,7 @@ test "CSSOM.CSSStyleDeclaration: escapeCSSValue - control characters and Unicode
     try testing.expectEqual("\"test\\\"quote\\A line\\\\back\"", result);
 }
 
-test "CSSOM.CSSStyleDeclaration: isValidPropertyName - CSS custom properties and vendor prefixes" {
+test "Browser: CSS.StyleDeclaration: isValidPropertyName - CSS custom properties and vendor prefixes" {
     try testing.expect(isValidPropertyName("--custom-color"));
     try testing.expect(isValidPropertyName("--my-variable"));
     try testing.expect(isValidPropertyName("--123"));
@@ -1000,7 +894,7 @@ test "CSSOM.CSSStyleDeclaration: isValidPropertyName - CSS custom properties and
     try testing.expect(!isValidPropertyName("-"));
 }
 
-test "CSSOM.CSSStyleDeclaration: startsWithFunction - case sensitivity and partial matches" {
+test "Browser: CSS.StyleDeclaration: startsWithFunction - case sensitivity and partial matches" {
     try testing.expect(CSSKeywords.startsWithFunction("RGB(255, 0, 0)"));
     try testing.expect(CSSKeywords.startsWithFunction("Rgb(255, 0, 0)"));
     try testing.expect(CSSKeywords.startsWithFunction("URL(image.png)"));
@@ -1017,7 +911,7 @@ test "CSSOM.CSSStyleDeclaration: startsWithFunction - case sensitivity and parti
     try testing.expect(!CSSKeywords.startsWithFunction("123function(test)"));
 }
 
-test "CSSOM.CSSStyleDeclaration: isHexColor - Unicode and invalid characters" {
+test "Browser: CSS.StyleDeclaration: isHexColor - Unicode and invalid characters" {
     try testing.expect(!isHexColor("#ghijkl"));
     try testing.expect(!isHexColor("#12345g"));
     try testing.expect(!isHexColor("#xyz"));
@@ -1028,7 +922,7 @@ test "CSSOM.CSSStyleDeclaration: isHexColor - Unicode and invalid characters" {
     try testing.expect(!isHexColor("#g2345678"));
 }
 
-test "CSSOM.CSSStyleDeclaration: complex integration scenarios" {
+test "Browser: CSS.StyleDeclaration: complex integration scenarios" {
     const allocator = testing.arena_allocator;
 
     try testing.expect(isMultiValueProperty("rgb(255,0,0) url(bg.jpg)"));
@@ -1043,7 +937,7 @@ test "CSSOM.CSSStyleDeclaration: complex integration scenarios" {
     try testing.expectEqual("rgb(255,0,0)", important_result.value);
 }
 
-test "CSSOM.CSSStyleDeclaration: performance edge cases - empty and minimal inputs" {
+test "Browser: CSS.StyleDeclaration: performance edge cases - empty and minimal inputs" {
     try testing.expect(!isNumericWithUnit(""));
     try testing.expect(!isHexColor(""));
     try testing.expect(!isMultiValueProperty(""));
