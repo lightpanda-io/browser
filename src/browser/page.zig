@@ -336,7 +336,7 @@ pub const Page = struct {
 
                     const http_active = http_client.active;
                     if (http_active == 0 and exit_when_done) {
-                        // we don't need to concider http_client.intercepted here
+                        // we don't need to consider http_client.intercepted here
                         // because exit_when_done is true, and that can only be
                         // the case when interception isn't possible.
                         std.debug.assert(http_client.intercepted == 0);
@@ -823,12 +823,12 @@ pub const Page = struct {
     }
 
     // The transfer arena is useful and interesting, but has a weird lifetime.
-    // When we're transfering from one page to another (via delayed navigation)
+    // When we're transferring from one page to another (via delayed navigation)
     // we need things in memory: like the URL that we're navigating to and
     // optionally the body to POST. That cannot exist in the page.arena, because
     // the page that we have is going to be destroyed and a new page is going
     // to be created. If we used the page.arena, we'd wouldn't be able to reset
-    // it between navigations.
+    // it between navigation.
     // So the transfer arena is meant to exist between a navigation event. It's
     // freed when the main html navigation is complete, either in pageDoneCallback
     // or pageErrorCallback. It needs to exist for this long because, if we set
@@ -1159,7 +1159,7 @@ pub export fn scriptAddedCallback(ctx: ?*anyopaque, element: ?*parser.Element) c
         return;
     }
 
-    // It's posisble for a script to be dynamically added without a src.
+    // It's possible for a script to be dynamically added without a src.
     //   const s = document.createElement('script');
     //   document.getElementsByTagName('body')[0].appendChild(s);
     // The src can be set after. We handle that in HTMLScriptElement.set_src,
