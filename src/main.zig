@@ -138,7 +138,7 @@ fn run(alloc: Allocator) !void {
             defer server.deinit();
 
             // max timeout of 1 week.
-            const timeout = if (opts.timeout > 604_800) 604_800_000 else @as(i32, @intCast(opts.timeout)) * 1000;
+            const timeout = if (opts.timeout > 604_800) 604_800_000 else @as(i32, opts.timeout) * 1000;
             server.run(address, timeout) catch |err| {
                 log.fatal(.app, "server run error", .{ .err = err });
                 return err;
