@@ -137,7 +137,9 @@ fn run(alloc: Allocator) !void {
             const server = &_server.?;
             defer server.deinit();
 
-            server.run(address, opts.timeout * 1000) catch |err| {
+            // max timeout of 1 week.
+            const timeout = if (opts.timeout > 604_800) 604_800_000 else @as(i32, opts.timeout) * 1000;
+            server.run(address, timeout) catch |err| {
                 log.fatal(.app, "server run error", .{ .err = err });
                 return err;
             };
@@ -268,7 +270,7 @@ const Command = struct {
     const Serve = struct {
         host: []const u8,
         port: u16,
-        timeout: u16,
+        timeout: u31,
         common: Common,
     };
 
@@ -369,7 +371,7 @@ const Command = struct {
             \\                Defaults to 9222
             \\
             \\--timeout       Inactivity timeout in seconds before disconnecting clients
-            \\                Defaults to 10 (seconds)
+            \\                Defaults to 10 (seconds). Limited to 604800 (1 week).
             \\
         ++ common_options ++
             \\
@@ -465,7 +467,7 @@ fn parseServeArgs(
 ) !Command.Serve {
     var host: []const u8 = "127.0.0.1";
     var port: u16 = 9222;
-    var timeout: u16 = 10;
+    var timeout: u31 = 10;
     var common: Command.Common = .{};
 
     while (args.next()) |opt| {
@@ -497,7 +499,7 @@ fn parseServeArgs(
                 return error.InvalidArgument;
             };
 
-            timeout = std.fmt.parseInt(u16, str, 10) catch |err| {
+            timeout = std.fmt.parseInt(u31, str, 10) catch |err| {
                 log.fatal(.app, "invalid argument value", .{ .arg = "--timeout", .err = err });
                 return error.InvalidArgument;
             };
