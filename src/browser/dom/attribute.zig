@@ -70,32 +70,6 @@ pub const Attr = struct {
 // -----
 
 const testing = @import("../../testing.zig");
-test "Browser.DOM.Attribute" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let a = document.createAttributeNS('foo', 'bar')", "undefined" },
-        .{ "a.namespaceURI", "foo" },
-        .{ "a.prefix", "null" },
-        .{ "a.localName", "bar" },
-        .{ "a.name", "bar" },
-        .{ "a.value", "" },
-        // TODO: libdom has a bug here: the created attr has no parent, it
-        // causes a panic w/ libdom when setting the value.
-        //.{ "a.value = 'nok'", "nok" },
-        .{ "a.ownerElement", "null" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "let b = document.getElementById('link').getAttributeNode('class')", "undefined" },
-        .{ "b.name", "class" },
-        .{ "b.value", "ok" },
-        .{ "b.value = 'nok'", "nok" },
-        .{ "b.value", "nok" },
-        .{ "b.value = null", "null" },
-        .{ "b.value", "null" },
-        .{ "b.value = 'ok'", "ok" },
-        .{ "b.ownerElement.id", "link" },
-    }, .{});
+test "Browser: DOM.Attribute" {
+    try testing.htmlRunner("dom/attribute.html");
 }

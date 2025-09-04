@@ -1,0 +1,32 @@
+<script src="../testing.js"></script>
+
+<a id="link" href="foo" class="ok">OK</a>
+
+<script id=attribute>
+  let a = document.createAttributeNS('foo', 'bar');
+  testing.expectEqual('foo', a.namespaceURI);
+  testing.expectEqual(null, a.prefix);
+  testing.expectEqual('bar', a.localName);
+  testing.expectEqual('bar', a.name);
+  testing.expectEqual('', a.value);
+
+  // TODO: libdom has a bug here: the created attr has no parent, it
+  // causes a panic w/ libdom when setting the value.
+  //.{ "a.value = 'nok'", "nok" },
+  testing.expectEqual(null, a.ownerElement);
+
+  let b = document.getElementById('link').getAttributeNode('class');
+  testing.expectEqual('class', b.name);
+  testing.expectEqual('ok', b.value);
+
+  b.value = 'nok';
+  testing.expectEqual('nok', b.value)
+
+  b.value = null;
+  testing.expectEqual('null', b.value);
+
+  b.value = 'ok';
+  testing.expectEqual('ok', b.value);
+
+  testing.expectEqual('link', b.ownerElement.id);
+</script>

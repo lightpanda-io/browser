@@ -1,0 +1,14 @@
+<script src="../testing.js"></script>
+
+<script id=animation>
+  let a1 = document.createElement('div').animate(null, null);
+  testing.expectEqual('finished', a1.playState);
+
+  let cb = [];
+  a1.ready.then(() => { cb.push('ready') });
+  a1.finished.then((x) => {
+    cb.push('finished');
+    cb.push(x == a1);
+  });
+  testing.eventually(() => testing.expectEqual(['finished', true], cb));
+</script>
