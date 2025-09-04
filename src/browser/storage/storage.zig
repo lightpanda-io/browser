@@ -130,7 +130,7 @@ pub const Bottle = struct {
         return @intCast(self.map.count());
     }
 
-    pub fn _key(self: *Bottle, idx: u32) ?[]const u8 {
+    pub fn _key(self: *const Bottle, idx: u32) ?[]const u8 {
         if (idx >= self.map.count()) return null;
 
         var it = self.map.valueIterator();
@@ -142,7 +142,7 @@ pub const Bottle = struct {
         unreachable;
     }
 
-    pub fn _getItem(self: *Bottle, k: []const u8) ?[]const u8 {
+    pub fn _getItem(self: *const Bottle, k: []const u8) ?[]const u8 {
         return self.map.get(k);
     }
 
@@ -202,35 +202,25 @@ pub const Bottle = struct {
         //
         // So for now, we won't impement the feature.
     }
+
+    pub fn named_get(self: *const Bottle, name: []const u8, _: *bool) ?[]const u8 {
+        return self._getItem(name);
+    }
+
+    pub fn named_set(self: *Bottle, name: []const u8, value: []const u8, _: *bool) !void {
+        try self._setItem(name, value);
+    }
 };
 
 // Tests
 // -----
 
 const testing = @import("../../testing.zig");
-test "Browser.Storage.LocalStorage" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "localStorage.length", "0" },
-
-        .{ "localStorage.setItem('foo', 'bar')", "undefined" },
-        .{ "localStorage.length", "1" },
-        .{ "localStorage.getItem('foo')", "bar" },
-        .{ "localStorage.removeItem('foo')", "undefined" },
-        .{ "localStorage.length", "0" },
-
-        // .{ "localStorage['foo'] = 'bar'", "undefined" },
-        // .{ "localStorage['foo']", "bar" },
-        // .{ "localStorage.length", "1" },
-
-        .{ "localStorage.clear()", "undefined" },
-        .{ "localStorage.length", "0" },
-    }, .{});
+test "Browser: Storage.LocalStorage" {
+    try testing.htmlRunner("storage/local_storage.html");
 }
 
-test "storage bottle" {
+test "Browser: Storage.Bottle" {
     var bottle = Bottle.init(std.testing.allocator);
     defer bottle.deinit();
 

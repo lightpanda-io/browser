@@ -1,0 +1,77 @@
+<script src="../testing.js"></script>
+<script id=url>
+  var url = new URL('https://foo.bar/path?query#fragment');
+  testing.expectEqual("https://foo.bar", url.origin);
+  testing.expectEqual("https://foo.bar/path?query#fragment", url.href);
+  testing.expectEqual("https:", url.protocol);
+  testing.expectEqual("", url.username);
+  testing.expectEqual("", url.password);
+  testing.expectEqual("foo.bar", url.host);
+  testing.expectEqual("foo.bar", url.hostname);
+  testing.expectEqual("", url.port);
+  testing.expectEqual("/path", url.pathname);
+  testing.expectEqual("?query", url.search);
+  testing.expectEqual("#fragment", url.hash);
+  testing.expectEqual("", url.searchParams.get('query'));
+
+  url.search = 'hello=world';
+  testing.expectEqual(1, url.searchParams.size);
+  testing.expectEqual("world", url.searchParams.get('hello'));
+
+  url.search = '?over=9000';
+  testing.expectEqual(1, url.searchParams.size);
+  testing.expectEqual("9000", url.searchParams.get('over'));
+
+  url.search = '';
+  testing.expectEqual(0, url.searchParams.size);
+
+  const url2 = new URL(url);
+  testing.expectEqual("https://foo.bar/path#fragment", url2.href);
+</script>
+
+<script id="constructor">
+  testing.expectError("TypeError: invalid argument", () => {
+    new URL(document.createElement('a'));
+  });
+
+  let a = document.createElement('a');
+  a.href = 'https://www.lightpanda.io/over?9000=!!';
+  const url3 = new URL(a);
+  testing.expectEqual("https://www.lightpanda.io/over?9000=%21%21", url3.href);
+ </script>
+
+<script id=searchParams>
+  url = new URL('https://foo.bar/path?a=~&b=%7E#fragment');
+  testing.expectEqual("~", url.searchParams.get('a'));
+  testing.expectEqual("~", url.searchParams.get('b'));
+
+  url.searchParams.append('c', 'foo');
+  testing.expectEqual("foo", url.searchParams.get('c'));
+  testing.expectEqual(1, url.searchParams.getAll('c').length);
+  testing.expectEqual("foo", url.searchParams.getAll('c')[0]);
+  testing.expectEqual(3, url.searchParams.size);
+
+  // search is dynamic
+  testing.expectEqual("?a=~&b=~&c=foo", url.search);
+
+  // href is dynamic
+  testing.expectEqual("https://foo.bar/path?a=~&b=~&c=foo#fragment", url.href);
+
+  url.searchParams.delete('c', 'foo');
+  testing.expectEqual(null, url.searchParams.get('c'));
+  url.searchParams.delete('a');
+  testing.expectEqual(null, url.searchParams.get('a'));
+</script>
+
+<script id=base>
+  url = new URL('over?9000', 'https://lightpanda.io');
+  testing.expectEqual("https://lightpanda.io/over?9000", url.href);
+</script>
+
+<script id="svelkit">
+  let sk = new URL('sveltekit-internal://');
+  testing.expectEqual("sveltekit-internal:", sk.protocol);
+  testing.expectEqual("", sk.host);
+  testing.expectEqual("", sk.hostname);
+  testing.expectEqual("sveltekit-internal://", sk.href);
+</script>

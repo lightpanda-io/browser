@@ -37,31 +37,6 @@ pub const pre =
 ;
 
 const testing = @import("../../testing.zig");
-test "Browser.webcomponents" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html = "<div id=main></div>" });
-    defer runner.deinit();
-
-    try @import("polyfill.zig").preload(testing.allocator, runner.page.main_context);
-
-    try runner.testCases(&.{
-        .{
-            \\ class LightPanda extends HTMLElement {
-            \\   constructor() {
-            \\     super();
-            \\   }
-            \\   connectedCallback() {
-            \\     this.append('connected');
-            \\   }
-            \\ }
-            \\ window.customElements.define("lightpanda-test", LightPanda);
-            \\ const main = document.getElementById('main');
-            \\ main.appendChild(document.createElement('lightpanda-test'));
-            ,
-            null,
-        },
-
-        .{ "main.innerHTML", "<lightpanda-test>connected</lightpanda-test>" },
-        .{ "document.createElement('lightpanda-test').dataset", "[object DataSet]" },
-        .{ "document.createElement('lightpanda-test.x').dataset", "[object DataSet]" },
-    }, .{});
+test "Browser: Polyfill.WebComponents" {
+    try testing.htmlRunner("polyfill/webcomponents.html");
 }

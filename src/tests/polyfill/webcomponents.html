@@ -1,0 +1,22 @@
+<script src="../testing.js"></script>
+
+<div id=main></div>
+
+<script id=webcomponents>
+  class LightPanda extends HTMLElement {
+    constructor() {
+      super();
+    }
+    connectedCallback() {
+      this.append('connected');
+    }
+  }
+
+  window.customElements.define("lightpanda-test", LightPanda);
+  const main = document.getElementById('main');
+  main.appendChild(document.createElement('lightpanda-test'));
+
+  testing.expectEqual('<lightpanda-test>connected</lightpanda-test>', main.innerHTML)
+  testing.expectEqual('[object DataSet]', document.createElement('lightpanda-test').dataset.toString());
+  testing.expectEqual('[object DataSet]', document.createElement('lightpanda-test.x').dataset.toString());
+</script>

@@ -1,0 +1,93 @@
+<script src="../testing.js"></script>
+<script id=url_search_params>
+  let usp = new URLSearchParams();
+  usp.get('a')
+  testing.expectEqual(false, usp.has('a'));
+  testing.expectEqual([], usp.getAll('a'));
+  usp.delete('a');
+
+  usp.set('a', 1);
+  testing.expectEqual(true, usp.has('a'));
+  testing.expectEqual("1", usp.get('a'));
+  testing.expectEqual(["1"], usp.getAll('a'));
+
+  usp.append('a', 2);
+  testing.expectEqual(true, usp.has('a'));
+  testing.expectEqual("1", usp.get('a'));
+  testing.expectEqual(['1','2'], usp.getAll('a'));
+
+  usp.append('b', '3');
+  testing.expectEqual(true, usp.has('a'));
+  testing.expectEqual("1", usp.get('a'));
+  testing.expectEqual(['1','2'], usp.getAll('a'));
+  testing.expectEqual(true, usp.has('b'));
+  testing.expectEqual("3", usp.get('b'));
+  testing.expectEqual(['3'], usp.getAll('b'));
+
+  let acc = [];
+  for (const key of usp.keys()) { acc.push(key) };
+  testing.expectEqual(['a', 'a', 'b'], acc);
+
+  acc = [];
+  for (const value of usp.values()) { acc.push(value) };
+  testing.expectEqual(['1', '2', '3'], acc);
+
+  acc = [];
+  for (const entry of usp.entries()) { acc.push(entry) };
+  testing.expectEqual([['a', '1'], ['a', '2'], ['b', '3']], acc);
+
+  acc = [];
+  for (const entry of usp) { acc.push(entry) };
+  testing.expectEqual([['a', '1'], ['a', '2'], ['b', '3']], acc);
+
+  usp.delete('a');
+  testing.expectEqual(false, usp.has('a'));
+  testing.expectEqual(true, usp.has('b'));
+
+  acc = [];
+  for (const key of usp.keys()) { acc.push(key) };
+  testing.expectEqual(['b'], acc);
+
+  acc = [];
+  for (const value of usp.values()) { acc.push(value) };
+  testing.expectEqual(['3'], acc);
+
+  acc = [];
+  for (const entry of usp.entries()) { acc.push(entry) };
+  testing.expectEqual([['b', '3']], acc);
+
+  acc = [];
+  for (const entry of usp) { acc.push(entry) };
+  testing.expectEqual([['b', '3']], acc);
+</script>
+
+<script id=parsed>
+  usp = new URLSearchParams('?hello');
+  testing.expectEqual('', usp.get('hello'));
+
+  usp = new URLSearchParams('?abc=');
+  testing.expectEqual('', usp.get('abc'));
+
+  usp = new URLSearchParams('?abc=123&');
+  testing.expectEqual('123', usp.get('abc'));
+  testing.expectEqual(1, usp.size);
+
+  var fd = new FormData();
+  fd.append('a', '1');
+  fd.append('a', '2');
+  fd.append('b', '3');
+  ups = new URLSearchParams(fd);
+
+  testing.expectEqual(3, ups.size);
+  testing.expectEqual(['1', '2'], ups.getAll('a'));
+
+  testing.expectEqual(['3'], ups.getAll('b'));
+
+  fd.delete('a'); // the two aren't linked, it created a copy
+  testing.expectEqual(3, ups.size);
+
+  ups = new URLSearchParams({over: 9000, spice: 'flow'});
+  testing.expectEqual(2, ups.size);
+  testing.expectEqual(['9000'], ups.getAll('over'));
+  testing.expectEqual(['flow'], ups.getAll('spice'));
+</script>
