@@ -371,7 +371,7 @@ const Command = struct {
             \\                Defaults to 9222
             \\
             \\--timeout       Inactivity timeout in seconds before disconnecting clients
-            \\                Defaults to 10 (seconds)
+            \\                Defaults to 10 (seconds). Limited to 604800 (1 week).
             \\
         ++ common_options ++
             \\
