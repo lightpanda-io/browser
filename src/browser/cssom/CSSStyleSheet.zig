@@ -92,26 +92,6 @@ pub fn _replaceSync(self: *CSSStyleSheet, text: []const u8) !void {
 }
 
 const testing = @import("../../testing.zig");
-test "Browser.CSS.StyleSheet" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let css = new CSSStyleSheet()", "undefined" },
-        .{ "css instanceof CSSStyleSheet", "true" },
-        .{ "css.cssRules.length", "0" },
-        .{ "css.ownerRule", "null" },
-        .{ "let index1 = css.insertRule('body { color: red; }', 0)", "undefined" },
-        .{ "index1", "0" },
-        .{ "css.cssRules.length", "1" },
-
-        .{
-            \\ let replaced = false;
-            \\ css.replace('body{}').then(() => replaced = true);
-            ,
-            null,
-        },
-        // microtasks are run between each statement
-        .{ "replaced", "true" },
-    }, .{});
+test "Browser: CSS.StyleSheet" {
+    try testing.htmlRunner("cssom/css_stylesheet.html");
 }

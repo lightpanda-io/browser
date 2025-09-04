@@ -47,14 +47,6 @@ pub fn get_length(self: *CSSRuleList) u32 {
 }
 
 const testing = @import("../../testing.zig");
-test "Browser.CSS.CSSRuleList" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let list = new CSSRuleList()", "undefined" },
-        .{ "list instanceof CSSRuleList", "true" },
-        .{ "list.length", "0" },
-        .{ "list.item(0)", "null" },
-    }, .{});
+test "Browser: CSS.CSSRuleList" {
+    try testing.htmlRunner("cssom/css_rule_list.html");
 }

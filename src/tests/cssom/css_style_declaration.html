@@ -1,0 +1,101 @@
+<script src="../testing.js"></script>
+<script id=css_style_declaration>
+  let style = document.createElement('div').style;
+  style.cssText = 'color: red; font-size: 12px; margin: 5px !important;';
+  testing.expectEqual(3, style.length);
+
+  testing.expectEqua;('red', style.getPropertyValue('color'));
+  testing.expectEqua;('12px', style.getPropertyValue('font-size'));
+  testing.expectEqua;('', style.getPropertyValue('unknown-property'));
+
+  testing.expectEqual('important', style.getPropertyPriority('margin'));
+  testing.expectEqual('', style.getPropertyPriority('color'));
+  testing.expectEqual('', style.getPropertyPriority('unknown-property'));
+
+  testing.expectEqual('color', style.item(0));
+  testing.expectEqual('font-size', style.item(1));
+  testing.expectEqual('margin', style.item(2));
+  testing.expectEqual('', style.item(3));
+
+  style.setProperty('background-color', 'blue');
+  testing.expectEqual('blue', style.getPropertyValue('background-color'));
+  testing.expectEqual(4, style.length);
+
+  style.setProperty('color', 'green');
+  testing.expectEqual('green', style.color);
+  testing.expectEqual('green', style.getPropertyValue('color'));
+  testing.expectEqual(4, style.length);
+
+  style.setProperty('padding', '10px', 'important');
+  testing.expectEqual('10px', style.getPropertyValue('padding'));
+  testing.expectEqual('important', style.getPropertyPriority('padding'));
+
+  style.setProperty('border', '1px solid black', 'IMPORTANT');
+  testing.expectEqual('important', style.getPropertyPriority('border'));
+</script>
+
+<script id=removeProperty>
+  testing.expectEqual('green', style.removeProperty('color'));
+  testing.expectEqual('', style.getPropertyValue('color'));
+  testing.expectEqual(5, style.length)
+
+  testing.expectEqual('', style.removeProperty('unknown-property'));
+</script>
+
+<script id=includes>
+  testing.expectEqual(false, style.cssText.includes('font-size: 10px;'));
+  testing.expectEqual(true, style.cssText.includes('font-size: 12px;'));
+  testing.expectEqual(true, style.cssText.includes('margin: 5px !important;'));
+  testing.expectEqual(true, style.cssText.includes('padding: 10px !important;'));
+  testing.expectEqual(true, style.cssText.includes('border: 1px solid black !important;'));
+</script>
+
+<script id=special_char">
+  style.cssText = 'color: purple; text-align: center;';
+  testing.expectEqual(2, style.length);
+  testing.expectEqual('purple', style.getPropertyValue('color'));
+  testing.expectEqual('center', style.getPropertyValue('text-align'));
+  testing.expectEqual('', style.getPropertyValue('font-size'));
+
+  style.setProperty('cont', 'Hello; world!');
+  testing.expectEqual('Hello; world!', style.getPropertyValue('cont'));
+
+  style.cssText = 'content: "Hello; world!"; background-image: url("test.png");';
+  testing.expectEqual('"Hello; world!"', style.getPropertyValue('content'));
+  testing.expectEqual('url("test.png")', style.getPropertyValue('background-image'));
+</script>
+
+<script id=cssFloat">
+  testing.expectEqual('', style.cssFloat);
+  style.cssFloat = 'left';
+  testing.expectEqual('left', style.cssFloat);
+  testing.expectEqual('left', style.getPropertyValue('float'));
+
+  style.cssFloat = 'right';
+  testing.expectEqual('right', style.cssFloat);
+  testing.expectEqual('right', style.getPropertyValue('float'));
+
+  style.cssFloat = null;
+  testing.expectEqual('', style.cssFloat);
+  testing.expectEqual('', style.getPropertyValue('float'));
+</script>
+
+<script id=misc>
+  style.setProperty('display', '');
+  testing.expectEqual('', style.getPropertyValue('display'));
+
+  style.cssText = '  color  :  purple  ;  margin  :  10px  ;  ';
+  testing.expectEqual('purple', style.getPropertyValue('color'));
+  testing.expectEqual('10px', style.getPropertyValue('margin'));
+
+  style.setProperty('border-bottom-left-radius', '5px');
+  testing.expectEqual('5px', style.getPropertyValue('border-bottom-left-radius'));
+
+  testing.expectEqual('visible', style.visibility);
+  testing.expectEqual('visible', style.getPropertyValue('visibility'));
+
+  testing.expectEqual('10px', style.margin);
+  style.margin = 'auto';
+  testing.expectEqual('auto', style.margin);
+</script>
+

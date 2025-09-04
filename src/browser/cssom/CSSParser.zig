@@ -199,7 +199,7 @@ fn finalize(self: *CSSParser, arena: Allocator, declarations: *std.ArrayListUnma
 }
 
 const testing = @import("../../testing.zig");
-test "CSSParser - Simple property" {
+test "Browser: CSS.Parser - Simple property" {
     defer testing.reset();
 
     const text = "color: red;";
@@ -213,7 +213,7 @@ test "CSSParser - Simple property" {
     try testing.expectEqual(false, declarations[0].is_important);
 }
 
-test "CSSParser - Property with !important" {
+test "Browser: CSS.Parser - Property with !important" {
     defer testing.reset();
     const text = "margin: 10px !important;";
     const allocator = testing.arena_allocator;
@@ -226,7 +226,7 @@ test "CSSParser - Property with !important" {
     try testing.expectEqual(true, declarations[0].is_important);
 }
 
-test "CSSParser - Multiple properties" {
+test "Browser: CSS.Parser - Multiple properties" {
     defer testing.reset();
     const text = "color: red; font-size: 12px; margin: 5px !important;";
     const allocator = testing.arena_allocator;
@@ -248,7 +248,7 @@ test "CSSParser - Multiple properties" {
     try testing.expectEqual(true, declarations[2].is_important);
 }
 
-test "CSSParser - Quoted value with semicolon" {
+test "Browser: CSS.Parser - Quoted value with semicolon" {
     defer testing.reset();
     const text = "content: \"Hello; world!\";";
     const allocator = testing.arena_allocator;
@@ -261,7 +261,7 @@ test "CSSParser - Quoted value with semicolon" {
     try testing.expectEqual(false, declarations[0].is_important);
 }
 
-test "CSSParser - URL value" {
+test "Browser: CSS.Parser - URL value" {
     defer testing.reset();
     const text = "background-image: url(\"test.png\");";
     const allocator = testing.arena_allocator;
@@ -274,7 +274,7 @@ test "CSSParser - URL value" {
     try testing.expectEqual(false, declarations[0].is_important);
 }
 
-test "CSSParser - Whitespace handling" {
+test "Browser: CSS.Parser - Whitespace handling" {
     defer testing.reset();
     const text = "  color  :  purple  ;  margin  :  10px  ;  ";
     const allocator = testing.arena_allocator;
