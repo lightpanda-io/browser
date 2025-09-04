@@ -90,6 +90,11 @@ pub const Page = struct {
 
     load_state: LoadState = .parsing,
 
+    // We should only emit these events once per page. To make sure of that, we
+    // track whether or not we've already emitted the notifications.
+    notified_network_idle: bool = false,
+    notified_network_almost_idle: bool = false,
+
     const Mode = union(enum) {
         pre: void,
         err: anyerror,
@@ -329,7 +334,13 @@ pub const Page = struct {
                         return error.JsError;
                     }
 
-                    if (http_client.active == 0 and exit_when_done) {
+                    const http_active = http_client.active;
+                    if (http_active == 0 and exit_when_done) {
+                        // we don't need to consider http_client.intercepted here
+                        // because exit_when_done is true, and that can only be
+                        // the case when interception isn't possible.
+                        std.debug.assert(http_client.intercepted == 0);
+
                         const ms = ms_to_next_task orelse blk: {
                             // TODO: when jsRunner is fully replaced with the
                             // htmlRunner, we can remove the first part of this
@@ -341,29 +352,34 @@ pub const Page = struct {
                                 // background jobs.
                                 break :blk 50;
                             }
-                            // no http transfers, no cdp extra socket, no
+                            // No http transfers, no cdp extra socket, no
                             // scheduled tasks, we're done.
                             return .done;
                         };
 
                         if (ms > ms_remaining) {
-                            // same as above, except we have a scheduled task,
-                            // it just happens to be too far into the future.s
+                            // Same as above, except we have a scheduled task,
+                            // it just happens to be too far into the future.
                             return .done;
                         }
 
-                        // we have a task to run in the not-so-distant future.
+                        // We have a task to run in the not-so-distant future.
                         // You might think we can just sleep until that task is
                         // ready, but we should continue to run lowPriority tasks
                         // in the meantime, and that could unblock things. So
                         // we'll just sleep for a bit, and then restart our wait
-                        // loop to see what's changed
+                        // loop to see if anything new can be processed.
                         std.Thread.sleep(std.time.ns_per_ms * @as(u64, @intCast(@min(ms, 20))));
                     } else {
+                        if (self.notified_network_idle == false and http_active == 0 and http_client.intercepted == 0) {
+                            self.notifyNetworkIdle();
+                        }
                         // We're here because we either have active HTTP
-                        // connections, of exit_when_done == false (aka, there's
+                        // connections, or exit_when_done == false (aka, there's
                         // an extra_socket registered with the http client).
-                        const ms_to_wait = @min(ms_remaining, ms_to_next_task orelse 100);
+                        // We should continue to run lowPriority tasks, so we
+                        // minimize how long we'll poll for network I/O.
+                        const ms_to_wait = @min(200, @min(ms_remaining, ms_to_next_task orelse 200));
                         if (try http_client.tick(ms_to_wait) == .extra_socket) {
                             // data on a socket we aren't handling, return to caller
                             return .extra_socket;
@@ -465,6 +481,31 @@ pub const Page = struct {
                 std.debug.print(" - {s} schedule: {d}ms\n", .{ task.name, task.ms - now });
             }
         }
+    }
+
+    fn notifyNetworkIdle(self: *Page) void {
+        // caller should always check that we haven't sent this already;
+        std.debug.assert(self.notified_network_idle == false);
+
+        // if we're going to send networkIdle, we should first send networkAlmostIdle
+        // if it hasn't already been sent.
+        if (self.notified_network_almost_idle == false) {
+            self.notifyNetworkAlmostIdle();
+        }
+
+        self.notified_network_idle = true;
+        self.session.browser.notification.dispatch(.page_network_idle, &.{
+            .timestamp = timestamp(),
+        });
+    }
+
+    fn notifyNetworkAlmostIdle(self: *Page) void {
+        // caller should always check that we haven't sent this already;
+        std.debug.assert(self.notified_network_almost_idle == false);
+        self.notified_network_almost_idle = true;
+        self.session.browser.notification.dispatch(.page_network_almost_idle, &.{
+            .timestamp = timestamp(),
+        });
     }
 
     pub fn origin(self: *const Page, arena: Allocator) ![]const u8 {
@@ -782,12 +823,12 @@ pub const Page = struct {
     }
 
     // The transfer arena is useful and interesting, but has a weird lifetime.
-    // When we're transfering from one page to another (via delayed navigation)
+    // When we're transferring from one page to another (via delayed navigation)
     // we need things in memory: like the URL that we're navigating to and
     // optionally the body to POST. That cannot exist in the page.arena, because
     // the page that we have is going to be destroyed and a new page is going
     // to be created. If we used the page.arena, we'd wouldn't be able to reset
-    // it between navigations.
+    // it between navigation.
     // So the transfer arena is meant to exist between a navigation event. It's
     // freed when the main html navigation is complete, either in pageDoneCallback
     // or pageErrorCallback. It needs to exist for this long because, if we set
@@ -1118,7 +1159,7 @@ pub export fn scriptAddedCallback(ctx: ?*anyopaque, element: ?*parser.Element) c
         return;
     }
 
-    // It's posisble for a script to be dynamically added without a src.
+    // It's possible for a script to be dynamically added without a src.
     //   const s = document.createElement('script');
     //   document.getElementsByTagName('body')[0].appendChild(s);
     // The src can be set after. We handle that in HTMLScriptElement.set_src,

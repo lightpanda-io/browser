@@ -1395,7 +1395,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     },
                     .@"struct" => {
                         // We don't want to duplicate the code for this, so we call
-                        // the actual coversion function.
+                        // the actual conversion function.
                         const value = (try self.jsValueToStruct(named_function, T, js_value)) orelse {
                             return .{ .invalid = {} };
                         };
@@ -1494,7 +1494,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
                 // We were hoping to find the module in our cache, and thus used
                 // the short-lived call_arena to create the normalized_specifier.
-                // But now this'll live for the lifetime of the context.
+                // But now this will live for the lifetime of the context.
                 const arena = self.context_arena;
                 const owned_specifier = try arena.dupe(u8, normalized_specifier);
                 try self.module_cache.put(arena, owned_specifier, PersistentModule.init(self.isolate, m));
@@ -2098,7 +2098,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // a shorthand method to return either the entire stack message
             // or just the exception message
             // - in Debug mode return the stack if available
-            // - otherwhise return the exception if available
+            // - otherwise return the exception if available
             // the caller needs to deinit the string returned
             pub fn err(self: TryCatch, allocator: Allocator) !?[]const u8 {
                 if (builtin.mode == .Debug) {
@@ -2579,7 +2579,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // If you're trying to implement setter, read:
             // https://groups.google.com/g/v8-users/c/8tahYBsHpgY/m/IteS7Wn2AAAJ
             // The issue I had was
-            // (a) where to attache it: does it go ont he instance_template
+            // (a) where to attache it: does it go on the instance_template
             //     instead of the prototype?
             // (b) defining the getter or query to respond with the
             //     PropertyAttribute to indicate if the property can be set
@@ -2751,7 +2751,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     }
 
                     if (T == Function) {
-                        // we're returnig a callback
+                        // we're returning a callback
                         return value.func.toValue();
                     }
 
@@ -2876,8 +2876,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             }
         };
 
-        // Callback called on global's property mssing.
-        // Return true to intercept the exectution or false to let the call
+        // Callback called on global's property missing.
+        // Return true to intercept the execution or false to let the call
         // continue the chain.
         pub const GlobalMissingCallback = struct {
             ptr: *anyopaque,
@@ -2951,10 +2951,10 @@ fn isComplexAttributeType(ti: std.builtin.Type) bool {
     };
 }
 
-// Responsible for calling Zig functions from JS invokations. This could
+// Responsible for calling Zig functions from JS invocations. This could
 // probably just contained in ExecutionWorld, but having this specific logic, which
 // is somewhat repetitive between constructors, functions, getters, etc contained
-// here does feel like it makes it clenaer.
+// here does feel like it makes it cleaner.
 fn Caller(comptime JsContext: type, comptime State: type) type {
     return struct {
         js_context: *JsContext,
@@ -3356,7 +3356,7 @@ fn Caller(comptime JsContext: type, comptime State: type) type {
             var is_variadic = false;
 
             {
-                // This is going to get complicated. If the last Zig paremeter
+                // This is going to get complicated. If the last Zig parameter
                 // is a slice AND the corresponding javascript parameter is
                 // NOT an an array, then we'll treat it as a variadic.
 

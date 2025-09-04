@@ -32,9 +32,9 @@ const List = std.DoublyLinkedList;
 // "scope". This would have a run-time cost and still require some coordination
 // between components to share a common scope.
 //
-// Instead, the approach that we take is to have a notification per
+// Instead, the approach that we take is to have a notification instance per
 // scope. This makes some things harder, but we only plan on having 2
-// notifications at a given time: one in a Browser and one in the App.
+// notification instances  at a given time: one in a Browser and one in the App.
 // What about something like Telemetry, which lives outside of a Browser but
 // still cares about Browser-events (like .page_navigate)? When the Browser
 // notification is created, a `notification_created` event is raised in the
@@ -59,6 +59,8 @@ pub const Notification = struct {
         page_created: List = .{},
         page_navigate: List = .{},
         page_navigated: List = .{},
+        page_network_idle: List = .{},
+        page_network_almost_idle: List = .{},
         http_request_fail: List = .{},
         http_request_start: List = .{},
         http_request_intercept: List = .{},
@@ -74,6 +76,8 @@ pub const Notification = struct {
         page_created: *page.Page,
         page_navigate: *const PageNavigate,
         page_navigated: *const PageNavigated,
+        page_network_idle: *const PageNetworkIdle,
+        page_network_almost_idle: *const PageNetworkAlmostIdle,
         http_request_fail: *const RequestFail,
         http_request_start: *const RequestStart,
         http_request_intercept: *const RequestIntercept,
@@ -96,6 +100,14 @@ pub const Notification = struct {
     pub const PageNavigated = struct {
         timestamp: u32,
         url: []const u8,
+    };
+
+    pub const PageNetworkIdle = struct {
+        timestamp: u32,
+    };
+
+    pub const PageNetworkAlmostIdle = struct {
+        timestamp: u32,
     };
 
     pub const RequestStart = struct {

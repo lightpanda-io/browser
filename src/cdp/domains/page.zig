@@ -78,12 +78,16 @@ fn getFrameTree(cmd: anytype) !void {
 }
 
 fn setLifecycleEventsEnabled(cmd: anytype) !void {
-    // const params = (try cmd.params(struct {
-    //     enabled: bool,
-    // })) orelse return error.InvalidParams;
+    const params = (try cmd.params(struct {
+        enabled: bool,
+    })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    bc.page_life_cycle_events = true;
+    if (params.enabled) {
+        try bc.lifecycleEventsEnable();
+    } else {
+        bc.lifecycleEventsDisable();
+    }
     return cmd.sendResult(null, .{});
 }
 
@@ -354,6 +358,27 @@ pub fn pageNavigated(bc: anytype, event: *const Notification.PageNavigated) !voi
     // frameStoppedLoading
     return cdp.sendEvent("Page.frameStoppedLoading", .{
         .frameId = target_id,
+    }, .{ .session_id = session_id });
+}
+
+pub fn pageNetworkIdle(bc: anytype, event: *const Notification.PageNetworkIdle) !void {
+    return sendPageLifecycle(bc, "networkIdle", event.timestamp);
+}
+
+pub fn pageNetworkAlmostIdle(bc: anytype, event: *const Notification.PageNetworkAlmostIdle) !void {
+    return sendPageLifecycle(bc, "networkAlmostIdle", event.timestamp);
+}
+
+fn sendPageLifecycle(bc: anytype, name: []const u8, timestamp: u32) !void {
+    const loader_id = bc.loader_id;
+    const target_id = bc.target_id orelse unreachable;
+    const session_id = bc.session_id orelse unreachable;
+
+    return bc.cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
+        .name = name,
+        .frameId = target_id,
+        .loaderId = loader_id,
+        .timestamp = timestamp,
     }, .{ .session_id = session_id });
 }
 

@@ -261,7 +261,7 @@ fn continueRequest(cmd: anytype) !void {
         transfer.req.body = body;
     }
 
-    try bc.cdp.browser.http_client.process(transfer);
+    try bc.cdp.browser.http_client.continueTransfer(transfer);
     return cmd.sendResult(null, .{});
 }
 
@@ -311,7 +311,7 @@ fn continueWithAuth(cmd: anytype) !void {
     );
 
     transfer.reset();
-    try bc.cdp.browser.http_client.process(transfer);
+    try bc.cdp.browser.http_client.continueTransfer(transfer);
     return cmd.sendResult(null, .{});
 }
 
@@ -352,7 +352,7 @@ fn fulfillRequest(cmd: anytype) !void {
         body = buf;
     }
 
-    try transfer.fulfill(params.responseCode, params.responseHeaders orelse &.{}, body);
+    try bc.cdp.browser.http_client.fulfillTransfer(transfer, params.responseCode, params.responseHeaders orelse &.{}, body);
 
     return cmd.sendResult(null, .{});
 }
@@ -368,7 +368,7 @@ fn failRequest(cmd: anytype) !void {
     const request_id = try idFromRequestId(params.requestId);
 
     const transfer = intercept_state.remove(request_id) orelse return error.RequestNotFound;
-    defer transfer.abort();
+    defer bc.cdp.browser.http_client.abortTransfer(transfer);
 
     log.info(.cdp, "request intercept", .{
         .state = "fail",

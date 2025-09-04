@@ -487,6 +487,18 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             self.cdp.browser.notification.unregister(.http_request_auth_required, self);
         }
 
+        pub fn lifecycleEventsEnable(self: *Self) !void {
+            self.page_life_cycle_events = true;
+            try self.cdp.browser.notification.register(.page_network_idle, self, onPageNetworkIdle);
+            try self.cdp.browser.notification.register(.page_network_almost_idle, self, onPageNetworkAlmostIdle);
+        }
+
+        pub fn lifecycleEventsDisable(self: *Self) void {
+            self.page_life_cycle_events = false;
+            self.cdp.browser.notification.unregister(.page_network_idle, self);
+            self.cdp.browser.notification.unregister(.page_network_almost_idle, self);
+        }
+
         pub fn onPageRemove(ctx: *anyopaque, _: Notification.PageRemove) !void {
             const self: *Self = @ptrCast(@alignCast(ctx));
             try @import("domains/page.zig").pageRemove(self);
@@ -506,6 +518,16 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         pub fn onPageNavigated(ctx: *anyopaque, msg: *const Notification.PageNavigated) !void {
             const self: *Self = @ptrCast(@alignCast(ctx));
             return @import("domains/page.zig").pageNavigated(self, msg);
+        }
+
+        pub fn onPageNetworkIdle(ctx: *anyopaque, msg: *const Notification.PageNetworkIdle) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx));
+            return @import("domains/page.zig").pageNetworkIdle(self, msg);
+        }
+
+        pub fn onPageNetworkAlmostIdle(ctx: *anyopaque, msg: *const Notification.PageNetworkAlmostIdle) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx));
+            return @import("domains/page.zig").pageNetworkAlmostIdle(self, msg);
         }
 
         pub fn onHttpRequestStart(ctx: *anyopaque, msg: *const Notification.RequestStart) !void {
