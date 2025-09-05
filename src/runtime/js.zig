@@ -1130,6 +1130,19 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         },
                         else => {},
                     },
+                    .array => |arr| {
+                        // Retrieve fixed-size array as slice then copy it
+                        const slice_type = []arr.child;
+                        const slice_value = try self.jsValueToZig(named_function, slice_type, js_value);
+                        if (slice_value.len != arr.len) {
+                            // Exact length match, we could allow smaller arrays, but we would not be able to communicate how many were written
+                            return error.InvalidArgument;
+                        }
+
+                        var result: T = undefined;
+                        @memcpy(&result, slice_value[0..arr.len]);
+                        return result;
+                    },
                     .@"struct" => {
                         return try (self.jsValueToStruct(named_function, T, js_value)) orelse {
                             return error.InvalidArgument;
@@ -1412,6 +1425,36 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             }
                         },
                         else => {},
+                    },
+                    .array => |arr| {
+                        // Retrieve fixed-size array as slice then probe
+                        const slice_type = []arr.child;
+                        switch (try self.probeJsValueToZig(named_function, slice_type, js_value)) {
+                            .value => |slice_value| {
+                                if (slice_value.len == arr.len) {
+                                    return .{ .ok = {} };
+                                }
+                                return .{ .invalid = {} };
+                            },
+                            .ok => {
+                                // Exact length match, we could allow smaller arrays as .compatible, but we would not be able to communicate how many were written
+                                if (js_value.isArray()) {
+                                    const js_arr = js_value.castTo(v8.Array);
+                                    if (js_arr.length() == arr.len) {
+                                        return .{ .ok = {} };
+                                    }
+                                } else if (js_value.isString() and arr.child == u8) {
+                                    const str = try valueToString(self.call_arena, js_value, self.isolate, self.v8_context);
+                                    if (str.len == arr.len) {
+                                        return .{ .ok = {} };
+                                    }
+                                }
+                                return .{ .invalid = {} };
+                            },
+                            .compatible => return .{ .compatible = {} },
+                            .coerce => return .{ .coerce = {} },
+                            .invalid => return .{ .invalid = {} },
+                        }
                     },
                     .@"struct" => {
                         // We don't want to duplicate the code for this, so we call
