@@ -677,8 +677,9 @@ pub fn eventTargetHasListener(
     var lst: ?*EventListener = null;
 
     // iterate over the EventTarget's listeners
+    const iter_event_listener = eventTargetVtable(et).iter_event_listener.?;
     while (true) {
-        const err = eventTargetVtable(et).iter_event_listener.?(
+        const err = iter_event_listener(
             et,
             str,
             capture,
@@ -728,8 +729,9 @@ pub fn eventTargetRemoveAllEventListeners(et: *EventTarget) !void {
     var lst: ?*EventListener = null;
 
     // iterate over the EventTarget's listeners
+    const iter_event_listener = eventTargetVtable(et).iter_event_listener.?;
     while (true) {
-        const errIter = eventTargetVtable(et).iter_event_listener.?(
+        const errIter = iter_event_listener(
             et,
             null,
             false,
@@ -806,6 +808,8 @@ pub const EventTargetTBase = extern struct {
         performance = 5,
         media_query_list = 6,
         message_port = 7,
+        screen = 8,
+        screen_orientation = 9,
     };
 
     vtable: ?*const c.struct_dom_event_target_vtable = &c.struct_dom_event_target_vtable{
