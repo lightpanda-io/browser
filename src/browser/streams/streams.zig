@@ -18,7 +18,7 @@
 
 pub const Interfaces = .{
     @import("ReadableStream.zig"),
+    @import("ReadableStream.zig").ReadableStreamReadResult,
     @import("ReadableStreamDefaultReader.zig"),
-    @import("ReadableStreamDefaultReader.zig").ReadableStreamReadResult,
     @import("ReadableStreamDefaultController.zig"),
 };

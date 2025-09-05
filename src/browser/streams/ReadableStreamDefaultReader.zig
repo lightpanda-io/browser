@@ -24,6 +24,7 @@ const log = @import("../../log.zig");
 const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
 const ReadableStream = @import("./ReadableStream.zig");
+const ReadableStreamReadResult = @import("./ReadableStream.zig").ReadableStreamReadResult;
 
 const ReadableStreamDefaultReader = @This();
 
@@ -47,22 +48,9 @@ pub fn get_closed(self: *const ReadableStreamDefaultReader) Env.Promise {
     return self.closed_resolver.promise();
 }
 
-pub fn _cancel(self: *ReadableStreamDefaultReader, page: *Page) !Env.Promise {
-    return try self.stream._cancel(page);
+pub fn _cancel(self: *ReadableStreamDefaultReader, reason: ?[]const u8, page: *Page) !Env.Promise {
+    return try self.stream._cancel(reason, page);
 }
-
-pub const ReadableStreamReadResult = struct {
-    value: ?[]const u8,
-    done: bool,
-
-    pub fn get_value(self: *const ReadableStreamReadResult) !?[]const u8 {
-        return self.value;
-    }
-
-    pub fn get_done(self: *const ReadableStreamReadResult) bool {
-        return self.done;
-    }
-};
 
 pub fn _read(self: *const ReadableStreamDefaultReader, page: *Page) !Env.Promise {
     const stream = self.stream;
@@ -76,20 +64,34 @@ pub fn _read(self: *const ReadableStreamDefaultReader, page: *Page) !Env.Promise
         .readable => {
             if (stream.queue.items.len > 0) {
                 const data = self.stream.queue.orderedRemove(0);
-                try resolver.resolve(ReadableStreamReadResult{ .value = data, .done = false });
+                try resolver.resolve(ReadableStreamReadResult{ .value = .{ .data = data }, .done = false });
             } else {
-                // TODO: need to wait until we have more data
-                try resolver.reject("TODO!");
-                return error.Todo;
+                if (self.stream.reader_resolver) |rr| {
+                    const r_resolver = Env.PromiseResolver{
+                        .js_context = page.main_context,
+                        .resolver = rr.castToPromiseResolver(),
+                    };
+
+                    return r_resolver.promise();
+                } else {
+                    const p_resolver = v8.Persistent(v8.PromiseResolver).init(page.main_context.isolate, resolver.resolver);
+                    self.stream.reader_resolver = p_resolver;
+                    return resolver.promise();
+                }
+
+                try self.stream.pullIf();
             }
         },
         .closed => |_| {
             if (stream.queue.items.len > 0) {
                 const data = self.stream.queue.orderedRemove(0);
-                try resolver.resolve(ReadableStreamReadResult{ .value = data, .done = false });
+                try resolver.resolve(ReadableStreamReadResult{ .value = .{ .data = data }, .done = false });
             } else {
-                try resolver.resolve(ReadableStreamReadResult{ .value = null, .done = true });
+                try resolver.resolve(ReadableStreamReadResult{ .value = .empty, .done = true });
             }
+        },
+        .cancelled => |_| {
+            try resolver.resolve(ReadableStreamReadResult{ .value = .empty, .done = true });
         },
         .errored => |err| {
             try resolver.reject(err);
@@ -97,4 +99,17 @@ pub fn _read(self: *const ReadableStreamDefaultReader, page: *Page) !Env.Promise
     }
 
     return resolver.promise();
+}
+
+pub fn _releaseLock(self: *const ReadableStreamDefaultReader, page: *Page) !void {
+    self.stream.locked = false;
+
+    if (self.stream.reader_resolver) |rr| {
+        const resolver = Env.PromiseResolver{
+            .js_context = page.main_context,
+            .resolver = rr.castToPromiseResolver(),
+        };
+
+        try resolver.reject("TypeError");
+    }
 }
