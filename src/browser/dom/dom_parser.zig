@@ -36,12 +36,6 @@ pub const DOMParser = struct {
 };
 
 const testing = @import("../../testing.zig");
-test "Browser.DOM.DOMParser" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "const dp = new DOMParser()", "undefined" },
-        .{ "dp.parseFromString('<div>abc</div>', 'text/html')", "[object HTMLDocument]" },
-    }, .{});
+test "Browser: DOM.Parser" {
+    try testing.htmlRunner("dom/dom_parser.html");
 }

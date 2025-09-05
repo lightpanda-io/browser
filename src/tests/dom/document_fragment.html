@@ -1,0 +1,33 @@
+<script src="../testing.js"></script>
+<body></body>
+
+<script id=documentFragement>
+  testing.expectEqual('DocumentFragment', new DocumentFragment().constructor.name);
+
+  const dc1 = new DocumentFragment();
+  testing.expectEqual(true, dc1.isEqualNode(dc1))
+
+  const dc2 = new DocumentFragment();
+  testing.expectEqual(true, dc1.isEqualNode(dc2))
+
+  let f = document.createDocumentFragment();
+  let d = document.createElement('div');
+  testing.expectEqual(0, d.childElementCount);
+
+  d.id = 'x';
+  testing.expectEqual(null, $('#x'));
+
+  f.append(d);
+  testing.expectEqual(1, f.childElementCount)
+  testing.expectEqual('x', f.children[0].id);
+  testing.expectEqual(null, $('#x'));
+
+  document.getElementsByTagName('body')[0].append(f.cloneNode(true));
+  testing.expectEqual(true, $('#x') != null);
+
+  testing.expectEqual(null, document.querySelector('.hello'));
+  testing.expectEqual(0, document.querySelectorAll('.hello').length);
+
+  testing.expectEqual('x', document.querySelector('#x').id);
+  testing.expectEqual(['x'], Array.from(document.querySelectorAll('#x')).map((n) => n.id));
+</script>

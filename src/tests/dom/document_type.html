@@ -1,0 +1,12 @@
+<script src="../testing.js"></script>
+<script id=documentType>
+  let dt1 = document.implementation.createDocumentType('qname1', 'pid1', 'sys1');
+  let dt2 = document.implementation.createDocumentType('qname2', 'pid2', 'sys2');
+  let dt3 = document.implementation.createDocumentType('qname1', 'pid1', 'sys1');
+  testing.expectEqual(true, dt1.isEqualNode(dt1));
+  testing.expectEqual(true, dt1.isEqualNode(dt3));
+  testing.expectEqual(false, dt1.isEqualNode(dt2));
+  testing.expectEqual(false, dt2.isEqualNode(dt3));
+  testing.expectEqual(false, dt1.isEqualNode(document));
+  testing.expectEqual(false, document.isEqualNode(dt1));
+</script>

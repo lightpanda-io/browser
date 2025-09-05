@@ -91,41 +91,6 @@ pub const DocumentFragment = struct {
 };
 
 const testing = @import("../../testing.zig");
-test "Browser.DOM.DocumentFragment" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "const dc = new DocumentFragment()", "undefined" },
-        .{ "dc.constructor.name", "DocumentFragment" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "const dc1 = new DocumentFragment()", "undefined" },
-        .{ "const dc2 = new DocumentFragment()", "undefined" },
-        .{ "dc1.isEqualNode(dc1)", "true" },
-        .{ "dc1.isEqualNode(dc2)", "true" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "let f = document.createDocumentFragment()", null },
-        .{ "let d = document.createElement('div');", null },
-        .{ "d.childElementCount", "0" },
-
-        .{ "d.id = 'x';", null },
-        .{ "document.getElementById('x') == null;", "true" },
-        .{ "f.append(d);", null },
-        .{ "f.childElementCount", "1" },
-        .{ "f.children[0].id", "x" },
-        .{ "document.getElementById('x') == null;", "true" },
-
-        .{ "document.getElementsByTagName('body')[0].append(f.cloneNode(true));", null },
-        .{ "document.getElementById('x') != null;", "true" },
-
-        .{ "document.querySelector('.hello')", "null" },
-        .{ "document.querySelectorAll('.hello').length", "0" },
-
-        .{ "document.querySelector('#x').id", "x" },
-        .{ "document.querySelectorAll('#x')[0].id", "x" },
-    }, .{});
+test "Browser: DOM.DocumentFragment" {
+    try testing.htmlRunner("dom/document_fragment.html");
 }

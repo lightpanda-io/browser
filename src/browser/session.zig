@@ -176,8 +176,6 @@ pub const Session = struct {
     }
 };
 
-
-
 const QueuedNavigation = struct {
     url: []const u8,
     opts: NavigateOpts,

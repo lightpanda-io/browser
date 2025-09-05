@@ -1,0 +1,6 @@
+<script src="../testing.js"></script>
+<script id=domParser>
+  const dp = new DOMParser();;
+  const parsed = dp.parseFromString('<div>abc</div>', 'text/html');
+  testing.expectEqual('[object HTMLDocument]', parsed.toString());
+</script>
