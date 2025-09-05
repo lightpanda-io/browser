@@ -74,11 +74,6 @@ pub fn constructor(_init: ?HeadersInit, page: *Page) !Headers {
         switch (init) {
             .strings => |kvs| {
                 for (kvs) |pair| {
-                    // Can only have two string elements if in a pair.
-                    if (pair.len != 2) {
-                        return error.TypeError;
-                    }
-
                     const key = try arena.dupe(u8, pair[0]);
                     const value = try arena.dupe(u8, pair[1]);
 
