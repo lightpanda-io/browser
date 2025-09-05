@@ -181,20 +181,41 @@ pub const Connection = struct {
         try errorCheck(c.curl_easy_setopt(self.easy, c.CURLOPT_URL, url.ptr));
     }
 
+    // a libcurl request has 2 methods. The first is the method that
+    // controls how libcurl behaves. This specifically influences how redirects
+    // are handled. For example, if you do a POST and get a 301, libcurl will
+    // change that to a GET. But if you do a POST and get a 308, libcurl will
+    // keep the POST (and re-send the body).
+    // The second method is the actual string that's included in the request
+    // headers.
+    // These two methods can be different - you can tell curl to behave as though
+    // you made a GET, but include "POST" in the request header.
+    //
+    // Here, we're only concerned about the 2nd method. If we want, we'll set
+    // the first one based on whether or not we have a body.
+    //
+    // It's important that, for each use of this connection, we set the 2nd
+    // method. Else, if we make a HEAD request and re-use the connection, but
+    // DON'T reset this, it'll keep making HEAD requests.
+    // (I don't know if it's as important to reset the 1st method, or if libcurl
+    // can infer that based on the presence of the body, but we also reset it
+    // to be safe);
     pub fn setMethod(self: *const Connection, method: Method) !void {
         const easy = self.easy;
-        switch (method) {
-            .GET => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPGET, @as(c_long, 1))),
-            .POST => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPPOST, @as(c_long, 1))),
-            .PUT => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, "put")),
-            .DELETE => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, "delete")),
-            .HEAD => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, "head")),
-            .OPTIONS => try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, "options")),
-        }
+        const m: [:0]const u8 = switch (method) {
+            .GET => "GET",
+            .POST => "POST",
+            .PUT => "PUT",
+            .DELETE => "DELETE",
+            .HEAD => "HEAD",
+            .OPTIONS => "OPTIONS",
+        };
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, m.ptr));
     }
 
     pub fn setBody(self: *const Connection, body: []const u8) !void {
         const easy = self.easy;
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPPOST, @as(c_long, 1)));
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_POSTFIELDSIZE, @as(c_long, @intCast(body.len))));
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_POSTFIELDS, body.ptr));
     }
