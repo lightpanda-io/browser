@@ -179,8 +179,10 @@ fn arePatternsSupported(patterns: []RequestPattern) bool {
 }
 
 pub fn requestIntercept(arena: Allocator, bc: anytype, intercept: *const Notification.RequestIntercept) !void {
-    // unreachable because we _have_ to have a page.
-    const session_id = bc.session_id orelse unreachable;
+    // detachTarget could be called, in which case, we still have a page doing
+    // things, but no session.
+    const session_id = bc.session_id orelse return;
+
     const target_id = bc.target_id orelse unreachable;
 
     // We keep it around to wait for modifications to the request.
@@ -380,8 +382,10 @@ fn failRequest(cmd: anytype) !void {
 }
 
 pub fn requestAuthRequired(arena: Allocator, bc: anytype, intercept: *const Notification.RequestAuthRequired) !void {
-    // unreachable because we _have_ to have a page.
-    const session_id = bc.session_id orelse unreachable;
+    // detachTarget could be called, in which case, we still have a page doing
+    // things, but no session.
+    const session_id = bc.session_id orelse return;
+
     const target_id = bc.target_id orelse unreachable;
 
     // We keep it around to wait for modifications to the request.

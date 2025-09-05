@@ -230,14 +230,10 @@ pub fn httpRequestFail(arena: Allocator, bc: anytype, msg: *const Notification.R
 }
 
 pub fn httpRequestStart(arena: Allocator, bc: anytype, msg: *const Notification.RequestStart) !void {
-    // Isn't possible to do a network request within a Browser (which our
-    // notification is tied to), without a page.
-    std.debug.assert(bc.session.page != null);
+    // detachTarget could be called, in which case, we still have a page doing
+    // things, but no session.
+    const session_id = bc.session_id orelse return;
 
-    var cdp = bc.cdp;
-
-    // all unreachable because we _have_ to have a page.
-    const session_id = bc.session_id orelse unreachable;
     const target_id = bc.target_id orelse unreachable;
     const page = bc.session.currentPage() orelse unreachable;
 
@@ -248,22 +244,17 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, msg: *const Notification.
 
     const transfer = msg.transfer;
     // We're missing a bunch of fields, but, for now, this seems like enough
-    try cdp.sendEvent("Network.requestWillBeSent", .{ .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id}), .frameId = target_id, .loaderId = bc.loader_id, .documentUrl = DocumentUrlWriter.init(&page.url.uri), .request = TransferAsRequestWriter.init(transfer) }, .{ .session_id = session_id });
+    try bc.cdp.sendEvent("Network.requestWillBeSent", .{ .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id}), .frameId = target_id, .loaderId = bc.loader_id, .documentUrl = DocumentUrlWriter.init(&page.url.uri), .request = TransferAsRequestWriter.init(transfer) }, .{ .session_id = session_id });
 }
 
 pub fn httpResponseHeaderDone(arena: Allocator, bc: anytype, msg: *const Notification.ResponseHeaderDone) !void {
-    // Isn't possible to do a network request within a Browser (which our
-    // notification is tied to), without a page.
-    std.debug.assert(bc.session.page != null);
-
-    var cdp = bc.cdp;
-
-    // all unreachable because we _have_ to have a page.
-    const session_id = bc.session_id orelse unreachable;
+    // detachTarget could be called, in which case, we still have a page doing
+    // things, but no session.
+    const session_id = bc.session_id orelse return;
     const target_id = bc.target_id orelse unreachable;
 
     // We're missing a bunch of fields, but, for now, this seems like enough
-    try cdp.sendEvent("Network.responseReceived", .{
+    try bc.cdp.sendEvent("Network.responseReceived", .{
         .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{msg.transfer.id}),
         .loaderId = bc.loader_id,
         .frameId = target_id,
@@ -272,16 +263,11 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: anytype, msg: *const Notific
 }
 
 pub fn httpRequestDone(arena: Allocator, bc: anytype, msg: *const Notification.RequestDone) !void {
-    // Isn't possible to do a network request within a Browser (which our
-    // notification is tied to), without a page.
-    std.debug.assert(bc.session.page != null);
+    // detachTarget could be called, in which case, we still have a page doing
+    // things, but no session.
+    const session_id = bc.session_id orelse return;
 
-    var cdp = bc.cdp;
-
-    // all unreachable because we _have_ to have a page.
-    const session_id = bc.session_id orelse unreachable;
-
-    try cdp.sendEvent("Network.loadingFinished", .{
+    try bc.cdp.sendEvent("Network.loadingFinished", .{
         .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{msg.transfer.id}),
         .encodedDataLength = msg.transfer.bytes_received,
     }, .{ .session_id = session_id });
