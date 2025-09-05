@@ -316,20 +316,4 @@ pub const Document = struct {
 const testing = @import("../../testing.zig");
 test "Browser: DOM.Document" {
     try testing.htmlRunner("dom/document.html");
-
-    // const Case = testing.JsRunner.Case;
-    // const tags = comptime parser.Tag.all();
-    // var createElements: [(tags.len) * 2]Case = undefined;
-    // inline for (tags, 0..) |tag, i| {
-    //     const tag_name = @tagName(tag);
-    //     createElements[i * 2] = Case{
-    //         "var " ++ tag_name ++ "Elem = document.createElement('" ++ tag_name ++ "')",
-    //         "undefined",
-    //     };
-    //     createElements[(i * 2) + 1] = Case{
-    //         tag_name ++ "Elem.localName",
-    //         tag_name,
-    //     };
-    // }
-    // try runner.testCases(&createElements, .{});
 }

@@ -387,7 +387,7 @@ fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) !void {
     _ = try self.perform(0);
 }
 
-pub const PerformStatus = enum{
+pub const PerformStatus = enum {
     extra_socket,
     normal,
 };

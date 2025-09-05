@@ -350,7 +350,7 @@ pub const Page = struct {
                                 // Look, we want to exit ASAP, but we don't want
                                 // to exit so fast that we've run none of the
                                 // background jobs.
-                                break :blk 50;
+                                break :blk if (comptime builtin.is_test) 5 else 50;
                             }
                             // No http transfers, no cdp extra socket, no
                             // scheduled tasks, we're done.
@@ -397,7 +397,7 @@ pub const Page = struct {
                     // we _could_ http_client.tick(ms_to_wait), but this has
                     // the same result, and I feel is more correct.
                     return .no_page;
-                }
+                },
             }
 
             const ms_elapsed = timer.lap() / 1_000_000;

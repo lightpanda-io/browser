@@ -1,0 +1,264 @@
+<script src="../testing.js"></script>
+
+<div id="content">
+  <a id="link" href="foo" class="ok">OK</a>
+  <p id="para-empty" class="ok empty">
+    <span id="para-empty-child"></span>
+  </p>
+  <p id="para"> And</p>
+  <!--comment-->
+</div>
+
+<script id=element>
+  let content = document.getElementById('content');
+  testing.expectEqual('http://www.w3.org/1999/xhtml', content.namespaceURI);
+  testing.expectEqual(null, content.prefix);
+  testing.expectEqual('div', content.localName);
+  testing.expectEqual('DIV', content.tagName);
+  testing.expectEqual('content', content.id);
+
+  content.id = 'foo';
+  testing.expectEqual('foo', content.id);
+
+  content.id = 'content';
+  testing.expectEqual('', content.className);
+
+  let p1 = document.getElementById('para-empty');
+  testing.expectEqual('ok empty', p1.className);
+
+  p1.className = 'foo bar baz';
+  testing.expectEqual('foo bar baz', p1.className);
+
+  p1.className = 'ok empty';
+  testing.expectEqual(2, p1.classList.length);
+</script>
+
+<script id=closest>
+  const el2 = document.createElement('div');
+  el2.id = 'closest';
+  el2.className = 'ok';
+
+  testing.expectEqual(el2, el2.closest('#closest'));
+  testing.expectEqual(el2, el2.closest('.ok'));
+  testing.expectEqual(null, el2.closest('#9000'));
+  testing.expectEqual(null, el2.closest('.notok'));
+
+  const sp = document.createElement('span');
+  el2.appendChild(sp);
+  testing.expectEqual(el2, sp.closest('#closest'));
+  testing.expectEqual(null, sp.closest('#9000'));
+</script>
+
+<script id=attributes>
+  testing.expectEqual(true, content.hasAttributes());
+  testing.expectEqual(1, content.attributes.length);
+  testing.expectEqual(['id'], content.getAttributeNames());
+  testing.expectEqual('content', content.getAttribute('id'));
+  testing.expectEqual('content', content.attributes['id'].value);
+
+  let x = '';
+  for (const attr of content.attributes) {
+    x += attr.name + '=' + attr.value;
+  }
+  testing.expectEqual('id=content', x);
+
+  testing.expectEqual(false, content.hasAttribute('foo'));
+  testing.expectEqual(null, content.getAttribute('foo'));
+
+  content.setAttribute('foo', 'bar');
+  testing.expectEqual(true, content.hasAttribute('foo'));
+  testing.expectEqual('bar', content.getAttribute('foo'));
+  testing.expectEqual(['id', 'foo'], content.getAttributeNames());
+
+  testing.expectError('Error: InvalidCharacterError', () => {
+    content.setAttribute('.foo', 'invalid')
+  });
+
+  content.setAttribute('foo', 'baz');
+  testing.expectEqual(true, content.hasAttribute('foo'));
+  testing.expectEqual('baz', content.getAttribute('foo'));
+
+  content.removeAttribute('foo');
+  testing.expectEqual(false, content.hasAttribute('foo'));
+  testing.expectEqual(null, content.getAttribute('foo'));
+
+  let b = document.getElementById('content');
+  testing.expectEqual(true, b.toggleAttribute('foo'));
+  testing.expectEqual(true, b.hasAttribute('foo'));
+  testing.expectEqual('', b.getAttribute('foo'));
+
+  testing.expectEqual(false, b.toggleAttribute('foo'));
+  testing.expectEqual(false, b.hasAttribute('foo'));
+
+  testing.expectEqual(false, document.createElement('a').hasAttributes());
+
+  const div2 = document.createElement('div');
+  div2.innerHTML = '<p id=1 .lit$id=9>a</p>';
+  testing.expectEqual('<p id="1" .lit$id="9">a</p>', div2.innerHTML);
+  testing.expectEqual(['id', '.lit$id'], div2.childNodes[0].getAttributeNames());
+</script>
+
+<script id=children>
+  testing.expectEqual(3, content.children.length);
+  testing.expectEqual('A', content.firstElementChild.nodeName);
+  testing.expectEqual('P', content.lastElementChild.nodeName);
+  testing.expectEqual(3, content.childElementCount);
+</script>
+
+<script id=sibling>
+  content.prepend(document.createTextNode('foo'));
+  content.append(document.createTextNode('bar'));
+
+  let d = document.getElementById('para');
+  testing.expectEqual('P', d.previousElementSibling.nodeName);
+  testing.expectEqual(null, d.nextElementSibling);
+</script>
+
+<script id=querySelector>
+  testing.expectEqual(null, content.querySelector('foo'));
+  testing.expectEqual(null, content.querySelector('#foo'));
+  testing.expectEqual('link', content.querySelector('#link').id);
+  testing.expectEqual('para', content.querySelector('#para').id);
+  testing.expectEqual('link', content.querySelector('*').id);
+  testing.expectEqual(null, content.querySelector(''));
+  testing.expectEqual('link', content.querySelector('*').id);
+  testing.expectEqual(null, content.querySelector('#content'));
+  testing.expectEqual('para', content.querySelector('#para').id);
+  testing.expectEqual('link', content.querySelector('.ok').id);
+  testing.expectEqual('para-empty', content.querySelector('a ~ p').id);
+
+  testing.expectEqual(0, content.querySelectorAll('foo').length);
+  testing.expectEqual(0, content.querySelectorAll('#foo').length);
+  testing.expectEqual(1, content.querySelectorAll('#link').length);
+  testing.expectEqual('link', content.querySelectorAll('#link').item(0).id);
+  testing.expectEqual(1, content.querySelectorAll('#para').length);
+  testing.expectEqual('para', content.querySelectorAll('#para').item(0).id);
+  testing.expectEqual(4, content.querySelectorAll('*').length);
+  testing.expectEqual(2, content.querySelectorAll('p').length);
+  testing.expectEqual('link', content.querySelectorAll('.ok').item(0).id);
+</script>
+
+<script id=createdAttributes>
+  let ff = document.createAttribute('foo');
+  content.setAttributeNode(ff);
+  testing.expectEqual('foo', content.getAttributeNode('foo').name);
+  testing.expectEqual('foo', content.removeAttributeNode(ff).name);
+  testing.expectEqual(null, content.getAttributeNode('bar'));
+</script>
+
+<script id=innerHTML>
+  testing.expectEqual(' And', document.getElementById('para').innerHTML);
+  testing.expectEqual('<span id="para-empty-child"></span>', $('#para-empty').innerHTML.trim());
+
+  let h = $('#para-empty');
+  const prev = h.innerHTML;
+  h.innerHTML = '<p id="hello">hello world</p>';
+  testing.expectEqual('<p id="hello">hello world</p>', h.innerHTML);
+  testing.expectEqual('P', h.firstChild.nodeName);
+  testing.expectEqual('hello', h.firstChild.id);
+  testing.expectEqual('hello world', h.firstChild.textContent);
+
+  h.innerHTML = prev;
+  testing.expectEqual('<span id="para-empty-child"></span>', $('#para-empty').innerHTML.trim());
+  testing.expectEqual('<p id="para"> And</p>', $('#para').outerHTML);
+</script>
+
+<script id=dimensions>
+  const para = document.getElementById('para');
+  testing.expectEqual(1, para.clientWidth);
+  testing.expectEqual(1, para.clientHeight);
+
+  // let r1 = document.getElementById('para').getBoundingClientRect();
+  // testing.expectEqual(0, r1.x);
+  // testing.expectEqual(0, r1.y);
+  // testing.expectEqual(1, r1.width);
+  // testing.expectEqual(2, r1.height);
+
+  // let r2 = document.getElementById('content').getBoundingClientRect();
+  // testing.expectEqual(1, r2.x);
+  // testing.expectEqual(0, r2.y);
+  // testing.expectEqual(1, r2.width);
+  // testing.expectEqual(1, r2.height);
+
+  // let r3 = document.getElementById('para').getBoundingClientRect();
+  // testing.expectEqual(0, r3.x);
+  // testing.expectEqual(0, r3.y);
+  // testing.expectEqual(1, r3.width);
+  // testing.expectEqual(1, r3.height);
+
+  // testing.expectEqual(1, para.clientWidth);
+  // testing.expectEqual(1, para.clientHeight);
+
+  // let r4 = document.createElement('div').getBoundingClientRect();
+  // testing.expectEqual(0, r4.x);
+  // testing.expectEqual(0, r4.y);
+  // testing.expectEqual(0, r4.width);
+  // testing.expectEqual(0, r4.height);
+</script>
+
+<script id=matches>
+  const el = document.createElement('div');
+  el.id = 'matches';
+  el.className = 'ok';
+  testing.expectEqual(true, el.matches('#matches'));
+  testing.expectEqual(true, el.matches('.ok'));
+  testing.expectEqual(false, el.matches('#9000'));
+  testing.expectEqual(false, el.matches('.notok'));
+</script>
+
+<script id=scroll>
+  const el3 = document.createElement('div');
+  el3.scrollIntoViewIfNeeded();
+  el3.scrollIntoViewIfNeeded(false);
+  // doesn't throw is good enough
+  testing.skip();
+</script>
+
+<script id=before>
+  const before_container = document.createElement('div');
+  document.append(before_container);
+
+  const b1 = document.createElement('div');
+  before_container.append(b1);
+
+  const b1_a = document.createElement('p');
+  b1.before(b1_a, 'over 9000');
+  testing.expectEqual('<p></p>over 9000<div></div>', before_container.innerHTML);
+</script>
+
+<script id=after>
+  const after_container = document.createElement('div');
+  document.append(after_container);
+  const a1 = document.createElement('div');
+  after_container.append(a1);
+
+  const a1_a = document.createElement('p');
+  a1.after('over 9000', a1_a);
+  testing.expectEqual('<div></div>over 9000<p></p>', after_container.innerHTML);
+</script>
+
+<script id=getElementsByTagName>
+  var div1 = document.createElement('div');
+  div1.innerHTML = "  <link/><table></table><a href='/a'>a</a><input type='checkbox'/>";
+  testing.expectEqual(1, div1.getElementsByTagName('a').length);
+</script>
+
+<script id=outerHTML>
+  let fc = document.createElement('div')
+  fc.innerHTML = '<script><\/script>';
+  testing.expectEqual('<div><script><\/script></div>', fc.outerHTML);
+
+  fc = document.createElement('div')
+  fc.innerHTML = '<script><\/script><p>hello</p>';
+  testing.expectEqual('<div><script><\/script><p>hello</p></div>', fc.outerHTML);
+</script>
+
+<script id=remove>
+  const rm = document.createElement('div');
+  testing.expectEqual([], rm.getAttributeNames());
+  rm.id = 'to-remove';
+
+  document.getElementsByTagName('body')[0].appendChild(rm);
+  $('#to-remove').remove();
+  testing.expectEqual(null, $('#to-remove'));
+</script>

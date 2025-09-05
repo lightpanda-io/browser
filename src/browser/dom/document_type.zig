@@ -62,19 +62,6 @@ pub const DocumentType = struct {
 };
 
 const testing = @import("../../testing.zig");
-test "Browser.DOM.DocumentType" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let dt1 = document.implementation.createDocumentType('qname1', 'pid1', 'sys1');", "undefined" },
-        .{ "let dt2 = document.implementation.createDocumentType('qname2', 'pid2', 'sys2');", "undefined" },
-        .{ "let dt3 = document.implementation.createDocumentType('qname1', 'pid1', 'sys1');", "undefined" },
-        .{ "dt1.isEqualNode(dt1)", "true" },
-        .{ "dt1.isEqualNode(dt3)", "true" },
-        .{ "dt1.isEqualNode(dt2)", "false" },
-        .{ "dt2.isEqualNode(dt3)", "false" },
-        .{ "dt1.isEqualNode(document)", "false" },
-        .{ "document.isEqualNode(dt1)", "false" },
-    }, .{});
+test "Browser: DOM.DocumentType" {
+    try testing.htmlRunner("dom/document_type.html");
 }
