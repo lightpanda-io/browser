@@ -1,0 +1,27 @@
+<head>
+  <script>
+    let dyn1_loaded = 0;
+    function loadScript(src) {
+      const script = document.createElement('script');
+      script.src = src;
+      document.getElementsByTagName("head")[0].appendChild(script)
+    }
+  </script>
+</head>
+
+<script src="../../testing.js"></script>
+
+<script defer>
+  loadScript('inline_defer.js');
+</script>
+
+<script async>
+  loadScript('inline_defer.js');
+</script>
+
+<script id=inline_defer>
+  // inline script should ignore defer and async attributes. If we don't do
+  // this correctly, we'd end up in an infinite loop
+  // https://github.com/lightpanda-io/browser/issues/1014
+  testing.eventually(() => testing.expectEqual(2, dyn1_loaded));
+</script>
