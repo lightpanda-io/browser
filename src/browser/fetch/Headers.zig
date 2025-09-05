@@ -62,7 +62,7 @@ headers: HeaderHashMap = .empty,
 // 3. Another Headers object.
 pub const HeadersInit = union(enum) {
     // List of Pairs of []const u8
-    strings: []const []const []const u8,
+    strings: []const [2][]const u8,
     headers: *Headers,
 };
 

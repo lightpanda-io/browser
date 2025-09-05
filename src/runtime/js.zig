@@ -331,17 +331,15 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
         fn promiseRejectCallback(v8_msg: v8.C_PromiseRejectMessage) callconv(.c) void {
             const msg = v8.PromiseRejectMessage.initFromC(v8_msg);
-            const isolate =  msg.getPromise().toObject().getIsolate();
+            const isolate = msg.getPromise().toObject().getIsolate();
             const v8_context = isolate.getCurrentContext();
             const context: *JsContext = @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
 
             const value =
-                if (msg.getValue()) |v8_value| valueToString(context.call_arena, v8_value, isolate, v8_context) catch |err| @errorName(err)
-                else "no value";
+                if (msg.getValue()) |v8_value| valueToString(context.call_arena, v8_value, isolate, v8_context) catch |err| @errorName(err) else "no value";
 
-            log.debug(.js, "unhandled rejection", .{.value =value});
+            log.debug(.js, "unhandled rejection", .{ .value = value });
         }
-
 
         // ExecutionWorld closely models a JS World.
         // https://chromium.googlesource.com/chromium/src/+/master/third_party/blink/renderer/bindings/core/v8/V8BindingDesign.md#World
@@ -1110,6 +1108,19 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         },
                         else => {},
                     },
+                    .array => |arr| {
+                        // Retrieve fixed-size array as slice then copy it
+                        const slice_type = []arr.child;
+                        const slice_value = try self.jsValueToZig(named_function, slice_type, js_value);
+                        if (slice_value.len != arr.len) {
+                            // Exact length match, we could allow smaller arrays, but we would not be able to communicate how many were written
+                            return error.InvalidArgument;
+                        }
+
+                        var result: T = undefined;
+                        @memcpy(&result, slice_value[0..arr.len]);
+                        return result;
+                    },
                     .@"struct" => {
                         return try (self.jsValueToStruct(named_function, T, js_value)) orelse {
                             return error.InvalidArgument;
@@ -1392,6 +1403,36 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             }
                         },
                         else => {},
+                    },
+                    .array => |arr| {
+                        // Retrieve fixed-size array as slice then probe
+                        const slice_type = []arr.child;
+                        switch (try self.probeJsValueToZig(named_function, slice_type, js_value)) {
+                            .value => |slice_value| {
+                                if (slice_value.len == arr.len) {
+                                    return .{ .ok = {} };
+                                }
+                                return .{ .invalid = {} };
+                            },
+                            .ok => {
+                                // Exact length match, we could allow smaller arrays as .compatible, but we would not be able to communicate how many were written
+                                if (js_value.isArray()) {
+                                    const js_arr = js_value.castTo(v8.Array);
+                                    if (js_arr.length() == arr.len) {
+                                        return .{ .ok = {} };
+                                    }
+                                } else if (js_value.isString() and arr.child == u8) {
+                                    const str = try valueToString(self.call_arena, js_value, self.isolate, self.v8_context);
+                                    if (str.len == arr.len) {
+                                        return .{ .ok = {} };
+                                    }
+                                }
+                                return .{ .invalid = {} };
+                            },
+                            .compatible => return .{ .compatible = {} },
+                            .coerce => return .{ .coerce = {} },
+                            .invalid => return .{ .invalid = {} },
+                        }
                     },
                     .@"struct" => {
                         // We don't want to duplicate the code for this, so we call
