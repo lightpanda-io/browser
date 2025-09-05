@@ -1429,7 +1429,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         switch (try self.probeJsValueToZig(named_function, slice_type, js_value)) {
                             .value => |slice_value| {
                                 if (slice_value.len == arr.len) {
-                                    return .{ .ok = {} };
+                                    return .{ .value = @as(*T, @ptrCast(slice_value.ptr)).* };
                                 }
                                 return .{ .invalid = {} };
                             },
@@ -1441,8 +1441,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                                         return .{ .ok = {} };
                                     }
                                 } else if (js_value.isString() and arr.child == u8) {
-                                    const str = try valueToString(self.call_arena, js_value, self.isolate, self.v8_context);
-                                    if (str.len == arr.len) {
+                                    const str = try js_value.toString(self.v8_context);
+                                    if (str.lenUtf8(self.isolate) == arr.len) {
                                         return .{ .ok = {} };
                                     }
                                 }
