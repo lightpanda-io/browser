@@ -345,10 +345,8 @@ fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) !void {
         try conn.setMethod(req.method);
         if (req.body) |b| {
             try conn.setBody(b);
-        } else if (req.method == .POST) {
-            // libcurl will crash if the method is POST but there's no body
-            // TODO: is there a setting for that..seems weird.
-            try conn.setBody("");
+        } else {
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPGET, @as(c_long, 1)));
         }
 
         var header_list = req.headers;
