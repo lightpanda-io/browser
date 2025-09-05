@@ -24,6 +24,7 @@ const Env = @import("../env.zig").Env;
 const v8 = @import("v8");
 
 const ReadableStream = @import("./ReadableStream.zig");
+const ReadableStreamReadResult = @import("./ReadableStream.zig").ReadableStreamReadResult;
 
 const ReadableStreamDefaultController = @This();
 
@@ -38,6 +39,16 @@ pub fn _close(self: *ReadableStreamDefaultController, _reason: ?[]const u8, page
     const reason = if (_reason) |reason| try page.arena.dupe(u8, reason) else null;
     self.stream.state = .{ .closed = reason };
 
+    if (self.stream.reader_resolver) |rr| {
+        const resolver = Env.PromiseResolver{
+            .js_context = page.main_context,
+            .resolver = rr.castToPromiseResolver(),
+        };
+
+        try resolver.resolve(ReadableStreamReadResult{ .value = .empty, .done = true });
+        self.stream.reader_resolver = null;
+    }
+
     // close just sets as closed meaning it wont READ any more but anything in the queue is fine to read.
     // to discard, must use cancel.
 }
@@ -49,9 +60,37 @@ pub fn _enqueue(self: *ReadableStreamDefaultController, chunk: []const u8, page:
         return error.TypeError;
     }
 
+    if (self.stream.reader_resolver) |rr| {
+        const resolver = Env.PromiseResolver{
+            .js_context = page.main_context,
+            .resolver = rr.castToPromiseResolver(),
+        };
+
+        try resolver.resolve(ReadableStreamReadResult{ .value = .{ .data = chunk }, .done = false });
+        self.stream.reader_resolver = null;
+
+        // rr.setWeakFinalizer(@ptrCast(self.stream), struct {
+        //     fn callback(info: ?*v8.c.WeakCallbackInfo) void {
+        //         const inner_stream: *ReadableStream = @ptrCast(@alignCast(v8.c.v8__WeakCallbackInfo__GetParameter(info).?));
+        //         inner_stream.reader_resolver = null;
+        //     }
+        // }.callback, .kParameter);
+    }
+
     try self.stream.queue.append(page.arena, chunk);
+    try self.stream.pullIf();
 }
 
-pub fn _error(self: *ReadableStreamDefaultController, err: Env.JsObject) void {
+pub fn _error(self: *ReadableStreamDefaultController, err: Env.JsObject, page: *Page) !void {
     self.stream.state = .{ .errored = err };
+
+    if (self.stream.reader_resolver) |rr| {
+        const resolver = Env.PromiseResolver{
+            .js_context = page.main_context,
+            .resolver = rr.castToPromiseResolver(),
+        };
+
+        try resolver.reject(err);
+        self.stream.reader_resolver = null;
+    }
 }
