@@ -845,6 +845,7 @@ pub const Transfer = struct {
 
         const url = try urlStitch(arena, hlocation.?.value, std.mem.span(baseurl), .{});
         const uri = try std.Uri.parse(url);
+        transfer.uri = uri;
 
         var cookies: std.ArrayListUnmanaged(u8) = .{};
         try req.cookie_jar.forRequest(&uri, cookies.writer(arena), .{
