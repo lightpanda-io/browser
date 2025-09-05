@@ -79,8 +79,8 @@ pub fn constructor(_init: ?HeadersInit, page: *Page) !Headers {
                         return error.TypeError;
                     }
 
-                    const key = try page.arena.dupe(u8, pair[0]);
-                    const value = try page.arena.dupe(u8, pair[1]);
+                    const key = try arena.dupe(u8, pair[0]);
+                    const value = try arena.dupe(u8, pair[1]);
 
                     try headers.put(arena, key, value);
                 }
@@ -88,8 +88,8 @@ pub fn constructor(_init: ?HeadersInit, page: *Page) !Headers {
             .headers => |hdrs| {
                 var iter = hdrs.headers.iterator();
                 while (iter.next()) |entry| {
-                    const key = try page.arena.dupe(u8, entry.key_ptr.*);
-                    const value = try page.arena.dupe(u8, entry.value_ptr.*);
+                    const key = try arena.dupe(u8, entry.key_ptr.*);
+                    const value = try arena.dupe(u8, entry.value_ptr.*);
                     try headers.put(arena, key, value);
                 }
             },
@@ -129,10 +129,29 @@ pub fn _delete(self: *Headers, name: []const u8) void {
     _ = self.headers.remove(name);
 }
 
-// TODO: entries iterator
-// They should be:
-// 1. Sorted in lexicographical order.
-// 2. Duplicate header names should be combined.
+pub const HeaderEntryIterator = struct {
+    slot: [][]const u8,
+    iter: *HeaderHashMap.Iterator,
+
+    // TODO: these SHOULD be in lexigraphical order but I'm not sure how actually
+    // important that is.
+    pub fn _next(self: *HeaderEntryIterator) !?[]const []const u8 {
+        if (self.iter.next()) |entry| {
+            self.slot[0] = entry.key_ptr.*;
+            self.slot[1] = entry.value_ptr.*;
+            return self.slot;
+        } else {
+            return null;
+        }
+    }
+};
+
+pub fn _entries(self: *const Headers, page: *Page) !HeaderEntryIterator {
+    const iter = try page.arena.create(HeaderHashMap.Iterator);
+    iter.* = self.headers.iterator();
+
+    return .{ .slot = try page.arena.alloc([]const u8, 2), .iter = iter };
+}
 
 pub fn _forEach(self: *Headers, callback_fn: Env.Function, this_arg: ?Env.JsObject) !void {
     var iter = self.headers.iterator();
@@ -163,7 +182,24 @@ pub fn _has(self: *const Headers, name: []const u8) bool {
     return self.headers.contains(name);
 }
 
-// TODO: keys iterator
+pub const HeaderKeyIterator = struct {
+    iter: *HeaderHashMap.KeyIterator,
+
+    pub fn _next(self: *HeaderKeyIterator) !?[]const u8 {
+        if (self.iter.next()) |key| {
+            return key.*;
+        } else {
+            return null;
+        }
+    }
+};
+
+pub fn _keys(self: *const Headers, page: *Page) !HeaderKeyIterator {
+    const iter = try page.arena.create(HeaderHashMap.KeyIterator);
+    iter.* = self.headers.keyIterator();
+
+    return .{ .iter = iter };
+}
 
 pub fn _set(self: *Headers, name: []const u8, value: []const u8, page: *Page) !void {
     const arena = page.arena;
@@ -172,7 +208,23 @@ pub fn _set(self: *Headers, name: []const u8, value: []const u8, page: *Page) !v
     gop.value_ptr.* = try arena.dupe(u8, value);
 }
 
-// TODO: values iterator
+pub const HeaderValueIterator = struct {
+    iter: *HeaderHashMap.ValueIterator,
+
+    pub fn _next(self: *HeaderValueIterator) !?[]const u8 {
+        if (self.iter.next()) |value| {
+            return value.*;
+        } else {
+            return null;
+        }
+    }
+};
+
+pub fn _values(self: *const Headers, page: *Page) !HeaderValueIterator {
+    const iter = try page.arena.create(HeaderHashMap.ValueIterator);
+    iter.* = self.headers.valueIterator();
+    return .{ .iter = iter };
+}
 
 const testing = @import("../../testing.zig");
 test "fetch: headers" {

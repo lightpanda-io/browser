@@ -37,7 +37,7 @@ const Page = @import("../page.zig").Page;
 const Response = @This();
 
 status: u16 = 0,
-headers: Headers = .{},
+headers: Headers,
 mime: ?Mime = null,
 url: []const u8 = "",
 body: []const u8 = "",

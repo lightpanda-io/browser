@@ -26,6 +26,7 @@ const Page = @import("../page.zig").Page;
 const Http = @import("../../http/Http.zig");
 const HttpClient = @import("../../http/Client.zig");
 const Mime = @import("../mime.zig").Mime;
+
 const Headers = @import("Headers.zig");
 
 const RequestInput = @import("Request.zig").RequestInput;
@@ -35,6 +36,9 @@ const Response = @import("Response.zig");
 
 pub const Interfaces = .{
     @import("Headers.zig"),
+    @import("Headers.zig").HeaderEntryIterator,
+    @import("Headers.zig").HeaderKeyIterator,
+    @import("Headers.zig").HeaderValueIterator,
     @import("Request.zig"),
     @import("Response.zig"),
 };
@@ -157,6 +161,7 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
         .done_callback = struct {
             fn doneCallback(ctx: *anyopaque) !void {
                 const self: *FetchContext = @ptrCast(@alignCast(ctx));
+                self.transfer = null;
 
                 log.info(.http, "request complete", .{
                     .source = "fetch",
@@ -177,8 +182,8 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
         .error_callback = struct {
             fn errorCallback(ctx: *anyopaque, err: anyerror) void {
                 const self: *FetchContext = @ptrCast(@alignCast(ctx));
-
                 self.transfer = null;
+
                 const promise_resolver: Env.PromiseResolver = .{
                     .js_context = self.js_ctx,
                     .resolver = self.promise_resolver.castToPromiseResolver(),
