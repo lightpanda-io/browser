@@ -31,6 +31,10 @@ pub const Union = union(enum) {
     xhr: *@import("../xhr/xhr.zig").XMLHttpRequest,
     plain: *parser.EventTarget,
     message_port: *@import("MessageChannel.zig").MessagePort,
+    screen: *@import("../html/screen.zig").Screen,
+    screen_orientation: *@import("../html/screen.zig").ScreenOrientation,
+    performance: *@import("performance.zig").Performance,
+    media_query_list: *@import("../html/media_query_list.zig").MediaQueryList,
 };
 
 // EventTarget implementation
@@ -67,7 +71,18 @@ pub const EventTarget = struct {
             .message_port => {
                 return .{ .message_port = @fieldParentPtr("proto", @as(*parser.EventTargetTBase, @ptrCast(et))) };
             },
-            else => return error.MissingEventTargetType,
+            .screen => {
+                return .{ .screen = @fieldParentPtr("proto", @as(*parser.EventTargetTBase, @ptrCast(et))) };
+            },
+            .screen_orientation => {
+                return .{ .screen_orientation = @fieldParentPtr("proto", @as(*parser.EventTargetTBase, @ptrCast(et))) };
+            },
+            .performance => {
+                return .{ .performance = @fieldParentPtr("base", @as(*parser.EventTargetTBase, @ptrCast(et))) };
+            },
+            .media_query_list => {
+                return .{ .media_query_list = @fieldParentPtr("base", @as(*parser.EventTargetTBase, @ptrCast(et))) };
+            },
         }
     }
 

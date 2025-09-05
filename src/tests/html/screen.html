@@ -1,0 +1,20 @@
+<script src="../testing.js"></script>
+
+<script id=screen>
+  let screen = window.screen;
+  testing.expectEqual(1920, screen.width);
+  testing.expectEqual(1080, screen.height);
+
+  let orientation = screen.orientation;
+  testing.expectEqual(0, orientation.angle);
+  testing.expectEqual('landscape-primary', orientation.type);
+
+  // this shouldn't crash (it used to)
+  screen.addEventListener('change', () => {});
+</script>
+
+<script id=orientation>
+  screen.orientation.addEventListener('change', () => {})
+  // above shouldn't crash (it used to)
+  testing.skip();
+</script>

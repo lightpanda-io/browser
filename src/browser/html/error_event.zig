@@ -81,34 +81,6 @@ pub const ErrorEvent = struct {
 };
 
 const testing = @import("../../testing.zig");
-test "Browser.HTML.ErrorEvent" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html = "<div id=c></div>" });
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let e1 = new ErrorEvent('err1')", null },
-        .{ "e1.message", "" },
-        .{ "e1.filename", "" },
-        .{ "e1.lineno", "0" },
-        .{ "e1.colno", "0" },
-        .{ "e1.error", "undefined" },
-
-        .{
-            \\ let e2 = new ErrorEvent('err1', {
-            \\    message: 'm1',
-            \\    filename: 'fx19',
-            \\    lineno: 443,
-            \\    colno: 8999,
-            \\    error: 'under 9000!',
-            \\
-            \\})
-            ,
-            null,
-        },
-        .{ "e2.message", "m1" },
-        .{ "e2.filename", "fx19" },
-        .{ "e2.lineno", "443" },
-        .{ "e2.colno", "8999" },
-        .{ "e2.error", "under 9000!" },
-    }, .{});
+test "Browser: HTML.ErrorEvent" {
+    try testing.htmlRunner("html/error_event.html");
 }

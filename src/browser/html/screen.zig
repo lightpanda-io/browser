@@ -18,6 +18,7 @@
 
 const std = @import("std");
 
+const parser = @import("../netsurf.zig");
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 
 pub const Interfaces = .{
@@ -28,6 +29,8 @@ pub const Interfaces = .{
 // https://developer.mozilla.org/en-US/docs/Web/API/Screen
 pub const Screen = struct {
     pub const prototype = *EventTarget;
+
+    proto: parser.EventTargetTBase = .{ .internal_target_type = .screen },
 
     height: u32 = 1080,
     width: u32 = 1920,
@@ -83,6 +86,7 @@ pub const ScreenOrientation = struct {
 
     angle: u32 = 0,
     type: ScreenOrientationType,
+    proto: parser.EventTargetTBase = .{ .internal_target_type = .screen_orientation },
 
     pub fn get_angle(self: *const ScreenOrientation) u32 {
         return self.angle;
@@ -94,16 +98,6 @@ pub const ScreenOrientation = struct {
 };
 
 const testing = @import("../../testing.zig");
-test "Browser.HTML.Screen" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let screen = window.screen", "undefined" },
-        .{ "screen.width === 1920", "true" },
-        .{ "screen.height === 1080", "true" },
-        .{ "let orientation = screen.orientation", "undefined" },
-        .{ "orientation.angle === 0", "true" },
-        .{ "orientation.type === \"landscape-primary\"", "true" },
-    }, .{});
+test "Browser: HTML.Screen" {
+    try testing.htmlRunner("html/screen.html");
 }
