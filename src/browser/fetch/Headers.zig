@@ -62,7 +62,7 @@ headers: HeaderHashMap = .empty,
 // 3. Another Headers object.
 pub const HeadersInit = union(enum) {
     // List of Pairs of []const u8
-    strings: []const []const []const u8,
+    strings: []const [2][]const u8,
     headers: *Headers,
 };
 
@@ -74,11 +74,6 @@ pub fn constructor(_init: ?HeadersInit, page: *Page) !Headers {
         switch (init) {
             .strings => |kvs| {
                 for (kvs) |pair| {
-                    // Can only have two string elements if in a pair.
-                    if (pair.len != 2) {
-                        return error.TypeError;
-                    }
-
                     const key = try arena.dupe(u8, pair[0]);
                     const value = try arena.dupe(u8, pair[1]);
 
