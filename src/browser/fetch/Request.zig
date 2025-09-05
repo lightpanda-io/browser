@@ -98,7 +98,7 @@ pub fn constructor(input: RequestInput, _options: ?RequestInit, page: *Page) !Re
     const arena = page.arena;
     const options: RequestInit = _options orelse .{};
 
-    const url = blk: switch (input) {
+    const url: [:0]const u8 = blk: switch (input) {
         .string => |str| {
             break :blk try URL.stitch(arena, str, page.url.raw, .{ .null_terminated = true });
         },
@@ -111,7 +111,7 @@ pub fn constructor(input: RequestInput, _options: ?RequestInit, page: *Page) !Re
     const cache = (if (options.cache) |cache| RequestCache.fromString(cache) else null) orelse RequestCache.default;
     const credentials = (if (options.credentials) |creds| RequestCredentials.fromString(creds) else null) orelse RequestCredentials.@"same-origin";
     const integrity = if (options.integrity) |integ| try arena.dupe(u8, integ) else "";
-    const headers = if (options.headers) |hdrs| try Headers.constructor(hdrs, page) else Headers{};
+    const headers: Headers = if (options.headers) |hdrs| try Headers.constructor(hdrs, page) else .{};
 
     const method: Http.Method = blk: {
         if (options.method) |given_method| {
