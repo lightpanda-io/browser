@@ -1131,17 +1131,14 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         else => {},
                     },
                     .array => |arr| {
-                        // Retrieve fixed-size array as slice then copy it
+                        // Retrieve fixed-size array as slice
                         const slice_type = []arr.child;
                         const slice_value = try self.jsValueToZig(named_function, slice_type, js_value);
                         if (slice_value.len != arr.len) {
                             // Exact length match, we could allow smaller arrays, but we would not be able to communicate how many were written
                             return error.InvalidArgument;
                         }
-
-                        var result: T = undefined;
-                        @memcpy(&result, slice_value[0..arr.len]);
-                        return result;
+                        return @as(*T, @ptrCast(slice_value.ptr)).*;
                     },
                     .@"struct" => {
                         return try (self.jsValueToStruct(named_function, T, js_value)) orelse {
