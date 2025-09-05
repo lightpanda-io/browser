@@ -170,8 +170,8 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
         .element = element,
         .source = source,
         .url = remote_url orelse page.url.raw,
-        .is_defer = try parser.elementGetAttribute(element, "defer") != null,
-        .is_async = try parser.elementGetAttribute(element, "async") != null,
+        .is_defer = if (remote_url == null) false else try parser.elementGetAttribute(element, "defer") != null,
+        .is_async = if (remote_url == null) false else try parser.elementGetAttribute(element, "async") != null,
     };
 
     if (source == .@"inline" and self.scripts.first == null) {

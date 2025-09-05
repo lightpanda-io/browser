@@ -1480,6 +1480,10 @@ test "Browser.HTML.HTMLStyleElement" {
     }, .{});
 }
 
+test "Browser: HTML.HTMLScriptElement" {
+    try testing.htmlRunner("html/script/inline_defer.html");
+}
+
 const Check = struct {
     input: []const u8,
     expected: ?[]const u8 = null, // Needed when input != expected
