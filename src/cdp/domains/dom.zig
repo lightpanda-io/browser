@@ -471,7 +471,7 @@ fn getFrameOwner(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const target_id = bc.target_id orelse return error.TargetNotLoaded;
     if (std.mem.eql(u8, target_id, params.frameId) == false) {
-        return cmd.sendError(-32000, "Frame with the given id does not belong to the target.");
+        return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
     }
 
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
