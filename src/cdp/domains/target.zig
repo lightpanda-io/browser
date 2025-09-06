@@ -79,7 +79,7 @@ fn createBrowserContext(cmd: anytype) !void {
     }
 
     const bc = cmd.createBrowserContext() catch |err| switch (err) {
-        error.AlreadyExists => return cmd.sendError(-32000, "Cannot have more than one browser context at a time"),
+        error.AlreadyExists => return cmd.sendError(-32000, "Cannot have more than one browser context at a time", .{}),
         else => return err,
     };
 
@@ -102,7 +102,7 @@ fn disposeBrowserContext(cmd: anytype) !void {
     })) orelse return error.InvalidParams;
 
     if (cmd.cdp.disposeBrowserContext(params.browserContextId) == false) {
-        return cmd.sendError(-32602, "No browser context with the given id found");
+        return cmd.sendError(-32602, "No browser context with the given id found", .{});
     }
     try cmd.sendResult(null, .{});
 }

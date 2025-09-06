@@ -151,18 +151,18 @@ pub fn CDPT(comptime TypeProvider: type) type {
                 if (std.mem.eql(u8, input_session_id, "STARTUP")) {
                     is_startup = true;
                 } else if (self.isValidSessionId(input_session_id) == false) {
-                    return command.sendError(-32001, "Unknown sessionId");
+                    return command.sendError(-32001, "Unknown sessionId", .{});
                 }
             }
 
             if (is_startup) {
                 dispatchStartupCommand(&command) catch |err| {
-                    command.sendError(-31999, @errorName(err)) catch {};
+                    command.sendError(-31999, @errorName(err), .{}) catch {};
                     return err;
                 };
             } else {
                 dispatchCommand(&command, input.method) catch |err| {
-                    command.sendError(-31998, @errorName(err)) catch {};
+                    command.sendError(-31998, @errorName(err), .{}) catch {};
                     return err;
                 };
             }
@@ -757,10 +757,14 @@ pub fn Command(comptime CDP_T: type, comptime Sender: type) type {
             return self.cdp.sendEvent(method, p, opts);
         }
 
-        pub fn sendError(self: *Self, code: i32, message: []const u8) !void {
+        const SendErrorOpts = struct {
+            include_session_id: bool = true,
+        };
+        pub fn sendError(self: *Self, code: i32, message: []const u8, opts: SendErrorOpts) !void {
             return self.sender.sendJSON(.{
                 .id = self.input.id,
                 .@"error" = .{ .code = code, .message = message },
+                .sessionId = if (opts.include_session_id) self.input.session_id else null,
             });
         }
 
