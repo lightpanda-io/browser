@@ -235,7 +235,9 @@ fn querySelectorAll(cmd: anytype) !void {
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-    const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse return error.UnknownNode;
+    const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse {
+        return cmd.sendError(-32000, "Could not find node with given id", .{});
+    };
 
     const arena = cmd.arena;
     const selected_nodes = try css.querySelectorAll(arena, node._node, params.selector);
