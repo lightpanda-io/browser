@@ -208,7 +208,9 @@ fn querySelector(cmd: anytype) !void {
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-    const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse return error.UnknownNode;
+    const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse {
+        return cmd.sendError(-32000, "Could not find node with given id", .{});
+    };
 
     const selected_node = try css.querySelector(
         cmd.arena,
@@ -235,7 +237,9 @@ fn querySelectorAll(cmd: anytype) !void {
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-    const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse return error.UnknownNode;
+    const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse {
+        return cmd.sendError(-32000, "Could not find node with given id", .{});
+    };
 
     const arena = cmd.arena;
     const selected_nodes = try css.querySelectorAll(arena, node._node, params.selector);
@@ -554,16 +558,19 @@ test "cdp.dom: querySelector unknown search id" {
 
     _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .html = "<p>1</p> <p>2</p>" });
 
-    try testing.expectError(error.UnknownNode, ctx.processMessage(.{
+    try ctx.processMessage(.{
         .id = 9,
         .method = "DOM.querySelector",
         .params = .{ .nodeId = 99, .selector = "" },
-    }));
-    try testing.expectError(error.UnknownNode, ctx.processMessage(.{
+    });
+    try ctx.expectSentError(-32000, "Could not find node with given id", .{});
+
+    try ctx.processMessage(.{
         .id = 9,
         .method = "DOM.querySelectorAll",
         .params = .{ .nodeId = 99, .selector = "" },
-    }));
+    });
+    try ctx.expectSentError(-32000, "Could not find node with given id", .{});
 }
 
 test "cdp.dom: querySelector Node not found" {
