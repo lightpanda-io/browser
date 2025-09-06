@@ -821,7 +821,8 @@ pub const Parser = struct {
 // nameStart returns whether c can be the first character of an identifier
 // (not counting an initial hyphen, or an escape sequence).
 fn nameStart(c: u8) bool {
-    return 'a' <= c and c <= 'z' or 'A' <= c and c <= 'Z' or c == '_' or c > 127;
+    return 'a' <= c and c <= 'z' or 'A' <= c and c <= 'Z' or c == '_' or c > 127 or
+        '0' <= c and c <= '9';
 }
 
 // nameChar returns whether c can be a character within an identifier
@@ -890,7 +891,7 @@ test "parser.parseIdentifier" {
         err: bool = false,
     }{
         .{ .s = "x", .exp = "x" },
-        .{ .s = "96", .exp = "", .err = true },
+        .{ .s = "96", .exp = "96", .err = false },
         .{ .s = "-x", .exp = "-x" },
         .{ .s = "r\\e9 sumé", .exp = "résumé" },
         .{ .s = "r\\0000e9 sumé", .exp = "résumé" },
@@ -975,6 +976,7 @@ test "parser.parse" {
         .{ .s = ":root", .exp = .{ .pseudo_class = .root } },
         .{ .s = ".\\:bar", .exp = .{ .class = ":bar" } },
         .{ .s = ".foo\\:bar", .exp = .{ .class = "foo:bar" } },
+        .{ .s = "[class=75c0fa18a94b9e3a6b8e14d6cbe688a27f5da10a]", .exp = .{ .attribute = .{ .key = "class", .val = "75c0fa18a94b9e3a6b8e14d6cbe688a27f5da10a", .op = .eql } } },
     };
 
     for (testcases) |tc| {
