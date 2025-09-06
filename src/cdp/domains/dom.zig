@@ -306,11 +306,11 @@ fn describeNode(cmd: anytype) !void {
         nodeId: ?Node.Id = null,
         backendNodeId: ?Node.Id = null,
         objectId: ?[]const u8 = null,
-        depth: u32 = 1,
+        depth: i32 = 1,
         pierce: bool = false,
     })) orelse return error.InvalidParams;
 
-    if (params.depth != 1 or params.pierce) return error.NotImplemented;
+    if (params.pierce) return error.NotImplemented;
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
