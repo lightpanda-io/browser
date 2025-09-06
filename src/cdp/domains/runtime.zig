@@ -27,6 +27,7 @@ pub fn processMessage(cmd: anytype) !void {
         addBinding,
         callFunctionOn,
         releaseObject,
+        getProperties,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
