@@ -39,6 +39,7 @@ pub fn processMessage(cmd: anytype) !void {
         getContentQuads,
         getBoxModel,
         requestChildNodes,
+        getFrameOwner,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -55,6 +56,7 @@ pub fn processMessage(cmd: anytype) !void {
         .getContentQuads => return getContentQuads(cmd),
         .getBoxModel => return getBoxModel(cmd),
         .requestChildNodes => return requestChildNodes(cmd),
+        .getFrameOwner => return getFrameOwner(cmd),
     }
 }
 
@@ -459,6 +461,24 @@ fn requestChildNodes(cmd: anytype) !void {
     });
 
     return cmd.sendResult(null, .{});
+}
+
+fn getFrameOwner(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        frameId: []const u8,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const target_id = bc.target_id orelse return error.TargetNotLoaded;
+    if (std.mem.eql(u8, target_id, params.frameId) == false) {
+        return cmd.sendError(-32000, "Frame with the given id does not belong to the target.");
+    }
+
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const doc = parser.documentHTMLToDocument(page.window.document);
+
+    const node = try bc.node_registry.register(parser.documentToNode(doc));
+    return cmd.sendResult(.{ .nodeId = node.id, .backendNodeId = node.id }, .{});
 }
 
 const testing = @import("../testing.zig");
