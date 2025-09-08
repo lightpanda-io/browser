@@ -220,11 +220,11 @@ pub fn _json(self: *Response, page: *Page) !Env.Promise {
 
     const p = std.json.parseFromSliceLeaky(
         std.json.Value,
-        page.arena,
+        page.call_arena,
         self.body,
         .{},
     ) catch |e| {
-        log.warn(.browser, "invalid json", .{ .err = e, .source = "Request" });
+        log.info(.browser, "invalid json", .{ .err = e, .source = "Request" });
         return error.SyntaxError;
     };
 
