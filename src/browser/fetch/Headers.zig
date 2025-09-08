@@ -63,9 +63,10 @@ headers: HeaderHashMap = .empty,
 pub const HeadersInit = union(enum) {
     // List of Pairs of []const u8
     strings: []const [2][]const u8,
-    // Mappings
-    mappings: Env.JsObject,
+    // Headers
     headers: *Headers,
+    // Mappings
+    object: Env.JsObject,
 };
 
 pub fn constructor(_init: ?HeadersInit, page: *Page) !Headers {
@@ -82,25 +83,20 @@ pub fn constructor(_init: ?HeadersInit, page: *Page) !Headers {
                     try headers.put(arena, key, value);
                 }
             },
-            .mappings => |obj| {
-                var iter = obj.nameIterator();
-                while (try iter.next()) |name_value| {
-                    const name = try name_value.toString(arena);
-                    const value = Env.Value{
-                        .js_context = page.main_context,
-                        .value = name_value.value,
-                    };
-                    const value_string = try value.toString(arena);
-
-                    try headers.put(arena, name, value_string);
-                }
-            },
             .headers => |hdrs| {
                 var iter = hdrs.headers.iterator();
                 while (iter.next()) |entry| {
-                    const key = try arena.dupe(u8, entry.key_ptr.*);
-                    const value = try arena.dupe(u8, entry.value_ptr.*);
-                    try headers.put(arena, key, value);
+                    try headers.put(arena, entry.key_ptr.*, entry.value_ptr.*);
+                }
+            },
+            .object => |obj| {
+                var iter = obj.nameIterator();
+                while (try iter.next()) |name_value| {
+                    const name = try name_value.toString(arena);
+                    const value = try obj.get(name);
+                    const value_string = try value.toString(arena);
+
+                    try headers.put(arena, name, value_string);
                 }
             },
         }
@@ -140,12 +136,12 @@ pub fn _delete(self: *Headers, name: []const u8) void {
 }
 
 pub const HeaderEntryIterator = struct {
-    slot: [][]const u8,
+    slot: [2][]const u8,
     iter: HeaderHashMap.Iterator,
 
     // TODO: these SHOULD be in lexigraphical order but I'm not sure how actually
     // important that is.
-    pub fn _next(self: *HeaderEntryIterator) ?[]const []const u8 {
+    pub fn _next(self: *HeaderEntryIterator) ?[2][]const u8 {
         if (self.iter.next()) |entry| {
             self.slot[0] = entry.key_ptr.*;
             self.slot[1] = entry.value_ptr.*;
@@ -156,9 +152,9 @@ pub const HeaderEntryIterator = struct {
     }
 };
 
-pub fn _entries(self: *const Headers, page: *Page) !HeaderEntryIterator {
+pub fn _entries(self: *const Headers) HeaderEntryIterator {
     return .{
-        .slot = try page.arena.alloc([]const u8, 2),
+        .slot = undefined,
         .iter = self.headers.iterator(),
     };
 }
@@ -166,21 +162,10 @@ pub fn _entries(self: *const Headers, page: *Page) !HeaderEntryIterator {
 pub fn _forEach(self: *Headers, callback_fn: Env.Function, this_arg: ?Env.JsObject) !void {
     var iter = self.headers.iterator();
 
-    if (this_arg) |this| {
-        while (iter.next()) |entry| {
-            try callback_fn.callWithThis(
-                void,
-                this,
-                .{ entry.key_ptr.*, entry.value_ptr.*, self },
-            );
-        }
-    } else {
-        while (iter.next()) |entry| {
-            try callback_fn.call(
-                void,
-                .{ entry.key_ptr.*, entry.value_ptr.*, self },
-            );
-        }
+    const cb = if (this_arg) |this| try callback_fn.withThis(this) else callback_fn;
+
+    while (iter.next()) |entry| {
+        try cb.call(void, .{ entry.key_ptr.*, entry.value_ptr.*, self });
     }
 }
 
@@ -195,7 +180,7 @@ pub fn _has(self: *const Headers, name: []const u8) bool {
 pub const HeaderKeyIterator = struct {
     iter: HeaderHashMap.KeyIterator,
 
-    pub fn _next(self: *HeaderKeyIterator) !?[]const u8 {
+    pub fn _next(self: *HeaderKeyIterator) ?[]const u8 {
         if (self.iter.next()) |key| {
             return key.*;
         } else {
@@ -204,7 +189,7 @@ pub const HeaderKeyIterator = struct {
     }
 };
 
-pub fn _keys(self: *const Headers, _: *Page) HeaderKeyIterator {
+pub fn _keys(self: *const Headers) HeaderKeyIterator {
     return .{ .iter = self.headers.keyIterator() };
 }
 
@@ -218,7 +203,7 @@ pub fn _set(self: *Headers, name: []const u8, value: []const u8, page: *Page) !v
 pub const HeaderValueIterator = struct {
     iter: HeaderHashMap.ValueIterator,
 
-    pub fn _next(self: *HeaderValueIterator) !?[]const u8 {
+    pub fn _next(self: *HeaderValueIterator) ?[]const u8 {
         if (self.iter.next()) |value| {
             return value.*;
         } else {
@@ -227,7 +212,7 @@ pub const HeaderValueIterator = struct {
     }
 };
 
-pub fn _values(self: *const Headers, _: *Page) HeaderValueIterator {
+pub fn _values(self: *const Headers) HeaderValueIterator {
     return .{ .iter = self.headers.valueIterator() };
 }
 
@@ -237,11 +222,11 @@ test "fetch: headers" {
     defer runner.deinit();
 
     try runner.testCases(&.{
-        .{ "let empty_headers = new Headers()", "undefined" },
+        .{ "let emptyHeaders = new Headers()", "undefined" },
     }, .{});
 
     try runner.testCases(&.{
-        .{ "let headers = new Headers([['Set-Cookie', 'name=world']])", "undefined" },
+        .{ "let headers = new Headers({'Set-Cookie': 'name=world'})", "undefined" },
         .{ "headers.get('set-cookie')", "name=world" },
     }, .{});
 
@@ -258,5 +243,22 @@ test "fetch: headers" {
         .{ "myHeaders.set('Picture-Type', 'image/svg')", "undefined" },
         .{ "myHeaders.get('Picture-Type')", "image/svg" },
         .{ "myHeaders.has('Picture-Type')", "true" },
+    }, .{});
+
+    try runner.testCases(&.{
+        .{ "const originalHeaders = new Headers([['Content-Type', 'application/json'], ['Authorization', 'Bearer token123']])", "undefined" },
+        .{ "originalHeaders.get('Content-Type')", "application/json" },
+        .{ "originalHeaders.get('Authorization')", "Bearer token123" },
+        .{ "const newHeaders = new Headers(originalHeaders)", "undefined" },
+        .{ "newHeaders.get('Content-Type')", "application/json" },
+        .{ "newHeaders.get('Authorization')", "Bearer token123" },
+        .{ "newHeaders.has('Content-Type')", "true" },
+        .{ "newHeaders.has('Authorization')", "true" },
+        .{ "newHeaders.has('X-Custom')", "false" },
+        // Verify that modifying the new headers doesn't affect the original
+        .{ "newHeaders.set('X-Custom', 'test-value')", "undefined" },
+        .{ "newHeaders.get('X-Custom')", "test-value" },
+        .{ "originalHeaders.get('X-Custom')", "null" },
+        .{ "originalHeaders.has('X-Custom')", "false" },
     }, .{});
 }
