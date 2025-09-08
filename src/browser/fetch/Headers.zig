@@ -107,12 +107,6 @@ pub fn constructor(_init: ?HeadersInit, page: *Page) !Headers {
     };
 }
 
-pub fn clone(self: *const Headers, allocator: std.mem.Allocator) !Headers {
-    return Headers{
-        .headers = try self.headers.clone(allocator),
-    };
-}
-
 pub fn append(self: *Headers, name: []const u8, value: []const u8, allocator: std.mem.Allocator) !void {
     const gop = try self.headers.getOrPut(allocator, name);
 
