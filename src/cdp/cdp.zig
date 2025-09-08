@@ -428,7 +428,20 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         pub fn createIsolatedWorld(self: *Self, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
             if (self.isolated_world != null) {
-                return error.CurrentlyOnly1IsolatedWorldSupported;
+                // if the two world have different names, be safe and return an
+                // error.
+                if (std.mem.eql(u8, self.isolated_world.?.name, world_name) == false) {
+                    return error.CurrentlyOnly1IsolatedWorldSupported;
+                }
+
+                // If the two worlds have the same name, reuse the existing one
+                // but send a warning.
+                log.warn(.cdp, "not implemented", .{
+                    .feature = "createIsolatedWorld: Not implemented second isolated world creation",
+                    .info = "reuse existing isolated world with the same name",
+                    .world_name = world_name,
+                });
+                return &self.isolated_world.?;
             }
 
             var executor = try self.cdp.browser.env.newExecutionWorld();
@@ -682,7 +695,14 @@ const IsolatedWorld = struct {
     // This also means this pointer becomes invalid after removePage untill a new page is created.
     // Currently we have only 1 page/frame and thus also only 1 state in the isolate world.
     pub fn createContext(self: *IsolatedWorld, page: *Page) !void {
-        if (self.executor.js_context != null) return error.Only1IsolatedContextSupported;
+        // if (self.executor.js_context != null) return error.Only1IsolatedContextSupported;
+        if (self.executor.js_context != null) {
+            log.warn(.cdp, "not implemented", .{
+                .feature = "createContext: Not implemented second isolated context creation",
+                .info = "reuse existing context",
+            });
+            return;
+        }
         _ = try self.executor.createJsContext(
             &page.window,
             page,
