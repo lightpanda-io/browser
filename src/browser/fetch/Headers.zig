@@ -63,6 +63,8 @@ headers: HeaderHashMap = .empty,
 pub const HeadersInit = union(enum) {
     // List of Pairs of []const u8
     strings: []const [2][]const u8,
+    // Mappings
+    mappings: Env.JsObject,
     headers: *Headers,
 };
 
@@ -78,6 +80,19 @@ pub fn constructor(_init: ?HeadersInit, page: *Page) !Headers {
                     const value = try arena.dupe(u8, pair[1]);
 
                     try headers.put(arena, key, value);
+                }
+            },
+            .mappings => |obj| {
+                var iter = obj.nameIterator();
+                while (try iter.next()) |name_value| {
+                    const name = try name_value.toString(arena);
+                    const value = Env.Value{
+                        .js_context = page.main_context,
+                        .value = name_value.value,
+                    };
+                    const value_string = try value.toString(arena);
+
+                    try headers.put(arena, name, value_string);
                 }
             },
             .headers => |hdrs| {
