@@ -50,7 +50,6 @@
   function getStatus() {
     // if we're already in a fail state, return fail, nothing can recover this
     if (testing._status === 'fail') return 'fail';
-
     // run any eventually's that we've captured
     for (const ev of testing._eventually) {
       testing._captured = ev[1];
@@ -70,7 +69,8 @@
       if (!id) {
         continue;
       }
-      if (!testing._executed_scripts[id]) {
+
+      if (!testing._executed_scripts.has(id)) {
         console.warn(`Failed to execute any expectations for <script id="${id}">...</script>`),
         testing._status = 'fail';
       }
@@ -99,7 +99,7 @@
     testing._status = 'ok';
 
     const script_id = testing._captured?.script_id || document.currentScript.id;
-    testing._executed_scripts[script_id] = true;
+    testing._executed_scripts.add(script_id);
     _registerErrorCallback();
   }
 
@@ -158,7 +158,7 @@
   window.testing = {
     _status: 'empty',
     _eventually: [],
-    _executed_scripts: {},
+    _executed_scripts: new Set(),
     _captured: null,
     skip: skip,
     getStatus: getStatus,
