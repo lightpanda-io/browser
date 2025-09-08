@@ -184,6 +184,12 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
                 const self: *FetchContext = @ptrCast(@alignCast(ctx));
                 self.transfer = null;
 
+                log.err(.http, "error", .{
+                    .url = self.url,
+                    .err = err,
+                    .source = "fetch error",
+                });
+
                 const promise_resolver: Env.PromiseResolver = .{
                     .js_context = self.js_ctx,
                     .resolver = self.promise_resolver.castToPromiseResolver(),
