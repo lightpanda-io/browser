@@ -1,0 +1,115 @@
+<script src="../testing.js"></script>
+
+<div id="content"><p id=para></p></div>
+
+<script id=eventTarget>
+  testing.expectEqual('[object EventTarget]', new EventTarget().toString());
+
+  let content = $('#content');
+  let para = $('#para');
+
+  var nb = 0;
+  var evt;
+  var phase;
+  var cur;
+
+  function reset() {
+    nb = 0;
+    evt = undefined;
+    phase = undefined;
+    cur = undefined;
+  }
+
+  function cbk(event) {
+    evt = event;
+    phase = event.eventPhase;
+    cur = event.currentTarget;
+    nb++;
+  }
+
+  content.addEventListener('basic', cbk);
+  content.dispatchEvent(new Event('basic'));
+  testing.expectEqual(1, nb);
+  testing.expectEqual(true, evt instanceof Event);
+  testing.expectEqual('basic', evt.type);
+  testing.expectEqual(2, phase);
+  testing.expectEqual('content', cur.getAttribute('id'));
+
+  reset();
+  para.dispatchEvent(new Event('basic'))
+
+  // handler is not called, no capture, not the targeno bubbling
+  testing.expectEqual(0, nb);
+  testing.expectEqual(undefined, evt);
+
+  reset();
+  content.addEventListener('basic', cbk);
+  content.dispatchEvent(new Event('basic'))
+  testing.expectEqual(1, nb);
+
+  reset();
+  content.addEventListener('basic', cbk, true);
+  content.dispatchEvent(new Event('basic'));
+  testing.expectEqual(2, nb);
+
+  reset()
+  content.removeEventListener('basic', cbk);
+  content.dispatchEvent(new Event('basic'));
+  testing.expectEqual(1, nb);
+
+  reset();
+  content.removeEventListener('basic', cbk, {capture: true});
+  content.dispatchEvent(new Event('basic'));
+  testing.expectEqual(0, nb);
+
+  reset();
+  content.addEventListener('capture', cbk, true);
+  content.dispatchEvent(new Event('capture'));
+  testing.expectEqual(1, nb);
+  testing.expectEqual(true, evt instanceof Event);
+  testing.expectEqual('capture', evt.type);
+  testing.expectEqual(2, phase);
+  testing.expectEqual('content', cur.getAttribute('id'));
+
+  reset();
+  para.dispatchEvent(new Event('capture'));
+  testing.expectEqual(1, nb);
+  testing.expectEqual(true, evt instanceof Event);
+  testing.expectEqual('capture', evt.type);
+  testing.expectEqual(1, phase);
+  testing.expectEqual('content', cur.getAttribute('id'));
+
+  reset();
+  content.addEventListener('bubbles', cbk);
+  content.dispatchEvent(new Event('bubbles', {bubbles: true}));
+  testing.expectEqual(1, nb);
+  testing.expectEqual(true, evt instanceof Event);
+  testing.expectEqual('bubbles', evt.type);
+  testing.expectEqual(2, phase);
+  testing.expectEqual('content', cur.getAttribute('id'));
+
+  reset();
+  para.dispatchEvent(new Event('bubbles', {bubbles: true}));
+  testing.expectEqual(1, nb);
+  testing.expectEqual(true, evt instanceof Event);
+  testing.expectEqual('bubbles', evt.type);
+  testing.expectEqual(3, phase);
+  testing.expectEqual('content', cur.getAttribute('id'));
+
+
+  const obj1 = {
+    calls: 0,
+    handleEvent: function() { this.calls += 1 }
+  };
+  content.addEventListener('he', obj1);
+  content.dispatchEvent(new Event('he'));
+  testing.expectEqual(1, obj1.calls);
+
+  content.removeEventListener('he', obj1);
+  content.dispatchEvent(new Event('he'));
+  testing.expectEqual(1, obj1.calls);
+
+  // doesn't crash on null receiver
+  content.addEventListener('he2', null);
+  content.dispatchEvent(new Event('he2'));
+</script>

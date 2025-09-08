@@ -1,0 +1,39 @@
+<script src="../testing.js"></script>
+
+<div id="content">
+  <a id="link" href="foo" class="ok">OK</a>
+</div>
+
+<script id=exceptions>
+  let content = $('#content');
+  let link = $('#link');
+
+  testing.withError((err) => {
+    const msg = "Failed to execute 'appendChild' on 'Node': The new child element contains the parent.";
+    testing.expectEqual(3, err.code);
+    testing.expectEqual(msg, err.message);
+    testing.expectEqual('HierarchyRequestError: ' + msg, err.toString());
+    testing.expectEqual(true, err instanceof DOMException);
+    testing.expectEqual(true, err instanceof Error);
+  }, () => link.appendChild(content));
+</script>
+
+<script id=constructor>
+  let exc0 = new DOMException();
+  testing.expectEqual('Error', exc0.name);
+  testing.expectEqual(0, exc0.code);
+  testing.expectEqual('', exc0.message);
+  testing.expectEqual('Error', exc0.toString());
+
+  let exc1 = new DOMException('Sandwich malfunction');
+  testing.expectEqual('Error', exc1.name);
+  testing.expectEqual(0, exc1.code);
+  testing.expectEqual('Sandwich malfunction', exc1.message);
+  testing.expectEqual('Error: Sandwich malfunction', exc1.toString());
+
+  let exc2 = new DOMException('Caterpillar turned into a butterfly', 'NoModificationAllowedError');
+  testing.expectEqual('NoModificationAllowedError', exc2.name);
+  testing.expectEqual(7, exc2.code);
+  testing.expectEqual('Caterpillar turned into a butterfly', exc2.message);
+  testing.expectEqual('NoModificationAllowedError: Caterpillar turned into a butterfly', exc2.toString());
+</script>

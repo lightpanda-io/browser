@@ -1,0 +1,59 @@
+<body>
+  <div id="content">
+    <a id="link" href="foo" class="ok">OK</a>
+    <p id="para-empty" class="ok empty">
+      <span id="para-empty-child"></span>
+    </p>
+    <p id="para"> And</p>
+    <!--comment-->
+  </div>
+</body>
+
+<script src="../testing.js"></script>
+<script id=exceptions>
+  let content = $('#content');
+  let pe = $('#para-empty');
+
+  let getElementsByTagName = document.getElementsByTagName('p');
+  testing.expectEqual(2, getElementsByTagName.length);
+
+  let getElementsByTagNameCI = document.getElementsByTagName('P');
+  testing.expectEqual(2, getElementsByTagNameCI.length);
+  testing.expectEqual('p', getElementsByTagName.item(0).localName);
+  testing.expectEqual('p', getElementsByTagName.item(1).localName);
+
+  let getElementsByTagNameAll = document.getElementsByTagName('*');
+  testing.expectEqual(10, getElementsByTagNameAll.length);
+  testing.expectEqual('html', getElementsByTagNameAll.item(0).localName);
+  testing.expectEqual('html', getElementsByTagNameAll.item(0).localName);
+  testing.expectEqual('head', getElementsByTagNameAll.item(1).localName);
+  testing.expectEqual('html', getElementsByTagNameAll.item(0).localName);
+  testing.expectEqual('body', getElementsByTagNameAll.item(2).localName);
+  testing.expectEqual('div', getElementsByTagNameAll.item(3).localName);
+  testing.expectEqual('p', getElementsByTagNameAll.item(7).localName);
+  testing.expectEqual('span', getElementsByTagNameAll.namedItem('para-empty-child').localName);
+
+  // array like
+  testing.expectEqual('html', getElementsByTagNameAll[0].localName);
+  testing.expectEqual('p', getElementsByTagNameAll[7].localName);
+  testing.expectEqual(undefined, getElementsByTagNameAll[11]);
+  testing.expectEqual('span', getElementsByTagNameAll['para-empty-child'].localName);
+  testing.expectEqual(undefined, getElementsByTagNameAll['foo']);
+
+  testing.expectEqual(4, content.getElementsByTagName('*').length);
+  testing.expectEqual(2, content.getElementsByTagName('p').length);
+  testing.expectEqual(0, content.getElementsByTagName('div').length);
+
+  testing.expectEqual(1, document.children.length);
+  testing.expectEqual(3, content.children.length);
+
+  // check liveness
+  let p = document.createElement('p');
+  testing.expectEqual('OK live', p.textContent = 'OK live');
+  testing.expectEqual(' And', getElementsByTagName.item(1).textContent);
+  testing.expectEqual(true, content.appendChild(p) != undefined);
+  testing.expectEqual(3, getElementsByTagName.length);
+  testing.expectEqual('OK live', getElementsByTagName.item(2).textContent);
+  testing.expectEqual(true, content.insertBefore(p, pe) != undefined);
+  testing.expectEqual('OK live', getElementsByTagName.item(0).textContent);
+</script>

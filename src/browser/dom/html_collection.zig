@@ -462,52 +462,6 @@ pub const HTMLCollection = struct {
 };
 
 const testing = @import("../../testing.zig");
-test "Browser.DOM.HTMLCollection" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let getElementsByTagName = document.getElementsByTagName('p')", "undefined" },
-        .{ "getElementsByTagName.length", "2" },
-        .{ "let getElementsByTagNameCI = document.getElementsByTagName('P')", "undefined" },
-        .{ "getElementsByTagNameCI.length", "2" },
-        .{ "getElementsByTagName.item(0).localName", "p" },
-        .{ "getElementsByTagName.item(1).localName", "p" },
-        .{ "let getElementsByTagNameAll = document.getElementsByTagName('*')", "undefined" },
-        .{ "getElementsByTagNameAll.length", "8" },
-        .{ "getElementsByTagNameAll.item(0).localName", "html" },
-        .{ "getElementsByTagNameAll.item(0).localName", "html" },
-        .{ "getElementsByTagNameAll.item(1).localName", "head" },
-        .{ "getElementsByTagNameAll.item(0).localName", "html" },
-        .{ "getElementsByTagNameAll.item(2).localName", "body" },
-        .{ "getElementsByTagNameAll.item(3).localName", "div" },
-        .{ "getElementsByTagNameAll.item(7).localName", "p" },
-        .{ "getElementsByTagNameAll.namedItem('para-empty-child').localName", "span" },
-
-        // array like
-        .{ "getElementsByTagNameAll[0].localName", "html" },
-        .{ "getElementsByTagNameAll[7].localName", "p" },
-        .{ "getElementsByTagNameAll[8]", "undefined" },
-        .{ "getElementsByTagNameAll['para-empty-child'].localName", "span" },
-        .{ "getElementsByTagNameAll['foo']", "undefined" },
-
-        .{ "document.getElementById('content').getElementsByTagName('*').length", "4" },
-        .{ "document.getElementById('content').getElementsByTagName('p').length", "2" },
-        .{ "document.getElementById('content').getElementsByTagName('div').length", "0" },
-
-        .{ "document.children.length", "1" },
-        .{ "document.getElementById('content').children.length", "3" },
-
-        // check liveness
-        .{ "let content = document.getElementById('content')", "undefined" },
-        .{ "let pe = document.getElementById('para-empty')", "undefined" },
-        .{ "let p = document.createElement('p')", "undefined" },
-        .{ "p.textContent = 'OK live'", "OK live" },
-        .{ "getElementsByTagName.item(1).textContent", " And" },
-        .{ "content.appendChild(p) != undefined", "true" },
-        .{ "getElementsByTagName.length", "3" },
-        .{ "getElementsByTagName.item(2).textContent", "OK live" },
-        .{ "content.insertBefore(p, pe) != undefined", "true" },
-        .{ "getElementsByTagName.item(0).textContent", "OK live" },
-    }, .{});
+test "Browser: DOM.HTMLCollection" {
+    try testing.htmlRunner("dom/html_collection.html");
 }

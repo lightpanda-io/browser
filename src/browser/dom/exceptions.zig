@@ -219,47 +219,6 @@ pub const DOMException = struct {
 };
 
 const testing = @import("../../testing.zig");
-test "Browser.DOM.Exception" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    const err = "Failed to execute 'appendChild' on 'Node': The new child element contains the parent.";
-    try runner.testCases(&.{
-        .{ "let content = document.getElementById('content')", "undefined" },
-        .{ "let link = document.getElementById('link')", "undefined" },
-        // HierarchyRequestError
-        .{
-            \\ var he;
-            \\ try { link.appendChild(content) } catch (error) { he = error}
-            \\ he.name
-            ,
-            "HierarchyRequestError",
-        },
-        .{ "he.code", "3" },
-        .{ "he.message", err },
-        .{ "he.toString()", "HierarchyRequestError: " ++ err },
-        .{ "he instanceof DOMException", "true" },
-        .{ "he instanceof Error", "true" },
-    }, .{});
-
-    // Test DOMException constructor
-    try runner.testCases(&.{
-        .{ "let exc0 = new DOMException()", "undefined" },
-        .{ "exc0.name", "Error" },
-        .{ "exc0.code", "0" },
-        .{ "exc0.message", "" },
-        .{ "exc0.toString()", "Error" },
-
-        .{ "let exc1 = new DOMException('Sandwich malfunction')", "undefined" },
-        .{ "exc1.name", "Error" },
-        .{ "exc1.code", "0" },
-        .{ "exc1.message", "Sandwich malfunction" },
-        .{ "exc1.toString()", "Error: Sandwich malfunction" },
-
-        .{ "let exc2 = new DOMException('Caterpillar turned into a butterfly', 'NoModificationAllowedError')", "undefined" },
-        .{ "exc2.name", "NoModificationAllowedError" },
-        .{ "exc2.code", "7" },
-        .{ "exc2.message", "Caterpillar turned into a butterfly" },
-        .{ "exc2.toString()", "NoModificationAllowedError: Caterpillar turned into a butterfly" },
-    }, .{});
+test "Browser: DOM.Exceptions" {
+    try testing.htmlRunner("dom/exceptions.html");
 }
