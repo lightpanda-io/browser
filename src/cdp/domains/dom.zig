@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const log = @import("../../log.zig");
 const Allocator = std.mem.Allocator;
 const Node = @import("../Node.zig");
 const css = @import("../../browser/dom/css.zig");
@@ -68,6 +69,10 @@ fn getDocument(cmd: anytype) !void {
         pierce: bool = false,
     };
     const params = try cmd.params(Params) orelse Params{};
+
+    if (params.pierce) {
+        log.warn(.cdp, "not implemented", .{ .feature = "DOM.getDocument: Not implemented pierce parameter" });
+    }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
@@ -310,7 +315,9 @@ fn describeNode(cmd: anytype) !void {
         pierce: bool = false,
     })) orelse return error.InvalidParams;
 
-    if (params.pierce) return error.NotImplemented;
+    if (params.pierce) {
+        log.warn(.cdp, "not implemented", .{ .feature = "DOM.describeNode: Not implemented pierce parameter" });
+    }
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
