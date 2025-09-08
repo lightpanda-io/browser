@@ -322,7 +322,7 @@ fn describeNode(cmd: anytype) !void {
 
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
 
-    return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{}) }, .{});
+    return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{ .depth = params.depth }) }, .{});
 }
 
 // An array of quad vertices, x immediately followed by y for each point, points clock-wise.
