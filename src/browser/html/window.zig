@@ -277,16 +277,6 @@ pub const Window = struct {
     };
     fn createTimeout(self: *Window, cbk: Function, delay_: ?u32, page: *Page, opts: CreateTimeoutOpts) !u32 {
         const delay = delay_ orelse 0;
-        if (delay > 5000) {
-            if (!@import("builtin").is_test) {
-                log.warn(.user_script, "long timeout ignored", .{ .delay = delay, .interval = opts.repeat });
-            }
-            // self.timer_id is u30, so the largest value we can generate is
-            // 1_073_741_824. Returning 2_000_000_000 makes sure that clients
-            // can call cancelTimer/cancelInterval without breaking anything.
-            return 2_000_000_000;
-        }
-
         if (self.timers.count() > 512) {
             return error.TooManyTimeout;
         }

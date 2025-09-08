@@ -22,24 +22,24 @@ const Allocator = std.mem.Allocator;
 
 const Scheduler = @This();
 
-primary: Queue,
+high_priority: Queue,
 
 // For repeating tasks. We only want to run these if there are other things to
 // do. We don't, for example, want a window.setInterval or the page.runMicrotasks
 // to block the page.wait.
-secondary: Queue,
+low_priority: Queue,
 
-// we expect allocator to be the page arena, hence we never call primary.deinit
+// we expect allocator to be the page arena, hence we never call high_priority.deinit
 pub fn init(allocator: Allocator) Scheduler {
     return .{
-        .primary = Queue.init(allocator, {}),
-        .secondary = Queue.init(allocator, {}),
+        .high_priority = Queue.init(allocator, {}),
+        .low_priority = Queue.init(allocator, {}),
     };
 }
 
 pub fn reset(self: *Scheduler) void {
-    self.primary.clearRetainingCapacity();
-    self.secondary.clearRetainingCapacity();
+    self.high_priority.clearRetainingCapacity();
+    self.low_priority.clearRetainingCapacity();
 }
 
 const AddOpts = struct {
@@ -47,13 +47,16 @@ const AddOpts = struct {
     low_priority: bool = false,
 };
 pub fn add(self: *Scheduler, ctx: *anyopaque, func: Task.Func, ms: u32, opts: AddOpts) !void {
+    var low_priority = opts.low_priority;
     if (ms > 5_000) {
-        log.warn(.user_script, "long timeout ignored", .{ .delay = ms });
-        // ignore any task that we're almost certainly never going to run
-        return;
+        // we don't want tasks in the far future to block page.wait from
+        // completing. However, if page.wait is called multiple times (maybe
+        // a CDP driver is wait for something to happen), then we do want
+        // to [eventually] run these when their time is up.
+        low_priority = true;
     }
 
-    var q = if (opts.low_priority) &self.secondary else &self.primary;
+    var q = if (low_priority) &self.low_priority else &self.high_priority;
     return q.add(.{
         .ms = std.time.milliTimestamp() + ms,
         .ctx = ctx,
@@ -63,11 +66,11 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, func: Task.Func, ms: u32, opts: Ad
 }
 
 pub fn runHighPriority(self: *Scheduler) !?i32 {
-    return self.runQueue(&self.primary);
+    return self.runQueue(&self.high_priority);
 }
 
 pub fn runLowPriority(self: *Scheduler) !?i32 {
-    return self.runQueue(&self.secondary);
+    return self.runQueue(&self.low_priority);
 }
 
 fn runQueue(self: *Scheduler, queue: *Queue) !?i32 {
@@ -94,7 +97,7 @@ fn runQueue(self: *Scheduler, queue: *Queue) !?i32 {
 
             var copy = task;
             copy.ms = now + repeat_delay;
-            try self.secondary.add(copy);
+            try self.low_priority.add(copy);
         }
         _ = queue.remove();
         next = queue.peek();
@@ -144,11 +147,11 @@ test "Scheduler" {
     try testing.expectEqualSlices(u32, &.{ 1, 1, 2 }, task.calls.items);
 
     std.Thread.sleep(std.time.ns_per_ms * 5);
-    // wont' run secondary
+    // won't run low_priority
     try testing.expectEqual(null, try s.runHighPriority());
     try testing.expectEqualSlices(u32, &.{ 1, 1, 2 }, task.calls.items);
 
-    //runs secondary
+    //runs low_priority
     try testing.expectDelta(2, try s.runLowPriority(), 1);
     try testing.expectEqualSlices(u32, &.{ 1, 1, 2, 2 }, task.calls.items);
 }
