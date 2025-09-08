@@ -2901,11 +2901,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
         // An interface for types that want to have their jsDeinit function to be
         // called when the call context ends
-        const DestructorCallback = struct {
+        pub const DestructorCallback = struct {
             ptr: *anyopaque,
             destructorFn: *const fn (ptr: *anyopaque) void,
 
-            fn init(ptr: anytype) DestructorCallback {
+            pub fn init(ptr: anytype) DestructorCallback {
                 const T = @TypeOf(ptr);
                 const ptr_info = @typeInfo(T);
 

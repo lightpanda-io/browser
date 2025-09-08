@@ -43,7 +43,7 @@ pub const Interfaces = .{
     @import("Response.zig"),
 };
 
-const FetchContext = struct {
+pub const FetchContext = struct {
     arena: std.mem.Allocator,
     js_ctx: *Env.JsContext,
     promise_resolver: v8.Persistent(v8.PromiseResolver),
@@ -79,6 +79,17 @@ const FetchContext = struct {
             .url = self.url,
         };
     }
+
+    pub fn destructor(self: *FetchContext) void {
+        if (self.transfer) |_| {
+            const resolver = Env.PromiseResolver{
+                .js_context = self.js_ctx,
+                .resolver = self.promise_resolver.castToPromiseResolver(),
+            };
+
+            resolver.reject("TypeError") catch unreachable;
+        }
+    }
 };
 
 // https://developer.mozilla.org/en-US/docs/Web/API/Window/fetch
@@ -106,6 +117,9 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
         .method = req.method,
         .url = req.url,
     };
+
+    // Add destructor callback for FetchContext.
+    try page.main_context.destructor_callbacks.append(arena, Env.DestructorCallback.init(fetch_ctx));
 
     try page.http_client.request(.{
         .ctx = @ptrCast(fetch_ctx),
@@ -189,13 +203,6 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
                     .err = err,
                     .source = "fetch error",
                 });
-
-                const promise_resolver: Env.PromiseResolver = .{
-                    .js_context = self.js_ctx,
-                    .resolver = self.promise_resolver.castToPromiseResolver(),
-                };
-
-                promise_resolver.reject(@errorName(err)) catch unreachable;
             }
         }.errorCallback,
     });
