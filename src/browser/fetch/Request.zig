@@ -173,23 +173,23 @@ pub fn get_url(self: *const Request) []const u8 {
     return self.url;
 }
 
-pub fn _clone(self: *Request, page: *Page) !Request {
+pub fn _clone(self: *Request) !Request {
     // Not allowed to clone if the body was used.
     if (self.body_used) {
         return error.TypeError;
     }
 
-    const arena = page.arena;
-
+    // OK to just return the same fields BECAUSE
+    // all of these fields are read-only and can't be modified.
     return Request{
-        .body = if (self.body) |body| try arena.dupe(u8, body) else null,
+        .body = self.body,
         .body_used = self.body_used,
         .cache = self.cache,
         .credentials = self.credentials,
-        .headers = try self.headers.clone(arena),
+        .headers = self.headers,
         .method = self.method,
-        .integrity = try arena.dupe(u8, self.integrity),
-        .url = try arena.dupeZ(u8, self.url),
+        .integrity = self.integrity,
+        .url = self.url,
     };
 }
 

@@ -109,21 +109,21 @@ pub fn get_url(self: *const Response) []const u8 {
     return self.url;
 }
 
-pub fn _clone(self: *const Response, page: *Page) !Response {
+pub fn _clone(self: *const Response) !Response {
     if (self.body_used) {
         return error.TypeError;
     }
 
-    const arena = page.arena;
-
+    // OK to just return the same fields BECAUSE
+    // all of these fields are read-only and can't be modified.
     return Response{
-        .body = try arena.dupe(u8, self.body),
+        .body = self.body,
         .body_used = self.body_used,
-        .mime = if (self.mime) |mime| try mime.clone(arena) else null,
-        .headers = try self.headers.clone(arena),
+        .mime = self.mime,
+        .headers = self.headers,
         .redirected = self.redirected,
         .status = self.status,
-        .url = try arena.dupe(u8, self.url),
+        .url = self.url,
     };
 }
 
