@@ -141,11 +141,11 @@ pub fn _delete(self: *Headers, name: []const u8) void {
 
 pub const HeaderEntryIterator = struct {
     slot: [][]const u8,
-    iter: *HeaderHashMap.Iterator,
+    iter: HeaderHashMap.Iterator,
 
     // TODO: these SHOULD be in lexigraphical order but I'm not sure how actually
     // important that is.
-    pub fn _next(self: *HeaderEntryIterator) !?[]const []const u8 {
+    pub fn _next(self: *HeaderEntryIterator) ?[]const []const u8 {
         if (self.iter.next()) |entry| {
             self.slot[0] = entry.key_ptr.*;
             self.slot[1] = entry.value_ptr.*;
@@ -157,10 +157,10 @@ pub const HeaderEntryIterator = struct {
 };
 
 pub fn _entries(self: *const Headers, page: *Page) !HeaderEntryIterator {
-    const iter = try page.arena.create(HeaderHashMap.Iterator);
-    iter.* = self.headers.iterator();
-
-    return .{ .slot = try page.arena.alloc([]const u8, 2), .iter = iter };
+    return .{
+        .slot = try page.arena.alloc([]const u8, 2),
+        .iter = self.headers.iterator(),
+    };
 }
 
 pub fn _forEach(self: *Headers, callback_fn: Env.Function, this_arg: ?Env.JsObject) !void {
@@ -193,7 +193,7 @@ pub fn _has(self: *const Headers, name: []const u8) bool {
 }
 
 pub const HeaderKeyIterator = struct {
-    iter: *HeaderHashMap.KeyIterator,
+    iter: HeaderHashMap.KeyIterator,
 
     pub fn _next(self: *HeaderKeyIterator) !?[]const u8 {
         if (self.iter.next()) |key| {
@@ -204,11 +204,8 @@ pub const HeaderKeyIterator = struct {
     }
 };
 
-pub fn _keys(self: *const Headers, page: *Page) !HeaderKeyIterator {
-    const iter = try page.arena.create(HeaderHashMap.KeyIterator);
-    iter.* = self.headers.keyIterator();
-
-    return .{ .iter = iter };
+pub fn _keys(self: *const Headers, _: *Page) HeaderKeyIterator {
+    return .{ .iter = self.headers.keyIterator() };
 }
 
 pub fn _set(self: *Headers, name: []const u8, value: []const u8, page: *Page) !void {
@@ -219,7 +216,7 @@ pub fn _set(self: *Headers, name: []const u8, value: []const u8, page: *Page) !v
 }
 
 pub const HeaderValueIterator = struct {
-    iter: *HeaderHashMap.ValueIterator,
+    iter: HeaderHashMap.ValueIterator,
 
     pub fn _next(self: *HeaderValueIterator) !?[]const u8 {
         if (self.iter.next()) |value| {
@@ -230,10 +227,8 @@ pub const HeaderValueIterator = struct {
     }
 };
 
-pub fn _values(self: *const Headers, page: *Page) !HeaderValueIterator {
-    const iter = try page.arena.create(HeaderHashMap.ValueIterator);
-    iter.* = self.headers.valueIterator();
-    return .{ .iter = iter };
+pub fn _values(self: *const Headers, _: *Page) HeaderValueIterator {
+    return .{ .iter = self.headers.valueIterator() };
 }
 
 const testing = @import("../../testing.zig");
