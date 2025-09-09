@@ -167,3 +167,23 @@
   acss.push(new CSSStyleSheet());
   testing.expectEqual(1, acss.length);
 </script>
+
+<script id=createEvent>
+    const event = document.createEvent("Event");
+
+    testing.expectEqual(true, event instanceof Event);
+    testing.expectEqual("", event.type);
+
+    const customEvent = document.createEvent("CustomEvent");
+    customEvent.initCustomEvent("hey", false, false);
+
+    testing.expectEqual(true, customEvent instanceof CustomEvent);
+    testing.expectEqual(true, customEvent instanceof Event);
+
+    testing.withError(
+        (err) => {
+            // TODO: Check the error type.
+        },
+        () => document.createEvent("InvalidType"),
+    );
+</script>
