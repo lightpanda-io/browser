@@ -74,6 +74,7 @@ pub fn sendFile(req: *std.http.Server.Request, file_path: []const u8) !void {
         error.FileNotFound => return req.respond("server error", .{ .status = .not_found }),
         else => return err,
     };
+    defer file.close();
 
     const stat = try file.stat();
     var send_buffer: [4096]u8 = undefined;
