@@ -88,6 +88,7 @@ pub const FetchContext = struct {
             };
 
             resolver.reject("TypeError") catch unreachable;
+            self.promise_resolver.deinit();
         }
     }
 };
@@ -175,6 +176,7 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
         .done_callback = struct {
             fn doneCallback(ctx: *anyopaque) !void {
                 const self: *FetchContext = @ptrCast(@alignCast(ctx));
+                defer self.promise_resolver.deinit();
                 self.transfer = null;
 
                 log.info(.http, "request complete", .{
