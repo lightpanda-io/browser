@@ -331,7 +331,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         node_search_list: Node.Search.List,
 
         inspector: Inspector,
-        isolated_world: ?IsolatedWorld,
+        isolated_worlds: std.ArrayListUnmanaged(IsolatedWorld),
 
         http_proxy_changed: bool = false,
 
@@ -375,7 +375,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .page_life_cycle_events = false, // TODO; Target based value
                 .node_registry = registry,
                 .node_search_list = undefined,
-                .isolated_world = null,
+                .isolated_worlds = .empty,
                 .inspector = inspector,
                 .notification_arena = cdp.notification_arena.allocator(),
                 .intercept_state = try InterceptState.init(allocator),
@@ -404,9 +404,10 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             // so we need to shutdown the page one first.
             self.cdp.browser.closeSession();
 
-            if (self.isolated_world) |*world| {
+            for (self.isolated_worlds.items) |*world| {
                 world.deinit();
             }
+            self.isolated_worlds.clearRetainingCapacity();
             self.node_registry.deinit();
             self.node_search_list.deinit();
             self.cdp.browser.notification.unregisterAll(self);
@@ -427,32 +428,19 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         }
 
         pub fn createIsolatedWorld(self: *Self, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
-            if (self.isolated_world != null) {
-                // if the two world have different names, be safe and return an
-                // error.
-                if (std.mem.eql(u8, self.isolated_world.?.name, world_name) == false) {
-                    return error.CurrentlyOnly1IsolatedWorldSupported;
-                }
-
-                // If the two worlds have the same name, reuse the existing one
-                // but send a warning.
-                log.warn(.cdp, "not implemented", .{
-                    .feature = "createIsolatedWorld: Not implemented second isolated world creation",
-                    .info = "reuse existing isolated world with the same name",
-                    .world_name = world_name,
-                });
-                return &self.isolated_world.?;
-            }
-
             var executor = try self.cdp.browser.env.newExecutionWorld();
             errdefer executor.deinit();
 
-            self.isolated_world = .{
-                .name = try self.arena.dupe(u8, world_name),
+            const owned_name = try self.arena.dupe(u8, world_name);
+            const world = try self.isolated_worlds.addOne(self.arena);
+
+            world.* = .{
+                .name = owned_name,
                 .executor = executor,
                 .grant_universal_access = grant_universal_access,
             };
-            return &self.isolated_world.?;
+
+            return world;
         }
 
         pub fn nodeWriter(self: *Self, root: *const Node, opts: Node.Writer.Opts) Node.Writer {
@@ -710,6 +698,14 @@ const IsolatedWorld = struct {
             false,
             Env.GlobalMissingCallback.init(&self.polyfill_loader),
         );
+    }
+
+    pub fn createContextAndLoadPolyfills(self: *IsolatedWorld, arena: Allocator, page: *Page) !void {
+        // We need to recreate the isolated world context
+        try self.createContext(page);
+
+        const loader = @import("../browser/polyfill/polyfill.zig");
+        try loader.preload(arena, &self.executor.js_context.?);
     }
 };
 

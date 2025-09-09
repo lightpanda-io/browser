@@ -241,10 +241,10 @@ fn closeTarget(cmd: anytype) !void {
     }
 
     bc.session.removePage();
-    if (bc.isolated_world) |*world| {
+    for (bc.isolated_worlds.items) |*world| {
         world.deinit();
-        bc.isolated_world = null;
     }
+    bc.isolated_worlds.clearRetainingCapacity();
     bc.target_id = null;
 }
 

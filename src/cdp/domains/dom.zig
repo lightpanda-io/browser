@@ -277,10 +277,15 @@ fn resolveNode(cmd: anytype) !void {
     var js_context = page.main_context;
     if (params.executionContextId) |context_id| {
         if (js_context.v8_context.debugContextId() != context_id) {
-            var isolated_world = bc.isolated_world orelse return error.ContextNotFound;
-            js_context = &(isolated_world.executor.js_context orelse return error.ContextNotFound);
-
-            if (js_context.v8_context.debugContextId() != context_id) return error.ContextNotFound;
+            var found = false;
+            for (bc.isolated_worlds.items) |*isolated_world| {
+                js_context = &(isolated_world.executor.js_context orelse return error.ContextNotFound);
+                if (js_context.v8_context.debugContextId() == context_id) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return error.ContextNotFound;
         }
     }
 
