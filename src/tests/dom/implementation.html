@@ -1,0 +1,13 @@
+<script src="../testing.js"></script>
+<script id=implementation>
+  let impl = document.implementation;
+  testing.expectEqual("[object HTMLDocument]", impl.createHTMLDocument().toString());;
+
+  const doc = impl.createHTMLDocument('foo');
+  testing.expectEqual("[object HTMLDocument]", doc.toString());
+  testing.expectEqual("foo", doc.title);
+  testing.expectEqual("[object HTMLBodyElement]", doc.body.toString());
+  testing.expectEqual("[object Document]", impl.createDocument(null, 'foo').toString());
+  testing.expectEqual("[object DocumentType]", impl.createDocumentType('foo', 'bar', 'baz').toString());
+  testing.expectEqual(true, impl.hasFeature());
+</script>

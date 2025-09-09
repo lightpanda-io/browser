@@ -1,0 +1,95 @@
+<body></body>
+<script src="../testing.js"></script>
+<script id=intersectionObserver>
+  // doesn't crash (I guess)
+  new IntersectionObserver(() => {}).observe(document.documentElement);
+
+  let count_a = 0;
+  const a1 = document.createElement('div');
+  new IntersectionObserver(entries => {count_a += 1;}).observe(a1);
+  testing.expectEqual(1, count_a);
+
+  // This test is documenting current behavior, not correct behavior.
+  // Currently every time observe is called, the callback is called with all entries.
+  let count_b = 0;
+  let observer_b = new IntersectionObserver(entries => {count_b = entries.length;});
+  const b1 = document.createElement('div');
+  observer_b.observe(b1);
+  testing.expectEqual(1, count_b);
+  const b2 = document.createElement('div');
+  observer_b.observe(b2);
+  testing.expectEqual(2, count_b);
+</script>
+
+<script id=reobserve>
+  let count_bb = 0;
+  let observer_bb = new IntersectionObserver(entries => {count_bb = entries.length;});
+  const bb1 = document.createElement('div');
+  observer_bb.observe(bb1);
+  testing.expectEqual(1, count_bb)
+  observer_bb.observe(bb1);
+  testing.expectEqual(1, count_bb) // Still 1, not 2
+</script>
+
+<script id=unobserve>
+    let count_c = 0;
+    let observer_c = new IntersectionObserver(entries => { count_c = entries.length;});
+    const c1 = document.createElement('div');
+    observer_c.observe(c1);
+    testing.expectEqual(1, count_c);
+    observer_c.unobserve(c1);
+    const c2 = document.createElement('div');
+    observer_c.observe(c2);
+    testing.expectEqual(1, count_c);
+</script>
+
+<script id=takeRecords>
+  let observer_e = new IntersectionObserver(entries => {});
+  let e1 = document.createElement('div');
+  observer_e.observe(e1);
+  const e2 = document.createElement('div');
+  observer_e.observe(e2);
+  testing.expectEqual(2, observer_e.takeRecords().length);
+</script>
+
+<script id=disconnect>
+  let observer_d = new IntersectionObserver(entries => {});
+  let d1 = document.createElement('div');
+  observer_d.observe(d1);
+  observer_d.disconnect();
+  testing.expectEqual(0, observer_d.takeRecords().length);
+</script>
+
+<script id=entry>
+  let entry;
+  let div1 = document.createElement('div');
+  document.body.appendChild(div1);
+  new IntersectionObserver(entries => { entry = entries[0]; }).observe(div1);
+
+  testing.expectEqual(0, entry.boundingClientRect.x);
+  testing.expectEqual(1, entry.intersectionRatio);
+  testing.expectEqual(0, entry.intersectionRect.x);
+  testing.expectEqual(0, entry.intersectionRect.y);
+  testing.expectEqual(1, entry.intersectionRect.width);
+  testing.expectEqual(1, entry.intersectionRect.height);
+  testing.expectEqual(true, entry.isIntersecting);
+  testing.expectEqual(0, entry.rootBounds.x);
+  testing.expectEqual(0, entry.rootBounds.y);
+  testing.expectEqual(1, entry.rootBounds.width);
+  testing.expectEqual(1, entry.rootBounds.height);
+  testing.expectEqual('[object HTMLDivElement]', entry.target.toString());
+</script>
+
+<script id=options>
+  const new_root = document.createElement('span');
+  document.body.appendChild(new_root);
+
+  let new_entry;
+  const new_observer = new IntersectionObserver(
+    (entries) => { new_entry = entries[0]; },
+    {root: new_root, rootMargin: '0px 0px 0px 0px', threshold: [0]}
+  );
+
+  new_observer.observe(document.createElement('div'));
+  testing.expectEqual(1, new_entry.rootBounds.x);
+</script>

@@ -115,26 +115,7 @@ pub const NamedNodeMapIterator = struct {
     }
 };
 
-// Tests
-// -----
-
 const testing = @import("../../testing.zig");
-test "Browser.DOM.NamedNodeMap" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let a = document.getElementById('content').attributes", "undefined" },
-        .{ "a.length", "1" },
-        .{ "a.item(0)", "[object Attr]" },
-        .{ "a.item(1)", "null" },
-        .{ "a.getNamedItem('id')", "[object Attr]" },
-        .{ "a.getNamedItem('foo')", "null" },
-        .{ "a.setNamedItem(a.getNamedItem('id'))", "[object Attr]" },
-        .{ "a['id'].name", "id" },
-        .{ "a['id'].value", "content" },
-        .{ "a['other']", "undefined" },
-        .{ "a[0].value = 'abc123'", null },
-        .{ "a[0].value", "abc123" },
-    }, .{});
+test "Browser: DOM.NamedNodeMap" {
+    try testing.htmlRunner("dom/named_node_map.html");
 }
