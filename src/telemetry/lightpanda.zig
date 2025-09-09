@@ -107,7 +107,6 @@ pub const LightPanda = struct {
         }
 
         try self.connection.setBody(aw.written());
-        std.debug.print("{s}\n", .{aw.written()});
         const status = try self.connection.request();
 
         if (status != 200) {
