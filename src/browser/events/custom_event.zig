@@ -19,6 +19,7 @@
 const parser = @import("../netsurf.zig");
 const Event = @import("event.zig").Event;
 const JsObject = @import("../env.zig").JsObject;
+const netsurf = @import("../netsurf.zig");
 
 // https://dom.spec.whatwg.org/#interface-customevent
 pub const CustomEvent = struct {
@@ -54,6 +55,25 @@ pub const CustomEvent = struct {
 
     pub fn get_detail(self: *CustomEvent) ?JsObject {
         return self.detail;
+    }
+
+    // Initializes an already created `CustomEvent`.
+    // https://developer.mozilla.org/en-US/docs/Web/API/CustomEvent/initCustomEvent
+    pub fn _initCustomEvent(
+        self: *CustomEvent,
+        event_type: []const u8,
+        can_bubble: bool,
+        cancelable: bool,
+        detail: ?JsObject,
+    ) !void {
+        // This function can only be called after the constructor has called.
+        // So we assume proto is initialized already by constructor.
+        self.proto.type = try netsurf.strFromData(event_type);
+        self.proto.bubble = can_bubble;
+        self.proto.cancelable = cancelable;
+        self.proto.is_initialised = true;
+        // Detail is stored separately.
+        self.detail = detail;
     }
 };
 
