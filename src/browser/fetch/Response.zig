@@ -36,7 +36,8 @@ const Page = @import("../page.zig").Page;
 // https://developer.mozilla.org/en-US/docs/Web/API/Response
 const Response = @This();
 
-status: u16 = 0,
+status: u16 = 200,
+status_text: []const u8 = "",
 headers: Headers,
 mime: ?Mime = null,
 url: []const u8 = "",
@@ -50,7 +51,7 @@ const ResponseBody = union(enum) {
 
 const ResponseOptions = struct {
     status: u16 = 200,
-    statusText: []const u8 = "",
+    statusText: ?[]const u8 = null,
     headers: ?HeadersInit = null,
 };
 
@@ -72,10 +73,13 @@ pub fn constructor(_input: ?ResponseBody, _options: ?ResponseOptions, page: *Pag
     };
 
     const headers: Headers = if (options.headers) |hdrs| try Headers.constructor(hdrs, page) else .{};
+    const status_text = if (options.statusText) |st| try arena.dupe(u8, st) else "";
 
     return .{
         .body = body,
         .headers = headers,
+        .status = options.status,
+        .status_text = status_text,
     };
 }
 
@@ -103,6 +107,10 @@ pub fn get_redirected(self: *const Response) bool {
 
 pub fn get_status(self: *const Response) u16 {
     return self.status;
+}
+
+pub fn get_statusText(self: *const Response) []const u8 {
+    return self.status_text;
 }
 
 pub fn get_url(self: *const Response) []const u8 {
@@ -183,9 +191,6 @@ pub fn _text(self: *Response, page: *Page) !Env.Promise {
 }
 
 const testing = @import("../../testing.zig");
-test "fetch: response" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .url = "https://lightpanda.io" });
-    defer runner.deinit();
-
-    try runner.testCases(&.{}, .{});
+test "fetch: Response" {
+    try testing.htmlRunner("fetch/response.html");
 }

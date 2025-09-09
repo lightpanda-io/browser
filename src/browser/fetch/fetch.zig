@@ -36,9 +36,9 @@ const Response = @import("Response.zig");
 
 pub const Interfaces = .{
     @import("Headers.zig"),
-    @import("Headers.zig").HeaderEntryIterator,
-    @import("Headers.zig").HeaderKeyIterator,
-    @import("Headers.zig").HeaderValueIterator,
+    @import("Headers.zig").HeadersEntryIterable,
+    @import("Headers.zig").HeadersKeyIterable,
+    @import("Headers.zig").HeadersValueIterable,
     @import("Request.zig"),
     @import("Response.zig"),
 };

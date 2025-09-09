@@ -54,6 +54,10 @@ pub const RequestCache = enum {
             return null;
         }
     }
+
+    pub fn toString(self: RequestCache) []const u8 {
+        return @tagName(self);
+    }
 };
 
 pub const RequestCredentials = enum {
@@ -69,6 +73,10 @@ pub const RequestCredentials = enum {
         } else {
             return null;
         }
+    }
+
+    pub fn toString(self: RequestCredentials) []const u8 {
+        return @tagName(self);
     }
 };
 
@@ -152,6 +160,10 @@ pub fn get_bodyUsed(self: *const Request) bool {
 
 pub fn get_cache(self: *const Request) RequestCache {
     return self.cache;
+}
+
+pub fn get_credentials(self: *const Request) RequestCredentials {
+    return self.credentials;
 }
 
 pub fn get_headers(self: *Request) *Headers {
@@ -249,50 +261,6 @@ pub fn _text(self: *Response, page: *Page) !Env.Promise {
 }
 
 const testing = @import("../../testing.zig");
-test "fetch: request" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .url = "https://lightpanda.io" });
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let request = new Request('flower.png')", "undefined" },
-        .{ "request.url", "https://lightpanda.io/flower.png" },
-        .{ "request.method", "GET" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "let request2 = new Request('https://google.com', { method: 'POST', body: 'Hello, World' })", "undefined" },
-        .{ "request2.url", "https://google.com" },
-        .{ "request2.method", "POST" },
-    }, .{});
-}
-
-test "fetch: Browser.fetch" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{
-            \\  var ok = false;
-            \\  const request = new Request("http://127.0.0.1:9582/loader");
-            \\  fetch(request).then((response) => { ok = response.ok; });
-            \\  false;
-            ,
-            "false",
-        },
-        // all events have been resolved.
-        .{ "ok", "true" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{
-            \\  var ok2 = false;
-            \\  const request2 = new Request("http://127.0.0.1:9582/loader");
-            \\  (async function () { resp = await fetch(request2); ok2 = resp.ok; }());
-            \\  false;
-            ,
-            "false",
-        },
-        // all events have been resolved.
-        .{ "ok2", "true" },
-    }, .{});
+test "fetch: Request" {
+    try testing.htmlRunner("fetch/request.html");
 }
