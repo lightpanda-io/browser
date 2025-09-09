@@ -37,6 +37,7 @@ const DocumentFragment = @import("document_fragment.zig").DocumentFragment;
 const HTMLCollection = @import("html_collection.zig").HTMLCollection;
 const HTMLAllCollection = @import("html_collection.zig").HTMLAllCollection;
 const HTMLCollectionIterator = @import("html_collection.zig").HTMLCollectionIterator;
+const ShadowRoot = @import("shadow_root.zig").ShadowRoot;
 const Walker = @import("walker.zig").WalkerDepthFirst;
 
 // HTML
@@ -354,11 +355,23 @@ pub const Node = struct {
     // - An Element inside a standard web page will return an HTMLDocument object representing the entire page (or <iframe>).
     // - An Element inside a shadow DOM will return the associated ShadowRoot.
     // - An Element that is not attached to a document or a shadow tree will return the root of the DOM tree it belongs to
-    pub fn _getRootNode(self: *parser.Node, options: ?struct { composed: bool = false }) !Union {
+    const GetRootNodeResult = union(enum) {
+        shadow_root: *ShadowRoot,
+        node: Union,
+    };
+    pub fn _getRootNode(self: *parser.Node, options: ?struct { composed: bool = false }, page: *Page) !GetRootNodeResult {
         if (options) |options_| if (options_.composed) {
             log.warn(.web_api, "not implemented", .{ .feature = "getRootNode composed" });
         };
-        return try Node.toInterface(try parser.nodeGetRootNode(self));
+
+        const root = try parser.nodeGetRootNode(self);
+        if (page.getNodeState(root)) |state| {
+            if (state.shadow_root) |sr| {
+                return .{ .shadow_root = sr };
+            }
+        }
+
+        return .{ .node = try Node.toInterface(root) };
     }
 
     pub fn _hasChildNodes(self: *parser.Node) !bool {

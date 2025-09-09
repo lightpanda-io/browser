@@ -259,6 +259,7 @@ pub const Tag = enum(u8) {
     _var = c.DOM_HTML_ELEMENT_TYPE_VAR,
     video = c.DOM_HTML_ELEMENT_TYPE_VIDEO,
     wbr = c.DOM_HTML_ELEMENT_TYPE_WBR,
+    slot = c.DOM_HTML_ELEMENT_TYPE_SLOT,
     undef = c.DOM_HTML_ELEMENT_TYPE__UNKNOWN,
 
     pub fn all() []Tag {
@@ -1973,6 +1974,7 @@ pub const Script = c.dom_html_script_element;
 pub const Select = c.dom_html_select_element;
 pub const Source = struct { base: *c.dom_html_element };
 pub const Span = struct { base: *c.dom_html_element };
+pub const Slot = c.dom_html_slot_element;
 pub const Style = c.dom_html_style_element;
 pub const Table = c.dom_html_table_element;
 pub const TableCaption = c.dom_html_table_caption_element;
