@@ -50,23 +50,7 @@ pub const DOMImplementation = struct {
     }
 };
 
-// Tests
-// -----
-
 const testing = @import("../../testing.zig");
-test "Browser.DOM.Implementation" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let impl = document.implementation", "undefined" },
-        .{ "impl.createHTMLDocument();", "[object HTMLDocument]" },
-        .{ "const doc = impl.createHTMLDocument('foo');", "undefined" },
-        .{ "doc", "[object HTMLDocument]" },
-        .{ "doc.title", "foo" },
-        .{ "doc.body", "[object HTMLBodyElement]" },
-        .{ "impl.createDocument(null, 'foo');", "[object Document]" },
-        .{ "impl.createDocumentType('foo', 'bar', 'baz')", "[object DocumentType]" },
-        .{ "impl.hasFeature()", "true" },
-    }, .{});
+test "Browser: DOM.Implementation" {
+    try testing.htmlRunner("dom/implementation.html");
 }

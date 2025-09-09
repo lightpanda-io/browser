@@ -1,0 +1,59 @@
+<script src="../testing.js"></script>
+<script id=messageChannel>
+  const mc1 = new MessageChannel();
+  testing.expectEqual(mc1.port1, mc1.port1);
+  testing.expectEqual(mc1.port2, mc1.port2);
+  testing.expectEqual(true, mc1.port1 != mc1.port2);
+  mc1.port1.postMessage('msg1');
+
+  let message = null;
+  let target = null;
+  let currentTarget = null;
+  mc1.port2.onmessage = (e) => {
+    message = e.data;
+    target = e.target;
+    currentTarget = e.currentTarget;
+  };
+
+  //  as soon as onmessage is called, queued messages are delivered
+  testing.expectEqual('msg1', message);
+  testing.expectEqual(mc1.port2, target);
+  testing.expectEqual(mc1.port2, currentTarget);
+
+  mc1.port1.postMessage('msg2');
+  testing.expectEqual('msg2', message);
+  testing.expectEqual(mc1.port2, target);
+  testing.expectEqual(mc1.port2, currentTarget);
+
+  message = null;
+  mc1.port1.close();
+  mc1.port1.postMessage('msg3');
+  testing.expectEqual(null, message);
+
+  const mc2 = new MessageChannel();
+  mc2.port2.postMessage('msg1');
+  mc2.port1.postMessage('msg2');
+
+  let message1 = null;
+  mc2.port1.addEventListener('message', (e) => {
+    message1 = e.data;
+  });
+
+  let message2 = null;
+  mc2.port2.addEventListener('message', (e) => {
+    message2 = e.data;
+  });
+
+  testing.expectEqual(null, message1);
+  testing.expectEqual(null, message2);
+
+  mc2.port2.start();
+
+  testing.expectEqual(null, message1);
+  testing.expectEqual('msg2', message2);
+  message2 = null;
+
+  mc2.port1.start();
+  testing.expectEqual('msg1', message1);
+  testing.expectEqual(null, message2);
+</script>

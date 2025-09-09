@@ -1,0 +1,68 @@
+<div></div>
+<div id=d1><p id=p1> And</p></div>
+<div id=d2><p id=p2> And</p></div>
+<div id=d3><p id=p3> And</p></div>
+
+<script src="../testing.js"></script>
+<script id=mutationObserver>
+  // doesn't crash, yay.
+  new MutationObserver(() => {}).observe(document, { childList: true });
+
+  var nb = 0;
+  var mrs;
+  new MutationObserver((mu) => {
+     mrs = mu;
+     nb++;
+  }).observe(document.firstElementChild, { attributes: true, attributeOldValue: true });
+  document.firstElementChild.setAttribute("foo", "bar");
+  document.firstElementChild.firstChild.setAttribute("foo", "bar");
+
+  testing.eventually(() => {
+    testing.expectEqual(1, nb);
+    testing.expectEqual('attributes', mrs[0].type);
+    testing.expectEqual(document.firstElementChild, mrs[0].target);
+    testing.expectEqual('bar', mrs[0].target.getAttribute('foo'));
+    testing.expectEqual('foo', mrs[0].attributeName);
+    testing.expectEqual(null, mrs[0].oldValue);
+  });
+
+  var nb2 = 0;
+  var mrs2;
+  var node1 = $('#p1').firstChild;
+  new MutationObserver((mu) => {
+      mrs2 = mu;
+      nb2++;
+  }).observe(node1, { characterData: true, characterDataOldValue: true });
+  node1.data = "foo";
+
+  testing.eventually(() => {
+    testing.expectEqual(1, nb2);
+    testing.expectEqual('characterData', mrs2[0].type);
+    testing.expectEqual(node1, mrs2[0].target);
+    testing.expectEqual('foo', mrs2[0].target.data);
+    testing.expectEqual(' And', mrs2[0].oldValue);
+  });
+</script>
+
+<script id=callback>
+  // tests that mutation observers that have a callback which trigger the
+  // mutation observer don't crash.
+  // https://github.com/lightpanda-io/browser/issues/550
+  var node2 = $("#p2");
+  new MutationObserver(() => {
+      node2.innerText = 'a';
+  }).observe($('#d2'), { subtree:true, childList:true });
+  node2.innerText = "2";
+  testing.eventually(() => testing.expectEqual('a', node2.innerText));
+
+  var node3 = $("#p3");
+  var attrWatch = 0;
+  new MutationObserver(() => {
+      attrWatch++;
+  }).observe($('#d3'), { attributeFilter: ["name"], subtree: true });
+  node3.setAttribute("id", "1");
+
+  testing.expectEqual(0, attrWatch);
+  node3.setAttribute('name', 'other');
+  testing.eventually(() => testing.expectEqual(1, attrWatch));
+</script>

@@ -1,0 +1,18 @@
+<div id="content"></div>
+
+<script src="../testing.js"></script>
+<script id=namedNodeMap>
+  let a = document.getElementById('content').attributes;
+  testing.expectEqual(1, a.length);
+  testing.expectEqual('[object Attr]', a.item(0).toString());
+  testing.expectEqual(null, a.item(1));
+  testing.expectEqual('[object Attr]', a.getNamedItem('id').toString());
+  testing.expectEqual(null, a.getNamedItem('foo'));
+  testing.expectEqual('[object Attr]', a.setNamedItem(a.getNamedItem('id')).toString());
+
+  testing.expectEqual('id', a['id'].name);
+  testing.expectEqual('content', a['id'].value);
+  testing.expectEqual(undefined, a['other']);
+  a[0].value = 'abc123';
+  testing.expectEqual('abc123', a[0].value);
+</script>
