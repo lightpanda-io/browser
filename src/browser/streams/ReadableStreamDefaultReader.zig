@@ -29,23 +29,18 @@ const ReadableStreamReadResult = @import("./ReadableStream.zig").ReadableStreamR
 const ReadableStreamDefaultReader = @This();
 
 stream: *ReadableStream,
-// This promise resolves when the stream is closed.
-closed_resolver: Env.PromiseResolver,
 
-pub fn constructor(stream: *ReadableStream, page: *Page) ReadableStreamDefaultReader {
-    const closed_resolver = Env.PromiseResolver{
-        .js_context = page.main_context,
-        .resolver = v8.PromiseResolver.init(page.main_context.v8_context),
-    };
-
-    return .{
-        .stream = stream,
-        .closed_resolver = closed_resolver,
-    };
+pub fn constructor(stream: *ReadableStream) ReadableStreamDefaultReader {
+    return .{ .stream = stream };
 }
 
-pub fn get_closed(self: *const ReadableStreamDefaultReader) Env.Promise {
-    return self.closed_resolver.promise();
+pub fn get_closed(self: *const ReadableStreamDefaultReader, page: *Page) Env.Promise {
+    const resolver = Env.PromiseResolver{
+        .js_context = page.main_context,
+        .resolver = self.stream.closed_resolver.castToPromiseResolver(),
+    };
+
+    return resolver.promise();
 }
 
 pub fn _cancel(self: *ReadableStreamDefaultReader, reason: ?[]const u8, page: *Page) !Env.Promise {
