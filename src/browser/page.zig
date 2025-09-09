@@ -90,10 +90,8 @@ pub const Page = struct {
 
     load_state: LoadState = .parsing,
 
-    // We should only emit these events once per page. To make sure of that, we
-    // track whether or not we've already emitted the notifications.
-    notified_network_idle: bool = false,
-    notified_network_almost_idle: bool = false,
+    notified_network_idle: IdleNotification = .init,
+    notified_network_almost_idle: IdleNotification = .init,
 
     const Mode = union(enum) {
         pre: void,
@@ -325,8 +323,7 @@ pub const Page = struct {
                     // scheduler.run could trigger new http transfers, so do not
                     // store http_client.active BEFORE this call and then use
                     // it AFTER.
-                    const ms_to_next_task = try scheduler.runHighPriority();
-                    _ = try scheduler.runLowPriority();
+                    const ms_to_next_task = try scheduler.run();
 
                     if (try_catch.hasCaught()) {
                         const msg = (try try_catch.err(self.arena)) orelse "unknown";
@@ -335,6 +332,14 @@ pub const Page = struct {
                     }
 
                     const http_active = http_client.active;
+                    const total_network_activity = http_active + http_client.intercepted;
+                    if (self.notified_network_almost_idle.check(total_network_activity <= 2)) {
+                        self.notifyNetworkAlmostIdle();
+                    }
+                    if (self.notified_network_idle.check(total_network_activity == 0)) {
+                        self.notifyNetworkIdle();
+                    }
+
                     if (http_active == 0 and exit_when_done) {
                         // we don't need to consider http_client.intercepted here
                         // because exit_when_done is true, and that can only be
@@ -359,7 +364,8 @@ pub const Page = struct {
 
                         if (ms > ms_remaining) {
                             // Same as above, except we have a scheduled task,
-                            // it just happens to be too far into the future.
+                            // it just happens to be too far into the future
+                            // compared to how long we were told to wait.
                             return .done;
                         }
 
@@ -371,9 +377,6 @@ pub const Page = struct {
                         // loop to see if anything new can be processed.
                         std.Thread.sleep(std.time.ns_per_ms * @as(u64, @intCast(@min(ms, 20))));
                     } else {
-                        if (self.notified_network_idle == false and http_active == 0 and http_client.intercepted == 0) {
-                            self.notifyNetworkIdle();
-                        }
                         // We're here because we either have active HTTP
                         // connections, or exit_when_done == false (aka, there's
                         // an extra_socket registered with the http client).
@@ -484,25 +487,14 @@ pub const Page = struct {
     }
 
     fn notifyNetworkIdle(self: *Page) void {
-        // caller should always check that we haven't sent this already;
-        std.debug.assert(self.notified_network_idle == false);
-
-        // if we're going to send networkIdle, we should first send networkAlmostIdle
-        // if it hasn't already been sent.
-        if (self.notified_network_almost_idle == false) {
-            self.notifyNetworkAlmostIdle();
-        }
-
-        self.notified_network_idle = true;
+        std.debug.assert(self.notified_network_idle == .done);
         self.session.browser.notification.dispatch(.page_network_idle, &.{
             .timestamp = timestamp(),
         });
     }
 
     fn notifyNetworkAlmostIdle(self: *Page) void {
-        // caller should always check that we haven't sent this already;
-        std.debug.assert(self.notified_network_almost_idle == false);
-        self.notified_network_almost_idle = true;
+        std.debug.assert(self.notified_network_almost_idle == .done);
         self.session.browser.notification.dispatch(.page_network_almost_idle, &.{
             .timestamp = timestamp(),
         });
@@ -1140,8 +1132,81 @@ pub const NavigateOpts = struct {
     header: ?[:0]const u8 = null,
 };
 
+const IdleNotification = union(enum) {
+    // hasn't started yet.
+    init,
+
+    // timestamp where the state was first triggered. If the state stays
+    // true (e.g. 0 nework activity for NetworkIdle, or <= 2 for NetworkAlmostIdle)
+    // for 500ms, it'll send the notification and transition to .done. If
+    // the state doesn't stay true, it'll revert to .init.
+    triggered: u64,
+
+    // notification sent - should never be reset
+    done,
+
+    // Returns `true` if we should send a notification. Only returns true if it
+    // was previously triggered 500+ milliseconds ago.
+    // active == true when the condition for the notification is true
+    // active == false when the condition for the notification is false
+    pub fn check(self: *IdleNotification, active: bool) bool {
+        if (active) {
+            switch (self.*) {
+                .done => {
+                    // Notification was already sent.
+                },
+                .init => {
+                    // This is the first time the condition was triggered (or
+                    // the first time after being un-triggered). Record the time
+                    // so that if the condition holds for long enough, we can
+                    // send a notification.
+                    self.* = .{ .triggered = milliTimestamp() };
+                },
+                .triggered => |ms| {
+                    // The condition was already triggered and was triggered
+                    // again. When this condition holds for 500+ms, we'll send
+                    // a notification.
+                    if (milliTimestamp() - ms >= 500) {
+                        // This is the only place in this function where we can
+                        // return true. The only place where we can tell our caller
+                        // "send the notification!".
+                        self.* = .done;
+                        return true;
+                    }
+                    // the state hasn't held for 500ms.
+                },
+            }
+        } else {
+            switch (self.*) {
+                .done => {
+                    // The condition became false, but we already sent the notification
+                    // There's nothing we can do, it stays .done. We never re-send
+                    // a notification or "undo" a sent notification (not that we can).
+                },
+                .init => {
+                    // The condition remains false
+                },
+                .triggered => {
+                    // The condition _had_ been true, and we were waiting (500ms)
+                    // for it to hold, but it hasn't. So we go back to waiting.
+                    self.* = .init;
+                },
+            }
+        }
+
+        // See above for the only case where we ever return true. All other
+        // paths go here. This means "don't send the notification". Maybe
+        // because it's already been sent, maybe because active is false, or
+        // maybe because the condition hasn't held long enough.
+        return false;
+    }
+};
+
 fn timestamp() u32 {
     return @import("../datetime.zig").timestamp();
+}
+fn milliTimestamp() u64 {
+    return @import("../datetime.zig").milliTimestamp();
 }
 
 // A callback from libdom whenever a script tag is added to the DOM.
