@@ -75,15 +75,6 @@ pub fn verify(what_to_show: u32, filter: ?Env.Function, node: *parser.Node) !Ver
 }
 
 const testing = @import("../../testing.zig");
-test "Browser.DOM.NodeFilter" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "NodeFilter.FILTER_ACCEPT", "1" },
-        .{ "NodeFilter.FILTER_REJECT", "2" },
-        .{ "NodeFilter.FILTER_SKIP", "3" },
-        .{ "NodeFilter.SHOW_ALL", "4294967295" },
-        .{ "NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_COMMENT", "129" },
-    }, .{});
+test "Browser: DOM.NodeFilter" {
+    try testing.htmlRunner("dom/node_filter.html");
 }

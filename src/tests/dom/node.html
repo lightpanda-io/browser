@@ -1,0 +1,225 @@
+<body><div id="content">
+    <a id="link" href="foo" class="ok">OK</a>
+    <p id="para-empty" class="ok empty">
+      <span id="para-empty-child"></span>
+    </p>
+    <p id="para"> And</p>
+    <!--comment-->
+  </div>
+</body>
+
+<script src="../testing.js"></script>
+<script>
+function trimAndReplace(str) {
+  str = str.replace(/(\r\n|\n|\r)/gm,'');
+  str = str.replace(/\s+/g, ' ');
+  str = str.trim();
+  return str;
+}
+
+let content = $('#content');
+let link = $('#link');
+let first_child = content.firstChild.nextSibling; // nextSibling because of line return \n
+</script>
+
+<script id=compareDocumentPosition>
+  testing.expectEqual(10, document.body.compareDocumentPosition(document.firstChild));
+  testing.expectEqual(10, $('#para-empty').compareDocumentPosition(content));
+  testing.expectEqual(20, content.compareDocumentPosition($('#para-empty')));
+  testing.expectEqual(0, link.compareDocumentPosition(link));
+  testing.expectEqual(2, $('#para-empty').compareDocumentPosition(link));
+  testing.expectEqual(4, link.compareDocumentPosition($('#para-empty')));
+</script>
+
+<script id=proto>
+  testing.expectEqual('HTMLDocument', content.getRootNode().__proto__.constructor.name);
+</script>
+
+<script id=firstChild>
+  let body_first_child = document.body.firstChild;
+  testing.expectEqual('div', body_first_child.localName);
+  testing.expectEqual('HTMLDivElement', body_first_child.__proto__.constructor.name);
+  testing.expectEqual(null, $('#para-empty').firstChild.firstChild);
+</script>
+
+<script id=lastChild>
+  let last_child = content.lastChild.previousSibling; // previousSibling because of line return \n
+  testing.expectEqual('Comment', last_child.__proto__.constructor.name);
+</script>
+
+<script id=nextSibling>
+  let next_sibling = link.nextSibling.nextSibling;
+  testing.expectEqual('p', next_sibling.localName);
+  testing.expectEqual('HTMLParagraphElement', next_sibling.__proto__.constructor.name);
+  testing.expectEqual(null, $('#para-empty-child').nextSibling.nextSibling);
+</script>
+
+<script id=previousSibling>
+  let prev_sibling = $('#para-empty').previousSibling.previousSibling;
+  testing.expectEqual('a', prev_sibling.localName);
+  testing.expectEqual('HTMLAnchorElement', prev_sibling.__proto__.constructor.name);
+  testing.expectEqual(null, content.previousSibling);
+</script>
+
+<script id=parentElement>
+  let parent = $('#para').parentElement;
+  testing.expectEqual('div', parent.localName);
+  testing.expectEqual('HTMLDivElement', parent.__proto__.constructor.name)
+
+  let h = content.parentElement.parentElement;
+  testing.expectEqual(null, h.parentElement);
+  testing.expectEqual('HTMLDocument', h.parentNode.__proto__.constructor.name);
+</script>
+
+<script id=nodeName>
+  testing.expectEqual('A', first_child.nodeName);
+  testing.expectEqual('#text', link.firstChild.nodeName);
+  testing.expectEqual('#comment', last_child.nodeName);
+  testing.expectEqual('#document', document.nodeName);
+</script>
+
+<script id=nodeType>
+  testing.expectEqual(1, first_child.nodeType)
+  testing.expectEqual(3, link.firstChild.nodeType)
+  testing.expectEqual(8, last_child.nodeType)
+  testing.expectEqual(9, document.nodeType)
+</script>
+
+<script id=ownerDocument>
+  let owner = content.ownerDocument;
+  testing.expectEqual('HTMLDocument', owner.__proto__.constructor.name);
+  testing.expectEqual(null, document.ownerDocument)
+
+  let owner2 = document.createElement('div').ownerDocument;
+  testing.expectEqual('HTMLDocument', owner2.__proto__.constructor.name);
+</script>
+
+<script id=isConnected>
+  testing.expectEqual(true, content.isConnected);
+  testing.expectEqual(true, document.isConnected);
+
+  const connDiv = document.createElement('div');
+  testing.expectEqual(false, connDiv.isConnected);
+
+  const connParentDiv = document.createElement('div');
+  connParentDiv.appendChild(connDiv);
+  testing.expectEqual(false, connDiv.isConnected);
+
+  content.appendChild(connParentDiv);
+  testing.expectEqual(true, connDiv.isConnected);
+</script>
+
+<script id=nodeValue>
+  testing.expectEqual('comment', last_child.nodeValue);
+  testing.expectEqual(null, link.nodeValue);
+
+  let text = link.firstChild;
+  testing.expectEqual('OK', text.nodeValue);
+
+  text.nodeValue = 'OK modified';
+  testing.expectEqual('OK modified', text.nodeValue);
+</script>
+
+<script id=textContent>
+  testing.expectEqual('OK modified', text.textContent);
+  testing.expectEqual('OK modified And', trimAndReplace(content.textContent));
+  text.textContent = 'OK';
+  testing.expectEqual('OK', text.textContent);
+
+  testing.expectEqual('', trimAndReplace($('#para-empty').textContent));
+
+  $('#para-empty').textContent = 'OK';
+  testing.expectEqual('#text', $('#para-empty').firstChild.nodeName);
+</script>
+
+<script id=appendChild>
+  let append = document.createElement('h1');
+  testing.expectEqual('[object HTMLHeadingElement]', content.appendChild(append).toString());
+  testing.expectEqual('HTMLHeadingElement', content.lastChild.__proto__.constructor.name);
+  testing.expectEqual('[object HTMLAnchorElement]', content.appendChild(link).toString());
+</script>
+
+<script id=cloneNode>
+  let clone = link.cloneNode();
+  testing.expectEqual('[object HTMLAnchorElement]', clone.toString());
+  testing.expectEqual(null, clone.parentNode);
+  testing.expectEqual(null, clone.firstChild);
+
+  let clone_deep = link.cloneNode(true);
+  testing.expectEqual('#text', clone_deep.firstChild.nodeName);
+</script>
+
+<script id=contains>
+  testing.expectEqual(true, link.contains(text));
+  testing.expectEqual(false, text.contains(link));
+</script>
+
+<script id=hasChildNodes>
+  testing.expectEqual(true, link.hasChildNodes());
+  testing.expectEqual(false, text.hasChildNodes());
+</script>
+
+<script id=childNodesLength>
+  testing.expectEqual(1, link.childNodes.length);
+  testing.expectEqual(0, text.childNodes.length);
+</script>
+
+<script id=insertBefore>
+  let insertBefore = document.createElement('a');
+  testing.expectEqual(true, link.insertBefore(insertBefore, text) !== undefined);
+  testing.expectEqual('a', link.firstChild.localName);
+
+  let insertBefore2 = document.createElement('b');
+  testing.expectEqual('b', link.insertBefore(insertBefore2, null).localName);
+  testing.expectEqual('b', link.childNodes[link.childNodes.length - 1].localName);
+</script>
+
+<script id=isDefaultNamespace>
+  // TODO: does not seems to work
+  //   link.isDefaultNamespace('')", "true" },
+  testing.expectEqual(false, link.isDefaultNamespace('false'));
+</script>
+
+<script id=isEqualNode>
+  let equal1 = document.createElement('a');
+  let equal2 = document.createElement('a');
+  equal1.textContent = 'is equal';
+  equal2.textContent = 'is equal';
+  // TODO: does not seems to work
+  // testing.expectEqual(true, equal1.isEqualNode(equal2));
+  testing.skip();
+</script>
+
+<script id=isSameNode>
+  testing.expectEqual(true, document.body.isSameNode(document.body));
+  testing.expectEqual(false, document.body.isSameNode(content));
+</script>
+
+<script id=baseURI>
+  testing.expectEqual('http://localhost:9582/src/tests/dom/node.html', link.baseURI);
+</script>
+
+<script id=removeChild>
+  testing.expectEqual(true, content.removeChild(append) !== undefined);
+  testing.expectEqual(true, last_child.__proto__.constructor.name !== 'HTMLHeadingElement');
+</script>
+
+<script id=replaceChild>
+  let replace = document.createElement('div');
+  testing.expectEqual(true, link.replaceChild(replace, insertBefore) !== undefined);
+</script>
+
+<script id=NODE_TYPE>
+  testing.expectEqual(1, Node.ELEMENT_NODE);
+  testing.expectEqual(2, Node.ATTRIBUTE_NODE);
+  testing.expectEqual(3, Node.TEXT_NODE);
+  testing.expectEqual(4, Node.CDATA_SECTION_NODE);
+  testing.expectEqual(7, Node.PROCESSING_INSTRUCTION_NODE);
+  testing.expectEqual(8, Node.COMMENT_NODE);
+  testing.expectEqual(9, Node.DOCUMENT_NODE);
+  testing.expectEqual(10, Node.DOCUMENT_TYPE_NODE);
+  testing.expectEqual(11, Node.DOCUMENT_FRAGMENT_NODE);
+  testing.expectEqual(5, Node.ENTITY_REFERENCE_NODE);
+  testing.expectEqual(6, Node.ENTITY_NODE);
+  testing.expectEqual(12, Node.NOTATION_NODE);
+</script>

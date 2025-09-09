@@ -1055,7 +1055,7 @@ pub const HTMLSlotElement = struct {
 
     fn findAssignedSlotNodes(self: *parser.Slot, opts: AssignedNodesOpts, page: *Page) !?[]NodeUnion {
         if (opts.flatten) {
-            log.warn(.web_api, "not implemented", .{ .feature = "HTMLSlotElement flatten assignedNodes" });
+            log.debug(.web_api, "not implemented", .{ .feature = "HTMLSlotElement flatten assignedNodes" });
         }
 
         const slot_name = try parser.elementGetAttribute(@ptrCast(@alignCast(self)), "name");
