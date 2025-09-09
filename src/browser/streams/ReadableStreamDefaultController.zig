@@ -39,6 +39,7 @@ pub fn _close(self: *ReadableStreamDefaultController, _reason: ?[]const u8, page
     const reason = if (_reason) |reason| try page.arena.dupe(u8, reason) else null;
     self.stream.state = .{ .closed = reason };
 
+    // Resolve the Reader Promise
     if (self.stream.reader_resolver) |rr| {
         const resolver = Env.PromiseResolver{
             .js_context = page.main_context,
@@ -48,6 +49,14 @@ pub fn _close(self: *ReadableStreamDefaultController, _reason: ?[]const u8, page
         try resolver.resolve(ReadableStreamReadResult{ .value = .empty, .done = true });
         self.stream.reader_resolver = null;
     }
+
+    // Resolve the Closed promise.
+    const closed_resolver = Env.PromiseResolver{
+        .js_context = page.main_context,
+        .resolver = self.stream.closed_resolver.castToPromiseResolver(),
+    };
+
+    try closed_resolver.resolve({});
 
     // close just sets as closed meaning it wont READ any more but anything in the queue is fine to read.
     // to discard, must use cancel.

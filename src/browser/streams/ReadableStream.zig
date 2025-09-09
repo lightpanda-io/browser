@@ -36,6 +36,9 @@ const State = union(enum) {
 
 // This promise resolves when a stream is canceled.
 cancel_resolver: v8.Persistent(v8.PromiseResolver),
+closed_resolver: v8.Persistent(v8.PromiseResolver),
+reader_resolver: ?v8.Persistent(v8.PromiseResolver) = null,
+
 locked: bool = false,
 state: State = .readable,
 
@@ -43,7 +46,6 @@ cancel_fn: ?Env.Function = null,
 pull_fn: ?Env.Function = null,
 
 strategy: QueueingStrategy,
-reader_resolver: ?v8.Persistent(v8.PromiseResolver) = null,
 queue: std.ArrayListUnmanaged([]const u8) = .empty,
 
 pub const ReadableStreamReadResult = struct {
@@ -82,8 +84,13 @@ pub fn constructor(underlying: ?UnderlyingSource, _strategy: ?QueueingStrategy, 
         v8.PromiseResolver.init(page.main_context.v8_context),
     );
 
+    const closed_resolver = v8.Persistent(v8.PromiseResolver).init(
+        page.main_context.isolate,
+        v8.PromiseResolver.init(page.main_context.v8_context),
+    );
+
     const stream = try page.arena.create(ReadableStream);
-    stream.* = ReadableStream{ .cancel_resolver = cancel_resolver, .strategy = strategy };
+    stream.* = ReadableStream{ .cancel_resolver = cancel_resolver, .closed_resolver = closed_resolver, .strategy = strategy };
 
     const controller = ReadableStreamDefaultController{ .stream = stream };
 
@@ -104,6 +111,15 @@ pub fn constructor(underlying: ?UnderlyingSource, _strategy: ?QueueingStrategy, 
     }
 
     return stream;
+}
+
+pub fn destructor(self: *ReadableStream) void {
+    self.cancel_resolver.deinit();
+    self.closed_resolver.deinit();
+
+    if (self.reader_resolver) |*rr| {
+        rr.deinit();
+    }
 }
 
 pub fn get_locked(self: *const ReadableStream) bool {
@@ -150,7 +166,7 @@ const GetReaderOptions = struct {
     mode: ?[]const u8 = null,
 };
 
-pub fn _getReader(self: *ReadableStream, _options: ?GetReaderOptions, page: *Page) !ReadableStreamDefaultReader {
+pub fn _getReader(self: *ReadableStream, _options: ?GetReaderOptions) !ReadableStreamDefaultReader {
     if (self.locked) {
         return error.TypeError;
     }
@@ -159,7 +175,7 @@ pub fn _getReader(self: *ReadableStream, _options: ?GetReaderOptions, page: *Pag
     const options = _options orelse GetReaderOptions{};
     _ = options;
 
-    return ReadableStreamDefaultReader.constructor(self, page);
+    return ReadableStreamDefaultReader.constructor(self);
 }
 
 // TODO: pipeThrough (requires TransformStream)
