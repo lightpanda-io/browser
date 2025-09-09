@@ -17,8 +17,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const log = @import("../../log.zig");
 const URL = @import("../../url.zig").URL;
 const Page = @import("../page.zig").Page;
+
+const iterator = @import("../iterator/iterator.zig");
 
 const v8 = @import("v8");
 const Env = @import("../env.zig").Env;
@@ -108,7 +111,8 @@ pub fn constructor(_init: ?HeadersInit, page: *Page) !Headers {
 }
 
 pub fn append(self: *Headers, name: []const u8, value: []const u8, allocator: std.mem.Allocator) !void {
-    const gop = try self.headers.getOrPut(allocator, name);
+    const key = try allocator.dupe(u8, name);
+    const gop = try self.headers.getOrPut(allocator, key);
 
     if (gop.found_existing) {
         // If we found it, append the value.
@@ -129,13 +133,13 @@ pub fn _delete(self: *Headers, name: []const u8) void {
     _ = self.headers.remove(name);
 }
 
-pub const HeaderEntryIterator = struct {
+pub const HeadersEntryIterator = struct {
     slot: [2][]const u8,
     iter: HeaderHashMap.Iterator,
 
     // TODO: these SHOULD be in lexigraphical order but I'm not sure how actually
     // important that is.
-    pub fn _next(self: *HeaderEntryIterator) ?[2][]const u8 {
+    pub fn _next(self: *HeadersEntryIterator) ?[2][]const u8 {
         if (self.iter.next()) |entry| {
             self.slot[0] = entry.key_ptr.*;
             self.slot[1] = entry.value_ptr.*;
@@ -146,10 +150,12 @@ pub const HeaderEntryIterator = struct {
     }
 };
 
-pub fn _entries(self: *const Headers) HeaderEntryIterator {
+pub fn _entries(self: *const Headers) HeadersEntryIterable {
     return .{
-        .slot = undefined,
-        .iter = self.headers.iterator(),
+        .inner = .{
+            .slot = undefined,
+            .iter = self.headers.iterator(),
+        },
     };
 }
 
@@ -171,10 +177,10 @@ pub fn _has(self: *const Headers, name: []const u8) bool {
     return self.headers.contains(name);
 }
 
-pub const HeaderKeyIterator = struct {
+pub const HeadersKeyIterator = struct {
     iter: HeaderHashMap.KeyIterator,
 
-    pub fn _next(self: *HeaderKeyIterator) ?[]const u8 {
+    pub fn _next(self: *HeadersKeyIterator) ?[]const u8 {
         if (self.iter.next()) |key| {
             return key.*;
         } else {
@@ -183,21 +189,22 @@ pub const HeaderKeyIterator = struct {
     }
 };
 
-pub fn _keys(self: *const Headers) HeaderKeyIterator {
-    return .{ .iter = self.headers.keyIterator() };
+pub fn _keys(self: *const Headers) HeadersKeyIterable {
+    return .{ .inner = .{ .iter = self.headers.keyIterator() } };
 }
 
 pub fn _set(self: *Headers, name: []const u8, value: []const u8, page: *Page) !void {
     const arena = page.arena;
 
-    const gop = try self.headers.getOrPut(arena, name);
+    const key = try arena.dupe(u8, name);
+    const gop = try self.headers.getOrPut(arena, key);
     gop.value_ptr.* = try arena.dupe(u8, value);
 }
 
-pub const HeaderValueIterator = struct {
+pub const HeadersValueIterator = struct {
     iter: HeaderHashMap.ValueIterator,
 
-    pub fn _next(self: *HeaderValueIterator) ?[]const u8 {
+    pub fn _next(self: *HeadersValueIterator) ?[]const u8 {
         if (self.iter.next()) |value| {
             return value.*;
         } else {
@@ -206,53 +213,15 @@ pub const HeaderValueIterator = struct {
     }
 };
 
-pub fn _values(self: *const Headers) HeaderValueIterator {
-    return .{ .iter = self.headers.valueIterator() };
+pub fn _values(self: *const Headers) HeadersValueIterable {
+    return .{ .inner = .{ .iter = self.headers.valueIterator() } };
 }
 
+pub const HeadersKeyIterable = iterator.Iterable(HeadersKeyIterator, "HeadersKeyIterator");
+pub const HeadersValueIterable = iterator.Iterable(HeadersValueIterator, "HeadersValueIterator");
+pub const HeadersEntryIterable = iterator.Iterable(HeadersEntryIterator, "HeadersEntryIterator");
+
 const testing = @import("../../testing.zig");
-test "fetch: headers" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .url = "https://lightpanda.io" });
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let emptyHeaders = new Headers()", "undefined" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "let headers = new Headers({'Set-Cookie': 'name=world'})", "undefined" },
-        .{ "headers.get('set-cookie')", "name=world" },
-    }, .{});
-
-    // adapted from the mdn examples
-    try runner.testCases(&.{
-        .{ "const myHeaders = new Headers();", "undefined" },
-        .{ "myHeaders.append('Content-Type', 'image/jpeg')", "undefined" },
-        .{ "myHeaders.has('Picture-Type')", "false" },
-        .{ "myHeaders.get('Content-Type')", "image/jpeg" },
-        .{ "myHeaders.append('Content-Type', 'image/png')", "undefined" },
-        .{ "myHeaders.get('Content-Type')", "image/jpeg, image/png" },
-        .{ "myHeaders.delete('Content-Type')", "undefined" },
-        .{ "myHeaders.get('Content-Type')", "null" },
-        .{ "myHeaders.set('Picture-Type', 'image/svg')", "undefined" },
-        .{ "myHeaders.get('Picture-Type')", "image/svg" },
-        .{ "myHeaders.has('Picture-Type')", "true" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "const originalHeaders = new Headers([['Content-Type', 'application/json'], ['Authorization', 'Bearer token123']])", "undefined" },
-        .{ "originalHeaders.get('Content-Type')", "application/json" },
-        .{ "originalHeaders.get('Authorization')", "Bearer token123" },
-        .{ "const newHeaders = new Headers(originalHeaders)", "undefined" },
-        .{ "newHeaders.get('Content-Type')", "application/json" },
-        .{ "newHeaders.get('Authorization')", "Bearer token123" },
-        .{ "newHeaders.has('Content-Type')", "true" },
-        .{ "newHeaders.has('Authorization')", "true" },
-        .{ "newHeaders.has('X-Custom')", "false" },
-        // Verify that modifying the new headers doesn't affect the original
-        .{ "newHeaders.set('X-Custom', 'test-value')", "undefined" },
-        .{ "newHeaders.get('X-Custom')", "test-value" },
-        .{ "originalHeaders.get('X-Custom')", "null" },
-        .{ "originalHeaders.has('X-Custom')", "false" },
-    }, .{});
+test "fetch: Headers" {
+    try testing.htmlRunner("fetch/headers.html");
 }
