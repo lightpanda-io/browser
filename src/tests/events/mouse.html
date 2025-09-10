@@ -31,3 +31,20 @@
   testing.expectEqual('click', evt.type);
   testing.expectEqual(true, evt instanceof MouseEvent);
 </script>
+
+<script id=customMouseEvent>
+  let hasEventDispatched = false;
+
+  let customMouseEvent = new MouseEvent("CustomMouseEvent");
+  testing.expectEqual(true, customMouseEvent instanceof MouseEvent);
+
+  document.addEventListener("CustomMouseEvent", (event) => {
+    hasEventDispatched = true;
+
+    testing.expectEqual(true, event instanceof MouseEvent);
+    testing.expectEqual(true, customMouseEvent === event);
+  });
+
+  document.dispatchEvent(customMouseEvent);
+  testing.expectEqual(true, hasEventDispatched);
+</script>
