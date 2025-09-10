@@ -33,11 +33,20 @@ const AbortSignal = @import("../html/AbortController.zig").AbortSignal;
 const CustomEvent = @import("custom_event.zig").CustomEvent;
 const ProgressEvent = @import("../xhr/progress_event.zig").ProgressEvent;
 const MouseEvent = @import("mouse_event.zig").MouseEvent;
+const KeyboardEvent = @import("keyboard_event.zig").KeyboardEvent;
 const ErrorEvent = @import("../html/error_event.zig").ErrorEvent;
 const MessageEvent = @import("../dom/MessageChannel.zig").MessageEvent;
 
 // Event interfaces
-pub const Interfaces = .{ Event, CustomEvent, ProgressEvent, MouseEvent, ErrorEvent, MessageEvent };
+pub const Interfaces = .{
+    Event,
+    CustomEvent,
+    ProgressEvent,
+    MouseEvent,
+    KeyboardEvent,
+    ErrorEvent,
+    MessageEvent,
+};
 
 pub const Union = generate.Union(Interfaces);
 

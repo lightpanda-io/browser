@@ -1,0 +1,22 @@
+<script src="../testing.js"></script>
+<script id=default>
+  const button = document.createElement("button");
+
+  document.addEventListener("keydown", (event) => {
+    console.log(event.target);
+  });
+
+  document.addEventListener("DOMContentLoaded", () => {
+    document.body.appendChild(button);
+    button.focus();
+  });
+
+  testing.expectEqual(true, true);
+</script>
+
+<script id=keyboardEvent>
+const keyboardEvent = new KeyboardEvent("a");
+console.lp(keyboardEvent.type);
+
+testing.expectEqual(true, true);
+</script>
