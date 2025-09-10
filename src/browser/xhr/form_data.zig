@@ -100,7 +100,7 @@ pub const FormData = struct {
             return kv.urlEncode(self.entries, .form, writer);
         }
 
-        log.warn(.web_api, "not implemented", .{
+        log.debug(.web_api, "not implemented", .{
             .feature = "form data encoding",
             .encoding = encoding,
         });
@@ -265,132 +265,11 @@ fn getSubmitterName(submitter_: ?*parser.ElementHTML) !?[]const u8 {
 }
 
 const testing = @import("../../testing.zig");
-test "Browser.FormData" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html = 
-        \\ <form id="form1">
-        \\   <input id="has_no_name" value="nope1">
-        \\   <input id="is_disabled" disabled value="nope2">
-        \\
-        \\   <input name="txt-1" value="txt-1-v">
-        \\   <input name="txt-2" value="txt-~-v" type=password>
-        \\
-        \\   <input name="chk-3" value="chk-3-va" type=checkbox>
-        \\   <input name="chk-3" value="chk-3-vb" type=checkbox checked>
-        \\   <input name="chk-3" value="chk-3-vc" type=checkbox checked>
-        \\   <input name="chk-4" value="chk-4-va" type=checkbox>
-        \\   <input name="chk-4" value="chk-4-va" type=checkbox>
-        \\
-        \\   <input name="rdi-1" value="rdi-1-va" type=radio>
-        \\   <input name="rdi-1" value="rdi-1-vb" type=radio>
-        \\   <input name="rdi-1" value="rdi-1-vc" type=radio checked>
-        \\   <input name="rdi-2" value="rdi-2-va" type=radio>
-        \\   <input name="rdi-2" value="rdi-2-vb" type=radio>
-        \\
-        \\   <textarea name="ta-1"> ta-1-v</textarea>
-        \\   <textarea name="ta"></textarea>
-        \\
-        \\   <input type=hidden name=h1 value="h1-v">
-        \\   <input type=hidden name=h2 value="h2-v" disabled=disabled>
-        \\
-        \\   <select name="sel-1"><option>blue<option>red</select>
-        \\   <select name="sel-2"><option>blue<option value=sel-2-v selected>red</select>
-        \\   <select name="sel-3"><option disabled>nope1<option>nope2</select>
-        \\   <select name="mlt-1" multiple><option>water<option>tea</select>
-        \\   <select name="mlt-2" multiple><option selected>water<option selected>tea<option>coffee</select>
-        \\   <input type=submit id=s1 name=s1 value=s1-v>
-        \\   <input type=submit name=s2 value=s2-v>
-        \\   <input type=image name=i1 value=i1-v>
-        \\ </form>
-        \\   <input type=text name=abc value=123 form=form1>
-    });
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let f = new FormData()", null },
-        .{ "f.get('a')", "null" },
-        .{ "f.has('a')", "false" },
-        .{ "f.getAll('a')", "" },
-        .{ "f.delete('a')", "undefined" },
-
-        .{ "f.set('a', 1)", "undefined" },
-        .{ "f.has('a')", "true" },
-        .{ "f.get('a')", "1" },
-        .{ "f.getAll('a')", "1" },
-
-        .{ "f.append('a', 2)", "undefined" },
-        .{ "f.has('a')", "true" },
-        .{ "f.get('a')", "1" },
-        .{ "f.getAll('a')", "1,2" },
-
-        .{ "f.append('b', '3')", "undefined" },
-        .{ "f.has('a')", "true" },
-        .{ "f.get('a')", "1" },
-        .{ "f.getAll('a')", "1,2" },
-        .{ "f.has('b')", "true" },
-        .{ "f.get('b')", "3" },
-        .{ "f.getAll('b')", "3" },
-
-        .{ "let acc = [];", null },
-        .{ "for (const key of f.keys()) { acc.push(key) }; acc;", "a,a,b" },
-
-        .{ "acc = [];", null },
-        .{ "for (const value of f.values()) { acc.push(value) }; acc;", "1,2,3" },
-
-        .{ "acc = [];", null },
-        .{ "for (const entry of f.entries()) { acc.push(entry) }; acc;", "a,1,a,2,b,3" },
-
-        .{ "acc = [];", null },
-        .{ "for (const entry of f) { acc.push(entry) }; acc;", "a,1,a,2,b,3" },
-
-        .{ "f.delete('a')", "undefined" },
-        .{ "f.has('a')", "false" },
-        .{ "f.has('b')", "true" },
-
-        .{ "acc = [];", null },
-        .{ "for (const key of f.keys()) { acc.push(key) }; acc;", "b" },
-
-        .{ "acc = [];", null },
-        .{ "for (const value of f.values()) { acc.push(value) }; acc;", "3" },
-
-        .{ "acc = [];", null },
-        .{ "for (const entry of f.entries()) { acc.push(entry) }; acc;", "b,3" },
-
-        .{ "acc = [];", null },
-        .{ "for (const entry of f) { acc.push(entry) }; acc;", "b,3" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "let form1 = document.getElementById('form1')", null },
-        .{ "let input = document.createElement('input');", null },
-        .{ "input.name = 'dyn'; input.value= 'dyn-v'; form1.appendChild(input);", null },
-        .{ "let submit1 = document.getElementById('s1')", null },
-        .{ "let f2 = new FormData(form1, submit1)", null },
-        .{ "acc = '';", null },
-        .{
-            \\ for (const entry of f2) {
-            \\   acc += entry[0] + '=' + entry[1] + '\n';
-            \\ };
-            \\ acc.slice(0, -1)
-            ,
-            \\txt-1=txt-1-v
-            \\txt-2=txt-~-v
-            \\chk-3=chk-3-vb
-            \\chk-3=chk-3-vc
-            \\rdi-1=rdi-1-vc
-            \\ta-1= ta-1-v
-            \\ta=
-            \\h1=h1-v
-            \\sel-1=blue
-            \\sel-2=sel-2-v
-            \\mlt-2=water
-            \\mlt-2=tea
-            \\s1=s1-v
-            \\dyn=dyn-v
-        },
-    }, .{});
+test "Browser: FormData" {
+    try testing.htmlRunner("xhr/form_data.html");
 }
 
-test "Browser.FormData: urlEncode" {
+test "Browser: FormData.urlEncode" {
     var arr: std.ArrayListUnmanaged(u8) = .empty;
     defer arr.deinit(testing.allocator);
 

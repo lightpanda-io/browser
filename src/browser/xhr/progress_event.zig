@@ -67,18 +67,6 @@ pub const ProgressEvent = struct {
 };
 
 const testing = @import("../../testing.zig");
-test "Browser.XHR.ProgressEvent" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let pevt = new ProgressEvent('foo');", "undefined" },
-        .{ "pevt.loaded", "0" },
-        .{ "pevt instanceof ProgressEvent", "true" },
-        .{ "var nnb = 0; var eevt = null; function ccbk(event) { nnb ++; eevt = event; }", "undefined" },
-        .{ "document.addEventListener('foo', ccbk)", "undefined" },
-        .{ "document.dispatchEvent(pevt)", "true" },
-        .{ "eevt.type", "foo" },
-        .{ "eevt instanceof ProgressEvent", "true" },
-    }, .{});
+test "Browser: XHR.ProgressEvent" {
+    try testing.htmlRunner("xhr/progress_event.html");
 }

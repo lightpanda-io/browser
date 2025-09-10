@@ -92,6 +92,15 @@
     _registerErrorCallback();
   }
 
+  async function async(promise, cb) {
+    const script_id = document.currentScript.id;
+    const stack = new Error().stack;
+    const value = await promise;
+    this._captured = {script_id: script_id, stack: stack};
+    cb(value);
+    this._captured = null;
+  }
+
   function _recordExecution() {
     if (testing._status === 'fail') {
       return;
@@ -161,6 +170,7 @@
     _executed_scripts: new Set(),
     _captured: null,
     skip: skip,
+    async: async,
     getStatus: getStatus,
     eventually: eventually,
     expectEqual: expectEqual,
@@ -176,5 +186,10 @@
   // Helper, so you can do $$(sel) in a test
   window.$$ = function(sel) {
     return document.querySelectorAll(sel);
+  }
+
+  if (!console.lp) {
+    // make this work in the browser
+    console.lp = console.log;
   }
 })();
