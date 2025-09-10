@@ -161,6 +161,11 @@ test "matchFirst" {
             .exp = 0,
         },
         .{
+            .q = "[foo=1baz]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 0,
+        },
+        .{
             .q = "[foo!=bar]",
             .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
             .exp = 1,

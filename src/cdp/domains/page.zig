@@ -122,7 +122,7 @@ fn createIsolatedWorld(cmd: anytype) !void {
 
     const world = try bc.createIsolatedWorld(params.worldName, params.grantUniveralAccess);
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
-    try pageCreated(bc, page);
+    try world.createContextAndLoadPolyfills(bc.arena, page);
     const js_context = &world.executor.js_context.?;
 
     // Create the auxdata json for the contextCreated event
@@ -259,7 +259,7 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
             true,
         );
     }
-    if (bc.isolated_world) |*isolated_world| {
+    for (bc.isolated_worlds.items) |*isolated_world| {
         const aux_json = try std.fmt.allocPrint(arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{target_id});
         // Calling contextCreated will assign a new Id to the context and send the contextCreated event
         bc.inspector.contextCreated(
@@ -274,18 +274,14 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
 
 pub fn pageRemove(bc: anytype) !void {
     // The main page is going to be removed, we need to remove contexts from other worlds first.
-    if (bc.isolated_world) |*isolated_world| {
+    for (bc.isolated_worlds.items) |*isolated_world| {
         try isolated_world.removeContext();
     }
 }
 
 pub fn pageCreated(bc: anytype, page: *Page) !void {
-    if (bc.isolated_world) |*isolated_world| {
-        // We need to recreate the isolated world context
-        try isolated_world.createContext(page);
-
-        const polyfill = @import("../../browser/polyfill/polyfill.zig");
-        try polyfill.preload(bc.arena, &isolated_world.executor.js_context.?);
+    for (bc.isolated_worlds.items) |*isolated_world| {
+        try isolated_world.createContextAndLoadPolyfills(bc.arena, page);
     }
 }
 
