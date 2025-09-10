@@ -65,12 +65,9 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, func: Task.Func, ms: u32, opts: Ad
     });
 }
 
-pub fn runHighPriority(self: *Scheduler) !?i32 {
+pub fn run(self: *Scheduler) !?i32 {
+    _ = try self.runQueue(&self.low_priority);
     return self.runQueue(&self.high_priority);
-}
-
-pub fn runLowPriority(self: *Scheduler) !?i32 {
-    return self.runQueue(&self.low_priority);
 }
 
 fn runQueue(self: *Scheduler, queue: *Queue) !?i32 {
@@ -127,33 +124,24 @@ test "Scheduler" {
     var task = TestTask{ .allocator = testing.arena_allocator };
 
     var s = Scheduler.init(testing.arena_allocator);
-    try testing.expectEqual(null, s.runHighPriority());
+    try testing.expectEqual(null, s.run());
     try testing.expectEqual(0, task.calls.items.len);
 
     try s.add(&task, TestTask.run1, 3, .{});
 
-    try testing.expectDelta(3, try s.runHighPriority(), 1);
+    try testing.expectDelta(3, try s.run(), 1);
     try testing.expectEqual(0, task.calls.items.len);
 
     std.Thread.sleep(std.time.ns_per_ms * 5);
-    try testing.expectEqual(null, s.runHighPriority());
+    try testing.expectEqual(null, s.run());
     try testing.expectEqualSlices(u32, &.{1}, task.calls.items);
 
     try s.add(&task, TestTask.run2, 3, .{});
     try s.add(&task, TestTask.run1, 2, .{});
 
     std.Thread.sleep(std.time.ns_per_ms * 5);
-    try testing.expectDelta(null, try s.runHighPriority(), 1);
+    try testing.expectDelta(null, try s.run(), 1);
     try testing.expectEqualSlices(u32, &.{ 1, 1, 2 }, task.calls.items);
-
-    std.Thread.sleep(std.time.ns_per_ms * 5);
-    // won't run low_priority
-    try testing.expectEqual(null, try s.runHighPriority());
-    try testing.expectEqualSlices(u32, &.{ 1, 1, 2 }, task.calls.items);
-
-    //runs low_priority
-    try testing.expectDelta(2, try s.runLowPriority(), 1);
-    try testing.expectEqualSlices(u32, &.{ 1, 1, 2, 2 }, task.calls.items);
 }
 
 const TestTask = struct {
