@@ -557,8 +557,6 @@ pub const Parser = struct {
                 const val = try buf.toOwnedSlice(allocator);
                 errdefer allocator.free(val);
 
-                lowerstr(val);
-
                 return .{ .pseudo_class_contains = .{ .own = pseudo_class == .containsown, .val = val } };
             },
             .matches, .matchesown => {

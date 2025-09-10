@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
+const css = @import("css.zig");
 
 pub const AttributeOP = enum {
     eql, // =
@@ -432,7 +434,25 @@ pub const Selector = union(enum) {
                     else => Error.UnsupportedRelativePseudoClass,
                 };
             },
-            .pseudo_class_contains => return Error.UnsupportedContainsPseudoClass, // TODO, need mem allocation.
+            .pseudo_class_contains => |v| {
+                // Only containsOwn is implemented.
+                if (v.own == false) return Error.UnsupportedContainsPseudoClass;
+
+                var c = try n.firstChild();
+                while (c != null) {
+                    if (c.?.isText()) {
+                        const text = try c.?.text();
+                        if (text) |_text| {
+                            if (contains(_text, v.val, false)) { // we are case sensitive. Is this correct behavior?
+                                return true;
+                            }
+                        }
+                    }
+
+                    c = try c.?.nextSibling();
+                }
+                return false;
+            },
             .pseudo_class_regexp => return Error.UnsupportedRegexpPseudoClass, // TODO need mem allocation.
             .pseudo_class_nth => |v| {
                 if (v.a == 0) {
@@ -827,3 +847,578 @@ pub const Selector = union(enum) {
         }
     }
 };
+
+// NodeTest mock implementation for test only.
+pub const NodeTest = struct {
+    child: ?*const NodeTest = null,
+    last: ?*const NodeTest = null,
+    sibling: ?*const NodeTest = null,
+    prev: ?*const NodeTest = null,
+    par: ?*const NodeTest = null,
+
+    name: []const u8 = "",
+    att: ?[]const u8 = null,
+
+    pub fn firstChild(n: *const NodeTest) !?*const NodeTest {
+        return n.child;
+    }
+
+    pub fn lastChild(n: *const NodeTest) !?*const NodeTest {
+        return n.last;
+    }
+
+    pub fn nextSibling(n: *const NodeTest) !?*const NodeTest {
+        return n.sibling;
+    }
+
+    pub fn prevSibling(n: *const NodeTest) !?*const NodeTest {
+        return n.prev;
+    }
+
+    pub fn parent(n: *const NodeTest) !?*const NodeTest {
+        return n.par;
+    }
+
+    pub fn isElement(_: *const NodeTest) bool {
+        return true;
+    }
+
+    pub fn isDocument(_: *const NodeTest) bool {
+        return false;
+    }
+
+    pub fn isComment(_: *const NodeTest) bool {
+        return false;
+    }
+
+    pub fn text(_: *const NodeTest) !?[]const u8 {
+        return null;
+    }
+
+    pub fn isText(_: *const NodeTest) bool {
+        return false;
+    }
+
+    pub fn isEmptyText(_: *const NodeTest) !bool {
+        return false;
+    }
+
+    pub fn tag(n: *const NodeTest) ![]const u8 {
+        return n.name;
+    }
+
+    pub fn attr(n: *const NodeTest, _: []const u8) !?[]const u8 {
+        return n.att;
+    }
+
+    pub fn eql(a: *const NodeTest, b: *const NodeTest) bool {
+        return a == b;
+    }
+};
+
+const MatcherTest = struct {
+    const NodeTests = std.ArrayListUnmanaged(*const NodeTest);
+
+    nodes: NodeTests,
+    allocator: Allocator,
+
+    fn init(allocator: Allocator) MatcherTest {
+        return .{
+            .nodes = .empty,
+            .allocator = allocator,
+        };
+    }
+
+    fn deinit(m: *MatcherTest) void {
+        m.nodes.deinit(m.allocator);
+    }
+
+    fn reset(m: *MatcherTest) void {
+        m.nodes.clearRetainingCapacity();
+    }
+
+    pub fn match(m: *MatcherTest, n: *const NodeTest) !void {
+        try m.nodes.append(m.allocator, n);
+    }
+};
+
+test "Browser.CSS.Selector: matchFirst" {
+    const alloc = std.testing.allocator;
+
+    var matcher = MatcherTest.init(alloc);
+    defer matcher.deinit();
+
+    const testcases = [_]struct {
+        q: []const u8,
+        n: NodeTest,
+        exp: usize,
+    }{
+        .{
+            .q = "address",
+            .n = .{ .child = &.{ .name = "body", .child = &.{ .name = "address" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "#foo",
+            .n = .{ .child = &.{ .name = "p", .att = "foo", .child = &.{ .name = "p" } } },
+            .exp = 1,
+        },
+        .{
+            .q = ".t1",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "t1" } } },
+            .exp = 1,
+        },
+        .{
+            .q = ".t1",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "foo t1" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p" } } },
+            .exp = 0,
+        },
+        .{
+            .q = "[foo]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo=baz]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 0,
+        },
+        .{
+            .q = "[foo!=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo!=baz]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo~=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "baz bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo~=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "barbaz" } } },
+            .exp = 0,
+        },
+        .{
+            .q = "[foo^=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "barbaz" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo$=baz]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "barbaz" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo*=rb]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "barbaz" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo|=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo|=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar-baz" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo|=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "ba" } } },
+            .exp = 0,
+        },
+        .{
+            .q = "strong, a",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "p a",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a", .par = &.{ .name = "p" } }, .sibling = &.{ .name = "a" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "p a",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "span", .child = &.{
+                .name = "a",
+                .par = &.{ .name = "span", .par = &.{ .name = "p" } },
+            } } } },
+            .exp = 1,
+        },
+        .{
+            .q = ":not(p)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "p:has(a)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "p:has(strong)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 0,
+        },
+        .{
+            .q = "p:haschild(a)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "p:haschild(strong)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 0,
+        },
+        .{
+            .q = "p:lang(en)",
+            .n = .{ .child = &.{ .name = "p", .att = "en-US", .child = &.{ .name = "a" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "a:lang(en)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a", .par = &.{ .att = "en-US" } } } },
+            .exp = 1,
+        },
+    };
+
+    for (testcases) |tc| {
+        matcher.reset();
+
+        const s = try css.parse(alloc, tc.q, .{});
+        defer s.deinit(alloc);
+
+        _ = css.matchFirst(&s, &tc.n, &matcher) catch |e| {
+            std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+            return e;
+        };
+
+        std.testing.expectEqual(tc.exp, matcher.nodes.items.len) catch |e| {
+            std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+            return e;
+        };
+    }
+}
+
+test "Browser.CSS.Selector: matchAll" {
+    const alloc = std.testing.allocator;
+
+    var matcher = MatcherTest.init(alloc);
+    defer matcher.deinit();
+
+    const testcases = [_]struct {
+        q: []const u8,
+        n: NodeTest,
+        exp: usize,
+    }{
+        .{
+            .q = "address",
+            .n = .{ .child = &.{ .name = "body", .child = &.{ .name = "address" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "#foo",
+            .n = .{ .child = &.{ .name = "p", .att = "foo", .child = &.{ .name = "p" } } },
+            .exp = 1,
+        },
+        .{
+            .q = ".t1",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "t1" } } },
+            .exp = 1,
+        },
+        .{
+            .q = ".t1",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "foo t1" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p" } } },
+            .exp = 0,
+        },
+        .{
+            .q = "[foo]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo=baz]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 0,
+        },
+        .{
+            .q = "[foo!=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo!=baz]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 2,
+        },
+        .{
+            .q = "[foo~=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "baz bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo~=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "barbaz" } } },
+            .exp = 0,
+        },
+        .{
+            .q = "[foo^=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "barbaz" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo$=baz]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "barbaz" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo*=rb]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "barbaz" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo|=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo|=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "bar-baz" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "[foo|=bar]",
+            .n = .{ .child = &.{ .name = "p", .sibling = &.{ .name = "p", .att = "ba" } } },
+            .exp = 0,
+        },
+        .{
+            .q = "strong, a",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 2,
+        },
+        .{
+            .q = "p a",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a", .par = &.{ .name = "p" } }, .sibling = &.{ .name = "a" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "p a",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "span", .child = &.{
+                .name = "a",
+                .par = &.{ .name = "span", .par = &.{ .name = "p" } },
+            } } } },
+            .exp = 1,
+        },
+        .{
+            .q = ":not(p)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 2,
+        },
+        .{
+            .q = "p:has(a)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "p:has(strong)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 0,
+        },
+        .{
+            .q = "p:haschild(a)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "p:haschild(strong)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a" }, .sibling = &.{ .name = "strong" } } },
+            .exp = 0,
+        },
+        .{
+            .q = "p:lang(en)",
+            .n = .{ .child = &.{ .name = "p", .att = "en-US", .child = &.{ .name = "a" } } },
+            .exp = 1,
+        },
+        .{
+            .q = "a:lang(en)",
+            .n = .{ .child = &.{ .name = "p", .child = &.{ .name = "a", .par = &.{ .att = "en-US" } } } },
+            .exp = 1,
+        },
+    };
+
+    for (testcases) |tc| {
+        matcher.reset();
+
+        const s = try css.parse(alloc, tc.q, .{});
+        defer s.deinit(alloc);
+
+        css.matchAll(&s, &tc.n, &matcher) catch |e| {
+            std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+            return e;
+        };
+
+        std.testing.expectEqual(tc.exp, matcher.nodes.items.len) catch |e| {
+            std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+            return e;
+        };
+    }
+}
+
+test "Browser.CSS.Selector: pseudo class" {
+    const alloc = std.testing.allocator;
+
+    var matcher = MatcherTest.init(alloc);
+    defer matcher.deinit();
+
+    var p1: NodeTest = .{ .name = "p" };
+    var p2: NodeTest = .{ .name = "p" };
+    var a1: NodeTest = .{ .name = "a" };
+
+    p1.sibling = &p2;
+    p2.prev = &p1;
+
+    p2.sibling = &a1;
+    a1.prev = &p2;
+
+    var root: NodeTest = .{ .child = &p1, .last = &a1 };
+    p1.par = &root;
+    p2.par = &root;
+    a1.par = &root;
+
+    const testcases = [_]struct {
+        q: []const u8,
+        n: NodeTest,
+        exp: ?*const NodeTest,
+    }{
+        .{ .q = "p:only-child", .n = root, .exp = null },
+        .{ .q = "a:only-of-type", .n = root, .exp = &a1 },
+    };
+
+    for (testcases) |tc| {
+        matcher.reset();
+
+        const s = try css.parse(alloc, tc.q, .{});
+        defer s.deinit(alloc);
+
+        css.matchAll(&s, &tc.n, &matcher) catch |e| {
+            std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+            return e;
+        };
+
+        if (tc.exp) |exp_n| {
+            const exp: usize = 1;
+            std.testing.expectEqual(exp, matcher.nodes.items.len) catch |e| {
+                std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+                return e;
+            };
+
+            std.testing.expectEqual(exp_n, matcher.nodes.items[0]) catch |e| {
+                std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+                return e;
+            };
+
+            continue;
+        }
+
+        const exp: usize = 0;
+        std.testing.expectEqual(exp, matcher.nodes.items.len) catch |e| {
+            std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+            return e;
+        };
+    }
+}
+
+test "Browser.CSS.Selector: nth pseudo class" {
+    const alloc = std.testing.allocator;
+
+    var matcher = MatcherTest.init(alloc);
+    defer matcher.deinit();
+
+    var p1: NodeTest = .{ .name = "p" };
+    var p2: NodeTest = .{ .name = "p" };
+
+    p1.sibling = &p2;
+    p2.prev = &p1;
+
+    var root: NodeTest = .{ .child = &p1, .last = &p2 };
+    p1.par = &root;
+    p2.par = &root;
+
+    const testcases = [_]struct {
+        q: []const u8,
+        n: NodeTest,
+        exp: ?*const NodeTest,
+    }{
+        .{ .q = "a:nth-of-type(1)", .n = root, .exp = null },
+        .{ .q = "p:nth-of-type(1)", .n = root, .exp = &p1 },
+        .{ .q = "p:nth-of-type(2)", .n = root, .exp = &p2 },
+        .{ .q = "p:nth-of-type(0)", .n = root, .exp = null },
+        .{ .q = "p:nth-of-type(2n)", .n = root, .exp = &p2 },
+        .{ .q = "p:nth-last-child(1)", .n = root, .exp = &p2 },
+        .{ .q = "p:nth-last-child(2)", .n = root, .exp = &p1 },
+        .{ .q = "p:nth-child(1)", .n = root, .exp = &p1 },
+        .{ .q = "p:nth-child(2)", .n = root, .exp = &p2 },
+        .{ .q = "p:nth-child(odd)", .n = root, .exp = &p1 },
+        .{ .q = "p:nth-child(even)", .n = root, .exp = &p2 },
+        .{ .q = "p:nth-child(n+2)", .n = root, .exp = &p2 },
+    };
+
+    for (testcases) |tc| {
+        matcher.reset();
+
+        const s = try css.parse(alloc, tc.q, .{});
+        defer s.deinit(alloc);
+
+        css.matchAll(&s, &tc.n, &matcher) catch |e| {
+            std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+            return e;
+        };
+
+        if (tc.exp) |exp_n| {
+            const exp: usize = 1;
+            std.testing.expectEqual(exp, matcher.nodes.items.len) catch |e| {
+                std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+                return e;
+            };
+
+            std.testing.expectEqual(exp_n, matcher.nodes.items[0]) catch |e| {
+                std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+                return e;
+            };
+
+            continue;
+        }
+
+        const exp: usize = 0;
+        std.testing.expectEqual(exp, matcher.nodes.items.len) catch |e| {
+            std.debug.print("query: {s}, parsed selector: {any}\n", .{ tc.q, s });
+            return e;
+        };
+    }
+}
