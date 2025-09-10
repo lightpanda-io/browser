@@ -36,6 +36,8 @@ const CSSStyleSheet = @import("../cssom/CSSStyleSheet.zig");
 const NodeIterator = @import("node_iterator.zig").NodeIterator;
 const Range = @import("range.zig").Range;
 
+const CustomEvent = @import("../events/custom_event.zig").CustomEvent;
+
 const Env = @import("../env.zig").Env;
 
 const DOMImplementation = @import("implementation.zig").DOMImplementation;
@@ -110,13 +112,21 @@ pub const Document = struct {
         return try parser.documentGetDoctype(self);
     }
 
-    pub fn _createEvent(_: *parser.Document, eventCstr: []const u8) !*parser.Event {
-        // TODO: for now only "Event" constructor is supported
-        // see table on https://dom.spec.whatwg.org/#dom-document-createevent $2
+    pub fn _createEvent(_: *parser.Document, eventCstr: []const u8) !union(enum) {
+        base: *parser.Event,
+        custom: CustomEvent,
+    } {
         if (std.ascii.eqlIgnoreCase(eventCstr, "Event") or std.ascii.eqlIgnoreCase(eventCstr, "Events")) {
-            return try parser.eventCreate();
+            return .{ .base = try parser.eventCreate() };
         }
-        return parser.DOMError.NotSupported;
+
+        // Not documented in MDN but supported in Chrome.
+        // This is actually both instance of `Event` and `CustomEvent`.
+        if (std.ascii.eqlIgnoreCase(eventCstr, "CustomEvent")) {
+            return .{ .custom = try CustomEvent.constructor(eventCstr, null) };
+        }
+
+        return error.NotSupported;
     }
 
     pub fn _getElementById(self: *parser.Document, id: []const u8) !?ElementUnion {

@@ -60,7 +60,7 @@
   let byTagNameAll = document.getElementsByTagName('*');
   // If you add a script block (or change the HTML in any other way on this
   // page), this test will break. Adjust it accordingly.
-  testing.expectEqual(20, byTagNameAll.length);
+  testing.expectEqual(21, byTagNameAll.length);
   testing.expectEqual('html', byTagNameAll.item(0).localName);
   testing.expectEqual('SCRIPT', byTagNameAll.item(11).tagName);
 
@@ -166,4 +166,24 @@
   testing.expectEqual(0, acss.length);
   acss.push(new CSSStyleSheet());
   testing.expectEqual(1, acss.length);
+</script>
+
+<script id=createEvent>
+    const event = document.createEvent("Event");
+
+    testing.expectEqual(true, event instanceof Event);
+    testing.expectEqual("", event.type);
+
+    const customEvent = document.createEvent("CustomEvent");
+    customEvent.initCustomEvent("hey", false, false);
+
+    testing.expectEqual(true, customEvent instanceof CustomEvent);
+    testing.expectEqual(true, customEvent instanceof Event);
+
+    testing.withError(
+        (err) => {
+            // TODO: Check the error type.
+        },
+        () => document.createEvent("InvalidType"),
+    );
 </script>

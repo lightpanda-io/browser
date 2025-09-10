@@ -106,7 +106,7 @@ inline fn strToData(s: *String) []const u8 {
     return data[0..c.dom_string_byte_length(s)];
 }
 
-inline fn strFromData(data: []const u8) !*String {
+pub inline fn strFromData(data: []const u8) !*String {
     var s: ?*String = null;
     const err = c.dom_string_create(data.ptr, data.len, &s);
     try DOMErr(err);
