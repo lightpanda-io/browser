@@ -1689,6 +1689,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         specifier: []const u8,
                         module: v8.Persistent(v8.Module),
                         resolver: v8.Persistent(v8.PromiseResolver),
+
+                        pub fn deinit(ev: *@This()) void {
+                            ev.module.deinit();
+                            ev.resolver.deinit();
+                        }
                     };
 
                     const ev_data = try self.context_arena.create(EvaluationData);
@@ -1705,6 +1710,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             const cb_isolate = cb_info.getIsolate();
                             const cb_context = cb_isolate.getCurrentContext();
                             const data: *EvaluationData = @ptrCast(@alignCast(cb_info.getExternalValue()));
+                            defer data.deinit();
                             const cb_module = data.module.castToModule();
                             const cb_resolver = data.resolver.castToPromiseResolver();
 
@@ -1719,6 +1725,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             const cb_info = v8.FunctionCallbackInfo{ .handle = info.? };
                             const cb_context = cb_info.getIsolate().getCurrentContext();
                             const data: *EvaluationData = @ptrCast(@alignCast(cb_info.getExternalValue()));
+                            defer data.deinit();
                             const cb_resolver = data.resolver.castToPromiseResolver();
 
                             log.err(.js, "dynamic import failed", .{ .specifier = data.specifier });
@@ -1731,6 +1738,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             .specifier = specifier,
                             .line = try_catch.sourceLineNumber() orelse 0,
                         });
+                        defer ev_data.deinit();
                         const error_msg = v8.String.initUtf8(iso, "Evaluation is a promise");
                         _ = resolver.reject(ctx, error_msg.toValue());
                         return;
