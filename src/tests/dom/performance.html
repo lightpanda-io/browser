@@ -1,0 +1,15 @@
+<script src="../testing.js"></script>
+<script id=performance>
+  let performance = window.performance;
+  testing.expectEqual(true, performance instanceof Performance);
+
+  let mark1 = performance.mark("start");
+  testing.expectEqual(true, mark1 instanceof PerformanceMark);
+  testing.expectEqual('start', mark1.name);
+  testing.expectEqual('mark', mark1.entryType);
+  testing.expectEqual(0, mark1.duration);
+  testing.expectEqual(null, mark1.detail);
+
+  let mark2 = performance.mark("start", {startTime: 32939393.9});
+  testing.expectEqual(32939393.9, mark2.startTime);
+</script>

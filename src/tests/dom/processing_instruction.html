@@ -1,0 +1,21 @@
+<script src="../testing.js"></script>
+<script id=processingInstruction>
+  let pi = document.createProcessingInstruction('foo', 'bar');
+  testing.expectEqual('foo', pi.target);
+  testing.expectEqual('bar', pi.data);
+  pi.data = 'foo';
+  testing.expectEqual('foo', pi.data);
+
+  let pi2 = pi.cloneNode();
+  testing.expectEqual(7, pi2.nodeType);
+
+  let pi11 = document.createProcessingInstruction('target1', 'data1');
+  let pi12 = document.createProcessingInstruction('target2', 'data2');
+  let pi13 = document.createProcessingInstruction('target1', 'data1');
+  testing.expectEqual(true, pi11.isEqualNode(pi11));
+  testing.expectEqual(true, pi11.isEqualNode(pi13));
+  testing.expectEqual(false, pi11.isEqualNode(pi12));
+  testing.expectEqual(false, pi12.isEqualNode(pi13));
+  testing.expectEqual(false, pi11.isEqualNode(document));
+  testing.expectEqual(false, document.isEqualNode(pi11));
+</script>

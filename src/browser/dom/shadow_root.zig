@@ -96,60 +96,6 @@ pub const ShadowRoot = struct {
 };
 
 const testing = @import("../../testing.zig");
-test "Browser.DOM.ShadowRoot" {
-    defer testing.reset();
-
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html = 
-        \\ <div id=conflict>nope</div>
-    });
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "const div1 = document.createElement('div');", null },
-        .{ "let sr1 = div1.attachShadow({mode: 'open'})", null },
-        .{ "sr1.host == div1", "true" },
-        .{ "div1.attachShadow({mode: 'open'}) == sr1", "true" },
-        .{ "div1.shadowRoot == sr1", "true" },
-
-        .{ "try { div1.attachShadow({mode: 'closed'}) } catch (e) { e }", "Error: NotSupportedError" },
-
-        .{ " sr1.append(document.createElement('div'))", null },
-        .{ " sr1.append(document.createElement('span'))", null },
-        .{ "sr1.childElementCount", "2" },
-        // re-attaching clears it
-        .{ "div1.attachShadow({mode: 'open'}) == sr1", "true" },
-        .{ "sr1.childElementCount", "0" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "const div2 = document.createElement('di2');", null },
-        .{ "let sr2 = div2.attachShadow({mode: 'closed'})", null },
-        .{ "sr2.host == div2", "true" },
-        .{ "div2.shadowRoot", "null" }, // null when attached with 'closed'
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "sr2.getElementById('conflict')", "null" },
-        .{ "const n1 = document.createElement('div')", null },
-        .{ "n1.id = 'conflict'", null },
-        .{ "sr2.append(n1)", null },
-        .{ "sr2.getElementById('conflict') == n1", "true" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "const acss = sr2.adoptedStyleSheets", null },
-        .{ "acss.length", "0" },
-        .{ "acss.push(new CSSStyleSheet())", null },
-        .{ "sr2.adoptedStyleSheets.length", "1" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "sr1.innerHTML = '<p>hello</p>'", null },
-        .{ "sr1.innerHTML", "<p>hello</p>" },
-        .{ "sr1.querySelector('*')", "[object HTMLParagraphElement]" },
-
-        .{ "sr1.innerHTML = null", null },
-        .{ "sr1.innerHTML", "" },
-        .{ "sr1.querySelector('*')", "null" },
-    }, .{});
+test "Browser: DOM.ShadowRoot" {
+    try testing.htmlRunner("dom/shadow_root.html");
 }

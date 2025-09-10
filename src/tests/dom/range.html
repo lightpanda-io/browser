@@ -1,0 +1,40 @@
+<script src="../testing.js"></script>
+
+<div id=content><!-- hello world --><p>over 9000</p></div>
+
+<script id="constructor">
+  let range = new Range();
+  testing.expectEqual(true, range instanceof Range);
+  testing.expectEqual(true, range instanceof AbstractRange);
+
+// Test initial state - collapsed range
+  testing.expectEqual(true, range.collapsed);
+  testing.expectEqual(0, range.startOffset);
+  testing.expectEqual(0, range.endOffset);
+  testing.expectEqual(true, range.startContainer instanceof HTMLDocument);
+  testing.expectEqual(true, range.endContainer instanceof HTMLDocument);
+</script>
+
+<script id="createRange">
+  let docRange = document.createRange();
+  testing.expectEqual(true, docRange instanceof Range);
+  testing.expectEqual(true, docRange.collapsed);
+</script>
+
+<script id=textRange>
+  const container = $('#content');
+  const commentNode = container.childNodes[0];
+  testing.expectEqual(' hello world ', commentNode.nodeValue);
+
+  const textRange = document.createRange();
+  textRange.selectNodeContents(commentNode);
+  testing.expectEqual(0, textRange.startOffset);
+  testing.expectEqual(13, textRange.endOffset); // length of comment
+</script>
+
+<script id=nodeRange>
+  const nodeRange = document.createRange();
+  nodeRange.selectNodeContents(container);
+  testing.expectEqual(0, nodeRange.startOffset);
+  testing.expectEqual(2, nodeRange.endOffset); // length of container.childNodes
+</script>

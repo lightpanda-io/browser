@@ -87,30 +87,6 @@ pub const ProcessingInstruction = struct {
 };
 
 const testing = @import("../../testing.zig");
-test "Browser.DOM.ProcessingInstruction" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let pi = document.createProcessingInstruction('foo', 'bar')", "undefined" },
-        .{ "pi.target", "foo" },
-        .{ "pi.data", "bar" },
-        .{ "pi.data = 'foo'", "foo" },
-        .{ "pi.data", "foo" },
-
-        .{ "let pi2 = pi.cloneNode()", "undefined" },
-        .{ "pi2.nodeType", "7" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "let pi11 = document.createProcessingInstruction('target1', 'data1');", "undefined" },
-        .{ "let pi12 = document.createProcessingInstruction('target2', 'data2');", "undefined" },
-        .{ "let pi13 = document.createProcessingInstruction('target1', 'data1');", "undefined" },
-        .{ "pi11.isEqualNode(pi11)", "true" },
-        .{ "pi11.isEqualNode(pi13)", "true" },
-        .{ "pi11.isEqualNode(pi12)", "false" },
-        .{ "pi12.isEqualNode(pi13)", "false" },
-        .{ "pi11.isEqualNode(document)", "false" },
-        .{ "document.isEqualNode(pi11)", "false" },
-    }, .{});
+test "Browser: DOM.ProcessingInstruction" {
+    try testing.htmlRunner("dom/processing_instruction.html");
 }

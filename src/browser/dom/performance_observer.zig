@@ -53,11 +53,6 @@ const Options = struct {
 };
 
 const testing = @import("../../testing.zig");
-test "Browser.DOM.PerformanceObserver" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "PerformanceObserver.supportedEntryTypes.length", "0" },
-    }, .{});
+test "Browser: DOM.PerformanceObserver" {
+    try testing.htmlRunner("dom/performance_observer.html");
 }

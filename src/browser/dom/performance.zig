@@ -203,22 +203,6 @@ test "Performance: now" {
     }
 }
 
-test "Browser.Performance.Mark" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let performance = window.performance", null },
-        .{ "performance instanceof Performance", "true" },
-
-        .{ "let mark1 = performance.mark(\"start\")", null },
-        .{ "mark1 instanceof PerformanceMark", "true" },
-        .{ "mark1.name", "start" },
-        .{ "mark1.entryType", "mark" },
-        .{ "mark1.duration", "0" },
-        .{ "mark1.detail", "null" },
-
-        .{ "let mark2 = performance.mark(\"start\", {startTime: 32939393.9})", null },
-        .{ "mark2.startTime", "32939393.9" },
-    }, .{});
+test "Browser: Performance.Mark" {
+    try testing.htmlRunner("dom/performance.html");
 }
