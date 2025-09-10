@@ -332,22 +332,22 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
         pub fn dumpMemoryStats(self: *Self) void {
             const stats = self.isolate.getHeapStatistics();
             std.debug.print(
-            \\ Total Heap Size: {d}
-            \\ Total Heap Size Executable: {d}
-            \\ Total Physical Size: {d}
-            \\ Total Available Size: {d}
-            \\ Used Heap Size: {d}
-            \\ Heap Size Limit: {d}
-            \\ Malloced Memory: {d}
-            \\ External Memory: {d}
-            \\ Peak Malloced Memory: {d}
-            \\ Number Of Native Contexts: {d}
-            \\ Number Of Detached Contexts: {d}
-            \\ Total Global Handles Size: {d}
-            \\ Used Global Handles Size: {d}
-            \\ Zap Garbage: {any}
-            \\
-            , .{stats.total_heap_size, stats.total_heap_size_executable, stats.total_physical_size, stats.total_available_size, stats.used_heap_size, stats.heap_size_limit, stats.malloced_memory, stats.external_memory, stats.peak_malloced_memory, stats.number_of_native_contexts, stats.number_of_detached_contexts, stats.total_global_handles_size, stats.used_global_handles_size, stats.does_zap_garbage});
+                \\ Total Heap Size: {d}
+                \\ Total Heap Size Executable: {d}
+                \\ Total Physical Size: {d}
+                \\ Total Available Size: {d}
+                \\ Used Heap Size: {d}
+                \\ Heap Size Limit: {d}
+                \\ Malloced Memory: {d}
+                \\ External Memory: {d}
+                \\ Peak Malloced Memory: {d}
+                \\ Number Of Native Contexts: {d}
+                \\ Number Of Detached Contexts: {d}
+                \\ Total Global Handles Size: {d}
+                \\ Used Global Handles Size: {d}
+                \\ Zap Garbage: {any}
+                \\
+            , .{ stats.total_heap_size, stats.total_heap_size_executable, stats.total_physical_size, stats.total_available_size, stats.used_heap_size, stats.heap_size_limit, stats.malloced_memory, stats.external_memory, stats.peak_malloced_memory, stats.number_of_native_contexts, stats.number_of_detached_contexts, stats.total_global_handles_size, stats.used_global_handles_size, stats.does_zap_garbage });
         }
 
         fn promiseRejectCallback(v8_msg: v8.C_PromiseRejectMessage) callconv(.c) void {

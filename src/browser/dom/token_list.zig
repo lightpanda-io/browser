@@ -169,77 +169,7 @@ pub const Iterator = struct {
     }
 };
 
-// Tests
-// -----
-
 const testing = @import("../../testing.zig");
-test "Browser.DOM.TokenList" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let gs = document.getElementById('para-empty')", "undefined" },
-        .{ "let cl = gs.classList", "undefined" },
-        .{ "gs.className", "ok empty" },
-        .{ "cl.value", "ok empty" },
-        .{ "cl.length", "2" },
-        .{ "gs.className = 'foo bar baz'", "foo bar baz" },
-        .{ "gs.className", "foo bar baz" },
-        .{ "cl.length", "3" },
-        .{ "gs.className = 'ok empty'", "ok empty" },
-        .{ "cl.length", "2" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "let cl2 = gs.classList", "undefined" },
-        .{ "cl2.length", "2" },
-        .{ "cl2.item(0)", "ok" },
-        .{ "cl2.item(1)", "empty" },
-        .{ "cl2.contains('ok')", "true" },
-        .{ "cl2.contains('nok')", "false" },
-        .{ "cl2.add('foo', 'bar', 'baz')", "undefined" },
-        .{ "cl2.length", "5" },
-        .{ "cl2.remove('foo', 'bar', 'baz')", "undefined" },
-        .{ "cl2.length", "2" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "let cl3 = gs.classList", "undefined" },
-        .{ "cl3.toggle('ok')", "false" },
-        .{ "cl3.toggle('ok')", "true" },
-        .{ "cl3.length", "2" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "let cl4 = gs.classList", "undefined" },
-        .{ "cl4.replace('ok', 'nok')", "true" },
-        .{ "cl4.value", "empty nok" },
-        .{ "cl4.replace('nok', 'ok')", "true" },
-        .{ "cl4.value", "empty ok" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "let cl5 = gs.classList", "undefined" },
-        .{ "let keys = [...cl5.keys()]", "undefined" },
-        .{ "keys.length", "2" },
-        .{ "keys[0]", "0" },
-        .{ "keys[1]", "1" },
-
-        .{ "let values = [...cl5.values()]", "undefined" },
-        .{ "values.length", "2" },
-        .{ "values[0]", "empty" },
-        .{ "values[1]", "ok" },
-
-        .{ "let entries = [...cl5.entries()]", "undefined" },
-        .{ "entries.length", "2" },
-        .{ "entries[0]", "0,empty" },
-        .{ "entries[1]", "1,ok" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "let cl6 = gs.classList", "undefined" },
-        .{ "cl6.value = 'a  b  ccc'", "a  b  ccc" },
-        .{ "cl6.value", "a  b  ccc" },
-        .{ "cl6.toString()", "a  b  ccc" },
-    }, .{});
+test "Browser: DOM.TokenList" {
+    try testing.htmlRunner("dom/token_list.html");
 }

@@ -1,0 +1,63 @@
+<p id="para-empty" class="ok empty">
+
+<script src="../testing.js"></script>
+<script id=tokenList>
+  let gs = $('#para-empty');
+
+  let cl = gs.classList;
+  testing.expectEqual('ok empty', gs.className);
+  testing.expectEqual('ok empty', cl.value);
+  testing.expectEqual(2, cl.length);
+
+  gs.className = 'foo bar baz';
+  testing.expectEqual('foo bar baz', gs.className);
+  testing.expectEqual(3, cl.length);
+
+  gs.className = 'ok empty';
+  testing.expectEqual(2, cl.length);
+
+  let cl2 = gs.classList;
+  testing.expectEqual(2, cl2.length);
+  testing.expectEqual('ok', cl2.item(0));
+  testing.expectEqual('empty', cl2.item(1));
+  testing.expectEqual(true, cl2.contains('ok'));
+  testing.expectEqual(false, cl2.contains('nok'));
+
+  cl2.add('foo', 'bar', 'baz');
+  testing.expectEqual(5, cl2.length);
+
+  cl2.remove('foo', 'bar', 'baz');
+  testing.expectEqual(2, cl2.length);
+
+  let cl3 = gs.classList;
+  testing.expectEqual(false, cl3.toggle('ok'));
+  testing.expectEqual(true, cl3.toggle('ok'));
+  testing.expectEqual(2, cl3.length);
+
+  let cl4 = gs.classList;
+  testing.expectEqual(true, cl4.replace('ok', 'nok'));
+  testing.expectEqual("empty nok", cl4.value);
+  testing.expectEqual(true, cl4.replace('nok', 'ok'));
+  testing.expectEqual("empty ok", cl4.value);
+
+  let cl5 = gs.classList;
+  let keys = [...cl5.keys()];
+  testing.expectEqual(2, keys.length);
+  testing.expectEqual(0, keys[0]);
+  testing.expectEqual(1, keys[1]);
+
+  let values = [...cl5.values()];
+  testing.expectEqual(2, values.length);
+  testing.expectEqual('empty', values[0]);
+  testing.expectEqual('ok', values[1]);
+
+  let entries = [...cl5.entries()];
+  testing.expectEqual(2, entries.length);
+  testing.expectEqual([0, 'empty'], entries[0]);
+  testing.expectEqual([1, 'ok'], entries[1]);
+
+  let cl6 = gs.classList;
+  cl6.value = 'a  b  ccc';
+  testing.expectEqual('a  b  ccc', cl6.value);
+  testing.expectEqual('a  b  ccc', cl6.toString());
+</script>

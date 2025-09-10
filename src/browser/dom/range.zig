@@ -385,44 +385,6 @@ fn compare(node_a: *parser.Node, offset_a: u32, node_b: *parser.Node, offset_b: 
 }
 
 const testing = @import("../../testing.zig");
-test "Browser.Range" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        // Test Range constructor
-        .{ "let range = new Range()", "undefined" },
-        .{ "range instanceof Range", "true" },
-        .{ "range instanceof AbstractRange", "true" },
-
-        // Test initial state - collapsed range
-        .{ "range.collapsed", "true" },
-        .{ "range.startOffset", "0" },
-        .{ "range.endOffset", "0" },
-        .{ "range.startContainer instanceof HTMLDocument", "true" },
-        .{ "range.endContainer instanceof HTMLDocument", "true" },
-
-        // Test document.createRange()
-        .{ "let docRange = document.createRange()", "undefined" },
-        .{ "docRange instanceof Range", "true" },
-        .{ "docRange.collapsed", "true" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "const container = document.getElementById('content');", null },
-
-        // Test text range
-        .{ "const commentNode = container.childNodes[7];", null },
-        .{ "commentNode.nodeValue", "comment" },
-        .{ "const textRange = document.createRange();", null },
-        .{ "textRange.selectNodeContents(commentNode)", "undefined" },
-        .{ "textRange.startOffset", "0" },
-        .{ "textRange.endOffset", "7" }, // length of `comment`
-
-        // Test Node range
-        .{ "const nodeRange = document.createRange();", null },
-        .{ "nodeRange.selectNodeContents(container)", "undefined" },
-        .{ "nodeRange.startOffset", "0" },
-        .{ "nodeRange.endOffset", "9" }, // length of container.childNodes
-    }, .{});
+test "Browser: Range" {
+    try testing.htmlRunner("dom/range.html");
 }

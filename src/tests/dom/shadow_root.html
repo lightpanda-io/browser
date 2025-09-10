@@ -1,0 +1,48 @@
+<div id=conflict>node</div>
+
+<script src="../testing.js"></script>
+<script id=shadow_root>
+  const div1 = document.createElement('div');
+  let sr1 = div1.attachShadow({mode: 'open'});
+  testing.expectEqual(div1, sr1.host);
+  testing.expectEqual(sr1, div1.attachShadow({mode: 'open'}));
+  testing.expectEqual(sr1, div1.shadowRoot);
+
+  testing.expectError('Error: NotSupportedError', () => {
+    div1.attachShadow({mode: 'closed'});
+  });
+
+  sr1.append(document.createElement('div'));
+  sr1.append(document.createElement('span'));
+  testing.expectEqual(2, sr1.childElementCount);
+
+  // re-attaching clears it
+  testing.expectEqual(sr1, div1.attachShadow({mode: 'open'}));
+  testing.expectEqual(0, sr1.childElementCount);
+
+
+  const div2 = document.createElement('di2');
+  let sr2 = div2.attachShadow({mode: 'closed'});
+  testing.expectEqual(div2, sr2.host);
+  testing.expectEqual(null, div2.shadowRoot) // null when attached with 'closed'
+
+
+  testing.expectEqual(null, sr2.getElementById('conflict'));
+  const n1 = document.createElement('div');
+  n1.id = 'conflict';
+  sr2.append(n1);
+  testing.expectEqual(n1, sr2.getElementById('conflict'));
+
+  const acss = sr2.adoptedStyleSheets;
+  testing.expectEqual(0, acss.length);
+  acss.push(new CSSStyleSheet());
+  testing.expectEqual(1, acss.length);
+
+  sr1.innerHTML = '<p>hello</p>';
+  testing.expectEqual('<p>hello</p>', sr1.innerHTML);
+  testing.expectEqual('[object HTMLParagraphElement]', sr1.querySelector('*').toString());
+
+  sr1.innerHTML = null;
+  testing.expectEqual('', sr1.innerHTML);
+  testing.expectEqual(null, sr1.querySelector('*'));
+  </script>

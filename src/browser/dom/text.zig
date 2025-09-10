@@ -56,31 +56,7 @@ pub const Text = struct {
     }
 };
 
-// Tests
-// -----
-
 const testing = @import("../../testing.zig");
-test "Browser.DOM.Text" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let t = new Text('foo')", "undefined" },
-        .{ "t.data", "foo" },
-
-        .{ "let emptyt = new Text()", "undefined" },
-        .{ "emptyt.data", "" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "let text = document.getElementById('link').firstChild", "undefined" },
-        .{ "text.wholeText === 'OK'", "true" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "text.data = 'OK modified'", "OK modified" },
-        .{ "let split = text.splitText('OK'.length)", "undefined" },
-        .{ "split.data === ' modified'", "true" },
-        .{ "text.data === 'OK'", "true" },
-    }, .{});
+test "Browser: DOM.Text" {
+    try testing.htmlRunner("dom/text.html");
 }
