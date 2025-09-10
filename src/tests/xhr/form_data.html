@@ -1,0 +1,129 @@
+<script src="../testing.js"></script>
+<script id=formData>
+  let f = new FormData();
+  testing.expectEqual(null, f.get('a'));
+  testing.expectEqual(false, f.has('a'));
+  testing.expectEqual([], f.getAll('a'));
+  testing.expectEqual(undefined, f.delete('a'));
+
+  f.set('a', 1);
+  testing.expectEqual(true, f.has('a'));
+  testing.expectEqual('1', f.get('a'));
+  testing.expectEqual(['1'], f.getAll('a'));
+
+  f.append('a', 2);
+  testing.expectEqual(true, f.has('a'));
+  testing.expectEqual('1', f.get('a'));
+  testing.expectEqual(['1', '2'], f.getAll('a'));
+
+  f.append('b', '3');
+  testing.expectEqual(true, f.has('a'));
+  testing.expectEqual('1', f.get('a'));
+  testing.expectEqual(['1', '2'], f.getAll('a'));
+  testing.expectEqual(true, f.has('b'));
+  testing.expectEqual('3', f.get('b'));
+  testing.expectEqual(['3'], f.getAll('b'));
+
+  let acc = [];
+  for (const key of f.keys()) { acc.push(key) }
+  testing.expectEqual(['a', 'a', 'b'], acc);
+
+  acc = [];
+  for (const value of f.values()) { acc.push(value) }
+  testing.expectEqual(['1', '2', '3'], acc);
+
+  acc = [];
+  for (const entry of f.entries()) { acc.push(entry) }
+  testing.expectEqual([['a', '1'], ['a', '2'], ['b', '3']], acc);
+
+  acc = [];
+  for (const entry of f) { acc.push(entry) };
+  testing.expectEqual([['a', '1'], ['a', '2'], ['b', '3']], acc);
+
+  f.delete('a');
+  testing.expectEqual(false, f.has('a'));
+  testing.expectEqual(true, f.has('b'));
+
+  acc = [];
+  for (const key of f.keys()) { acc.push(key) }
+  testing.expectEqual(['b'], acc);
+
+  acc = [];
+  for (const value of f.values()) { acc.push(value) }
+  testing.expectEqual(['3'], acc);
+
+  acc = [];
+  for (const entry of f.entries()) { acc.push(entry) }
+  testing.expectEqual([['b', '3']], acc);
+
+  acc = [];
+  for (const entry of f) { acc.push(entry) }
+  testing.expectEqual([['b', '3']], acc);
+</script>
+
+<script id=serialize>
+  let form1 = $('#form1');
+  let submit1 = $('#s1');
+
+  let input = document.createElement('input');
+  input.name = 'dyn';
+  input.value = 'dyn-v';
+  form1.appendChild(input);
+  let f2 = new FormData(form1, submit1);
+
+  acc = [];
+  for (const entry of f2) {
+    acc.push(entry);
+  };
+
+  testing.expectEqual(['txt-1', 'txt-1-v'], acc[0]);
+  testing.expectEqual(['txt-2', 'txt-~-v'], acc[1]);
+  testing.expectEqual(['chk-3', 'chk-3-vb'], acc[2]);
+  testing.expectEqual(['chk-3', 'chk-3-vc'], acc[3]);
+  testing.expectEqual(['rdi-1', 'rdi-1-vc'], acc[4]);
+  testing.expectEqual(['ta-1', ' ta-1-v'], acc[5]);
+  testing.expectEqual(['ta', ''], acc[6]);
+  testing.expectEqual(['h1', 'h1-v'], acc[7]);
+  testing.expectEqual(['sel-1', 'blue'], acc[8]);
+  testing.expectEqual(['sel-2', 'sel-2-v'], acc[9]);
+  testing.expectEqual(['mlt-2', 'water'], acc[10]);
+  testing.expectEqual(['mlt-2', 'tea'], acc[11]);
+  testing.expectEqual(['s1', 's1-v'], acc[12]);
+  testing.expectEqual(['dyn', 'dyn-v'], acc[13]);
+</script>
+
+<form id="form1">
+  <input id="has_no_name" value="nope1">
+  <input id="is_disabled" disabled value="nope2">
+
+  <input name="txt-1" value="txt-1-v">
+  <input name="txt-2" value="txt-~-v" type=password>
+
+  <input name="chk-3" value="chk-3-va" type=checkbox>
+  <input name="chk-3" value="chk-3-vb" type=checkbox checked>
+  <input name="chk-3" value="chk-3-vc" type=checkbox checked>
+  <input name="chk-4" value="chk-4-va" type=checkbox>
+  <input name="chk-4" value="chk-4-va" type=checkbox>
+
+  <input name="rdi-1" value="rdi-1-va" type=radio>
+  <input name="rdi-1" value="rdi-1-vb" type=radio>
+  <input name="rdi-1" value="rdi-1-vc" type=radio checked>
+  <input name="rdi-2" value="rdi-2-va" type=radio>
+  <input name="rdi-2" value="rdi-2-vb" type=radio>
+
+  <textarea name="ta-1"> ta-1-v</textarea>
+  <textarea name="ta"></textarea>
+
+  <input type=hidden name=h1 value="h1-v">
+  <input type=hidden name=h2 value="h2-v" disabled=disabled>
+
+  <select name="sel-1"><option>blue<option>red</select>
+  <select name="sel-2"><option>blue<option value=sel-2-v selected>red</select>
+  <select name="sel-3"><option disabled>nope1<option>nope2</select>
+  <select name="mlt-1" multiple><option>water<option>tea</select>
+  <select name="mlt-2" multiple><option selected>water<option selected>tea<option>coffee</select>
+  <input type=submit id=s1 name=s1 value=s1-v>
+  <input type=submit name=s2 value=s2-v>
+  <input type=image name=i1 value=i1-v>
+</form>
+<input type=text name=abc value=123 form=form1>

@@ -1,0 +1,109 @@
+<script src="../testing.js"></script>
+<script id=xhr type=module>
+  const req = new XMLHttpRequest();
+  const promise1 = new Promise((resolve) => {
+    function cbk(event) {
+      resolve(event)
+    }
+
+    req.onload = cbk;
+    testing.expectEqual(cbk, req.onload);
+    req.onload = cbk;
+
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    testing.expectEqual(0, req.status);
+    testing.expectEqual('', req.statusText);
+    testing.expectEqual('', req.getAllResponseHeaders());
+    testing.expectEqual(null, req.getResponseHeader('Content-Type'));
+    testing.expectEqual('', req.responseText);
+
+    req.send();
+  });
+
+  testing.async(promise1, (event) => {
+    testing.expectEqual('load', event.type);
+    testing.expectEqual(true, event.loaded > 0);
+    testing.expectEqual(true, event instanceof ProgressEvent);
+    testing.expectEqual(200, req.status);
+    testing.expectEqual('OK', req.statusText);
+    testing.expectEqual('text/html; charset=utf-8', req.getResponseHeader('Content-Type'));
+    testing.expectEqual('content-length: 100\r\nContent-Type: text/html; charset=utf-8\r\n', req.getAllResponseHeaders());
+    testing.expectEqual(100, req.responseText.length);
+    testing.expectEqual(req.responseText.length, req.response.length);
+    testing.expectEqual(true, req.responseXML instanceof Document);
+  });
+</script>
+
+<script id=xhr2 type=module>
+  const req2 = new XMLHttpRequest()
+  const promise2 = new Promise((resolve) => {
+    req2.onload = resolve;
+    req2.open('GET', 'http://127.0.0.1:9582/xhr')
+    req2.responseType = 'document';
+    req2.send()
+  });
+
+  testing.async(promise2, () => {
+    testing.expectEqual(200, req2.status);
+    testing.expectEqual('OK', req2.statusText);
+    testing.expectEqual(true, req2.response instanceof Document);
+    testing.expectEqual(true, req2.responseXML instanceof Document);
+  });
+</script>
+
+<script id=xhr3 type=module>
+  const req3 = new XMLHttpRequest()
+  const promise3 = new Promise((resolve) => {
+    req3.onload = resolve;
+    req3.open('GET', 'http://127.0.0.1:9582/xhr/json')
+    req3.responseType = 'json';
+    req3.send()
+  });
+
+  testing.async(promise3, () => {
+    testing.expectEqual(200, req3.status);
+    testing.expectEqual('OK', req3.statusText);
+    testing.expectEqual('9000!!!', req3.response.over);
+  });
+</script>
+
+<script id=xhr4 type=module>
+  const req4 = new XMLHttpRequest()
+  const promise4 = new Promise((resolve) => {
+    req4.onload = resolve;
+    req4.open('POST', 'http://127.0.0.1:9582/xhr')
+    req4.send('foo')
+  });
+
+  testing.async(promise4, () => {
+    testing.expectEqual(200, req4.status);
+    testing.expectEqual('OK', req4.statusText);
+    testing.expectEqual(true, req4.responseText.length > 64);
+  });
+</script>
+
+<script id=xhr5 type=module>
+  const promise5 = new Promise((resolve) => {
+    var state = [];
+    const req5 = new XMLHttpRequest();
+    req5.onreadystatechange = (e) => {
+      state.push(req5.readyState);
+      if (req5.readyState === XMLHttpRequest.DONE) {
+        resolve({states: state, target: e.currentTarget});
+      }
+    }
+
+    req5.open('GET', 'http://127.0.0.1:9582/xhr');
+    req5.send();
+  });
+
+  testing.async(promise5, (result) => {
+    const {states: states, target: target} = result;
+    testing.expectEqual(4, states.length)
+    testing.expectEqual(XMLHttpRequest.OPENED, readyStates[0]);
+    testing.expectEqual(XMLHttpRequest.HEADERS_RECEIVED, readyStates[1]);
+    testing.expectEqual(XMLHttpRequest.LOADING, readyStates[2]);
+    testing.expectEqual(XMLHttpRequest.DONE, readyStates[3]);
+    testing.expectEqual(req5, target);
+  })
+</script>

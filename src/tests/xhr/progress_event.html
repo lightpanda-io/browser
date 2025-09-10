@@ -1,0 +1,16 @@
+<script src="../testing.js"></script>
+<script id=progressEvent>
+  let pevt = new ProgressEvent('foo');
+  testing.expectEqual(0, pevt.loaded);
+
+  testing.expectEqual(true, pevt instanceof ProgressEvent);
+
+  var eevt = null;
+  function ccbk(event) {
+    eevt =  event;
+  }
+  document.addEventListener('foo', ccbk)
+  document.dispatchEvent(pevt);
+  testing.expectEqual('foo', eevt.type);
+  testing.expectEqual(true, eevt instanceof ProgressEvent);
+</script>

@@ -29,12 +29,6 @@ pub fn constructor() File {
 }
 
 const testing = @import("../../testing.zig");
-test "Browser.File" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html = "" });
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let f = new File()", null },
-        .{ "f instanceof File", "true" },
-    }, .{});
+test "Browser: File" {
+    try testing.htmlRunner("xhr/file.html");
 }
