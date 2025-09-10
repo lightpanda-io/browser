@@ -64,7 +64,7 @@ pub const CustomEvent = struct {
         event_type: []const u8,
         can_bubble: bool,
         cancelable: bool,
-        detail: ?JsObject,
+        maybe_detail: ?JsObject,
     ) !void {
         // This function can only be called after the constructor has called.
         // So we assume proto is initialized already by constructor.
@@ -73,7 +73,9 @@ pub const CustomEvent = struct {
         self.proto.cancelable = cancelable;
         self.proto.is_initialised = true;
         // Detail is stored separately.
-        self.detail = detail;
+        if (maybe_detail) |detail| {
+            self.detail = try detail.persist();
+        }
     }
 };
 
