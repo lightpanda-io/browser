@@ -5,6 +5,7 @@ env:
   AWS_SECRET_ACCESS_KEY: ${{ secrets.LPD_PERF_AWS_SECRET_ACCESS_KEY }}
   AWS_BUCKET: ${{ vars.LPD_PERF_AWS_BUCKET }}
   AWS_REGION: ${{ vars.LPD_PERF_AWS_REGION }}
+  LIGHTPANDA_DISABLE_TELEMETRY: true
 
 on:
   schedule:
@@ -30,7 +31,7 @@ jobs:
       - uses: ./.github/actions/install
 
       - name: json output
-        run: zig build wpt -- --json > wpt.json
+        run: zig build -Doptimize=ReleaseFast wpt -- --json > wpt.json
 
       - name: write commit
         run: |

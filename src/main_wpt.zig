@@ -25,7 +25,6 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const App = @import("app.zig").App;
 const Env = @import("browser/env.zig").Env;
 const Browser = @import("browser/browser.zig").Browser;
-const Session = @import("browser/session.zig").Session;
 const TestHTTPServer = @import("TestHTTPServer.zig");
 
 const parser = @import("browser/netsurf.zig");
@@ -75,15 +74,15 @@ pub fn main() !void {
 
     var browser = try Browser.init(app);
     defer browser.deinit();
-    const session = try browser.newSession();
 
+    var i: usize = 0;
     while (try it.next()) |test_file| {
         defer _ = test_arena.reset(.retain_capacity);
 
         var err_out: ?[]const u8 = null;
         const result = run(
             test_arena.allocator(),
-            session,
+            &browser,
             test_file,
             &err_out,
         ) catch |err| blk: {
@@ -93,16 +92,24 @@ pub fn main() !void {
             break :blk null;
         };
         try writer.process(test_file, result, err_out);
+        // if (@mod(i, 10) == 0) {
+        //     std.debug.print("\n\n=== V8 Memory {d}===\n", .{i});
+        //     browser.env.dumpMemoryStats();
+        // }
+        i += 1;
     }
     try writer.finalize();
 }
 
 fn run(
     arena: Allocator,
-    session: *Session,
+    browser: *Browser,
     test_file: []const u8,
     err_out: *?[]const u8,
 ) ![]const u8 {
+    const session = try browser.newSession();
+    defer browser.closeSession();
+
     const page = try session.createPage();
     defer session.removePage();
 
@@ -141,11 +148,7 @@ const Writer = struct {
     writer: std.fs.File.Writer,
     cases: std.ArrayListUnmanaged(Case) = .{},
 
-    const Format = enum {
-        json,
-        text,
-        summary,
-    };
+    const Format = enum { json, text, summary, quiet };
 
     fn init(allocator: Allocator, format: Format) !Writer {
         const out = std.fs.File.stdout();
@@ -200,6 +203,7 @@ const Writer = struct {
                     }, .{ .whitespace = .indent_2 }, writer);
                     return writer.writeByte(',');
                 },
+                .quiet => {},
             }
             // just make sure we didn't fall through by mistake
             unreachable;
@@ -289,6 +293,7 @@ const Writer = struct {
                 // separator, see `finalize` for the hack we use to terminate this
                 try writer.writeByte(',');
             },
+            .quiet => {},
         }
     }
 
@@ -309,7 +314,8 @@ fn parseArgs(arena: Allocator) !Command {
         \\
         \\  -h, --help       Print this help message and exit.
         \\  --json           result is formatted in JSON.
-        \\  --summary        print a summary result. Incompatible w/ --json
+        \\  --summary        print a summary result. Incompatible w/ --json or --quiet
+        \\  --quiet          No output. Incompatible w/ --json or --summary
         \\
     ;
 
@@ -331,6 +337,8 @@ fn parseArgs(arena: Allocator) !Command {
             format = .json;
         } else if (std.mem.eql(u8, "--summary", arg)) {
             format = .summary;
+        } else if (std.mem.eql(u8, "--quiet", arg)) {
+            format = .quiet;
         } else {
             try filters.append(arena, arg);
         }
