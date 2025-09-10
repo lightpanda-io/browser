@@ -177,22 +177,6 @@ pub const NodeList = struct {
 };
 
 const testing = @import("../../testing.zig");
-test "Browser.DOM.NodeList" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let list = document.getElementById('content').childNodes", "undefined" },
-        .{ "list.length", "9" },
-        .{ "list[0].__proto__.constructor.name", "Text" },
-        .{
-            \\  let i = 0;
-            \\  list.forEach(function (n, idx) {
-            \\    i += idx;
-            \\  });
-            \\  i;
-            ,
-            "36",
-        },
-    }, .{});
+test "Browser: DOM.NodeList" {
+    try testing.htmlRunner("dom/node_list.html");
 }

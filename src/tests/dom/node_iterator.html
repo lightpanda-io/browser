@@ -1,0 +1,61 @@
+<script src="../testing.js"></script>
+<script id=nodeIterator>
+  const nodeIterator = document.createNodeIterator(
+    document.body,
+    NodeFilter.SHOW_ELEMENT,
+    {
+      acceptNode(node) {
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    },
+  );
+  testing.expectEqual('BODY', nodeIterator.nextNode().nodeName);
+
+  testing.expectEqual('DIV', nodeIterator.nextNode().nodeName);
+  testing.expectEqual('A', nodeIterator.nextNode().nodeName);
+  testing.expectEqual('A', nodeIterator.previousNode().nodeName); // pointer_before_current flips
+  testing.expectEqual('A', nodeIterator.nextNode().nodeName); // pointer_before_current flips
+  testing.expectEqual('A', nodeIterator.previousNode().nodeName); // pointer_before_current flips
+  testing.expectEqual('DIV', nodeIterator.previousNode().nodeName);
+  testing.expectEqual('BODY', nodeIterator.previousNode().nodeName);
+  testing.expectEqual(null, nodeIterator.previousNode()); // Not HEAD since body is root
+  testing.expectEqual(null, nodeIterator.previousNode()); // Keeps returning null
+  testing.expectEqual('BODY', nodeIterator.nextNode().nodeName);
+
+  nodeIterator.nextNode();
+  nodeIterator.nextNode();
+  nodeIterator.nextNode();
+  testing.expectEqual('SPAN', nodeIterator.nextNode().nodeName);
+  testing.expectEqual('P', nodeIterator.nextNode().nodeName);
+  testing.expectEqual(null, nodeIterator.nextNode()); // Just the last one
+  testing.expectEqual(null ,nodeIterator.nextNode()); // Keeps returning null
+  testing.expectEqual('P', nodeIterator.previousNode().nodeName);
+
+  const notationIterator = document.createNodeIterator(
+    document.body,
+    NodeFilter.SHOW_NOTATION,
+  );
+  testing.expectEqual(null, notationIterator.nextNode());
+  testing.expectEqual(null, notationIterator.previousNode());
+
+  testing.expectEqual(1, nodeIterator.filter.acceptNode(document.body));
+  testing.expectEqual(null, notationIterator.filter);
+
+  const rejectIterator = document.createNodeIterator(
+    document.body,
+    NodeFilter.SHOW_ALL,
+    (e => { return NodeFilter.FILTER_REJECT}),
+  );
+  testing.expectEqual(2, rejectIterator.filter(document.body));
+</script>
+
+<body>
+    <div id="content">
+    <a id="link" href="foo" class="ok">OK</a>
+    <p id="para-empty" class="ok empty">
+      <span id="para-empty-child"></span>
+    </p>
+    <p id="para"> And</p>
+    <!--comment-->
+  </div>
+</body>

@@ -1,0 +1,33 @@
+<div id="target-container">
+  <p id="reference-node">
+  I am the original reference node.
+  </p>
+</div>
+
+<script src="../testing.js"></script>
+<script id=nodeOwner>
+  const parser = new DOMParser();
+  const newDoc = parser.parseFromString('<div id="new-node"><p>Hey</p><span>Marked</span></div>', 'text/html');
+  const newNode = newDoc.getElementById('new-node');
+  const parent = $('#target-container');
+  const referenceNode = $('#reference-node');
+
+  parent.insertBefore(newNode, referenceNode);
+  const k = $('#new-node');
+  const ptag = k.querySelector('p');
+  const spanTag = k.querySelector('span');
+  const anotherDoc = parser.parseFromString('<div id="another-new-node"></div>', 'text/html');
+  const anotherNewNode = anotherDoc.getElementById('another-new-node');
+  testing.expectEqual('[object HTMLDivElement]', parent.appendChild(anotherNewNode).toString());
+
+
+  testing.expectEqual(newNode.ownerDocument, parent.ownerDocument);
+  testing.expectEqual(anotherNewNode.ownerDocument, parent.ownerDocument);
+  testing.expectEqual('P', newNode.firstChild.nodeName);
+  testing.expectEqual(parent.ownerDocument, ptag.ownerDocument);
+  testing.expectEqual(parent.ownerDocument, spanTag.ownerDocument);
+  testing.expectEqual(true, parent.contains(newNode));
+  testing.expectEqual(true, parent.contains(anotherNewNode));
+  testing.expectEqual(false, anotherDoc.contains(anotherNewNode));
+  testing.expectEqual(false, newDoc.contains(newNode));
+</script>

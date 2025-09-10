@@ -1,0 +1,18 @@
+<div id="content">
+  <a id="link" href="foo" class="ok">OK</a>
+  <p id="para-empty" class="ok empty">
+    <span id="para-empty-child"></span>
+  </p>
+  <p id="para"> And</p>
+  <!--comment-->
+</div>
+
+<script src="../testing.js"></script>
+<script id=nodeList>
+  let list = document.getElementById('content').childNodes;
+  testing.expectEqual(9, list.length);
+  testing.expectEqual('Text', list[0].__proto__.constructor.name);
+  let i = 0;
+  list.forEach(function (n, idx) { i += idx; });
+  testing.expectEqual(36, i);
+</script>
