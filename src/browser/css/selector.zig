@@ -434,7 +434,25 @@ pub const Selector = union(enum) {
                     else => Error.UnsupportedRelativePseudoClass,
                 };
             },
-            .pseudo_class_contains => return Error.UnsupportedContainsPseudoClass, // TODO, need mem allocation.
+            .pseudo_class_contains => |v| {
+                // Only containsOwn is implemented.
+                if (v.own == false) return Error.UnsupportedContainsPseudoClass;
+
+                var c = try n.firstChild();
+                while (c != null) {
+                    if (c.?.isText()) {
+                        const text = try c.?.text();
+                        if (text) |_text| {
+                            if (contains(_text, v.val, false)) { // we are case sensitive. Is this correct behavior?
+                                return true;
+                            }
+                        }
+                    }
+
+                    c = try c.?.nextSibling();
+                }
+                return false;
+            },
             .pseudo_class_regexp => return Error.UnsupportedRegexpPseudoClass, // TODO need mem allocation.
             .pseudo_class_nth => |v| {
                 if (v.a == 0) {

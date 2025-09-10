@@ -81,6 +81,14 @@ pub const Node = struct {
         return t == .text;
     }
 
+    pub fn text(n: Node) !?[]const u8 {
+        const data = try parser.nodeTextContent(n.node);
+        if (data == null) return null;
+        if (data.?.len == 0) return null;
+
+        return std.mem.trim(u8, data.?, &std.ascii.whitespace);
+    }
+
     pub fn isEmptyText(n: Node) !bool {
         const data = try parser.nodeTextContent(n.node);
         if (data == null) return true;
@@ -216,13 +224,14 @@ test "Browser.CSS.Libdom: matchFirst" {
         .{ .q = "li, p", .html = "<ul><li></li><li></li></ul><p>", .exp = 1 },
         .{ .q = "p +/*This is a comment*/ p", .html = "<p id=\"1\"><p id=\"2\"></p><address></address><p id=\"3\">", .exp = 1 },
         // .{ .q = "p:contains(\"that wraps\")", .html = "<p>Text block that <span>wraps inner text</span> and continues</p>", .exp = 1 },
-        // .{ .q = "p:containsOwn(\"that wraps\")", .html = "<p>Text block that <span>wraps inner text</span> and continues</p>", .exp = 0 },
-        // .{ .q = ":containsOwn(\"inner\")", .html = "<p>Text block that <span>wraps inner text</span> and continues</p>", .exp = 1 },
-        // .{ .q = "p:containsOwn(\"block\")", .html = "<p>Text block that <span>wraps inner text</span> and continues</p>", .exp = 1 },
+        .{ .q = "p:containsOwn(\"that wraps\")", .html = "<p>Text block that <span>wraps inner text</span> and continues</p>", .exp = 0 },
+        .{ .q = ":containsOwn(\"inner\")", .html = "<p>Text block that <span>wraps inner text</span> and continues</p>", .exp = 1 },
+        .{ .q = ":containsOwn(\"Inner\")", .html = "<p>Text block that <span>wraps inner text</span> and continues</p>", .exp = 0 },
+        .{ .q = "p:containsOwn(\"block\")", .html = "<p>Text block that <span>wraps inner text</span> and continues</p>", .exp = 1 },
         // .{ .q = "div:has(#p1)", .html = "<div id=\"d1\"><p id=\"p1\"><span>text content</span></p></div><div id=\"d2\"/>", .exp = 1 },
-        // .{ .q = "div:has(:containsOwn(\"2\"))", .html = "<div id=\"d1\"><p id=\"p1\"><span>contents 1</span></p></div> <div id=\"d2\"><p>contents <em>2</em></p></div>", .exp = 1 },
-        // .{ .q = "body :has(:containsOwn(\"2\"))", .html = "<body><div id=\"d1\"><p id=\"p1\"><span>contents 1</span></p></div> <div id=\"d2\"><p id=\"p2\">contents <em>2</em></p></div></body>", .exp = 1 },
-        // .{ .q = "body :haschild(:containsOwn(\"2\"))", .html = "<body><div id=\"d1\"><p id=\"p1\"><span>contents 1</span></p></div> <div id=\"d2\"><p id=\"p2\">contents <em>2</em></p></div></body>", .exp = 1 },
+        .{ .q = "div:has(:containsOwn(\"2\"))", .html = "<div id=\"d1\"><p id=\"p1\"><span>contents 1</span></p></div> <div id=\"d2\"><p>contents <em>2</em></p></div>", .exp = 1 },
+        .{ .q = "body :has(:containsOwn(\"2\"))", .html = "<body><div id=\"d1\"><p id=\"p1\"><span>contents 1</span></p></div> <div id=\"d2\"><p id=\"p2\">contents <em>2</em></p></div></body>", .exp = 1 },
+        .{ .q = "body :haschild(:containsOwn(\"2\"))", .html = "<body><div id=\"d1\"><p id=\"p1\"><span>contents 1</span></p></div> <div id=\"d2\"><p id=\"p2\">contents <em>2</em></p></div></body>", .exp = 1 },
         // .{ .q = "p:matches([\\d])", .html = "<p id=\"p1\">0123456789</p><p id=\"p2\">abcdef</p><p id=\"p3\">0123ABCD</p>", .exp = 1 },
         // .{ .q = "p:matches([a-z])", .html = "<p id=\"p1\">0123456789</p><p id=\"p2\">abcdef</p><p id=\"p3\">0123ABCD</p>", .exp = 1 },
         // .{ .q = "p:matches([a-zA-Z])", .html = "<p id=\"p1\">0123456789</p><p id=\"p2\">abcdef</p><p id=\"p3\">0123ABCD</p>", .exp = 1 },
@@ -360,13 +369,14 @@ test "Browser.CSS.Libdom: matchAll" {
         .{ .q = "li, p", .html = "<ul><li></li><li></li></ul><p>", .exp = 3 },
         .{ .q = "p +/*This is a comment*/ p", .html = "<p id=\"1\"><p id=\"2\"></p><address></address><p id=\"3\">", .exp = 1 },
         // .{ .q = "p:contains(\"that wraps\")", .html = "<p>Text block that <span>wraps inner text</span> and continues</p>", .exp = 1 },
-        // .{ .q = "p:containsOwn(\"that wraps\")", .html = "<p>Text block that <span>wraps inner text</span> and continues</p>", .exp = 0 },
-        // .{ .q = ":containsOwn(\"inner\")", .html = "<p>Text block that <span>wraps inner text</span> and continues</p>", .exp = 1 },
-        // .{ .q = "p:containsOwn(\"block\")", .html = "<p>Text block that <span>wraps inner text</span> and continues</p>", .exp = 1 },
+        .{ .q = "p:containsOwn(\"that wraps\")", .html = "<p>Text block that <span>wraps inner text</span> and continues</p>", .exp = 0 },
+        .{ .q = ":containsOwn(\"inner\")", .html = "<p>Text block that <span>wraps inner text</span> and continues</p>", .exp = 1 },
+        .{ .q = ":containsOwn(\"Inner\")", .html = "<p>Text block that <span>wraps inner text</span> and continues</p>", .exp = 0 },
+        .{ .q = "p:containsOwn(\"block\")", .html = "<p>Text block that <span>wraps inner text</span> and continues</p>", .exp = 1 },
         .{ .q = "div:has(#p1)", .html = "<div id=\"d1\"><p id=\"p1\"><span>text content</span></p></div><div id=\"d2\"/>", .exp = 1 },
-        // .{ .q = "div:has(:containsOwn(\"2\"))", .html = "<div id=\"d1\"><p id=\"p1\"><span>contents 1</span></p></div> <div id=\"d2\"><p>contents <em>2</em></p></div>", .exp = 1 },
-        // .{ .q = "body :has(:containsOwn(\"2\"))", .html = "<body><div id=\"d1\"><p id=\"p1\"><span>contents 1</span></p></div> <div id=\"d2\"><p id=\"p2\">contents <em>2</em></p></div></body>", .exp = 2 },
-        // .{ .q = "body :haschild(:containsOwn(\"2\"))", .html = "<body><div id=\"d1\"><p id=\"p1\"><span>contents 1</span></p></div> <div id=\"d2\"><p id=\"p2\">contents <em>2</em></p></div></body>", .exp = 1 },
+        .{ .q = "div:has(:containsOwn(\"2\"))", .html = "<div id=\"d1\"><p id=\"p1\"><span>contents 1</span></p></div> <div id=\"d2\"><p>contents <em>2</em></p></div>", .exp = 1 },
+        .{ .q = "body :has(:containsOwn(\"2\"))", .html = "<body><div id=\"d1\"><p id=\"p1\"><span>contents 1</span></p></div> <div id=\"d2\"><p id=\"p2\">contents <em>2</em></p></div></body>", .exp = 2 },
+        .{ .q = "body :haschild(:containsOwn(\"2\"))", .html = "<body><div id=\"d1\"><p id=\"p1\"><span>contents 1</span></p></div> <div id=\"d2\"><p id=\"p2\">contents <em>2</em></p></div></body>", .exp = 1 },
         // .{ .q = "p:matches([\\d])", .html = "<p id=\"p1\">0123456789</p><p id=\"p2\">abcdef</p><p id=\"p3\">0123ABCD</p>", .exp = 2 },
         // .{ .q = "p:matches([a-z])", .html = "<p id=\"p1\">0123456789</p><p id=\"p2\">abcdef</p><p id=\"p3\">0123ABCD</p>", .exp = 1 },
         // .{ .q = "p:matches([a-zA-Z])", .html = "<p id=\"p1\">0123456789</p><p id=\"p2\">abcdef</p><p id=\"p3\">0123ABCD</p>", .exp = 2 },
