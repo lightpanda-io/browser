@@ -17,11 +17,11 @@ inputs:
   zig-v8:
     description: 'zig v8 version to install'
     required: false
-    default: 'v0.1.28'
+    default: 'v0.1.30'
   v8:
     description: 'v8 version to install'
     required: false
-    default: '13.6.233.8'
+    default: '14.0.365.4'
   cache-dir:
     description: 'cache dir to use'
     required: false
