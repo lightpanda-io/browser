@@ -1,0 +1,21 @@
+<script src="../testing.js"></script>
+
+<div id=c></div>
+
+<script id=template>
+  let t = document.createElement('template');
+  let d = document.createElement('div');
+  d.id = 'abc';
+  t.content.append(d);
+
+  testing.expectEqual(null, document.getElementById('abc'));
+  document.getElementById('c').appendChild(t.content.cloneNode(true));
+  testing.expectEqual('abc', document.getElementById('abc').id);
+
+  t.innerHTML = '<span>over</span><p>9000!</p>';
+  testing.expectEqual(2, t.content.childNodes.length);
+  testing.expectEqual('SPAN', t.content.childNodes[0].tagName);
+  testing.expectEqual('over', t.content.childNodes[0].innerHTML);
+  testing.expectEqual('P', t.content.childNodes[1].tagName);
+  testing.expectEqual('9000!', t.content.childNodes[1].innerHTML);
+</script>

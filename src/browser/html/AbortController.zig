@@ -138,44 +138,6 @@ const TimeoutCallback = struct {
 };
 
 const testing = @import("../../testing.zig");
-test "Browser.HTML.AbortController" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "var called = 0", null },
-        .{ "var a1 = new AbortController()", null },
-        .{ "var s1 = a1.signal", null },
-        .{ "s1.throwIfAborted()", "undefined" },
-        .{ "s1.reason", "undefined" },
-        .{ "var target;", null },
-        .{
-            \\ s1.addEventListener('abort', (e) => {
-            \\   called += 1;
-            \\   target = e.target;
-            \\
-            \\ });
-            ,
-            null,
-        },
-        .{ "a1.abort()", null },
-        .{ "s1.aborted", "true" },
-        .{ "target == s1", "true" },
-        .{ "s1.reason", "AbortError" },
-        .{ "called", "1" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "var s2 = AbortSignal.abort('over 9000')", null },
-        .{ "s2.aborted", "true" },
-        .{ "s2.reason", "over 9000" },
-        .{ "AbortSignal.abort().reason", "AbortError" },
-    }, .{});
-
-    try runner.testCases(&.{
-        .{ "var s3 = AbortSignal.timeout(10)", null },
-        .{ "s3.aborted", "true" },
-        .{ "s3.reason", "TimeoutError" },
-        .{ "try { s3.throwIfAborted() } catch (e) { e }", "Error: TimeoutError" },
-    }, .{});
+test "Browser: HTML.AbortController" {
+    try testing.htmlRunner("html/abort_controller.html");
 }

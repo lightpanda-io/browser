@@ -87,20 +87,6 @@ pub const Location = struct {
 };
 
 const testing = @import("../../testing.zig");
-test "Browser.HTML.Location" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "location.href", "https://lightpanda.io/opensource-browser/" },
-        .{ "document.location.href", "https://lightpanda.io/opensource-browser/" },
-
-        .{ "location.host", "lightpanda.io" },
-        .{ "location.hostname", "lightpanda.io" },
-        .{ "location.origin", "https://lightpanda.io" },
-        .{ "location.pathname", "/opensource-browser/" },
-        .{ "location.hash", "" },
-        .{ "location.port", "" },
-        .{ "location.search", "" },
-    }, .{});
+test "Browser: HTML.Location" {
+    try testing.htmlRunner("html/location.html");
 }

@@ -31,11 +31,6 @@ pub const SVGElement = struct {
 };
 
 const testing = @import("../../testing.zig");
-test "Browser.HTML.SVGElement" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "'AString' instanceof SVGElement", "false" },
-    }, .{});
+test "Browser: HTML.SVGElement" {
+    try testing.htmlRunner("html/svg.html");
 }

@@ -1,0 +1,23 @@
+<script src="../testing.js"></script>
+
+<script id=history>
+  testing.expectEqual('auto', history.scrollRestoration);
+
+  history.scrollRestoration = 'manual';
+  history.scrollRestoration = 'foo';
+  testing.expectEqual('manual', history.scrollRestoration);
+
+  history.scrollRestoration = 'auto';
+  testing.expectEqual('auto', history.scrollRestoration);
+
+  testing.expectEqual(null, history.state)
+
+  history.pushState({}, null, '');
+  history.replaceState({}, null, '');
+
+  testing.expectEqual(undefined, history.go());
+  testing.expectEqual(undefined, history.go(1));
+  testing.expectEqual(undefined, history.go(-1));
+  testing.expectEqual(undefined, history.forward());
+  testing.expectEqual(undefined, history.back());
+</script>

@@ -76,22 +76,6 @@ fn normalize(allocator: Allocator, name: []const u8) ![]const u8 {
 }
 
 const testing = @import("../../testing.zig");
-test "Browser.HTML.DataSet" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{ .html = "" });
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "let el1 = document.createElement('div')", null },
-        .{ "el1.dataset.x", "undefined" },
-        .{ "el1.dataset.x = '123'", "123" },
-        .{ "delete el1.dataset.x", "true" },
-        .{ "el1.dataset.x", "undefined" },
-        .{ "delete el1.dataset.other", "true" }, // yes, this is right
-
-        .{ "let ds1 = el1.dataset", null },
-        .{ "ds1.helloWorld = 'yes'", null },
-        .{ "el1.getAttribute('data-hello-world')", "yes" },
-        .{ "el1.setAttribute('data-this-will-work', 'positive')", null },
-        .{ "ds1.thisWillWork", "positive" },
-    }, .{});
+test "Browser: HTML.DataSet" {
+    try testing.htmlRunner("html/dataset.html");
 }

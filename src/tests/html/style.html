@@ -1,0 +1,7 @@
+<script src="../testing.js"></script>
+
+<script id=style>
+  let s = document.createElement('style');
+  testing.expectEqual('text/css', s.sheet.type);
+  testing.expectEqual(false, document.createElement('style').sheet == s.sheet);
+</script>

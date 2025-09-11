@@ -1,0 +1,74 @@
+<script src="../testing.js"></script>
+
+<form id=f1>
+ <select id=s1 name=s1><option>o1<option>o2</select>
+</form>
+<select id=s2></select>
+
+<script id=select>
+  const s = document.getElementById('s1');
+  testing.expectEqual('[object HTMLFormElement]', s.form.toString());
+  testing.expectEqual(null, document.getElementById('s2').form);
+
+  testing.expectEqual(false, s.disabled);
+  s.disabled = true;
+  testing.expectEqual(true, s.disabled);
+
+  s.disabled = false;
+  testing.expectEqual(false, s.disabled);
+
+  testing.expectEqual(false, s.multiple);
+  s.multiple = true;
+  testing.expectEqual(true, s.multiple);
+  s.multiple = false;
+  testing.expectEqual(false, s.multiple);
+
+  testing.expectEqual('s1', s.name);
+  s.name = 'sel1';
+  testing.expectEqual('sel1', s.name);
+
+  testing.expectEqual(2, s.length);
+
+  testing.expectEqual(0, s.selectedIndex);
+  s.selectedIndex = 2; // out of range
+  testing.expectEqual(-1, s.selectedIndex);
+
+  s.selectedIndex = -1;
+  testing.expectEqual(-1, s.selectedIndex);
+
+  s.selectedIndex = 0;
+  testing.expectEqual(0, s.selectedIndex);
+
+  s.selectedIndex = 1;
+  testing.expectEqual(1, s.selectedIndex);
+
+  s.selectedIndex = -323;
+  testing.expectEqual(-1, s.selectedIndex);
+
+  let options = s.options;
+  testing.expectEqual(2, options.length);
+  testing.expectEqual('o2', options.item(1).value);
+  testing.expectEqual(-1, options.selectedIndex);
+
+  let o3 = document.createElement('option');
+  o3.value = 'o3';
+  options.add(o3)
+  testing.expectEqual(3, options.length);
+  testing.expectEqual('o3', options.item(2).value);
+
+  let o4 = document.createElement('option');
+  o4.value = 'o4';
+  options.add(o4, 1);
+  testing.expectEqual(4, options.length);
+  testing.expectEqual('o4', options.item(1).value);
+
+  let o5 = document.createElement('option');
+  o5.value = 'o5';
+  options.add(o5, o3)
+  testing.expectEqual(5, options.length);
+  testing.expectEqual('o5', options.item(3).value);
+
+  options.remove(3)
+  testing.expectEqual(4, options.length);
+  testing.expectEqual('o3', options.item(3).value);
+</script>

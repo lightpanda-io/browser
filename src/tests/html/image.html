@@ -1,0 +1,31 @@
+<script src="../testing.js"></script>
+
+<script id=image>
+  img = new Image();
+  testing.expectEqual(0, img.width);
+  testing.expectEqual(0, img.height);
+
+  img = new Image(4);
+  testing.expectEqual(4, img.width);
+  testing.expectEqual(0, img.height);
+
+  img = new Image(5, 6);
+  testing.expectEqual(5, img.width);
+  testing.expectEqual(6, img.height);
+
+  let fruit = new Image
+  testing.expectEqual(0, fruit.width);
+  fruit.width = 5;
+  testing.expectEqual(5, fruit.width);
+  fruit.width = '15';
+  testing.expectEqual(15, fruit.width);
+  fruit.width = 'apple';
+  testing.expectEqual(0, fruit.width);
+
+  let lyric = new Image
+  testing.expectEqual('', lyric.src);
+  lyric.src = 'okay';
+  testing.expectEqual('okay', lyric.src);
+  lyric.src = 15;
+  testing.expectEqual('15', lyric.src);
+</script>

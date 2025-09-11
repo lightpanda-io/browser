@@ -1,0 +1,29 @@
+<script src="../testing.js"></script>
+<div id=x data-power="over 9000" data-empty data-some-long-key=ok></div>
+
+<script id=dataset>
+  let el1 = document.createElement('div');
+  testing.expectEqual(undefined, el1.dataset.x);
+
+  el1.dataset.x = '123';
+  testing.expectEqual(true, delete el1.dataset.x);
+  testing.expectEqual(undefined, el1.dataset.x);
+  // yes, this is right
+  testing.expectEqual(true, delete el1.dataset.other);
+
+  let ds1 = el1.dataset;
+  ds1.helloWorld = 'yes';
+  testing.expectEqual('yes', el1.getAttribute('data-hello-world'));
+  el1.setAttribute('data-this-will-work', 'positive');
+  testing.expectEqual('positive', ds1.thisWillWork);
+</script>
+
+<script id=element>
+  let div = $('#x');
+  testing.expectEqual(undefined, div.dataset.nope);
+  testing.expectEqual('over 9000', div.dataset.power);
+  testing.expectEqual('', div.dataset.empty);
+  testing.expectEqual('ok', div.dataset.someLongKey);
+  testing.expectEqual(true, delete div.dataset.power);
+  testing.expectEqual(undefined, div.dataset.power);
+</script>
