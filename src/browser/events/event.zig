@@ -113,7 +113,7 @@ pub const Event = struct {
     // Even though this is supposed to to provide microsecond resolution, browser
     // return coarser values to protect against fingerprinting. libdom returns
     // seconds, which is good enough.
-    pub fn get_timeStamp(self: *parser.Event) !u32 {
+    pub fn get_timeStamp(self: *parser.Event) !u64 {
         return parser.eventTimestamp(self);
     }
 
