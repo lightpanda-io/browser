@@ -374,6 +374,10 @@ pub const XMLHttpRequest = struct {
         for (self.headers.items) |hdr| {
             try headers.add(hdr);
         }
+
+        // transfer cookies to headers
+        addCookies(&headers, page.cookie_jar, page.arena);
+
         try page.requestCookie(.{}).headersForRequest(self.arena, self.url.?, &headers);
 
         try page.http_client.request(.{
@@ -390,6 +394,27 @@ pub const XMLHttpRequest = struct {
             .done_callback = httpDoneCallback,
             .error_callback = httpErrorCallback,
         });
+    }
+
+    fn addCookies(headers: *Http.Headers, jar: *CookieJar, allocator: Allocator) void {
+        var cookiebuf: [4093:0]u8 = undefined;
+        var write_head: [*]u8 = &cookiebuf;
+        for (jar.cookies.items) |cookie| {
+            write_head = writeStr(write_head, cookie.name);
+            write_head = writeStr(write_head, "=");
+            write_head = writeStr(write_head, cookie.value);
+            write_head = writeStr(write_head, ";");
+        }
+        write_head[0] = 0;
+        const len = write_head - &cookiebuf;
+        const cookiestr = allocator.allocSentinel(u8, len, 0) catch return;
+        @memmove(cookiestr, cookiebuf[0..len]);
+        headers.cookies = cookiestr.ptr;
+    }
+
+    fn writeStr(dest: [*]u8, src: []const u8) [*]u8 {
+        @memmove(dest[0..src.len], src);
+        return dest + src.len;
     }
 
     fn httpStartCallback(transfer: *Http.Transfer) !void {
