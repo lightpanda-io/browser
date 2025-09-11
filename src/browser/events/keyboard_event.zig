@@ -18,23 +18,11 @@
 
 const std = @import("std");
 const log = @import("../../log.zig");
+const builtin = @import("builtin");
 
 const netsurf = @import("../netsurf.zig");
 const Event = @import("event.zig").Event;
 const JsObject = @import("../env.zig").JsObject;
-
-const c = @cImport({
-    @cInclude("dom/dom.h");
-    @cInclude("core/pi.h");
-    @cInclude("dom/bindings/hubbub/parser.h");
-    @cInclude("events/event_target.h");
-    @cInclude("events/event.h");
-    @cInclude("events/mouse_event.h");
-    @cInclude("events/keyboard_event.h");
-    @cInclude("utils/validate.h");
-    @cInclude("html/html_element.h");
-    @cInclude("html/html_document.h");
-});
 
 // TODO: We currently don't have a UIEvent interface so we skip it in the prototype chain.
 // https://developer.mozilla.org/en-US/docs/Web/API/UIEvent
@@ -45,50 +33,124 @@ pub const KeyboardEvent = struct {
     pub const Self = netsurf.KeyboardEvent;
     pub const prototype = *UIEvent;
 
-    pub const KeyLocationCode = enum(u16) {
-        standard = 0x00,
-        left = 0x01,
-        right = 0x02,
-        numpad = 0x03,
-        mobile = 0x04, // Non-standard, deprecated.
-        joystick = 0x05, // Non-standard, deprecated.
-    };
-
     pub const ConstructorOptions = struct {
         key: []const u8 = "",
         code: []const u8 = "",
-        location: KeyLocationCode = .standard,
-        char_code: u32 = 0,
-        key_code: u32 = 0,
-        which: u32 = 0,
+        location: netsurf.KeyboardEventOpts.LocationCode = .standard,
         repeat: bool = false,
-        ctrl_key: bool = false,
-        shift_key: bool = false,
-        alt_key: bool = false,
-        meta_key: bool = false,
-        is_composing: bool = false,
+        isComposing: bool = false,
+        // Currently not supported but we take as argument.
+        charCode: u32 = 0,
+        // Currently not supported but we take as argument.
+        keyCode: u32 = 0,
+        // Currently not supported but we take as argument.
+        which: u32 = 0,
+        ctrlKey: bool = false,
+        shiftKey: bool = false,
+        altKey: bool = false,
+        metaKey: bool = false,
     };
 
     pub fn constructor(event_type: []const u8, maybe_options: ?ConstructorOptions) !*netsurf.KeyboardEvent {
-        const options = maybe_options orelse ConstructorOptions{};
+        const options: ConstructorOptions = maybe_options orelse .{};
 
-        const event = try netsurf.keyboardEventCreate();
+        var event = try netsurf.keyboardEventCreate();
+        try netsurf.eventSetInternalType(@ptrCast(&event), .keyboard_event);
+
         try netsurf.keyboardEventInit(
             event,
             event_type,
             .{
-                .bubbles = false,
-                .cancelable = false,
                 .key = options.key,
                 .code = options.code,
-                .alt = options.alt_key,
-                .ctrl = options.ctrl_key,
-                .meta = options.meta_key,
-                .shift = options.shift_key,
+                .location = options.location,
+                .repeat = options.repeat,
+                .is_composing = options.isComposing,
+                .ctrl_key = options.ctrlKey,
+                .shift_key = options.shiftKey,
+                .alt_key = options.altKey,
+                .meta_key = options.metaKey,
             },
         );
 
         return event;
+    }
+
+    // Returns the modifier state for given modifier key.
+    pub fn _getModifierState(self: *Self, key: []const u8) bool {
+        // Chrome and Firefox do case-sensitive match, here we prefer the same.
+        if (std.mem.eql(u8, key, "Alt")) {
+            return get_altKey(self);
+        }
+
+        if (std.mem.eql(u8, key, "AltGraph")) {
+            return (get_altKey(self) and get_ctrlKey(self));
+        }
+
+        if (std.mem.eql(u8, key, "Control")) {
+            return get_ctrlKey(self);
+        }
+
+        if (std.mem.eql(u8, key, "Shift")) {
+            return get_shiftKey(self);
+        }
+
+        if (std.mem.eql(u8, key, "Meta") or std.mem.eql(u8, key, "OS")) {
+            return get_metaKey(self);
+        }
+
+        // Special case for IE.
+        if (comptime builtin.os.tag == .windows) {
+            if (std.mem.eql(u8, key, "Win")) {
+                return get_metaKey(self);
+            }
+        }
+
+        // getModifierState() also accepts a deprecated virtual modifier named "Accel".
+        // event.getModifierState("Accel") returns true when at least one of
+        // KeyboardEvent.ctrlKey or KeyboardEvent.metaKey is true.
+        //
+        // https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/getModifierState#accel_virtual_modifier
+        if (std.mem.eql(u8, key, "Accel")) {
+            return (get_ctrlKey(self) or get_metaKey(self));
+        }
+
+        // TODO: Add support for "CapsLock", "ScrollLock".
+        return false;
+    }
+
+    // Getters.
+
+    pub fn get_altKey(self: *Self) bool {
+        return netsurf.keyboardEventKeyIsSet(self, .alt);
+    }
+
+    pub fn get_ctrlKey(self: *Self) bool {
+        return netsurf.keyboardEventKeyIsSet(self, .ctrl);
+    }
+
+    pub fn get_metaKey(self: *Self) bool {
+        return netsurf.keyboardEventKeyIsSet(self, .meta);
+    }
+
+    pub fn get_shiftKey(self: *Self) bool {
+        return netsurf.keyboardEventKeyIsSet(self, .shift);
+    }
+
+    pub fn get_isComposing(self: *Self) bool {
+        return self.is_composing;
+    }
+
+    pub fn get_location(self: *Self) u32 {
+        return self.location;
+    }
+
+    pub fn get_key(self: *Self) ![]const u8 {
+        return netsurf.keyboardEventGetKey(self);
+    }
+
+    pub fn get_repeat(self: *Self) bool {
+        return self.repeat;
     }
 };
 

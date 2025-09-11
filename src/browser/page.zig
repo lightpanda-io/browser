@@ -942,10 +942,10 @@ pub const Page = struct {
             .cancelable = true,
             .key = kbe.key,
             .code = kbe.code,
-            .alt = kbe.alt,
-            .ctrl = kbe.ctrl,
-            .meta = kbe.meta,
-            .shift = kbe.shift,
+            .alt_key = kbe.alt,
+            .ctrl_key = kbe.ctrl,
+            .meta_key = kbe.meta,
+            .shift_key = kbe.shift,
         });
         _ = try parser.elementDispatchEvent(element, @ptrCast(event));
     }

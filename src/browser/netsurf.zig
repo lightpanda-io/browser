@@ -952,15 +952,44 @@ pub fn keyboardEventDestroy(evt: *KeyboardEvent) void {
     c._dom_keyboard_event_destroy(evt);
 }
 
-const KeyboardEventOpts = struct {
-    key: []const u8,
-    code: []const u8,
+pub inline fn keyboardEventKeyIsSet(
+    evt: *KeyboardEvent,
+    comptime key: enum { ctrl, alt, shift, meta },
+) bool {
+    var is_set: bool = false;
+    const err = switch (key) {
+        .ctrl => c._dom_keyboard_event_get_ctrl_key(evt, &is_set),
+        .alt => c._dom_keyboard_event_get_alt_key(evt, &is_set),
+        .shift => c._dom_keyboard_event_get_shift_key(evt, &is_set),
+        .meta => c._dom_keyboard_event_get_meta_key(evt, &is_set),
+    };
+    // None of the earlier can fail.
+    std.debug.assert(err == c.DOM_NO_ERR);
+
+    return is_set;
+}
+
+pub const KeyboardEventOpts = struct {
+    key: []const u8 = "",
+    code: []const u8 = "",
+    location: LocationCode = .standard,
+    repeat: bool = false,
     bubbles: bool = false,
     cancelable: bool = false,
-    ctrl: bool = false,
-    alt: bool = false,
-    shift: bool = false,
-    meta: bool = false,
+    is_composing: bool = false,
+    ctrl_key: bool = false,
+    alt_key: bool = false,
+    shift_key: bool = false,
+    meta_key: bool = false,
+
+    pub const LocationCode = enum(u32) {
+        standard = c.DOM_KEY_LOCATION_STANDARD,
+        left = c.DOM_KEY_LOCATION_LEFT,
+        right = c.DOM_KEY_LOCATION_RIGHT,
+        numpad = c.DOM_KEY_LOCATION_NUMPAD,
+        mobile = 0x04, // Non-standard, deprecated.
+        joystick = 0x05, // Non-standard, deprecated.
+    };
 };
 
 pub fn keyboardEventInit(evt: *KeyboardEvent, typ: []const u8, opts: KeyboardEventOpts) !void {
@@ -973,13 +1002,13 @@ pub fn keyboardEventInit(evt: *KeyboardEvent, typ: []const u8, opts: KeyboardEve
         null, // dom_abstract_view* ?
         try strFromData(opts.key),
         try strFromData(opts.code),
-        0, // location 0 == standard
-        opts.ctrl,
-        opts.shift,
-        opts.alt,
-        opts.meta,
-        false, // repease
-        false, // is_composiom
+        @intFromEnum(opts.location),
+        opts.ctrl_key,
+        opts.shift_key,
+        opts.alt_key,
+        opts.meta_key,
+        opts.repeat, // repease
+        opts.is_composing, // is_composiom
     );
     try DOMErr(err);
 }
