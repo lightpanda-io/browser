@@ -505,11 +505,11 @@ pub fn eventIsTrusted(evt: *Event) !bool {
     return res;
 }
 
-pub fn eventTimestamp(evt: *Event) !u32 {
-    var ts: c_uint = undefined;
+pub fn eventTimestamp(evt: *Event) !u64 {
+    var ts: u64 = 0;
     const err = c._dom_event_get_timestamp(evt, &ts);
     try DOMErr(err);
-    return @as(u32, @intCast(ts));
+    return ts;
 }
 
 pub fn eventStopPropagation(evt: *Event) !void {
