@@ -5,7 +5,7 @@
 </div>
 
 <script id=dispatch>
-  const startTime = new Date().getTime();
+  const startTime =  new Event('x').timeStamp;
 
   let content = $('#content');
   // let para = document.getElementById('para');
@@ -27,7 +27,7 @@
   testing.expectEqual(true, evt.cancelable);
   testing.expectEqual(true, evt.defaultPrevented);
   testing.expectEqual(true, evt.isTrusted);
-  testing.expectEqual(true, evt.timeStamp >= Math.floor(startTime/1000));
+  testing.expectEqual(true, evt.timeStamp >= Math.floor(startTime));
 </script>
 
 <script id=propogate>
