@@ -72,6 +72,7 @@ pub const Event = struct {
             .mouse_event => .{ .MouseEvent = @as(*parser.MouseEvent, @ptrCast(evt)) },
             .error_event => .{ .ErrorEvent = @as(*ErrorEvent, @ptrCast(evt)).* },
             .message_event => .{ .MessageEvent = @as(*MessageEvent, @ptrCast(evt)).* },
+            .keyboard_event => .{ .KeyboardEvent = @as(*parser.KeyboardEvent, @ptrCast(evt)) },
         };
     }
 
