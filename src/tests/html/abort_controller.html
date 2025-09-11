@@ -1,0 +1,40 @@
+<script src="../testing.js"></script>
+
+<script id=abortController>
+  var a1 = new AbortController();
+
+  var s1 = a1.signal;
+  testing.expectEqual(undefined, s1.throwIfAborted());
+  testing.expectEqual(undefined, s1.reason);
+
+  let target;;
+  let called = 0;
+  s1.addEventListener('abort', (e) => {
+    called += 1;
+    target = e.target;
+  });
+
+  a1.abort();
+  testing.expectEqual(true, s1.aborted)
+  testing.expectEqual(s1, target)
+  testing.expectEqual('AbortError', s1.reason)
+  testing.expectEqual(1, called)
+</script>
+
+<script id=abort>
+  var s2 = AbortSignal.abort('over 9000');
+  testing.expectEqual(true, s2.aborted);
+  testing.expectEqual('over 9000', s2.reason);
+  testing.expectEqual('AbortError', AbortSignal.abort().reason);
+</script>
+
+<script id=timeout>
+  var s3 = AbortSignal.timeout(10);
+  testing.eventually(() => {
+    testing.expectEqual(true, s3.aborted);
+    testing.expectEqual('TimeoutError', s3.reason);
+    testing.expectError('Error: TimeoutError', () => {
+      s3.throwIfAborted()
+    });
+  });
+</script>

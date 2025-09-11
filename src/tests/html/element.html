@@ -1,0 +1,52 @@
+<script src="../testing.js"></script>
+<div id=content>a<strong>b</strong>cc</div>
+<script id=inner>
+  const content = $('#content');
+  testing.expectEqual('a<strong>b</strong>cc', content.innerHTML);
+  testing.expectEqual('abcc', content.innerText);
+  content. innerText = 'foo';
+
+  testing.expectEqual('foo', content.innerHTML);
+  testing.expectEqual('foo', content.innerText);
+</script>
+
+<script id=addEventListene>
+  let click_count = 0;
+  content.addEventListener('click', function() { click_count++ });
+  content.click()
+  testing.expectEqual(1, click_count);
+</script>
+
+<script id=style>
+  let style = content.style;
+  style.cssText = 'color: red; font-size: 12px; margin: 5px !important';
+  testing.expectEqual(3, style.length);
+  style.setProperty('background-color', 'blue')
+  testing.expectEqual('blue', style.getPropertyValue('background-color'));
+  testing.expectEqual(4, style.length);
+</script>
+
+<script id=a>
+  let a = document.createElement('a');
+  testing.expectEqual('', a.href);
+  testing.expectEqual('', a.host);
+  a.href = 'about';
+  testing.expectEqual('http://localhost:9582/src/tests/html/about', a.href);
+</script>
+
+<script id=focus>
+  // detached node cannot be focused
+  const focused = document.activeElement;
+  document.createElement('a').focus();
+  testing.expectEqual(focused, document.activeElement);
+</script>
+
+<script id=link>
+  let l2 = document.createElement('link');
+  testing.expectEqual('', l2.href);
+  l2.href = 'https://lightpanda.io/opensource-browser/15';
+  testing.expectEqual('https://lightpanda.io/opensource-browser/15', l2.href);
+
+  l2.href = '/over/9000';
+  testing.expectEqual('http://localhost:9582/over/9000', l2.href);
+</script>

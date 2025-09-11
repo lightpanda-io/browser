@@ -1,0 +1,14 @@
+<script src="../testing.js"></script>
+
+<script id=location>
+  testing.expectEqual('http://localhost:9582/src/tests/html/location.html', location.href);
+  testing.expectEqual('http://localhost:9582/src/tests/html/location.html', document.location.href);
+
+  testing.expectEqual("localhost:9582", location.host);
+  testing.expectEqual("localhost", location.hostname);
+  testing.expectEqual("http://localhost:9582", location.origin);
+  testing.expectEqual("/src/tests/html/location.html", location.pathname);
+  testing.expectEqual("", location.hash);
+  testing.expectEqual("9582", location.port);
+  testing.expectEqual("", location.search);
+</script>

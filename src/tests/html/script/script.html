@@ -1,0 +1,14 @@
+<script src="../../testing.js"></script>
+
+<script id=script>
+  let script = document.createElement('script')
+  script.src = 'foo.bar';
+
+  script.async = true;
+  testing.expectEqual(true, script.async);
+  script.async = false;
+  testing.expectEqual(false, script.async);
+
+  script.defer = true;
+  testing.expectEqual(true, script.defer);
+</script>

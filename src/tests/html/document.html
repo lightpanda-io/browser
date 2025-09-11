@@ -1,0 +1,84 @@
+<html>
+  <body>
+    <div id=content><a id=link href=#></a></div>
+  </body>
+</html>
+
+<script src="../testing.js"></script>
+
+<script id=document>
+  testing.expectEqual('HTMLDocument', document.__proto__.constructor.name);
+  testing.expectEqual('Document', document.__proto__.__proto__.constructor.name);
+  testing.expectEqual('body', document.body.localName);
+
+  testing.expectEqual('localhost:9582', document.domain);
+  testing.expectEqual('', document.referrer);
+  testing.expectEqual('', document.title);
+  testing.expectEqual('body', document.body.localName);
+  testing.expectEqual('head', document.head.localName);
+  testing.expectEqual(0, document.images.length);
+  testing.expectEqual(0, document.embeds.length);
+  testing.expectEqual(0, document.plugins.length);
+  testing.expectEqual(2, document.scripts.length);
+  testing.expectEqual(0, document.forms.length);
+  testing.expectEqual(1, document.links.length);
+  testing.expectEqual(0, document.applets.length);
+  testing.expectEqual(0, document.anchors.length);
+  testing.expectEqual(7, document.all.length);
+  testing.expectEqual('document', document.currentScript.id);
+
+  document.title = 'foo';
+  testing.expectEqual('foo', document.title);
+  document.title = '';
+
+  document.getElementById('link').setAttribute('name', 'foo');
+  let list = document.getElementsByName('foo');
+  testing.expectEqual(1, list.length);
+
+  testing.expectEqual('', document.cookie);
+  document.cookie = 'name=Oeschger;';
+  document.cookie = 'favorite_food=tripe;';
+
+  testing.expectEqual('name=Oeschger; favorite_food=tripe', document.cookie);
+  // "" should be returned, but the framework overrules it atm
+  document.cookie = 'IgnoreMy=Ghost; HttpOnly';
+  testing.expectEqual('name=Oeschger; favorite_food=tripe', document.cookie);
+
+  // Return null since we only return elements when they have previously been localized
+  testing.expectEqual(null, document.elementFromPoint(0.5, 0.5));
+  testing.expectEqual([], document.elementsFromPoint(0.5, 0.5));
+
+  let div1 = document.createElement('div');
+  document.body.appendChild(div1);
+  div1.getClientRects(); // clal this to position it
+  testing.expectEqual('[object HTMLDivElement]', document.elementFromPoint(0.5, 0.5).toString());
+
+  let elems = document.elementsFromPoint(0.5, 0.5);
+  testing.expectEqual(3, elems.length);
+  testing.expectEqual('[object HTMLDivElement]', elems[0].toString());
+  testing.expectEqual('[object HTMLBodyElement]', elems[1].toString());
+  testing.expectEqual('[object HTMLHtmlElement]', elems[2].toString());
+
+  let a = document.createElement('a');
+  a.href = "https://lightpanda.io";
+  document.body.appendChild(a);
+  // Note this will be placed after the div of previous test
+  a.getClientRects();
+
+  let a_again = document.elementFromPoint(1.5, 0.5);
+  testing.expectEqual('[object HTMLAnchorElement]', a_again.toString());
+  testing.expectEqual('https://lightpanda.io', a_again.href);
+
+  let a_agains = document.elementsFromPoint(1.5, 0.5);
+  testing.expectEqual('https://lightpanda.io', a_agains[0].href);
+
+
+  testing.expectEqual(true, !document.all);
+  testing.expectEqual(false, !!document.all);
+  testing.expectEqual('[object HTMLScriptElement]', document.all(5).toString());
+  testing.expectEqual('[object HTMLDivElement]', document.all('content').toString());
+
+
+  testing.expectEqual(document, document.defaultView.document );
+  testing.expectEqual('loading', document.readyState);
+</script>

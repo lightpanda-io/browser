@@ -80,17 +80,7 @@ pub const Navigator = struct {
     }
 };
 
-// Tests
-// -----
-
 const testing = @import("../../testing.zig");
-test "Browser.HTML.Navigator" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "navigator.userAgent", "Lightpanda/1.0" },
-        .{ "navigator.appVersion", "1.0" },
-        .{ "navigator.language", "en-US" },
-    }, .{});
+test "Browser: HTML.Navigator" {
+    try testing.htmlRunner("html/navigator.html");
 }

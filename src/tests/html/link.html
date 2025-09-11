@@ -1,0 +1,59 @@
+<script src="../testing.js"></script>
+<a id=link href=foo>OK</a>
+
+<script id=link>
+  let link = $('#link');
+  testing.expectEqual('', link.target);
+  link.target = '_blank';
+  testing.expectEqual('_blank', link.target);
+  link.target = '';
+
+  testing.expectEqual('foo', link.href);
+  link.href = 'https://lightpanda.io/';
+  testing.expectEqual('https://lightpanda.io/', link.href);
+
+  testing.expectEqual('https://lightpanda.io', link.origin);
+
+  link.host = 'lightpanda.io:443';
+  testing.expectEqual('lightpanda.io:443', link.host);
+  testing.expectEqual('443', link.port);
+  testing.expectEqual('lightpanda.io', link.hostname);
+
+  link.host = 'lightpanda.io';
+  testing.expectEqual('lightpanda.io', link.host);
+  testing.expectEqual('', link.port);
+  testing.expectEqual('lightpanda.io', link.hostname);
+
+  testing.expectEqual('lightpanda.io', link.host);
+  testing.expectEqual('lightpanda.io', link.hostname);
+  link.hostname = 'foo.bar';
+  testing.expectEqual('https://foo.bar/', link.href);
+
+  testing.expectEqual('', link.search);
+  link.search = 'q=bar';
+  testing.expectEqual('?q=bar', link.search);
+  testing.expectEqual('https://foo.bar/?q=bar', link.href);
+
+  testing.expectEqual('', link.hash);
+  link.hash = 'frag';
+  testing.expectEqual('#frag', link.hash);
+  testing.expectEqual('https://foo.bar/?q=bar#frag', link.href);
+
+  testing.expectEqual('', link.port);
+  link.port = '443';
+  testing.expectEqual('foo.bar:443', link.host);
+  testing.expectEqual('foo.bar', link.hostname);
+  testing.expectEqual('https://foo.bar:443/?q=bar#frag', link.href);
+  link.port = null;
+  testing.expectEqual('https://foo.bar/?q=bar#frag', link.href);
+
+  testing.expectEqual('foo', link.href = 'foo');
+
+  testing.expectEqual('', link.type);
+  link.type = 'text/html';
+  testing.expectEqual('text/html', link.type);
+
+  testing.expectEqual('OK', link.text);
+  link.text = 'foo';
+  testing.expectEqual('foo', link.text);
+</script>

@@ -1,0 +1,110 @@
+<script src="../testing.js"></script>
+
+<form action="test.php" target="_blank" id=form>
+  <p>
+    <label>First name: <input type="text" name="first-name" id=input /></label>
+  </p>
+</form>
+
+<script id=input_properties>
+  let input = document.createElement('input');
+
+  testing.expectEqual(null, input.form);
+  input.form = 'foo';
+  testing.expectEqual(null, input.form);
+
+  testing.expectEqual('', input.name);
+  input.name = 'leto';
+  testing.expectEqual('leto', input.name);
+
+  testing.expectEqual('', input.accept);
+  input.accept = 'anything';
+  testing.expectEqual('anything', input.accept);
+
+  testing.expectEqual('', input.alt);
+  input.alt = 'x1';
+  testing.expectEqual('x1', input.alt);
+
+  testing.expectEqual(false, input.disabled);
+  input.disabled = true;
+  testing.expectEqual(true, input.disabled);
+  input.disabled = false;
+  testing.expectEqual(false, input.disabled);
+
+  testing.expectEqual(false, input.readOnly);
+  input.readOnly = true;
+  testing.expectEqual(true, input.readOnly);
+  input.readOnly = false;
+  testing.expectEqual(false, input.readOnly);
+
+  testing.expectEqual(-1, input.maxLength);
+  input.maxLength = 5;
+  testing.expectEqual(5, input.maxLength);
+  input.maxLength = 'banana';
+  testing.expectEqual(0, input.maxLength);
+  testing.expectError('Error: NegativeValueNotAllowed', () => { input.maxLength = -45;});
+
+  testing.expectEqual(20, input.size);
+  input.size = 5;
+  testing.expectEqual(5, input.size);
+  input.size = -449;
+  testing.expectEqual(20, input.size);
+  testing.expectError('Error: ZeroNotAllowed', () => { input.size = 0; });
+
+  testing.expectEqual('', input.src);
+  input.src = 'foo'
+  testing.expectEqual('http://localhost:9582/src/tests/html/foo', input.src);
+  input.src = '-3'
+  testing.expectEqual('http://localhost:9582/src/tests/html/-3', input.src);
+  input.src = ''
+  testing.expectEqual('http://localhost:9582/src/tests/html/input.html', input.src);
+
+  testing.expectEqual('text', input.type);
+  input.type = 'checkbox';
+  testing.expectEqual('checkbox', input.type);
+  input.type = '5';
+  testing.expectEqual('text', input.type);
+</script>
+
+<script id=related>
+  let input_checked = document.createElement('input')
+  testing.expectEqual(false, input_checked.defaultChecked);
+  testing.expectEqual(false, input_checked.checked);
+
+  input_checked.defaultChecked = true;
+  testing.expectEqual(true, input_checked.defaultChecked);
+  testing.expectEqual(true, input_checked.checked);
+
+  input_checked.checked = false;
+  testing.expectEqual(true, input_checked.defaultChecked);
+  testing.expectEqual(false, input_checked.checked);
+
+  input_checked.defaultChecked = true;
+  testing.expectEqual(false, input_checked.checked);
+</script>
+
+<script id=defaultValue>
+  testing.expectEqual('', input.defaultValue);
+  testing.expectEqual('', input.value);
+
+  input.defaultValue = 3.1;
+  testing.expectEqual('3.1', input.defaultValue);
+  testing.expectEqual('3.1', input.value)
+
+  input.value = 'mango';
+  testing.expectEqual('3.1', input.defaultValue);
+  testing.expectEqual('mango', input.value);
+
+  input.defaultValue = true;
+  testing.expectEqual('mango', input.value);
+</script>
+
+<script id=form>
+  const form = $('#form');
+  input = $('#input');
+  testing.expectEqual(form, input.form);
+
+  // invalid
+  input.form = 'foo';
+  testing.expectEqual(form, input.form);
+</script>

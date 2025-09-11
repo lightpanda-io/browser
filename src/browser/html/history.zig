@@ -87,34 +87,7 @@ pub const History = struct {
     }
 };
 
-// Tests
-// -----
-
 const testing = @import("../../testing.zig");
-test "Browser.HTML.History" {
-    var runner = try testing.jsRunner(testing.tracking_allocator, .{});
-    defer runner.deinit();
-
-    try runner.testCases(&.{
-        .{ "history.scrollRestoration", "auto" },
-        .{ "history.scrollRestoration = 'manual'", "manual" },
-        .{ "history.scrollRestoration = 'foo'", "foo" },
-        .{ "history.scrollRestoration", "manual" },
-        .{ "history.scrollRestoration = 'auto'", "auto" },
-        .{ "history.scrollRestoration", "auto" },
-
-        .{ "history.state", "null" },
-
-        .{ "history.pushState({}, null, '')", "undefined" },
-
-        .{ "history.replaceState({}, null, '')", "undefined" },
-
-        .{ "history.go()", "undefined" },
-        .{ "history.go(1)", "undefined" },
-        .{ "history.go(-1)", "undefined" },
-
-        .{ "history.forward()", "undefined" },
-
-        .{ "history.back()", "undefined" },
-    }, .{});
+test "Browser: HTML.History" {
+    try testing.htmlRunner("html/history.html");
 }
