@@ -388,7 +388,7 @@ pub const DOMError = error{
 
 const DOMException = c.dom_exception;
 
-pub fn DOMErr(except: DOMException) DOMError!void {
+fn DOMErr(except: DOMException) DOMError!void {
     return switch (except) {
         c.DOM_NO_ERR => return,
         c.DOM_INDEX_SIZE_ERR => DOMError.IndexSize,
