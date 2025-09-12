@@ -11,4 +11,8 @@
 
   script.defer = true;
   testing.expectEqual(true, script.defer);
+
+  testing.expectEqual('', script.nonce);
+  script.nonce = 'hello';
+  testing.expectEqual('hello', script.nonce);
 </script>
