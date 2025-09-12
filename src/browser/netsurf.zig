@@ -952,7 +952,7 @@ pub fn keyboardEventDestroy(evt: *KeyboardEvent) void {
     c._dom_keyboard_event_destroy(evt);
 }
 
-pub inline fn keyboardEventKeyIsSet(
+pub fn keyboardEventKeyIsSet(
     evt: *KeyboardEvent,
     comptime key: enum { ctrl, alt, shift, meta },
 ) bool {
