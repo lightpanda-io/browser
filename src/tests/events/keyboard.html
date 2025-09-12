@@ -1,0 +1,87 @@
+<script src="../testing.js"></script>
+
+<script id=default>
+  let event = new KeyboardEvent("test", { key: "a" });
+  testing.expectEqual(true, event instanceof KeyboardEvent);
+  testing.expectEqual(true, event instanceof Event);
+
+  testing.expectEqual("test", event.type);
+  testing.expectEqual("a", event.key);
+
+  testing.expectEqual(0, event.location);
+  testing.expectEqual(false, event.repeat);
+  testing.expectEqual(false, event.isComposing);
+
+  testing.expectEqual(false, event.ctrlKey);
+  testing.expectEqual(false, event.shiftKey);
+  testing.expectEqual(false, event.metaKey);
+  testing.expectEqual(false, event.altKey);
+</script>
+
+<script id=getModifierState>
+  event = new KeyboardEvent("test", {
+    altKey: true,
+    shiftKey: true,
+    metaKey: true,
+    ctrlKey: true,
+  });
+
+  testing.expectEqual(true, event.getModifierState("Alt"));
+  testing.expectEqual(true, event.getModifierState("AltGraph"));
+  testing.expectEqual(true, event.getModifierState("Control"));
+  testing.expectEqual(true, event.getModifierState("Shift"));
+  testing.expectEqual(true, event.getModifierState("Meta"));
+  testing.expectEqual(true, event.getModifierState("OS"));
+  testing.expectEqual(true, event.getModifierState("Accel"));
+</script>
+
+<script id=keyDownListener>
+  event = new KeyboardEvent("keydown", { key: "z" });
+  let isKeyDown = false;
+
+  document.addEventListener("keydown", (e) => {
+    isKeyDown = true;
+
+    testing.expectEqual(true, e instanceof KeyboardEvent);
+    testing.expectEqual(true, e instanceof Event);
+    testing.expectEqual("z", event.key);
+  });
+
+  document.dispatchEvent(event);
+
+  testing.expectEqual(true, isKeyDown);
+</script>
+
+<script id=keyUpListener>
+  event = new KeyboardEvent("keyup", { key: "x" });
+  let isKeyUp = false;
+
+  document.addEventListener("keyup", (e) => {
+    isKeyUp = true;
+
+    testing.expectEqual(true, e instanceof KeyboardEvent);
+    testing.expectEqual(true, e instanceof Event);
+    testing.expectEqual("x", event.key);
+  });
+
+  document.dispatchEvent(event);
+
+  testing.expectEqual(true, isKeyUp);
+</script>
+
+<script id=keyPressListener>
+  event = new KeyboardEvent("keypress", { key: "w" });
+  let isKeyPress = false;
+
+  document.addEventListener("keypress", (e) => {
+    isKeyPress = true;
+
+    testing.expectEqual(true, e instanceof KeyboardEvent);
+    testing.expectEqual(true, e instanceof Event);
+    testing.expectEqual("w", event.key);
+  });
+
+  document.dispatchEvent(event);
+
+  testing.expectEqual(true, isKeyPress);
+</script>
