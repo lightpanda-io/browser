@@ -36,52 +36,52 @@
 </script>
 
 <script id=keyDownListener>
-event = new KeyboardEvent("keydown", { key: "z" });
-let isKeyDown = false;
+  event = new KeyboardEvent("keydown", { key: "z" });
+  let isKeyDown = false;
 
-document.addEventListener("keydown", (e) => {
-  isKeyDown = true;
+  document.addEventListener("keydown", (e) => {
+    isKeyDown = true;
 
-  testing.expectEqual(true, e instanceof KeyboardEvent);
-  testing.expectEqual(true, e instanceof Event);
-  testing.expectEqual("z", event.key);
-});
+    testing.expectEqual(true, e instanceof KeyboardEvent);
+    testing.expectEqual(true, e instanceof Event);
+    testing.expectEqual("z", event.key);
+  });
 
-document.dispatchEvent(event);
+  document.dispatchEvent(event);
 
-testing.expectEqual(true, isKeyDown);
+  testing.expectEqual(true, isKeyDown);
 </script>
 
 <script id=keyUpListener>
-event = new KeyboardEvent("keyup", { key: "x" });
-let isKeyUp = false;
+  event = new KeyboardEvent("keyup", { key: "x" });
+  let isKeyUp = false;
 
-document.addEventListener("keyup", (e) => {
-  isKeyUp = true;
+  document.addEventListener("keyup", (e) => {
+    isKeyUp = true;
 
-  testing.expectEqual(true, e instanceof KeyboardEvent);
-  testing.expectEqual(true, e instanceof Event);
-  testing.expectEqual("x", event.key);
-});
+    testing.expectEqual(true, e instanceof KeyboardEvent);
+    testing.expectEqual(true, e instanceof Event);
+    testing.expectEqual("x", event.key);
+  });
 
-document.dispatchEvent(event);
+  document.dispatchEvent(event);
 
-testing.expectEqual(true, isKeyUp);
+  testing.expectEqual(true, isKeyUp);
 </script>
 
 <script id=keyPressListener>
-event = new KeyboardEvent("keypress", { key: "w" });
-let isKeyPress = false;
+  event = new KeyboardEvent("keypress", { key: "w" });
+  let isKeyPress = false;
 
-document.addEventListener("keypress", (e) => {
-  isKeyPress = true;
+  document.addEventListener("keypress", (e) => {
+    isKeyPress = true;
 
-  testing.expectEqual(true, e instanceof KeyboardEvent);
-  testing.expectEqual(true, e instanceof Event);
-  testing.expectEqual("w", event.key);
-});
+    testing.expectEqual(true, e instanceof KeyboardEvent);
+    testing.expectEqual(true, e instanceof Event);
+    testing.expectEqual("w", event.key);
+  });
 
-document.dispatchEvent(event);
+  document.dispatchEvent(event);
 
-testing.expectEqual(true, isKeyPress);
+  testing.expectEqual(true, isKeyPress);
 </script>
