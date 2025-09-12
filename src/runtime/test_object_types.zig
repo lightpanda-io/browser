@@ -210,8 +210,8 @@ test "JS: object types" {
 
     defer runner.deinit();
 
-    // v8 has 5 default "own" properties
-    const own_base = "5";
+    // v8 has 3 default "own" properties
+    const own_base = "3";
 
     try runner.testCases(&.{
         .{ "Object.getOwnPropertyNames(MyObject).length;", own_base },
