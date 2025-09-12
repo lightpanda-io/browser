@@ -20,6 +20,7 @@ const std = @import("std");
 const log = @import("../../log.zig");
 
 const Env = @import("../env.zig").Env;
+const Page = @import("../page.zig").Page;
 
 // https://encoding.spec.whatwg.org/#interface-textdecoder
 const TextDecoder = @This();
@@ -37,6 +38,7 @@ const Options = struct {
 
 fatal: bool,
 ignore_bom: bool,
+stream: std.ArrayList(u8),
 
 pub fn constructor(label_: ?[]const u8, opts_: ?Options) !TextDecoder {
     if (label_) |l| {
@@ -47,6 +49,7 @@ pub fn constructor(label_: ?[]const u8, opts_: ?Options) !TextDecoder {
     }
     const opts = opts_ orelse Options{};
     return .{
+        .stream = .empty,
         .fatal = opts.fatal,
         .ignore_bom = opts.ignoreBOM,
     };
@@ -64,18 +67,34 @@ pub fn get_fatal(self: *const TextDecoder) bool {
     return self.fatal;
 }
 
-// TODO: Should accept an ArrayBuffer, TypedArray or DataView
-// js.zig will currently only map a TypedArray to our []const u8.
-pub fn _decode(self: *const TextDecoder, v: []const u8) ![]const u8 {
-    if (self.fatal and !std.unicode.utf8ValidateSlice(v)) {
+const DecodeOptions = struct {
+    stream: bool = false,
+};
+pub fn _decode(self: *TextDecoder, input_: ?[]const u8, opts_: ?DecodeOptions, page: *Page) ![]const u8 {
+    var str = input_ orelse return "";
+    const opts: DecodeOptions = opts_ orelse .{};
+
+    if (self.stream.items.len > 0) {
+        try self.stream.appendSlice(page.arena, str);
+        str = self.stream.items;
+    }
+
+    if (self.fatal and !std.unicode.utf8ValidateSlice(str)) {
+        if (opts.stream) {
+            if (self.stream.items.len == 0) {
+                try self.stream.appendSlice(page.arena, str);
+            }
+            return "";
+        }
         return error.InvalidUtf8;
     }
 
-    if (self.ignore_bom == false and std.mem.startsWith(u8, v, &.{ 0xEF, 0xBB, 0xBF })) {
-        return v[3..];
+    self.stream.clearRetainingCapacity();
+    if (self.ignore_bom == false and std.mem.startsWith(u8, str, &.{ 0xEF, 0xBB, 0xBF })) {
+        return str[3..];
     }
 
-    return v;
+    return str;
 }
 
 const testing = @import("../../testing.zig");
