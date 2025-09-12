@@ -172,6 +172,10 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
                     };
                 }
 
+                if (transfer.getContentLength()) |cl| {
+                    try self.body.ensureTotalCapacity(self.arena, cl);
+                }
+
                 var it = transfer.responseHeaderIterator();
                 while (it.next()) |hdr| {
                     const joined = try std.fmt.allocPrint(self.arena, "{s}: {s}", .{ hdr.name, hdr.value });
