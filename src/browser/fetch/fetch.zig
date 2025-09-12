@@ -105,6 +105,20 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
     };
 
     var headers = try Http.Headers.init();
+
+    // Copy our headers into the HTTP headers.
+    var header_iter = req.headers.headers.iterator();
+    while (header_iter.next()) |entry| {
+        // This is fine because curl/headers copies it internally.
+        const combined = try std.fmt.allocPrintSentinel(
+            page.call_arena,
+            "{s}: {s}",
+            .{ entry.key_ptr.*, entry.value_ptr.* },
+            0,
+        );
+        try headers.add(combined.ptr);
+    }
+
     try page.requestCookie(.{}).headersForRequest(arena, req.url, &headers);
 
     const fetch_ctx = try arena.create(FetchContext);
