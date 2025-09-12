@@ -977,6 +977,21 @@ pub const HTMLScriptElement = struct {
         return try parser.elementRemoveAttribute(parser.scriptToElt(self), "nomodule");
     }
 
+    pub fn get_nonce(self: *parser.Script) !?[]const u8 {
+        return try parser.elementGetAttribute(
+            parser.scriptToElt(self),
+            "nonce",
+        ) orelse "";
+    }
+
+    pub fn set_nonce(self: *parser.Script, v: []const u8) !void {
+        try parser.elementSetAttribute(
+            parser.scriptToElt(self),
+            "nonce",
+            v,
+        );
+    }
+
     pub fn get_onload(self: *parser.Script, page: *Page) !?Env.Function {
         const state = page.getNodeState(@ptrCast(@alignCast(self))) orelse return null;
         return state.onload;
