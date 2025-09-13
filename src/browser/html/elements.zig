@@ -1042,68 +1042,84 @@ pub const HTMLSlotElement = struct {
         flatten: bool = false,
     };
     pub fn _assignedNodes(self: *parser.Slot, opts_: ?AssignedNodesOpts, page: *Page) ![]NodeUnion {
-        const opts = opts_ orelse AssignedNodesOpts{ .flatten = false };
-
-        if (try findAssignedSlotNodes(self, opts, page)) |nodes| {
-            return nodes;
-        }
-
-        if (!opts.flatten) {
-            return &.{};
-        }
-
-        const node: *parser.Node = @ptrCast(@alignCast(self));
-        const nl = try parser.nodeGetChildNodes(node);
-        const len = try parser.nodeListLength(nl);
-        if (len == 0) {
-            return &.{};
-        }
-
-        var assigned = try page.call_arena.alloc(NodeUnion, len);
-        var i: usize = 0;
-        while (true) : (i += 1) {
-            const child = try parser.nodeListItem(nl, @intCast(i)) orelse break;
-            assigned[i] = try Node.toInterface(child);
-        }
-        return assigned[0..i];
+        return findAssignedSlotNodes(self, opts_, false, page);
     }
 
-    fn findAssignedSlotNodes(self: *parser.Slot, opts: AssignedNodesOpts, page: *Page) !?[]NodeUnion {
+    // This should return Union, instead of NodeUnion, but we want to re-use
+    // findAssignedSlotNodes. Returning NodeUnion is fine, as long as every element
+    // within is an Element. This could be more efficient
+    pub fn _assignedElements(self: *parser.Slot, opts_: ?AssignedNodesOpts, page: *Page) ![]NodeUnion {
+        return findAssignedSlotNodes(self, opts_, true, page);
+    }
+
+    fn findAssignedSlotNodes(self: *parser.Slot, opts_: ?AssignedNodesOpts, element_only: bool, page: *Page) ![]NodeUnion {
+        const opts = opts_ orelse AssignedNodesOpts{ .flatten = false };
+
         if (opts.flatten) {
             log.debug(.web_api, "not implemented", .{ .feature = "HTMLSlotElement flatten assignedNodes" });
         }
 
-        const slot_name = try parser.elementGetAttribute(@ptrCast(@alignCast(self)), "name");
         const node: *parser.Node = @ptrCast(@alignCast(self));
-        var root = try parser.nodeGetRootNode(node);
-        if (page.getNodeState(root)) |state| {
-            if (state.shadow_root) |sr| {
-                root = @ptrCast(@alignCast(sr.host));
-            }
-        }
 
-        var arr: std.ArrayList(NodeUnion) = .empty;
-        const w = @import("../dom/walker.zig").WalkerChildren{};
-        var next: ?*parser.Node = null;
-        while (true) {
-            next = try w.get_next(root, next) orelse break;
-            if (try parser.nodeType(next.?) != .element) {
-                if (slot_name == null) {
-                    // default slot (with no name), takes everything
-                    try arr.append(page.call_arena, try Node.toInterface(next.?));
+        // First we look for any explicitly assigned nodes (via the slot attribute)
+        {
+            const slot_name = try parser.elementGetAttribute(@ptrCast(@alignCast(self)), "name");
+            var root = try parser.nodeGetRootNode(node);
+            if (page.getNodeState(root)) |state| {
+                if (state.shadow_root) |sr| {
+                    root = @ptrCast(@alignCast(sr.host));
                 }
-                continue;
             }
-            const el: *parser.Element = @ptrCast(@alignCast(next.?));
-            const element_slot = try parser.elementGetAttribute(el, "slot");
 
-            if (nullableStringsAreEqual(slot_name, element_slot)) {
-                // either they're the same string or they are both null
-                try arr.append(page.call_arena, try Node.toInterface(next.?));
-                continue;
+            var arr: std.ArrayList(NodeUnion) = .empty;
+            const w = @import("../dom/walker.zig").WalkerChildren{};
+            var next: ?*parser.Node = null;
+            while (true) {
+                next = try w.get_next(root, next) orelse break;
+                if (try parser.nodeType(next.?) != .element) {
+                    if (slot_name == null and !element_only) {
+                        // default slot (with no name), takes everything
+                        try arr.append(page.call_arena, try Node.toInterface(next.?));
+                    }
+                    continue;
+                }
+                const el: *parser.Element = @ptrCast(@alignCast(next.?));
+                const element_slot = try parser.elementGetAttribute(el, "slot");
+
+                if (nullableStringsAreEqual(slot_name, element_slot)) {
+                    // either they're the same string or they are both null
+                    try arr.append(page.call_arena, try Node.toInterface(next.?));
+                    continue;
+                }
+            }
+            if (arr.items.len > 0) {
+                return arr.items;
+            }
+
+            if (!opts.flatten) {
+                return &.{};
             }
         }
-        return if (arr.items.len == 0) null else arr.items;
+
+        // Since, we have no explicitly assigned nodes and flatten == false,
+        // we'll collect the children of the slot - the defaults.
+        {
+            const nl = try parser.nodeGetChildNodes(node);
+            const len = try parser.nodeListLength(nl);
+            if (len == 0) {
+                return &.{};
+            }
+
+            var assigned = try page.call_arena.alloc(NodeUnion, len);
+            var i: usize = 0;
+            while (true) : (i += 1) {
+                const child = try parser.nodeListItem(nl, @intCast(i)) orelse break;
+                if (!element_only or try parser.nodeType(child) == .element) {
+                    assigned[i] = try Node.toInterface(child);
+                }
+            }
+            return assigned[0..i];
+        }
     }
 
     fn nullableStringsAreEqual(a: ?[]const u8, b: ?[]const u8) bool {

@@ -63,4 +63,9 @@
   assertNodes(['default2'], s6[0].assignedNodes({flatten: true}));
   assertNodes(['More ', ' ', '!!'], s6[1].assignedNodes({}));
   assertNodes(['More ', ' ', '!!'], s6[1].assignedNodes({flatten: true}));
+
+  assertNodes(['default2'], s6[0].assignedElements({}));
+  assertNodes(['default2'], s6[0].assignedElements({flatten: true}));
+  assertNodes(['!!'], s6[1].assignedElements({}));
+  assertNodes(['!!'], s6[1].assignedElements({flatten: true}));
 </script>
