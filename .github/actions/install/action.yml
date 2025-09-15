@@ -67,9 +67,23 @@ runs:
         mkdir -p v8/out/${{ inputs.os }}/release/obj/zig/
         ln -s ${{ inputs.cache-dir }}/v8/libc_v8.a v8/out/${{ inputs.os }}/release/obj/zig/libc_v8.a
 
-    - name: libiconv
+    - name: Cache libiconv
+      id: cache-libiconv
+      uses: actions/cache@v4
+      env:
+        cache-name: cache-libiconv
+      with:
+        path: ${{ inputs.cache-dir }}/libiconv
+        key: vendor/libiconv/libiconv-1.17
+
+    - name: download libiconv
+      if: ${{ steps.cache-libiconv.outputs.cache-hit != 'true' }}
       shell: bash
-      run: make install-libiconv
+      run: make download-libiconv
+
+    - name: build libiconv
+      shell: bash
+      run: make build-libiconv
 
     - name: build mimalloc
       shell: bash

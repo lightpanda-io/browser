@@ -202,10 +202,12 @@ ifeq ("$(wildcard vendor/libiconv/libiconv-1.17)","")
 	curl https://ftp.gnu.org/pub/gnu/libiconv/libiconv-1.17.tar.gz | tar -xvzf -
 endif
 
-install-libiconv: download-libiconv clean-libiconv
+build-libiconv: clean-libiconv
 	@cd vendor/libiconv/libiconv-1.17 && \
 	./configure --prefix=$(ICONV) --enable-static && \
 	make && make install
+
+install-libiconv: download-libiconv build-libiconv
 
 clean-libiconv:
 ifneq ("$(wildcard vendor/libiconv/libiconv-1.17/Makefile)","")
