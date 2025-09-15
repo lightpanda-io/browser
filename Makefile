@@ -199,7 +199,7 @@ download-libiconv:
 ifeq ("$(wildcard vendor/libiconv/libiconv-1.17)","")
 	@mkdir -p vendor/libiconv
 	@cd vendor/libiconv && \
-	curl https://ftp.gnu.org/pub/gnu/libiconv/libiconv-1.17.tar.gz | tar -xvzf -
+	curl -L https://github.com/lightpanda-io/libiconv/releases/download/1.17/libiconv-1.17.tar.gz | tar -xvzf -
 endif
 
 build-libiconv: clean-libiconv
