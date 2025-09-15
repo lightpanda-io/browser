@@ -20,7 +20,7 @@ const std = @import("std");
 const log = @import("../../log.zig");
 const builtin = @import("builtin");
 
-const netsurf = @import("../netsurf.zig");
+const parser = @import("../netsurf.zig");
 const Event = @import("event.zig").Event;
 const JsObject = @import("../env.zig").JsObject;
 
@@ -30,13 +30,13 @@ const UIEvent = Event;
 
 // https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent
 pub const KeyboardEvent = struct {
-    pub const Self = netsurf.KeyboardEvent;
+    pub const Self = parser.KeyboardEvent;
     pub const prototype = *UIEvent;
 
     pub const ConstructorOptions = struct {
         key: []const u8 = "",
         code: []const u8 = "",
-        location: netsurf.KeyboardEventOpts.LocationCode = .standard,
+        location: parser.KeyboardEventOpts.LocationCode = .standard,
         repeat: bool = false,
         isComposing: bool = false,
         // Currently not supported but we take as argument.
@@ -51,13 +51,13 @@ pub const KeyboardEvent = struct {
         metaKey: bool = false,
     };
 
-    pub fn constructor(event_type: []const u8, maybe_options: ?ConstructorOptions) !*netsurf.KeyboardEvent {
+    pub fn constructor(event_type: []const u8, maybe_options: ?ConstructorOptions) !*parser.KeyboardEvent {
         const options: ConstructorOptions = maybe_options orelse .{};
 
-        var event = try netsurf.keyboardEventCreate();
-        try netsurf.eventSetInternalType(@ptrCast(&event), .keyboard_event);
+        var event = try parser.keyboardEventCreate();
+        parser.eventSetInternalType(@ptrCast(&event), .keyboard_event);
 
-        try netsurf.keyboardEventInit(
+        try parser.keyboardEventInit(
             event,
             event_type,
             .{
@@ -122,19 +122,19 @@ pub const KeyboardEvent = struct {
     // Getters.
 
     pub fn get_altKey(self: *Self) bool {
-        return netsurf.keyboardEventKeyIsSet(self, .alt);
+        return parser.keyboardEventKeyIsSet(self, .alt);
     }
 
     pub fn get_ctrlKey(self: *Self) bool {
-        return netsurf.keyboardEventKeyIsSet(self, .ctrl);
+        return parser.keyboardEventKeyIsSet(self, .ctrl);
     }
 
     pub fn get_metaKey(self: *Self) bool {
-        return netsurf.keyboardEventKeyIsSet(self, .meta);
+        return parser.keyboardEventKeyIsSet(self, .meta);
     }
 
     pub fn get_shiftKey(self: *Self) bool {
-        return netsurf.keyboardEventKeyIsSet(self, .shift);
+        return parser.keyboardEventKeyIsSet(self, .shift);
     }
 
     pub fn get_isComposing(self: *Self) bool {
@@ -146,7 +146,7 @@ pub const KeyboardEvent = struct {
     }
 
     pub fn get_key(self: *Self) ![]const u8 {
-        return netsurf.keyboardEventGetKey(self);
+        return parser.keyboardEventGetKey(self);
     }
 
     pub fn get_repeat(self: *Self) bool {

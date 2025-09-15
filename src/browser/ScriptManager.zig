@@ -649,10 +649,7 @@ const Script = struct {
                 defer parser.eventDestroy(loadevt);
 
                 var result: Env.Function.Result = undefined;
-                const iface = Event.toInterface(loadevt) catch |err| {
-                    log.err(.browser, "SM event interface", .{ .err = err });
-                    return;
-                };
+                const iface = Event.toInterface(loadevt);
                 f.tryCall(void, .{iface}, &result) catch {
                     log.warn(.user_script, "script callback", .{
                         .url = self.url,

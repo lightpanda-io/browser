@@ -42,7 +42,7 @@ pub const ErrorEvent = struct {
         const event = try parser.eventCreate();
         defer parser.eventDestroy(event);
         try parser.eventInit(event, event_type, .{});
-        try parser.eventSetInternalType(event, .event);
+        parser.eventSetInternalType(event, .event);
 
         const o = opts orelse ErrorEventInit{};
 

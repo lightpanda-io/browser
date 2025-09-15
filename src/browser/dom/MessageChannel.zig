@@ -252,7 +252,7 @@ pub const MessageEvent = struct {
         const event = try parser.eventCreate();
         defer parser.eventDestroy(event);
         try parser.eventInit(event, "message", .{});
-        try parser.eventSetInternalType(event, .message_event);
+        parser.eventSetInternalType(event, .message_event);
 
         return .{
             .proto = event.*,

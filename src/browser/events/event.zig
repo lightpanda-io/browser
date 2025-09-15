@@ -64,8 +64,8 @@ pub const Event = struct {
     pub const _AT_TARGET = 2;
     pub const _BUBBLING_PHASE = 3;
 
-    pub fn toInterface(evt: *parser.Event) !Union {
-        return switch (try parser.eventGetInternalType(evt)) {
+    pub fn toInterface(evt: *parser.Event) Union {
+        return switch (parser.eventGetInternalType(evt)) {
             .event, .abort_signal, .xhr_event => .{ .Event = evt },
             .custom_event => .{ .CustomEvent = @as(*CustomEvent, @ptrCast(evt)).* },
             .progress_event => .{ .ProgressEvent = @as(*ProgressEvent, @ptrCast(evt)).* },
@@ -89,41 +89,41 @@ pub const Event = struct {
     }
 
     pub fn get_target(self: *parser.Event, page: *Page) !?EventTargetUnion {
-        const et = try parser.eventTarget(self);
+        const et = parser.eventTarget(self);
         if (et == null) return null;
         return try EventTarget.toInterface(et.?, page);
     }
 
     pub fn get_currentTarget(self: *parser.Event, page: *Page) !?EventTargetUnion {
-        const et = try parser.eventCurrentTarget(self);
+        const et = parser.eventCurrentTarget(self);
         if (et == null) return null;
         return try EventTarget.toInterface(et.?, page);
     }
 
-    pub fn get_eventPhase(self: *parser.Event) !u8 {
-        return try parser.eventPhase(self);
+    pub fn get_eventPhase(self: *parser.Event) u8 {
+        return parser.eventPhase(self);
     }
 
-    pub fn get_bubbles(self: *parser.Event) !bool {
-        return try parser.eventBubbles(self);
+    pub fn get_bubbles(self: *parser.Event) bool {
+        return parser.eventBubbles(self);
     }
 
-    pub fn get_cancelable(self: *parser.Event) !bool {
-        return try parser.eventCancelable(self);
+    pub fn get_cancelable(self: *parser.Event) bool {
+        return parser.eventCancelable(self);
     }
 
-    pub fn get_defaultPrevented(self: *parser.Event) !bool {
-        return try parser.eventDefaultPrevented(self);
+    pub fn get_defaultPrevented(self: *parser.Event) bool {
+        return parser.eventDefaultPrevented(self);
     }
 
-    pub fn get_isTrusted(self: *parser.Event) !bool {
-        return try parser.eventIsTrusted(self);
+    pub fn get_isTrusted(self: *parser.Event) bool {
+        return parser.eventIsTrusted(self);
     }
 
     // Even though this is supposed to to provide microsecond resolution, browser
     // return coarser values to protect against fingerprinting. libdom returns
     // seconds, which is good enough.
-    pub fn get_timeStamp(self: *parser.Event) !u64 {
+    pub fn get_timeStamp(self: *parser.Event) u64 {
         return parser.eventTimestamp(self);
     }
 
@@ -143,19 +143,19 @@ pub const Event = struct {
     }
 
     pub fn _stopPropagation(self: *parser.Event) !void {
-        return try parser.eventStopPropagation(self);
+        return parser.eventStopPropagation(self);
     }
 
     pub fn _stopImmediatePropagation(self: *parser.Event) !void {
-        return try parser.eventStopImmediatePropagation(self);
+        return parser.eventStopImmediatePropagation(self);
     }
 
     pub fn _preventDefault(self: *parser.Event) !void {
-        return try parser.eventPreventDefault(self);
+        return parser.eventPreventDefault(self);
     }
 
     pub fn _composedPath(self: *parser.Event, page: *Page) ![]const EventTargetUnion {
-        const et_ = try parser.eventTarget(self);
+        const et_ = parser.eventTarget(self);
         const et = et_ orelse return &.{};
 
         var node: ?*parser.Node = switch (try parser.eventTargetInternalType(et)) {
@@ -326,11 +326,7 @@ pub const EventHandler = struct {
     }
 
     fn handle(node: *parser.EventNode, event: *parser.Event) void {
-        const ievent = Event.toInterface(event) catch |err| {
-            log.err(.app, "toInterface error", .{ .err = err });
-            return;
-        };
-
+        const ievent = Event.toInterface(event);
         const self: *EventHandler = @fieldParentPtr("node", node);
         var result: Function.Result = undefined;
         self.callback.tryCall(void, .{ievent}, &result) catch {
@@ -342,7 +338,7 @@ pub const EventHandler = struct {
         };
 
         if (self.once) {
-            const target = (parser.eventTarget(event) catch return).?;
+            const target = parser.eventTarget(event).?;
             const typ = parser.eventType(event) catch return;
             parser.eventTargetRemoveEventListener(
                 target,

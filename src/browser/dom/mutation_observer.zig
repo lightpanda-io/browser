@@ -278,7 +278,7 @@ const Observer = struct {
         var mutation_observer = self.mutation_observer;
 
         const node = blk: {
-            const event_target = try parser.eventTarget(event) orelse return;
+            const event_target = parser.eventTarget(event) orelse return;
             break :blk parser.eventTargetToNode(event_target);
         };
 

@@ -273,7 +273,7 @@ pub const XMLHttpRequest = struct {
         // We can we defer event destroy once the event is dispatched.
         defer parser.eventDestroy(evt);
 
-        try parser.eventSetInternalType(evt, .xhr_event);
+        parser.eventSetInternalType(evt, .xhr_event);
 
         try parser.eventInit(evt, typ, .{ .bubbles = true, .cancelable = true });
         _ = try parser.eventTargetDispatchEvent(@as(*parser.EventTarget, @ptrCast(self)), evt);
