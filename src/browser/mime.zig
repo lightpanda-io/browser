@@ -52,6 +52,95 @@ pub const Mime = struct {
         other: struct { type: []const u8, sub_type: []const u8 },
     };
 
+    /// Removes quotes of value if quotes are given.
+    ///
+    /// Currently we don't validate the charset.
+    /// See section 2.3 Naming Requirements:
+    /// https://datatracker.ietf.org/doc/rfc2978/
+    fn parseCharset(value: []const u8) error{ CharsetTooBig, Invalid }![]const u8 {
+        // Cannot be larger than 40.
+        // https://datatracker.ietf.org/doc/rfc2978/
+        if (value.len > 40) return error.CharsetTooBig;
+
+        // If the first char is not a quote, value can be used directly.
+        // Whitespace is not allowed.
+        if (value[0] != '"') {
+            return value;
+        }
+
+        // Search for second quote begins.
+        // Skip the first character.
+        var offset: usize = 1;
+
+        // Charset values are not so large; 128-bit registers should be
+        // more than enough.
+        const vec_size = 16;
+        const Vec = @Vector(vec_size, u8);
+        const UInt = std.meta.Int(.unsigned, vec_size);
+        const block_size = @sizeOf(u64);
+
+        const charset = blk: {
+            // Vector search.
+            while (value.len - offset >= vec_size) : (offset += vec_size) {
+                // Fill a vector with quotes.
+                const quotes: Vec = @splat('"');
+                const chunk: Vec = value[offset..][0..vec_size].*;
+
+                // Check if chunk has double quote byte.
+                const match = @intFromBool(chunk == quotes);
+                // Create an integer out of match and count how much to skip.
+                const skip_by = @ctz(@as(UInt, @bitCast(match)));
+
+                // Found a match.
+                if (skip_by != vec_size) {
+                    break :blk value[1 .. offset + skip_by];
+                }
+            }
+
+            // SWAR search.
+            while (value.len - offset >= block_size) : (offset += block_size) {
+                // Magic number for integer filled with double quote.
+                // [8]u8{ '"', '"', '"', '"', '"', '"', '"', '"' }.
+                const quotes: u64 = 0x2222222222222222;
+                // Load the next chunk as unsigned 64-bit integer.
+                const chunk: u64 = @bitCast(value[offset..][0..block_size].*);
+
+                // XOR with the pattern - bytes equal to quote become 0.
+                const xor_result = chunk ^ quotes;
+
+                const magic: u64 = 0x8080808080808080; // High bit mask for each byte.
+                const sub_result = xor_result -% 0x0101010101010101; // Subtract 1 from each byte.
+                const and_result = sub_result & (~xor_result); // AND with inverted original.
+                const zero_mask = and_result & magic; // Extract high bits (indicates zero bytes).
+
+                // Found a match.
+                if (zero_mask != 0) {
+                    // * Count trailing zeroes.
+                    // * Dividing by byte size (>> 3) converts the bit position to byte index.
+                    const skip_by = @ctz(zero_mask) >> 3;
+                    break :blk value[1 .. offset + skip_by];
+                }
+            }
+
+            // Fallback to scalar search.
+            for (value[offset..], 0..) |c, i| {
+                if (c == '"') {
+                    break :blk value[1 .. offset + i];
+                }
+            }
+
+            // No quote pairs, something is wrong.
+            return error.Invalid;
+        };
+
+        // Make sure we don't end up w/ empty buffer.
+        if (charset.len == 0) {
+            return error.Invalid;
+        }
+
+        return charset;
+    }
+
     pub fn parse(input: []u8) !Mime {
         if (input.len > 255) {
             return error.TooBig;
