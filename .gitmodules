@@ -9,7 +9,7 @@
 	url = https://github.com/lightpanda-io/libdom.git/
 [submodule "vendor/netsurf/share/netsurf-buildsystem"]
 	path = vendor/netsurf/share/netsurf-buildsystem
-	url = https://source.netsurf-browser.org/buildsystem.git
+	url = https://github.com/lightpanda-io/netsurf-buildsystem.git
 [submodule "vendor/netsurf/libhubbub"]
 	path = vendor/netsurf/libhubbub
 	url = https://github.com/lightpanda-io/libhubbub.git/
