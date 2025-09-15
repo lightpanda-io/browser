@@ -91,7 +91,7 @@ pub const AbortSignal = struct {
         self.reason = reason_ orelse DEFAULT_REASON;
 
         const abort_event = try parser.eventCreate();
-        try parser.eventSetInternalType(abort_event, .abort_signal);
+        parser.eventSetInternalType(abort_event, .abort_signal);
 
         defer parser.eventDestroy(abort_event);
         try parser.eventInit(abort_event, "abort", .{});

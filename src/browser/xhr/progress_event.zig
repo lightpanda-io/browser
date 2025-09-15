@@ -41,7 +41,7 @@ pub const ProgressEvent = struct {
         const event = try parser.eventCreate();
         defer parser.eventDestroy(event);
         try parser.eventInit(event, event_type, .{});
-        try parser.eventSetInternalType(event, .progress_event);
+        parser.eventSetInternalType(event, .progress_event);
 
         const o = opts orelse EventInit{};
 

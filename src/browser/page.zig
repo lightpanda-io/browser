@@ -881,7 +881,7 @@ pub const Page = struct {
     }
 
     fn _windowClicked(self: *Page, event: *parser.Event) !void {
-        const target = (try parser.eventTarget(event)) orelse return;
+        const target = parser.eventTarget(event) orelse return;
         const node = parser.eventTargetToNode(target);
         const tag = (try parser.nodeHTMLGetTagType(node)) orelse return;
         switch (tag) {
@@ -958,7 +958,7 @@ pub const Page = struct {
     }
 
     fn _keydownCallback(self: *Page, event: *parser.Event) !void {
-        const target = (try parser.eventTarget(event)) orelse return;
+        const target = parser.eventTarget(event) orelse return;
         const node = parser.eventTargetToNode(target);
         const tag = (try parser.nodeHTMLGetTagType(node)) orelse return;
 

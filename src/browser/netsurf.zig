@@ -456,87 +456,87 @@ pub fn eventType(evt: *Event) ![]const u8 {
     return strToData(s.?);
 }
 
-pub fn eventTarget(evt: *Event) !?*EventTarget {
+pub fn eventTarget(evt: *Event) ?*EventTarget {
     var et: ?*EventTarget = null;
     const err = c._dom_event_get_target(evt, &et);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return et;
 }
 
-pub fn eventCurrentTarget(evt: *Event) !?*EventTarget {
+pub fn eventCurrentTarget(evt: *Event) ?*EventTarget {
     var et: ?*EventTarget = null;
     const err = c._dom_event_get_current_target(evt, &et);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return et;
 }
 
-pub fn eventPhase(evt: *Event) !u8 {
+pub fn eventPhase(evt: *Event) u8 {
     var phase: c.dom_event_flow_phase = undefined;
     const err = c._dom_event_get_event_phase(evt, &phase);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return @as(u8, @intCast(phase));
 }
 
-pub fn eventBubbles(evt: *Event) !bool {
+pub fn eventBubbles(evt: *Event) bool {
     var res: bool = undefined;
     const err = c._dom_event_get_bubbles(evt, &res);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return res;
 }
 
-pub fn eventCancelable(evt: *Event) !bool {
+pub fn eventCancelable(evt: *Event) bool {
     var res: bool = undefined;
     const err = c._dom_event_get_cancelable(evt, &res);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return res;
 }
 
-pub fn eventDefaultPrevented(evt: *Event) !bool {
+pub fn eventDefaultPrevented(evt: *Event) bool {
     var res: bool = undefined;
     const err = c._dom_event_is_default_prevented(evt, &res);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return res;
 }
 
-pub fn eventIsTrusted(evt: *Event) !bool {
+pub fn eventIsTrusted(evt: *Event) bool {
     var res: bool = undefined;
     const err = c._dom_event_get_is_trusted(evt, &res);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return res;
 }
 
-pub fn eventTimestamp(evt: *Event) !u64 {
+pub fn eventTimestamp(evt: *Event) u64 {
     var ts: u64 = 0;
     const err = c._dom_event_get_timestamp(evt, &ts);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return ts;
 }
 
-pub fn eventStopPropagation(evt: *Event) !void {
+pub fn eventStopPropagation(evt: *Event) void {
     const err = c._dom_event_stop_propagation(evt);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
 }
 
-pub fn eventStopImmediatePropagation(evt: *Event) !void {
+pub fn eventStopImmediatePropagation(evt: *Event) void {
     const err = c._dom_event_stop_immediate_propagation(evt);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
 }
 
-pub fn eventPreventDefault(evt: *Event) !void {
+pub fn eventPreventDefault(evt: *Event) void {
     const err = c._dom_event_prevent_default(evt);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
 }
 
-pub fn eventGetInternalType(evt: *Event) !EventType {
+pub fn eventGetInternalType(evt: *Event) EventType {
     var res: u32 = undefined;
     const err = c._dom_event_get_internal_type(evt, &res);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return @enumFromInt(res);
 }
 
-pub fn eventSetInternalType(evt: *Event, internal_type: EventType) !void {
+pub fn eventSetInternalType(evt: *Event, internal_type: EventType) void {
     const err = c._dom_event_set_internal_type(evt, @intFromEnum(internal_type));
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
 }
 
 pub const EventType = enum(u8) {
