@@ -13,4 +13,12 @@
 
   el.dispatchEvent(new CustomEvent('c2', {detail: {over: 9000}}));
   testing.expectEqual("c2-9000", capture);
+
+  let window_calls = 0;
+  window.addEventListener('c1', () => {
+    window_calls += 1;
+  });
+
+  el.dispatchEvent(new CustomEvent('c1', {bubbles: true}));
+  testing.expectEqual(1, window_calls);
 </script>

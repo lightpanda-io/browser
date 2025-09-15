@@ -604,7 +604,7 @@ fn eventTargetVtable(et: *EventTarget) c.dom_event_target_vtable {
     return @as([*c]const c.dom_event_target_vtable, @ptrCast(vtable_aligned)).*;
 }
 
-pub inline fn toEventTarget(comptime T: type, v: *T) *EventTarget {
+pub fn toEventTarget(comptime T: type, v: *T) *EventTarget {
     if (comptime eventTargetTBaseFieldName(T)) |field| {
         const et_aligned: *align(@alignOf(EventTarget)) EventTargetTBase = @alignCast(&@field(v, field));
         return @as(*EventTarget, @ptrCast(et_aligned));
