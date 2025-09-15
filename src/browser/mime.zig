@@ -22,13 +22,15 @@ const Allocator = std.mem.Allocator;
 pub const Mime = struct {
     content_type: ContentType,
     params: []const u8 = "",
-    charset: ?[:0]const u8 = null,
+    // IANA defines max. charset value length as 40.
+    // We keep 41 for null-termination since HTML parser expects in this format.
+    charset: [41]u8 = default_charset,
 
-    pub const unknown = Mime{
-        .params = "",
-        .charset = null,
-        .content_type = .{ .unknown = {} },
-    };
+    /// String "UTF-8" continued by null characters.
+    pub const default_charset = .{ 'U', 'T', 'F', '-', '8' } ++ .{0} ** 36;
+
+    /// Mime with unknown Content-Type, empty params and empty charset.
+    pub const unknown = Mime{ .content_type = .{ .unknown = {} } };
 
     pub const ContentTypeEnum = enum {
         text_xml,
@@ -51,6 +53,11 @@ pub const Mime = struct {
         unknown: void,
         other: struct { type: []const u8, sub_type: []const u8 },
     };
+
+    /// Returns the null-terminated charset value.
+    pub inline fn charsetString(mime: *const Mime) [:0]const u8 {
+        return @ptrCast(&mime.charset);
+    }
 
     /// Removes quotes of value if quotes are given.
     ///
@@ -158,7 +165,7 @@ pub const Mime = struct {
 
         const params = trimLeft(normalized[type_len..]);
 
-        var charset: ?[:0]const u8 = null;
+        var charset: [41]u8 = undefined;
 
         var it = std.mem.splitScalar(u8, params, ';');
         while (it.next()) |attr| {
@@ -176,35 +183,14 @@ pub const Mime = struct {
 
             switch (attribute_name) {
                 .charset => {
-                    // We used to have a proper value parser, but we currently
-                    // only care about the charset attribute, plus only about
-                    // the UTF-8 value. It's a lot easier to do it this way,
-                    // and it doesn't require an allocation to (a) unescape the
-                    // value or (b) ensure the correct lifetime.
                     if (value.len == 0) {
                         break;
                     }
-                    var attribute_value = value;
-                    if (value[0] == '"') {
-                        if (value.len < 3 or value[value.len - 1] != '"') {
-                            return error.Invalid;
-                        }
-                        attribute_value = value[1 .. value.len - 1];
-                    }
 
-                    if (std.ascii.eqlIgnoreCase(attribute_value, "utf-8")) {
-                        charset = "UTF-8";
-                    } else if (std.ascii.eqlIgnoreCase(attribute_value, "iso-8859-1")) {
-                        charset = "ISO-8859-1";
-                    } else {
-                        // we only care about null (which we default to UTF-8)
-                        // or UTF-8. If this is actually set (i.e. not null)
-                        // and isn't UTF-8, we'll just put a dummy value. If
-                        // we want to capture the actual value, we'll need to
-                        // dupe/allocate it. Since, for now, we don't need that
-                        // we can avoid the allocation.
-                        charset = "lightpanda:UNSUPPORTED";
-                    }
+                    const attribute_value = try parseCharset(value);
+                    @memcpy(charset[0..attribute_value.len], attribute_value);
+                    // Fill the rest with zeroes.
+                    @memset(charset[attribute_value.len..], 0);
                 },
             }
         }

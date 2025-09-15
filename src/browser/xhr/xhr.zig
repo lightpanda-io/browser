@@ -679,7 +679,7 @@ pub const XMLHttpRequest = struct {
         }
 
         var fbs = std.io.fixedBufferStream(self.response_bytes.items);
-        const doc = parser.documentHTMLParse(fbs.reader(), mime.charset orelse "UTF-8") catch {
+        const doc = parser.documentHTMLParse(fbs.reader(), mime.charsetString()) catch {
             self.response_obj = .{ .Failure = {} };
             return;
         };
