@@ -438,21 +438,33 @@ test "Mime: parse charset" {
 
     try expect(.{
         .content_type = .{ .text_xml = {} },
-        .charset = "UTF-8",
+        .charset = "utf-8",
         .params = "charset=utf-8",
     }, "text/xml; charset=utf-8");
 
     try expect(.{
         .content_type = .{ .text_xml = {} },
-        .charset = "UTF-8",
+        .charset = "utf-8",
         .params = "charset=\"utf-8\"",
-    }, "text/xml;charset=\"utf-8\"");
+    }, "text/xml;charset=\"UTF-8\"");
+
+    try expect(.{
+        .content_type = .{ .text_html = {} },
+        .charset = "iso-8859-1",
+        .params = "charset=\"iso-8859-1\"",
+    }, "text/html; charset=\"iso-8859-1\"");
+
+    try expect(.{
+        .content_type = .{ .text_html = {} },
+        .charset = "iso-8859-1",
+        .params = "charset=\"iso-8859-1\"",
+    }, "text/html; charset=\"ISO-8859-1\"");
 
     try expect(.{
         .content_type = .{ .text_xml = {} },
-        .charset = "lightpanda:UNSUPPORTED",
-        .params = "charset=\"\\\\ \\\" \"",
-    }, "text/xml;charset=\"\\\\ \\\" \"   ");
+        .charset = "custom-non-standard-charset-value",
+        .params = "charset=\"custom-non-standard-charset-value\"",
+    }, "text/xml;charset=\"custom-non-standard-charset-value\"");
 }
 
 test "Mime: isHTML" {
@@ -565,8 +577,10 @@ fn expect(expected: Expectation, input: []const u8) !void {
     try testing.expectEqual(expected.params, actual.params);
 
     if (expected.charset) |ec| {
-        try testing.expectEqual(ec, actual.charset.?);
+        // We remove the null characters for testing purposes here.
+        try testing.expectEqual(ec, actual.charsetString()[0..ec.len]);
     } else {
-        try testing.expectEqual(null, actual.charset);
+        const m: Mime = .unknown;
+        try testing.expectEqual(m.charsetString(), actual.charsetString());
     }
 }
