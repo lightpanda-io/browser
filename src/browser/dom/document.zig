@@ -116,7 +116,9 @@ pub const Document = struct {
         base: *parser.Event,
         custom: CustomEvent,
     } {
-        if (std.ascii.eqlIgnoreCase(eventCstr, "Event") or std.ascii.eqlIgnoreCase(eventCstr, "Events")) {
+        const eqlIgnoreCase = std.ascii.eqlIgnoreCase;
+
+        if (eqlIgnoreCase(eventCstr, "Event") or eqlIgnoreCase(eventCstr, "Events") or eqlIgnoreCase(eventCstr, "HTMLEvents")) {
             return .{ .base = try parser.eventCreate() };
         }
 
