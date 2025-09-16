@@ -78,14 +78,6 @@ pub const FetchContext = struct {
             .url = self.url,
         };
     }
-
-    pub fn destructor(self: *FetchContext) void {
-        if (self.transfer) |_| {
-            self.promise_resolver.reject("TypeError") catch unreachable;
-            self.promise_resolver.deinit();
-            self.transfer = null;
-        }
-    }
 };
 
 // https://developer.mozilla.org/en-US/docs/Web/API/Window/fetch
@@ -121,9 +113,6 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
         .method = req.method,
         .url = req.url,
     };
-
-    // Add destructor callback for FetchContext.
-    try page.main_context.destructor_callbacks.append(arena, Env.DestructorCallback.init(fetch_ctx));
 
     try page.http_client.request(.{
         .ctx = @ptrCast(fetch_ctx),
@@ -200,15 +189,18 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
         .error_callback = struct {
             fn errorCallback(ctx: *anyopaque, err: anyerror) void {
                 const self: *FetchContext = @ptrCast(@alignCast(ctx));
-                if (self.transfer != null) {
-                    self.transfer = null;
+                defer self.promise_resolver.deinit();
+                self.transfer = null;
 
-                    log.err(.http, "error", .{
-                        .url = self.url,
-                        .err = err,
-                        .source = "fetch error",
-                    });
+                log.err(.http, "error", .{
+                    .url = self.url,
+                    .err = err,
+                    .source = "fetch error",
+                });
 
+                // We throw an Abort error when the page is getting closed so,
+                // in this case, we don't need to reject the promise.
+                if (err != error.Abort) {
                     self.promise_resolver.reject(@errorName(err)) catch unreachable;
                 }
             }
