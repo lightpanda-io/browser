@@ -108,6 +108,15 @@ jobs:
           go run runner/main.go
           kill `cat LPD.pid` `cat PROXY.id`
 
+      - name: run request interception through proxy
+        run: |
+          export PROXY_USERNAME=username PROXY_PASSWORD=password
+          ./proxy/proxy & echo $! > PROXY.id
+          ./lightpanda serve & echo $! > LPD.pid
+          URL=https://demo-browser.lightpanda.io/campfire-commerce/ node puppeteer/proxy_auth.js
+          BASE_URL=https://demo-browser.lightpanda.io/ node playwright/proxy_auth.js
+          kill `cat LPD.pid` `cat PROXY.id`
+
   cdp-and-hyperfine-bench:
     name: cdp-and-hyperfine-bench
     needs: zig-build-release

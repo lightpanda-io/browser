@@ -202,6 +202,7 @@ pub fn request(self: *Client, req: Request) !void {
         notification.dispatch(.http_request_intercept, &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception });
         if (wait_for_interception) {
             self.intercepted += 1;
+            log.debug(.http, "wait for interception", .{ .intercepted = self.intercepted });
             if (builtin.mode == .Debug) {
                 transfer._intercepted = true;
             }
@@ -230,6 +231,7 @@ pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
         std.debug.assert(transfer._intercepted);
     }
     self.intercepted -= 1;
+    log.debug(.http, "continue transfer", .{ .intercepted = self.intercepted });
     return self.process(transfer);
 }
 
@@ -239,6 +241,7 @@ pub fn abortTransfer(self: *Client, transfer: *Transfer) void {
         std.debug.assert(transfer._intercepted);
     }
     self.intercepted -= 1;
+    log.debug(.http, "abort transfer", .{ .intercepted = self.intercepted });
     transfer.abort();
 }
 
@@ -248,6 +251,7 @@ pub fn fulfillTransfer(self: *Client, transfer: *Transfer, status: u16, headers:
         std.debug.assert(transfer._intercepted);
     }
     self.intercepted -= 1;
+    log.debug(.http, "filfull transfer", .{ .intercepted = self.intercepted });
     return transfer.fulfill(status, headers, body);
 }
 
@@ -440,6 +444,11 @@ fn processMessages(self: *Client) !void {
                     // In this case we ignore callbacks for now.
                     // Note: we don't deinit transfer on purpose: we want to keep
                     // using it for the following request.
+                    self.intercepted += 1;
+                    log.debug(.http, "wait for auth interception", .{ .intercepted = self.intercepted });
+                    if (builtin.mode == .Debug) {
+                        transfer._intercepted = true;
+                    }
                     self.endTransfer(transfer);
                     continue;
                 }
@@ -811,6 +820,11 @@ pub const Transfer = struct {
     // abort. We don't call self.client.endTransfer here b/c it has been done
     // before interception process.
     pub fn abortAuthChallenge(self: *Transfer) void {
+        if (builtin.mode == .Debug) {
+            std.debug.assert(self._intercepted);
+        }
+        self.client.intercepted -= 1;
+        log.debug(.http, "abort auth transfer", .{ .intercepted = self.client.intercepted });
         self.client.requestFailed(self, error.AbortAuthChallenge);
         self.deinit();
     }
