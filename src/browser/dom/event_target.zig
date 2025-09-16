@@ -148,8 +148,15 @@ pub const EventTarget = struct {
         );
     }
 
-    pub fn _dispatchEvent(self: *parser.EventTarget, event: *parser.Event) !bool {
-        return try parser.eventTargetDispatchEvent(self, event);
+    pub fn _dispatchEvent(self: *parser.EventTarget, event: *parser.Event, page: *Page) !bool {
+        const res = try parser.eventTargetDispatchEvent(self, event);
+
+        if (!parser.eventBubbles(event) or parser.eventIsStopped(event)) {
+            return res;
+        }
+
+        try page.window.dispatchForDocumentTarget(event);
+        return true;
     }
 };
 
