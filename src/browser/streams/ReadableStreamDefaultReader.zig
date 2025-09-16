@@ -48,6 +48,7 @@ pub fn _read(self: *const ReadableStreamDefaultReader, page: *Page) !Env.Promise
             if (stream.queue.items.len > 0) {
                 const data = self.stream.queue.orderedRemove(0);
                 const resolver = page.main_context.createPromiseResolver();
+
                 try resolver.resolve(ReadableStreamReadResult{ .value = .{ .data = data }, .done = false });
                 try self.stream.pullIf();
                 return resolver.promise();
