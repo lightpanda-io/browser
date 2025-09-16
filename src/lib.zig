@@ -1,0 +1,129 @@
+const std = @import("std");
+const App = @import("app.zig").App;
+const Browser = @import("browser/browser.zig").Browser;
+const Session = @import("browser/session.zig").Session;
+const Page = @import("browser/page.zig").Page;
+const CDPT = @import("cdp/cdp.zig").CDPT;
+const Command = @import("cdp/cdp.zig").Command;
+
+export fn lightpanda_app_init() ?*anyopaque {
+    const allocator = std.heap.c_allocator;
+
+    const app = App.init(allocator, .{ .run_mode = .fetch, .tls_verify_host = false }) catch return null;
+
+    return app;
+}
+
+export fn lightpanda_app_deinit(app_ptr: *anyopaque) void {
+    const app: *App = @ptrCast(@alignCast(app_ptr));
+    app.deinit();
+}
+
+export fn lightpanda_browser_init(app_ptr: *anyopaque) ?*anyopaque {
+    const app: *App = @ptrCast(@alignCast(app_ptr));
+
+    const browser = std.heap.c_allocator.create(Browser) catch return null;
+    browser.* = Browser.init(app) catch return null;
+
+    return browser;
+}
+
+export fn lightpanda_browser_deinit(browser_ptr: *anyopaque) void {
+    const browser: *Browser = @ptrCast(@alignCast(browser_ptr));
+    browser.deinit();
+}
+
+export fn lightpanda_browser_new_session(browser_ptr: *anyopaque) ?*anyopaque {
+    const browser: *Browser = @ptrCast(@alignCast(browser_ptr));
+    const session = browser.newSession() catch return null;
+    return session;
+}
+
+export fn lightpanda_session_create_page(session_ptr: *anyopaque) ?*anyopaque {
+    const session: *Session = @ptrCast(@alignCast(session_ptr));
+    const page = session.createPage() catch return null;
+    return page;
+}
+
+export fn lightpanda_page_navigate(page_ptr: *anyopaque, url: [*:0]const u8) void {
+    const page: *Page = @ptrCast(@alignCast(page_ptr));
+    page.navigate(std.mem.span(url), .{}) catch return;
+}
+
+const NativeClientHandler = *const fn (ctx: *anyopaque, message: [*:0]const u8) callconv(.c) void;
+
+const NativeClient = struct {
+    allocator: std.mem.Allocator,
+    send_arena: std.heap.ArenaAllocator,
+    // sent: std.ArrayListUnmanaged(std.json.Value) = .{},
+    // serialized: std.ArrayListUnmanaged([]const u8) = .{},
+    handler: NativeClientHandler,
+    ctx: *anyopaque,
+
+    fn init(alloc: std.mem.Allocator, handler: NativeClientHandler, ctx: *anyopaque) NativeClient {
+        return .{ .allocator = alloc, .send_arena = std.heap.ArenaAllocator.init(alloc), .handler = handler, .ctx = ctx };
+    }
+
+    pub fn sendJSON(self: *NativeClient, message: anytype, opts: std.json.Stringify.Options) !void {
+        var opts_copy = opts;
+        opts_copy.whitespace = .indent_2;
+        const serialized = try std.json.Stringify.valueAlloc(self.allocator, message, opts_copy);
+
+        const slice = try self.allocator.dupeZ(u8, serialized);
+        defer self.allocator.free(slice);
+        self.handler(self.ctx, slice.ptr);
+
+        // try self.serialized.append(self.allocator, serialized);
+
+        // const value = try std.json.parseFromSliceLeaky(std.json.Value, self.allocator, serialized, .{});
+        // try self.sent.append(self.allocator, value);
+        // @panic("trying to send JSON to nativeClient");
+    }
+
+    pub fn sendJSONRaw(self: *NativeClient, buf: std.ArrayListUnmanaged(u8)) !void {
+        // const value = try std.json.parseFromSliceLeaky(std.json.Value, self.allocator, buf.items, .{});
+        // try self.sent.append(self.allocator, value);
+        // @panic("trying to send raw JSON to nativeClient");
+        const slice = try self.allocator.dupeZ(u8, buf.items);
+        defer self.allocator.free(slice);
+        self.handler(self.ctx, slice.ptr);
+    }
+};
+
+const CDP = CDPT(struct {
+    pub const Client = *NativeClient;
+});
+
+export fn lightpanda_cdp_init(app_ptr: *anyopaque, handler: NativeClientHandler, ctx: *anyopaque) ?*anyopaque {
+    const app: *App = @ptrCast(@alignCast(app_ptr));
+
+    const client = app.allocator.create(NativeClient) catch return null;
+    client.* = NativeClient.init(app.allocator, handler, ctx);
+
+    const cdp = app.allocator.create(CDP) catch return null;
+    cdp.* = CDP.init(app, client) catch return null;
+
+    return cdp;
+}
+
+export fn lightpanda_cdp_deinit(cdp_ptr: *anyopaque) void {
+    const cdp: *CDP = @ptrCast(@alignCast(cdp_ptr));
+    cdp.deinit();
+}
+
+export fn lightpanda_cdp_create_browser_context(cdp_ptr: *anyopaque) ?[*:0]const u8 {
+    const cdp: *CDP = @ptrCast(@alignCast(cdp_ptr));
+    const id = cdp.createBrowserContext() catch return null;
+    const slice = cdp.allocator.dupeZ(u8, id) catch return null;
+    return slice.ptr;
+}
+
+export fn lightpanda_cdp_browser(cdp_ptr: *anyopaque) ?*anyopaque {
+    const cdp: *CDP = @ptrCast(@alignCast(cdp_ptr));
+    return &cdp.browser;
+}
+
+export fn lightpanda_cdp_process_message(cdp_ptr: *anyopaque, msg: [*:0]const u8) void {
+    const cdp: *CDP = @ptrCast(@alignCast(cdp_ptr));
+    cdp.processMessage(std.mem.span(msg)) catch return;
+}

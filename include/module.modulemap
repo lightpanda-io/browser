@@ -1,0 +1,4 @@
+module lightpanda {
+    umbrella header "lightpanda.h"
+    export *
+}

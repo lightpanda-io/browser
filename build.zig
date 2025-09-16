@@ -62,27 +62,45 @@ pub fn build(b: *Build) !void {
     try addDependencies(b, lightpanda_module, opts);
 
     {
-        // browser
-        // -------
+        // static lib
+        // ----------
 
-        // compile and install
-        const exe = b.addExecutable(.{
-            .name = "lightpanda",
-            .use_llvm = true,
-            .root_module = lightpanda_module,
+        const liblightpanda_module = b.addModule("lightpanda", .{
+            .root_source_file = b.path("src/lib.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .link_libcpp = true,
         });
-        b.installArtifact(exe);
+        try addDependencies(b, liblightpanda_module, opts);
 
-        // run
-        const run_cmd = b.addRunArtifact(exe);
-        if (b.args) |args| {
-            run_cmd.addArgs(args);
-        }
-
-        // step
-        const run_step = b.step("run", "Run the app");
-        run_step.dependOn(&run_cmd.step);
+        const lib = b.addLibrary(.{ .name = "lightpanda", .root_module = liblightpanda_module, .use_llvm = true, .linkage = .static });
+        lib.bundle_compiler_rt = true;
+        b.installArtifact(lib);
     }
+
+    // {
+    //     // browser
+    //     // -------
+
+    //     // compile and install
+    //     const exe = b.addExecutable(.{
+    //         .name = "lightpanda",
+    //         .use_llvm = true,
+    //         .root_module = lightpanda_module,
+    //     });
+    //     b.installArtifact(exe);
+
+    //     // run
+    //     const run_cmd = b.addRunArtifact(exe);
+    //     if (b.args) |args| {
+    //         run_cmd.addArgs(args);
+    //     }
+
+    //     // step
+    //     const run_step = b.step("run", "Run the app");
+    //     run_step.dependOn(&run_cmd.step);
+    // }
 
     {
         // tests
