@@ -1261,6 +1261,13 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 };
             }
 
+            pub fn createPersistentPromiseResolver(self: *JsContext) PersistentPromiseResolver {
+                return .{
+                    .js_context = self,
+                    .resolver = v8.Persistent(v8.PromiseResolver).init(self.isolate, v8.PromiseResolver.init(self.v8_context)),
+                };
+            }
+
             // Probing is part of trying to map a JS value to a Zig union. There's
             // a lot of ambiguity in this process, in part because some JS values
             // can almost always be coerced. For example, anything can be coerced
@@ -2225,6 +2232,43 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
                 // resolver.reject will return null if the promise isn't pending
                 const ok = self.resolver.reject(js_context.v8_context, js_value) orelse return;
+                if (!ok) {
+                    return error.FailedToRejectPromise;
+                }
+            }
+        };
+
+        pub const PersistentPromiseResolver = struct {
+            js_context: *JsContext,
+            resolver: v8.Persistent(v8.PromiseResolver),
+
+            pub fn deinit(self: *PersistentPromiseResolver) void {
+                self.resolver.deinit();
+            }
+
+            pub fn promise(self: PersistentPromiseResolver) Promise {
+                return .{
+                    .promise = self.resolver.castToPromiseResolver().getPromise(),
+                };
+            }
+
+            pub fn resolve(self: PersistentPromiseResolver, value: anytype) !void {
+                const js_context = self.js_context;
+                const js_value = try js_context.zigValueToJs(value);
+
+                // resolver.resolve will return null if the promise isn't pending
+                const ok = self.resolver.castToPromiseResolver().resolve(js_context.v8_context, js_value) orelse return;
+                if (!ok) {
+                    return error.FailedToResolvePromise;
+                }
+            }
+
+            pub fn reject(self: PersistentPromiseResolver, value: anytype) !void {
+                const js_context = self.js_context;
+                const js_value = try js_context.zigValueToJs(value);
+
+                // resolver.reject will return null if the promise isn't pending
+                const ok = self.resolver.castToPromiseResolver().reject(js_context.v8_context, js_value) orelse return;
                 if (!ok) {
                     return error.FailedToRejectPromise;
                 }
