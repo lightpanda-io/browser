@@ -62,35 +62,27 @@ pub fn build(b: *Build) !void {
     try addDependencies(b, lightpanda_module, opts);
 
     {
-        // static lib
-        // ----------
+        // browser
+        // -------
 
-        const lib = b.addLibrary(.{ .name = "lightpanda", .root_module = lightpanda_module, .use_llvm = true, .linkage = .static });
-        b.installArtifact(lib);
+        // compile and install
+        const exe = b.addExecutable(.{
+            .name = "lightpanda",
+            .use_llvm = true,
+            .root_module = lightpanda_module,
+        });
+        b.installArtifact(exe);
+
+        // run
+        const run_cmd = b.addRunArtifact(exe);
+        if (b.args) |args| {
+            run_cmd.addArgs(args);
+        }
+
+        // step
+        const run_step = b.step("run", "Run the app");
+        run_step.dependOn(&run_cmd.step);
     }
-
-    // {
-    //     // browser
-    //     // -------
-
-    //     // compile and install
-    //     const exe = b.addExecutable(.{
-    //         .name = "lightpanda",
-    //         .use_llvm = true,
-    //         .root_module = lightpanda_module,
-    //     });
-    //     b.installArtifact(exe);
-
-    //     // run
-    //     const run_cmd = b.addRunArtifact(exe);
-    //     if (b.args) |args| {
-    //         run_cmd.addArgs(args);
-    //     }
-
-    //     // step
-    //     const run_step = b.step("run", "Run the app");
-    //     run_step.dependOn(&run_cmd.step);
-    // }
 
     {
         // tests
