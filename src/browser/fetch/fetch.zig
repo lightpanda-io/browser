@@ -85,15 +85,11 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
     const arena = page.arena;
 
     const req = try Request.constructor(input, options, page);
-
-    const resolver = page.main_context.createPersistentPromiseResolver();
-
     var headers = try Http.Headers.init();
 
     // Copy our headers into the HTTP headers.
     var header_iter = req.headers.headers.iterator();
     while (header_iter.next()) |entry| {
-        // This is fine because curl/headers copies it internally.
         const combined = try std.fmt.allocPrintSentinel(
             page.arena,
             "{s}: {s}",
@@ -104,6 +100,8 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
     }
 
     try page.requestCookie(.{}).headersForRequest(arena, req.url, &headers);
+
+    const resolver = page.main_context.createPersistentPromiseResolver();
 
     const fetch_ctx = try arena.create(FetchContext);
     fetch_ctx.* = .{
@@ -126,7 +124,7 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
         .start_callback = struct {
             fn startCallback(transfer: *HttpClient.Transfer) !void {
                 const self: *FetchContext = @ptrCast(@alignCast(transfer.ctx));
-                log.debug(.http, "request start", .{ .method = self.method, .url = self.url, .source = "fetch" });
+                log.debug(.fetch, "request start", .{ .method = self.method, .url = self.url, .source = "fetch" });
 
                 self.transfer = transfer;
             }
@@ -137,7 +135,7 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
 
                 const header = &transfer.response_header.?;
 
-                log.debug(.http, "request header", .{
+                log.debug(.fetch, "request header", .{
                     .source = "fetch",
                     .method = self.method,
                     .url = self.url,
@@ -175,7 +173,7 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
                 defer self.promise_resolver.deinit();
                 self.transfer = null;
 
-                log.info(.http, "request complete", .{
+                log.info(.fetch, "request complete", .{
                     .source = "fetch",
                     .method = self.method,
                     .url = self.url,
@@ -192,7 +190,7 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
                 defer self.promise_resolver.deinit();
                 self.transfer = null;
 
-                log.err(.http, "error", .{
+                log.err(.fetch, "error", .{
                     .url = self.url,
                     .err = err,
                     .source = "fetch error",
