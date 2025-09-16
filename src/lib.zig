@@ -4,7 +4,7 @@ const Browser = @import("browser/browser.zig").Browser;
 const Session = @import("browser/session.zig").Session;
 const Page = @import("browser/page.zig").Page;
 const CDPT = @import("cdp/cdp.zig").CDPT;
-const Command = @import("cdp/cdp.zig").Command;
+const BrowserContext = @import("cdp/cdp.zig").BrowserContext;
 
 export fn lightpanda_app_init() ?*anyopaque {
     const allocator = std.heap.c_allocator;
@@ -114,6 +114,16 @@ export fn lightpanda_cdp_deinit(cdp_ptr: *anyopaque) void {
 export fn lightpanda_cdp_create_browser_context(cdp_ptr: *anyopaque) ?[*:0]const u8 {
     const cdp: *CDP = @ptrCast(@alignCast(cdp_ptr));
     const id = cdp.createBrowserContext() catch return null;
+
+    _ = cdp.browser_context.?.session.createPage() catch return null;
+
+    const target_id = cdp.target_id_gen.next();
+    cdp.browser_context.?.target_id = target_id;
+
+    const session_id = cdp.session_id_gen.next();
+    cdp.browser_context.?.extra_headers.clearRetainingCapacity();
+    cdp.browser_context.?.session_id = session_id;
+
     const slice = cdp.allocator.dupeZ(u8, id) catch return null;
     return slice.ptr;
 }
@@ -126,4 +136,14 @@ export fn lightpanda_cdp_browser(cdp_ptr: *anyopaque) ?*anyopaque {
 export fn lightpanda_cdp_process_message(cdp_ptr: *anyopaque, msg: [*:0]const u8) void {
     const cdp: *CDP = @ptrCast(@alignCast(cdp_ptr));
     cdp.processMessage(std.mem.span(msg)) catch return;
+}
+
+export fn lightpanda_cdp_browser_context(cdp_ptr: *anyopaque) *anyopaque {
+    const cdp: *CDP = @ptrCast(@alignCast(cdp_ptr));
+    return &cdp.browser_context.?;
+}
+
+export fn lightpanda_browser_context_session(browser_context_ptr: *anyopaque) *anyopaque {
+    const browser_context: *BrowserContext(CDP) = @ptrCast(@alignCast(browser_context_ptr));
+    return browser_context.session;
 }

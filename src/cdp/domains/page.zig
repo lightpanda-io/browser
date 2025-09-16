@@ -155,10 +155,12 @@ fn navigate(cmd: anytype) !void {
     var page = bc.session.currentPage() orelse return error.PageNotLoaded;
     bc.loader_id = bc.cdp.loader_id_gen.next();
 
-    try page.navigate(params.url, .{
+    page.navigate(params.url, .{
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
-    });
+    }) catch |err| {
+        @import("std").debug.panic("navigate failed: {any}", .{err});
+    };
 }
 
 pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.PageNavigate) !void {

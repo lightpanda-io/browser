@@ -18,5 +18,7 @@ void lightpanda_cdp_deinit(void* cdp_ptr);
 const char* lightpanda_cdp_create_browser_context(void* cdp_ptr);
 void* lightpanda_cdp_browser(void* cdp_ptr);
 void lightpanda_cdp_process_message(void* cdp_ptr, const char *msg);
+void* lightpanda_cdp_browser_context(void* cdp_ptr);
+void* lightpanda_browser_context_session(void* browser_context_ptr);
 
 #endif
