@@ -111,7 +111,7 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
     while (header_iter.next()) |entry| {
         // This is fine because curl/headers copies it internally.
         const combined = try std.fmt.allocPrintSentinel(
-            page.call_arena,
+            page.arena,
             "{s}: {s}",
             .{ entry.key_ptr.*, entry.value_ptr.* },
             0,
@@ -228,4 +228,9 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
     });
 
     return resolver.promise();
+}
+
+const testing = @import("../../testing.zig");
+test "fetch: fetch" {
+    try testing.htmlRunner("fetch/fetch.html");
 }
