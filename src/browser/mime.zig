@@ -123,8 +123,8 @@ pub const Mime = struct {
 
                     const attribute_value = try parseCharset(value);
                     @memcpy(charset[0..attribute_value.len], attribute_value);
-                    // Fill the rest with zeroes.
-                    @memset(charset[attribute_value.len..], 0);
+                    // Null-terminate right after attribute value.
+                    charset[attribute_value.len] = 0;
                 },
             }
         }
