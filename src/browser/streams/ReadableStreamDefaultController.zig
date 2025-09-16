@@ -21,7 +21,6 @@ const log = @import("../../log.zig");
 
 const Page = @import("../page.zig").Page;
 const Env = @import("../env.zig").Env;
-const v8 = @import("v8");
 
 const ReadableStream = @import("./ReadableStream.zig");
 const ReadableStreamReadResult = @import("./ReadableStream.zig").ReadableStreamReadResult;
@@ -40,23 +39,14 @@ pub fn _close(self: *ReadableStreamDefaultController, _reason: ?[]const u8, page
     self.stream.state = .{ .closed = reason };
 
     // Resolve the Reader Promise
-    if (self.stream.reader_resolver) |rr| {
-        const resolver = Env.PromiseResolver{
-            .js_context = page.main_context,
-            .resolver = rr.castToPromiseResolver(),
-        };
-
-        try resolver.resolve(ReadableStreamReadResult{ .value = .empty, .done = true });
+    if (self.stream.reader_resolver) |*rr| {
+        defer rr.deinit();
+        try rr.resolve(ReadableStreamReadResult{ .value = .empty, .done = true });
         self.stream.reader_resolver = null;
     }
 
     // Resolve the Closed promise.
-    const closed_resolver = Env.PromiseResolver{
-        .js_context = page.main_context,
-        .resolver = self.stream.closed_resolver.castToPromiseResolver(),
-    };
-
-    try closed_resolver.resolve({});
+    try self.stream.closed_resolver.resolve({});
 
     // close just sets as closed meaning it wont READ any more but anything in the queue is fine to read.
     // to discard, must use cancel.
@@ -69,37 +59,22 @@ pub fn _enqueue(self: *ReadableStreamDefaultController, chunk: []const u8, page:
         return error.TypeError;
     }
 
-    if (self.stream.reader_resolver) |rr| {
-        const resolver = Env.PromiseResolver{
-            .js_context = page.main_context,
-            .resolver = rr.castToPromiseResolver(),
-        };
-
-        try resolver.resolve(ReadableStreamReadResult{ .value = .{ .data = chunk }, .done = false });
+    if (self.stream.reader_resolver) |*rr| {
+        defer rr.deinit();
+        try rr.resolve(ReadableStreamReadResult{ .value = .{ .data = chunk }, .done = false });
         self.stream.reader_resolver = null;
-
-        // rr.setWeakFinalizer(@ptrCast(self.stream), struct {
-        //     fn callback(info: ?*v8.c.WeakCallbackInfo) void {
-        //         const inner_stream: *ReadableStream = @ptrCast(@alignCast(v8.c.v8__WeakCallbackInfo__GetParameter(info).?));
-        //         inner_stream.reader_resolver = null;
-        //     }
-        // }.callback, .kParameter);
     }
 
     try self.stream.queue.append(page.arena, chunk);
     try self.stream.pullIf();
 }
 
-pub fn _error(self: *ReadableStreamDefaultController, err: Env.JsObject, page: *Page) !void {
+pub fn _error(self: *ReadableStreamDefaultController, err: Env.JsObject) !void {
     self.stream.state = .{ .errored = err };
 
-    if (self.stream.reader_resolver) |rr| {
-        const resolver = Env.PromiseResolver{
-            .js_context = page.main_context,
-            .resolver = rr.castToPromiseResolver(),
-        };
-
-        try resolver.reject(err);
+    if (self.stream.reader_resolver) |*rr| {
+        defer rr.deinit();
+        try rr.reject(err);
         self.stream.reader_resolver = null;
     }
 }

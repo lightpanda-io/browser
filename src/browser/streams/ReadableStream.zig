@@ -19,7 +19,6 @@
 const std = @import("std");
 const log = @import("../../log.zig");
 
-const v8 = @import("v8");
 const Page = @import("../page.zig").Page;
 const Env = @import("../env.zig").Env;
 
@@ -35,9 +34,9 @@ const State = union(enum) {
 };
 
 // This promise resolves when a stream is canceled.
-cancel_resolver: v8.Persistent(v8.PromiseResolver),
-closed_resolver: v8.Persistent(v8.PromiseResolver),
-reader_resolver: ?v8.Persistent(v8.PromiseResolver) = null,
+cancel_resolver: Env.PersistentPromiseResolver,
+closed_resolver: Env.PersistentPromiseResolver,
+reader_resolver: ?Env.PersistentPromiseResolver = null,
 
 locked: bool = false,
 state: State = .readable,
@@ -79,15 +78,8 @@ const QueueingStrategy = struct {
 pub fn constructor(underlying: ?UnderlyingSource, _strategy: ?QueueingStrategy, page: *Page) !*ReadableStream {
     const strategy: QueueingStrategy = _strategy orelse .{};
 
-    const cancel_resolver = v8.Persistent(v8.PromiseResolver).init(
-        page.main_context.isolate,
-        v8.PromiseResolver.init(page.main_context.v8_context),
-    );
-
-    const closed_resolver = v8.Persistent(v8.PromiseResolver).init(
-        page.main_context.isolate,
-        v8.PromiseResolver.init(page.main_context.v8_context),
-    );
+    const cancel_resolver = page.main_context.createPersistentPromiseResolver();
+    const closed_resolver = page.main_context.createPersistentPromiseResolver();
 
     const stream = try page.arena.create(ReadableStream);
     stream.* = ReadableStream{ .cancel_resolver = cancel_resolver, .closed_resolver = closed_resolver, .strategy = strategy };
@@ -131,11 +123,6 @@ pub fn _cancel(self: *ReadableStream, reason: ?[]const u8, page: *Page) !Env.Pro
         return error.TypeError;
     }
 
-    const resolver = Env.PromiseResolver{
-        .js_context = page.main_context,
-        .resolver = self.cancel_resolver.castToPromiseResolver(),
-    };
-
     self.state = .{ .cancelled = if (reason) |r| try page.arena.dupe(u8, r) else null };
 
     // Call cancel callback.
@@ -147,8 +134,8 @@ pub fn _cancel(self: *ReadableStream, reason: ?[]const u8, page: *Page) !Env.Pro
         }
     }
 
-    try resolver.resolve({});
-    return resolver.promise();
+    try self.cancel_resolver.resolve({});
+    return self.cancel_resolver.promise();
 }
 
 pub fn pullIf(self: *ReadableStream) !void {

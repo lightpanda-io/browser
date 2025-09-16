@@ -19,7 +19,6 @@
 const std = @import("std");
 const log = @import("../../log.zig");
 
-const v8 = @import("v8");
 const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
 
@@ -46,7 +45,7 @@ pub const Interfaces = .{
 pub const FetchContext = struct {
     arena: std.mem.Allocator,
     js_ctx: *Env.JsContext,
-    promise_resolver: v8.Persistent(v8.PromiseResolver),
+    promise_resolver: Env.PersistentPromiseResolver,
 
     method: Http.Method,
     url: []const u8,
@@ -82,13 +81,9 @@ pub const FetchContext = struct {
 
     pub fn destructor(self: *FetchContext) void {
         if (self.transfer) |_| {
-            const resolver = Env.PromiseResolver{
-                .js_context = self.js_ctx,
-                .resolver = self.promise_resolver.castToPromiseResolver(),
-            };
-
-            resolver.reject("TypeError") catch unreachable;
+            self.promise_resolver.reject("TypeError") catch unreachable;
             self.promise_resolver.deinit();
+            self.transfer = null;
         }
     }
 };
@@ -99,10 +94,7 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
 
     const req = try Request.constructor(input, options, page);
 
-    const resolver = Env.PromiseResolver{
-        .js_context = page.main_context,
-        .resolver = v8.PromiseResolver.init(page.main_context.v8_context),
-    };
+    const resolver = page.main_context.createPersistentPromiseResolver();
 
     var headers = try Http.Headers.init();
 
@@ -125,10 +117,7 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
     fetch_ctx.* = .{
         .arena = arena,
         .js_ctx = page.main_context,
-        .promise_resolver = v8.Persistent(v8.PromiseResolver).init(
-            page.main_context.isolate,
-            resolver.resolver,
-        ),
+        .promise_resolver = resolver,
         .method = req.method,
         .url = req.url,
     };
@@ -205,24 +194,23 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
                 });
 
                 const response = try self.toResponse();
-                const promise_resolver: Env.PromiseResolver = .{
-                    .js_context = self.js_ctx,
-                    .resolver = self.promise_resolver.castToPromiseResolver(),
-                };
-
-                try promise_resolver.resolve(response);
+                try self.promise_resolver.resolve(response);
             }
         }.doneCallback,
         .error_callback = struct {
             fn errorCallback(ctx: *anyopaque, err: anyerror) void {
                 const self: *FetchContext = @ptrCast(@alignCast(ctx));
-                self.transfer = null;
+                if (self.transfer != null) {
+                    self.transfer = null;
 
-                log.err(.http, "error", .{
-                    .url = self.url,
-                    .err = err,
-                    .source = "fetch error",
-                });
+                    log.err(.http, "error", .{
+                        .url = self.url,
+                        .err = err,
+                        .source = "fetch error",
+                    });
+
+                    self.promise_resolver.reject(@errorName(err)) catch unreachable;
+                }
             }
         }.errorCallback,
     });

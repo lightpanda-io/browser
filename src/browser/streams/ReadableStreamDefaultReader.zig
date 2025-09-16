@@ -18,8 +18,6 @@
 
 const std = @import("std");
 
-const v8 = @import("v8");
-
 const log = @import("../../log.zig");
 const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
@@ -34,13 +32,8 @@ pub fn constructor(stream: *ReadableStream) ReadableStreamDefaultReader {
     return .{ .stream = stream };
 }
 
-pub fn get_closed(self: *const ReadableStreamDefaultReader, page: *Page) Env.Promise {
-    const resolver = Env.PromiseResolver{
-        .js_context = page.main_context,
-        .resolver = self.stream.closed_resolver.castToPromiseResolver(),
-    };
-
-    return resolver.promise();
+pub fn get_closed(self: *const ReadableStreamDefaultReader) Env.Promise {
+    return self.stream.closed_resolver.promise();
 }
 
 pub fn _cancel(self: *ReadableStreamDefaultReader, reason: ?[]const u8, page: *Page) !Env.Promise {
@@ -50,61 +43,53 @@ pub fn _cancel(self: *ReadableStreamDefaultReader, reason: ?[]const u8, page: *P
 pub fn _read(self: *const ReadableStreamDefaultReader, page: *Page) !Env.Promise {
     const stream = self.stream;
 
-    const resolver = Env.PromiseResolver{
-        .js_context = page.main_context,
-        .resolver = v8.PromiseResolver.init(page.main_context.v8_context),
-    };
-
     switch (stream.state) {
         .readable => {
             if (stream.queue.items.len > 0) {
                 const data = self.stream.queue.orderedRemove(0);
+                const resolver = page.main_context.createPromiseResolver();
                 try resolver.resolve(ReadableStreamReadResult{ .value = .{ .data = data }, .done = false });
+                try self.stream.pullIf();
+                return resolver.promise();
             } else {
                 if (self.stream.reader_resolver) |rr| {
-                    const r_resolver = Env.PromiseResolver{
-                        .js_context = page.main_context,
-                        .resolver = rr.castToPromiseResolver(),
-                    };
-
-                    return r_resolver.promise();
+                    return rr.promise();
                 } else {
-                    const p_resolver = v8.Persistent(v8.PromiseResolver).init(page.main_context.isolate, resolver.resolver);
-                    self.stream.reader_resolver = p_resolver;
-                    return resolver.promise();
+                    const persistent_resolver = page.main_context.createPersistentPromiseResolver();
+                    self.stream.reader_resolver = persistent_resolver;
+                    return persistent_resolver.promise();
                 }
-
-                try self.stream.pullIf();
             }
         },
         .closed => |_| {
+            const resolver = page.main_context.createPromiseResolver();
+
             if (stream.queue.items.len > 0) {
                 const data = self.stream.queue.orderedRemove(0);
                 try resolver.resolve(ReadableStreamReadResult{ .value = .{ .data = data }, .done = false });
             } else {
                 try resolver.resolve(ReadableStreamReadResult{ .value = .empty, .done = true });
             }
+
+            return resolver.promise();
         },
         .cancelled => |_| {
+            const resolver = page.main_context.createPromiseResolver();
             try resolver.resolve(ReadableStreamReadResult{ .value = .empty, .done = true });
+            return resolver.promise();
         },
         .errored => |err| {
+            const resolver = page.main_context.createPromiseResolver();
             try resolver.reject(err);
+            return resolver.promise();
         },
     }
-
-    return resolver.promise();
 }
 
-pub fn _releaseLock(self: *const ReadableStreamDefaultReader, page: *Page) !void {
+pub fn _releaseLock(self: *const ReadableStreamDefaultReader) !void {
     self.stream.locked = false;
 
     if (self.stream.reader_resolver) |rr| {
-        const resolver = Env.PromiseResolver{
-            .js_context = page.main_context,
-            .resolver = rr.castToPromiseResolver(),
-        };
-
-        try resolver.reject("TypeError");
+        try rr.reject("TypeError");
     }
 }
