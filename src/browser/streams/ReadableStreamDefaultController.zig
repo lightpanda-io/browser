@@ -59,13 +59,15 @@ pub fn _enqueue(self: *ReadableStreamDefaultController, chunk: []const u8, page:
         return error.TypeError;
     }
 
+    const duped_chunk = try page.arena.dupe(u8, chunk);
+
     if (self.stream.reader_resolver) |*rr| {
         defer rr.deinit();
-        try rr.resolve(ReadableStreamReadResult{ .value = .{ .data = chunk }, .done = false });
+        try rr.resolve(ReadableStreamReadResult{ .value = .{ .data = duped_chunk }, .done = false });
         self.stream.reader_resolver = null;
     }
 
-    try self.stream.queue.append(page.arena, chunk);
+    try self.stream.queue.append(page.arena, duped_chunk);
     try self.stream.pullIf();
 }
 
