@@ -820,6 +820,11 @@ pub const Transfer = struct {
     // abort. We don't call self.client.endTransfer here b/c it has been done
     // before interception process.
     pub fn abortAuthChallenge(self: *Transfer) void {
+        if (builtin.mode == .Debug) {
+            std.debug.assert(self._intercepted);
+        }
+        self.client.intercepted -= 1;
+        log.debug(.http, "abort auth transfer", .{ .intercepted = self.client.intercepted });
         self.client.requestFailed(self, error.AbortAuthChallenge);
         self.deinit();
     }
