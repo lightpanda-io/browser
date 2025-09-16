@@ -517,6 +517,13 @@ pub fn eventStopPropagation(evt: *Event) void {
     std.debug.assert(err == c.DOM_NO_ERR);
 }
 
+pub fn eventIsStopped(evt: *Event) bool {
+    var res: bool = undefined;
+    const err = c._dom_event_is_stopped(evt, &res);
+    std.debug.assert(err == c.DOM_NO_ERR);
+    return res;
+}
+
 pub fn eventStopImmediatePropagation(evt: *Event) void {
     const err = c._dom_event_stop_immediate_propagation(evt);
     std.debug.assert(err == c.DOM_NO_ERR);

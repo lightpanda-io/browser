@@ -151,19 +151,12 @@ pub const EventTarget = struct {
     pub fn _dispatchEvent(self: *parser.EventTarget, event: *parser.Event, page: *Page) !bool {
         const res = try parser.eventTargetDispatchEvent(self, event);
 
-        // TODO: If we get this working, we should also create a getter to check
-        // stopPropagation and not bubble to window if true.
-        if (!parser.eventBubbles(event)) {
+        if (!parser.eventBubbles(event) or parser.eventIsStopped(event)) {
             return res;
         }
 
-        // I think this mutates `event`, which means any JavaScript that captured
-        // it will be mutated incorrectly.
-        const Window = @import("../html/window.zig").Window;
-        return parser.eventTargetDispatchEvent(
-            parser.toEventTarget(Window, &page.window),
-            event,
-        );
+        try page.window.dispatchForDocumentTarget(event);
+        return true;
     }
 };
 
