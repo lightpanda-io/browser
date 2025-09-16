@@ -98,6 +98,11 @@ fn getAndMakeAppDir(allocator: Allocator) ?[]const u8 {
     if (@import("builtin").is_test) {
         return allocator.dupe(u8, "/tmp") catch unreachable;
     }
+
+    if (@import("builtin").os.tag == .ios) {
+        return null; // getAppDataDir is not available on iOS
+    }
+
     const app_dir_path = std.fs.getAppDataDir(allocator, "lightpanda") catch |err| {
         log.warn(.app, "get data dir", .{ .err = err });
         return null;

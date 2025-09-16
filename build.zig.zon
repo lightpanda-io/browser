@@ -8,7 +8,7 @@
             .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/84cdca7cd9065f67c7933388f2091810fc485bc6.tar.gz",
             .hash = "v8-0.0.0-xddH67vcAwCuN2gBsAO8TBzEw523KMroIKGrdZwc-Q-y",
         },
-        //.v8 = .{ .path = "../zig-v8-fork" }
+        //.v8 = .{ .path = "../zig-v8-fork" },
         .@"ada-singleheader" = .{
             .url = "https://github.com/ada-url/ada/releases/download/v3.3.0/singleheader.zip",
             .hash = "N-V-__8AAPmhFAAw64ALjlzd5YMtzpSrmZ6KymsT84BKfB4s",

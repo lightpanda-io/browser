@@ -75,8 +75,17 @@ pub const Server = struct {
         self.listener = listener;
 
         try posix.setsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-        if (@hasDecl(posix.TCP, "NODELAY")) {
-            try posix.setsockopt(listener, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
+        switch (builtin.os.tag) {
+            .ios => {
+                // TCP.NODELAY is not defined for iOS in posix module
+                const TCP_NODELAY = 0x01;
+                try posix.setsockopt(listener, posix.IPPROTO.TCP, TCP_NODELAY, &std.mem.toBytes(@as(c_int, 1)));
+            },
+            else => {
+                if (@hasDecl(posix.TCP, "NODELAY")) {
+                    try posix.setsockopt(listener, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
+                }
+            },
         }
 
         try posix.bind(listener, &address.any, address.getOsSockLen());
