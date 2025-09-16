@@ -36,3 +36,14 @@
   let emptyResponse = new Response("");
   testing.expectEqual(200, emptyResponse.status);
 </script>
+
+<script id=json type=module>
+  const promise1 = new Promise((resolve) => {
+    let response = new Response('[]');
+    response.json().then(resolve)
+  });
+
+  testing.async(promise1, (json) => {
+    testing.expectEqual([], json);
+  });
+</script>ref
