@@ -198,6 +198,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // This is the callback that runs whenever a module is dynamically imported.
             isolate.setHostImportModuleDynamicallyCallback(JsContext.dynamicModuleCallback);
             isolate.setPromiseRejectCallback(promiseRejectCallback);
+            isolate.setMicrotasksPolicy(v8.c.kExplicit);
 
             isolate.enter();
             errdefer isolate.exit();
