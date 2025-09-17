@@ -29,8 +29,6 @@ const log = @import("log.zig");
 const App = @import("app.zig").App;
 const CDP = @import("cdp/cdp.zig").CDP;
 
-const TimeoutCheck = std.time.ns_per_ms * 100;
-
 const MAX_HTTP_REQUEST_SIZE = 4096;
 
 // max message size

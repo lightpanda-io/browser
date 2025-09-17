@@ -29,7 +29,6 @@ const Page = @import("../browser/page.zig").Page;
 const Inspector = @import("../browser/env.zig").Env.Inspector;
 const Incrementing = @import("../id.zig").Incrementing;
 const Notification = @import("../notification.zig").Notification;
-const NetworkState = @import("domains/network.zig").NetworkState;
 const InterceptState = @import("domains/fetch.zig").InterceptState;
 
 const polyfill = @import("../browser/polyfill/polyfill.zig");

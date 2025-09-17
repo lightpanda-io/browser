@@ -2841,7 +2841,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     }
                     return v8.initNull(isolate).toValue();
                 },
-                .error_union => return zigValueToJs(templates, isolate, v8_context, value catch |err| return err),
+                .error_union => return zigValueToJs(templates, isolate, v8_context, try value),
                 else => {},
             }
 

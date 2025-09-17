@@ -21,7 +21,6 @@ const Allocator = std.mem.Allocator;
 const parser = @import("../netsurf.zig");
 const Page = @import("../page.zig").Page;
 const HTMLElement = @import("elements.zig").HTMLElement;
-const FormData = @import("../xhr/form_data.zig").FormData;
 
 pub const HTMLFormElement = struct {
     pub const Self = parser.Form;

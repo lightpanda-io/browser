@@ -44,7 +44,7 @@ pub const NodeFilter = struct {
 const VerifyResult = enum { accept, skip, reject };
 
 pub fn verify(what_to_show: u32, filter: ?Env.Function, node: *parser.Node) !VerifyResult {
-    const node_type = try parser.nodeType(node);
+    const node_type = parser.nodeType(node);
 
     // Verify that we can show this node type.
     if (!switch (node_type) {

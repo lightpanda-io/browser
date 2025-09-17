@@ -31,7 +31,6 @@ const parser = @import("netsurf.zig");
 const DataSet = @import("html/DataSet.zig");
 const ShadowRoot = @import("dom/shadow_root.zig").ShadowRoot;
 const StyleSheet = @import("cssom/StyleSheet.zig");
-const CSSStyleSheet = @import("cssom/CSSStyleSheet.zig");
 const CSSStyleDeclaration = @import("cssom/CSSStyleDeclaration.zig");
 
 // for HTMLScript (but probably needs to be added to more)

@@ -44,39 +44,39 @@ pub const WalkerDepthFirst = struct {
         var n = cur orelse root;
 
         // TODO deinit next
-        if (try parser.nodeFirstChild(n)) |next| {
+        if (parser.nodeFirstChild(n)) |next| {
             return next;
         }
 
         // TODO deinit next
-        if (try parser.nodeNextSibling(n)) |next| {
+        if (parser.nodeNextSibling(n)) |next| {
             return next;
         }
 
         // TODO deinit parent
         // Back to the parent of cur.
         // If cur has no parent, then the iteration is over.
-        var parent = try parser.nodeParentNode(n) orelse return null;
+        var parent = parser.nodeParentNode(n) orelse return null;
 
         // TODO deinit lastchild
-        var lastchild = try parser.nodeLastChild(parent);
+        var lastchild = parser.nodeLastChild(parent);
         while (n != root and n == lastchild) {
             n = parent;
 
             // TODO deinit parent
             // Back to the prev's parent.
             // If prev has no parent, then the loop must stop.
-            parent = try parser.nodeParentNode(n) orelse break;
+            parent = parser.nodeParentNode(n) orelse break;
 
             // TODO deinit lastchild
-            lastchild = try parser.nodeLastChild(parent);
+            lastchild = parser.nodeLastChild(parent);
         }
 
         if (n == root) {
             return null;
         }
 
-        return try parser.nodeNextSibling(n);
+        return parser.nodeNextSibling(n);
     }
 };
 
@@ -84,14 +84,14 @@ pub const WalkerDepthFirst = struct {
 pub const WalkerChildren = struct {
     pub fn get_next(_: WalkerChildren, root: *parser.Node, cur: ?*parser.Node) !?*parser.Node {
         // On walk start, we return the first root's child.
-        if (cur == null) return try parser.nodeFirstChild(root);
+        if (cur == null) return parser.nodeFirstChild(root);
 
         // If cur is root, then return null.
         // This is a special case, if the root is included in the walk, we
         // don't want to go further to find children.
         if (root == cur.?) return null;
 
-        return try parser.nodeNextSibling(cur.?);
+        return parser.nodeNextSibling(cur.?);
     }
 };
 

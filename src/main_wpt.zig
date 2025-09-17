@@ -27,9 +27,6 @@ const Env = @import("browser/env.zig").Env;
 const Browser = @import("browser/browser.zig").Browser;
 const TestHTTPServer = @import("TestHTTPServer.zig");
 
-const parser = @import("browser/netsurf.zig");
-const polyfill = @import("browser/polyfill/polyfill.zig");
-
 const WPT_DIR = "tests/wpt";
 
 pub fn main() !void {

@@ -22,12 +22,10 @@ const Allocator = std.mem.Allocator;
 
 const log = @import("log.zig");
 const App = @import("app.zig").App;
-const Http = @import("http/Http.zig");
 const Server = @import("server.zig").Server;
 const Browser = @import("browser/browser.zig").Browser;
 
 const build_config = @import("build_config");
-const parser = @import("browser/netsurf.zig");
 
 var _app: ?*App = null;
 var _server: ?Server = null;

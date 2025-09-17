@@ -41,8 +41,8 @@ pub fn writeDocType(doc_type: *parser.DocumentType, writer: *std.Io.Writer) !voi
     try writer.writeAll("<!DOCTYPE ");
     try writer.writeAll(try parser.documentTypeGetName(doc_type));
 
-    const public_id = try parser.documentTypeGetPublicId(doc_type);
-    const system_id = try parser.documentTypeGetSystemId(doc_type);
+    const public_id = parser.documentTypeGetPublicId(doc_type);
+    const system_id = parser.documentTypeGetSystemId(doc_type);
     if (public_id.len != 0 and system_id.len != 0) {
         try writer.writeAll(" PUBLIC \"");
         try writeEscapedAttributeValue(writer, public_id);
@@ -63,7 +63,7 @@ pub fn writeDocType(doc_type: *parser.DocumentType, writer: *std.Io.Writer) !voi
 }
 
 pub fn writeNode(node: *parser.Node, opts: Opts, writer: *std.Io.Writer) anyerror!void {
-    switch (try parser.nodeType(node)) {
+    switch (parser.nodeType(node)) {
         .element => {
             // open the tag
             const tag_type = try parser.nodeHTMLGetTagType(node) orelse .undef;
@@ -104,7 +104,7 @@ pub fn writeNode(node: *parser.Node, opts: Opts, writer: *std.Io.Writer) anyerro
             if (try isVoid(parser.nodeToElement(node))) return;
 
             if (tag_type == .script) {
-                try writer.writeAll(try parser.nodeTextContent(node) orelse "");
+                try writer.writeAll(parser.nodeTextContent(node) orelse "");
             } else {
                 // write the children
                 // TODO avoid recursion
@@ -117,17 +117,17 @@ pub fn writeNode(node: *parser.Node, opts: Opts, writer: *std.Io.Writer) anyerro
             try writer.writeAll(">");
         },
         .text => {
-            const v = try parser.nodeValue(node) orelse return;
+            const v = parser.nodeValue(node) orelse return;
             try writeEscapedTextNode(writer, v);
         },
         .cdata_section => {
-            const v = try parser.nodeValue(node) orelse return;
+            const v = parser.nodeValue(node) orelse return;
             try writer.writeAll("<![CDATA[");
             try writer.writeAll(v);
             try writer.writeAll("]]>");
         },
         .comment => {
-            const v = try parser.nodeValue(node) orelse return;
+            const v = parser.nodeValue(node) orelse return;
             try writer.writeAll("<!--");
             try writer.writeAll(v);
             try writer.writeAll("-->");

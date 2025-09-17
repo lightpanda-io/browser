@@ -20,7 +20,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const log = @import("../../log.zig");
 
-const Allocator = std.mem.Allocator;
 const Page = @import("../page.zig").Page;
 const JsObject = @import("../env.zig").Env.JsObject;
 

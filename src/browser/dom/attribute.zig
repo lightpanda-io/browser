@@ -25,24 +25,24 @@ pub const Attr = struct {
     pub const prototype = *Node;
     pub const subtype = .node;
 
-    pub fn get_namespaceURI(self: *parser.Attribute) !?[]const u8 {
-        return try parser.nodeGetNamespace(parser.attributeToNode(self));
+    pub fn get_namespaceURI(self: *parser.Attribute) ?[]const u8 {
+        return parser.nodeGetNamespace(parser.attributeToNode(self));
     }
 
-    pub fn get_prefix(self: *parser.Attribute) !?[]const u8 {
-        return try parser.nodeGetPrefix(parser.attributeToNode(self));
+    pub fn get_prefix(self: *parser.Attribute) ?[]const u8 {
+        return parser.nodeGetPrefix(parser.attributeToNode(self));
     }
 
     pub fn get_localName(self: *parser.Attribute) ![]const u8 {
-        return try parser.nodeLocalName(parser.attributeToNode(self));
+        return parser.nodeLocalName(parser.attributeToNode(self));
     }
 
     pub fn get_name(self: *parser.Attribute) ![]const u8 {
-        return try parser.attributeGetName(self);
+        return parser.attributeGetName(self);
     }
 
     pub fn get_value(self: *parser.Attribute) !?[]const u8 {
-        return try parser.attributeGetValue(self);
+        return parser.attributeGetValue(self);
     }
 
     pub fn set_value(self: *parser.Attribute, v: []const u8) !?[]const u8 {

@@ -51,7 +51,7 @@ pub const CharacterData = struct {
     }
 
     pub fn get_nextElementSibling(self: *parser.CharacterData) !?ElementUnion {
-        const res = try parser.nodeNextElementSibling(parser.characterDataToNode(self));
+        const res = parser.nodeNextElementSibling(parser.characterDataToNode(self));
         if (res == null) {
             return null;
         }
@@ -59,7 +59,7 @@ pub const CharacterData = struct {
     }
 
     pub fn get_previousElementSibling(self: *parser.CharacterData) !?ElementUnion {
-        const res = try parser.nodePreviousElementSibling(parser.characterDataToNode(self));
+        const res = parser.nodePreviousElementSibling(parser.characterDataToNode(self));
         if (res == null) {
             return null;
         }
@@ -68,8 +68,8 @@ pub const CharacterData = struct {
 
     // Read/Write attributes
 
-    pub fn get_data(self: *parser.CharacterData) ![]const u8 {
-        return try parser.characterDataData(self);
+    pub fn get_data(self: *parser.CharacterData) []const u8 {
+        return parser.characterDataData(self);
     }
 
     pub fn set_data(self: *parser.CharacterData, data: []const u8) !void {
@@ -96,18 +96,18 @@ pub const CharacterData = struct {
     }
 
     pub fn _substringData(self: *parser.CharacterData, offset: u32, count: u32) ![]const u8 {
-        return try parser.characterDataSubstringData(self, offset, count);
+        return parser.characterDataSubstringData(self, offset, count);
     }
 
     // netsurf's CharacterData (text, comment) doesn't implement the
     // dom_node_get_attributes and thus will crash if we try to call nodeIsEqualNode.
-    pub fn _isEqualNode(self: *parser.CharacterData, other_node: *parser.Node) !bool {
-        if (try parser.nodeType(@ptrCast(@alignCast(self))) != try parser.nodeType(other_node)) {
+    pub fn _isEqualNode(self: *parser.CharacterData, other_node: *parser.Node) bool {
+        if (parser.nodeType(@ptrCast(@alignCast(self))) != parser.nodeType(other_node)) {
             return false;
         }
 
         const other: *parser.CharacterData = @ptrCast(other_node);
-        if (std.mem.eql(u8, try get_data(self), try get_data(other)) == false) {
+        if (std.mem.eql(u8, get_data(self), get_data(other)) == false) {
             return false;
         }
 

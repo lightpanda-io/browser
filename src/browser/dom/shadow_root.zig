@@ -67,7 +67,7 @@ pub const ShadowRoot = struct {
 
     pub fn set_innerHTML(self: *ShadowRoot, str_: ?[]const u8) !void {
         const sr_doc = parser.documentFragmentToNode(self.proto);
-        const doc = try parser.nodeOwnerDocument(sr_doc) orelse return parser.DOMError.WrongDocument;
+        const doc = parser.nodeOwnerDocument(sr_doc) orelse return parser.DOMError.WrongDocument;
         try Node.removeChildren(sr_doc);
         const str = str_ orelse return;
 
@@ -80,16 +80,16 @@ pub const ShadowRoot = struct {
         // element.
         // For ShadowRoot, it appears the only the children within the body should
         // be set.
-        const html = try parser.nodeFirstChild(fragment_node) orelse return;
-        const head = try parser.nodeFirstChild(html) orelse return;
-        const body = try parser.nodeNextSibling(head) orelse return;
+        const html = parser.nodeFirstChild(fragment_node) orelse return;
+        const head = parser.nodeFirstChild(html) orelse return;
+        const body = parser.nodeNextSibling(head) orelse return;
 
         const children = try parser.nodeGetChildNodes(body);
-        const ln = try parser.nodeListLength(children);
+        const ln = parser.nodeListLength(children);
         for (0..ln) |_| {
             // always index 0, because nodeAppendChild moves the node out of
             // the nodeList and into the new tree
-            const child = try parser.nodeListItem(children, 0) orelse continue;
+            const child = parser.nodeListItem(children, 0) orelse continue;
             _ = try parser.nodeAppendChild(sr_doc, child);
         }
     }

@@ -21,7 +21,6 @@ const parser = @import("../netsurf.zig");
 
 const NodeFilter = @import("node_filter.zig");
 const Env = @import("../env.zig").Env;
-const Page = @import("../page.zig").Page;
 const Node = @import("node.zig").Node;
 const NodeUnion = @import("node.zig").Union;
 
@@ -95,11 +94,11 @@ pub const TreeWalker = struct {
 
     fn firstChild(self: *const TreeWalker, node: *parser.Node) !?*parser.Node {
         const children = try parser.nodeGetChildNodes(node);
-        const child_count = try parser.nodeListLength(children);
+        const child_count = parser.nodeListLength(children);
 
         for (0..child_count) |i| {
             const index: u32 = @intCast(i);
-            const child = (try parser.nodeListItem(children, index)) orelse return null;
+            const child = (parser.nodeListItem(children, index)) orelse return null;
 
             switch (try NodeFilter.verify(self.what_to_show, self.filter_func, child)) {
                 .accept => return child,
@@ -113,12 +112,12 @@ pub const TreeWalker = struct {
 
     fn lastChild(self: *const TreeWalker, node: *parser.Node) !?*parser.Node {
         const children = try parser.nodeGetChildNodes(node);
-        const child_count = try parser.nodeListLength(children);
+        const child_count = parser.nodeListLength(children);
 
         var index: u32 = child_count;
         while (index > 0) {
             index -= 1;
-            const child = (try parser.nodeListItem(children, index)) orelse return null;
+            const child = (parser.nodeListItem(children, index)) orelse return null;
 
             switch (try NodeFilter.verify(self.what_to_show, self.filter_func, child)) {
                 .accept => return child,
@@ -134,7 +133,7 @@ pub const TreeWalker = struct {
         var current = node;
 
         while (true) {
-            current = (try parser.nodeNextSibling(current)) orelse return null;
+            current = (parser.nodeNextSibling(current)) orelse return null;
 
             switch (try NodeFilter.verify(self.what_to_show, self.filter_func, current)) {
                 .accept => return current,
@@ -149,7 +148,7 @@ pub const TreeWalker = struct {
         var current = node;
 
         while (true) {
-            current = (try parser.nodePreviousSibling(current)) orelse return null;
+            current = (parser.nodePreviousSibling(current)) orelse return null;
 
             switch (try NodeFilter.verify(self.what_to_show, self.filter_func, current)) {
                 .accept => return current,
@@ -166,7 +165,7 @@ pub const TreeWalker = struct {
         var current = node;
         while (true) {
             if (current == self.root) return null;
-            current = (try parser.nodeParentNode(current)) orelse return null;
+            current = (parser.nodeParentNode(current)) orelse return null;
 
             switch (try NodeFilter.verify(self.what_to_show, self.filter_func, current)) {
                 .accept => return current,
@@ -206,7 +205,7 @@ pub const TreeWalker = struct {
                 return try Node.toInterface(sibling);
             }
 
-            current = (try parser.nodeParentNode(current)) orelse break;
+            current = (parser.nodeParentNode(current)) orelse break;
         }
 
         return null;
@@ -234,7 +233,7 @@ pub const TreeWalker = struct {
         if (self.current_node == self.root) return null;
 
         var current = self.current_node;
-        while (try parser.nodePreviousSibling(current)) |previous| {
+        while (parser.nodePreviousSibling(current)) |previous| {
             current = previous;
 
             switch (try NodeFilter.verify(self.what_to_show, self.filter_func, current)) {

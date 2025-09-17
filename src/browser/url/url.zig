@@ -23,7 +23,6 @@ const parser = @import("../netsurf.zig");
 const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
 const FormData = @import("../xhr/form_data.zig").FormData;
-const HTMLElement = @import("../html/elements.zig").HTMLElement;
 
 const kv = @import("../key_value.zig");
 const iterator = @import("../iterator/iterator.zig");

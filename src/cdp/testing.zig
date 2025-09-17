@@ -24,7 +24,6 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const Testing = @This();
 
 const main = @import("cdp.zig");
-const App = @import("../app.zig").App;
 const parser = @import("../browser/netsurf.zig");
 
 const base = @import("../testing.zig");

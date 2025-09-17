@@ -125,7 +125,7 @@ pub const NodeIterator = struct {
                 return try Node.toInterface(sibling);
             }
 
-            current = (try parser.nodeParentNode(current)) orelse break;
+            current = (parser.nodeParentNode(current)) orelse break;
         }
 
         return null;
@@ -147,7 +147,7 @@ pub const NodeIterator = struct {
         }
 
         var current = self.reference_node;
-        while (try parser.nodePreviousSibling(current)) |previous| {
+        while (parser.nodePreviousSibling(current)) |previous| {
             current = previous;
 
             switch (try NodeFilter.verify(self.what_to_show, self.filter_func, current)) {
@@ -189,11 +189,11 @@ pub const NodeIterator = struct {
 
     fn firstChild(self: *const NodeIterator, node: *parser.Node) !?*parser.Node {
         const children = try parser.nodeGetChildNodes(node);
-        const child_count = try parser.nodeListLength(children);
+        const child_count = parser.nodeListLength(children);
 
         for (0..child_count) |i| {
             const index: u32 = @intCast(i);
-            const child = (try parser.nodeListItem(children, index)) orelse return null;
+            const child = (parser.nodeListItem(children, index)) orelse return null;
 
             switch (try NodeFilter.verify(self.what_to_show, self.filter_func, child)) {
                 .accept => return child, // NOTE: Skip and reject are equivalent for NodeIterator, this is different from TreeWalker
@@ -206,12 +206,12 @@ pub const NodeIterator = struct {
 
     fn lastChild(self: *const NodeIterator, node: *parser.Node) !?*parser.Node {
         const children = try parser.nodeGetChildNodes(node);
-        const child_count = try parser.nodeListLength(children);
+        const child_count = parser.nodeListLength(children);
 
         var index: u32 = child_count;
         while (index > 0) {
             index -= 1;
-            const child = (try parser.nodeListItem(children, index)) orelse return null;
+            const child = (parser.nodeListItem(children, index)) orelse return null;
 
             switch (try NodeFilter.verify(self.what_to_show, self.filter_func, child)) {
                 .accept => return child, // NOTE: Skip and reject are equivalent for NodeIterator, this is different from TreeWalker
@@ -229,7 +229,7 @@ pub const NodeIterator = struct {
         var current = node;
         while (true) {
             if (current == self.root) return null;
-            current = (try parser.nodeParentNode(current)) orelse return null;
+            current = (parser.nodeParentNode(current)) orelse return null;
 
             switch (try NodeFilter.verify(self.what_to_show, self.filter_func, current)) {
                 .accept => return current,
@@ -243,7 +243,7 @@ pub const NodeIterator = struct {
         var current = node;
 
         while (true) {
-            current = (try parser.nodeNextSibling(current)) orelse return null;
+            current = (parser.nodeNextSibling(current)) orelse return null;
 
             switch (try NodeFilter.verify(self.what_to_show, self.filter_func, current)) {
                 .accept => return current,

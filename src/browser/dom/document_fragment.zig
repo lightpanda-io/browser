@@ -38,8 +38,8 @@ pub const DocumentFragment = struct {
         );
     }
 
-    pub fn _isEqualNode(self: *parser.DocumentFragment, other_node: *parser.Node) !bool {
-        const other_type = try parser.nodeType(other_node);
+    pub fn _isEqualNode(self: *parser.DocumentFragment, other_node: *parser.Node) bool {
+        const other_type = parser.nodeType(other_node);
         if (other_type != .document_fragment) {
             return false;
         }

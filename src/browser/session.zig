@@ -22,7 +22,6 @@ const Allocator = std.mem.Allocator;
 
 const Env = @import("env.zig").Env;
 const Page = @import("page.zig").Page;
-const URL = @import("../url.zig").URL;
 const Browser = @import("browser.zig").Browser;
 const NavigateOpts = @import("page.zig").NavigateOpts;
 

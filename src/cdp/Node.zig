@@ -243,13 +243,13 @@ pub const Writer = struct {
     fn writeChildren(self: *const Writer, node: *const Node, depth: usize, w: anytype) anyerror!usize {
         var registry = self.registry;
         const child_nodes = try parser.nodeGetChildNodes(node._node);
-        const child_count = try parser.nodeListLength(child_nodes);
+        const child_count = parser.nodeListLength(child_nodes);
         const full_child = self.depth < 0 or self.depth < depth;
 
         var i: usize = 0;
         try w.beginArray();
         for (0..child_count) |_| {
-            const child = (try parser.nodeListItem(child_nodes, @intCast(i))) orelse break;
+            const child = (parser.nodeListItem(child_nodes, @intCast(i))) orelse break;
             const child_node = try registry.register(child);
             if (full_child) {
                 try self.toJSON(child_node, depth + 1, w);
@@ -275,7 +275,7 @@ pub const Writer = struct {
 
         const n = node._node;
 
-        if (try parser.nodeParentNode(n)) |p| {
+        if (parser.nodeParentNode(n)) |p| {
             const parent_node = try self.registry.register(p);
             try w.objectField("parentId");
             try w.write(parent_node.id);
@@ -295,7 +295,7 @@ pub const Writer = struct {
         }
 
         try w.objectField("nodeType");
-        try w.write(@intFromEnum(try parser.nodeType(n)));
+        try w.write(@intFromEnum(parser.nodeType(n)));
 
         try w.objectField("nodeName");
         try w.write(try parser.nodeName(n));
@@ -304,12 +304,12 @@ pub const Writer = struct {
         try w.write(try parser.nodeLocalName(n));
 
         try w.objectField("nodeValue");
-        try w.write((try parser.nodeValue(n)) orelse "");
+        try w.write((parser.nodeValue(n)) orelse "");
 
         if (include_child_count) {
             try w.objectField("childNodeCount");
             const child_nodes = try parser.nodeGetChildNodes(n);
-            try w.write(try parser.nodeListLength(child_nodes));
+            try w.write(parser.nodeListLength(child_nodes));
         }
 
         try w.objectField("documentURL");

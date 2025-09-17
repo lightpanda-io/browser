@@ -18,7 +18,6 @@
 
 const std = @import("std");
 
-const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 const Page = @import("../page.zig").Page;
 

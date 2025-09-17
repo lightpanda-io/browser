@@ -46,17 +46,15 @@ pub fn parse(alloc: std.mem.Allocator, s: []const u8, opts: parser.ParseOptions)
 // matchFirst call m.match with the first node that matches the selector s, from the
 // descendants of n and returns true. If none matches, it returns false.
 pub fn matchFirst(s: *const Selector, node: anytype, m: anytype) !bool {
-    var c = try node.firstChild();
-    while (true) {
-        if (c == null) break;
-
-        if (try s.match(c.?)) {
-            try m.match(c.?);
+    var child = node.firstChild();
+    while (child) |c| {
+        if (try s.match(c)) {
+            try m.match(c);
             return true;
         }
 
-        if (try matchFirst(s, c.?, m)) return true;
-        c = try c.?.nextSibling();
+        if (try matchFirst(s, c, m)) return true;
+        child = c.nextSibling();
     }
     return false;
 }
@@ -64,13 +62,11 @@ pub fn matchFirst(s: *const Selector, node: anytype, m: anytype) !bool {
 // matchAll call m.match with the all the nodes that matches the selector s, from the
 // descendants of n.
 pub fn matchAll(s: *const Selector, node: anytype, m: anytype) !void {
-    var c = try node.firstChild();
-    while (true) {
-        if (c == null) break;
-
-        if (try s.match(c.?)) try m.match(c.?);
-        try matchAll(s, c.?, m);
-        c = try c.?.nextSibling();
+    var child = node.firstChild();
+    while (child) |c| {
+        if (try s.match(c)) try m.match(c);
+        try matchAll(s, c, m);
+        child = c.nextSibling();
     }
 }
 
