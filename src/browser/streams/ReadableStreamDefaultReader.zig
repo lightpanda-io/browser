@@ -56,7 +56,7 @@ pub fn _read(self: *const ReadableStreamDefaultReader, page: *Page) !Env.Promise
                 if (self.stream.reader_resolver) |rr| {
                     return rr.promise();
                 } else {
-                    const persistent_resolver = page.main_context.createPersistentPromiseResolver();
+                    const persistent_resolver = try page.main_context.createPersistentPromiseResolver();
                     self.stream.reader_resolver = persistent_resolver;
                     return persistent_resolver.promise();
                 }
