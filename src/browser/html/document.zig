@@ -115,67 +115,69 @@ pub const HTMLDocument = struct {
     }
 
     pub fn _getElementsByName(self: *parser.DocumentHTML, name: []const u8, page: *Page) !NodeList {
-        const arena = page.arena;
         var list: NodeList = .{};
 
-        if (name.len == 0) return list;
+        if (name.len == 0) {
+            return list;
+        }
 
         const root = parser.documentHTMLToNode(self);
-        var c = try collection.HTMLCollectionByName(arena, root, name, .{
+        var c = try collection.HTMLCollectionByName(root, name, .{
             .include_root = false,
         });
 
         const ln = try c.get_length();
+        try list.ensureTotalCapacity(page.arena, ln);
+
         var i: u32 = 0;
-        while (i < ln) {
+        while (i < ln) : (i += 1) {
             const n = try c.item(i) orelse break;
-            try list.append(arena, n);
-            i += 1;
+            list.appendAssumeCapacity(n);
         }
 
         return list;
     }
 
-    pub fn get_images(self: *parser.DocumentHTML, page: *Page) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(page.arena, parser.documentHTMLToNode(self), "img", .{
+    pub fn get_images(self: *parser.DocumentHTML) collection.HTMLCollection {
+        return collection.HTMLCollectionByTagName(parser.documentHTMLToNode(self), "img", .{
             .include_root = false,
         });
     }
 
-    pub fn get_embeds(self: *parser.DocumentHTML, page: *Page) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(page.arena, parser.documentHTMLToNode(self), "embed", .{
+    pub fn get_embeds(self: *parser.DocumentHTML) collection.HTMLCollection {
+        return collection.HTMLCollectionByTagName(parser.documentHTMLToNode(self), "embed", .{
             .include_root = false,
         });
     }
 
-    pub fn get_plugins(self: *parser.DocumentHTML, page: *Page) !collection.HTMLCollection {
-        return get_embeds(self, page);
+    pub fn get_plugins(self: *parser.DocumentHTML) collection.HTMLCollection {
+        return get_embeds(self);
     }
 
-    pub fn get_forms(self: *parser.DocumentHTML, page: *Page) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(page.arena, parser.documentHTMLToNode(self), "form", .{
+    pub fn get_forms(self: *parser.DocumentHTML) collection.HTMLCollection {
+        return collection.HTMLCollectionByTagName(parser.documentHTMLToNode(self), "form", .{
             .include_root = false,
         });
     }
 
-    pub fn get_scripts(self: *parser.DocumentHTML, page: *Page) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(page.arena, parser.documentHTMLToNode(self), "script", .{
+    pub fn get_scripts(self: *parser.DocumentHTML) collection.HTMLCollection {
+        return collection.HTMLCollectionByTagName(parser.documentHTMLToNode(self), "script", .{
             .include_root = false,
         });
     }
 
-    pub fn get_applets(_: *parser.DocumentHTML) !collection.HTMLCollection {
-        return try collection.HTMLCollectionEmpty();
+    pub fn get_applets(_: *parser.DocumentHTML) collection.HTMLCollection {
+        return collection.HTMLCollectionEmpty();
     }
 
-    pub fn get_links(self: *parser.DocumentHTML) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByLinks(parser.documentHTMLToNode(self), .{
+    pub fn get_links(self: *parser.DocumentHTML) collection.HTMLCollection {
+        return collection.HTMLCollectionByLinks(parser.documentHTMLToNode(self), .{
             .include_root = false,
         });
     }
 
-    pub fn get_anchors(self: *parser.DocumentHTML) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByAnchors(parser.documentHTMLToNode(self), .{
+    pub fn get_anchors(self: *parser.DocumentHTML) collection.HTMLCollection {
+        return collection.HTMLCollectionByAnchors(parser.documentHTMLToNode(self), .{
             .include_root = false,
         });
     }

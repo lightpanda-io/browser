@@ -246,10 +246,10 @@ pub const Window = struct {
         return self.createTimeout(cbk, 0, page, .{ .name = "queueMicrotask" });
     }
 
-    pub fn _matchMedia(_: *const Window, media: []const u8, page: *Page) !MediaQueryList {
+    pub fn _matchMedia(_: *const Window, media: Env.String) !MediaQueryList {
         return .{
             .matches = false, // TODO?
-            .media = try page.arena.dupe(u8, media),
+            .media = media.string,
         };
     }
 
