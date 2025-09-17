@@ -244,7 +244,14 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, msg: *const Notification.
 
     const transfer = msg.transfer;
     // We're missing a bunch of fields, but, for now, this seems like enough
-    try bc.cdp.sendEvent("Network.requestWillBeSent", .{ .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id}), .frameId = target_id, .loaderId = bc.loader_id, .documentUrl = DocumentUrlWriter.init(&page.url.uri), .request = TransferAsRequestWriter.init(transfer) }, .{ .session_id = session_id });
+    try bc.cdp.sendEvent("Network.requestWillBeSent", .{
+        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id}),
+        .frameId = target_id,
+        .loaderId = bc.loader_id,
+        .documentUrl = DocumentUrlWriter.init(&page.url.uri),
+        .request = TransferAsRequestWriter.init(transfer),
+        .initiator = .{ .type = "other" },
+    }, .{ .session_id = session_id });
 }
 
 pub fn httpResponseHeaderDone(arena: Allocator, bc: anytype, msg: *const Notification.ResponseHeaderDone) !void {

@@ -151,18 +151,18 @@ pub fn CDPT(comptime TypeProvider: type) type {
                 if (std.mem.eql(u8, input_session_id, "STARTUP")) {
                     is_startup = true;
                 } else if (self.isValidSessionId(input_session_id) == false) {
-                    return command.sendError(-32001, "Unknown sessionId");
+                    return command.sendError(-32001, "Unknown sessionId", .{});
                 }
             }
 
             if (is_startup) {
                 dispatchStartupCommand(&command) catch |err| {
-                    command.sendError(-31999, @errorName(err)) catch {};
+                    command.sendError(-31999, @errorName(err), .{}) catch {};
                     return err;
                 };
             } else {
                 dispatchCommand(&command, input.method) catch |err| {
-                    command.sendError(-31998, @errorName(err)) catch {};
+                    command.sendError(-31998, @errorName(err), .{}) catch {};
                     return err;
                 };
             }
@@ -331,7 +331,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         node_search_list: Node.Search.List,
 
         inspector: Inspector,
-        isolated_world: ?IsolatedWorld,
+        isolated_worlds: std.ArrayListUnmanaged(IsolatedWorld),
 
         http_proxy_changed: bool = false,
 
@@ -375,7 +375,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .page_life_cycle_events = false, // TODO; Target based value
                 .node_registry = registry,
                 .node_search_list = undefined,
-                .isolated_world = null,
+                .isolated_worlds = .empty,
                 .inspector = inspector,
                 .notification_arena = cdp.notification_arena.allocator(),
                 .intercept_state = try InterceptState.init(allocator),
@@ -404,9 +404,10 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             // so we need to shutdown the page one first.
             self.cdp.browser.closeSession();
 
-            if (self.isolated_world) |*world| {
+            for (self.isolated_worlds.items) |*world| {
                 world.deinit();
             }
+            self.isolated_worlds.clearRetainingCapacity();
             self.node_registry.deinit();
             self.node_search_list.deinit();
             self.cdp.browser.notification.unregisterAll(self);
@@ -427,19 +428,19 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         }
 
         pub fn createIsolatedWorld(self: *Self, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
-            if (self.isolated_world != null) {
-                return error.CurrentlyOnly1IsolatedWorldSupported;
-            }
-
             var executor = try self.cdp.browser.env.newExecutionWorld();
             errdefer executor.deinit();
 
-            self.isolated_world = .{
-                .name = try self.arena.dupe(u8, world_name),
+            const owned_name = try self.arena.dupe(u8, world_name);
+            const world = try self.isolated_worlds.addOne(self.arena);
+
+            world.* = .{
+                .name = owned_name,
                 .executor = executor,
                 .grant_universal_access = grant_universal_access,
             };
-            return &self.isolated_world.?;
+
+            return world;
         }
 
         pub fn nodeWriter(self: *Self, root: *const Node, opts: Node.Writer.Opts) Node.Writer {
@@ -682,7 +683,14 @@ const IsolatedWorld = struct {
     // This also means this pointer becomes invalid after removePage untill a new page is created.
     // Currently we have only 1 page/frame and thus also only 1 state in the isolate world.
     pub fn createContext(self: *IsolatedWorld, page: *Page) !void {
-        if (self.executor.js_context != null) return error.Only1IsolatedContextSupported;
+        // if (self.executor.js_context != null) return error.Only1IsolatedContextSupported;
+        if (self.executor.js_context != null) {
+            log.warn(.cdp, "not implemented", .{
+                .feature = "createContext: Not implemented second isolated context creation",
+                .info = "reuse existing context",
+            });
+            return;
+        }
         _ = try self.executor.createJsContext(
             &page.window,
             page,
@@ -690,6 +698,14 @@ const IsolatedWorld = struct {
             false,
             Env.GlobalMissingCallback.init(&self.polyfill_loader),
         );
+    }
+
+    pub fn createContextAndLoadPolyfills(self: *IsolatedWorld, arena: Allocator, page: *Page) !void {
+        // We need to recreate the isolated world context
+        try self.createContext(page);
+
+        const loader = @import("../browser/polyfill/polyfill.zig");
+        try loader.preload(arena, &self.executor.js_context.?);
     }
 };
 
@@ -757,10 +773,14 @@ pub fn Command(comptime CDP_T: type, comptime Sender: type) type {
             return self.cdp.sendEvent(method, p, opts);
         }
 
-        pub fn sendError(self: *Self, code: i32, message: []const u8) !void {
+        const SendErrorOpts = struct {
+            include_session_id: bool = true,
+        };
+        pub fn sendError(self: *Self, code: i32, message: []const u8, opts: SendErrorOpts) !void {
             return self.sender.sendJSON(.{
                 .id = self.input.id,
                 .@"error" = .{ .code = code, .message = message },
+                .sessionId = if (opts.include_session_id) self.input.session_id else null,
             });
         }
 

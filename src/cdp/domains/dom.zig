@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const log = @import("../../log.zig");
 const Allocator = std.mem.Allocator;
 const Node = @import("../Node.zig");
 const css = @import("../../browser/dom/css.zig");
@@ -39,6 +40,7 @@ pub fn processMessage(cmd: anytype) !void {
         getContentQuads,
         getBoxModel,
         requestChildNodes,
+        getFrameOwner,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -55,6 +57,7 @@ pub fn processMessage(cmd: anytype) !void {
         .getContentQuads => return getContentQuads(cmd),
         .getBoxModel => return getBoxModel(cmd),
         .requestChildNodes => return requestChildNodes(cmd),
+        .getFrameOwner => return getFrameOwner(cmd),
     }
 }
 
@@ -66,6 +69,10 @@ fn getDocument(cmd: anytype) !void {
         pierce: bool = false,
     };
     const params = try cmd.params(Params) orelse Params{};
+
+    if (params.pierce) {
+        log.warn(.cdp, "not implemented", .{ .feature = "DOM.getDocument: Not implemented pierce parameter" });
+    }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
@@ -206,7 +213,9 @@ fn querySelector(cmd: anytype) !void {
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-    const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse return error.UnknownNode;
+    const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse {
+        return cmd.sendError(-32000, "Could not find node with given id", .{});
+    };
 
     const selected_node = try css.querySelector(
         cmd.arena,
@@ -233,7 +242,9 @@ fn querySelectorAll(cmd: anytype) !void {
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-    const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse return error.UnknownNode;
+    const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse {
+        return cmd.sendError(-32000, "Could not find node with given id", .{});
+    };
 
     const arena = cmd.arena;
     const selected_nodes = try css.querySelectorAll(arena, node._node, params.selector);
@@ -266,10 +277,12 @@ fn resolveNode(cmd: anytype) !void {
     var js_context = page.main_context;
     if (params.executionContextId) |context_id| {
         if (js_context.v8_context.debugContextId() != context_id) {
-            var isolated_world = bc.isolated_world orelse return error.ContextNotFound;
-            js_context = &(isolated_world.executor.js_context orelse return error.ContextNotFound);
-
-            if (js_context.v8_context.debugContextId() != context_id) return error.ContextNotFound;
+            for (bc.isolated_worlds.items) |*isolated_world| {
+                js_context = &(isolated_world.executor.js_context orelse return error.ContextNotFound);
+                if (js_context.v8_context.debugContextId() == context_id) {
+                    break;
+                }
+            } else return error.ContextNotFound;
         }
     }
 
@@ -300,16 +313,18 @@ fn describeNode(cmd: anytype) !void {
         nodeId: ?Node.Id = null,
         backendNodeId: ?Node.Id = null,
         objectId: ?[]const u8 = null,
-        depth: u32 = 1,
+        depth: i32 = 1,
         pierce: bool = false,
     })) orelse return error.InvalidParams;
 
-    if (params.depth != 1 or params.pierce) return error.NotImplemented;
+    if (params.pierce) {
+        log.warn(.cdp, "not implemented", .{ .feature = "DOM.describeNode: Not implemented pierce parameter" });
+    }
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
 
-    return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{}) }, .{});
+    return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{ .depth = params.depth }) }, .{});
 }
 
 // An array of quad vertices, x immediately followed by y for each point, points clock-wise.
@@ -461,6 +476,24 @@ fn requestChildNodes(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
+fn getFrameOwner(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        frameId: []const u8,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const target_id = bc.target_id orelse return error.TargetNotLoaded;
+    if (std.mem.eql(u8, target_id, params.frameId) == false) {
+        return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
+    }
+
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const doc = parser.documentHTMLToDocument(page.window.document);
+
+    const node = try bc.node_registry.register(parser.documentToNode(doc));
+    return cmd.sendResult(.{ .nodeId = node.id, .backendNodeId = node.id }, .{});
+}
+
 const testing = @import("../testing.zig");
 
 test "cdp.dom: getSearchResults unknown search id" {
@@ -534,16 +567,19 @@ test "cdp.dom: querySelector unknown search id" {
 
     _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .html = "<p>1</p> <p>2</p>" });
 
-    try testing.expectError(error.UnknownNode, ctx.processMessage(.{
+    try ctx.processMessage(.{
         .id = 9,
         .method = "DOM.querySelector",
         .params = .{ .nodeId = 99, .selector = "" },
-    }));
-    try testing.expectError(error.UnknownNode, ctx.processMessage(.{
+    });
+    try ctx.expectSentError(-32000, "Could not find node with given id", .{});
+
+    try ctx.processMessage(.{
         .id = 9,
         .method = "DOM.querySelectorAll",
         .params = .{ .nodeId = 99, .selector = "" },
-    }));
+    });
+    try ctx.expectSentError(-32000, "Could not find node with given id", .{});
 }
 
 test "cdp.dom: querySelector Node not found" {
