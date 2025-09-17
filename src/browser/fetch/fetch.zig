@@ -101,7 +101,7 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
 
     try page.requestCookie(.{}).headersForRequest(arena, req.url, &headers);
 
-    const resolver = page.main_context.createPersistentPromiseResolver();
+    const resolver = try page.main_context.createPersistentPromiseResolver(.page);
 
     const fetch_ctx = try arena.create(FetchContext);
     fetch_ctx.* = .{
@@ -170,7 +170,6 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
         .done_callback = struct {
             fn doneCallback(ctx: *anyopaque) !void {
                 const self: *FetchContext = @ptrCast(@alignCast(ctx));
-                defer self.promise_resolver.deinit();
                 self.transfer = null;
 
                 log.info(.fetch, "request complete", .{
@@ -187,7 +186,6 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
         .error_callback = struct {
             fn errorCallback(ctx: *anyopaque, err: anyerror) void {
                 const self: *FetchContext = @ptrCast(@alignCast(ctx));
-                defer self.promise_resolver.deinit();
                 self.transfer = null;
 
                 log.err(.fetch, "error", .{

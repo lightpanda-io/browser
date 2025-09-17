@@ -677,6 +677,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // we now simply persist every time persist() is called.
             js_object_list: std.ArrayListUnmanaged(PersistentObject) = .empty,
 
+            // Various web APIs depend on having a persistent promise resolver. They
+            // require for this PromiseResolver to be valid for a lifetime longer than
+            // the function that resolves/rejects them.
+            persisted_promise_resolvers: std.ArrayListUnmanaged(v8.Persistent(v8.PromiseResolver)) = .empty,
+
             // When we need to load a resource (i.e. an external script), we call
             // this function to get the source. This is always a reference to the
             // Page's fetchModuleSource, but we use a function pointer
@@ -730,6 +735,10 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 }
 
                 for (self.js_object_list.items) |*p| {
+                    p.deinit();
+                }
+
+                for (self.persisted_promise_resolvers.items) |*p| {
                     p.deinit();
                 }
 
@@ -1261,11 +1270,20 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 };
             }
 
-            pub fn createPersistentPromiseResolver(self: *JsContext) PersistentPromiseResolver {
-                return .{
-                    .js_context = self,
-                    .resolver = v8.Persistent(v8.PromiseResolver).init(self.isolate, v8.PromiseResolver.init(self.v8_context)),
-                };
+            // creates a PersistentPromiseResolver, taking in a lifetime parameter.
+            // If the lifetime is page, the page will clean up the PersistentPromiseResolver.
+            // If the lifetime is self, you will be expected to deinitalize the PersistentPromiseResolver.
+            pub fn createPersistentPromiseResolver(
+                self: *JsContext,
+                lifetime: enum { self, page },
+            ) !PersistentPromiseResolver {
+                const resolver = v8.Persistent(v8.PromiseResolver).init(self.isolate, v8.PromiseResolver.init(self.v8_context));
+
+                if (lifetime == .page) {
+                    try self.persisted_promise_resolvers.append(self.context_arena, resolver);
+                }
+
+                return .{ .js_context = self, .resolver = resolver };
             }
 
             // Probing is part of trying to map a JS value to a Zig union. There's

@@ -40,7 +40,6 @@ pub fn _close(self: *ReadableStreamDefaultController, _reason: ?[]const u8, page
 
     // Resolve the Reader Promise
     if (self.stream.reader_resolver) |*rr| {
-        defer rr.deinit();
         try rr.resolve(ReadableStreamReadResult{ .value = .empty, .done = true });
         self.stream.reader_resolver = null;
     }
@@ -62,7 +61,6 @@ pub fn _enqueue(self: *ReadableStreamDefaultController, chunk: []const u8, page:
     const duped_chunk = try page.arena.dupe(u8, chunk);
 
     if (self.stream.reader_resolver) |*rr| {
-        defer rr.deinit();
         try rr.resolve(ReadableStreamReadResult{ .value = .{ .data = duped_chunk }, .done = false });
         self.stream.reader_resolver = null;
     }
@@ -75,7 +73,6 @@ pub fn _error(self: *ReadableStreamDefaultController, err: Env.JsObject) !void {
     self.stream.state = .{ .errored = err };
 
     if (self.stream.reader_resolver) |*rr| {
-        defer rr.deinit();
         try rr.reject(err);
         self.stream.reader_resolver = null;
     }

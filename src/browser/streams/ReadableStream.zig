@@ -78,11 +78,15 @@ const QueueingStrategy = struct {
 pub fn constructor(underlying: ?UnderlyingSource, _strategy: ?QueueingStrategy, page: *Page) !*ReadableStream {
     const strategy: QueueingStrategy = _strategy orelse .{};
 
-    const cancel_resolver = page.main_context.createPersistentPromiseResolver();
-    const closed_resolver = page.main_context.createPersistentPromiseResolver();
+    const cancel_resolver = try page.main_context.createPersistentPromiseResolver(.self);
+    const closed_resolver = try page.main_context.createPersistentPromiseResolver(.self);
 
     const stream = try page.arena.create(ReadableStream);
-    stream.* = ReadableStream{ .cancel_resolver = cancel_resolver, .closed_resolver = closed_resolver, .strategy = strategy };
+    stream.* = ReadableStream{
+        .cancel_resolver = cancel_resolver,
+        .closed_resolver = closed_resolver,
+        .strategy = strategy,
+    };
 
     const controller = ReadableStreamDefaultController{ .stream = stream };
 
@@ -108,10 +112,7 @@ pub fn constructor(underlying: ?UnderlyingSource, _strategy: ?QueueingStrategy, 
 pub fn destructor(self: *ReadableStream) void {
     self.cancel_resolver.deinit();
     self.closed_resolver.deinit();
-
-    if (self.reader_resolver) |*rr| {
-        rr.deinit();
-    }
+    // reader resolver is scoped to the page lifetime and is cleaned up by it.
 }
 
 pub fn get_locked(self: *const ReadableStream) bool {
