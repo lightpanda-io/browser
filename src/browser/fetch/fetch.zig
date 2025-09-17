@@ -170,7 +170,7 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
         .done_callback = struct {
             fn doneCallback(ctx: *anyopaque) !void {
                 const self: *FetchContext = @ptrCast(@alignCast(ctx));
-                defer self.promise_resolver.deinit();
+                defer self.promise_resolver.setWeak();
                 self.transfer = null;
 
                 log.info(.fetch, "request complete", .{
@@ -187,7 +187,7 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
         .error_callback = struct {
             fn errorCallback(ctx: *anyopaque, err: anyerror) void {
                 const self: *FetchContext = @ptrCast(@alignCast(ctx));
-                defer self.promise_resolver.deinit();
+                defer self.promise_resolver.setWeak();
                 self.transfer = null;
 
                 log.err(.fetch, "error", .{

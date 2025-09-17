@@ -2246,6 +2246,10 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 self.resolver.deinit();
             }
 
+            pub fn setWeak(self: *PersistentPromiseResolver) void {
+                self.resolver.setWeak();
+            }
+
             pub fn promise(self: PersistentPromiseResolver) Promise {
                 return .{
                     .promise = self.resolver.castToPromiseResolver().getPromise(),
