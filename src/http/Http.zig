@@ -102,6 +102,10 @@ pub fn newConnection(self: *Http) !Connection {
     return Connection.init(self.ca_blob, &self.opts);
 }
 
+pub fn newHeaders(self: *const Http) Headers {
+    return Headers.init(self.opts.user_agent);
+}
+
 pub const Connection = struct {
     easy: *c.CURL,
     opts: Connection.Opts,
@@ -259,8 +263,8 @@ pub const Headers = struct {
     headers: *c.curl_slist,
     cookies: ?[*c]const u8,
 
-    pub fn init() !Headers {
-        const header_list = c.curl_slist_append(null, "User-Agent: Lightpanda/1.0");
+    pub fn init(user_agent: [:0]const u8) !Headers {
+        const header_list = c.curl_slist_append(null, user_agent);
         if (header_list == null) return error.OutOfMemory;
         return .{ .headers = header_list, .cookies = null };
     }
@@ -337,6 +341,7 @@ pub const Opts = struct {
     tls_verify_host: bool = true,
     http_proxy: ?[:0]const u8 = null,
     proxy_bearer_token: ?[:0]const u8 = null,
+    user_agent: [:0]const u8,
 };
 
 pub const Method = enum {

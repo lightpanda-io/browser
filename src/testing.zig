@@ -493,6 +493,7 @@ pub fn setup() !void {
     test_app = try App.init(gpa.allocator(), .{
         .run_mode = .serve,
         .tls_verify_host = false,
+        .user_agent = "User-Agent: Lightpanda/1.0 internal-tester",
     });
     errdefer test_app.deinit();
 

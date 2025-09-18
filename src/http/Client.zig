@@ -96,6 +96,9 @@ notification: ?*Notification = null,
 // restoring, this originally-configured value is what it goes to.
 http_proxy: ?[:0]const u8 = null,
 
+// The complete user-agent header line
+user_agent: [:0]const u8,
+
 // libcurl can monitor arbitrary sockets. Currently, we ever [maybe] want to
 // monitor the CDP client socket, so we've done the simplest thing possible
 // by having this single optional field
@@ -130,6 +133,7 @@ pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts) !*Clie
         .blocking = blocking,
         .allocator = allocator,
         .http_proxy = opts.http_proxy,
+        .user_agent = opts.user_agent,
         .transfer_pool = transfer_pool,
     };
 
@@ -145,6 +149,10 @@ pub fn deinit(self: *Client) void {
 
     self.transfer_pool.deinit();
     self.allocator.destroy(self);
+}
+
+pub fn newHeaders(self: *const Client) !Http.Headers {
+    return Http.Headers.init(self.user_agent);
 }
 
 pub fn abort(self: *Client) void {
@@ -796,7 +804,7 @@ pub const Transfer = struct {
         self.req.headers.deinit();
 
         var buf: std.ArrayListUnmanaged(u8) = .empty;
-        var new_headers = try Http.Headers.init();
+        var new_headers = try self.client.newHeaders();
         for (headers) |hdr| {
             // safe to re-use this buffer, because Headers.add because curl copies
             // the value we pass into curl_slist_append.

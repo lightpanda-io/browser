@@ -205,7 +205,7 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
 
     errdefer pending_script.deinit();
 
-    var headers = try Http.Headers.init();
+    var headers = try self.client.newHeaders();
     try page.requestCookie(.{}).headersForRequest(page.arena, remote_url.?, &headers);
 
     try self.client.request(.{
@@ -273,7 +273,7 @@ pub fn blockingGet(self: *ScriptManager, url: [:0]const u8) !BlockingResult {
         .buffer_pool = &self.buffer_pool,
     };
 
-    var headers = try Http.Headers.init();
+    var headers = try self.client.newHeaders();
     try self.page.requestCookie(.{}).headersForRequest(self.page.arena, url, &headers);
 
     var client = self.client;
