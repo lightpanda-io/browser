@@ -49,7 +49,7 @@ const Opts = struct {
     filter_scopes: []const Scope = &.{},
 };
 
-pub var opts = Opts{};
+pub var opts = Opts{ .level = .info, .format = .pretty };
 
 // synchronizes writes to the output
 var out_lock: Thread.Mutex = .{};
