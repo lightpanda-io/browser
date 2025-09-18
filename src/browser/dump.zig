@@ -226,7 +226,7 @@ fn writeEscapedAttributeValue(writer: anytype, value: []const u8) !void {
 
 const testing = std.testing;
 test "dump.writeHTML" {
-    try parser.init();
+    parser.init();
     defer parser.deinit();
 
     try testWriteHTML(

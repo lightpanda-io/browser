@@ -93,7 +93,7 @@ pub const Session = struct {
 
         // Start netsurf memory arena.
         // We need to init this early as JS event handlers may be registered through Runtime.evaluate before the first html doc is loaded
-        try parser.init();
+        parser.init();
 
         const page_arena = &self.browser.page_arena;
         _ = page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });

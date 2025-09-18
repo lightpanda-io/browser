@@ -54,7 +54,7 @@ pub const Mime = struct {
     };
 
     /// Returns the null-terminated charset value.
-    pub inline fn charsetString(mime: *const Mime) [:0]const u8 {
+    pub fn charsetString(mime: *const Mime) [:0]const u8 {
         return @ptrCast(&mime.charset);
     }
 
