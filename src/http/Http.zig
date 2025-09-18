@@ -112,6 +112,7 @@ pub const Connection = struct {
 
     const Opts = struct {
         proxy_bearer_token: ?[:0]const u8,
+        user_agent: [:0]const u8,
     };
 
     // pointer to opts is not stable, don't hold a reference to it!
@@ -172,6 +173,7 @@ pub const Connection = struct {
         return .{
             .easy = easy,
             .opts = .{
+                .user_agent = opts.user_agent,
                 .proxy_bearer_token = opts.proxy_bearer_token,
             },
         };
@@ -234,7 +236,7 @@ pub const Connection = struct {
     pub fn request(self: *const Connection) !u16 {
         const easy = self.easy;
 
-        var header_list = try Headers.init();
+        var header_list = try Headers.init(self.opts.user_agent);
         defer header_list.deinit();
         try self.secretHeaders(&header_list);
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPHEADER, header_list.headers));
