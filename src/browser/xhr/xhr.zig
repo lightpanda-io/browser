@@ -370,7 +370,7 @@ pub const XMLHttpRequest = struct {
             }
         }
 
-        var headers = try Http.Headers.init();
+        var headers = try page.http_client.newHeaders();
         for (self.headers.items) |hdr| {
             try headers.add(hdr);
         }

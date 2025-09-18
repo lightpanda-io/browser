@@ -548,7 +548,7 @@ pub const Page = struct {
         const owned_url = try self.arena.dupeZ(u8, request_url);
         self.url = try URL.parse(owned_url, null);
 
-        var headers = try Http.Headers.init();
+        var headers = try self.http_client.newHeaders();
         if (opts.header) |hdr| try headers.add(hdr);
         try self.requestCookie(.{ .is_navigation = true }).headersForRequest(self.arena, owned_url, &headers);
 

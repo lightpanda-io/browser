@@ -102,12 +102,17 @@ pub fn newConnection(self: *Http) !Connection {
     return Connection.init(self.ca_blob, &self.opts);
 }
 
+pub fn newHeaders(self: *const Http) Headers {
+    return Headers.init(self.opts.user_agent);
+}
+
 pub const Connection = struct {
     easy: *c.CURL,
     opts: Connection.Opts,
 
     const Opts = struct {
         proxy_bearer_token: ?[:0]const u8,
+        user_agent: [:0]const u8,
     };
 
     // pointer to opts is not stable, don't hold a reference to it!
@@ -168,6 +173,7 @@ pub const Connection = struct {
         return .{
             .easy = easy,
             .opts = .{
+                .user_agent = opts.user_agent,
                 .proxy_bearer_token = opts.proxy_bearer_token,
             },
         };
@@ -230,7 +236,7 @@ pub const Connection = struct {
     pub fn request(self: *const Connection) !u16 {
         const easy = self.easy;
 
-        var header_list = try Headers.init();
+        var header_list = try Headers.init(self.opts.user_agent);
         defer header_list.deinit();
         try self.secretHeaders(&header_list);
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPHEADER, header_list.headers));
@@ -259,8 +265,8 @@ pub const Headers = struct {
     headers: *c.curl_slist,
     cookies: ?[*c]const u8,
 
-    pub fn init() !Headers {
-        const header_list = c.curl_slist_append(null, "User-Agent: Lightpanda/1.0");
+    pub fn init(user_agent: [:0]const u8) !Headers {
+        const header_list = c.curl_slist_append(null, user_agent);
         if (header_list == null) return error.OutOfMemory;
         return .{ .headers = header_list, .cookies = null };
     }
@@ -337,6 +343,7 @@ pub const Opts = struct {
     tls_verify_host: bool = true,
     http_proxy: ?[:0]const u8 = null,
     proxy_bearer_token: ?[:0]const u8 = null,
+    user_agent: [:0]const u8,
 };
 
 pub const Method = enum {

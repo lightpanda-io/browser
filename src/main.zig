@@ -108,6 +108,14 @@ fn run(alloc: Allocator) !void {
         log.opts.filter_scopes = lfs;
     }
 
+    const user_agent = blk: {
+        const USER_AGENT = "User-Agent: Lightpanda/1.0";
+        if (args.userAgentSuffix()) |suffix| {
+            break :blk try std.fmt.allocPrintSentinel(args_arena.allocator(), "{s} {s}", .{ USER_AGENT, suffix }, 0);
+        }
+        break :blk USER_AGENT;
+    };
+
     // _app is global to handle graceful shutdown.
     _app = try App.init(alloc, .{
         .run_mode = args.mode,
@@ -118,6 +126,7 @@ fn run(alloc: Allocator) !void {
         .http_connect_timeout_ms = args.httpConnectTiemout(),
         .http_max_host_open = args.httpMaxHostOpen(),
         .http_max_concurrent = args.httpMaxConcurrent(),
+        .user_agent = user_agent,
     });
 
     const app = _app.?;
@@ -260,6 +269,13 @@ const Command = struct {
         };
     }
 
+    fn userAgentSuffix(self: *const Command) ?[]const u8 {
+        return switch (self.mode) {
+            inline .serve, .fetch => |opts| opts.common.user_agent_suffix,
+            else => unreachable,
+        };
+    }
+
     const Mode = union(App.RunMode) {
         help: bool, // false when being printed because of an error
         fetch: Fetch,
@@ -293,6 +309,7 @@ const Command = struct {
         log_level: ?log.Level = null,
         log_format: ?log.Format = null,
         log_filter_scopes: ?[]log.Scope = null,
+        user_agent_suffix: ?[]const u8 = null,
     };
 
     fn printUsageAndExit(self: *const Command, success: bool) void {
@@ -338,6 +355,9 @@ const Command = struct {
             \\--log_format    The log format: pretty or logfmt.
             \\                Defaults to
         ++ (if (builtin.mode == .Debug) " pretty." else " logfmt.") ++
+            \\
+            \\ --user_agent_suffix
+            \\                Suffix to append to the Lightpanda/X.Y User-Agent
             \\
         ;
 
@@ -710,6 +730,21 @@ fn parseCommonArg(
             });
         }
         common.log_filter_scopes = arr.items;
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--user_agent_suffix", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--user_agent_suffix" });
+            return error.InvalidArgument;
+        };
+        for (str) |c| {
+            if (!std.ascii.isPrint(c)) {
+                log.fatal(.app, "not printable character", .{ .arg = "--user_agent_suffix" });
+                return error.InvalidArgument;
+            }
+        }
+        common.user_agent_suffix = try allocator.dupe(u8, str);
         return true;
     }
 
