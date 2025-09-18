@@ -85,7 +85,7 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
     const arena = page.arena;
 
     const req = try Request.constructor(input, options, page);
-    var headers = try Http.Headers.init();
+    var headers = try Http.Headers.init(page.http_client.user_agent);
 
     // Copy our headers into the HTTP headers.
     var header_iter = req.headers.headers.iterator();
