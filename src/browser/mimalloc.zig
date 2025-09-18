@@ -26,14 +26,9 @@ const c = @cImport({
     @cInclude("mimalloc.h");
 });
 
-const Error = error{
-    HeapNotNull,
-    HeapNull,
-};
-
 var heap: ?*c.mi_heap_t = null;
 
-pub fn create() Error!void {
+pub fn create() void {
     std.debug.assert(heap == null);
     heap = c.mi_heap_new();
     std.debug.assert(heap != null);

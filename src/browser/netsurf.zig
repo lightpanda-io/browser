@@ -36,8 +36,8 @@ const mimalloc = @import("mimalloc.zig");
 // init initializes netsurf lib.
 // init starts a mimalloc heap arena for the netsurf session. The caller must
 // call deinit() to free the arena memory.
-pub fn init() !void {
-    try mimalloc.create();
+pub fn init() void {
+    mimalloc.create();
 }
 
 // deinit frees the mimalloc heap arena memory.
@@ -84,7 +84,7 @@ pub fn deinit() void {
 // - VtableT: the type of the vtable (dom_node_vtable, dom_element_vtable, etc)
 // - NodeT: the type of the node interface (dom_element, dom_document, etc)
 // - node: the node interface instance
-inline fn getVtable(comptime VtableT: type, comptime NodeT: type, node: anytype) VtableT {
+fn getVtable(comptime VtableT: type, comptime NodeT: type, node: anytype) VtableT {
     // first align correctly the node interface
     const node_aligned: *align(@alignOf(NodeExternal)) NodeT = @alignCast(node);
     // then convert the node interface to a base node
@@ -101,12 +101,12 @@ inline fn getVtable(comptime VtableT: type, comptime NodeT: type, node: anytype)
 // Utils
 const String = c.dom_string;
 
-inline fn strToData(s: *String) []const u8 {
+fn strToData(s: *String) []const u8 {
     const data = c.dom_string_data(s);
     return data[0..c.dom_string_byte_length(s)];
 }
 
-pub inline fn strFromData(data: []const u8) !*String {
+pub fn strFromData(data: []const u8) !*String {
     var s: ?*String = null;
     const err = c.dom_string_create(data.ptr, data.len, &s);
     try DOMErr(err);
@@ -116,10 +116,10 @@ pub inline fn strFromData(data: []const u8) !*String {
 const LWCString = c.lwc_string;
 
 // TODO implement lwcStringToData
-// inline fn lwcStringToData(s: *LWCString) []const u8 {
+// fn lwcStringToData(s: *LWCString) []const u8 {
 // }
 
-inline fn lwcStringFromData(data: []const u8) !*LWCString {
+fn lwcStringFromData(data: []const u8) !*LWCString {
     var s: ?*LWCString = null;
     const err = c.lwc_intern_string(data.ptr, data.len, &s);
     try DOMErr(err);
@@ -1460,12 +1460,12 @@ pub fn nodeGetElementById(node: *Node, id: []const u8) !?*Element {
 }
 
 // nodeToElement is an helper to convert a node to an element.
-pub inline fn nodeToElement(node: *Node) *Element {
+pub fn nodeToElement(node: *Node) *Element {
     return @as(*Element, @ptrCast(node));
 }
 
 // nodeToDocument is an helper to convert a node to an document.
-pub inline fn nodeToDocument(node: *Node) *Document {
+pub fn nodeToDocument(node: *Node) *Document {
     return @as(*Document, @ptrCast(node));
 }
 
@@ -1485,7 +1485,7 @@ fn characterDataVtable(data: *CharacterData) c.dom_characterdata_vtable {
     return getVtable(c.dom_characterdata_vtable, CharacterData, data);
 }
 
-pub inline fn characterDataToNode(cdata: *CharacterData) *Node {
+pub fn characterDataToNode(cdata: *CharacterData) *Node {
     return @as(*Node, @ptrCast(@alignCast(cdata)));
 }
 
@@ -1570,7 +1570,7 @@ pub const Comment = c.dom_comment;
 pub const ProcessingInstruction = c.dom_processing_instruction;
 
 // processingInstructionToNode is an helper to convert an ProcessingInstruction to a node.
-pub inline fn processingInstructionToNode(pi: *ProcessingInstruction) *Node {
+pub fn processingInstructionToNode(pi: *ProcessingInstruction) *Node {
     return @as(*Node, @ptrCast(@alignCast(pi)));
 }
 
@@ -1625,7 +1625,7 @@ pub fn attributeGetOwnerElement(a: *Attribute) !?*Element {
 }
 
 // attributeToNode is an helper to convert an attribute to a node.
-pub inline fn attributeToNode(a: *Attribute) *Node {
+pub fn attributeToNode(a: *Attribute) *Node {
     return @as(*Node, @ptrCast(@alignCast(a)));
 }
 
@@ -1787,7 +1787,7 @@ pub fn elementHasClass(elem: *Element, class: []const u8) !bool {
 }
 
 // elementToNode is an helper to convert an element to a node.
-pub inline fn elementToNode(e: *Element) *Node {
+pub fn elementToNode(e: *Element) *Node {
     return @as(*Node, @ptrCast(@alignCast(e)));
 }
 
@@ -1856,14 +1856,14 @@ fn elementHTMLVtable(elem_html: *ElementHTML) c.dom_html_element_vtable {
 // HTMLScriptElement
 
 // scriptToElt is an helper to convert an script to an element.
-pub inline fn scriptToElt(s: *Script) *Element {
+pub fn scriptToElt(s: *Script) *Element {
     return @as(*Element, @ptrCast(@alignCast(s)));
 }
 
 // HTMLAnchorElement
 
 // anchorToNode is an helper to convert an anchor to a node.
-pub inline fn anchorToNode(a: *Anchor) *Node {
+pub fn anchorToNode(a: *Anchor) *Node {
     return @as(*Node, @ptrCast(@alignCast(a)));
 }
 
@@ -2024,7 +2024,7 @@ pub const OptionCollection = c.dom_html_options_collection;
 // Document Fragment
 pub const DocumentFragment = c.dom_document_fragment;
 
-pub inline fn documentFragmentToNode(doc: *DocumentFragment) *Node {
+pub fn documentFragmentToNode(doc: *DocumentFragment) *Node {
     return @as(*Node, @ptrCast(@alignCast(doc)));
 }
 
@@ -2055,21 +2055,21 @@ fn documentTypeVtable(dt: *DocumentType) c.dom_document_type_vtable {
     return getVtable(c.dom_document_type_vtable, DocumentType, dt);
 }
 
-pub inline fn documentTypeGetName(dt: *DocumentType) ![]const u8 {
+pub fn documentTypeGetName(dt: *DocumentType) ![]const u8 {
     var s: ?*String = null;
     const err = documentTypeVtable(dt).dom_document_type_get_name.?(dt, &s);
     try DOMErr(err);
     return strToData(s.?);
 }
 
-pub inline fn documentTypeGetPublicId(dt: *DocumentType) []const u8 {
+pub fn documentTypeGetPublicId(dt: *DocumentType) []const u8 {
     var s: ?*String = null;
     const err = documentTypeVtable(dt).dom_document_type_get_public_id.?(dt, &s);
     std.debug.assert(err == c.DOM_NO_ERR);
     return strToData(s.?);
 }
 
-pub inline fn documentTypeGetSystemId(dt: *DocumentType) []const u8 {
+pub fn documentTypeGetSystemId(dt: *DocumentType) []const u8 {
     var s: ?*String = null;
     const err = documentTypeVtable(dt).dom_document_type_get_system_id.?(dt, &s);
     std.debug.assert(err == c.DOM_NO_ERR);
@@ -2077,7 +2077,7 @@ pub inline fn documentTypeGetSystemId(dt: *DocumentType) []const u8 {
 }
 
 // DOMImplementation
-pub inline fn domImplementationCreateDocument(
+pub fn domImplementationCreateDocument(
     namespace: ?[:0]const u8,
     qname: ?[:0]const u8,
     doctype: ?*DocumentType,
@@ -2107,7 +2107,7 @@ pub inline fn domImplementationCreateDocument(
     return doc.?;
 }
 
-pub inline fn domImplementationCreateDocumentType(
+pub fn domImplementationCreateDocumentType(
     qname: [:0]const u8,
     publicId: [:0]const u8,
     systemId: [:0]const u8,
@@ -2118,7 +2118,7 @@ pub inline fn domImplementationCreateDocumentType(
     return dt.?;
 }
 
-pub inline fn domImplementationCreateHTMLDocument(title: ?[]const u8) !*DocumentHTML {
+pub fn domImplementationCreateHTMLDocument(title: ?[]const u8) !*DocumentHTML {
     const doc_html = try documentCreateDocument(title);
     const doc = documentHTMLToDocument(doc_html);
 
@@ -2149,18 +2149,18 @@ fn documentVtable(doc: *Document) c.dom_document_vtable {
     return getVtable(c.dom_document_vtable, Document, doc);
 }
 
-pub inline fn documentToNode(doc: *Document) *Node {
+pub fn documentToNode(doc: *Document) *Node {
     return @as(*Node, @ptrCast(@alignCast(doc)));
 }
 
-pub inline fn documentGetElementById(doc: *Document, id: []const u8) !?*Element {
+pub fn documentGetElementById(doc: *Document, id: []const u8) !?*Element {
     var elem: ?*Element = null;
     const err = documentVtable(doc).dom_document_get_element_by_id.?(doc, try strFromData(id), &elem);
     try DOMErr(err);
     return elem;
 }
 
-pub inline fn documentGetElementsByTagName(doc: *Document, tagname: []const u8) !*NodeList {
+pub fn documentGetElementsByTagName(doc: *Document, tagname: []const u8) !*NodeList {
     var nlist: ?*NodeList = null;
     const err = documentVtable(doc).dom_document_get_elements_by_tag_name.?(doc, try strFromData(tagname), &nlist);
     try DOMErr(err);
@@ -2168,7 +2168,7 @@ pub inline fn documentGetElementsByTagName(doc: *Document, tagname: []const u8) 
 }
 
 // documentGetDocumentElement returns the root document element.
-pub inline fn documentGetDocumentElement(doc: *Document) !?*Element {
+pub fn documentGetDocumentElement(doc: *Document) !?*Element {
     var elem: ?*Element = null;
     const err = documentVtable(doc).dom_document_get_document_element.?(doc, &elem);
     try DOMErr(err);
@@ -2176,7 +2176,7 @@ pub inline fn documentGetDocumentElement(doc: *Document) !?*Element {
     return elem.?;
 }
 
-pub inline fn documentGetDocumentURI(doc: *Document) ![]const u8 {
+pub fn documentGetDocumentURI(doc: *Document) ![]const u8 {
     var s: ?*String = null;
     const err = documentVtable(doc).dom_document_get_uri.?(doc, &s);
     try DOMErr(err);
@@ -2188,19 +2188,19 @@ pub fn documentSetDocumentURI(doc: *Document, uri: []const u8) !void {
     try DOMErr(err);
 }
 
-pub inline fn documentGetInputEncoding(doc: *Document) ![]const u8 {
+pub fn documentGetInputEncoding(doc: *Document) ![]const u8 {
     var s: ?*String = null;
     const err = documentVtable(doc).dom_document_get_input_encoding.?(doc, &s);
     try DOMErr(err);
     return strToData(s.?);
 }
 
-pub inline fn documentSetInputEncoding(doc: *Document, enc: []const u8) !void {
+pub fn documentSetInputEncoding(doc: *Document, enc: []const u8) !void {
     const err = documentVtable(doc).dom_document_set_input_encoding.?(doc, try strFromData(enc));
     try DOMErr(err);
 }
 
-pub inline fn documentCreateDocument(title: ?[]const u8) !*DocumentHTML {
+pub fn documentCreateDocument(title: ?[]const u8) !*DocumentHTML {
     var doc: ?*Document = null;
     const err = c.dom_implementation_create_document(
         c.DOM_IMPLEMENTATION_HTML,
@@ -2267,42 +2267,42 @@ pub fn documentCreateElementNS(doc: *Document, ns: []const u8, tag_name: []const
     return elem.?;
 }
 
-pub inline fn documentGetDoctype(doc: *Document) !?*DocumentType {
+pub fn documentGetDoctype(doc: *Document) !?*DocumentType {
     var dt: ?*DocumentType = null;
     const err = documentVtable(doc).dom_document_get_doctype.?(doc, &dt);
     try DOMErr(err);
     return dt;
 }
 
-pub inline fn documentCreateDocumentFragment(doc: *Document) !*DocumentFragment {
+pub fn documentCreateDocumentFragment(doc: *Document) !*DocumentFragment {
     var df: ?*DocumentFragment = null;
     const err = documentVtable(doc).dom_document_create_document_fragment.?(doc, &df);
     try DOMErr(err);
     return df.?;
 }
 
-pub inline fn documentCreateTextNode(doc: *Document, s: []const u8) !*Text {
+pub fn documentCreateTextNode(doc: *Document, s: []const u8) !*Text {
     var txt: ?*Text = null;
     const err = documentVtable(doc).dom_document_create_text_node.?(doc, try strFromData(s), &txt);
     try DOMErr(err);
     return txt.?;
 }
 
-pub inline fn documentCreateCDATASection(doc: *Document, s: []const u8) !*CDATASection {
+pub fn documentCreateCDATASection(doc: *Document, s: []const u8) !*CDATASection {
     var cdata: ?*CDATASection = null;
     const err = documentVtable(doc).dom_document_create_cdata_section.?(doc, try strFromData(s), &cdata);
     try DOMErr(err);
     return cdata.?;
 }
 
-pub inline fn documentCreateComment(doc: *Document, s: []const u8) !*Comment {
+pub fn documentCreateComment(doc: *Document, s: []const u8) !*Comment {
     var com: ?*Comment = null;
     const err = documentVtable(doc).dom_document_create_comment.?(doc, try strFromData(s), &com);
     try DOMErr(err);
     return com.?;
 }
 
-pub inline fn documentCreateProcessingInstruction(doc: *Document, target: []const u8, data: []const u8) !*ProcessingInstruction {
+pub fn documentCreateProcessingInstruction(doc: *Document, target: []const u8, data: []const u8) !*ProcessingInstruction {
     var pi: ?*ProcessingInstruction = null;
     const err = documentVtable(doc).dom_document_create_processing_instruction.?(
         doc,
@@ -2314,7 +2314,7 @@ pub inline fn documentCreateProcessingInstruction(doc: *Document, target: []cons
     return pi.?;
 }
 
-pub inline fn documentImportNode(doc: *Document, node: *Node, deep: bool) !*Node {
+pub fn documentImportNode(doc: *Document, node: *Node, deep: bool) !*Node {
     var res: NodeExternal = undefined;
     const nodeext = toNodeExternal(Node, node);
     const err = documentVtable(doc).dom_document_import_node.?(doc, nodeext, deep, &res);
@@ -2322,7 +2322,7 @@ pub inline fn documentImportNode(doc: *Document, node: *Node, deep: bool) !*Node
     return @as(*Node, @ptrCast(@alignCast(res)));
 }
 
-pub inline fn documentAdoptNode(doc: *Document, node: *Node) !*Node {
+pub fn documentAdoptNode(doc: *Document, node: *Node) !*Node {
     var res: NodeExternal = undefined;
     const nodeext = toNodeExternal(Node, node);
     const err = documentVtable(doc).dom_document_adopt_node.?(doc, nodeext, &res);
@@ -2330,14 +2330,14 @@ pub inline fn documentAdoptNode(doc: *Document, node: *Node) !*Node {
     return @as(*Node, @ptrCast(@alignCast(res)));
 }
 
-pub inline fn documentCreateAttribute(doc: *Document, name: []const u8) !*Attribute {
+pub fn documentCreateAttribute(doc: *Document, name: []const u8) !*Attribute {
     var attr: ?*Attribute = null;
     const err = documentVtable(doc).dom_document_create_attribute.?(doc, try strFromData(name), &attr);
     try DOMErr(err);
     return attr.?;
 }
 
-pub inline fn documentCreateAttributeNS(doc: *Document, ns: []const u8, qname: []const u8) !*Attribute {
+pub fn documentCreateAttributeNS(doc: *Document, ns: []const u8, qname: []const u8) !*Attribute {
     var attr: ?*Attribute = null;
     const err = documentVtable(doc).dom_document_create_attribute_ns.?(
         doc,
@@ -2361,7 +2361,7 @@ pub fn documentSetScriptAddedCallback(
 pub const DocumentHTML = c.dom_html_document;
 
 // documentHTMLToNode is an helper to convert a documentHTML to an node.
-pub inline fn documentHTMLToNode(doc: *DocumentHTML) *Node {
+pub fn documentHTMLToNode(doc: *DocumentHTML) *Node {
     return @as(*Node, @ptrCast(@alignCast(doc)));
 }
 
@@ -2511,11 +2511,11 @@ pub fn documentHTMLClose(doc: *DocumentHTML) !void {
     try DOMErr(err);
 }
 
-pub inline fn documentHTMLToDocument(doc_html: *DocumentHTML) *Document {
+pub fn documentHTMLToDocument(doc_html: *DocumentHTML) *Document {
     return @as(*Document, @ptrCast(doc_html));
 }
 
-pub inline fn documentHTMLBody(doc_html: *DocumentHTML) !?*Body {
+pub fn documentHTMLBody(doc_html: *DocumentHTML) !?*Body {
     var body: ?*ElementHTML = null;
     const err = documentHTMLVtable(doc_html).get_body.?(doc_html, &body);
     try DOMErr(err);
@@ -2523,16 +2523,16 @@ pub inline fn documentHTMLBody(doc_html: *DocumentHTML) !?*Body {
     return @as(*Body, @ptrCast(body.?));
 }
 
-pub inline fn bodyToElement(body: *Body) *Element {
+pub fn bodyToElement(body: *Body) *Element {
     return @as(*Element, @ptrCast(@alignCast(body)));
 }
 
-pub inline fn documentHTMLSetBody(doc_html: *DocumentHTML, elt: ?*ElementHTML) !void {
+pub fn documentHTMLSetBody(doc_html: *DocumentHTML, elt: ?*ElementHTML) !void {
     const err = documentHTMLVtable(doc_html).set_body.?(doc_html, elt);
     try DOMErr(err);
 }
 
-pub inline fn documentHTMLGetReferrer(doc: *DocumentHTML) ![]const u8 {
+pub fn documentHTMLGetReferrer(doc: *DocumentHTML) ![]const u8 {
     var s: ?*String = null;
     const err = documentHTMLVtable(doc).get_referrer.?(doc, &s);
     try DOMErr(err);
@@ -2540,7 +2540,7 @@ pub inline fn documentHTMLGetReferrer(doc: *DocumentHTML) ![]const u8 {
     return strToData(s.?);
 }
 
-pub inline fn documentHTMLGetTitle(doc: *DocumentHTML) ![]const u8 {
+pub fn documentHTMLGetTitle(doc: *DocumentHTML) ![]const u8 {
     var s: ?*String = null;
     const err = documentHTMLVtable(doc).get_title.?(doc, &s);
     try DOMErr(err);
@@ -2548,7 +2548,7 @@ pub inline fn documentHTMLGetTitle(doc: *DocumentHTML) ![]const u8 {
     return strToData(s.?);
 }
 
-pub inline fn documentHTMLSetTitle(doc: *DocumentHTML, v: []const u8) !void {
+pub fn documentHTMLSetTitle(doc: *DocumentHTML, v: []const u8) !void {
     const err = documentHTMLVtable(doc).set_title.?(doc, try strFromData(v));
     try DOMErr(err);
 }

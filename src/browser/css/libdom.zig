@@ -136,7 +136,7 @@ const MatcherTest = struct {
 test "Browser.CSS.Libdom: matchFirst" {
     const alloc = std.testing.allocator;
 
-    try parser.init();
+    parser.init();
     defer parser.deinit();
 
     var matcher = MatcherTest.init(alloc);
@@ -281,7 +281,7 @@ test "Browser.CSS.Libdom: matchFirst" {
 test "Browser.CSS.Libdom: matchAll" {
     const alloc = std.testing.allocator;
 
-    try parser.init();
+    parser.init();
     defer parser.deinit();
 
     var matcher = MatcherTest.init(alloc);
