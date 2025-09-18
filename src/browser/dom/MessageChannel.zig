@@ -94,7 +94,6 @@ pub const MessagePort = struct {
 
         if (opts_ != null) {
             log.warn(.web_api, "not implemented", .{ .feature = "MessagePort postMessage options" });
-            return error.NotImplemented;
         }
 
         try self.pair.dispatchOrQueue(obj, page.arena);
