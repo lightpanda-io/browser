@@ -347,11 +347,7 @@ pub const Page = struct {
                         std.debug.assert(http_client.intercepted == 0);
 
                         const ms = ms_to_next_task orelse blk: {
-                            // TODO: when jsRunner is fully replaced with the
-                            // htmlRunner, we can remove the first part of this
-                            // condition. jsRunner calls `page.wait` far too
-                            // often to enforce this.
-                            if (wait_ms > 100 and wait_ms - ms_remaining < 100) {
+                            if (wait_ms - ms_remaining < 100) {
                                 // Look, we want to exit ASAP, but we don't want
                                 // to exit so fast that we've run none of the
                                 // background jobs.
