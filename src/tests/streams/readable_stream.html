@@ -1,0 +1,117 @@
+<script src="../testing.js"></script>
+
+<script id=readable_stream>
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue("hello");
+      controller.enqueue("world");
+      controller.close();
+    }
+  });
+
+  const reader = stream.getReader();
+
+  testing.async(reader.read(), (data) => {
+    testing.expectEqual("hello", data.value);
+    testing.expectEqual(false, data.done);
+  });
+</script>
+
+<script id=readable_stream_close>
+  var closeResult;
+
+  const stream1 = new ReadableStream({
+    start(controller) {
+      controller.enqueue("first");
+      controller.enqueue("second");
+      controller.close();
+    }
+  });
+
+  const reader1 = stream1.getReader();
+
+  testing.async(reader1.read(), (data) => {
+    testing.expectEqual("first", data.value);
+    testing.expectEqual(false, data.done);
+  });
+
+  testing.async(reader1.read(), (data) => {
+    testing.expectEqual("second", data.value);
+    testing.expectEqual(false, data.done);
+  });
+
+  testing.async(reader1.read(), (data) => {
+    testing.expectEqual(undefined, data.value);
+    testing.expectEqual(true, data.done);
+  });
+</script>
+
+<script id=readable_stream_cancel>
+  var readResult;
+  var cancelResult;
+  var closeResult;
+
+  const stream2 = new ReadableStream({
+    start(controller) {
+      controller.enqueue("data1");
+      controller.enqueue("data2");
+      controller.enqueue("data3");
+    },
+    cancel(reason) {
+      closeResult = `Stream cancelled: ${reason}`;
+    }
+  });
+
+  const reader2 = stream2.getReader();
+
+  testing.async(reader2.read(), (data) => {
+    testing.expectEqual("data1", data.value);
+    testing.expectEqual(false, data.done);
+  });
+
+  testing.async(reader2.cancel("user requested"), (result) => {
+    testing.expectEqual(undefined, result);
+    testing.expectEqual("Stream cancelled: user requested", closeResult);
+  });
+</script>
+
+<script id=readable_stream_cancel_no_reason>
+  var closeResult2;
+
+  const stream3 = new ReadableStream({
+    start(controller) {
+      controller.enqueue("test");
+    },
+    cancel(reason) {
+      closeResult2 = reason === undefined ? "no reason" : reason;
+    }
+  });
+
+  const reader3 = stream3.getReader();
+
+  testing.async(reader3.cancel(), (result) => {
+    testing.expectEqual(undefined, result);
+    testing.expectEqual("no reason", closeResult2);
+  });
+</script>
+
+<script id=readable_stream_read_after_cancel>
+  var readAfterCancelResult;
+
+  const stream4 = new ReadableStream({
+    start(controller) {
+      controller.enqueue("before_cancel");
+    },
+  });
+
+  const reader4 = stream4.getReader();
+
+  testing.async(reader4.cancel("test cancel"), (cancelResult) => {
+    testing.expectEqual(undefined, cancelResult);
+  });
+
+  testing.async(reader4.read(), (data) => {
+    testing.expectEqual(undefined, data.value);
+    testing.expectEqual(true, data.done);
+  });
+</script>

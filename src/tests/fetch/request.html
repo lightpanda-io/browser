@@ -1,0 +1,22 @@
+<script src="../testing.js"></script>
+
+<script id=request>
+  let request = new Request("flower.png");
+  testing.expectEqual("http://localhost:9582/src/tests/fetch/flower.png", request.url);
+  testing.expectEqual("GET", request.method);
+
+  let request2 = new Request("https://google.com", {
+    method: "POST",
+    body: "Hello, World",
+    cache: "reload",
+    credentials: "omit",
+    headers: { "Sender": "me", "Target": "you" }
+    }
+  );
+  testing.expectEqual("https://google.com", request2.url);
+  testing.expectEqual("POST", request2.method);
+  testing.expectEqual("omit", request2.credentials);
+  testing.expectEqual("reload", request2.cache);
+  testing.expectEqual("me", request2.headers.get("SeNdEr"));
+  testing.expectEqual("you", request2.headers.get("target"));
+</script>

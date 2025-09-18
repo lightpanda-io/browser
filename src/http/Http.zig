@@ -346,13 +346,13 @@ pub const Opts = struct {
     user_agent: [:0]const u8,
 };
 
-pub const Method = enum {
-    GET,
-    PUT,
-    POST,
-    DELETE,
-    HEAD,
-    OPTIONS,
+pub const Method = enum(u8) {
+    GET = 0,
+    PUT = 1,
+    POST = 2,
+    DELETE = 3,
+    HEAD = 4,
+    OPTIONS = 5,
 };
 
 // TODO: on BSD / Linux, we could just read the PEM file directly.

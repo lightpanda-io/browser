@@ -39,6 +39,7 @@ pub const Scope = enum {
     unknown_prop,
     web_api,
     xhr,
+    fetch,
     polyfill,
     mouse_event,
 };

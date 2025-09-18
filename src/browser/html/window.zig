@@ -39,6 +39,10 @@ const Css = @import("../css/css.zig").Css;
 const Function = Env.Function;
 const JsObject = Env.JsObject;
 
+const v8 = @import("v8");
+const Request = @import("../fetch/Request.zig");
+const fetchFn = @import("../fetch/fetch.zig").fetch;
+
 const storage = @import("../storage/storage.zig");
 
 // https://dom.spec.whatwg.org/#interface-window-extensions
@@ -93,6 +97,10 @@ pub const Window = struct {
 
     pub fn setStorageShelf(self: *Window, shelf: *storage.Shelf) void {
         self.storage_shelf = shelf;
+    }
+
+    pub fn _fetch(_: *Window, input: Request.RequestInput, options: ?Request.RequestInit, page: *Page) !Env.Promise {
+        return fetchFn(input, options, page);
     }
 
     pub fn get_window(self: *Window) *Window {

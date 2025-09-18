@@ -677,6 +677,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // we now simply persist every time persist() is called.
             js_object_list: std.ArrayListUnmanaged(PersistentObject) = .empty,
 
+            // Various web APIs depend on having a persistent promise resolver. They
+            // require for this PromiseResolver to be valid for a lifetime longer than
+            // the function that resolves/rejects them.
+            persisted_promise_resolvers: std.ArrayListUnmanaged(v8.Persistent(v8.PromiseResolver)) = .empty,
+
             // When we need to load a resource (i.e. an external script), we call
             // this function to get the source. This is always a reference to the
             // Page's fetchModuleSource, but we use a function pointer
@@ -730,6 +735,10 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 }
 
                 for (self.js_object_list.items) |*p| {
+                    p.deinit();
+                }
+
+                for (self.persisted_promise_resolvers.items) |*p| {
                     p.deinit();
                 }
 
@@ -1130,6 +1139,16 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         },
                         else => {},
                     },
+                    .array => |arr| {
+                        // Retrieve fixed-size array as slice
+                        const slice_type = []arr.child;
+                        const slice_value = try self.jsValueToZig(named_function, slice_type, js_value);
+                        if (slice_value.len != arr.len) {
+                            // Exact length match, we could allow smaller arrays, but we would not be able to communicate how many were written
+                            return error.InvalidArgument;
+                        }
+                        return @as(*T, @ptrCast(slice_value.ptr)).*;
+                    },
                     .@"struct" => {
                         return try (self.jsValueToStruct(named_function, T, js_value)) orelse {
                             return error.InvalidArgument;
@@ -1249,6 +1268,22 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     .js_context = self,
                     .resolver = v8.PromiseResolver.init(self.v8_context),
                 };
+            }
+
+            // creates a PersistentPromiseResolver, taking in a lifetime parameter.
+            // If the lifetime is page, the page will clean up the PersistentPromiseResolver.
+            // If the lifetime is self, you will be expected to deinitalize the PersistentPromiseResolver.
+            pub fn createPersistentPromiseResolver(
+                self: *JsContext,
+                lifetime: enum { self, page },
+            ) !PersistentPromiseResolver {
+                const resolver = v8.Persistent(v8.PromiseResolver).init(self.isolate, v8.PromiseResolver.init(self.v8_context));
+
+                if (lifetime == .page) {
+                    try self.persisted_promise_resolvers.append(self.context_arena, resolver);
+                }
+
+                return .{ .js_context = self, .resolver = resolver };
             }
 
             // Probing is part of trying to map a JS value to a Zig union. There's
@@ -1412,6 +1447,36 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             }
                         },
                         else => {},
+                    },
+                    .array => |arr| {
+                        // Retrieve fixed-size array as slice then probe
+                        const slice_type = []arr.child;
+                        switch (try self.probeJsValueToZig(named_function, slice_type, js_value)) {
+                            .value => |slice_value| {
+                                if (slice_value.len == arr.len) {
+                                    return .{ .value = @as(*T, @ptrCast(slice_value.ptr)).* };
+                                }
+                                return .{ .invalid = {} };
+                            },
+                            .ok => {
+                                // Exact length match, we could allow smaller arrays as .compatible, but we would not be able to communicate how many were written
+                                if (js_value.isArray()) {
+                                    const js_arr = js_value.castTo(v8.Array);
+                                    if (js_arr.length() == arr.len) {
+                                        return .{ .ok = {} };
+                                    }
+                                } else if (js_value.isString() and arr.child == u8) {
+                                    const str = try js_value.toString(self.v8_context);
+                                    if (str.lenUtf8(self.isolate) == arr.len) {
+                                        return .{ .ok = {} };
+                                    }
+                                }
+                                return .{ .invalid = {} };
+                            },
+                            .compatible => return .{ .compatible = {} },
+                            .coerce => return .{ .coerce = {} },
+                            .invalid => return .{ .invalid = {} },
+                        }
                     },
                     .@"struct" => {
                         // We don't want to duplicate the code for this, so we call
@@ -2176,6 +2241,54 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 const ok = self.resolver.resolve(js_context.v8_context, js_value) orelse return;
                 if (!ok) {
                     return error.FailedToResolvePromise;
+                }
+            }
+
+            pub fn reject(self: PromiseResolver, value: anytype) !void {
+                const js_context = self.js_context;
+                const js_value = try js_context.zigValueToJs(value);
+
+                // resolver.reject will return null if the promise isn't pending
+                const ok = self.resolver.reject(js_context.v8_context, js_value) orelse return;
+                if (!ok) {
+                    return error.FailedToRejectPromise;
+                }
+            }
+        };
+
+        pub const PersistentPromiseResolver = struct {
+            js_context: *JsContext,
+            resolver: v8.Persistent(v8.PromiseResolver),
+
+            pub fn deinit(self: *PersistentPromiseResolver) void {
+                self.resolver.deinit();
+            }
+
+            pub fn promise(self: PersistentPromiseResolver) Promise {
+                return .{
+                    .promise = self.resolver.castToPromiseResolver().getPromise(),
+                };
+            }
+
+            pub fn resolve(self: PersistentPromiseResolver, value: anytype) !void {
+                const js_context = self.js_context;
+                const js_value = try js_context.zigValueToJs(value);
+
+                // resolver.resolve will return null if the promise isn't pending
+                const ok = self.resolver.castToPromiseResolver().resolve(js_context.v8_context, js_value) orelse return;
+                if (!ok) {
+                    return error.FailedToResolvePromise;
+                }
+            }
+
+            pub fn reject(self: PersistentPromiseResolver, value: anytype) !void {
+                const js_context = self.js_context;
+                const js_value = try js_context.zigValueToJs(value);
+
+                // resolver.reject will return null if the promise isn't pending
+                const ok = self.resolver.castToPromiseResolver().reject(js_context.v8_context, js_value) orelse return;
+                if (!ok) {
+                    return error.FailedToRejectPromise;
                 }
             }
         };
