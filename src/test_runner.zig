@@ -35,7 +35,7 @@ pub const std_options = std.Options{
 };
 
 pub var js_runner_duration: usize = 0;
-pub var tracking_allocator = TrackingAllocator.init(std.testing.allocator);
+pub var tracking_allocator: Allocator = undefined;
 
 pub fn main() !void {
     var mem: [8192]u8 = undefined;
@@ -51,6 +51,12 @@ pub fn main() !void {
 
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
+
+    var tracking_arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    defer tracking_arena.deinit();
+
+    var ta = TrackingAllocator.init(tracking_arena.allocator());
+    tracking_allocator = ta.allocator();
 
     // ignore the exec name.
     _ = args.next();
@@ -82,6 +88,7 @@ pub fn main() !void {
         if (isSetup(t) or isTeardown(t)) {
             continue;
         }
+        defer _ = tracking_arena.reset(.retain_capacity);
 
         var status = Status.pass;
         slowest.startTiming();
@@ -175,7 +182,7 @@ pub fn main() !void {
     if (json_stats) {
         var stdout = std.fs.File.stdout();
         var writer = stdout.writer(&.{});
-        const stats = tracking_allocator.stats();
+        const stats = ta.stats();
         try std.json.Stringify.value(&.{
             .{ .name = "browser", .bench = .{
                 .duration = js_runner_duration,
