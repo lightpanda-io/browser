@@ -3,6 +3,7 @@ const App = @import("app.zig").App;
 const Browser = @import("browser/browser.zig").Browser;
 const Session = @import("browser/session.zig").Session;
 const Page = @import("browser/page.zig").Page;
+const Scheduler = @import("browser/Scheduler.zig");
 const CDPT = @import("cdp/cdp.zig").CDPT;
 const BrowserContext = @import("cdp/cdp.zig").BrowserContext;
 
@@ -152,9 +153,27 @@ export fn lightpanda_cdp_browser_context(cdp_ptr: *anyopaque) *anyopaque {
     return &cdp.browser_context.?;
 }
 
+// returns -1 if no session/page, or if no events reamin, otherwise returns 
+// milliseconds until next scheduled task
 export fn lightpanda_cdp_page_wait(cdp_ptr: *anyopaque, ms: i32) c_int {
     const cdp: *CDP = @ptrCast(@alignCast(cdp_ptr));
-    return @intFromEnum(cdp.pageWait(ms));
+    _ = cdp.pageWait(ms);
+
+    // it's okay to panic if the session or page don't exist.
+    const scheduler = &cdp.browser.session.?.page.?.scheduler;
+    return cdp_peek_next_delay_ms(scheduler) orelse -1;
+}
+
+fn cdp_peek_next_delay_ms(scheduler: *Scheduler) ?i32 {
+    if (scheduler.high_priority.count() == 0) {
+        return null;
+    }
+
+    const now = std.time.milliTimestamp();
+    const next_task = scheduler.high_priority.peek().?;
+    const time_to_next = next_task.ms - now;
+
+    return if (time_to_next > 0) @intCast(time_to_next) else 0;
 }
 
 export fn lightpanda_browser_context_session(browser_context_ptr: *anyopaque) *anyopaque {
