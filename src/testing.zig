@@ -360,8 +360,6 @@ fn isJsonValue(a: std.json.Value, b: std.json.Value) bool {
     }
 }
 
-pub const tracking_allocator = @import("root").tracking_allocator.allocator();
-
 var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
 pub var test_app: *App = undefined;
 pub var test_browser: Browser = undefined;
@@ -387,8 +385,13 @@ pub fn shutdown() void {
 
 pub fn htmlRunner(file: []const u8) !void {
     defer _ = arena_instance.reset(.retain_capacity);
+
+    const start = try std.time.Instant.now();
+
     const page = try test_session.createPage();
     defer test_session.removePage();
+
+    page.arena = @import("root").tracking_allocator;
 
     const js_context = page.main_context;
     var try_catch: Env.TryCatch = undefined;
@@ -398,6 +401,8 @@ pub fn htmlRunner(file: []const u8) !void {
     const url = try std.fmt.allocPrint(arena_allocator, "http://localhost:9582/src/tests/{s}", .{file});
     try page.navigate(url, .{});
     _ = page.wait(2000);
+
+    @import("root").js_runner_duration += std.time.Instant.since(try std.time.Instant.now(), start);
 
     const value = js_context.exec("testing.getStatus()", "testing.getStatus()") catch |err| {
         const msg = try_catch.err(arena_allocator) catch @errorName(err) orelse "unknown";
