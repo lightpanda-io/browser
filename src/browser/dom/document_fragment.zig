@@ -88,6 +88,11 @@ pub const DocumentFragment = struct {
         const e = try parser.nodeGetElementById(@ptrCast(@alignCast(self)), id) orelse return null;
         return try Element.toInterface(e);
     }
+
+    pub fn get_firstElementChild(self: *parser.DocumentFragment) !?ElementUnion {
+        var children = try get_children(self);
+        return try children._item(0);
+    }
 };
 
 const testing = @import("../../testing.zig");
