@@ -253,7 +253,15 @@ pub const Window = struct {
         return self.createTimeout(cbk, 0, page, .{ .name = "queueMicrotask" });
     }
 
-    pub fn _matchMedia(_: *const Window, media: Env.String) !MediaQueryList {
+    pub fn _setImmediate(self: *Window, cbk: Function, page: *Page) !u32 {
+        return self.createTimeout(cbk, 0, page, .{ .name = "setImmediate" });
+    }
+
+    pub fn _clearImmediate(self: *Window, id: u32) void {
+        _ = self.timers.remove(id);
+    }
+
+    pub fn _matchMedia(_: *const Window, media: []const u8, page: *Page) !MediaQueryList {
         return .{
             .matches = false, // TODO?
             .media = media.string,
