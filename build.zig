@@ -149,6 +149,25 @@ pub fn build(b: *Build) !void {
         const build_step = b.step("build-v8", "Build v8");
         build_step.dependOn(&build_v8.step);
     }
+
+    {
+        // static lib
+        // -------
+        const static_lib_module = b.addModule("lightpanda", .{
+            .root_source_file = b.path("src/lib.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .link_libcpp = true,
+        });
+        try addDependencies(b, static_lib_module, opts);
+
+        const lib = b.addLibrary(.{ .name = "lightpanda", .root_module = static_lib_module, .use_llvm = true, .linkage = .static });
+        lib.bundle_compiler_rt = true;
+        const install_artifact = b.addInstallArtifact(lib, .{});
+        const build_step = b.step("static-lib", "Build static lib");
+        build_step.dependOn(&install_artifact.step);
+    }
 }
 
 fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !void {
