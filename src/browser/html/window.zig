@@ -261,7 +261,7 @@ pub const Window = struct {
         _ = self.timers.remove(id);
     }
 
-    pub fn _matchMedia(_: *const Window, media: []const u8, page: *Page) !MediaQueryList {
+    pub fn _matchMedia(_: *const Window, media: Env.String) !MediaQueryList {
         return .{
             .matches = false, // TODO?
             .media = media.string,
