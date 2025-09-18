@@ -20,7 +20,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const Thread = std.Thread;
-const Allocator = std.mem.Allocator;
 
 const is_debug = builtin.mode == .Debug;
 

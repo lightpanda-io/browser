@@ -48,7 +48,7 @@ pub const ProcessingInstruction = struct {
     }
 
     pub fn get_data(self: *parser.ProcessingInstruction) !?[]const u8 {
-        return try parser.nodeValue(parser.processingInstructionToNode(self));
+        return parser.nodeValue(parser.processingInstructionToNode(self));
     }
 
     pub fn set_data(self: *parser.ProcessingInstruction, data: []u8) !void {
@@ -58,7 +58,7 @@ pub const ProcessingInstruction = struct {
     // netsurf's ProcessInstruction doesn't implement the dom_node_get_attributes
     // and thus will crash if we try to call nodeIsEqualNode.
     pub fn _isEqualNode(self: *parser.ProcessingInstruction, other_node: *parser.Node) !bool {
-        if (try parser.nodeType(other_node) != .processing_instruction) {
+        if (parser.nodeType(other_node) != .processing_instruction) {
             return false;
         }
 

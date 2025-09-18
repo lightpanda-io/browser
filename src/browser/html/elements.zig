@@ -133,14 +133,14 @@ pub const HTMLElement = struct {
 
     pub fn get_innerText(e: *parser.ElementHTML) ![]const u8 {
         const n = @as(*parser.Node, @ptrCast(e));
-        return try parser.nodeTextContent(n) orelse "";
+        return parser.nodeTextContent(n) orelse "";
     }
 
     pub fn set_innerText(e: *parser.ElementHTML, s: []const u8) !void {
         const n = @as(*parser.Node, @ptrCast(e));
 
         // create text node.
-        const doc = try parser.nodeOwnerDocument(n) orelse return error.NoDocument;
+        const doc = parser.nodeOwnerDocument(n) orelse return error.NoDocument;
         const t = try parser.documentCreateTextNode(doc, s);
 
         // remove existing children.
@@ -167,12 +167,12 @@ pub const HTMLElement = struct {
         focusVisible: bool,
     };
     pub fn _focus(e: *parser.ElementHTML, _: ?FocusOpts, page: *Page) !void {
-        if (!try page.isNodeAttached(@ptrCast(e))) {
+        if (!page.isNodeAttached(@ptrCast(e))) {
             return;
         }
 
         const Document = @import("../dom/document.zig").Document;
-        const root_node = try parser.nodeGetRootNode(@ptrCast(e));
+        const root_node = parser.nodeGetRootNode(@ptrCast(e));
         try Document.setFocus(@ptrCast(root_node), e, page);
     }
 };
@@ -251,7 +251,7 @@ pub const HTMLAnchorElement = struct {
     }
 
     pub fn get_text(self: *parser.Anchor) !?[]const u8 {
-        return try parser.nodeTextContent(parser.anchorToNode(self));
+        return parser.nodeTextContent(parser.anchorToNode(self));
     }
 
     pub fn set_text(self: *parser.Anchor, v: []const u8) !void {
@@ -1064,7 +1064,7 @@ pub const HTMLSlotElement = struct {
         // First we look for any explicitly assigned nodes (via the slot attribute)
         {
             const slot_name = try parser.elementGetAttribute(@ptrCast(@alignCast(self)), "name");
-            var root = try parser.nodeGetRootNode(node);
+            var root = parser.nodeGetRootNode(node);
             if (page.getNodeState(root)) |state| {
                 if (state.shadow_root) |sr| {
                     root = @ptrCast(@alignCast(sr.host));
@@ -1076,7 +1076,7 @@ pub const HTMLSlotElement = struct {
             var next: ?*parser.Node = null;
             while (true) {
                 next = try w.get_next(root, next) orelse break;
-                if (try parser.nodeType(next.?) != .element) {
+                if (parser.nodeType(next.?) != .element) {
                     if (slot_name == null and !element_only) {
                         // default slot (with no name), takes everything
                         try arr.append(page.call_arena, try Node.toInterface(next.?));
@@ -1105,7 +1105,7 @@ pub const HTMLSlotElement = struct {
         // we'll collect the children of the slot - the defaults.
         {
             const nl = try parser.nodeGetChildNodes(node);
-            const len = try parser.nodeListLength(nl);
+            const len = parser.nodeListLength(nl);
             if (len == 0) {
                 return &.{};
             }
@@ -1113,8 +1113,8 @@ pub const HTMLSlotElement = struct {
             var assigned = try page.call_arena.alloc(NodeUnion, len);
             var i: usize = 0;
             while (true) : (i += 1) {
-                const child = try parser.nodeListItem(nl, @intCast(i)) orelse break;
-                if (!element_only or try parser.nodeType(child) == .element) {
+                const child = parser.nodeListItem(nl, @intCast(i)) orelse break;
+                if (!element_only or parser.nodeType(child) == .element) {
                     assigned[i] = try Node.toInterface(child);
                 }
             }

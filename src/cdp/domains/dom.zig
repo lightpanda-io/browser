@@ -122,7 +122,7 @@ fn dispatchSetChildNodes(cmd: anytype, nodes: []*parser.Node) !void {
     for (nodes) |_n| {
         var n = _n;
         while (true) {
-            const p = try parser.nodeParentNode(n) orelse break;
+            const p = parser.nodeParentNode(n) orelse break;
 
             // Register the node.
             const node = try bc.node_registry.register(p);
@@ -151,7 +151,7 @@ fn dispatchSetChildNodes(cmd: anytype, nodes: []*parser.Node) !void {
         // If the node has no parent, it's the root node.
         // We don't dispatch event for it because we assume the root node is
         // dispatched via the DOM.getDocument command.
-        const p = try parser.nodeParentNode(node._node) orelse {
+        const p = parser.nodeParentNode(node._node) orelse {
             continue;
         };
 
@@ -368,7 +368,7 @@ fn scrollIntoViewIfNeeded(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
 
-    const node_type = parser.nodeType(node._node) catch return error.InvalidNode;
+    const node_type = parser.nodeType(node._node);
     switch (node_type) {
         .element => {},
         .document => {},
@@ -410,7 +410,7 @@ fn getContentQuads(cmd: anytype) !void {
     // visibility: hidden
     // display: none
 
-    if (try parser.nodeType(node._node) != .element) return error.NodeIsNotAnElement;
+    if (parser.nodeType(node._node) != .element) return error.NodeIsNotAnElement;
     // TODO implement for document or text
     // Most likely document would require some hierachgy in the renderer. It is left unimplemented till we have a good example.
     // Text may be tricky, multiple quads in case of multiple lines? empty quads of text  = ""?
@@ -436,7 +436,7 @@ fn getBoxModel(cmd: anytype) !void {
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
 
     // TODO implement for document or text
-    if (try parser.nodeType(node._node) != .element) return error.NodeIsNotAnElement;
+    if (parser.nodeType(node._node) != .element) return error.NodeIsNotAnElement;
     const element = parser.nodeToElement(node._node);
 
     const rect = try Element._getBoundingClientRect(element, page);

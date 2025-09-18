@@ -19,7 +19,6 @@
 const std = @import("std");
 
 const CSSRule = @import("CSSRule.zig");
-const StyleSheet = @import("StyleSheet.zig").StyleSheet;
 
 const CSSImportRule = CSSRule.CSSImportRule;
 

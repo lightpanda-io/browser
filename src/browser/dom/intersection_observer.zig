@@ -157,7 +157,7 @@ pub const IntersectionObserverEntry = struct {
             return self.page.renderer.boundingRect();
         }
 
-        const root_type = try parser.nodeType(root);
+        const root_type = parser.nodeType(root);
 
         var element: *parser.Element = undefined;
         switch (root_type) {

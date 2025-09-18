@@ -37,7 +37,6 @@ const domcss = @import("../dom/css.zig");
 const Css = @import("../css/css.zig").Css;
 
 const Function = Env.Function;
-const JsObject = Env.JsObject;
 
 const v8 = @import("v8");
 const Request = @import("../fetch/Request.zig");

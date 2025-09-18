@@ -334,41 +334,39 @@ pub const Selector = union(enum) {
                         if (!try v.second.match(n)) return false;
 
                         // The first must match a ascendent.
-                        var p = try n.parent();
-                        while (p != null) {
-                            if (try v.first.match(p.?)) {
+                        var parent = n.parent();
+                        while (parent) |p| {
+                            if (try v.first.match(p)) {
                                 return true;
                             }
-                            p = try p.?.parent();
+                            parent = p.parent();
                         }
 
                         return false;
                     },
                     .child => {
-                        const p = try n.parent();
-                        if (p == null) return false;
-
-                        return try v.second.match(n) and try v.first.match(p.?);
+                        const p = n.parent() orelse return false;
+                        return try v.second.match(n) and try v.first.match(p);
                     },
                     .next_sibling => {
                         if (!try v.second.match(n)) return false;
-                        var c = try n.prevSibling();
-                        while (c != null) {
-                            if (c.?.isText() or c.?.isComment()) {
-                                c = try c.?.prevSibling();
+                        var child = n.prevSibling();
+                        while (child) |c| {
+                            if (c.isText() or c.isComment()) {
+                                child = c.prevSibling();
                                 continue;
                             }
-                            return try v.first.match(c.?);
+                            return try v.first.match(c);
                         }
                         return false;
                     },
                     .subsequent_sibling => {
                         if (!try v.second.match(n)) return false;
 
-                        var c = try n.prevSibling();
-                        while (c != null) {
-                            if (try v.first.match(c.?)) return true;
-                            c = try c.?.prevSibling();
+                        var child = n.prevSibling();
+                        while (child) |c| {
+                            if (try v.first.match(c)) return true;
+                            child = c.prevSibling();
                         }
                         return false;
                     },
@@ -438,10 +436,10 @@ pub const Selector = union(enum) {
                 // Only containsOwn is implemented.
                 if (v.own == false) return Error.UnsupportedContainsPseudoClass;
 
-                var c = try n.firstChild();
-                while (c != null) {
-                    if (c.?.isText()) {
-                        const text = try c.?.text();
+                var child = n.firstChild();
+                while (child) |c| {
+                    if (c.isText()) {
+                        const text = c.text();
                         if (text) |_text| {
                             if (contains(_text, v.val, false)) { // we are case sensitive. Is this correct behavior?
                                 return true;
@@ -449,7 +447,7 @@ pub const Selector = union(enum) {
                         }
                     }
 
-                    c = try c.?.nextSibling();
+                    child = c.nextSibling();
                 }
                 return false;
             },
@@ -477,16 +475,16 @@ pub const Selector = union(enum) {
                     .empty => {
                         if (!n.isElement()) return false;
 
-                        var c = try n.firstChild();
-                        while (c != null) {
-                            if (c.?.isElement()) return false;
+                        var child = n.firstChild();
+                        while (child) |c| {
+                            if (c.isElement()) return false;
 
-                            if (c.?.isText()) {
-                                if (try c.?.isEmptyText()) continue;
+                            if (c.isText()) {
+                                if (c.isEmptyText()) continue;
                                 return false;
                             }
 
-                            c = try c.?.nextSibling();
+                            child = c.nextSibling();
                         }
 
                         return true;
@@ -494,7 +492,7 @@ pub const Selector = union(enum) {
                     .root => {
                         if (!n.isElement()) return false;
 
-                        const p = try n.parent();
+                        const p = n.parent();
                         return (p != null and p.?.isDocument());
                     },
                     .link => {
@@ -609,24 +607,23 @@ pub const Selector = union(enum) {
     }
 
     fn hasLegendInPreviousSiblings(n: anytype) anyerror!bool {
-        var c = try n.prevSibling();
-        while (c != null) {
-            const ctag = try c.?.tag();
+        var child = n.prevSibling();
+        while (child) |c| {
+            const ctag = try c.tag();
             if (std.ascii.eqlIgnoreCase("legend", ctag)) return true;
-            c = try c.?.prevSibling();
+            child = c.prevSibling();
         }
         return false;
     }
 
     fn inDisabledFieldset(n: anytype) anyerror!bool {
-        const p = try n.parent();
-        if (p == null) return false;
+        const p = n.parent() orelse return false;
 
         const ntag = try n.tag();
-        const ptag = try p.?.tag();
+        const ptag = try p.tag();
 
         if (std.ascii.eqlIgnoreCase("fieldset", ptag) and
-            try p.?.attr("disabled") != null and
+            try p.attr("disabled") != null and
             (!std.ascii.eqlIgnoreCase("legend", ntag) or try hasLegendInPreviousSiblings(n)))
         {
             return true;
@@ -642,7 +639,7 @@ pub const Selector = union(enum) {
         // ```
         // https://github.com/andybalholm/cascadia/blob/master/pseudo_classes.go#L434
 
-        return try inDisabledFieldset(p.?);
+        return try inDisabledFieldset(p);
     }
 
     fn langMatch(lang: []const u8, n: anytype) anyerror!bool {
@@ -656,10 +653,8 @@ pub const Selector = union(enum) {
         }
 
         // if the tag doesn't match, try the parent.
-        const p = try n.parent();
-        if (p == null) return false;
-
-        return langMatch(lang, p.?);
+        const p = n.parent() orelse return false;
+        return langMatch(lang, p);
     }
 
     // onlyChildMatch implements :only-child
@@ -667,25 +662,24 @@ pub const Selector = union(enum) {
     fn onlyChildMatch(of_type: bool, n: anytype) anyerror!bool {
         if (!n.isElement()) return false;
 
-        const p = try n.parent();
-        if (p == null) return false;
+        const p = n.parent() orelse return false;
 
         const ntag = try n.tag();
 
         var count: usize = 0;
-        var c = try p.?.firstChild();
+        var child = p.firstChild();
         // loop hover all n siblings.
-        while (c != null) {
+        while (child) |c| {
             // ignore non elements or others tags if of-type is true.
-            if (!c.?.isElement() or (of_type and !std.mem.eql(u8, ntag, try c.?.tag()))) {
-                c = try c.?.nextSibling();
+            if (!c.isElement() or (of_type and !std.mem.eql(u8, ntag, try c.tag()))) {
+                child = c.nextSibling();
                 continue;
             }
 
             count += 1;
             if (count > 1) return false;
 
-            c = try c.?.nextSibling();
+            child = c.nextSibling();
         }
 
         return count == 1;
@@ -696,27 +690,25 @@ pub const Selector = union(enum) {
     fn simpleNthLastChildMatch(b: isize, of_type: bool, n: anytype) anyerror!bool {
         if (!n.isElement()) return false;
 
-        const p = try n.parent();
-        if (p == null) return false;
-
+        const p = n.parent() orelse return false;
         const ntag = try n.tag();
 
         var count: isize = 0;
-        var c = try p.?.lastChild();
+        var child = p.lastChild();
         // loop hover all n siblings.
-        while (c != null) {
+        while (child) |c| {
             // ignore non elements or others tags if of-type is true.
-            if (!c.?.isElement() or (of_type and !std.mem.eql(u8, ntag, try c.?.tag()))) {
-                c = try c.?.prevSibling();
+            if (!c.isElement() or (of_type and !std.mem.eql(u8, ntag, try c.tag()))) {
+                child = c.prevSibling();
                 continue;
             }
 
             count += 1;
 
-            if (n.eql(c.?)) return count == b;
+            if (n.eql(c)) return count == b;
             if (count >= b) return false;
 
-            c = try c.?.prevSibling();
+            child = c.prevSibling();
         }
 
         return false;
@@ -727,27 +719,25 @@ pub const Selector = union(enum) {
     fn simpleNthChildMatch(b: isize, of_type: bool, n: anytype) anyerror!bool {
         if (!n.isElement()) return false;
 
-        const p = try n.parent();
-        if (p == null) return false;
-
+        const p = n.parent() orelse return false;
         const ntag = try n.tag();
 
         var count: isize = 0;
-        var c = try p.?.firstChild();
+        var child = p.firstChild();
         // loop hover all n siblings.
-        while (c != null) {
+        while (child) |c| {
             // ignore non elements or others tags if of-type is true.
-            if (!c.?.isElement() or (of_type and !std.mem.eql(u8, ntag, try c.?.tag()))) {
-                c = try c.?.nextSibling();
+            if (!c.isElement() or (of_type and !std.mem.eql(u8, ntag, try c.tag()))) {
+                child = c.nextSibling();
                 continue;
             }
 
             count += 1;
 
-            if (n.eql(c.?)) return count == b;
+            if (n.eql(c)) return count == b;
             if (count >= b) return false;
 
-            c = try c.?.nextSibling();
+            child = c.nextSibling();
         }
 
         return false;
@@ -759,29 +749,27 @@ pub const Selector = union(enum) {
     fn nthChildMatch(a: isize, b: isize, last: bool, of_type: bool, n: anytype) anyerror!bool {
         if (!n.isElement()) return false;
 
-        const p = try n.parent();
-        if (p == null) return false;
-
+        const p = n.parent() orelse return false;
         const ntag = try n.tag();
 
         var i: isize = -1;
         var count: isize = 0;
-        var c = try p.?.firstChild();
+        var child = p.firstChild();
         // loop hover all n siblings.
-        while (c != null) {
+        while (child) |c| {
             // ignore non elements or others tags if of-type is true.
-            if (!c.?.isElement() or (of_type and !std.mem.eql(u8, ntag, try c.?.tag()))) {
-                c = try c.?.nextSibling();
+            if (!c.isElement() or (of_type and !std.mem.eql(u8, ntag, try c.tag()))) {
+                child = c.nextSibling();
                 continue;
             }
             count += 1;
 
-            if (n.eql(c.?)) {
+            if (n.eql(c)) {
                 i = count;
                 if (!last) break;
             }
 
-            c = try c.?.nextSibling();
+            child = c.nextSibling();
         }
 
         if (i == -1) return false;
@@ -794,21 +782,21 @@ pub const Selector = union(enum) {
     }
 
     fn hasDescendantMatch(s: *const Selector, n: anytype) anyerror!bool {
-        var c = try n.firstChild();
-        while (c != null) {
-            if (try s.match(c.?)) return true;
-            if (c.?.isElement() and try hasDescendantMatch(s, c.?)) return true;
-            c = try c.?.nextSibling();
+        var child = n.firstChild();
+        while (child) |c| {
+            if (try s.match(c)) return true;
+            if (c.isElement() and try hasDescendantMatch(s, c)) return true;
+            child = c.nextSibling();
         }
 
         return false;
     }
 
     fn hasChildMatch(s: *const Selector, n: anytype) anyerror!bool {
-        var c = try n.firstChild();
-        while (c != null) {
-            if (try s.match(c.?)) return true;
-            c = try c.?.nextSibling();
+        var child = n.firstChild();
+        while (child) |c| {
+            if (try s.match(c)) return true;
+            child = c.nextSibling();
         }
 
         return false;
@@ -859,23 +847,23 @@ pub const NodeTest = struct {
     name: []const u8 = "",
     att: ?[]const u8 = null,
 
-    pub fn firstChild(n: *const NodeTest) !?*const NodeTest {
+    pub fn firstChild(n: *const NodeTest) ?*const NodeTest {
         return n.child;
     }
 
-    pub fn lastChild(n: *const NodeTest) !?*const NodeTest {
+    pub fn lastChild(n: *const NodeTest) ?*const NodeTest {
         return n.last;
     }
 
-    pub fn nextSibling(n: *const NodeTest) !?*const NodeTest {
+    pub fn nextSibling(n: *const NodeTest) ?*const NodeTest {
         return n.sibling;
     }
 
-    pub fn prevSibling(n: *const NodeTest) !?*const NodeTest {
+    pub fn prevSibling(n: *const NodeTest) ?*const NodeTest {
         return n.prev;
     }
 
-    pub fn parent(n: *const NodeTest) !?*const NodeTest {
+    pub fn parent(n: *const NodeTest) ?*const NodeTest {
         return n.par;
     }
 
@@ -891,7 +879,7 @@ pub const NodeTest = struct {
         return false;
     }
 
-    pub fn text(_: *const NodeTest) !?[]const u8 {
+    pub fn text(_: *const NodeTest) ?[]const u8 {
         return null;
     }
 
@@ -899,7 +887,7 @@ pub const NodeTest = struct {
         return false;
     }
 
-    pub fn isEmptyText(_: *const NodeTest) !bool {
+    pub fn isEmptyText(_: *const NodeTest) bool {
         return false;
     }
 

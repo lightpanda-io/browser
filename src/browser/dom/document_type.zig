@@ -29,21 +29,21 @@ pub const DocumentType = struct {
     pub const subtype = .node;
 
     pub fn get_name(self: *parser.DocumentType) ![]const u8 {
-        return try parser.documentTypeGetName(self);
+        return parser.documentTypeGetName(self);
     }
 
-    pub fn get_publicId(self: *parser.DocumentType) ![]const u8 {
-        return try parser.documentTypeGetPublicId(self);
+    pub fn get_publicId(self: *parser.DocumentType) []const u8 {
+        return parser.documentTypeGetPublicId(self);
     }
 
-    pub fn get_systemId(self: *parser.DocumentType) ![]const u8 {
-        return try parser.documentTypeGetSystemId(self);
+    pub fn get_systemId(self: *parser.DocumentType) []const u8 {
+        return parser.documentTypeGetSystemId(self);
     }
 
     // netsurf's DocumentType doesn't implement the dom_node_get_attributes
     // and thus will crash if we try to call nodeIsEqualNode.
     pub fn _isEqualNode(self: *parser.DocumentType, other_node: *parser.Node) !bool {
-        if (try parser.nodeType(other_node) != .document_type) {
+        if (parser.nodeType(other_node) != .document_type) {
             return false;
         }
 
@@ -51,10 +51,10 @@ pub const DocumentType = struct {
         if (std.mem.eql(u8, try get_name(self), try get_name(other)) == false) {
             return false;
         }
-        if (std.mem.eql(u8, try get_publicId(self), try get_publicId(other)) == false) {
+        if (std.mem.eql(u8, get_publicId(self), get_publicId(other)) == false) {
             return false;
         }
-        if (std.mem.eql(u8, try get_systemId(self), try get_systemId(other)) == false) {
+        if (std.mem.eql(u8, get_systemId(self), get_systemId(other)) == false) {
             return false;
         }
         return true;

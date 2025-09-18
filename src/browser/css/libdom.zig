@@ -26,71 +26,67 @@ const Allocator = std.mem.Allocator;
 pub const Node = struct {
     node: *parser.Node,
 
-    pub fn firstChild(n: Node) !?Node {
-        const c = try parser.nodeFirstChild(n.node);
+    pub fn firstChild(n: Node) ?Node {
+        const c = parser.nodeFirstChild(n.node);
         if (c) |cc| return .{ .node = cc };
 
         return null;
     }
 
-    pub fn lastChild(n: Node) !?Node {
-        const c = try parser.nodeLastChild(n.node);
+    pub fn lastChild(n: Node) ?Node {
+        const c = parser.nodeLastChild(n.node);
         if (c) |cc| return .{ .node = cc };
 
         return null;
     }
 
-    pub fn nextSibling(n: Node) !?Node {
-        const c = try parser.nodeNextSibling(n.node);
+    pub fn nextSibling(n: Node) ?Node {
+        const c = parser.nodeNextSibling(n.node);
         if (c) |cc| return .{ .node = cc };
 
         return null;
     }
 
-    pub fn prevSibling(n: Node) !?Node {
-        const c = try parser.nodePreviousSibling(n.node);
+    pub fn prevSibling(n: Node) ?Node {
+        const c = parser.nodePreviousSibling(n.node);
         if (c) |cc| return .{ .node = cc };
 
         return null;
     }
 
-    pub fn parent(n: Node) !?Node {
-        const c = try parser.nodeParentNode(n.node);
+    pub fn parent(n: Node) ?Node {
+        const c = parser.nodeParentNode(n.node);
         if (c) |cc| return .{ .node = cc };
 
         return null;
     }
 
     pub fn isElement(n: Node) bool {
-        const t = parser.nodeType(n.node) catch return false;
-        return t == .element;
+        return parser.nodeType(n.node) == .element;
     }
 
     pub fn isDocument(n: Node) bool {
-        const t = parser.nodeType(n.node) catch return false;
-        return t == .document;
+        return parser.nodeType(n.node) == .document;
     }
 
     pub fn isComment(n: Node) bool {
-        const t = parser.nodeType(n.node) catch return false;
-        return t == .comment;
+        return parser.nodeType(n.node) == .comment;
     }
 
     pub fn isText(n: Node) bool {
-        const t = parser.nodeType(n.node) catch return false;
-        return t == .text;
+        return parser.nodeType(n.node) == .text;
     }
 
-    pub fn text(n: Node) !?[]const u8 {
-        const data = try parser.nodeTextContent(n.node);
+    pub fn text(n: Node) ?[]const u8 {
+        const data = parser.nodeTextContent(n.node);
         if (data == null) return null;
         if (data.?.len == 0) return null;
 
         return std.mem.trim(u8, data.?, &std.ascii.whitespace);
     }
 
-    pub fn isEmptyText(n: Node) !bool {
-        const data = try parser.nodeTextContent(n.node);
+    pub fn isEmptyText(n: Node) bool {
+        const data = parser.nodeTextContent(n.node);
         if (data == null) return true;
         if (data.?.len == 0) return true;
 
@@ -98,7 +94,7 @@ pub const Node = struct {
     }
 
     pub fn tag(n: Node) ![]const u8 {
-        return try parser.nodeName(n.node);
+        return parser.nodeName(n.node);
     }
 
     pub fn attr(n: Node, key: []const u8) !?[]const u8 {

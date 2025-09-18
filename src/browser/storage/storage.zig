@@ -18,8 +18,6 @@
 
 const std = @import("std");
 
-const DOMError = @import("../netsurf.zig").DOMError;
-
 pub const cookie = @import("cookie.zig");
 pub const Cookie = cookie.Cookie;
 pub const CookieJar = cookie.Jar;

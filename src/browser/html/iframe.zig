@@ -16,10 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 
 const parser = @import("../netsurf.zig");
-const Page = @import("../page.zig").Page;
 const HTMLElement = @import("elements.zig").HTMLElement;
 
 // https://html.spec.whatwg.org/multipage/iframe-embed-object.html#htmliframeelement

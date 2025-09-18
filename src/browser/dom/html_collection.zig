@@ -344,7 +344,7 @@ pub const HTMLCollection = struct {
         var node = try self.start() orelse return 0;
 
         while (true) {
-            if (try parser.nodeType(node) == .element) {
+            if (parser.nodeType(node) == .element) {
                 if (try self.matcher.match(node)) {
                     len += 1;
                 }
@@ -371,7 +371,7 @@ pub const HTMLCollection = struct {
         }
 
         while (true) {
-            if (try parser.nodeType(node) == .element) {
+            if (parser.nodeType(node) == .element) {
                 if (try self.matcher.match(node)) {
                     // check if we found the searched element.
                     if (i == index) {
@@ -405,7 +405,7 @@ pub const HTMLCollection = struct {
         var node = try self.start() orelse return null;
 
         while (true) {
-            if (try parser.nodeType(node) == .element) {
+            if (parser.nodeType(node) == .element) {
                 if (try self.matcher.match(node)) {
                     const elem = @as(*parser.Element, @ptrCast(node));
 

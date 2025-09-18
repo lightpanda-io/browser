@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 
 pub const Mime = struct {
     content_type: ContentType,

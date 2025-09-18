@@ -445,13 +445,15 @@ pub fn eventInit(evt: *Event, typ: []const u8, opts: EventInit) !void {
     try DOMErr(err);
 }
 
-pub fn eventType(evt: *Event) ![]const u8 {
+pub fn eventType(evt: *Event) []const u8 {
     var s: ?*String = null;
     const err = c._dom_event_get_type(evt, &s);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
 
     // if the event type is null, return a empty string.
-    if (s == null) return "";
+    if (s == null) {
+        return "";
+    }
 
     return strToData(s.?);
 }
@@ -571,10 +573,10 @@ pub fn mutationEventAttributeName(evt: *MutationEvent) ![]const u8 {
     return strToData(s.?);
 }
 
-pub fn mutationEventPrevValue(evt: *MutationEvent) !?[]const u8 {
+pub fn mutationEventPrevValue(evt: *MutationEvent) ?[]const u8 {
     var s: ?*String = null;
     const err = c._dom_mutation_event_get_prev_value(evt, &s);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     if (s == null) return null;
     return strToData(s.?);
 }
@@ -582,7 +584,7 @@ pub fn mutationEventPrevValue(evt: *MutationEvent) !?[]const u8 {
 pub fn mutationEventRelatedNode(evt: *MutationEvent) !?*Node {
     var n: NodeExternal = undefined;
     const err = c._dom_mutation_event_get_related_node(evt, &n);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     if (n == null) return null;
     return @as(*Node, @ptrCast(@alignCast(n)));
 }
@@ -779,10 +781,10 @@ pub fn eventTargetDispatchEvent(et: *EventTarget, event: *Event) !bool {
     return res;
 }
 
-pub fn eventTargetInternalType(et: *EventTarget) !EventTargetTBase.InternalType {
+pub fn eventTargetInternalType(et: *EventTarget) EventTargetTBase.InternalType {
     var res: u32 = undefined;
     const err = eventTargetVtable(et).internal_type.?(et, &res);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return @enumFromInt(res);
 }
 
@@ -850,10 +852,8 @@ pub const EventTargetTBase = extern struct {
     pub fn dispatch_event(et: [*c]c.dom_event_target, evt: ?*c.struct_dom_event, res: [*c]bool) callconv(.c) c.dom_exception {
         const self = @as(*Self, @ptrCast(et));
         // Set the event target to the target dispatched.
-        const e = c._dom_event_set_target(evt, et);
-        if (e != c.DOM_NO_ERR) {
-            return e;
-        }
+        const err = c._dom_event_set_target(evt, et);
+        std.debug.assert(err == c.DOM_NO_ERR);
         return c._dom_event_target_dispatch(et, &self.eti, evt, c.DOM_AT_TARGET, res);
     }
 
@@ -1046,17 +1046,17 @@ pub const NodeType = enum(u4) {
 // NodeList
 pub const NodeList = c.dom_nodelist;
 
-pub fn nodeListLength(nodeList: *NodeList) !u32 {
+pub fn nodeListLength(nodeList: *NodeList) u32 {
     var ln: u32 = undefined;
     const err = c.dom_nodelist_get_length(nodeList, &ln);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return ln;
 }
 
-pub fn nodeListItem(nodeList: *NodeList, index: u32) !?*Node {
+pub fn nodeListItem(nodeList: *NodeList, index: u32) ?*Node {
     var n: NodeExternal = undefined;
     const err = c._dom_nodelist_item(nodeList, index, &n);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     if (n == null) return null;
     return @as(*Node, @ptrCast(@alignCast(n)));
 }
@@ -1173,88 +1173,86 @@ fn nodeVtable(node: *Node) c.dom_node_vtable {
 pub fn nodeLocalName(node: *Node) ![]const u8 {
     var s: ?*String = null;
     const err = nodeVtable(node).dom_node_get_local_name.?(node, &s);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     if (s == null) return "";
+
     var s_lower: ?*String = null;
     const errStr = c.dom_string_tolower(s, true, &s_lower);
     try DOMErr(errStr);
     return strToData(s_lower.?);
 }
 
-pub fn nodeType(node: *Node) !NodeType {
+pub fn nodeType(node: *Node) NodeType {
     var node_type: c.dom_node_type = undefined;
     const err = nodeVtable(node).dom_node_get_node_type.?(node, &node_type);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return @as(NodeType, @enumFromInt(node_type));
 }
 
-pub fn nodeFirstChild(node: *Node) !?*Node {
+pub fn nodeFirstChild(node: *Node) ?*Node {
     var res: ?*Node = null;
     const err = nodeVtable(node).dom_node_get_first_child.?(node, &res);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return res;
 }
 
-pub fn nodeLastChild(node: *Node) !?*Node {
+pub fn nodeLastChild(node: *Node) ?*Node {
     var res: ?*Node = null;
     const err = nodeVtable(node).dom_node_get_last_child.?(node, &res);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return res;
 }
 
-pub fn nodeNextSibling(node: *Node) !?*Node {
+pub fn nodeNextSibling(node: *Node) ?*Node {
     var res: ?*Node = null;
     const err = nodeVtable(node).dom_node_get_next_sibling.?(node, &res);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return res;
 }
 
-pub fn nodeNextElementSibling(node: *Node) !?*Element {
+pub fn nodeNextElementSibling(node: *Node) ?*Element {
     var n = node;
     while (true) {
-        const res = try nodeNextSibling(n);
-        if (res == null) return null;
+        const res = nodeNextSibling(n) orelse return null;
 
-        if (try nodeType(res.?) == .element) {
-            return @as(*Element, @ptrCast(res.?));
+        if (nodeType(res) == .element) {
+            return @as(*Element, @ptrCast(res));
         }
-        n = res.?;
+        n = res;
     }
     return null;
 }
 
-pub fn nodePreviousSibling(node: *Node) !?*Node {
+pub fn nodePreviousSibling(node: *Node) ?*Node {
     var res: ?*Node = null;
     const err = nodeVtable(node).dom_node_get_previous_sibling.?(node, &res);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return res;
 }
 
-pub fn nodePreviousElementSibling(node: *Node) !?*Element {
+pub fn nodePreviousElementSibling(node: *Node) ?*Element {
     var n = node;
     while (true) {
-        const res = try nodePreviousSibling(n);
-        if (res == null) return null;
-
-        if (try nodeType(res.?) == .element) {
-            return @as(*Element, @ptrCast(res.?));
+        const res = nodePreviousSibling(n) orelse return null;
+        if (nodeType(res) == .element) {
+            return @as(*Element, @ptrCast(res));
         }
-        n = res.?;
+        n = res;
     }
     return null;
 }
 
-pub fn nodeParentNode(node: *Node) !?*Node {
+pub fn nodeParentNode(node: *Node) ?*Node {
     var res: ?*Node = null;
     const err = nodeVtable(node).dom_node_get_parent_node.?(node, &res);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return res;
 }
 
-pub fn nodeParentElement(node: *Node) !?*Element {
-    const res = try nodeParentNode(node);
+pub fn nodeParentElement(node: *Node) ?*Element {
+    const res = nodeParentNode(node);
     if (res) |value| {
-        if (try nodeType(value) == .element) {
+        if (nodeType(value) == .element) {
             return @as(*Element, @ptrCast(value));
         }
     }
@@ -1269,17 +1267,17 @@ pub fn nodeName(node: *Node) ![]const u8 {
     return strToData(s.?);
 }
 
-pub fn nodeOwnerDocument(node: *Node) !?*Document {
+pub fn nodeOwnerDocument(node: *Node) ?*Document {
     var doc: ?*Document = null;
     const err = nodeVtable(node).dom_node_get_owner_document.?(node, &doc);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return doc;
 }
 
-pub fn nodeValue(node: *Node) !?[]const u8 {
+pub fn nodeValue(node: *Node) ?[]const u8 {
     var s: ?*String = null;
     const err = nodeVtable(node).dom_node_get_node_value.?(node, &s);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     if (s == null) return null;
     return strToData(s.?);
 }
@@ -1290,14 +1288,14 @@ pub fn nodeSetValue(node: *Node, value: []const u8) !void {
     try DOMErr(err);
 }
 
-pub fn nodeTextContent(node: *Node) !?[]const u8 {
+pub fn nodeTextContent(node: *Node) ?[]const u8 {
     var s: ?*String = null;
     const err = nodeVtable(node).dom_node_get_text_content.?(node, &s);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     if (s == null) {
         // NOTE: it seems that there is a bug in netsurf implem
         // an empty Element should return an empty string and not null
-        if (try nodeType(node) == .element) {
+        if (nodeType(node) == .element) {
             return "";
         }
         return null;
@@ -1318,10 +1316,10 @@ pub fn nodeGetChildNodes(node: *Node) !*NodeList {
     return nlist.?;
 }
 
-pub fn nodeGetRootNode(node: *Node) !*Node {
+pub fn nodeGetRootNode(node: *Node) *Node {
     var root = node;
     while (true) {
-        const parent = try nodeParentNode(root);
+        const parent = nodeParentNode(root);
         if (parent) |parent_| {
             root = parent_;
         } else break;
@@ -1343,17 +1341,17 @@ pub fn nodeCloneNode(node: *Node, is_deep: bool) !*Node {
     return res.?;
 }
 
-pub fn nodeContains(node: *Node, other: *Node) !bool {
+pub fn nodeContains(node: *Node, other: *Node) bool {
     var res: bool = undefined;
     const err = c._dom_node_contains(node, other, &res);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return res;
 }
 
-pub fn nodeHasChildNodes(node: *Node) !bool {
+pub fn nodeHasChildNodes(node: *Node) bool {
     var res: bool = undefined;
     const err = nodeVtable(node).dom_node_has_child_nodes.?(node, &res);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return res;
 }
 
@@ -1368,7 +1366,7 @@ pub fn nodeIsDefaultNamespace(node: *Node, namespace_: ?[]const u8) !bool {
     const s = if (namespace_) |n| try strFromData(n) else null;
     var res: bool = undefined;
     const err = nodeVtable(node).dom_node_is_default_namespace.?(node, s, &res);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return res;
 }
 
@@ -1379,10 +1377,10 @@ pub fn nodeIsEqualNode(node: *Node, other: *Node) !bool {
     return res;
 }
 
-pub fn nodeIsSameNode(node: *Node, other: *Node) !bool {
+pub fn nodeIsSameNode(node: *Node, other: *Node) bool {
     var res: bool = undefined;
     const err = nodeVtable(node).dom_node_is_same.?(node, other, &res);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return res;
 }
 
@@ -1422,13 +1420,6 @@ pub fn nodeReplaceChild(node: *Node, new_child: *Node, old_child: *Node) !*Node 
     return res.?;
 }
 
-pub fn nodeHasAttributes(node: *Node) !bool {
-    var res: bool = undefined;
-    const err = nodeVtable(node).dom_node_has_attributes.?(node, &res);
-    try DOMErr(err);
-    return res;
-}
-
 pub fn nodeGetAttributes(node: *Node) !?*NamedNodeMap {
     var res: ?*NamedNodeMap = null;
     const err = nodeVtable(node).dom_node_get_attributes.?(node, &res);
@@ -1436,18 +1427,18 @@ pub fn nodeGetAttributes(node: *Node) !?*NamedNodeMap {
     return res;
 }
 
-pub fn nodeGetNamespace(node: *Node) !?[]const u8 {
+pub fn nodeGetNamespace(node: *Node) ?[]const u8 {
     var s: ?*String = null;
     const err = nodeVtable(node).dom_node_get_namespace.?(node, &s);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     if (s == null) return null;
     return strToData(s.?);
 }
 
-pub fn nodeGetPrefix(node: *Node) !?[]const u8 {
+pub fn nodeGetPrefix(node: *Node) ?[]const u8 {
     var s: ?*String = null;
     const err = nodeVtable(node).dom_node_get_prefix.?(node, &s);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     if (s == null) return null;
     return strToData(s.?);
 }
@@ -1463,7 +1454,8 @@ pub fn nodeSetEmbedderData(node: *Node, data: *anyopaque) void {
 pub fn nodeGetElementById(node: *Node, id: []const u8) !?*Element {
     var el: ?*Element = null;
     const str_id = try strFromData(id);
-    try DOMErr(c._dom_find_element_by_id(node, str_id, &el));
+    const err = c._dom_find_element_by_id(node, str_id, &el);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return el;
 }
 
@@ -1479,7 +1471,7 @@ pub inline fn nodeToDocument(node: *Node) *Document {
 
 // Combination of nodeToElement + elementTag
 pub fn nodeHTMLGetTagType(node: *Node) !?Tag {
-    if (try nodeType(node) != .element) {
+    if (nodeType(node) != .element) {
         return null;
     }
 
@@ -1497,10 +1489,10 @@ pub inline fn characterDataToNode(cdata: *CharacterData) *Node {
     return @as(*Node, @ptrCast(@alignCast(cdata)));
 }
 
-pub fn characterDataData(cdata: *CharacterData) ![]const u8 {
+pub fn characterDataData(cdata: *CharacterData) []const u8 {
     var s: ?*String = null;
     const err = characterDataVtable(cdata).dom_characterdata_get_data.?(cdata, &s);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return strToData(s.?);
 }
 
@@ -1513,7 +1505,7 @@ pub fn characterDataSetData(cdata: *CharacterData, data: []const u8) !void {
 pub fn characterDataLength(cdata: *CharacterData) !u32 {
     var n: u32 = undefined;
     const err = characterDataVtable(cdata).dom_characterdata_get_length.?(cdata, &n);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return n;
 }
 
@@ -2070,17 +2062,17 @@ pub inline fn documentTypeGetName(dt: *DocumentType) ![]const u8 {
     return strToData(s.?);
 }
 
-pub inline fn documentTypeGetPublicId(dt: *DocumentType) ![]const u8 {
+pub inline fn documentTypeGetPublicId(dt: *DocumentType) []const u8 {
     var s: ?*String = null;
     const err = documentTypeVtable(dt).dom_document_type_get_public_id.?(dt, &s);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return strToData(s.?);
 }
 
-pub inline fn documentTypeGetSystemId(dt: *DocumentType) ![]const u8 {
+pub inline fn documentTypeGetSystemId(dt: *DocumentType) []const u8 {
     var s: ?*String = null;
     const err = documentTypeVtable(dt).dom_document_type_get_system_id.?(dt, &s);
-    try DOMErr(err);
+    std.debug.assert(err == c.DOM_NO_ERR);
     return strToData(s.?);
 }
 

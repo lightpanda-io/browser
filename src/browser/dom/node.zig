@@ -67,7 +67,7 @@ pub const Node = struct {
     pub const subtype = .node;
 
     pub fn toInterface(node: *parser.Node) !Union {
-        return switch (try parser.nodeType(node)) {
+        return switch (parser.nodeType(node)) {
             .element => try Element.toInterfaceT(
                 Union,
                 @as(*parser.Element, @ptrCast(node)),
@@ -124,7 +124,7 @@ pub const Node = struct {
     }
 
     pub fn get_firstChild(self: *parser.Node) !?Union {
-        const res = try parser.nodeFirstChild(self);
+        const res = parser.nodeFirstChild(self);
         if (res == null) {
             return null;
         }
@@ -132,7 +132,7 @@ pub const Node = struct {
     }
 
     pub fn get_lastChild(self: *parser.Node) !?Union {
-        const res = try parser.nodeLastChild(self);
+        const res = parser.nodeLastChild(self);
         if (res == null) {
             return null;
         }
@@ -140,7 +140,7 @@ pub const Node = struct {
     }
 
     pub fn get_nextSibling(self: *parser.Node) !?Union {
-        const res = try parser.nodeNextSibling(self);
+        const res = parser.nodeNextSibling(self);
         if (res == null) {
             return null;
         }
@@ -148,7 +148,7 @@ pub const Node = struct {
     }
 
     pub fn get_previousSibling(self: *parser.Node) !?Union {
-        const res = try parser.nodePreviousSibling(self);
+        const res = parser.nodePreviousSibling(self);
         if (res == null) {
             return null;
         }
@@ -156,7 +156,7 @@ pub const Node = struct {
     }
 
     pub fn get_parentNode(self: *parser.Node) !?Union {
-        const res = try parser.nodeParentNode(self);
+        const res = parser.nodeParentNode(self);
         if (res == null) {
             return null;
         }
@@ -164,7 +164,7 @@ pub const Node = struct {
     }
 
     pub fn get_parentElement(self: *parser.Node) !?ElementUnion {
-        const res = try parser.nodeParentElement(self);
+        const res = parser.nodeParentElement(self);
         if (res == null) {
             return null;
         }
@@ -176,11 +176,11 @@ pub const Node = struct {
     }
 
     pub fn get_nodeType(self: *parser.Node) !u8 {
-        return @intFromEnum(try parser.nodeType(self));
+        return @intFromEnum(parser.nodeType(self));
     }
 
     pub fn get_ownerDocument(self: *parser.Node) !?*parser.DocumentHTML {
-        const res = try parser.nodeOwnerDocument(self);
+        const res = parser.nodeOwnerDocument(self);
         if (res == null) {
             return null;
         }
@@ -190,12 +190,12 @@ pub const Node = struct {
     pub fn get_isConnected(self: *parser.Node) !bool {
         var node = self;
         while (true) {
-            const node_type = try parser.nodeType(node);
+            const node_type = parser.nodeType(node);
             if (node_type == .document) {
                 return true;
             }
 
-            if (try parser.nodeParentNode(node)) |parent| {
+            if (parser.nodeParentNode(node)) |parent| {
                 // didn't find a document, but node has a parent, let's see
                 // if it's connected;
                 node = parent;
@@ -222,15 +222,15 @@ pub const Node = struct {
     // Read/Write attributes
 
     pub fn get_nodeValue(self: *parser.Node) !?[]const u8 {
-        return try parser.nodeValue(self);
+        return parser.nodeValue(self);
     }
 
     pub fn set_nodeValue(self: *parser.Node, data: []u8) !void {
         try parser.nodeSetValue(self, data);
     }
 
-    pub fn get_textContent(self: *parser.Node) !?[]const u8 {
-        return try parser.nodeTextContent(self);
+    pub fn get_textContent(self: *parser.Node) ?[]const u8 {
+        return parser.nodeTextContent(self);
     }
 
     pub fn set_textContent(self: *parser.Node, data: []u8) !void {
@@ -240,8 +240,8 @@ pub const Node = struct {
     // Methods
 
     pub fn _appendChild(self: *parser.Node, child: *parser.Node) !Union {
-        const self_owner = try parser.nodeOwnerDocument(self);
-        const child_owner = try parser.nodeOwnerDocument(child);
+        const self_owner = parser.nodeOwnerDocument(self);
+        const child_owner = parser.nodeOwnerDocument(child);
 
         // If the node to be inserted has a different ownerDocument than the parent node,
         // modern browsers automatically adopt the node and its descendants into
@@ -272,14 +272,14 @@ pub const Node = struct {
             return 0;
         }
 
-        const docself = try parser.nodeOwnerDocument(self) orelse blk: {
-            if (try parser.nodeType(self) == .document) {
+        const docself = parser.nodeOwnerDocument(self) orelse blk: {
+            if (parser.nodeType(self) == .document) {
                 break :blk @as(*parser.Document, @ptrCast(self));
             }
             break :blk null;
         };
-        const docother = try parser.nodeOwnerDocument(other) orelse blk: {
-            if (try parser.nodeType(other) == .document) {
+        const docother = parser.nodeOwnerDocument(other) orelse blk: {
+            if (parser.nodeType(other) == .document) {
                 break :blk @as(*parser.Document, @ptrCast(other));
             }
             break :blk null;
@@ -299,8 +299,8 @@ pub const Node = struct {
                 @intFromEnum(parser.DocumentPosition.contained_by);
         }
 
-        const rootself = try parser.nodeGetRootNode(self);
-        const rootother = try parser.nodeGetRootNode(other);
+        const rootself = parser.nodeGetRootNode(self);
+        const rootother = parser.nodeGetRootNode(other);
         if (rootself != rootother) {
             return @intFromEnum(parser.DocumentPosition.disconnected) +
                 @intFromEnum(parser.DocumentPosition.implementation_specific) +
@@ -347,8 +347,8 @@ pub const Node = struct {
         return 0;
     }
 
-    pub fn _contains(self: *parser.Node, other: *parser.Node) !bool {
-        return try parser.nodeContains(self, other);
+    pub fn _contains(self: *parser.Node, other: *parser.Node) bool {
+        return parser.nodeContains(self, other);
     }
 
     // Returns itself or ancestor object inheriting from Node.
@@ -364,7 +364,7 @@ pub const Node = struct {
             log.warn(.web_api, "not implemented", .{ .feature = "getRootNode composed" });
         };
 
-        const root = try parser.nodeGetRootNode(self);
+        const root = parser.nodeGetRootNode(self);
         if (page.getNodeState(root)) |state| {
             if (state.shadow_root) |sr| {
                 return .{ .shadow_root = sr };
@@ -374,18 +374,18 @@ pub const Node = struct {
         return .{ .node = try Node.toInterface(root) };
     }
 
-    pub fn _hasChildNodes(self: *parser.Node) !bool {
-        return try parser.nodeHasChildNodes(self);
+    pub fn _hasChildNodes(self: *parser.Node) bool {
+        return parser.nodeHasChildNodes(self);
     }
 
     pub fn get_childNodes(self: *parser.Node, page: *Page) !NodeList {
         const allocator = page.arena;
         var list: NodeList = .{};
 
-        var n = try parser.nodeFirstChild(self) orelse return list;
+        var n = parser.nodeFirstChild(self) orelse return list;
         while (true) {
             try list.append(allocator, n);
-            n = try parser.nodeNextSibling(n) orelse return list;
+            n = parser.nodeNextSibling(n) orelse return list;
         }
     }
 
@@ -394,8 +394,8 @@ pub const Node = struct {
             return _appendChild(self, new_node);
         }
 
-        const self_owner = try parser.nodeOwnerDocument(self);
-        const new_node_owner = try parser.nodeOwnerDocument(new_node);
+        const self_owner = parser.nodeOwnerDocument(self);
+        const new_node_owner = parser.nodeOwnerDocument(new_node);
 
         // If the node to be inserted has a different ownerDocument than the parent node,
         // modern browsers automatically adopt the node and its descendants into
@@ -415,7 +415,7 @@ pub const Node = struct {
     }
 
     pub fn _isDefaultNamespace(self: *parser.Node, namespace: ?[]const u8) !bool {
-        return try parser.nodeIsDefaultNamespace(self, namespace);
+        return parser.nodeIsDefaultNamespace(self, namespace);
     }
 
     pub fn _isEqualNode(self: *parser.Node, other: *parser.Node) !bool {
@@ -423,10 +423,10 @@ pub const Node = struct {
         return try parser.nodeIsEqualNode(self, other);
     }
 
-    pub fn _isSameNode(self: *parser.Node, other: *parser.Node) !bool {
+    pub fn _isSameNode(self: *parser.Node, other: *parser.Node) bool {
         // TODO: other is not an optional parameter, but can be null.
         // NOTE: there is no need to use isSameNode(); instead use the === strict equality operator
-        return try parser.nodeIsSameNode(self, other);
+        return parser.nodeIsSameNode(self, other);
     }
 
     pub fn _lookupPrefix(self: *parser.Node, namespace: ?[]const u8) !?[]const u8 {
@@ -482,9 +482,9 @@ pub const Node = struct {
             return parser.DOMError.HierarchyRequest;
         }
 
-        const doc = (try parser.nodeOwnerDocument(self)) orelse return;
+        const doc = (parser.nodeOwnerDocument(self)) orelse return;
 
-        if (try parser.nodeFirstChild(self)) |first| {
+        if (parser.nodeFirstChild(self)) |first| {
             for (nodes) |node| {
                 _ = try parser.nodeInsertBefore(self, try node.toNode(doc), first);
             }
@@ -506,7 +506,7 @@ pub const Node = struct {
             return parser.DOMError.HierarchyRequest;
         }
 
-        const doc = (try parser.nodeOwnerDocument(self)) orelse return;
+        const doc = (parser.nodeOwnerDocument(self)) orelse return;
         for (nodes) |node| {
             _ = try parser.nodeAppendChild(self, try node.toNode(doc));
         }
@@ -525,7 +525,7 @@ pub const Node = struct {
         // remove existing children
         try removeChildren(self);
 
-        const doc = (try parser.nodeOwnerDocument(self)) orelse return;
+        const doc = (parser.nodeOwnerDocument(self)) orelse return;
         // add new children
         for (nodes) |node| {
             _ = try parser.nodeAppendChild(self, try node.toNode(doc));
@@ -533,30 +533,30 @@ pub const Node = struct {
     }
 
     pub fn removeChildren(self: *parser.Node) !void {
-        if (!try parser.nodeHasChildNodes(self)) return;
+        if (!parser.nodeHasChildNodes(self)) return;
 
         const children = try parser.nodeGetChildNodes(self);
-        const ln = try parser.nodeListLength(children);
+        const ln = parser.nodeListLength(children);
         var i: u32 = 0;
         while (i < ln) {
             defer i += 1;
             // we always retrieve the 0 index child on purpose: libdom nodelist
             // are dynamic. So the next child to remove is always as pos 0.
-            const child = try parser.nodeListItem(children, 0) orelse continue;
+            const child = parser.nodeListItem(children, 0) orelse continue;
             _ = try parser.nodeRemoveChild(self, child);
         }
     }
 
     pub fn before(self: *parser.Node, nodes: []const NodeOrText) !void {
-        const parent = try parser.nodeParentNode(self) orelse return;
-        const doc = (try parser.nodeOwnerDocument(parent)) orelse return;
+        const parent = parser.nodeParentNode(self) orelse return;
+        const doc = (parser.nodeOwnerDocument(parent)) orelse return;
 
         var sibling: ?*parser.Node = self;
         // have to find the first sibling that isn't in nodes
         CHECK: while (sibling) |s| {
             for (nodes) |n| {
                 if (n.is(s)) {
-                    sibling = try parser.nodePreviousSibling(s);
+                    sibling = parser.nodePreviousSibling(s);
                     continue :CHECK;
                 }
             }
@@ -564,7 +564,7 @@ pub const Node = struct {
         }
 
         if (sibling == null) {
-            sibling = try parser.nodeFirstChild(parent);
+            sibling = parser.nodeFirstChild(parent);
         }
 
         if (sibling) |ref_node| {
@@ -578,15 +578,15 @@ pub const Node = struct {
     }
 
     pub fn after(self: *parser.Node, nodes: []const NodeOrText) !void {
-        const parent = try parser.nodeParentNode(self) orelse return;
-        const doc = (try parser.nodeOwnerDocument(parent)) orelse return;
+        const parent = parser.nodeParentNode(self) orelse return;
+        const doc = (parser.nodeOwnerDocument(parent)) orelse return;
 
         // have to find the first sibling that isn't in nodes
-        var sibling = try parser.nodeNextSibling(self);
+        var sibling = parser.nodeNextSibling(self);
         CHECK: while (sibling) |s| {
             for (nodes) |n| {
                 if (n.is(s)) {
-                    sibling = try parser.nodeNextSibling(s);
+                    sibling = parser.nodeNextSibling(s);
                     continue :CHECK;
                 }
             }

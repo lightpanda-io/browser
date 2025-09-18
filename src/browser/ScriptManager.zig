@@ -161,7 +161,7 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
         remote_url = try URL.stitch(page.arena, src, page.url.raw, .{ .null_terminated = true });
         source = .{ .remote = .{} };
     } else {
-        const inline_source = try parser.nodeTextContent(@ptrCast(element)) orelse return;
+        const inline_source = parser.nodeTextContent(@ptrCast(element)) orelse return;
         source = .{ .@"inline" = inline_source };
     }
 

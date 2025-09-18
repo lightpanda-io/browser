@@ -1,9 +1,7 @@
 const std = @import("std");
 
 const log = @import("log.zig");
-const URL = @import("url.zig").URL;
 const page = @import("browser/page.zig");
-const Http = @import("http/Http.zig");
 const Transfer = @import("http/Client.zig").Transfer;
 
 const Allocator = std.mem.Allocator;

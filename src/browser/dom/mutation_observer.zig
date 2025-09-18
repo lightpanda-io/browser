@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 
 const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
@@ -284,7 +283,7 @@ const Observer = struct {
 
         const mutation_event = parser.eventToMutationEvent(event);
         const event_type = blk: {
-            const t = try parser.eventType(event);
+            const t = parser.eventType(event);
             break :blk std.meta.stringToEnum(MutationEventType, t) orelse return;
         };
 
@@ -302,12 +301,12 @@ const Observer = struct {
             .DOMAttrModified => {
                 record.attribute_name = parser.mutationEventAttributeName(mutation_event) catch null;
                 if (self.options.attributeOldValue) {
-                    record.old_value = parser.mutationEventPrevValue(mutation_event) catch null;
+                    record.old_value = parser.mutationEventPrevValue(mutation_event);
                 }
             },
             .DOMCharacterDataModified => {
                 if (self.options.characterDataOldValue) {
-                    record.old_value = parser.mutationEventPrevValue(mutation_event) catch null;
+                    record.old_value = parser.mutationEventPrevValue(mutation_event);
                 }
             },
             .DOMNodeInserted => {

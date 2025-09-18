@@ -22,7 +22,6 @@ const builtin = @import("builtin");
 
 const parser = @import("../netsurf.zig");
 const Event = @import("event.zig").Event;
-const JsObject = @import("../env.zig").JsObject;
 
 // TODO: We currently don't have a UIEvent interface so we skip it in the prototype chain.
 // https://developer.mozilla.org/en-US/docs/Web/API/UIEvent

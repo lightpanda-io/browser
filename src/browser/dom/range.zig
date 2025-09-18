@@ -176,10 +176,10 @@ pub const Range = struct {
         self.proto.end_node = node;
 
         // Set end_offset
-        switch (try parser.nodeType(node)) {
+        switch (parser.nodeType(node)) {
             .text, .cdata_section, .comment, .processing_instruction => {
                 // For text-like nodes, end_offset should be the length of the text data
-                if (try parser.nodeValue(node)) |text_data| {
+                if (parser.nodeValue(node)) |text_data| {
                     self.proto.end_offset = @intCast(text_data.len);
                 } else {
                     self.proto.end_offset = 0;
@@ -188,7 +188,7 @@ pub const Range = struct {
             else => {
                 // For element and other nodes, end_offset is the number of children
                 const child_nodes = try parser.nodeGetChildNodes(node);
-                const child_count = try parser.nodeListLength(child_nodes);
+                const child_count = parser.nodeListLength(child_nodes);
                 self.proto.end_offset = @intCast(child_count);
             },
         }
@@ -211,7 +211,7 @@ pub const Range = struct {
 
     pub fn _comparePoint(self: *const Range, node: *parser.Node, offset_: i32) !i32 {
         const start = self.proto.start_node;
-        if (try parser.nodeGetRootNode(start) != try parser.nodeGetRootNode(node)) {
+        if (parser.nodeGetRootNode(start) != parser.nodeGetRootNode(node)) {
             // WPT really wants this error to be first. Later, when we check
             // if the relative position is 'disconnected', it'll also catch this
             // case, but WPT will complain because it sometimes also sends
@@ -219,7 +219,7 @@ pub const Range = struct {
             return error.WrongDocument;
         }
 
-        if (try parser.nodeType(node) == .document_type) {
+        if (parser.nodeType(node) == .document_type) {
             return error.InvalidNodeType;
         }
 
@@ -245,8 +245,8 @@ pub const Range = struct {
     }
 
     pub fn _intersectsNode(self: *const Range, node: *parser.Node) !bool {
-        const start_root = try parser.nodeGetRootNode(self.proto.start_node);
-        const node_root = try parser.nodeGetRootNode(node);
+        const start_root = parser.nodeGetRootNode(self.proto.start_node);
+        const node_root = parser.nodeGetRootNode(node);
         if (start_root != node_root) {
             return false;
         }
@@ -299,29 +299,29 @@ fn ensureValidOffset(node: *parser.Node, offset: i32) !void {
 
 fn nodeLength(node: *parser.Node) !usize {
     switch (try isTextual(node)) {
-        true => return ((try parser.nodeTextContent(node)) orelse "").len,
+        true => return ((parser.nodeTextContent(node)) orelse "").len,
         false => {
             const children = try parser.nodeGetChildNodes(node);
-            return @intCast(try parser.nodeListLength(children));
+            return @intCast(parser.nodeListLength(children));
         },
     }
 }
 
 fn isTextual(node: *parser.Node) !bool {
-    return switch (try parser.nodeType(node)) {
+    return switch (parser.nodeType(node)) {
         .text, .comment, .cdata_section => true,
         else => false,
     };
 }
 
 fn getParentAndIndex(child: *parser.Node) !struct { *parser.Node, u32 } {
-    const parent = (try parser.nodeParentNode(child)) orelse return error.InvalidNodeType;
+    const parent = (parser.nodeParentNode(child)) orelse return error.InvalidNodeType;
     const children = try parser.nodeGetChildNodes(parent);
-    const ln = try parser.nodeListLength(children);
+    const ln = parser.nodeListLength(children);
     var i: u32 = 0;
     while (i < ln) {
         defer i += 1;
-        const c = try parser.nodeListItem(children, i) orelse continue;
+        const c = parser.nodeListItem(children, i) orelse continue;
         if (c == child) {
             return .{ parent, i };
         }
@@ -363,7 +363,7 @@ fn compare(node_a: *parser.Node, offset_a: u32, node_b: *parser.Node, offset_b: 
     if (position & @intFromEnum(parser.DocumentPosition.contains) == @intFromEnum(parser.DocumentPosition.contains)) {
         // node_a contains node_b
         var child = node_b;
-        while (try parser.nodeParentNode(child)) |parent| {
+        while (parser.nodeParentNode(child)) |parent| {
             if (parent == node_a) {
                 // child.parentNode == node_a
                 break;

@@ -198,12 +198,12 @@ pub const Page = struct {
                 // returns the <pre> element from the HTML
                 const doc = parser.documentHTMLToDocument(self.window.document);
                 const list = try parser.documentGetElementsByTagName(doc, "pre");
-                const pre = try parser.nodeListItem(list, 0) orelse return error.InvalidHTML;
+                const pre = parser.nodeListItem(list, 0) orelse return error.InvalidHTML;
                 const walker = Walker{};
                 var next: ?*parser.Node = null;
                 while (true) {
                     next = try walker.get_next(pre, next) orelse break;
-                    const v = try parser.nodeTextContent(next.?) orelse return;
+                    const v = parser.nodeTextContent(next.?) orelse return;
                     try out.writeAll(v);
                 }
                 return;
@@ -241,7 +241,7 @@ pub const Page = struct {
 
         // find <head> tag
         const list = try parser.documentGetElementsByTagName(doc, "head");
-        const head = try parser.nodeListItem(list, 0) orelse return;
+        const head = parser.nodeListItem(list, 0) orelse return;
 
         const base = try parser.documentCreateElement(doc, "base");
         try parser.elementSetAttribute(base, "href", self.url.raw);
@@ -1076,9 +1076,9 @@ pub const Page = struct {
         try self.navigateFromWebAPI(action, opts);
     }
 
-    pub fn isNodeAttached(self: *const Page, node: *parser.Node) !bool {
+    pub fn isNodeAttached(self: *const Page, node: *parser.Node) bool {
         const root = parser.documentToNode(parser.documentHTMLToDocument(self.window.document));
-        return root == try parser.nodeGetRootNode(node);
+        return root == parser.nodeGetRootNode(node);
     }
 
     fn elementSubmitForm(self: *Page, element: *parser.Element) !void {

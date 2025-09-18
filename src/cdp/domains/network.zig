@@ -19,7 +19,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const log = @import("../../log.zig");
 const CdpStorage = @import("storage.zig");
 const Transfer = @import("../../http/Client.zig").Transfer;
 const Notification = @import("../../notification.zig").Notification;

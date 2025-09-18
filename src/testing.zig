@@ -19,8 +19,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const Platform = @import("runtime/js.zig").Platform;
-
 pub const allocator = std.testing.allocator;
 pub const expectError = std.testing.expectError;
 pub const expect = std.testing.expect;

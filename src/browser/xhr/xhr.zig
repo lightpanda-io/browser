@@ -31,7 +31,6 @@ const Mime = @import("../mime.zig").Mime;
 const parser = @import("../netsurf.zig");
 const Page = @import("../page.zig").Page;
 const Http = @import("../../http/Http.zig");
-const CookieJar = @import("../storage/storage.zig").CookieJar;
 
 // XHR interfaces
 // https://xhr.spec.whatwg.org/#interface-xmlhttprequest
