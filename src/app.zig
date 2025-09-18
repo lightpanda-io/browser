@@ -92,16 +92,24 @@ pub const App = struct {
     }
 };
 
+fn getAppDir(allocator: Allocator) ![]const u8 {
+    if (@import("builtin").os.tag == .ios) {
+        // std.fs.getAppDataDir is not available on iOS, so we inline the same macOS implementation here.
+        const home_dir = std.posix.getenv("HOME") orelse {
+            return error.AppDataDirUnavailable;
+        };
+        return std.fs.path.join(allocator, &[_][]const u8{ home_dir, "Library", "Application Support", "lightpanda" });
+    } else {
+        return try std.fs.getAppDataDir(allocator, "lightpanda");
+    }
+}
+
 fn getAndMakeAppDir(allocator: Allocator) ?[]const u8 {
     if (@import("builtin").is_test) {
         return allocator.dupe(u8, "/tmp") catch unreachable;
     }
 
-    if (@import("builtin").os.tag == .ios) {
-        return null; // getAppDataDir is not available on iOS
-    }
-
-    const app_dir_path = std.fs.getAppDataDir(allocator, "lightpanda") catch |err| {
+    const app_dir_path = getAppDir(allocator) catch |err| {
         log.warn(.app, "get data dir", .{ .err = err });
         return null;
     };
