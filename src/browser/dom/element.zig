@@ -19,6 +19,7 @@
 const std = @import("std");
 
 const parser = @import("../netsurf.zig");
+const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
 
 const css = @import("css.zig");
@@ -350,28 +351,18 @@ pub const Element = struct {
         return try parser.elementRemoveAttributeNode(self, attr);
     }
 
-    pub fn _getElementsByTagName(
-        self: *parser.Element,
-        tag_name: []const u8,
-        page: *Page,
-    ) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(
-            page.arena,
+    pub fn _getElementsByTagName(self: *parser.Element, tag_name: Env.String) !collection.HTMLCollection {
+        return collection.HTMLCollectionByTagName(
             parser.elementToNode(self),
-            tag_name,
+            tag_name.string,
             .{ .include_root = false },
         );
     }
 
-    pub fn _getElementsByClassName(
-        self: *parser.Element,
-        classNames: []const u8,
-        page: *Page,
-    ) !collection.HTMLCollection {
+    pub fn _getElementsByClassName(self: *parser.Element, class_names: Env.String) !collection.HTMLCollection {
         return try collection.HTMLCollectionByClassName(
-            page.arena,
             parser.elementToNode(self),
-            classNames,
+            class_names.string,
             .{ .include_root = false },
         );
     }

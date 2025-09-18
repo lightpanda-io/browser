@@ -155,22 +155,14 @@ pub const Document = struct {
     // the spec changed to return an HTMLCollection instead.
     // That's why we reimplemented getElementsByTagName by using an
     // HTMLCollection in zig here.
-    pub fn _getElementsByTagName(
-        self: *parser.Document,
-        tag_name: []const u8,
-        page: *Page,
-    ) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByTagName(page.arena, parser.documentToNode(self), tag_name, .{
+    pub fn _getElementsByTagName(self: *parser.Document, tag_name: Env.String) !collection.HTMLCollection {
+        return collection.HTMLCollectionByTagName(parser.documentToNode(self), tag_name.string, .{
             .include_root = true,
         });
     }
 
-    pub fn _getElementsByClassName(
-        self: *parser.Document,
-        classNames: []const u8,
-        page: *Page,
-    ) !collection.HTMLCollection {
-        return try collection.HTMLCollectionByClassName(page.arena, parser.documentToNode(self), classNames, .{
+    pub fn _getElementsByClassName(self: *parser.Document, class_names: Env.String) !collection.HTMLCollection {
+        return collection.HTMLCollectionByClassName(parser.documentToNode(self), class_names.string, .{
             .include_root = true,
         });
     }

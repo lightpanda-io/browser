@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
@@ -101,13 +102,20 @@ pub const NodeList = struct {
 
     nodes: NodesArrayList = .{},
 
-    pub fn deinit(self: *NodeList, alloc: std.mem.Allocator) void {
-        // TODO unref all nodes
-        self.nodes.deinit(alloc);
+    pub fn deinit(self: *NodeList, allocator: Allocator) void {
+        self.nodes.deinit(allocator);
     }
 
-    pub fn append(self: *NodeList, alloc: std.mem.Allocator, node: *parser.Node) !void {
-        try self.nodes.append(alloc, node);
+    pub fn ensureTotalCapacity(self: *NodeList, allocator: Allocator, n: usize) !void {
+        return self.nodes.ensureTotalCapacity(allocator, n);
+    }
+
+    pub fn append(self: *NodeList, allocator: Allocator, node: *parser.Node) !void {
+        try self.nodes.append(allocator, node);
+    }
+
+    pub fn appendAssumeCapacity(self: *NodeList, node: *parser.Node) void {
+        self.nodes.appendAssumeCapacity(node);
     }
 
     pub fn get_length(self: *const NodeList) u32 {

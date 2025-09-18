@@ -1215,6 +1215,10 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     return try self.createFunction(js_value);
                 }
 
+                if (T == String) {
+                    return .{ .string = try valueToString(self.context_arena, js_value, self.isolate, self.v8_context) };
+                }
+
                 const js_obj = js_value.castTo(v8.Object);
 
                 if (comptime isJsObject(T)) {
@@ -2295,6 +2299,15 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
         pub const Promise = struct {
             promise: v8.Promise,
+        };
+
+        // When doing jsValueToZig, string ([]const u8) are managed by the
+        // call_arena. That means that if the API wants to persist the string
+        // (which is relatively common), it needs to dupe it again.
+        // If the parameter is an Env.String rather than a []const u8, then
+        // the page's arena will be used (rather than the call arena).
+        pub const String = struct {
+            string: []const u8,
         };
 
         pub const Inspector = struct {
