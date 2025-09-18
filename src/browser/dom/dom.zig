@@ -25,7 +25,6 @@ const NodeList = @import("nodelist.zig");
 const Node = @import("node.zig");
 const ResizeObserver = @import("resize_observer.zig");
 const MutationObserver = @import("mutation_observer.zig");
-const IntersectionObserver = @import("intersection_observer.zig");
 const DOMParser = @import("dom_parser.zig").DOMParser;
 const TreeWalker = @import("tree_walker.zig").TreeWalker;
 const NodeIterator = @import("node_iterator.zig").NodeIterator;
@@ -44,7 +43,6 @@ pub const Interfaces = .{
     Node.Interfaces,
     ResizeObserver.Interfaces,
     MutationObserver.Interfaces,
-    IntersectionObserver.Interfaces,
     DOMParser,
     TreeWalker,
     NodeIterator,
@@ -54,4 +52,5 @@ pub const Interfaces = .{
     @import("range.zig").Interfaces,
     @import("Animation.zig"),
     @import("MessageChannel.zig").Interfaces,
+    @import("IntersectionObserver.zig").Interfaces,
 };
