@@ -549,7 +549,12 @@ fn buildMbedtls(b: *Build, m: *Build.Module) !void {
     mbedtls.addIncludePath(b.path(root ++ "include"));
     mbedtls.addIncludePath(b.path(root ++ "library"));
 
-    mbedtls.addCSourceFiles(.{ .flags = &.{"-Wno-nullability-completeness"}, .files = &.{
+    const flags: []const []const u8 = if (m.resolved_target.?.result.os.tag == .ios)
+        &.{"-Wno-nullability-completeness"}
+    else
+        &.{};
+
+    mbedtls.addCSourceFiles(.{ .flags = flags, .files = &.{
         root ++ "library/aes.c",
         root ++ "library/aesni.c",
         root ++ "library/aesce.c",
