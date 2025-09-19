@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 
-<div id="content">
+<div id="content" dir="ltr">
   <a id="link" href="foo" class="ok">OK</a>
   <p id="para-empty" class="ok empty">
     <span id="para-empty-child"></span>
@@ -52,16 +52,16 @@
 
 <script id=attributes>
   testing.expectEqual(true, content.hasAttributes());
-  testing.expectEqual(1, content.attributes.length);
-  testing.expectEqual(['id'], content.getAttributeNames());
+  testing.expectEqual(2, content.attributes.length);
+  testing.expectEqual(['id', 'dir'], content.getAttributeNames());
   testing.expectEqual('content', content.getAttribute('id'));
   testing.expectEqual('content', content.attributes['id'].value);
 
   let x = '';
   for (const attr of content.attributes) {
-    x += attr.name + '=' + attr.value;
+    x += attr.name + '=' + attr.value + ',';
   }
-  testing.expectEqual('id=content', x);
+  testing.expectEqual('id=content,dir=ltr,', x);
 
   testing.expectEqual(false, content.hasAttribute('foo'));
   testing.expectEqual(null, content.getAttribute('foo'));
@@ -69,7 +69,7 @@
   content.setAttribute('foo', 'bar');
   testing.expectEqual(true, content.hasAttribute('foo'));
   testing.expectEqual('bar', content.getAttribute('foo'));
-  testing.expectEqual(['id', 'foo'], content.getAttributeNames());
+  testing.expectEqual(['id', 'dir', 'foo'], content.getAttributeNames());
 
   testing.expectError('Error: InvalidCharacterError', () => {
     content.setAttribute('.foo', 'invalid')
@@ -266,7 +266,7 @@
 
 <script id=elementDir>
   const divElement = document.createElement("div");
-  // Always initialized with empty string.
+  // Always initialized with empty string if `dir` attribute not provided.
   testing.expectEqual("", divElement.dir);
 
   divElement.dir = "ltr";
