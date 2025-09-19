@@ -46,7 +46,7 @@ pub fn getRSS() i64 {
         // that this requires parsing some unstructured data
         @compileError("Only available in debug builds");
     }
-    var buf: [4096]u8 = undefined;
+    var buf: [1024 * 8]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buf);
     var writer = std.Io.Writer.Allocating.init(fba.allocator());
 
@@ -54,7 +54,7 @@ pub fn getRSS() i64 {
         fn print(msg: [*c]const u8, data: ?*anyopaque) callconv(.c) void {
             const w: *std.Io.Writer = @ptrCast(@alignCast(data.?));
             w.writeAll(std.mem.span(msg)) catch |err| {
-                std.debug.print("Failed to write mimalloc data: {}", .{err});
+                std.debug.print("Failed to write mimalloc data: {}\n", .{err});
             };
         }
     }.print, &writer.writer);
