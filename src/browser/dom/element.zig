@@ -104,6 +104,14 @@ pub const Element = struct {
         return try parser.nodeName(parser.elementToNode(self));
     }
 
+    pub fn get_dir(self: *parser.Element) ![]const u8 {
+        return try parser.elementGetAttribute(self, "dir") orelse "";
+    }
+
+    pub fn set_dir(self: *parser.Element, dir: []const u8) !void {
+        return parser.elementSetAttribute(self, "dir", dir);
+    }
+
     pub fn get_id(self: *parser.Element) ![]const u8 {
         return try parser.elementGetAttribute(self, "id") orelse "";
     }
