@@ -66,6 +66,7 @@ pub fn main() !void {
 
     var app = try App.init(allocator, .{
         .run_mode = .fetch,
+        .user_agent = "User-Agent: Lightpanda/1.0 Lightpanda/WPT",
     });
     defer app.deinit();
 
