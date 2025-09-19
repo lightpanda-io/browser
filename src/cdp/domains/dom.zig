@@ -527,7 +527,7 @@ test "cdp.dom: search flow" {
             .method = "DOM.getSearchResults",
             .params = .{ .searchId = "0", .fromIndex = 0, .toIndex = 2 },
         });
-        try ctx.expectSentResult(.{ .nodeIds = &.{ 0, 1 } }, .{ .id = 13 });
+        try ctx.expectSentResult(.{ .nodeIds = &.{ 1, 2 } }, .{ .id = 13 });
 
         // different fromIndex
         try ctx.processMessage(.{
@@ -535,7 +535,7 @@ test "cdp.dom: search flow" {
             .method = "DOM.getSearchResults",
             .params = .{ .searchId = "0", .fromIndex = 1, .toIndex = 2 },
         });
-        try ctx.expectSentResult(.{ .nodeIds = &.{1} }, .{ .id = 14 });
+        try ctx.expectSentResult(.{ .nodeIds = &.{2} }, .{ .id = 14 });
 
         // different toIndex
         try ctx.processMessage(.{
@@ -543,7 +543,7 @@ test "cdp.dom: search flow" {
             .method = "DOM.getSearchResults",
             .params = .{ .searchId = "0", .fromIndex = 0, .toIndex = 1 },
         });
-        try ctx.expectSentResult(.{ .nodeIds = &.{0} }, .{ .id = 15 });
+        try ctx.expectSentResult(.{ .nodeIds = &.{1} }, .{ .id = 15 });
     }
 
     try ctx.processMessage(.{
@@ -588,7 +588,7 @@ test "cdp.dom: querySelector Node not found" {
 
     _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .html = "<p>1</p> <p>2</p>" });
 
-    try ctx.processMessage(.{ // Hacky way to make sure nodeId 0 exists in the registry
+    try ctx.processMessage(.{ // Hacky way to make sure nodeId 1 exists in the registry
         .id = 3,
         .method = "DOM.performSearch",
         .params = .{ .query = "p" },
@@ -598,13 +598,13 @@ test "cdp.dom: querySelector Node not found" {
     try testing.expectError(error.NodeNotFoundForGivenId, ctx.processMessage(.{
         .id = 4,
         .method = "DOM.querySelector",
-        .params = .{ .nodeId = 0, .selector = "a" },
+        .params = .{ .nodeId = 1, .selector = "a" },
     }));
 
     try ctx.processMessage(.{
         .id = 5,
         .method = "DOM.querySelectorAll",
-        .params = .{ .nodeId = 0, .selector = "a" },
+        .params = .{ .nodeId = 1, .selector = "a" },
     });
     try ctx.expectSentResult(.{ .nodeIds = &[_]u32{} }, .{ .id = 5 });
 }
@@ -615,7 +615,7 @@ test "cdp.dom: querySelector Nodes found" {
 
     _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .html = "<div><p>2</p></div>" });
 
-    try ctx.processMessage(.{ // Hacky way to make sure nodeId 0 exists in the registry
+    try ctx.processMessage(.{ // Hacky way to make sure nodeId 1 exists in the registry
         .id = 3,
         .method = "DOM.performSearch",
         .params = .{ .query = "div" },
@@ -625,18 +625,18 @@ test "cdp.dom: querySelector Nodes found" {
     try ctx.processMessage(.{
         .id = 4,
         .method = "DOM.querySelector",
-        .params = .{ .nodeId = 0, .selector = "p" },
+        .params = .{ .nodeId = 1, .selector = "p" },
     });
     try ctx.expectSentEvent("DOM.setChildNodes", null, .{});
-    try ctx.expectSentResult(.{ .nodeId = 5 }, .{ .id = 4 });
+    try ctx.expectSentResult(.{ .nodeId = 6 }, .{ .id = 4 });
 
     try ctx.processMessage(.{
         .id = 5,
         .method = "DOM.querySelectorAll",
-        .params = .{ .nodeId = 0, .selector = "p" },
+        .params = .{ .nodeId = 1, .selector = "p" },
     });
     try ctx.expectSentEvent("DOM.setChildNodes", null, .{});
-    try ctx.expectSentResult(.{ .nodeIds = &.{5} }, .{ .id = 5 });
+    try ctx.expectSentResult(.{ .nodeIds = &.{6} }, .{ .id = 5 });
 }
 
 test "cdp.dom: getBoxModel" {
@@ -645,7 +645,7 @@ test "cdp.dom: getBoxModel" {
 
     _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .html = "<div><p>2</p></div>" });
 
-    try ctx.processMessage(.{ // Hacky way to make sure nodeId 0 exists in the registry
+    try ctx.processMessage(.{ // Hacky way to make sure nodeId 1 exists in the registry
         .id = 3,
         .method = "DOM.getDocument",
     });
@@ -653,14 +653,14 @@ test "cdp.dom: getBoxModel" {
     try ctx.processMessage(.{
         .id = 4,
         .method = "DOM.querySelector",
-        .params = .{ .nodeId = 0, .selector = "p" },
+        .params = .{ .nodeId = 1, .selector = "p" },
     });
-    try ctx.expectSentResult(.{ .nodeId = 2 }, .{ .id = 4 });
+    try ctx.expectSentResult(.{ .nodeId = 3 }, .{ .id = 4 });
 
     try ctx.processMessage(.{
         .id = 5,
         .method = "DOM.getBoxModel",
-        .params = .{ .nodeId = 5 },
+        .params = .{ .nodeId = 6 },
     });
     try ctx.expectSentResult(.{ .model = BoxModel{
         .content = Quad{ 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0 },
