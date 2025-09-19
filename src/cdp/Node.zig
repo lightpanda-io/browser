@@ -42,7 +42,7 @@ pub const Registry = struct {
 
     pub fn init(allocator: Allocator) Registry {
         return .{
-            .node_id = 0,
+            .node_id = 1,
             .lookup_by_id = .{},
             .lookup_by_node = .{},
             .allocator = allocator,
@@ -346,24 +346,24 @@ test "cdp Node: Registry register" {
     {
         const n = (try doc.querySelector("#a1")).?;
         const node = try registry.register(n);
-        const n1b = registry.lookup_by_id.get(0).?;
-        const n1c = registry.lookup_by_node.get(node._node).?;
-        try testing.expectEqual(node, n1b);
-        try testing.expectEqual(node, n1c);
-
-        try testing.expectEqual(0, node.id);
-        try testing.expectEqual(n, node._node);
-    }
-
-    {
-        const n = (try doc.querySelector("p")).?;
-        const node = try registry.register(n);
         const n1b = registry.lookup_by_id.get(1).?;
         const n1c = registry.lookup_by_node.get(node._node).?;
         try testing.expectEqual(node, n1b);
         try testing.expectEqual(node, n1c);
 
         try testing.expectEqual(1, node.id);
+        try testing.expectEqual(n, node._node);
+    }
+
+    {
+        const n = (try doc.querySelector("p")).?;
+        const node = try registry.register(n);
+        const n1b = registry.lookup_by_id.get(2).?;
+        const n1c = registry.lookup_by_node.get(node._node).?;
+        try testing.expectEqual(node, n1b);
+        try testing.expectEqual(node, n1c);
+
+        try testing.expectEqual(2, node.id);
         try testing.expectEqual(n, node._node);
     }
 }
@@ -404,18 +404,18 @@ test "cdp Node: search list" {
 
         const s1 = try search_list.create(try doc.querySelectorAll("a"));
         try testing.expectEqual("1", s1.name);
-        try testing.expectEqualSlices(u32, &.{ 0, 1 }, s1.node_ids);
+        try testing.expectEqualSlices(u32, &.{ 1, 2 }, s1.node_ids);
 
         try testing.expectEqual(2, registry.lookup_by_id.count());
         try testing.expectEqual(2, registry.lookup_by_node.count());
 
         const s2 = try search_list.create(try doc.querySelectorAll("#a1"));
         try testing.expectEqual("2", s2.name);
-        try testing.expectEqualSlices(u32, &.{0}, s2.node_ids);
+        try testing.expectEqualSlices(u32, &.{1}, s2.node_ids);
 
         const s3 = try search_list.create(try doc.querySelectorAll("#a2"));
         try testing.expectEqual("3", s3.name);
-        try testing.expectEqualSlices(u32, &.{1}, s3.node_ids);
+        try testing.expectEqualSlices(u32, &.{2}, s3.node_ids);
 
         try testing.expectEqual(2, registry.lookup_by_id.count());
         try testing.expectEqual(2, registry.lookup_by_node.count());
@@ -443,8 +443,8 @@ test "cdp Node: Writer" {
         defer testing.allocator.free(json);
 
         try testing.expectJson(.{
-            .nodeId = 0,
-            .backendNodeId = 0,
+            .nodeId = 1,
+            .backendNodeId = 1,
             .nodeType = 9,
             .nodeName = "#document",
             .localName = "",
@@ -456,8 +456,8 @@ test "cdp Node: Writer" {
             .compatibilityMode = "NoQuirksMode",
             .childNodeCount = 1,
             .children = &.{.{
-                .nodeId = 1,
-                .backendNodeId = 1,
+                .nodeId = 2,
+                .backendNodeId = 2,
                 .nodeType = 1,
                 .nodeName = "HTML",
                 .localName = "html",
@@ -473,7 +473,7 @@ test "cdp Node: Writer" {
     }
 
     {
-        const node = registry.lookup_by_id.get(1).?;
+        const node = registry.lookup_by_id.get(2).?;
         const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
             .root = node,
             .depth = 1,
@@ -483,8 +483,8 @@ test "cdp Node: Writer" {
         defer testing.allocator.free(json);
 
         try testing.expectJson(.{
-            .nodeId = 1,
-            .backendNodeId = 1,
+            .nodeId = 2,
+            .backendNodeId = 2,
             .nodeType = 1,
             .nodeName = "HTML",
             .localName = "html",
@@ -496,8 +496,8 @@ test "cdp Node: Writer" {
             .compatibilityMode = "NoQuirksMode",
             .isScrollable = false,
             .children = &.{ .{
-                .nodeId = 2,
-                .backendNodeId = 2,
+                .nodeId = 3,
+                .backendNodeId = 3,
                 .nodeType = 1,
                 .nodeName = "HEAD",
                 .localName = "head",
@@ -508,10 +508,10 @@ test "cdp Node: Writer" {
                 .xmlVersion = "",
                 .compatibilityMode = "NoQuirksMode",
                 .isScrollable = false,
-                .parentId = 1,
+                .parentId = 2,
             }, .{
-                .nodeId = 3,
-                .backendNodeId = 3,
+                .nodeId = 4,
+                .backendNodeId = 4,
                 .nodeType = 1,
                 .nodeName = "BODY",
                 .localName = "body",
@@ -522,13 +522,13 @@ test "cdp Node: Writer" {
                 .xmlVersion = "",
                 .compatibilityMode = "NoQuirksMode",
                 .isScrollable = false,
-                .parentId = 1,
+                .parentId = 2,
             } },
         }, json);
     }
 
     {
-        const node = registry.lookup_by_id.get(1).?;
+        const node = registry.lookup_by_id.get(2).?;
         const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
             .root = node,
             .depth = -1,
@@ -538,8 +538,8 @@ test "cdp Node: Writer" {
         defer testing.allocator.free(json);
 
         try testing.expectJson(&.{ .{
-            .nodeId = 2,
-            .backendNodeId = 2,
+            .nodeId = 3,
+            .backendNodeId = 3,
             .nodeType = 1,
             .nodeName = "HEAD",
             .localName = "head",
@@ -550,10 +550,10 @@ test "cdp Node: Writer" {
             .xmlVersion = "",
             .compatibilityMode = "NoQuirksMode",
             .isScrollable = false,
-            .parentId = 1,
+            .parentId = 2,
         }, .{
-            .nodeId = 3,
-            .backendNodeId = 3,
+            .nodeId = 4,
+            .backendNodeId = 4,
             .nodeType = 1,
             .nodeName = "BODY",
             .localName = "body",
@@ -565,20 +565,20 @@ test "cdp Node: Writer" {
             .compatibilityMode = "NoQuirksMode",
             .isScrollable = false,
             .children = &.{ .{
-                .nodeId = 4,
+                .nodeId = 5,
                 .localName = "a",
                 .childNodeCount = 0,
-                .parentId = 3,
+                .parentId = 4,
             }, .{
-                .nodeId = 5,
+                .nodeId = 6,
                 .localName = "div",
                 .childNodeCount = 1,
-                .parentId = 3,
+                .parentId = 4,
                 .children = &.{.{
-                    .nodeId = 6,
+                    .nodeId = 7,
                     .localName = "a",
                     .childNodeCount = 0,
-                    .parentId = 5,
+                    .parentId = 6,
                 }},
             } },
         } }, json);
