@@ -394,6 +394,9 @@ pub const Page = struct {
                     return err;
                 },
                 .raw_done => {
+                    // Run scheduler to clean up any pending tasks
+                    _ = try scheduler.run();
+
                     if (exit_when_done) {
                         return .done;
                     }

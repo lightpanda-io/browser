@@ -153,7 +153,7 @@ export fn lightpanda_cdp_browser_context(cdp_ptr: *anyopaque) *anyopaque {
     return &cdp.browser_context.?;
 }
 
-// returns -1 if no session/page, or if no events reamin, otherwise returns 
+// returns -1 if no session/page, or if no events reamin, otherwise returns
 // milliseconds until next scheduled task
 export fn lightpanda_cdp_page_wait(cdp_ptr: *anyopaque, ms: i32) c_int {
     const cdp: *CDP = @ptrCast(@alignCast(cdp_ptr));
@@ -165,14 +165,20 @@ export fn lightpanda_cdp_page_wait(cdp_ptr: *anyopaque, ms: i32) c_int {
 }
 
 fn cdp_peek_next_delay_ms(scheduler: *Scheduler) ?i32 {
-    if (scheduler.high_priority.count() == 0) {
-        return null;
-    }
+    var queue = queue: {
+        if (scheduler.high_priority.count() == 0) {
+            if (scheduler.low_priority.count() == 0) return null;
+            break :queue scheduler.low_priority;
+        } else {
+            break :queue scheduler.high_priority;
+        }
+    };
 
     const now = std.time.milliTimestamp();
-    const next_task = scheduler.high_priority.peek().?;
-    const time_to_next = next_task.ms - now;
+    // we know this must exist because the count was not 0.
+    const next_task = queue.peek().?;
 
+    const time_to_next = next_task.ms - now;
     return if (time_to_next > 0) @intCast(time_to_next) else 0;
 }
 
