@@ -17,6 +17,7 @@
   testing.expectEqual('div', content.localName);
   testing.expectEqual('DIV', content.tagName);
   testing.expectEqual('content', content.id);
+  testing.expectEqual('ltr', content.dir);
 
   content.id = 'foo';
   testing.expectEqual('foo', content.id);
@@ -26,6 +27,7 @@
 
   let p1 = document.getElementById('para-empty');
   testing.expectEqual('ok empty', p1.className);
+  testing.expectEqual('', p1.dir);
 
   p1.className = 'foo bar baz';
   testing.expectEqual('foo bar baz', p1.className);
