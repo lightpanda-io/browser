@@ -312,6 +312,12 @@ pub const Page = struct {
                     // mode with an extra socket. Either way, we're waiting
                     // for http traffic
                     if (try http_client.tick(ms_remaining) == .extra_socket) {
+                        // exit_when_done is explicitly set when there isn't
+                        // an extra socket, so it should not be possibl to
+                        // get an extra_socket message when exit_when_done
+                        // is true.
+                        std.debug.assert(exit_when_done == false);
+
                         // data on a socket we aren't handling, return to caller
                         return .extra_socket;
                     }
