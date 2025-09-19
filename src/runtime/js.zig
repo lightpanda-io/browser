@@ -2843,7 +2843,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             const T = @TypeOf(value);
             switch (@typeInfo(T)) {
-                .void, .bool, .int, .comptime_int, .float, .comptime_float, .@"enum" => {
+                .void, .bool, .int, .comptime_int, .float, .comptime_float, .@"enum", .null => {
                     // Need to do this to keep the compiler happy
                     // simpleZigValueToJs handles all of these cases.
                     unreachable;
@@ -3634,6 +3634,7 @@ fn jsUnsignedIntToZig(comptime T: type, max: comptime_int, maybe: u32) !T {
 fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bool) if (fail) v8.Value else ?v8.Value {
     switch (@typeInfo(@TypeOf(value))) {
         .void => return v8.initUndefined(isolate).toValue(),
+        .null => return v8.initNull(isolate).toValue(),
         .bool => return v8.getValue(if (value) v8.initTrue(isolate) else v8.initFalse(isolate)),
         .int => |n| switch (n.signedness) {
             .signed => {
