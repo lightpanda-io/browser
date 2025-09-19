@@ -263,3 +263,18 @@
   $('#to-remove').remove();
   testing.expectEqual(null, $('#to-remove'));
 </script>
+
+<script id=elementDir>
+  const divElement = document.createElement("div");
+  // Always initialized with empty string.
+  testing.expectEqual("", divElement.dir);
+
+  divElement.dir = "ltr";
+  testing.expectEqual("ltr", divElement.dir);
+
+  divElement.dir = "rtl";
+  testing.expectEqual("rtl", divElement.dir);
+
+  divElement.dir = "auto";
+  testing.expectEqual("auto", divElement.dir);
+</script>
