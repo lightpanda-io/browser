@@ -80,6 +80,27 @@ pub const RequestCredentials = enum {
     }
 };
 
+pub const RequestMode = enum {
+    cors,
+    @"no-cors",
+    @"same-origin",
+    navigate,
+
+    pub fn fromString(str: []const u8) ?RequestMode {
+        for (std.enums.values(RequestMode)) |cache| {
+            if (std.ascii.eqlIgnoreCase(str, @tagName(cache))) {
+                return cache;
+            }
+        } else {
+            return null;
+        }
+    }
+
+    pub fn toString(self: RequestMode) []const u8 {
+        return @tagName(self);
+    }
+};
+
 // https://developer.mozilla.org/en-US/docs/Web/API/RequestInit
 pub const RequestInit = struct {
     body: ?[]const u8 = null,
@@ -88,6 +109,7 @@ pub const RequestInit = struct {
     headers: ?HeadersInit = null,
     integrity: ?[]const u8 = null,
     method: ?[]const u8 = null,
+    mode: ?[]const u8 = null,
 };
 
 // https://developer.mozilla.org/en-US/docs/Web/API/Request/Request
@@ -97,6 +119,8 @@ method: Http.Method,
 url: [:0]const u8,
 cache: RequestCache,
 credentials: RequestCredentials,
+// no-cors is default is not built with constructor.
+mode: RequestMode = .@"no-cors",
 headers: Headers,
 body: ?[]const u8,
 body_used: bool = false,
@@ -115,11 +139,11 @@ pub fn constructor(input: RequestInput, _options: ?RequestInit, page: *Page) !Re
         },
     };
 
-    const body = if (options.body) |body| try arena.dupe(u8, body) else null;
     const cache = (if (options.cache) |cache| RequestCache.fromString(cache) else null) orelse RequestCache.default;
     const credentials = (if (options.credentials) |creds| RequestCredentials.fromString(creds) else null) orelse RequestCredentials.@"same-origin";
     const integrity = if (options.integrity) |integ| try arena.dupe(u8, integ) else "";
     const headers: Headers = if (options.headers) |hdrs| try Headers.constructor(hdrs, page) else .{};
+    const mode = (if (options.mode) |mode| RequestMode.fromString(mode) else null) orelse RequestMode.cors;
 
     const method: Http.Method = blk: {
         if (options.method) |given_method| {
@@ -135,11 +159,19 @@ pub fn constructor(input: RequestInput, _options: ?RequestInit, page: *Page) !Re
         }
     };
 
+    // Can't have a body on .GET or .HEAD.
+    const body: ?[]const u8 = blk: {
+        if (method == .GET or method == .HEAD) {
+            break :blk null;
+        } else break :blk if (options.body) |body| try arena.dupe(u8, body) else null;
+    };
+
     return .{
         .method = method,
         .url = url,
         .cache = cache,
         .credentials = credentials,
+        .mode = mode,
         .headers = headers,
         .body = body,
         .integrity = integrity,
@@ -181,6 +213,10 @@ pub fn get_method(self: *const Request) []const u8 {
     return @tagName(self.method);
 }
 
+pub fn get_mode(self: *const Request) RequestMode {
+    return self.mode;
+}
+
 pub fn get_url(self: *const Request) []const u8 {
     return self.url;
 }
@@ -210,10 +246,7 @@ pub fn _bytes(self: *Response, page: *Page) !Env.Promise {
         return error.TypeError;
     }
 
-    const resolver = Env.PromiseResolver{
-        .js_context = page.main_context,
-        .resolver = v8.PromiseResolver.init(page.main_context.v8_context),
-    };
+    const resolver = page.main_context.createPromiseResolver();
 
     try resolver.resolve(self.body);
     self.body_used = true;
@@ -225,22 +258,24 @@ pub fn _json(self: *Response, page: *Page) !Env.Promise {
         return error.TypeError;
     }
 
-    const resolver = Env.PromiseResolver{
-        .js_context = page.main_context,
-        .resolver = v8.PromiseResolver.init(page.main_context.v8_context),
-    };
+    const resolver = page.main_context.createPromiseResolver();
 
-    const p = std.json.parseFromSliceLeaky(
-        std.json.Value,
-        page.call_arena,
-        self.body,
-        .{},
-    ) catch |e| {
-        log.info(.browser, "invalid json", .{ .err = e, .source = "Request" });
-        return error.SyntaxError;
-    };
+    if (self.body) |body| {
+        const p = std.json.parseFromSliceLeaky(
+            std.json.Value,
+            page.call_arena,
+            body,
+            .{},
+        ) catch |e| {
+            log.info(.browser, "invalid json", .{ .err = e, .source = "Request" });
+            return error.SyntaxError;
+        };
 
-    try resolver.resolve(p);
+        try resolver.resolve(p);
+    } else {
+        try resolver.resolve(null);
+    }
+
     self.body_used = true;
     return resolver.promise();
 }
@@ -250,10 +285,7 @@ pub fn _text(self: *Response, page: *Page) !Env.Promise {
         return error.TypeError;
     }
 
-    const resolver = Env.PromiseResolver{
-        .js_context = page.main_context,
-        .resolver = v8.PromiseResolver.init(page.main_context.v8_context),
-    };
+    const resolver = page.main_context.createPromiseResolver();
 
     try resolver.resolve(self.body);
     self.body_used = true;

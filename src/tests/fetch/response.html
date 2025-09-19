@@ -25,6 +25,7 @@
   testing.expectEqual("no-cache", response2.headers.get("cache-control"));
         
   let response3 = new Response("Created", { status: 201, statusText: "Created" });
+  testing.expectEqual("basic", response3.type);
   testing.expectEqual(201, response3.status);
   testing.expectEqual("Created", response3.statusText);
   testing.expectEqual(true, response3.ok);

@@ -41,9 +41,10 @@ status_text: []const u8 = "",
 headers: Headers,
 mime: ?Mime = null,
 url: []const u8 = "",
-body: []const u8 = "",
+body: ?[]const u8 = null,
 body_used: bool = false,
 redirected: bool = false,
+type: ResponseType = .basic,
 
 const ResponseBody = union(enum) {
     string: []const u8,
@@ -53,6 +54,28 @@ const ResponseOptions = struct {
     status: u16 = 200,
     statusText: ?[]const u8 = null,
     headers: ?HeadersInit = null,
+};
+
+pub const ResponseType = enum {
+    basic,
+    cors,
+    @"error",
+    @"opaque",
+    opaqueredirect,
+
+    pub fn fromString(str: []const u8) ?ResponseType {
+        for (std.enums.values(ResponseType)) |cache| {
+            if (std.ascii.eqlIgnoreCase(str, @tagName(cache))) {
+                return cache;
+            }
+        } else {
+            return null;
+        }
+    }
+
+    pub fn toString(self: ResponseType) []const u8 {
+        return @tagName(self);
+    }
 };
 
 pub fn constructor(_input: ?ResponseBody, _options: ?ResponseOptions, page: *Page) !Response {
@@ -68,7 +91,7 @@ pub fn constructor(_input: ?ResponseBody, _options: ?ResponseOptions, page: *Pag
                 },
             }
         } else {
-            break :blk "";
+            break :blk null;
         }
     };
 
@@ -85,7 +108,9 @@ pub fn constructor(_input: ?ResponseBody, _options: ?ResponseOptions, page: *Pag
 
 pub fn get_body(self: *const Response, page: *Page) !*ReadableStream {
     const stream = try ReadableStream.constructor(null, null, page);
-    try stream.queue.append(page.arena, self.body);
+    if (self.body) |body| {
+        try stream.queue.append(page.arena, body);
+    }
     return stream;
 }
 
@@ -113,6 +138,10 @@ pub fn get_statusText(self: *const Response) []const u8 {
     return self.status_text;
 }
 
+pub fn get_type(self: *const Response) ResponseType {
+    return self.type;
+}
+
 pub fn get_url(self: *const Response) []const u8 {
     return self.url;
 }
@@ -132,6 +161,7 @@ pub fn _clone(self: *const Response) !Response {
         .redirected = self.redirected,
         .status = self.status,
         .url = self.url,
+        .type = self.type,
     };
 }
 
@@ -155,22 +185,24 @@ pub fn _json(self: *Response, page: *Page) !Env.Promise {
         return error.TypeError;
     }
 
-    const resolver = Env.PromiseResolver{
-        .js_context = page.main_context,
-        .resolver = v8.PromiseResolver.init(page.main_context.v8_context),
-    };
+    const resolver = page.main_context.createPromiseResolver();
 
-    const p = std.json.parseFromSliceLeaky(
-        std.json.Value,
-        page.call_arena,
-        self.body,
-        .{},
-    ) catch |e| {
-        log.info(.browser, "invalid json", .{ .err = e, .source = "Response" });
-        return error.SyntaxError;
-    };
+    if (self.body) |body| {
+        const p = std.json.parseFromSliceLeaky(
+            std.json.Value,
+            page.call_arena,
+            body,
+            .{},
+        ) catch |e| {
+            log.info(.browser, "invalid json", .{ .err = e, .source = "Response" });
+            return error.SyntaxError;
+        };
 
-    try resolver.resolve(p);
+        try resolver.resolve(p);
+    } else {
+        try resolver.resolve(null);
+    }
+
     self.body_used = true;
     return resolver.promise();
 }
@@ -180,10 +212,7 @@ pub fn _text(self: *Response, page: *Page) !Env.Promise {
         return error.TypeError;
     }
 
-    const resolver = Env.PromiseResolver{
-        .js_context = page.main_context,
-        .resolver = v8.PromiseResolver.init(page.main_context.v8_context),
-    };
+    const resolver = page.main_context.createPromiseResolver();
 
     try resolver.resolve(self.body);
     self.body_used = true;

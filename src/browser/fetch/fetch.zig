@@ -53,6 +53,7 @@ pub const FetchContext = struct {
     headers: std.ArrayListUnmanaged([]const u8) = .empty,
     status: u16 = 0,
     mime: ?Mime = null,
+    mode: Request.RequestMode,
     transfer: ?*HttpClient.Transfer = null,
 
     /// This effectively takes ownership of the FetchContext.
@@ -62,6 +63,19 @@ pub const FetchContext = struct {
     pub fn toResponse(self: *const FetchContext) !Response {
         var headers: Headers = .{};
 
+        // If the mode is "no-cors", we need to return this opaque/stripped Response.
+        // https://developer.mozilla.org/en-US/docs/Web/API/Response/type
+        if (self.mode == .@"no-cors") {
+            return Response{
+                .status = 0,
+                .headers = headers,
+                .mime = self.mime,
+                .body = null,
+                .url = self.url,
+                .type = .@"opaque",
+            };
+        }
+
         // convert into Headers
         for (self.headers.items) |hdr| {
             var iter = std.mem.splitScalar(u8, hdr, ':');
@@ -70,12 +84,25 @@ pub const FetchContext = struct {
             try headers.append(name, value, self.arena);
         }
 
+        const resp_type: Response.ResponseType = blk: {
+            if (std.mem.startsWith(u8, self.url, "data:")) {
+                break :blk .basic;
+            }
+
+            break :blk switch (self.mode) {
+                .cors => .cors,
+                .@"same-origin", .navigate => .basic,
+                .@"no-cors" => unreachable,
+            };
+        };
+
         return Response{
             .status = self.status,
             .headers = headers,
             .mime = self.mime,
             .body = self.body.items,
             .url = self.url,
+            .type = resp_type,
         };
     }
 };
@@ -110,6 +137,7 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
         .promise_resolver = resolver,
         .method = req.method,
         .url = req.url,
+        .mode = req.mode,
     };
 
     try page.http_client.request(.{
