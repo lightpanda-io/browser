@@ -379,6 +379,8 @@ pub fn setup() !void {
     test_session = try test_browser.newSession();
 }
 pub fn shutdown() void {
+    @import("root").v8_peak_memory = test_browser.env.isolate.getHeapStatistics().total_physical_size;
+    @import("root").libdom_memory = @import("browser/mimalloc.zig").getRSS();
     test_browser.deinit();
     test_app.deinit();
 }

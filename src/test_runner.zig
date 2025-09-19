@@ -35,6 +35,8 @@ pub const std_options = std.Options{
 };
 
 pub var js_runner_duration: usize = 0;
+pub var v8_peak_memory: usize = 0;
+pub var libdom_memory: i64 = 0;
 pub var tracking_allocator: Allocator = undefined;
 
 pub fn main() !void {
@@ -194,13 +196,13 @@ pub fn main() !void {
                 .duration = js_runner_duration,
                 .alloc_nb = 0,
                 .realloc_nb = 0,
-                .alloc_size = 0,
+                .alloc_size = libdom_memory,
             } },
             .{ .name = "v8", .bench = .{
                 .duration = js_runner_duration,
                 .alloc_nb = 0,
                 .realloc_nb = 0,
-                .alloc_size = 0,
+                .alloc_size = v8_peak_memory,
             } },
             .{ .name = "main", .bench = .{
                 .duration = js_runner_duration,
