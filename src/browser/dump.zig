@@ -26,7 +26,13 @@ pub const Opts = struct {
     // set to include element shadowroots in the dump
     page: ?*const Page = null,
 
-    exclude_scripts: bool = false,
+    strip_mode: StripMode = .{},
+
+    pub const StripMode = struct {
+        js: bool = false,
+        ui: bool = false,
+        css: bool = false,
+    };
 };
 
 // writer must be a std.io.Writer
@@ -67,7 +73,7 @@ pub fn writeNode(node: *parser.Node, opts: Opts, writer: *std.Io.Writer) anyerro
         .element => {
             // open the tag
             const tag_type = try parser.nodeHTMLGetTagType(node) orelse .undef;
-            if (opts.exclude_scripts and try isScriptOrRelated(tag_type, node)) {
+            if (try isStripped(tag_type, node, opts.strip_mode)) {
                 return;
             }
 
@@ -159,9 +165,22 @@ pub fn writeChildren(root: *parser.Node, opts: Opts, writer: *std.Io.Writer) !vo
     }
 }
 
-// When `exclude_scripts` is passed to dump, we don't include <script> tags.
-// We also want to omit <link rel=preload as=ascript>
-fn isScriptOrRelated(tag_type: parser.Tag, node: *parser.Node) !bool {
+fn isStripped(tag_type: parser.Tag, node: *parser.Node, strip_mode: Opts.StripMode) !bool {
+    if (strip_mode.js and try isJsRelated(tag_type, node)) {
+        return true;
+    }
+
+    if (strip_mode.css and try isCssRelated(tag_type, node)) {
+        return true;
+    }
+
+    if (strip_mode.ui and try isUIRelated(tag_type, node)) {
+        return true;
+    }
+    return false;
+}
+
+fn isJsRelated(tag_type: parser.Tag, node: *parser.Node) !bool {
     if (tag_type == .script) {
         return true;
     }
@@ -174,6 +193,34 @@ fn isScriptOrRelated(tag_type: parser.Tag, node: *parser.Node) !bool {
 
         const rel = try parser.elementGetAttribute(el, "rel") orelse return false;
         return std.ascii.eqlIgnoreCase(rel, "preload");
+    }
+    return false;
+}
+
+fn isCssRelated(tag_type: parser.Tag, node: *parser.Node) !bool {
+    if (tag_type == .style) {
+        return true;
+    }
+    if (tag_type == .link) {
+        const el = parser.nodeToElement(node);
+        const rel = try parser.elementGetAttribute(el, "rel") orelse return false;
+        return std.ascii.eqlIgnoreCase(rel, "stylesheet");
+    }
+    return false;
+}
+
+fn isUIRelated(tag_type: parser.Tag, node: *parser.Node) !bool {
+    if (try isCssRelated(tag_type, node)) {
+        return true;
+    }
+    if (tag_type == .img or tag_type == .picture or tag_type == .video) {
+        return true;
+    }
+    if (tag_type == .undef) {
+        const name = try parser.nodeLocalName(node);
+        if (std.mem.eql(u8, name, "svg")) {
+            return true;
+        }
     }
     return false;
 }
