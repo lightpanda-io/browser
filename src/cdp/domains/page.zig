@@ -20,6 +20,8 @@ const std = @import("std");
 const URL = @import("../../url.zig").URL;
 const Page = @import("../../browser/page.zig").Page;
 const Notification = @import("../../notification.zig").Notification;
+const log = @import("../../log.zig");
+const parser = @import("../../browser/netsurf.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -354,9 +356,20 @@ pub fn pageNavigated(bc: anytype, event: *const Notification.PageNavigated) !voi
     }
 
     // frameStoppedLoading
-    return cdp.sendEvent("Page.frameStoppedLoading", .{
+    try cdp.sendEvent("Page.frameStoppedLoading", .{
         .frameId = target_id,
     }, .{ .session_id = session_id });
+
+    // Auto-enable DOM monitoring after page navigation is complete
+    const page = bc.session.currentPage() orelse return;
+    if (page.auto_enable_dom_monitoring) {
+        std.debug.print("dom monitoring enabled\n", .{});
+        autoEnableDOMMonitoring(bc, page) catch |err| {
+            log.warn(.cdp, "autoenable DOM monitor fail", .{.err = err});
+        };
+    } else {
+        std.debug.print("nalok\n", .{});
+    }
 }
 
 pub fn pageNetworkIdle(bc: anytype, event: *const Notification.PageNetworkIdle) !void {
@@ -388,6 +401,72 @@ const LifecycleEvent = struct {
     name: []const u8,
     timestamp: u32,
 };
+
+// Auto-enable DOM monitoring when pages are created/navigated
+fn autoEnableDOMMonitoring(bc: anytype, page: anytype) !void {
+    const BC = @TypeOf(bc.*);
+    const CDP = @TypeOf(bc.cdp.*);
+
+    // Check if we have a session (required for sending events)
+    const session_id = bc.session_id orelse return;
+
+    // Create a CDP-specific mutation observer that sends DOM.attributeModified events
+    const arena = page.arena;
+    const doc = parser.documentHTMLToDocument(page.window.document);
+    const Observer = struct {
+        bc: *BC,
+        cdp: *CDP,
+        session_id: []const u8,
+        event_node: parser.EventNode,
+
+        const Self = @This();
+
+        fn handle(en: *parser.EventNode, event: *parser.Event) void {
+            const self: *Self = @fieldParentPtr("event_node", en);
+            self._handle(event) catch |err| {
+                log.err(.cdp, "DOM Observer handle error", .{.err = err});
+            };
+        }
+
+        fn _handle(self: *Self, event: *parser.Event) !void {
+            const mutation_event = parser.eventToMutationEvent(event);
+            const attribute_name = parser.mutationEventAttributeName(mutation_event) catch return;
+            const new_value = parser.mutationEventNewValue(mutation_event) catch null;
+
+            // Get the target node and register it to get a CDP node ID
+            const event_target = parser.eventTarget(event) orelse return;
+            const target_node = parser.eventTargetToNode(event_target);
+            const node = try self.bc.node_registry.register(target_node);
+
+            // Send CDP DOM.attributeModified event
+            try self.cdp.sendEvent("DOM.attributeModified", .{
+                .nodeId = node.id,
+                .name = attribute_name,
+                .value = new_value,
+            }, .{
+                .session_id = self.session_id,
+            });
+        }
+    };
+
+    const cdp_observer = try arena.create(Observer);
+    cdp_observer.* = .{
+        .bc = bc,
+        .cdp = bc.cdp,
+        .session_id = session_id,
+        .event_node = .{ .id = @intFromPtr(cdp_observer), .func = Observer.handle },
+    };
+
+    // Add event listener to document element to catch all attribute changes
+    const document_element = (try parser.documentGetDocumentElement(doc)) orelse return;
+        
+    _ = try parser.eventTargetAddEventListener(
+        parser.toEventTarget(parser.Element, document_element),
+        "DOMAttrModified",
+        &cdp_observer.event_node,
+        true, // use capture to catch all events
+    );
+}
 
 const testing = @import("../testing.zig");
 test "cdp.page: getFrameTree" {

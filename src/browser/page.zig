@@ -92,6 +92,7 @@ pub const Page = struct {
 
     notified_network_idle: IdleNotification = .init,
     notified_network_almost_idle: IdleNotification = .init,
+    auto_enable_dom_monitoring: bool = false,
 
     const Mode = union(enum) {
         pre: void,

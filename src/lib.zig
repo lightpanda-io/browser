@@ -10,6 +10,8 @@ const BrowserContext = @import("cdp/cdp.zig").BrowserContext;
 export fn lightpanda_app_init() ?*anyopaque {
     const allocator = std.heap.c_allocator;
 
+    @import("log.zig").opts.level = .warn;
+
     const app = App.init(allocator, .{
         // .run_mode = .serve,
         // .tls_verify_host = false
@@ -55,6 +57,7 @@ export fn lightpanda_browser_new_session(browser_ptr: *anyopaque) ?*anyopaque {
 export fn lightpanda_session_create_page(session_ptr: *anyopaque) ?*anyopaque {
     const session: *Session = @ptrCast(@alignCast(session_ptr));
     const page = session.createPage() catch return null;
+    page.auto_enable_dom_monitoring = true;
     return page;
 }
 
@@ -125,7 +128,8 @@ export fn lightpanda_cdp_create_browser_context(cdp_ptr: *anyopaque) ?[*:0]const
     const cdp: *CDP = @ptrCast(@alignCast(cdp_ptr));
     const id = cdp.createBrowserContext() catch return null;
 
-    _ = cdp.browser_context.?.session.createPage() catch return null;
+    const page = cdp.browser_context.?.session.createPage() catch return null;
+    page.auto_enable_dom_monitoring = true;
 
     const target_id = cdp.target_id_gen.next();
     cdp.browser_context.?.target_id = target_id;
