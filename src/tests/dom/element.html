@@ -280,3 +280,12 @@
   divElement.dir = "auto";
   testing.expectEqual("auto", divElement.dir);
 </script>
+
+<script id=linkRel>
+  const linkElement = document.createElement("link");
+  // A newly created link element must have it's rel set to empty string.
+  testing.expectEqual("", linkElement.rel);
+
+  linkElement.rel = "stylesheet";
+  testing.expectEqual("stylesheet", linkElement.rel);
+</script>
