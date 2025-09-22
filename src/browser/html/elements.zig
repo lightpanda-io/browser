@@ -757,6 +757,10 @@ pub const HTMLLinkElement = struct {
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
 
+    pub fn get_rel(self: *parser.Link) ![]const u8 {
+        return try parser.linkGetRel(self);
+    }
+
     pub fn get_href(self: *parser.Link) ![]const u8 {
         return try parser.linkGetHref(self);
     }

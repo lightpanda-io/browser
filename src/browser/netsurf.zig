@@ -1934,6 +1934,14 @@ pub fn anchorSetRel(a: *Anchor, rel: []const u8) !void {
 
 // HTMLLinkElement
 
+pub fn linkGetRel(link: *Link) ![]const u8 {
+    var res: ?*String = null;
+    const err = c.dom_html_link_element_get_rel(link, &res);
+    try DOMErr(err);
+    if (res == null) return "";
+    return strToData(res.?);
+}
+
 pub fn linkGetHref(link: *Link) ![]const u8 {
     var res: ?*String = null;
     const err = c.dom_html_link_element_get_href(link, &res);
