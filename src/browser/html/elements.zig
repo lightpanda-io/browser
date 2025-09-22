@@ -757,13 +757,21 @@ pub const HTMLLinkElement = struct {
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
 
+    pub fn get_rel(self: *parser.Link) ![]const u8 {
+        return parser.linkGetRel(self);
+    }
+
+    pub fn set_rel(self: *parser.Link, rel: []const u8) !void {
+        return parser.linkSetRel(self, rel);
+    }
+
     pub fn get_href(self: *parser.Link) ![]const u8 {
-        return try parser.linkGetHref(self);
+        return parser.linkGetHref(self);
     }
 
     pub fn set_href(self: *parser.Link, href: []const u8, page: *const Page) !void {
         const full = try urlStitch(page.call_arena, href, page.url.raw, .{});
-        return try parser.linkSetHref(self, full);
+        return parser.linkSetHref(self, full);
     }
 };
 
