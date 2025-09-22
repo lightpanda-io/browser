@@ -627,6 +627,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
         const PersistentObject = v8.Persistent(v8.Object);
         const PersistentModule = v8.Persistent(v8.Module);
+        const PersistentPromise = v8.Persistent(v8.Promise);
         const PersistentFunction = v8.Persistent(v8.Function);
 
         // Loosely maps to a Browser Page.
@@ -692,7 +693,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             destructor_callbacks: std.ArrayListUnmanaged(DestructorCallback) = .empty,
 
             // Our module cache: normalized module specifier => module.
-            module_cache: std.StringHashMapUnmanaged(PersistentModule) = .empty,
+            module_cache: std.StringHashMapUnmanaged(ModuleEntry) = .empty,
 
             // Module => Path. The key is the module hashcode (module.getIdentityHash)
             // and the value is the full path to the module. We need to capture this
@@ -711,6 +712,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 // Don't like having to reach into ../browser/ here. But can't think
                 // of a good way to fix this.
                 const BlockingResult = @import("../browser/ScriptManager.zig").BlockingResult;
+            };
+
+            const ModuleEntry = struct {
+                module: PersistentModule,
+                promise: PersistentPromise,
             };
 
             // no init, started with executor.createJsContext()
@@ -744,8 +750,9 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
                 {
                     var it = self.module_cache.valueIterator();
-                    while (it.next()) |p| {
-                        p.deinit();
+                    while (it.next()) |entry| {
+                        entry.module.deinit();
+                        entry.promise.deinit();
                     }
                 }
 
@@ -809,27 +816,20 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // compile and eval a JS module
             // It returns null if the module is already compiled and in the cache.
             // It returns a v8.Promise if the module must be evaluated.
-            pub fn module(self: *JsContext, src: []const u8, url: []const u8, cacheable: bool) !?v8.Promise {
-                const arena = self.context_arena;
-
-                if (cacheable and self.module_cache.contains(url)) {
-                    return null;
+            pub fn module(self: *JsContext, src: []const u8, url: []const u8, cacheable: bool) !ModuleEntry {
+                if (cacheable) {
+                    if (self.module_cache.get(url)) |entry| {
+                        return entry;
+                    }
                 }
                 errdefer _ = self.module_cache.remove(url);
 
                 const m = try compileModule(self.isolate, src, url);
 
+                const arena = self.context_arena;
                 const owned_url = try arena.dupe(u8, url);
                 try self.module_identifier.putNoClobber(arena, m.getIdentityHash(), owned_url);
                 errdefer _ = self.module_identifier.remove(m.getIdentityHash());
-
-                if (cacheable) {
-                    try self.module_cache.putNoClobber(
-                        arena,
-                        owned_url,
-                        PersistentModule.init(self.isolate, m),
-                    );
-                }
 
                 // resolveModuleCallback loads module's dependencies.
                 const v8_context = self.v8_context;
@@ -841,8 +841,17 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 // https://v8.github.io/api/head/classv8_1_1Module.html#a1f1758265a4082595757c3251bb40e0f
                 // Must be a promise that gets returned here.
                 std.debug.assert(evaluated.isPromise());
-                const promise = v8.Promise{ .handle = evaluated.handle };
-                return promise;
+
+                const entry = ModuleEntry{
+                    .module = PersistentModule.init(self.isolate, m),
+                    .promise = PersistentPromise.init(self.isolate, .{.handle = evaluated.handle}),
+                };
+                if (cacheable) {
+                    try self.module_cache.putNoClobber(arena, owned_url, entry);
+                    try self.module_identifier.put(arena, m.getIdentityHash(), owned_url);
+                }
+
+                return entry;
             }
 
             pub fn newArray(self: *JsContext, len: u32) JsObject {
@@ -1274,6 +1283,23 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 };
             }
 
+            fn rejectPromise(self: *JsContext, msg: []const u8) v8.Promise {
+                const ctx = self.v8_context;
+                var resolver = v8.PromiseResolver.init(ctx);
+
+                const error_msg = v8.String.initUtf8(self.isolate, msg);
+                _ = resolver.reject(ctx, error_msg.toValue());
+
+                return resolver.getPromise();
+            }
+
+            fn resolvePromise(self: *JsContext, value: v8.Value) v8.Promise {
+                const ctx = self.v8_context;
+                var resolver = v8.PromiseResolver.init(ctx);
+                _ = resolver.resolve(ctx, value);
+                return resolver.getPromise();
+            }
+
             // creates a PersistentPromiseResolver, taking in a lifetime parameter.
             // If the lifetime is page, the page will clean up the PersistentPromiseResolver.
             // If the lifetime is self, you will be expected to deinitalize the PersistentPromiseResolver.
@@ -1556,39 +1582,138 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     .{ .alloc = .if_needed, .null_terminated = true },
                 );
 
-                if (self.module_cache.get(normalized_specifier)) |pm| {
-                    return pm.handle;
-                }
+                const module_loader = self.module_loader;
+                var fetch_result = try module_loader.func(module_loader.ptr, normalized_specifier);
+                defer fetch_result.deinit();
 
-                const m: v8.Module = blk: {
+                var try_catch: TryCatch = undefined;
+                try_catch.init(self);
+                defer try_catch.deinit();
+
+                const entry = self.module(fetch_result.src(), normalized_specifier, true) catch |err| {
+                    log.warn(.js, "compile resolved module", .{
+                        .specifier = specifier,
+                        .stack = try_catch.stack(self.call_arena) catch null,
+                        .src = try_catch.sourceLine(self.call_arena) catch "err",
+                        .line = try_catch.sourceLineNumber() orelse 0,
+                        .exception = (try_catch.exception(self.call_arena) catch @errorName(err)) orelse @errorName(err),
+                    });
+                    return null;
+                };
+                return entry.module.handle;
+            }
+
+            pub fn dynamicModuleCallback(
+                v8_ctx: ?*const v8.c.Context,
+                host_defined_options: ?*const v8.c.Data,
+                resource_name: ?*const v8.c.Value,
+                v8_specifier: ?*const v8.c.String,
+                import_attrs: ?*const v8.c.FixedArray,
+            ) callconv(.c) ?*v8.c.Promise {
+                _ = host_defined_options;
+                _ = import_attrs;
+
+                const ctx: v8.Context = .{ .handle = v8_ctx.? };
+                const self: *JsContext = @ptrFromInt(ctx.getEmbedderData(1).castTo(v8.BigInt).getUint64());
+                const isolate = self.isolate;
+
+                const resource = jsStringToZig(self.call_arena, .{ .handle = resource_name.? }, isolate) catch |err| {
+                    log.err(.app, "OOM", .{.err = err, .src =  "dynamicModuleCallback1"});
+                    return @constCast(self.rejectPromise("Out of memory").handle);
+                };
+
+                const specifier = jsStringToZig(self.call_arena, .{ .handle = v8_specifier.? }, isolate) catch |err| {
+                    log.err(.app, "OOM", .{.err = err, .src =  "dynamicModuleCallback2"});
+                    return @constCast(self.rejectPromise("Out of memory").handle);
+                };
+
+                const normalized_specifier = @import("../url.zig").stitch(
+                    self.call_arena,
+                    specifier,
+                    resource,
+                    .{ .alloc = .if_needed, .null_terminated = true },
+                ) catch |err| {
+                    log.err(.app, "OOM", .{.err = err, .src =  "dynamicModuleCallback3"});
+                    return @constCast(self.rejectPromise("Out of memory").handle);
+                };
+
+                const promise = self._dynamicModuleCallback(normalized_specifier) catch |err| blk: {
+                    log.err(.js, "dynamic module callback", .{
+                        .err = err,
+                    });
+                    break :blk self.rejectPromise("Failed to load module");
+                };
+                return @constCast(promise.handle);
+            }
+
+            fn _dynamicModuleCallback(self: *JsContext, specifier: [:0]const u8) !v8.Promise {
+                const isolate = self.isolate;
+                const ctx = self.v8_context;
+
+                const entry = self.module_cache.get(specifier) orelse blk: {
                     const module_loader = self.module_loader;
-                    var fetch_result = try module_loader.func(module_loader.ptr, normalized_specifier);
+                    var fetch_result = try module_loader.func(module_loader.ptr, specifier);
                     defer fetch_result.deinit();
 
                     var try_catch: TryCatch = undefined;
                     try_catch.init(self);
                     defer try_catch.deinit();
 
-                    break :blk compileModule(self.isolate, fetch_result.src(), normalized_specifier) catch |err| {
-                        log.warn(.js, "compile resolved module", .{
+                    break :blk self.module(fetch_result.src(), specifier, true) catch {
+                        const ex = try_catch.exception(self.call_arena) catch |err| @errorName(err) orelse "unknown error";
+                        log.err(.js, "module compilation failed", .{
                             .specifier = specifier,
+                            .exception = ex,
                             .stack = try_catch.stack(self.call_arena) catch null,
-                            .src = try_catch.sourceLine(self.call_arena) catch "err",
                             .line = try_catch.sourceLineNumber() orelse 0,
-                            .exception = (try_catch.exception(self.call_arena) catch @errorName(err)) orelse @errorName(err),
                         });
-                        return null;
+                        return self.rejectPromise(ex);
                     };
                 };
 
-                // We were hoping to find the module in our cache, and thus used
-                // the short-lived call_arena to create the normalized_specifier.
-                // But now this will live for the lifetime of the context.
-                const arena = self.context_arena;
-                const owned_specifier = try arena.dupe(u8, normalized_specifier);
-                try self.module_cache.put(arena, owned_specifier, PersistentModule.init(self.isolate, m));
-                try self.module_identifier.putNoClobber(arena, m.getIdentityHash(), owned_specifier);
-                return m.handle;
+                const EvaluationData = struct {
+                    module: v8.Module,
+                    resolver: v8.PromiseResolver,
+                };
+                const resolver = v8.Persistent(v8.PromiseResolver).init(isolate, v8.PromiseResolver.init(self.v8_context));
+                try self.persisted_promise_resolvers.append(self.context_arena, resolver);
+
+                const ev_data = try self.context_arena.create(EvaluationData);
+                ev_data.* = .{
+                    .module = entry.module.castToModule(),
+                    .resolver = resolver.castToPromiseResolver(),
+                };
+                const external = v8.External.init(isolate, @ptrCast(ev_data));
+
+                const then_callback = v8.Function.initWithData(ctx, struct {
+                    pub fn callback(raw_info: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
+                        const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
+                        const iso = info.getIsolate();
+
+                        const data: *EvaluationData = @ptrCast(@alignCast(info.getExternalValue()));
+                        _ = data.resolver.resolve(iso.getCurrentContext(), data.module.getModuleNamespace());
+                    }
+                }.callback, external);
+
+                const catch_callback = v8.Function.initWithData(ctx, struct {
+                    pub fn callback(raw_info: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
+                        const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
+                        const iso = info.getIsolate();
+
+                        const data: *EvaluationData = @ptrCast(@alignCast(info.getExternalValue()));
+                        _ = data.resolver.reject(iso.getCurrentContext(), info.getData());
+                    }
+                }.callback, external);
+
+                _ = entry.promise.castToPromise().thenAndCatch(ctx, then_callback, catch_callback) catch |err| {
+                    log.err(.js, "module evaluation is promise", .{
+                        .err = err,
+                        .specifier = specifier,
+                    });
+                    return self.rejectPromise("Failed to evaluate promise");
+                };
+
+                return ev_data.resolver.getPromise();
             }
 
             // Reverses the mapZigInstanceToJs, making sure that our TaggedAnyOpaque
@@ -1660,168 +1785,6 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         return error.InvalidArgument;
                     }
                     type_index = prototype_index;
-                }
-            }
-
-            pub fn dynamicModuleCallback(
-                v8_ctx: ?*const v8.c.Context,
-                host_defined_options: ?*const v8.c.Data,
-                resource_name: ?*const v8.c.Value,
-                v8_specifier: ?*const v8.c.String,
-                import_attrs: ?*const v8.c.FixedArray,
-            ) callconv(.c) ?*v8.c.Promise {
-                _ = host_defined_options;
-                _ = import_attrs;
-                const ctx: v8.Context = .{ .handle = v8_ctx.? };
-                const context: *JsContext = @ptrFromInt(ctx.getEmbedderData(1).castTo(v8.BigInt).getUint64());
-                const iso = context.isolate;
-                const resolver = v8.PromiseResolver.init(context.v8_context);
-
-                const specifier: v8.String = .{ .handle = v8_specifier.? };
-                const specifier_str = jsStringToZig(context.context_arena, specifier, iso) catch {
-                    const error_msg = v8.String.initUtf8(iso, "Failed to parse module specifier");
-                    _ = resolver.reject(ctx, error_msg.toValue());
-                    return @constCast(resolver.getPromise().handle);
-                };
-                const resource: v8.String = .{ .handle = resource_name.? };
-                const resource_str = jsStringToZig(context.context_arena, resource, iso) catch {
-                    const error_msg = v8.String.initUtf8(iso, "Failed to parse module resource");
-                    _ = resolver.reject(ctx, error_msg.toValue());
-                    return @constCast(resolver.getPromise().handle);
-                };
-
-                const normalized_specifier = @import("../url.zig").stitch(
-                    context.context_arena,
-                    specifier_str,
-                    resource_str,
-                    .{ .alloc = .if_needed, .null_terminated = true },
-                ) catch unreachable;
-
-                log.debug(.js, "dynamic import", .{
-                    .specifier = specifier_str,
-                    .resource = resource_str,
-                    .normalized_specifier = normalized_specifier,
-                });
-
-                _dynamicModuleCallback(context, normalized_specifier, &resolver) catch |err| {
-                    log.err(.js, "dynamic module callback", .{
-                        .err = err,
-                    });
-                    // Must be rejected at this point
-                    // otherwise, we will just wait on a pending promise.
-                    std.debug.assert(resolver.getPromise().getState() == .kRejected);
-                };
-                return @constCast(resolver.getPromise().handle);
-            }
-
-            fn _dynamicModuleCallback(
-                self: *JsContext,
-                specifier: [:0]const u8,
-                resolver: *const v8.PromiseResolver,
-            ) !void {
-                const iso = self.isolate;
-                const ctx = self.v8_context;
-
-                var try_catch: TryCatch = undefined;
-                try_catch.init(self);
-                defer try_catch.deinit();
-
-                const maybe_promise: ?v8.Promise = blk: {
-                    const module_loader = self.module_loader;
-                    var fetch_result = module_loader.func(module_loader.ptr, specifier) catch {
-                        const error_msg = v8.String.initUtf8(iso, "Failed to load module");
-                        _ = resolver.reject(ctx, error_msg.toValue());
-                        return;
-                    };
-                    defer fetch_result.deinit();
-
-                    break :blk self.module(fetch_result.src(), specifier, true) catch {
-                        log.err(.js, "module compilation failed", .{
-                            .specifier = specifier,
-                            .exception = try_catch.exception(self.call_arena) catch "unknown error",
-                            .stack = try_catch.stack(self.call_arena) catch null,
-                            .line = try_catch.sourceLineNumber() orelse 0,
-                        });
-                        const error_msg = if (try_catch.hasCaught()) eblk: {
-                            const exception_str = try_catch.exception(self.call_arena) catch "Evaluation error";
-                            break :eblk v8.String.initUtf8(iso, exception_str orelse "Evaluation error");
-                        } else v8.String.initUtf8(iso, "Module evaluation failed");
-                        _ = resolver.reject(ctx, error_msg.toValue());
-                        return;
-                    };
-                };
-
-                const new_module = self.module_cache.get(specifier).?.castToModule();
-
-                if (maybe_promise) |promise| {
-                    // This means we must wait for the evaluation.
-                    const EvaluationData = struct {
-                        specifier: []const u8,
-                        module: v8.Persistent(v8.Module),
-                        resolver: v8.Persistent(v8.PromiseResolver),
-
-                        pub fn deinit(ev: *@This()) void {
-                            ev.module.deinit();
-                            ev.resolver.deinit();
-                        }
-                    };
-
-                    const ev_data = try self.context_arena.create(EvaluationData);
-                    ev_data.* = .{
-                        .specifier = specifier,
-                        .module = v8.Persistent(v8.Module).init(iso, new_module),
-                        .resolver = v8.Persistent(v8.PromiseResolver).init(iso, resolver.*),
-                    };
-                    const external = v8.External.init(iso, @ptrCast(ev_data));
-
-                    const then_callback = v8.Function.initWithData(ctx, struct {
-                        pub fn callback(info: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
-                            const cb_info = v8.FunctionCallbackInfo{ .handle = info.? };
-                            const cb_isolate = cb_info.getIsolate();
-                            const cb_context = cb_isolate.getCurrentContext();
-                            const data: *EvaluationData = @ptrCast(@alignCast(cb_info.getExternalValue()));
-                            defer data.deinit();
-                            const cb_module = data.module.castToModule();
-                            const cb_resolver = data.resolver.castToPromiseResolver();
-
-                            const namespace = cb_module.getModuleNamespace();
-                            log.info(.js, "dynamic import complete", .{ .specifier = data.specifier });
-                            _ = cb_resolver.resolve(cb_context, namespace);
-                        }
-                    }.callback, external);
-
-                    const catch_callback = v8.Function.initWithData(ctx, struct {
-                        pub fn callback(info: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
-                            const cb_info = v8.FunctionCallbackInfo{ .handle = info.? };
-                            const cb_context = cb_info.getIsolate().getCurrentContext();
-                            const data: *EvaluationData = @ptrCast(@alignCast(cb_info.getExternalValue()));
-                            defer data.deinit();
-                            const cb_resolver = data.resolver.castToPromiseResolver();
-
-                            log.err(.js, "dynamic import failed", .{ .specifier = data.specifier });
-                            _ = cb_resolver.reject(cb_context, cb_info.getData());
-                        }
-                    }.callback, external);
-
-                    _ = promise.thenAndCatch(ctx, then_callback, catch_callback) catch {
-                        log.err(.js, "module evaluation is promise", .{
-                            .specifier = specifier,
-                            .line = try_catch.sourceLineNumber() orelse 0,
-                        });
-                        defer ev_data.deinit();
-                        const error_msg = v8.String.initUtf8(iso, "Evaluation is a promise");
-                        _ = resolver.reject(ctx, error_msg.toValue());
-                        return;
-                    };
-                } else {
-                    // This means it is already present in the cache.
-                    const namespace = new_module.getModuleNamespace();
-                    log.info(.js, "dynamic import complete", .{
-                        .module = new_module,
-                        .namespace = namespace,
-                    });
-                    _ = resolver.resolve(ctx, namespace);
-                    return;
                 }
             }
         };

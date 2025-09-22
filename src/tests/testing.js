@@ -93,7 +93,7 @@
   }
 
   async function async(promise, cb) {
-    const script_id = document.currentScript.id;
+    const script_id = document.currentScript ? document.currentScript.id : '<script id is unavailable in browsers>';
     const stack = new Error().stack;
     const value = await promise;
     this._captured = {script_id: script_id, stack: stack};

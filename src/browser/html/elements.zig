@@ -1343,6 +1343,8 @@ test "Browser: HTML.HtmlStyleElement" {
 test "Browser: HTML.HtmlScriptElement" {
     try testing.htmlRunner("html/script/script.html");
     try testing.htmlRunner("html/script/inline_defer.html");
+    try testing.htmlRunner("html/script/import.html");
+    try testing.htmlRunner("html/script/dynamic_import.html");
 }
 
 test "Browser: HTML.HtmlSlotElement" {
