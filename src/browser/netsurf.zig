@@ -1942,6 +1942,11 @@ pub fn linkGetRel(link: *Link) ![]const u8 {
     return strToData(res.?);
 }
 
+pub fn linkSetRel(link: *Link, rel: []const u8) !void {
+    const err = c.dom_html_link_element_set_rel(link, try strFromData(rel));
+    return DOMErr(err);
+}
+
 pub fn linkGetHref(link: *Link) ![]const u8 {
     var res: ?*String = null;
     const err = c.dom_html_link_element_get_href(link, &res);
