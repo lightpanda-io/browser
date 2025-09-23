@@ -353,7 +353,8 @@ pub const Page = struct {
                         std.debug.assert(http_client.intercepted == 0);
 
                         const ms = ms_to_next_task orelse blk: {
-                            if (wait_ms - ms_remaining < 100) {
+                            const min_wait = if (comptime builtin.is_test) 5 else 100;
+                            if (wait_ms - ms_remaining < min_wait) {
                                 // Look, we want to exit ASAP, but we don't want
                                 // to exit so fast that we've run none of the
                                 // background jobs.
