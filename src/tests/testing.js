@@ -95,7 +95,9 @@
   async function async(promise, cb) {
     const script_id = document.currentScript.id;
     const stack = new Error().stack;
+    this._captured = {script_id: script_id, stack: stack};
     const value = await promise;
+    // reset it, because await promise could change it.
     this._captured = {script_id: script_id, stack: stack};
     cb(value);
     this._captured = null;
