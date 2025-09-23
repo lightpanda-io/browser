@@ -43,8 +43,8 @@ pub const Interfaces = .{
 };
 
 pub const FetchContext = struct {
+    page: *Page,
     arena: std.mem.Allocator,
-    js_ctx: *Env.JsContext,
     promise_resolver: Env.PersistentPromiseResolver,
 
     method: Http.Method,
@@ -63,9 +63,12 @@ pub const FetchContext = struct {
     pub fn toResponse(self: *const FetchContext) !Response {
         var headers: Headers = .{};
 
+        // seems to be the highest priority
+        const same_origin = try isSameOriginAsPage(self.url, self.page);
+
         // If the mode is "no-cors", we need to return this opaque/stripped Response.
         // https://developer.mozilla.org/en-US/docs/Web/API/Response/type
-        if (self.mode == .@"no-cors") {
+        if (!same_origin and self.mode == .@"no-cors") {
             return Response{
                 .status = 0,
                 .headers = headers,
@@ -85,7 +88,7 @@ pub const FetchContext = struct {
         }
 
         const resp_type: Response.ResponseType = blk: {
-            if (std.mem.startsWith(u8, self.url, "data:")) {
+            if (same_origin or std.mem.startsWith(u8, self.url, "data:")) {
                 break :blk .basic;
             }
 
@@ -132,8 +135,8 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
 
     const fetch_ctx = try arena.create(FetchContext);
     fetch_ctx.* = .{
+        .page = page,
         .arena = arena,
-        .js_ctx = page.main_context,
         .promise_resolver = resolver,
         .method = req.method,
         .url = req.url,
@@ -232,6 +235,11 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
     });
 
     return resolver.promise();
+}
+
+fn isSameOriginAsPage(url: []const u8, page: *const Page) !bool {
+    const origin = try page.origin(page.call_arena);
+    return std.mem.startsWith(u8, url, origin);
 }
 
 const testing = @import("../../testing.zig");
