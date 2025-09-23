@@ -136,6 +136,10 @@ pub const Element = struct {
         return try parser.elementSetAttribute(self, "slot", slot);
     }
 
+    pub fn get_assignedSlot(self: *parser.Element, page: *const Page) !?*parser.Slot {
+        return @import("../SlotChangeMonitor.zig").findSlot(self, page);
+    }
+
     pub fn get_classList(self: *parser.Element) !*parser.TokenList {
         return try parser.tokenListCreate(self, "class");
     }

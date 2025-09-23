@@ -34,12 +34,13 @@
 <lp-test id=lp5 mode=1><p slot=slot-1>default</p> xx <b slot=slot-1>other</b></lp-test>
 <lp-test id=lp6 mode=2>More <p slot=slot-1>default2</p> <span>!!</span></lp-test>
 
-<script id=HTMLSlotElement>
+<script>
   function assertNodes(expected, actual) {
     actual = actual.map((n) => n.id || n.textContent)
     testing.expectEqual(expected, actual);
   }
-
+</script>
+<script id=HTMLSlotElement>
   for (let idx of [1, 2, 3, 4]) {
     const lp = $(`#lp${idx}`);
     const slot = lp.shadowRoot.querySelector('slot');
@@ -54,19 +55,125 @@
     }
   }
 
-  const lp5 = $('#lp5');
-  const s5 = lp5.shadowRoot.querySelector('slot');
-  assertNodes(['default', 'other'], s5.assignedNodes());
+  {
+    const lp5 = $('#lp5');
+    const s5 = lp5.shadowRoot.querySelector('slot');
+    assertNodes(['default', 'other'], s5.assignedNodes());
 
-  const lp6 = $('#lp6');
-  const s6 = lp6.shadowRoot.querySelectorAll('slot');
-  assertNodes(['default2'], s6[0].assignedNodes({}));
-  assertNodes(['default2'], s6[0].assignedNodes({flatten: true}));
-  assertNodes(['More ', ' ', '!!'], s6[1].assignedNodes({}));
-  assertNodes(['More ', ' ', '!!'], s6[1].assignedNodes({flatten: true}));
+    const lp6 = $('#lp6');
+    const s6 = lp6.shadowRoot.querySelectorAll('slot');
+    assertNodes(['default2'], s6[0].assignedNodes({}));
+    assertNodes(['default2'], s6[0].assignedNodes({flatten: true}));
+    assertNodes(['More ', ' ', '!!'], s6[1].assignedNodes({}));
+    assertNodes(['More ', ' ', '!!'], s6[1].assignedNodes({flatten: true}));
 
-  assertNodes(['default2'], s6[0].assignedElements({}));
-  assertNodes(['default2'], s6[0].assignedElements({flatten: true}));
-  assertNodes(['!!'], s6[1].assignedElements({}));
-  assertNodes(['!!'], s6[1].assignedElements({flatten: true}));
+    assertNodes(['default2'], s6[0].assignedElements({}));
+    assertNodes(['default2'], s6[0].assignedElements({flatten: true}));
+    assertNodes(['!!'], s6[1].assignedElements({}));
+    assertNodes(['!!'], s6[1].assignedElements({flatten: true}));
+  }
+</script>
+
+<lp-test id=sc1 mode=1></lp-test>
+<script id=slotChange1>
+  {
+    let calls = 0;
+    const lp = $('#sc1');
+    const slot = lp.shadowRoot.querySelector('slot');
+    slot.addEventListener('slotchange', (e) => {
+      assertNodes(['slotted'], slot.assignedNodes({}));
+      calls += 1
+    }, {});
+
+    const div = document.createElement('div');
+    div.textContent = 'Hello!';
+    div.id = 'slotted';
+    testing.expectEqual(null, div.assignedSlot);
+
+    div.setAttribute('slot', 'slot-1');
+    lp.appendChild(div);
+    testing.expectEqual(slot, div.assignedSlot);
+
+    testing.eventually(() => {
+      testing.expectEqual(1, calls)
+    });
+  }
+</script>
+
+<lp-test id=sc2 mode=1><div id=s2 slot=slot-1>hello</div></lp-test>
+<script id=slotChange2>
+  {
+    let calls = 0;
+    const lp = $('#sc2');
+    const slot = lp.shadowRoot.querySelector('slot');
+    slot.addEventListener('slotchange', (e) => {
+      assertNodes([], slot.assignedNodes({}));
+      calls += 1;
+    });
+
+    const div = $('#s2');
+    div.removeAttribute('slot');
+    testing.eventually(() => {
+      testing.expectEqual(1, calls)
+    });
+  }
+</script>
+
+<lp-test id=sc3 mode=1><div id=s3 slot=slot-1>hello</div></lp-test>
+<script id=slotChange3>
+  {
+    let calls = 0;
+    const lp = $('#sc3');
+    const slot = lp.shadowRoot.querySelector('slot');
+    slot.addEventListener('slotchange', (e) => {
+      assertNodes([], slot.assignedNodes({}));
+      calls += 1;
+    });
+
+    const div = $('#s3');
+    div.slot = 'other';
+    testing.eventually(() => {
+      testing.expectEqual(1, calls)
+    });
+  }
+</script>
+
+<lp-test id=sc4 mode=1></lp-test>
+<script id=slotChange4>
+  {
+    let calls = 0;
+    const lp = $('#sc4');
+    const slot = lp.shadowRoot.querySelector('slot');
+    slot.addEventListener('slotchange', (e) => {
+      assertNodes(['slotted'], slot.assignedNodes({}));
+      calls += 1;
+    });
+
+    const div = document.createElement('div');
+    div.id = 'slotted';
+    div.slot = 'other';
+    lp.appendChild(div);
+    div.slot = 'slot-1'
+    testing.eventually(() => {
+      testing.expectEqual(1, calls)
+    });
+  }
+</script>
+
+<lp-test id=sc5 mode=1><div id=s5 slot=slot-1>hello</div></lp-test>
+<script id=slotChange5>
+  {
+    let calls = 0;
+    const lp = $('#sc5');
+    const slot = lp.shadowRoot.querySelector('slot');
+    slot.addEventListener('slotchange', (e) => {
+      assertNodes([], slot.assignedNodes({}));
+      calls += 1;
+    });
+
+    $('#s5').remove();
+    testing.eventually(() => {
+      testing.expectEqual(1, calls)
+    });
+  }
 </script>

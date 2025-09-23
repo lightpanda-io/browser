@@ -581,6 +581,14 @@ pub fn mutationEventPrevValue(evt: *MutationEvent) ?[]const u8 {
     return strToData(s.?);
 }
 
+pub fn mutationEventNewValue(evt: *MutationEvent) ?[]const u8 {
+    var s: ?*String = null;
+    const err = c._dom_mutation_event_get_new_value(evt, &s);
+    std.debug.assert(err == c.DOM_NO_ERR);
+    if (s == null) return null;
+    return strToData(s.?);
+}
+
 pub fn mutationEventRelatedNode(evt: *MutationEvent) !?*Node {
     var n: NodeExternal = undefined;
     const err = c._dom_mutation_event_get_related_node(evt, &n);

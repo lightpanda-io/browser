@@ -32,6 +32,7 @@ const Walker = @import("dom/walker.zig").WalkerDepthFirst;
 const Scheduler = @import("Scheduler.zig");
 const Http = @import("../http/Http.zig");
 const ScriptManager = @import("ScriptManager.zig");
+const SlotChangeMonitor = @import("SlotChangeMonitor.zig");
 const HTMLDocument = @import("html/document.zig").HTMLDocument;
 
 const URL = @import("../url.zig").URL;
@@ -89,6 +90,10 @@ pub const Page = struct {
     mode: Mode,
 
     load_state: LoadState = .parsing,
+
+    // expensive, adds a a global MutationObserver, so we only do it if there's
+    // an "slotchange" event registered
+    slot_change_monitor: ?*SlotChangeMonitor = null,
 
     notified_network_idle: IdleNotification = .init,
     notified_network_almost_idle: IdleNotification = .init,
@@ -1116,6 +1121,13 @@ pub const Page = struct {
             return self.main_context.stackTrace();
         }
         return null;
+    }
+
+    pub fn registerSlotChangeMonitor(self: *Page) !void {
+        if (self.slot_change_monitor != null) {
+            return;
+        }
+        self.slot_change_monitor = try SlotChangeMonitor.init(self);
     }
 };
 
