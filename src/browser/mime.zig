@@ -19,16 +19,16 @@
 const std = @import("std");
 
 pub const Mime = struct {
+    /// MIME type.
     content_type: ContentType,
-    params: []const u8 = "",
-    // IANA defines max. charset value length as 40.
-    // We keep 41 for null-termination since HTML parser expects in this format.
+    /// IANA defines max. charset value length as 40.
+    /// We keep 41 for null-termination since HTML parser expects in this format.
     charset: [41]u8 = default_charset,
 
     /// String "UTF-8" continued by null characters.
     pub const default_charset = .{ 'U', 'T', 'F', '-', '8' } ++ .{0} ** 36;
 
-    /// Mime with unknown Content-Type, empty params and empty charset.
+    /// Mime with unknown Content-Type, empty params and default charset.
     pub const unknown = Mime{ .content_type = .{ .unknown = {} } };
 
     pub const ContentTypeEnum = enum {
@@ -53,6 +53,8 @@ pub const Mime = struct {
         other: struct { type: []const u8, sub_type: []const u8 },
     };
 
+    pub const ParseError = error{Invalid};
+
     /// Returns the null-terminated charset value.
     pub fn charsetString(mime: *const Mime) [:0]const u8 {
         return @ptrCast(&mime.charset);
@@ -63,10 +65,10 @@ pub const Mime = struct {
     /// Currently we don't validate the charset.
     /// See section 2.3 Naming Requirements:
     /// https://datatracker.ietf.org/doc/rfc2978/
-    fn parseCharset(value: []const u8) error{ CharsetTooBig, Invalid }![]const u8 {
+    fn parseCharset(value: []const u8) ParseError![]const u8 {
         // Cannot be larger than 40.
         // https://datatracker.ietf.org/doc/rfc2978/
-        if (value.len > 40) return error.CharsetTooBig;
+        if (value.len > 40) return error.Invalid;
 
         // If the first char is a quote, look for a pair.
         if (value[0] == '"') {
@@ -81,58 +83,250 @@ pub const Mime = struct {
         return value;
     }
 
-    pub fn parse(input: []u8) !Mime {
-        if (input.len > 255) {
-            return error.TooBig;
+    /// Matches the first 2 characters of data with given characters.
+    inline fn match2(data: *const [2]u8, c0: u8, c1: u8) bool {
+        return @as(u16, @bitCast(data.*)) == @as(u16, @bitCast([_]u8{ c0, c1 }));
+    }
+
+    /// Matches the first 3 characters of data with given characters.
+    inline fn match3(data: *const [3]u8, c0: u8, c1: u8, c2: u8) bool {
+        return data[0] == c0 and data[1] == c1 and data[2] == c2;
+    }
+
+    /// Matches the first 4 characters of data with given characters.
+    inline fn match4(data: *const [4]u8, c0: u8, c1: u8, c2: u8, c3: u8) bool {
+        return @as(u32, @bitCast(data.*)) == @as(u32, @bitCast([_]u8{ c0, c1, c2, c3 }));
+    }
+
+    /// Parses unrecognized content type.
+    /// Always pass the `normalized` slice here.
+    fn parseOther(normalized: []const u8) ParseError!Mime {
+        const mime_end = std.mem.indexOfScalarPos(u8, normalized, 0, ';') orelse normalized.len;
+        // `normalized` is already trimmed from it's beginning.
+        // trimEnd is enough here.
+        const mime_slice = std.mem.trimEnd(u8, normalized[0..mime_end], &.{ '\t', ' ' });
+
+        const delimiter = std.mem.indexOfScalarPos(u8, mime_slice, 0, '/') orelse return error.Invalid;
+
+        const main_type = mime_slice[0..delimiter];
+        const sub_type = mime_slice[delimiter + 1 ..];
+
+        const dirty = main_type.len == 0 or sub_type.len == 0 or validType(main_type) == false or validType(sub_type) == false;
+        if (dirty) {
+            return error.Invalid;
         }
 
+        var m = Mime{ .content_type = .{ .other = .{ .type = main_type, .sub_type = sub_type } } };
+
+        // Skip whitespaces and semicolons.
+        const rem = std.mem.trimStart(u8, normalized[mime_end..], &.{ ' ', '\t', ';' });
+
+        var iterator = std.mem.splitScalar(u8, rem, ';');
+        while (iterator.next()) |attr| {
+            // Skip.
+            if (attr.len < 8) {
+                continue;
+            }
+
+            const charset_: u64 = @bitCast([_]u8{ 'c', 'h', 'a', 'r', 's', 'e', 't', '=' });
+
+            // Found charset.
+            if (@as(u64, @bitCast(attr[0..8].*)) == charset_) {
+                // Skip 8 bytes.
+                const slice = attr[8..];
+                if (slice.len == 0) {
+                    continue;
+                }
+
+                const attribute_value = try parseCharset(slice);
+                // Copy charset value.
+                @memcpy(m.charset[0..attribute_value.len], attribute_value);
+                // null-terminate.
+                m.charset[attribute_value.len] = 0;
+
+                return m;
+            }
+        }
+
+        return m;
+    }
+
+    pub fn parse(input: []u8) ParseError!Mime {
         // Zig's trim API is broken. The return type is always `[]const u8`,
         // even if the input type is `[]u8`. @constCast is safe here.
-        var normalized = @constCast(std.mem.trim(u8, input, &std.ascii.whitespace));
+        // Spec only allows space (32) and HT (9) as whitespace.
+        var normalized = @constCast(std.mem.trimStart(u8, input, &.{ ' ', '\t' }));
         _ = std.ascii.lowerString(normalized, normalized);
 
-        const content_type, const type_len = try parseContentType(normalized);
-        if (type_len >= normalized.len) {
-            return .{ .content_type = content_type };
+        // Too small for our interests, we can prefer `other` but there are no
+        // MIME this small honestly.
+        if (normalized.len < 8) {
+            return error.Invalid;
         }
 
-        const params = trimLeft(normalized[type_len..]);
+        // Magic integers for prefix matching.
+        const text_htm: u64 = @bitCast([_]u8{ 't', 'e', 'x', 't', '/', 'h', 't', 'm' });
+        const text_xml: u64 = @bitCast([_]u8{ 't', 'e', 'x', 't', '/', 'x', 'm', 'l' });
+        const text_jav: u64 = @bitCast([_]u8{ 't', 'e', 'x', 't', '/', 'j', 'a', 'v' });
+        const text_css: u64 = @bitCast([_]u8{ 't', 'e', 'x', 't', '/', 'c', 's', 's' });
+        const text_pla: u64 = @bitCast([_]u8{ 't', 'e', 'x', 't', '/', 'p', 'l', 'a' });
+        const applicat: u64 = @bitCast([_]u8{ 'a', 'p', 'p', 'l', 'i', 'c', 'a', 't' });
 
-        var charset: [41]u8 = undefined;
+        const prefix: u64 = @bitCast(normalized[0..8].*);
+        // Slice to remaining length.
+        var rem = normalized[8..];
 
-        var it = std.mem.splitScalar(u8, params, ';');
-        while (it.next()) |attr| {
-            const i = std.mem.indexOfScalarPos(u8, attr, 0, '=') orelse return error.Invalid;
-            const name = trimLeft(attr[0..i]);
-
-            const value = trimRight(attr[i + 1 ..]);
-            if (value.len == 0) {
-                return error.Invalid;
-            }
-
-            const attribute_name = std.meta.stringToEnum(enum {
-                charset,
-            }, name) orelse continue;
-
-            switch (attribute_name) {
-                .charset => {
-                    if (value.len == 0) {
-                        break;
+        const mime_type: ContentType = blk: {
+            switch (prefix) {
+                text_htm => {
+                    // There must be at least one more byte.
+                    if (rem.len == 0) {
+                        @branchHint(.unlikely);
+                        return parseOther(normalized);
                     }
 
-                    const attribute_value = try parseCharset(value);
-                    @memcpy(charset[0..attribute_value.len], attribute_value);
-                    // Null-terminate right after attribute value.
-                    charset[attribute_value.len] = 0;
+                    if (rem[0] == 'l') {
+                        @branchHint(.likely);
+                        rem = rem[1..];
+                        break :blk .{ .text_html = {} };
+                    }
+
+                    return parseOther(normalized);
                 },
+                // Perfect cases.
+                text_xml => break :blk .{ .text_xml = {} },
+                text_css => break :blk .{ .text_css = {} },
+                text_jav => {
+                    if (rem.len < 7) {
+                        @branchHint(.unlikely);
+                        return parseOther(normalized);
+                    }
+
+                    if (match4(rem[0..4], 'a', 's', 'c', 'r') and match3(rem[4..7], 'i', 'p', 't')) {
+                        @branchHint(.likely);
+                        rem = rem[7..];
+                        break :blk .{ .text_javascript = {} };
+                    }
+
+                    return parseOther(normalized);
+                },
+                text_pla => {
+                    if (rem.len < 2) {
+                        @branchHint(.unlikely);
+                        return parseOther(normalized);
+                    }
+
+                    if (match2(rem[0..2], 'i', 'n')) {
+                        @branchHint(.likely);
+                        rem = rem[2..];
+                        break :blk .{ .text_plain = {} };
+                    }
+
+                    return parseOther(normalized);
+                },
+                applicat => {
+                    if (rem.len < 8) {
+                        @branchHint(.unlikely);
+                        return parseOther(normalized);
+                    }
+
+                    const prefix2: u64 = @bitCast(rem[0..8].*);
+                    // Advance.
+                    rem = rem[8..];
+
+                    const ion_json: u64 = @bitCast([_]u8{ 'i', 'o', 'n', '/', 'j', 's', 'o', 'n' });
+                    const ion_java: u64 = @bitCast([_]u8{ 'i', 'o', 'n', '/', 'j', 'a', 'v', 'a' });
+                    const ion_x_ja: u64 = @bitCast([_]u8{ 'i', 'o', 'n', '/', 'x', '-', 'j', 'a' });
+
+                    switch (prefix2) {
+                        ion_json => break :blk .{ .application_json = {} },
+                        ion_java => {
+                            if (rem.len < 6) {
+                                @branchHint(.unlikely);
+                                return parseOther(normalized);
+                            }
+
+                            if (match4(rem[0..4], 's', 'c', 'r', 'i') and match2(rem[4..6], 'p', 't')) {
+                                @branchHint(.likely);
+                                rem = rem[6..];
+                                break :blk .{ .text_javascript = {} };
+                            }
+
+                            return parseOther(normalized);
+                        },
+                        ion_x_ja => {
+                            if (rem.len < 8) {
+                                @branchHint(.unlikely);
+                                return parseOther(normalized);
+                            }
+
+                            const vascript: u64 = @bitCast(@as([*]const u8, "vascript")[0..8].*);
+                            if (@as(u64, @bitCast(rem[0..8].*)) == vascript) {
+                                @branchHint(.likely);
+                                rem = rem[8..];
+                                break :blk .{ .text_javascript = {} };
+                            }
+
+                            return parseOther(normalized);
+                        },
+                        else => {},
+                    }
+
+                    return parseOther(normalized);
+                },
+                else => {},
+            }
+
+            // Last resort.
+            return parseOther(normalized);
+        };
+
+        // text/xml; charset="UTF-8"
+        // ~~~~~~~~^ -> beginning of rem; right after MIME.
+        //
+        // Remove leading whitespaces and semicolons.
+        // safe constCast.
+        rem = @constCast(std.mem.trimStart(u8, rem, &.{ ' ', '\t', ';' }));
+
+        // If there are no remaining bytes, we know that there'll be no params.
+        if (rem.len == 0) {
+            return .{ .content_type = mime_type };
+        }
+
+        // text/xml; charset="UTF-8"
+        // ~~~~~~~~~~^ -> beginning of rem; now that whitespace and semicolon are skipped.
+        // We can keep this position as params.
+        // const params = rem[0..];
+
+        var m = Mime{ .content_type = mime_type };
+        var iterator = std.mem.splitScalar(u8, rem, ';');
+        while (iterator.next()) |attr| {
+            // Skip.
+            if (attr.len < 8) {
+                continue;
+            }
+
+            const charset_: u64 = @bitCast([_]u8{ 'c', 'h', 'a', 'r', 's', 'e', 't', '=' });
+
+            // Found charset.
+            if (@as(u64, @bitCast(attr[0..8].*)) == charset_) {
+                // Skip 8 bytes.
+                const slice = attr[8..];
+                if (slice.len == 0) {
+                    continue;
+                }
+
+                const attribute_value = try parseCharset(slice);
+                // Copy charset value.
+                @memcpy(m.charset[0..attribute_value.len], attribute_value);
+                // null-terminate.
+                m.charset[attribute_value.len] = 0;
+
+                return m;
             }
         }
 
-        return .{
-            .params = params,
-            .charset = charset,
-            .content_type = content_type,
-        };
+        return error.Invalid;
     }
 
     pub fn sniff(body: []const u8) ?Mime {
@@ -207,53 +401,6 @@ pub const Mime = struct {
         return self.content_type == .text_html;
     }
 
-    // we expect value to be lowercase
-    fn parseContentType(value: []const u8) !struct { ContentType, usize } {
-        const end = std.mem.indexOfScalarPos(u8, value, 0, ';') orelse value.len;
-        const type_name = trimRight(value[0..end]);
-        const attribute_start = end + 1;
-
-        if (std.meta.stringToEnum(enum {
-            @"text/xml",
-            @"text/html",
-            @"text/css",
-            @"text/plain",
-
-            @"text/javascript",
-            @"application/javascript",
-            @"application/x-javascript",
-
-            @"application/json",
-        }, type_name)) |known_type| {
-            const ct: ContentType = switch (known_type) {
-                .@"text/xml" => .{ .text_xml = {} },
-                .@"text/html" => .{ .text_html = {} },
-                .@"text/javascript", .@"application/javascript", .@"application/x-javascript" => .{ .text_javascript = {} },
-                .@"text/plain" => .{ .text_plain = {} },
-                .@"text/css" => .{ .text_css = {} },
-                .@"application/json" => .{ .application_json = {} },
-            };
-            return .{ ct, attribute_start };
-        }
-
-        const separator = std.mem.indexOfScalarPos(u8, type_name, 0, '/') orelse return error.Invalid;
-
-        const main_type = value[0..separator];
-        const sub_type = trimRight(value[separator + 1 .. end]);
-
-        if (main_type.len == 0 or validType(main_type) == false) {
-            return error.Invalid;
-        }
-        if (sub_type.len == 0 or validType(sub_type) == false) {
-            return error.Invalid;
-        }
-
-        return .{ .{ .other = .{
-            .type = main_type,
-            .sub_type = sub_type,
-        } }, attribute_start };
-    }
-
     const T_SPECIAL = blk: {
         var v = [_]bool{false} ** 256;
         for ("()<>@,;:\\\"/[]?=") |b| {
@@ -280,14 +427,6 @@ pub const Mime = struct {
             }
         }
         return true;
-    }
-
-    fn trimLeft(s: []const u8) []const u8 {
-        return std.mem.trimLeft(u8, s, &std.ascii.whitespace);
-    }
-
-    fn trimRight(s: []const u8) []const u8 {
-        return std.mem.trimRight(u8, s, &std.ascii.whitespace);
     }
 };
 
@@ -372,31 +511,26 @@ test "Mime: parse charset" {
     try expect(.{
         .content_type = .{ .text_xml = {} },
         .charset = "utf-8",
-        .params = "charset=utf-8",
     }, "text/xml; charset=utf-8");
 
     try expect(.{
         .content_type = .{ .text_xml = {} },
         .charset = "utf-8",
-        .params = "charset=\"utf-8\"",
     }, "text/xml;charset=\"UTF-8\"");
 
     try expect(.{
         .content_type = .{ .text_html = {} },
         .charset = "iso-8859-1",
-        .params = "charset=\"iso-8859-1\"",
     }, "text/html; charset=\"iso-8859-1\"");
 
     try expect(.{
         .content_type = .{ .text_html = {} },
         .charset = "iso-8859-1",
-        .params = "charset=\"iso-8859-1\"",
     }, "text/html; charset=\"ISO-8859-1\"");
 
     try expect(.{
         .content_type = .{ .text_xml = {} },
         .charset = "custom-non-standard-charset-value",
-        .params = "charset=\"custom-non-standard-charset-value\"",
     }, "text/xml;charset=\"custom-non-standard-charset-value\"");
 }
 
@@ -485,7 +619,6 @@ test "Mime: sniff" {
 
 const Expectation = struct {
     content_type: Mime.ContentType,
-    params: []const u8 = "",
     charset: ?[]const u8 = null,
 };
 
@@ -506,8 +639,6 @@ fn expect(expected: Expectation, input: []const u8) !void {
         },
         else => {}, // already asserted above
     }
-
-    try testing.expectEqual(expected.params, actual.params);
 
     if (expected.charset) |ec| {
         // We remove the null characters for testing purposes here.
