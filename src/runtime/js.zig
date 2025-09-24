@@ -22,6 +22,7 @@ const v8 = @import("v8");
 
 const log = @import("../log.zig");
 const SubType = @import("subtype.zig").SubType;
+const ScriptManager = @import("../browser/ScriptManager.zig");
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
@@ -540,6 +541,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     .module_loader = .{
                         .ptr = safe_module_loader,
                         .func = ModuleLoader.fetchModuleSource,
+                        .async = ModuleLoader.fetchAsyncModuleSource,
                     },
                     .global_callback = global_callback,
                 };
@@ -707,16 +709,26 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             const ModuleLoader = struct {
                 ptr: *anyopaque,
-                func: *const fn (ptr: *anyopaque, url: [:0]const u8) anyerror!BlockingResult,
-
-                // Don't like having to reach into ../browser/ here. But can't think
-                // of a good way to fix this.
-                const BlockingResult = @import("../browser/ScriptManager.zig").BlockingResult;
+                func: *const fn (ptr: *anyopaque, url: [:0]const u8) anyerror!ScriptManager.GetResult,
+                async: *const fn (ptr: *anyopaque, url: [:0]const u8, cb: ScriptManager.AsyncModule.Callback, cb_state: *anyopaque) anyerror!void,
             };
 
             const ModuleEntry = struct {
-                module: PersistentModule,
-                promise: PersistentPromise,
+                // Can be null if we're asynchrously loading the module, in
+                // which case resolver_promise cannot be null.
+                module: ?PersistentModule = null,
+
+                // The promise of the evaluting module. The resolved value is
+                // meaningless to us, but the resolver promise needs to chain
+                // to this, since we need to know when it's complete.
+                module_promise: ?PersistentPromise = null,
+
+                // The promise for the resolver which is loading the module.
+                // (AKA, the first time we try to load it). This resolver will
+                // chain to the module_promise  and, when it's done evaluating
+                // will resolve its namespace. Any other attempt to load the
+                // module willchain to this.
+                resolver_promise: ?PersistentPromise = null,
             };
 
             // no init, started with executor.createJsContext()
@@ -751,8 +763,15 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 {
                     var it = self.module_cache.valueIterator();
                     while (it.next()) |entry| {
-                        entry.module.deinit();
-                        entry.promise.deinit();
+                        if (entry.module) |*mod| {
+                            mod.deinit();
+                        }
+                        if (entry.module_promise) |*p| {
+                            p.deinit();
+                        }
+                        if (entry.resolver_promise) |*p| {
+                            p.deinit();
+                        }
                     }
                 }
 
@@ -813,13 +832,16 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 return self.createValue(value);
             }
 
-            // compile and eval a JS module
-            // It returns null if the module is already compiled and in the cache.
-            // It returns a v8.Promise if the module must be evaluated.
-            pub fn module(self: *JsContext, src: []const u8, url: []const u8, cacheable: bool) !ModuleEntry {
+            pub fn module(self: *JsContext, comptime want_result: bool, src: []const u8, url: []const u8, cacheable: bool) !(if (want_result) ModuleEntry else void) {
                 if (cacheable) {
                     if (self.module_cache.get(url)) |entry| {
-                        return entry;
+                        // The dynamic import will creaet an entry withouth the
+                        // module to prevent multiple calls from asynchronously
+                        // loading the same module. If we're here, without the
+                        // module, then it's time to load it.
+                        if (entry.module != null) {
+                            return if (comptime want_result) entry else {};
+                        }
                     }
                 }
                 errdefer _ = self.module_cache.remove(url);
@@ -842,16 +864,44 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 // Must be a promise that gets returned here.
                 std.debug.assert(evaluated.isPromise());
 
-                const entry = ModuleEntry{
-                    .module = PersistentModule.init(self.isolate, m),
-                    .promise = PersistentPromise.init(self.isolate, .{.handle = evaluated.handle}),
-                };
-                if (cacheable) {
-                    try self.module_cache.putNoClobber(arena, owned_url, entry);
-                    try self.module_identifier.put(arena, m.getIdentityHash(), owned_url);
+                if (comptime !want_result) {
+                    // avoid creating a bunch of persisted objects if it isn't
+                    // cachachable and the caller doesn't care about results.
+                    // This is pretty common, i.e. every <script type=module>
+                    // within the html page.
+                    if (!cacheable) {
+                        return;
+                    }
                 }
 
-                return entry;
+                // anyone who cares about the result, should also want it to
+                // be cached
+                std.debug.assert(cacheable);
+
+                const persisted_module = PersistentModule.init(self.isolate, m);
+                const persisted_promise = PersistentPromise.init(self.isolate, .{ .handle = evaluated.handle });
+
+                var gop = try self.module_cache.getOrPut(arena, owned_url);
+                if (gop.found_existing) {
+                    // only way for us to have found an existing entry, is if
+                    // we're asynchronously loading this module
+                    std.debug.assert(gop.value_ptr.module == null);
+                    std.debug.assert(gop.value_ptr.module_promise == null);
+                    std.debug.assert(gop.value_ptr.resolver_promise != null);
+
+                    // keep the resolver promise, it's doing the heavy lifting
+                    // and any other async loads will be chained to it.
+                    gop.value_ptr.module = persisted_module;
+                    gop.value_ptr.module_promise = persisted_promise;
+                } else {
+                    gop.value_ptr.* = ModuleEntry{
+                        .module = persisted_module,
+                        .module_promise = persisted_promise,
+                        .resolver_promise = null,
+                    };
+                }
+                try self.module_identifier.put(arena, m.getIdentityHash(), owned_url);
+                return if (comptime want_result) gop.value_ptr.* else {};
             }
 
             pub fn newArray(self: *JsContext, len: u32) JsObject {
@@ -1590,7 +1640,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 try_catch.init(self);
                 defer try_catch.deinit();
 
-                const entry = self.module(fetch_result.src(), normalized_specifier, true) catch |err| {
+                const entry = self.module(true, fetch_result.src(), normalized_specifier, true) catch |err| {
                     log.warn(.js, "compile resolved module", .{
                         .specifier = specifier,
                         .stack = try_catch.stack(self.call_arena) catch null,
@@ -1600,7 +1650,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     });
                     return null;
                 };
-                return entry.module.handle;
+                // entry.module is always set when returning from self.module()
+                return entry.module.?.handle;
             }
 
             pub fn dynamicModuleCallback(
@@ -1618,22 +1669,22 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 const isolate = self.isolate;
 
                 const resource = jsStringToZig(self.call_arena, .{ .handle = resource_name.? }, isolate) catch |err| {
-                    log.err(.app, "OOM", .{.err = err, .src =  "dynamicModuleCallback1"});
+                    log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback1" });
                     return @constCast(self.rejectPromise("Out of memory").handle);
                 };
 
                 const specifier = jsStringToZig(self.call_arena, .{ .handle = v8_specifier.? }, isolate) catch |err| {
-                    log.err(.app, "OOM", .{.err = err, .src =  "dynamicModuleCallback2"});
+                    log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback2" });
                     return @constCast(self.rejectPromise("Out of memory").handle);
                 };
 
                 const normalized_specifier = @import("../url.zig").stitch(
-                    self.call_arena,
+                    self.context_arena, // might need to survive until the module is loaded
                     specifier,
                     resource,
                     .{ .alloc = .if_needed, .null_terminated = true },
                 ) catch |err| {
-                    log.err(.app, "OOM", .{.err = err, .src =  "dynamicModuleCallback3"});
+                    log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback3" });
                     return @constCast(self.rejectPromise("Out of memory").handle);
                 };
 
@@ -1646,74 +1697,165 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 return @constCast(promise.handle);
             }
 
-            fn _dynamicModuleCallback(self: *JsContext, specifier: [:0]const u8) !v8.Promise {
-                const isolate = self.isolate;
-                const ctx = self.v8_context;
+            // Will get passed to ScriptManager and then passed back to us when
+            // the src of the module is loaded
+            const DynamicModuleResolveState = struct {
+                js_context: *JsContext,
+                specifier: [:0]const u8,
+                resolver: v8.PromiseResolver,
+            };
 
-                const entry = self.module_cache.get(specifier) orelse blk: {
+            fn _dynamicModuleCallback(self: *JsContext, specifier: [:0]const u8) !v8.Promise {
+                const gop = try self.module_cache.getOrPut(self.context_arena, specifier);
+                if (gop.found_existing and gop.value_ptr.resolver_promise != null) {
+                    // This is easy, there's already something responsible
+                    // for loading the module. Maybe it's still loading, maybe
+                    // it's complete. Whatever, we can just return that promise.
+                    return gop.value_ptr.resolver_promise.?.castToPromise();
+                }
+
+                const isolate = self.isolate;
+
+                const persistent_resolver = v8.Persistent(v8.PromiseResolver).init(isolate, v8.PromiseResolver.init(self.v8_context));
+                try self.persisted_promise_resolvers.append(self.context_arena, persistent_resolver);
+                var resolver = persistent_resolver.castToPromiseResolver();
+
+                const state = try self.context_arena.create(DynamicModuleResolveState);
+                state.* = .{
+                    .js_context = self,
+                    .resolver = resolver,
+                    .specifier = specifier,
+                };
+
+                const promise = resolver.getPromise();
+
+                if (!gop.found_existing) {
+                    // this module hasn't been seen before. This is the most
+                    // complicated path.
+
+                    // First, we'll setup a bare entry into our cache. This will
+                    // prevent anyone one else from trying to asychronously load
+                    // it. Instead, they can just return our promise.
+                    gop.value_ptr.* = ModuleEntry{
+                        .module = null,
+                        .module_promise = null,
+                        .resolver_promise = PersistentPromise.init(self.isolate, .{ .handle = promise.handle }),
+                    };
+
+                    // Next, we need to actually load it.
                     const module_loader = self.module_loader;
-                    var fetch_result = try module_loader.func(module_loader.ptr, specifier);
+                    module_loader.async(module_loader.ptr, specifier, dynamicModuleSourceCallback, state) catch |err| {
+                        const error_msg = v8.String.initUtf8(isolate, @errorName(err));
+                        _ = resolver.reject(self.v8_context, error_msg.toValue());
+                    };
+
+                    // For now, we're done. but this will be continued in
+                    // `dynamicModuleSourceCallback`, once the source for the
+                    // moduel is loaded.
+                    return promise;
+                }
+
+                // So we have a module, but no async resolver. This can only
+                // happen if the module was first synchronously loaded (Does that
+                // ever even happen?!) You'd think we cann just return the module
+                // but no, we need to resolve the module namespace, and the
+                // module could still be loading!
+                // We need to do part of what the first case is going to do in
+                // `dynamicModuleSourceCallback`, but we can skip some steps
+                // since the module is alrady loaded,
+
+                // like before, we want to set this up so that if anything else
+                // tries to load this module, it can just return our promise
+                // since we're going to be doing all the work.
+                gop.value_ptr.resolver_promise = PersistentPromise.init(self.isolate, .{ .handle = promise.handle });
+
+                // But we can skip direclty to `resolveDynamicModule` which is
+                // what the above callback will eventually do.
+                self.resolveDynamicModule(state, gop.value_ptr.*);
+                return promise;
+            }
+
+            fn dynamicModuleSourceCallback(ctx: *anyopaque, fetch_result_: anyerror!ScriptManager.GetResult) void {
+                const state: *DynamicModuleResolveState = @ptrCast(@alignCast(ctx));
+                var self = state.js_context;
+
+                var fetch_result = fetch_result_ catch |err| {
+                    const error_msg = v8.String.initUtf8(self.isolate, @errorName(err));
+                    _ = state.resolver.reject(self.v8_context, error_msg.toValue());
+                    return;
+                };
+
+                const module_entry = blk: {
                     defer fetch_result.deinit();
 
                     var try_catch: TryCatch = undefined;
                     try_catch.init(self);
                     defer try_catch.deinit();
 
-                    break :blk self.module(fetch_result.src(), specifier, true) catch {
+                    break :blk self.module(true, fetch_result.src(), state.specifier, true) catch {
                         const ex = try_catch.exception(self.call_arena) catch |err| @errorName(err) orelse "unknown error";
                         log.err(.js, "module compilation failed", .{
-                            .specifier = specifier,
+                            .specifier = state.specifier,
                             .exception = ex,
                             .stack = try_catch.stack(self.call_arena) catch null,
                             .line = try_catch.sourceLineNumber() orelse 0,
                         });
-                        return self.rejectPromise(ex);
+                        const error_msg = v8.String.initUtf8(self.isolate, ex);
+                        _ = state.resolver.reject(self.v8_context, error_msg.toValue());
+                        return;
                     };
                 };
 
-                const EvaluationData = struct {
-                    module: v8.Module,
-                    resolver: v8.PromiseResolver,
-                };
-                const resolver = v8.Persistent(v8.PromiseResolver).init(isolate, v8.PromiseResolver.init(self.v8_context));
-                try self.persisted_promise_resolvers.append(self.context_arena, resolver);
+                self.resolveDynamicModule(state, module_entry);
+            }
 
-                const ev_data = try self.context_arena.create(EvaluationData);
-                ev_data.* = .{
-                    .module = entry.module.castToModule(),
-                    .resolver = resolver.castToPromiseResolver(),
-                };
-                const external = v8.External.init(isolate, @ptrCast(ev_data));
+            fn resolveDynamicModule(self: *JsContext, state: *DynamicModuleResolveState, module_entry: ModuleEntry) void {
+                const ctx = self.v8_context;
+                const external = v8.External.init(self.isolate, @ptrCast(state));
+
+                // we can only be here if the module has been evaluated and if
+                // we have a resolve loading this asynchronously.
+                std.debug.assert(module_entry.module != null);
+                std.debug.assert(module_entry.module_promise != null);
+                std.debug.assert(module_entry.resolver_promise != null);
+
+                // We've gotten the source for the module and are evaluating it.
+                // You might thing we're done, but the module evaluation is
+                // itself asynchronous. We need to chain to the module's own
+                // promise. When the module is evalutated, it resolves to the
+                // last value of the module. But, for module loading, we need to
+                // resolve to the module's namespace.
 
                 const then_callback = v8.Function.initWithData(ctx, struct {
                     pub fn callback(raw_info: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
                         const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
-                        const iso = info.getIsolate();
+                        const isolate = info.getIsolate();
 
-                        const data: *EvaluationData = @ptrCast(@alignCast(info.getExternalValue()));
-                        _ = data.resolver.resolve(iso.getCurrentContext(), data.module.getModuleNamespace());
+                        const s: *DynamicModuleResolveState = @ptrCast(@alignCast(info.getExternalValue()));
+                        const js_context = s.js_context;
+                        const me = js_context.module_cache.getPtr(s.specifier).?;
+                        const namespace = me.module.?.castToModule().getModuleNamespace();
+                        _ = s.resolver.resolve(isolate.getCurrentContext(), namespace);
                     }
                 }.callback, external);
 
                 const catch_callback = v8.Function.initWithData(ctx, struct {
                     pub fn callback(raw_info: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
                         const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
-                        const iso = info.getIsolate();
-
-                        const data: *EvaluationData = @ptrCast(@alignCast(info.getExternalValue()));
-                        _ = data.resolver.reject(iso.getCurrentContext(), info.getData());
+                        const isolate = info.getIsolate();
+                        const data: *DynamicModuleResolveState = @ptrCast(@alignCast(info.getExternalValue()));
+                        _ = data.resolver.reject(isolate.getCurrentContext(), info.getData());
                     }
                 }.callback, external);
 
-                _ = entry.promise.castToPromise().thenAndCatch(ctx, then_callback, catch_callback) catch |err| {
+                _ = module_entry.module_promise.?.castToPromise().thenAndCatch(ctx, then_callback, catch_callback) catch |err| {
                     log.err(.js, "module evaluation is promise", .{
                         .err = err,
-                        .specifier = specifier,
+                        .specifier = state.specifier,
                     });
-                    return self.rejectPromise("Failed to evaluate promise");
+                    const error_msg = v8.String.initUtf8(self.isolate, "Failed to evaluate promise");
+                    _ = state.resolver.reject(ctx, error_msg.toValue());
                 };
-
-                return ev_data.resolver.getPromise();
             }
 
             // Reverses the mapZigInstanceToJs, making sure that our TaggedAnyOpaque
@@ -3997,11 +4139,11 @@ const NoopInspector = struct {
 };
 
 const ErrorModuleLoader = struct {
-    // Don't like having to reach into ../browser/ here. But can't think
-    // of a good way to fix this.
-    const BlockingResult = @import("../browser/ScriptManager.zig").BlockingResult;
+    pub fn fetchModuleSource(_: *anyopaque, _: [:0]const u8) !ScriptManager.GetResult {
+        return error.NoModuleLoadConfigured;
+    }
 
-    pub fn fetchModuleSource(_: *anyopaque, _: [:0]const u8) !BlockingResult {
+    pub fn fetchAsyncModuleSource(_: *anyopaque, _: [:0]const u8, _: ScriptManager.AsyncModule.Callback, _: *anyopaque) !void {
         return error.NoModuleLoadConfigured;
     }
 };
