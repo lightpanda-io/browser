@@ -850,6 +850,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
                 const arena = self.context_arena;
                 const owned_url = try arena.dupe(u8, url);
+
                 try self.module_identifier.putNoClobber(arena, m.getIdentityHash(), owned_url);
                 errdefer _ = self.module_identifier.remove(m.getIdentityHash());
 
@@ -900,7 +901,6 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         .resolver_promise = null,
                     };
                 }
-                try self.module_identifier.put(arena, m.getIdentityHash(), owned_url);
                 return if (comptime want_result) gop.value_ptr.* else {};
             }
 
@@ -1763,6 +1763,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 // We need to do part of what the first case is going to do in
                 // `dynamicModuleSourceCallback`, but we can skip some steps
                 // since the module is alrady loaded,
+                std.debug.assert(gop.value_ptr.module != null);
+                std.debug.assert(gop.value_ptr.module_promise != null);
 
                 // like before, we want to set this up so that if anything else
                 // tries to load this module, it can just return our promise
@@ -1818,6 +1820,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 std.debug.assert(module_entry.module != null);
                 std.debug.assert(module_entry.module_promise != null);
                 std.debug.assert(module_entry.resolver_promise != null);
+                std.debug.assert(self.module_cache.contains(state.specifier));
 
                 // We've gotten the source for the module and are evaluating it.
                 // You might thing we're done, but the module evaluation is
