@@ -806,6 +806,9 @@ pub const Page = struct {
                 unreachable;
             },
         }
+
+        // Push the navigation after a successful load.
+        try self.session.history.pushNavigation(self.url.raw, self);
     }
 
     fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
@@ -1136,6 +1139,7 @@ pub const NavigateReason = enum {
     address_bar,
     form,
     script,
+    history,
 };
 
 pub const NavigateOpts = struct {

@@ -25,9 +25,9 @@ const Page = @import("../page.zig").Page;
 const History = @This();
 
 const HistoryEntry = struct {
-    url: ?[]const u8,
-    // Serialized Env.JsObject
-    state: []u8,
+    url: []const u8,
+    // Serialized as JSON.
+    state: ?[]u8,
 };
 
 const ScrollRestorationMode = enum {
@@ -64,52 +64,78 @@ pub fn set_scrollRestoration(self: *History, mode: []const u8) void {
     self.scrollRestoration = ScrollRestorationMode.fromString(mode) orelse self.scrollRestoration;
 }
 
-pub fn get_state(self: *History, page: *Page) !?Env.JsObject {
+pub fn get_state(self: *History, page: *Page) !?Env.Value {
     if (self.current) |curr| {
         const entry = self.stack.items[curr];
-        const object = try Env.JsObject.fromJson(page.main_context, entry.state);
-        return object;
+        if (entry.state) |state| {
+            const value = try Env.Value.fromJson(page.main_context, state);
+            return value;
+        } else {
+            return null;
+        }
     } else {
         return null;
     }
 }
 
-pub fn _pushState(self: *History, state: Env.JsObject, _: ?[]const u8, url: ?[]const u8, page: *Page) !void {
-    const json = try state.toJson(page.arena);
+pub fn pushNavigation(self: *History, _url: []const u8, page: *Page) !void {
+    const arena = page.session.arena;
+    const url = try arena.dupe(u8, _url);
+
+    const entry = HistoryEntry{ .state = null, .url = url };
+    try self.stack.append(arena, entry);
+    self.current = self.stack.items.len - 1;
+}
+
+pub fn _pushState(self: *History, state: Env.JsObject, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
+    const arena = page.session.arena;
+
+    const url = if (_url) |u| try arena.dupe(u8, u) else try arena.dupe(u8, page.url.raw);
+    const json = try state.toJson(page.session.arena);
     const entry = HistoryEntry{ .state = json, .url = url };
-    try self.stack.append(page.session.arena, entry);
-    self.current = self.stack.items.len;
+    try self.stack.append(arena, entry);
+    self.current = self.stack.items.len - 1;
 }
 
-// TODO implement the function
-// data must handle any argument. We could expect a std.json.Value but
-// https://github.com/lightpanda-io/zig-js-runtime/issues/267 is missing.
-pub fn _replaceState(self: *History, state: Env.JsObject, _: ?[]const u8, url: ?[]const u8) void {
-    _ = self;
-    _ = url;
-    _ = state;
-}
+pub fn _replaceState(self: *History, state: Env.JsObject, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
+    const arena = page.session.arena;
 
-// TODO implement the function
-pub fn _go(self: *History, delta: ?i32) void {
-    _ = self;
-    _ = delta;
-}
-
-pub fn _back(self: *History) void {
     if (self.current) |curr| {
-        if (curr > 0) {
-            self.current = curr - 1;
-        }
+        const entry = &self.stack.items[curr];
+        const url = if (_url) |u| try arena.dupe(u8, u) else try arena.dupe(u8, page.url.raw);
+        const json = try state.toJson(arena);
+        entry.* = HistoryEntry{ .state = json, .url = url };
+    } else {
+        try self._pushState(state, "", _url, page);
     }
 }
 
-pub fn _forward(self: *History) void {
-    if (self.current) |curr| {
-        if (curr < self.stack.items.len) {
-            self.current = curr + 1;
-        }
+pub fn go(self: *History, delta: i32, page: *Page) !void {
+    // 0 behaves the same as no argument, both reloading the page.
+    // If this is getting called, there SHOULD be an entry, atleast from pushNavigation.
+    const current = self.current.?;
+
+    const index_s: i64 = @intCast(@as(i64, @intCast(current)) + @as(i64, @intCast(delta)));
+    if (index_s < 0 or index_s > self.stack.items.len - 1) {
+        return;
     }
+
+    const index = @as(usize, @intCast(index_s));
+    const entry = self.stack.items[index];
+    self.current = index;
+    try page.navigateFromWebAPI(entry.url, .{ .reason = .history });
+}
+
+pub fn _go(self: *History, _delta: ?i32, page: *Page) !void {
+    try self.go(_delta orelse 0, page);
+}
+
+pub fn _back(self: *History, page: *Page) !void {
+    try self.go(-1, page);
+}
+
+pub fn _forward(self: *History, page: *Page) !void {
+    try self.go(1, page);
 }
 
 const testing = @import("../../testing.zig");
