@@ -231,6 +231,71 @@ pub const Element = struct {
         }
     }
 
+    /// Parses the given `input` string and inserts it's children to an element at given `position`.
+    /// https://developer.mozilla.org/en-US/docs/Web/API/Element/insertAdjacentHTML
+    ///
+    /// TODO: Support for XML parsing and `TrustedHTML` instances.
+    pub fn _insertAdjacentHTML(self: *parser.Element, position: []const u8, input: []const u8) !void {
+        const self_node = parser.elementToNode(self);
+        const doc = parser.nodeOwnerDocument(self_node) orelse {
+            return parser.DOMError.WrongDocument;
+        };
+
+        // Parse the fragment.
+        const fragment = try parser.documentParseFragmentFromStr(doc, input);
+        const fragment_node = parser.documentFragmentToNode(fragment);
+
+        // We always get it wrapped like so:
+        // <html><head></head><body>{ ... }</body></html>
+        const html = parser.nodeFirstChild(fragment_node) orelse return;
+        const head = parser.nodeFirstChild(html) orelse return;
+        const body = parser.nodeNextSibling(head) orelse return;
+
+        const children = try parser.nodeGetChildNodes(body);
+        const len = parser.nodeListLength(children);
+
+        if (std.mem.eql(u8, position, "beforeend")) {
+            for (0..len) |_| {
+                const child = parser.nodeListItem(children, 0) orelse continue;
+                _ = try parser.nodeInsertBefore(self_node, child, null);
+            }
+        } else if (std.mem.eql(u8, position, "afterbegin")) {
+            const target = parser.nodeFirstChild(self_node) orelse self_node;
+            for (0..len) |_| {
+                const child = parser.nodeListItem(children, 0) orelse continue;
+                _ = try parser.nodeInsertBefore(target, child, null);
+            }
+        } else if (std.mem.eql(u8, position, "beforebegin")) {
+            const parent = parser.nodeParentNode(self_node) orelse {
+                return error.NoModificationAllowed;
+            };
+
+            // Make sure parent is not Document.
+            // Should also check for document_fragment and document_type?
+            if (parser.nodeType(parent) == .document) {
+                return error.NoModificationAllowed;
+            }
+
+            for (0..len) |_| {
+                const child = parser.nodeListItem(children, 0) orelse continue;
+                _ = try parser.nodeInsertBefore(parent, child, self_node);
+            }
+        } else if (std.mem.eql(u8, position, "afterend")) {
+            const parent = parser.nodeParentNode(self_node) orelse {
+                return error.NoModificationAllowed;
+            };
+
+            if (parser.nodeType(parent) == .document) {
+                return error.NoModificationAllowed;
+            }
+
+            for (0..len) |_| {
+                const child = parser.nodeListItem(children, 0) orelse continue;
+                _ = try parser.nodeInsertBefore(parent, child, null);
+            }
+        }
+    }
+
     // The closest() method of the Element interface traverses the element and its parents (heading toward the document root) until it finds a node that matches the specified CSS selector.
     // Returns the closest ancestor Element or itself, which matches the selectors. If there are no such element, null.
     pub fn _closest(self: *parser.Element, selector: []const u8, page: *Page) !?*parser.Element {
