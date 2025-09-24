@@ -54,8 +54,8 @@ pub const MouseEvent = struct {
     pub fn constructor(event_type: []const u8, opts_: ?MouseEventInit) !*parser.MouseEvent {
         const opts = opts_ orelse MouseEventInit{};
 
-        var mouse_event = try parser.mouseEventCreate();
-        parser.eventSetInternalType(@ptrCast(&mouse_event), .mouse_event);
+        const mouse_event = try parser.mouseEventCreate();
+        parser.eventSetInternalType(@ptrCast(mouse_event), .mouse_event);
 
         try parser.mouseEventInit(mouse_event, event_type, .{
             .x = opts.clientX,
