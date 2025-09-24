@@ -289,3 +289,17 @@
   linkElement.rel = "stylesheet";
   testing.expectEqual("stylesheet", linkElement.rel);
 </script>
+
+<script id=insertAdjacentHTML>
+  const el4 = document.createElement("div");
+
+  const el5 = document.createElement("span");
+  el4.appendChild(el5);
+
+  const el6 = document.createElement("p");
+  el6.innerText = "content";
+  el4.appendChild(el6);
+
+  el5.insertAdjacentHTML("beforebegin", "<h1>title</h1>");
+  testing.expectEqual("<h1>title</h1><span></span><p>content</p>", el4.innerHTML);
+</script>
