@@ -36,6 +36,7 @@ const MouseEvent = @import("mouse_event.zig").MouseEvent;
 const KeyboardEvent = @import("keyboard_event.zig").KeyboardEvent;
 const ErrorEvent = @import("../html/error_event.zig").ErrorEvent;
 const MessageEvent = @import("../dom/MessageChannel.zig").MessageEvent;
+const PopStateEvent = @import("../html/History.zig").PopStateEvent;
 
 // Event interfaces
 pub const Interfaces = .{
@@ -46,6 +47,7 @@ pub const Interfaces = .{
     KeyboardEvent,
     ErrorEvent,
     MessageEvent,
+    PopStateEvent,
 };
 
 pub const Union = generate.Union(Interfaces);
@@ -73,6 +75,7 @@ pub const Event = struct {
             .error_event => .{ .ErrorEvent = @as(*ErrorEvent, @ptrCast(evt)).* },
             .message_event => .{ .MessageEvent = @as(*MessageEvent, @ptrCast(evt)).* },
             .keyboard_event => .{ .KeyboardEvent = @as(*parser.KeyboardEvent, @ptrCast(evt)) },
+            .pop_state => .{ .PopStateEvent = @as(*PopStateEvent, @ptrCast(evt)).* },
         };
     }
 

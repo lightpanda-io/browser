@@ -19,8 +19,18 @@
     let state = { "new": "field", testComplete: true };
     testing.expectEqual(state, history.state);
 
-    testing.expectEqual(undefined, history.back());
-    testing.expectEqual(undefined, history.forward());
+    let popstateEventFired = false;
+    let popstateEventState = null;
+
+    window.addEventListener('popstate', (event) => {
+        popstateEventFired = true;
+        popstateEventState = event.state;
+    });
+
+    testing.eventually(() => {
+      testing.expectEqual(true, popstateEventFired);
+      testing.expectEqual(state, popstateEventState);
+    })
 
     testing.onPageWait(() => {
       testing.expectEqual(true, history.state && history.state.testComplete);

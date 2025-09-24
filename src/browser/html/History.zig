@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const log = @import("../../log.zig");
 
 const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
@@ -87,6 +88,32 @@ pub fn pushNavigation(self: *History, _url: []const u8, page: *Page) !void {
     self.current = self.stack.items.len - 1;
 }
 
+pub fn dispatchPopStateEvent(state: ?[]const u8, page: *Page) void {
+    log.debug(.script_event, "dispatch popstate event", .{
+        .type = "popstate",
+        .source = "history",
+    });
+    History._dispatchPopStateEvent(state, page) catch |err| {
+        log.err(.app, "dispatch popstate event error", .{
+            .err = err,
+            .type = "popstate",
+            .source = "history",
+        });
+    };
+}
+
+fn _dispatchPopStateEvent(
+    state: ?[]const u8,
+    page: *Page,
+) !void {
+    var evt = try PopStateEvent.constructor("popstate", .{ .state = state });
+
+    _ = try parser.eventTargetDispatchEvent(
+        @as(*parser.EventTarget, @ptrCast(&page.window)),
+        @as(*parser.Event, @ptrCast(&evt)),
+    );
+}
+
 pub fn _pushState(self: *History, state: Env.JsObject, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
     const arena = page.session.arena;
 
@@ -123,6 +150,15 @@ pub fn go(self: *History, delta: i32, page: *Page) !void {
     const index = @as(usize, @intCast(index_s));
     const entry = self.stack.items[index];
     self.current = index;
+
+    if (try page.isSameOrigin(entry.url)) {
+        if (entry.state) |state| {
+            History.dispatchPopStateEvent(state, page);
+        } else {
+            History.dispatchPopStateEvent(null, page);
+        }
+    }
+
     try page.navigateFromWebAPI(entry.url, .{ .reason = .history });
 }
 
@@ -137,6 +173,46 @@ pub fn _back(self: *History, page: *Page) !void {
 pub fn _forward(self: *History, page: *Page) !void {
     try self.go(1, page);
 }
+
+const parser = @import("../netsurf.zig");
+const Event = @import("../events/event.zig").Event;
+
+pub const PopStateEvent = struct {
+    pub const prototype = *Event;
+    pub const union_make_copy = true;
+
+    pub const EventInit = struct {
+        state: ?[]const u8 = null,
+    };
+
+    proto: parser.Event,
+    state: ?[]const u8,
+
+    pub fn constructor(event_type: []const u8, opts: ?EventInit) !PopStateEvent {
+        const event = try parser.eventCreate();
+        defer parser.eventDestroy(event);
+        try parser.eventInit(event, event_type, .{});
+        parser.eventSetInternalType(event, .pop_state);
+
+        const o = opts orelse EventInit{};
+
+        return .{
+            .proto = event.*,
+            .state = o.state,
+        };
+    }
+
+    // `hasUAVisualTransition` is not implemented. It isn't baseline so this is okay.
+
+    pub fn get_state(self: *const PopStateEvent, page: *Page) !?Env.Value {
+        if (self.state) |state| {
+            const value = try Env.Value.fromJson(page.main_context, state);
+            return value;
+        } else {
+            return null;
+        }
+    }
+};
 
 const testing = @import("../../testing.zig");
 test "Browser: HTML.History" {

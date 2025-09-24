@@ -1132,6 +1132,11 @@ pub const Page = struct {
         }
         self.slot_change_monitor = try SlotChangeMonitor.init(self);
     }
+
+    pub fn isSameOrigin(self: *const Page, url: []const u8) !bool {
+        const current_origin = try self.origin(self.call_arena);
+        return std.mem.startsWith(u8, url, current_origin);
+    }
 };
 
 pub const NavigateReason = enum {
