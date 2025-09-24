@@ -53,8 +53,8 @@ pub const KeyboardEvent = struct {
     pub fn constructor(event_type: []const u8, maybe_options: ?ConstructorOptions) !*parser.KeyboardEvent {
         const options: ConstructorOptions = maybe_options orelse .{};
 
-        var event = try parser.keyboardEventCreate();
-        parser.eventSetInternalType(@ptrCast(&event), .keyboard_event);
+        const event = try parser.keyboardEventCreate();
+        parser.eventSetInternalType(@ptrCast(event), .keyboard_event);
 
         try parser.keyboardEventInit(
             event,
