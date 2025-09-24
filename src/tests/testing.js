@@ -109,9 +109,11 @@
     }
     testing._status = 'ok';
 
-    const script_id = testing._captured?.script_id || document.currentScript.id;
-    testing._executed_scripts.add(script_id);
-    _registerErrorCallback();
+    if (testing._captured || document.currentScript) {
+    	const script_id = testing._captured?.script_id || document.currentScript.id;
+    	testing._executed_scripts.add(script_id);
+	    _registerErrorCallback();
+    }
   }
 
   // We want to attach an onError callback to each <script>, so that we can

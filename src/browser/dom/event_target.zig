@@ -100,6 +100,9 @@ pub const EventTarget = struct {
         page: *Page,
     ) !void {
         _ = try EventHandler.register(page.arena, self, typ, listener, opts);
+        if (std.mem.eql(u8, typ, "slotchange")) {
+            try page.registerSlotChangeMonitor();
+        }
     }
 
     const RemoveEventListenerOpts = union(enum) {
