@@ -1363,7 +1363,7 @@ pub fn nodeHasChildNodes(node: *Node) bool {
     return res;
 }
 
-pub fn nodeInsertBefore(node: *Node, new_node: *Node, ref_node: *Node) !*Node {
+pub fn nodeInsertBefore(node: *Node, new_node: *Node, ref_node: ?*Node) !*Node {
     var res: ?*Node = null;
     const err = nodeVtable(node).dom_node_insert_before.?(node, new_node, ref_node, &res);
     try DOMErr(err);
