@@ -22,3 +22,10 @@
   testing.expectEqual(undefined, history.forward());
   testing.expectEqual(undefined, history.back());
 </script>
+
+<script id=history-states>
+  testing.expectEqual(null, history.state)
+
+  history.pushState({}, { "abc": "def" }, '');
+  testing.expectEqual({ "abc": "def"}, history.state);
+</script>

@@ -2005,6 +2005,12 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 return writer.writeAll(try self.toString());
             }
 
+            pub fn toJson(self: JsObject, allocator: std.mem.Allocator) ![]u8 {
+                const json_string = try v8.Json.stringify(self.js_context.v8_context, self.js_obj.toValue(), null);
+                const str = try jsStringToZig(allocator, json_string, self.js_context.isolate);
+                return str;
+            }
+
             pub fn persist(self: JsObject) !JsObject {
                 var js_context = self.js_context;
                 const js_obj = self.js_obj;
@@ -2399,6 +2405,12 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             pub fn toString(self: Value, allocator: Allocator) ![]const u8 {
                 const js_context = self.js_context;
                 return valueToString(allocator, self.value, js_context.isolate, js_context.v8_context);
+            }
+
+            pub fn fromJson(ctx: *JsContext, json: []const u8) !Value {
+                const json_string = v8.String.initUtf8(ctx.isolate, json);
+                const value = try v8.Json.parse(ctx.v8_context, json_string);
+                return Value{ .js_context = ctx, .value = value };
             }
         };
 
