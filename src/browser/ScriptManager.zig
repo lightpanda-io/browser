@@ -157,9 +157,10 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
     if (try parser.elementGetAttribute(element, "src")) |src| {
         if (try DataURI.parse(page.arena, src)) |data_uri| {
             source = .{ .@"inline" = data_uri };
+        } else {
+            remote_url = try URL.stitch(page.arena, src, page.url.raw, .{ .null_terminated = true });
+            source = .{ .remote = .{} };
         }
-        remote_url = try URL.stitch(page.arena, src, page.url.raw, .{ .null_terminated = true });
-        source = .{ .remote = .{} };
     } else {
         const inline_source = parser.nodeTextContent(@ptrCast(element)) orelse return;
         source = .{ .@"inline" = inline_source };
