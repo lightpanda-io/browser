@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+
+<script src="../../testing.js"></script>
+
+<script id=import type=module>
+  import * as im from './import.js';
+  testing.expectEqual('hello', im.greeting);
+</script>
+
+<script id=cached type=module>
+  // hopefully cached, who knows, no real way to assert this
+  // but at least it works.
+  import * as im from './import.js';
+  testing.expectEqual('hello', im.greeting);
+</script>
