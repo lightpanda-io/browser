@@ -2889,6 +2889,10 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         return value.js_obj.toValue();
                     }
 
+                    if (T == Value) {
+                        return value.value;
+                    }
+
                     if (T == Promise) {
                         // we're returning a v8.Promise
                         return value.promise.toObject().toValue();
