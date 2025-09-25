@@ -300,7 +300,7 @@
 
 <script id=insertAdjacentHTML>
   // Insert "beforeend".
-  const wrapper = document.querySelector("div#insert-adjacent-html-inner-wrapper");
+  const wrapper = $("#insert-adjacent-html-inner-wrapper");
   wrapper.insertAdjacentHTML("beforeend", "<h1>title</h1>");
   let newElement = wrapper.lastElementChild;
   testing.expectEqual("H1", newElement.tagName);
