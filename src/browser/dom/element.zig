@@ -273,12 +273,22 @@ pub const Element = struct {
             if (std.mem.eql(u8, position, "beforebegin")) {
                 // The node must have a parent node in order to use this variant.
                 const parent = parser.nodeParentNode(self_node) orelse return error.NoModificationAllowed;
+                // Parent cannot be Document.
+                // Should have checks for document_fragment and document_type?
+                if (parser.nodeType(parent) == .document) {
+                    return error.NoModificationAllowed;
+                }
+
                 break :blk .{ parent, self_node };
             }
 
             if (std.mem.eql(u8, position, "afterend")) {
                 // The node must have a parent node in order to use this variant.
                 const parent = parser.nodeParentNode(self_node) orelse return error.NoModificationAllowed;
+                // Parent cannot be Document.
+                if (parser.nodeType(parent) == .document) {
+                    return error.NoModificationAllowed;
+                }
                 // Get the next sibling or null; null indicates our node is the only one.
                 const sibling = parser.nodeNextSibling(self_node);
                 break :blk .{ parent, sibling };
