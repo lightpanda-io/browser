@@ -242,57 +242,56 @@ pub const Element = struct {
         };
 
         // Parse the fragment.
+        // Should return error.Syntax on fail?
         const fragment = try parser.documentParseFragmentFromStr(doc, input);
         const fragment_node = parser.documentFragmentToNode(fragment);
 
         // We always get it wrapped like so:
         // <html><head></head><body>{ ... }</body></html>
-        const html = parser.nodeFirstChild(fragment_node) orelse return;
-        const head = parser.nodeFirstChild(html) orelse return;
-        const body = parser.nodeNextSibling(head) orelse return;
+        // None of the following can be null.
+        const html = parser.nodeFirstChild(fragment_node).?;
+        const body = parser.nodeLastChild(html).?;
 
         const children = try parser.nodeGetChildNodes(body);
-        const len = parser.nodeListLength(children);
 
-        if (std.mem.eql(u8, position, "beforeend")) {
-            for (0..len) |_| {
-                const child = parser.nodeListItem(children, 0) orelse continue;
-                _ = try parser.nodeInsertBefore(self_node, child, null);
-            }
-        } else if (std.mem.eql(u8, position, "afterbegin")) {
-            const target = parser.nodeFirstChild(self_node) orelse self_node;
-            for (0..len) |_| {
-                const child = parser.nodeListItem(children, 0) orelse continue;
-                _ = try parser.nodeInsertBefore(target, child, null);
-            }
-        } else if (std.mem.eql(u8, position, "beforebegin")) {
-            const parent = parser.nodeParentNode(self_node) orelse {
-                return error.NoModificationAllowed;
-            };
-
-            // Make sure parent is not Document.
-            // Should also check for document_fragment and document_type?
-            if (parser.nodeType(parent) == .document) {
-                return error.NoModificationAllowed;
+        // * `target_node` is `*Node` (where we actually insert),
+        // * `prev_node` is `?*Node`.
+        const target_node, const prev_node = blk: {
+            // Prefer case-sensitive match.
+            // "beforeend" was the most common case in my tests; we might adjust the order
+            // depending on which ones websites prefer most.
+            if (std.mem.eql(u8, position, "beforeend")) {
+                break :blk .{ self_node, null };
             }
 
-            for (0..len) |_| {
-                const child = parser.nodeListItem(children, 0) orelse continue;
-                _ = try parser.nodeInsertBefore(parent, child, self_node);
-            }
-        } else if (std.mem.eql(u8, position, "afterend")) {
-            const parent = parser.nodeParentNode(self_node) orelse {
-                return error.NoModificationAllowed;
-            };
-
-            if (parser.nodeType(parent) == .document) {
-                return error.NoModificationAllowed;
+            if (std.mem.eql(u8, position, "afterbegin")) {
+                // Get the first child; null indicates there are no children.
+                const first_child = parser.nodeFirstChild(self_node);
+                break :blk .{ self_node, first_child };
             }
 
-            for (0..len) |_| {
-                const child = parser.nodeListItem(children, 0) orelse continue;
-                _ = try parser.nodeInsertBefore(parent, child, null);
+            if (std.mem.eql(u8, position, "beforebegin")) {
+                // The node must have a parent node in order to use this variant.
+                const parent = parser.nodeParentNode(self_node) orelse return error.NoModificationAllowed;
+                break :blk .{ parent, self_node };
             }
+
+            if (std.mem.eql(u8, position, "afterend")) {
+                // The node must have a parent node in order to use this variant.
+                const parent = parser.nodeParentNode(self_node) orelse return error.NoModificationAllowed;
+                // Get the next sibling or null; null indicates our node is the only one.
+                const sibling = parser.nodeNextSibling(self_node);
+                break :blk .{ parent, sibling };
+            }
+
+            // Thrown if:
+            // * position is not one of the four listed values.
+            // * The input is XML that is not well-formed.
+            return error.Syntax;
+        };
+
+        while (parser.nodeListItem(children, 0)) |child| {
+            _ = try parser.nodeInsertBefore(target_node, child, prev_node);
         }
     }
 
