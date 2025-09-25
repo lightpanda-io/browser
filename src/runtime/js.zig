@@ -177,6 +177,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
         meta_lookup: [Types.len]TypeMeta,
 
+        context_id: usize,
+
         const Self = @This();
 
         const TYPE_LOOKUP = TypeLookup{};
@@ -222,6 +224,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             errdefer allocator.destroy(env);
 
             env.* = .{
+                .context_id = 0,
                 .platform = platform,
                 .isolate = isolate,
                 .templates = undefined,
@@ -528,9 +531,12 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         return error.ConsoleDeleteError;
                     }
                 }
+                const context_id = env.context_id;
+                env.context_id = context_id + 1;
 
                 self.js_context = JsContext{
                     .state = state,
+                    .id = context_id,
                     .isolate = isolate,
                     .v8_context = v8_context,
                     .templates = &env.templates,
@@ -634,6 +640,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
         // Loosely maps to a Browser Page.
         pub const JsContext = struct {
+            id: usize,
             state: State,
             isolate: v8.Isolate,
             // This context is a persistent object. The persistent needs to be recovered and reset.
@@ -1700,6 +1707,10 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // Will get passed to ScriptManager and then passed back to us when
             // the src of the module is loaded
             const DynamicModuleResolveState = struct {
+                // this is what we're trying to get from the module and resolve
+                // on our promise
+                namespace: ?v8.Value,
+                context_id: usize,
                 js_context: *JsContext,
                 specifier: [:0]const u8,
                 resolver: v8.PromiseResolver,
@@ -1725,6 +1736,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     .js_context = self,
                     .resolver = resolver,
                     .specifier = specifier,
+                    .context_id = self.id,
+                    .namespace = null,
                 };
 
                 const promise = resolver.getPromise();
@@ -1817,10 +1830,10 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
                 // we can only be here if the module has been evaluated and if
                 // we have a resolve loading this asynchronously.
-                std.debug.assert(module_entry.module != null);
                 std.debug.assert(module_entry.module_promise != null);
                 std.debug.assert(module_entry.resolver_promise != null);
                 std.debug.assert(self.module_cache.contains(state.specifier));
+                state.namespace = module_entry.module.?.castToModule().getModuleNamespace();
 
                 // We've gotten the source for the module and are evaluating it.
                 // You might thing we're done, but the module evaluation is
@@ -1831,23 +1844,36 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
                 const then_callback = v8.Function.initWithData(ctx, struct {
                     pub fn callback(raw_info: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
-                        const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
-                        const isolate = info.getIsolate();
+                        var info = v8.FunctionCallbackInfo.initFromV8(raw_info);
+                        var caller = Caller(JsContext, State).init(info);
+                        defer caller.deinit();
 
                         const s: *DynamicModuleResolveState = @ptrCast(@alignCast(info.getExternalValue()));
-                        const js_context = s.js_context;
-                        const me = js_context.module_cache.getPtr(s.specifier).?;
-                        const namespace = me.module.?.castToModule().getModuleNamespace();
-                        _ = s.resolver.resolve(isolate.getCurrentContext(), namespace);
+
+                        if (s.context_id != caller.js_context.id) {
+                            // The microtask is tied to the isolate, not the context
+                            // it can be resolved while another context is active
+                            // (Which seems crazy to me). If that happens, then
+                            // another page was loaded and we MUST ignore thise
+                            // (most of the fields in state are not valid)
+                            return;
+                        }
+
+                        _ = s.resolver.resolve(caller.js_context.v8_context, s.namespace.?);
                     }
                 }.callback, external);
 
                 const catch_callback = v8.Function.initWithData(ctx, struct {
                     pub fn callback(raw_info: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
-                        const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
-                        const isolate = info.getIsolate();
-                        const data: *DynamicModuleResolveState = @ptrCast(@alignCast(info.getExternalValue()));
-                        _ = data.resolver.reject(isolate.getCurrentContext(), info.getData());
+                        var info = v8.FunctionCallbackInfo.initFromV8(raw_info);
+                        var caller = Caller(JsContext, State).init(info);
+                        defer caller.deinit();
+
+                        const s: *DynamicModuleResolveState = @ptrCast(@alignCast(info.getExternalValue()));
+                        if (s.context_id != caller.js_context.id) {
+                            return;
+                        }
+                        _ = s.resolver.reject(caller.js_context.v8_context, info.getData());
                     }
                 }.callback, external);
 

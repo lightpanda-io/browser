@@ -403,6 +403,10 @@ pub fn htmlRunner(file: []const u8) !void {
     const url = try std.fmt.allocPrint(arena_allocator, "http://localhost:9582/src/tests/{s}", .{file});
     try page.navigate(url, .{});
     _ = page.wait(2000);
+    // page exits more aggressively in tests. We want to make sure this is called
+    // at lease once.
+    page.session.browser.runMicrotasks();
+    page.session.browser.runMessageLoop();
 
     @import("root").js_runner_duration += std.time.Instant.since(try std.time.Instant.now(), start);
 
