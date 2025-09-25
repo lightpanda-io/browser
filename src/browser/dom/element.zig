@@ -231,7 +231,7 @@ pub const Element = struct {
         }
     }
 
-    /// Parses the given `input` string and inserts it's children to an element at given `position`.
+    /// Parses the given `input` string and inserts its children to an element at given `position`.
     /// https://developer.mozilla.org/en-US/docs/Web/API/Element/insertAdjacentHTML
     ///
     /// TODO: Support for XML parsing and `TrustedHTML` instances.
