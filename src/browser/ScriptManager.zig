@@ -67,7 +67,17 @@ client: *Http.Client,
 allocator: Allocator,
 buffer_pool: BufferPool,
 script_pool: std.heap.MemoryPool(PendingScript),
+sync_module_pool: std.heap.MemoryPool(SyncModule),
 async_module_pool: std.heap.MemoryPool(AsyncModule),
+
+// We can download multiple sync modules in parallel, but we want to process
+// then in order. We can't use an OrderList, like the other script types,
+// because the order we load them might not be the order we want to process
+// them in (I'm not sure this is true, but as far as I can tell, v8 doesn't
+// make any guarantees about the list of sub-module dependencies it gives us
+// So this is more like a cache. When a SyncModule is complete, it's put here
+// and can be requested as needed.
+sync_modules: std.StringHashMapUnmanaged(*SyncModule),
 
 const OrderList = std.DoublyLinkedList;
 
@@ -80,24 +90,42 @@ pub fn init(browser: *Browser, page: *Page) ScriptManager {
         .scripts = .{},
         .deferreds = .{},
         .asyncs_ready = .{},
+        .sync_modules = .empty,
         .is_evaluating = false,
         .allocator = allocator,
         .client = browser.http_client,
         .static_scripts_done = false,
         .buffer_pool = BufferPool.init(allocator, 5),
         .script_pool = std.heap.MemoryPool(PendingScript).init(allocator),
+        .sync_module_pool = std.heap.MemoryPool(SyncModule).init(allocator),
         .async_module_pool = std.heap.MemoryPool(AsyncModule).init(allocator),
     };
 }
 
 pub fn deinit(self: *ScriptManager) void {
     self.reset();
+    var it = self.sync_modules.valueIterator();
+    while (it.next()) |value_ptr| {
+        value_ptr.*.buffer.deinit(self.allocator);
+        self.sync_module_pool.destroy(value_ptr.*);
+    }
+
     self.buffer_pool.deinit();
     self.script_pool.deinit();
+    self.sync_module_pool.deinit();
     self.async_module_pool.deinit();
+
+    self.sync_modules.deinit(self.allocator);
 }
 
 pub fn reset(self: *ScriptManager) void {
+    var it = self.sync_modules.valueIterator();
+    while (it.next()) |value_ptr| {
+        value_ptr.*.buffer.deinit(self.allocator);
+        self.sync_module_pool.destroy(value_ptr.*);
+    }
+    self.sync_modules.clearRetainingCapacity();
+
     self.clearList(&self.asyncs);
     self.clearList(&self.scripts);
     self.clearList(&self.deferreds);
@@ -259,49 +287,70 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
 // Unlike external modules which can only ever be executed after releasing an
 // http handle, these are executed without there necessarily being a free handle.
 // Thus, Http/Client.zig maintains a dedicated handle for these calls.
-pub fn blockingGet(self: *ScriptManager, url: [:0]const u8) !GetResult {
-    std.debug.assert(self.is_blocking == false);
-
-    self.is_blocking = true;
-    defer {
-        self.is_blocking = false;
-
-        // we blocked evaluation while loading this script, there could be
-        // scripts ready to process.
-        self.evaluate();
+pub fn getModule(self: *ScriptManager, url: [:0]const u8) !void {
+    const gop = try self.sync_modules.getOrPut(self.allocator, url);
+    if (gop.found_existing) {
+        // already requested
+        return;
     }
+    errdefer _ = self.sync_modules.remove(url);
 
-    var blocking = Blocking{
-        .allocator = self.allocator,
-        .buffer_pool = &self.buffer_pool,
-    };
+    const sync = try self.sync_module_pool.create();
+    errdefer self.sync_module_pool.destroy(sync);
+
+    sync.* = .{ .manager = self };
+    gop.value_ptr.* = sync;
 
     var headers = try self.client.newHeaders();
     try self.page.requestCookie(.{}).headersForRequest(self.page.arena, url, &headers);
 
-    var client = self.client;
-    try client.blockingRequest(.{
+    try self.client.request(.{
         .url = url,
+        .ctx = sync,
         .method = .GET,
         .headers = headers,
         .cookie_jar = self.page.cookie_jar,
-        .ctx = &blocking,
         .resource_type = .script,
-        .start_callback = if (log.enabled(.http, .debug)) Blocking.startCallback else null,
-        .header_callback = Blocking.headerCallback,
-        .data_callback = Blocking.dataCallback,
-        .done_callback = Blocking.doneCallback,
-        .error_callback = Blocking.errorCallback,
+        .start_callback = if (log.enabled(.http, .debug)) SyncModule.startCallback else null,
+        .header_callback = SyncModule.headerCallback,
+        .data_callback = SyncModule.dataCallback,
+        .done_callback = SyncModule.doneCallback,
+        .error_callback = SyncModule.errorCallback,
     });
+}
 
-    // rely on http's timeout settings to avoid an endless/long loop.
+pub fn waitForModule(self: *ScriptManager, url: [:0]const u8) !GetResult {
+    std.debug.assert(self.is_blocking == false);
+    self.is_blocking = true;
+    defer self.is_blocking = false;
+
+    // Normally it's dangerous to hold on to map pointers. But here, the map
+    // can't change. It's possible that by calling `tick`, other entries within
+    // the map will have their value change, but the map itself is immutable
+    // during this tick.
+    const entry = self.sync_modules.getEntry(url) orelse {
+        return error.UnknownModule;
+    };
+    const sync = entry.value_ptr.*;
+
+    var client = self.client;
     while (true) {
-        _ = try client.tick(200);
-        switch (blocking.state) {
-            .running => {},
-            .done => |result| return result,
+        switch (sync.state) {
+            .loading => {},
+            .done => {
+                // Our caller has its own higher level cache (caching the
+                // actual compiled module). There's no reason for us to keep this
+                defer self.sync_module_pool.destroy(sync);
+                defer self.sync_modules.removeByPtr(entry.key_ptr);
+                return .{
+                    .buffer = sync.buffer,
+                    .buffer_pool = &self.buffer_pool,
+                };
+            },
             .err => |err| return err,
         }
+        // rely on http's timeout settings to avoid an endless/long loop.
+        _ = try client.tick(200);
     }
 }
 
@@ -332,7 +381,6 @@ pub fn getAsyncModule(self: *ScriptManager, url: [:0]const u8, cb: AsyncModule.C
         .error_callback = AsyncModule.errorCallback,
     });
 }
-
 pub fn staticScriptsDone(self: *ScriptManager) void {
     std.debug.assert(self.static_scripts_done == false);
     self.static_scripts_done = true;
@@ -782,16 +830,15 @@ const BufferPool = struct {
     }
 };
 
-const Blocking = struct {
-    allocator: Allocator,
-    buffer_pool: *BufferPool,
-    state: State = .{ .running = {} },
+const SyncModule = struct {
+    manager: *ScriptManager,
     buffer: std.ArrayListUnmanaged(u8) = .{},
+    state: State = .loading,
 
     const State = union(enum) {
-        running: void,
+        done,
+        loading,
         err: anyerror,
-        done: GetResult,
     };
 
     fn startCallback(transfer: *Http.Transfer) !void {
@@ -807,12 +854,13 @@ const Blocking = struct {
             .content_type = header.contentType(),
         });
 
+        var self: *SyncModule = @ptrCast(@alignCast(transfer.ctx));
         if (header.status != 200) {
+            self.finished(.{ .err = error.InvalidStatusCode });
             return error.InvalidStatusCode;
         }
 
-        var self: *Blocking = @ptrCast(@alignCast(transfer.ctx));
-        self.buffer = self.buffer_pool.get();
+        self.buffer = self.manager.buffer_pool.get();
     }
 
     fn dataCallback(transfer: *Http.Transfer, data: []const u8) !void {
@@ -822,8 +870,8 @@ const Blocking = struct {
         //     .blocking = true,
         // });
 
-        var self: *Blocking = @ptrCast(@alignCast(transfer.ctx));
-        self.buffer.appendSlice(self.allocator, data) catch |err| {
+        var self: *SyncModule = @ptrCast(@alignCast(transfer.ctx));
+        self.buffer.appendSlice(self.manager.allocator, data) catch |err| {
             log.err(.http, "SM.dataCallback", .{
                 .err = err,
                 .len = data.len,
@@ -835,19 +883,17 @@ const Blocking = struct {
     }
 
     fn doneCallback(ctx: *anyopaque) !void {
-        var self: *Blocking = @ptrCast(@alignCast(ctx));
-        self.state = .{ .done = .{
-            .buffer = self.buffer,
-            .buffer_pool = self.buffer_pool,
-        } };
+        var self: *SyncModule = @ptrCast(@alignCast(ctx));
+        self.finished(.done);
     }
 
     fn errorCallback(ctx: *anyopaque, err: anyerror) void {
-        var self: *Blocking = @ptrCast(@alignCast(ctx));
-        self.state = .{ .err = err };
-        if (self.buffer.items.len > 0) {
-            self.buffer_pool.release(self.buffer);
-        }
+        var self: *SyncModule = @ptrCast(@alignCast(ctx));
+        self.finished(.{ .err = err });
+    }
+
+    fn finished(self: *SyncModule, state: State) void {
+        self.state = state;
     }
 };
 

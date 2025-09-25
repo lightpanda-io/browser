@@ -143,7 +143,7 @@ pub const Page = struct {
             .main_context = undefined,
         };
 
-        self.main_context = try session.executor.createJsContext(&self.window, self, self, true, Env.GlobalMissingCallback.init(&self.polyfill_loader));
+        self.main_context = try session.executor.createJsContext(&self.window, self, &self.script_manager, true, Env.GlobalMissingCallback.init(&self.polyfill_loader));
         try polyfill.preload(self.arena, self.main_context);
 
         try self.scheduler.add(self, runMicrotasks, 5, .{ .name = "page.microtasks" });
@@ -253,16 +253,6 @@ pub const Page = struct {
 
         const Node = @import("dom/node.zig").Node;
         try Node.prepend(head, &[_]Node.NodeOrText{.{ .node = parser.elementToNode(base) }});
-    }
-
-    pub fn fetchModuleSource(ctx: *anyopaque, url: [:0]const u8) !ScriptManager.GetResult {
-        const self: *Page = @ptrCast(@alignCast(ctx));
-        return self.script_manager.blockingGet(url);
-    }
-
-    pub fn fetchAsyncModuleSource(ctx: *anyopaque, url: [:0]const u8, cb: ScriptManager.AsyncModule.Callback, cb_data: *anyopaque) !void {
-        const self: *Page = @ptrCast(@alignCast(ctx));
-        return self.script_manager.getAsyncModule(url, cb, cb_data);
     }
 
     pub fn wait(self: *Page, wait_ms: i32) Session.WaitResult {

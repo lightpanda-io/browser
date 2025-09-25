@@ -693,7 +693,7 @@ const IsolatedWorld = struct {
         _ = try self.executor.createJsContext(
             &page.window,
             page,
-            {},
+            null,
             false,
             Env.GlobalMissingCallback.init(&self.polyfill_loader),
         );

@@ -410,18 +410,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // when the handle_scope is freed.
             // We also maintain our own "context_arena" which allows us to have
             // all page related memory easily managed.
-            pub fn createJsContext(self: *ExecutionWorld, global: anytype, state: State, module_loader: anytype, enter: bool, global_callback: ?GlobalMissingCallback) !*JsContext {
+            pub fn createJsContext(self: *ExecutionWorld, global: anytype, state: State, script_manager: ?*ScriptManager, enter: bool, global_callback: ?GlobalMissingCallback) !*JsContext {
                 std.debug.assert(self.js_context == null);
-
-                const ModuleLoader = switch (@typeInfo(@TypeOf(module_loader))) {
-                    .@"struct" => @TypeOf(module_loader),
-                    .pointer => |ptr| ptr.child,
-                    .void => ErrorModuleLoader,
-                    else => @compileError("invalid module_loader"),
-                };
-
-                // If necessary, turn a void context into something we can safely ptrCast
-                const safe_module_loader: *anyopaque = if (ModuleLoader == ErrorModuleLoader) @ptrCast(@constCast(&{})) else module_loader;
 
                 const env = self.env;
                 const isolate = env.isolate;
@@ -542,13 +532,9 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     .templates = &env.templates,
                     .meta_lookup = &env.meta_lookup,
                     .handle_scope = handle_scope,
+                    .script_manager = script_manager,
                     .call_arena = self.call_arena.allocator(),
                     .context_arena = self.context_arena.allocator(),
-                    .module_loader = .{
-                        .ptr = safe_module_loader,
-                        .func = ModuleLoader.fetchModuleSource,
-                        .async = ModuleLoader.fetchAsyncModuleSource,
-                    },
                     .global_callback = global_callback,
                 };
 
@@ -692,12 +678,6 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // the function that resolves/rejects them.
             persisted_promise_resolvers: std.ArrayListUnmanaged(v8.Persistent(v8.PromiseResolver)) = .empty,
 
-            // When we need to load a resource (i.e. an external script), we call
-            // this function to get the source. This is always a reference to the
-            // Page's fetchModuleSource, but we use a function pointer
-            // since this js module is decoupled from the browser implementation.
-            module_loader: ModuleLoader,
-
             // Some Zig types have code to execute to cleanup
             destructor_callbacks: std.ArrayListUnmanaged(DestructorCallback) = .empty,
 
@@ -711,14 +691,11 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // necessary to lookup/store the dependent module in the module_cache.
             module_identifier: std.AutoHashMapUnmanaged(u32, []const u8) = .empty,
 
+            // the page's script manager
+            script_manager: ?*ScriptManager,
+
             // Global callback is called on missing property.
             global_callback: ?GlobalMissingCallback = null,
-
-            const ModuleLoader = struct {
-                ptr: *anyopaque,
-                func: *const fn (ptr: *anyopaque, url: [:0]const u8) anyerror!ScriptManager.GetResult,
-                async: *const fn (ptr: *anyopaque, url: [:0]const u8, cb: ScriptManager.AsyncModule.Callback, cb_state: *anyopaque) anyerror!void,
-            };
 
             const ModuleEntry = struct {
                 // Can be null if we're asynchrously loading the module, in
@@ -861,8 +838,33 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 try self.module_identifier.putNoClobber(arena, m.getIdentityHash(), owned_url);
                 errdefer _ = self.module_identifier.remove(m.getIdentityHash());
 
-                // resolveModuleCallback loads module's dependencies.
                 const v8_context = self.v8_context;
+                {
+                    // Non-async modules are blocking. We can download them in
+                    // parallel, but they need to be processed serially. So we
+                    // want to get the list of dependent modules this module has
+                    // and start downloading them asap.
+                    const requests = m.getModuleRequests();
+                    const isolate = self.isolate;
+                    for (0..requests.length()) |i| {
+                        const req = requests.get(v8_context, @intCast(i)).castTo(v8.ModuleRequest);
+                        const specifier = try jsStringToZig(self.call_arena, req.getSpecifier(), isolate);
+                        const normalized_specifier = try @import("../url.zig").stitch(
+                            self.call_arena,
+                            specifier,
+                            owned_url,
+                            .{ .alloc = .if_needed, .null_terminated = true },
+                        );
+                        const gop = try self.module_cache.getOrPut(self.context_arena, normalized_specifier);
+                        if (!gop.found_existing) {
+                            const owned_specifier = try self.context_arena.dupeZ(u8, normalized_specifier);
+                            gop.key_ptr.* = owned_specifier;
+                            gop.value_ptr.* = .{};
+                            try self.script_manager.?.getModule(owned_specifier);
+                        }
+                    }
+                }
+
                 if (try m.instantiate(v8_context, resolveModuleCallback) == false) {
                     return error.ModuleInstantiationError;
                 }
@@ -891,14 +893,13 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
                 var gop = try self.module_cache.getOrPut(arena, owned_url);
                 if (gop.found_existing) {
-                    // only way for us to have found an existing entry, is if
-                    // we're asynchronously loading this module
+                    // If we're here, it's because we had a cache entry, but no
+                    // module. This happens because both our synch and async
+                    // module loaders create the entry to prevent concurrent
+                    // loads of the same resource (like Go's Singleflight).
                     std.debug.assert(gop.value_ptr.module == null);
                     std.debug.assert(gop.value_ptr.module_promise == null);
-                    std.debug.assert(gop.value_ptr.resolver_promise != null);
 
-                    // keep the resolver promise, it's doing the heavy lifting
-                    // and any other async loads will be chained to it.
                     gop.value_ptr.module = persisted_module;
                     gop.value_ptr.module_promise = persisted_promise;
                 } else {
@@ -1639,8 +1640,29 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     .{ .alloc = .if_needed, .null_terminated = true },
                 );
 
-                const module_loader = self.module_loader;
-                var fetch_result = try module_loader.func(module_loader.ptr, normalized_specifier);
+                const gop = try self.module_cache.getOrPut(self.context_arena, normalized_specifier);
+                if (gop.found_existing) {
+                    if (gop.value_ptr.module) |m| {
+                        return m.handle;
+                    }
+                    // We don't have a module, but we do have a cache entry for it
+                    // That means we're already trying to load it. We just have
+                    // to wait for it to be done.
+                } else {
+                    // I don't think it's possible for us to be here. This is
+                    // only ever called by v8 when we evaluate a module. But
+                    // before evaluating, we should have already started
+                    // downloading all of the module's nested modules. So it
+                    // should be impossible that this is the first time we've
+                    // heard about this module.
+                    // But, I'm not confident enough in that, and ther's little
+                    // harm in handling this case.
+                    @branchHint(.unlikely);
+                    gop.value_ptr.* = .{};
+                    try self.script_manager.?.getModule(normalized_specifier);
+                }
+
+                var fetch_result = try self.script_manager.?.waitForModule(normalized_specifier);
                 defer fetch_result.deinit();
 
                 var try_catch: TryCatch = undefined;
@@ -1756,8 +1778,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     };
 
                     // Next, we need to actually load it.
-                    const module_loader = self.module_loader;
-                    module_loader.async(module_loader.ptr, specifier, dynamicModuleSourceCallback, state) catch |err| {
+                    self.script_manager.?.getAsyncModule(specifier, dynamicModuleSourceCallback, state) catch |err| {
                         const error_msg = v8.String.initUtf8(isolate, @errorName(err));
                         _ = resolver.reject(self.v8_context, error_msg.toValue());
                     };
@@ -4167,16 +4188,6 @@ fn stackForLogs(arena: Allocator, isolate: v8.Isolate) !?[]const u8 {
 const NoopInspector = struct {
     pub fn onInspectorResponse(_: *anyopaque, _: u32, _: []const u8) void {}
     pub fn onInspectorEvent(_: *anyopaque, _: []const u8) void {}
-};
-
-const ErrorModuleLoader = struct {
-    pub fn fetchModuleSource(_: *anyopaque, _: [:0]const u8) !ScriptManager.GetResult {
-        return error.NoModuleLoadConfigured;
-    }
-
-    pub fn fetchAsyncModuleSource(_: *anyopaque, _: [:0]const u8, _: ScriptManager.AsyncModule.Callback, _: *anyopaque) !void {
-        return error.NoModuleLoadConfigured;
-    }
 };
 
 // If we have a struct:
