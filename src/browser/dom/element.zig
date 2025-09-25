@@ -249,8 +249,13 @@ pub const Element = struct {
         // We always get it wrapped like so:
         // <html><head></head><body>{ ... }</body></html>
         // None of the following can be null.
-        const html = parser.nodeFirstChild(fragment_node).?;
-        const body = parser.nodeLastChild(html).?;
+        const maybe_html = parser.nodeFirstChild(fragment_node);
+        std.debug.assert(maybe_html != null);
+        const html = maybe_html.?;
+
+        const maybe_body = parser.nodeLastChild(html);
+        std.debug.assert(maybe_body != null);
+        const body = maybe_body.?;
 
         const children = try parser.nodeGetChildNodes(body);
 
