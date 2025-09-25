@@ -290,16 +290,39 @@
   testing.expectEqual("stylesheet", linkElement.rel);
 </script>
 
+<!-- This structure will get mutated by insertAdjacentHTML test -->
+<div id="insert-adjacent-html-outer-wrapper">
+    <div id="insert-adjacent-html-inner-wrapper">
+        <span></span>
+        <p>content</p>
+    </div>
+</div>
+
 <script id=insertAdjacentHTML>
-  const el4 = document.createElement("div");
+  // Insert "beforeend".
+  const wrapper = document.querySelector("div#insert-adjacent-html-inner-wrapper");
+  wrapper.insertAdjacentHTML("beforeend", "<h1>title</h1>");
+  let newElement = wrapper.lastElementChild;
+  testing.expectEqual("H1", newElement.tagName);
+  testing.expectEqual("title", newElement.innerText);
 
-  const el5 = document.createElement("span");
-  el4.appendChild(el5);
+  // Insert "beforebegin".
+  wrapper.insertAdjacentHTML("beforebegin", "<h2>small title</h2>");
+  newElement = wrapper.previousElementSibling;
+  testing.expectEqual("H2", newElement.tagName);
+  testing.expectEqual("small title", newElement.innerText);
 
-  const el6 = document.createElement("p");
-  el6.innerText = "content";
-  el4.appendChild(el6);
+  // Insert "afterend".
+  wrapper.insertAdjacentHTML("afterend", "<div id=\"afterend\">after end</div>");
+  newElement = wrapper.nextElementSibling;
+  testing.expectEqual("DIV", newElement.tagName);
+  testing.expectEqual("after end", newElement.innerText);
+  testing.expectEqual("afterend", newElement.id);
 
-  el5.insertAdjacentHTML("beforebegin", "<h1>title</h1>");
-  testing.expectEqual("<h1>title</h1><span></span><p>content</p>", el4.innerHTML);
+  // Insert "afterbegin".
+  wrapper.insertAdjacentHTML("afterbegin", "<div class=\"afterbegin\">after begin</div><yy></yy>");
+  newElement = wrapper.firstElementChild;
+  testing.expectEqual("DIV", newElement.tagName);
+  testing.expectEqual("after begin", newElement.innerText);
+  testing.expectEqual("afterbegin", newElement.className);
 </script>
