@@ -27,7 +27,8 @@ const History = @This();
 
 const HistoryEntry = struct {
     url: []const u8,
-    // Serialized as JSON.
+    // This is serialized as JSON because
+    // History must survive a JsContext.
     state: ?[]u8,
 };
 
@@ -44,9 +45,13 @@ const ScrollRestorationMode = enum {
             return null;
         }
     }
+
+    pub fn toString(self: ScrollRestorationMode) []const u8 {
+        return @tagName(self);
+    }
 };
 
-scrollRestoration: ScrollRestorationMode = .auto,
+scroll_restoration: ScrollRestorationMode = .auto,
 stack: std.ArrayListUnmanaged(HistoryEntry) = .empty,
 current: ?usize = null,
 
@@ -54,15 +59,12 @@ pub fn get_length(self: *History) u32 {
     return @intCast(self.stack.items.len);
 }
 
-pub fn get_scrollRestoration(self: *History) []const u8 {
-    return switch (self.scrollRestoration) {
-        .auto => "auto",
-        .manual => "manual",
-    };
+pub fn get_scrollRestoration(self: *History) ScrollRestorationMode {
+    return self.scroll_restoration;
 }
 
 pub fn set_scrollRestoration(self: *History, mode: []const u8) void {
-    self.scrollRestoration = ScrollRestorationMode.fromString(mode) orelse self.scrollRestoration;
+    self.scroll_restoration = ScrollRestorationMode.fromString(mode) orelse self.scroll_restoration;
 }
 
 pub fn get_state(self: *History, page: *Page) !?Env.Value {
@@ -102,23 +104,20 @@ pub fn dispatchPopStateEvent(state: ?[]const u8, page: *Page) void {
     };
 }
 
-fn _dispatchPopStateEvent(
-    state: ?[]const u8,
-    page: *Page,
-) !void {
+fn _dispatchPopStateEvent(state: ?[]const u8, page: *Page) !void {
     var evt = try PopStateEvent.constructor("popstate", .{ .state = state });
 
     _ = try parser.eventTargetDispatchEvent(
         @as(*parser.EventTarget, @ptrCast(&page.window)),
-        @as(*parser.Event, @ptrCast(&evt)),
+        &evt.proto,
     );
 }
 
 pub fn _pushState(self: *History, state: Env.JsObject, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
     const arena = page.session.arena;
 
+    const json = try state.toJson(arena);
     const url = if (_url) |u| try arena.dupe(u8, u) else try arena.dupe(u8, page.url.raw);
-    const json = try state.toJson(page.session.arena);
     const entry = HistoryEntry{ .state = json, .url = url };
     try self.stack.append(arena, entry);
     self.current = self.stack.items.len - 1;
@@ -129,8 +128,8 @@ pub fn _replaceState(self: *History, state: Env.JsObject, _: ?[]const u8, _url: 
 
     if (self.current) |curr| {
         const entry = &self.stack.items[curr];
-        const url = if (_url) |u| try arena.dupe(u8, u) else try arena.dupe(u8, page.url.raw);
         const json = try state.toJson(arena);
+        const url = if (_url) |u| try arena.dupe(u8, u) else try arena.dupe(u8, page.url.raw);
         entry.* = HistoryEntry{ .state = json, .url = url };
     } else {
         try self._pushState(state, "", _url, page);
@@ -152,11 +151,7 @@ pub fn go(self: *History, delta: i32, page: *Page) !void {
     self.current = index;
 
     if (try page.isSameOrigin(entry.url)) {
-        if (entry.state) |state| {
-            History.dispatchPopStateEvent(state, page);
-        } else {
-            History.dispatchPopStateEvent(null, page);
-        }
+        History.dispatchPopStateEvent(entry.state, page);
     }
 
     try page.navigateFromWebAPI(entry.url, .{ .reason = .history });
