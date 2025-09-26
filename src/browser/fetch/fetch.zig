@@ -64,7 +64,7 @@ pub const FetchContext = struct {
         var headers: Headers = .{};
 
         // seems to be the highest priority
-        const same_origin = try isSameOriginAsPage(self.url, self.page);
+        const same_origin = try self.page.isSameOrigin(self.url);
 
         // If the mode is "no-cors", we need to return this opaque/stripped Response.
         // https://developer.mozilla.org/en-US/docs/Web/API/Response/type
@@ -235,11 +235,6 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promi
     });
 
     return resolver.promise();
-}
-
-fn isSameOriginAsPage(url: []const u8, page: *const Page) !bool {
-    const origin = try page.origin(page.call_arena);
-    return std.mem.startsWith(u8, url, origin);
 }
 
 const testing = @import("../../testing.zig");

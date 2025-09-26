@@ -21,7 +21,7 @@ const HTMLElem = @import("elements.zig");
 const SVGElem = @import("svg_elements.zig");
 const Window = @import("window.zig").Window;
 const Navigator = @import("navigator.zig").Navigator;
-const History = @import("history.zig").History;
+const History = @import("History.zig");
 const Location = @import("location.zig").Location;
 const MediaQueryList = @import("media_query_list.zig").MediaQueryList;
 

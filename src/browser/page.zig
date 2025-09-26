@@ -806,6 +806,9 @@ pub const Page = struct {
                 unreachable;
             },
         }
+
+        // Push the navigation after a successful load.
+        try self.session.history.pushNavigation(self.url.raw, self);
     }
 
     fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
@@ -1129,6 +1132,11 @@ pub const Page = struct {
         }
         self.slot_change_monitor = try SlotChangeMonitor.init(self);
     }
+
+    pub fn isSameOrigin(self: *const Page, url: []const u8) !bool {
+        const current_origin = try self.origin(self.call_arena);
+        return std.mem.startsWith(u8, url, current_origin);
+    }
 };
 
 pub const NavigateReason = enum {
@@ -1136,6 +1144,7 @@ pub const NavigateReason = enum {
     address_bar,
     form,
     script,
+    history,
 };
 
 pub const NavigateOpts = struct {

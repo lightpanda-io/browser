@@ -558,6 +558,7 @@ pub const EventType = enum(u8) {
     xhr_event = 6,
     message_event = 7,
     keyboard_event = 8,
+    pop_state = 9,
 };
 
 pub const MutationEvent = c.dom_mutation_event;

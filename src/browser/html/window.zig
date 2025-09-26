@@ -24,7 +24,7 @@ const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
 
 const Navigator = @import("navigator.zig").Navigator;
-const History = @import("history.zig").History;
+const History = @import("History.zig");
 const Location = @import("location.zig").Location;
 const Crypto = @import("../crypto/crypto.zig").Crypto;
 const Console = @import("../console/console.zig").Console;
@@ -54,7 +54,6 @@ pub const Window = struct {
 
     document: *parser.DocumentHTML,
     target: []const u8 = "",
-    history: History = .{},
     location: Location = .{},
     storage_shelf: ?*storage.Shelf = null,
 
@@ -179,8 +178,8 @@ pub const Window = struct {
         return self.document;
     }
 
-    pub fn get_history(self: *Window) *History {
-        return &self.history;
+    pub fn get_history(_: *Window, page: *Page) *History {
+        return &page.session.history;
     }
 
     //  The interior height of the window in pixels, including the height of the horizontal scroll bar, if present.

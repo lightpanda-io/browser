@@ -404,6 +404,13 @@ pub fn htmlRunner(file: []const u8) !void {
     try page.navigate(url, .{});
     _ = page.wait(2000);
 
+    const needs_second_wait = try js_context.exec("testing._onPageWait.length > 0", "check_onPageWait");
+    if (needs_second_wait.value.toBool(page.main_context.isolate)) {
+        // sets the isSecondWait flag in testing.
+        _ = js_context.exec("testing._isSecondWait = true", "set_second_wait_flag") catch {};
+        _ = page.wait(2000);
+    }
+
     @import("root").js_runner_duration += std.time.Instant.since(try std.time.Instant.now(), start);
 
     const value = js_context.exec("testing.getStatus()", "testing.getStatus()") catch |err| {
