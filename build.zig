@@ -149,6 +149,25 @@ pub fn build(b: *Build) !void {
         const build_step = b.step("build-v8", "Build v8");
         build_step.dependOn(&build_v8.step);
     }
+
+    {
+        // static lib
+        // -------
+        const static_lib_module = b.addModule("lightpanda", .{
+            .root_source_file = b.path("src/lib.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .link_libcpp = true,
+        });
+        try addDependencies(b, static_lib_module, opts);
+
+        const lib = b.addLibrary(.{ .name = "lightpanda", .root_module = static_lib_module, .use_llvm = true, .linkage = .static });
+        lib.bundle_compiler_rt = true;
+        const install_artifact = b.addInstallArtifact(lib, .{});
+        const build_step = b.step("static-lib", "Build static lib");
+        build_step.dependOn(&install_artifact.step);
+    }
 }
 
 fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !void {
@@ -176,6 +195,7 @@ fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !vo
         const os = switch (target.result.os.tag) {
             .linux => "linux",
             .macos => "macos",
+            .ios => "ios",
             else => return error.UnsupportedPlatform,
         };
         var lib_path = try std.fmt.allocPrint(
@@ -197,6 +217,12 @@ fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !vo
             .macos => {
                 // v8 has a dependency, abseil-cpp, which, on Mac, uses CoreFoundation
                 mod.addSystemFrameworkPath(.{ .cwd_relative = "/System/Library/Frameworks" });
+                mod.linkFramework("CoreFoundation", .{});
+            },
+            .ios => {
+                const sdk_path = try std.process.getEnvVarOwned(mod.owner.allocator, "SDK");
+                const framework_path = try std.fmt.allocPrint(mod.owner.allocator, "{s}/System/Library/Frameworks", .{sdk_path});
+                mod.addSystemFrameworkPath(.{ .cwd_relative = framework_path });
                 mod.linkFramework("CoreFoundation", .{});
             },
             else => {},
@@ -390,6 +416,13 @@ fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !vo
                 mod.linkFramework("CoreFoundation", .{});
                 mod.linkFramework("SystemConfiguration", .{});
             },
+            .ios => {
+                const sdk_path = try std.process.getEnvVarOwned(mod.owner.allocator, "SDK");
+                const framework_path = try std.fmt.allocPrint(mod.owner.allocator, "{s}/System/Library/Frameworks", .{sdk_path});
+                mod.addSystemFrameworkPath(.{ .cwd_relative = framework_path });
+                mod.linkFramework("CoreFoundation", .{});
+                mod.linkFramework("SystemConfiguration", .{});
+            },
             else => {},
         }
     }
@@ -397,19 +430,33 @@ fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !vo
 
 fn moduleNetSurf(b: *Build, mod: *Build.Module) !void {
     const target = mod.resolved_target.?;
-    const os = target.result.os.tag;
-    const arch = target.result.cpu.arch;
+    const os = switch (target.result.os.tag) {
+        .linux => "linux",
+        .macos => "macos",
+        .ios => switch (target.result.abi) {
+            .simulator => "iphonesimulator",
+            else => return error.UnsupportedPlatform,
+        },
+        else => return error.UnsupportedPlatform,
+    };
+    const arch = switch (target.result.os.tag) {
+        .ios => switch (target.result.cpu.arch) {
+            .aarch64 => "arm64",
+            else => @tagName(target.result.cpu.arch),
+        },
+        else => @tagName(target.result.cpu.arch),
+    };
 
     // iconv
     const libiconv_lib_path = try std.fmt.allocPrint(
         b.allocator,
         "vendor/libiconv/out/{s}-{s}/lib/libiconv.a",
-        .{ @tagName(os), @tagName(arch) },
+        .{ os, arch },
     );
     const libiconv_include_path = try std.fmt.allocPrint(
         b.allocator,
         "vendor/libiconv/out/{s}-{s}/lib/libiconv.a",
-        .{ @tagName(os), @tagName(arch) },
+        .{ os, arch },
     );
     mod.addObjectFile(b.path(libiconv_lib_path));
     mod.addIncludePath(b.path(libiconv_include_path));
@@ -420,7 +467,7 @@ fn moduleNetSurf(b: *Build, mod: *Build.Module) !void {
         const lib_path = try std.fmt.allocPrint(
             b.allocator,
             mimalloc ++ "/out/{s}-{s}/lib/libmimalloc.a",
-            .{ @tagName(os), @tagName(arch) },
+            .{ os, arch },
         );
         mod.addObjectFile(b.path(lib_path));
         mod.addIncludePath(b.path(mimalloc ++ "/include"));
@@ -431,7 +478,7 @@ fn moduleNetSurf(b: *Build, mod: *Build.Module) !void {
     const ns_include_path = try std.fmt.allocPrint(
         b.allocator,
         ns ++ "/out/{s}-{s}/include",
-        .{ @tagName(os), @tagName(arch) },
+        .{ os, arch },
     );
     mod.addIncludePath(b.path(ns_include_path));
 
@@ -445,7 +492,7 @@ fn moduleNetSurf(b: *Build, mod: *Build.Module) !void {
         const ns_lib_path = try std.fmt.allocPrint(
             b.allocator,
             ns ++ "/out/{s}-{s}/lib/" ++ lib ++ ".a",
-            .{ @tagName(os), @tagName(arch) },
+            .{ os, arch },
         );
         mod.addObjectFile(b.path(ns_lib_path));
         mod.addIncludePath(b.path(ns ++ "/" ++ lib ++ "/src"));
@@ -494,7 +541,12 @@ fn buildMbedtls(b: *Build, m: *Build.Module) !void {
     mbedtls.addIncludePath(b.path(root ++ "include"));
     mbedtls.addIncludePath(b.path(root ++ "library"));
 
-    mbedtls.addCSourceFiles(.{ .flags = &.{}, .files = &.{
+    const flags: []const []const u8 = if (m.resolved_target.?.result.os.tag == .ios)
+        &.{"-Wno-nullability-completeness"}
+    else
+        &.{};
+
+    mbedtls.addCSourceFiles(.{ .flags = flags, .files = &.{
         root ++ "library/aes.c",
         root ++ "library/aesni.c",
         root ++ "library/aesce.c",
@@ -648,6 +700,12 @@ fn buildNghttp2(b: *Build, m: *Build.Module) !void {
 }
 
 fn buildCurl(b: *Build, m: *Build.Module) !void {
+    if (m.resolved_target.?.result.os.tag == .ios) {
+        const sdk_path = try std.process.getEnvVarOwned(b.allocator, "SDK");
+        const include_path = try std.fmt.allocPrint(b.allocator, "{s}/usr/include", .{sdk_path});
+        m.addIncludePath(.{ .cwd_relative = include_path });
+    }
+
     const curl = b.addLibrary(.{
         .name = "curl",
         .root_module = m,
