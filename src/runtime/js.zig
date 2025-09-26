@@ -725,7 +725,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 // which case resolver_promise cannot be null.
                 module: ?PersistentModule = null,
 
-                // The promise of the evaluting module. The resolved value is
+                // The promise of the evaluating module. The resolved value is
                 // meaningless to us, but the resolver promise needs to chain
                 // to this, since we need to know when it's complete.
                 module_promise: ?PersistentPromise = null,
@@ -842,7 +842,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             pub fn module(self: *JsContext, comptime want_result: bool, src: []const u8, url: []const u8, cacheable: bool) !(if (want_result) ModuleEntry else void) {
                 if (cacheable) {
                     if (self.module_cache.get(url)) |entry| {
-                        // The dynamic import will creaet an entry withouth the
+                        // The dynamic import will create an entry without the
                         // module to prevent multiple calls from asynchronously
                         // loading the same module. If we're here, without the
                         // module, then it's time to load it.
@@ -874,7 +874,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
                 if (comptime !want_result) {
                     // avoid creating a bunch of persisted objects if it isn't
-                    // cachachable and the caller doesn't care about results.
+                    // cacheable and the caller doesn't care about results.
                     // This is pretty common, i.e. every <script type=module>
                     // within the html page.
                     if (!cacheable) {
@@ -1836,9 +1836,9 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 state.namespace = module_entry.module.?.castToModule().getModuleNamespace();
 
                 // We've gotten the source for the module and are evaluating it.
-                // You might thing we're done, but the module evaluation is
+                // You might think we're done, but the module evaluation is
                 // itself asynchronous. We need to chain to the module's own
-                // promise. When the module is evalutated, it resolves to the
+                // promise. When the module is evaluated, it resolves to the
                 // last value of the module. But, for module loading, we need to
                 // resolve to the module's namespace.
 
@@ -1854,7 +1854,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             // The microtask is tied to the isolate, not the context
                             // it can be resolved while another context is active
                             // (Which seems crazy to me). If that happens, then
-                            // another page was loaded and we MUST ignore thise
+                            // another page was loaded and we MUST ignore this
                             // (most of the fields in state are not valid)
                             return;
                         }
