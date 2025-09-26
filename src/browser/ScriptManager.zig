@@ -67,6 +67,7 @@ client: *Http.Client,
 allocator: Allocator,
 buffer_pool: BufferPool,
 script_pool: std.heap.MemoryPool(PendingScript),
+async_module_pool: std.heap.MemoryPool(AsyncModule),
 
 const OrderList = std.DoublyLinkedList;
 
@@ -85,6 +86,7 @@ pub fn init(browser: *Browser, page: *Page) ScriptManager {
         .static_scripts_done = false,
         .buffer_pool = BufferPool.init(allocator, 5),
         .script_pool = std.heap.MemoryPool(PendingScript).init(allocator),
+        .async_module_pool = std.heap.MemoryPool(AsyncModule).init(allocator),
     };
 }
 
@@ -92,6 +94,7 @@ pub fn deinit(self: *ScriptManager) void {
     self.reset();
     self.buffer_pool.deinit();
     self.script_pool.deinit();
+    self.async_module_pool.deinit();
 }
 
 pub fn reset(self: *ScriptManager) void {
@@ -257,7 +260,7 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
 // Unlike external modules which can only ever be executed after releasing an
 // http handle, these are executed without there necessarily being a free handle.
 // Thus, Http/Client.zig maintains a dedicated handle for these calls.
-pub fn blockingGet(self: *ScriptManager, url: [:0]const u8) !BlockingResult {
+pub fn blockingGet(self: *ScriptManager, url: [:0]const u8) !GetResult {
     std.debug.assert(self.is_blocking == false);
 
     self.is_blocking = true;
@@ -301,6 +304,34 @@ pub fn blockingGet(self: *ScriptManager, url: [:0]const u8) !BlockingResult {
             .err => |err| return err,
         }
     }
+}
+
+pub fn getAsyncModule(self: *ScriptManager, url: [:0]const u8, cb: AsyncModule.Callback, cb_data: *anyopaque) !void {
+    const async = try self.async_module_pool.create();
+    errdefer self.async_module_pool.destroy(async);
+
+    async.* = .{
+        .cb = cb,
+        .manager = self,
+        .cb_data = cb_data,
+    };
+
+    var headers = try self.client.newHeaders();
+    try self.page.requestCookie(.{}).headersForRequest(self.page.arena, url, &headers);
+
+    try self.client.request(.{
+        .url = url,
+        .method = .GET,
+        .headers = headers,
+        .cookie_jar = self.page.cookie_jar,
+        .ctx = async,
+        .resource_type = .script,
+        .start_callback = if (log.enabled(.http, .debug)) AsyncModule.startCallback else null,
+        .header_callback = AsyncModule.headerCallback,
+        .data_callback = AsyncModule.dataCallback,
+        .done_callback = AsyncModule.doneCallback,
+        .error_callback = AsyncModule.errorCallback,
+    });
 }
 
 pub fn staticScriptsDone(self: *ScriptManager) void {
@@ -595,7 +626,7 @@ const Script = struct {
                 .javascript => _ = js_context.eval(content, url) catch break :blk false,
                 .module => {
                     // We don't care about waiting for the evaluation here.
-                    _ = js_context.module(content, url, cacheable) catch break :blk false;
+                    js_context.module(false, content, url, cacheable) catch break :blk false;
                 },
             }
             break :blk true;
@@ -761,7 +792,7 @@ const Blocking = struct {
     const State = union(enum) {
         running: void,
         err: anyerror,
-        done: BlockingResult,
+        done: GetResult,
     };
 
     fn startCallback(transfer: *Http.Transfer) !void {
@@ -815,19 +846,93 @@ const Blocking = struct {
     fn errorCallback(ctx: *anyopaque, err: anyerror) void {
         var self: *Blocking = @ptrCast(@alignCast(ctx));
         self.state = .{ .err = err };
-        self.buffer_pool.release(self.buffer);
+        if (self.buffer.items.len > 0) {
+            self.buffer_pool.release(self.buffer);
+        }
     }
 };
 
-pub const BlockingResult = struct {
+pub const AsyncModule = struct {
+    cb: Callback,
+    cb_data: *anyopaque,
+    manager: *ScriptManager,
+    buffer: std.ArrayListUnmanaged(u8) = .{},
+
+    pub const Callback = *const fn (ptr: *anyopaque, result: anyerror!GetResult) void;
+
+    fn startCallback(transfer: *Http.Transfer) !void {
+        log.debug(.http, "script fetch start", .{ .req = transfer, .async = true });
+    }
+
+    fn headerCallback(transfer: *Http.Transfer) !void {
+        const header = &transfer.response_header.?;
+        log.debug(.http, "script header", .{
+            .req = transfer,
+            .async = true,
+            .status = header.status,
+            .content_type = header.contentType(),
+        });
+
+        if (header.status != 200) {
+            return error.InvalidStatusCode;
+        }
+
+        var self: *AsyncModule = @ptrCast(@alignCast(transfer.ctx));
+        self.buffer = self.manager.buffer_pool.get();
+    }
+
+    fn dataCallback(transfer: *Http.Transfer, data: []const u8) !void {
+        // too verbose
+        // log.debug(.http, "script data chunk", .{
+        //     .req = transfer,
+        //     .blocking = true,
+        // });
+
+        var self: *AsyncModule = @ptrCast(@alignCast(transfer.ctx));
+        self.buffer.appendSlice(self.manager.allocator, data) catch |err| {
+            log.err(.http, "SM.dataCallback", .{
+                .err = err,
+                .len = data.len,
+                .ascyn = true,
+                .transfer = transfer,
+            });
+            return err;
+        };
+    }
+
+    fn doneCallback(ctx: *anyopaque) !void {
+        var self: *AsyncModule = @ptrCast(@alignCast(ctx));
+        defer self.manager.async_module_pool.destroy(self);
+        self.cb(self.cb_data, .{
+            .buffer = self.buffer,
+            .buffer_pool = &self.manager.buffer_pool,
+        });
+    }
+
+    fn errorCallback(ctx: *anyopaque, err: anyerror) void {
+        var self: *AsyncModule = @ptrCast(@alignCast(ctx));
+
+        if (err != error.Abort) {
+            self.cb(self.cb_data, err);
+        }
+
+        if (self.buffer.items.len > 0) {
+            self.manager.buffer_pool.release(self.buffer);
+        }
+
+        self.manager.async_module_pool.destroy(self);
+    }
+};
+
+pub const GetResult = struct {
     buffer: std.ArrayListUnmanaged(u8),
     buffer_pool: *BufferPool,
 
-    pub fn deinit(self: *BlockingResult) void {
+    pub fn deinit(self: *GetResult) void {
         self.buffer_pool.release(self.buffer);
     }
 
-    pub fn src(self: *const BlockingResult) []const u8 {
+    pub fn src(self: *const GetResult) []const u8 {
         return self.buffer.items;
     }
 };

@@ -255,9 +255,14 @@ pub const Page = struct {
         try Node.prepend(head, &[_]Node.NodeOrText{.{ .node = parser.elementToNode(base) }});
     }
 
-    pub fn fetchModuleSource(ctx: *anyopaque, src: [:0]const u8) !ScriptManager.BlockingResult {
+    pub fn fetchModuleSource(ctx: *anyopaque, url: [:0]const u8) !ScriptManager.GetResult {
         const self: *Page = @ptrCast(@alignCast(ctx));
-        return self.script_manager.blockingGet(src);
+        return self.script_manager.blockingGet(url);
+    }
+
+    pub fn fetchAsyncModuleSource(ctx: *anyopaque, url: [:0]const u8, cb: ScriptManager.AsyncModule.Callback, cb_data: *anyopaque) !void {
+        const self: *Page = @ptrCast(@alignCast(ctx));
+        return self.script_manager.getAsyncModule(url, cb, cb_data);
     }
 
     pub fn wait(self: *Page, wait_ms: i32) Session.WaitResult {
