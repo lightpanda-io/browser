@@ -31,7 +31,7 @@ jobs:
       - uses: ./.github/actions/install
 
       - name: json output
-        run: zig build -Doptimize=ReleaseFast wpt -- --json > wpt.json
+        run: zig build wpt -- --json > wpt.json
 
       - name: write commit
         run: |
