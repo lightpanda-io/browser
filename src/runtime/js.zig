@@ -1707,16 +1707,17 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
             // Will get passed to ScriptManager and then passed back to us when
             // the src of the module is loaded
             const DynamicModuleResolveState = struct {
-                // this is what we're trying to get from the module and resolve
-                // on our promise
-                namespace: ?v8.Value,
+                // The module that we're resolving (we'll actually resolve its
+                // namespace)
+                module: ?v8.Module,
                 context_id: usize,
                 js_context: *JsContext,
                 specifier: [:0]const u8,
-                resolver: v8.PromiseResolver,
+                resolver: v8.Persistent(v8.PromiseResolver),
             };
 
             fn _dynamicModuleCallback(self: *JsContext, specifier: [:0]const u8) !v8.Promise {
+                const isolate = self.isolate;
                 const gop = try self.module_cache.getOrPut(self.context_arena, specifier);
                 if (gop.found_existing and gop.value_ptr.resolver_promise != null) {
                     // This is easy, there's already something responsible
@@ -1725,22 +1726,21 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     return gop.value_ptr.resolver_promise.?.castToPromise();
                 }
 
-                const isolate = self.isolate;
-
                 const persistent_resolver = v8.Persistent(v8.PromiseResolver).init(isolate, v8.PromiseResolver.init(self.v8_context));
                 try self.persisted_promise_resolvers.append(self.context_arena, persistent_resolver);
                 var resolver = persistent_resolver.castToPromiseResolver();
 
                 const state = try self.context_arena.create(DynamicModuleResolveState);
                 state.* = .{
+                    .module = null,
                     .js_context = self,
-                    .resolver = resolver,
                     .specifier = specifier,
                     .context_id = self.id,
-                    .namespace = null,
+                    .resolver = persistent_resolver,
                 };
 
-                const promise = resolver.getPromise();
+                const persisted_promise = PersistentPromise.init(self.isolate, resolver.getPromise());
+                const promise = persisted_promise.castToPromise();
 
                 if (!gop.found_existing) {
                     // this module hasn't been seen before. This is the most
@@ -1752,7 +1752,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                     gop.value_ptr.* = ModuleEntry{
                         .module = null,
                         .module_promise = null,
-                        .resolver_promise = PersistentPromise.init(self.isolate, .{ .handle = promise.handle }),
+                        .resolver_promise = persisted_promise,
                     };
 
                     // Next, we need to actually load it.
@@ -1782,7 +1782,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 // like before, we want to set this up so that if anything else
                 // tries to load this module, it can just return our promise
                 // since we're going to be doing all the work.
-                gop.value_ptr.resolver_promise = PersistentPromise.init(self.isolate, .{ .handle = promise.handle });
+                gop.value_ptr.resolver_promise = persisted_promise;
 
                 // But we can skip direclty to `resolveDynamicModule` which is
                 // what the above callback will eventually do.
@@ -1796,7 +1796,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
                 var fetch_result = fetch_result_ catch |err| {
                     const error_msg = v8.String.initUtf8(self.isolate, @errorName(err));
-                    _ = state.resolver.reject(self.v8_context, error_msg.toValue());
+                    _ = state.resolver.castToPromiseResolver().reject(self.v8_context, error_msg.toValue());
                     return;
                 };
 
@@ -1816,7 +1816,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             .line = try_catch.sourceLineNumber() orelse 0,
                         });
                         const error_msg = v8.String.initUtf8(self.isolate, ex);
-                        _ = state.resolver.reject(self.v8_context, error_msg.toValue());
+                        _ = state.resolver.castToPromiseResolver().reject(self.v8_context, error_msg.toValue());
                         return;
                     };
                 };
@@ -1826,6 +1826,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
 
             fn resolveDynamicModule(self: *JsContext, state: *DynamicModuleResolveState, module_entry: ModuleEntry) void {
                 const ctx = self.v8_context;
+                const isolate = self.isolate;
                 const external = v8.External.init(self.isolate, @ptrCast(state));
 
                 // we can only be here if the module has been evaluated and if
@@ -1833,7 +1834,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                 std.debug.assert(module_entry.module_promise != null);
                 std.debug.assert(module_entry.resolver_promise != null);
                 std.debug.assert(self.module_cache.contains(state.specifier));
-                state.namespace = module_entry.module.?.castToModule().getModuleNamespace();
+                state.module = module_entry.module.?.castToModule();
 
                 // We've gotten the source for the module and are evaluating it.
                 // You might think we're done, but the module evaluation is
@@ -1859,7 +1860,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                             return;
                         }
 
-                        _ = s.resolver.resolve(caller.js_context.v8_context, s.namespace.?);
+                        const namespace = s.module.?.getModuleNamespace();
+                        _ = s.resolver.castToPromiseResolver().resolve(caller.js_context.v8_context, namespace);
                     }
                 }.callback, external);
 
@@ -1873,7 +1875,7 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         if (s.context_id != caller.js_context.id) {
                             return;
                         }
-                        _ = s.resolver.reject(caller.js_context.v8_context, info.getData());
+                        _ = s.resolver.castToPromiseResolver().reject(caller.js_context.v8_context, info.getData());
                     }
                 }.callback, external);
 
@@ -1882,8 +1884,8 @@ pub fn Env(comptime State: type, comptime WebApis: type) type {
                         .err = err,
                         .specifier = state.specifier,
                     });
-                    const error_msg = v8.String.initUtf8(self.isolate, "Failed to evaluate promise");
-                    _ = state.resolver.reject(ctx, error_msg.toValue());
+                    const error_msg = v8.String.initUtf8(isolate, "Failed to evaluate promise");
+                    _ = state.resolver.castToPromiseResolver().reject(ctx, error_msg.toValue());
                 };
             }
 
