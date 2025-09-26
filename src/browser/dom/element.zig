@@ -231,6 +231,85 @@ pub const Element = struct {
         }
     }
 
+    /// Parses the given `input` string and inserts its children to an element at given `position`.
+    /// https://developer.mozilla.org/en-US/docs/Web/API/Element/insertAdjacentHTML
+    ///
+    /// TODO: Support for XML parsing and `TrustedHTML` instances.
+    pub fn _insertAdjacentHTML(self: *parser.Element, position: []const u8, input: []const u8) !void {
+        const self_node = parser.elementToNode(self);
+        const doc = parser.nodeOwnerDocument(self_node) orelse {
+            return parser.DOMError.WrongDocument;
+        };
+
+        // Parse the fragment.
+        // Should return error.Syntax on fail?
+        const fragment = try parser.documentParseFragmentFromStr(doc, input);
+        const fragment_node = parser.documentFragmentToNode(fragment);
+
+        // We always get it wrapped like so:
+        // <html><head></head><body>{ ... }</body></html>
+        // None of the following can be null.
+        const maybe_html = parser.nodeFirstChild(fragment_node);
+        std.debug.assert(maybe_html != null);
+        const html = maybe_html orelse return;
+
+        const maybe_body = parser.nodeLastChild(html);
+        std.debug.assert(maybe_body != null);
+        const body = maybe_body orelse return;
+
+        const children = try parser.nodeGetChildNodes(body);
+
+        // * `target_node` is `*Node` (where we actually insert),
+        // * `prev_node` is `?*Node`.
+        const target_node, const prev_node = blk: {
+            // Prefer case-sensitive match.
+            // "beforeend" was the most common case in my tests; we might adjust the order
+            // depending on which ones websites prefer most.
+            if (std.mem.eql(u8, position, "beforeend")) {
+                break :blk .{ self_node, null };
+            }
+
+            if (std.mem.eql(u8, position, "afterbegin")) {
+                // Get the first child; null indicates there are no children.
+                const first_child = parser.nodeFirstChild(self_node);
+                break :blk .{ self_node, first_child };
+            }
+
+            if (std.mem.eql(u8, position, "beforebegin")) {
+                // The node must have a parent node in order to use this variant.
+                const parent = parser.nodeParentNode(self_node) orelse return error.NoModificationAllowed;
+                // Parent cannot be Document.
+                // Should have checks for document_fragment and document_type?
+                if (parser.nodeType(parent) == .document) {
+                    return error.NoModificationAllowed;
+                }
+
+                break :blk .{ parent, self_node };
+            }
+
+            if (std.mem.eql(u8, position, "afterend")) {
+                // The node must have a parent node in order to use this variant.
+                const parent = parser.nodeParentNode(self_node) orelse return error.NoModificationAllowed;
+                // Parent cannot be Document.
+                if (parser.nodeType(parent) == .document) {
+                    return error.NoModificationAllowed;
+                }
+                // Get the next sibling or null; null indicates our node is the only one.
+                const sibling = parser.nodeNextSibling(self_node);
+                break :blk .{ parent, sibling };
+            }
+
+            // Thrown if:
+            // * position is not one of the four listed values.
+            // * The input is XML that is not well-formed.
+            return error.Syntax;
+        };
+
+        while (parser.nodeListItem(children, 0)) |child| {
+            _ = try parser.nodeInsertBefore(target_node, child, prev_node);
+        }
+    }
+
     // The closest() method of the Element interface traverses the element and its parents (heading toward the document root) until it finds a node that matches the specified CSS selector.
     // Returns the closest ancestor Element or itself, which matches the selectors. If there are no such element, null.
     pub fn _closest(self: *parser.Element, selector: []const u8, page: *Page) !?*parser.Element {
