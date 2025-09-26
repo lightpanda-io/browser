@@ -251,11 +251,11 @@ pub const Element = struct {
         // None of the following can be null.
         const maybe_html = parser.nodeFirstChild(fragment_node);
         std.debug.assert(maybe_html != null);
-        const html = maybe_html.?;
+        const html = maybe_html orelse return;
 
         const maybe_body = parser.nodeLastChild(html);
         std.debug.assert(maybe_body != null);
-        const body = maybe_body.?;
+        const body = maybe_body orelse return;
 
         const children = try parser.nodeGetChildNodes(body);
 
