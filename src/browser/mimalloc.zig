@@ -62,8 +62,8 @@ pub fn getRSS() i64 {
     const data = writer.written();
     const index = std.mem.indexOf(u8, data, "rss: ") orelse return -1;
     const sep = std.mem.indexOfScalarPos(u8, data, index + 5, ' ') orelse return -2;
-    const value = std.fmt.parseFloat(f64, data[index+5..sep]) catch return -3;
-    const unit = data[sep+1..];
+    const value = std.fmt.parseFloat(f64, data[index + 5 .. sep]) catch return -3;
+    const unit = data[sep + 1 ..];
     if (std.mem.startsWith(u8, unit, "KiB,")) {
         return @as(i64, @intFromFloat(value)) * 1024;
     }
@@ -108,3 +108,36 @@ pub export fn strn_dup(s: [*c]const u8, size: usize) callconv(.c) [*c]u8 {
 pub export fn f_ree(_: ?*anyopaque) callconv(.c) void {
     return;
 }
+
+/// An allocator that use mimalloc to manage memory.
+pub const allocator = std.mem.Allocator{
+    .ptr = undefined,
+    .vtable = Allocator.vtable,
+};
+
+const Allocator = struct {
+    fn alloc(_: *anyopaque, len: usize, alignment: std.mem.Alignment, _: usize) ?[*]u8 {
+        const ptr = c.mi_malloc_aligned(len, alignment.toByteUnits());
+        return @ptrCast(ptr);
+    }
+
+    fn resize(_: *anyopaque, memory: []u8, _: std.mem.Alignment, new_len: usize, _: usize) bool {
+        return c.mi_expand(memory.ptr, new_len) != null;
+    }
+
+    fn remap(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, _: usize) ?[*]u8 {
+        const ptr = c.mi_realloc_aligned(memory.ptr, new_len, alignment.toByteUnits());
+        return @ptrCast(ptr);
+    }
+
+    fn free(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, _: usize) void {
+        c.mi_free_size_aligned(memory.ptr, memory.len, alignment.toByteUnits());
+    }
+
+    pub const vtable = &std.mem.Allocator.VTable{
+        .alloc = Allocator.alloc,
+        .resize = Allocator.resize,
+        .remap = Allocator.remap,
+        .free = Allocator.free,
+    };
+};
