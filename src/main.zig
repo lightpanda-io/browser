@@ -25,6 +25,7 @@ const App = @import("app.zig").App;
 const Server = @import("server.zig").Server;
 const Browser = @import("browser/browser.zig").Browser;
 const DumpStripMode = @import("browser/dump.zig").Opts.StripMode;
+const mimalloc = @import("browser/mimalloc.zig");
 
 const build_config = @import("build_config");
 
@@ -34,9 +35,9 @@ var _server: ?Server = null;
 pub fn main() !void {
     // allocator
     // - in Debug mode we use the General Purpose Allocator to detect memory leaks
-    // - in Release mode we use the c allocator
+    // - in Release mode we use the mimalloc allocator
     var gpa: std.heap.DebugAllocator(.{}) = .init;
-    const alloc = if (builtin.mode == .Debug) gpa.allocator() else std.heap.c_allocator;
+    const alloc = if (builtin.mode == .Debug) gpa.allocator() else mimalloc.allocator;
 
     defer if (builtin.mode == .Debug) {
         if (gpa.detectLeaks()) std.posix.exit(1);
