@@ -67,6 +67,17 @@ client: *Http.Client,
 allocator: Allocator,
 buffer_pool: BufferPool,
 script_pool: std.heap.MemoryPool(PendingScript),
+sync_module_pool: std.heap.MemoryPool(SyncModule),
+async_module_pool: std.heap.MemoryPool(AsyncModule),
+
+// We can download multiple sync modules in parallel, but we want to process
+// then in order. We can't use an OrderList, like the other script types,
+// because the order we load them might not be the order we want to process
+// them in (I'm not sure this is true, but as far as I can tell, v8 doesn't
+// make any guarantees about the list of sub-module dependencies it gives us
+// So this is more like a cache. When a SyncModule is complete, it's put here
+// and can be requested as needed.
+sync_modules: std.StringHashMapUnmanaged(*SyncModule),
 
 const OrderList = std.DoublyLinkedList;
 
@@ -79,22 +90,42 @@ pub fn init(browser: *Browser, page: *Page) ScriptManager {
         .scripts = .{},
         .deferreds = .{},
         .asyncs_ready = .{},
+        .sync_modules = .empty,
         .is_evaluating = false,
         .allocator = allocator,
         .client = browser.http_client,
         .static_scripts_done = false,
         .buffer_pool = BufferPool.init(allocator, 5),
         .script_pool = std.heap.MemoryPool(PendingScript).init(allocator),
+        .sync_module_pool = std.heap.MemoryPool(SyncModule).init(allocator),
+        .async_module_pool = std.heap.MemoryPool(AsyncModule).init(allocator),
     };
 }
 
 pub fn deinit(self: *ScriptManager) void {
     self.reset();
+    var it = self.sync_modules.valueIterator();
+    while (it.next()) |value_ptr| {
+        value_ptr.*.buffer.deinit(self.allocator);
+        self.sync_module_pool.destroy(value_ptr.*);
+    }
+
     self.buffer_pool.deinit();
     self.script_pool.deinit();
+    self.sync_module_pool.deinit();
+    self.async_module_pool.deinit();
+
+    self.sync_modules.deinit(self.allocator);
 }
 
 pub fn reset(self: *ScriptManager) void {
+    var it = self.sync_modules.valueIterator();
+    while (it.next()) |value_ptr| {
+        value_ptr.*.buffer.deinit(self.allocator);
+        self.sync_module_pool.destroy(value_ptr.*);
+    }
+    self.sync_modules.clearRetainingCapacity();
+
     self.clearList(&self.asyncs);
     self.clearList(&self.scripts);
     self.clearList(&self.deferreds);
@@ -257,52 +288,100 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
 // Unlike external modules which can only ever be executed after releasing an
 // http handle, these are executed without there necessarily being a free handle.
 // Thus, Http/Client.zig maintains a dedicated handle for these calls.
-pub fn blockingGet(self: *ScriptManager, url: [:0]const u8) !BlockingResult {
-    std.debug.assert(self.is_blocking == false);
-
-    self.is_blocking = true;
-    defer {
-        self.is_blocking = false;
-
-        // we blocked evaluation while loading this script, there could be
-        // scripts ready to process.
-        self.evaluate();
+pub fn getModule(self: *ScriptManager, url: [:0]const u8) !void {
+    const gop = try self.sync_modules.getOrPut(self.allocator, url);
+    if (gop.found_existing) {
+        // already requested
+        return;
     }
+    errdefer _ = self.sync_modules.remove(url);
 
-    var blocking = Blocking{
-        .allocator = self.allocator,
-        .buffer_pool = &self.buffer_pool,
+    const sync = try self.sync_module_pool.create();
+    errdefer self.sync_module_pool.destroy(sync);
+
+    sync.* = .{ .manager = self };
+    gop.value_ptr.* = sync;
+
+    var headers = try self.client.newHeaders();
+    try self.page.requestCookie(.{}).headersForRequest(self.page.arena, url, &headers);
+
+    try self.client.request(.{
+        .url = url,
+        .ctx = sync,
+        .method = .GET,
+        .headers = headers,
+        .cookie_jar = self.page.cookie_jar,
+        .resource_type = .script,
+        .start_callback = if (log.enabled(.http, .debug)) SyncModule.startCallback else null,
+        .header_callback = SyncModule.headerCallback,
+        .data_callback = SyncModule.dataCallback,
+        .done_callback = SyncModule.doneCallback,
+        .error_callback = SyncModule.errorCallback,
+    });
+}
+
+pub fn waitForModule(self: *ScriptManager, url: [:0]const u8) !GetResult {
+    std.debug.assert(self.is_blocking == false);
+    self.is_blocking = true;
+    defer self.is_blocking = false;
+
+    // Normally it's dangerous to hold on to map pointers. But here, the map
+    // can't change. It's possible that by calling `tick`, other entries within
+    // the map will have their value change, but the map itself is immutable
+    // during this tick.
+    const entry = self.sync_modules.getEntry(url) orelse {
+        return error.UnknownModule;
+    };
+    const sync = entry.value_ptr.*;
+
+    var client = self.client;
+    while (true) {
+        switch (sync.state) {
+            .loading => {},
+            .done => {
+                // Our caller has its own higher level cache (caching the
+                // actual compiled module). There's no reason for us to keep this
+                defer self.sync_module_pool.destroy(sync);
+                defer self.sync_modules.removeByPtr(entry.key_ptr);
+                return .{
+                    .buffer = sync.buffer,
+                    .buffer_pool = &self.buffer_pool,
+                };
+            },
+            .err => |err| return err,
+        }
+        // rely on http's timeout settings to avoid an endless/long loop.
+        _ = try client.tick(200);
+    }
+}
+
+pub fn getAsyncModule(self: *ScriptManager, url: [:0]const u8, cb: AsyncModule.Callback, cb_data: *anyopaque) !void {
+    const async = try self.async_module_pool.create();
+    errdefer self.async_module_pool.destroy(async);
+
+    async.* = .{
+        .cb = cb,
+        .manager = self,
+        .cb_data = cb_data,
     };
 
     var headers = try self.client.newHeaders();
     try self.page.requestCookie(.{}).headersForRequest(self.page.arena, url, &headers);
 
-    var client = self.client;
-    try client.blockingRequest(.{
+    try self.client.request(.{
         .url = url,
         .method = .GET,
         .headers = headers,
         .cookie_jar = self.page.cookie_jar,
-        .ctx = &blocking,
+        .ctx = async,
         .resource_type = .script,
-        .start_callback = if (log.enabled(.http, .debug)) Blocking.startCallback else null,
-        .header_callback = Blocking.headerCallback,
-        .data_callback = Blocking.dataCallback,
-        .done_callback = Blocking.doneCallback,
-        .error_callback = Blocking.errorCallback,
+        .start_callback = if (log.enabled(.http, .debug)) AsyncModule.startCallback else null,
+        .header_callback = AsyncModule.headerCallback,
+        .data_callback = AsyncModule.dataCallback,
+        .done_callback = AsyncModule.doneCallback,
+        .error_callback = AsyncModule.errorCallback,
     });
-
-    // rely on http's timeout settings to avoid an endless/long loop.
-    while (true) {
-        _ = try client.tick(200);
-        switch (blocking.state) {
-            .running => {},
-            .done => |result| return result,
-            .err => |err| return err,
-        }
-    }
 }
-
 pub fn staticScriptsDone(self: *ScriptManager) void {
     std.debug.assert(self.static_scripts_done == false);
     self.static_scripts_done = true;
@@ -595,7 +674,7 @@ const Script = struct {
                 .javascript => _ = js_context.eval(content, url) catch break :blk false,
                 .module => {
                     // We don't care about waiting for the evaluation here.
-                    _ = js_context.module(content, url, cacheable) catch break :blk false;
+                    js_context.module(false, content, url, cacheable) catch break :blk false;
                 },
             }
             break :blk true;
@@ -752,16 +831,15 @@ const BufferPool = struct {
     }
 };
 
-const Blocking = struct {
-    allocator: Allocator,
-    buffer_pool: *BufferPool,
-    state: State = .{ .running = {} },
+const SyncModule = struct {
+    manager: *ScriptManager,
     buffer: std.ArrayListUnmanaged(u8) = .{},
+    state: State = .loading,
 
     const State = union(enum) {
-        running: void,
+        done,
+        loading,
         err: anyerror,
-        done: BlockingResult,
     };
 
     fn startCallback(transfer: *Http.Transfer) !void {
@@ -777,12 +855,13 @@ const Blocking = struct {
             .content_type = header.contentType(),
         });
 
+        var self: *SyncModule = @ptrCast(@alignCast(transfer.ctx));
         if (header.status != 200) {
+            self.finished(.{ .err = error.InvalidStatusCode });
             return error.InvalidStatusCode;
         }
 
-        var self: *Blocking = @ptrCast(@alignCast(transfer.ctx));
-        self.buffer = self.buffer_pool.get();
+        self.buffer = self.manager.buffer_pool.get();
     }
 
     fn dataCallback(transfer: *Http.Transfer, data: []const u8) !void {
@@ -792,8 +871,8 @@ const Blocking = struct {
         //     .blocking = true,
         // });
 
-        var self: *Blocking = @ptrCast(@alignCast(transfer.ctx));
-        self.buffer.appendSlice(self.allocator, data) catch |err| {
+        var self: *SyncModule = @ptrCast(@alignCast(transfer.ctx));
+        self.buffer.appendSlice(self.manager.allocator, data) catch |err| {
             log.err(.http, "SM.dataCallback", .{
                 .err = err,
                 .len = data.len,
@@ -805,29 +884,101 @@ const Blocking = struct {
     }
 
     fn doneCallback(ctx: *anyopaque) !void {
-        var self: *Blocking = @ptrCast(@alignCast(ctx));
-        self.state = .{ .done = .{
-            .buffer = self.buffer,
-            .buffer_pool = self.buffer_pool,
-        } };
+        var self: *SyncModule = @ptrCast(@alignCast(ctx));
+        self.finished(.done);
     }
 
     fn errorCallback(ctx: *anyopaque, err: anyerror) void {
-        var self: *Blocking = @ptrCast(@alignCast(ctx));
-        self.state = .{ .err = err };
-        self.buffer_pool.release(self.buffer);
+        var self: *SyncModule = @ptrCast(@alignCast(ctx));
+        self.finished(.{ .err = err });
+    }
+
+    fn finished(self: *SyncModule, state: State) void {
+        self.state = state;
     }
 };
 
-pub const BlockingResult = struct {
+pub const AsyncModule = struct {
+    cb: Callback,
+    cb_data: *anyopaque,
+    manager: *ScriptManager,
+    buffer: std.ArrayListUnmanaged(u8) = .{},
+
+    pub const Callback = *const fn (ptr: *anyopaque, result: anyerror!GetResult) void;
+
+    fn startCallback(transfer: *Http.Transfer) !void {
+        log.debug(.http, "script fetch start", .{ .req = transfer, .async = true });
+    }
+
+    fn headerCallback(transfer: *Http.Transfer) !void {
+        const header = &transfer.response_header.?;
+        log.debug(.http, "script header", .{
+            .req = transfer,
+            .async = true,
+            .status = header.status,
+            .content_type = header.contentType(),
+        });
+
+        if (header.status != 200) {
+            return error.InvalidStatusCode;
+        }
+
+        var self: *AsyncModule = @ptrCast(@alignCast(transfer.ctx));
+        self.buffer = self.manager.buffer_pool.get();
+    }
+
+    fn dataCallback(transfer: *Http.Transfer, data: []const u8) !void {
+        // too verbose
+        // log.debug(.http, "script data chunk", .{
+        //     .req = transfer,
+        //     .blocking = true,
+        // });
+
+        var self: *AsyncModule = @ptrCast(@alignCast(transfer.ctx));
+        self.buffer.appendSlice(self.manager.allocator, data) catch |err| {
+            log.err(.http, "SM.dataCallback", .{
+                .err = err,
+                .len = data.len,
+                .ascyn = true,
+                .transfer = transfer,
+            });
+            return err;
+        };
+    }
+
+    fn doneCallback(ctx: *anyopaque) !void {
+        var self: *AsyncModule = @ptrCast(@alignCast(ctx));
+        defer self.manager.async_module_pool.destroy(self);
+        self.cb(self.cb_data, .{
+            .buffer = self.buffer,
+            .buffer_pool = &self.manager.buffer_pool,
+        });
+    }
+
+    fn errorCallback(ctx: *anyopaque, err: anyerror) void {
+        var self: *AsyncModule = @ptrCast(@alignCast(ctx));
+
+        if (err != error.Abort) {
+            self.cb(self.cb_data, err);
+        }
+
+        if (self.buffer.items.len > 0) {
+            self.manager.buffer_pool.release(self.buffer);
+        }
+
+        self.manager.async_module_pool.destroy(self);
+    }
+};
+
+pub const GetResult = struct {
     buffer: std.ArrayListUnmanaged(u8),
     buffer_pool: *BufferPool,
 
-    pub fn deinit(self: *BlockingResult) void {
+    pub fn deinit(self: *GetResult) void {
         self.buffer_pool.release(self.buffer);
     }
 
-    pub fn src(self: *const BlockingResult) []const u8 {
+    pub fn src(self: *const GetResult) []const u8 {
         return self.buffer.items;
     }
 };

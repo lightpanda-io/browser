@@ -62,8 +62,8 @@ pub fn getRSS() i64 {
     const data = writer.written();
     const index = std.mem.indexOf(u8, data, "rss: ") orelse return -1;
     const sep = std.mem.indexOfScalarPos(u8, data, index + 5, ' ') orelse return -2;
-    const value = std.fmt.parseFloat(f64, data[index+5..sep]) catch return -3;
-    const unit = data[sep+1..];
+    const value = std.fmt.parseFloat(f64, data[index + 5 .. sep]) catch return -3;
+    const unit = data[sep + 1 ..];
     if (std.mem.startsWith(u8, unit, "KiB,")) {
         return @as(i64, @intFromFloat(value)) * 1024;
     }

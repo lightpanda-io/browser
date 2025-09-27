@@ -52,7 +52,7 @@ pub fn Runner(comptime State: type, comptime Global: type, comptime types: anyty
             self.js_context = try self.executor.createJsContext(
                 if (Global == void) &default_global else global,
                 state,
-                {},
+                null,
                 true,
                 null,
             );

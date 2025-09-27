@@ -86,9 +86,6 @@ allocator: Allocator,
 // request. These wil come and go with each request.
 transfer_pool: std.heap.MemoryPool(Transfer),
 
-// see ScriptManager.blockingGet
-blocking: Handle,
-
 // To notify registered subscribers of events, the browser sets/nulls this for us.
 notification: ?*Notification = null,
 
@@ -121,16 +118,12 @@ pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts) !*Clie
     var handles = try Handles.init(allocator, client, ca_blob, &opts);
     errdefer handles.deinit(allocator);
 
-    var blocking = try Handle.init(client, ca_blob, &opts);
-    errdefer blocking.deinit();
-
     client.* = .{
         .queue = .{},
         .active = 0,
         .intercepted = 0,
         .multi = multi,
         .handles = handles,
-        .blocking = blocking,
         .allocator = allocator,
         .http_proxy = opts.http_proxy,
         .user_agent = opts.user_agent,
@@ -142,7 +135,6 @@ pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts) !*Clie
 
 pub fn deinit(self: *Client) void {
     self.abort();
-    self.blocking.deinit();
     self.handles.deinit(self.allocator);
 
     _ = c.curl_multi_cleanup(self.multi);
@@ -263,12 +255,6 @@ pub fn fulfillTransfer(self: *Client, transfer: *Transfer, status: u16, headers:
     return transfer.fulfill(status, headers, body);
 }
 
-// See ScriptManager.blockingGet
-pub fn blockingRequest(self: *Client, req: Request) !void {
-    const transfer = try self.makeTransfer(req);
-    return self.makeRequest(&self.blocking, transfer);
-}
-
 fn makeTransfer(self: *Client, req: Request) !*Transfer {
     errdefer req.headers.deinit();
 
@@ -329,7 +315,6 @@ pub fn changeProxy(self: *Client, proxy: [:0]const u8) !void {
     for (self.handles.handles) |*h| {
         try errorCheck(c.curl_easy_setopt(h.conn.easy, c.CURLOPT_PROXY, proxy.ptr));
     }
-    try errorCheck(c.curl_easy_setopt(self.blocking.conn.easy, c.CURLOPT_PROXY, proxy.ptr));
 }
 
 // Same restriction as changeProxy. Should be ok since this is only called on
@@ -341,7 +326,6 @@ pub fn restoreOriginalProxy(self: *Client) !void {
     for (self.handles.handles) |*h| {
         try errorCheck(c.curl_easy_setopt(h.conn.easy, c.CURLOPT_PROXY, proxy));
     }
-    try errorCheck(c.curl_easy_setopt(self.blocking.conn.easy, c.CURLOPT_PROXY, proxy));
 }
 
 fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) !void {
@@ -504,7 +488,7 @@ fn endTransfer(self: *Client, transfer: *Transfer) void {
         log.fatal(.http, "Failed to remove handle", .{ .err = err });
     };
 
-    self.handles.release(self, handle);
+    self.handles.release(handle);
     transfer._handle = null;
     self.active -= 1;
 }
@@ -563,13 +547,7 @@ const Handles = struct {
         return null;
     }
 
-    fn release(self: *Handles, client: *Client, handle: *Handle) void {
-        if (handle == &client.blocking) {
-            // the handle we've reserved for blocking request doesn't participate
-            // int he in_use/available pools
-            return;
-        }
-
+    fn release(self: *Handles, handle: *Handle) void {
         var node = &handle.node;
         self.in_use.remove(node);
         node.prev = null;
@@ -747,7 +725,7 @@ pub const Transfer = struct {
     fn deinit(self: *Transfer) void {
         self.req.headers.deinit();
         if (self._handle) |handle| {
-            self.client.handles.release(self.client, handle);
+            self.client.handles.release(handle);
         }
         self.arena.deinit();
         self.client.transfer_pool.destroy(self);
