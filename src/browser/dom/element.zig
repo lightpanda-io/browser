@@ -192,11 +192,9 @@ pub const Element = struct {
             // a new fragment
             const clean = try parser.documentCreateDocumentFragment(doc);
             const children = try parser.nodeGetChildNodes(body);
-            const ln = parser.nodeListLength(children);
-            for (0..ln) |_| {
-                // always index 0, because nodeAppendChild moves the node out of
-                // the nodeList and into the new tree
-                const child = parser.nodeListItem(children, 0) orelse continue;
+            // always index 0, because nodeAppendChild moves the node out of
+            // the nodeList and into the new tree
+            while (parser.nodeListItem(children, 0)) |child| {
                 _ = try parser.nodeAppendChild(@ptrCast(@alignCast(clean)), child);
             }
 
@@ -210,22 +208,18 @@ pub const Element = struct {
         {
             // First, copy some of the head element
             const children = try parser.nodeGetChildNodes(head);
-            const ln = parser.nodeListLength(children);
-            for (0..ln) |_| {
-                // always index 0, because nodeAppendChild moves the node out of
-                // the nodeList and into the new tree
-                const child = parser.nodeListItem(children, 0) orelse continue;
+            // always index 0, because nodeAppendChild moves the node out of
+            // the nodeList and into the new tree
+            while (parser.nodeListItem(children, 0)) |child| {
                 _ = try parser.nodeAppendChild(node, child);
             }
         }
 
         {
             const children = try parser.nodeGetChildNodes(body);
-            const ln = parser.nodeListLength(children);
-            for (0..ln) |_| {
-                // always index 0, because nodeAppendChild moves the node out of
-                // the nodeList and into the new tree
-                const child = parser.nodeListItem(children, 0) orelse continue;
+            // always index 0, because nodeAppendChild moves the node out of
+            // the nodeList and into the new tree
+            while (parser.nodeListItem(children, 0)) |child| {
                 _ = try parser.nodeAppendChild(node, child);
             }
         }
