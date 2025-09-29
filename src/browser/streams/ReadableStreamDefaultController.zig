@@ -51,17 +51,17 @@ pub fn _close(self: *ReadableStreamDefaultController, _reason: ?[]const u8, page
     // to discard, must use cancel.
 }
 
-pub fn _enqueue(self: *ReadableStreamDefaultController, chunk: []const u8, page: *Page) !void {
+pub fn _enqueue(self: *ReadableStreamDefaultController, chunk: ReadableStream.Chunk, page: *Page) !void {
     const stream = self.stream;
 
     if (stream.state != .readable) {
         return error.TypeError;
     }
 
-    const duped_chunk = try page.arena.dupe(u8, chunk);
+    const duped_chunk = try chunk.dupe(page.arena);
 
     if (self.stream.reader_resolver) |*rr| {
-        try rr.resolve(ReadableStreamReadResult{ .value = .{ .data = duped_chunk }, .done = false });
+        try rr.resolve(ReadableStreamReadResult.init(duped_chunk, false));
         self.stream.reader_resolver = null;
     }
 

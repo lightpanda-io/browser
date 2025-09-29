@@ -1,3 +1,4 @@
+<!DOCTYPE html>
 <script src="../testing.js"></script>
 
 <script id=readable_stream>
@@ -13,6 +14,22 @@
 
   testing.async(reader.read(), (data) => {
     testing.expectEqual("hello", data.value);
+    testing.expectEqual(false, data.done);
+  });
+</script>
+
+<script id=readable_stream_binary>
+  const input = new TextEncoder().encode('over 9000!');
+  const binStream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(input);
+      controller.enqueue("world");
+      controller.close();
+    }
+  });
+
+  testing.async(binStream.getReader().read(), (data) => {
+    testing.expectEqual(input, data.value);
     testing.expectEqual(false, data.done);
   });
 </script>

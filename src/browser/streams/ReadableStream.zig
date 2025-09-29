@@ -19,8 +19,9 @@
 const std = @import("std");
 const log = @import("../../log.zig");
 
-const Page = @import("../page.zig").Page;
+const Allocator = std.mem.Allocator;
 const Env = @import("../env.zig").Env;
+const Page = @import("../page.zig").Page;
 
 const ReadableStream = @This();
 const ReadableStreamDefaultReader = @import("ReadableStreamDefaultReader.zig");
@@ -45,16 +46,42 @@ cancel_fn: ?Env.Function = null,
 pull_fn: ?Env.Function = null,
 
 strategy: QueueingStrategy,
-queue: std.ArrayListUnmanaged([]const u8) = .empty,
+queue: std.ArrayListUnmanaged(Chunk) = .empty,
+
+pub const Chunk = union(enum) {
+    // the order matters, sorry.
+    uint8array: Env.TypedArray(u8),
+    string: []const u8,
+
+    pub fn dupe(self: Chunk, allocator: Allocator) !Chunk {
+        return switch (self) {
+            .string => |str| .{ .string = try allocator.dupe(u8, str) },
+            .uint8array => |arr| .{ .uint8array = try arr.dupe(allocator) },
+        };
+    }
+};
 
 pub const ReadableStreamReadResult = struct {
-    const ValueUnion =
-        union(enum) { data: []const u8, empty: void };
-
-    value: ValueUnion,
     done: bool,
+    value: Value = .empty,
 
-    pub fn get_value(self: *const ReadableStreamReadResult) ValueUnion {
+    const Value = union(enum) {
+        empty,
+        data: Chunk,
+    };
+
+    pub fn init(chunk: Chunk, done: bool) ReadableStreamReadResult {
+        if (done) {
+            return .{ .done = true, .value = .empty };
+        }
+
+        return .{
+            .done = false,
+            .value = .{ .data = chunk },
+        };
+    }
+
+    pub fn get_value(self: *const ReadableStreamReadResult) Value {
         return self.value;
     }
 

@@ -49,7 +49,7 @@ pub fn _read(self: *const ReadableStreamDefaultReader, page: *Page) !Env.Promise
                 const data = self.stream.queue.orderedRemove(0);
                 const resolver = page.main_context.createPromiseResolver();
 
-                try resolver.resolve(ReadableStreamReadResult{ .value = .{ .data = data }, .done = false });
+                try resolver.resolve(ReadableStreamReadResult.init(data, false));
                 try self.stream.pullIf();
                 return resolver.promise();
             } else {
@@ -67,9 +67,9 @@ pub fn _read(self: *const ReadableStreamDefaultReader, page: *Page) !Env.Promise
 
             if (stream.queue.items.len > 0) {
                 const data = self.stream.queue.orderedRemove(0);
-                try resolver.resolve(ReadableStreamReadResult{ .value = .{ .data = data }, .done = false });
+                try resolver.resolve(ReadableStreamReadResult.init(data, false));
             } else {
-                try resolver.resolve(ReadableStreamReadResult{ .value = .empty, .done = true });
+                try resolver.resolve(ReadableStreamReadResult{ .done = true });
             }
 
             return resolver.promise();
