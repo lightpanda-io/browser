@@ -104,3 +104,16 @@
   });
   testing.eventually(() => testing.expectEqual(true, dcl));
 </script>
+
+<script id=window.onload>
+  let isWindowTarget = false;
+
+  const callback = (e) => isWindowTarget = e.target === window;
+  // Callback is not set yet.
+  testing.expectEqual(null, window.onload);
+  // Callback is set.
+  window.onload = callback;
+  testing.expectEqual(callback, window.onload);
+
+  testing.eventually(() => testing.expectEqual(true, isWindowTarget));
+</script>
