@@ -25,6 +25,7 @@ const Page = @import("page.zig").Page;
 const Browser = @import("browser.zig").Browser;
 const NavigateOpts = @import("page.zig").NavigateOpts;
 const History = @import("html/History.zig");
+const Navigation = @import("html/Navigation.zig");
 
 const log = @import("../log.zig");
 const parser = @import("netsurf.zig");
@@ -57,6 +58,7 @@ pub const Session = struct {
     // History is persistent across the "tab".
     // https://developer.mozilla.org/en-US/docs/Web/API/History
     history: History = .{},
+    navigation: Navigation = .{},
 
     page: ?Page = null,
 
