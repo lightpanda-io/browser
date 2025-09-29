@@ -45,3 +45,13 @@
   testing.expectEqual('', d2.decode(new Uint8Array([226, 153]), { stream: true }));
   testing.expectEqual('♥', d2.decode(new Uint8Array([165]), { stream: true }));
 </script>
+
+<script id=slice>
+    const buffer = new ArrayBuffer(4);
+    const arr1 = new Uint8Array(buffer)
+    arr1[0] = 80;
+    arr1[1] = 81;
+    arr1[2] = 82;
+    arr1[3] = 83;
+    testing.expectEqual('QR', d3.decode(new Uint8Array(buffer, 1, 2)));
+</script>
