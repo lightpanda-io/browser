@@ -606,6 +606,8 @@ pub const Element = struct {
         contentVisibilityAuto: bool,
         opacityProperty: bool,
         visibilityProperty: bool,
+        checkVisibilityCSS: bool,
+        checkOpacity: bool,
     };
 
     pub fn _checkVisibility(self: *parser.Element, opts: ?CheckVisibilityOpts) bool {
