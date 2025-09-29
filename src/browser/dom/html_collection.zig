@@ -429,24 +429,23 @@ pub const HTMLCollection = struct {
         return null;
     }
 
-    pub fn postAttach(self: *HTMLCollection, js_this: JsThis) !void {
-        const len = try self.get_length();
-        for (0..len) |i| {
-            const node = try self.item(@intCast(i)) orelse unreachable;
-            const e = @as(*parser.Element, @ptrCast(node));
-            const as_interface = try Element.toInterface(e);
-            try js_this.setIndex(@intCast(i), as_interface, .{});
+    pub fn indexed_get(self: *HTMLCollection, index: u32, has_value: *bool) !?Union {
+        return (try _item(self, index)) orelse {
+            has_value.* = false;
+            return undefined;
+        };
+    }
 
-            if (try item_name(e)) |name| {
-                // Even though an entry might have an empty id, the spec says
-                // that namedItem("") should always return null
-                if (name.len > 0) {
-                    // Named fields should not be enumerable (it is defined with
-                    // the LegacyUnenumerableNamedProperties flag.)
-                    try js_this.set(name, as_interface, .{ .DONT_ENUM = true });
-                }
-            }
+    pub fn named_get(self: *const HTMLCollection, name: []const u8, has_value: *bool) !?Union {
+        // Even though an entry might have an empty id, the spec says
+        // that namedItem("") should always return null
+        if (name.len == 0) {
+            return null;
         }
+        return (try _namedItem(self, name)) orelse {
+            has_value.* = false;
+            return undefined;
+        };
     }
 };
 
