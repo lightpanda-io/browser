@@ -55,6 +55,7 @@
   o3.value = 'o3';
   options.add(o3)
   testing.expectEqual(3, options.length);
+  testing.expectEqual('o3', options[2].value);
   testing.expectEqual('o3', options.item(2).value);
 
   let o4 = document.createElement('option');
@@ -71,5 +72,9 @@
 
   options.remove(3)
   testing.expectEqual(4, options.length);
+  testing.expectEqual('o3', options[3].value);
   testing.expectEqual('o3', options.item(3).value);
+
+  testing.expectEqual(undefined, options[10]);
+  testing.expectEqual(null, options.item(10));
 </script>
