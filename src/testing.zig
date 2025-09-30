@@ -403,6 +403,10 @@ pub fn htmlRunner(file: []const u8) !void {
     const url = try std.fmt.allocPrint(arena_allocator, "http://localhost:9582/src/tests/{s}", .{file});
     try page.navigate(url, .{});
     _ = page.wait(2000);
+    // page exits more aggressively in tests. We want to make sure this is called
+    // at lease once.
+    page.session.browser.runMicrotasks();
+    page.session.browser.runMessageLoop();
 
     const needs_second_wait = try js_context.exec("testing._onPageWait.length > 0", "check_onPageWait");
     if (needs_second_wait.value.toBool(page.main_context.isolate)) {
