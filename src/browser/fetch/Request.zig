@@ -181,7 +181,7 @@ pub fn constructor(input: RequestInput, _options: ?RequestInit, page: *Page) !Re
 pub fn get_body(self: *const Request, page: *Page) !?*ReadableStream {
     if (self.body) |body| {
         const stream = try ReadableStream.constructor(null, null, page);
-        try stream.queue.append(page.arena, body);
+        try stream.queue.append(page.arena, .{ .string = body });
         return stream;
     } else return null;
 }

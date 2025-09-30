@@ -109,7 +109,7 @@ pub fn constructor(_input: ?ResponseBody, _options: ?ResponseOptions, page: *Pag
 pub fn get_body(self: *const Response, page: *Page) !*ReadableStream {
     const stream = try ReadableStream.constructor(null, null, page);
     if (self.body) |body| {
-        try stream.queue.append(page.arena, body);
+        try stream.queue.append(page.arena, .{ .string = body });
     }
     return stream;
 }
