@@ -47,11 +47,14 @@
 </script>
 
 <script id=slice>
-    const buffer = new ArrayBuffer(4);
-    const arr1 = new Uint8Array(buffer)
+    const buf1 = new ArrayBuffer(7);
+    const arr1 = new Uint8Array(buf1)
     arr1[0] = 80;
     arr1[1] = 81;
     arr1[2] = 82;
     arr1[3] = 83;
-    testing.expectEqual('QR', d3.decode(new Uint8Array(buffer, 1, 2)));
+    arr1[4] = 84;
+    arr1[5] = 85;
+    arr1[6] = 86;
+    testing.expectEqual('RST', d3.decode(new Uint8Array(buf1, 2, 3)));
 </script>
