@@ -176,7 +176,7 @@ fn run(alloc: Allocator) !void {
                 },
             };
 
-            _ = session.wait(5000); // 5 seconds
+            _ = session.fetchWait(5000); // 5 seconds
 
             // dump
             if (opts.dump) {
