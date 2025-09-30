@@ -111,6 +111,9 @@
   const callback = (e) => isWindowTarget = e.target === window;
   // Callback is not set yet.
   testing.expectEqual(null, window.onload);
+  // Setting an object.
+  window.onload = {};
+  testing.expectEqual(null, window.onload);
   // Callback is set.
   window.onload = callback;
   testing.expectEqual(callback, window.onload);

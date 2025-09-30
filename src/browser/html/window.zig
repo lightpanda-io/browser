@@ -111,27 +111,30 @@ pub const Window = struct {
     /// Sets `onload_callback`.
     pub fn set_onload(self: *Window, maybe_listener: ?EventHandler.Listener, page: *Page) !void {
         const event_target = parser.toEventTarget(Window, self);
+        const event_type = "load";
 
+        // Check if we have a listener set.
         if (self.onload_callback) |callback| {
-            // If we got here, it means `onload_callback` has been set before
-            // so listener cannot be null.
-            const listener = try parser.eventTargetHasListener(event_target, "load", false, callback.id);
+            const listener = try parser.eventTargetHasListener(event_target, event_type, false, callback.id);
             std.debug.assert(listener != null);
-
-            try parser.eventTargetRemoveEventListener(event_target, "load", listener.?, false);
+            try parser.eventTargetRemoveEventListener(event_target, event_type, listener.?, false);
         }
 
         if (maybe_listener) |listener| {
-            // The only time this can return null if the listener is already
-            // registered. But before calling `register`, all of our functions
-            // remove any existing listener, so it should be impossible to get null
-            // from this function call.
-            _ = try EventHandler.register(page.arena, event_target, "load", listener, null) orelse unreachable;
-            self.onload_callback = listener.function;
-        } else {
-            // Just unset the listener.
-            self.onload_callback = null;
+            switch (listener) {
+                // If an object is given as listener, do nothing.
+                .object => {},
+                .function => |callback| {
+                    _ = try EventHandler.register(page.arena, event_target, event_type, listener, null) orelse unreachable;
+                    self.onload_callback = callback;
+
+                    return;
+                },
+            }
         }
+
+        // Just unset the listener.
+        self.onload_callback = null;
     }
 
     pub fn get_window(self: *Window) *Window {
