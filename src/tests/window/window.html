@@ -81,10 +81,10 @@
 
 <script id=scroll>
   let scroll = false;
-  let scrolend = false
+  let scrollend = false
   window.addEventListener('scroll', () => {scroll = true});
   document.addEventListener('scrollend', () => {scrollend = true});
-  window.scrollTo(0);
+  window.scrollTo(0, 0);
 
   testing.expectEqual(true, scroll);
   testing.expectEqual(true, scrollend);
