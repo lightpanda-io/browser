@@ -29,6 +29,9 @@ const TestHTTPServer = @import("TestHTTPServer.zig");
 
 const WPT_DIR = "tests/wpt";
 
+// use in custom panic handler
+var current_test: ?[]const u8 = null;
+
 pub fn main() !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
@@ -76,6 +79,9 @@ pub fn main() !void {
     var i: usize = 0;
     while (try it.next()) |test_file| {
         defer _ = test_arena.reset(.retain_capacity);
+
+        defer current_test = null;
+        current_test = test_file;
 
         var err_out: ?[]const u8 = null;
         const result = run(
@@ -448,3 +454,12 @@ fn httpHandler(req: *std.http.Server.Request) !void {
     const file_path = try std.fmt.bufPrint(&buf, WPT_DIR ++ "{s}", .{path});
     return TestHTTPServer.sendFile(req, file_path);
 }
+
+pub const panic = std.debug.FullPanic(struct {
+    pub fn panicFn(msg: []const u8, first_trace_addr: ?usize) noreturn {
+        if (current_test) |ct| {
+            std.debug.print("===panic running: {s}===\n", .{ct});
+        }
+        std.debug.defaultPanic(msg, first_trace_addr);
+    }
+}.panicFn);
