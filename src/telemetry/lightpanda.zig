@@ -76,6 +76,7 @@ pub const LightPanda = struct {
 
     fn run(self: *LightPanda) void {
         var aw = std.Io.Writer.Allocating.init(self.allocator);
+        defer aw.deinit();
 
         var batch: [MAX_BATCH_SIZE]*LightPandaEvent = undefined;
         self.mutex.lock();
