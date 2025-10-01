@@ -89,7 +89,7 @@ pub const URL = struct {
         base: []const u8,
         comptime opts: StitchOpts,
     ) !StitchReturn(opts) {
-        if (base.len == 0 or isComleteHTTPUrl(path)) {
+        if (base.len == 0 or isCompleteHTTPUrl(path)) {
             return simpleStitch(allocator, path, opts);
         }
 
@@ -114,64 +114,83 @@ pub const URL = struct {
         // Given https://a.b  this will point to 'a'
         // Given http://a.b  this will point '.'
         // Either way, we just care about this value to find the start of the path
-        const protocol_end: usize = if (isComleteHTTPUrl(base)) 8 else 0;
+        const protocol_end: usize = if (isCompleteHTTPUrl(base)) 8 else 0;
+
+        var root = base;
+        if (std.mem.indexOfScalar(u8, base[protocol_end..], '/')) |pos| {
+            root = base[0 .. pos + protocol_end];
+        }
 
         if (path[0] == '/') {
-            const pos = std.mem.indexOfScalarPos(u8, base, protocol_end, '/') orelse base.len;
             if (comptime opts.null_terminated) {
-                return std.fmt.allocPrintSentinel(allocator, "{s}{s}", .{ base[0..pos], path }, 0);
+                return std.fmt.allocPrintSentinel(allocator, "{s}{s}", .{ root, path }, 0);
             }
-            return std.fmt.allocPrint(allocator, "{s}{s}", .{ base[0..pos], path });
+            return std.fmt.allocPrint(allocator, "{s}{s}", .{ root, path });
         }
 
-        var normalized_base = base;
-        if (std.mem.lastIndexOfScalar(u8, base[protocol_end..], '/')) |pos| {
-            normalized_base = base[0 .. pos + protocol_end];
+        var old_path = std.mem.trimStart(u8, base[root.len..], "/");
+        if (std.mem.lastIndexOfScalar(u8, old_path, '/')) |pos| {
+            old_path = old_path[0..pos];
+        } else {
+            old_path = "";
         }
 
-        // that extra spacelets us handle opts.null_terminated. If we end up
-        // not trimming anything, it ensures that we have 1 extra byte to store
-        // our null terminator.
-        var out = try std.fmt.allocPrint(allocator, "{s}/{s}" ++ if (comptime opts.null_terminated) " " else "", .{
-            normalized_base,
-            path,
-        });
+        // We preallocate all of the space possibly needed.
+        // This is the root, old_path, new path, 3 slashes and perhaps a null terminated slot.
+        var out = try allocator.alloc(u8, root.len + old_path.len + path.len + 3 + if (comptime opts.null_terminated) 1 else 0);
+        var end: usize = 0;
+        @memmove(out[0..root.len], root);
+        end += root.len;
+        out[root.len] = '/';
+        end += 1;
+        // If we don't have an old path, do nothing here.
+        if (old_path.len > 0) {
+            @memmove(out[end .. end + old_path.len], old_path);
+            end += old_path.len;
+            out[end] = '/';
+            end += 1;
+        }
+        @memmove(out[end .. end + path.len], path);
+        end += path.len;
 
-        const end = if (comptime opts.null_terminated) out.len - 1 else out.len;
+        var read: usize = root.len;
+        var write: usize = root.len;
 
         // Strip out ./ and ../. This is done in-place, because doing so can
         // only ever make `out` smaller. After this, `out` cannot be freed by
         // an allocator, which is ok, because we expect allocator to be an arena.
-        var in_i: usize = 0;
-        var out_i: usize = 0;
-        while (in_i < end) {
-            if (std.mem.startsWith(u8, out[in_i..], "./")) {
-                in_i += 2;
+        while (read < end) {
+            if (std.mem.startsWith(u8, out[read..], "./")) {
+                read += 2;
                 continue;
             }
-            if (std.mem.startsWith(u8, out[in_i..], "../")) {
-                std.debug.assert(out[out_i - 1] == '/');
 
-                out_i -= 2;
-                while (out_i > 1 and out[out_i - 1] != '/') {
-                    out_i -= 1;
+            if (std.mem.startsWith(u8, out[read..], "../")) {
+                if (write > root.len + 1) {
+                    const search_range = out[root.len .. write - 1];
+                    if (std.mem.lastIndexOfScalar(u8, search_range, '/')) |pos| {
+                        write = root.len + pos + 1;
+                    } else {
+                        write = root.len + 1;
+                    }
                 }
-                // <= to deal with the hack-ish protocol_end which will be off-by-one between http and https
-                if (out_i <= protocol_end) return error.InvalidURL;
-                in_i += 3;
+
+                read += 3;
                 continue;
             }
-            out[out_i] = out[in_i];
-            in_i += 1;
-            out_i += 1;
+
+            out[write] = out[read];
+            write += 1;
+            read += 1;
         }
 
         if (comptime opts.null_terminated) {
             // we always have an extra space
-            out[out_i] = 0;
-            return out[0..out_i :0];
+            out[write] = 0;
+            return out[0..write :0];
         }
-        return out[0..out_i];
+
+        return out[0..write];
     }
 
     pub fn concatQueryString(arena: Allocator, url: []const u8, query_string: []const u8) ![]const u8 {
@@ -226,7 +245,7 @@ fn simpleStitch(allocator: Allocator, url: []const u8, comptime opts: StitchOpts
     return url;
 }
 
-fn isComleteHTTPUrl(url: []const u8) bool {
+fn isCompleteHTTPUrl(url: []const u8) bool {
     if (url.len < 8) {
         return false;
     }
@@ -243,17 +262,17 @@ fn isComleteHTTPUrl(url: []const u8) bool {
 }
 
 const testing = @import("testing.zig");
-test "URL: isComleteHTTPUrl" {
-    try testing.expectEqual(true, isComleteHTTPUrl("http://lightpanda.io/about"));
-    try testing.expectEqual(true, isComleteHTTPUrl("HttP://lightpanda.io/about"));
-    try testing.expectEqual(true, isComleteHTTPUrl("httpS://lightpanda.io/about"));
-    try testing.expectEqual(true, isComleteHTTPUrl("HTTPs://lightpanda.io/about"));
+test "URL: isCompleteHTTPUrl" {
+    try testing.expectEqual(true, isCompleteHTTPUrl("http://lightpanda.io/about"));
+    try testing.expectEqual(true, isCompleteHTTPUrl("HttP://lightpanda.io/about"));
+    try testing.expectEqual(true, isCompleteHTTPUrl("httpS://lightpanda.io/about"));
+    try testing.expectEqual(true, isCompleteHTTPUrl("HTTPs://lightpanda.io/about"));
 
-    try testing.expectEqual(false, isComleteHTTPUrl("/lightpanda.io"));
-    try testing.expectEqual(false, isComleteHTTPUrl("../../about"));
-    try testing.expectEqual(false, isComleteHTTPUrl("about"));
-    try testing.expectEqual(false, isComleteHTTPUrl("//lightpanda.io"));
-    try testing.expectEqual(false, isComleteHTTPUrl("//lightpanda.io/about"));
+    try testing.expectEqual(false, isCompleteHTTPUrl("/lightpanda.io"));
+    try testing.expectEqual(false, isCompleteHTTPUrl("../../about"));
+    try testing.expectEqual(false, isCompleteHTTPUrl("about"));
+    try testing.expectEqual(false, isCompleteHTTPUrl("//lightpanda.io"));
+    try testing.expectEqual(false, isCompleteHTTPUrl("//lightpanda.io/about"));
 }
 
 test "URL: stitch" {
@@ -265,153 +284,51 @@ test "URL: stitch" {
         expected: []const u8,
     };
 
-    const cases = [_]Case{ .{
-        .base = "https://lightpanda.io/xyz/abc/123",
-        .path = "something.js",
-        .expected = "https://lightpanda.io/xyz/abc/something.js",
-    }, .{
-        .base = "https://lightpanda.io/xyz/abc/123",
-        .path = "/something.js",
-        .expected = "https://lightpanda.io/something.js",
-    }, .{
-        .base = "https://lightpanda.io/",
-        .path = "something.js",
-        .expected = "https://lightpanda.io/something.js",
-    }, .{
-        .base = "https://lightpanda.io/",
-        .path = "/something.js",
-        .expected = "https://lightpanda.io/something.js",
-    }, .{
-        .base = "https://lightpanda.io",
-        .path = "something.js",
-        .expected = "https://lightpanda.io/something.js",
-    }, .{
-        .base = "https://lightpanda.io",
-        .path = "abc/something.js",
-        .expected = "https://lightpanda.io/abc/something.js",
-    }, .{
-        .base = "https://lightpanda.io/nested",
-        .path = "abc/something.js",
-        .expected = "https://lightpanda.io/abc/something.js",
-    }, .{
-        .base = "https://lightpanda.io/nested/",
-        .path = "abc/something.js",
-        .expected = "https://lightpanda.io/nested/abc/something.js",
-    }, .{
-        .base = "https://lightpanda.io/nested/",
-        .path = "/abc/something.js",
-        .expected = "https://lightpanda.io/abc/something.js",
-    }, .{
-        .base = "https://lightpanda.io/nested/",
-        .path = "http://www.github.com/lightpanda-io/",
-        .expected = "http://www.github.com/lightpanda-io/",
-    }, .{
-        .base = "https://lightpanda.io/nested/",
-        .path = "",
-        .expected = "https://lightpanda.io/nested/",
-    }, .{
-        .base = "https://lightpanda.io/abc/aaa",
-        .path = "./hello/./world",
-        .expected = "https://lightpanda.io/abc/hello/world",
-    }, .{
-        .base = "https://lightpanda.io/abc/aaa/",
-        .path = "../hello",
-        .expected = "https://lightpanda.io/abc/hello",
-    }, .{
-        .base = "https://lightpanda.io/abc/aaa",
-        .path = "../hello",
-        .expected = "https://lightpanda.io/hello",
-    }, .{
-        .base = "https://lightpanda.io/abc/aaa/",
-        .path = "./.././.././hello",
-        .expected = "https://lightpanda.io/hello",
-    }, .{
-        .base = "some/page",
-        .path = "hello",
-        .expected = "some/hello",
-    }, .{
-        .base = "some/page/",
-        .path = "hello",
-        .expected = "some/page/hello",
-    }, .{
-        .base = "some/page/other",
-        .path = ".././hello",
-        .expected = "some/hello",
-    }, .{
-        .path = "//static.lightpanda.io/hello.js",
-        .base = "https://lightpanda.io/about/",
-        .expected = "https://static.lightpanda.io/hello.js",
-    } };
-
-    for (cases) |case| {
-        const result = try stitch(testing.arena_allocator, case.path, case.base, .{});
-        try testing.expectString(case.expected, result);
-    }
-
-    try testing.expectError(
-        error.InvalidURL,
-        stitch(testing.arena_allocator, "../hello", "https://lightpanda.io/", .{}),
-    );
-    try testing.expectError(
-        error.InvalidURL,
-        stitch(testing.arena_allocator, "../hello", "http://lightpanda.io/", .{}),
-    );
-}
-
-test "URL: stitch null terminated" {
-    defer testing.reset();
-
-    const Case = struct {
-        base: []const u8,
-        path: []const u8,
-        expected: []const u8,
-    };
-
     const cases = [_]Case{
         .{
             .base = "https://lightpanda.io/xyz/abc/123",
-            .path = "something.js",
-            .expected = "https://lightpanda.io/xyz/abc/something.js",
+            .path = "something1.js",
+            .expected = "https://lightpanda.io/xyz/abc/something1.js",
         },
         .{
             .base = "https://lightpanda.io/xyz/abc/123",
-            .path = "/something.js",
-            .expected = "https://lightpanda.io/something.js",
+            .path = "/something2.js",
+            .expected = "https://lightpanda.io/something2.js",
         },
         .{
             .base = "https://lightpanda.io/",
-            .path = "something.js",
-            .expected = "https://lightpanda.io/something.js",
+            .path = "something3.js",
+            .expected = "https://lightpanda.io/something3.js",
         },
         .{
             .base = "https://lightpanda.io/",
-            .path = "/something.js",
-            .expected = "https://lightpanda.io/something.js",
+            .path = "/something4.js",
+            .expected = "https://lightpanda.io/something4.js",
         },
         .{
             .base = "https://lightpanda.io",
-            .path = "something.js",
-            .expected = "https://lightpanda.io/something.js",
+            .path = "something5.js",
+            .expected = "https://lightpanda.io/something5.js",
         },
         .{
             .base = "https://lightpanda.io",
-            .path = "abc/something.js",
-            .expected = "https://lightpanda.io/abc/something.js",
+            .path = "abc/something6.js",
+            .expected = "https://lightpanda.io/abc/something6.js",
         },
         .{
             .base = "https://lightpanda.io/nested",
-            .path = "abc/something.js",
-            .expected = "https://lightpanda.io/abc/something.js",
+            .path = "abc/something7.js",
+            .expected = "https://lightpanda.io/abc/something7.js",
         },
         .{
             .base = "https://lightpanda.io/nested/",
-            .path = "abc/something.js",
-            .expected = "https://lightpanda.io/nested/abc/something.js",
+            .path = "abc/something8.js",
+            .expected = "https://lightpanda.io/nested/abc/something8.js",
         },
         .{
             .base = "https://lightpanda.io/nested/",
-            .path = "/abc/something.js",
-            .expected = "https://lightpanda.io/abc/something.js",
+            .path = "/abc/something9.js",
+            .expected = "https://lightpanda.io/abc/something9.js",
         },
         .{
             .base = "https://lightpanda.io/nested/",
@@ -453,11 +370,151 @@ test "URL: stitch null terminated" {
             .path = "hello",
             .expected = "some/page/hello",
         },
-
         .{
             .base = "some/page/other",
             .path = ".././hello",
             .expected = "some/hello",
+        },
+        .{
+            .path = "//static.lightpanda.io/hello.js",
+            .base = "https://lightpanda.io/about/",
+            .expected = "https://static.lightpanda.io/hello.js",
+        },
+    };
+
+    for (cases) |case| {
+        const result = try stitch(testing.arena_allocator, case.path, case.base, .{});
+        try testing.expectString(case.expected, result);
+    }
+}
+
+test "URL: stitch regression (#1093)" {
+    defer testing.reset();
+
+    const Case = struct {
+        base: []const u8,
+        path: []const u8,
+        expected: []const u8,
+    };
+
+    const cases = [_]Case{
+        .{
+            .base = "https://alas.aws.amazon.com/alas2.html",
+            .path = "../static/bootstrap.min.css",
+            .expected = "https://alas.aws.amazon.com/static/bootstrap.min.css",
+        },
+    };
+
+    for (cases) |case| {
+        const result = try stitch(testing.arena_allocator, case.path, case.base, .{});
+        try testing.expectString(case.expected, result);
+    }
+}
+
+test "URL: stitch null terminated" {
+    defer testing.reset();
+
+    const Case = struct {
+        base: []const u8,
+        path: []const u8,
+        expected: []const u8,
+    };
+
+    const cases = [_]Case{
+        .{
+            .base = "https://lightpanda.io/xyz/abc/123",
+            .path = "something1.js",
+            .expected = "https://lightpanda.io/xyz/abc/something1.js",
+        },
+        .{
+            .base = "https://lightpanda.io/xyz/abc/123",
+            .path = "/something2.js",
+            .expected = "https://lightpanda.io/something2.js",
+        },
+        .{
+            .base = "https://lightpanda.io/",
+            .path = "something3.js",
+            .expected = "https://lightpanda.io/something3.js",
+        },
+        .{
+            .base = "https://lightpanda.io/",
+            .path = "/something4.js",
+            .expected = "https://lightpanda.io/something4.js",
+        },
+        .{
+            .base = "https://lightpanda.io",
+            .path = "something5.js",
+            .expected = "https://lightpanda.io/something5.js",
+        },
+        .{
+            .base = "https://lightpanda.io",
+            .path = "abc/something6.js",
+            .expected = "https://lightpanda.io/abc/something6.js",
+        },
+        .{
+            .base = "https://lightpanda.io/nested",
+            .path = "abc/something7.js",
+            .expected = "https://lightpanda.io/abc/something7.js",
+        },
+        .{
+            .base = "https://lightpanda.io/nested/",
+            .path = "abc/something8.js",
+            .expected = "https://lightpanda.io/nested/abc/something8.js",
+        },
+        .{
+            .base = "https://lightpanda.io/nested/",
+            .path = "/abc/something9.js",
+            .expected = "https://lightpanda.io/abc/something9.js",
+        },
+        .{
+            .base = "https://lightpanda.io/nested/",
+            .path = "http://www.github.com/lightpanda-io/",
+            .expected = "http://www.github.com/lightpanda-io/",
+        },
+        .{
+            .base = "https://lightpanda.io/nested/",
+            .path = "",
+            .expected = "https://lightpanda.io/nested/",
+        },
+        .{
+            .base = "https://lightpanda.io/abc/aaa",
+            .path = "./hello/./world",
+            .expected = "https://lightpanda.io/abc/hello/world",
+        },
+        .{
+            .base = "https://lightpanda.io/abc/aaa/",
+            .path = "../hello",
+            .expected = "https://lightpanda.io/abc/hello",
+        },
+        .{
+            .base = "https://lightpanda.io/abc/aaa",
+            .path = "../hello",
+            .expected = "https://lightpanda.io/hello",
+        },
+        .{
+            .base = "https://lightpanda.io/abc/aaa/",
+            .path = "./.././.././hello",
+            .expected = "https://lightpanda.io/hello",
+        },
+        .{
+            .base = "some/page",
+            .path = "hello",
+            .expected = "some/hello",
+        },
+        .{
+            .base = "some/page/",
+            .path = "hello",
+            .expected = "some/page/hello",
+        },
+        .{
+            .base = "some/page/other",
+            .path = ".././hello",
+            .expected = "some/hello",
+        },
+        .{
+            .path = "//static.lightpanda.io/hello.js",
+            .base = "https://lightpanda.io/about/",
+            .expected = "https://static.lightpanda.io/hello.js",
         },
     };
 
@@ -465,15 +522,6 @@ test "URL: stitch null terminated" {
         const result = try stitch(testing.arena_allocator, case.path, case.base, .{ .null_terminated = true });
         try testing.expectString(case.expected, result);
     }
-
-    try testing.expectError(
-        error.InvalidURL,
-        stitch(testing.arena_allocator, "../hello", "https://lightpanda.io/", .{ .null_terminated = true }),
-    );
-    try testing.expectError(
-        error.InvalidURL,
-        stitch(testing.arena_allocator, "../hello", "http://lightpanda.io/", .{ .null_terminated = true }),
-    );
 }
 
 test "URL: concatQueryString" {
