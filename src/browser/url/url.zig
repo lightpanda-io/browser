@@ -164,8 +164,11 @@ pub const URL = struct {
         return aw.written();
     }
 
-    pub fn get_protocol(self: *URL, page: *Page) ![]const u8 {
-        return try std.mem.concat(page.arena, u8, &[_][]const u8{ self.uri.scheme, ":" });
+    pub fn get_protocol(self: *const URL) []const u8 {
+        // std.Uri keeps a pointer to "https", "http" (scheme part) so we know
+        // its followed by ':'.
+        const scheme = self.uri.scheme;
+        return scheme.ptr[0 .. scheme.len + 1];
     }
 
     pub fn get_username(self: *URL) []const u8 {
