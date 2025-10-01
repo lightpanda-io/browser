@@ -11,15 +11,19 @@
 
   var nb = 0;
   var mrs;
-  new MutationObserver((mu) => {
+  let cb_this1;
+  let mu1 = new MutationObserver(function(mu) {
      mrs = mu;
      nb++;
-  }).observe(document.firstElementChild, { attributes: true, attributeOldValue: true });
+     cb_this1 = this;
+  });
+  mu1.observe(document.firstElementChild, { attributes: true, attributeOldValue: true });
   document.firstElementChild.setAttribute("foo", "bar");
   document.firstElementChild.firstChild.setAttribute("foo", "bar");
 
   testing.eventually(() => {
     testing.expectEqual(1, nb);
+    testing.expectEqual(cb_this1, mu1);
     testing.expectEqual('attributes', mrs[0].type);
     testing.expectEqual(document.firstElementChild, mrs[0].target);
     testing.expectEqual('bar', mrs[0].target.getAttribute('foo'));
@@ -30,14 +34,17 @@
   var nb2 = 0;
   var mrs2;
   var node1 = $('#p1').firstChild;
-  new MutationObserver((mu) => {
+  let mu2 = new MutationObserver((mu) => {
       mrs2 = mu;
       nb2++;
-  }).observe(node1, { characterData: true, characterDataOldValue: true });
+      cb_this2 = this;
+  })
+  mu2.observe(node1, { characterData: true, characterDataOldValue: true });
   node1.data = "foo";
 
   testing.eventually(() => {
     testing.expectEqual(1, nb2);
+    testing.expectEqual(window, cb_this2);
     testing.expectEqual('characterData', mrs2[0].type);
     testing.expectEqual(node1, mrs2[0].target);
     testing.expectEqual('foo', mrs2[0].target.data);

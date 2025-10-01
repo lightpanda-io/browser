@@ -36,8 +36,8 @@ const Walker = @import("../dom/walker.zig").WalkerChildren;
 pub const MutationObserver = struct {
     page: *Page,
     cbk: Env.Function,
-    connected: bool,
     scheduled: bool,
+    observers: std.ArrayListUnmanaged(*Observer),
 
     // List of records which were observed. When the call scope ends, we need to
     // execute our callback with it.
@@ -48,8 +48,8 @@ pub const MutationObserver = struct {
             .cbk = cbk,
             .page = page,
             .observed = .{},
-            .connected = true,
             .scheduled = false,
+            .observers = .empty,
         };
     }
 
@@ -68,15 +68,17 @@ pub const MutationObserver = struct {
             .event_node = .{ .id = self.cbk.id, .func = Observer.handle },
         };
 
+        try self.observers.append(arena, observer);
+
         // register node's events
         if (options.childList or options.subtree) {
-            _ = try parser.eventTargetAddEventListener(
+            observer.dom_node_inserted_listener = try parser.eventTargetAddEventListener(
                 parser.toEventTarget(parser.Node, node),
                 "DOMNodeInserted",
                 &observer.event_node,
                 false,
             );
-            _ = try parser.eventTargetAddEventListener(
+            observer.dom_node_removed_listener = try parser.eventTargetAddEventListener(
                 parser.toEventTarget(parser.Node, node),
                 "DOMNodeRemoved",
                 &observer.event_node,
@@ -84,7 +86,7 @@ pub const MutationObserver = struct {
             );
         }
         if (options.attr()) {
-            _ = try parser.eventTargetAddEventListener(
+            observer.dom_node_attribute_modified_listener = try parser.eventTargetAddEventListener(
                 parser.toEventTarget(parser.Node, node),
                 "DOMAttrModified",
                 &observer.event_node,
@@ -92,7 +94,7 @@ pub const MutationObserver = struct {
             );
         }
         if (options.cdata()) {
-            _ = try parser.eventTargetAddEventListener(
+            observer.dom_cdata_modified_listener = try parser.eventTargetAddEventListener(
                 parser.toEventTarget(parser.Node, node),
                 "DOMCharacterDataModified",
                 &observer.event_node,
@@ -100,7 +102,7 @@ pub const MutationObserver = struct {
             );
         }
         if (options.subtree) {
-            _ = try parser.eventTargetAddEventListener(
+            observer.dom_subtree_modified_listener = try parser.eventTargetAddEventListener(
                 parser.toEventTarget(parser.Node, node),
                 "DOMSubtreeModified",
                 &observer.event_node,
@@ -111,10 +113,6 @@ pub const MutationObserver = struct {
 
     fn callback(ctx: *anyopaque) ?u32 {
         const self: *MutationObserver = @ptrCast(@alignCast(ctx));
-        if (self.connected == false) {
-            self.scheduled = true;
-            return null;
-        }
         self.scheduled = false;
 
         const records = self.observed.items;
@@ -125,7 +123,7 @@ pub const MutationObserver = struct {
         defer self.observed.clearRetainingCapacity();
 
         var result: Env.Function.Result = undefined;
-        self.cbk.tryCall(void, .{records}, &result) catch {
+        self.cbk.tryCallWithThis(void, self, .{records}, &result) catch {
             log.debug(.user_script, "callback error", .{
                 .err = result.exception,
                 .stack = result.stack,
@@ -135,9 +133,55 @@ pub const MutationObserver = struct {
         return null;
     }
 
-    // TODO
     pub fn _disconnect(self: *MutationObserver) !void {
-        self.connected = false;
+        for (self.observers.items) |observer| {
+            const event_target = parser.toEventTarget(parser.Node, observer.node);
+            if (observer.dom_node_inserted_listener) |listener| {
+                try parser.eventTargetRemoveEventListener(
+                    event_target,
+                    "DOMNodeInserted",
+                    listener,
+                    false,
+                );
+            }
+
+            if (observer.dom_node_removed_listener) |listener| {
+                try parser.eventTargetRemoveEventListener(
+                    event_target,
+                    "DOMNodeRemoved",
+                    listener,
+                    false,
+                );
+            }
+
+            if (observer.dom_node_attribute_modified_listener) |listener| {
+                try parser.eventTargetRemoveEventListener(
+                    event_target,
+                    "DOMAttrModified",
+                    listener,
+                    false,
+                );
+            }
+
+            if (observer.dom_cdata_modified_listener) |listener| {
+                try parser.eventTargetRemoveEventListener(
+                    event_target,
+                    "DOMCharacterDataModified",
+                    listener,
+                    false,
+                );
+            }
+
+            if (observer.dom_subtree_modified_listener) |listener| {
+                try parser.eventTargetRemoveEventListener(
+                    event_target,
+                    "DOMSubtreeModified",
+                    listener,
+                    false,
+                );
+            }
+        }
+        self.observers.clearRetainingCapacity();
     }
 
     // TODO
@@ -221,6 +265,12 @@ const Observer = struct {
     mutation_observer: *MutationObserver,
 
     event_node: parser.EventNode,
+
+    dom_node_inserted_listener: ?*parser.EventListener = null,
+    dom_node_removed_listener: ?*parser.EventListener = null,
+    dom_node_attribute_modified_listener: ?*parser.EventListener = null,
+    dom_cdata_modified_listener: ?*parser.EventListener = null,
+    dom_subtree_modified_listener: ?*parser.EventListener = null,
 
     fn appliesTo(
         self: *const Observer,
