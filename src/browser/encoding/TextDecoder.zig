@@ -19,6 +19,7 @@
 const std = @import("std");
 const log = @import("../../log.zig");
 
+const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
 
 // https://encoding.spec.whatwg.org/#interface-textdecoder
@@ -69,8 +70,8 @@ pub fn get_fatal(self: *const TextDecoder) bool {
 const DecodeOptions = struct {
     stream: bool = false,
 };
-pub fn _decode(self: *TextDecoder, input_: ?[]const u8, opts_: ?DecodeOptions, page: *Page) ![]const u8 {
-    var str = input_ orelse return "";
+pub fn _decode(self: *TextDecoder, str_: ?[]const u8, opts_: ?DecodeOptions, page: *Page) ![]const u8 {
+    var str = str_ orelse return "";
     const opts: DecodeOptions = opts_ orelse .{};
 
     if (self.stream.items.len > 0) {

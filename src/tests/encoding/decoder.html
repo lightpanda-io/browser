@@ -45,3 +45,16 @@
   testing.expectEqual('', d2.decode(new Uint8Array([226, 153]), { stream: true }));
   testing.expectEqual('♥', d2.decode(new Uint8Array([165]), { stream: true }));
 </script>
+
+<script id=slice>
+    const buf1 = new ArrayBuffer(7);
+    const arr1 = new Uint8Array(buf1)
+    arr1[0] = 80;
+    arr1[1] = 81;
+    arr1[2] = 82;
+    arr1[3] = 83;
+    arr1[4] = 84;
+    arr1[5] = 85;
+    arr1[6] = 86;
+    testing.expectEqual('RST', d3.decode(new Uint8Array(buf1, 2, 3)));
+</script>
