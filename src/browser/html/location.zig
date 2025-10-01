@@ -29,8 +29,8 @@ pub const Location = struct {
         return "";
     }
 
-    pub fn get_protocol(self: *Location, page: *Page) ![]const u8 {
-        if (self.url) |*u| return u.get_protocol(page);
+    pub fn get_protocol(self: *Location) []const u8 {
+        if (self.url) |*u| return u.get_protocol();
         return "";
     }
 
