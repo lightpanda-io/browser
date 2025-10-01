@@ -37,7 +37,7 @@ pub fn reset() void {
 }
 
 const App = @import("app.zig").App;
-const Env = @import("browser/env.zig").Env;
+const js = @import("browser/js/js.zig");
 const Browser = @import("browser/browser.zig").Browser;
 const Session = @import("browser/session.zig").Session;
 const parser = @import("browser/netsurf.zig");
@@ -396,7 +396,7 @@ pub fn htmlRunner(file: []const u8) !void {
     page.arena = @import("root").tracking_allocator;
 
     const js_context = page.main_context;
-    var try_catch: Env.TryCatch = undefined;
+    var try_catch: js.TryCatch = undefined;
     try_catch.init(js_context);
     defer try_catch.deinit();
 

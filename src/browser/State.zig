@@ -26,7 +26,7 @@
 // this quickly proved necessary, since different fields are needed on the same
 // data at different levels of the prototype chain. This isn't memory efficient.
 
-const Env = @import("env.zig").Env;
+const js = @import("js/js.zig");
 const parser = @import("netsurf.zig");
 const DataSet = @import("html/DataSet.zig");
 const ShadowRoot = @import("dom/shadow_root.zig").ShadowRoot;
@@ -34,8 +34,8 @@ const StyleSheet = @import("cssom/StyleSheet.zig");
 const CSSStyleDeclaration = @import("cssom/CSSStyleDeclaration.zig");
 
 // for HTMLScript (but probably needs to be added to more)
-onload: ?Env.Function = null,
-onerror: ?Env.Function = null,
+onload: ?js.Function = null,
+onerror: ?js.Function = null,
 
 // for HTMLElement
 style: CSSStyleDeclaration = .empty,
@@ -53,7 +53,7 @@ style_sheet: ?*StyleSheet = null,
 
 // for dom/document
 active_element: ?*parser.Element = null,
-adopted_style_sheets: ?Env.JsObject = null,
+adopted_style_sheets: ?js.JsObject = null,
 
 // for HTMLSelectElement
 // By default, if no option is explicitly selected, the first option should

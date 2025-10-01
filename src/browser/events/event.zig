@@ -21,7 +21,7 @@ const Allocator = std.mem.Allocator;
 
 const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
-const generate = @import("../../runtime/generate.zig");
+const generate = @import("../js/generate.zig");
 
 const Page = @import("../page.zig").Page;
 const Node = @import("../dom/node.zig").Node;
@@ -219,18 +219,17 @@ pub const Event = struct {
 pub const EventHandler = struct {
     once: bool,
     capture: bool,
-    callback: Function,
+    callback: js.Function,
     node: parser.EventNode,
     listener: *parser.EventListener,
 
-    const Env = @import("../env.zig").Env;
-    const Function = Env.Function;
+    const js = @import("../js/js.zig");
 
     pub const Listener = union(enum) {
-        function: Function,
-        object: Env.JsObject,
+        function: js.Function,
+        object: js.JsObject,
 
-        pub fn callback(self: Listener, target: *parser.EventTarget) !?Function {
+        pub fn callback(self: Listener, target: *parser.EventTarget) !?js.Function {
             return switch (self) {
                 .function => |func| try func.withThis(target),
                 .object => |obj| blk: {
@@ -331,7 +330,7 @@ pub const EventHandler = struct {
     fn handle(node: *parser.EventNode, event: *parser.Event) void {
         const ievent = Event.toInterface(event);
         const self: *EventHandler = @fieldParentPtr("node", node);
-        var result: Function.Result = undefined;
+        var result: js.Function.Result = undefined;
         self.callback.tryCall(void, .{ievent}, &result) catch {
             log.debug(.user_script, "callback error", .{
                 .err = result.exception,

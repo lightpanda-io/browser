@@ -17,10 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const js = @import("../js/js.zig");
 const log = @import("../../log.zig");
 
 const Page = @import("../page.zig").Page;
-const Env = @import("../env.zig").Env;
 
 const ReadableStream = @import("./ReadableStream.zig");
 const ReadableStreamReadResult = @import("./ReadableStream.zig").ReadableStreamReadResult;
@@ -69,7 +69,7 @@ pub fn _enqueue(self: *ReadableStreamDefaultController, chunk: ReadableStream.Ch
     try self.stream.pullIf();
 }
 
-pub fn _error(self: *ReadableStreamDefaultController, err: Env.JsObject) !void {
+pub fn _error(self: *ReadableStreamDefaultController, err: js.JsObject) !void {
     self.stream.state = .{ .errored = err };
 
     if (self.stream.reader_resolver) |*rr| {

@@ -17,7 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 const std = @import("std");
 const parser = @import("../netsurf.zig");
-const Env = @import("../env.zig").Env;
+const js = @import("../js/js.zig");
+
 const Page = @import("../page.zig").Page;
 
 const Allocator = std.mem.Allocator;
@@ -26,7 +27,7 @@ const DataSet = @This();
 
 element: *parser.Element,
 
-pub fn named_get(self: *const DataSet, name: []const u8, _: *bool, page: *Page) !Env.UndefinedOr([]const u8) {
+pub fn named_get(self: *const DataSet, name: []const u8, _: *bool, page: *Page) !js.UndefinedOr([]const u8) {
     const normalized_name = try normalize(page.call_arena, name);
     if (try parser.elementGetAttribute(self.element, normalized_name)) |value| {
         return .{ .value = value };

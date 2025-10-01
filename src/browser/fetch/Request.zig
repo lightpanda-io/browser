@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const js = @import("../js/js.zig");
 const log = @import("../../log.zig");
 
 const URL = @import("../../url.zig").URL;
@@ -27,7 +28,6 @@ const Http = @import("../../http/Http.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
 
 const v8 = @import("v8");
-const Env = @import("../env.zig").Env;
 
 const Headers = @import("Headers.zig");
 const HeadersInit = @import("Headers.zig").HeadersInit;
@@ -241,7 +241,7 @@ pub fn _clone(self: *Request) !Request {
     };
 }
 
-pub fn _bytes(self: *Response, page: *Page) !Env.Promise {
+pub fn _bytes(self: *Response, page: *Page) !js.Promise {
     if (self.body_used) {
         return error.TypeError;
     }
@@ -253,7 +253,7 @@ pub fn _bytes(self: *Response, page: *Page) !Env.Promise {
     return resolver.promise();
 }
 
-pub fn _json(self: *Response, page: *Page) !Env.Promise {
+pub fn _json(self: *Response, page: *Page) !js.Promise {
     if (self.body_used) {
         return error.TypeError;
     }
@@ -280,7 +280,7 @@ pub fn _json(self: *Response, page: *Page) !Env.Promise {
     return resolver.promise();
 }
 
-pub fn _text(self: *Response, page: *Page) !Env.Promise {
+pub fn _text(self: *Response, page: *Page) !js.Promise {
     if (self.body_used) {
         return error.TypeError;
     }

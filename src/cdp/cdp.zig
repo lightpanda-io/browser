@@ -21,17 +21,16 @@ const Allocator = std.mem.Allocator;
 const json = std.json;
 
 const log = @import("../log.zig");
+const js = @import("../browser/js/js.zig");
+const polyfill = @import("../browser/polyfill/polyfill.zig");
+
 const App = @import("../app.zig").App;
-const Env = @import("../browser/env.zig").Env;
 const Browser = @import("../browser/browser.zig").Browser;
 const Session = @import("../browser/session.zig").Session;
 const Page = @import("../browser/page.zig").Page;
-const Inspector = @import("../browser/env.zig").Env.Inspector;
 const Incrementing = @import("../id.zig").Incrementing;
 const Notification = @import("../notification.zig").Notification;
 const InterceptState = @import("domains/fetch.zig").InterceptState;
-
-const polyfill = @import("../browser/polyfill/polyfill.zig");
 
 pub const URL_BASE = "chrome://newtab/";
 pub const LOADER_ID = "LOADERID24DD2FD56CF1EF33C965C79C";
@@ -329,7 +328,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         node_registry: Node.Registry,
         node_search_list: Node.Search.List,
 
-        inspector: Inspector,
+        inspector: js.Inspector,
         isolated_worlds: std.ArrayListUnmanaged(IsolatedWorld),
 
         http_proxy_changed: bool = false,
@@ -661,7 +660,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 /// An object id is unique across all contexts, different object ids can refer to the same Node in different contexts.
 const IsolatedWorld = struct {
     name: []const u8,
-    executor: Env.ExecutionWorld,
+    executor: js.ExecutionWorld,
     grant_universal_access: bool,
 
     // Polyfill loader for the isolated world.
@@ -695,7 +694,7 @@ const IsolatedWorld = struct {
             page,
             null,
             false,
-            Env.GlobalMissingCallback.init(&self.polyfill_loader),
+            js.GlobalMissingCallback.init(&self.polyfill_loader),
         );
     }
 

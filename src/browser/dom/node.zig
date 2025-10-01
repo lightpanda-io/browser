@@ -20,7 +20,7 @@ const std = @import("std");
 
 const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
-const generate = @import("../../runtime/generate.zig");
+const generate = @import("../js/generate.zig");
 
 const Page = @import("../page.zig").Page;
 const EventTarget = @import("event_target.zig").EventTarget;

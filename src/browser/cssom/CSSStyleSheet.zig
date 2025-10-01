@@ -18,7 +18,7 @@
 
 const std = @import("std");
 
-const Env = @import("../env.zig").Env;
+const js = @import("../js/js.zig");
 const Page = @import("../page.zig").Page;
 const StyleSheet = @import("StyleSheet.zig");
 const CSSRuleList = @import("CSSRuleList.zig");
@@ -73,7 +73,7 @@ pub fn _deleteRule(self: *CSSStyleSheet, index: usize) !void {
     _ = self.css_rules.list.orderedRemove(index);
 }
 
-pub fn _replace(self: *CSSStyleSheet, text: []const u8, page: *Page) !Env.Promise {
+pub fn _replace(self: *CSSStyleSheet, text: []const u8, page: *Page) !js.Promise {
     _ = self;
     _ = text;
     // TODO: clear self.css_rules

@@ -18,12 +18,11 @@
 
 const std = @import("std");
 
+const js = @import("../js/js.zig");
 const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 const iterator = @import("../iterator/iterator.zig");
 
-const Function = @import("../env.zig").Function;
-const JsObject = @import("../env.zig").JsObject;
 const DOMException = @import("exceptions.zig").DOMException;
 
 pub const Interfaces = .{
@@ -137,10 +136,10 @@ pub const DOMTokenList = struct {
     }
 
     // TODO handle thisArg
-    pub fn _forEach(self: *parser.TokenList, cbk: Function, this_arg: JsObject) !void {
+    pub fn _forEach(self: *parser.TokenList, cbk: js.Function, this_arg: js.JsObject) !void {
         var entries = _entries(self);
         while (try entries._next()) |entry| {
-            var result: Function.Result = undefined;
+            var result: js.Function.Result = undefined;
             cbk.tryCallWithThis(void, this_arg, .{ entry.@"1", entry.@"0", self }, &result) catch {
                 log.debug(.user_script, "callback error", .{
                     .err = result.exception,

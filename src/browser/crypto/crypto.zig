@@ -17,14 +17,14 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const Env = @import("../env.zig").Env;
+const js = @import("../js/js.zig");
 const uuidv4 = @import("../../id.zig").uuidv4;
 
 // https://w3c.github.io/webcrypto/#crypto-interface
 pub const Crypto = struct {
     _not_empty: bool = true,
 
-    pub fn _getRandomValues(_: *const Crypto, js_obj: Env.JsObject) !Env.JsObject {
+    pub fn _getRandomValues(_: *const Crypto, js_obj: js.JsObject) !js.JsObject {
         var into = try js_obj.toZig(Crypto, "getRandomValues", RandomValues);
         const buf = into.asBuffer();
         if (buf.len > 65_536) {

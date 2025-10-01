@@ -19,9 +19,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const js = @import("../js/js.zig");
 const log = @import("../../log.zig");
 const Allocator = std.mem.Allocator;
-const Env = @import("../env.zig").Env;
 
 pub const Loader = struct {
     state: enum { empty, loading } = .empty,
@@ -30,8 +30,8 @@ pub const Loader = struct {
         webcomponents: bool = false,
     } = .{},
 
-    fn load(self: *Loader, comptime name: []const u8, source: []const u8, js_context: *Env.JsContext) void {
-        var try_catch: Env.TryCatch = undefined;
+    fn load(self: *Loader, comptime name: []const u8, source: []const u8, js_context: *js.JsContext) void {
+        var try_catch: js.TryCatch = undefined;
         try_catch.init(js_context);
         defer try_catch.deinit();
 
@@ -49,7 +49,7 @@ pub const Loader = struct {
         @field(self.done, name) = true;
     }
 
-    pub fn missing(self: *Loader, name: []const u8, js_context: *Env.JsContext) bool {
+    pub fn missing(self: *Loader, name: []const u8, js_context: *js.JsContext) bool {
         // Avoid recursive calls during polyfill loading.
         if (self.state == .loading) {
             return false;
@@ -82,8 +82,8 @@ pub const Loader = struct {
     }
 };
 
-pub fn preload(allocator: Allocator, js_context: *Env.JsContext) !void {
-    var try_catch: Env.TryCatch = undefined;
+pub fn preload(allocator: Allocator, js_context: *js.JsContext) !void {
+    var try_catch: js.TryCatch = undefined;
     try_catch.init(js_context);
     defer try_catch.deinit();
 

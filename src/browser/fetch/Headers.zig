@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const js = @import("../js/js.zig");
 const log = @import("../../log.zig");
 const URL = @import("../../url.zig").URL;
 const Page = @import("../page.zig").Page;
@@ -24,8 +25,6 @@ const Page = @import("../page.zig").Page;
 const iterator = @import("../iterator/iterator.zig");
 
 const v8 = @import("v8");
-const Env = @import("../env.zig").Env;
-
 // https://developer.mozilla.org/en-US/docs/Web/API/Headers
 const Headers = @This();
 
@@ -69,7 +68,7 @@ pub const HeadersInit = union(enum) {
     // Headers
     headers: *Headers,
     // Mappings
-    object: Env.JsObject,
+    object: js.JsObject,
 };
 
 pub fn constructor(_init: ?HeadersInit, page: *Page) !Headers {
@@ -159,7 +158,7 @@ pub fn _entries(self: *const Headers) HeadersEntryIterable {
     };
 }
 
-pub fn _forEach(self: *Headers, callback_fn: Env.Function, this_arg: ?Env.JsObject) !void {
+pub fn _forEach(self: *Headers, callback_fn: js.Function, this_arg: ?js.JsObject) !void {
     var iter = self.headers.iterator();
 
     const cb = if (this_arg) |this| try callback_fn.withThis(this) else callback_fn;

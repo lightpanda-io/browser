@@ -17,9 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-
-const Env = @import("../env.zig").Env;
-const Function = Env.Function;
+const js = @import("../js/js.zig");
 
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const EventHandler = @import("../events/event.zig").EventHandler;
@@ -33,20 +31,20 @@ pub const XMLHttpRequestEventTarget = struct {
     // Extend libdom event target for pure zig struct.
     base: parser.EventTargetTBase = parser.EventTargetTBase{ .internal_target_type = .xhr },
 
-    onloadstart_cbk: ?Function = null,
-    onprogress_cbk: ?Function = null,
-    onabort_cbk: ?Function = null,
-    onload_cbk: ?Function = null,
-    ontimeout_cbk: ?Function = null,
-    onloadend_cbk: ?Function = null,
-    onreadystatechange_cbk: ?Function = null,
+    onloadstart_cbk: ?js.Function = null,
+    onprogress_cbk: ?js.Function = null,
+    onabort_cbk: ?js.Function = null,
+    onload_cbk: ?js.Function = null,
+    ontimeout_cbk: ?js.Function = null,
+    onloadend_cbk: ?js.Function = null,
+    onreadystatechange_cbk: ?js.Function = null,
 
     fn register(
         self: *XMLHttpRequestEventTarget,
         alloc: std.mem.Allocator,
         typ: []const u8,
         listener: EventHandler.Listener,
-    ) !?Function {
+    ) !?js.Function {
         const target = @as(*parser.EventTarget, @ptrCast(self));
 
         // The only time this can return null if the listener is already
@@ -69,25 +67,25 @@ pub const XMLHttpRequestEventTarget = struct {
         try parser.eventTargetRemoveEventListener(et, typ, lst.?, false);
     }
 
-    pub fn get_onloadstart(self: *XMLHttpRequestEventTarget) ?Function {
+    pub fn get_onloadstart(self: *XMLHttpRequestEventTarget) ?js.Function {
         return self.onloadstart_cbk;
     }
-    pub fn get_onprogress(self: *XMLHttpRequestEventTarget) ?Function {
+    pub fn get_onprogress(self: *XMLHttpRequestEventTarget) ?js.Function {
         return self.onprogress_cbk;
     }
-    pub fn get_onabort(self: *XMLHttpRequestEventTarget) ?Function {
+    pub fn get_onabort(self: *XMLHttpRequestEventTarget) ?js.Function {
         return self.onabort_cbk;
     }
-    pub fn get_onload(self: *XMLHttpRequestEventTarget) ?Function {
+    pub fn get_onload(self: *XMLHttpRequestEventTarget) ?js.Function {
         return self.onload_cbk;
     }
-    pub fn get_ontimeout(self: *XMLHttpRequestEventTarget) ?Function {
+    pub fn get_ontimeout(self: *XMLHttpRequestEventTarget) ?js.Function {
         return self.ontimeout_cbk;
     }
-    pub fn get_onloadend(self: *XMLHttpRequestEventTarget) ?Function {
+    pub fn get_onloadend(self: *XMLHttpRequestEventTarget) ?js.Function {
         return self.onloadend_cbk;
     }
-    pub fn get_onreadystatechange(self: *XMLHttpRequestEventTarget) ?Function {
+    pub fn get_onreadystatechange(self: *XMLHttpRequestEventTarget) ?js.Function {
         return self.onreadystatechange_cbk;
     }
 

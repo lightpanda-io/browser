@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const js = @import("../js/js.zig");
 const log = @import("../../log.zig");
 
 const v8 = @import("v8");
@@ -29,7 +30,6 @@ const ReadableStream = @import("../streams/ReadableStream.zig");
 const Headers = @import("Headers.zig");
 const HeadersInit = @import("Headers.zig").HeadersInit;
 
-const Env = @import("../env.zig").Env;
 const Mime = @import("../mime.zig").Mime;
 const Page = @import("../page.zig").Page;
 
@@ -165,12 +165,12 @@ pub fn _clone(self: *const Response) !Response {
     };
 }
 
-pub fn _bytes(self: *Response, page: *Page) !Env.Promise {
+pub fn _bytes(self: *Response, page: *Page) !js.Promise {
     if (self.body_used) {
         return error.TypeError;
     }
 
-    const resolver = Env.PromiseResolver{
+    const resolver = js.PromiseResolver{
         .js_context = page.main_context,
         .resolver = v8.PromiseResolver.init(page.main_context.v8_context),
     };
@@ -180,7 +180,7 @@ pub fn _bytes(self: *Response, page: *Page) !Env.Promise {
     return resolver.promise();
 }
 
-pub fn _json(self: *Response, page: *Page) !Env.Promise {
+pub fn _json(self: *Response, page: *Page) !js.Promise {
     if (self.body_used) {
         return error.TypeError;
     }
@@ -207,7 +207,7 @@ pub fn _json(self: *Response, page: *Page) !Env.Promise {
     return resolver.promise();
 }
 
-pub fn _text(self: *Response, page: *Page) !Env.Promise {
+pub fn _text(self: *Response, page: *Page) !js.Promise {
     if (self.body_used) {
         return error.TypeError;
     }

@@ -18,11 +18,11 @@
 
 const std = @import("std");
 
+const js = @import("../js/js.zig");
 const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 const Page = @import("../page.zig").Page;
 
-const Env = @import("../env.zig").Env;
 const Element = @import("element.zig").Element;
 
 pub const Interfaces = .{
@@ -40,14 +40,14 @@ pub const Interfaces = .{
 // https://developer.mozilla.org/en-US/docs/Web/API/IntersectionObserver
 pub const IntersectionObserver = struct {
     page: *Page,
-    callback: Env.Function,
+    callback: js.Function,
     options: IntersectionObserverOptions,
 
     observed_entries: std.ArrayListUnmanaged(IntersectionObserverEntry),
 
     // new IntersectionObserver(callback)
     // new IntersectionObserver(callback, options) [not supported yet]
-    pub fn constructor(callback: Env.Function, options_: ?IntersectionObserverOptions, page: *Page) !IntersectionObserver {
+    pub fn constructor(callback: js.Function, options_: ?IntersectionObserverOptions, page: *Page) !IntersectionObserver {
         var options = IntersectionObserverOptions{
             .root = parser.documentToNode(parser.documentHTMLToDocument(page.window.document)),
             .rootMargin = "0px 0px 0px 0px",
@@ -84,7 +84,7 @@ pub const IntersectionObserver = struct {
             .options = &self.options,
         });
 
-        var result: Env.Function.Result = undefined;
+        var result: js.Function.Result = undefined;
         self.callback.tryCall(void, .{self.observed_entries.items}, &result) catch {
             log.debug(.user_script, "callback error", .{
                 .err = result.exception,

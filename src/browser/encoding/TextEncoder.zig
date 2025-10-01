@@ -18,7 +18,7 @@
 
 const std = @import("std");
 
-const Env = @import("../env.zig").Env;
+const js = @import("../js/js.zig");
 
 // https://encoding.spec.whatwg.org/#interface-textencoder
 const TextEncoder = @This();
@@ -31,7 +31,7 @@ pub fn get_encoding(_: *const TextEncoder) []const u8 {
     return "utf-8";
 }
 
-pub fn _encode(_: *const TextEncoder, v: []const u8) !Env.TypedArray(u8) {
+pub fn _encode(_: *const TextEncoder, v: []const u8) !js.TypedArray(u8) {
     // Ensure the input is a valid utf-8
     // It seems chrome accepts invalid utf-8 sequence.
     //

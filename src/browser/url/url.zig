@@ -19,8 +19,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const js = @import("../js/js.zig");
 const parser = @import("../netsurf.zig");
-const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
 const FormData = @import("../xhr/form_data.zig").FormData;
 
@@ -261,7 +261,7 @@ pub const URLSearchParams = struct {
     const URLSearchParamsOpts = union(enum) {
         qs: []const u8,
         form_data: *const FormData,
-        js_obj: Env.JsObject,
+        js_obj: js.JsObject,
     };
     pub fn constructor(opts_: ?URLSearchParamsOpts, page: *Page) !URLSearchParams {
         const opts = opts_ orelse return .{ .entries = .{} };

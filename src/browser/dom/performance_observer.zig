@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const Env = @import("../env.zig").Env;
+const js = @import("../js/js.zig");
 
 const PerformanceEntry = @import("performance.zig").PerformanceEntry;
 
@@ -25,7 +25,7 @@ const PerformanceEntry = @import("performance.zig").PerformanceEntry;
 pub const PerformanceObserver = struct {
     pub const _supportedEntryTypes = [0][]const u8{};
 
-    pub fn constructor(cbk: Env.Function) PerformanceObserver {
+    pub fn constructor(cbk: js.Function) PerformanceObserver {
         _ = cbk;
         return .{};
     }

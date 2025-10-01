@@ -18,9 +18,9 @@
 
 const std = @import("std");
 
+const js = @import("../js/js.zig");
 const parser = @import("../netsurf.zig");
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
-const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
 
 const milliTimestamp = @import("../../datetime.zig").milliTimestamp;
@@ -61,7 +61,7 @@ pub const Performance = struct {
         return milliTimestamp() - self.time_origin;
     }
 
-    pub fn _mark(_: *Performance, name: Env.String, _options: ?PerformanceMark.Options, page: *Page) !PerformanceMark {
+    pub fn _mark(_: *Performance, name: js.String, _options: ?PerformanceMark.Options, page: *Page) !PerformanceMark {
         const mark: PerformanceMark = try .constructor(name, _options, page);
         // TODO: Should store this in an entries list
         return mark;
@@ -148,14 +148,14 @@ pub const PerformanceMark = struct {
     pub const prototype = *PerformanceEntry;
 
     proto: PerformanceEntry,
-    detail: ?Env.JsObject,
+    detail: ?js.JsObject,
 
     const Options = struct {
-        detail: ?Env.JsObject = null,
+        detail: ?js.JsObject = null,
         startTime: ?f64 = null,
     };
 
-    pub fn constructor(name: Env.String, _options: ?Options, page: *Page) !PerformanceMark {
+    pub fn constructor(name: js.String, _options: ?Options, page: *Page) !PerformanceMark {
         const perf = &page.window.performance;
 
         const options = _options orelse Options{};
@@ -171,7 +171,7 @@ pub const PerformanceMark = struct {
         return .{ .proto = proto, .detail = detail };
     }
 
-    pub fn get_detail(self: *const PerformanceMark) ?Env.JsObject {
+    pub fn get_detail(self: *const PerformanceMark) ?js.JsObject {
         return self.detail;
     }
 };

@@ -19,7 +19,7 @@
 const std = @import("std");
 const log = @import("../../log.zig");
 
-const Env = @import("../env.zig").Env;
+const js = @import("../js/js.zig");
 const Page = @import("../page.zig").Page;
 
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#the-history-interface
@@ -67,11 +67,11 @@ pub fn set_scrollRestoration(self: *History, mode: []const u8) void {
     self.scroll_restoration = ScrollRestorationMode.fromString(mode) orelse self.scroll_restoration;
 }
 
-pub fn get_state(self: *History, page: *Page) !?Env.Value {
+pub fn get_state(self: *History, page: *Page) !?js.Value {
     if (self.current) |curr| {
         const entry = self.stack.items[curr];
         if (entry.state) |state| {
-            const value = try Env.Value.fromJson(page.main_context, state);
+            const value = try js.Value.fromJson(page.main_context, state);
             return value;
         } else {
             return null;
@@ -113,7 +113,7 @@ fn _dispatchPopStateEvent(state: ?[]const u8, page: *Page) !void {
     );
 }
 
-pub fn _pushState(self: *History, state: Env.JsObject, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
+pub fn _pushState(self: *History, state: js.JsObject, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
     const arena = page.session.arena;
 
     const json = try state.toJson(arena);
@@ -123,7 +123,7 @@ pub fn _pushState(self: *History, state: Env.JsObject, _: ?[]const u8, _url: ?[]
     self.current = self.stack.items.len - 1;
 }
 
-pub fn _replaceState(self: *History, state: Env.JsObject, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
+pub fn _replaceState(self: *History, state: js.JsObject, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
     const arena = page.session.arena;
 
     if (self.current) |curr| {
@@ -199,9 +199,9 @@ pub const PopStateEvent = struct {
 
     // `hasUAVisualTransition` is not implemented. It isn't baseline so this is okay.
 
-    pub fn get_state(self: *const PopStateEvent, page: *Page) !?Env.Value {
+    pub fn get_state(self: *const PopStateEvent, page: *Page) !?js.Value {
         if (self.state) |state| {
-            const value = try Env.Value.fromJson(page.main_context, state);
+            const value = try js.Value.fromJson(page.main_context, state);
             return value;
         } else {
             return null;
