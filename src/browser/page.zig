@@ -74,7 +74,7 @@ pub const Page = struct {
 
     // Our JavaScript context for this specific page. This is what we use to
     // execute any JavaScript
-    main_context: *js.JsContext,
+    main_context: *js.Context,
 
     // indicates intention to navigate to another page on the next loop execution.
     delayed_navigation: bool = false,
@@ -143,7 +143,7 @@ pub const Page = struct {
             .main_context = undefined,
         };
 
-        self.main_context = try session.executor.createJsContext(&self.window, self, &self.script_manager, true, js.GlobalMissingCallback.init(&self.polyfill_loader));
+        self.main_context = try session.executor.createContext(&self.window, self, &self.script_manager, true, js.GlobalMissingCallback.init(&self.polyfill_loader));
         try polyfill.preload(self.arena, self.main_context);
 
         try self.scheduler.add(self, runMicrotasks, 5, .{ .name = "page.microtasks" });

@@ -171,7 +171,7 @@ pub fn _bytes(self: *Response, page: *Page) !js.Promise {
     }
 
     const resolver = js.PromiseResolver{
-        .js_context = page.main_context,
+        .context = page.main_context,
         .resolver = v8.PromiseResolver.init(page.main_context.v8_context),
     };
 

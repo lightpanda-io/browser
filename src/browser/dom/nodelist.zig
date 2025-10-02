@@ -23,7 +23,6 @@ const js = @import("../js/js.zig");
 const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 
-
 const NodeUnion = @import("node.zig").Union;
 const Node = @import("node.zig").Node;
 
@@ -174,7 +173,7 @@ pub const NodeList = struct {
     }
 
     // TODO entries() https://developer.mozilla.org/en-US/docs/Web/API/NodeList/entries
-    pub fn postAttach(self: *NodeList, js_this: js.JsThis) !void {
+    pub fn postAttach(self: *NodeList, js_this: js.This) !void {
         const len = self.get_length();
         for (0..len) |i| {
             const node = try self._item(@intCast(i)) orelse unreachable;

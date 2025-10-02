@@ -53,7 +53,7 @@ style_sheet: ?*StyleSheet = null,
 
 // for dom/document
 active_element: ?*parser.Element = null,
-adopted_style_sheets: ?js.JsObject = null,
+adopted_style_sheets: ?js.Object = null,
 
 // for HTMLSelectElement
 // By default, if no option is explicitly selected, the first option should

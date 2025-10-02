@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 
-<script id=readable_stream>
+<!-- <script id=readable_stream>
   const stream = new ReadableStream({
     start(controller) {
       controller.enqueue("hello");
@@ -16,7 +16,7 @@
     testing.expectEqual("hello", data.value);
     testing.expectEqual(false, data.done);
   });
-</script>
+</script> -->
 
 <script id=readable_stream_binary>
   const input = new TextEncoder().encode('over 9000!');

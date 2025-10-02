@@ -126,7 +126,7 @@ pub const Session = struct {
         // registered a destructor (e.g. XMLHttpRequest).
         // Should be called before we deinit the page, because these objects
         // could be referencing it.
-        self.executor.removeJsContext();
+        self.executor.removeContext();
 
         self.page.?.deinit();
         self.page = null;

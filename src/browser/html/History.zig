@@ -113,7 +113,7 @@ fn _dispatchPopStateEvent(state: ?[]const u8, page: *Page) !void {
     );
 }
 
-pub fn _pushState(self: *History, state: js.JsObject, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
+pub fn _pushState(self: *History, state: js.Object, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
     const arena = page.session.arena;
 
     const json = try state.toJson(arena);
@@ -123,7 +123,7 @@ pub fn _pushState(self: *History, state: js.JsObject, _: ?[]const u8, _url: ?[]c
     self.current = self.stack.items.len - 1;
 }
 
-pub fn _replaceState(self: *History, state: js.JsObject, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
+pub fn _replaceState(self: *History, state: js.Object, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
     const arena = page.session.arena;
 
     if (self.current) |curr| {

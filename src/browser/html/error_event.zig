@@ -28,14 +28,14 @@ pub const ErrorEvent = struct {
     filename: []const u8,
     lineno: i32,
     colno: i32,
-    @"error": ?js.JsObject,
+    @"error": ?js.Object,
 
     const ErrorEventInit = struct {
         message: []const u8 = "",
         filename: []const u8 = "",
         lineno: i32 = 0,
         colno: i32 = 0,
-        @"error": ?js.JsObject = null,
+        @"error": ?js.Object = null,
     };
 
     pub fn constructor(event_type: []const u8, opts: ?ErrorEventInit) !ErrorEvent {
@@ -72,7 +72,7 @@ pub const ErrorEvent = struct {
         return self.colno;
     }
 
-    pub fn get_error(self: *const ErrorEvent) js.UndefinedOr(js.JsObject) {
+    pub fn get_error(self: *const ErrorEvent) js.UndefinedOr(js.Object) {
         if (self.@"error") |e| {
             return .{ .value = e };
         }

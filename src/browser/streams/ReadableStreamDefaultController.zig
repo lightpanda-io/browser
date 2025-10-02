@@ -69,7 +69,7 @@ pub fn _enqueue(self: *ReadableStreamDefaultController, chunk: ReadableStream.Ch
     try self.stream.pullIf();
 }
 
-pub fn _error(self: *ReadableStreamDefaultController, err: js.JsObject) !void {
+pub fn _error(self: *ReadableStreamDefaultController, err: js.Object) !void {
     self.stream.state = .{ .errored = err };
 
     if (self.stream.reader_resolver) |*rr| {

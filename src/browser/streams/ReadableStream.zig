@@ -31,7 +31,7 @@ const State = union(enum) {
     readable,
     closed: ?[]const u8,
     cancelled: ?[]const u8,
-    errored: js.JsObject,
+    errored: js.Object,
 };
 
 // This promise resolves when a stream is canceled.

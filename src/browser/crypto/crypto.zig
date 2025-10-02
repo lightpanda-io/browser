@@ -24,7 +24,7 @@ const uuidv4 = @import("../../id.zig").uuidv4;
 pub const Crypto = struct {
     _not_empty: bool = true,
 
-    pub fn _getRandomValues(_: *const Crypto, js_obj: js.JsObject) !js.JsObject {
+    pub fn _getRandomValues(_: *const Crypto, js_obj: js.Object) !js.Object {
         var into = try js_obj.toZig(Crypto, "getRandomValues", RandomValues);
         const buf = into.asBuffer();
         if (buf.len > 65_536) {

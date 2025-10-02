@@ -34,7 +34,7 @@ pub const ShadowRoot = struct {
     mode: Mode,
     host: *parser.Element,
     proto: *parser.DocumentFragment,
-    adopted_style_sheets: ?js.JsObject = null,
+    adopted_style_sheets: ?js.Object = null,
 
     pub const Mode = enum {
         open,
@@ -45,7 +45,7 @@ pub const ShadowRoot = struct {
         return Element.toInterface(self.host);
     }
 
-    pub fn get_adoptedStyleSheets(self: *ShadowRoot, page: *Page) !js.JsObject {
+    pub fn get_adoptedStyleSheets(self: *ShadowRoot, page: *Page) !js.Object {
         if (self.adopted_style_sheets) |obj| {
             return obj;
         }
@@ -55,7 +55,7 @@ pub const ShadowRoot = struct {
         return obj;
     }
 
-    pub fn set_adoptedStyleSheets(self: *ShadowRoot, sheets: js.JsObject) !void {
+    pub fn set_adoptedStyleSheets(self: *ShadowRoot, sheets: js.Object) !void {
         self.adopted_style_sheets = try sheets.persist();
     }
 

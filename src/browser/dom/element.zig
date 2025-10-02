@@ -660,7 +660,7 @@ pub const Element = struct {
         return sr;
     }
 
-    pub fn _animate(self: *parser.Element, effect: js.JsObject, opts: js.JsObject) !Animation {
+    pub fn _animate(self: *parser.Element, effect: js.Object, opts: js.Object) !Animation {
         _ = self;
         _ = opts;
         return Animation.constructor(effect, null);
