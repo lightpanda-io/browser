@@ -19,11 +19,12 @@
 const std = @import("std");
 
 const log = @import("log.zig");
+const js = @import("browser/js/js.zig");
+
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
 const App = @import("app.zig").App;
-const Env = @import("browser/env.zig").Env;
 const Browser = @import("browser/browser.zig").Browser;
 const TestHTTPServer = @import("TestHTTPServer.zig");
 
@@ -123,7 +124,7 @@ fn run(
     _ = page.wait(2000);
 
     const js_context = page.main_context;
-    var try_catch: Env.TryCatch = undefined;
+    var try_catch: js.TryCatch = undefined;
     try_catch.init(js_context);
     defer try_catch.deinit();
 

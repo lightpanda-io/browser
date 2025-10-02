@@ -19,7 +19,6 @@
 const std = @import("std");
 const log = @import("../../log.zig");
 
-const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
 
 // https://encoding.spec.whatwg.org/#interface-textdecoder

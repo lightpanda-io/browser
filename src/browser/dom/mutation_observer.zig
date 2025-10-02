@@ -18,11 +18,11 @@
 
 const std = @import("std");
 
+const js = @import("../js/js.zig");
 const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 const Page = @import("../page.zig").Page;
 
-const Env = @import("../env.zig").Env;
 const NodeList = @import("nodelist.zig").NodeList;
 
 pub const Interfaces = .{
@@ -35,7 +35,7 @@ const Walker = @import("../dom/walker.zig").WalkerChildren;
 // WEB IDL https://dom.spec.whatwg.org/#interface-mutationobserver
 pub const MutationObserver = struct {
     page: *Page,
-    cbk: Env.Function,
+    cbk: js.Function,
     scheduled: bool,
     observers: std.ArrayListUnmanaged(*Observer),
 
@@ -43,7 +43,7 @@ pub const MutationObserver = struct {
     // execute our callback with it.
     observed: std.ArrayListUnmanaged(MutationRecord),
 
-    pub fn constructor(cbk: Env.Function, page: *Page) !MutationObserver {
+    pub fn constructor(cbk: js.Function, page: *Page) !MutationObserver {
         return .{
             .cbk = cbk,
             .page = page,
@@ -122,7 +122,7 @@ pub const MutationObserver = struct {
 
         defer self.observed.clearRetainingCapacity();
 
-        var result: Env.Function.Result = undefined;
+        var result: js.Function.Result = undefined;
         self.cbk.tryCallWithThis(void, self, .{records}, &result) catch {
             log.debug(.user_script, "callback error", .{
                 .err = result.exception,

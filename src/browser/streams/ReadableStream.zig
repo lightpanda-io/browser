@@ -17,10 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const js = @import("../js/js.zig");
 const log = @import("../../log.zig");
 
 const Allocator = std.mem.Allocator;
-const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
 
 const ReadableStream = @This();
@@ -31,26 +31,26 @@ const State = union(enum) {
     readable,
     closed: ?[]const u8,
     cancelled: ?[]const u8,
-    errored: Env.JsObject,
+    errored: js.JsObject,
 };
 
 // This promise resolves when a stream is canceled.
-cancel_resolver: Env.PersistentPromiseResolver,
-closed_resolver: Env.PersistentPromiseResolver,
-reader_resolver: ?Env.PersistentPromiseResolver = null,
+cancel_resolver: js.PersistentPromiseResolver,
+closed_resolver: js.PersistentPromiseResolver,
+reader_resolver: ?js.PersistentPromiseResolver = null,
 
 locked: bool = false,
 state: State = .readable,
 
-cancel_fn: ?Env.Function = null,
-pull_fn: ?Env.Function = null,
+cancel_fn: ?js.Function = null,
+pull_fn: ?js.Function = null,
 
 strategy: QueueingStrategy,
 queue: std.ArrayListUnmanaged(Chunk) = .empty,
 
 pub const Chunk = union(enum) {
     // the order matters, sorry.
-    uint8array: Env.TypedArray(u8),
+    uint8array: js.TypedArray(u8),
     string: []const u8,
 
     pub fn dupe(self: Chunk, allocator: Allocator) !Chunk {
@@ -91,14 +91,14 @@ pub const ReadableStreamReadResult = struct {
 };
 
 const UnderlyingSource = struct {
-    start: ?Env.Function = null,
-    pull: ?Env.Function = null,
-    cancel: ?Env.Function = null,
+    start: ?js.Function = null,
+    pull: ?js.Function = null,
+    cancel: ?js.Function = null,
     type: ?[]const u8 = null,
 };
 
 const QueueingStrategy = struct {
-    size: ?Env.Function = null,
+    size: ?js.Function = null,
     high_water_mark: u32 = 1,
 };
 
@@ -146,7 +146,7 @@ pub fn get_locked(self: *const ReadableStream) bool {
     return self.locked;
 }
 
-pub fn _cancel(self: *ReadableStream, reason: ?[]const u8, page: *Page) !Env.Promise {
+pub fn _cancel(self: *ReadableStream, reason: ?[]const u8, page: *Page) !js.Promise {
     if (self.locked) {
         return error.TypeError;
     }

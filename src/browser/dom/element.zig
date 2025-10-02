@@ -18,8 +18,8 @@
 
 const std = @import("std");
 
+const js = @import("../js/js.zig");
 const parser = @import("../netsurf.zig");
-const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
 
 const css = @import("css.zig");
@@ -34,7 +34,6 @@ const HTMLElem = @import("../html/elements.zig");
 const ShadowRoot = @import("../dom/shadow_root.zig").ShadowRoot;
 
 const Animation = @import("Animation.zig");
-const JsObject = @import("../env.zig").JsObject;
 
 pub const Union = @import("../html/elements.zig").Union;
 
@@ -436,7 +435,7 @@ pub const Element = struct {
         return try parser.elementRemoveAttributeNode(self, attr);
     }
 
-    pub fn _getElementsByTagName(self: *parser.Element, tag_name: Env.String) !collection.HTMLCollection {
+    pub fn _getElementsByTagName(self: *parser.Element, tag_name: js.String) !collection.HTMLCollection {
         return collection.HTMLCollectionByTagName(
             parser.elementToNode(self),
             tag_name.string,
@@ -444,7 +443,7 @@ pub const Element = struct {
         );
     }
 
-    pub fn _getElementsByClassName(self: *parser.Element, class_names: Env.String) !collection.HTMLCollection {
+    pub fn _getElementsByClassName(self: *parser.Element, class_names: js.String) !collection.HTMLCollection {
         return try collection.HTMLCollectionByClassName(
             parser.elementToNode(self),
             class_names.string,
@@ -661,7 +660,7 @@ pub const Element = struct {
         return sr;
     }
 
-    pub fn _animate(self: *parser.Element, effect: JsObject, opts: JsObject) !Animation {
+    pub fn _animate(self: *parser.Element, effect: js.JsObject, opts: js.JsObject) !Animation {
         _ = self;
         _ = opts;
         return Animation.constructor(effect, null);

@@ -18,10 +18,10 @@
 
 const std = @import("std");
 
+const js = @import("js/js.zig");
 const log = @import("../log.zig");
 const parser = @import("netsurf.zig");
 
-const Env = @import("env.zig").Env;
 const Page = @import("page.zig").Page;
 const DataURI = @import("DataURI.zig");
 const Http = @import("../http/Http.zig");
@@ -627,7 +627,7 @@ const Script = struct {
 
     const Callback = union(enum) {
         string: []const u8,
-        function: Env.Function,
+        function: js.Function,
     };
 
     const Source = union(enum) {
@@ -664,7 +664,7 @@ const Script = struct {
         });
 
         const js_context = page.main_context;
-        var try_catch: Env.TryCatch = undefined;
+        var try_catch: js.TryCatch = undefined;
         try_catch.init(js_context);
         defer try_catch.deinit();
 
@@ -706,7 +706,7 @@ const Script = struct {
 
         switch (callback) {
             .string => |str| {
-                var try_catch: Env.TryCatch = undefined;
+                var try_catch: js.TryCatch = undefined;
                 try_catch.init(page.main_context);
                 defer try_catch.deinit();
 
@@ -728,7 +728,7 @@ const Script = struct {
                 };
                 defer parser.eventDestroy(loadevt);
 
-                var result: Env.Function.Result = undefined;
+                var result: js.Function.Result = undefined;
                 const iface = Event.toInterface(loadevt);
                 f.tryCall(void, .{iface}, &result) catch {
                     log.warn(.user_script, "script callback", .{

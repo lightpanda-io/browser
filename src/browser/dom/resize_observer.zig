@@ -16,7 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const Env = @import("../env.zig").Env;
+const js = @import("../js/js.zig");
 const parser = @import("../netsurf.zig");
 
 pub const Interfaces = .{
@@ -25,7 +25,7 @@ pub const Interfaces = .{
 
 // WEB IDL https://drafts.csswg.org/resize-observer/#resize-observer-interface
 pub const ResizeObserver = struct {
-    pub fn constructor(cbk: Env.Function) ResizeObserver {
+    pub fn constructor(cbk: js.Function) ResizeObserver {
         _ = cbk;
         return .{};
     }

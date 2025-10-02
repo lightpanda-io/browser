@@ -18,8 +18,8 @@
 
 const std = @import("std");
 
+const js = @import("../js/js.zig");
 const log = @import("../../log.zig");
-const Env = @import("../env.zig").Env;
 const Page = @import("../page.zig").Page;
 const ReadableStream = @import("./ReadableStream.zig");
 const ReadableStreamReadResult = @import("./ReadableStream.zig").ReadableStreamReadResult;
@@ -32,15 +32,15 @@ pub fn constructor(stream: *ReadableStream) ReadableStreamDefaultReader {
     return .{ .stream = stream };
 }
 
-pub fn get_closed(self: *const ReadableStreamDefaultReader) Env.Promise {
+pub fn get_closed(self: *const ReadableStreamDefaultReader) js.Promise {
     return self.stream.closed_resolver.promise();
 }
 
-pub fn _cancel(self: *ReadableStreamDefaultReader, reason: ?[]const u8, page: *Page) !Env.Promise {
+pub fn _cancel(self: *ReadableStreamDefaultReader, reason: ?[]const u8, page: *Page) !js.Promise {
     return try self.stream._cancel(reason, page);
 }
 
-pub fn _read(self: *const ReadableStreamDefaultReader, page: *Page) !Env.Promise {
+pub fn _read(self: *const ReadableStreamDefaultReader, page: *Page) !js.Promise {
     const stream = self.stream;
 
     switch (stream.state) {

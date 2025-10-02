@@ -17,10 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const js = @import("../js/js.zig");
 const parser = @import("../netsurf.zig");
 
 const NodeFilter = @import("node_filter.zig");
-const Env = @import("../env.zig").Env;
 const Node = @import("node.zig").Node;
 const NodeUnion = @import("node.zig").Union;
 
@@ -30,20 +30,20 @@ pub const TreeWalker = struct {
     current_node: *parser.Node,
     what_to_show: u32,
     filter: ?TreeWalkerOpts,
-    filter_func: ?Env.Function,
+    filter_func: ?js.Function,
 
     // One of the few cases where null and undefined resolve to different default.
     // We need the raw JsObject so that we can probe the tri state:
     // null, undefined or i32.
-    pub const WhatToShow = Env.JsObject;
+    pub const WhatToShow = js.JsObject;
 
     pub const TreeWalkerOpts = union(enum) {
-        function: Env.Function,
-        object: struct { acceptNode: Env.Function },
+        function: js.Function,
+        object: struct { acceptNode: js.Function },
     };
 
     pub fn init(node: *parser.Node, what_to_show_: ?WhatToShow, filter: ?TreeWalkerOpts) !TreeWalker {
-        var filter_func: ?Env.Function = null;
+        var filter_func: ?js.Function = null;
 
         if (filter) |f| {
             filter_func = switch (f) {

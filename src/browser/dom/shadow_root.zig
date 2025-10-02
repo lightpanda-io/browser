@@ -20,7 +20,7 @@ const std = @import("std");
 const dump = @import("../dump.zig");
 const parser = @import("../netsurf.zig");
 
-const Env = @import("../env.zig").Env;
+const js = @import(".././js/js.zig");
 const Page = @import("../page.zig").Page;
 const Node = @import("node.zig").Node;
 const Element = @import("element.zig").Element;
@@ -34,7 +34,7 @@ pub const ShadowRoot = struct {
     mode: Mode,
     host: *parser.Element,
     proto: *parser.DocumentFragment,
-    adopted_style_sheets: ?Env.JsObject = null,
+    adopted_style_sheets: ?js.JsObject = null,
 
     pub const Mode = enum {
         open,
@@ -45,7 +45,7 @@ pub const ShadowRoot = struct {
         return Element.toInterface(self.host);
     }
 
-    pub fn get_adoptedStyleSheets(self: *ShadowRoot, page: *Page) !Env.JsObject {
+    pub fn get_adoptedStyleSheets(self: *ShadowRoot, page: *Page) !js.JsObject {
         if (self.adopted_style_sheets) |obj| {
             return obj;
         }
@@ -55,7 +55,7 @@ pub const ShadowRoot = struct {
         return obj;
     }
 
-    pub fn set_adoptedStyleSheets(self: *ShadowRoot, sheets: Env.JsObject) !void {
+    pub fn set_adoptedStyleSheets(self: *ShadowRoot, sheets: js.JsObject) !void {
         self.adopted_style_sheets = try sheets.persist();
     }
 

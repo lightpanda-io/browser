@@ -190,7 +190,7 @@ test "generate: Union" {
     const value = Union(.{ Astruct, Bstruct, .{Cstruct} });
     const ti = @typeInfo(value).@"union";
     try std.testing.expectEqual(3, ti.fields.len);
-    try std.testing.expectEqualStrings("*runtime.generate.test.generate: Union.Astruct.Other", @typeName(ti.fields[0].type));
+    try std.testing.expectEqualStrings("*browser.js.generate.test.generate: Union.Astruct.Other", @typeName(ti.fields[0].type));
     try std.testing.expectEqualStrings(ti.fields[0].name, "Astruct");
     try std.testing.expectEqual(*Bstruct, ti.fields[1].type);
     try std.testing.expectEqualStrings(ti.fields[1].name, "Bstruct");

@@ -20,7 +20,7 @@ const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 
-const Env = @import("env.zig").Env;
+const js = @import("js/js.zig");
 const Page = @import("page.zig").Page;
 const Browser = @import("browser.zig").Browser;
 const NavigateOpts = @import("page.zig").NavigateOpts;
@@ -50,7 +50,7 @@ pub const Session = struct {
     // page and start another.
     transfer_arena: Allocator,
 
-    executor: Env.ExecutionWorld,
+    executor: js.ExecutionWorld,
     storage_shed: storage.Shed,
     cookie_jar: storage.CookieJar,
 

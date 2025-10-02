@@ -15,7 +15,7 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-const Env = @import("../env.zig").Env;
+const js = @import("../js/js.zig");
 const parser = @import("../netsurf.zig");
 
 // https://developer.mozilla.org/en-US/docs/Web/API/ErrorEvent
@@ -28,14 +28,14 @@ pub const ErrorEvent = struct {
     filename: []const u8,
     lineno: i32,
     colno: i32,
-    @"error": ?Env.JsObject,
+    @"error": ?js.JsObject,
 
     const ErrorEventInit = struct {
         message: []const u8 = "",
         filename: []const u8 = "",
         lineno: i32 = 0,
         colno: i32 = 0,
-        @"error": ?Env.JsObject = null,
+        @"error": ?js.JsObject = null,
     };
 
     pub fn constructor(event_type: []const u8, opts: ?ErrorEventInit) !ErrorEvent {
@@ -72,7 +72,7 @@ pub const ErrorEvent = struct {
         return self.colno;
     }
 
-    pub fn get_error(self: *const ErrorEvent) Env.UndefinedOr(Env.JsObject) {
+    pub fn get_error(self: *const ErrorEvent) js.UndefinedOr(js.JsObject) {
         if (self.@"error") |e| {
             return .{ .value = e };
         }

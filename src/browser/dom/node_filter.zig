@@ -17,8 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const js = @import("../js/js.zig");
 const parser = @import("../netsurf.zig");
-const Env = @import("../env.zig").Env;
 const Node = @import("node.zig").Node;
 
 pub const NodeFilter = struct {
@@ -43,7 +43,7 @@ pub const NodeFilter = struct {
 
 const VerifyResult = enum { accept, skip, reject };
 
-pub fn verify(what_to_show: u32, filter: ?Env.Function, node: *parser.Node) !VerifyResult {
+pub fn verify(what_to_show: u32, filter: ?js.Function, node: *parser.Node) !VerifyResult {
     const node_type = parser.nodeType(node);
 
     // Verify that we can show this node type.

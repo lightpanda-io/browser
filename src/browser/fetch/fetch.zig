@@ -19,7 +19,7 @@
 const std = @import("std");
 const log = @import("../../log.zig");
 
-const Env = @import("../env.zig").Env;
+const js = @import("../js/js.zig");
 const Page = @import("../page.zig").Page;
 
 const Http = @import("../../http/Http.zig");
@@ -45,7 +45,7 @@ pub const Interfaces = .{
 pub const FetchContext = struct {
     page: *Page,
     arena: std.mem.Allocator,
-    promise_resolver: Env.PersistentPromiseResolver,
+    promise_resolver: js.PersistentPromiseResolver,
 
     method: Http.Method,
     url: []const u8,
@@ -111,7 +111,7 @@ pub const FetchContext = struct {
 };
 
 // https://developer.mozilla.org/en-US/docs/Web/API/Window/fetch
-pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !Env.Promise {
+pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !js.Promise {
     const arena = page.arena;
 
     const req = try Request.constructor(input, options, page);

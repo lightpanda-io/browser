@@ -16,8 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const js = @import("../js/js.zig");
 const parser = @import("../netsurf.zig");
-const Function = @import("../env.zig").Function;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 
 // https://drafts.csswg.org/cssom-view/#the-mediaquerylist-interface
@@ -39,7 +39,7 @@ pub const MediaQueryList = struct {
         return self.media;
     }
 
-    pub fn _addListener(_: *const MediaQueryList, _: Function) void {}
+    pub fn _addListener(_: *const MediaQueryList, _: js.Function) void {}
 
-    pub fn _removeListener(_: *const MediaQueryList, _: Function) void {}
+    pub fn _removeListener(_: *const MediaQueryList, _: js.Function) void {}
 };

@@ -16,9 +16,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const js = @import("../js/js.zig");
 const parser = @import("../netsurf.zig");
 const Event = @import("event.zig").Event;
-const JsObject = @import("../env.zig").JsObject;
+
 const netsurf = @import("../netsurf.zig");
 
 // https://dom.spec.whatwg.org/#interface-customevent
@@ -27,13 +28,13 @@ pub const CustomEvent = struct {
     pub const union_make_copy = true;
 
     proto: parser.Event,
-    detail: ?JsObject,
+    detail: ?js.JsObject,
 
     const CustomEventInit = struct {
         bubbles: bool = false,
         cancelable: bool = false,
         composed: bool = false,
-        detail: ?JsObject = null,
+        detail: ?js.JsObject = null,
     };
 
     pub fn constructor(event_type: []const u8, opts_: ?CustomEventInit) !CustomEvent {
@@ -53,7 +54,7 @@ pub const CustomEvent = struct {
         };
     }
 
-    pub fn get_detail(self: *CustomEvent) ?JsObject {
+    pub fn get_detail(self: *CustomEvent) ?js.JsObject {
         return self.detail;
     }
 
@@ -64,7 +65,7 @@ pub const CustomEvent = struct {
         event_type: []const u8,
         can_bubble: bool,
         cancelable: bool,
-        maybe_detail: ?JsObject,
+        maybe_detail: ?js.JsObject,
     ) !void {
         // This function can only be called after the constructor has called.
         // So we assume proto is initialized already by constructor.

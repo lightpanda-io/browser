@@ -18,8 +18,8 @@
 
 const std = @import("std");
 
+const js = @import("../js/js.zig");
 const parser = @import("../netsurf.zig");
-const Env = @import("../env.zig").Env;
 const NodeFilter = @import("node_filter.zig");
 const Node = @import("node.zig").Node;
 const NodeUnion = @import("node.zig").Union;
@@ -37,7 +37,7 @@ pub const NodeIterator = struct {
     reference_node: *parser.Node,
     what_to_show: u32,
     filter: ?NodeIteratorOpts,
-    filter_func: ?Env.Function,
+    filter_func: ?js.Function,
     pointer_before_current: bool = true,
     // used to track / block recursive filters
     is_in_callback: bool = false,
@@ -45,15 +45,15 @@ pub const NodeIterator = struct {
     // One of the few cases where null and undefined resolve to different default.
     // We need the raw JsObject so that we can probe the tri state:
     // null, undefined or i32.
-    pub const WhatToShow = Env.JsObject;
+    pub const WhatToShow = js.JsObject;
 
     pub const NodeIteratorOpts = union(enum) {
-        function: Env.Function,
-        object: struct { acceptNode: Env.Function },
+        function: js.Function,
+        object: struct { acceptNode: js.Function },
     };
 
     pub fn init(node: *parser.Node, what_to_show_: ?WhatToShow, filter: ?NodeIteratorOpts) !NodeIterator {
-        var filter_func: ?Env.Function = null;
+        var filter_func: ?js.Function = null;
         if (filter) |f| {
             filter_func = switch (f) {
                 .function => |func| func,

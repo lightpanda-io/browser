@@ -19,11 +19,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const js = @import("../js/js.zig");
 const log = @import("../../log.zig");
 const parser = @import("../netsurf.zig");
 
-const JsThis = @import("../env.zig").JsThis;
-const Function = @import("../env.zig").Function;
 
 const NodeUnion = @import("node.zig").Union;
 const Node = @import("node.zig").Node;
@@ -148,10 +147,10 @@ pub const NodeList = struct {
     //     };
     // }
 
-    pub fn _forEach(self: *NodeList, cbk: Function) !void { // TODO handle thisArg
+    pub fn _forEach(self: *NodeList, cbk: js.Function) !void { // TODO handle thisArg
         for (self.nodes.items, 0..) |n, i| {
             const ii: u32 = @intCast(i);
-            var result: Function.Result = undefined;
+            var result: js.Function.Result = undefined;
             cbk.tryCall(void, .{ n, ii, self }, &result) catch {
                 log.debug(.user_script, "forEach callback", .{ .err = result.exception, .stack = result.stack });
             };
@@ -175,7 +174,7 @@ pub const NodeList = struct {
     }
 
     // TODO entries() https://developer.mozilla.org/en-US/docs/Web/API/NodeList/entries
-    pub fn postAttach(self: *NodeList, js_this: JsThis) !void {
+    pub fn postAttach(self: *NodeList, js_this: js.JsThis) !void {
         const len = self.get_length();
         for (0..len) |i| {
             const node = try self._item(@intCast(i)) orelse unreachable;

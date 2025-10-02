@@ -23,7 +23,6 @@ const parser = @import("../netsurf.zig");
 
 const Element = @import("element.zig").Element;
 const Union = @import("element.zig").Union;
-const JsThis = @import("../env.zig").JsThis;
 const Walker = @import("walker.zig").Walker;
 
 const Matcher = union(enum) {
