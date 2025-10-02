@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
-<body></body>
+<body style=height:4000px;width:4000px></body>
 <script id=aliases>
   testing.expectEqual(window, window.self);
   testing.expectEqual(window, window.parent);
@@ -82,12 +82,41 @@
 <script id=scroll>
   let scroll = false;
   let scrollend = false
+
   window.addEventListener('scroll', () => {scroll = true});
   document.addEventListener('scrollend', () => {scrollend = true});
   window.scrollTo(0, 0);
+  testing.expectEqual(0, scrollX);
+  testing.expectEqual(0, pageXOffset);
+  testing.expectEqual(0, scrollY);
+  testing.expectEqual(0, pageYOffset);
 
   testing.expectEqual(true, scroll);
   testing.expectEqual(true, scrollend);
+
+  window.scrollTo(10, 20);
+  testing.expectEqual(10, scrollX);
+  testing.expectEqual(10, pageXOffset);
+  testing.expectEqual(20, scrollY);
+  testing.expectEqual(20, pageYOffset);
+
+  window.scrollTo(-10, -20);
+  testing.expectEqual(0, scrollX);
+  testing.expectEqual(0, pageXOffset);
+  testing.expectEqual(0, scrollY);
+  testing.expectEqual(0, pageYOffset);
+
+  window.scrollTo({top: 30, left: 40});
+  testing.expectEqual(40, scrollX);
+  testing.expectEqual(40, pageXOffset);
+  testing.expectEqual(30, scrollY);
+  testing.expectEqual(30, pageYOffset);
+
+  window.scrollTo({top: -30, left: -40});
+  testing.expectEqual(0, scrollX);
+  testing.expectEqual(0, pageXOffset);
+  testing.expectEqual(0, scrollY);
+  testing.expectEqual(0, pageYOffset);
 </script>
 
 <script id=queueMicroTask>

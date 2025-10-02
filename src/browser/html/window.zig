@@ -68,6 +68,8 @@ pub const Window = struct {
     performance: Performance,
     screen: Screen = .{},
     css: Css = .{},
+    scroll_x: u32 = 0,
+    scroll_y: u32 = 0,
     onload_callback: ?Function = null,
 
     pub fn create(target: ?[]const u8, navigator: ?Navigator) !Window {
@@ -388,12 +390,20 @@ pub const Window = struct {
         const Opts = struct {
             top: i32,
             left: i32,
-            behavior: []const u8,
+            behavior: []const u8 = "",
         };
     };
-    pub fn _scrollTo(self: *Window, opts: ScrollToOpts, y: ?u32) !void {
-        _ = opts;
-        _ = y;
+    pub fn _scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32) !void {
+        switch (opts) {
+            .x => |x| {
+                self.scroll_x = @intCast(@max(x, 0));
+                self.scroll_y = @intCast(@max(0, y orelse 0));
+            },
+            .opts => |o| {
+                self.scroll_y = @intCast(@max(0, o.top));
+                self.scroll_x = @intCast(@max(0, o.left));
+            },
+        }
 
         {
             const scroll_event = try parser.eventCreate();
@@ -416,6 +426,28 @@ pub const Window = struct {
                 scroll_end,
             );
         }
+    }
+    pub fn _scroll(self: *Window, opts: ScrollToOpts, y: ?i32) !void {
+        // just an alias for scrollTo
+        return self._scrollTo(opts, y);
+    }
+
+    pub fn get_scrollX(self: *const Window) u32 {
+        return self.scroll_x;
+    }
+
+    pub fn get_scrollY(self: *const Window) u32 {
+        return self.scroll_y;
+    }
+
+    pub fn get_pageXOffset(self: *const Window) u32 {
+        // just an alias for scrollX
+        return self.get_scrollX();
+    }
+
+    pub fn get_pageYOffset(self: *const Window) u32 {
+        // just an alias for scrollY
+        return self.get_scrollY();
     }
 
     // libdom's document doesn't have a parent, which is correct, but
