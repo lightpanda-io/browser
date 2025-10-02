@@ -384,6 +384,7 @@ fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !vo
         try buildMbedtls(b, mod);
         try buildNghttp2(b, mod);
         try buildCurl(b, mod);
+        try buildAda(b, mod);
 
         switch (target.result.os.tag) {
             .macos => {
@@ -848,4 +849,28 @@ fn buildCurl(b: *Build, m: *Build.Module) !void {
             root ++ "lib/vtls/x509asn1.c",
         },
     });
+}
+
+pub fn buildAda(b: *Build, m: *Build.Module) !void {
+    const ada_dep = b.dependency("ada-singleheader", .{});
+    const ada = b.addLibrary(.{
+        .name = "ada",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .target = m.resolved_target,
+            .optimize = m.optimize,
+            .link_libcpp = true,
+        }),
+    });
+
+    // Expose "ada_c.h".
+    ada.installHeader(ada_dep.path("ada_c.h"), "ada_c.h");
+
+    ada.root_module.addCSourceFiles(.{
+        .root = ada_dep.path(""),
+        .files = &.{"ada.cpp"},
+        .flags = &.{"-std=c++20"},
+    });
+
+    m.linkLibrary(ada);
 }
