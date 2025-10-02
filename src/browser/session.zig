@@ -148,35 +148,62 @@ pub const Session = struct {
     };
 
     pub fn wait(self: *Session, wait_ms: i32) WaitResult {
-        if (self.queued_navigation) |qn| {
-            // This was already aborted on the page, but it would be pretty
-            // bad if old requests went to the new page, so let's make double sure
-            self.browser.http_client.abort();
-
-            // Page.navigateFromWebAPI terminatedExecution. If we don't resume
-            // it before doing a shutdown we'll get an error.
-            self.executor.resumeExecution();
-            self.removePage();
-            self.queued_navigation = null;
-
-            const page = self.createPage() catch |err| {
-                log.err(.browser, "queued navigation page error", .{
-                    .err = err,
-                    .url = qn.url,
-                });
-                return .done;
-            };
-
-            page.navigate(qn.url, qn.opts) catch |err| {
-                log.err(.browser, "queued navigation error", .{ .err = err, .url = qn.url });
-                return .done;
-            };
-        }
+        _ = self.processQueuedNavigation() catch {
+            // There was an error processing the queue navigation. This already
+            // logged the error, just return.
+            return .done;
+        };
 
         if (self.page) |*page| {
             return page.wait(wait_ms);
         }
         return .no_page;
+    }
+
+    pub fn fetchWait(self: *Session, wait_ms: i32) void {
+        while (true) {
+            if (self.page == null) {
+                return;
+            }
+            _ = self.page.?.wait(wait_ms);
+            const navigated = self.processQueuedNavigation() catch {
+                // There was an error processing the queue navigation. This already
+                // logged the error, just return.
+                return;
+            };
+
+            if (navigated == false) {
+                return;
+            }
+        }
+    }
+
+    fn processQueuedNavigation(self: *Session) !bool {
+        const qn = self.queued_navigation orelse return false;
+        // This was already aborted on the page, but it would be pretty
+        // bad if old requests went to the new page, so let's make double sure
+        self.browser.http_client.abort();
+
+        // Page.navigateFromWebAPI terminatedExecution. If we don't resume
+        // it before doing a shutdown we'll get an error.
+        self.executor.resumeExecution();
+        self.removePage();
+        self.queued_navigation = null;
+
+        const page = self.createPage() catch |err| {
+            log.err(.browser, "queued navigation page error", .{
+                .err = err,
+                .url = qn.url,
+            });
+            return err;
+        };
+
+        page.navigate(qn.url, qn.opts) catch |err| {
+            log.err(.browser, "queued navigation error", .{ .err = err, .url = qn.url });
+            return err;
+        };
+
+        return true;
     }
 };
 
