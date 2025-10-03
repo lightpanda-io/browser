@@ -80,7 +80,7 @@ pub fn contextCreated(
 // we'll create it and track it for cleanup when the context ends.
 pub fn getRemoteObject(
     self: *const Inspector,
-    context: *const Context,
+    context: *Context,
     group: []const u8,
     value: anytype,
 ) !RemoteObject {

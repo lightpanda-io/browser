@@ -663,7 +663,7 @@ const Script = struct {
             .cacheable = cacheable,
         });
 
-        const js_context = page.main_context;
+        const js_context = page.js;
         var try_catch: js.TryCatch = undefined;
         try_catch.init(js_context);
         defer try_catch.deinit();
@@ -707,10 +707,10 @@ const Script = struct {
         switch (callback) {
             .string => |str| {
                 var try_catch: js.TryCatch = undefined;
-                try_catch.init(page.main_context);
+                try_catch.init(page.js);
                 defer try_catch.deinit();
 
-                _ = page.main_context.exec(str, typ) catch |err| {
+                _ = page.js.exec(str, typ) catch |err| {
                     const msg = try_catch.err(page.arena) catch @errorName(err) orelse "unknown";
                     log.warn(.user_script, "script callback", .{
                         .url = self.url,

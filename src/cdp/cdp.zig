@@ -690,9 +690,7 @@ const IsolatedWorld = struct {
             return;
         }
         _ = try self.executor.createContext(
-            &page.window,
             page,
-            null,
             false,
             js.GlobalMissingCallback.init(&self.polyfill_loader),
         );

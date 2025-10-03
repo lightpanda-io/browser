@@ -74,7 +74,7 @@ pub const Page = struct {
 
     // Our JavaScript context for this specific page. This is what we use to
     // execute any JavaScript
-    main_context: *js.Context,
+    js: *js.Context,
 
     // indicates intention to navigate to another page on the next loop execution.
     delayed_navigation: bool = false,
@@ -140,11 +140,11 @@ pub const Page = struct {
             .scheduler = Scheduler.init(arena),
             .keydown_event_node = .{ .func = keydownCallback },
             .window_clicked_event_node = .{ .func = windowClicked },
-            .main_context = undefined,
+            .js = undefined,
         };
 
-        self.main_context = try session.executor.createContext(&self.window, self, &self.script_manager, true, js.GlobalMissingCallback.init(&self.polyfill_loader));
-        try polyfill.preload(self.arena, self.main_context);
+        self.js = try session.executor.createContext(self, true, js.GlobalMissingCallback.init(&self.polyfill_loader));
+        try polyfill.preload(self.arena, self.js);
 
         try self.scheduler.add(self, runMicrotasks, 5, .{ .name = "page.microtasks" });
         // message loop must run only non-test env
@@ -277,7 +277,7 @@ pub const Page = struct {
         var ms_remaining = wait_ms;
 
         var try_catch: js.TryCatch = undefined;
-        try_catch.init(self.main_context);
+        try_catch.init(self.js);
         defer try_catch.deinit();
 
         var scheduler = &self.scheduler;
@@ -1116,7 +1116,7 @@ pub const Page = struct {
 
     pub fn stackTrace(self: *Page) !?[]const u8 {
         if (comptime builtin.mode == .Debug) {
-            return self.main_context.stackTrace();
+            return self.js.stackTrace();
         }
         return null;
     }

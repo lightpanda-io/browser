@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+
 const js = @import("js.zig");
 const v8 = js.v8;
 
@@ -109,7 +111,19 @@ const ModuleEntry = struct {
     resolver_promise: ?PersistentPromise = null,
 };
 
-// no init, started with executor.createContext()
+pub fn fromC(c_context: *const v8.C_Context) *Context {
+    const v8_context = v8.Context{ .handle = c_context };
+    return @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
+}
+
+pub fn fromIsolate(isolate: v8.Isolate) *Context {
+    const v8_context = isolate.getCurrentContext();
+    return @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
+}
+
+pub fn setupGlobal(self: *Context) !void {
+    _ = try self.mapZigInstanceToJs(self.v8_context.getGlobal(), &self.page.window);
+}
 
 pub fn deinit(self: *Context) void {
     {
@@ -189,11 +203,7 @@ pub fn valueToExistingObject(self: *const Context, value: anytype) !v8.Object {
     return persistent_object.castToObject();
 }
 
-pub fn stackTrace(self: *const Context) !?[]const u8 {
-    return stackForLogs(self.call_arena, self.isolate);
-}
-
-// Executes the src
+// == Executors ==
 pub fn eval(self: *Context, src: []const u8, name: ?[]const u8) !void {
     _ = try self.exec(src, name);
 }
@@ -239,10 +249,9 @@ pub fn module(self: *Context, comptime want_result: bool, src: []const u8, url: 
         // want to get the list of dependent modules this module has
         // and start downloading them asap.
         const requests = m.getModuleRequests();
-        const isolate = self.isolate;
         for (0..requests.length()) |i| {
             const req = requests.get(v8_context, @intCast(i)).castTo(v8.ModuleRequest);
-            const specifier = try js.stringToZig(self.call_arena, req.getSpecifier(), isolate);
+            const specifier = try self.jsStringToZig(req.getSpecifier(), .{});
             const normalized_specifier = try @import("../../url.zig").stitch(
                 self.call_arena,
                 specifier,
@@ -306,7 +315,8 @@ pub fn module(self: *Context, comptime want_result: bool, src: []const u8, url: 
     return if (comptime want_result) gop.value_ptr.* else {};
 }
 
-pub fn newArray(self: *Context, len: u32) js.Object {
+// == Creators ==
+pub fn createArray(self: *Context, len: u32) js.Object {
     const arr = v8.Array.init(self.isolate, len);
     return .{
         .context = self,
@@ -314,8 +324,7 @@ pub fn newArray(self: *Context, len: u32) js.Object {
     };
 }
 
-// Wrap a v8.Exception
-fn createException(self: *const Context, e: v8.Value) js.Exception {
+pub fn createException(self: *const Context, e: v8.Value) js.Exception {
     return .{
         .inner = e,
         .context = self,
@@ -331,17 +340,171 @@ pub fn createValue(self: *const Context, value: v8.Value) js.Value {
     };
 }
 
-pub fn zigValueToJs(self: *const Context, value: anytype) !v8.Value {
-    return _zigValueToJs(self.templates, self.isolate, self.v8_context, value);
+pub fn createFunction(self: *Context, js_value: v8.Value) !js.Function {
+    // caller should have made sure this was a function
+    std.debug.assert(js_value.isFunction());
+
+    const func = v8.Persistent(v8.Function).init(self.isolate, js_value.castTo(v8.Function));
+    try self.trackCallback(func);
+
+    return .{
+        .func = func,
+        .context = self,
+        .id = js_value.castTo(v8.Object).getIdentityHash(),
+    };
 }
 
-// See _mapZigInstanceToJs, this is wrapper that can be called
-// without a Context. This is possible because we store our
-// context in the EmbedderData of the v8.Context. So, as long as
-// we have a v8.Context, we can get the context.
-pub fn mapZigInstanceToJs(v8_context: v8.Context, js_obj_or_template: anytype, value: anytype) !PersistentObject {
-    const context: *Context = @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
-    return context._mapZigInstanceToJs(js_obj_or_template, value);
+pub fn throw(self: *Context, err: []const u8) js.Exception {
+    const js_value = js._createException(self.isolate, err);
+    return self.createException(js_value);
+}
+
+pub fn zigValueToJs(self: *Context, value: anytype) !v8.Value {
+    const isolate = self.isolate;
+
+    // Check if it's a "simple" type. This is extracted so that it can be
+    // reused by other parts of the code. "simple" types only require an
+    // isolate to create (specifically, they don't our templates array)
+    if (js.simpleZigValueToJs(isolate, value, false)) |js_value| {
+        return js_value;
+    }
+
+    const v8_context = self.v8_context;
+    const T = @TypeOf(value);
+    switch (@typeInfo(T)) {
+        .void, .bool, .int, .comptime_int, .float, .comptime_float, .@"enum", .null => {
+            // Need to do this to keep the compiler happy
+            // simpleZigValueToJs handles all of these cases.
+            unreachable;
+        },
+        .array => {
+            var js_arr = v8.Array.init(isolate, value.len);
+            var js_obj = js_arr.castTo(v8.Object);
+            for (value, 0..) |v, i| {
+                const js_val = try self.zigValueToJs(v);
+                if (js_obj.setValueAtIndex(v8_context, @intCast(i), js_val) == false) {
+                    return error.FailedToCreateArray;
+                }
+            }
+            return js_obj.toValue();
+        },
+        .pointer => |ptr| switch (ptr.size) {
+            .one => {
+                const type_name = @typeName(ptr.child);
+                if (@hasField(types.Lookup, type_name)) {
+                    const template = self.templates[@field(types.LOOKUP, type_name)];
+                    const js_obj = try self.mapZigInstanceToJs(template, value);
+                    return js_obj.toValue();
+                }
+
+                const one_info = @typeInfo(ptr.child);
+                if (one_info == .array and one_info.array.child == u8) {
+                    // Need to do this to keep the compiler happy
+                    // If this was the case, simpleZigValueToJs would
+                    // have handled it
+                    unreachable;
+                }
+            },
+            .slice => {
+                if (ptr.child == u8) {
+                    // Need to do this to keep the compiler happy
+                    // If this was the case, simpleZigValueToJs would
+                    // have handled it
+                    unreachable;
+                }
+                var js_arr = v8.Array.init(isolate, @intCast(value.len));
+                var js_obj = js_arr.castTo(v8.Object);
+
+                for (value, 0..) |v, i| {
+                    const js_val = try self.zigValueToJs(v);
+                    if (js_obj.setValueAtIndex(v8_context, @intCast(i), js_val) == false) {
+                        return error.FailedToCreateArray;
+                    }
+                }
+                return js_obj.toValue();
+            },
+            else => {},
+        },
+        .@"struct" => |s| {
+            const type_name = @typeName(T);
+            if (@hasField(types.Lookup, type_name)) {
+                const template = self.templates[@field(types.LOOKUP, type_name)];
+                const js_obj = try self.mapZigInstanceToJs(template, value);
+                return js_obj.toValue();
+            }
+
+            if (T == js.Function) {
+                // we're returning a callback
+                return value.func.toValue();
+            }
+
+            if (T == js.Object) {
+                // we're returning a v8.Object
+                return value.js_obj.toValue();
+            }
+
+            if (T == js.Value) {
+                return value.value;
+            }
+
+            if (T == js.Promise) {
+                // we're returning a v8.Promise
+                return value.toObject().toValue();
+            }
+
+            if (T == js.Exception) {
+                return isolate.throwException(value.inner);
+            }
+
+            if (s.is_tuple) {
+                // return the tuple struct as an array
+                var js_arr = v8.Array.init(isolate, @intCast(s.fields.len));
+                var js_obj = js_arr.castTo(v8.Object);
+                inline for (s.fields, 0..) |f, i| {
+                    const js_val = try self.zigValueToJs(@field(value, f.name));
+                    if (js_obj.setValueAtIndex(v8_context, @intCast(i), js_val) == false) {
+                        return error.FailedToCreateArray;
+                    }
+                }
+                return js_obj.toValue();
+            }
+
+            // return the struct as a JS object
+            const js_obj = v8.Object.init(isolate);
+            inline for (s.fields) |f| {
+                const js_val = try self.zigValueToJs(@field(value, f.name));
+                const key = v8.String.initUtf8(isolate, f.name);
+                if (!js_obj.setValue(v8_context, key, js_val)) {
+                    return error.CreateObjectFailure;
+                }
+            }
+            return js_obj.toValue();
+        },
+        .@"union" => |un| {
+            if (T == std.json.Value) {
+                return zigJsonToJs(isolate, v8_context, value);
+            }
+            if (un.tag_type) |UnionTagType| {
+                inline for (un.fields) |field| {
+                    if (value == @field(UnionTagType, field.name)) {
+                        return self.zigValueToJs(@field(value, field.name));
+                    }
+                }
+                unreachable;
+            }
+            @compileError("Cannot use untagged union: " ++ @typeName(T));
+        },
+        .optional => {
+            if (value) |v| {
+                return self.zigValueToJs(v);
+            }
+            return v8.initNull(isolate).toValue();
+        },
+        .error_union => return self.zigValueToJs(try value),
+        else => {},
+    }
+
+    @compileError("A function returns an unsupported type: " ++ @typeName(T));
 }
 
 // To turn a Zig instance into a v8 object, we need to do a number of things.
@@ -357,7 +520,7 @@ pub fn mapZigInstanceToJs(v8_context: v8.Context, js_obj_or_template: anytype, v
 //  4 - Store our TaggedAnyOpaque into the persistent object
 //  5 - Update our identity_map (so that, if we return this same instance again,
 //      we can just grab it from the identity_map)
-pub fn _mapZigInstanceToJs(self: *Context, js_obj_or_template: anytype, value: anytype) !PersistentObject {
+pub fn mapZigInstanceToJs(self: *Context, js_obj_or_template: anytype, value: anytype) !PersistentObject {
     const v8_context = self.v8_context;
     const context_arena = self.context_arena;
 
@@ -367,7 +530,7 @@ pub fn _mapZigInstanceToJs(self: *Context, js_obj_or_template: anytype, value: a
             // Struct, has to be placed on the heap
             const heap = try context_arena.create(T);
             heap.* = value;
-            return self._mapZigInstanceToJs(js_obj_or_template, heap);
+            return self.mapZigInstanceToJs(js_obj_or_template, heap);
         },
         .pointer => |ptr| {
             const gop = try self.identity_map.getOrPut(context_arena, @intFromPtr(value));
@@ -497,10 +660,10 @@ pub fn jsValueToZig(self: *Context, comptime named_function: NamedFunction, comp
                 if (ptr.child == u8) {
                     if (ptr.sentinel()) |s| {
                         if (comptime s == 0) {
-                            return js.valueToStringZ(self.call_arena, js_value, self.isolate, self.v8_context);
+                            return self.valueToStringZ(js_value, .{});
                         }
                     } else {
-                        return js.valueToString(self.call_arena, js_value, self.isolate, self.v8_context);
+                        return self.valueToString(js_value, .{});
                     }
                 }
 
@@ -605,7 +768,7 @@ fn jsValueToStruct(self: *Context, comptime named_function: NamedFunction, compt
     }
 
     if (T == js.String) {
-        return .{ .string = try js.valueToString(self.context_arena, js_value, self.isolate, self.v8_context) };
+        return .{ .string = try self.valueToString(js_value, .{ .allocator = self.context_arena }) };
     }
 
     const js_obj = js_value.castTo(v8.Object);
@@ -733,58 +896,581 @@ fn jsValueToTypedArray(_: *Context, comptime T: type, js_value: v8.Value) !?[]T 
     return error.InvalidArgument;
 }
 
-pub fn createFunction(self: *Context, js_value: v8.Value) !js.Function {
-    // caller should have made sure this was a function
-    std.debug.assert(js_value.isFunction());
-
-    const func = v8.Persistent(v8.Function).init(self.isolate, js_value.castTo(v8.Function));
-    try self.trackCallback(func);
-
-    return .{
-        .func = func,
-        .context = self,
-        .id = js_value.castTo(v8.Object).getIdentityHash(),
-    };
+// == Stringifiers ==
+const valueToStringOpts = struct {
+    allocator: ?Allocator = null,
+};
+pub fn valueToString(self: *const Context, value: v8.Value, opts: valueToStringOpts) ![]u8 {
+    const allocator = opts.allocator orelse self.call_arena;
+    if (value.isSymbol()) {
+        // symbol's can't be converted to a string
+        return allocator.dupe(u8, "$Symbol");
+    }
+    const str = try value.toString(self.v8_context);
+    return self.jsStringToZig(str, .{ .allocator = allocator });
 }
 
-pub fn createPromiseResolver(self: *Context) js.PromiseResolver {
-    return .{
-        .context = self,
-        .resolver = v8.PromiseResolver.init(self.v8_context),
-    };
+pub fn valueToStringZ(self: *const Context, value: v8.Value, opts: valueToStringOpts) ![:0]u8 {
+    const allocator = opts.allocator orelse self.call_arena;
+    const str = try value.toString(self.v8_context);
+    const len = str.lenUtf8(self.isolate);
+    const buf = try allocator.allocSentinel(u8, len, 0);
+    const n = str.writeUtf8(self.isolate, buf);
+    std.debug.assert(n == len);
+    return buf;
 }
 
-fn rejectPromise(self: *Context, msg: []const u8) v8.Promise {
+const JsStringToZigOpts = struct {
+    allocator: ?Allocator = null,
+};
+pub fn jsStringToZig(self: *const Context, str: v8.String, opts: JsStringToZigOpts) ![]u8 {
+    const allocator = opts.allocator orelse self.call_arena;
+    const len = str.lenUtf8(self.isolate);
+    const buf = try allocator.alloc(u8, len);
+    const n = str.writeUtf8(self.isolate, buf);
+    std.debug.assert(n == len);
+    return buf;
+}
+
+pub fn valueToDetailString(self: *const Context, value: v8.Value) ![]u8 {
+    var str: ?v8.String = null;
+    const v8_context = self.v8_context;
+
+    if (value.isObject() and !value.isFunction()) blk: {
+        str = v8.Json.stringify(v8_context, value, null) catch break :blk;
+
+        if (str.?.lenUtf8(self.isolate) == 2) {
+            // {} isn't useful, null this so that we can get the toDetailString
+            // (which might also be useless, but maybe not)
+            str = null;
+        }
+    }
+
+    if (str == null) {
+        str = try value.toDetailString(v8_context);
+    }
+
+    const s = try self.jsStringToZig(str.?, .{});
+    if (comptime builtin.mode == .Debug) {
+        if (std.mem.eql(u8, s, "[object Object]")) {
+            if (self.debugValueToString(value.castTo(v8.Object))) |ds| {
+                return ds;
+            } else |err| {
+                log.err(.js, "debug serialize value", .{ .err = err });
+            }
+        }
+    }
+    return s;
+}
+
+fn debugValueToString(self: *const Context, js_obj: v8.Object) ![]u8 {
+    if (comptime builtin.mode != .Debug) {
+        @compileError("debugValue can only be called in debug mode");
+    }
+    const v8_context = self.v8_context;
+
+    const names_arr = js_obj.getOwnPropertyNames(v8_context);
+    const names_obj = names_arr.castTo(v8.Object);
+    const len = names_arr.length();
+
+    var arr: std.ArrayListUnmanaged(u8) = .empty;
+    var writer = arr.writer(self.call_arena);
+    try writer.writeAll("(JSON.stringify failed, dumping top-level fields)\n");
+    for (0..len) |i| {
+        const field_name = try names_obj.getAtIndex(v8_context, @intCast(i));
+        const field_value = try js_obj.getValue(v8_context, field_name);
+        const name = try self.valueToString(field_name, .{});
+        const value = try self.valueToString(field_value, .{});
+        try writer.writeAll(name);
+        try writer.writeAll(": ");
+        if (std.mem.indexOfAny(u8, value, &std.ascii.whitespace) == null) {
+            try writer.writeAll(value);
+        } else {
+            try writer.writeByte('"');
+            try writer.writeAll(value);
+            try writer.writeByte('"');
+        }
+        try writer.writeByte(' ');
+    }
+    return arr.items;
+}
+
+pub fn stackTrace(self: *const Context) !?[]const u8 {
+    std.debug.assert(@import("builtin").mode == .Debug);
+    const isolate = self.isolate;
+    const separator = log.separator();
+
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    var writer = buf.writer(self.call_arena);
+
+    const stack_trace = v8.StackTrace.getCurrentStackTrace(isolate, 30);
+    const frame_count = stack_trace.getFrameCount();
+
+    for (0..frame_count) |i| {
+        const frame = stack_trace.getFrame(isolate, @intCast(i));
+        if (frame.getScriptName()) |name| {
+            const script = try self.jsStringToZig(name, .{});
+            try writer.print("{s}{s}:{d}", .{ separator, script, frame.getLineNumber() });
+        } else {
+            try writer.print("{s}<anonymous>:{d}", .{ separator, frame.getLineNumber() });
+        }
+    }
+    return buf.items;
+}
+
+// == Promise Helpers ==
+pub fn rejectPromise(self: *Context, value: anytype) js.Promise {
     const ctx = self.v8_context;
-    var resolver = v8.PromiseResolver.init(ctx);
+    const js_value = try self.zigValueToJs(value);
 
-    const error_msg = v8.String.initUtf8(self.isolate, msg);
-    _ = resolver.reject(ctx, error_msg.toValue());
+    var resolver = v8.PromiseResolver.init(ctx);
+    _ = resolver.reject(ctx, js_value);
 
     return resolver.getPromise();
 }
 
-fn resolvePromise(self: *Context, value: v8.Value) v8.Promise {
+pub fn resolvePromise(self: *Context, value: anytype) !js.Promise {
     const ctx = self.v8_context;
+    const js_value = try self.zigValueToJs(value);
+
     var resolver = v8.PromiseResolver.init(ctx);
-    _ = resolver.resolve(ctx, value);
+    _ = resolver.resolve(ctx, js_value);
+
     return resolver.getPromise();
 }
 
 // creates a PersistentPromiseResolver, taking in a lifetime parameter.
 // If the lifetime is page, the page will clean up the PersistentPromiseResolver.
 // If the lifetime is self, you will be expected to deinitalize the PersistentPromiseResolver.
-pub fn createPersistentPromiseResolver(
-    self: *Context,
-    lifetime: enum { self, page },
-) !js.PersistentPromiseResolver {
-    const resolver = v8.Persistent(v8.PromiseResolver).init(self.isolate, v8.PromiseResolver.init(self.v8_context));
-
-    if (lifetime == .page) {
-        try self.persisted_promise_resolvers.append(self.context_arena, resolver);
+const PromiseResolverLifetime = enum {
+    none,
+    self, // it's a persisted promise, but it'll be managed by the caller
+    page, // it's a persisted promise, tied to the page lifetime
+};
+fn PromiseResolverType(comptime lifetime: PromiseResolverLifetime) type {
+    if (lifetime == .none) {
+        return js.PromiseResolver;
+    }
+    return error{OutOfMemory}!js.PersistentPromiseResolver;
+}
+pub fn createPromiseResolver(self: *Context, comptime lifetime: PromiseResolverLifetime) PromiseResolverType(lifetime) {
+    const resolver = v8.PromiseResolver.init(self.v8_context);
+    if (comptime lifetime == .none) {
+        return .{ .context = self, .resolver = resolver };
     }
 
-    return .{ .context = self, .resolver = resolver };
+    const persisted = v8.Persistent(v8.PromiseResolver).init(self.isolate, resolver);
+
+    if (comptime lifetime == .page) {
+        try self.persisted_promise_resolvers.append(self.context_arena, persisted);
+    }
+
+    return .{
+        .context = self,
+        .resolver = persisted,
+    };
+}
+
+// == Callbacks ==
+// Callback from V8, asking us to load a module. The "specifier" is
+// the src of the module to load.
+fn resolveModuleCallback(
+    c_context: ?*const v8.C_Context,
+    c_specifier: ?*const v8.C_String,
+    import_attributes: ?*const v8.C_FixedArray,
+    c_referrer: ?*const v8.C_Module,
+) callconv(.c) ?*const v8.C_Module {
+    _ = import_attributes;
+
+    const self = fromC(c_context.?);
+
+    const specifier = self.jsStringToZig(.{ .handle = c_specifier.? }, .{}) catch |err| {
+        log.err(.js, "resolve module", .{ .err = err });
+        return null;
+    };
+    const referrer = v8.Module{ .handle = c_referrer.? };
+
+    return self._resolveModuleCallback(referrer, specifier) catch |err| {
+        log.err(.js, "resolve module", .{
+            .err = err,
+            .specifier = specifier,
+        });
+        return null;
+    };
+}
+
+pub fn dynamicModuleCallback(
+    c_context: ?*const v8.c.Context,
+    host_defined_options: ?*const v8.c.Data,
+    resource_name: ?*const v8.c.Value,
+    v8_specifier: ?*const v8.c.String,
+    import_attrs: ?*const v8.c.FixedArray,
+) callconv(.c) ?*v8.c.Promise {
+    _ = host_defined_options;
+    _ = import_attrs;
+
+    const self = fromC(c_context.?);
+
+    const resource = self.jsStringToZig(.{ .handle = resource_name.? }, .{}) catch |err| {
+        log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback1" });
+        return @constCast(self.rejectPromise("Out of memory").handle);
+    };
+
+    const specifier = self.jsStringToZig(.{ .handle = v8_specifier.? }, .{}) catch |err| {
+        log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback2" });
+        return @constCast(self.rejectPromise("Out of memory").handle);
+    };
+
+    const normalized_specifier = @import("../../url.zig").stitch(
+        self.context_arena, // might need to survive until the module is loaded
+        specifier,
+        resource,
+        .{ .alloc = .if_needed, .null_terminated = true },
+    ) catch |err| {
+        log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback3" });
+        return @constCast(self.rejectPromise("Out of memory").handle);
+    };
+
+    const promise = self._dynamicModuleCallback(normalized_specifier) catch |err| blk: {
+        log.err(.js, "dynamic module callback", .{
+            .err = err,
+        });
+        break :blk self.rejectPromise("Failed to load module");
+    };
+    return @constCast(promise.handle);
+}
+
+pub fn metaObjectCallback(c_context: ?*v8.C_Context, c_module: ?*v8.C_Module, c_meta: ?*v8.C_Value) callconv(.c) void {
+    const self = fromC(c_context.?);
+    const m = v8.Module{ .handle = c_module.? };
+    const meta = v8.Object{ .handle = c_meta.? };
+
+    const url = self.module_identifier.get(m.getIdentityHash()) orelse {
+        // Shouldn't be possible.
+        log.err(.js, "import meta", .{ .err = error.UnknownModuleReferrer });
+        return;
+    };
+
+    const js_key = v8.String.initUtf8(self.isolate, "url");
+    const js_value = try self.zigValueToJs(url);
+    const res = meta.defineOwnProperty(self.v8_context, js_key.toName(), js_value, 0) orelse false;
+    if (!res) {
+        log.err(.js, "import meta", .{ .err = error.FailedToSet });
+    }
+}
+
+fn _resolveModuleCallback(self: *Context, referrer: v8.Module, specifier: []const u8) !?*const v8.C_Module {
+    const referrer_path = self.module_identifier.get(referrer.getIdentityHash()) orelse {
+        // Shouldn't be possible.
+        return error.UnknownModuleReferrer;
+    };
+
+    const normalized_specifier = try @import("../../url.zig").stitch(
+        self.call_arena,
+        specifier,
+        referrer_path,
+        .{ .alloc = .if_needed, .null_terminated = true },
+    );
+
+    const gop = try self.module_cache.getOrPut(self.context_arena, normalized_specifier);
+    if (gop.found_existing) {
+        if (gop.value_ptr.module) |m| {
+            return m.handle;
+        }
+        // We don't have a module, but we do have a cache entry for it
+        // That means we're already trying to load it. We just have
+        // to wait for it to be done.
+    } else {
+        // I don't think it's possible for us to be here. This is
+        // only ever called by v8 when we evaluate a module. But
+        // before evaluating, we should have already started
+        // downloading all of the module's nested modules. So it
+        // should be impossible that this is the first time we've
+        // heard about this module.
+        // But, I'm not confident enough in that, and ther's little
+        // harm in handling this case.
+        @branchHint(.unlikely);
+        gop.value_ptr.* = .{};
+        try self.script_manager.?.getModule(normalized_specifier);
+    }
+
+    var fetch_result = try self.script_manager.?.waitForModule(normalized_specifier);
+    defer fetch_result.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(self);
+    defer try_catch.deinit();
+
+    const entry = self.module(true, fetch_result.src(), normalized_specifier, true) catch |err| {
+        log.warn(.js, "compile resolved module", .{
+            .specifier = specifier,
+            .stack = try_catch.stack(self.call_arena) catch null,
+            .src = try_catch.sourceLine(self.call_arena) catch "err",
+            .line = try_catch.sourceLineNumber() orelse 0,
+            .exception = (try_catch.exception(self.call_arena) catch @errorName(err)) orelse @errorName(err),
+        });
+        return null;
+    };
+    // entry.module is always set when returning from self.module()
+    return entry.module.?.handle;
+}
+
+// Will get passed to ScriptManager and then passed back to us when
+// the src of the module is loaded
+const DynamicModuleResolveState = struct {
+    // The module that we're resolving (we'll actually resolve its
+    // namespace)
+    module: ?v8.Module,
+    context_id: usize,
+    context: *Context,
+    specifier: [:0]const u8,
+    resolver: v8.Persistent(v8.PromiseResolver),
+};
+
+fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8) !v8.Promise {
+    const isolate = self.isolate;
+    const gop = try self.module_cache.getOrPut(self.context_arena, specifier);
+    if (gop.found_existing and gop.value_ptr.resolver_promise != null) {
+        // This is easy, there's already something responsible
+        // for loading the module. Maybe it's still loading, maybe
+        // it's complete. Whatever, we can just return that promise.
+        return gop.value_ptr.resolver_promise.?.castToPromise();
+    }
+
+    const persistent_resolver = v8.Persistent(v8.PromiseResolver).init(isolate, v8.PromiseResolver.init(self.v8_context));
+    try self.persisted_promise_resolvers.append(self.context_arena, persistent_resolver);
+    var resolver = persistent_resolver.castToPromiseResolver();
+
+    const state = try self.context_arena.create(DynamicModuleResolveState);
+    state.* = .{
+        .module = null,
+        .context = self,
+        .specifier = specifier,
+        .context_id = self.id,
+        .resolver = persistent_resolver,
+    };
+
+    const persisted_promise = PersistentPromise.init(self.isolate, resolver.getPromise());
+    const promise = persisted_promise.castToPromise();
+
+    if (!gop.found_existing) {
+        // this module hasn't been seen before. This is the most
+        // complicated path.
+
+        // First, we'll setup a bare entry into our cache. This will
+        // prevent anyone one else from trying to asychronously load
+        // it. Instead, they can just return our promise.
+        gop.value_ptr.* = ModuleEntry{
+            .module = null,
+            .module_promise = null,
+            .resolver_promise = persisted_promise,
+        };
+
+        // Next, we need to actually load it.
+        self.script_manager.?.getAsyncModule(specifier, dynamicModuleSourceCallback, state) catch |err| {
+            const error_msg = v8.String.initUtf8(isolate, @errorName(err));
+            _ = resolver.reject(self.v8_context, error_msg.toValue());
+        };
+
+        // For now, we're done. but this will be continued in
+        // `dynamicModuleSourceCallback`, once the source for the
+        // moduel is loaded.
+        return promise;
+    }
+
+    // So we have a module, but no async resolver. This can only
+    // happen if the module was first synchronously loaded (Does that
+    // ever even happen?!) You'd think we cann just return the module
+    // but no, we need to resolve the module namespace, and the
+    // module could still be loading!
+    // We need to do part of what the first case is going to do in
+    // `dynamicModuleSourceCallback`, but we can skip some steps
+    // since the module is alrady loaded,
+    std.debug.assert(gop.value_ptr.module != null);
+    std.debug.assert(gop.value_ptr.module_promise != null);
+
+    // like before, we want to set this up so that if anything else
+    // tries to load this module, it can just return our promise
+    // since we're going to be doing all the work.
+    gop.value_ptr.resolver_promise = persisted_promise;
+
+    // But we can skip direclty to `resolveDynamicModule` which is
+    // what the above callback will eventually do.
+    self.resolveDynamicModule(state, gop.value_ptr.*);
+    return promise;
+}
+
+fn dynamicModuleSourceCallback(ctx: *anyopaque, fetch_result_: anyerror!ScriptManager.GetResult) void {
+    const state: *DynamicModuleResolveState = @ptrCast(@alignCast(ctx));
+    var self = state.context;
+
+    var fetch_result = fetch_result_ catch |err| {
+        const error_msg = v8.String.initUtf8(self.isolate, @errorName(err));
+        _ = state.resolver.castToPromiseResolver().reject(self.v8_context, error_msg.toValue());
+        return;
+    };
+
+    const module_entry = blk: {
+        defer fetch_result.deinit();
+
+        var try_catch: js.TryCatch = undefined;
+        try_catch.init(self);
+        defer try_catch.deinit();
+
+        break :blk self.module(true, fetch_result.src(), state.specifier, true) catch {
+            const ex = try_catch.exception(self.call_arena) catch |err| @errorName(err) orelse "unknown error";
+            log.err(.js, "module compilation failed", .{
+                .specifier = state.specifier,
+                .exception = ex,
+                .stack = try_catch.stack(self.call_arena) catch null,
+                .line = try_catch.sourceLineNumber() orelse 0,
+            });
+            const error_msg = v8.String.initUtf8(self.isolate, ex);
+            _ = state.resolver.castToPromiseResolver().reject(self.v8_context, error_msg.toValue());
+            return;
+        };
+    };
+
+    self.resolveDynamicModule(state, module_entry);
+}
+
+fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, module_entry: ModuleEntry) void {
+    const ctx = self.v8_context;
+    const isolate = self.isolate;
+    const external = v8.External.init(self.isolate, @ptrCast(state));
+
+    // we can only be here if the module has been evaluated and if
+    // we have a resolve loading this asynchronously.
+    std.debug.assert(module_entry.module_promise != null);
+    std.debug.assert(module_entry.resolver_promise != null);
+    std.debug.assert(self.module_cache.contains(state.specifier));
+    state.module = module_entry.module.?.castToModule();
+
+    // We've gotten the source for the module and are evaluating it.
+    // You might think we're done, but the module evaluation is
+    // itself asynchronous. We need to chain to the module's own
+    // promise. When the module is evaluated, it resolves to the
+    // last value of the module. But, for module loading, we need to
+    // resolve to the module's namespace.
+
+    const then_callback = v8.Function.initWithData(ctx, struct {
+        pub fn callback(raw_info: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
+            var info = v8.FunctionCallbackInfo.initFromV8(raw_info);
+            var caller = Caller.init(info);
+            defer caller.deinit();
+
+            const s: *DynamicModuleResolveState = @ptrCast(@alignCast(info.getExternalValue()));
+
+            if (s.context_id != caller.context.id) {
+                // The microtask is tied to the isolate, not the context
+                // it can be resolved while another context is active
+                // (Which seems crazy to me). If that happens, then
+                // another page was loaded and we MUST ignore this
+                // (most of the fields in state are not valid)
+                return;
+            }
+
+            const namespace = s.module.?.getModuleNamespace();
+            _ = s.resolver.castToPromiseResolver().resolve(caller.context.v8_context, namespace);
+        }
+    }.callback, external);
+
+    const catch_callback = v8.Function.initWithData(ctx, struct {
+        pub fn callback(raw_info: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
+            var info = v8.FunctionCallbackInfo.initFromV8(raw_info);
+            var caller = Caller.init(info);
+            defer caller.deinit();
+
+            const s: *DynamicModuleResolveState = @ptrCast(@alignCast(info.getExternalValue()));
+            if (s.context_id != caller.context.id) {
+                return;
+            }
+            _ = s.resolver.castToPromiseResolver().reject(caller.context.v8_context, info.getData());
+        }
+    }.callback, external);
+
+    _ = module_entry.module_promise.?.castToPromise().thenAndCatch(ctx, then_callback, catch_callback) catch |err| {
+        log.err(.js, "module evaluation is promise", .{
+            .err = err,
+            .specifier = state.specifier,
+        });
+        const error_msg = v8.String.initUtf8(isolate, "Failed to evaluate promise");
+        _ = state.resolver.castToPromiseResolver().reject(ctx, error_msg.toValue());
+    };
+}
+
+// ==  Zig <-> JS ==
+
+// Reverses the mapZigInstanceToJs, making sure that our TaggedAnyOpaque
+// contains a ptr to the correct type.
+pub fn typeTaggedAnyOpaque(self: *const Context, comptime named_function: NamedFunction, comptime R: type, js_obj: v8.Object) !R {
+    const ti = @typeInfo(R);
+    if (ti != .pointer) {
+        @compileError(named_function.full_name ++ "has a non-pointer Zig parameter type: " ++ @typeName(R));
+    }
+
+    const T = ti.pointer.child;
+    if (comptime types.isEmpty(T)) {
+        // Empty structs aren't stored as TOAs and there's no data
+        // stored in the JSObject's IntenrnalField. Why bother when
+        // we can just return an empty struct here?
+        return @constCast(@as(*const T, &.{}));
+    }
+
+    // if it isn't an empty struct, then the v8.Object should have an
+    // InternalFieldCount > 0, since our toa pointer should be embedded
+    // at index 0 of the internal field count.
+    if (js_obj.internalFieldCount() == 0) {
+        return error.InvalidArgument;
+    }
+
+    const type_name = @typeName(T);
+    if (@hasField(types.Lookup, type_name) == false) {
+        @compileError(named_function.full_name ++ "has an unknown Zig type: " ++ @typeName(R));
+    }
+
+    const op = js_obj.getInternalField(0).castTo(v8.External).get();
+    const tao: *TaggedAnyOpaque = @ptrCast(@alignCast(op));
+    const expected_type_index = @field(types.LOOKUP, type_name);
+
+    var type_index = tao.index;
+    if (type_index == expected_type_index) {
+        return @ptrCast(@alignCast(tao.ptr));
+    }
+
+    const meta_lookup = self.meta_lookup;
+
+    // If we have N levels deep of prototypes, then the offset is the
+    // sum at each level...
+    var total_offset: usize = 0;
+
+    // ...unless, the proto is behind a pointer, then total_offset will
+    // get reset to 0, and our base_ptr will move to the address
+    // referenced by the proto field.
+    var base_ptr: usize = @intFromPtr(tao.ptr);
+
+    // search through the prototype tree
+    while (true) {
+        const proto_offset = meta_lookup[type_index].proto_offset;
+        if (proto_offset < 0) {
+            base_ptr = @as(*align(1) usize, @ptrFromInt(base_ptr + total_offset + @as(usize, @intCast(-proto_offset)))).*;
+            total_offset = 0;
+        } else {
+            total_offset += @intCast(proto_offset);
+        }
+
+        const prototype_index = types.PROTOTYPE_TABLE[type_index];
+        if (prototype_index == expected_type_index) {
+            return @ptrFromInt(base_ptr + total_offset);
+        }
+
+        if (prototype_index == type_index) {
+            // When a type has itself as the prototype, then we've
+            // reached the end of the chain.
+            return error.InvalidArgument;
+        }
+        type_index = prototype_index;
+    }
 }
 
 // Probing is part of trying to map a JS value to a Zig union. There's
@@ -993,587 +1679,6 @@ fn probeJsValueToZig(self: *Context, comptime named_function: NamedFunction, com
     return .{ .invalid = {} };
 }
 
-pub fn throw(self: *Context, err: []const u8) js.Exception {
-    const js_value = js._createException(self.isolate, err);
-    return self.createException(js_value);
-}
-
-pub fn initializeImportMeta(self: *Context, m: v8.Module, meta: v8.Object) !void {
-    const url = self.module_identifier.get(m.getIdentityHash()) orelse {
-        // Shouldn't be possible.
-        return error.UnknownModuleReferrer;
-    };
-
-    const js_key = v8.String.initUtf8(self.isolate, "url");
-    const js_value = try self.zigValueToJs(url);
-    const res = meta.defineOwnProperty(self.v8_context, js_key.toName(), js_value, 0) orelse false;
-    if (!res) {
-        return error.FailedToSet;
-    }
-}
-
-// Callback from V8, asking us to load a module. The "specifier" is
-// the src of the module to load.
-fn resolveModuleCallback(
-    c_context: ?*const v8.C_Context,
-    c_specifier: ?*const v8.C_String,
-    import_attributes: ?*const v8.C_FixedArray,
-    c_referrer: ?*const v8.C_Module,
-) callconv(.c) ?*const v8.C_Module {
-    _ = import_attributes;
-
-    const v8_context = v8.Context{ .handle = c_context.? };
-    const self: *Context = @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
-
-    const specifier = js.stringToZig(self.call_arena, .{ .handle = c_specifier.? }, self.isolate) catch |err| {
-        log.err(.js, "resolve module", .{ .err = err });
-        return null;
-    };
-    const referrer = v8.Module{ .handle = c_referrer.? };
-
-    return self._resolveModuleCallback(referrer, specifier) catch |err| {
-        log.err(.js, "resolve module", .{
-            .err = err,
-            .specifier = specifier,
-        });
-        return null;
-    };
-}
-
-fn _resolveModuleCallback(self: *Context, referrer: v8.Module, specifier: []const u8) !?*const v8.C_Module {
-    const referrer_path = self.module_identifier.get(referrer.getIdentityHash()) orelse {
-        // Shouldn't be possible.
-        return error.UnknownModuleReferrer;
-    };
-
-    const normalized_specifier = try @import("../../url.zig").stitch(
-        self.call_arena,
-        specifier,
-        referrer_path,
-        .{ .alloc = .if_needed, .null_terminated = true },
-    );
-
-    const gop = try self.module_cache.getOrPut(self.context_arena, normalized_specifier);
-    if (gop.found_existing) {
-        if (gop.value_ptr.module) |m| {
-            return m.handle;
-        }
-        // We don't have a module, but we do have a cache entry for it
-        // That means we're already trying to load it. We just have
-        // to wait for it to be done.
-    } else {
-        // I don't think it's possible for us to be here. This is
-        // only ever called by v8 when we evaluate a module. But
-        // before evaluating, we should have already started
-        // downloading all of the module's nested modules. So it
-        // should be impossible that this is the first time we've
-        // heard about this module.
-        // But, I'm not confident enough in that, and ther's little
-        // harm in handling this case.
-        @branchHint(.unlikely);
-        gop.value_ptr.* = .{};
-        try self.script_manager.?.getModule(normalized_specifier);
-    }
-
-    var fetch_result = try self.script_manager.?.waitForModule(normalized_specifier);
-    defer fetch_result.deinit();
-
-    var try_catch: js.TryCatch = undefined;
-    try_catch.init(self);
-    defer try_catch.deinit();
-
-    const entry = self.module(true, fetch_result.src(), normalized_specifier, true) catch |err| {
-        log.warn(.js, "compile resolved module", .{
-            .specifier = specifier,
-            .stack = try_catch.stack(self.call_arena) catch null,
-            .src = try_catch.sourceLine(self.call_arena) catch "err",
-            .line = try_catch.sourceLineNumber() orelse 0,
-            .exception = (try_catch.exception(self.call_arena) catch @errorName(err)) orelse @errorName(err),
-        });
-        return null;
-    };
-    // entry.module is always set when returning from self.module()
-    return entry.module.?.handle;
-}
-
-pub fn dynamicModuleCallback(
-    v8_ctx: ?*const v8.c.Context,
-    host_defined_options: ?*const v8.c.Data,
-    resource_name: ?*const v8.c.Value,
-    v8_specifier: ?*const v8.c.String,
-    import_attrs: ?*const v8.c.FixedArray,
-) callconv(.c) ?*v8.c.Promise {
-    _ = host_defined_options;
-    _ = import_attrs;
-
-    const ctx: v8.Context = .{ .handle = v8_ctx.? };
-    const self: *Context = @ptrFromInt(ctx.getEmbedderData(1).castTo(v8.BigInt).getUint64());
-    const isolate = self.isolate;
-
-    const resource = js.stringToZig(self.call_arena, .{ .handle = resource_name.? }, isolate) catch |err| {
-        log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback1" });
-        return @constCast(self.rejectPromise("Out of memory").handle);
-    };
-
-    const specifier = js.stringToZig(self.call_arena, .{ .handle = v8_specifier.? }, isolate) catch |err| {
-        log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback2" });
-        return @constCast(self.rejectPromise("Out of memory").handle);
-    };
-
-    const normalized_specifier = @import("../../url.zig").stitch(
-        self.context_arena, // might need to survive until the module is loaded
-        specifier,
-        resource,
-        .{ .alloc = .if_needed, .null_terminated = true },
-    ) catch |err| {
-        log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback3" });
-        return @constCast(self.rejectPromise("Out of memory").handle);
-    };
-
-    const promise = self._dynamicModuleCallback(normalized_specifier) catch |err| blk: {
-        log.err(.js, "dynamic module callback", .{
-            .err = err,
-        });
-        break :blk self.rejectPromise("Failed to load module");
-    };
-    return @constCast(promise.handle);
-}
-
-// Will get passed to ScriptManager and then passed back to us when
-// the src of the module is loaded
-const DynamicModuleResolveState = struct {
-    // The module that we're resolving (we'll actually resolve its
-    // namespace)
-    module: ?v8.Module,
-    context_id: usize,
-    context: *Context,
-    specifier: [:0]const u8,
-    resolver: v8.Persistent(v8.PromiseResolver),
-};
-
-fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8) !v8.Promise {
-    const isolate = self.isolate;
-    const gop = try self.module_cache.getOrPut(self.context_arena, specifier);
-    if (gop.found_existing and gop.value_ptr.resolver_promise != null) {
-        // This is easy, there's already something responsible
-        // for loading the module. Maybe it's still loading, maybe
-        // it's complete. Whatever, we can just return that promise.
-        return gop.value_ptr.resolver_promise.?.castToPromise();
-    }
-
-    const persistent_resolver = v8.Persistent(v8.PromiseResolver).init(isolate, v8.PromiseResolver.init(self.v8_context));
-    try self.persisted_promise_resolvers.append(self.context_arena, persistent_resolver);
-    var resolver = persistent_resolver.castToPromiseResolver();
-
-    const state = try self.context_arena.create(DynamicModuleResolveState);
-    state.* = .{
-        .module = null,
-        .context = self,
-        .specifier = specifier,
-        .context_id = self.id,
-        .resolver = persistent_resolver,
-    };
-
-    const persisted_promise = PersistentPromise.init(self.isolate, resolver.getPromise());
-    const promise = persisted_promise.castToPromise();
-
-    if (!gop.found_existing) {
-        // this module hasn't been seen before. This is the most
-        // complicated path.
-
-        // First, we'll setup a bare entry into our cache. This will
-        // prevent anyone one else from trying to asychronously load
-        // it. Instead, they can just return our promise.
-        gop.value_ptr.* = ModuleEntry{
-            .module = null,
-            .module_promise = null,
-            .resolver_promise = persisted_promise,
-        };
-
-        // Next, we need to actually load it.
-        self.script_manager.?.getAsyncModule(specifier, dynamicModuleSourceCallback, state) catch |err| {
-            const error_msg = v8.String.initUtf8(isolate, @errorName(err));
-            _ = resolver.reject(self.v8_context, error_msg.toValue());
-        };
-
-        // For now, we're done. but this will be continued in
-        // `dynamicModuleSourceCallback`, once the source for the
-        // moduel is loaded.
-        return promise;
-    }
-
-    // So we have a module, but no async resolver. This can only
-    // happen if the module was first synchronously loaded (Does that
-    // ever even happen?!) You'd think we cann just return the module
-    // but no, we need to resolve the module namespace, and the
-    // module could still be loading!
-    // We need to do part of what the first case is going to do in
-    // `dynamicModuleSourceCallback`, but we can skip some steps
-    // since the module is alrady loaded,
-    std.debug.assert(gop.value_ptr.module != null);
-    std.debug.assert(gop.value_ptr.module_promise != null);
-
-    // like before, we want to set this up so that if anything else
-    // tries to load this module, it can just return our promise
-    // since we're going to be doing all the work.
-    gop.value_ptr.resolver_promise = persisted_promise;
-
-    // But we can skip direclty to `resolveDynamicModule` which is
-    // what the above callback will eventually do.
-    self.resolveDynamicModule(state, gop.value_ptr.*);
-    return promise;
-}
-
-fn dynamicModuleSourceCallback(ctx: *anyopaque, fetch_result_: anyerror!ScriptManager.GetResult) void {
-    const state: *DynamicModuleResolveState = @ptrCast(@alignCast(ctx));
-    var self = state.context;
-
-    var fetch_result = fetch_result_ catch |err| {
-        const error_msg = v8.String.initUtf8(self.isolate, @errorName(err));
-        _ = state.resolver.castToPromiseResolver().reject(self.v8_context, error_msg.toValue());
-        return;
-    };
-
-    const module_entry = blk: {
-        defer fetch_result.deinit();
-
-        var try_catch: js.TryCatch = undefined;
-        try_catch.init(self);
-        defer try_catch.deinit();
-
-        break :blk self.module(true, fetch_result.src(), state.specifier, true) catch {
-            const ex = try_catch.exception(self.call_arena) catch |err| @errorName(err) orelse "unknown error";
-            log.err(.js, "module compilation failed", .{
-                .specifier = state.specifier,
-                .exception = ex,
-                .stack = try_catch.stack(self.call_arena) catch null,
-                .line = try_catch.sourceLineNumber() orelse 0,
-            });
-            const error_msg = v8.String.initUtf8(self.isolate, ex);
-            _ = state.resolver.castToPromiseResolver().reject(self.v8_context, error_msg.toValue());
-            return;
-        };
-    };
-
-    self.resolveDynamicModule(state, module_entry);
-}
-
-fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, module_entry: ModuleEntry) void {
-    const ctx = self.v8_context;
-    const isolate = self.isolate;
-    const external = v8.External.init(self.isolate, @ptrCast(state));
-
-    // we can only be here if the module has been evaluated and if
-    // we have a resolve loading this asynchronously.
-    std.debug.assert(module_entry.module_promise != null);
-    std.debug.assert(module_entry.resolver_promise != null);
-    std.debug.assert(self.module_cache.contains(state.specifier));
-    state.module = module_entry.module.?.castToModule();
-
-    // We've gotten the source for the module and are evaluating it.
-    // You might think we're done, but the module evaluation is
-    // itself asynchronous. We need to chain to the module's own
-    // promise. When the module is evaluated, it resolves to the
-    // last value of the module. But, for module loading, we need to
-    // resolve to the module's namespace.
-
-    const then_callback = v8.Function.initWithData(ctx, struct {
-        pub fn callback(raw_info: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
-            var info = v8.FunctionCallbackInfo.initFromV8(raw_info);
-            var caller = Caller.init(info);
-            defer caller.deinit();
-
-            const s: *DynamicModuleResolveState = @ptrCast(@alignCast(info.getExternalValue()));
-
-            if (s.context_id != caller.context.id) {
-                // The microtask is tied to the isolate, not the context
-                // it can be resolved while another context is active
-                // (Which seems crazy to me). If that happens, then
-                // another page was loaded and we MUST ignore this
-                // (most of the fields in state are not valid)
-                return;
-            }
-
-            const namespace = s.module.?.getModuleNamespace();
-            _ = s.resolver.castToPromiseResolver().resolve(caller.context.v8_context, namespace);
-        }
-    }.callback, external);
-
-    const catch_callback = v8.Function.initWithData(ctx, struct {
-        pub fn callback(raw_info: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
-            var info = v8.FunctionCallbackInfo.initFromV8(raw_info);
-            var caller = Caller.init(info);
-            defer caller.deinit();
-
-            const s: *DynamicModuleResolveState = @ptrCast(@alignCast(info.getExternalValue()));
-            if (s.context_id != caller.context.id) {
-                return;
-            }
-            _ = s.resolver.castToPromiseResolver().reject(caller.context.v8_context, info.getData());
-        }
-    }.callback, external);
-
-    _ = module_entry.module_promise.?.castToPromise().thenAndCatch(ctx, then_callback, catch_callback) catch |err| {
-        log.err(.js, "module evaluation is promise", .{
-            .err = err,
-            .specifier = state.specifier,
-        });
-        const error_msg = v8.String.initUtf8(isolate, "Failed to evaluate promise");
-        _ = state.resolver.castToPromiseResolver().reject(ctx, error_msg.toValue());
-    };
-}
-
-// Reverses the mapZigInstanceToJs, making sure that our TaggedAnyOpaque
-// contains a ptr to the correct type.
-pub fn typeTaggedAnyOpaque(self: *const Context, comptime named_function: NamedFunction, comptime R: type, js_obj: v8.Object) !R {
-    const ti = @typeInfo(R);
-    if (ti != .pointer) {
-        @compileError(named_function.full_name ++ "has a non-pointer Zig parameter type: " ++ @typeName(R));
-    }
-
-    const T = ti.pointer.child;
-    if (comptime types.isEmpty(T)) {
-        // Empty structs aren't stored as TOAs and there's no data
-        // stored in the JSObject's IntenrnalField. Why bother when
-        // we can just return an empty struct here?
-        return @constCast(@as(*const T, &.{}));
-    }
-
-    // if it isn't an empty struct, then the v8.Object should have an
-    // InternalFieldCount > 0, since our toa pointer should be embedded
-    // at index 0 of the internal field count.
-    if (js_obj.internalFieldCount() == 0) {
-        return error.InvalidArgument;
-    }
-
-    const type_name = @typeName(T);
-    if (@hasField(types.Lookup, type_name) == false) {
-        @compileError(named_function.full_name ++ "has an unknown Zig type: " ++ @typeName(R));
-    }
-
-    const op = js_obj.getInternalField(0).castTo(v8.External).get();
-    const tao: *TaggedAnyOpaque = @ptrCast(@alignCast(op));
-    const expected_type_index = @field(types.LOOKUP, type_name);
-
-    var type_index = tao.index;
-    if (type_index == expected_type_index) {
-        return @ptrCast(@alignCast(tao.ptr));
-    }
-
-    const meta_lookup = self.meta_lookup;
-
-    // If we have N levels deep of prototypes, then the offset is the
-    // sum at each level...
-    var total_offset: usize = 0;
-
-    // ...unless, the proto is behind a pointer, then total_offset will
-    // get reset to 0, and our base_ptr will move to the address
-    // referenced by the proto field.
-    var base_ptr: usize = @intFromPtr(tao.ptr);
-
-    // search through the prototype tree
-    while (true) {
-        const proto_offset = meta_lookup[type_index].proto_offset;
-        if (proto_offset < 0) {
-            base_ptr = @as(*align(1) usize, @ptrFromInt(base_ptr + total_offset + @as(usize, @intCast(-proto_offset)))).*;
-            total_offset = 0;
-        } else {
-            total_offset += @intCast(proto_offset);
-        }
-
-        const prototype_index = types.PROTOTYPE_TABLE[type_index];
-        if (prototype_index == expected_type_index) {
-            return @ptrFromInt(base_ptr + total_offset);
-        }
-
-        if (prototype_index == type_index) {
-            // When a type has itself as the prototype, then we've
-            // reached the end of the chain.
-            return error.InvalidArgument;
-        }
-        type_index = prototype_index;
-    }
-}
-
-// An interface for types that want to have their jsDeinit function to be
-// called when the call context ends
-const DestructorCallback = struct {
-    ptr: *anyopaque,
-    destructorFn: *const fn (ptr: *anyopaque) void,
-
-    fn init(ptr: anytype) DestructorCallback {
-        const T = @TypeOf(ptr);
-        const ptr_info = @typeInfo(T);
-
-        const gen = struct {
-            pub fn destructor(pointer: *anyopaque) void {
-                const self: T = @ptrCast(@alignCast(pointer));
-                return ptr_info.pointer.child.destructor(self);
-            }
-        };
-
-        return .{
-            .ptr = ptr,
-            .destructorFn = gen.destructor,
-        };
-    }
-
-    pub fn destructor(self: DestructorCallback) void {
-        self.destructorFn(self.ptr);
-    }
-};
-
-// Turns a Zig value into a JS one.
-fn _zigValueToJs(
-    templates: []v8.FunctionTemplate,
-    isolate: v8.Isolate,
-    v8_context: v8.Context,
-    value: anytype,
-) anyerror!v8.Value {
-    // Check if it's a "simple" type. This is extracted so that it can be
-    // reused by other parts of the code. "simple" types only require an
-    // isolate to create (specifically, they don't our templates array)
-    if (js.simpleZigValueToJs(isolate, value, false)) |js_value| {
-        return js_value;
-    }
-
-    const T = @TypeOf(value);
-    switch (@typeInfo(T)) {
-        .void, .bool, .int, .comptime_int, .float, .comptime_float, .@"enum", .null => {
-            // Need to do this to keep the compiler happy
-            // simpleZigValueToJs handles all of these cases.
-            unreachable;
-        },
-        .array => {
-            var js_arr = v8.Array.init(isolate, value.len);
-            var js_obj = js_arr.castTo(v8.Object);
-            for (value, 0..) |v, i| {
-                const js_val = try _zigValueToJs(templates, isolate, v8_context, v);
-                if (js_obj.setValueAtIndex(v8_context, @intCast(i), js_val) == false) {
-                    return error.FailedToCreateArray;
-                }
-            }
-            return js_obj.toValue();
-        },
-        .pointer => |ptr| switch (ptr.size) {
-            .one => {
-                const type_name = @typeName(ptr.child);
-                if (@hasField(types.Lookup, type_name)) {
-                    const template = templates[@field(types.LOOKUP, type_name)];
-                    const js_obj = try Context.mapZigInstanceToJs(v8_context, template, value);
-                    return js_obj.toValue();
-                }
-
-                const one_info = @typeInfo(ptr.child);
-                if (one_info == .array and one_info.array.child == u8) {
-                    // Need to do this to keep the compiler happy
-                    // If this was the case, simpleZigValueToJs would
-                    // have handled it
-                    unreachable;
-                }
-            },
-            .slice => {
-                if (ptr.child == u8) {
-                    // Need to do this to keep the compiler happy
-                    // If this was the case, simpleZigValueToJs would
-                    // have handled it
-                    unreachable;
-                }
-                var js_arr = v8.Array.init(isolate, @intCast(value.len));
-                var js_obj = js_arr.castTo(v8.Object);
-
-                for (value, 0..) |v, i| {
-                    const js_val = try _zigValueToJs(templates, isolate, v8_context, v);
-                    if (js_obj.setValueAtIndex(v8_context, @intCast(i), js_val) == false) {
-                        return error.FailedToCreateArray;
-                    }
-                }
-                return js_obj.toValue();
-            },
-            else => {},
-        },
-        .@"struct" => |s| {
-            const type_name = @typeName(T);
-            if (@hasField(types.Lookup, type_name)) {
-                const template = templates[@field(types.LOOKUP, type_name)];
-                const js_obj = try Context.mapZigInstanceToJs(v8_context, template, value);
-                return js_obj.toValue();
-            }
-
-            if (T == js.Function) {
-                // we're returning a callback
-                return value.func.toValue();
-            }
-
-            if (T == js.Object) {
-                // we're returning a v8.Object
-                return value.js_obj.toValue();
-            }
-
-            if (T == js.Value) {
-                return value.value;
-            }
-
-            if (T == js.Promise) {
-                // we're returning a v8.Promise
-                return value.promise.toObject().toValue();
-            }
-
-            if (T == js.Exception) {
-                return isolate.throwException(value.inner);
-            }
-
-            if (s.is_tuple) {
-                // return the tuple struct as an array
-                var js_arr = v8.Array.init(isolate, @intCast(s.fields.len));
-                var js_obj = js_arr.castTo(v8.Object);
-                inline for (s.fields, 0..) |f, i| {
-                    const js_val = try _zigValueToJs(templates, isolate, v8_context, @field(value, f.name));
-                    if (js_obj.setValueAtIndex(v8_context, @intCast(i), js_val) == false) {
-                        return error.FailedToCreateArray;
-                    }
-                }
-                return js_obj.toValue();
-            }
-
-            // return the struct as a JS object
-            const js_obj = v8.Object.init(isolate);
-            inline for (s.fields) |f| {
-                const js_val = try _zigValueToJs(templates, isolate, v8_context, @field(value, f.name));
-                const key = v8.String.initUtf8(isolate, f.name);
-                if (!js_obj.setValue(v8_context, key, js_val)) {
-                    return error.CreateObjectFailure;
-                }
-            }
-            return js_obj.toValue();
-        },
-        .@"union" => |un| {
-            if (T == std.json.Value) {
-                return zigJsonToJs(isolate, v8_context, value);
-            }
-            if (un.tag_type) |UnionTagType| {
-                inline for (un.fields) |field| {
-                    if (value == @field(UnionTagType, field.name)) {
-                        return _zigValueToJs(templates, isolate, v8_context, @field(value, field.name));
-                    }
-                }
-                unreachable;
-            }
-            @compileError("Cannot use untagged union: " ++ @typeName(T));
-        },
-        .optional => {
-            if (value) |v| {
-                return _zigValueToJs(templates, isolate, v8_context, v);
-            }
-            return v8.initNull(isolate).toValue();
-        },
-        .error_union => return _zigValueToJs(templates, isolate, v8_context, try value),
-        else => {},
-    }
-
-    @compileError("A function returns an unsupported type: " ++ @typeName(T));
-}
-
 fn jsIntToZig(comptime T: type, js_value: v8.Value, v8_context: v8.Context) !T {
     const n = @typeInfo(T).int;
     switch (n.signedness) {
@@ -1619,28 +1724,6 @@ fn jsUnsignedIntToZig(comptime T: type, max: comptime_int, maybe: u32) !T {
         return @intCast(maybe);
     }
     return error.InvalidArgument;
-}
-
-pub fn stackForLogs(arena: Allocator, isolate: v8.Isolate) !?[]const u8 {
-    std.debug.assert(@import("builtin").mode == .Debug);
-
-    const separator = log.separator();
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    var writer = buf.writer(arena);
-
-    const stack_trace = v8.StackTrace.getCurrentStackTrace(isolate, 30);
-    const frame_count = stack_trace.getFrameCount();
-
-    for (0..frame_count) |i| {
-        const frame = stack_trace.getFrame(isolate, @intCast(i));
-        if (frame.getScriptName()) |name| {
-            const script = try js.stringToZig(arena, name, isolate);
-            try writer.print("{s}{s}:{d}", .{ separator, script, frame.getLineNumber() });
-        } else {
-            try writer.print("{s}<anonymous>:{d}", .{ separator, frame.getLineNumber() });
-        }
-    }
-    return buf.items;
 }
 
 fn compileScript(isolate: v8.Isolate, ctx: v8.Context, src: []const u8, name: ?[]const u8) !v8.Script {
@@ -1729,3 +1812,32 @@ fn zigJsonToJs(isolate: v8.Isolate, v8_context: v8.Context, value: std.json.Valu
         },
     }
 }
+
+// == Misc ==
+// An interface for types that want to have their jsDeinit function to be
+// called when the call context ends
+const DestructorCallback = struct {
+    ptr: *anyopaque,
+    destructorFn: *const fn (ptr: *anyopaque) void,
+
+    fn init(ptr: anytype) DestructorCallback {
+        const T = @TypeOf(ptr);
+        const ptr_info = @typeInfo(T);
+
+        const gen = struct {
+            pub fn destructor(pointer: *anyopaque) void {
+                const self: T = @ptrCast(@alignCast(pointer));
+                return ptr_info.pointer.child.destructor(self);
+            }
+        };
+
+        return .{
+            .ptr = ptr,
+            .destructorFn = gen.destructor,
+        };
+    }
+
+    pub fn destructor(self: DestructorCallback) void {
+        self.destructorFn(self.ptr);
+    }
+};

@@ -21,15 +21,14 @@ pub fn hasCaught(self: TryCatch) bool {
 // the caller needs to deinit the string returned
 pub fn exception(self: TryCatch, allocator: Allocator) !?[]const u8 {
     const msg = self.inner.getException() orelse return null;
-    const context = self.context;
-    return try js.valueToString(allocator, msg, context.isolate, context.v8_context);
+    return try self.context.valueToString(msg, .{ .allocator = allocator });
 }
 
 // the caller needs to deinit the string returned
 pub fn stack(self: TryCatch, allocator: Allocator) !?[]const u8 {
     const context = self.context;
     const s = self.inner.getStackTrace(context.v8_context) orelse return null;
-    return try js.valueToString(allocator, s, context.isolate, context.v8_context);
+    return try context.valueToString(s, .{ .allocator = allocator });
 }
 
 // the caller needs to deinit the string returned
@@ -37,7 +36,7 @@ pub fn sourceLine(self: TryCatch, allocator: Allocator) !?[]const u8 {
     const context = self.context;
     const msg = self.inner.getMessage() orelse return null;
     const sl = msg.getSourceLine(context.v8_context) orelse return null;
-    return try js.stringToZig(allocator, sl, context.isolate);
+    return try context.jsStringToZig(sl, .{ .allocator = allocator });
 }
 
 pub fn sourceLineNumber(self: TryCatch) ?u32 {

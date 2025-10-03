@@ -105,8 +105,8 @@ const QueueingStrategy = struct {
 pub fn constructor(underlying: ?UnderlyingSource, _strategy: ?QueueingStrategy, page: *Page) !*ReadableStream {
     const strategy: QueueingStrategy = _strategy orelse .{};
 
-    const cancel_resolver = try page.main_context.createPersistentPromiseResolver(.self);
-    const closed_resolver = try page.main_context.createPersistentPromiseResolver(.self);
+    const cancel_resolver = try page.js.createPromiseResolver(.self);
+    const closed_resolver = try page.js.createPromiseResolver(.self);
 
     const stream = try page.arena.create(ReadableStream);
     stream.* = ReadableStream{

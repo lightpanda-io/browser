@@ -304,7 +304,7 @@ pub const Document = struct {
             return obj;
         }
 
-        const obj = try page.main_context.newArray(0).persist();
+        const obj = try page.js.createArray(0).persist();
         state.adopted_style_sheets = obj;
         return obj;
     }

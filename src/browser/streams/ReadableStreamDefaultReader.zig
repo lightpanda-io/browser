@@ -47,43 +47,26 @@ pub fn _read(self: *const ReadableStreamDefaultReader, page: *Page) !js.Promise 
         .readable => {
             if (stream.queue.items.len > 0) {
                 const data = self.stream.queue.orderedRemove(0);
-                const resolver = page.main_context.createPromiseResolver();
-
-                try resolver.resolve(ReadableStreamReadResult.init(data, false));
+                const promise = page.js.resolvePromise(ReadableStreamReadResult.init(data, false));
                 try self.stream.pullIf();
-                return resolver.promise();
-            } else {
-                if (self.stream.reader_resolver) |rr| {
-                    return rr.promise();
-                } else {
-                    const persistent_resolver = try page.main_context.createPersistentPromiseResolver(.page);
-                    self.stream.reader_resolver = persistent_resolver;
-                    return persistent_resolver.promise();
-                }
+                return promise;
             }
+            if (self.stream.reader_resolver) |rr| {
+                return rr.promise();
+            }
+            const persistent_resolver = try page.js.createPromiseResolver(.page);
+            self.stream.reader_resolver = persistent_resolver;
+            return persistent_resolver.promise();
         },
         .closed => |_| {
-            const resolver = page.main_context.createPromiseResolver();
-
             if (stream.queue.items.len > 0) {
                 const data = self.stream.queue.orderedRemove(0);
-                try resolver.resolve(ReadableStreamReadResult.init(data, false));
-            } else {
-                try resolver.resolve(ReadableStreamReadResult{ .done = true });
+                return page.js.resolvePromise(ReadableStreamReadResult.init(data, false));
             }
-
-            return resolver.promise();
+            return page.js.resolvePromise(ReadableStreamReadResult{ .done = true });
         },
-        .cancelled => |_| {
-            const resolver = page.main_context.createPromiseResolver();
-            try resolver.resolve(ReadableStreamReadResult{ .value = .empty, .done = true });
-            return resolver.promise();
-        },
-        .errored => |err| {
-            const resolver = page.main_context.createPromiseResolver();
-            try resolver.reject(err);
-            return resolver.promise();
-        },
+        .cancelled => |_| return page.js.resolvePromise(ReadableStreamReadResult{ .value = .empty, .done = true }),
+        .errored => |err| return page.js.rejectPromise(err),
     }
 }
 

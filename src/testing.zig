@@ -395,7 +395,7 @@ pub fn htmlRunner(file: []const u8) !void {
 
     page.arena = @import("root").tracking_allocator;
 
-    const js_context = page.main_context;
+    const js_context = page.js;
     var try_catch: js.TryCatch = undefined;
     try_catch.init(js_context);
     defer try_catch.deinit();
@@ -409,7 +409,7 @@ pub fn htmlRunner(file: []const u8) !void {
     page.session.browser.runMessageLoop();
 
     const needs_second_wait = try js_context.exec("testing._onPageWait.length > 0", "check_onPageWait");
-    if (needs_second_wait.value.toBool(page.main_context.isolate)) {
+    if (needs_second_wait.value.toBool(page.js.isolate)) {
         // sets the isSecondWait flag in testing.
         _ = js_context.exec("testing._isSecondWait = true", "set_second_wait_flag") catch {};
         _ = page.wait(2000);

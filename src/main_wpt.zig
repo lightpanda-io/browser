@@ -123,7 +123,7 @@ fn run(
 
     _ = page.wait(2000);
 
-    const js_context = page.main_context;
+    const js_context = page.js;
     var try_catch: js.TryCatch = undefined;
     try_catch.init(js_context);
     defer try_catch.deinit();

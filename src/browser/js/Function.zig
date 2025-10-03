@@ -22,7 +22,7 @@ pub const Result = struct {
 
 pub fn getName(self: *const Function, allocator: Allocator) ![]const u8 {
     const name = self.func.castToFunction().getName();
-    return js.valueToString(allocator, name, self.context.isolate, self.context.v8_context);
+    return self.context.valueToString(name, .{ .allocator = allocator });
 }
 
 pub fn setName(self: *const Function, name: []const u8) void {

@@ -74,15 +74,7 @@ pub fn init(allocator: Allocator, platform: *const Platform, _: Opts) !*Env {
     isolate.enter();
     errdefer isolate.exit();
 
-    isolate.setHostInitializeImportMetaObjectCallback(struct {
-        fn callback(c_context: ?*v8.C_Context, c_module: ?*v8.C_Module, c_meta: ?*v8.C_Value) callconv(.c) void {
-            const v8_context = v8.Context{ .handle = c_context.? };
-            const context: *Context = @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
-            context.initializeImportMeta(v8.Module{ .handle = c_module.? }, v8.Object{ .handle = c_meta.? }) catch |err| {
-                log.err(.js, "import meta", .{ .err = err });
-            };
-        }
-    }.callback);
+    isolate.setHostInitializeImportMetaObjectCallback(Context.metaObjectCallback);
 
     var temp_scope: v8.HandleScope = undefined;
     v8.HandleScope.init(&temp_scope, isolate);
@@ -226,11 +218,10 @@ pub fn dumpMemoryStats(self: *Env) void {
 fn promiseRejectCallback(v8_msg: v8.C_PromiseRejectMessage) callconv(.c) void {
     const msg = v8.PromiseRejectMessage.initFromC(v8_msg);
     const isolate = msg.getPromise().toObject().getIsolate();
-    const v8_context = isolate.getCurrentContext();
-    const context: *Context = @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
+    const context = Context.fromIsolate(isolate);
 
     const value =
-        if (msg.getValue()) |v8_value| js.valueToString(context.call_arena, v8_value, isolate, v8_context) catch |err| @errorName(err) else "no value";
+        if (msg.getValue()) |v8_value| context.valueToString(v8_value, .{}) catch |err| @errorName(err) else "no value";
 
     log.debug(.js, "unhandled rejection", .{ .value = value });
 }

@@ -131,7 +131,7 @@ pub fn fetch(input: RequestInput, options: ?RequestInit, page: *Page) !js.Promis
 
     try page.requestCookie(.{}).headersForRequest(arena, req.url, &headers);
 
-    const resolver = try page.main_context.createPersistentPromiseResolver(.page);
+    const resolver = try page.js.createPromiseResolver(.page);
 
     const fetch_ctx = try arena.create(FetchContext);
     fetch_ctx.* = .{
