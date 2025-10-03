@@ -79,9 +79,7 @@ pub fn _replace(self: *CSSStyleSheet, text: []const u8, page: *Page) !js.Promise
     // TODO: clear self.css_rules
     // parse text and re-populate self.css_rules
 
-    const resolver = page.main_context.createPromiseResolver();
-    try resolver.resolve({});
-    return resolver.promise();
+    return page.js.resolvePromise({});
 }
 
 pub fn _replaceSync(self: *CSSStyleSheet, text: []const u8) !void {

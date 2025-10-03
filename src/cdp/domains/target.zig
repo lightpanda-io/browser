@@ -147,7 +147,7 @@ fn createTarget(cmd: anytype) !void {
     {
         const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
         bc.inspector.contextCreated(
-            page.main_context,
+            page.js,
             "",
             try page.origin(cmd.arena),
             aux_data,

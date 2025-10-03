@@ -52,24 +52,22 @@ pub fn isTruthy(self: Object) bool {
 }
 
 pub fn toString(self: Object) ![]const u8 {
-    const context = self.context;
     const js_value = self.js_obj.toValue();
-    return js.valueToString(context.call_arena, js_value, context.isolate, context.v8_context);
+    return self.context.valueToString(js_value, .{});
 }
 
 pub fn toDetailString(self: Object) ![]const u8 {
-    const context = self.context;
     const js_value = self.js_obj.toValue();
-    return js.valueToDetailString(context.call_arena, js_value, context.isolate, context.v8_context);
+    return self.context.valueToDetailString(js_value);
 }
 
 pub fn format(self: Object, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
     return writer.writeAll(try self.toString());
 }
 
-pub fn toJson(self: Object, allocator: std.mem.Allocator) ![]u8 {
+pub fn toJson(self: Object, allocator: Allocator) ![]u8 {
     const json_string = try v8.Json.stringify(self.context.v8_context, self.js_obj.toValue(), null);
-    const str = try js.stringToZig(allocator, json_string, self.context.isolate);
+    const str = try self.context.jsStringToZig(json_string, .{ .allocator = allocator });
     return str;
 }
 
@@ -135,11 +133,6 @@ pub fn nameIterator(self: Object) js.ValueIterator {
         .context = context,
         .js_obj = array.castTo(v8.Object),
     };
-}
-
-pub fn constructorName(self: Object, allocator: Allocator) ![]const u8 {
-    const str = try self.js_obj.getConstructorName();
-    return js.StringToZig(allocator, str, self.context.isolate);
 }
 
 pub fn toZig(self: Object, comptime Struct: type, comptime name: []const u8, comptime T: type) !T {

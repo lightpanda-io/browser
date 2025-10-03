@@ -77,9 +77,9 @@ pub fn constructor(self: *Caller, comptime Struct: type, comptime named_function
     const this = info.getThis();
     if (@typeInfo(ReturnType) == .error_union) {
         const non_error_res = res catch |err| return err;
-        _ = try Context.mapZigInstanceToJs(self.v8_context, this, non_error_res);
+        _ = try self.context.mapZigInstanceToJs(this, non_error_res);
     } else {
-        _ = try Context.mapZigInstanceToJs(self.v8_context, this, res);
+        _ = try self.context.mapZigInstanceToJs(this, res);
     }
     info.getReturnValue().set(this);
 }
@@ -209,7 +209,7 @@ fn namedSetOrDeleteCall(res: anytype, has_value: bool) !u8 {
 }
 
 fn nameToString(self: *Caller, name: v8.Name) ![]const u8 {
-    return js.valueToString(self.call_arena, .{ .handle = name.handle }, self.isolate, self.v8_context);
+    return self.context.valueToString(.{ .handle = name.handle }, .{});
 }
 
 fn isSelfReceiver(comptime Struct: type, comptime named_function: NamedFunction) bool {
@@ -258,7 +258,7 @@ pub fn handleError(self: *Caller, comptime Struct: type, comptime named_function
 
     if (comptime @import("builtin").mode == .Debug and @hasDecl(@TypeOf(info), "length")) {
         if (log.enabled(.js, .warn)) {
-            logFunctionCallError(self.call_arena, self.isolate, self.v8_context, err, named_function.full_name, info);
+            self.logFunctionCallError(err, named_function.full_name, info);
         }
     }
 
@@ -461,6 +461,38 @@ fn getArgs(self: *const Caller, comptime Struct: type, comptime named_function: 
     return args;
 }
 
+// This is extracted to speed up compilation. When left inlined in handleError,
+// this can add as much as 10 seconds of compilation time.
+fn logFunctionCallError(self: *Caller, err: anyerror, function_name: []const u8, info: v8.FunctionCallbackInfo) void {
+    const args_dump = self.serializeFunctionArgs(info) catch "failed to serialize args";
+    log.info(.js, "function call error", .{
+        .name = function_name,
+        .err = err,
+        .args = args_dump,
+        .stack = self.context.stackTrace() catch |err1| @errorName(err1),
+    });
+}
+
+fn serializeFunctionArgs(self: *Caller, info: v8.FunctionCallbackInfo) ![]const u8 {
+    const separator = log.separator();
+    const js_parameter_count = info.length();
+
+    const context = self.context;
+    var arr: std.ArrayListUnmanaged(u8) = .{};
+    for (0..js_parameter_count) |i| {
+        const js_value = info.getArg(@intCast(i));
+        const value_string = try context.valueToDetailString(js_value);
+        const value_type = try context.jsStringToZig(try js_value.typeOf(self.isolate), .{});
+        try std.fmt.format(arr.writer(context.call_arena), "{s}{d}: {s} ({s})", .{
+            separator,
+            i + 1,
+            value_string,
+            value_type,
+        });
+    }
+    return arr.items;
+}
+
 // We want the function name, or more precisely, the "Struct.function" for
 // displaying helpful @compileError.
 // However, there's no way to get the name from a std.Builtin.Fn, so we create
@@ -522,37 +554,6 @@ fn tupleFieldName(comptime i: usize) [:0]const u8 {
 
 fn isPage(comptime T: type) bool {
     return T == *Page or T == *const Page;
-}
-
-// This is extracted to speed up compilation. When left inlined in handleError,
-// this can add as much as 10 seconds of compilation time.
-fn logFunctionCallError(arena: Allocator, isolate: v8.Isolate, context: v8.Context, err: anyerror, function_name: []const u8, info: v8.FunctionCallbackInfo) void {
-    const args_dump = serializeFunctionArgs(arena, isolate, context, info) catch "failed to serialize args";
-    log.info(.js, "function call error", .{
-        .name = function_name,
-        .err = err,
-        .args = args_dump,
-        .stack = Context.stackForLogs(arena, isolate) catch |err1| @errorName(err1),
-    });
-}
-
-fn serializeFunctionArgs(arena: Allocator, isolate: v8.Isolate, context: v8.Context, info: v8.FunctionCallbackInfo) ![]const u8 {
-    const separator = log.separator();
-    const js_parameter_count = info.length();
-
-    var arr: std.ArrayListUnmanaged(u8) = .{};
-    for (0..js_parameter_count) |i| {
-        const js_value = info.getArg(@intCast(i));
-        const value_string = try js.valueToDetailString(arena, js_value, isolate, context);
-        const value_type = try js.stringToZig(arena, try js_value.typeOf(isolate), isolate);
-        try std.fmt.format(arr.writer(arena), "{s}{d}: {s} ({s})", .{
-            separator,
-            i + 1,
-            value_string,
-            value_type,
-        });
-    }
-    return arr.items;
 }
 
 fn createTypeException(isolate: v8.Isolate, msg: []const u8) v8.Value {

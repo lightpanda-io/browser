@@ -23,7 +23,3 @@ pub fn setIndex(self: This, index: u32, value: anytype, opts: js.Object.SetOpts)
 pub fn set(self: This, key: []const u8, value: anytype, opts: js.Object.SetOpts) !void {
     return self.obj.set(key, value, opts);
 }
-
-pub fn constructorName(self: This, allocator: Allocator) ![]const u8 {
-    return try self.obj.constructorName(allocator);
-}

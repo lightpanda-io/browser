@@ -37,7 +37,6 @@ const domcss = @import("../dom/css.zig");
 const Css = @import("../css/css.zig").Css;
 const EventHandler = @import("../events/event.zig").EventHandler;
 
-const v8 = @import("v8");
 const Request = @import("../fetch/Request.zig");
 const fetchFn = @import("../fetch/fetch.zig").fetch;
 
