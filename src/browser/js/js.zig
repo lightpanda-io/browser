@@ -573,7 +573,7 @@ pub export fn v8_inspector__Client__IMPL__valueSubtype(
     _: *v8.c.InspectorClientImpl,
     c_value: *const v8.C_Value,
 ) callconv(.c) [*c]const u8 {
-    const external_entry = getTaggedAnyOpaque(.{ .handle = c_value }) orelse return null;
+    const external_entry = Inspector.getTaggedAnyOpaque(.{ .handle = c_value }) orelse return null;
     return if (external_entry.subtype) |st| @tagName(st) else null;
 }
 
@@ -590,19 +590,6 @@ pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
 
     // We _must_ include a non-null description in order for the subtype value
     // to be included. Besides that, I don't know if the value has any meaning
-    const external_entry = getTaggedAnyOpaque(.{ .handle = c_value }) orelse return null;
+    const external_entry = Inspector.getTaggedAnyOpaque(.{ .handle = c_value }) orelse return null;
     return if (external_entry.subtype == null) null else "";
-}
-
-fn getTaggedAnyOpaque(value: v8.Value) ?*TaggedAnyOpaque {
-    if (value.isObject() == false) {
-        return null;
-    }
-    const obj = value.castTo(v8.Object);
-    if (obj.internalFieldCount() == 0) {
-        return null;
-    }
-
-    const external_data = obj.getInternalField(0).castTo(v8.External).get().?;
-    return @ptrCast(@alignCast(external_data));
 }

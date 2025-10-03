@@ -111,35 +111,7 @@ const NoopInspector = struct {
     pub fn onInspectorEvent(_: *anyopaque, _: []const u8) void {}
 };
 
-// This is called from V8. Whenever the v8 inspector has to describe a value
-// it'll call this function to gets its [optional] subtype - which, from V8's
-// point of view, is an arbitrary string.
-pub export fn v8_inspector__Client__IMPL__valueSubtype(
-    _: *v8.c.InspectorClientImpl,
-    c_value: *const v8.C_Value,
-) callconv(.c) [*c]const u8 {
-    const external_entry = getTaggedAnyOpaque(.{ .handle = c_value }) orelse return null;
-    return if (external_entry.subtype) |st| @tagName(st) else null;
-}
-
-// Same as valueSubType above, but for the optional description field.
-// From what I can tell, some drivers _need_ the description field to be
-// present, even if it's empty. So if we have a subType for the value, we'll
-// put an empty description.
-pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
-    _: *v8.c.InspectorClientImpl,
-    v8_context: *const v8.C_Context,
-    c_value: *const v8.C_Value,
-) callconv(.c) [*c]const u8 {
-    _ = v8_context;
-
-    // We _must_ include a non-null description in order for the subtype value
-    // to be included. Besides that, I don't know if the value has any meaning
-    const external_entry = getTaggedAnyOpaque(.{ .handle = c_value }) orelse return null;
-    return if (external_entry.subtype == null) null else "";
-}
-
-fn getTaggedAnyOpaque(value: v8.Value) ?*js.TaggedAnyOpaque {
+pub fn getTaggedAnyOpaque(value: v8.Value) ?*js.TaggedAnyOpaque {
     if (value.isObject() == false) {
         return null;
     }
