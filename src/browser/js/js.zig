@@ -562,3 +562,47 @@ fn debugValueToString(arena: Allocator, js_obj: v8.Object, isolate: v8.Isolate, 
     }
     return arr.items;
 }
+
+// These are here, and not in Inspector.zig, because Inspector.zig isn't always
+// included (e.g. in the wpt build).
+
+// This is called from V8. Whenever the v8 inspector has to describe a value
+// it'll call this function to gets its [optional] subtype - which, from V8's
+// point of view, is an arbitrary string.
+pub export fn v8_inspector__Client__IMPL__valueSubtype(
+    _: *v8.c.InspectorClientImpl,
+    c_value: *const v8.C_Value,
+) callconv(.c) [*c]const u8 {
+    const external_entry = getTaggedAnyOpaque(.{ .handle = c_value }) orelse return null;
+    return if (external_entry.subtype) |st| @tagName(st) else null;
+}
+
+// Same as valueSubType above, but for the optional description field.
+// From what I can tell, some drivers _need_ the description field to be
+// present, even if it's empty. So if we have a subType for the value, we'll
+// put an empty description.
+pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
+    _: *v8.c.InspectorClientImpl,
+    v8_context: *const v8.C_Context,
+    c_value: *const v8.C_Value,
+) callconv(.c) [*c]const u8 {
+    _ = v8_context;
+
+    // We _must_ include a non-null description in order for the subtype value
+    // to be included. Besides that, I don't know if the value has any meaning
+    const external_entry = getTaggedAnyOpaque(.{ .handle = c_value }) orelse return null;
+    return if (external_entry.subtype == null) null else "";
+}
+
+fn getTaggedAnyOpaque(value: v8.Value) ?*TaggedAnyOpaque {
+    if (value.isObject() == false) {
+        return null;
+    }
+    const obj = value.castTo(v8.Object);
+    if (obj.internalFieldCount() == 0) {
+        return null;
+    }
+
+    const external_data = obj.getInternalField(0).castTo(v8.External).get().?;
+    return @ptrCast(@alignCast(external_data));
+}
