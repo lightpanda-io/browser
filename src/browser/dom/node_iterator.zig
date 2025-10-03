@@ -45,7 +45,7 @@ pub const NodeIterator = struct {
     // One of the few cases where null and undefined resolve to different default.
     // We need the raw JsObject so that we can probe the tri state:
     // null, undefined or i32.
-    pub const WhatToShow = js.JsObject;
+    pub const WhatToShow = js.Object;
 
     pub const NodeIteratorOpts = union(enum) {
         function: js.Function,

@@ -268,11 +268,11 @@ pub const Window = struct {
         _ = self.timers.remove(id);
     }
 
-    pub fn _setTimeout(self: *Window, cbk: js.Function, delay: ?u32, params: []js.JsObject, page: *Page) !u32 {
+    pub fn _setTimeout(self: *Window, cbk: js.Function, delay: ?u32, params: []js.Object, page: *Page) !u32 {
         return self.createTimeout(cbk, delay, page, .{ .args = params, .name = "setTimeout" });
     }
 
-    pub fn _setInterval(self: *Window, cbk: js.Function, delay: ?u32, params: []js.JsObject, page: *Page) !u32 {
+    pub fn _setInterval(self: *Window, cbk: js.Function, delay: ?u32, params: []js.Object, page: *Page) !u32 {
         return self.createTimeout(cbk, delay, page, .{ .repeat = true, .args = params, .name = "setInterval" });
     }
 
@@ -320,7 +320,7 @@ pub const Window = struct {
 
     const CreateTimeoutOpts = struct {
         name: []const u8,
-        args: []js.JsObject = &.{},
+        args: []js.Object = &.{},
         repeat: bool = false,
         animation_frame: bool = false,
         low_priority: bool = false,
@@ -345,9 +345,9 @@ pub const Window = struct {
         errdefer _ = self.timers.remove(timer_id);
 
         const args = opts.args;
-        var persisted_args: []js.JsObject = &.{};
+        var persisted_args: []js.Object = &.{};
         if (args.len > 0) {
-            persisted_args = try page.arena.alloc(js.JsObject, args.len);
+            persisted_args = try page.arena.alloc(js.Object, args.len);
             for (args, persisted_args) |a, *ca| {
                 ca.* = try a.persist();
             }
@@ -480,7 +480,7 @@ const TimerCallback = struct {
 
     window: *Window,
 
-    args: []js.JsObject = &.{},
+    args: []js.Object = &.{},
 
     fn run(ctx: *anyopaque) ?u32 {
         const self: *TimerCallback = @ptrCast(@alignCast(ctx));

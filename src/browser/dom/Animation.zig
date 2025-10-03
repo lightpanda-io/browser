@@ -23,12 +23,12 @@ const Page = @import("../page.zig").Page;
 
 const Animation = @This();
 
-effect: ?js.JsObject,
-timeline: ?js.JsObject,
+effect: ?js.Object,
+timeline: ?js.Object,
 ready_resolver: ?js.PromiseResolver,
 finished_resolver: ?js.PromiseResolver,
 
-pub fn constructor(effect: ?js.JsObject, timeline: ?js.JsObject) !Animation {
+pub fn constructor(effect: ?js.Object, timeline: ?js.Object) !Animation {
     return .{
         .effect = if (effect) |eo| try eo.persist() else null,
         .timeline = if (timeline) |to| try to.persist() else null,
@@ -65,19 +65,19 @@ pub fn get_ready(self: *Animation, page: *Page) !js.Promise {
     return self.ready_resolver.?.promise();
 }
 
-pub fn get_effect(self: *const Animation) ?js.JsObject {
+pub fn get_effect(self: *const Animation) ?js.Object {
     return self.effect;
 }
 
-pub fn set_effect(self: *Animation, effect: js.JsObject) !void {
+pub fn set_effect(self: *Animation, effect: js.Object) !void {
     self.effect = try effect.persist();
 }
 
-pub fn get_timeline(self: *const Animation) ?js.JsObject {
+pub fn get_timeline(self: *const Animation) ?js.Object {
     return self.timeline;
 }
 
-pub fn set_timeline(self: *Animation, timeline: js.JsObject) !void {
+pub fn set_timeline(self: *Animation, timeline: js.Object) !void {
     self.timeline = try timeline.persist();
 }
 

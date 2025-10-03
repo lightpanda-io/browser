@@ -136,7 +136,7 @@ pub const DOMTokenList = struct {
     }
 
     // TODO handle thisArg
-    pub fn _forEach(self: *parser.TokenList, cbk: js.Function, this_arg: js.JsObject) !void {
+    pub fn _forEach(self: *parser.TokenList, cbk: js.Function, this_arg: js.Object) !void {
         var entries = _entries(self);
         while (try entries._next()) |entry| {
             var result: js.Function.Result = undefined;

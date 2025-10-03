@@ -278,7 +278,7 @@ fn resolveNode(cmd: anytype) !void {
     if (params.executionContextId) |context_id| {
         if (js_context.v8_context.debugContextId() != context_id) {
             for (bc.isolated_worlds.items) |*isolated_world| {
-                js_context = &(isolated_world.executor.js_context orelse return error.ContextNotFound);
+                js_context = &(isolated_world.executor.context orelse return error.ContextNotFound);
                 if (js_context.v8_context.debugContextId() == context_id) {
                     break;
                 }

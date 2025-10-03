@@ -74,18 +74,18 @@ pub const MessagePort = struct {
     onmessageerror_cbk: ?js.Function = null,
     // This is the queue of messages to dispatch to THIS MessagePort when the
     // MessagePort is started.
-    queue: std.ArrayListUnmanaged(js.JsObject) = .empty,
+    queue: std.ArrayListUnmanaged(js.Object) = .empty,
 
     pub const PostMessageOption = union(enum) {
-        transfer: js.JsObject,
+        transfer: js.Object,
         options: Opts,
 
         pub const Opts = struct {
-            transfer: js.JsObject,
+            transfer: js.Object,
         };
     };
 
-    pub fn _postMessage(self: *MessagePort, obj: js.JsObject, opts_: ?PostMessageOption, page: *Page) !void {
+    pub fn _postMessage(self: *MessagePort, obj: js.Object, opts_: ?PostMessageOption, page: *Page) !void {
         if (self.closed) {
             return;
         }
@@ -150,7 +150,7 @@ pub const MessagePort = struct {
 
     // called from our pair. If port1.postMessage("x") is called, then this
     // will be called on port2.
-    fn dispatchOrQueue(self: *MessagePort, obj: js.JsObject, arena: Allocator) !void {
+    fn dispatchOrQueue(self: *MessagePort, obj: js.Object, arena: Allocator) !void {
         // our pair should have checked this already
         std.debug.assert(self.closed == false);
 
@@ -165,7 +165,7 @@ pub const MessagePort = struct {
         return self.queue.append(arena, try obj.persist());
     }
 
-    fn dispatch(self: *MessagePort, obj: js.JsObject) !void {
+    fn dispatch(self: *MessagePort, obj: js.Object) !void {
         // obj is already persisted, don't use `MessageEvent.constructor`, but
         // go directly to `init`, which assumes persisted objects.
         var evt = try MessageEvent.init(.{ .data = obj });
@@ -205,12 +205,12 @@ pub const MessageEvent = struct {
     pub const union_make_copy = true;
 
     proto: parser.Event,
-    data: ?js.JsObject,
+    data: ?js.Object,
 
     // You would think if port1 sends to port2, the source would be port2
     // (which is how I read the documentation), but it appears to always be
     // null. It can always be set explicitly via the constructor;
-    source: ?js.JsObject,
+    source: ?js.Object,
 
     origin: []const u8,
 
@@ -224,8 +224,8 @@ pub const MessageEvent = struct {
     ports: []*MessagePort,
 
     const Options = struct {
-        data: ?js.JsObject = null,
-        source: ?js.JsObject = null,
+        data: ?js.Object = null,
+        source: ?js.Object = null,
         origin: []const u8 = "",
         lastEventId: []const u8 = "",
         ports: []*MessagePort = &.{},
@@ -241,7 +241,7 @@ pub const MessageEvent = struct {
         });
     }
 
-    // This is like "constructor", but it assumes js.JsObjects have already been
+    // This is like "constructor", but it assumes js.Objects have already been
     // persisted. Necessary because this `new MessageEvent()` can be called
     // directly from JS OR from a port.postMessage. In the latter case, data
     // may have already been persisted (as it might need to be queued);
@@ -261,7 +261,7 @@ pub const MessageEvent = struct {
         };
     }
 
-    pub fn get_data(self: *const MessageEvent) !?js.JsObject {
+    pub fn get_data(self: *const MessageEvent) !?js.Object {
         return self.data;
     }
 
@@ -269,7 +269,7 @@ pub const MessageEvent = struct {
         return self.origin;
     }
 
-    pub fn get_source(self: *const MessageEvent) ?js.JsObject {
+    pub fn get_source(self: *const MessageEvent) ?js.Object {
         return self.source;
     }
 

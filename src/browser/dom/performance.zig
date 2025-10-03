@@ -148,10 +148,10 @@ pub const PerformanceMark = struct {
     pub const prototype = *PerformanceEntry;
 
     proto: PerformanceEntry,
-    detail: ?js.JsObject,
+    detail: ?js.Object,
 
     const Options = struct {
-        detail: ?js.JsObject = null,
+        detail: ?js.Object = null,
         startTime: ?f64 = null,
     };
 
@@ -171,7 +171,7 @@ pub const PerformanceMark = struct {
         return .{ .proto = proto, .detail = detail };
     }
 
-    pub fn get_detail(self: *const PerformanceMark) ?js.JsObject {
+    pub fn get_detail(self: *const PerformanceMark) ?js.Object {
         return self.detail;
     }
 };

@@ -122,7 +122,7 @@ fn createIsolatedWorld(cmd: anytype) !void {
     const world = try bc.createIsolatedWorld(params.worldName, params.grantUniveralAccess);
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
     try world.createContextAndLoadPolyfills(bc.arena, page);
-    const js_context = &world.executor.js_context.?;
+    const js_context = &world.executor.context.?;
 
     // Create the auxdata json for the contextCreated event
     // Calling contextCreated will assign a Id to the context and send the contextCreated event
@@ -262,7 +262,7 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
         const aux_json = try std.fmt.allocPrint(arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{target_id});
         // Calling contextCreated will assign a new Id to the context and send the contextCreated event
         bc.inspector.contextCreated(
-            &isolated_world.executor.js_context.?,
+            &isolated_world.executor.context.?,
             isolated_world.name,
             "://",
             aux_json,

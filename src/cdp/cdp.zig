@@ -671,8 +671,8 @@ const IsolatedWorld = struct {
         self.executor.deinit();
     }
     pub fn removeContext(self: *IsolatedWorld) !void {
-        if (self.executor.js_context == null) return error.NoIsolatedContextToRemove;
-        self.executor.removeJsContext();
+        if (self.executor.context == null) return error.NoIsolatedContextToRemove;
+        self.executor.removeContext();
     }
 
     // The isolate world must share at least some of the state with the related page, specifically the DocumentHTML
@@ -681,15 +681,15 @@ const IsolatedWorld = struct {
     // This also means this pointer becomes invalid after removePage untill a new page is created.
     // Currently we have only 1 page/frame and thus also only 1 state in the isolate world.
     pub fn createContext(self: *IsolatedWorld, page: *Page) !void {
-        // if (self.executor.js_context != null) return error.Only1IsolatedContextSupported;
-        if (self.executor.js_context != null) {
+        // if (self.executor.context != null) return error.Only1IsolatedContextSupported;
+        if (self.executor.context != null) {
             log.warn(.cdp, "not implemented", .{
                 .feature = "createContext: Not implemented second isolated context creation",
                 .info = "reuse existing context",
             });
             return;
         }
-        _ = try self.executor.createJsContext(
+        _ = try self.executor.createContext(
             &page.window,
             page,
             null,
@@ -703,7 +703,7 @@ const IsolatedWorld = struct {
         try self.createContext(page);
 
         const loader = @import("../browser/polyfill/polyfill.zig");
-        try loader.preload(arena, &self.executor.js_context.?);
+        try loader.preload(arena, &self.executor.context.?);
     }
 };
 

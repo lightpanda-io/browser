@@ -28,13 +28,13 @@ pub const CustomEvent = struct {
     pub const union_make_copy = true;
 
     proto: parser.Event,
-    detail: ?js.JsObject,
+    detail: ?js.Object,
 
     const CustomEventInit = struct {
         bubbles: bool = false,
         cancelable: bool = false,
         composed: bool = false,
-        detail: ?js.JsObject = null,
+        detail: ?js.Object = null,
     };
 
     pub fn constructor(event_type: []const u8, opts_: ?CustomEventInit) !CustomEvent {
@@ -54,7 +54,7 @@ pub const CustomEvent = struct {
         };
     }
 
-    pub fn get_detail(self: *CustomEvent) ?js.JsObject {
+    pub fn get_detail(self: *CustomEvent) ?js.Object {
         return self.detail;
     }
 
@@ -65,7 +65,7 @@ pub const CustomEvent = struct {
         event_type: []const u8,
         can_bubble: bool,
         cancelable: bool,
-        maybe_detail: ?js.JsObject,
+        maybe_detail: ?js.Object,
     ) !void {
         // This function can only be called after the constructor has called.
         // So we assume proto is initialized already by constructor.

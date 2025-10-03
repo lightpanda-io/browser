@@ -298,7 +298,7 @@ pub const Document = struct {
         return &.{};
     }
 
-    pub fn get_adoptedStyleSheets(self: *parser.Document, page: *Page) !js.JsObject {
+    pub fn get_adoptedStyleSheets(self: *parser.Document, page: *Page) !js.Object {
         const state = try page.getOrCreateNodeState(@ptrCast(@alignCast(self)));
         if (state.adopted_style_sheets) |obj| {
             return obj;
@@ -309,7 +309,7 @@ pub const Document = struct {
         return obj;
     }
 
-    pub fn set_adoptedStyleSheets(self: *parser.Document, sheets: js.JsObject, page: *Page) !void {
+    pub fn set_adoptedStyleSheets(self: *parser.Document, sheets: js.Object, page: *Page) !void {
         const state = try page.getOrCreateNodeState(@ptrCast(@alignCast(self)));
         state.adopted_style_sheets = try sheets.persist();
     }

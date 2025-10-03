@@ -68,7 +68,7 @@ pub const HeadersInit = union(enum) {
     // Headers
     headers: *Headers,
     // Mappings
-    object: js.JsObject,
+    object: js.Object,
 };
 
 pub fn constructor(_init: ?HeadersInit, page: *Page) !Headers {
@@ -158,7 +158,7 @@ pub fn _entries(self: *const Headers) HeadersEntryIterable {
     };
 }
 
-pub fn _forEach(self: *Headers, callback_fn: js.Function, this_arg: ?js.JsObject) !void {
+pub fn _forEach(self: *Headers, callback_fn: js.Function, this_arg: ?js.Object) !void {
     var iter = self.headers.iterator();
 
     const cb = if (this_arg) |this| try callback_fn.withThis(this) else callback_fn;

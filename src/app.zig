@@ -4,7 +4,7 @@ const Allocator = std.mem.Allocator;
 
 const log = @import("log.zig");
 const Http = @import("http/Http.zig");
-const Platform = @import("browser/js/js.zig").Platform;
+const Platform = @import("browser/js/Platform.zig");
 
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
 const Notification = @import("notification.zig").Notification;

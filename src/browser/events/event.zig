@@ -227,7 +227,7 @@ pub const EventHandler = struct {
 
     pub const Listener = union(enum) {
         function: js.Function,
-        object: js.JsObject,
+        object: js.Object,
 
         pub fn callback(self: Listener, target: *parser.EventTarget) !?js.Function {
             return switch (self) {
