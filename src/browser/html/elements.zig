@@ -281,7 +281,7 @@ pub const HTMLAnchorElement = struct {
     // TODO return a disposable string
     pub fn get_protocol(self: *parser.Anchor, page: *Page) ![]const u8 {
         var u = try url(self, page);
-        return u.get_protocol(page);
+        return u.get_protocol();
     }
 
     pub fn set_protocol(self: *parser.Anchor, v: []const u8, page: *Page) !void {
