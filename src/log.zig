@@ -29,7 +29,6 @@ pub const Scope = enum {
     cdp,
     console,
     http,
-    http_client,
     js,
     loop,
     script_event,
@@ -40,7 +39,7 @@ pub const Scope = enum {
     xhr,
     fetch,
     polyfill,
-    mouse_event,
+    interceptor,
 };
 
 const Opts = struct {
@@ -148,6 +147,13 @@ fn logTo(comptime scope: Scope, level: Level, comptime msg: []const u8, data: an
         .pretty => try logPretty(scope, level, msg, data, out),
     }
     out.flush() catch return;
+
+    const interceptor = _interceptor orelse return;
+    if (interceptor.writer(interceptor.ctx, scope, level)) |iwriter| {
+        try logLogfmt(scope, level, msg, data, iwriter);
+        try iwriter.flush();
+        interceptor.done(interceptor.ctx, scope, level);
+    }
 }
 
 fn logLogfmt(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, writer: anytype) !void {
@@ -345,6 +351,24 @@ fn elapsed() struct { time: f64, unit: []const u8 } {
     }
     return .{ .time = @as(f64, @floatFromInt(e)) / @as(f64, 1000), .unit = "s" };
 }
+
+var _interceptor: ?Interceptor = null;
+pub fn registerInterceptor(interceptor: Interceptor) void {
+    _interceptor = interceptor;
+}
+
+pub fn unregisterInterceptor() void {
+    _interceptor = null;
+}
+
+const Interceptor = struct {
+    ctx: *anyopaque,
+    done: DoneFunc,
+    writer: WriterFunc,
+
+    const DoneFunc = *const fn (ctx: *anyopaque, scope: Scope, level: Level) void;
+    const WriterFunc = *const fn (ctx: *anyopaque, scope: Scope, level: Level) ?*std.Io.Writer;
+};
 
 const testing = @import("testing.zig");
 test "log: data" {
