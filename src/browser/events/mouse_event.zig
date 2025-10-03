@@ -68,7 +68,7 @@ pub const MouseEvent = struct {
         });
 
         if (!std.mem.eql(u8, event_type, "click")) {
-            log.warn(.mouse_event, "unsupported mouse event", .{ .event = event_type });
+            log.warn(.browser, "unsupported mouse event", .{ .event = event_type });
         }
 
         return mouse_event;
