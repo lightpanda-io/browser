@@ -853,24 +853,24 @@ fn buildCurl(b: *Build, m: *Build.Module) !void {
 
 pub fn buildAda(b: *Build, m: *Build.Module) !void {
     const ada_dep = b.dependency("ada-singleheader", .{});
-    const ada = b.addLibrary(.{
-        .name = "ada",
-        .linkage = .static,
-        .root_module = b.createModule(.{
-            .target = m.resolved_target,
-            .optimize = m.optimize,
-            .link_libcpp = true,
-        }),
+    const dep_root = ada_dep.path("");
+
+    // Private module that binds ada functions.
+    const ada_mod = b.createModule(.{
+        .root_source_file = b.path("vendor/ada/root.zig"),
+        .target = m.resolved_target,
+        .optimize = m.optimize,
+        .link_libcpp = true,
     });
 
-    // Expose "ada_c.h".
-    ada.installHeader(ada_dep.path("ada_c.h"), "ada_c.h");
+    // Expose headers; note that "ada.h" is a C++ header so no use here.
+    ada_mod.addIncludePath(dep_root);
 
-    ada.root_module.addCSourceFiles(.{
-        .root = ada_dep.path(""),
+    ada_mod.addCSourceFiles(.{
+        .root = dep_root,
         .files = &.{"ada.cpp"},
         .flags = &.{"-std=c++20"},
     });
 
-    m.linkLibrary(ada);
+    m.addImport("ada", ada_mod);
 }
