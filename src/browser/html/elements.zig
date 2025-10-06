@@ -887,7 +887,7 @@ pub const HTMLScriptElement = struct {
             //    s.src = '...';
             // This should load the script.
             // addFromElement protects against double execution.
-            try page.script_manager.addFromElement(@ptrCast(@alignCast(self)));
+            try page.script_manager.addFromElement(@ptrCast(@alignCast(self)), "dynamic");
         }
     }
 

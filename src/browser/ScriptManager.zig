@@ -142,7 +142,7 @@ fn clearList(_: *const ScriptManager, list: *OrderList) void {
     std.debug.assert(list.first == null);
 }
 
-pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
+pub fn addFromElement(self: *ScriptManager, element: *parser.Element, comptime ctx: []const u8) !void {
     if (try parser.elementGetAttribute(element, "nomodule") != null) {
         // these scripts should only be loaded if we don't support modules
         // but since we do support modules, we can just skip them.
@@ -230,7 +230,11 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
         self.scripts.append(&pending_script.node);
         return;
     } else {
-        log.debug(.http, "script queue", .{ .url = remote_url.? });
+        log.debug(.http, "script queue", .{
+            .ctx = ctx,
+            .url = remote_url.?,
+            .stack = page.js.stackTrace() catch "???",
+        });
     }
 
     pending_script.getList().append(&pending_script.node);
@@ -255,40 +259,7 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element) !void {
     });
 }
 
-// @TODO: Improving this would have the simplest biggest performance improvement
-// for most sites.
-//
-// For JS imports (both static and dynamic), we currently block to get the
-// result (the content of the file).
-//
-// For static imports, this is necessary, since v8 is expecting the compiled module
-// as part of the function return. (we should try to pre-load the JavaScript
-// source via module.GetModuleRequests(), but that's for a later time).
-//
-// For dynamic dynamic imports, this is not strictly necessary since the v8
-// call returns a Promise; we could make this a normal get call, associated with
-// the promise, and when done, resolve the promise.
-//
-// In both cases, for now at least, we just issue a "blocking" request. We block
-// by ticking the http client until the script is complete.
-//
-// This uses the client.blockingRequest call which has a dedicated handle for
-// these blocking requests. Because they are blocking, we're guaranteed to have
-// only 1 at a time, thus the 1 reserved handle.
-//
-// You almost don't need the http client's blocking handle. In most cases, you
-// should always have 1 free handle whenever you get here, because we always
-// release the handle before executing the doneCallback. So, if a module does:
-//    import * as x from 'blah'
-// And we need to load 'blah', there should always be 1 free handle - the handle
-// of the http GET we just completed before executing the module.
-// The exception to this, and the reason we need a special blocking handle, is
-// for inline modules within the HTML page itself:
-//    <script type=module>import ....</script>
-// Unlike external modules which can only ever be executed after releasing an
-// http handle, these are executed without there necessarily being a free handle.
-// Thus, Http/Client.zig maintains a dedicated handle for these calls.
-pub fn getModule(self: *ScriptManager, url: [:0]const u8) !void {
+pub fn getModule(self: *ScriptManager, url: [:0]const u8, referrer: []const u8) !void {
     const gop = try self.sync_modules.getOrPut(self.allocator, url);
     if (gop.found_existing) {
         // already requested
@@ -304,6 +275,13 @@ pub fn getModule(self: *ScriptManager, url: [:0]const u8) !void {
 
     var headers = try self.client.newHeaders();
     try self.page.requestCookie(.{}).headersForRequest(self.page.arena, url, &headers);
+
+    log.debug(.http, "script queue", .{
+        .url = url,
+        .ctx = "module",
+        .referrer = referrer,
+        .stack = self.page.js.stackTrace() catch "???",
+    });
 
     try self.client.request(.{
         .url = url,
@@ -355,7 +333,7 @@ pub fn waitForModule(self: *ScriptManager, url: [:0]const u8) !GetResult {
     }
 }
 
-pub fn getAsyncModule(self: *ScriptManager, url: [:0]const u8, cb: AsyncModule.Callback, cb_data: *anyopaque) !void {
+pub fn getAsyncModule(self: *ScriptManager, url: [:0]const u8, cb: AsyncModule.Callback, cb_data: *anyopaque, referrer: []const u8) !void {
     const async = try self.async_module_pool.create();
     errdefer self.async_module_pool.destroy(async);
 
@@ -367,6 +345,13 @@ pub fn getAsyncModule(self: *ScriptManager, url: [:0]const u8, cb: AsyncModule.C
 
     var headers = try self.client.newHeaders();
     try self.page.requestCookie(.{}).headersForRequest(self.page.arena, url, &headers);
+
+    log.debug(.http, "script queue", .{
+        .url = url,
+        .ctx = "dynamic module",
+        .referrer = referrer,
+        .stack = self.page.js.stackTrace() catch "???",
+    });
 
     try self.client.request(.{
         .url = url,

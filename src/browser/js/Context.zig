@@ -263,7 +263,7 @@ pub fn module(self: *Context, comptime want_result: bool, src: []const u8, url: 
                 const owned_specifier = try self.context_arena.dupeZ(u8, normalized_specifier);
                 gop.key_ptr.* = owned_specifier;
                 gop.value_ptr.* = .{};
-                try self.script_manager.?.getModule(owned_specifier);
+                try self.script_manager.?.getModule(owned_specifier, src);
             }
         }
     }
@@ -996,7 +996,10 @@ fn debugValueToString(self: *const Context, js_obj: v8.Object) ![]u8 {
 }
 
 pub fn stackTrace(self: *const Context) !?[]const u8 {
-    std.debug.assert(@import("builtin").mode == .Debug);
+    if (comptime @import("builtin").mode != .Debug) {
+        return "not available";
+    }
+
     const isolate = self.isolate;
     const separator = log.separator();
 
@@ -1005,6 +1008,10 @@ pub fn stackTrace(self: *const Context) !?[]const u8 {
 
     const stack_trace = v8.StackTrace.getCurrentStackTrace(isolate, 30);
     const frame_count = stack_trace.getFrameCount();
+
+    if (v8.StackTrace.getCurrentScriptNameOrSourceUrl(isolate)) |script| {
+        try writer.print("{s}<{s}>", .{ separator, try self.jsStringToZig(script, .{}) });
+    }
 
     for (0..frame_count) |i| {
         const frame = stack_trace.getFrame(isolate, @intCast(i));
@@ -1131,7 +1138,7 @@ pub fn dynamicModuleCallback(
         return @constCast(self.rejectPromise("Out of memory").handle);
     };
 
-    const promise = self._dynamicModuleCallback(normalized_specifier) catch |err| blk: {
+    const promise = self._dynamicModuleCallback(normalized_specifier, resource) catch |err| blk: {
         log.err(.js, "dynamic module callback", .{
             .err = err,
         });
@@ -1191,7 +1198,7 @@ fn _resolveModuleCallback(self: *Context, referrer: v8.Module, specifier: []cons
         // harm in handling this case.
         @branchHint(.unlikely);
         gop.value_ptr.* = .{};
-        try self.script_manager.?.getModule(normalized_specifier);
+        try self.script_manager.?.getModule(normalized_specifier, referrer_path);
     }
 
     var fetch_result = try self.script_manager.?.waitForModule(normalized_specifier);
@@ -1227,7 +1234,7 @@ const DynamicModuleResolveState = struct {
     resolver: v8.Persistent(v8.PromiseResolver),
 };
 
-fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8) !v8.Promise {
+fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []const u8) !v8.Promise {
     const isolate = self.isolate;
     const gop = try self.module_cache.getOrPut(self.context_arena, specifier);
     if (gop.found_existing and gop.value_ptr.resolver_promise != null) {
@@ -1267,7 +1274,7 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8) !v8.Promise {
         };
 
         // Next, we need to actually load it.
-        self.script_manager.?.getAsyncModule(specifier, dynamicModuleSourceCallback, state) catch |err| {
+        self.script_manager.?.getAsyncModule(specifier, dynamicModuleSourceCallback, state, referrer) catch |err| {
             const error_msg = v8.String.initUtf8(isolate, @errorName(err));
             _ = resolver.reject(self.v8_context, error_msg.toValue());
         };
