@@ -245,6 +245,7 @@ fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !vo
             mod.addCMacro("HAVE_ASSERT_H", "1");
             mod.addCMacro("HAVE_BASENAME", "1");
             mod.addCMacro("HAVE_BOOL_T", "1");
+            mod.addCMacro("HAVE_BROTLI", "1");
             mod.addCMacro("HAVE_BUILTIN_AVAILABLE", "1");
             mod.addCMacro("HAVE_CLOCK_GETTIME_MONOTONIC", "1");
             mod.addCMacro("HAVE_DLFCN_H", "1");
@@ -379,6 +380,7 @@ fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !vo
         }
 
         try buildZlib(b, mod);
+        try buildBrotli(b, mod);
         try buildMbedtls(b, mod);
         try buildNghttp2(b, mod);
         try buildCurl(b, mod);
@@ -481,6 +483,30 @@ fn buildZlib(b: *Build, m: *Build.Module) !void {
         root ++ "trees.c",
         root ++ "uncompr.c",
         root ++ "zutil.c",
+    } });
+}
+
+fn buildBrotli(b: *Build, m: *Build.Module) !void {
+    const brotli = b.addLibrary(.{
+        .name = "brotli",
+        .root_module = m,
+    });
+
+    const root = "vendor/brotli/c/";
+    brotli.addIncludePath(b.path(root ++ "include"));
+    brotli.addCSourceFiles(.{ .flags = &.{}, .files = &.{
+        root ++ "common/constants.c",
+        root ++ "common/context.c",
+        root ++ "common/dictionary.c",
+        root ++ "common/platform.c",
+        root ++ "common/shared_dictionary.c",
+        root ++ "common/transform.c",
+        root ++ "dec/bit_reader.c",
+        root ++ "dec/decode.c",
+        root ++ "dec/huffman.c",
+        root ++ "dec/prefix.c",
+        root ++ "dec/state.c",
+        root ++ "dec/static_init.c",
     } });
 }
 

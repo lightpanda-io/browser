@@ -168,6 +168,13 @@ pub const Connection = struct {
         // debug
         if (comptime Http.ENABLE_DEBUG) {
             try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_VERBOSE, @as(c_long, 1)));
+
+            // Sometimes the default debug output hides some useful data. You can
+            // uncomment the following line (BUT KEEP THE LIVE ABOVE AS-IS), to
+            // get more control over the data (specifically, the `CURLINFO_TEXT`
+            // can include useful data).
+
+            // try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_DEBUGFUNCTION, debugCallback));
         }
 
         return .{
@@ -435,3 +442,15 @@ const LineWriter = struct {
         self.col = col + remain.len;
     }
 };
+
+
+pub fn debugCallback(_: *c.CURL, msg_type: c.curl_infotype, raw: [*c]u8, len: usize, _: *anyopaque) callconv(.c) void {
+    const data = raw[0..len];
+    switch (msg_type) {
+        c.CURLINFO_TEXT => std.debug.print("libcurl [text]: {s}\n", .{data}),
+        c.CURLINFO_HEADER_OUT => std.debug.print("libcurl [req-h]: {s}\n", .{data}),
+        c.CURLINFO_HEADER_IN => std.debug.print("libcurl [res-h]: {s}\n", .{data}),
+        // c.CURLINFO_DATA_IN => std.debug.print("libcurl [res-b]: {s}\n", .{data}),
+        else => std.debug.print("libcurl ?? {d}\n", .{msg_type}),
+    }
+}
