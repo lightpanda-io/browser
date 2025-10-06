@@ -38,21 +38,12 @@ page: *Page,
 // used to prevent recursive evalutaion
 is_evaluating: bool,
 
-// used to prevent executing scripts while we're doing a blocking load
-is_blocking: bool = false,
-
 // Only once this is true can deferred scripts be run
 static_scripts_done: bool,
 
 // List of async scripts. We don't care about the execution order of these, but
 // on shutdown/abort, we need to cleanup any pending ones.
 asyncs: OrderList,
-
-// When an async script is ready to be evaluated, it's moved from asyncs to
-// this list. You might think we can evaluate an async script as soon as it's
-// done, but we can only evaluate scripts when `is_blocking == false`. So this
-// becomes a list of scripts to execute on the next evaluate().
-asyncs_ready: OrderList,
 
 // Normal scripts (non-deferred & non-async). These must be executed in order
 scripts: OrderList,
@@ -89,7 +80,6 @@ pub fn init(browser: *Browser, page: *Page) ScriptManager {
         .asyncs = .{},
         .scripts = .{},
         .deferreds = .{},
-        .asyncs_ready = .{},
         .sync_modules = .empty,
         .is_evaluating = false,
         .allocator = allocator,
@@ -129,7 +119,6 @@ pub fn reset(self: *ScriptManager) void {
     self.clearList(&self.asyncs);
     self.clearList(&self.scripts);
     self.clearList(&self.deferreds);
-    self.clearList(&self.asyncs_ready);
     self.static_scripts_done = false;
 }
 
@@ -321,10 +310,6 @@ pub fn getModule(self: *ScriptManager, url: [:0]const u8) !void {
 }
 
 pub fn waitForModule(self: *ScriptManager, url: [:0]const u8) !GetResult {
-    std.debug.assert(self.is_blocking == false);
-    self.is_blocking = true;
-    defer self.is_blocking = false;
-
     // Normally it's dangerous to hold on to map pointers. But here, the map
     // can't change. It's possible that by calling `tick`, other entries within
     // the map will have their value change, but the map itself is immutable
@@ -398,23 +383,9 @@ fn evaluate(self: *ScriptManager) void {
         return;
     }
 
-    if (self.is_blocking) {
-        // Cannot evaluate scripts while a blocking-load is in progress. Not
-        // only could that result in incorrect evaluation order, it could
-        // trigger another blocking request, while we're doing a blocking request.
-        return;
-    }
-
     const page = self.page;
     self.is_evaluating = true;
     defer self.is_evaluating = false;
-
-    // every script in asyncs_ready is ready to be evaluated.
-    while (self.asyncs_ready.first) |n| {
-        var pending_script: *PendingScript = @fieldParentPtr("node", n);
-        defer pending_script.deinit();
-        pending_script.script.eval(page);
-    }
 
     while (self.scripts.first) |n| {
         var pending_script: *PendingScript = @fieldParentPtr("node", n);
@@ -573,11 +544,13 @@ pub const PendingScript = struct {
 
         const manager = self.manager;
         self.complete = true;
-        if (self.script.is_async) {
-            manager.asyncs.remove(&self.node);
-            manager.asyncs_ready.append(&self.node);
+        if (!self.script.is_async) {
+            manager.evaluate();
+            return;
         }
-        manager.evaluate();
+        // async script can be evaluated immediately
+        defer self.deinit();
+        self.script.eval(manager.page);
     }
 
     fn errorCallback(self: *PendingScript, err: anyerror) void {
@@ -601,7 +574,7 @@ pub const PendingScript = struct {
 
         const script = &self.script;
         if (script.is_async) {
-            return if (self.complete) &self.manager.asyncs_ready else &self.manager.asyncs;
+            return &self.manager.asyncs;
         }
 
         if (script.is_defer) {
