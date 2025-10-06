@@ -785,7 +785,7 @@ pub const Page = struct {
                         // ignore non-js script.
                         continue;
                     }
-                    try self.script_manager.addFromElement(@ptrCast(node));
+                    try self.script_manager.addFromElement(@ptrCast(node), "page");
                 }
 
                 self.script_manager.staticScriptsDone();
@@ -1250,7 +1250,7 @@ pub export fn scriptAddedCallback(ctx: ?*anyopaque, element: ?*parser.Element) c
     // here, else the script_manager will flag it as already-processed.
     _ = parser.elementGetAttribute(element.?, "src") catch return orelse return;
 
-    self.script_manager.addFromElement(element.?) catch |err| {
+    self.script_manager.addFromElement(element.?, "dynamic") catch |err| {
         log.warn(.browser, "dynamic script", .{ .err = err });
     };
 }

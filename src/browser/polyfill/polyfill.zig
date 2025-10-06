@@ -69,6 +69,7 @@ pub const Loader = struct {
         if (comptime builtin.mode == .Debug) {
             log.debug(.unknown_prop, "unkown global property", .{
                 .info = "but the property can exist in pure JS",
+                .stack = js_context.stackTrace() catch "???",
                 .property = name,
             });
         }
