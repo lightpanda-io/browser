@@ -443,7 +443,6 @@ const LineWriter = struct {
     }
 };
 
-
 pub fn debugCallback(_: *c.CURL, msg_type: c.curl_infotype, raw: [*c]u8, len: usize, _: *anyopaque) callconv(.c) void {
     const data = raw[0..len];
     switch (msg_type) {

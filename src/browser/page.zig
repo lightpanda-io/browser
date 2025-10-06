@@ -121,7 +121,7 @@ pub const Page = struct {
         complete,
     };
 
-    pub fn init(self: *Page, arena: Allocator, session: *Session) !void {
+    pub fn init(self: *Page, arena: Allocator, call_arena: Allocator, session: *Session) !void {
         const browser = session.browser;
         const script_manager = ScriptManager.init(browser, self);
 
@@ -131,7 +131,7 @@ pub const Page = struct {
             .window = try Window.create(null, null),
             .arena = arena,
             .session = session,
-            .call_arena = undefined,
+            .call_arena = call_arena,
             .renderer = Renderer.init(arena),
             .state_pool = &browser.state_pool,
             .cookie_jar = &session.cookie_jar,

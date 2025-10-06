@@ -22,7 +22,7 @@ pub fn setIndex(self: Object, index: u32, value: anytype, opts: SetOpts) !void {
     @setEvalBranchQuota(10000);
     const key = switch (index) {
         inline 0...20 => |i| std.fmt.comptimePrint("{d}", .{i}),
-        else => try std.fmt.allocPrint(self.context.context_arena, "{d}", .{index}),
+        else => try std.fmt.allocPrint(self.context.arena, "{d}", .{index}),
     };
     return self.set(key, value, opts);
 }
@@ -76,7 +76,7 @@ pub fn persist(self: Object) !Object {
     const js_obj = self.js_obj;
 
     const persisted = PersistentObject.init(context.isolate, js_obj);
-    try context.js_object_list.append(context.context_arena, persisted);
+    try context.js_object_list.append(context.arena, persisted);
 
     return .{
         .context = context,
