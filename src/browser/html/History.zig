@@ -71,7 +71,7 @@ pub fn get_state(self: *History, page: *Page) !?js.Value {
     if (self.current) |curr| {
         const entry = self.stack.items[curr];
         if (entry.state) |state| {
-            const value = try js.Value.fromJson(page.main_context, state);
+            const value = try js.Value.fromJson(page.js, state);
             return value;
         } else {
             return null;
@@ -201,7 +201,7 @@ pub const PopStateEvent = struct {
 
     pub fn get_state(self: *const PopStateEvent, page: *Page) !?js.Value {
         if (self.state) |state| {
-            const value = try js.Value.fromJson(page.main_context, state);
+            const value = try js.Value.fromJson(page.js, state);
             return value;
         } else {
             return null;

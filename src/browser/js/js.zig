@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const builtin = @import("builtin");
 pub const v8 = @import("v8");
 
 const types = @import("types.zig");
@@ -64,9 +63,7 @@ pub const PromiseResolver = struct {
     resolver: v8.PromiseResolver,
 
     pub fn promise(self: PromiseResolver) Promise {
-        return .{
-            .promise = self.resolver.getPromise(),
-        };
+        return self.resolver.getPromise();
     }
 
     pub fn resolve(self: PromiseResolver, value: anytype) !void {
@@ -101,9 +98,7 @@ pub const PersistentPromiseResolver = struct {
     }
 
     pub fn promise(self: PersistentPromiseResolver) Promise {
-        return .{
-            .promise = self.resolver.castToPromiseResolver().getPromise(),
-        };
+        return self.resolver.castToPromiseResolver().getPromise();
     }
 
     pub fn resolve(self: PersistentPromiseResolver, value: anytype) !void {
@@ -129,9 +124,7 @@ pub const PersistentPromiseResolver = struct {
     }
 };
 
-pub const Promise = struct {
-    promise: v8.Promise,
-};
+pub const Promise = v8.Promise;
 
 // When doing jsValueToZig, string ([]const u8) are managed by the
 // call_arena. That means that if the API wants to persist the string
@@ -148,8 +141,7 @@ pub const Exception = struct {
 
     // the caller needs to deinit the string returned
     pub fn exception(self: Exception, allocator: Allocator) ![]const u8 {
-        const context = self.context;
-        return try valueToString(allocator, self.inner, context.isolate, context.v8_context);
+        return self.context.valueToString(self.inner, .{ .allocator = allocator });
     }
 };
 
@@ -159,8 +151,7 @@ pub const Value = struct {
 
     // the caller needs to deinit the string returned
     pub fn toString(self: Value, allocator: Allocator) ![]const u8 {
-        const context = self.context;
-        return valueToString(allocator, self.value, context.isolate, context.v8_context);
+        return self.context.valueToString(self.value, .{ .allocator = allocator });
     }
 
     pub fn fromJson(ctx: *Context, json: []const u8) !Value {
@@ -475,93 +466,6 @@ pub const TaggedAnyOpaque = struct {
     // which is where we store the subtype.
     subtype: ?types.Sub,
 };
-
-pub fn valueToDetailString(arena: Allocator, value: v8.Value, isolate: v8.Isolate, v8_context: v8.Context) ![]u8 {
-    var str: ?v8.String = null;
-    if (value.isObject() and !value.isFunction()) blk: {
-        str = v8.Json.stringify(v8_context, value, null) catch break :blk;
-
-        if (str.?.lenUtf8(isolate) == 2) {
-            // {} isn't useful, null this so that we can get the toDetailString
-            // (which might also be useless, but maybe not)
-            str = null;
-        }
-    }
-
-    if (str == null) {
-        str = try value.toDetailString(v8_context);
-    }
-
-    const s = try stringToZig(arena, str.?, isolate);
-    if (comptime builtin.mode == .Debug) {
-        if (std.mem.eql(u8, s, "[object Object]")) {
-            if (debugValueToString(arena, value.castTo(v8.Object), isolate, v8_context)) |ds| {
-                return ds;
-            } else |err| {
-                log.err(.js, "debug serialize value", .{ .err = err });
-            }
-        }
-    }
-    return s;
-}
-
-pub fn valueToString(allocator: Allocator, value: v8.Value, isolate: v8.Isolate, v8_context: v8.Context) ![]u8 {
-    if (value.isSymbol()) {
-        // symbol's can't be converted to a string
-        return allocator.dupe(u8, "$Symbol");
-    }
-    const str = try value.toString(v8_context);
-    return stringToZig(allocator, str, isolate);
-}
-
-pub fn valueToStringZ(allocator: Allocator, value: v8.Value, isolate: v8.Isolate, v8_context: v8.Context) ![:0]u8 {
-    const str = try value.toString(v8_context);
-    const len = str.lenUtf8(isolate);
-    const buf = try allocator.allocSentinel(u8, len, 0);
-    const n = str.writeUtf8(isolate, buf);
-    std.debug.assert(n == len);
-    return buf;
-}
-
-pub fn stringToZig(allocator: Allocator, str: v8.String, isolate: v8.Isolate) ![]u8 {
-    const len = str.lenUtf8(isolate);
-    const buf = try allocator.alloc(u8, len);
-    const n = str.writeUtf8(isolate, buf);
-    std.debug.assert(n == len);
-    return buf;
-}
-
-fn debugValueToString(arena: Allocator, js_obj: v8.Object, isolate: v8.Isolate, v8_context: v8.Context) ![]u8 {
-    if (comptime builtin.mode != .Debug) {
-        @compileError("debugValue can only be called in debug mode");
-    }
-
-    var arr: std.ArrayListUnmanaged(u8) = .empty;
-    var writer = arr.writer(arena);
-
-    const names_arr = js_obj.getOwnPropertyNames(v8_context);
-    const names_obj = names_arr.castTo(v8.Object);
-    const len = names_arr.length();
-
-    try writer.writeAll("(JSON.stringify failed, dumping top-level fields)\n");
-    for (0..len) |i| {
-        const field_name = try names_obj.getAtIndex(v8_context, @intCast(i));
-        const field_value = try js_obj.getValue(v8_context, field_name);
-        const name = try valueToString(arena, field_name, isolate, v8_context);
-        const value = try valueToString(arena, field_value, isolate, v8_context);
-        try writer.writeAll(name);
-        try writer.writeAll(": ");
-        if (std.mem.indexOfAny(u8, value, &std.ascii.whitespace) == null) {
-            try writer.writeAll(value);
-        } else {
-            try writer.writeByte('"');
-            try writer.writeAll(value);
-            try writer.writeByte('"');
-        }
-        try writer.writeByte(' ');
-    }
-    return arr.items;
-}
 
 // These are here, and not in Inspector.zig, because Inspector.zig isn't always
 // included (e.g. in the wpt build).

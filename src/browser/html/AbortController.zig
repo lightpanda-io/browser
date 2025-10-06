@@ -118,7 +118,7 @@ pub const AbortSignal = struct {
     };
     pub fn _throwIfAborted(self: *const AbortSignal, page: *Page) ThrowIfAborted {
         if (self.aborted) {
-            const ex = page.main_context.throw(self.reason orelse DEFAULT_REASON);
+            const ex = page.js.throw(self.reason orelse DEFAULT_REASON);
             return .{ .exception = ex };
         }
         return .{ .undefined = {} };

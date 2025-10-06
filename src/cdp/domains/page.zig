@@ -251,7 +251,7 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
         const page = bc.session.currentPage() orelse return error.PageNotLoaded;
         const aux_data = try std.fmt.allocPrint(arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
         bc.inspector.contextCreated(
-            page.main_context,
+            page.js,
             "",
             try page.origin(arena),
             aux_data,

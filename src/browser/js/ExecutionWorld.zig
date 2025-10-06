@@ -58,12 +58,12 @@ pub fn deinit(self: *ExecutionWorld) void {
 // when the handle_scope is freed.
 // We also maintain our own "context_arena" which allows us to have
 // all page related memory easily managed.
-pub fn createContext(self: *ExecutionWorld, global: anytype, page: *Page, script_manager: ?*ScriptManager, enter: bool, global_callback: ?js.GlobalMissingCallback) !*Context {
+pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_callback: ?js.GlobalMissingCallback) !*Context {
     std.debug.assert(self.context == null);
 
     const env = self.env;
     const isolate = env.isolate;
-    const Global = @TypeOf(global.*);
+    const Global = @TypeOf(page.window);
     const templates = &self.env.templates;
 
     var v8_context: v8.Context = blk: {
@@ -84,12 +84,9 @@ pub fn createContext(self: *ExecutionWorld, global: anytype, page: *Page, script
                 .getter = struct {
                     fn callback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
                         const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
-                        const _isolate = info.getIsolate();
-                        const v8_context = _isolate.getCurrentContext();
+                        const context = Context.fromIsolate(info.getIsolate());
 
-                        const context: *Context = @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
-
-                        const property = js.valueToString(context.call_arena, .{ .handle = c_name.? }, _isolate, v8_context) catch "???";
+                        const property = context.valueToString(.{ .handle = c_name.? }, .{}) catch "???";
                         if (context.global_callback.?.missing(property, context)) {
                             return v8.Intercepted.Yes;
                         }
@@ -180,7 +177,7 @@ pub fn createContext(self: *ExecutionWorld, global: anytype, page: *Page, script
         .templates = &env.templates,
         .meta_lookup = &env.meta_lookup,
         .handle_scope = handle_scope,
-        .script_manager = script_manager,
+        .script_manager = &page.script_manager,
         .call_arena = self.call_arena.allocator(),
         .context_arena = self.context_arena.allocator(),
         .global_callback = global_callback,
@@ -188,9 +185,8 @@ pub fn createContext(self: *ExecutionWorld, global: anytype, page: *Page, script
 
     var context = &self.context.?;
     {
-        // Given a context, we can get our executor.
-        // (we store a pointer to our executor in the context's
-        // embeddeder data)
+        // Store a pointer to our context inside the v8 context so that, given
+        // a v8 context, we can get our context out
         const data = isolate.initBigIntU64(@intCast(@intFromPtr(context)));
         v8_context.setEmbedderData(1, data);
     }
@@ -240,7 +236,7 @@ pub fn createContext(self: *ExecutionWorld, global: anytype, page: *Page, script
         }
     }
 
-    _ = try context._mapZigInstanceToJs(v8_context.getGlobal(), global);
+    try context.setupGlobal();
     return context;
 }
 

@@ -24,7 +24,6 @@ const Page = @import("../page.zig").Page;
 
 const iterator = @import("../iterator/iterator.zig");
 
-const v8 = @import("v8");
 // https://developer.mozilla.org/en-US/docs/Web/API/Headers
 const Headers = @This();
 
