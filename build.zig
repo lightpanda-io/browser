@@ -493,7 +493,7 @@ fn buildBrotli(b: *Build, m: *Build.Module) !void {
     });
 
     const root = "vendor/brotli/c/";
-    brotli.installHeader(b.path(root ++ "brotli.h"), "brotli.h");
+    brotli.addIncludePath(b.path(root ++ "include"));
     brotli.addCSourceFiles(.{ .flags = &.{}, .files = &.{
         root ++ "common/constants.c",
         root ++ "common/context.c",
