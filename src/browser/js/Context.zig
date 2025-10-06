@@ -35,12 +35,11 @@ templates: []v8.FunctionTemplate,
 // references the Env.meta_lookup
 meta_lookup: []types.Meta,
 
-// An arena for the lifetime of a call-group. Gets reset whenever
-// call_depth reaches 0.
-call_arena: Allocator,
+// Arena for the lifetime of the context
+arena: Allocator,
 
-// An arena for the lifetime of the context
-context_arena: Allocator,
+// The page.call_arena
+call_arena: Allocator,
 
 // Because calls can be nested (i.e.a function calling a callback),
 // we can only reset the call_arena when call_depth == 0. If we were
@@ -179,7 +178,7 @@ pub fn deinit(self: *Context) void {
 }
 
 fn trackCallback(self: *Context, pf: PersistentFunction) !void {
-    return self.callbacks.append(self.context_arena, pf);
+    return self.callbacks.append(self.arena, pf);
 }
 
 // Given an anytype, turns it into a v8.Object. The anytype could be:
@@ -236,7 +235,7 @@ pub fn module(self: *Context, comptime want_result: bool, src: []const u8, url: 
 
     const m = try compileModule(self.isolate, src, url);
 
-    const arena = self.context_arena;
+    const arena = self.arena;
     const owned_url = try arena.dupe(u8, url);
 
     try self.module_identifier.putNoClobber(arena, m.getIdentityHash(), owned_url);
@@ -258,9 +257,9 @@ pub fn module(self: *Context, comptime want_result: bool, src: []const u8, url: 
                 owned_url,
                 .{ .alloc = .if_needed, .null_terminated = true },
             );
-            const gop = try self.module_cache.getOrPut(self.context_arena, normalized_specifier);
+            const gop = try self.module_cache.getOrPut(self.arena, normalized_specifier);
             if (!gop.found_existing) {
-                const owned_specifier = try self.context_arena.dupeZ(u8, normalized_specifier);
+                const owned_specifier = try self.arena.dupeZ(u8, normalized_specifier);
                 gop.key_ptr.* = owned_specifier;
                 gop.value_ptr.* = .{};
                 try self.script_manager.?.getModule(owned_specifier);
@@ -522,18 +521,18 @@ pub fn zigValueToJs(self: *Context, value: anytype) !v8.Value {
 //      we can just grab it from the identity_map)
 pub fn mapZigInstanceToJs(self: *Context, js_obj_or_template: anytype, value: anytype) !PersistentObject {
     const v8_context = self.v8_context;
-    const context_arena = self.context_arena;
+    const arena = self.arena;
 
     const T = @TypeOf(value);
     switch (@typeInfo(T)) {
         .@"struct" => {
             // Struct, has to be placed on the heap
-            const heap = try context_arena.create(T);
+            const heap = try arena.create(T);
             heap.* = value;
             return self.mapZigInstanceToJs(js_obj_or_template, heap);
         },
         .pointer => |ptr| {
-            const gop = try self.identity_map.getOrPut(context_arena, @intFromPtr(value));
+            const gop = try self.identity_map.getOrPut(arena, @intFromPtr(value));
             if (gop.found_existing) {
                 // we've seen this instance before, return the same
                 // PersistentObject.
@@ -541,7 +540,7 @@ pub fn mapZigInstanceToJs(self: *Context, js_obj_or_template: anytype, value: an
             }
 
             if (comptime @hasDecl(ptr.child, "destructor")) {
-                try self.destructor_callbacks.append(context_arena, DestructorCallback.init(value));
+                try self.destructor_callbacks.append(arena, DestructorCallback.init(value));
             }
 
             // Sometimes we're creating a new v8.Object, like when
@@ -563,7 +562,7 @@ pub fn mapZigInstanceToJs(self: *Context, js_obj_or_template: anytype, value: an
                 // The TAO contains the pointer ot our Zig instance as
                 // well as any meta data we'll need to use it later.
                 // See the TaggedAnyOpaque struct for more details.
-                const tao = try context_arena.create(TaggedAnyOpaque);
+                const tao = try arena.create(TaggedAnyOpaque);
                 const meta_index = @field(types.LOOKUP, @typeName(ptr.child));
                 const meta = self.meta_lookup[meta_index];
 
@@ -768,7 +767,7 @@ fn jsValueToStruct(self: *Context, comptime named_function: NamedFunction, compt
     }
 
     if (T == js.String) {
-        return .{ .string = try self.valueToString(js_value, .{ .allocator = self.context_arena }) };
+        return .{ .string = try self.valueToString(js_value, .{ .allocator = self.arena }) };
     }
 
     const js_obj = js_value.castTo(v8.Object);
@@ -1062,7 +1061,7 @@ pub fn createPromiseResolver(self: *Context, comptime lifetime: PromiseResolverL
     const persisted = v8.Persistent(v8.PromiseResolver).init(self.isolate, resolver);
 
     if (comptime lifetime == .page) {
-        try self.persisted_promise_resolvers.append(self.context_arena, persisted);
+        try self.persisted_promise_resolvers.append(self.arena, persisted);
     }
 
     return .{
@@ -1122,7 +1121,7 @@ pub fn dynamicModuleCallback(
     };
 
     const normalized_specifier = @import("../../url.zig").stitch(
-        self.context_arena, // might need to survive until the module is loaded
+        self.arena, // might need to survive until the module is loaded
         specifier,
         resource,
         .{ .alloc = .if_needed, .null_terminated = true },
@@ -1172,7 +1171,7 @@ fn _resolveModuleCallback(self: *Context, referrer: v8.Module, specifier: []cons
         .{ .alloc = .if_needed, .null_terminated = true },
     );
 
-    const gop = try self.module_cache.getOrPut(self.context_arena, normalized_specifier);
+    const gop = try self.module_cache.getOrPut(self.arena, normalized_specifier);
     if (gop.found_existing) {
         if (gop.value_ptr.module) |m| {
             return m.handle;
@@ -1229,7 +1228,7 @@ const DynamicModuleResolveState = struct {
 
 fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8) !v8.Promise {
     const isolate = self.isolate;
-    const gop = try self.module_cache.getOrPut(self.context_arena, specifier);
+    const gop = try self.module_cache.getOrPut(self.arena, specifier);
     if (gop.found_existing and gop.value_ptr.resolver_promise != null) {
         // This is easy, there's already something responsible
         // for loading the module. Maybe it's still loading, maybe
@@ -1238,10 +1237,10 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8) !v8.Promise {
     }
 
     const persistent_resolver = v8.Persistent(v8.PromiseResolver).init(isolate, v8.PromiseResolver.init(self.v8_context));
-    try self.persisted_promise_resolvers.append(self.context_arena, persistent_resolver);
+    try self.persisted_promise_resolvers.append(self.arena, persistent_resolver);
     var resolver = persistent_resolver.castToPromiseResolver();
 
-    const state = try self.context_arena.create(DynamicModuleResolveState);
+    const state = try self.arena.create(DynamicModuleResolveState);
     state.* = .{
         .module = null,
         .context = self,

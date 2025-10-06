@@ -21,13 +21,6 @@ const CONTEXT_ARENA_RETAIN = 1024 * 64;
 const ExecutionWorld = @This();
 env: *Env,
 
-// Arena whose lifetime is for a single getter/setter/function/etc.
-// Largely used to get strings out of V8, like a stack trace from
-// a TryCatch. The allocator will be owned by the Context, but the
-// arena itself is owned by the ExecutionWorld so that we can re-use it
-// from context to context.
-call_arena: ArenaAllocator,
-
 // Arena whose lifetime is for a single page load. Where
 // the call_arena lives for a single function call, the context_arena
 // lives for the lifetime of the entire page. The allocator will be
@@ -48,7 +41,6 @@ pub fn deinit(self: *ExecutionWorld) void {
         self.removeContext();
     }
 
-    self.call_arena.deinit();
     self.context_arena.deinit();
 }
 
@@ -178,8 +170,8 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_cal
         .meta_lookup = &env.meta_lookup,
         .handle_scope = handle_scope,
         .script_manager = &page.script_manager,
-        .call_arena = self.call_arena.allocator(),
-        .context_arena = self.context_arena.allocator(),
+        .call_arena = page.call_arena,
+        .arena = self.context_arena.allocator(),
         .global_callback = global_callback,
     };
 
@@ -190,8 +182,6 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_cal
         const data = isolate.initBigIntU64(@intCast(@intFromPtr(context)));
         v8_context.setEmbedderData(1, data);
     }
-
-    page.call_arena = context.call_arena;
 
     // Custom exception
     // NOTE: there is no way in v8 to subclass the Error built-in type

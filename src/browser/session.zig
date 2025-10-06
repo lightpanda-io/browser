@@ -106,7 +106,7 @@ pub const Session = struct {
 
         self.page = @as(Page, undefined);
         const page = &self.page.?;
-        try Page.init(page, page_arena.allocator(), self);
+        try Page.init(page, page_arena.allocator(), self.browser.call_arena.allocator(), self);
 
         log.debug(.browser, "create page", .{});
         // start JS env

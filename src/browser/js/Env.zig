@@ -178,7 +178,6 @@ pub fn newExecutionWorld(self: *Env) !ExecutionWorld {
     return .{
         .env = self,
         .context = null,
-        .call_arena = ArenaAllocator.init(self.allocator),
         .context_arena = ArenaAllocator.init(self.allocator),
     };
 }

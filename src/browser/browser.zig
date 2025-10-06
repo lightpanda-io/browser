@@ -39,6 +39,7 @@ pub const Browser = struct {
     session: ?Session,
     allocator: Allocator,
     http_client: *HttpClient,
+    call_arena: ArenaAllocator,
     page_arena: ArenaAllocator,
     session_arena: ArenaAllocator,
     transfer_arena: ArenaAllocator,
@@ -63,6 +64,7 @@ pub const Browser = struct {
             .allocator = allocator,
             .notification = notification,
             .http_client = app.http.client,
+            .call_arena = ArenaAllocator.init(allocator),
             .page_arena = ArenaAllocator.init(allocator),
             .session_arena = ArenaAllocator.init(allocator),
             .transfer_arena = ArenaAllocator.init(allocator),
@@ -73,6 +75,7 @@ pub const Browser = struct {
     pub fn deinit(self: *Browser) void {
         self.closeSession();
         self.env.deinit();
+        self.call_arena.deinit();
         self.page_arena.deinit();
         self.session_arena.deinit();
         self.transfer_arena.deinit();
