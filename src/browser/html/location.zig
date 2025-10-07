@@ -29,13 +29,13 @@ pub const Location = struct {
         return "";
     }
 
-    pub fn get_protocol(self: *Location, page: *Page) ![]const u8 {
-        if (self.url) |*u| return u.get_protocol(page);
+    pub fn get_protocol(self: *Location) []const u8 {
+        if (self.url) |*u| return u.get_protocol();
         return "";
     }
 
-    pub fn get_host(self: *Location, page: *Page) ![]const u8 {
-        if (self.url) |*u| return u.get_host(page);
+    pub fn get_host(self: *Location) []const u8 {
+        if (self.url) |*u| return u.get_host();
         return "";
     }
 
@@ -44,8 +44,8 @@ pub const Location = struct {
         return "";
     }
 
-    pub fn get_port(self: *Location, page: *Page) ![]const u8 {
-        if (self.url) |*u| return u.get_port(page);
+    pub fn get_port(self: *Location) []const u8 {
+        if (self.url) |*u| return u.get_port();
         return "";
     }
 
@@ -59,8 +59,8 @@ pub const Location = struct {
         return "";
     }
 
-    pub fn get_hash(self: *Location, page: *Page) ![]const u8 {
-        if (self.url) |*u| return u.get_hash(page);
+    pub fn get_hash(self: *Location) []const u8 {
+        if (self.url) |*u| return u.get_hash();
         return "";
     }
 
@@ -82,7 +82,7 @@ pub const Location = struct {
     }
 
     pub fn _toString(self: *Location, page: *Page) ![]const u8 {
-        return try self.get_href(page);
+        return self.get_href(page);
     }
 };
 
