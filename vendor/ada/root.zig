@@ -7,6 +7,8 @@ const c = @cImport({
 
 /// Pointer type.
 pub const URL = c.ada_url;
+pub const URLComponents = c.ada_url_components;
+pub const URLOmitted = c.ada_url_omitted;
 pub const String = c.ada_string;
 pub const OwnedString = c.ada_owned_string;
 /// Pointer type.
@@ -34,12 +36,21 @@ pub fn parseWithBase(input: []const u8, base: []const u8) ParseError!URL {
     return url;
 }
 
+pub inline fn getComponents(url: URL) *const URLComponents {
+    return c.ada_get_components(url);
+}
+
 pub inline fn free(url: URL) void {
     return c.ada_free(url);
 }
 
 pub inline fn freeOwnedString(owned: OwnedString) void {
     return c.ada_free_owned_string(owned);
+}
+
+/// Returns true if given URL is valid (not NULL).
+pub inline fn isValid(url: URL) bool {
+    return c.ada_is_valid(url);
 }
 
 /// Can return an empty string.
@@ -68,6 +79,10 @@ pub inline fn getPassword(url: URL) []const u8 {
 }
 
 pub inline fn getPort(url: URL) []const u8 {
+    if (!c.ada_has_port(url)) {
+        return "";
+    }
+
     const port = c.ada_get_port(url);
     return port.data[0..port.length];
 }
@@ -77,12 +92,21 @@ pub inline fn getHash(url: URL) []const u8 {
     return hash.data[0..hash.length];
 }
 
+/// Returns an empty string if not provided.
 pub inline fn getHost(url: URL) []const u8 {
     const host = c.ada_get_host(url);
+    if (host.data == null) {
+        return "";
+    }
+
     return host.data[0..host.length];
 }
 
 pub inline fn getHostname(url: URL) []const u8 {
+    if (!c.ada_has_hostname(url)) {
+        return "";
+    }
+
     const hostname = c.ada_get_hostname(url);
     return hostname.data[0..hostname.length];
 }
@@ -92,12 +116,55 @@ pub inline fn getPathname(url: URL) []const u8 {
     return pathname.data[0..pathname.length];
 }
 
-pub inline fn getSearch(url: URL) []const u8 {
-    const search = c.ada_get_search(url);
-    return search.data[0..search.length];
+pub inline fn getSearch(url: URL) String {
+    return c.ada_get_search(url);
 }
 
 pub inline fn getProtocol(url: URL) []const u8 {
     const protocol = c.ada_get_protocol(url);
     return protocol.data[0..protocol.length];
+}
+
+pub inline fn setHref(url: URL, input: []const u8) bool {
+    return c.ada_set_href(url, input.ptr, input.len);
+}
+
+pub inline fn setHost(url: URL, input: []const u8) bool {
+    return c.ada_set_host(url, input.ptr, input.len);
+}
+
+pub inline fn setHostname(url: URL, input: []const u8) bool {
+    return c.ada_set_hostname(url, input.ptr, input.len);
+}
+
+pub inline fn setProtocol(url: URL, input: []const u8) bool {
+    return c.ada_set_protocol(url, input.ptr, input.len);
+}
+
+pub inline fn setUsername(url: URL, input: []const u8) bool {
+    return c.ada_set_username(url, input.ptr, input.len);
+}
+
+pub inline fn setPassword(url: URL, input: []const u8) bool {
+    return c.ada_set_password(url, input.ptr, input.len);
+}
+
+pub inline fn setPort(url: URL, input: []const u8) bool {
+    return c.ada_set_port(url, input.ptr, input.len);
+}
+
+pub inline fn setPathname(url: URL, input: []const u8) bool {
+    return c.ada_set_pathname(url, input.ptr, input.len);
+}
+
+pub inline fn setSearch(url: URL, input: []const u8) void {
+    return c.ada_set_search(url, input.ptr, input.len);
+}
+
+pub inline fn setHash(url: URL, input: []const u8) void {
+    return c.ada_set_hash(url, input.ptr, input.len);
+}
+
+pub inline fn clearSearch(url: URL) void {
+    return c.ada_clear_search(url);
 }
