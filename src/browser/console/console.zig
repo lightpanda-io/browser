@@ -71,6 +71,16 @@ pub const Console = struct {
         });
     }
 
+    pub fn _trace(values: []js.Object, page: *Page) !void {
+        if (values.len == 0) {
+            return;
+        }
+        log.debug(.console, "debug", .{
+            .stack = page.js.stackTrace() catch "???",
+            .args = try serializeValues(values, page),
+        });
+    }
+
     pub fn _clear() void {}
 
     pub fn _count(self: *Console, label_: ?[]const u8, page: *Page) !void {

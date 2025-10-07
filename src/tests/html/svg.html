@@ -1,6 +1,19 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 
+<svg width="200" height="100" style="border:1px solid #ccc" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+  <rect></rect>
+  <text x="100" y="95" font-size="14" text-anchor="middle">OVER 9000!!</text>
+</svg>
+
 <script id=svg>
   testing.expectEqual(false, 'AString' instanceof SVGElement);
+
+  const svg = document.querySelector('svg');
+  testing.expectEqual('http://www.w3.org/2000/svg', svg.getAttribute('xmlns'));
+  testing.expectEqual('http://www.w3.org/2000/svg', svg.getAttributeNode('xmlns').value);
+  testing.expectEqual('http://www.w3.org/2000/svg', svg.attributes.getNamedItem('xmlns').value);
+  testing.expectEqual('0 0 200 100', svg.getAttribute('viewBox'));
+  testing.expectEqual('viewBox', svg.getAttributeNode('viewBox').name);
+  testing.expectEqual(true, svg.outerHTML.includes('viewBox'));
 </script>
