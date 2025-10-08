@@ -161,6 +161,9 @@ pub const Page = struct {
     }
 
     fn reset(self: *Page) void {
+        // Force running the micro task to drain the queue.
+        self.session.browser.env.runMicrotasks();
+
         self.scheduler.reset();
         self.http_client.abort();
         self.script_manager.reset();
