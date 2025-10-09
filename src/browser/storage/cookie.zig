@@ -315,7 +315,7 @@ pub const Cookie = struct {
     const ValidateCookieError = error{ Empty, InvalidByteSequence };
 
     /// Returns an error if cookie str length is 0
-    /// or contains characters between 32...126.
+    /// or contains characters outside of the ascii range 32...126.
     fn validateCookieString(str: []const u8) ValidateCookieError!void {
         if (str.len == 0) {
             return error.Empty;
