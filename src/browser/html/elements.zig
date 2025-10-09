@@ -1353,6 +1353,7 @@ test "Browser: HTML.HtmlScriptElement" {
     try testing.htmlRunner("html/script/inline_defer.html");
     try testing.htmlRunner("html/script/import.html");
     try testing.htmlRunner("html/script/dynamic_import.html");
+    try testing.htmlRunner("html/script/importmap.html");
 }
 
 test "Browser: HTML.HtmlSlotElement" {

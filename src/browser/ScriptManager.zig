@@ -248,6 +248,16 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element, comptime c
     });
 }
 
+// Resolve a module specifier to an valid URL.
+pub fn resolveSpecifier(_: *ScriptManager, arena: Allocator, specifier: []const u8, base: []const u8) ![:0]const u8 {
+    return URL.stitch(
+        arena,
+        specifier,
+        base,
+        .{ .alloc = .if_needed, .null_terminated = true },
+    );
+}
+
 pub fn getModule(self: *ScriptManager, url: [:0]const u8, referrer: []const u8) !void {
     const gop = try self.sync_modules.getOrPut(self.allocator, url);
     if (gop.found_existing) {
