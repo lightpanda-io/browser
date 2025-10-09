@@ -42,7 +42,7 @@ pub const Location = struct {
     }
 
     pub fn set_href(_: *const Location, href: []const u8, page: *Page) !void {
-        return page.navigate(href, .{ .reason = .script });
+        return page.navigateFromWebAPI(href, .{ .reason = .script });
     }
 
     pub fn get_protocol(self: *Location) []const u8 {
