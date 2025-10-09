@@ -252,7 +252,7 @@ pub const URLSearchParams = struct {
     pub const ConstructorOptions = union(enum) {
         query_string: []const u8,
         form_data: *const FormData,
-        object: js.JsObject,
+        object: js.Object,
     };
 
     pub fn constructor(maybe_options: ?ConstructorOptions, page: *Page) !URLSearchParams {
