@@ -122,7 +122,9 @@ pub fn reset(self: *ScriptManager) void {
         self.sync_module_pool.destroy(value_ptr.*);
     }
     self.sync_modules.clearRetainingCapacity();
-    self.importmap.clearRetainingCapacity();
+    // Our allocator is the page arena, it's been reset. We cannot use
+    // clearAndRetainCapacity, since that space is no longer ours
+    self.importmap.clearAndFree(self.page.arena);
 
     self.clearList(&self.asyncs);
     self.clearList(&self.scripts);
