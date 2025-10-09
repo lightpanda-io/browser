@@ -24,6 +24,7 @@ const Allocator = std.mem.Allocator;
 const Dump = @import("dump.zig");
 const State = @import("State.zig");
 const Mime = @import("mime.zig").Mime;
+const Browser = @import("browser.zig").Browser;
 const Session = @import("session.zig").Session;
 const Renderer = @import("renderer.zig").Renderer;
 const Window = @import("html/window.zig").Window;
@@ -146,11 +147,7 @@ pub const Page = struct {
         self.js = try session.executor.createContext(self, true, js.GlobalMissingCallback.init(&self.polyfill_loader));
         try polyfill.preload(self.arena, self.js);
 
-        try self.scheduler.add(self, runMicrotasks, 5, .{ .name = "page.microtasks" });
-        // message loop must run only non-test env
-        if (comptime !builtin.is_test) {
-            try self.scheduler.add(self, runMessageLoop, 5, .{ .name = "page.messageLoop" });
-        }
+        try self.registerBackgroundTasks();
     }
 
     pub fn deinit(self: *Page) void {
@@ -160,7 +157,7 @@ pub const Page = struct {
         self.script_manager.deinit();
     }
 
-    fn reset(self: *Page) void {
+    fn reset(self: *Page) !void {
         // Force running the micro task to drain the queue.
         self.session.browser.env.runMicrotasks();
 
@@ -171,18 +168,31 @@ pub const Page = struct {
         self.load_state = .parsing;
         self.mode = .{ .pre = {} };
         _ = self.session.browser.page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
+
+        try self.registerBackgroundTasks();
     }
 
-    fn runMicrotasks(ctx: *anyopaque) ?u32 {
-        const self: *Page = @ptrCast(@alignCast(ctx));
-        self.session.browser.runMicrotasks();
-        return 5;
-    }
+    fn registerBackgroundTasks(self: *Page) !void {
+        if (comptime builtin.is_test) {
+            // HTML test runner manually calls these as necessary
+            return;
+        }
 
-    fn runMessageLoop(ctx: *anyopaque) ?u32 {
-        const self: *Page = @ptrCast(@alignCast(ctx));
-        self.session.browser.runMessageLoop();
-        return 100;
+        try self.scheduler.add(self.session.browser, struct {
+            fn runMicrotasks(ctx: *anyopaque) ?u32 {
+                const b: *Browser = @ptrCast(@alignCast(ctx));
+                b.runMicrotasks();
+                return 5;
+            }
+        }.runMicrotasks, 5, .{ .name = "page.microtasks" });
+
+        try self.scheduler.add(self.session.browser, struct {
+            fn runMessageLoop(ctx: *anyopaque) ?u32 {
+                const b: *Browser = @ptrCast(@alignCast(ctx));
+                b.runMessageLoop();
+                return 100;
+            }
+        }.runMessageLoop, 5, .{ .name = "page.messageLoop" });
     }
 
     pub const DumpOpts = struct {
@@ -529,7 +539,7 @@ pub const Page = struct {
         if (self.mode != .pre) {
             // it's possible for navigate to be called multiple times on the
             // same page (via CDP). We want to reset the page between each call.
-            self.reset();
+            try self.reset();
         }
 
         log.info(.http, "navigate", .{

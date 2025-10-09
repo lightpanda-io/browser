@@ -138,10 +138,7 @@ fn getThis(self: *const Function) v8.Object {
     return self.this orelse self.context.v8_context.getGlobal();
 }
 
-// debug/helper to print the source of the JS callback
-pub fn printFunc(self: Function) !void {
-    const context = self.context;
+pub fn src(self: *const Function) ![]const u8 {
     const value = self.func.castToFunction().toValue();
-    const src = try js.valueToString(context.call_arena, value, context.isolate, context.v8_context);
-    std.debug.print("{s}\n", .{src});
+    return self.context.valueToString(value, .{});
 }
