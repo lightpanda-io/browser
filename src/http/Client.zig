@@ -393,7 +393,9 @@ fn perform(self: *Client, timeout_ms: c_int) !PerformStatus {
 
     // We're potentially going to block for a while until we get data. Process
     // whatever messages we have waiting ahead of time.
-    try self.processMessages();
+    if (try self.processMessages()) {
+        return .normal;
+    }
 
     var status = PerformStatus.normal;
     if (self.extra_socket) |s| {
@@ -411,12 +413,13 @@ fn perform(self: *Client, timeout_ms: c_int) !PerformStatus {
         try errorMCheck(c.curl_multi_poll(multi, null, 0, timeout_ms, null));
     }
 
-    try self.processMessages();
+    _ = try self.processMessages();
     return status;
 }
 
-fn processMessages(self: *Client) !void {
+fn processMessages(self: *Client) !bool {
     const multi = self.multi;
+    var processed = false;
     var messages_count: c_int = 0;
     while (c.curl_multi_info_read(multi, &messages_count)) |msg_| {
         const msg: *c.CURLMsg = @ptrCast(msg_);
@@ -475,10 +478,12 @@ fn processMessages(self: *Client) !void {
                     .transfer = transfer,
                 });
             }
+            processed = true;
         } else |err| {
             self.requestFailed(transfer, err);
         }
     }
+    return processed;
 }
 
 fn endTransfer(self: *Client, transfer: *Transfer) void {
