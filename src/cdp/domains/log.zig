@@ -106,7 +106,7 @@ pub fn LogInterceptor(comptime BC: type) type {
             }, .{
                 .session_id = self.bc.session_id,
             }) catch |err| {
-                log.err(.interceptor, "failed to send", .{.err = err});
+                log.err(.interceptor, "failed to send", .{ .err = err });
             };
         }
     };
