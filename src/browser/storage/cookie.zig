@@ -207,16 +207,7 @@ pub const Cookie = struct {
     // Duplicate attributes - use the last valid
     // Value-less attributes with a value? Ignore the value
     pub fn parse(allocator: Allocator, uri: *const std.Uri, str: []const u8) !Cookie {
-        if (str.len == 0) {
-            // this check is necessary, `std.mem.minMax` asserts len > 0
-            return error.Empty;
-        }
-        {
-            const min, const max = std.mem.minMax(u8, str);
-            if (min < 32 or max > 126) {
-                return error.InvalidByteSequence;
-            }
-        }
+        try validateCookieString(str);
 
         const cookie_name, const cookie_value, const rest = parseNameValue(str) catch {
             return error.InvalidNameValue;
@@ -319,6 +310,56 @@ pub const Cookie = struct {
             .domain = owned_domain,
             .expires = normalized_expires,
         };
+    }
+
+    const ValidateCookieError = error{ Empty, InvalidByteSequence };
+
+    /// Returns an error if cookie str length is 0
+    /// or contains characters outside of the ascii range 32...126.
+    fn validateCookieString(str: []const u8) ValidateCookieError!void {
+        if (str.len == 0) {
+            return error.Empty;
+        }
+
+        const vec_size_suggestion = std.simd.suggestVectorLength(u8);
+        var offset: usize = 0;
+
+        // Fast path if possible.
+        if (comptime vec_size_suggestion) |size| {
+            while (str.len - offset >= size) : (offset += size) {
+                const Vec = @Vector(size, u8);
+                const space: Vec = @splat(32);
+                const tilde: Vec = @splat(126);
+                const chunk: Vec = str[offset..][0..size].*;
+
+                // This creates a mask where invalid characters represented
+                // as ones and valid characters as zeros. We then bitCast this
+                // into an unsigned integer. If the integer is not equal to 0,
+                // we know that we've invalid characters in this chunk.
+                // @popCount can also be used but using integers are simpler.
+                const mask = (@intFromBool(chunk < space) | @intFromBool(chunk > tilde));
+                const reduced: std.meta.Int(.unsigned, size) = @bitCast(mask);
+
+                // Got match.
+                if (reduced != 0) {
+                    return error.InvalidByteSequence;
+                }
+            }
+
+            // Means str.len % size == 0; we also know str.len != 0.
+            // Cookie is valid.
+            if (offset == str.len) {
+                return;
+            }
+        }
+
+        // Either remaining slice or the original if fast path not taken.
+        const slice = str[offset..];
+        // Slow path.
+        const min, const max = std.mem.minMax(u8, slice);
+        if (min < 32 or max > 126) {
+            return error.InvalidByteSequence;
+        }
     }
 
     pub fn parsePath(arena: Allocator, uri: ?*const std.Uri, explicit_path: ?[]const u8) ![]const u8 {
