@@ -37,8 +37,10 @@ pub fn init(allocator: Allocator) Scheduler {
 }
 
 pub fn reset(self: *Scheduler) void {
-    self.high_priority.clearRetainingCapacity();
-    self.low_priority.clearRetainingCapacity();
+    // Our allocator is the page arena, it's been reset. We cannot use
+    // clearAndRetainCapacity, since that space is no longer ours
+    self.high_priority.clearAndFree();
+    self.low_priority.clearAndFree();
 }
 
 const AddOpts = struct {
