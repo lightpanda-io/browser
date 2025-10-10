@@ -41,8 +41,8 @@ pub const Location = struct {
         return page.navigateFromWebAPI(href, .{ .reason = .script });
     }
 
-    pub fn get_protocol(self: *Location, page: *Page) ![]const u8 {
-        return self.url.get_protocol(page);
+    pub fn get_protocol(self: *Location) []const u8 {
+        return self.url.get_protocol();
     }
 
     pub fn get_host(self: *Location, page: *Page) ![]const u8 {
