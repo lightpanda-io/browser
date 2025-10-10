@@ -27,7 +27,7 @@ pub fn setIndex(self: Object, index: u32, value: anytype, opts: SetOpts) !void {
     return self.set(key, value, opts);
 }
 
-pub fn set(self: Object, key: []const u8, value: anytype, opts: SetOpts) !void {
+pub fn set(self: Object, key: []const u8, value: anytype, opts: SetOpts) error{ FailedToSet, OutOfMemory }!void {
     const context = self.context;
 
     const js_key = v8.String.initUtf8(context.isolate, key);
