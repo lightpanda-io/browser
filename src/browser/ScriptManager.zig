@@ -72,7 +72,8 @@ sync_modules: std.StringHashMapUnmanaged(*SyncModule),
 
 // Mapping between module specifier and resolution.
 // see https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/script/type/importmap
-importmap: std.StringHashMapUnmanaged([]const u8),
+// importmap contains resolved urls.
+importmap: std.StringHashMapUnmanaged([:0]const u8),
 
 const OrderList = std.DoublyLinkedList;
 
@@ -124,7 +125,7 @@ pub fn reset(self: *ScriptManager) void {
     self.sync_modules.clearRetainingCapacity();
     // Our allocator is the page arena, it's been reset. We cannot use
     // clearAndRetainCapacity, since that space is no longer ours
-    self.importmap.clearAndFree(self.page.arena);
+    self.importmap = .empty;
 
     self.clearList(&self.asyncs);
     self.clearList(&self.scripts);
@@ -262,11 +263,10 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element, comptime c
 }
 
 // Resolve a module specifier to an valid URL.
-pub fn resolveSpecifier(self: *ScriptManager, arena: Allocator, _specifier: []const u8, base: []const u8) ![:0]const u8 {
-    var specifier = _specifier;
-    // If the specifier is mapped in the importmap, use it to resolve the path.
+pub fn resolveSpecifier(self: *ScriptManager, arena: Allocator, specifier: []const u8, base: []const u8) ![:0]const u8 {
+    // If the specifier is mapped in the importmap, return the pre-resolved value.
     if (self.importmap.get(specifier)) |s| {
-        specifier = s;
+        return s;
     }
 
     return URL.stitch(
@@ -497,7 +497,17 @@ fn parseImportmap(self: *ScriptManager, script: *const Script) !void {
 
     var iter = imports.imports.map.iterator();
     while (iter.next()) |entry| {
-        try self.importmap.put(self.page.arena, entry.key_ptr.*, entry.value_ptr.*);
+        // > Relative URLs are resolved to absolute URL addresses using the
+        // > base URL of the document containing the import map.
+        // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules#importing_modules_using_import_maps
+        const resolved_url = try URL.stitch(
+            self.page.arena,
+            entry.value_ptr.*,
+            self.page.url.raw,
+            .{ .alloc = .if_needed, .null_terminated = true },
+        );
+
+        try self.importmap.put(self.page.arena, entry.key_ptr.*, resolved_url);
     }
 
     return;
