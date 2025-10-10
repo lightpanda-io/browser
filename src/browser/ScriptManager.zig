@@ -70,6 +70,11 @@ async_module_pool: std.heap.MemoryPool(AsyncModule),
 // and can be requested as needed.
 sync_modules: std.StringHashMapUnmanaged(*SyncModule),
 
+// Mapping between module specifier and resolution.
+// see https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/script/type/importmap
+// importmap contains resolved urls.
+importmap: std.StringHashMapUnmanaged([:0]const u8),
+
 const OrderList = std.DoublyLinkedList;
 
 pub fn init(browser: *Browser, page: *Page) ScriptManager {
@@ -80,6 +85,7 @@ pub fn init(browser: *Browser, page: *Page) ScriptManager {
         .asyncs = .{},
         .scripts = .{},
         .deferreds = .{},
+        .importmap = .empty,
         .sync_modules = .empty,
         .is_evaluating = false,
         .allocator = allocator,
@@ -106,6 +112,8 @@ pub fn deinit(self: *ScriptManager) void {
     self.async_module_pool.deinit();
 
     self.sync_modules.deinit(self.allocator);
+    // we don't deinit self.importmap b/c we use the page's arena for its
+    // allocations.
 }
 
 pub fn reset(self: *ScriptManager) void {
@@ -115,6 +123,9 @@ pub fn reset(self: *ScriptManager) void {
         self.sync_module_pool.destroy(value_ptr.*);
     }
     self.sync_modules.clearRetainingCapacity();
+    // Our allocator is the page arena, it's been reset. We cannot use
+    // clearAndRetainCapacity, since that space is no longer ours
+    self.importmap = .empty;
 
     self.clearList(&self.asyncs);
     self.clearList(&self.scripts);
@@ -163,6 +174,9 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element, comptime c
         }
         if (std.ascii.eqlIgnoreCase(script_type, "module")) {
             break :blk .module;
+        }
+        if (std.ascii.eqlIgnoreCase(script_type, "importmap")) {
+            break :blk .importmap;
         }
 
         // "type" could be anything, but only the above are ones we need to process.
@@ -246,6 +260,21 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element, comptime c
         .done_callback = doneCallback,
         .error_callback = errorCallback,
     });
+}
+
+// Resolve a module specifier to an valid URL.
+pub fn resolveSpecifier(self: *ScriptManager, arena: Allocator, specifier: []const u8, base: []const u8) ![:0]const u8 {
+    // If the specifier is mapped in the importmap, return the pre-resolved value.
+    if (self.importmap.get(specifier)) |s| {
+        return s;
+    }
+
+    return URL.stitch(
+        arena,
+        specifier,
+        base,
+        .{ .alloc = .if_needed, .null_terminated = true },
+    );
 }
 
 pub fn getModule(self: *ScriptManager, url: [:0]const u8, referrer: []const u8) !void {
@@ -452,6 +481,38 @@ fn errorCallback(ctx: *anyopaque, err: anyerror) void {
     script.errorCallback(err);
 }
 
+fn parseImportmap(self: *ScriptManager, script: *const Script) !void {
+    const content = script.source.content();
+
+    const Imports = struct {
+        imports: std.json.ArrayHashMap([]const u8),
+    };
+
+    const imports = try std.json.parseFromSliceLeaky(
+        Imports,
+        self.page.arena,
+        content,
+        .{ .allocate = .alloc_always },
+    );
+
+    var iter = imports.imports.map.iterator();
+    while (iter.next()) |entry| {
+        // > Relative URLs are resolved to absolute URL addresses using the
+        // > base URL of the document containing the import map.
+        // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules#importing_modules_using_import_maps
+        const resolved_url = try URL.stitch(
+            self.page.arena,
+            entry.value_ptr.*,
+            self.page.url.raw,
+            .{ .alloc = .if_needed, .null_terminated = true },
+        );
+
+        try self.importmap.put(self.page.arena, entry.key_ptr.*, resolved_url);
+    }
+
+    return;
+}
+
 // A script which is pending execution.
 // It could be pending because:
 //   (a) we're still downloading its content or
@@ -581,6 +642,7 @@ const Script = struct {
     const Kind = enum {
         module,
         javascript,
+        importmap,
     };
 
     const Callback = union(enum) {
@@ -621,6 +683,23 @@ const Script = struct {
             .cacheable = cacheable,
         });
 
+        // Handle importmap special case here: the content is a JSON containing
+        // imports.
+        if (self.kind == .importmap) {
+            page.script_manager.parseImportmap(self) catch |err| {
+                log.err(.browser, "parse importmap script", .{
+                    .err = err,
+                    .src = url,
+                    .kind = self.kind,
+                    .cacheable = cacheable,
+                });
+                self.executeCallback("onerror", page);
+                return;
+            };
+            self.executeCallback("onload", page);
+            return;
+        }
+
         const js_context = page.js;
         var try_catch: js.TryCatch = undefined;
         try_catch.init(js_context);
@@ -634,6 +713,7 @@ const Script = struct {
                     // We don't care about waiting for the evaluation here.
                     js_context.module(false, content, url, cacheable) catch break :blk false;
                 },
+                .importmap => unreachable, // handled before the try/catch.
             }
             break :blk true;
         };

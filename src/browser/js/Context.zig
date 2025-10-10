@@ -251,11 +251,10 @@ pub fn module(self: *Context, comptime want_result: bool, src: []const u8, url: 
         for (0..requests.length()) |i| {
             const req = requests.get(v8_context, @intCast(i)).castTo(v8.ModuleRequest);
             const specifier = try self.jsStringToZig(req.getSpecifier(), .{});
-            const normalized_specifier = try @import("../../url.zig").stitch(
+            const normalized_specifier = try self.script_manager.?.resolveSpecifier(
                 self.call_arena,
                 specifier,
                 owned_url,
-                .{ .alloc = .if_needed, .null_terminated = true },
             );
             const gop = try self.module_cache.getOrPut(self.arena, normalized_specifier);
             if (!gop.found_existing) {
@@ -1127,11 +1126,10 @@ pub fn dynamicModuleCallback(
         return @constCast(self.rejectPromise("Out of memory").handle);
     };
 
-    const normalized_specifier = @import("../../url.zig").stitch(
+    const normalized_specifier = self.script_manager.?.resolveSpecifier(
         self.arena, // might need to survive until the module is loaded
         specifier,
         resource,
-        .{ .alloc = .if_needed, .null_terminated = true },
     ) catch |err| {
         log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback3" });
         return @constCast(self.rejectPromise("Out of memory").handle);
@@ -1171,11 +1169,10 @@ fn _resolveModuleCallback(self: *Context, referrer: v8.Module, specifier: []cons
         return error.UnknownModuleReferrer;
     };
 
-    const normalized_specifier = try @import("../../url.zig").stitch(
+    const normalized_specifier = try self.script_manager.?.resolveSpecifier(
         self.call_arena,
         specifier,
         referrer_path,
-        .{ .alloc = .if_needed, .null_terminated = true },
     );
 
     const gop = try self.module_cache.getOrPut(self.arena, normalized_specifier);
