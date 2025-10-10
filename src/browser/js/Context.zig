@@ -29,6 +29,8 @@ isolate: v8.Isolate,
 v8_context: v8.Context,
 handle_scope: ?v8.HandleScope,
 
+cpu_profiler: ?v8.CpuProfiler = null,
+
 // references Env.templates
 templates: []v8.FunctionTemplate,
 
@@ -1815,6 +1817,11 @@ fn zigJsonToJs(isolate: v8.Isolate, v8_context: v8.Context, value: std.json.Valu
     }
 }
 
+pub fn getGlobalThis(self: *Context) js.This {
+    const js_global = self.v8_context.getGlobal();
+    return .{ .obj = .{ .js_obj = js_global, .context = self } };
+}
+
 // == Misc ==
 // An interface for types that want to have their jsDeinit function to be
 // called when the call context ends
@@ -1843,3 +1850,26 @@ const DestructorCallback = struct {
         self.destructorFn(self.ptr);
     }
 };
+
+// == Profiler ==
+pub fn startCpuProfiler(self: *Context) void {
+    if (builtin.mode != .Debug) {
+        // Still testing this out, don't have it properly exposed, so add this
+        // guard for the time being to prevent any accidental/weird prod issues.
+        @compileError("CPU Profiling is only available in debug builds");
+    }
+
+    std.debug.assert(self.cpu_profiler == null);
+    v8.CpuProfiler.useDetailedSourcePositionsForProfiling(self.isolate);
+    const cpu_profiler = v8.CpuProfiler.init(self.isolate);
+    const title = self.isolate.initStringUtf8("v8_cpu_profile");
+    cpu_profiler.startProfiling(title);
+    self.cpu_profiler = cpu_profiler;
+}
+
+pub fn stopCpuProfiler(self: *Context) ![]const u8 {
+    const title = self.isolate.initStringUtf8("v8_cpu_profile");
+    const profile = self.cpu_profiler.?.stopProfiling(title) orelse unreachable;
+    const serialized = profile.serialize(self.isolate).?;
+    return self.jsStringToZig(serialized, .{});
+}

@@ -849,7 +849,7 @@ pub const Page = struct {
         _ = self.session.browser.transfer_arena.reset(.{ .retain_with_limit = 4 * 1024 });
     }
 
-    // extracted because this sis called from tests to set things up.
+    // extracted because this is called from tests to set things up.
     pub fn setDocument(self: *Page, html_doc: *parser.DocumentHTML) !void {
         const doc = parser.documentHTMLToDocument(html_doc);
         try parser.documentSetDocumentURI(doc, self.url.raw);
