@@ -231,7 +231,6 @@ pub fn module(self: *Context, comptime want_result: bool, src: []const u8, url: 
             }
         }
     }
-    errdefer _ = self.module_cache.remove(url);
 
     const m = try compileModule(self.isolate, src, url);
 
