@@ -112,6 +112,10 @@ pub const URL = struct {
         };
     }
 
+    pub fn initWithoutSearchParams(uri: std.Uri) URL {
+        return .{ .uri = uri, .search_params = .{} };
+    }
+
     pub fn get_origin(self: *URL, page: *Page) ![]const u8 {
         var aw = std.Io.Writer.Allocating.init(page.arena);
         try self.uri.writeToStream(&aw.writer, .{

@@ -52,7 +52,7 @@ pub const Window = struct {
 
     document: *parser.DocumentHTML,
     target: []const u8 = "",
-    location: Location = .{},
+    location: Location = .default,
     storage_shelf: ?*storage.Shelf = null,
 
     // counter for having unique timer ids

@@ -16,57 +16,61 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const Page = @import("../page.zig").Page;
+const Uri = @import("std").Uri;
 
+const Page = @import("../page.zig").Page;
 const URL = @import("../url/url.zig").URL;
 
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#the-location-interface
 pub const Location = struct {
-    url: ?URL = null,
+    url: URL,
+
+    /// Browsers give such initial values when user not navigated yet:
+    /// Chrome  -> chrome://new-tab-page/
+    /// Firefox -> about:newtab
+    /// Safari  -> favorites://
+    pub const default = Location{
+        .url = .initWithoutSearchParams(Uri.parse("about:blank") catch unreachable),
+    };
 
     pub fn get_href(self: *Location, page: *Page) ![]const u8 {
-        if (self.url) |*u| return u.get_href(page);
-        return "";
+        return self.url.get_href(page);
+    }
+
+    pub fn set_href(_: *const Location, href: []const u8, page: *Page) !void {
+        return page.navigateFromWebAPI(href, .{ .reason = .script });
     }
 
     pub fn get_protocol(self: *Location, page: *Page) ![]const u8 {
-        if (self.url) |*u| return u.get_protocol(page);
-        return "";
+        return self.url.get_protocol(page);
     }
 
     pub fn get_host(self: *Location, page: *Page) ![]const u8 {
-        if (self.url) |*u| return u.get_host(page);
-        return "";
+        return self.url.get_host(page);
     }
 
     pub fn get_hostname(self: *Location) []const u8 {
-        if (self.url) |*u| return u.get_hostname();
-        return "";
+        return self.url.get_hostname();
     }
 
     pub fn get_port(self: *Location, page: *Page) ![]const u8 {
-        if (self.url) |*u| return u.get_port(page);
-        return "";
+        return self.url.get_port(page);
     }
 
     pub fn get_pathname(self: *Location) []const u8 {
-        if (self.url) |*u| return u.get_pathname();
-        return "";
+        return self.url.get_pathname();
     }
 
     pub fn get_search(self: *Location, page: *Page) ![]const u8 {
-        if (self.url) |*u| return u.get_search(page);
-        return "";
+        return self.url.get_search(page);
     }
 
     pub fn get_hash(self: *Location, page: *Page) ![]const u8 {
-        if (self.url) |*u| return u.get_hash(page);
-        return "";
+        return self.url.get_hash(page);
     }
 
     pub fn get_origin(self: *Location, page: *Page) ![]const u8 {
-        if (self.url) |*u| return u.get_origin(page);
-        return "";
+        return self.url.get_origin(page);
     }
 
     pub fn _assign(_: *const Location, url: []const u8, page: *Page) !void {
