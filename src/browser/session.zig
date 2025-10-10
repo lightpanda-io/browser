@@ -22,6 +22,7 @@ const Allocator = std.mem.Allocator;
 
 const js = @import("js/js.zig");
 const Page = @import("page.zig").Page;
+const NavigationKind = @import("html/Navigation.zig").NavigationKind;
 const Browser = @import("browser.zig").Browser;
 const NavigateOpts = @import("page.zig").NavigateOpts;
 const History = @import("html/History.zig");
@@ -59,6 +60,7 @@ pub const Session = struct {
     // https://developer.mozilla.org/en-US/docs/Web/API/History
     history: History = .{},
     navigation: Navigation = .{},
+    navigation_kind: NavigationKind = .initial,
 
     page: ?Page = null,
 

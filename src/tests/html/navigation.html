@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
+
 <script id=navigation>
     testing.expectEqual('object', typeof navigation);
     testing.expectEqual('object', typeof navigation.currentEntry);
@@ -7,43 +8,11 @@
     testing.expectEqual('string', typeof navigation.currentEntry.id);
     testing.expectEqual('string', typeof navigation.currentEntry.key);
     testing.expectEqual('string', typeof navigation.currentEntry.url);
-    testing.expectEqual(0, navigation.currentEntry.index);
-    testing.expectEqual(true, navigation.currentEntry.sameDocument);
-    
-    let result = navigation.navigate('http://127.0.0.1:9582/xhr/json', { 
-        state: { testInProgress: true } 
-    });
-    testing.expectEqual('object', typeof result);
-    testing.expectEqual('object', typeof result.committed);
-    testing.expectEqual('object', typeof result.finished);
-    
-    testing.expectEqual({ testInProgress: true }, navigation.currentEntry.getState());
-    testing.expectEqual(1, navigation.currentEntry.index);
-    
-    testing.expectEqual(true, navigation.canGoBack);
-    testing.expectEqual(false, navigation.canGoForward);
-    
-    testing.expectEqual(undefined, navigation.back());
-    
-    testing.onPageWait(() => {
-        testing.expectEqual(0, navigation.currentEntry.index);
-        testing.expectEqual(true, navigation.canGoForward);
-        
-        testing.expectEqual(undefined, navigation.forward());
-    });
-    
-    testing.onPageWait(() => {
-        testing.expectEqual(1, navigation.currentEntry.index);
-        testing.expectEqual({ testInProgress: true }, navigation.currentEntry.getState());
-        
-        let targetKey = navigation.currentEntry.key;
-        testing.expectEqual(undefined, navigation.traverseTo(targetKey));
-    });
-    
-    navigation.updateCurrentEntry({ state: { updated: true, testComplete: true } });
-    testing.expectEqual({ updated: true, testComplete: true }, navigation.currentEntry.getState());
-    
-    testing.onPageWait(() => {
-        testing.expectEqual(true, navigation.currentEntry.getState().testComplete);
-    });
+
+    const currentIndex = navigation.currentEntry.index;
+
+    navigation.navigate(
+        'http://127.0.0.1:9582/src/tests/html/navigation2.html',
+        { state: { currentIndex: currentIndex, navTestInProgress: true } }
+    );
 </script>

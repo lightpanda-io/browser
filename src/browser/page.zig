@@ -34,6 +34,7 @@ const Http = @import("../http/Http.zig");
 const ScriptManager = @import("ScriptManager.zig");
 const SlotChangeMonitor = @import("SlotChangeMonitor.zig");
 const HTMLDocument = @import("html/document.zig").HTMLDocument;
+const NavigationKind = @import("html/Navigation.zig").NavigationKind;
 
 const js = @import("js/js.zig");
 const URL = @import("../url.zig").URL;
@@ -815,8 +816,8 @@ pub const Page = struct {
             },
         }
 
-        // Push the navigation after a successful load.
-        _ = try self.session.navigation.pushEntry(self.url.raw, null, self);
+        // We need to handle different navigation types differently.
+        try self.session.navigation.processNavigation(self.url.raw, self.session.navigation_kind, self);
     }
 
     fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
@@ -906,7 +907,7 @@ pub const Page = struct {
             .a => {
                 const element: *parser.Element = @ptrCast(node);
                 const href = (try parser.elementGetAttribute(element, "href")) orelse return;
-                try self.navigateFromWebAPI(href, .{});
+                try self.navigateFromWebAPI(href, .{}, .{ .push = null });
             },
             .input => {
                 const element: *parser.Element = @ptrCast(node);
@@ -1043,7 +1044,7 @@ pub const Page = struct {
     // As such we schedule the function to be called as soon as possible.
     // The page.arena is safe to use here, but the transfer_arena exists
     // specifically for this type of lifetime.
-    pub fn navigateFromWebAPI(self: *Page, url: []const u8, opts: NavigateOpts) !void {
+    pub fn navigateFromWebAPI(self: *Page, url: []const u8, opts: NavigateOpts, kind: NavigationKind) !void {
         const session = self.session;
         if (session.queued_navigation != null) {
             // It might seem like this should never happen. And it might not,
@@ -1069,6 +1070,8 @@ pub const Page = struct {
             .opts = opts,
             .url = try URL.stitch(session.transfer_arena, url, self.url.raw, .{ .alloc = .always }),
         };
+
+        session.navigation_kind = kind;
 
         self.http_client.abort();
 
@@ -1120,7 +1123,7 @@ pub const Page = struct {
         } else {
             action = try URL.concatQueryString(transfer_arena, action, buf.items);
         }
-        try self.navigateFromWebAPI(action, opts);
+        try self.navigateFromWebAPI(action, opts, .{ .push = null });
     }
 
     pub fn isNodeAttached(self: *const Page, node: *parser.Node) bool {
@@ -1178,6 +1181,7 @@ pub const NavigateReason = enum {
     form,
     script,
     history,
+    navigation,
 };
 
 pub const NavigateOpts = struct {

@@ -81,7 +81,9 @@ fn _dispatchPopStateEvent(state: ?[]const u8, page: *Page) !void {
 pub fn _pushState(_: *const History, state: js.Object, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
     const arena = page.session.arena;
     const url = if (_url) |u| try arena.dupe(u8, u) else try arena.dupe(u8, page.url.raw);
-    _ = try page.session.navigation.pushEntry(url, .{ .state = state }, page);
+
+    const json = state.toJson(arena) catch return error.DataClone;
+    _ = try page.session.navigation.pushEntry(url, json, page);
 }
 
 pub fn _replaceState(_: *const History, state: js.Object, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
@@ -113,7 +115,7 @@ pub fn go(_: *const History, delta: i32, page: *Page) !void {
         }
     }
 
-    _ = try entry.navigate(page, .force);
+    _ = try page.session.navigation.navigate(entry.url, .{ .traverse = index }, page);
 }
 
 pub fn _go(self: *History, _delta: ?i32, page: *Page) !void {
