@@ -17,16 +17,15 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+
 const log = @import("../../log.zig");
+const testing = @import("../../testing.zig");
 const URL = @import("../../url.zig").URL;
-
-const js = @import("../js/js.zig");
-const Page = @import("../page.zig").Page;
-
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const EventHandler = @import("../events/event.zig").EventHandler;
-
+const js = @import("../js/js.zig");
 const parser = @import("../netsurf.zig");
+const Page = @import("../page.zig").Page;
 
 // https://developer.mozilla.org/en-US/docs/Web/API/Navigation
 const Navigation = @This();
@@ -38,12 +37,20 @@ pub const Interfaces = .{
     NavigationHistoryEntry,
 };
 
-pub const NavigationKind = union(enum) {
-    initial,
+pub const NavigationType = enum {
+    pub const ENUM_JS_USE_TAG = true;
+
+    push,
+    replace,
+    reload,
+    traverse,
+};
+
+pub const NavigationKind = union(NavigationType) {
     push: ?[]const u8,
     replace,
-    traverse: usize,
     reload,
+    traverse: usize,
 };
 
 pub const prototype = *EventTarget;
@@ -103,18 +110,9 @@ const NavigationHistoryEntry = struct {
 
 // https://developer.mozilla.org/en-US/docs/Web/API/NavigationActivation
 const NavigationActivation = struct {
-    const NavigationActivationType = enum {
-        pub const ENUM_JS_USE_TAG = true;
-
-        push,
-        reload,
-        replace,
-        traverse,
-    };
-
     entry: NavigationHistoryEntry,
     from: ?NavigationHistoryEntry = null,
-    type: NavigationActivationType,
+    type: NavigationType,
 
     pub fn get_entry(self: *const NavigationActivation) NavigationHistoryEntry {
         return self.entry;
@@ -124,7 +122,7 @@ const NavigationActivation = struct {
         return self.from;
     }
 
-    pub fn get_navigationType(self: *const NavigationActivation) NavigationActivationType {
+    pub fn get_navigationType(self: *const NavigationActivation) NavigationType {
         return self.type;
     }
 };
@@ -133,7 +131,7 @@ const NavigationActivation = struct {
 const NavigationTransition = struct {
     finished: js.Promise,
     from: NavigationHistoryEntry,
-    navigation_type: NavigationActivation.NavigationActivationType,
+    navigation_type: NavigationType,
 };
 
 pub fn get_canGoBack(self: *const Navigation) bool {
@@ -191,21 +189,22 @@ pub fn _forward(self: *Navigation, page: *Page) !NavigationReturn {
 }
 
 // This is for after true navigation processing, where we need to ensure that our entries are up to date.
-pub fn processNavigation(self: *Navigation, url: []const u8, kind: NavigationKind, page: *Page) !void {
-    switch (kind) {
-        .initial => {
-            _ = try self.pushEntry(url, null, page);
-        },
-        .replace => {
-            // When replacing, we just update the URL but the state is nullified.
-            const entry = self.currentEntry();
-            entry.url = url;
-            entry.state = null;
-        },
-        .push => |state| {
-            _ = try self.pushEntry(url, state, page);
-        },
-        .traverse, .reload => {},
+pub fn processNavigation(self: *Navigation, url: []const u8, kind: ?NavigationKind, page: *Page) !void {
+    if (kind) |k| {
+        switch (k) {
+            .replace => {
+                // When replacing, we just update the URL but the state is nullified.
+                const entry = self.currentEntry();
+                entry.url = url;
+                entry.state = null;
+            },
+            .push => |state| {
+                _ = try self.pushEntry(url, state, page);
+            },
+            .traverse, .reload => {},
+        }
+    } else {
+        _ = try self.pushEntry(url, null, page);
     }
 }
 
@@ -300,7 +299,7 @@ pub fn navigate(
         .reload => {
             try page.navigateFromWebAPI(url, .{ .reason = .navigation }, kind);
         },
-        else => unreachable,
+        .replace => {},
     }
 
     return .{
@@ -312,7 +311,17 @@ pub fn navigate(
 pub fn _navigate(self: *Navigation, _url: []const u8, _opts: ?NavigateOptions, page: *Page) !NavigationReturn {
     const opts = _opts orelse NavigateOptions{};
     const json = if (opts.state) |state| state.toJson(page.session.arena) catch return error.DataClone else null;
-    return try self.navigate(_url, .{ .push = json }, page);
+
+    switch (opts.history) {
+        .auto, .push => {
+            return try self.navigate(_url, .{ .push = json }, page);
+        },
+        .replace => {
+            const entry = self.currentEntry();
+            entry.state = json;
+            return try self.navigate(_url, .replace, page);
+        },
+    }
 }
 
 pub const ReloadOptions = struct {
@@ -357,7 +366,44 @@ pub fn _updateCurrentEntry(self: *Navigation, options: UpdateCurrentEntryOptions
     self.currentEntry().state = options.state.toJson(arena) catch return error.DataClone;
 }
 
-const testing = @import("../../testing.zig");
+const Event = @import("../events/event.zig").Event;
+
+pub const NavigationCurrentEntryChangeEvent = struct {
+    pub const prototype = *Event;
+    pub const union_make_copy = true;
+
+    pub const EventInit = struct {
+        from: NavigationHistoryEntry,
+        navigation_type: ?NavigationType = null,
+    };
+
+    proto: parser.Event,
+    form: NavigationHistoryEntry,
+    navigation_type: ?NavigationType,
+
+    pub fn constructor(event_type: []const u8, opts: ?EventInit) !NavigationCurrentEntryChangeEvent {
+        const event = try parser.eventCreate();
+        defer parser.eventDestroy(event);
+        try parser.eventInit(event, event_type, .{});
+        parser.eventSetInternalType(event, .navigation_current_entry_change);
+
+        const o = opts orelse EventInit{};
+
+        return .{
+            .proto = event.*,
+            .state = o.state,
+        };
+    }
+
+    pub fn get_from(self: *const NavigationCurrentEntryChangeEvent) NavigationHistoryEntry {
+        return self.from;
+    }
+
+    pub fn get_navigationType(self: *const NavigationCurrentEntryChangeEvent) NavigationType {
+        return self.navigation_type.?;
+    }
+};
+
 test "Browser: Navigation" {
     try testing.htmlRunner("html/navigation.html");
 }

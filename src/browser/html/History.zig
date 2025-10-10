@@ -60,22 +60,19 @@ pub fn dispatchPopStateEvent(state: ?[]const u8, page: *Page) void {
         .type = "popstate",
         .source = "history",
     });
-    History._dispatchPopStateEvent(state, page) catch |err| {
-        log.err(.app, "dispatch popstate event error", .{
-            .err = err,
-            .type = "popstate",
-            .source = "history",
-        });
-    };
-}
 
-fn _dispatchPopStateEvent(state: ?[]const u8, page: *Page) !void {
     var evt = try PopStateEvent.constructor("popstate", .{ .state = state });
 
     _ = try parser.eventTargetDispatchEvent(
         @as(*parser.EventTarget, @ptrCast(&page.window)),
         &evt.proto,
-    );
+    ) catch |e| {
+        log.err(.app, "dispatch popstate event error", .{
+            .err = e,
+            .type = "popstate",
+            .source = "history",
+        });
+    };
 }
 
 pub fn _pushState(_: *const History, state: js.Object, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
