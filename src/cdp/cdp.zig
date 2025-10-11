@@ -397,6 +397,10 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             log.unregisterInterceptor();
             self.log_interceptor.deinit();
 
+            // Drain microtasks makes sure we don't have inspector's callback
+            // in progress before deinit.
+            self.cdp.browser.env.runMicrotasks();
+
             self.inspector.deinit();
 
             // abort all intercepted requests before closing the sesion/page
