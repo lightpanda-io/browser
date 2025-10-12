@@ -217,6 +217,18 @@ pub const URL = struct {
         buf.appendSliceAssumeCapacity(query_string);
         return buf.items;
     }
+
+    // Compares two URLs, returning true if it is the same document.
+    pub fn eqlDocument(self: *const URL, other: *const URL, arena: Allocator) !bool {
+        if (!std.mem.eql(u8, self.scheme(), other.scheme())) return false;
+        if (!std.mem.eql(u8, self.host(), other.host())) return false;
+        if (self.port() != other.port()) return false;
+
+        const path1 = try self.uri.path.toRawMaybeAlloc(arena);
+        const path2 = try other.uri.path.toRawMaybeAlloc(arena);
+
+        return std.mem.eql(u8, path1, path2);
+    }
 };
 
 const StitchOpts = struct {
