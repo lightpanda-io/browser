@@ -816,7 +816,7 @@ pub const Page = struct {
         }
 
         // Push the navigation after a successful load.
-        try self.session.history.pushNavigation(self.url.raw, self);
+        _ = try self.session.navigation.pushEntry(self.url.raw, null, self);
     }
 
     fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {

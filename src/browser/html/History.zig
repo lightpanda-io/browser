@@ -25,13 +25,6 @@ const Page = @import("../page.zig").Page;
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#the-history-interface
 const History = @This();
 
-const HistoryEntry = struct {
-    url: []const u8,
-    // This is serialized as JSON because
-    // History must survive a JsContext.
-    state: ?[]u8,
-};
-
 const ScrollRestorationMode = enum {
     pub const ENUM_JS_USE_TAG = true;
 
@@ -40,11 +33,9 @@ const ScrollRestorationMode = enum {
 };
 
 scroll_restoration: ScrollRestorationMode = .auto,
-stack: std.ArrayListUnmanaged(HistoryEntry) = .empty,
-current: ?usize = null,
 
-pub fn get_length(self: *History) u32 {
-    return @intCast(self.stack.items.len);
+pub fn get_length(_: *History, page: *Page) u32 {
+    return @intCast(page.session.navigation.entries.items.len);
 }
 
 pub fn get_scrollRestoration(self: *History) ScrollRestorationMode {
@@ -55,27 +46,13 @@ pub fn set_scrollRestoration(self: *History, mode: ScrollRestorationMode) void {
     self.scroll_restoration = mode;
 }
 
-pub fn get_state(self: *History, page: *Page) !?js.Value {
-    if (self.current) |curr| {
-        const entry = self.stack.items[curr];
-        if (entry.state) |state| {
-            const value = try js.Value.fromJson(page.js, state);
-            return value;
-        } else {
-            return null;
-        }
+pub fn get_state(_: *History, page: *Page) !?js.Value {
+    if (page.session.navigation.currentEntry().state) |state| {
+        const value = try js.Value.fromJson(page.js, state);
+        return value;
     } else {
         return null;
     }
-}
-
-pub fn pushNavigation(self: *History, _url: []const u8, page: *Page) !void {
-    const arena = page.session.arena;
-    const url = try arena.dupe(u8, _url);
-
-    const entry = HistoryEntry{ .state = null, .url = url };
-    try self.stack.append(arena, entry);
-    self.current = self.stack.items.len - 1;
 }
 
 pub fn dispatchPopStateEvent(state: ?[]const u8, page: *Page) void {
@@ -101,48 +78,42 @@ fn _dispatchPopStateEvent(state: ?[]const u8, page: *Page) !void {
     );
 }
 
-pub fn _pushState(self: *History, state: js.Object, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
+pub fn _pushState(_: *const History, state: js.Object, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
+    const arena = page.session.arena;
+    const url = if (_url) |u| try arena.dupe(u8, u) else try arena.dupe(u8, page.url.raw);
+    _ = try page.session.navigation.pushEntry(url, .{ .state = state }, page);
+}
+
+pub fn _replaceState(_: *const History, state: js.Object, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
     const arena = page.session.arena;
 
+    const entry = page.session.navigation.currentEntry();
     const json = try state.toJson(arena);
     const url = if (_url) |u| try arena.dupe(u8, u) else try arena.dupe(u8, page.url.raw);
-    const entry = HistoryEntry{ .state = json, .url = url };
-    try self.stack.append(arena, entry);
-    self.current = self.stack.items.len - 1;
+
+    entry.state = json;
+    entry.url = url;
 }
 
-pub fn _replaceState(self: *History, state: js.Object, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
-    const arena = page.session.arena;
-
-    if (self.current) |curr| {
-        const entry = &self.stack.items[curr];
-        const json = try state.toJson(arena);
-        const url = if (_url) |u| try arena.dupe(u8, u) else try arena.dupe(u8, page.url.raw);
-        entry.* = HistoryEntry{ .state = json, .url = url };
-    } else {
-        try self._pushState(state, "", _url, page);
-    }
-}
-
-pub fn go(self: *History, delta: i32, page: *Page) !void {
+pub fn go(_: *const History, delta: i32, page: *Page) !void {
     // 0 behaves the same as no argument, both reloading the page.
-    // If this is getting called, there SHOULD be an entry, atleast from pushNavigation.
-    const current = self.current.?;
 
+    const current = page.session.navigation.index;
     const index_s: i64 = @intCast(@as(i64, @intCast(current)) + @as(i64, @intCast(delta)));
-    if (index_s < 0 or index_s > self.stack.items.len - 1) {
+    if (index_s < 0 or index_s > page.session.navigation.entries.items.len - 1) {
         return;
     }
 
     const index = @as(usize, @intCast(index_s));
-    const entry = self.stack.items[index];
-    self.current = index;
+    const entry = page.session.navigation.entries.items[index];
 
-    if (try page.isSameOrigin(entry.url)) {
-        History.dispatchPopStateEvent(entry.state, page);
+    if (entry.url) |url| {
+        if (try page.isSameOrigin(url)) {
+            History.dispatchPopStateEvent(entry.state, page);
+        }
     }
 
-    try page.navigateFromWebAPI(entry.url, .{ .reason = .history });
+    _ = try entry.navigate(page, .force);
 }
 
 pub fn _go(self: *History, _delta: ?i32, page: *Page) !void {
