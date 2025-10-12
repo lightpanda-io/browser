@@ -34,6 +34,7 @@ pub const Interfaces = .{
     Window,
     Navigator,
     History,
+    @import("Navigation.zig").Interfaces,
     Location,
     MediaQueryList,
     @import("DataSet.zig"),

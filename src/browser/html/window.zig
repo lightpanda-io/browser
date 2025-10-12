@@ -25,6 +25,7 @@ const Page = @import("../page.zig").Page;
 
 const Navigator = @import("navigator.zig").Navigator;
 const History = @import("History.zig");
+const Navigation = @import("Navigation.zig");
 const Location = @import("location.zig").Location;
 const Crypto = @import("../crypto/crypto.zig").Crypto;
 const Console = @import("../console/console.zig").Console;
@@ -188,6 +189,10 @@ pub const Window = struct {
 
     pub fn get_history(_: *Window, page: *Page) *History {
         return &page.session.history;
+    }
+
+    pub fn get_navigation(_: *Window, page: *Page) *Navigation {
+        return &page.session.navigation;
     }
 
     //  The interior height of the window in pixels, including the height of the horizontal scroll bar, if present.
