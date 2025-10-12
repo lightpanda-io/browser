@@ -33,22 +33,10 @@ const HistoryEntry = struct {
 };
 
 const ScrollRestorationMode = enum {
+    pub const ENUM_JS_USE_TAG = true;
+
     auto,
     manual,
-
-    pub fn fromString(str: []const u8) ?ScrollRestorationMode {
-        for (std.enums.values(ScrollRestorationMode)) |mode| {
-            if (std.ascii.eqlIgnoreCase(str, @tagName(mode))) {
-                return mode;
-            }
-        } else {
-            return null;
-        }
-    }
-
-    pub fn toString(self: ScrollRestorationMode) []const u8 {
-        return @tagName(self);
-    }
 };
 
 scroll_restoration: ScrollRestorationMode = .auto,
@@ -63,8 +51,8 @@ pub fn get_scrollRestoration(self: *History) ScrollRestorationMode {
     return self.scroll_restoration;
 }
 
-pub fn set_scrollRestoration(self: *History, mode: []const u8) void {
-    self.scroll_restoration = ScrollRestorationMode.fromString(mode) orelse self.scroll_restoration;
+pub fn set_scrollRestoration(self: *History, mode: ScrollRestorationMode) void {
+    self.scroll_restoration = mode;
 }
 
 pub fn get_state(self: *History, page: *Page) !?js.Value {
