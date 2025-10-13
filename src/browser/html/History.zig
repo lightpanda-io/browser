@@ -55,29 +55,6 @@ pub fn get_state(_: *History, page: *Page) !?js.Value {
     }
 }
 
-pub fn dispatchPopStateEvent(state: ?[]const u8, page: *Page) void {
-    log.debug(.script_event, "dispatch popstate event", .{
-        .type = "popstate",
-        .source = "history",
-    });
-    History._dispatchPopStateEvent(state, page) catch |err| {
-        log.err(.app, "dispatch popstate event error", .{
-            .err = err,
-            .type = "popstate",
-            .source = "history",
-        });
-    };
-}
-
-fn _dispatchPopStateEvent(state: ?[]const u8, page: *Page) !void {
-    var evt = try PopStateEvent.constructor("popstate", .{ .state = state });
-
-    _ = try parser.eventTargetDispatchEvent(
-        @as(*parser.EventTarget, @ptrCast(&page.window)),
-        &evt.proto,
-    );
-}
-
 pub fn _pushState(_: *const History, state: js.Object, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
     const arena = page.session.arena;
     const url = if (_url) |u| try arena.dupe(u8, u) else try arena.dupe(u8, page.url.raw);
@@ -111,7 +88,7 @@ pub fn go(_: *const History, delta: i32, page: *Page) !void {
 
     if (entry.url) |url| {
         if (try page.isSameOrigin(url)) {
-            History.dispatchPopStateEvent(entry.state, page);
+            PopStateEvent.dispatch(entry.state, page);
         }
     }
 
@@ -167,6 +144,34 @@ pub const PopStateEvent = struct {
         } else {
             return null;
         }
+    }
+
+    pub fn dispatch(state: ?[]const u8, page: *Page) void {
+        log.debug(.script_event, "dispatch popstate event", .{
+            .type = "popstate",
+            .source = "history",
+        });
+
+        var evt = PopStateEvent.constructor("popstate", .{ .state = state }) catch |err| {
+            log.err(.app, "event constructor error", .{
+                .err = err,
+                .type = "popstate",
+                .source = "history",
+            });
+
+            return;
+        };
+
+        _ = parser.eventTargetDispatchEvent(
+            @as(*parser.EventTarget, @ptrCast(&page.window)),
+            &evt.proto,
+        ) catch |err| {
+            log.err(.app, "dispatch popstate event error", .{
+                .err = err,
+                .type = "popstate",
+                .source = "history",
+            });
+        };
     }
 };
 

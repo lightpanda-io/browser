@@ -39,6 +39,8 @@ pub const Interfaces = .{
 };
 
 pub const NavigationType = enum {
+    pub const ENUM_JS_USE_TAG = true;
+
     push,
     replace,
     traverse,
@@ -56,7 +58,8 @@ pub const prototype = *EventTarget;
 base: parser.EventTargetTBase = parser.EventTargetTBase{ .internal_target_type = .plain },
 
 index: usize = 0,
-entries: std.ArrayListUnmanaged(NavigationHistoryEntry) = .empty,
+// Need to be stable pointers, because Events can reference entries.
+entries: std.ArrayListUnmanaged(*NavigationHistoryEntry) = .empty,
 next_entry_id: usize = 0,
 
 // https://developer.mozilla.org/en-US/docs/Web/API/NavigationHistoryEntry
@@ -75,7 +78,7 @@ const NavigationHistoryEntry = struct {
 
     pub fn get_index(self: *const NavigationHistoryEntry, page: *Page) i32 {
         const navigation = page.session.navigation;
-        for (navigation.entries.items, 0..) |*entry, i| {
+        for (navigation.entries.items, 0..) |entry, i| {
             if (std.mem.eql(u8, entry.id, self.id)) {
                 return @intCast(i);
             }
@@ -151,11 +154,11 @@ pub fn get_canGoForward(self: *const Navigation) bool {
 }
 
 pub fn currentEntry(self: *Navigation) *NavigationHistoryEntry {
-    return &self.entries.items[self.index];
+    return self.entries.items[self.index];
 }
 
-pub fn get_currentEntry(self: *const Navigation) NavigationHistoryEntry {
-    return self.entries.items[self.index];
+pub fn get_currentEntry(self: *Navigation) *NavigationHistoryEntry {
+    return self.currentEntry();
 }
 
 pub fn get_transition(_: *const Navigation) ?NavigationTransition {
@@ -180,7 +183,7 @@ pub fn _back(self: *Navigation, page: *Page) !NavigationReturn {
     return self.navigate(next_entry.url, .{ .traverse = new_index }, page);
 }
 
-pub fn _entries(self: *const Navigation) []NavigationHistoryEntry {
+pub fn _entries(self: *const Navigation) []*NavigationHistoryEntry {
     return self.entries.items;
 }
 
@@ -222,7 +225,7 @@ pub fn processNavigation(self: *Navigation, page: *Page) !void {
 
 /// Pushes an entry into the Navigation stack WITHOUT actually navigating to it.
 /// For that, use `navigate`.
-pub fn pushEntry(self: *Navigation, _url: ?[]const u8, state: ?[]const u8, page: *Page) !NavigationHistoryEntry {
+pub fn pushEntry(self: *Navigation, _url: ?[]const u8, state: ?[]const u8, page: *Page) !*NavigationHistoryEntry {
     const arena = page.session.arena;
 
     const url = if (_url) |u| try arena.dupe(u8, u) else null;
@@ -231,21 +234,31 @@ pub fn pushEntry(self: *Navigation, _url: ?[]const u8, state: ?[]const u8, page:
     if (self.entries.items.len > self.index + 1) {
         self.entries.shrinkRetainingCapacity(self.index + 1);
     }
-    self.index = self.entries.items.len;
+
+    const index = self.entries.items.len;
 
     const id = self.next_entry_id;
     self.next_entry_id += 1;
 
     const id_str = try std.fmt.allocPrint(arena, "{d}", .{id});
 
-    const entry = NavigationHistoryEntry{
+    const entry = try arena.create(NavigationHistoryEntry);
+    entry.* = NavigationHistoryEntry{
         .id = id_str,
         .key = id_str,
         .url = url,
         .state = state,
     };
 
+    // we don't always have a current entry...
+    const previous = if (self.entries.items.len > 0) self.currentEntry() else null;
     try self.entries.append(arena, entry);
+    if (previous) |prev| {
+        NavigationCurrentEntryChangeEvent.dispatch(prev, .push, page);
+    }
+
+    self.index = index;
+
     return entry;
 }
 
@@ -337,7 +350,9 @@ pub fn _reload(self: *Navigation, _opts: ?ReloadOptions, page: *Page) !Navigatio
     const opts = _opts orelse ReloadOptions{};
     const entry = self.currentEntry();
     if (opts.state) |state| {
+        const previous = entry;
         entry.state = state.toJson(arena) catch return error.DataClone;
+        NavigationCurrentEntryChangeEvent.dispatch(previous, .reload, page);
     }
 
     return self.navigate(entry.url, .reload, page);
@@ -365,8 +380,79 @@ pub const UpdateCurrentEntryOptions = struct {
 
 pub fn _updateCurrentEntry(self: *Navigation, options: UpdateCurrentEntryOptions, page: *Page) !void {
     const arena = page.session.arena;
+
+    const previous = self.currentEntry();
     self.currentEntry().state = options.state.toJson(arena) catch return error.DataClone;
+    NavigationCurrentEntryChangeEvent.dispatch(previous, null, page);
 }
+
+const Event = @import("../events/event.zig").Event;
+
+pub const NavigationCurrentEntryChangeEvent = struct {
+    pub const prototype = *Event;
+    pub const union_make_copy = true;
+
+    pub const EventInit = struct {
+        from: *NavigationHistoryEntry,
+        navigation_type: ?NavigationType = null,
+    };
+
+    proto: parser.Event,
+    from: *NavigationHistoryEntry,
+    navigation_type: ?NavigationType,
+
+    pub fn constructor(event_type: []const u8, opts: EventInit) !NavigationCurrentEntryChangeEvent {
+        const event = try parser.eventCreate();
+        defer parser.eventDestroy(event);
+        try parser.eventInit(event, event_type, .{});
+        parser.eventSetInternalType(event, .navigation_current_entry_change_event);
+
+        return .{
+            .proto = event.*,
+            .from = opts.from,
+            .navigation_type = opts.navigation_type,
+        };
+    }
+
+    pub fn get_from(self: *NavigationCurrentEntryChangeEvent) *NavigationHistoryEntry {
+        return self.from;
+    }
+
+    pub fn get_navigationType(self: *const NavigationCurrentEntryChangeEvent) ?NavigationType {
+        return self.navigation_type;
+    }
+
+    pub fn dispatch(from: *NavigationHistoryEntry, typ: ?NavigationType, page: *Page) void {
+        log.debug(.script_event, "dispatch event", .{
+            .type = "currententrychange",
+            .source = "navigation",
+        });
+
+        var evt = NavigationCurrentEntryChangeEvent.constructor(
+            "currententrychange",
+            .{ .from = from, .navigation_type = typ },
+        ) catch |err| {
+            log.err(.app, "event constructor error", .{
+                .err = err,
+                .type = "currententrychange",
+                .source = "navigation",
+            });
+
+            return;
+        };
+
+        _ = parser.eventTargetDispatchEvent(
+            @as(*parser.EventTarget, @ptrCast(&page.session.navigation)),
+            &evt.proto,
+        ) catch |err| {
+            log.err(.app, "dispatch event error", .{
+                .err = err,
+                .type = "currententrychange",
+                .source = "navigation",
+            });
+        };
+    }
+};
 
 const testing = @import("../../testing.zig");
 test "Browser: Navigation" {
