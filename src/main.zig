@@ -165,6 +165,24 @@ fn run(alloc: Allocator) !void {
             // page
             const page = try session.createPage();
 
+            // // Comment this out to get a profile of the JS code in v8/profile.json.
+            // // You can open this in Chrome's profiler.
+            // // I've seen it generate invalid JSON, but I'm not sure why. It only
+            // // happens rarely, and I manually fix the file.
+            // page.js.startCpuProfiler();
+            // defer {
+            //     if (page.js.stopCpuProfiler()) |profile| {
+            //         std.fs.cwd().writeFile(.{
+            //             .sub_path = "v8/profile.json",
+            //             .data = profile,
+            //         }) catch |err| {
+            //             log.err(.app, "profile write error", .{ .err = err });
+            //         };
+            //     } else |err| {
+            //         log.err(.app, "profile error", .{ .err = err });
+            //     }
+            // }
+
             _ = page.navigate(url, .{}) catch |err| switch (err) {
                 error.UnsupportedUriScheme, error.UriMissingHost => {
                     log.fatal(.app, "invalid fetch URL", .{ .err = err, .url = url });

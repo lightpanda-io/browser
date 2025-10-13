@@ -136,36 +136,12 @@ pub const Window = struct {
         self.onload_callback = null;
     }
 
-    pub fn get_window(self: *Window) *Window {
-        return self;
-    }
-
-    pub fn get_navigator(self: *Window) *Navigator {
-        return &self.navigator;
-    }
-
     pub fn get_location(self: *Window) *Location {
         return &self.location;
     }
 
     pub fn set_location(_: *const Window, url: []const u8, page: *Page) !void {
         return page.navigateFromWebAPI(url, .{ .reason = .script });
-    }
-
-    pub fn get_console(self: *Window) *Console {
-        return &self.console;
-    }
-
-    pub fn get_crypto(self: *Window) *Crypto {
-        return &self.crypto;
-    }
-
-    pub fn get_self(self: *Window) *Window {
-        return self;
-    }
-
-    pub fn get_parent(self: *Window) *Window {
-        return self;
     }
 
     // frames return the window itself, but accessing it via a pseudo
@@ -205,10 +181,6 @@ pub const Window = struct {
         return frames.get_length();
     }
 
-    pub fn get_top(self: *Window) *Window {
-        return self;
-    }
-
     pub fn get_document(self: *Window) ?*parser.DocumentHTML {
         return self.document;
     }
@@ -241,14 +213,6 @@ pub const Window = struct {
     pub fn get_sessionStorage(self: *Window) !*storage.Bottle {
         if (self.storage_shelf == null) return parser.DOMError.NotSupported;
         return &self.storage_shelf.?.bucket.session;
-    }
-
-    pub fn get_performance(self: *Window) *Performance {
-        return &self.performance;
-    }
-
-    pub fn get_screen(self: *Window) *Screen {
-        return &self.screen;
     }
 
     pub fn get_CSS(self: *Window) *Css {
@@ -462,6 +426,18 @@ pub const Window = struct {
         // we assume that this evt has already been dispatched on the document
         // and thus the target has already been set to the document.
         return self.base.redispatchEvent(evt);
+    }
+
+    pub fn postAttach(self: *Window, js_this: js.This) !void {
+        try js_this.set("top", self, .{});
+        try js_this.set("self", self, .{});
+        try js_this.set("parent", self, .{});
+        try js_this.set("window", self, .{});
+        try js_this.set("crypto", &self.crypto, .{});
+        try js_this.set("screen", &self.screen, .{});
+        try js_this.set("console", &self.console, .{});
+        try js_this.set("navigator", &self.navigator, .{});
+        try js_this.set("performance", &self.performance, .{});
     }
 };
 
