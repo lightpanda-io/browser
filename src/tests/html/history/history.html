@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<script src="../testing.js"></script>
+<script src="../../testing.js"></script>
 
 <script id=history>
     testing.expectEqual('auto', history.scrollRestoration);
@@ -11,7 +11,7 @@
     testing.expectEqual('auto', history.scrollRestoration);
     testing.expectEqual(null, history.state)
 
-    history.pushState({ testInProgress: true }, null, 'http://127.0.0.1:9582/src/tests/html/history2.html');
+    history.pushState({ testInProgress: true }, null, 'http://127.0.0.1:9582/src/tests/html/history/history_after_nav.html');
     testing.expectEqual({ testInProgress: true }, history.state);
 
     history.pushState({ testInProgress: false }, null, 'http://127.0.0.1:9582/xhr/json');

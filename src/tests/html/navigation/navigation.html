@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<script src="../testing.js"></script>
+<script src="../../testing.js"></script>
 
 <script id=navigation>
     testing.expectEqual('object', typeof navigation);
@@ -12,7 +12,7 @@
     const currentIndex = navigation.currentEntry.index;
 
     navigation.navigate(
-        'http://127.0.0.1:9582/src/tests/html/navigation2.html',
+        'http://127.0.0.1:9582/src/tests/html/navigation/navigation2.html',
         { state: { currentIndex: currentIndex, navTestInProgress: true } }
     );
 </script>

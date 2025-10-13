@@ -44,6 +44,8 @@ const fetchFn = @import("../fetch/fetch.zig").fetch;
 const storage = @import("../storage/storage.zig");
 const ErrorEvent = @import("error_event.zig").ErrorEvent;
 
+const DirectEventHandler = @import("../events/event.zig").DirectEventHandler;
+
 // https://dom.spec.whatwg.org/#interface-window-extensions
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#window
 pub const Window = struct {
@@ -70,6 +72,7 @@ pub const Window = struct {
     scroll_x: u32 = 0,
     scroll_y: u32 = 0,
     onload_callback: ?js.Function = null,
+    onpopstate_callback: ?js.Function = null,
 
     pub fn create(target: ?[]const u8, navigator: ?Navigator) !Window {
         var fbs = std.io.fixedBufferStream("");
@@ -111,31 +114,17 @@ pub const Window = struct {
 
     /// Sets `onload_callback`.
     pub fn set_onload(self: *Window, maybe_listener: ?EventHandler.Listener, page: *Page) !void {
-        const event_target = parser.toEventTarget(Window, self);
-        const event_type = "load";
+        try DirectEventHandler(Window, self, "load", maybe_listener, &self.onload_callback, page.arena);
+    }
 
-        // Check if we have a listener set.
-        if (self.onload_callback) |callback| {
-            const listener = try parser.eventTargetHasListener(event_target, event_type, false, callback.id);
-            std.debug.assert(listener != null);
-            try parser.eventTargetRemoveEventListener(event_target, event_type, listener.?, false);
-        }
+    /// Returns `onpopstate_callback`.
+    pub fn get_onpopstate(self: *const Window) ?js.Function {
+        return self.onpopstate_callback;
+    }
 
-        if (maybe_listener) |listener| {
-            switch (listener) {
-                // If an object is given as listener, do nothing.
-                .object => {},
-                .function => |callback| {
-                    _ = try EventHandler.register(page.arena, event_target, event_type, listener, null) orelse unreachable;
-                    self.onload_callback = callback;
-
-                    return;
-                },
-            }
-        }
-
-        // Just unset the listener.
-        self.onload_callback = null;
+    /// Sets `onpopstate_callback`.
+    pub fn set_onpopstate(self: *Window, maybe_listener: ?EventHandler.Listener, page: *Page) !void {
+        try DirectEventHandler(Window, self, "popstate", maybe_listener, &self.onpopstate_callback, page.arena);
     }
 
     pub fn get_location(self: *Window) *Location {

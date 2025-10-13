@@ -177,5 +177,6 @@ pub const PopStateEvent = struct {
 
 const testing = @import("../../testing.zig");
 test "Browser: HTML.History" {
-    try testing.htmlRunner("html/history.html");
+    try testing.htmlRunner("html/history/history.html");
+    try testing.htmlRunner("html/history/history2.html");
 }

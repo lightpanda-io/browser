@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const js = @import("../js/js.zig");
 const Allocator = std.mem.Allocator;
 
 const log = @import("../../log.zig");
@@ -231,8 +232,6 @@ pub const EventHandler = struct {
     node: parser.EventNode,
     listener: *parser.EventListener,
 
-    const js = @import("../js/js.zig");
-
     pub const Listener = union(enum) {
         function: js.Function,
         object: js.Object,
@@ -403,6 +402,40 @@ const SignalCallback = struct {
         );
     }
 };
+
+pub fn DirectEventHandler(
+    comptime TargetT: type,
+    target: *TargetT,
+    event_type: []const u8,
+    maybe_listener: ?EventHandler.Listener,
+    cb: *?js.Function,
+    page_arena: std.mem.Allocator,
+) !void {
+    const event_target = parser.toEventTarget(TargetT, target);
+
+    // Check if we have a listener set.
+    if (cb.*) |callback| {
+        const listener = try parser.eventTargetHasListener(event_target, event_type, false, callback.id);
+        std.debug.assert(listener != null);
+        try parser.eventTargetRemoveEventListener(event_target, event_type, listener.?, false);
+    }
+
+    if (maybe_listener) |listener| {
+        switch (listener) {
+            // If an object is given as listener, do nothing.
+            .object => {},
+            .function => |callback| {
+                _ = try EventHandler.register(page_arena, event_target, event_type, listener, null) orelse unreachable;
+                cb.* = callback;
+
+                return;
+            },
+        }
+    }
+
+    // Just unset the listener.
+    cb.* = null;
+}
 
 const testing = @import("../../testing.zig");
 test "Browser: Event" {

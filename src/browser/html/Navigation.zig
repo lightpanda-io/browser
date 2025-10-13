@@ -23,6 +23,7 @@ const URL = @import("../../url.zig").URL;
 const js = @import("../js/js.zig");
 const Page = @import("../page.zig").Page;
 
+const DirectEventHandler = @import("../events/event.zig").DirectEventHandler;
 const EventTarget = @import("../dom/event_target.zig").EventTarget;
 const EventHandler = @import("../events/event.zig").EventHandler;
 
@@ -61,6 +62,8 @@ index: usize = 0,
 // Need to be stable pointers, because Events can reference entries.
 entries: std.ArrayListUnmanaged(*NavigationHistoryEntry) = .empty,
 next_entry_id: usize = 0,
+
+oncurrententrychange_callback: ?js.Function = null,
 
 // https://developer.mozilla.org/en-US/docs/Web/API/NavigationHistoryEntry
 const NavigationHistoryEntry = struct {
@@ -197,6 +200,16 @@ pub fn _forward(self: *Navigation, page: *Page) !NavigationReturn {
     self.index = new_index;
 
     return self.navigate(next_entry.url, .{ .traverse = new_index }, page);
+}
+
+/// Returns `oncurrententrychange_callback`.
+pub fn get_oncurrententrychange(self: *const Navigation) ?js.Function {
+    return self.oncurrententrychange_callback;
+}
+
+/// Sets `oncurrententrychange_callback`.
+pub fn set_oncurrententrychange(self: *Navigation, maybe_listener: ?EventHandler.Listener, page: *Page) !void {
+    try DirectEventHandler(Navigation, self, "currententrychange", maybe_listener, &self.oncurrententrychange_callback, page.arena);
 }
 
 // This is for after true navigation processing, where we need to ensure that our entries are up to date.
@@ -456,5 +469,5 @@ pub const NavigationCurrentEntryChangeEvent = struct {
 
 const testing = @import("../../testing.zig");
 test "Browser: Navigation" {
-    try testing.htmlRunner("html/navigation.html");
+    try testing.htmlRunner("html/navigation/navigation.html");
 }
