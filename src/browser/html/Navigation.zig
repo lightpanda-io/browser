@@ -38,8 +38,14 @@ pub const Interfaces = .{
     NavigationHistoryEntry,
 };
 
-pub const NavigationKind = union(enum) {
-    initial,
+pub const NavigationType = enum {
+    push,
+    replace,
+    traverse,
+    reload,
+};
+
+pub const NavigationKind = union(NavigationType) {
     push: ?[]const u8,
     replace,
     traverse: usize,
@@ -191,21 +197,26 @@ pub fn _forward(self: *Navigation, page: *Page) !NavigationReturn {
 }
 
 // This is for after true navigation processing, where we need to ensure that our entries are up to date.
-pub fn processNavigation(self: *Navigation, url: []const u8, kind: NavigationKind, page: *Page) !void {
-    switch (kind) {
-        .initial => {
-            _ = try self.pushEntry(url, null, page);
-        },
-        .replace => {
-            // When replacing, we just update the URL but the state is nullified.
-            const entry = self.currentEntry();
-            entry.url = url;
-            entry.state = null;
-        },
-        .push => |state| {
-            _ = try self.pushEntry(url, state, page);
-        },
-        .traverse, .reload => {},
+// This is only really safe to run in the `pageDoneCallback` where we can guarantee that the URL and NavigationKind are correct.
+pub fn processNavigation(self: *Navigation, page: *Page) !void {
+    const url = page.url.raw;
+    const kind = page.session.navigation_kind;
+
+    if (kind) |k| {
+        switch (k) {
+            .replace => {
+                // When replacing, we just update the URL but the state is nullified.
+                const entry = self.currentEntry();
+                entry.url = url;
+                entry.state = null;
+            },
+            .push => |state| {
+                _ = try self.pushEntry(url, state, page);
+            },
+            .traverse, .reload => {},
+        }
+    } else {
+        _ = try self.pushEntry(url, null, page);
     }
 }
 

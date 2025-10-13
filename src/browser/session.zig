@@ -60,7 +60,7 @@ pub const Session = struct {
     // https://developer.mozilla.org/en-US/docs/Web/API/History
     history: History = .{},
     navigation: Navigation = .{},
-    navigation_kind: NavigationKind = .initial,
+    navigation_kind: ?NavigationKind = null,
 
     page: ?Page = null,
 

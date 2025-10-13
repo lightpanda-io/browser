@@ -817,7 +817,7 @@ pub const Page = struct {
         }
 
         // We need to handle different navigation types differently.
-        try self.session.navigation.processNavigation(self.url.raw, self.session.navigation_kind, self);
+        try self.session.navigation.processNavigation(self);
     }
 
     fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
