@@ -22,9 +22,9 @@ const builtin = @import("builtin");
 
 const Http = @import("Http.zig");
 const Notification = @import("../notification.zig").Notification;
-const CookieJar = @import("../browser/storage/storage.zig").CookieJar;
-
-const urlStitch = @import("../url.zig").stitch;
+const CookieJar = @import("../browser/storage/cookie.zig").Jar;
+const URL = @import("../url.zig").URL;
+const urlStitch = URL.stitch;
 
 const c = Http.c;
 const posix = std.posix;
@@ -259,7 +259,7 @@ fn makeTransfer(self: *Client, req: Request) !*Transfer {
     errdefer req.headers.deinit();
 
     // we need this for cookies
-    const uri = std.Uri.parse(req.url) catch |err| {
+    const url = URL.parse(req.url, null) catch |err| {
         log.warn(.http, "invalid url", .{ .err = err, .url = req.url });
         return err;
     };
@@ -272,7 +272,7 @@ fn makeTransfer(self: *Client, req: Request) !*Transfer {
     transfer.* = .{
         .arena = ArenaAllocator.init(self.allocator),
         .id = id,
-        .uri = uri,
+        .url = url,
         .req = req,
         .ctx = req.ctx,
         .client = self,
@@ -595,20 +595,20 @@ pub const Handle = struct {
 pub const RequestCookie = struct {
     is_http: bool,
     is_navigation: bool,
-    origin: *const std.Uri,
-    jar: *@import("../browser/storage/cookie.zig").Jar,
+    origin_url: URL,
+    cookie_jar: *CookieJar,
 
-    pub fn headersForRequest(self: *const RequestCookie, temp: Allocator, url: [:0]const u8, headers: *Http.Headers) !void {
-        const uri = std.Uri.parse(url) catch |err| {
-            log.warn(.http, "invalid url", .{ .err = err, .url = url });
+    pub fn headersForRequest(self: *const RequestCookie, temp: Allocator, url_str: [:0]const u8, headers: *Http.Headers) !void {
+        const url = URL.parse(url_str, null) catch |err| {
+            log.warn(.http, "invalid url", .{ .err = err, .url = url_str });
             return error.InvalidUrl;
         };
 
         var arr: std.ArrayListUnmanaged(u8) = .{};
-        try self.jar.forRequest(&uri, arr.writer(temp), .{
+        try self.cookie_jar.forRequest(url, arr.writer(temp), .{
             .is_http = self.is_http,
             .is_navigation = self.is_navigation,
-            .origin_uri = self.origin,
+            .origin_url = self.origin_url,
         });
 
         if (arr.items.len > 0) {
@@ -688,7 +688,7 @@ pub const Transfer = struct {
     arena: ArenaAllocator,
     id: usize = 0,
     req: Request,
-    uri: std.Uri, // used for setting/getting the cookie
+    url: URL, // used for setting/getting the cookie
     ctx: *anyopaque, // copied from req.ctx to make it easier for callback handlers
     client: *Client,
     // total bytes received in the response, including the response status line,
@@ -774,7 +774,7 @@ pub const Transfer = struct {
 
     pub fn updateURL(self: *Transfer, url: [:0]const u8) !void {
         // for cookies
-        self.uri = try std.Uri.parse(url);
+        self.url = try self.url.reparse(url);
 
         // for the request itself
         self.req.url = url;
@@ -833,7 +833,7 @@ pub const Transfer = struct {
         while (true) {
             const ct = getResponseHeader(easy, "set-cookie", i);
             if (ct == null) break;
-            try req.cookie_jar.populateFromResponse(&transfer.uri, ct.?.value);
+            try req.cookie_jar.populateFromResponse(transfer.url, ct.?.value);
             i += 1;
             if (i >= ct.?.amount) break;
         }
@@ -847,14 +847,16 @@ pub const Transfer = struct {
         var baseurl: [*c]u8 = undefined;
         try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_EFFECTIVE_URL, &baseurl));
 
-        const url = try urlStitch(arena, hlocation.?.value, std.mem.span(baseurl), .{});
-        const uri = try std.Uri.parse(url);
-        transfer.uri = uri;
+        const stitched = try urlStitch(arena, hlocation.?.value, std.mem.span(baseurl), .{});
+        // Since we're being redirected, we know url is valid.
+        // An assertation won't hurt, though.
+        std.debug.assert(transfer.url.isValid());
+        _ = try transfer.url.reparse(stitched);
 
         var cookies: std.ArrayListUnmanaged(u8) = .{};
-        try req.cookie_jar.forRequest(&uri, cookies.writer(arena), .{
+        try req.cookie_jar.forRequest(transfer.url, cookies.writer(arena), .{
             .is_http = true,
-            .origin_uri = &transfer.uri,
+            .origin_url = transfer.url,
             // used to enforce samesite cookie rules
             .is_navigation = req.resource_type == .document,
         });
@@ -883,7 +885,7 @@ pub const Transfer = struct {
         while (true) {
             const ct = getResponseHeader(easy, "set-cookie", i);
             if (ct == null) break;
-            transfer.req.cookie_jar.populateFromResponse(&transfer.uri, ct.?.value) catch |err| {
+            transfer.req.cookie_jar.populateFromResponse(transfer.url, ct.?.value) catch |err| {
                 log.err(.http, "set cookie", .{ .err = err, .req = transfer });
                 return err;
             };

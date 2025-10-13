@@ -22,6 +22,7 @@ const Allocator = std.mem.Allocator;
 const CdpStorage = @import("storage.zig");
 const Transfer = @import("../../http/Client.zig").Transfer;
 const Notification = @import("../../notification.zig").Notification;
+const URL = @import("../../url.zig").URL;
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -117,15 +118,20 @@ fn deleteCookies(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const cookies = &bc.session.cookie_jar.cookies;
 
-    const uri = if (params.url) |url| std.Uri.parse(url) catch return error.InvalidParams else null;
-    const uri_ptr = if (uri) |u| &u else null;
+    const maybe_url: ?URL = blk: {
+        if (params.url) |url| {
+            break :blk URL.parse(url, null) catch return error.InvalidParams;
+        }
+
+        break :blk null;
+    };
 
     var index = cookies.items.len;
     while (index > 0) {
         index -= 1;
         const cookie = &cookies.items[index];
-        const domain = try Cookie.parseDomain(cmd.arena, uri_ptr, params.domain);
-        const path = try Cookie.parsePath(cmd.arena, uri_ptr, params.path);
+        const domain = try Cookie.parseDomain(cmd.arena, maybe_url, params.domain);
+        const path = try Cookie.parsePath(cmd.arena, maybe_url, params.path);
 
         // We do not want to use Cookie.appliesTo here. As a Cookie with a shorter path would match.
         // Similar to deduplicating with areCookiesEqual, except domain and path are optional.
@@ -133,6 +139,12 @@ fn deleteCookies(cmd: anytype) !void {
             cookies.swapRemove(index).deinit();
         }
     }
+
+    // Deinit URL if we had.
+    if (maybe_url) |url| {
+        url.deinit();
+    }
+
     return cmd.sendResult(null, .{});
 }
 
@@ -177,13 +189,14 @@ fn getCookies(cmd: anytype) !void {
     const param_urls = params.urls orelse &[_][]const u8{page_url orelse return error.InvalidParams};
 
     var urls = try std.ArrayListUnmanaged(CdpStorage.PreparedUri).initCapacity(cmd.arena, param_urls.len);
-    for (param_urls) |url| {
-        const uri = std.Uri.parse(url) catch return error.InvalidParams;
+    for (param_urls) |url_str| {
+        const url = URL.parse(url_str, null) catch return error.InvalidParams;
+        defer url.deinit();
 
         urls.appendAssumeCapacity(.{
-            .host = try Cookie.parseDomain(cmd.arena, &uri, null),
-            .path = try Cookie.parsePath(cmd.arena, &uri, null),
-            .secure = std.mem.eql(u8, uri.scheme, "https"),
+            .host = try Cookie.parseDomain(cmd.arena, url, null),
+            .path = try Cookie.parsePath(cmd.arena, url, null),
+            .secure = url.isSecure(),
         });
     }
 
@@ -247,7 +260,7 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, msg: *const Notification.
         .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id}),
         .frameId = target_id,
         .loaderId = bc.loader_id,
-        .documentUrl = DocumentUrlWriter.init(&page.url.uri),
+        .documentUrl = DocumentUrlWriter.init(page.url),
         .request = TransferAsRequestWriter.init(transfer),
         .initiator = .{ .type = "other" },
     }, .{ .session_id = session_id });
@@ -300,23 +313,17 @@ pub const TransferAsRequestWriter = struct {
             try jws.objectField("url");
             try jws.beginWriteRaw();
             try writer.writeByte('\"');
-            try transfer.uri.writeToStream(writer, .{
-                .scheme = true,
-                .authentication = true,
-                .authority = true,
-                .path = true,
-                .query = true,
-            });
+            try transfer.url.writeToStream(writer);
             try writer.writeByte('\"');
             jws.endWriteRaw();
         }
 
         {
-            if (transfer.uri.fragment) |frag| {
+            if (transfer.url.getFragment()) |frag| {
                 try jws.objectField("urlFragment");
                 try jws.beginWriteRaw();
                 try writer.writeAll("\"#");
-                try writer.writeAll(frag.percent_encoded);
+                try writer.writeAll(frag);
                 try writer.writeByte('\"');
                 jws.endWriteRaw();
             }
@@ -370,13 +377,7 @@ const TransferAsResponseWriter = struct {
             try jws.objectField("url");
             try jws.beginWriteRaw();
             try writer.writeByte('\"');
-            try transfer.uri.writeToStream(writer, .{
-                .scheme = true,
-                .authentication = true,
-                .authority = true,
-                .path = true,
-                .query = true,
-            });
+            try transfer.url.writeToStream(writer);
             try writer.writeByte('\"');
             jws.endWriteRaw();
         }
@@ -417,29 +418,22 @@ const TransferAsResponseWriter = struct {
 };
 
 const DocumentUrlWriter = struct {
-    uri: *std.Uri,
+    url: URL,
 
-    fn init(uri: *std.Uri) DocumentUrlWriter {
-        return .{
-            .uri = uri,
-        };
+    fn init(url: URL) DocumentUrlWriter {
+        return .{ .url = url };
     }
 
     pub fn jsonStringify(self: *const DocumentUrlWriter, jws: anytype) !void {
         self._jsonStringify(jws) catch return error.WriteFailed;
     }
+
     fn _jsonStringify(self: *const DocumentUrlWriter, jws: anytype) !void {
         const writer = jws.writer;
 
         try jws.beginWriteRaw();
         try writer.writeByte('\"');
-        try self.uri.writeToStream(writer, .{
-            .scheme = true,
-            .authentication = true,
-            .authority = true,
-            .path = true,
-            .query = true,
-        });
+        try self.url.writeToStream(writer);
         try writer.writeByte('\"');
         jws.endWriteRaw();
     }

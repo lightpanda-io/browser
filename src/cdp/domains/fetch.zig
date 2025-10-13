@@ -208,7 +208,7 @@ pub fn requestIntercept(arena: Allocator, bc: anytype, intercept: *const Notific
     log.debug(.cdp, "request intercept", .{
         .state = "paused",
         .id = transfer.id,
-        .url = transfer.uri,
+        .url = transfer.url,
     });
     // Await either continueRequest, failRequest or fulfillRequest
 
@@ -237,7 +237,7 @@ fn continueRequest(cmd: anytype) !void {
     log.debug(.cdp, "request intercept", .{
         .state = "continue",
         .id = transfer.id,
-        .url = transfer.uri,
+        .url = transfer.url,
         .new_url = params.url,
     });
 
@@ -342,7 +342,7 @@ fn fulfillRequest(cmd: anytype) !void {
     log.debug(.cdp, "request intercept", .{
         .state = "fulfilled",
         .id = transfer.id,
-        .url = transfer.uri,
+        .url = transfer.url,
         .status = params.responseCode,
         .body = params.body != null,
     });
@@ -376,7 +376,7 @@ fn failRequest(cmd: anytype) !void {
     log.info(.cdp, "request intercept", .{
         .state = "fail",
         .id = request_id,
-        .url = transfer.uri,
+        .url = transfer.url,
         .reason = params.errorReason,
     });
     return cmd.sendResult(null, .{});
@@ -420,7 +420,7 @@ pub fn requestAuthRequired(arena: Allocator, bc: anytype, intercept: *const Noti
     log.debug(.cdp, "request auth required", .{
         .state = "paused",
         .id = transfer.id,
-        .url = transfer.uri,
+        .url = transfer.url,
     });
     // Await continueWithAuth
 

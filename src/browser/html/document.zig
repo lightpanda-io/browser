@@ -85,7 +85,7 @@ pub const HTMLDocument = struct {
 
     pub fn get_cookie(_: *parser.DocumentHTML, page: *Page) ![]const u8 {
         var buf: std.ArrayListUnmanaged(u8) = .{};
-        try page.cookie_jar.forRequest(&page.url.uri, buf.writer(page.arena), .{
+        try page.cookie_jar.forRequest(page.url, buf.writer(page.arena), .{
             .is_http = false,
             .is_navigation = true,
         });
@@ -95,7 +95,7 @@ pub const HTMLDocument = struct {
     pub fn set_cookie(_: *parser.DocumentHTML, cookie_str: []const u8, page: *Page) ![]const u8 {
         // we use the cookie jar's allocator to parse the cookie because it
         // outlives the page's arena.
-        const c = try Cookie.parse(page.cookie_jar.allocator, &page.url.uri, cookie_str);
+        const c = try Cookie.parse(page.cookie_jar.allocator, page.url, cookie_str);
         errdefer c.deinit();
         if (c.http_only) {
             c.deinit();

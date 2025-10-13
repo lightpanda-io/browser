@@ -21,6 +21,7 @@ const std = @import("std");
 const log = @import("../../log.zig");
 const Cookie = @import("../../browser/storage/storage.zig").Cookie;
 const CookieJar = @import("../../browser/storage/storage.zig").CookieJar;
+const URL = @import("../../url.zig").URL;
 pub const PreparedUri = @import("../../browser/storage/cookie.zig").PreparedUri;
 
 pub fn processMessage(cmd: anytype) !void {
@@ -136,12 +137,25 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
     const a = arena.allocator();
 
     // NOTE: The param.url can affect the default domain, (NOT path), secure, source port, and source scheme.
-    const uri = if (param.url) |url| std.Uri.parse(url) catch return error.InvalidParams else null;
-    const uri_ptr = if (uri) |*u| u else null;
-    const domain = try Cookie.parseDomain(a, uri_ptr, param.domain);
+    const maybe_url: ?URL = blk: {
+        if (param.url) |url| {
+            break :blk URL.parse(url, null) catch return error.InvalidParams;
+        }
+
+        break :blk null;
+    };
+
+    const domain = try Cookie.parseDomain(a, maybe_url, param.domain);
     const path = if (param.path == null) "/" else try Cookie.parsePath(a, null, param.path);
 
-    const secure = if (param.secure) |s| s else if (uri) |uri_| std.mem.eql(u8, uri_.scheme, "https") else false;
+    const secure: bool = blk: {
+        // Check if params indicate security.
+        if (param.secure) |s| break :blk s;
+        // Check if protocol is secure.
+        if (maybe_url) |url| break :blk url.isSecure();
+        // If all fails, insecure.
+        break :blk false;
+    };
 
     const cookie = Cookie{
         .arena = arena,
@@ -158,6 +172,12 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
             .None => .none,
         },
     };
+
+    // Free if we had.
+    if (maybe_url) |url| {
+        url.deinit();
+    }
+
     try cookie_jar.add(cookie, std.time.timestamp());
 }
 

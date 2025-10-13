@@ -1,82 +1,135 @@
 const std = @import("std");
 
-const Uri = std.Uri;
 const Allocator = std.mem.Allocator;
 const WebApiURL = @import("browser/url/url.zig").URL;
+
+const ada = @import("ada");
 
 pub const stitch = URL.stitch;
 
 pub const URL = struct {
-    uri: Uri,
+    internal: ada.URL,
+    /// This must outlive the URL structure.
     raw: []const u8,
 
-    pub const empty = URL{ .uri = .{ .scheme = "" }, .raw = "" };
-    pub const about_blank = URL{ .uri = .{ .scheme = "" }, .raw = "about:blank" };
+    pub const empty = URL{ .internal = null, .raw = "" };
+    pub const invalid = URL{ .internal = null, .raw = "" };
+    pub const blank = parse("about:blank", null) catch unreachable;
 
-    // We assume str will last as long as the URL
-    // In some cases, this is safe to do, because we know the URL is short lived.
-    // In most cases though, we assume the caller will just dupe the string URL
-    // into an arena
-    pub fn parse(str: []const u8, default_scheme: ?[]const u8) !URL {
-        var uri = Uri.parse(str) catch try Uri.parseAfterScheme(default_scheme orelse "https", str);
+    pub const ParseError = ada.ParseError;
 
-        // special case, url scheme is about, like about:blank.
-        // Use an empty string as host.
-        if (std.mem.eql(u8, uri.scheme, "about")) {
-            uri.host = .{ .percent_encoded = "" };
-        }
-
-        if (uri.host == null) {
-            return error.MissingHost;
-        }
-
-        std.debug.assert(uri.host.? == .percent_encoded);
-
-        return .{
-            .uri = uri,
-            .raw = str,
+    /// We assume str will last as long as the URL
+    /// In some cases, this is safe to do, because we know the URL is short lived.
+    /// In most cases though, we assume the caller will just dupe the string URL
+    /// into an arena.
+    /// If `str` does not contain a scheme, `fallback_scheme` be used instead.
+    /// `fallback_scheme` is `https` if not provided.
+    pub fn parse(str: []const u8, fallback_scheme: ?[]const u8) ParseError!URL {
+        // Try parsing directly; if it fails, we might have to provide a base.
+        const internal = ada.parse(str) catch blk: {
+            break :blk try ada.parseWithBase(fallback_scheme orelse "https", str);
         };
+
+        return .{ .internal = internal, .raw = str };
     }
 
-    pub fn fromURI(arena: Allocator, uri: *const Uri) !URL {
-        // This is embarrassing.
-        var buf: std.ArrayListUnmanaged(u8) = .{};
-        try uri.writeToStream(.{
-            .scheme = true,
-            .authentication = true,
-            .authority = true,
-            .path = true,
-            .query = true,
-            .fragment = true,
-        }, buf.writer(arena));
+    /// Uses the same URL to parse in-place.
+    /// Assumes `internal` is valid.
+    pub fn reparse(self: URL, str: []const u8) ParseError!URL {
+        std.debug.assert(self.internal != null);
 
-        return parse(buf.items, null);
+        _ = ada.setHref(self.internal, str);
+        if (!ada.isValid(self.internal)) {
+            return error.Invalid;
+        }
+        //self.raw = str;
+
+        return self;
     }
 
-    // Above, in `parse`, we error if a host doesn't exist
-    // In other words, we can't have a URL with a null host.
-    pub fn host(self: *const URL) []const u8 {
-        return self.uri.host.?.percent_encoded;
+    /// Deinitializes internal url.
+    pub fn deinit(self: URL) void {
+        std.debug.assert(self.internal != null);
+        ada.free(self.internal);
     }
 
-    pub fn port(self: *const URL) ?u16 {
-        return self.uri.port;
+    /// Returns true if `internal` is initialized.
+    pub fn isValid(self: URL) bool {
+        return ada.isValid(self.internal);
     }
 
-    pub fn scheme(self: *const URL) []const u8 {
-        return self.uri.scheme;
+    /// Above, in `parse`, we error if a host doesn't exist
+    /// In other words, we can't have a URL with a null host.
+    pub fn host(self: URL) []const u8 {
+        const str = ada.getHostNullable(self.internal);
+        return str.data[0..str.length];
     }
 
-    pub fn origin(self: *const URL, writer: *std.Io.Writer) !void {
-        return self.uri.writeToStream(writer, .{ .scheme = true, .authority = true });
+    pub fn href(self: URL) []const u8 {
+        return ada.getHref(self.internal);
     }
 
-    pub fn format(self: *const URL, writer: *std.Io.Writer) !void {
+    pub fn hostname(self: URL) []const u8 {
+        return ada.getHostname(self.internal);
+    }
+
+    pub fn getFragment(self: URL) ?[]const u8 {
+        // Ada calls it "hash" instead of "fragment".
+        const hash = ada.getHashNullable(self.internal);
+        if (hash.data == null) return null;
+
+        return hash.data[0..hash.length];
+    }
+
+    pub fn getProtocol(self: URL) []const u8 {
+        return ada.getProtocol(self.internal);
+    }
+
+    pub fn getScheme(self: URL) []const u8 {
+        const proto = self.getProtocol();
+        std.debug.assert(proto[proto.len - 1] == ':');
+
+        return proto.ptr[0 .. proto.len - 1];
+    }
+
+    /// Returns the path.
+    pub fn getPath(self: URL) []const u8 {
+        const pathname = ada.getPathnameNullable(self.internal);
+        // Return a slash if path is null.
+        if (pathname.data == null) {
+            return "/";
+        }
+
+        return pathname.data[0..pathname.length];
+    }
+
+    /// Returns true if the URL's protocol is secure.
+    pub fn isSecure(self: URL) bool {
+        const scheme = ada.getSchemeType(self.internal);
+        return scheme == ada.Scheme.https or scheme == ada.Scheme.wss;
+    }
+
+    pub fn writeToStream(self: URL, writer: anytype) !void {
+        return writer.writeAll(self.href());
+    }
+
+    // TODO: Skip unnecessary allocation by writing url parts directly to stream.
+    pub fn origin(self: URL, writer: *std.Io.Writer) !void {
+        // Ada manages its own memory for origin.
+        // Here we write it to stream and free it afterwards.
+        const proto = ada.getOrigin(self.internal);
+        defer ada.freeOwnedString(.{ .data = proto.ptr, .length = proto.len });
+
+        return writer.writeAll(proto);
+    }
+
+    pub fn format(self: URL, writer: *std.Io.Writer) !void {
         return writer.writeAll(self.raw);
     }
 
-    pub fn toWebApi(self: *const URL, allocator: Allocator) !WebApiURL {
-        return WebApiURL.init(allocator, self.uri);
+    /// Converts `URL` to `WebApiURL`.
+    pub fn toWebApi(self: URL, allocator: Allocator) !WebApiURL {
+        return WebApiURL.constructFromInternal(allocator, self.internal);
     }
 
     /// Properly stitches two URL fragments together.

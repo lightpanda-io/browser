@@ -150,6 +150,7 @@ pub const Page = struct {
         try self.registerBackgroundTasks();
     }
 
+    // FIXME: Deinit self.url.
     pub fn deinit(self: *Page) void {
         self.script_manager.shutdown = true;
 
@@ -239,7 +240,7 @@ pub const Page = struct {
 
         const doc = parser.documentHTMLToDocument(self.window.document);
 
-        // if the base si requested, add the base's node in the document's headers.
+        // if the base is requested, add the base's node in the document's headers.
         if (opts.with_base) {
             try self.addDOMTreeBase();
         }
@@ -525,10 +526,11 @@ pub const Page = struct {
         is_http: bool = true,
         is_navigation: bool = false,
     };
+
     pub fn requestCookie(self: *const Page, opts: RequestCookieOpts) Http.Client.RequestCookie {
         return .{
-            .jar = self.cookie_jar,
-            .origin = &self.url.uri,
+            .cookie_jar = self.cookie_jar,
+            .origin_url = self.url,
             .is_http = opts.is_http,
             .is_navigation = opts.is_navigation,
         };
@@ -859,7 +861,7 @@ pub const Page = struct {
         self.window.setStorageShelf(
             try self.session.storage_shed.getOrPut(try self.origin(self.arena)),
         );
-        try self.window.replaceLocation(.{ .url = try self.url.toWebApi(self.arena) });
+        //try self.window.replaceLocation(.{ .url = try self.url.toWebApi(self.arena) });
     }
 
     pub const MouseEvent = struct {

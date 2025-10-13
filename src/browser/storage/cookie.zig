@@ -6,14 +6,7 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const log = @import("../../log.zig");
 const DateTime = @import("../../datetime.zig").DateTime;
 const public_suffix_list = @import("../../data/public_suffix_list.zig").lookup;
-
-pub const LookupOpts = struct {
-    request_time: ?i64 = null,
-    origin_uri: ?*const Uri = null,
-    is_http: bool,
-    is_navigation: bool = true,
-    prefix: ?[]const u8 = null,
-};
+const URL = @import("../../url.zig").URL;
 
 pub const Jar = struct {
     allocator: Allocator,
@@ -80,13 +73,21 @@ pub const Jar = struct {
         }
     }
 
-    pub fn forRequest(self: *Jar, target_uri: *const Uri, writer: anytype, opts: LookupOpts) !void {
+    pub const LookupOpts = struct {
+        request_time: ?i64 = null,
+        origin_url: ?URL = null,
+        is_http: bool,
+        is_navigation: bool = true,
+        prefix: ?[]const u8 = null,
+    };
+
+    pub fn forRequest(self: *Jar, target_url: URL, writer: anytype, opts: LookupOpts) !void {
         const target = PreparedUri{
-            .host = (target_uri.host orelse return error.InvalidURI).percent_encoded,
-            .path = target_uri.path.percent_encoded,
-            .secure = std.mem.eql(u8, target_uri.scheme, "https"),
+            .host = target_url.host(),
+            .path = target_url.getPath(),
+            .secure = target_url.isSecure(),
         };
-        const same_site = try areSameSite(opts.origin_uri, target.host);
+        const same_site = try areSameSite(opts.origin_url, target.host);
 
         removeExpired(self, opts.request_time);
 
@@ -109,8 +110,8 @@ pub const Jar = struct {
         }
     }
 
-    pub fn populateFromResponse(self: *Jar, uri: *const Uri, set_cookie: []const u8) !void {
-        const c = Cookie.parse(self.allocator, uri, set_cookie) catch |err| {
+    pub fn populateFromResponse(self: *Jar, url: URL, set_cookie: []const u8) !void {
+        const c = Cookie.parse(self.allocator, url, set_cookie) catch |err| {
             log.warn(.web_api, "cookie parse failed", .{ .raw = set_cookie, .err = err });
             return;
         };
@@ -148,9 +149,9 @@ fn areCookiesEqual(a: *const Cookie, b: *const Cookie) bool {
     return true;
 }
 
-fn areSameSite(origin_uri_: ?*const std.Uri, target_host: []const u8) !bool {
-    const origin_uri = origin_uri_ orelse return true;
-    const origin_host = (origin_uri.host orelse return error.InvalidURI).percent_encoded;
+fn areSameSite(maybe_origin_url: ?URL, target_host: []const u8) !bool {
+    const origin_url = maybe_origin_url orelse return true;
+    const origin_host = origin_url.host();
 
     // common case
     if (std.mem.eql(u8, target_host, origin_host)) {
@@ -161,6 +162,7 @@ fn areSameSite(origin_uri_: ?*const std.Uri, target_host: []const u8) !bool {
 }
 
 fn findSecondLevelDomain(host: []const u8) []const u8 {
+    // TODO: maybe reverseIterator?
     var i = std.mem.lastIndexOfScalar(u8, host, '.') orelse return host;
     while (true) {
         i = std.mem.lastIndexOfScalar(u8, host[0..i], '.') orelse return host;
@@ -269,8 +271,8 @@ pub const Cookie = struct {
         const aa = arena.allocator();
         const owned_name = try aa.dupe(u8, cookie_name);
         const owned_value = try aa.dupe(u8, cookie_value);
-        const owned_path = try parsePath(aa, uri, path);
-        const owned_domain = try parseDomain(aa, uri, domain);
+        const owned_path = try parsePath(aa, url, path);
+        const owned_domain = try parseDomain(aa, url, domain);
 
         var normalized_expires: ?f64 = null;
         if (max_age) |ma| {
@@ -362,37 +364,35 @@ pub const Cookie = struct {
         }
     }
 
-    pub fn parsePath(arena: Allocator, uri: ?*const std.Uri, explicit_path: ?[]const u8) ![]const u8 {
+    pub fn parsePath(arena: Allocator, maybe_url: ?URL, maybe_explicit_path: ?[]const u8) ![]const u8 {
         // path attribute value either begins with a '/' or we
         // ignore it and use the "default-path" algorithm
-        if (explicit_path) |path| {
+        if (maybe_explicit_path) |path| {
             if (path.len > 0 and path[0] == '/') {
-                return try arena.dupe(u8, path);
+                return arena.dupe(u8, path);
             }
         }
 
-        // default-path
-        const url_path = (uri orelse return "/").path;
+        const url_path = blk: {
+            if (maybe_url) |url| {
+                break :blk url.getPath();
+            }
 
-        const either = url_path.percent_encoded;
-        if (either.len == 0 or (either.len == 1 and either[0] == '/')) {
+            return "/";
+        };
+
+        if (url_path.len == 0 or (url_path.len == 1 and url_path[0] == '/')) {
             return "/";
         }
 
-        var owned_path: []const u8 = try percentEncode(arena, url_path, isPathChar);
-        const last = std.mem.lastIndexOfScalar(u8, owned_path[1..], '/') orelse {
-            return "/";
-        };
-        return try arena.dupe(u8, owned_path[0 .. last + 1]);
+        return arena.dupe(u8, url_path);
     }
 
-    pub fn parseDomain(arena: Allocator, uri: ?*const std.Uri, explicit_domain: ?[]const u8) ![]const u8 {
+    pub fn parseDomain(arena: Allocator, maybe_url: ?URL, explicit_domain: ?[]const u8) ![]const u8 {
         var encoded_host: ?[]const u8 = null;
-        if (uri) |uri_| {
-            const uri_host = uri_.host orelse return error.InvalidURI;
-            const host = try percentEncode(arena, uri_host, isHostChar);
-            _ = toLower(host);
-            encoded_host = host;
+        if (maybe_url) |url| {
+            const url_host = url.hostname();
+            encoded_host = url_host;
         }
 
         if (explicit_domain) |domain| {
@@ -419,19 +419,6 @@ pub const Cookie = struct {
         }
 
         return encoded_host orelse return error.InvalidDomain; // default-domain
-    }
-
-    pub fn percentEncode(arena: Allocator, component: std.Uri.Component, comptime isValidChar: fn (u8) bool) ![]u8 {
-        switch (component) {
-            .raw => |str| {
-                var aw = try std.Io.Writer.Allocating.initCapacity(arena, str.len);
-                try std.Uri.Component.percentEncode(&aw.writer, str, isValidChar);
-                return aw.written(); // @memory retains memory used before growing
-            },
-            .percent_encoded => |str| {
-                return try arena.dupe(u8, str);
-            },
-        }
     }
 
     pub fn isHostChar(c: u8) bool {
@@ -601,37 +588,40 @@ test "Jar: add" {
     defer jar.deinit();
     try expectCookies(&.{}, jar);
 
-    try jar.add(try Cookie.parse(testing.allocator, &test_uri, "over=9000;Max-Age=0"), now);
+    const test_url = try URL.parse("http://lightpanda.io/", null);
+    defer test_url.deinit();
+
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "over=9000;Max-Age=0"), now);
     try expectCookies(&.{}, jar);
 
-    try jar.add(try Cookie.parse(testing.allocator, &test_uri, "over=9000"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "over=9000"), now);
     try expectCookies(&.{.{ "over", "9000" }}, jar);
 
-    try jar.add(try Cookie.parse(testing.allocator, &test_uri, "over=9000!!"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "over=9000!!"), now);
     try expectCookies(&.{.{ "over", "9000!!" }}, jar);
 
-    try jar.add(try Cookie.parse(testing.allocator, &test_uri, "spice=flow"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "spice=flow"), now);
     try expectCookies(&.{ .{ "over", "9000!!" }, .{ "spice", "flow" } }, jar);
 
-    try jar.add(try Cookie.parse(testing.allocator, &test_uri, "spice=flows;Path=/"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "spice=flows;Path=/"), now);
     try expectCookies(&.{ .{ "over", "9000!!" }, .{ "spice", "flows" } }, jar);
 
-    try jar.add(try Cookie.parse(testing.allocator, &test_uri, "over=9001;Path=/other"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "over=9001;Path=/other"), now);
     try expectCookies(&.{ .{ "over", "9000!!" }, .{ "spice", "flows" }, .{ "over", "9001" } }, jar);
 
-    try jar.add(try Cookie.parse(testing.allocator, &test_uri, "over=9002;Path=/;Domain=lightpanda.io"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "over=9002;Path=/;Domain=lightpanda.io"), now);
     try expectCookies(&.{ .{ "over", "9000!!" }, .{ "spice", "flows" }, .{ "over", "9001" }, .{ "over", "9002" } }, jar);
 
-    try jar.add(try Cookie.parse(testing.allocator, &test_uri, "over=x;Path=/other;Max-Age=-200"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "over=x;Path=/other;Max-Age=-200"), now);
     try expectCookies(&.{ .{ "over", "9000!!" }, .{ "spice", "flows" }, .{ "over", "9002" } }, jar);
 }
 
 test "Jar: forRequest" {
     const expectCookies = struct {
-        fn expect(expected: []const u8, jar: *Jar, target_uri: Uri, opts: LookupOpts) !void {
+        fn expect(expected: []const u8, jar: *Jar, target_url: URL, opts: Jar.LookupOpts) !void {
             var arr: std.ArrayListUnmanaged(u8) = .empty;
             defer arr.deinit(testing.allocator);
-            try jar.forRequest(&target_uri, arr.writer(testing.allocator), opts);
+            try jar.forRequest(target_url, arr.writer(testing.allocator), opts);
             try testing.expectEqual(expected, arr.items);
         }
     }.expect;
@@ -641,131 +631,142 @@ test "Jar: forRequest" {
     var jar = Jar.init(testing.allocator);
     defer jar.deinit();
 
-    const test_uri_2 = Uri.parse("http://test.lightpanda.io/") catch unreachable;
+    const test_url = try URL.parse("http://lightpanda.io/", null);
+    defer test_url.deinit();
+
+    const test_url_2 = try URL.parse("http://test.lightpanda.io/", null);
+    defer test_url_2.deinit();
 
     {
         // test with no cookies
-        try expectCookies("", &jar, test_uri, .{ .is_http = true });
+        try expectCookies("", &jar, test_url, .{ .is_http = true });
     }
 
-    try jar.add(try Cookie.parse(testing.allocator, &test_uri, "global1=1"), now);
-    try jar.add(try Cookie.parse(testing.allocator, &test_uri, "global2=2;Max-Age=30;domain=lightpanda.io"), now);
-    try jar.add(try Cookie.parse(testing.allocator, &test_uri, "path1=3;Path=/about"), now);
-    try jar.add(try Cookie.parse(testing.allocator, &test_uri, "path2=4;Path=/docs/"), now);
-    try jar.add(try Cookie.parse(testing.allocator, &test_uri, "secure=5;Secure"), now);
-    try jar.add(try Cookie.parse(testing.allocator, &test_uri, "sitenone=6;SameSite=None;Path=/x/;Secure"), now);
-    try jar.add(try Cookie.parse(testing.allocator, &test_uri, "sitelax=7;SameSite=Lax;Path=/x/"), now);
-    try jar.add(try Cookie.parse(testing.allocator, &test_uri, "sitestrict=8;SameSite=Strict;Path=/x/"), now);
-    try jar.add(try Cookie.parse(testing.allocator, &test_uri_2, "domain1=9;domain=test.lightpanda.io"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "global1=1"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "global2=2;Max-Age=30;domain=lightpanda.io"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "path1=3;Path=/about"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "path2=4;Path=/docs/"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "secure=5;Secure"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "sitenone=6;SameSite=None;Path=/x/;Secure"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "sitelax=7;SameSite=Lax;Path=/x/"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "sitestrict=8;SameSite=Strict;Path=/x/"), now);
+    try jar.add(try Cookie.parse(testing.allocator, test_url_2, "domain1=9;domain=test.lightpanda.io"), now);
 
     // nothing fancy here
-    try expectCookies("global1=1; global2=2", &jar, test_uri, .{ .is_http = true });
-    try expectCookies("global1=1; global2=2", &jar, test_uri, .{ .origin_uri = &test_uri, .is_navigation = false, .is_http = true });
+    try expectCookies("global1=1; global2=2", &jar, test_url, .{ .is_http = true });
+    try expectCookies("global1=1; global2=2", &jar, test_url, .{ .origin_url = test_url, .is_navigation = false, .is_http = true });
+
+    // We reuse this URL to reparse.
+    const reuse_url = try URL.parse("http://anothersitelightpanda.io/", null);
+    defer reuse_url.deinit();
 
     // We have a cookie where Domain=lightpanda.io
     // This should _not_ match xyxlightpanda.io
-    try expectCookies("", &jar, try std.Uri.parse("http://anothersitelightpanda.io/"), .{
-        .origin_uri = &test_uri,
+    try expectCookies("", &jar, reuse_url, .{
+        .origin_url = test_url,
         .is_http = true,
     });
 
     // matching path without trailing /
-    try expectCookies("global1=1; global2=2; path1=3", &jar, try std.Uri.parse("http://lightpanda.io/about"), .{
-        .origin_uri = &test_uri,
+    try expectCookies("global1=1; global2=2; path1=3", &jar, try reuse_url.reparse("http://lightpanda.io/about"), .{
+        .origin_url = test_url,
         .is_http = true,
     });
 
     // incomplete prefix path
-    try expectCookies("global1=1; global2=2", &jar, try std.Uri.parse("http://lightpanda.io/abou"), .{
-        .origin_uri = &test_uri,
+    try expectCookies("global1=1; global2=2", &jar, try reuse_url.reparse("http://lightpanda.io/abou"), .{
+        .origin_url = test_url,
         .is_http = true,
     });
 
     // path doesn't match
-    try expectCookies("global1=1; global2=2", &jar, try std.Uri.parse("http://lightpanda.io/aboutus"), .{
-        .origin_uri = &test_uri,
+    try expectCookies("global1=1; global2=2", &jar, try reuse_url.reparse("http://lightpanda.io/aboutus"), .{
+        .origin_url = test_url,
         .is_http = true,
     });
 
     // path doesn't match cookie directory
-    try expectCookies("global1=1; global2=2", &jar, try std.Uri.parse("http://lightpanda.io/docs"), .{
-        .origin_uri = &test_uri,
+    try expectCookies("global1=1; global2=2", &jar, try reuse_url.reparse("http://lightpanda.io/docs"), .{
+        .origin_url = test_url,
         .is_http = true,
     });
 
     // exact directory match
-    try expectCookies("global1=1; global2=2; path2=4", &jar, try std.Uri.parse("http://lightpanda.io/docs/"), .{
-        .origin_uri = &test_uri,
+    try expectCookies("global1=1; global2=2; path2=4", &jar, try reuse_url.reparse("http://lightpanda.io/docs/"), .{
+        .origin_url = test_url,
         .is_http = true,
     });
 
     // sub directory match
-    try expectCookies("global1=1; global2=2; path2=4", &jar, try std.Uri.parse("http://lightpanda.io/docs/more"), .{
-        .origin_uri = &test_uri,
+    try expectCookies("global1=1; global2=2; path2=4", &jar, try reuse_url.reparse("http://lightpanda.io/docs/more"), .{
+        .origin_url = test_url,
         .is_http = true,
     });
 
     // secure
-    try expectCookies("global1=1; global2=2; secure=5", &jar, try std.Uri.parse("https://lightpanda.io/"), .{
-        .origin_uri = &test_uri,
+    try expectCookies("global1=1; global2=2; secure=5", &jar, try reuse_url.reparse("https://lightpanda.io/"), .{
+        .origin_url = test_url,
         .is_http = true,
     });
 
     // navigational cross domain, secure
-    try expectCookies("global1=1; global2=2; secure=5; sitenone=6; sitelax=7", &jar, try std.Uri.parse("https://lightpanda.io/x/"), .{
-        .origin_uri = &(try std.Uri.parse("https://example.com/")),
+    const example_com_url = try URL.parse("https://example.com/", null);
+    defer example_com_url.deinit();
+
+    try expectCookies("global1=1; global2=2; secure=5; sitenone=6; sitelax=7", &jar, try reuse_url.reparse("https://lightpanda.io/x/"), .{
+        .origin_url = example_com_url,
         .is_http = true,
     });
 
     // navigational cross domain, insecure
-    try expectCookies("global1=1; global2=2; sitelax=7", &jar, try std.Uri.parse("http://lightpanda.io/x/"), .{
-        .origin_uri = &(try std.Uri.parse("https://example.com/")),
+    try expectCookies("global1=1; global2=2; sitelax=7", &jar, try reuse_url.reparse("http://lightpanda.io/x/"), .{
+        .origin_url = example_com_url,
         .is_http = true,
     });
 
     // non-navigational cross domain, insecure
-    try expectCookies("", &jar, try std.Uri.parse("http://lightpanda.io/x/"), .{
-        .origin_uri = &(try std.Uri.parse("https://example.com/")),
+    try expectCookies("", &jar, try reuse_url.reparse("http://lightpanda.io/x/"), .{
+        .origin_url = example_com_url,
         .is_http = true,
         .is_navigation = false,
     });
 
     // non-navigational cross domain, secure
-    try expectCookies("sitenone=6", &jar, try std.Uri.parse("https://lightpanda.io/x/"), .{
-        .origin_uri = &(try std.Uri.parse("https://example.com/")),
+    try expectCookies("sitenone=6", &jar, try reuse_url.reparse("https://lightpanda.io/x/"), .{
+        .origin_url = example_com_url,
         .is_http = true,
         .is_navigation = false,
     });
 
     // non-navigational same origin
-    try expectCookies("global1=1; global2=2; sitelax=7; sitestrict=8", &jar, try std.Uri.parse("http://lightpanda.io/x/"), .{
-        .origin_uri = &(try std.Uri.parse("https://lightpanda.io/")),
+    try expectCookies("global1=1; global2=2; sitelax=7; sitestrict=8", &jar, try reuse_url.reparse("http://lightpanda.io/x/"), .{
+        .origin_url = test_url,
         .is_http = true,
         .is_navigation = false,
     });
 
     // exact domain match + suffix
-    try expectCookies("global2=2; domain1=9", &jar, try std.Uri.parse("http://test.lightpanda.io/"), .{
-        .origin_uri = &test_uri,
+    try expectCookies("global2=2; domain1=9", &jar, try reuse_url.reparse("http://test.lightpanda.io/"), .{
+        .origin_url = test_url,
         .is_http = true,
     });
 
     // domain suffix match + suffix
-    try expectCookies("global2=2; domain1=9", &jar, try std.Uri.parse("http://1.test.lightpanda.io/"), .{
-        .origin_uri = &test_uri,
+    try expectCookies("global2=2; domain1=9", &jar, try reuse_url.reparse("http://1.test.lightpanda.io/"), .{
+        .origin_url = test_url,
         .is_http = true,
     });
 
     // non-matching domain
-    try expectCookies("global2=2", &jar, try std.Uri.parse("http://other.lightpanda.io/"), .{
-        .origin_uri = &test_uri,
+    try expectCookies("global2=2", &jar, try reuse_url.reparse("http://other.lightpanda.io/"), .{
+        .origin_url = test_url,
         .is_http = true,
     });
 
     const l = jar.cookies.items.len;
-    try expectCookies("global1=1", &jar, test_uri, .{
+    try expectCookies("global1=1", &jar, test_url, .{
         .request_time = now + 100,
-        .origin_uri = &test_uri,
+        .origin_url = test_url,
         .is_http = true,
     });
     try testing.expectEqual(l - 1, jar.cookies.items.len);
@@ -961,9 +962,11 @@ const ExpectedCookie = struct {
     same_site: Cookie.SameSite = .lax,
 };
 
-fn expectCookie(expected: ExpectedCookie, url: []const u8, set_cookie: []const u8) !void {
-    const uri = try Uri.parse(url);
-    var cookie = try Cookie.parse(testing.allocator, &uri, set_cookie);
+fn expectCookie(expected: ExpectedCookie, url_str: []const u8, set_cookie: []const u8) !void {
+    const url = try URL.parse(url_str, null);
+    defer url.deinit();
+
+    var cookie = try Cookie.parse(testing.allocator, url, set_cookie);
     defer cookie.deinit();
 
     try testing.expectEqual(expected.name, cookie.name);
@@ -977,9 +980,11 @@ fn expectCookie(expected: ExpectedCookie, url: []const u8, set_cookie: []const u
     try testing.expectDelta(expected.expires, cookie.expires, 2.0);
 }
 
-fn expectAttribute(expected: anytype, url: ?[]const u8, set_cookie: []const u8) !void {
-    const uri = if (url) |u| try Uri.parse(u) else test_uri;
-    var cookie = try Cookie.parse(testing.allocator, &uri, set_cookie);
+fn expectAttribute(expected: anytype, maybe_url_str: ?[]const u8, set_cookie: []const u8) !void {
+    const url = try URL.parse(if (maybe_url_str) |url_str| url_str else "https://lightpanda.io/", null);
+    defer url.deinit();
+
+    var cookie = try Cookie.parse(testing.allocator, url, set_cookie);
     defer cookie.deinit();
 
     inline for (@typeInfo(@TypeOf(expected)).@"struct".fields) |f| {
@@ -994,9 +999,7 @@ fn expectAttribute(expected: anytype, url: ?[]const u8, set_cookie: []const u8) 
     }
 }
 
-fn expectError(expected: anyerror, url: ?[]const u8, set_cookie: []const u8) !void {
-    const uri = if (url) |u| try Uri.parse(u) else test_uri;
-    try testing.expectError(expected, Cookie.parse(testing.allocator, &uri, set_cookie));
+fn expectError(expected: anyerror, maybe_url_str: ?[]const u8, set_cookie: []const u8) !void {
+    const url = try URL.parse(if (maybe_url_str) |url_str| url_str else "https://lightpanda.io/", null);
+    try testing.expectError(expected, Cookie.parse(testing.allocator, url, set_cookie));
 }
-
-const test_uri = Uri.parse("http://lightpanda.io/") catch unreachable;

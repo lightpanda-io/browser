@@ -84,20 +84,10 @@ pub const URL = struct {
             break :blk ada.parse(url_str);
         };
 
-        // Prepare search_params.
-        const params: URLSearchParams = blk: {
-            const search = ada.getSearch(internal);
-            if (search.data == null) {
-                break :blk .{};
-            }
-
-            break :blk try .initFromString(page.arena, search.data[0..search.length]);
+        return .{
+            .internal = internal,
+            .search_params = try prepareSearchParams(page.arena, internal),
         };
-
-        // We're doing this since we track search params separately.
-        ada.clearSearch(internal);
-
-        return .{ .internal = internal, .search_params = params };
     }
 
     pub fn destructor(self: *const URL) void {
@@ -105,8 +95,37 @@ pub const URL = struct {
         return ada.free(self.internal);
     }
 
-    pub fn initWithoutSearchParams(uri: std.Uri) URL {
-        return .{ .uri = uri, .search_params = .{} };
+    /// Initializes a `URL` from given `internal`.
+    /// Note that this copies the given `internal`; meaning 2 instances
+    /// of it has to be tracked separately.
+    pub fn constructFromInternal(arena: Allocator, internal: ada.URL) !URL {
+        const copy = ada.copy(internal);
+
+        return .{
+            .internal = copy,
+            .search_params = try prepareSearchParams(arena, copy),
+        };
+    }
+
+    /// Prepares a `URLSearchParams` from given `internal`.
+    /// Resets `search` of `internal`.
+    fn prepareSearchParams(arena: Allocator, internal: ada.URL) !URLSearchParams {
+        const search = ada.getSearch(internal);
+        // Empty.
+        if (search.data == null) return .{};
+
+        const slice = search.data[0..search.length];
+        const search_params = URLSearchParams.initFromString(arena, slice);
+        // After a call to this function, search params are tracked by
+        // `search_params`. So we reset the internal's search.
+        ada.clearSearch(internal);
+
+        return search_params;
+    }
+
+    // Alias to get_href.
+    pub fn _toString(self: *const URL, page: *Page) ![]const u8 {
+        return self.get_href(page);
     }
     pub fn _toString(self: *const URL) []const u8 {
         return ada.getHref(self.internal);
@@ -178,7 +197,13 @@ pub const URL = struct {
     }
 
     pub fn get_pathname(self: *const URL) []const u8 {
-        return ada.getPathname(self.internal);
+        const path = ada.getPathnameNullable(self.internal);
+        // Return a slash if path is null.
+        if (path.data == null) {
+            return "/";
+        }
+
+        return path.data[0..path.length];
     }
 
     // get_search depends on the current state of `search_params`.
