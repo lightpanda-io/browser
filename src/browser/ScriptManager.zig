@@ -384,6 +384,7 @@ pub fn getAsyncModule(self: *ScriptManager, url: [:0]const u8, cb: AsyncModule.C
 pub fn staticScriptsDone(self: *ScriptManager) void {
     std.debug.assert(self.static_scripts_done == false);
     self.static_scripts_done = true;
+    self.evaluate();
 }
 
 // try to evaluate completed scripts (in order). This is called whenever a script
@@ -448,6 +449,12 @@ pub fn isDone(self: *const ScriptManager) bool {
         self.static_scripts_done and // and we've finished parsing the HTML to queue all <scripts>
         self.scripts.first == null and // and there are no more <script src=> to wait for
         self.deferreds.first == null; // and there are no more <script defer src=> to wait for
+}
+
+fn asyncScriptIsDone(self: *ScriptManager) void {
+    if (self.isDone()) {
+        self.page.documentIsComplete();
+    }
 }
 
 fn startCallback(transfer: *Http.Transfer) !void {
@@ -597,6 +604,7 @@ pub const PendingScript = struct {
         // async script can be evaluated immediately
         defer self.deinit();
         self.script.eval(manager.page);
+        manager.asyncScriptIsDone();
     }
 
     fn errorCallback(self: *PendingScript, err: anyerror) void {
