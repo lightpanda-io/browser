@@ -19,7 +19,6 @@ pub const ParseError = error{Invalid};
 pub fn parse(input: []const u8) ParseError!URL {
     const url = c.ada_parse(input.ptr, input.len);
     if (!c.ada_is_valid(url)) {
-        free(url);
         return error.Invalid;
     }
 
@@ -29,7 +28,6 @@ pub fn parse(input: []const u8) ParseError!URL {
 pub fn parseWithBase(input: []const u8, base: []const u8) ParseError!URL {
     const url = c.ada_parse_with_base(input.ptr, input.len, base.ptr, base.len);
     if (!c.ada_is_valid(url)) {
-        free(url);
         return error.Invalid;
     }
 
@@ -51,6 +49,11 @@ pub inline fn freeOwnedString(owned: OwnedString) void {
 /// Returns true if given URL is valid (not NULL).
 pub inline fn isValid(url: URL) bool {
     return c.ada_is_valid(url);
+}
+
+/// Creates a new `URL` from given `URL`.
+pub inline fn copy(url: URL) URL {
+    return c.ada_copy(url);
 }
 
 /// Can return an empty string.
@@ -92,9 +95,18 @@ pub inline fn getHash(url: URL) []const u8 {
     return hash.data[0..hash.length];
 }
 
-/// Returns an empty string if not provided.
+pub inline fn getHashNullable(url: URL) String {
+    return c.ada_get_hash(url);
+}
+
+/// `data` is null if host not provided.
+pub inline fn getHostNullable(url: URL) String {
+    return c.ada_get_host(url);
+}
+
+/// Returns an empty string if host not provided.
 pub inline fn getHost(url: URL) []const u8 {
-    const host = c.ada_get_host(url);
+    const host = getHostNullable(url);
     if (host.data == null) {
         return "";
     }
@@ -109,6 +121,10 @@ pub inline fn getHostname(url: URL) []const u8 {
 
     const hostname = c.ada_get_hostname(url);
     return hostname.data[0..hostname.length];
+}
+
+pub inline fn getPathnameNullable(url: URL) String {
+    return c.ada_get_pathname(url);
 }
 
 pub inline fn getPathname(url: URL) []const u8 {
@@ -167,4 +183,19 @@ pub inline fn setHash(url: URL, input: []const u8) void {
 
 pub inline fn clearSearch(url: URL) void {
     return c.ada_clear_search(url);
+}
+
+pub const Scheme = struct {
+    pub const http: u8 = 0;
+    pub const not_special: u8 = 1;
+    pub const https: u8 = 2;
+    pub const ws: u8 = 3;
+    pub const ftp: u8 = 4;
+    pub const wss: u8 = 5;
+    pub const file: u8 = 6;
+};
+
+/// Returns one of the constants defined in `Scheme`.
+pub inline fn getSchemeType(url: URL) u8 {
+    return c.ada_get_scheme_type(url);
 }
