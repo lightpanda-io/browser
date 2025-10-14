@@ -81,9 +81,10 @@ pub const Jar = struct {
         prefix: ?[]const u8 = null,
     };
 
+    // FIXME: Invalid behavior.
     pub fn forRequest(self: *Jar, target_url: URL, writer: anytype, opts: LookupOpts) !void {
         const target = PreparedUri{
-            .host = target_url.host(),
+            .host = target_url.getHostname(),
             .path = target_url.getPath(),
             .secure = target_url.isSecure(),
         };
