@@ -69,8 +69,9 @@ pub const URL = struct {
         return ada.getHref(self.internal);
     }
 
-    pub fn hostname(self: URL) []const u8 {
-        return ada.getHostname(self.internal);
+    pub fn getHostname(self: URL) []const u8 {
+        const hostname = ada.getHostnameNullable(self.internal);
+        return hostname.data[0..hostname.length];
     }
 
     pub fn getFragment(self: URL) ?[]const u8 {
