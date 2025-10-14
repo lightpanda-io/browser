@@ -46,7 +46,7 @@ pub inline fn freeOwnedString(owned: OwnedString) void {
     return c.ada_free_owned_string(owned);
 }
 
-/// Returns true if given URL is valid (not NULL).
+/// Returns true if given URL is valid.
 pub inline fn isValid(url: URL) bool {
     return c.ada_is_valid(url);
 }
@@ -63,10 +63,8 @@ pub inline fn getOrigin(url: URL) []const u8 {
     return origin.data[0..origin.length];
 }
 
-/// Can return an empty string.
-pub inline fn getHref(url: URL) []const u8 {
-    const href = c.ada_get_href(url);
-    return href.data[0..href.length];
+pub inline fn getHrefNullable(url: URL) String {
+    return c.ada_get_href(url);
 }
 
 /// Can return an empty string.
@@ -123,6 +121,10 @@ pub inline fn getHostname(url: URL) []const u8 {
     return hostname.data[0..hostname.length];
 }
 
+pub inline fn getHostnameNullable(url: URL) String {
+    return c.ada_get_hostname(url);
+}
+
 pub inline fn getPathnameNullable(url: URL) String {
     return c.ada_get_pathname(url);
 }
@@ -141,6 +143,8 @@ pub inline fn getProtocol(url: URL) []const u8 {
     return protocol.data[0..protocol.length];
 }
 
+/// Sets the href for given URL.
+/// Call `isInvalid` afterwards to check correctness.
 pub inline fn setHref(url: URL, input: []const u8) bool {
     return c.ada_set_href(url, input.ptr, input.len);
 }
