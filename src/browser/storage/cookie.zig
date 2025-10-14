@@ -385,7 +385,11 @@ pub const Cookie = struct {
             return "/";
         }
 
-        return arena.dupe(u8, url_path);
+        const last = std.mem.lastIndexOfScalar(u8, url_path[1..], '/') orelse {
+            return "/";
+        };
+
+        return arena.dupe(u8, url_path[0 .. last + 1]);
     }
 
     pub fn parseDomain(arena: Allocator, maybe_url: ?URL, explicit_domain: ?[]const u8) ![]const u8 {
