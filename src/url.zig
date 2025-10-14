@@ -14,7 +14,6 @@ pub const URL = struct {
 
     pub const empty = URL{ .internal = null, .raw = "" };
     pub const invalid = URL{ .internal = null, .raw = "" };
-    pub const blank = parse("about:blank", null) catch unreachable;
 
     pub const ParseError = ada.ParseError;
 
@@ -65,8 +64,13 @@ pub const URL = struct {
         return str.data[0..str.length];
     }
 
-    pub fn href(self: URL) []const u8 {
-        return ada.getHref(self.internal);
+    pub fn getHref(self: URL) []const u8 {
+        const href = ada.getHrefNullable(self.internal);
+        if (href.data == null) {
+            return "";
+        }
+
+        return href.data[0..href.length];
     }
 
     pub fn getHostname(self: URL) []const u8 {
@@ -111,7 +115,7 @@ pub const URL = struct {
     }
 
     pub fn writeToStream(self: URL, writer: anytype) !void {
-        return writer.writeAll(self.href());
+        return writer.writeAll(self.getHref());
     }
 
     // TODO: Skip unnecessary allocation by writing url parts directly to stream.

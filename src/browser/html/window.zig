@@ -36,6 +36,8 @@ const Screen = @import("screen.zig").Screen;
 const domcss = @import("../dom/css.zig");
 const Css = @import("../css/css.zig").Css;
 const EventHandler = @import("../events/event.zig").EventHandler;
+const URL = @import("../../url.zig").URL;
+const WebApiURL = @import("../url/url.zig").URL;
 
 const Request = @import("../fetch/Request.zig");
 const fetchFn = @import("../fetch/fetch.zig").fetch;
@@ -52,7 +54,7 @@ pub const Window = struct {
 
     document: *parser.DocumentHTML,
     target: []const u8 = "",
-    location: Location = .default,
+    location: Location,
     storage_shelf: ?*storage.Shelf = null,
 
     // counter for having unique timer ids
@@ -75,17 +77,30 @@ pub const Window = struct {
         const doc = parser.documentHTMLToDocument(html_doc);
         try parser.documentSetDocumentURI(doc, "about:blank");
 
+        const native_url = URL.parse("about:blank", null) catch unreachable;
+
+        // Here we manually initialize; this is a special case and
+        // one should prefer constructor functions instead.
+        const url = WebApiURL{
+            .internal = native_url.internal,
+            .search_params = .{},
+        };
+
         return .{
             .document = html_doc,
+            .location = .{ .url = url },
             .target = target orelse "",
             .navigator = navigator orelse .{},
             .performance = Performance.init(),
         };
     }
 
-    pub fn replaceLocation(self: *Window, loc: Location) !void {
-        self.location = loc;
-        try parser.documentHTMLSetLocation(Location, self.document, &self.location);
+    pub fn replaceLocation(self: *Window, location: Location) !void {
+        // Remove current.
+        self.location.url.destructor();
+        // Put the new one.
+        self.location = location;
+        return parser.documentHTMLSetLocation(Location, self.document, &self.location);
     }
 
     pub fn replaceDocument(self: *Window, doc: *parser.DocumentHTML) !void {

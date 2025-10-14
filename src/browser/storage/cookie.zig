@@ -1,5 +1,4 @@
 const std = @import("std");
-const Uri = std.Uri;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
@@ -209,7 +208,7 @@ pub const Cookie = struct {
     // Invalid attribute values? Ignore.
     // Duplicate attributes - use the last valid
     // Value-less attributes with a value? Ignore the value
-    pub fn parse(allocator: Allocator, uri: *const std.Uri, str: []const u8) !Cookie {
+    pub fn parse(allocator: Allocator, url: URL, str: []const u8) !Cookie {
         try validateCookieString(str);
 
         const cookie_name, const cookie_value, const rest = parseNameValue(str) catch {
@@ -396,7 +395,7 @@ pub const Cookie = struct {
     pub fn parseDomain(arena: Allocator, maybe_url: ?URL, explicit_domain: ?[]const u8) ![]const u8 {
         var encoded_host: ?[]const u8 = null;
         if (maybe_url) |url| {
-            const url_host = url.hostname();
+            const url_host = url.getHostname();
             encoded_host = url_host;
         }
 

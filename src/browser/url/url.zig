@@ -127,9 +127,6 @@ pub const URL = struct {
     pub fn _toString(self: *const URL, page: *Page) ![]const u8 {
         return self.get_href(page);
     }
-    pub fn _toString(self: *const URL) []const u8 {
-        return ada.getHref(self.internal);
-    }
 
     // Getters.
 
@@ -152,7 +149,13 @@ pub const URL = struct {
     pub fn get_href(self: *const URL, page: *Page) ![]const u8 {
         var w: Writer.Allocating = .init(page.arena);
 
-        const href = ada.getHref(self.internal);
+        const maybe_href = ada.getHrefNullable(self.internal);
+        if (maybe_href.data == null) {
+            return "";
+        }
+
+        const href = maybe_href.data[0..maybe_href.length];
+
         const comps = ada.getComponents(self.internal);
         const has_hash = comps.hash_start != ada.URLOmitted;
 
