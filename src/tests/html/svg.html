@@ -1,19 +1,38 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 
-<svg width="200" height="100" style="border:1px solid #ccc" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+<svg id=lower width="200" height="100" style="border:1px solid #ccc" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
   <rect></rect>
   <text x="100" y="95" font-size="14" text-anchor="middle">OVER 9000!!</text>
 </svg>
 
+<SVG ID=UPPER WIDTH="200" HEIGHT="100" STYLE="BORDER:1PX SOLID #CCC" XMLNS="http://www.w3.org/2000/svg" VIEWBOX="0 0 200 100">
+  <RECT></RECT>
+  <TEXT X="100" Y="95" FONT-SIZE="14" TEXT-ANCHOR="MIDDLE">OVER 9000!!!</TEXT>
+</SVG>
+
 <script id=svg>
   testing.expectEqual(false, 'AString' instanceof SVGElement);
 
-  const svg = document.querySelector('svg');
-  testing.expectEqual('http://www.w3.org/2000/svg', svg.getAttribute('xmlns'));
-  testing.expectEqual('http://www.w3.org/2000/svg', svg.getAttributeNode('xmlns').value);
-  testing.expectEqual('http://www.w3.org/2000/svg', svg.attributes.getNamedItem('xmlns').value);
-  testing.expectEqual('0 0 200 100', svg.getAttribute('viewBox'));
-  testing.expectEqual('viewBox', svg.getAttributeNode('viewBox').name);
-  testing.expectEqual(true, svg.outerHTML.includes('viewBox'));
+  const svg1 = $('#lower');
+  testing.expectEqual('http://www.w3.org/2000/svg', svg1.getAttribute('xmlns'));
+  testing.expectEqual('http://www.w3.org/2000/svg', svg1.getAttributeNode('xmlns').value);
+  testing.expectEqual('http://www.w3.org/2000/svg', svg1.attributes.getNamedItem('xmlns').value);
+  testing.expectEqual('0 0 200 100', svg1.getAttribute('viewBox'));
+  testing.expectEqual('viewBox', svg1.getAttributeNode('viewBox').name);
+  testing.expectEqual(true, svg1.outerHTML.includes('viewBox'));
+  testing.expectEqual('svg', svg1.tagName);
+  testing.expectEqual('rect', svg1.querySelector('rect').tagName);
+  testing.expectEqual('text', svg1.querySelector('text').tagName);
+
+  const svg2 = $('#UPPER');
+  testing.expectEqual('http://www.w3.org/2000/svg', svg2.getAttribute('xmlns'));
+  testing.expectEqual('http://www.w3.org/2000/svg', svg2.getAttributeNode('xmlns').value);
+  testing.expectEqual('http://www.w3.org/2000/svg', svg2.attributes.getNamedItem('xmlns').value);
+  testing.expectEqual('0 0 200 100', svg2.getAttribute('viewBox'));
+  testing.expectEqual('viewBox', svg2.getAttributeNode('viewBox').name);
+  testing.expectEqual(true, svg2.outerHTML.includes('viewBox'));
+  testing.expectEqual('svg', svg2.tagName);
+  testing.expectEqual('rect', svg2.querySelector('rect').tagName);
+  testing.expectEqual('text', svg2.querySelector('text').tagName);
 </script>
