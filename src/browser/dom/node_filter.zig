@@ -47,6 +47,9 @@ pub fn verify(what_to_show: u32, filter: ?js.Function, node: *parser.Node) !Veri
     const node_type = parser.nodeType(node);
 
     // Verify that we can show this node type.
+    // Per the DOM spec, what_to_show filters which nodes to return, but should
+    // still traverse children. So we return .skip (not .reject) when the node
+    // type doesn't match.
     if (!switch (node_type) {
         .attribute => what_to_show & NodeFilter._SHOW_ATTRIBUTE != 0,
         .cdata_section => what_to_show & NodeFilter._SHOW_CDATA_SECTION != 0,
@@ -60,7 +63,7 @@ pub fn verify(what_to_show: u32, filter: ?js.Function, node: *parser.Node) !Veri
         .notation => what_to_show & NodeFilter._SHOW_NOTATION != 0,
         .processing_instruction => what_to_show & NodeFilter._SHOW_PROCESSING_INSTRUCTION != 0,
         .text => what_to_show & NodeFilter._SHOW_TEXT != 0,
-    }) return .reject;
+    }) return .skip;
 
     // Verify that we aren't filtering it out.
     if (filter) |f| {

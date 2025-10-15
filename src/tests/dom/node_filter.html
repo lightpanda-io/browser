@@ -1,9 +1,219 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
+
+<!-- Test fixture -->
+<div id="container">
+  <!-- comment1 -->
+  <div id="outer">
+    <!-- comment2 -->
+    <span id="inner">
+      <!-- comment3 -->
+      Text content
+      <!-- comment4 -->
+    </span>
+    <!-- comment5 -->
+  </div>
+  <!-- comment6 -->
+</div>
+
 <script id=nodeFilter>
   testing.expectEqual(1, NodeFilter.FILTER_ACCEPT);
   testing.expectEqual(2, NodeFilter.FILTER_REJECT);
   testing.expectEqual(3, NodeFilter.FILTER_SKIP);
   testing.expectEqual(4294967295, NodeFilter.SHOW_ALL);
   testing.expectEqual(129, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_COMMENT);
+</script>
+
+<script id=treeWalkerComments>
+  {
+    const container = $('#container');
+    const walker = document.createTreeWalker(
+      container,
+      NodeFilter.SHOW_COMMENT,
+      null,
+      false
+    );
+
+    const comments = [];
+    let node;
+    while (node = walker.nextNode()) {
+      comments.push(node.data.trim());
+    }
+
+    // Should find all 6 comments, including those nested inside elements
+    testing.expectEqual(6, comments.length);
+    testing.expectEqual('comment1', comments[0]);
+    testing.expectEqual('comment2', comments[1]);
+    testing.expectEqual('comment3', comments[2]);
+    testing.expectEqual('comment4', comments[3]);
+    testing.expectEqual('comment5', comments[4]);
+    testing.expectEqual('comment6', comments[5]);
+  }
+</script>
+
+<script id=treeWalkerElements>
+  {
+    const container = $('#container');
+    const walker = document.createTreeWalker(
+      container,
+      NodeFilter.SHOW_ELEMENT,
+      null,
+      false
+    );
+
+    const elements = [];
+    let node;
+    while (node = walker.nextNode()) {
+      if (node.id) {
+        elements.push(node.id);
+      }
+    }
+
+    // Should find the 2 nested elements (outer and inner)
+    testing.expectEqual(2, elements.length);
+    testing.expectEqual('outer', elements[0]);
+    testing.expectEqual('inner', elements[1]);
+  }
+</script>
+
+<script id=treeWalkerAll>
+  {
+    const container = $('#container');
+    const walker = document.createTreeWalker(
+      container,
+      NodeFilter.SHOW_ALL,
+      null,
+      false
+    );
+
+    let commentCount = 0;
+    let elementCount = 0;
+    let textCount = 0;
+
+    let node;
+    while (node = walker.nextNode()) {
+      if (node.nodeType === 8) commentCount++;      // Comment
+      else if (node.nodeType === 1) elementCount++;  // Element
+      else if (node.nodeType === 3) textCount++;     // Text
+    }
+
+    testing.expectEqual(6, commentCount);
+    testing.expectEqual(2, elementCount);
+    testing.expectEqual(true, textCount > 0);
+  }
+</script>
+
+<script id=treeWalkerCombined>
+  {
+    const container = $('#container');
+    const walker = document.createTreeWalker(
+      container,
+      NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_COMMENT,
+      null,
+      false
+    );
+
+    let commentCount = 0;
+    let elementCount = 0;
+
+    let node;
+    while (node = walker.nextNode()) {
+      if (node.nodeType === 8) commentCount++;      // Comment
+      else if (node.nodeType === 1) elementCount++;  // Element
+    }
+
+    // Should find 6 comments and 2 elements, but no text nodes
+    testing.expectEqual(6, commentCount);
+    testing.expectEqual(2, elementCount);
+  }
+</script>
+
+<script id=treeWalkerCustomFilter>
+  {
+    const container = $('#container');
+
+    // Filter that accepts only elements with id
+    const walker = document.createTreeWalker(
+      container,
+      NodeFilter.SHOW_ELEMENT,
+      {
+        acceptNode: function(node) {
+          return node.id ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+        }
+      },
+      false
+    );
+
+    const elements = [];
+    let node;
+    while (node = walker.nextNode()) {
+      elements.push(node.id);
+    }
+
+    // Should find only elements with id (outer and inner)
+    testing.expectEqual(2, elements.length);
+    testing.expectEqual('outer', elements[0]);
+    testing.expectEqual('inner', elements[1]);
+  }
+</script>
+
+<script id=nodeIteratorComments>
+  {
+    const container = $('#container');
+    const iterator = document.createNodeIterator(
+      container,
+      NodeFilter.SHOW_COMMENT,
+      null,
+      false
+    );
+
+    const comments = [];
+    let node;
+    while (node = iterator.nextNode()) {
+      comments.push(node.data.trim());
+    }
+
+    // Should find all 6 comments, including those nested inside elements
+    testing.expectEqual(6, comments.length);
+    testing.expectEqual('comment1', comments[0]);
+    testing.expectEqual('comment2', comments[1]);
+    testing.expectEqual('comment3', comments[2]);
+    testing.expectEqual('comment4', comments[3]);
+    testing.expectEqual('comment5', comments[4]);
+    testing.expectEqual('comment6', comments[5]);
+  }
+</script>
+
+<script id=reactLikeScenario>
+  {
+    // Test a React-like scenario with comment markers
+    const div = document.createElement('div');
+    div.innerHTML = `
+      <a href="/">
+        <!--$-->
+        <svg viewBox="0 0 10 10">
+          <path d="M0,0 L10,10" />
+        </svg>
+        <!--/$-->
+      </a>
+    `;
+
+    const walker = document.createTreeWalker(
+      div,
+      NodeFilter.SHOW_COMMENT,
+      null,
+      false
+    );
+
+    const comments = [];
+    let node;
+    while (node = walker.nextNode()) {
+      comments.push(node.data);
+    }
+
+    // Should find both React markers even though they're nested inside <a>
+    testing.expectEqual(2, comments.length);
+    testing.expectEqual('$', comments[0]);
+    testing.expectEqual('/$', comments[1]);
+  }
 </script>
