@@ -602,8 +602,9 @@ pub const PendingScript = struct {
             return;
         }
         // async script can be evaluated immediately
-        defer self.deinit();
         self.script.eval(manager.page);
+        self.deinit();
+        // asyncScriptIsDone must be run after the pending script is deinit.
         manager.asyncScriptIsDone();
     }
 
