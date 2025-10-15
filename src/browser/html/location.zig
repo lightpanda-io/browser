@@ -38,7 +38,7 @@ pub const Location = struct {
     }
 
     pub fn set_href(_: *const Location, href: []const u8, page: *Page) !void {
-        return page.navigateFromWebAPI(href, .{ .reason = .script });
+        return page.navigateFromWebAPI(href, .{ .reason = .script }, .{ .push = null });
     }
 
     pub fn get_protocol(self: *Location) []const u8 {
@@ -71,10 +71,6 @@ pub const Location = struct {
 
     pub fn get_origin(self: *Location, page: *Page) ![]const u8 {
         return self.url.get_origin(page);
-    }
-
-    pub fn set_href(_: *Location, url: []const u8, page: *Page) !void {
-        return page.navigateFromWebAPI(url, .{ .reason = .script }, .{ .push = null });
     }
 
     pub fn _assign(_: *const Location, url: []const u8, page: *Page) !void {

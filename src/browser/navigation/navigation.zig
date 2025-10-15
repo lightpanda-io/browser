@@ -147,7 +147,7 @@ pub const NavigationCurrentEntryChangeEvent = struct {
 
     pub const EventInit = struct {
         from: *NavigationHistoryEntry,
-        navigation_type: ?NavigationType = null,
+        navigationType: ?NavigationType = null,
     };
 
     proto: parser.Event,
@@ -164,7 +164,7 @@ pub const NavigationCurrentEntryChangeEvent = struct {
         return .{
             .proto = event.*,
             .from = opts.from,
-            .navigation_type = opts.navigation_type,
+            .navigation_type = opts.navigationType,
         };
     }
 
@@ -184,7 +184,7 @@ pub const NavigationCurrentEntryChangeEvent = struct {
 
         var evt = NavigationCurrentEntryChangeEvent.constructor(
             "currententrychange",
-            .{ .from = from, .navigation_type = typ },
+            .{ .from = from, .navigationType = typ },
         ) catch |err| {
             log.err(.app, "event constructor error", .{
                 .err = err,

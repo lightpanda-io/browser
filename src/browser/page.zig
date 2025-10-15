@@ -34,7 +34,7 @@ const Http = @import("../http/Http.zig");
 const ScriptManager = @import("ScriptManager.zig");
 const SlotChangeMonitor = @import("SlotChangeMonitor.zig");
 const HTMLDocument = @import("html/document.zig").HTMLDocument;
-const NavigationKind = @import("html/Navigation.zig").NavigationKind;
+const NavigationKind = @import("navigation/navigation.zig").NavigationKind;
 
 const js = @import("js/js.zig");
 const URL = @import("../url.zig").URL;
