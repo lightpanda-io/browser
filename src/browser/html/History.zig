@@ -21,6 +21,7 @@ const log = @import("../../log.zig");
 
 const js = @import("../js/js.zig");
 const Page = @import("../page.zig").Page;
+const Window = @import("window.zig").Window;
 
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#the-history-interface
 const History = @This();
@@ -60,7 +61,7 @@ pub fn _pushState(_: *const History, state: js.Object, _: ?[]const u8, _url: ?[]
     const url = if (_url) |u| try arena.dupe(u8, u) else try arena.dupe(u8, page.url.raw);
 
     const json = state.toJson(arena) catch return error.DataClone;
-    _ = try page.session.navigation.pushEntry(url, json, page);
+    _ = try page.session.navigation.pushEntry(url, json, page, true);
 }
 
 pub fn _replaceState(_: *const History, state: js.Object, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
@@ -163,7 +164,7 @@ pub const PopStateEvent = struct {
         };
 
         _ = parser.eventTargetDispatchEvent(
-            @as(*parser.EventTarget, @ptrCast(&page.window)),
+            parser.toEventTarget(Window, &page.window),
             &evt.proto,
         ) catch |err| {
             log.err(.app, "dispatch popstate event error", .{

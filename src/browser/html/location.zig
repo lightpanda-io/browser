@@ -73,6 +73,10 @@ pub const Location = struct {
         return self.url.get_origin(page);
     }
 
+    pub fn set_href(_: *Location, url: []const u8, page: *Page) !void {
+        return page.navigateFromWebAPI(url, .{ .reason = .script }, .{ .push = null });
+    }
+
     pub fn _assign(_: *const Location, url: []const u8, page: *Page) !void {
         return page.navigateFromWebAPI(url, .{ .reason = .script }, .{ .push = null });
     }

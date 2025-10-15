@@ -25,7 +25,7 @@ const Page = @import("../page.zig").Page;
 
 const Navigator = @import("navigator.zig").Navigator;
 const History = @import("History.zig");
-const Navigation = @import("Navigation.zig");
+const Navigation = @import("../navigation/Navigation.zig");
 const Location = @import("location.zig").Location;
 const Crypto = @import("../crypto/crypto.zig").Crypto;
 const Console = @import("../console/console.zig").Console;

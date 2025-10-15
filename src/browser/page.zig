@@ -737,6 +737,9 @@ pub const Page = struct {
         var self: *Page = @ptrCast(@alignCast(ctx));
         self.clearTransferArena();
 
+        // We need to handle different navigation types differently.
+        try self.session.navigation.processNavigation(self);
+
         switch (self.mode) {
             .pre => {
                 // Received a response without a body like: https://httpbin.io/status/200
@@ -815,9 +818,6 @@ pub const Page = struct {
                 unreachable;
             },
         }
-
-        // We need to handle different navigation types differently.
-        try self.session.navigation.processNavigation(self);
     }
 
     fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
@@ -1046,6 +1046,26 @@ pub const Page = struct {
     // specifically for this type of lifetime.
     pub fn navigateFromWebAPI(self: *Page, url: []const u8, opts: NavigateOpts, kind: NavigationKind) !void {
         const session = self.session;
+
+        // Force will force a page load.
+        //
+        // TODO: This needs to be reworked but just ensuring events get fired right.
+        if (!opts.force) {
+            // If we are navigating within the same document, just change URL.
+            const new_url = try URL.parse(url, null);
+            if (try self.url.eqlDocument(&new_url, self.arena)) {
+                const new_duped_url = try session.arena.dupe(u8, url);
+                self.url = try URL.parse(new_duped_url, null);
+
+                // TODO: remove this temporary snippet.
+                const prev = session.navigation.currentEntry();
+                const NavigationCurrentEntryChangeEvent = @import("navigation/navigation.zig").NavigationCurrentEntryChangeEvent;
+                NavigationCurrentEntryChangeEvent.dispatch(&self.session.navigation, prev, kind);
+
+                return;
+            }
+        }
+
         if (session.queued_navigation != null) {
             // It might seem like this should never happen. And it might not,
             // BUT..consider the case where we have script like:
@@ -1190,6 +1210,7 @@ pub const NavigateOpts = struct {
     method: Http.Method = .GET,
     body: ?[]const u8 = null,
     header: ?[:0]const u8 = null,
+    force: bool = false,
 };
 
 const IdleNotification = union(enum) {

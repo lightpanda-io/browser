@@ -34,6 +34,7 @@ pub const Union = union(enum) {
     screen_orientation: *@import("../html/screen.zig").ScreenOrientation,
     performance: *@import("performance.zig").Performance,
     media_query_list: *@import("../html/media_query_list.zig").MediaQueryList,
+    navigation: *@import("../navigation/Navigation.zig"),
 };
 
 // EventTarget implementation
@@ -81,6 +82,11 @@ pub const EventTarget = struct {
             },
             .media_query_list => {
                 return .{ .media_query_list = @fieldParentPtr("base", @as(*parser.EventTargetTBase, @ptrCast(et))) };
+            },
+            .navigation => {
+                const NavigationEventTarget = @import("../navigation/NavigationEventTarget.zig");
+                const base: *NavigationEventTarget = @fieldParentPtr("base", @as(*parser.EventTargetTBase, @ptrCast(et)));
+                return .{ .navigation = @fieldParentPtr("proto", base) };
             },
         }
     }
