@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const log = @import("../../log.zig");
 
 const js = @import("../js/js.zig");
 const parser = @import("../netsurf.zig");
@@ -312,6 +313,11 @@ pub const Document = struct {
     pub fn set_adoptedStyleSheets(self: *parser.Document, sheets: js.Object, page: *Page) !void {
         const state = try page.getOrCreateNodeState(@ptrCast(@alignCast(self)));
         state.adopted_style_sheets = try sheets.persist();
+    }
+
+    pub fn _hasFocus(_: *parser.Document) bool {
+        log.debug(.web_api, "not implemented", .{ .feature = "Document hasFocus" });
+        return true;
     }
 };
 
