@@ -224,3 +224,22 @@ let first_child = content.firstChild.nextSibling; // nextSibling because of line
   testing.expectEqual(6, Node.ENTITY_NODE);
   testing.expectEqual(12, Node.NOTATION_NODE);
 </script>
+
+<span id=token class="token" style="color:#ce9178">&quot;puppeteer &quot;</span>
+                                        <h3 id=name>Leto
+                                        <!-- -->
+                                        <!-- -->
+                                        Atreides</h3>
+<script id=normalize>
+  const token = $('#token');
+  testing.expectEqual('"puppeteer "', token.firstChild.nodeValue);
+
+  const name = $('#name');
+  testing.expectEqual([
+    "Leto\n                                        ",
+    " ",
+    "\n                                        ",
+    " ",
+    "\n                                        Atreides"
+  ], Array.from(name.childNodes).map((n) => n.nodeValue));
+</script>
