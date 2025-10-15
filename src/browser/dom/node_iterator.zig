@@ -74,10 +74,10 @@ pub const NodeIterator = struct {
 
         return .{
             .root = node,
-            .reference_node = node,
-            .what_to_show = what_to_show,
             .filter = filter,
+            .reference_node = node,
             .filter_func = filter_func,
+            .what_to_show = what_to_show,
         };
     }
 
@@ -106,6 +106,7 @@ pub const NodeIterator = struct {
         defer self.callbackEnd();
 
         if (self.pointer_before_current) {
+            self.pointer_before_current = false;
             // Unlike TreeWalker, NodeIterator starts at the first node
             if (.accept == try NodeFilter.verify(self.what_to_show, self.filter_func, self.reference_node)) {
                 self.pointer_before_current = false;
@@ -120,9 +121,21 @@ pub const NodeIterator = struct {
 
         var current = self.reference_node;
         while (current != self.root) {
-            if (try self.nextSibling(current)) |sibling| {
-                self.reference_node = sibling;
-                return try Node.toInterface(sibling);
+            // Try to get next sibling (including .skip/.reject nodes we need to descend into)
+            if (try self.nextSiblingOrSkipReject(current)) |result| {
+                if (result.should_descend) {
+                    // This is a .skip/.reject node - try to find acceptable children within it
+                    if (try self.firstChild(result.node)) |child| {
+                        self.reference_node = child;
+                        return try Node.toInterface(child);
+                    }
+                    // No acceptable children, continue looking at this node's siblings
+                    current = result.node;
+                    continue;
+                }
+                // This is an .accept node - return it
+                self.reference_node = result.node;
+                return try Node.toInterface(result.node);
             }
 
             current = (parser.nodeParentNode(current)) orelse break;
@@ -248,6 +261,22 @@ pub const NodeIterator = struct {
             switch (try NodeFilter.verify(self.what_to_show, self.filter_func, current)) {
                 .accept => return current,
                 .skip, .reject => continue,
+            }
+        }
+
+        return null;
+    }
+
+    // Get the next sibling that is either acceptable or should be descended into (skip/reject)
+    fn nextSiblingOrSkipReject(self: *const NodeIterator, node: *parser.Node) !?struct { node: *parser.Node, should_descend: bool } {
+        var current = node;
+
+        while (true) {
+            current = (parser.nodeNextSibling(current)) orelse return null;
+
+            switch (try NodeFilter.verify(self.what_to_show, self.filter_func, current)) {
+                .accept => return .{ .node = current, .should_descend = false },
+                .skip, .reject => return .{ .node = current, .should_descend = true },
             }
         }
 

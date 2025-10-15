@@ -144,6 +144,23 @@ pub const TreeWalker = struct {
         return null;
     }
 
+    // Get the next sibling that is either acceptable or should be descended into (skip)
+    fn nextSiblingOrSkip(self: *const TreeWalker, node: *parser.Node) !?struct { node: *parser.Node, should_descend: bool } {
+        var current = node;
+
+        while (true) {
+            current = (parser.nodeNextSibling(current)) orelse return null;
+
+            switch (try NodeFilter.verify(self.what_to_show, self.filter_func, current)) {
+                .accept => return .{ .node = current, .should_descend = false },
+                .skip => return .{ .node = current, .should_descend = true },
+                .reject => continue,
+            }
+        }
+
+        return null;
+    }
+
     fn previousSibling(self: *const TreeWalker, node: *parser.Node) !?*parser.Node {
         var current = node;
 
@@ -193,19 +210,37 @@ pub const TreeWalker = struct {
     }
 
     pub fn _nextNode(self: *TreeWalker) !?NodeUnion {
-        if (try self.firstChild(self.current_node)) |child| {
+        var current = self.current_node;
+
+        // First, try to go to first child of current node
+        if (try self.firstChild(current)) |child| {
             self.current_node = child;
             return try Node.toInterface(child);
         }
 
-        var current = self.current_node;
+        // No acceptable children, move to next node in tree
         while (current != self.root) {
-            if (try self.nextSibling(current)) |sibling| {
-                self.current_node = sibling;
-                return try Node.toInterface(sibling);
+            const result = try self.nextSiblingOrSkip(current) orelse {
+                // No next sibling, go up to parent and continue
+                // or, if there is no parent, we're done
+                current = (parser.nodeParentNode(current)) orelse break;
+                continue;
+            };
+
+
+            if (!result.should_descend) {
+                // This is an .accept node - return it
+                self.current_node = result.node;
+                return try Node.toInterface(result.node);
             }
 
-            current = (parser.nodeParentNode(current)) orelse break;
+            // This is a .skip node - try to find acceptable children within it
+            if (try self.firstChild(result.node)) |child| {
+                self.current_node = child;
+                return try Node.toInterface(child);
+            }
+            // No acceptable children, continue looking at this node's siblings
+            current = result.node;
         }
 
         return null;
