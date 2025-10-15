@@ -236,10 +236,10 @@ fn isVoid(elem: *parser.Element) !bool {
     };
 }
 
-fn writeEscapedTextNode(writer: anytype, value: []const u8) !void {
+fn writeEscapedTextNode(writer: *std.Io.Writer, value: []const u8) !void {
     var v = value;
     while (v.len > 0) {
-        const index = std.mem.indexOfAnyPos(u8, v, 0, &.{ '&', '<', '>' }) orelse {
+        const index = std.mem.indexOfAnyPos(u8, v, 0, &.{ '&', '<', '>', 194 }) orelse {
             return writer.writeAll(v);
         };
         try writer.writeAll(v[0..index]);
@@ -247,13 +247,22 @@ fn writeEscapedTextNode(writer: anytype, value: []const u8) !void {
             '&' => try writer.writeAll("&amp;"),
             '<' => try writer.writeAll("&lt;"),
             '>' => try writer.writeAll("&gt;"),
+            194 => {
+                // non breaking space
+                if (v.len > index + 1 and v[index + 1] == 160) {
+                    try writer.writeAll("&nbsp;");
+                    v = v[index + 2 ..];
+                    continue;
+                }
+                try writer.writeByte(194);
+            },
             else => unreachable,
         }
         v = v[index + 1 ..];
     }
 }
 
-fn writeEscapedAttributeValue(writer: anytype, value: []const u8) !void {
+fn writeEscapedAttributeValue(writer: *std.Io.Writer, value: []const u8) !void {
     var v = value;
     while (v.len > 0) {
         const index = std.mem.indexOfAnyPos(u8, v, 0, &.{ '&', '<', '>', '"' }) orelse {
