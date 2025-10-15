@@ -1013,6 +1013,31 @@ pub const Page = struct {
         }
     }
 
+    // insertText is a shortcut to insert text into the active element.
+    pub fn insertText(self: *Page, v: []const u8) !void {
+        const Document = @import("dom/document.zig").Document;
+        const element = (try Document.getActiveElement(@ptrCast(self.window.document), self)) orelse return;
+        const node = parser.elementToNode(element);
+
+        const tag = (try parser.nodeHTMLGetTagType(node)) orelse return;
+        switch (tag) {
+            .input => {
+                const input_type = try parser.inputGetType(@ptrCast(element));
+                if (std.mem.eql(u8, input_type, "text")) {
+                    const value = try parser.inputGetValue(@ptrCast(element));
+                    const new_value = try std.mem.concat(self.arena, u8, &.{ value, v });
+                    try parser.inputSetValue(@ptrCast(element), new_value);
+                }
+            },
+            .textarea => {
+                const value = try parser.textareaGetValue(@ptrCast(node));
+                const new_value = try std.mem.concat(self.arena, u8, &.{ value, v });
+                try parser.textareaSetValue(@ptrCast(node), new_value);
+            },
+            else => {},
+        }
+    }
+
     // We cannot navigate immediately as navigating will delete the DOM tree,
     // which holds this event's node.
     // As such we schedule the function to be called as soon as possible.

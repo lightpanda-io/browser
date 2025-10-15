@@ -23,11 +23,13 @@ pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
         dispatchKeyEvent,
         dispatchMouseEvent,
+        insertText,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
         .dispatchKeyEvent => return dispatchKeyEvent(cmd),
         .dispatchMouseEvent => return dispatchMouseEvent(cmd),
+        .insertText => return insertText(cmd),
     }
 }
 
@@ -113,6 +115,20 @@ fn dispatchMouseEvent(cmd: anytype) !void {
     };
     try page.mouseEvent(mouse_event);
     // result already sent
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-insertText
+fn insertText(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        text: []const u8, // The text to insert
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return;
+    const page = bc.session.currentPage() orelse return;
+
+    try page.insertText(params.text);
+
+    try cmd.sendResult(null, .{});
 }
 
 fn clickNavigate(cmd: anytype, uri: std.Uri) !void {
