@@ -326,3 +326,16 @@
   testing.expectEqual("after begin", newElement.innerText);
   testing.expectEqual("afterbegin", newElement.className);
 </script>
+
+<script id=nonBreakingSpace>
+  // Test non-breaking space encoding (critical for React hydration)
+  const div = document.createElement('div');
+  div.innerHTML = 'hello\xa0world';
+  testing.expectEqual('hello\xa0world', div.textContent);
+  testing.expectEqual('hello&nbsp;world', div.innerHTML);
+
+  // Test that outerHTML also encodes non-breaking spaces correctly
+  const p = document.createElement('p');
+  p.textContent = 'XAnge\xa0Privacy';
+  testing.expectEqual('<p>XAnge&nbsp;Privacy</p>', p.outerHTML);
+</script>
