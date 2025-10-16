@@ -262,7 +262,7 @@ pub fn module(self: *Context, comptime want_result: bool, src: []const u8, url: 
                 const owned_specifier = try self.arena.dupeZ(u8, normalized_specifier);
                 gop.key_ptr.* = owned_specifier;
                 gop.value_ptr.* = .{};
-                try self.script_manager.?.getModule(owned_specifier, src);
+                try self.script_manager.?.getModule(owned_specifier, url);
             }
         }
     }
@@ -1171,7 +1171,7 @@ fn _resolveModuleCallback(self: *Context, referrer: v8.Module, specifier: []cons
     };
 
     const normalized_specifier = try self.script_manager.?.resolveSpecifier(
-        self.call_arena,
+        self.arena, // might need to survive until the module is loaded
         specifier,
         referrer_path,
     );
@@ -1207,7 +1207,7 @@ fn _resolveModuleCallback(self: *Context, referrer: v8.Module, specifier: []cons
 
     const entry = self.module(true, fetch_result.src(), normalized_specifier, true) catch |err| {
         log.warn(.js, "compile resolved module", .{
-            .specifier = specifier,
+            .specifier = normalized_specifier,
             .stack = try_catch.stack(self.call_arena) catch null,
             .src = try_catch.sourceLine(self.call_arena) catch "err",
             .line = try_catch.sourceLineNumber() orelse 0,
