@@ -211,9 +211,5 @@ pub const NavigationCurrentEntryChangeEvent = struct {
 const testing = @import("../../testing.zig");
 test "Browser: Navigation" {
     try testing.htmlRunner("html/navigation/navigation.html");
-    // try testing.htmlRunner("html/navigation/navigation_currententrychange.html");
-}
-
-test "Browser: NavigationCurrentEntry" {
     try testing.htmlRunner("html/navigation/navigation_currententrychange.html");
 }
