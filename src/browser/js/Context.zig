@@ -262,7 +262,7 @@ pub fn module(self: *Context, comptime want_result: bool, src: []const u8, url: 
                 const owned_specifier = try self.arena.dupeZ(u8, normalized_specifier);
                 gop.key_ptr.* = owned_specifier;
                 gop.value_ptr.* = .{};
-                try self.script_manager.?.getModule(owned_specifier, src);
+                try self.script_manager.?.getModule(owned_specifier, url);
             }
         }
     }
