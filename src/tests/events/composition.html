@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=noNata>
+  {
+    let event = new CompositionEvent("test", {});
+    testing.expectEqual(true, event instanceof CompositionEvent);
+    testing.expectEqual(true, event instanceof Event);
+
+    testing.expectEqual("test", event.type);
+    testing.expectEqual("", event.data);
+  }
+</script>
+
+<script id=withData>
+  {
+    let event = new CompositionEvent("test2", {data: "over 9000!"});
+    testing.expectEqual("test2", event.type);
+    testing.expectEqual("over 9000!", event.data);
+  }
+</script>
+
+<script id=dispatch>
+  {
+    let called = 0;
+    document.addEventListener('CE', (e) => {
+      testing.expectEqual('test-data', e.data);
+      testing.expectEqual(true, e instanceof CompositionEvent);
+      called += 1
+    });
+
+    document.dispatchEvent(new CompositionEvent('CE', {data: 'test-data'}));
+    testing.expectEqual(1, called);
+  }
+</script>
+
