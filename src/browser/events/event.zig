@@ -72,7 +72,7 @@ pub const Event = struct {
             .custom_event => .{ .CustomEvent = @as(*CustomEvent, @ptrCast(evt)).* },
             .progress_event => .{ .ProgressEvent = @as(*ProgressEvent, @ptrCast(evt)).* },
             .mouse_event => .{ .MouseEvent = @as(*parser.MouseEvent, @ptrCast(evt)) },
-            .error_event => .{ .ErrorEvent = @as(*ErrorEvent, @ptrCast(evt)).* },
+            .error_event => .{ .ErrorEvent = (@as(*ErrorEvent, @fieldParentPtr("proto", evt))).* },
             .message_event => .{ .MessageEvent = @as(*MessageEvent, @ptrCast(evt)).* },
             .keyboard_event => .{ .KeyboardEvent = @as(*parser.KeyboardEvent, @ptrCast(evt)) },
             .pop_state => .{ .PopStateEvent = @as(*PopStateEvent, @ptrCast(evt)).* },
