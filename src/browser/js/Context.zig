@@ -1171,7 +1171,7 @@ fn _resolveModuleCallback(self: *Context, referrer: v8.Module, specifier: []cons
     };
 
     const normalized_specifier = try self.script_manager.?.resolveSpecifier(
-        self.call_arena,
+        self.arena, // might need to survive until the module is loaded
         specifier,
         referrer_path,
     );
