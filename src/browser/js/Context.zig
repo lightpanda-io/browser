@@ -271,7 +271,18 @@ pub fn module(self: *Context, comptime want_result: bool, src: []const u8, url: 
         return error.ModuleInstantiationError;
     }
 
-    const evaluated = try m.evaluate(v8_context);
+    const evaluated = m.evaluate(v8_context) catch {
+        std.debug.assert(m.getStatus() == .kErrored);
+
+        // Some module-loading errors aren't handled by TryCatch. We need to
+        // get the error from the module itself.
+        log.warn(.js, "evaluate module", .{
+            .specifier = owned_url,
+            .message = self.valueToString(m.getException(), .{}) catch "???",
+        });
+        return error.EvaluationError;
+    };
+
     // https://v8.github.io/api/head/classv8_1_1Module.html#a1f1758265a4082595757c3251bb40e0f
     // Must be a promise that gets returned here.
     std.debug.assert(evaluated.isPromise());
@@ -1206,13 +1217,21 @@ fn _resolveModuleCallback(self: *Context, referrer: v8.Module, specifier: []cons
     defer try_catch.deinit();
 
     const entry = self.module(true, fetch_result.src(), normalized_specifier, true) catch |err| {
-        log.warn(.js, "compile resolved module", .{
-            .specifier = normalized_specifier,
-            .stack = try_catch.stack(self.call_arena) catch null,
-            .src = try_catch.sourceLine(self.call_arena) catch "err",
-            .line = try_catch.sourceLineNumber() orelse 0,
-            .exception = (try_catch.exception(self.call_arena) catch @errorName(err)) orelse @errorName(err),
-        });
+        switch (err) {
+            error.EvaluationError => {
+                // This is a sentinel value telling us that the error was already
+                // logged. Some module-loading errors aren't captured by Try/Catch.
+                // We need to handle those errors differently, where the module
+                // exists.
+            },
+            else => log.warn(.js, "compile resolved module", .{
+                .specifier = normalized_specifier,
+                .stack = try_catch.stack(self.call_arena) catch null,
+                .src = try_catch.sourceLine(self.call_arena) catch "err",
+                .line = try_catch.sourceLineNumber() orelse 0,
+                .exception = (try_catch.exception(self.call_arena) catch @errorName(err)) orelse @errorName(err),
+            }),
+        }
         return null;
     };
     // entry.module is always set when returning from self.module()
