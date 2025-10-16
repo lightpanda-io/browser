@@ -360,18 +360,30 @@ pub const Node = struct {
         node: Union,
     };
     pub fn _getRootNode(self: *parser.Node, options: ?struct { composed: bool = false }, page: *Page) !GetRootNodeResult {
-        if (options) |options_| if (options_.composed) {
-            log.warn(.web_api, "not implemented", .{ .feature = "getRootNode composed" });
-        };
+        const composed = if (options) |opts| opts.composed else false;
 
-        const root = parser.nodeGetRootNode(self);
-        if (page.getNodeState(root)) |state| {
-            if (state.shadow_root) |sr| {
-                return .{ .shadow_root = sr };
+        var current_root = parser.nodeGetRootNode(self);
+
+        while (true) {
+            const node_type = parser.nodeType(current_root);
+
+            if (node_type == .document_fragment) {
+                if (parser.documentFragmentGetHost(@ptrCast(current_root))) |host| {
+                    if (page.getNodeState(host)) |state| {
+                        if (state.shadow_root) |sr| {
+                            if (!composed) {
+                                return .{ .shadow_root = sr };
+                            }
+                            current_root = parser.nodeGetRootNode(@ptrCast(sr.host));
+                            continue;
+                        }
+                    }
+                }
             }
+            break;
         }
 
-        return .{ .node = try Node.toInterface(root) };
+        return .{ .node = try Node.toInterface(current_root) };
     }
 
     pub fn _hasChildNodes(self: *parser.Node) bool {
