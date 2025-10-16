@@ -1207,7 +1207,7 @@ fn _resolveModuleCallback(self: *Context, referrer: v8.Module, specifier: []cons
 
     const entry = self.module(true, fetch_result.src(), normalized_specifier, true) catch |err| {
         log.warn(.js, "compile resolved module", .{
-            .specifier = specifier,
+            .specifier = normalized_specifier,
             .stack = try_catch.stack(self.call_arena) catch null,
             .src = try_catch.sourceLine(self.call_arena) catch "err",
             .line = try_catch.sourceLineNumber() orelse 0,
