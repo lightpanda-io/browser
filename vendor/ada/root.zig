@@ -71,10 +71,22 @@ pub inline fn getHrefNullable(url: URL) String {
     return c.ada_get_href(url);
 }
 
+pub inline fn getUsernameNullable(url: URL) String {
+    return c.ada_get_username(url);
+}
+
 /// Can return an empty string.
 pub inline fn getUsername(url: URL) []const u8 {
     const username = c.ada_get_username(url);
     return username.data[0..username.length];
+}
+
+pub inline fn getPasswordNullable(url: URL) String {
+    return c.ada_get_password(url);
+}
+
+pub inline fn getSearchNullable(url: URL) String {
+    return c.ada_get_search(url);
 }
 
 /// Can return an empty string.

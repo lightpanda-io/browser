@@ -44,6 +44,11 @@ pub const URL = struct {
         return self;
     }
 
+    /// Forms a `URL` from given `internal`. Memory is not copied.
+    pub fn fromInternal(internal: ada.URL) URL {
+        return .{ .internal = internal };
+    }
+
     /// Deinitializes internal url.
     pub fn deinit(self: URL) void {
         std.debug.assert(self.internal != null);
@@ -100,12 +105,54 @@ pub const URL = struct {
         if (!is_set) return error.InvalidHostname;
     }
 
+    pub fn getUsername(self: URL) ?[]const u8 {
+        const username = ada.getUsernameNullable(self.internal);
+        if (username.data == null) return null;
+        return username.data[0..username.length];
+    }
+
+    pub fn setUsername(self: URL, username: []const u8) error{InvalidUsername}!void {
+        const is_set = ada.setUsername(self.internal, username);
+        if (!is_set) return error.InvalidUsername;
+    }
+
+    pub fn getPassword(self: URL) ?[]const u8 {
+        const password = ada.getPasswordNullable(self.internal);
+        if (password.data == null) return null;
+        return password.data[0..password.length];
+    }
+
+    pub fn setPassword(self: URL, password: []const u8) error{InvalidPassword}!void {
+        const is_set = ada.setPassword(self.internal, password);
+        if (!is_set) return error.InvalidPassword;
+    }
+
     pub fn getFragment(self: URL) ?[]const u8 {
         // Ada calls it "hash" instead of "fragment".
         const hash = ada.getHashNullable(self.internal);
         if (hash.data == null) return null;
 
         return hash.data[0..hash.length];
+    }
+
+    pub fn getSearch(self: URL) ?[]const u8 {
+        const search = ada.getSearchNullable(self.internal);
+        if (search.data == null) return null;
+        return search.data[0..search.length];
+    }
+
+    pub fn setSearch(self: URL, search: []const u8) void {
+        return ada.setSearch(self.internal, search);
+    }
+
+    pub fn getHash(self: URL) ?[]const u8 {
+        const hash = ada.getHashNullable(self.internal);
+        if (hash.data == null) return null;
+        return hash.data[0..hash.length];
+    }
+
+    pub fn setHash(self: URL, hash: []const u8) void {
+        return ada.setHash(self.internal, hash);
     }
 
     pub fn getProtocol(self: URL) []const u8 {
@@ -133,6 +180,11 @@ pub const URL = struct {
         }
 
         return pathname.data[0..pathname.length];
+    }
+
+    pub fn setPath(self: URL, path: []const u8) error{InvalidPath}!void {
+        const is_set = ada.setPathname(self.internal, path);
+        if (!is_set) return error.InvalidPath;
     }
 
     /// Returns true if the URL's protocol is secure.

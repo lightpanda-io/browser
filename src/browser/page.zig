@@ -84,6 +84,11 @@ pub const Page = struct {
 
     polyfill_loader: polyfill.Loader = .{},
 
+    /// KV map for various object data; use pointers as unsigned integer keys
+    /// and store any `*anyopaque` as values. If a key or value will be
+    /// deinitialized (freed), it should be removed from the map too.
+    object_data: ObjectDataMap = .{},
+
     scheduler: Scheduler,
     http_client: *Http.Client,
     script_manager: ScriptManager,
@@ -121,6 +126,21 @@ pub const Page = struct {
         // Corresponds to the load event
         complete,
     };
+
+    const ObjectDataMap = std.HashMapUnmanaged(
+        usize,
+        *anyopaque,
+        struct {
+            pub fn hash(_: @This(), key: usize) usize {
+                return key;
+            }
+
+            pub fn eql(_: @This(), a: usize, b: usize) bool {
+                return a == b;
+            }
+        },
+        std.hash_map.default_max_load_percentage,
+    );
 
     pub fn init(self: *Page, arena: Allocator, call_arena: Allocator, session: *Session) !void {
         const browser = session.browser;
@@ -160,6 +180,7 @@ pub const Page = struct {
         self.http_client.abort();
         self.script_manager.deinit();
         self.url.deinit();
+        self.object_data.deinit(self.arena);
     }
 
     fn reset(self: *Page) !void {
@@ -169,6 +190,12 @@ pub const Page = struct {
         self.scheduler.reset();
         self.http_client.abort();
         self.script_manager.reset();
+
+        _ = try self.url.reparse("about:blank");
+        errdefer self.url.deinit();
+
+        self.object_data.deinit(self.arena);
+        self.object_data = .{};
 
         self.load_state = .parsing;
         self.mode = .{ .pre = {} };
@@ -198,6 +225,21 @@ pub const Page = struct {
                 return 100;
             }
         }.runMessageLoop, 5, .{ .name = "page.messageLoop" });
+    }
+
+    /// Returns the object data by given key.
+    /// `key` must be a pointer type.
+    /// Type of value is unknown to map; so the caller must do the type casting.
+    pub fn getObjectData(self: *Page, key: anytype) ?*anyopaque {
+        std.debug.assert(@typeInfo(@TypeOf(key)) == .pointer);
+        return self.object_data.get(@intFromPtr(key));
+    }
+
+    /// Puts the object data by given key.
+    /// `key` must be a pointer type.
+    pub fn putObjectData(self: *Page, key: anytype, value: *anyopaque) Allocator.Error!void {
+        std.debug.assert(@typeInfo(@TypeOf(key)) == .pointer);
+        return self.object_data.put(self.arena, @intFromPtr(key), value);
     }
 
     pub const DumpOpts = struct {
