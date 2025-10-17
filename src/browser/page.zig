@@ -34,7 +34,9 @@ const Http = @import("../http/Http.zig");
 const ScriptManager = @import("ScriptManager.zig");
 const SlotChangeMonitor = @import("SlotChangeMonitor.zig");
 const HTMLDocument = @import("html/document.zig").HTMLDocument;
+
 const NavigationKind = @import("navigation/navigation.zig").NavigationKind;
+const NavigationCurrentEntryChangeEvent = @import("navigation/navigation.zig").NavigationCurrentEntryChangeEvent;
 
 const js = @import("js/js.zig");
 const URL = @import("../url.zig").URL;
@@ -737,9 +739,6 @@ pub const Page = struct {
         var self: *Page = @ptrCast(@alignCast(ctx));
         self.clearTransferArena();
 
-        // We need to handle different navigation types differently.
-        try self.session.navigation.processNavigation(self);
-
         switch (self.mode) {
             .pre => {
                 // Received a response without a body like: https://httpbin.io/status/200
@@ -818,6 +817,9 @@ pub const Page = struct {
                 unreachable;
             },
         }
+
+        // We need to handle different navigation types differently.
+        try self.session.navigation.processNavigation(self);
     }
 
     fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
@@ -1046,22 +1048,19 @@ pub const Page = struct {
     // specifically for this type of lifetime.
     pub fn navigateFromWebAPI(self: *Page, url: []const u8, opts: NavigateOpts, kind: NavigationKind) !void {
         const session = self.session;
+        const stitched_url = try URL.stitch(session.transfer_arena, url, self.url.raw, .{ .alloc = .always });
 
         // Force will force a page load.
-        //
-        // TODO: This needs to be reworked but just ensuring events get fired right.
+        // Otherwise, we need to check if this is a true navigation.
         if (!opts.force) {
             // If we are navigating within the same document, just change URL.
-            const new_url = try URL.parse(url, null);
-            if (try self.url.eqlDocument(&new_url, self.arena)) {
-                const new_duped_url = try session.arena.dupe(u8, url);
-                self.url = try URL.parse(new_duped_url, null);
+            const new_url = try URL.parse(stitched_url, null);
 
-                // TODO: remove this temporary snippet.
+            if (try self.url.eqlDocument(&new_url, session.transfer_arena)) {
+                self.url = new_url;
+
                 const prev = session.navigation.currentEntry();
-                const NavigationCurrentEntryChangeEvent = @import("navigation/navigation.zig").NavigationCurrentEntryChangeEvent;
                 NavigationCurrentEntryChangeEvent.dispatch(&self.session.navigation, prev, kind);
-
                 return;
             }
         }
@@ -1088,7 +1087,7 @@ pub const Page = struct {
 
         session.queued_navigation = .{
             .opts = opts,
-            .url = try URL.stitch(session.transfer_arena, url, self.url.raw, .{ .alloc = .always }),
+            .url = stitched_url,
         };
 
         session.navigation_kind = kind;
