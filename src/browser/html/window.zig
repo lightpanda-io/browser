@@ -41,6 +41,7 @@ const Request = @import("../fetch/Request.zig");
 const fetchFn = @import("../fetch/fetch.zig").fetch;
 
 const storage = @import("../storage/storage.zig");
+const ErrorEvent = @import("error_event.zig").ErrorEvent;
 
 // https://dom.spec.whatwg.org/#interface-window-extensions
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#window
@@ -279,6 +280,25 @@ pub const Window = struct {
         const out = try page.call_arena.alloc(u8, size);
         Decoder.decode(out, value) catch return error.InvalidCharacterError;
         return out;
+    }
+
+    pub fn _reportError(self: *Window, err: js.Object, page: *Page) !void {
+        var error_event = try ErrorEvent.constructor("error", .{
+            .@"error" = err,
+        });
+        _ = try parser.eventTargetDispatchEvent(
+            parser.toEventTarget(Window, self),
+            @as(*parser.Event, &error_event.proto),
+        );
+
+        if (parser.eventDefaultPrevented(&error_event.proto) == false) {
+            const err_string = err.toString() catch "Unknown error";
+            log.info(.user_script, "error", .{
+                .err = err_string,
+                .stack = page.stackTrace() catch "???",
+                .source = "window.reportError",
+            });
+        }
     }
 
     const CreateTimeoutOpts = struct {

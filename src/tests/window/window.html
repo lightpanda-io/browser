@@ -149,3 +149,19 @@
 
   testing.eventually(() => testing.expectEqual(true, isWindowTarget));
 </script>
+
+<script id=reportError>
+  let errorEventFired = false;
+  let capturedError = null;
+
+  window.addEventListener('error', (e) => {
+    errorEventFired = true;
+    capturedError = e.error;
+  });
+
+  const testError = new Error('Test error message');
+  window.reportError(testError);
+
+  testing.expectEqual(true, errorEventFired);
+  testing.expectEqual(testError, capturedError);
+</script>
