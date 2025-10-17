@@ -63,6 +63,10 @@ pub inline fn getOrigin(url: URL) []const u8 {
     return origin.data[0..origin.length];
 }
 
+pub inline fn getOriginNullable(url: URL) OwnedString {
+    return c.ada_get_origin(url);
+}
+
 pub inline fn getHrefNullable(url: URL) String {
     return c.ada_get_href(url);
 }
@@ -77,6 +81,10 @@ pub inline fn getUsername(url: URL) []const u8 {
 pub inline fn getPassword(url: URL) []const u8 {
     const password = c.ada_get_password(url);
     return password.data[0..password.length];
+}
+
+pub inline fn getPortNullable(url: URL) String {
+    return c.ada_get_port(url);
 }
 
 pub inline fn getPort(url: URL) []const u8 {
