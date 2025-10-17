@@ -227,7 +227,6 @@ pub const TreeWalker = struct {
                 continue;
             };
 
-
             if (!result.should_descend) {
                 // This is an .accept node - return it
                 self.current_node = result.node;
