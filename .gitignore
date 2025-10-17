@@ -1,7 +1,6 @@
-zig-cache
 /.zig-cache/
-zig-out
-/vendor/netsurf/out
-/vendor/libiconv/
+/zig-out/
 lightpanda.id
 /v8/
+/build/
+src/html5ever/target/

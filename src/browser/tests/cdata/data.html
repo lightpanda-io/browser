@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id=a><!-- spice --></div>
+<div id=b>flow</div>
+
+<script id=data>
+  testing.expectEqual(' spice ', $('#a').firstChild.data);
+  testing.expectEqual('flow', $('#b').firstChild.data);
+</script>

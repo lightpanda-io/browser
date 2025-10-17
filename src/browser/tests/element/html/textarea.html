@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<!-- TextArea elements -->
+<textarea id="textarea1">initial text</textarea>
+<textarea id="textarea2"></textarea>
+<textarea id="textarea3" disabled>disabled text</textarea>
+
+<!-- Form association tests -->
+<form id="form1">
+  <textarea id="textarea_in_form">in form</textarea>
+</form>
+
+<form id="form2"></form>
+<textarea id="textarea_with_form_attr" form="form2">with form attr</textarea>
+
+<textarea id="textarea_no_form">no form</textarea>
+
+<form id="form3">
+  <textarea id="textarea_invalid_form_attr" form="nonexistent">invalid form</textarea>
+</form>
+
+<script id="value_initial">
+  testing.expectEqual('initial text', $('#textarea1').value)
+  testing.expectEqual('', $('#textarea2').value)
+</script>
+
+<script id="value_set">
+  $('#textarea1').value = 'changed'
+  testing.expectEqual('changed', $('#textarea1').value)
+
+  $('#textarea2').value = 'new value'
+  testing.expectEqual('new value', $('#textarea2').value)
+</script>
+
+<script id="defaultValue">
+  testing.expectEqual('initial text', $('#textarea1').defaultValue)
+  testing.expectEqual('', $('#textarea2').defaultValue)
+
+  // Setting value shouldn't change defaultValue
+  $('#textarea1').value = 'changed'
+  testing.expectEqual('initial text', $('#textarea1').defaultValue)
+</script>
+
+<script id="disabled_initial">
+  testing.expectEqual(false, $('#textarea1').disabled)
+  testing.expectEqual(true, $('#textarea3').disabled)
+</script>
+
+<script id="disabled_set">
+  $('#textarea1').disabled = true
+  testing.expectEqual(true, $('#textarea1').disabled)
+
+  $('#textarea3').disabled = false
+  testing.expectEqual(false, $('#textarea3').disabled)
+</script>
+
+<script id="form_ancestor">
+  const textareaInForm = $('#textarea_in_form')
+  testing.expectEqual('FORM', textareaInForm.form.tagName)
+  testing.expectEqual('form1', textareaInForm.form.id)
+</script>
+
+<script id="form_attribute">
+  const textareaWithFormAttr = $('#textarea_with_form_attr')
+  testing.expectEqual('FORM', textareaWithFormAttr.form.tagName)
+  testing.expectEqual('form2', textareaWithFormAttr.form.id)
+</script>
+
+<script id="form_null">
+  const textareaNoForm = $('#textarea_no_form')
+  testing.expectEqual(null, textareaNoForm.form)
+</script>
+
+<script id="form_invalid_attribute">
+  const textareaInvalidFormAttr = $('#textarea_invalid_form_attr')
+  testing.expectEqual(null, textareaInvalidFormAttr.form)
+</script>

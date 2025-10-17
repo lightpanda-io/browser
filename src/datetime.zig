@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const posix = std.posix;
 
 const Allocator = std.mem.Allocator;
 
@@ -502,26 +504,45 @@ pub const DateTime = struct {
     }
 };
 
-pub fn timestamp() u32 {
+// true if we should use clock_gettime()
+const is_posix = switch (builtin.os.tag) {
+    .windows, .uefi, .wasi => false,
+    else => true,
+};
+
+pub const TimestampMode = enum {
+    clock,
+    monotonic,
+};
+pub fn timestamp(comptime mode: TimestampMode) u64 {
+    if (comptime is_posix == false or mode == .clock) {
+        return @intCast(std.time.timestamp());
+    }
     const ts = timespec();
     return @intCast(ts.sec);
 }
 
-pub fn milliTimestamp() u64 {
+pub fn milliTimestamp(comptime mode: TimestampMode) u64 {
+    if (comptime is_posix == false or mode == .clock) {
+        return @intCast(std.time.milliTimestamp());
+    }
     const ts = timespec();
     return @as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(@divTrunc(ts.nsec, 1_000_000)));
 }
 
-fn timespec() std.posix.timespec {
+fn timespec() posix.timespec {
+    if (comptime is_posix == false) {
+        @compileError("`timespec` should not be called when `is_posix` is false");
+    }
+
     const clock_id = switch (@import("builtin").os.tag) {
-        .freebsd, .dragonfly => std.posix.CLOCK.MONOTONIC_FAST,
-        .macos, .ios, .tvos, .watchos, .visionos => std.posix.CLOCK.UPTIME_RAW, // continues counting while suspended
-        .linux => std.posix.CLOCK.BOOTTIME, // continues counting while suspended
-        else => std.posix.CLOCK.MONOTONIC,
+        .freebsd, .dragonfly => posix.CLOCK.MONOTONIC_FAST,
+        .macos, .ios, .tvos, .watchos, .visionos => posix.CLOCK.UPTIME_RAW, // continues counting while suspended
+        .linux => posix.CLOCK.BOOTTIME, // continues counting while suspended
+        else => posix.CLOCK.MONOTONIC,
     };
-    // we don't currently support platforms where, at the very least,
-    // posix.CLOCK.MONOTONIC wouldn't be available.
-    return std.posix.clock_gettime(clock_id) catch unreachable;
+    // unreac
+    return posix.clock_gettime(clock_id) catch unreachable;
 }
 
 fn writeDate(into: []u8, date: Date) u8 {

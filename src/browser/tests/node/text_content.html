@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<div id=id1>d1 <p>hello</p></div>
+
+<script id=element>
+  const div = $('#id1');
+  testing.expectEqual('d1 hello', div.textContent);
+
+  div.textContent = 'world <p>!</p>';
+  testing.expectEqual('world <p>!</p>', div.textContent);
+</script>
+
+<script id=document>
+  testing.expectEqual(null, document.textContent);
+  document.textContent = 'over 9000';
+  testing.expectEqual(null, document.textContent);
+</script>
+
+<script id=cdata>
+  div.innerHTML = 'd1 <p>hello</p>';
+  testing.expectEqual('d1 ', div.firstChild.textContent);
+  div.firstChild.textContent = 'dd2d';
+  testing.expectEqual('dd2d', div.firstChild.textContent);
+  testing.expectEqual('dd2dhello', div.textContent);
+</script>
+
+<script id=attribute>
+  const attr = div.getAttributeNode('id');
+  testing.expectEqual('id1', attr.value);
+  testing.expectEqual('id1', attr.textContent);
+  attr.textContent = 'id2';
+  testing.expectEqual('id2', attr.value);
+  testing.expectEqual('id2', attr.textContent);
+  testing.expectEqual(div, $('#id2'));
+</script>

@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="container" class="container-class">
+  <div class="foo" id="foo1">foo1</div>
+  <span class="foo" id="foo2">foo2</span>
+  <p class="foo" id="foo3">foo3</p>
+  <div class="bar" id="bar1">bar1</div>
+  <div class="baz" id="baz1">baz1</div>
+</div>
+
+<div id="nested" class="nested-root">
+  <div class="outer" id="outer">
+    <div class="inner" id="inner1">inner1</div>
+    <div class="inner" id="inner2">inner2</div>
+    <p class="inner" id="inner3">inner3</p>
+  </div>
+</div>
+
+<div id="empty"></div>
+
+<div id="multi" class="multi class names">
+  <div class="multi" id="multi1">multi1</div>
+  <span class="class" id="multi2">multi2</span>
+  <p class="names" id="multi3">multi3</p>
+</div>
+
+<div id="classMatch" class="test-class">
+  <span class="other">span1</span>
+  <p class="other">p1</p>
+</div>
+
+<script id=basic>
+{
+  const container = $('#container');
+
+  testing.expectEqual(0, container.getElementsByClassName('nonexistent').length);
+  testing.expectEqual(0, container.getElementsByClassName('unknown').length);
+
+  const foos = container.getElementsByClassName('foo');
+  testing.expectEqual(true, foos instanceof HTMLCollection);
+  testing.expectEqual(3, foos.length);
+  testing.expectEqual(3, foos.length); // cache test
+  testing.expectEqual('foo1', foos[0].id);
+  testing.expectEqual('foo2', foos[1].id);
+  testing.expectEqual('foo3', foos[2].id);
+  testing.expectEqual('foo1', foos[0].id); // cache test
+  testing.expectEqual('foo3', foos[2].id);
+  testing.expectEqual('foo2', foos[1].id);
+  testing.expectEqual(undefined, foos[-1]);
+  testing.expectEqual(undefined, foos[3]);
+
+  const bars = container.getElementsByClassName('bar');
+  testing.expectEqual(1, bars.length);
+  testing.expectEqual('bar1', bars[0].id);
+
+  const bazs = container.getElementsByClassName('baz');
+  testing.expectEqual(1, bazs.length);
+  testing.expectEqual('baz1', bazs[0].id);
+}
+</script>
+
+<script id=nestedSearch>
+{
+  const nested = $('#nested');
+  const inners = nested.getElementsByClassName('inner');
+  testing.expectEqual(3, inners.length);
+  testing.expectEqual('inner1', inners[0].id);
+  testing.expectEqual('inner2', inners[1].id);
+  testing.expectEqual('inner3', inners[2].id);
+
+  const outer = $('#outer');
+  const outerInners = outer.getElementsByClassName('inner');
+  testing.expectEqual(3, outerInners.length);
+  testing.expectEqual('inner1', outerInners[0].id);
+  testing.expectEqual('inner2', outerInners[1].id);
+  testing.expectEqual('inner3', outerInners[2].id);
+}
+</script>
+
+<script id=emptyResult>
+{
+  const empty = $('#empty');
+  testing.expectEqual(0, empty.getElementsByClassName('foo').length);
+  testing.expectEqual(0, empty.getElementsByClassName('bar').length);
+  testing.expectEqual(0, empty.getElementsByClassName('').length);
+}
+</script>
+
+<script id=excludeSelf>
+{
+  // Element itself should NOT be included in results, even if it matches
+  const container = $('#container');
+  const containerClass = container.getElementsByClassName('container-class');
+  testing.expectEqual(0, containerClass.length); // container has 'container-class' but should not be included
+
+  const classMatch = $('#classMatch');
+  const testClass = classMatch.getElementsByClassName('test-class');
+  testing.expectEqual(0, testClass.length); // classMatch itself has 'test-class' but should not be included
+
+  const others = classMatch.getElementsByClassName('other');
+  testing.expectEqual(2, others.length); // Only the child elements
+}
+</script>
+
+<script id=item>
+{
+  const container = $('#container');
+  const foos = container.getElementsByClassName('foo');
+
+  testing.expectEqual('foo1', foos.item(0).id);
+  testing.expectEqual('foo2', foos.item(1).id);
+  testing.expectEqual('foo3', foos.item(2).id);
+  testing.expectEqual(null, foos.item(3));
+  testing.expectEqual(null, foos.item(-1));
+  testing.expectEqual(null, foos.item(100));
+}
+</script>
+
+<script id=namedItem>
+{
+  const container = $('#container');
+  const foos = container.getElementsByClassName('foo');
+
+  testing.expectEqual('foo1', foos.namedItem('foo1').id);
+  testing.expectEqual('foo2', foos.namedItem('foo2').id);
+  testing.expectEqual('foo3', foos.namedItem('foo3').id);
+  testing.expectEqual(null, foos.namedItem('foo4'));
+  testing.expectEqual(null, foos.namedItem('container'));
+
+  testing.expectEqual('foo1', foos['foo1'].id);
+  testing.expectEqual('foo2', foos['foo2'].id);
+}
+</script>
+
+<script id=iterator>
+{
+  const container = $('#container');
+  const foos = container.getElementsByClassName('foo');
+
+  let acc = [];
+  for (let el of foos) {
+    acc.push(el.id);
+  }
+  testing.expectEqual(['foo1', 'foo2', 'foo3'], acc);
+}
+</script>
+
+<script id=multipleClasses>
+{
+  const multi = $('#multi');
+
+  const multiClass = multi.getElementsByClassName('multi');
+  testing.expectEqual(1, multiClass.length);
+  testing.expectEqual('multi1', multiClass[0].id);
+
+  const classClass = multi.getElementsByClassName('class');
+  testing.expectEqual(1, classClass.length);
+  testing.expectEqual('multi2', classClass[0].id);
+
+  const namesClass = multi.getElementsByClassName('names');
+  testing.expectEqual(1, namesClass.length);
+  testing.expectEqual('multi3', namesClass[0].id);
+}
+</script>
+
+<script id=arrayIndexing>
+{
+  const container = $('#container');
+  const foos = container.getElementsByClassName('foo');
+
+  testing.expectEqual('foo1', foos[0].id);
+  testing.expectEqual('foo2', foos[1].id);
+  testing.expectEqual('foo3', foos[2].id);
+  testing.expectEqual(undefined, foos[3]);
+  testing.expectEqual(undefined, foos[-1]);
+  testing.expectEqual(undefined, foos[100]);
+}
+</script>
+
+<script id=emptyString>
+{
+  const container = $('#container');
+  const empty = container.getElementsByClassName('');
+  testing.expectEqual(0, empty.length);
+}
+</script>

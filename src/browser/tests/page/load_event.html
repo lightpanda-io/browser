@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<script id=DOMContentLoaded>
+  let call1 = false;
+  let ex1 = null;
+  document.addEventListener('DOMContentLoaded', function(e) {
+    ex1 = e; // let's just capture this to make sure our lifetimes are working
+    testing.expectEqual(document, e.target);
+    call1 = true;
+  });
+
+  testing.eventually(() => {
+    testing.expectEqual(document, ex1.target);
+    testing.expectEqual('DOMContentLoaded', ex1.type);
+    testing.expectEqual(true, call1);
+  });
+  testing.expectEqual(true, true);
+</script>

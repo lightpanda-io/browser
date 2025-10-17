@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script>
+  function assert(expected, fd) {
+    for (let e of expected) {
+      testing.expectEqual(true, fd.has(e.key));
+      testing.expectEqual(expected.find((ee) => ee.key == e.key).value, fd.get(e.key));
+      testing.expectEqual(expected.filter((ee) => ee.key == e.key).map((ee) => ee.value), fd.getAll(e.key));
+    }
+    testing.expectEqual(null, fd.get("nope"));
+    testing.expectEqual([], fd.getAll("nope"));
+
+    testing.expectEqual(expected.map((e) => e.key), Array.from(fd.keys()));
+    testing.expectEqual(expected.map((e) => e.value), Array.from(fd.values()));
+    testing.expectEqual(expected.map((e) => [e.key, e.value]), Array.from(fd));
+    testing.expectEqual(expected.map((e) => [e.key, e.value]), Array.from(fd.entries()));
+  }
+</script>
+
+<script id=basic>
+{
+  const fd = new FormData();
+  assert([], fd);
+
+  fd.append('name', 'John');
+  assert([{key: 'name', value: 'John'}], fd);
+
+  fd.append('email', 'john@example.com');
+  assert([{key: 'name', value: 'John'}, {key: 'email', value: 'john@example.com'}], fd);
+}
+</script>
+
+<script id=manipulation>
+{
+  const fd = new FormData();
+  assert([], fd);
+
+  fd.append('field', 'value1')
+  assert([{key: 'field', value: 'value1'}], fd);
+
+  fd.append('field', 'value2')
+  assert([{key: 'field', value: 'value1'}, {key: 'field', value: 'value2'}], fd);
+
+  fd.set('field', 'only')
+  assert([{key: 'field', value: 'only'}], fd);
+}
+</script>
+
+<script id=emptyAndNull>
+{
+  const fd = new FormData();
+  testing.expectEqual(null, fd.get('anything'));
+  testing.expectEqual([], fd.getAll('anything'));
+  testing.expectEqual(false, fd.has('anything'));
+}
+</script>
+
+<script id=duplicateKeys>
+{
+  const fd = new FormData();
+  fd.append('key', '1');
+  fd.append('key', '2');
+  fd.append('key', '3');
+
+  testing.expectEqual('1', fd.get('key'));
+  testing.expectEqual(['1', '2', '3'], fd.getAll('key'));
+
+  fd.set('key', 'only');
+  testing.expectEqual('only', fd.get('key'));
+  testing.expectEqual(['only'], fd.getAll('key'));
+}
+</script>
+
+<script id=deleteOperations>
+{
+  const fd = new FormData();
+  fd.append('a', '1');
+  fd.append('b', '2');
+  fd.append('a', '3');
+  fd.append('c', '4');
+  fd.append('a', '5');
+
+  fd.delete('a');
+  testing.expectEqual(false, fd.has('a'));
+  testing.expectEqual('2', fd.get('b'));
+  testing.expectEqual('4', fd.get('c'));
+
+  fd.delete('nonexistent');
+  testing.expectEqual('2', fd.get('b'));
+  testing.expectEqual('4', fd.get('c'));
+}
+</script>
+
+<script id=iteration>
+{
+  const fd = new FormData();
+  fd.append('a', '1');
+  fd.append('b', '2');
+  fd.append('a', '3');
+
+  const keys = Array.from(fd.keys());
+  testing.expectEqual(['a', 'b', 'a'], keys);
+
+  const values = Array.from(fd.values());
+  testing.expectEqual(['1', '2', '3'], values);
+
+  const entries = Array.from(fd.entries());
+  testing.expectEqual([['a', '1'], ['b', '2'], ['a', '3']], entries);
+
+  const defaultIter = Array.from(fd);
+  testing.expectEqual([['a', '1'], ['b', '2'], ['a', '3']], defaultIter);
+}
+</script>
+
+<script id=iteratorIsolation>
+{
+  const fd = new FormData();
+  fd.append('a', '1');
+  fd.append('b', '2');
+  fd.append('c', '3');
+
+  const keys1 = fd.keys();
+  const keys2 = fd.keys();
+  const values1 = fd.values();
+  const entries1 = fd.entries();
+
+  testing.expectEqual('a', keys1.next().value);
+  testing.expectEqual('a', keys2.next().value);
+  testing.expectEqual('1', values1.next().value);
+  testing.expectEqual(['a', '1'], entries1.next().value);
+
+  testing.expectEqual('b', keys1.next().value);
+  testing.expectEqual('b', keys2.next().value);
+  testing.expectEqual('2', values1.next().value);
+  testing.expectEqual(['b', '2'], entries1.next().value);
+
+  testing.expectEqual('c', keys1.next().value);
+  testing.expectEqual('c', keys2.next().value);
+  testing.expectEqual('3', values1.next().value);
+  testing.expectEqual(['c', '3'], entries1.next().value);
+
+  testing.expectEqual(true, keys1.next().done);
+  testing.expectEqual(true, keys2.next().done);
+  testing.expectEqual(true, values1.next().done);
+  testing.expectEqual(true, entries1.next().done);
+}
+</script>
+
+<script id=iteratorLifetime>
+{
+  let keysIter;
+  let valuesIter;
+  let entriesIter;
+
+  {
+    const fd = new FormData();
+    fd.append('x', '10');
+    fd.append('y', '20');
+    fd.append('z', '30');
+    keysIter = fd.keys();
+    valuesIter = fd.values();
+    entriesIter = fd.entries();
+  }
+
+  testing.expectEqual('x', keysIter.next().value);
+  testing.expectEqual('10', valuesIter.next().value);
+  testing.expectEqual(['x', '10'], entriesIter.next().value);
+
+  testing.expectEqual('y', keysIter.next().value);
+  testing.expectEqual('20', valuesIter.next().value);
+  testing.expectEqual(['y', '20'], entriesIter.next().value);
+
+  testing.expectEqual('z', keysIter.next().value);
+  testing.expectEqual('30', valuesIter.next().value);
+  testing.expectEqual(['z', '30'], entriesIter.next().value);
+
+  testing.expectEqual(true, keysIter.next().done);
+  testing.expectEqual(true, valuesIter.next().done);
+  testing.expectEqual(true, entriesIter.next().done);
+}
+</script>
+
+<script id=forEach>
+{
+  const fd = new FormData();
+  fd.append('a', '1');
+  fd.append('b', '2');
+  fd.append('c', '3');
+
+  const results = [];
+  fd.forEach((value, key, formData) => {
+    results.push({value, key});
+    // Verify third argument is the FormData instance itself
+    testing.expectEqual(fd, formData);
+  });
+
+  testing.expectEqual([
+    {key: 'a', value: '1'},
+    {key: 'b', value: '2'},
+    {key: 'c', value: '3'}
+  ], results);
+}
+</script>
+
+<script id=forEachWithDuplicates>
+{
+  const fd = new FormData();
+  fd.append('x', '10');
+  fd.append('x', '20');
+  fd.append('y', '30');
+
+  const results = [];
+  fd.forEach((value, key) => {
+    results.push({key, value});
+  });
+
+  testing.expectEqual([
+    {key: 'x', value: '10'},
+    {key: 'x', value: '20'},
+    {key: 'y', value: '30'}
+  ], results);
+}
+</script>
+
+<script id=forEachEmpty>
+{
+  const fd = new FormData();
+  let called = false;
+
+  fd.forEach(() => {
+    called = true;
+  });
+
+  testing.expectEqual(false, called);
+}
+</script>
+
+<script id=forEachThisArg>
+{
+  const fd = new FormData();
+  fd.append('a', '1');
+  fd.append('b', '2');
+  const context = {sum: 0};
+
+  fd.forEach(function(value) {
+    this.sum += parseInt(value);
+  }, context);
+
+  testing.expectEqual(3, context.sum);
+}
+</script>

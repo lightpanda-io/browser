@@ -25,12 +25,18 @@ const is_debug = builtin.mode == .Debug;
 
 pub const Scope = enum {
     app,
+    dom,
+    bug,
     browser,
     cdp,
     console,
     http,
+    page,
     js,
     loop,
+    event,
+    scheduler,
+    not_implemented,
     script_event,
     telemetry,
     user_script,
@@ -125,7 +131,7 @@ pub fn log(comptime scope: Scope, level: Level, comptime msg: []const u8, data: 
     var writer = stderr.writer(&buf);
 
     logTo(scope, level, msg, data, &writer.interface) catch |log_err| {
-        std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"", .{ timestamp(), @errorName(log_err), @tagName(scope), msg });
+        std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"", .{ timestamp(.clock), @errorName(log_err), @tagName(scope), msg });
     };
 }
 
@@ -168,7 +174,7 @@ fn logLogfmt(comptime scope: Scope, level: Level, comptime msg: []const u8, data
 
 fn logLogFmtPrefix(comptime scope: Scope, level: Level, comptime msg: []const u8, writer: anytype) !void {
     try writer.writeAll("$time=");
-    try writer.print("{d}", .{timestamp()});
+    try writer.print("{d}", .{timestamp(.clock)});
 
     try writer.writeAll(" $scope=");
     try writer.writeAll(@tagName(scope));
@@ -327,16 +333,9 @@ fn writeString(comptime format: Format, value: []const u8, writer: anytype) !voi
     return writer.writeByte('"');
 }
 
-fn timestamp() u64 {
-    if (comptime @import("builtin").is_test) {
-        return 1739795092929;
-    }
-    return @import("datetime.zig").milliTimestamp();
-}
-
 var first_log: u64 = 0;
 fn elapsed() struct { time: f64, unit: []const u8 } {
-    const now = timestamp();
+    const now = timestamp(.monotonic);
 
     last_log_lock.lock();
     defer last_log_lock.unlock();
@@ -350,6 +349,14 @@ fn elapsed() struct { time: f64, unit: []const u8 } {
         return .{ .time = @floatFromInt(e), .unit = "ms" };
     }
     return .{ .time = @as(f64, @floatFromInt(e)) / @as(f64, 1000), .unit = "s" };
+}
+
+const datetime = @import("datetime.zig");
+fn timestamp(mode: datetime.TimestampMode) u64 {
+    if (comptime @import("builtin").is_test) {
+        return 1739795092929;
+    }
+    return datetime.milliTimestamp(mode);
 }
 
 var _interceptor: ?Interceptor = null;

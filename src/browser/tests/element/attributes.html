@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id=attr1 ClasS="sHow"></div>
+
+<script id=attributes>
+  const el1 = $('#attr1');
+  testing.expectEqual(null, el1.getAttribute('other'));
+
+  testing.expectEqual('attr1', el1.id);
+  testing.expectEqual('attr1', el1.getAttribute('id'));
+  testing.expectEqual('attr1', el1.getAttribute('Id'));
+  testing.expectEqual('sHow', el1.getAttribute('CLASS'));
+  testing.expectEqual('sHow', el1.getAttribute('class'));
+  testing.expectEqual(['id', 'class'], el1.getAttributeNames());
+
+  el1.setAttribute('other', 'attr-1')
+  testing.expectEqual('attr-1', el1.getAttribute('other'));
+  testing.expectEqual(['id', 'class', 'other'], el1.getAttributeNames());
+  el1.removeAttribute('other');
+  testing.expectEqual(null, el1.getAttribute('other'));
+  testing.expectEqual(['id', 'class'], el1.getAttributeNames());
+
+  testing.expectEqual(null, el1.getAttributeNode('unknown'));
+
+  let an1 = el1.getAttributeNode('class');
+  testing.expectEqual(an1 , el1.setAttributeNode(an1));
+  testing.expectEqual(el1, an1.ownerElement);
+  testing.expectEqual('class', an1.name);
+  testing.expectEqual('class', an1.localName);
+  testing.expectEqual('sHow', an1.value);
+  testing.expectEqual(el1.getAttributeNode('class'), an1);
+  testing.expectEqual(null, an1.namespaceURI);
+
+  const script_id_node = $('#attributes').getAttributeNode('id')
+  testing.withError((err) => {
+    testing.expectEqual(8, err.code);
+    testing.expectEqual("NotFoundError", err.name);
+    testing.expectEqual("Not Found", err.message);
+  }, () => el1.removeAttributeNode(script_id_node));
+
+  testing.expectEqual(an1, el1.removeAttributeNode(an1));
+  testing.expectEqual(null, an1.ownerElement);
+  testing.expectEqual(null, el1.getAttributeNode('class'));
+
+  testing.expectEqual(null, el1.setAttributeNode(an1))
+  testing.expectEqual(el1, an1.ownerElement);
+</script>
+
+<script id=namednodemap>
+  testing.expectEqual(true, el1.attributes instanceof NamedNodeMap);
+  testing.expectEqual(el1.attributes, el1.attributes);
+  function assertAttributes(expected) {
+    const attributes = el1.attributes;
+    testing.expectEqual(expected.length, attributes.length);
+
+    for (let i = 0; i < expected.length; i++) {
+      const ex = expected[i];
+      let attribute = attributes[ex.name];
+      testing.expectEqual(ex.name, attribute.name)
+      testing.expectEqual(ex.value, attribute.value)
+
+      attribute = attributes.getNamedItem(ex.name);
+      testing.expectEqual(ex.name, attribute.name)
+      testing.expectEqual(ex.value, attribute.value)
+
+      attribute = attributes.item(i);
+      testing.expectEqual(ex.name, attribute.name)
+      testing.expectEqual(ex.value, attribute.value)
+    }
+    testing.expectEqual(undefined, attributes["nope"]);
+    testing.expectEqual('attr1', attributes.id.value);
+    testing.expectEqual(null, attributes.getNamedItem("nope"));
+    testing.expectEqual(null, attributes.item(100));
+    testing.expectEqual(null, attributes.item(-3));
+
+    let acc = [];
+    for (let attribute of attributes) {
+      acc.push({name: attribute.name, value: attribute.value});
+    }
+    testing.expectEqual(expected, acc);
+  }
+
+  assertAttributes([{name: 'id', value: 'attr1'}, {name: 'class', value: 'sHow'}]);
+</script>

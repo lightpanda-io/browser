@@ -1,3 +1,21 @@
+// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 const std = @import("std");
 const js = @import("js.zig");
 const v8 = js.v8;
@@ -61,8 +79,9 @@ pub fn toDetailString(self: Object) ![]const u8 {
     return self.context.valueToDetailString(js_value);
 }
 
-pub fn format(self: Object, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-    return writer.writeAll(try self.toString());
+pub fn format(self: Object, writer: *std.Io.Writer) !void {
+    const str = self.toString() catch return error.WriteFailed;
+    return writer.writeAll(str);
 }
 
 pub fn toJson(self: Object, allocator: Allocator) ![]u8 {
@@ -107,16 +126,6 @@ pub fn isUndefined(self: Object) bool {
     return self.js_obj.toValue().isUndefined();
 }
 
-pub fn triState(self: Object, comptime Struct: type, comptime name: []const u8, comptime T: type) !TriState(T) {
-    if (self.isNull()) {
-        return .{ .null = {} };
-    }
-    if (self.isUndefined()) {
-        return .{ .undefined = {} };
-    }
-    return .{ .value = try self.toZig(Struct, name, T) };
-}
-
 pub fn isNullOrUndefined(self: Object) bool {
     return self.js_obj.toValue().isNullOrUndefined();
 }
@@ -135,9 +144,8 @@ pub fn nameIterator(self: Object) js.ValueIterator {
     };
 }
 
-pub fn toZig(self: Object, comptime Struct: type, comptime name: []const u8, comptime T: type) !T {
-    const named_function = comptime Caller.NamedFunction.init(Struct, name);
-    return self.context.jsValueToZig(named_function, T, self.js_obj.toValue());
+pub fn toZig(self: Object, comptime T: type) !T {
+    return self.context.jsValueToZig(T, self.js_obj.toValue());
 }
 
 pub fn TriState(comptime T: type) type {

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<select id="select1">
+  <option value="val1">Option 1</option>
+  <option value="val2" selected>Option 2</option>
+  <option value="val3">Option 3</option>
+</select>
+
+<select id="select2">
+  <option value="a">A</option>
+  <option value="b">B</option>
+</select>
+
+<select id="select3" disabled>
+  <option value="x">X</option>
+</select>
+
+<form id="form1">
+  <select id="select_in_form">
+    <option value="f1">Form option</option>
+  </select>
+</form>
+
+<form id="form2"></form>
+<select id="select_with_form_attr" form="form2">
+  <option value="f2">Form attr option</option>
+</select>
+
+<select id="select_no_form">
+  <option value="nf">No form option</option>
+</select>
+
+<script id="value_initial">
+  // Should return value of selected option
+  testing.expectEqual('val2', $('#select1').value)
+
+  // If no option is explicitly selected, first option is implicitly selected
+  testing.expectEqual('a', $('#select2').value)
+</script>
+
+<script id="value_set">
+  $('#select1').value = 'val3'
+  testing.expectEqual('val3', $('#select1').value)
+
+  // The option should now be selected
+  const opt3 = $('#select1').querySelector('option[value="val3"]')
+  testing.expectEqual(true, opt3.selected)
+
+  // Other options should be unselected
+  const opt2 = $('#select1').querySelector('option[value="val2"]')
+  testing.expectEqual(false, opt2.selected)
+</script>
+
+<script id="disabled_initial">
+  testing.expectEqual(false, $('#select1').disabled)
+  testing.expectEqual(true, $('#select3').disabled)
+</script>
+
+<script id="disabled_set">
+  $('#select1').disabled = true
+  testing.expectEqual(true, $('#select1').disabled)
+
+  $('#select3').disabled = false
+  testing.expectEqual(false, $('#select3').disabled)
+</script>
+
+<script id="form_ancestor">
+  const selectInForm = $('#select_in_form')
+  testing.expectEqual('FORM', selectInForm.form.tagName)
+  testing.expectEqual('form1', selectInForm.form.id)
+</script>
+
+<script id="form_attribute">
+  const selectWithFormAttr = $('#select_with_form_attr')
+  testing.expectEqual('FORM', selectWithFormAttr.form.tagName)
+  testing.expectEqual('form2', selectWithFormAttr.form.id)
+</script>
+
+<script id="form_null">
+  const selectNoForm = $('#select_no_form')
+  testing.expectEqual(null, selectNoForm.form)
+</script>

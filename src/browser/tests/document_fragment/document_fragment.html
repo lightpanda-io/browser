@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<body></body>
+
+<script id=document_fragment>
+  {
+    const df = new DocumentFragment();
+    testing.expectEqual("DocumentFragment", df.constructor.name);
+    testing.expectEqual("#document-fragment", df.nodeName);
+  }
+
+  {
+    const df = document.createDocumentFragment();
+    testing.expectEqual("DocumentFragment", df.constructor.name);
+    testing.expectEqual("#document-fragment", df.nodeName);
+  }
+
+  {
+    const df = document.createDocumentFragment();
+    const div1 = document.createElement("div");
+    div1.textContent = "First";
+    const div2 = document.createElement("div");
+    div2.textContent = "Second";
+
+    df.appendChild(div1);
+    df.appendChild(div2);
+
+    testing.expectEqual(2, df.childElementCount);
+    testing.expectEqual(div1, df.firstElementChild);
+    testing.expectEqual(div2, df.lastElementChild);
+  }
+
+  {
+    const df = document.createDocumentFragment();
+    df.append("text1", document.createElement("span"), "text2");
+    testing.expectEqual(3, df.childNodes.length);
+    testing.expectEqual(1, df.childElementCount);
+  }
+
+  {
+    const df = document.createDocumentFragment();
+    df.append("last");
+    df.prepend("first");
+    testing.expectEqual("#text", df.firstChild.nodeName);
+    testing.expectEqual("first", df.firstChild.textContent);
+  }
+
+  {
+    const df = document.createDocumentFragment();
+    const p = document.createElement("p");
+    p.className = "test";
+    p.textContent = "Hello";
+    df.appendChild(p);
+
+    const found = df.querySelector(".test");
+    testing.expectEqual(p, found);
+    testing.expectEqual("Hello", found.textContent);
+  }
+
+  {
+    const df = document.createDocumentFragment();
+    df.appendChild(document.createElement("div"));
+    df.appendChild(document.createElement("div"));
+    testing.expectEqual(2, df.childElementCount);
+
+    df.replaceChildren(document.createElement("span"));
+    testing.expectEqual(1, df.childElementCount);
+    testing.expectEqual("SPAN", df.firstElementChild.tagName);
+  }
+
+  {
+    const df = document.createDocumentFragment();
+    const outer = document.createElement("div");
+    outer.id = "outer";
+    const inner = document.createElement("div");
+    inner.id = "inner";
+    outer.appendChild(inner);
+    df.appendChild(outer);
+
+    testing.expectEqual(outer, df.getElementById("outer"));
+    testing.expectEqual(inner, df.getElementById("inner"));
+    testing.expectEqual(null, df.getElementById("notfound"));
+  }
+
+  {
+    const df = document.createDocumentFragment();
+    const test1 = document.createElement("div");
+    test1.id = "test1";
+    const test2 = document.createElement("div");
+    test2.id = "test2";
+
+    df.appendChild(test1);
+    df.appendChild(test2);
+    testing.expectEqual(2, df.childElementCount);
+
+    document.body.appendChild(df);
+    testing.expectEqual(0, df.childElementCount);
+    testing.expectEqual(test1, document.getElementById("test1"));
+    testing.expectEqual(test2, document.getElementById("test2"));
+  }
+</script>

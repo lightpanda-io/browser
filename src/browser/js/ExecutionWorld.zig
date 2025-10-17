@@ -1,24 +1,46 @@
+// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 const std = @import("std");
+
+const log = @import("../../log.zig");
+
 const js = @import("js.zig");
 const v8 = js.v8;
 
-const log = @import("../../log.zig");
-const Page = @import("../page.zig").Page;
-const ScriptManager = @import("../ScriptManager.zig");
-
-const types = @import("types.zig");
-const Types = types.Types;
+const bridge = @import("bridge.zig");
 const Env = @import("Env.zig");
 const Context = @import("Context.zig");
+
+const Page = @import("../Page.zig");
+const ScriptManager = @import("../ScriptManager.zig");
 
 const ArenaAllocator = std.heap.ArenaAllocator;
 
 const CONTEXT_ARENA_RETAIN = 1024 * 64;
 
+const JsApis = bridge.JsApis;
+
 // ExecutionWorld closely models a JS World.
 // https://chromium.googlesource.com/chromium/src/+/master/third_party/blink/renderer/bindings/core/v8/V8BindingDesign.md#World
 // https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/scripting/ExecutionWorld
 const ExecutionWorld = @This();
+
 env: *Env,
 
 // Arena whose lifetime is for a single page load. Where
@@ -55,7 +77,6 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_cal
 
     const env = self.env;
     const isolate = env.isolate;
-    const Global = @TypeOf(page.window);
     const templates = &self.env.templates;
 
     var v8_context: v8.Context = blk: {
@@ -64,7 +85,7 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_cal
         defer temp_scope.deinit();
 
         const js_global = v8.FunctionTemplate.initDefault(isolate);
-        Env.attachClass(Global, isolate, js_global);
+        Env.attachClass(@TypeOf(page.window.*).JsApi, isolate, js_global);
 
         const global_template = js_global.getInstanceTemplate();
         global_template.setInternalFieldCount(1);
@@ -92,10 +113,11 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_cal
 
         // All the FunctionTemplates that we created and setup in Env.init
         // are now going to get associated with our global instance.
-        inline for (Types, 0..) |s, i| {
-            const Struct = s.defaultValue().?;
-            const class_name = v8.String.initUtf8(isolate, comptime js.classNameForStruct(Struct));
-            global_template.set(class_name.toName(), templates[i], v8.PropertyAttribute.None);
+        inline for (JsApis, 0..) |JsApi, i| {
+            if (@hasDecl(JsApi.Meta, "name")) {
+                const class_name = v8.String.initUtf8(isolate, JsApi.Meta.name);
+                global_template.set(class_name.toName(), templates[i], v8.PropertyAttribute.None);
+            }
         }
 
         // The global object (Window) has already been hooked into the v8
@@ -103,10 +125,9 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_cal
         // But the V8 global is its own FunctionTemplate instance so even
         // though it's also a Window, we need to set the prototype for this
         // specific instance of the the Window.
-        if (@hasDecl(Global, "prototype")) {
-            const proto_type = types.Receiver(@typeInfo(Global.prototype).pointer.child);
-            const proto_name = @typeName(proto_type);
-            const proto_index = @field(types.LOOKUP, proto_name);
+        {
+            const proto_type = @typeInfo(@TypeOf(page.window._proto)).pointer.child;
+            const proto_index = @field(bridge.JS_API_LOOKUP, @typeName(proto_type.JsApi));
             js_global.inherit(templates[proto_index]);
         }
 
@@ -119,19 +140,9 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_cal
         // This shouldn't be necessary, but it is:
         // https://groups.google.com/g/v8-users/c/qAQQBmbi--8
         // TODO: see if newer V8 engines have a way around this.
-        inline for (Types, 0..) |s, i| {
-            const Struct = s.defaultValue().?;
-
-            if (@hasDecl(Struct, "prototype")) {
-                const proto_type = types.Receiver(@typeInfo(Struct.prototype).pointer.child);
-                const proto_name = @typeName(proto_type);
-                if (@hasField(types.Lookup, proto_name) == false) {
-                    @compileError("Type '" ++ @typeName(Struct) ++ "' defines an unknown prototype: " ++ proto_name);
-                }
-
-                const proto_index = @field(types.LOOKUP, proto_name);
+        inline for (JsApis, 0..) |JsApi, i| {
+            if (comptime Env.protoIndexLookup(JsApi)) |proto_index| {
                 const proto_obj = templates[proto_index].getFunction(v8_context).toObject();
-
                 const self_obj = templates[i].getFunction(v8_context).toObject();
                 _ = self_obj.setPrototype(v8_context, proto_obj);
             }
@@ -167,9 +178,8 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_cal
         .isolate = isolate,
         .v8_context = v8_context,
         .templates = &env.templates,
-        .meta_lookup = &env.meta_lookup,
         .handle_scope = handle_scope,
-        .script_manager = &page.script_manager,
+        .script_manager = &page._script_manager,
         .call_arena = page.call_arena,
         .arena = self.context_arena.allocator(),
         .global_callback = global_callback,
@@ -183,17 +193,19 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_cal
         v8_context.setEmbedderData(1, data);
     }
 
+    // @ZIGDOM
     // Custom exception
     // NOTE: there is no way in v8 to subclass the Error built-in type
     // TODO: this is an horrible hack
-    inline for (Types) |s| {
-        const Struct = s.defaultValue().?;
-        if (@hasDecl(Struct, "ErrorSet")) {
-            const script = comptime js.classNameForStruct(Struct) ++ ".prototype.__proto__ = Error.prototype";
-            _ = try context.exec(script, "errorSubclass");
-        }
-    }
+    // inline for (JsApi) |JsApi| {
+    //     const Struct = s.defaultValue().?;
+    //     if (@hasDecl(Struct, "ErrorSet")) {
+    //         const script = comptime JsApi.Meta.name ++ ".prototype.__proto__ = Error.prototype";
+    //         _ = try context.exec(script, "errorSubclass");
+    //     }
+    // }
 
+    // @ZIGDOM
     // Primitive attributes are set directly on the FunctionTemplate
     // when we setup the environment. But we cannot set more complex
     // types (v8 will crash).
@@ -204,27 +216,26 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_cal
     // As far as I can tell, getting the FunctionTemplate's object
     // and setting values directly on it, for each context, is the
     // way to do this.
-    inline for (Types, 0..) |s, i| {
-        const Struct = s.defaultValue().?;
-        inline for (@typeInfo(Struct).@"struct".decls) |declaration| {
-            const name = declaration.name;
-            if (comptime name[0] == '_') {
-                const value = @field(Struct, name);
+    // inline for (JsApis, 0..) |Jsapi, i| {
+    //     inline for (@typeInfo(Struct).@"struct".decls) |declaration| {
+    //         const name = declaration.name;
+    //         if (comptime name[0] == '_') {
+    //             const value = @field(Struct, name);
 
-                if (comptime js.isComplexAttributeType(@typeInfo(@TypeOf(value)))) {
-                    const js_obj = templates[i].getFunction(v8_context).toObject();
-                    const js_name = v8.String.initUtf8(isolate, name[1..]).toName();
-                    const js_val = try context.zigValueToJs(value);
-                    if (!js_obj.setValue(v8_context, js_name, js_val)) {
-                        log.fatal(.app, "set class attribute", .{
-                            .@"struct" = @typeName(Struct),
-                            .name = name,
-                        });
-                    }
-                }
-            }
-        }
-    }
+    //             if (comptime js.isComplexAttributeType(@typeInfo(@TypeOf(value)))) {
+    //                 const js_obj = templates[i].getFunction(v8_context).toObject();
+    //                 const js_name = v8.String.initUtf8(isolate, name[1..]).toName();
+    //                 const js_val = try context.zigValueToJs(value);
+    //                 if (!js_obj.setValue(v8_context, js_name, js_val)) {
+    //                     log.fatal(.app, "set class attribute", .{
+    //                         .@"struct" = @typeName(Struct),
+    //                         .name = name,
+    //                     });
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
 
     try context.setupGlobal();
     return context;

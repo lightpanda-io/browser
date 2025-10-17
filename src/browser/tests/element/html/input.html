@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<input id="text1" type="text" value="initial">
+<input id="text2" type="text">
+
+<input id="check1" type="checkbox" checked>
+<input id="check2" type="checkbox">
+
+<input id="radio1" type="radio" name="group1" checked>
+<input id="radio2" type="radio" name="group1">
+<input id="radio3" type="radio" name="group1">
+
+<input id="radio4" type="radio" name="group2">
+
+<input id="disabled1" type="text" disabled>
+<input id="disabled2" type="checkbox">
+
+<script id="type">
+  testing.expectEqual('text', $('#text1').type)
+  testing.expectEqual('text', $('#text2').type)
+  testing.expectEqual('checkbox', $('#check1').type)
+  testing.expectEqual('radio', $('#radio1').type)
+</script>
+
+<script id="type_case_insensitive">
+  {
+    const input = document.createElement('input')
+    input.setAttribute('type', 'TEXT')
+    testing.expectEqual('text', input.type)
+
+    input.setAttribute('type', 'ChEcKbOx')
+    testing.expectEqual('checkbox', input.type)
+
+    input.setAttribute('type', 'EMAIL')
+    testing.expectEqual('email', input.type)
+  }
+</script>
+
+<script id="type_attribute_name_case_insensitive">
+  {
+    const input = document.createElement('input')
+    input.setAttribute('TYPE', 'checkbox')
+    testing.expectEqual('checkbox', input.type)
+    testing.expectEqual('checkbox', input.getAttribute('type'))
+
+    input.setAttribute('TyPe', 'radio')
+    testing.expectEqual('radio', input.type)
+    testing.expectEqual('radio', input.getAttribute('type'))
+  }
+</script>
+
+<script id="type_invalid_defaults_to_text">
+  {
+    const input = document.createElement('input')
+    input.setAttribute('type', 'invalid')
+    testing.expectEqual('text', input.type)
+
+    input.setAttribute('type', 'notavalidtype')
+    testing.expectEqual('text', input.type)
+
+    input.setAttribute('type', 'x'.repeat(50))
+    testing.expectEqual('text', input.type)
+  }
+</script>
+
+<script id="type_set">
+  const input = document.createElement('input')
+  testing.expectEqual('text', input.type)
+
+  input.type = 'password'
+  testing.expectEqual('password', input.type)
+
+  input.type = 'EMAIL'
+  testing.expectEqual('email', input.type)
+
+  input.type = 'invalid'
+  testing.expectEqual('text', input.type)
+
+  input.type = 'ChEcKbOx'
+  testing.expectEqual('checkbox', input.type)
+</script>
+
+<script id="value_initial">
+  testing.expectEqual('initial', $('#text1').value)
+  testing.expectEqual('', $('#text2').value)
+</script>
+
+<script id="value_set">
+  $('#text1').value = 'changed'
+  testing.expectEqual('changed', $('#text1').value)
+
+  $('#text2').value = 'new value'
+  testing.expectEqual('new value', $('#text2').value)
+</script>
+
+<script id="checked_initial">
+  testing.expectEqual(true, $('#check1').checked)
+  testing.expectEqual(false, $('#check2').checked)
+  testing.expectEqual(true, $('#radio1').checked)
+  testing.expectEqual(false, $('#radio2').checked)
+</script>
+
+<script id="checked_set">
+  $('#check1').checked = false
+  testing.expectEqual(false, $('#check1').checked)
+
+  $('#check2').checked = true
+  testing.expectEqual(true, $('#check2').checked)
+
+  $('#radio2').checked = true
+  testing.expectEqual(true, $('#radio2').checked)
+</script>
+
+<script id="defaultValue">
+  testing.expectEqual('initial', $('#text1').defaultValue)
+  testing.expectEqual('', $('#text2').defaultValue)
+
+  $('#text1').value = 'changed'
+  testing.expectEqual('initial', $('#text1').defaultValue)
+</script>
+
+<script id="defaultChecked">
+  testing.expectEqual(true, $('#check1').defaultChecked)
+  testing.expectEqual(false, $('#check2').defaultChecked)
+  testing.expectEqual(true, $('#radio1').defaultChecked)
+  testing.expectEqual(false, $('#radio2').defaultChecked)
+
+  $('#check1').checked = false
+  testing.expectEqual(true, $('#check1').defaultChecked)
+</script>
+
+<script id="disabled_initial">
+  testing.expectEqual(true, $('#disabled1').disabled)
+  testing.expectEqual(false, $('#disabled2').disabled)
+</script>
+
+<script id="disabled_set">
+  $('#disabled1').disabled = false
+  testing.expectEqual(false, $('#disabled1').disabled)
+
+  $('#disabled2').disabled = true
+  testing.expectEqual(true, $('#disabled2').disabled)
+</script>
+
+<form id="form1">
+  <input id="input_in_form" type="text">
+</form>
+
+<form id="form2"></form>
+<input id="input_with_form_attr" type="text" form="form2">
+
+<input id="input_no_form" type="text">
+
+<form id="form3">
+  <input id="input_invalid_form_attr" type="text" form="nonexistent">
+</form>
+
+<script id="form_ancestor">
+  const inputInForm = $('#input_in_form')
+  testing.expectEqual('FORM', inputInForm.form.tagName)
+  testing.expectEqual('form1', inputInForm.form.id)
+</script>
+
+<script id="form_attribute">
+  const inputWithFormAttr = $('#input_with_form_attr')
+  testing.expectEqual('FORM', inputWithFormAttr.form.tagName)
+  testing.expectEqual('form2', inputWithFormAttr.form.id)
+</script>
+
+<script id="form_null">
+  const inputNoForm = $('#input_no_form')
+  testing.expectEqual(null, inputNoForm.form)
+</script>
+
+<script id="form_invalid_attribute">
+  const inputInvalidFormAttr = $('#input_invalid_form_attr')
+  testing.expectEqual(null, inputInvalidFormAttr.form)
+</script>
+
+<script id="input_clone">
+  {
+    const input = document.createElement('input');
+    input.type = 'image';
+    const clone = input.cloneNode();
+    testing.expectEqual('image', clone.type);
+  }
+</script>
+
+<script id="type_reflects_to_attribute">
+  {
+    const input = document.createElement('input')
+    input.type = 'checkbox'
+    testing.expectEqual('checkbox', input.getAttribute('type'))
+    testing.expectTrue(input.outerHTML.includes('type="checkbox"'))
+
+    input.type = 'radio'
+    testing.expectEqual('radio', input.getAttribute('type'))
+    testing.expectTrue(input.outerHTML.includes('type="radio"'))
+  }
+</script>
+
+<script id="disabled_reflects_to_attribute">
+  {
+    const input = document.createElement('input')
+    testing.expectEqual(null, input.getAttribute('disabled'))
+    testing.expectFalse(input.outerHTML.includes('disabled'))
+
+    input.disabled = true
+    testing.expectEqual('', input.getAttribute('disabled'))
+    testing.expectTrue(input.outerHTML.includes('disabled'))
+
+    input.disabled = false
+    testing.expectEqual(null, input.getAttribute('disabled'))
+    testing.expectFalse(input.outerHTML.includes('disabled'))
+  }
+</script>
+
+<script id="value_does_not_reflect_to_attribute">
+  {
+    const input = document.createElement('input')
+    input.setAttribute('value', 'initial')
+    testing.expectEqual('initial', input.getAttribute('value'))
+
+    input.value = 'changed'
+    testing.expectEqual('changed', input.value)
+    testing.expectEqual('initial', input.getAttribute('value'))
+    testing.expectTrue(input.outerHTML.includes('value="initial"'))
+    testing.expectFalse(input.outerHTML.includes('value="changed"'))
+  }
+</script>
+
+<script id="checked_does_not_reflect_to_attribute">
+  {
+    const input = document.createElement('input')
+    input.type = 'checkbox'
+    input.setAttribute('checked', '')
+    testing.expectEqual('', input.getAttribute('checked'))
+    testing.expectTrue(input.outerHTML.includes('checked'))
+
+    input.checked = false
+    testing.expectEqual(false, input.checked)
+    testing.expectEqual('', input.getAttribute('checked'))
+    testing.expectTrue(input.outerHTML.includes('checked'))
+  }
+</script>

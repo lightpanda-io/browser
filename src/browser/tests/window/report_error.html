@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=reportErrorBasic>
+{
+  let errorEventFired = false;
+  let capturedEvent = null;
+
+  window.addEventListener('error', (e) => {
+    errorEventFired = true;
+    capturedEvent = e;
+  });
+
+  const err = new Error('Test error');
+  window.reportError(err);
+
+  testing.expectEqual(true, errorEventFired);
+  testing.expectEqual('error', capturedEvent.type);
+  testing.expectEqual(true, capturedEvent.message.includes('Test error'));
+}
+</script>
+
+<script id=reportErrorWithProperties>
+{
+  let evt = null;
+  window.addEventListener('error', (e) => {
+    evt = e;
+  });
+
+  const err = new Error('Detailed error');
+  err.fileName = 'script.js';
+  err.lineNumber = 100;
+  err.columnNumber = 25;
+
+  window.reportError(err);
+
+  testing.expectEqual(true, evt.message.includes('Detailed error'));
+  testing.expectEqual('script.js', evt.filename);
+  testing.expectEqual(100, evt.lineno);
+  testing.expectEqual(25, evt.colno);
+  testing.expectEqual(err, evt.error);
+}
+</script>
+
+<script id=reportErrorCancelable>
+{
+  let eventCancelable = false;
+
+  window.addEventListener('error', (e) => {
+    eventCancelable = e.cancelable;
+    e.preventDefault();
+  });
+
+  window.reportError(new Error('Cancelable error'));
+
+  testing.expectEqual(true, eventCancelable);
+}
+</script>
+
+<script id=reportErrorNotBubbling>
+{
+  let parentCalled = false;
+  let windowCalled = false;
+
+  document.addEventListener('error', () => {
+    parentCalled = true;
+  });
+
+  window.addEventListener('error', () => {
+    windowCalled = true;
+  });
+
+  window.reportError(new Error('Non-bubbling error'));
+
+  testing.expectEqual(false, parentCalled);
+  testing.expectEqual(true, windowCalled);
+}
+</script>
+
+<script id=reportErrorWithString>
+{
+  let evt = null;
+
+  window.addEventListener('error', (e) => {
+    evt = e;
+  });
+
+  window.reportError('Plain string error');
+
+  testing.expectEqual('Plain string error', evt.message);
+  testing.expectEqual('', evt.filename);
+  testing.expectEqual(0, evt.lineno);
+  testing.expectEqual(0, evt.colno);
+}
+</script>
+
+<script id=reportErrorMultipleCalls>
+{
+  let callCount = 0;
+
+  window.addEventListener('error', () => {
+    callCount++;
+  });
+
+  window.reportError(new Error('First error'));
+  window.reportError(new Error('Second error'));
+  window.reportError(new Error('Third error'));
+
+  testing.expectEqual(3, callCount);
+}
+</script>
+
+<script id=reportErrorEventTarget>
+{
+  let evt = null;
+
+  window.addEventListener('error', (e) => {
+    evt = e;
+  });
+
+  const err = new Error('Target test');
+  window.reportError(err);
+
+  testing.expectEqual(window, evt.target);
+  testing.expectEqual(window, evt.currentTarget);
+}
+</script>
+
+<script id=reportErrorWithNull>
+{
+  let eventFired = false;
+  let evt = null;
+
+  window.addEventListener('error', (e) => {
+    eventFired = true;
+    evt = e;
+  });
+
+  window.reportError(null);
+
+  testing.expectEqual(true, eventFired);
+  testing.expectEqual('error', evt.type);
+  testing.expectEqual('', evt.filename);
+  testing.expectEqual(0, evt.lineno);
+  testing.expectEqual(0, evt.colno);
+}
+</script>
+
+<script id=reportErrorWithUndefined>
+{
+  let eventFired = false;
+  let evt = null;
+
+  window.addEventListener('error', (e) => {
+    eventFired = true;
+    evt = e;
+  });
+
+  window.reportError(undefined);
+
+  testing.expectEqual(true, eventFired);
+  testing.expectEqual('error', evt.type);
+  testing.expectEqual('', evt.filename);
+  testing.expectEqual(0, evt.lineno);
+  testing.expectEqual(0, evt.colno);
+}
+</script>
+
+<script id=reportErrorPreventDefault>
+{
+  let preventDefaultCalled = false;
+  let listenerCalled = false;
+
+  window.addEventListener('error', (e) => {
+    listenerCalled = true;
+    testing.expectEqual(true, e.cancelable);
+    e.preventDefault();
+    preventDefaultCalled = true;
+    testing.expectEqual(true, e.defaultPrevented);
+  });
+
+  window.reportError(new Error('Should be prevented'));
+
+  testing.expectEqual(true, listenerCalled);
+  testing.expectEqual(true, preventDefaultCalled);
+}
+</script>

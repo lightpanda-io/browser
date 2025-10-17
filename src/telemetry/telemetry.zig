@@ -4,8 +4,8 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const log = @import("../log.zig");
-const App = @import("../app.zig").App;
-const Notification = @import("../notification.zig").Notification;
+const App = @import("../App.zig");
+const Notification = @import("../Notification.zig");
 
 const uuidv4 = @import("../id.zig").uuidv4;
 const IID_FILE = "iid";

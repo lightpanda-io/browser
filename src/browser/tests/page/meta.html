@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<script id=meta>
+  testing.expectEqual('Document', document.constructor.name);
+  testing.expectEqual('[object Document]', new Document().toString());
+  testing.expectEqual('Window', window.constructor.name);
+
+  // Important test. new Document() returns a Node, but getElementById
+  // exists on the Document. So this is a simple way to make sure that
+  // the returned Zig type is associated with the correct JS class.
+  testing.expectEqual(null, new Document().getElementById('x'));
+</script>

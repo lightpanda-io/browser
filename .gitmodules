@@ -1,24 +1,6 @@
-[submodule "vendor/netsurf/libwapcaplet"]
-	path = vendor/netsurf/libwapcaplet
-	url = https://github.com/lightpanda-io/libwapcaplet.git/
-[submodule "vendor/netsurf/libparserutils"]
-	path = vendor/netsurf/libparserutils
-	url = https://github.com/lightpanda-io/libparserutils.git/
-[submodule "vendor/netsurf/libdom"]
-	path = vendor/netsurf/libdom
-	url = https://github.com/lightpanda-io/libdom.git/
-[submodule "vendor/netsurf/share/netsurf-buildsystem"]
-	path = vendor/netsurf/share/netsurf-buildsystem
-	url = https://github.com/lightpanda-io/netsurf-buildsystem.git
-[submodule "vendor/netsurf/libhubbub"]
-	path = vendor/netsurf/libhubbub
-	url = https://github.com/lightpanda-io/libhubbub.git/
 [submodule "tests/wpt"]
 	path = tests/wpt
 	url = https://github.com/lightpanda-io/wpt
-[submodule "vendor/mimalloc"]
-	path = vendor/mimalloc
-	url = https://github.com/microsoft/mimalloc.git/
 [submodule "vendor/nghttp2"]
 	path = vendor/nghttp2
 	url = https://github.com/nghttp2/nghttp2.git

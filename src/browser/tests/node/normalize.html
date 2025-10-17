@@ -1,0 +1,30 @@
+<script src="../testing.js"></script>
+<div id=container></div>
+
+<script id=normalize>
+  const container = $('#container');
+
+  // Test merging adjacent text nodes
+  container.innerHTML = 'a' + 'b';
+  container.normalize();
+  testing.expectEqual('ab', container.innerHTML);
+  testing.expectEqual(1, container.childNodes.length);
+
+  // Test removing empty text nodes
+  container.innerHTML = 'a' + '' + 'b';
+  container.normalize();
+  testing.expectEqual('ab', container.innerHTML);
+  testing.expectEqual(1, container.childNodes.length);
+
+  // Test recursive normalization
+  container.innerHTML = '<div>a' + '' + 'b</div>c';
+  container.normalize();
+  testing.expectEqual('<div>ab</div>c', container.innerHTML);
+  testing.expectEqual(2, container.childNodes.length);
+  testing.expectEqual(1, container.firstChild.childNodes.length);
+
+  container.innerHTML = 'a<p></p>b';
+  container.normalize();
+  testing.expectEqual('a<p></p>b', container.innerHTML);
+  testing.expectEqual(3, container.childNodes.length);
+</script>

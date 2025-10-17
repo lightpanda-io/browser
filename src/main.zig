@@ -17,73 +17,41 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
-const log = @import("log.zig");
-const App = @import("app.zig").App;
-const Server = @import("server.zig").Server;
-const Browser = @import("browser/browser.zig").Browser;
-const DumpStripMode = @import("browser/dump.zig").Opts.StripMode;
-
-const build_config = @import("build_config");
+const log = lp.log;
+const App = lp.App;
 
 var _app: ?*App = null;
-var _server: ?Server = null;
+var _server: ?lp.Server = null;
 
 pub fn main() !void {
     // allocator
     // - in Debug mode we use the General Purpose Allocator to detect memory leaks
     // - in Release mode we use the c allocator
     var gpa: std.heap.DebugAllocator(.{}) = .init;
-    const alloc = if (builtin.mode == .Debug) gpa.allocator() else std.heap.c_allocator;
+    const allocator = if (builtin.mode == .Debug) gpa.allocator() else std.heap.c_allocator;
 
     defer if (builtin.mode == .Debug) {
         if (gpa.detectLeaks()) std.posix.exit(1);
     };
 
-    run(alloc) catch |err| {
-        // If explicit filters were set, they won't be valid anymore because
-        // the args_arena is gone. We need to set it to something that's not
-        // invalid. (We should just move the args_arena up to main)
-        log.opts.filter_scopes = &.{};
+    var global_allocator = lp.GlobalAllocator.init(allocator);
+
+    // arena for main-specific allocations
+    var main_arena = std.heap.ArenaAllocator.init(global_allocator.allocator());
+    defer main_arena.deinit();
+
+    run(&global_allocator, main_arena.allocator()) catch |err| {
         log.fatal(.app, "exit", .{ .err = err });
         std.posix.exit(1);
     };
 }
 
-// Handle app shutdown gracefuly on signals.
-fn shutdown() void {
-    const sigaction: std.posix.Sigaction = .{
-        .handler = .{
-            .handler = struct {
-                pub fn handler(_: c_int) callconv(.c) void {
-                    // Shutdown service gracefuly.
-                    if (_server) |server| {
-                        server.deinit();
-                    }
-                    if (_app) |app| {
-                        app.deinit();
-                    }
-                    std.posix.exit(0);
-                }
-            }.handler,
-        },
-        .mask = std.posix.empty_sigset,
-        .flags = 0,
-    };
-    // Exit the program on SIGINT signal. When running the browser in a Docker
-    // container, sending a CTRL-C (SIGINT) signal is catched but doesn't exit
-    // the program. Here we force exiting on SIGINT.
-    std.posix.sigaction(std.posix.SIG.INT, &sigaction, null);
-    std.posix.sigaction(std.posix.SIG.TERM, &sigaction, null);
-    std.posix.sigaction(std.posix.SIG.QUIT, &sigaction, null);
-}
-
-fn run(alloc: Allocator) !void {
-    var args_arena = std.heap.ArenaAllocator.init(alloc);
-    defer args_arena.deinit();
-    const args = try parseArgs(args_arena.allocator());
+fn run(allocator: *lp.GlobalAllocator, main_arena: Allocator) !void {
+    const args = try parseArgs(main_arena);
 
     switch (args.mode) {
         .help => {
@@ -91,7 +59,7 @@ fn run(alloc: Allocator) !void {
             return std.process.cleanExit();
         },
         .version => {
-            std.debug.print("{s}\n", .{build_config.git_commit});
+            std.debug.print("{s}\n", .{lp.build_config.git_commit});
             return std.process.cleanExit();
         },
         else => {},
@@ -110,13 +78,13 @@ fn run(alloc: Allocator) !void {
     const user_agent = blk: {
         const USER_AGENT = "User-Agent: Lightpanda/1.0";
         if (args.userAgentSuffix()) |suffix| {
-            break :blk try std.fmt.allocPrintSentinel(args_arena.allocator(), "{s} {s}", .{ USER_AGENT, suffix }, 0);
+            break :blk try std.fmt.allocPrintSentinel(main_arena, "{s} {s}", .{ USER_AGENT, suffix }, 0);
         }
         break :blk USER_AGENT;
     };
 
     // _app is global to handle graceful shutdown.
-    _app = try App.init(alloc, .{
+    _app = try App.init(allocator, .{
         .run_mode = args.mode,
         .http_proxy = args.httpProxy(),
         .proxy_bearer_token = args.proxyBearerToken(),
@@ -133,80 +101,49 @@ fn run(alloc: Allocator) !void {
     app.telemetry.record(.{ .run = {} });
 
     switch (args.mode) {
-        .serve => |opts| {
-            log.debug(.app, "startup", .{ .mode = "serve" });
-            const address = std.net.Address.parseIp4(opts.host, opts.port) catch |err| {
-                log.fatal(.app, "invalid server address", .{ .err = err, .host = opts.host, .port = opts.port });
-                return args.printUsageAndExit(false);
-            };
+        .serve => {
+            log.fatal(.app, "serve not not supported in the zigdom branch yet\n", .{});
+            return;
+            // @ZIGDOM-CDP
+            // .serve => |opts| {
+            //     log.debug(.app, "startup", .{ .mode = "serve" });
+            //     const address = std.net.Address.parseIp4(opts.host, opts.port) catch |err| {
+            //         log.fatal(.app, "invalid server address", .{ .err = err, .host = opts.host, .port = opts.port });
+            //         return args.printUsageAndExit(false);
+            //     };
 
-            // _server is global to handle graceful shutdown.
-            _server = try Server.init(app, address);
-            const server = &_server.?;
-            defer server.deinit();
+            //     // _server is global to handle graceful shutdown.
+            //     _server = try lp.Server.init(app, address);
+            //     const server = &_server.?;
+            //     defer server.deinit();
 
-            // max timeout of 1 week.
-            const timeout = if (opts.timeout > 604_800) 604_800_000 else @as(i32, opts.timeout) * 1000;
-            server.run(address, timeout) catch |err| {
-                log.fatal(.app, "server run error", .{ .err = err });
-                return err;
-            };
+            //     // max timeout of 1 week.
+            //     const timeout = if (opts.timeout > 604_800) 604_800_000 else @as(i32, opts.timeout) * 1000;
+            //     server.run(address, timeout) catch |err| {
+            //         log.fatal(.app, "server run error", .{ .err = err });
+            //         return err;
+            //     };
         },
         .fetch => |opts| {
             const url = opts.url;
             log.debug(.app, "startup", .{ .mode = "fetch", .dump = opts.dump, .url = url });
 
-            // browser
-            var browser = try Browser.init(app);
-            defer browser.deinit();
-
-            var session = try browser.newSession();
-
-            // page
-            const page = try session.createPage();
-
-            // // Comment this out to get a profile of the JS code in v8/profile.json.
-            // // You can open this in Chrome's profiler.
-            // // I've seen it generate invalid JSON, but I'm not sure why. It only
-            // // happens rarely, and I manually fix the file.
-            // page.js.startCpuProfiler();
-            // defer {
-            //     if (page.js.stopCpuProfiler()) |profile| {
-            //         std.fs.cwd().writeFile(.{
-            //             .sub_path = "v8/profile.json",
-            //             .data = profile,
-            //         }) catch |err| {
-            //             log.err(.app, "profile write error", .{ .err = err });
-            //         };
-            //     } else |err| {
-            //         log.err(.app, "profile error", .{ .err = err });
-            //     }
-            // }
-
-            _ = page.navigate(url, .{}) catch |err| switch (err) {
-                error.UnsupportedUriScheme, error.UriMissingHost => {
-                    log.fatal(.app, "invalid fetch URL", .{ .err = err, .url = url });
-                    return args.printUsageAndExit(false);
-                },
-                else => {
-                    log.fatal(.app, "fetch error", .{ .err = err, .url = url });
-                    return err;
+            var fetch_opts = lp.FetchOpts{
+                .wait_ms = 5000,
+                .dump = .{
+                    .with_base = opts.with_base,
+                    .strip_mode = opts.strip_mode,
                 },
             };
 
-            _ = session.fetchWait(5000); // 5 seconds
-
-            // dump
             if (opts.dump) {
-                var stdout = std.fs.File.stdout();
-                var writer = stdout.writer(&.{});
-                try page.dump(.{
-                    .page = page,
-                    .with_base = opts.withbase,
-                    .strip_mode = opts.strip_mode,
-                }, &writer.interface);
-                try writer.interface.flush();
+                fetch_opts.dump_file = std.fs.File.stdout();
             }
+
+            lp.fetch(app, url, fetch_opts) catch |err| {
+                log.fatal(.app, "fetch error", .{ .err = err, .url = url });
+                return err;
+            };
         },
         else => unreachable,
     }
@@ -312,7 +249,7 @@ const Command = struct {
         dump: bool = false,
         common: Common,
         withbase: bool = false,
-        strip_mode: DumpStripMode = .{},
+        strip_mode: lp.dump.Opts.StripMode = .{},
     };
 
     const Common = struct {
@@ -578,7 +515,7 @@ fn parseFetchArgs(
     var withbase: bool = false;
     var url: ?[]const u8 = null;
     var common: Command.Common = .{};
-    var strip_mode: DumpStripMode = .{};
+    var strip_mode: lp.dump.Opts.StripMode = .{};
 
     while (args.next()) |opt| {
         if (std.mem.eql(u8, "--dump", opt)) {
@@ -809,94 +746,30 @@ fn parseCommonArg(
     return false;
 }
 
-const testing = @import("testing.zig");
-test {
-    std.testing.refAllDecls(@This());
-}
-
-const TestHTTPServer = @import("TestHTTPServer.zig");
-
-var test_cdp_server: ?Server = null;
-var test_http_server: ?TestHTTPServer = null;
-
-test "tests:beforeAll" {
-    log.opts.level = .warn;
-    log.opts.format = .pretty;
-    try testing.setup();
-    var wg: std.Thread.WaitGroup = .{};
-    wg.startMany(2);
-
-    {
-        const thread = try std.Thread.spawn(.{}, serveCDP, .{&wg});
-        thread.detach();
-    }
-
-    test_http_server = TestHTTPServer.init(testHTTPHandler);
-    {
-        const thread = try std.Thread.spawn(.{}, TestHTTPServer.run, .{ &test_http_server.?, &wg });
-        thread.detach();
-    }
-
-    // need to wait for the servers to be listening, else tests will fail because
-    // they aren't able to connect.
-    wg.wait();
-}
-
-test "tests:afterAll" {
-    if (test_cdp_server) |*server| {
-        server.deinit();
-    }
-    if (test_http_server) |*server| {
-        server.deinit();
-    }
-    testing.shutdown();
-}
-
-fn serveCDP(wg: *std.Thread.WaitGroup) !void {
-    const address = try std.net.Address.parseIp("127.0.0.1", 9583);
-    test_cdp_server = try Server.init(testing.test_app, address);
-
-    var server = try Server.init(testing.test_app, address);
-    defer server.deinit();
-    wg.finish();
-
-    test_cdp_server.?.run(address, 5) catch |err| {
-        std.debug.print("CDP server error: {}", .{err});
-        return err;
+// Handle app shutdown gracefuly on signals.
+fn shutdown() void {
+    const sigaction: std.posix.Sigaction = .{
+        .handler = .{
+            .handler = struct {
+                pub fn handler(_: c_int) callconv(.c) void {
+                    // Shutdown service gracefuly.
+                    if (_server) |server| {
+                        server.deinit();
+                    }
+                    if (_app) |app| {
+                        app.deinit();
+                    }
+                    std.posix.exit(0);
+                }
+            }.handler,
+        },
+        .mask = std.posix.empty_sigset,
+        .flags = 0,
     };
-}
-
-fn testHTTPHandler(req: *std.http.Server.Request) !void {
-    const path = req.head.target;
-
-    if (std.mem.eql(u8, path, "/loader")) {
-        return req.respond("Hello!", .{
-            .extra_headers = &.{.{ .name = "Connection", .value = "close" }},
-        });
-    }
-
-    if (std.mem.eql(u8, path, "/xhr")) {
-        return req.respond("1234567890" ** 10, .{
-            .extra_headers = &.{
-                .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
-            },
-        });
-    }
-
-    if (std.mem.eql(u8, path, "/xhr/json")) {
-        return req.respond("{\"over\":\"9000!!!\"}", .{
-            .extra_headers = &.{
-                .{ .name = "Content-Type", .value = "application/json" },
-            },
-        });
-    }
-
-    if (std.mem.startsWith(u8, path, "/src/tests/")) {
-        // strip off leading / so that it's relative to CWD
-        return TestHTTPServer.sendFile(req, path[1..]);
-    }
-
-    std.debug.print("TestHTTPServer was asked to serve an unknown file: {s}\n", .{path});
-
-    unreachable;
+    // Exit the program on SIGINT signal. When running the browser in a Docker
+    // container, sending a CTRL-C (SIGINT) signal is catched but doesn't exit
+    // the program. Here we force exiting on SIGINT.
+    std.posix.sigaction(std.posix.SIG.INT, &sigaction, null);
+    std.posix.sigaction(std.posix.SIG.TERM, &sigaction, null);
+    std.posix.sigaction(std.posix.SIG.QUIT, &sigaction, null);
 }

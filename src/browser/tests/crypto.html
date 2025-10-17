@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+
+<script id=getRandomValues>
+  function isRandom(ta) {
+    let uniq = new Set(Array.from(ta));
+    testing.expectEqual(true, (uniq.size / ta.length) * 100 > 0.7)
+  }
+  {
+    let tu8a = new Uint8Array(100)
+    testing.expectEqual(tu8a, Crypto.getRandomValues(tu8a))
+    isRandom(tu8a)
+
+    let ti8a = new Int8Array(100)
+    testing.expectEqual(ti8a, Crypto.getRandomValues(ti8a))
+    isRandom(ti8a)
+  }
+
+  {
+    let tu16a = new Uint16Array(100)
+    testing.expectEqual(tu16a, Crypto.getRandomValues(tu16a))
+    isRandom(tu16a)
+
+    let ti16a = new Int16Array(100)
+    testing.expectEqual(ti16a, Crypto.getRandomValues(ti16a))
+    isRandom(ti16a)
+  }
+
+  {
+    let tu32a = new Uint32Array(100)
+    testing.expectEqual(tu32a, Crypto.getRandomValues(tu32a))
+    isRandom(tu32a)
+
+    let ti32a = new Int32Array(100)
+    testing.expectEqual(ti32a, Crypto.getRandomValues(ti32a))
+    isRandom(ti32a)
+  }
+
+  {
+    let tu64a = new BigUint64Array(100)
+    testing.expectEqual(tu64a, Crypto.getRandomValues(tu64a))
+    isRandom(tu64a)
+
+    let ti64a = new BigInt64Array(100)
+    testing.expectEqual(ti64a, Crypto.getRandomValues(ti64a))
+    isRandom(ti64a)
+  }
+
+
+</script>
+
+<script id="randomUUID">
+  const uuid = Crypto.randomUUID();
+  testing.expectEqual('string', typeof uuid);
+  testing.expectEqual(36, uuid.length);
+  const regex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  testing.expectEqual(true, regex.test(uuid));
+</script>

@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<body>
+  <div id="root">
+    <div id="child1">
+      <span id="grandchild1">Text 1</span>
+      <span id="grandchild2">Text 2</span>
+    </div>
+    <div id="child2">
+      <span id="grandchild3">Text 3</span>
+    </div>
+    <p id="child3">Paragraph</p>
+  </div>
+</body>
+
+<script id=node_iterator_basic>
+  {
+    const root = document.getElementById("root");
+    const iterator = document.createNodeIterator(root);
+
+    testing.expectEqual("NodeIterator", iterator.constructor.name);
+    testing.expectEqual(root, iterator.root);
+    testing.expectEqual(root, iterator.referenceNode);
+    testing.expectEqual(true, iterator.pointerBeforeReferenceNode);
+    testing.expectEqual(0xFFFFFFFF, iterator.whatToShow);
+    testing.expectEqual(null, iterator.filter);
+  }
+</script>
+
+<script id=node_iterator_pointer_state_forward>
+  {
+    const container = document.createElement("div");
+    const a = document.createElement("div");
+    a.id = "a";
+    const b = document.createElement("div");
+    b.id = "b";
+    container.appendChild(a);
+    container.appendChild(b);
+
+    const iterator = document.createNodeIterator(container, NodeFilter.SHOW_ELEMENT);
+
+    testing.expectEqual(true, iterator.pointerBeforeReferenceNode);
+    testing.expectEqual(container, iterator.referenceNode);
+
+    const first = iterator.nextNode();
+    testing.expectEqual(container, first);
+    testing.expectEqual(false, iterator.pointerBeforeReferenceNode);
+    testing.expectEqual(container, iterator.referenceNode);
+
+    const second = iterator.nextNode();
+    testing.expectEqual("a", second.id);
+    testing.expectEqual(false, iterator.pointerBeforeReferenceNode);
+    testing.expectEqual(second, iterator.referenceNode);
+
+    const third = iterator.nextNode();
+    testing.expectEqual("b", third.id);
+    testing.expectEqual(false, iterator.pointerBeforeReferenceNode);
+    testing.expectEqual(third, iterator.referenceNode);
+  }
+</script>
+
+<script id=node_iterator_pointer_state_backward>
+  {
+    const container = document.createElement("div");
+    const a = document.createElement("div");
+    a.id = "a";
+    const b = document.createElement("div");
+    b.id = "b";
+    container.appendChild(a);
+    container.appendChild(b);
+
+    const iterator = document.createNodeIterator(container, NodeFilter.SHOW_ELEMENT);
+
+    iterator.nextNode();
+    iterator.nextNode();
+    iterator.nextNode();
+    testing.expectEqual("b", iterator.referenceNode.id);
+    testing.expectEqual(false, iterator.pointerBeforeReferenceNode);
+
+    const prev = iterator.previousNode();
+    testing.expectEqual("b", prev.id);
+    testing.expectEqual(true, iterator.pointerBeforeReferenceNode);
+    testing.expectEqual("b", iterator.referenceNode.id);
+  }
+</script>
+
+<script id=node_iterator_pointer_state_zigzag>
+  {
+    const container = document.createElement("div");
+    const a = document.createElement("div");
+    a.id = "a";
+    const b = document.createElement("div");
+    b.id = "b";
+    const c = document.createElement("div");
+    c.id = "c";
+    container.appendChild(a);
+    container.appendChild(b);
+    container.appendChild(c);
+
+    const iterator = document.createNodeIterator(container, NodeFilter.SHOW_ELEMENT);
+
+    iterator.nextNode();
+    iterator.nextNode();
+    testing.expectEqual("a", iterator.referenceNode.id);
+    testing.expectEqual(false, iterator.pointerBeforeReferenceNode);
+
+    const back = iterator.previousNode();
+    testing.expectEqual("a", back.id);
+    testing.expectEqual(true, iterator.pointerBeforeReferenceNode);
+
+    const forward = iterator.nextNode();
+    testing.expectEqual("a", forward.id);
+    testing.expectEqual(false, iterator.pointerBeforeReferenceNode);
+
+    iterator.nextNode();
+    testing.expectEqual("b", iterator.referenceNode.id);
+    testing.expectEqual(false, iterator.pointerBeforeReferenceNode);
+  }
+</script>
+
+<script id=node_iterator_skip_vs_reject>
+  {
+    const container = document.createElement("div");
+    container.innerHTML = `
+      <div id="skip-me">
+        <span id="nested-span">Found me!</span>
+      </div>
+      <div id="reject-me">
+        <span id="hidden-span">Can't find me!</span>
+      </div>
+    `;
+
+    const iterator = document.createNodeIterator(
+      container,
+      NodeFilter.SHOW_ELEMENT,
+      function(node) {
+        if (node.id === "skip-me") {
+          return NodeFilter.FILTER_SKIP;
+        }
+        if (node.id === "reject-me") {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    );
+
+    const root = iterator.nextNode();
+    testing.expectEqual(container, root);
+
+    const first = iterator.nextNode();
+    testing.expectEqual("nested-span", first.id);
+
+    const second = iterator.nextNode();
+    testing.expectEqual("hidden-span", second.id);
+  }
+</script>
+
+<script id=node_iterator_nested_comments_in_skipped>
+  {
+    const container = document.createElement("div");
+    const skipped = document.createElement("div");
+    skipped.id = "skipped";
+    const comment = document.createComment("Important comment");
+    skipped.appendChild(comment);
+    container.appendChild(skipped);
+
+    const iterator = document.createNodeIterator(
+      container,
+      NodeFilter.SHOW_COMMENT,
+      function(node) {
+        if (node.nodeType === 1 && node.id === "skipped") {
+          return NodeFilter.FILTER_SKIP;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    );
+
+    const found = iterator.nextNode();
+    testing.expectEqual(8, found.nodeType);
+    testing.expectEqual("Important comment", found.textContent);
+  }
+</script>
+
+<script id=node_iterator_nested_in_rejected>
+  {
+    const container = document.createElement("div");
+    const rejected = document.createElement("div");
+    rejected.id = "rejected";
+    rejected.appendChild(document.createTextNode("Hidden text"));
+    container.appendChild(rejected);
+    container.appendChild(document.createTextNode("Visible text"));
+
+    const iterator = document.createNodeIterator(
+      container,
+      NodeFilter.SHOW_TEXT,
+      function(node) {
+        if (node.nodeType === 1 && node.id === "rejected") {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    );
+
+    const text1 = iterator.nextNode();
+    testing.expectEqual("Hidden text", text1.textContent);
+
+    const text2 = iterator.nextNode();
+    testing.expectEqual("Visible text", text2.textContent);
+  }
+</script>
+
+<script id=node_iterator_deep_nesting>
+  {
+    const container = document.createElement("div");
+    container.innerHTML = `
+      <div id="level1-skip">
+        <div id="level2-skip">
+          <div id="level3-accept">
+            <span id="level4-accept">Deep span</span>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const iterator = document.createNodeIterator(
+      container,
+      NodeFilter.SHOW_ELEMENT,
+      function(node) {
+        if (node.id && node.id.includes("accept")) {
+          return NodeFilter.FILTER_ACCEPT;
+        }
+        return NodeFilter.FILTER_SKIP;
+      }
+    );
+
+    const first = iterator.nextNode();
+    testing.expectEqual("level3-accept", first.id);
+
+    const second = iterator.nextNode();
+    testing.expectEqual("level4-accept", second.id);
+
+    const none = iterator.nextNode();
+    testing.expectEqual(null, none);
+  }
+</script>
+
+<script id=node_iterator_previousNode_with_filter>
+  {
+    const container = document.createElement("div");
+    container.innerHTML = `
+      <div class="accept">A</div>
+      <div class="skip">
+        <div class="accept">B</div>
+      </div>
+      <div class="accept">C</div>
+    `;
+
+    const iterator = document.createNodeIterator(
+      container,
+      NodeFilter.SHOW_ELEMENT,
+      function(node) {
+        if (node.classList.contains("accept")) {
+          return NodeFilter.FILTER_ACCEPT;
+        }
+        return NodeFilter.FILTER_SKIP;
+      }
+    );
+
+    iterator.nextNode();
+    iterator.nextNode();
+    iterator.nextNode();
+    iterator.nextNode();
+
+    testing.expectEqual("C", iterator.previousNode().textContent);
+    testing.expectEqual("B", iterator.previousNode().textContent);
+    testing.expectEqual("A", iterator.previousNode().textContent);
+  }
+</script>
+
+<script id=node_iterator_pointer_consistency_with_skipped>
+  {
+    const container = document.createElement("div");
+    const a = document.createElement("div");
+    a.id = "accept";
+    const b = document.createElement("div");
+    b.id = "skip";
+    const c = document.createElement("div");
+    c.id = "accept2";
+    container.appendChild(a);
+    container.appendChild(b);
+    container.appendChild(c);
+
+    const iterator = document.createNodeIterator(
+      container,
+      NodeFilter.SHOW_ELEMENT,
+      function(node) {
+        if (node.id && node.id.includes("accept")) {
+          return NodeFilter.FILTER_ACCEPT;
+        }
+        return NodeFilter.FILTER_SKIP;
+      }
+    );
+
+    const first = iterator.nextNode();
+    testing.expectEqual("accept", first.id);
+    testing.expectEqual(false, iterator.pointerBeforeReferenceNode);
+
+    const second = iterator.nextNode();
+    testing.expectEqual("accept2", second.id);
+    testing.expectEqual(false, iterator.pointerBeforeReferenceNode);
+
+    const back = iterator.previousNode();
+    testing.expectEqual("accept2", back.id);
+    testing.expectEqual(true, iterator.pointerBeforeReferenceNode);
+  }
+</script>
+
+<script id=node_iterator_function_filter>
+  {
+    const root = document.getElementById("root");
+
+    const iterator = document.createNodeIterator(
+      root,
+      NodeFilter.SHOW_ELEMENT,
+      function(node) {
+        if (node.id && node.id.startsWith("child")) {
+          return NodeFilter.FILTER_ACCEPT;
+        }
+        return NodeFilter.FILTER_SKIP;
+      }
+    );
+
+    testing.expectEqual("child1", iterator.nextNode().id);
+    testing.expectEqual("child2", iterator.nextNode().id);
+    testing.expectEqual("child3", iterator.nextNode().id);
+    testing.expectEqual(null, iterator.nextNode());
+  }
+</script>
+
+<script id=node_iterator_object_filter>
+  {
+    const root = document.getElementById("root");
+
+    const filter = {
+      acceptNode: function(node) {
+        if (node.tagName === "SPAN") {
+          return NodeFilter.FILTER_ACCEPT;
+        }
+        return NodeFilter.FILTER_SKIP;
+      }
+    };
+
+    const iterator = document.createNodeIterator(
+      root,
+      NodeFilter.SHOW_ELEMENT,
+      filter
+    );
+
+    testing.expectEqual("grandchild1", iterator.nextNode().id);
+    testing.expectEqual("grandchild2", iterator.nextNode().id);
+    testing.expectEqual("grandchild3", iterator.nextNode().id);
+    testing.expectEqual(null, iterator.nextNode());
+  }
+</script>
+
+<script id=node_iterator_text_nodes>
+  {
+    const container = document.createElement("div");
+    container.appendChild(document.createTextNode("text1"));
+    container.appendChild(document.createTextNode("text2"));
+    container.appendChild(document.createTextNode("text3"));
+
+    const iterator = document.createNodeIterator(container, NodeFilter.SHOW_TEXT);
+
+    const text1 = iterator.nextNode();
+    testing.expectEqual("#text", text1.nodeName);
+    testing.expectEqual("text1", text1.textContent);
+
+    const text2 = iterator.nextNode();
+    testing.expectEqual("text2", text2.textContent);
+
+    const text3 = iterator.nextNode();
+    testing.expectEqual("text3", text3.textContent);
+
+    testing.expectEqual(null, iterator.nextNode());
+  }
+</script>
+
+<script id=node_iterator_all_node_types>
+  {
+    const container = document.createElement("div");
+    container.appendChild(document.createTextNode("text"));
+    container.appendChild(document.createComment("comment"));
+    const span = document.createElement("span");
+    span.textContent = "element";
+    container.appendChild(span);
+
+    const allIterator = document.createNodeIterator(container, NodeFilter.SHOW_ALL);
+    testing.expectEqual(1, allIterator.nextNode().nodeType);
+    testing.expectEqual(3, allIterator.nextNode().nodeType);
+    testing.expectEqual(8, allIterator.nextNode().nodeType);
+    testing.expectEqual(1, allIterator.nextNode().nodeType);
+    testing.expectEqual(3, allIterator.nextNode().nodeType);
+  }
+</script>
+
+<script id=node_iterator_boundary_at_root>
+  {
+    const root = document.getElementById("root");
+    const iterator = document.createNodeIterator(root, NodeFilter.SHOW_ELEMENT);
+
+    testing.expectEqual(null, iterator.previousNode());
+    testing.expectEqual(true, iterator.pointerBeforeReferenceNode);
+  }
+</script>
+
+<script id=node_iterator_pointer_after_reaching_end>
+  {
+    const container = document.createElement("div");
+    const a = document.createElement("div");
+    a.id = "a";
+    container.appendChild(a);
+
+    const iterator = document.createNodeIterator(container, NodeFilter.SHOW_ELEMENT);
+
+    iterator.nextNode();
+    iterator.nextNode();
+    testing.expectEqual(null, iterator.nextNode());
+
+    testing.expectEqual("a", iterator.referenceNode.id);
+    testing.expectEqual(false, iterator.pointerBeforeReferenceNode);
+  }
+</script>
+
+<script id=node_iterator_complex_filter_pointer_tracking>
+  {
+    const container = document.createElement("div");
+    for (let i = 0; i < 5; i++) {
+      const div = document.createElement("div");
+      div.className = i % 2 === 0 ? "even" : "odd";
+      div.textContent = String(i);
+      container.appendChild(div);
+    }
+
+    const iterator = document.createNodeIterator(
+      container,
+      NodeFilter.SHOW_ELEMENT,
+      function(node) {
+        if (node.classList.contains("even")) {
+          return NodeFilter.FILTER_ACCEPT;
+        }
+        return NodeFilter.FILTER_SKIP;
+      }
+    );
+
+    testing.expectEqual("0", iterator.nextNode().textContent);
+    testing.expectEqual(false, iterator.pointerBeforeReferenceNode);
+
+    testing.expectEqual("2", iterator.nextNode().textContent);
+    testing.expectEqual(false, iterator.pointerBeforeReferenceNode);
+
+    testing.expectEqual("2", iterator.previousNode().textContent);
+    testing.expectEqual(true, iterator.pointerBeforeReferenceNode);
+
+    testing.expectEqual("2", iterator.nextNode().textContent);
+    testing.expectEqual(false, iterator.pointerBeforeReferenceNode);
+
+    testing.expectEqual("4", iterator.nextNode().textContent);
+    testing.expectEqual(null, iterator.nextNode());
+  }
+</script>
+

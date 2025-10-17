@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<div id="test-element" class="test-class" data-foo="bar">
+  <p>Paragraph 1</p>
+  <p>Paragraph 2</p>
+  <span>Some text</span>
+</div>
+
+<svg id="test-svg" width="100" height="100" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="50" cy="50" r="40" stroke="black" stroke-width="3" fill="red"/>
+  <text x="10" y="20">SVG Text</text>
+</svg>
+
+<script id="cloneTextNode">
+{
+  const text = document.createTextNode('Hello World');
+  const cloned = text.cloneNode(false);
+
+  testing.expectEqual(3, cloned.nodeType);
+  testing.expectEqual('Hello World', cloned.nodeValue);
+  testing.expectEqual(null, cloned.parentNode);
+  testing.expectEqual(false, text.isSameNode(cloned));
+}
+</script>
+
+<script id="cloneCommentNode">
+{
+  const comment = document.createComment('test comment');
+  const cloned = comment.cloneNode(false);
+
+  testing.expectEqual(8, cloned.nodeType);
+  testing.expectEqual('test comment', cloned.nodeValue);
+  testing.expectEqual(null, cloned.parentNode);
+  testing.expectEqual(false, comment.isSameNode(cloned));
+}
+</script>
+
+<script id="cloneElementShallow">
+{
+  const original = $('#test-element');
+  const cloned = original.cloneNode(false);
+
+  testing.expectEqual(1, cloned.nodeType);
+  testing.expectEqual('DIV', cloned.tagName);
+  testing.expectEqual('test-class', cloned.className);
+  testing.expectEqual('bar', cloned.getAttribute('data-foo'));
+  testing.expectEqual(null, cloned.parentNode);
+  testing.expectEqual(false, cloned.hasChildNodes());
+  testing.expectEqual(false, original.isSameNode(cloned));
+}
+</script>
+
+<script id="cloneElementDeep">
+{
+  const original = $('#test-element');
+  const cloned = original.cloneNode(true);
+
+  testing.expectEqual(1, cloned.nodeType);
+  testing.expectEqual('DIV', cloned.tagName);
+  testing.expectEqual('test-class', cloned.className);
+  testing.expectEqual('bar', cloned.getAttribute('data-foo'));
+  testing.expectEqual(null, cloned.parentNode);
+  testing.expectEqual(true, cloned.hasChildNodes());
+
+  testing.expectEqual(false, original.isSameNode(cloned));
+  testing.expectEqual(false, original.firstChild.isSameNode(cloned.firstChild));
+
+  const p1 = cloned.querySelector('p');
+  testing.expectEqual('Paragraph 1', p1.textContent);
+
+  const span = cloned.querySelector('span');
+  testing.expectEqual('Some text', span.textContent);
+}
+</script>
+
+<script id="cloneEmptyElement">
+{
+  const empty = document.createElement('div');
+  const cloned = empty.cloneNode(true);
+
+  testing.expectEqual('DIV', cloned.tagName);
+  testing.expectEqual(false, cloned.hasChildNodes());
+}
+</script>
+
+<script id="cloneWithAttributes">
+{
+  const el = document.createElement('input');
+  el.setAttribute('type', 'text');
+  el.setAttribute('name', 'username');
+  el.setAttribute('value', 'test');
+
+  const cloned = el.cloneNode(false);
+  testing.expectEqual('text', cloned.getAttribute('type'));
+  testing.expectEqual('username', cloned.getAttribute('name'));
+  testing.expectEqual('test', cloned.getAttribute('value'));
+}
+</script>
+
+<script id="cloneNestedDeep">
+{
+  const outer = document.createElement('div');
+  const middle = document.createElement('span');
+  const inner = document.createTextNode('nested');
+
+  middle.appendChild(inner);
+  outer.appendChild(middle);
+
+  const cloned = outer.cloneNode(true);
+  testing.expectEqual(true, cloned.hasChildNodes());
+  testing.expectEqual('SPAN', cloned.firstChild.tagName);
+  testing.expectEqual(true, cloned.firstChild.hasChildNodes());
+  testing.expectEqual('nested', cloned.firstChild.firstChild.nodeValue);
+}
+</script>
+
+<script id="cloneSVGElement">
+{
+  const svg = $('#test-svg');
+  const cloned = svg.cloneNode(false);
+
+  testing.expectEqual('svg', cloned.tagName);
+  testing.expectEqual('http://www.w3.org/2000/svg', cloned.namespaceURI);
+  testing.expectEqual('100', cloned.getAttribute('width'));
+  testing.expectEqual('100', cloned.getAttribute('height'));
+  testing.expectEqual(false, cloned.hasChildNodes());
+}
+</script>
+
+<script id="cloneSVGDeep">
+{
+  const svg = $('#test-svg');
+  const cloned = svg.cloneNode(true);
+
+  testing.expectEqual('svg', cloned.tagName);
+  testing.expectEqual('http://www.w3.org/2000/svg', cloned.namespaceURI);
+  testing.expectEqual(true, cloned.hasChildNodes());
+
+  const circle = cloned.querySelector('circle');
+  testing.expectEqual('circle', circle.tagName);
+  testing.expectEqual('http://www.w3.org/2000/svg', circle.namespaceURI);
+  testing.expectEqual('50', circle.getAttribute('cx'));
+  testing.expectEqual('40', circle.getAttribute('r'));
+
+  testing.expectEqual(true, cloned.textContent.indexOf('SVG Text') >= 0);
+}
+</script>
+
+<script id="cloneSVGElementNS">
+{
+  const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  circle.setAttribute('cx', '25');
+  circle.setAttribute('cy', '25');
+  circle.setAttribute('r', '20');
+
+  const cloned = circle.cloneNode(false);
+  testing.expectEqual('circle', cloned.tagName);
+  testing.expectEqual('http://www.w3.org/2000/svg', cloned.namespaceURI);
+  testing.expectEqual('25', cloned.getAttribute('cx'));
+  testing.expectEqual('25', cloned.getAttribute('cy'));
+  testing.expectEqual('20', cloned.getAttribute('r'));
+}
+</script>
+
+<script id="cloneMixedContent">
+{
+  const div = document.createElement('div');
+  div.appendChild(document.createTextNode('Before'));
+  div.appendChild(document.createElement('span'));
+  div.appendChild(document.createComment('comment'));
+  div.appendChild(document.createTextNode('After'));
+
+  const cloned = div.cloneNode(true);
+  const children = cloned.childNodes;
+
+  testing.expectEqual(4, children.length);
+  testing.expectEqual(3, children[0].nodeType);
+  testing.expectEqual('Before', children[0].nodeValue);
+  testing.expectEqual(1, children[1].nodeType);
+  testing.expectEqual('SPAN', children[1].tagName);
+  testing.expectEqual(8, children[2].nodeType);
+  testing.expectEqual('comment', children[2].nodeValue);
+  testing.expectEqual(3, children[3].nodeType);
+  testing.expectEqual('After', children[3].nodeValue);
+}
+</script>
+
+<script id="cloneMultipleAttributes">
+{
+  const input = document.createElement('input');
+  input.setAttribute('type', 'text');
+  input.setAttribute('name', 'username');
+  input.setAttribute('value', 'test');
+  input.setAttribute('placeholder', 'Enter username');
+  input.setAttribute('required', '');
+  input.setAttribute('data-custom', 'custom-value');
+
+  const cloned = input.cloneNode(false);
+  testing.expectEqual('text', cloned.getAttribute('type'));
+  testing.expectEqual('username', cloned.getAttribute('name'));
+  testing.expectEqual('test', cloned.getAttribute('value'));
+  testing.expectEqual('Enter username', cloned.getAttribute('placeholder'));
+  testing.expectEqual('', cloned.getAttribute('required'));
+  testing.expectEqual('custom-value', cloned.getAttribute('data-custom'));
+}
+</script>
+
+<script id="cloneDetached">
+{
+  const original = $('#test-element');
+  const cloned = original.cloneNode(true);
+
+  testing.expectEqual(null, cloned.parentNode);
+  testing.expectEqual(false, cloned.isConnected);
+
+  document.body.appendChild(cloned);
+  testing.expectEqual(document.body, cloned.parentNode);
+  testing.expectEqual(true, cloned.isConnected);
+
+  cloned.remove();
+}
+</script>
+
+<script id="cloneEmptyTextNode">
+{
+  const text = document.createTextNode('');
+  const cloned = text.cloneNode(false);
+
+  testing.expectEqual(3, cloned.nodeType);
+  testing.expectEqual('', cloned.nodeValue);
+}
+</script>
+
+<script id="cloneDeepPreservesStructure">
+{
+  const original = document.createElement('ul');
+  const li1 = document.createElement('li');
+  li1.textContent = 'Item 1';
+  const li2 = document.createElement('li');
+  li2.textContent = 'Item 2';
+  const li3 = document.createElement('li');
+  li3.textContent = 'Item 3';
+
+  original.appendChild(li1);
+  original.appendChild(li2);
+  original.appendChild(li3);
+
+  const cloned = original.cloneNode(true);
+  const items = cloned.querySelectorAll('li');
+
+  testing.expectEqual(3, items.length);
+  testing.expectEqual('Item 1', items[0].textContent);
+  testing.expectEqual('Item 2', items[1].textContent);
+  testing.expectEqual('Item 3', items[2].textContent);
+}
+</script>
+
+<script id="cloneShallowDoesNotCloneChildren">
+{
+  const div = document.createElement('div');
+  div.appendChild(document.createElement('p'));
+  div.appendChild(document.createElement('span'));
+  div.appendChild(document.createTextNode('text'));
+
+  const cloned = div.cloneNode(false);
+  testing.expectEqual(false, cloned.hasChildNodes());
+  testing.expectEqual(0, cloned.childNodes.length);
+}
+</script>
+
+<script id="cloneDefaultDeepParameter">
+{
+  const text = document.createTextNode('test');
+  const cloned = text.cloneNode();
+
+  testing.expectEqual('test', cloned.nodeValue);
+  testing.expectEqual(false, text.isSameNode(cloned));
+}
+</script>
+
+<script id="svgNamespaceInheritance">
+{
+  const svg = $('#test-svg');
+  testing.expectEqual('http://www.w3.org/2000/svg', svg.namespaceURI);
+
+  const circle = svg.querySelector('circle');
+  testing.expectEqual('http://www.w3.org/2000/svg', circle.namespaceURI);
+
+  const text = svg.querySelector('text');
+  testing.expectEqual('http://www.w3.org/2000/svg', text.namespaceURI);
+}
+</script>

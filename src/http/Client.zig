@@ -21,10 +21,9 @@ const log = @import("../log.zig");
 const builtin = @import("builtin");
 
 const Http = @import("Http.zig");
-const Notification = @import("../notification.zig").Notification;
-const CookieJar = @import("../browser/storage/storage.zig").CookieJar;
-
-const urlStitch = @import("../url.zig").stitch;
+const URL = @import("../browser/URL.zig");
+const Notification = @import("../Notification.zig");
+const CookieJar = @import("../browser/webapi/storage/cookie.zig").Jar;
 
 const c = Http.c;
 const posix = std.posix;
@@ -595,8 +594,8 @@ pub const Handle = struct {
 pub const RequestCookie = struct {
     is_http: bool,
     is_navigation: bool,
-    origin: *const std.Uri,
-    jar: *@import("../browser/storage/cookie.zig").Jar,
+    origin: [:0]const u8,
+    jar: *@import("../browser/webapi/storage/cookie.zig").Jar,
 
     pub fn headersForRequest(self: *const RequestCookie, temp: Allocator, url: [:0]const u8, headers: *Http.Headers) !void {
         const uri = std.Uri.parse(url) catch |err| {
@@ -604,11 +603,16 @@ pub const RequestCookie = struct {
             return error.InvalidUrl;
         };
 
+        const origin_uri = std.Uri.parse(self.origin) catch |err| {
+            log.warn(.http, "invalid url", .{ .err = err, .url = self.origin });
+            return error.InvalidUrl;
+        };
+
         var arr: std.ArrayListUnmanaged(u8) = .{};
         try self.jar.forRequest(&uri, arr.writer(temp), .{
             .is_http = self.is_http,
             .is_navigation = self.is_navigation,
-            .origin_uri = self.origin,
+            .origin_uri = &origin_uri,
         });
 
         if (arr.items.len > 0) {
@@ -839,15 +843,14 @@ pub const Transfer = struct {
         }
 
         // set cookies for the following redirection's request.
-        const hlocation = getResponseHeader(easy, "location", 0);
-        if (hlocation == null) {
+        const location = getResponseHeader(easy, "location", 0) orelse {
             return error.LocationNotFound;
-        }
+        };
 
-        var baseurl: [*c]u8 = undefined;
-        try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_EFFECTIVE_URL, &baseurl));
+        var base_url: [*c]u8 = undefined;
+        try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_EFFECTIVE_URL, &base_url));
 
-        const url = try urlStitch(arena, hlocation.?.value, std.mem.span(baseurl), .{});
+        const url = try URL.resolve(arena, std.mem.span(base_url), location.value, .{});
         const uri = try std.Uri.parse(url);
         transfer.uri = uri;
 

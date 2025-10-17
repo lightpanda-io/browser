@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<!-- Button elements -->
+<button id="button1">Click me</button>
+<button id="button2" disabled>Disabled button</button>
+
+<!-- Form association tests -->
+<form id="form1">
+  <button id="button_in_form">In form</button>
+</form>
+
+<form id="form2"></form>
+<button id="button_with_form_attr" form="form2">With form attr</button>
+
+<button id="button_no_form">No form</button>
+
+<form id="form3">
+  <button id="button_invalid_form_attr" form="nonexistent">Invalid form</button>
+</form>
+
+<script id="disabled_initial">
+  testing.expectEqual(false, $('#button1').disabled)
+  testing.expectEqual(true, $('#button2').disabled)
+</script>
+
+<script id="disabled_set">
+  $('#button1').disabled = true
+  testing.expectEqual(true, $('#button1').disabled)
+
+  $('#button2').disabled = false
+  testing.expectEqual(false, $('#button2').disabled)
+</script>
+
+<script id="form_ancestor">
+  const buttonInForm = $('#button_in_form')
+  testing.expectEqual('FORM', buttonInForm.form.tagName)
+  testing.expectEqual('form1', buttonInForm.form.id)
+</script>
+
+<script id="form_attribute">
+  const buttonWithFormAttr = $('#button_with_form_attr')
+  testing.expectEqual('FORM', buttonWithFormAttr.form.tagName)
+  testing.expectEqual('form2', buttonWithFormAttr.form.id)
+</script>
+
+<script id="form_null">
+  const buttonNoForm = $('#button_no_form')
+  testing.expectEqual(null, buttonNoForm.form)
+</script>
+
+<script id="form_invalid_attribute">
+  const buttonInvalidFormAttr = $('#button_invalid_form_attr')
+  testing.expectEqual(null, buttonInvalidFormAttr.form)
+</script>

@@ -23,7 +23,7 @@ const Build = std.Build;
 
 /// Do not rename this constant. It is scanned by some scripts to determine
 /// which zig version to install.
-const recommended_zig_version = "0.15.1";
+const recommended_zig_version = "0.15.2";
 
 pub fn build(b: *Build) !void {
     switch (comptime builtin.zig_version.order(std.SemanticVersion.parse(recommended_zig_version) catch unreachable)) {
@@ -49,87 +49,93 @@ pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // We're still using llvm because the new x86 backend seems to crash
-    // with v8. This can be reproduced in zig-v8-fork.
+    const enable_tsan = b.option(bool, "tsan", "Enable Thread Sanitizer");
+    const enable_csan = b.option(std.zig.SanitizeC, "csan", "Enable C Sanitizers");
 
-    const lightpanda_module = b.addModule("lightpanda", .{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .link_libcpp = true,
-    });
-    try addDependencies(b, lightpanda_module, opts);
+    const lightpanda_module = blk: {
+        const mod = b.addModule("lightpanda", .{
+            .root_source_file = b.path("src/lightpanda.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .link_libcpp = true,
+            .sanitize_c = enable_csan,
+            .sanitize_thread = enable_tsan,
+        });
+
+        try addDependencies(b, mod, opts);
+
+        if (optimize == .ReleaseFast or optimize == .ReleaseSmall) {
+            mod.addLibraryPath(b.path("build/html5ever/release"));
+        } else {
+            mod.addLibraryPath(b.path("build/html5ever/debug"));
+        }
+        mod.linkSystemLibrary("litefetch_html5ever", .{});
+
+        break :blk mod;
+    };
 
     {
         // browser
-        // -------
-
-        // compile and install
         const exe = b.addExecutable(.{
             .name = "lightpanda",
             .use_llvm = true,
-            .root_module = lightpanda_module,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/main.zig"),
+                .target = target,
+                .optimize = optimize,
+                .sanitize_c = enable_csan,
+                .sanitize_thread = enable_tsan,
+                .imports = &.{
+                  .{.name = "lightpanda", .module = lightpanda_module},
+                },
+            }),
         });
         b.installArtifact(exe);
 
-        // run
         const run_cmd = b.addRunArtifact(exe);
         if (b.args) |args| {
             run_cmd.addArgs(args);
         }
-
-        // step
         const run_step = b.step("run", "Run the app");
         run_step.dependOn(&run_cmd.step);
     }
 
     {
-        // tests
-        // ----
-
-        // compile
+        // test
         const tests = b.addTest(.{
             .root_module = lightpanda_module,
-            .use_llvm = true,
             .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple },
         });
-
         const run_tests = b.addRunArtifact(tests);
-        if (b.args) |args| {
-            run_tests.addArgs(args);
-        }
-
-        // step
-        const tests_step = b.step("test", "Run unit tests");
-        tests_step.dependOn(&run_tests.step);
+        const test_step = b.step("test", "Run unit tests");
+        test_step.dependOn(&run_tests.step);
     }
 
     {
         // wpt
-        // -----
-        const wpt_module = b.createModule(.{
-            .root_source_file = b.path("src/main_wpt.zig"),
-            .target = target,
-            .optimize = optimize,
-        });
-        try addDependencies(b, wpt_module, opts);
-
-        // compile and install
-        const wpt = b.addExecutable(.{
+        const exe = b.addExecutable(.{
             .name = "lightpanda-wpt",
             .use_llvm = true,
-            .root_module = wpt_module,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/main_wpt.zig"),
+                .target = target,
+                .optimize = optimize,
+                .sanitize_c = enable_csan,
+                .sanitize_thread = enable_tsan,
+                .imports = &.{
+                  .{.name = "lightpanda", .module = lightpanda_module},
+                },
+            }),
         });
+        b.installArtifact(exe);
 
-        // run
-        const wpt_cmd = b.addRunArtifact(wpt);
+        const run_cmd = b.addRunArtifact(exe);
         if (b.args) |args| {
-            wpt_cmd.addArgs(args);
+            run_cmd.addArgs(args);
         }
-        // step
-        const wpt_step = b.step("wpt", "WPT tests");
-        wpt_step.dependOn(&wpt_cmd.step);
+        const run_step = b.step("wpt", "Run WPT tests");
+        run_step.dependOn(&run_cmd.step);
     }
 
     {
@@ -152,7 +158,6 @@ pub fn build(b: *Build) !void {
 }
 
 fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !void {
-    try moduleNetSurf(b, mod);
     mod.addImport("build_config", opts.createModule());
 
     const target = mod.resolved_target.?;
@@ -394,63 +399,6 @@ fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !vo
             },
             else => {},
         }
-    }
-}
-
-fn moduleNetSurf(b: *Build, mod: *Build.Module) !void {
-    const target = mod.resolved_target.?;
-    const os = target.result.os.tag;
-    const arch = target.result.cpu.arch;
-
-    // iconv
-    const libiconv_lib_path = try std.fmt.allocPrint(
-        b.allocator,
-        "vendor/libiconv/out/{s}-{s}/lib/libiconv.a",
-        .{ @tagName(os), @tagName(arch) },
-    );
-    const libiconv_include_path = try std.fmt.allocPrint(
-        b.allocator,
-        "vendor/libiconv/out/{s}-{s}/lib/libiconv.a",
-        .{ @tagName(os), @tagName(arch) },
-    );
-    mod.addObjectFile(b.path(libiconv_lib_path));
-    mod.addIncludePath(b.path(libiconv_include_path));
-
-    {
-        // mimalloc
-        const mimalloc = "vendor/mimalloc";
-        const lib_path = try std.fmt.allocPrint(
-            b.allocator,
-            mimalloc ++ "/out/{s}-{s}/lib/libmimalloc.a",
-            .{ @tagName(os), @tagName(arch) },
-        );
-        mod.addObjectFile(b.path(lib_path));
-        mod.addIncludePath(b.path(mimalloc ++ "/include"));
-    }
-
-    // netsurf libs
-    const ns = "vendor/netsurf";
-    const ns_include_path = try std.fmt.allocPrint(
-        b.allocator,
-        ns ++ "/out/{s}-{s}/include",
-        .{ @tagName(os), @tagName(arch) },
-    );
-    mod.addIncludePath(b.path(ns_include_path));
-
-    const libs: [4][]const u8 = .{
-        "libdom",
-        "libhubbub",
-        "libparserutils",
-        "libwapcaplet",
-    };
-    inline for (libs) |lib| {
-        const ns_lib_path = try std.fmt.allocPrint(
-            b.allocator,
-            ns ++ "/out/{s}-{s}/lib/" ++ lib ++ ".a",
-            .{ @tagName(os), @tagName(arch) },
-        );
-        mod.addObjectFile(b.path(ns_lib_path));
-        mod.addIncludePath(b.path(ns ++ "/" ++ lib ++ "/src"));
     }
 }
 

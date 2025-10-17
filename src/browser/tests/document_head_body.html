@@ -1,0 +1,9 @@
+<head id="the_head">
+  <script src="testing.js"></script>
+</head>
+<body id="the_body">
+  <script id="test-document-head-body">
+    testing.expectEqual(document.getElementById('the_head'), document.head);
+    testing.expectEqual(document.getElementById('the_body'), document.body);
+  </script>
+</body>

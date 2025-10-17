@@ -36,147 +36,146 @@ const MAX_HTTP_REQUEST_SIZE = 4096;
 // +140 for the max control packet that might be interleaved in a message
 const MAX_MESSAGE_SIZE = 512 * 1024 + 14 + 140;
 
-pub const Server = struct {
-    app: *App,
-    shutdown: bool,
-    allocator: Allocator,
-    client: ?posix.socket_t,
-    listener: ?posix.socket_t,
-    json_version_response: []const u8,
+const Server = @This();
+app: *App,
+shutdown: bool,
+allocator: Allocator,
+client: ?posix.socket_t,
+listener: ?posix.socket_t,
+json_version_response: []const u8,
 
-    pub fn init(app: *App, address: net.Address) !Server {
-        const allocator = app.allocator;
-        const json_version_response = try buildJSONVersionResponse(allocator, address);
-        errdefer allocator.free(json_version_response);
+pub fn init(app: *App, address: net.Address) !Server {
+    const allocator = app.allocator;
+    const json_version_response = try buildJSONVersionResponse(allocator, address);
+    errdefer allocator.free(json_version_response);
 
-        return .{
-            .app = app,
-            .client = null,
-            .listener = null,
-            .shutdown = false,
-            .allocator = allocator,
-            .json_version_response = json_version_response,
+    return .{
+        .app = app,
+        .client = null,
+        .listener = null,
+        .shutdown = false,
+        .allocator = allocator,
+        .json_version_response = json_version_response,
+    };
+}
+
+pub fn deinit(self: *Server) void {
+    self.shutdown = true;
+    if (self.listener) |listener| {
+        posix.close(listener);
+    }
+    // *if* server.run is running, we should really wait for it to return
+    // before existing from here.
+    self.allocator.free(self.json_version_response);
+}
+
+pub fn run(self: *Server, address: net.Address, timeout_ms: i32) !void {
+    const flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC;
+    const listener = try posix.socket(address.any.family, flags, posix.IPPROTO.TCP);
+    self.listener = listener;
+
+    try posix.setsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+    if (@hasDecl(posix.TCP, "NODELAY")) {
+        try posix.setsockopt(listener, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
+    }
+
+    try posix.bind(listener, &address.any, address.getOsSockLen());
+    try posix.listen(listener, 1);
+
+    log.info(.app, "server running", .{ .address = address });
+    while (true) {
+        const socket = posix.accept(listener, null, null, posix.SOCK.NONBLOCK) catch |err| {
+            if (self.shutdown) {
+                return;
+            }
+            log.err(.app, "CDP accept", .{ .err = err });
+            std.Thread.sleep(std.time.ns_per_s);
+            continue;
+        };
+
+        self.client = socket;
+        defer if (self.client) |s| {
+            posix.close(s);
+            self.client = null;
+        };
+
+        if (log.enabled(.app, .info)) {
+            var client_address: std.net.Address = undefined;
+            var socklen: posix.socklen_t = @sizeOf(net.Address);
+            try std.posix.getsockname(socket, &client_address.any, &socklen);
+            log.info(.app, "client connected", .{ .ip = client_address });
+        }
+
+        self.readLoop(socket, timeout_ms) catch |err| {
+            log.err(.app, "CDP client loop", .{ .err = err });
         };
     }
+}
 
-    pub fn deinit(self: *Server) void {
-        self.shutdown = true;
-        if (self.listener) |listener| {
-            posix.close(listener);
+fn readLoop(self: *Server, socket: posix.socket_t, timeout_ms: i32) !void {
+    // This shouldn't be necessary, but the Client is HUGE (> 512KB) because
+    // it has a large read buffer. I don't know why, but v8 crashes if this
+    // is on the stack (and I assume it's related to its size).
+    const client = try self.allocator.create(Client);
+    defer self.allocator.destroy(client);
+
+    client.* = try Client.init(socket, self);
+    defer client.deinit();
+
+    var http = &self.app.http;
+    http.monitorSocket(socket);
+    defer http.unmonitorSocket();
+
+    std.debug.assert(client.mode == .http);
+    while (true) {
+        if (http.poll(timeout_ms) != .extra_socket) {
+            log.info(.app, "CDP timeout", .{});
+            return;
         }
-        // *if* server.run is running, we should really wait for it to return
-        // before existing from here.
-        self.allocator.free(self.json_version_response);
+
+        if (try client.readSocket() == false) {
+            return;
+        }
+
+        if (client.mode == .cdp) {
+            break; // switch to our CDP loop
+        }
     }
 
-    pub fn run(self: *Server, address: net.Address, timeout_ms: i32) !void {
-        const flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC;
-        const listener = try posix.socket(address.any.family, flags, posix.IPPROTO.TCP);
-        self.listener = listener;
-
-        try posix.setsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-        if (@hasDecl(posix.TCP, "NODELAY")) {
-            try posix.setsockopt(listener, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
-        }
-
-        try posix.bind(listener, &address.any, address.getOsSockLen());
-        try posix.listen(listener, 1);
-
-        log.info(.app, "server running", .{ .address = address });
-        while (true) {
-            const socket = posix.accept(listener, null, null, posix.SOCK.NONBLOCK) catch |err| {
-                if (self.shutdown) {
+    var cdp = &client.mode.cdp;
+    var last_message = timestamp();
+    var ms_remaining = timeout_ms;
+    while (true) {
+        switch (cdp.pageWait(ms_remaining)) {
+            .extra_socket => {
+                if (try client.readSocket() == false) {
                     return;
                 }
-                log.err(.app, "CDP accept", .{ .err = err });
-                std.Thread.sleep(std.time.ns_per_s);
-                continue;
-            };
-
-            self.client = socket;
-            defer if (self.client) |s| {
-                posix.close(s);
-                self.client = null;
-            };
-
-            if (log.enabled(.app, .info)) {
-                var client_address: std.net.Address = undefined;
-                var socklen: posix.socklen_t = @sizeOf(net.Address);
-                try std.posix.getsockname(socket, &client_address.any, &socklen);
-                log.info(.app, "client connected", .{ .ip = client_address });
-            }
-
-            self.readLoop(socket, timeout_ms) catch |err| {
-                log.err(.app, "CDP client loop", .{ .err = err });
-            };
+                last_message = timestamp();
+                ms_remaining = timeout_ms;
+            },
+            .no_page => {
+                if (http.poll(ms_remaining) != .extra_socket) {
+                    log.info(.app, "CDP timeout", .{});
+                    return;
+                }
+                if (try client.readSocket() == false) {
+                    return;
+                }
+                last_message = timestamp();
+                ms_remaining = timeout_ms;
+            },
+            .done => {
+                const elapsed = timestamp() - last_message;
+                if (elapsed > ms_remaining) {
+                    log.info(.app, "CDP timeout", .{});
+                    return;
+                }
+                ms_remaining -= @as(i32, @intCast(elapsed));
+            },
         }
     }
-
-    fn readLoop(self: *Server, socket: posix.socket_t, timeout_ms: i32) !void {
-        // This shouldn't be necessary, but the Client is HUGE (> 512KB) because
-        // it has a large read buffer. I don't know why, but v8 crashes if this
-        // is on the stack (and I assume it's related to its size).
-        const client = try self.allocator.create(Client);
-        defer self.allocator.destroy(client);
-
-        client.* = try Client.init(socket, self);
-        defer client.deinit();
-
-        var http = &self.app.http;
-        http.monitorSocket(socket);
-        defer http.unmonitorSocket();
-
-        std.debug.assert(client.mode == .http);
-        while (true) {
-            if (http.poll(timeout_ms) != .extra_socket) {
-                log.info(.app, "CDP timeout", .{});
-                return;
-            }
-
-            if (try client.readSocket() == false) {
-                return;
-            }
-
-            if (client.mode == .cdp) {
-                break; // switch to our CDP loop
-            }
-        }
-
-        var cdp = &client.mode.cdp;
-        var last_message = timestamp();
-        var ms_remaining = timeout_ms;
-        while (true) {
-            switch (cdp.pageWait(ms_remaining)) {
-                .extra_socket => {
-                    if (try client.readSocket() == false) {
-                        return;
-                    }
-                    last_message = timestamp();
-                    ms_remaining = timeout_ms;
-                },
-                .no_page => {
-                    if (http.poll(ms_remaining) != .extra_socket) {
-                        log.info(.app, "CDP timeout", .{});
-                        return;
-                    }
-                    if (try client.readSocket() == false) {
-                        return;
-                    }
-                    last_message = timestamp();
-                    ms_remaining = timeout_ms;
-                },
-                .done => {
-                    const elapsed = timestamp() - last_message;
-                    if (elapsed > ms_remaining) {
-                        log.info(.app, "CDP timeout", .{});
-                        return;
-                    }
-                    ms_remaining -= @as(i32, @intCast(elapsed));
-                },
-            }
-        }
-    }
-};
+}
 
 pub const Client = struct {
     // The client is initially serving HTTP requests but, under normal circumstances

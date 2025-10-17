@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="container">
+  <div id="div1">div1</div>
+  <p id="p1">p1</p>
+  <div id="div2">div2</div>
+  <span id="span1">span1</span>
+  <p id="p2">p2</p>
+</div>
+
+<div id="nested">
+  <div id="outer">
+    <div id="inner1">inner1</div>
+    <p id="innerP">innerP</p>
+    <div id="inner2">inner2</div>
+  </div>
+</div>
+
+<div id="empty"></div>
+
+<div id="divMatch" class="test">
+  <span>span1</span>
+  <p>p1</p>
+  <span>span2</span>
+</div>
+
+<h1>H1</h1>
+<h2>H2</h2>
+<h3>H3</h3>
+<section id="headings">
+  <h1>Section H1</h1>
+  <h2>Section H2</h2>
+  <h3>Section H3</h3>
+  <h4>Section H4</h4>
+  <h5>Section H5</h5>
+  <h6>Section H6</h6>
+</section>
+
+<script id=basic>
+{
+  const container = $('#container');
+
+  testing.expectEqual(0, container.getElementsByTagName('a').length);
+  testing.expectEqual(0, container.getElementsByTagName('unknown').length);
+
+  const divs = container.getElementsByTagName('div');
+  testing.expectEqual(true, divs instanceof HTMLCollection);
+  testing.expectEqual(2, divs.length);
+  testing.expectEqual('div1', divs[0].id);
+  testing.expectEqual('div2', divs[1].id);
+  testing.expectEqual('div1', divs[0].id); // cache test
+
+  const ps = container.getElementsByTagName('p');
+  testing.expectEqual(2, ps.length);
+  testing.expectEqual('p1', ps[0].id);
+  testing.expectEqual('p2', ps[1].id);
+
+  const spans = container.getElementsByTagName('span');
+  testing.expectEqual(1, spans.length);
+  testing.expectEqual('span1', spans[0].id);
+}
+</script>
+
+<script id=nestedSearch>
+{
+  const nested = $('#nested');
+  const nestedDivs = nested.getElementsByTagName('div');
+  testing.expectEqual(3, nestedDivs.length);
+  testing.expectEqual('outer', nestedDivs[0].id);
+  testing.expectEqual('inner1', nestedDivs[1].id);
+  testing.expectEqual('inner2', nestedDivs[2].id);
+
+  const outer = $('#outer');
+  const outerDivs = outer.getElementsByTagName('div');
+  testing.expectEqual(2, outerDivs.length);
+  testing.expectEqual('inner1', outerDivs[0].id);
+  testing.expectEqual('inner2', outerDivs[1].id);
+}
+</script>
+
+<script id=emptyResult>
+{
+  const empty = $('#empty');
+  testing.expectEqual(0, empty.getElementsByTagName('div').length);
+  testing.expectEqual(0, empty.getElementsByTagName('p').length);
+  testing.expectEqual(0, empty.getElementsByTagName('span').length);
+}
+</script>
+
+<script id=excludeSelf>
+{
+  // Element itself should NOT be included in results, even if it matches
+  const divMatch = $('#divMatch');
+  const divsInDiv = divMatch.getElementsByTagName('div');
+  testing.expectEqual(0, divsInDiv.length); // divMatch itself is a div but should not be included
+
+  const spansInDiv = divMatch.getElementsByTagName('span');
+  testing.expectEqual(2, spansInDiv.length); // Only the child spans
+}
+</script>
+
+<script id=caseInsensitive>
+{
+  const container = $('#container');
+  testing.expectEqual(2, container.getElementsByTagName('DIV').length);
+  testing.expectEqual(2, container.getElementsByTagName('Div').length);
+  testing.expectEqual(2, container.getElementsByTagName('div').length);
+  testing.expectEqual(2, container.getElementsByTagName('P').length);
+  testing.expectEqual(1, container.getElementsByTagName('SPAN').length);
+}
+</script>
+
+<script id=item>
+{
+  const container = $('#container');
+  const divs = container.getElementsByTagName('div');
+
+  testing.expectEqual('div1', divs.item(0).id);
+  testing.expectEqual('div2', divs.item(1).id);
+  testing.expectEqual(null, divs.item(2));
+  testing.expectEqual(null, divs.item(-1));
+  testing.expectEqual(null, divs.item(100));
+}
+</script>
+
+<script id=namedItem>
+{
+  const container = $('#container');
+  const divs = container.getElementsByTagName('div');
+
+  testing.expectEqual('div1', divs.namedItem('div1').id);
+  testing.expectEqual('div2', divs.namedItem('div2').id);
+  testing.expectEqual(null, divs.namedItem('div3'));
+  testing.expectEqual(null, divs.namedItem('container'));
+
+  testing.expectEqual('div1', divs['div1'].id);
+  testing.expectEqual('div2', divs['div2'].id);
+}
+</script>
+
+<script id=iterator>
+{
+  const container = $('#container');
+  const ps = container.getElementsByTagName('p');
+
+  let acc = [];
+  for (let p of ps) {
+    acc.push(p.id);
+  }
+  testing.expectEqual(['p1', 'p2'], acc);
+}
+</script>
+
+<script id=headings>
+{
+  const headings = $('#headings');
+
+  testing.expectEqual(1, headings.getElementsByTagName('h1').length);
+  testing.expectEqual('Section H1', headings.getElementsByTagName('h1')[0].textContent);
+  testing.expectEqual(1, headings.getElementsByTagName('h2').length);
+  testing.expectEqual('Section H2', headings.getElementsByTagName('h2')[0].textContent);
+  testing.expectEqual(1, headings.getElementsByTagName('h3').length);
+  testing.expectEqual(1, headings.getElementsByTagName('h4').length);
+  testing.expectEqual(1, headings.getElementsByTagName('h5').length);
+  testing.expectEqual(1, headings.getElementsByTagName('h6').length);
+
+  // Case insensitive
+  testing.expectEqual(1, headings.getElementsByTagName('H1').length);
+  testing.expectEqual('Section H1', headings.getElementsByTagName('H1')[0].textContent);
+}
+</script>
+
+<script id=arrayIndexing>
+{
+  const container = $('#container');
+  const divs = container.getElementsByTagName('div');
+
+  testing.expectEqual('div1', divs[0].id);
+  testing.expectEqual('div2', divs[1].id);
+  testing.expectEqual(undefined, divs[2]);
+  testing.expectEqual(undefined, divs[-1]);
+  testing.expectEqual(undefined, divs[100]);
+}
+</script>
+

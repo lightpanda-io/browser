@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<div>0</div>
+<div>1</div>
+<div>2</div>
+
+<p id=p1></p>
+<p id=p2></p>
+<p id=p3></p>
+
+<h1>H1</h1>
+<h2>H2</h2>
+<h3>H3</h3>
+<h4>H4</h4>
+<h5>H5</h5>
+<h6>H6</h6>
+<b>Bold</b>
+<i>Italic</i>
+<em>Emphasized</em>
+<strong>Strong</strong>
+<header>Header</header>
+<nav>Nav</nav>
+<main>Main</main>
+
+<script id=basic>
+  testing.expectEqual(0, document.getElementsByTagName('a').length);
+  testing.expectEqual(0, document.getElementsByTagName('unknown').length);
+
+  const divs = document.getElementsByTagName('div');
+  testing.expectEqual(true, divs instanceof HTMLCollection);
+  testing.expectEqual(3, divs.length);
+  testing.expectEqual(3, divs.length);
+  testing.expectEqual('0', divs[0].textContent);
+  testing.expectEqual('0', divs[0].textContent);
+  testing.expectEqual('0', divs[0].textContent);
+  testing.expectEqual('1', divs[1].textContent);
+  testing.expectEqual('2', divs[2].textContent);
+  testing.expectEqual('2', divs[2].textContent);
+  testing.expectEqual('1', divs[1].textContent);
+  testing.expectEqual('1', divs[1].textContent);
+  testing.expectEqual('2', divs[2].textContent);
+  testing.expectEqual('0', divs[0].textContent);
+  testing.expectEqual(undefined, divs[-1]);
+  testing.expectEqual(undefined, divs[4]);
+
+  testing.expectEqual('2', divs.item(2).textContent);
+  testing.expectEqual(null, divs.item(-3));
+  testing.expectEqual('0', divs.item(0).textContent);
+  testing.expectEqual(null, divs.item(-100));
+</script>
+
+<script id=namedItem>
+  testing.expectEqual(null, divs.namedItem('d1'));
+
+  const ps = document.getElementsByTagName('p');
+  testing.expectEqual('p1', ps.namedItem('p1').id);
+  testing.expectEqual('p2', ps.namedItem('p2').id);
+  testing.expectEqual('p3', ps.namedItem('p3').id);
+  testing.expectEqual(null, ps.namedItem('p4'));
+
+  testing.expectEqual('p1', ps['p1'].id);
+</script>
+
+<script id=iterator>
+  let acc = [];
+  for (let x of ps) {
+    acc.push(x.id);
+  }
+  testing.expectEqual(['p1', 'p2', 'p3'], acc);
+</script>
+
+<script id=extendedTags>
+  // Test headings
+  testing.expectEqual(1, document.getElementsByTagName('h1').length);
+  testing.expectEqual('H1', document.getElementsByTagName('h1')[0].textContent);
+  testing.expectEqual(1, document.getElementsByTagName('h2').length);
+  testing.expectEqual('H2', document.getElementsByTagName('h2')[0].textContent);
+  testing.expectEqual(1, document.getElementsByTagName('h3').length);
+  testing.expectEqual(1, document.getElementsByTagName('h4').length);
+  testing.expectEqual(1, document.getElementsByTagName('h5').length);
+  testing.expectEqual(1, document.getElementsByTagName('h6').length);
+
+  // Test case insensitivity
+  testing.expectEqual(1, document.getElementsByTagName('H1').length);
+  testing.expectEqual('H1', document.getElementsByTagName('H1')[0].textContent);
+
+  // Test text formatting elements
+  testing.expectEqual(1, document.getElementsByTagName('b').length);
+  testing.expectEqual('Bold', document.getElementsByTagName('b')[0].textContent);
+  testing.expectEqual(1, document.getElementsByTagName('i').length);
+  testing.expectEqual('Italic', document.getElementsByTagName('i')[0].textContent);
+  testing.expectEqual(1, document.getElementsByTagName('em').length);
+  testing.expectEqual('Emphasized', document.getElementsByTagName('em')[0].textContent);
+  testing.expectEqual(1, document.getElementsByTagName('strong').length);
+  testing.expectEqual('Strong', document.getElementsByTagName('strong')[0].textContent);
+
+  // Test structural elements
+  testing.expectEqual(1, document.getElementsByTagName('header').length);
+  testing.expectEqual('Header', document.getElementsByTagName('header')[0].textContent);
+  testing.expectEqual(1, document.getElementsByTagName('nav').length);
+  testing.expectEqual('Nav', document.getElementsByTagName('nav')[0].textContent);
+  testing.expectEqual(1, document.getElementsByTagName('main').length);
+  testing.expectEqual('Main', document.getElementsByTagName('main')[0].textContent);
+</script>
+
+<script id=multipleIterators>
+{
+  const list = document.getElementsByTagName('p');
+
+  const iter1 = list[Symbol.iterator]();
+  const iter2 = list[Symbol.iterator]();
+
+  const val1_iter1 = iter1.next();
+  testing.expectEqual(false, val1_iter1.done);
+  testing.expectEqual('p1', val1_iter1.value.id);
+
+  const val1_iter2 = iter2.next();
+  testing.expectEqual(false, val1_iter2.done);
+  testing.expectEqual('p1', val1_iter2.value.id);
+
+  const val2_iter1 = iter1.next();
+  testing.expectEqual(false, val2_iter1.done);
+  testing.expectEqual('p2', val2_iter1.value.id);
+
+  const val2_iter2 = iter2.next();
+  testing.expectEqual(false, val2_iter2.done);
+  testing.expectEqual('p2', val2_iter2.value.id);
+}
+</script>
+
+<script id=iteratorLifetime>
+{
+  let iter;
+  {
+    const list = document.getElementsByTagName('p');
+    iter = list[Symbol.iterator]();
+  }
+
+  const val1 = iter.next();
+  testing.expectEqual(false, val1.done);
+  testing.expectEqual('p1', val1.value.id);
+
+  const val2 = iter.next();
+  testing.expectEqual(false, val2.done);
+  testing.expectEqual('p2', val2.value.id);
+
+  const val3 = iter.next();
+  testing.expectEqual(false, val3.done);
+  testing.expectEqual('p3', val3.value.id);
+
+  const val4 = iter.next();
+  testing.expectEqual(true, val4.done);
+}
+</script>
+

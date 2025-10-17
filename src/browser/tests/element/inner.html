@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<div id=d1>hello <em>world</em></div>
+
+<script id=innerHTML>
+  const d1 = $('#d1');
+  testing.expectEqual('hello <em>world</em>', d1.innerHTML);
+
+  d1.innerHTML = 'only text';
+  testing.expectEqual('only text', d1.innerHTML);
+
+  d1.innerHTML = 'hello <div>world</div><b>!!</b>';
+  testing.expectEqual('hello <div>world</div><b>!!</b>', d1.innerHTML);
+  for (let child of d1.childNodes) {
+    testing.expectEqual(d1, child.parentNode);
+  }
+
+  // doesn't run JavaScript, important!
+  let inner_loaded = false;
+  d1.innerHTML = '<script src=inner.js>';
+  testing.expectEqual('<script src="inner.js"><\/script>', d1.innerHTML);
+  testing.expectEqual(false, inner_loaded);
+</script>
+
+<script id=ids>
+  d1.innerHTML = '<a id=link>home</a>';
+  testing.expectEqual('home', $('#link').innerText);
+
+  d1.innerHTML = '';
+  testing.expectEqual(null, $('#link'));
+
+  d1.innerHTML = '<div><p><a id=link>hi</a></p></div>';
+  testing.expectEqual('hi', $('#link').innerText);
+
+  d1.innerHTML = '';
+  testing.todo(null, $('#link'));
+</script>
+
+<script id=attributeSerialization>
+  d1.innerHTML = '<div class="test">text</div>';
+  testing.expectEqual('<div class="test">text</div>', d1.innerHTML);
+
+  d1.innerHTML = '<div id=simple>text</div>';
+  testing.expectEqual('<div id="simple">text</div>', d1.innerHTML);
+
+  d1.innerHTML = '<a href="/?foo=1&bar=2">link</a>';
+  testing.expectEqual('<a href="/?foo=1&amp;bar=2">link</a>', d1.innerHTML);
+
+  d1.innerHTML = '<div title="She said &quot;hello&quot;">text</div>';
+  testing.expectEqual('<div title="She said &quot;hello&quot;">text</div>', d1.innerHTML);
+
+  d1.innerHTML = '<div data-value="<tag>">text</div>';
+  testing.expectEqual('<div data-value="&lt;tag&gt;">text</div>', d1.innerHTML);
+
+  const div1 = document.createElement('div');
+  div1.setAttribute('title', 'line1\nline2');
+  d1.innerHTML = '';
+  d1.appendChild(div1);
+  testing.expectEqual('<div title="line1\nline2"></div>', d1.innerHTML);
+
+  const div2 = document.createElement('div');
+  div2.setAttribute('title', 'line1\rline2');
+  d1.innerHTML = '';
+  d1.appendChild(div2);
+  testing.expectEqual('<div title="line1\rline2"></div>', d1.innerHTML);
+
+  const div3 = document.createElement('div');
+  div3.setAttribute('title', 'col1\tcol2');
+  d1.innerHTML = '';
+  d1.appendChild(div3);
+  testing.expectEqual('<div title="col1\tcol2"></div>', d1.innerHTML);
+
+  d1.innerHTML = '<div data-test="&quot;&amp;&lt;&gt;">text</div>';
+  testing.expectEqual('<div data-test="&quot;&amp;&lt;&gt;">text</div>', d1.innerHTML);
+
+  d1.innerHTML = '<input type="text" value="">';
+  testing.expectEqual('<input type="text" value="">', d1.innerHTML);
+
+  d1.innerHTML = '<div class="foo bar">text</div>';
+  testing.expectEqual('<div class="foo bar">text</div>', d1.innerHTML);
+
+  d1.innerHTML = '<div data-expr="x=5">text</div>';
+  testing.expectEqual('<div data-expr="x=5">text</div>', d1.innerHTML);
+
+  const div4 = document.createElement('div');
+  div4.setAttribute('title', "it's working");
+  d1.innerHTML = '';
+  d1.appendChild(div4);
+  testing.expectEqual('<div title="it\'s working"></div>', d1.innerHTML);
+
+  const div5 = document.createElement('div');
+  div5.setAttribute('data-code', '`template`');
+  d1.innerHTML = '';
+  d1.appendChild(div5);
+  testing.expectEqual('<div data-code="`template`"></div>', d1.innerHTML);
+
+  d1.innerHTML = '<a href="/search?q=test&lang=en" title="Search: &quot;test&quot;">Search</a>';
+  testing.expectEqual('<a href="/search?q=test&amp;lang=en" title="Search: &quot;test&quot;">Search</a>', d1.innerHTML);
+
+  d1.innerHTML = '<div data-start="&start">text</div>';
+  testing.expectEqual('<div data-start="&amp;start">text</div>', d1.innerHTML);
+
+  d1.innerHTML = '<div data-end="end&">text</div>';
+  testing.expectEqual('<div data-end="end&amp;">text</div>', d1.innerHTML);
+
+  d1.innerHTML = '<div data-middle="mid&dle">text</div>';
+  testing.expectEqual('<div data-middle="mid&amp;dle">text</div>', d1.innerHTML);
+</script>
+
+<script id=voidElements>
+  d1.innerHTML = '<br>';
+  testing.expectEqual('<br>', d1.innerHTML);
+
+  d1.innerHTML = '<hr>';
+  testing.expectEqual('<hr>', d1.innerHTML);
+
+  d1.innerHTML = '<img src="test.png" alt="test">';
+  testing.expectEqual('<img src="test.png" alt="test">', d1.innerHTML);
+
+  d1.innerHTML = '<input type="text" name="field">';
+  testing.expectEqual('<input type="text" name="field">', d1.innerHTML);
+
+  d1.innerHTML = '<link rel="stylesheet" href="style.css">';
+  testing.expectEqual('<link rel="stylesheet" href="style.css">', d1.innerHTML);
+
+  d1.innerHTML = '<meta charset="utf-8">';
+  testing.expectEqual('<meta charset="utf-8">', d1.innerHTML);
+
+  d1.innerHTML = '<div><br><hr><img src="x.png"></div>';
+  testing.expectEqual('<div><br><hr><img src="x.png"></div>', d1.innerHTML);
+</script>

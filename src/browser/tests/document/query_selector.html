@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div class="test-class">div1</div>
+<span class="test-class">span1</span>
+<div class="multiple classes here">multi1</div>
+<div class="classes">multi2</div>
+<div class="">empty-class</div>
+<div>no-class</div>
+
+<h1>Heading 1</h1>
+<h2>Heading 2</h2>
+<h3>Heading 3</h3>
+<h4>Heading 4</h4>
+<h5>Heading 5</h5>
+<h6>Heading 6</h6>
+<b>Bold text</b>
+<i>Italic text</i>
+<em>Emphasized text</em>
+<strong>Strong text</strong>
+<header>Header element</header>
+<nav>Navigation</nav>
+<main>Main content</main>
+
+<script id=byId name="test1">
+  testing.expectError("Syntax Error", () => document.querySelector(''));
+  testing.withError((err) => {
+    testing.expectEqual(12, err.code);
+    testing.expectEqual("SyntaxError", err.name);
+    testing.expectEqual("Syntax Error", err.message);
+  }, () => document.querySelector(''));
+
+  testing.expectEqual('test1', document.querySelector('#byId').getAttribute('name'));
+</script>
+
+<script id=byClass>
+{
+  const result = document.querySelector('.test-class');
+  testing.expectEqual('div1', result.textContent);
+
+  testing.expectEqual('multi1', document.querySelector('.multiple').textContent);
+  testing.expectEqual('multi1', document.querySelector('.classes').textContent);
+  testing.expectEqual('multi1', document.querySelector('.here').textContent);
+
+  testing.expectEqual(null, document.querySelector('.nonexistent'));
+}
+</script>
+
+<script id=byTag>
+{
+  const result = document.querySelector('div');
+  testing.expectEqual('div1', result.textContent);
+
+  testing.expectEqual('span1', document.querySelector('span').textContent);
+
+  // Test that script elements can be found
+  const firstScript = document.querySelector('script');
+  testing.expectEqual('SCRIPT', firstScript.tagName);
+
+  testing.expectEqual(null, document.querySelector('select'));
+  testing.expectEqual(null, document.querySelector('another'));
+}
+</script>
+
+<script id=byTagExtended>
+{
+  // Test headings (h1-h6)
+  testing.expectEqual('Heading 1', document.querySelector('h1').textContent);
+  testing.expectEqual('Heading 2', document.querySelector('h2').textContent);
+  testing.expectEqual('Heading 3', document.querySelector('h3').textContent);
+  testing.expectEqual('Heading 4', document.querySelector('h4').textContent);
+  testing.expectEqual('Heading 5', document.querySelector('h5').textContent);
+  testing.expectEqual('Heading 6', document.querySelector('h6').textContent);
+
+  // Test case insensitivity
+  testing.expectEqual('Heading 1', document.querySelector('H1').textContent);
+  testing.expectEqual('Heading 2', document.querySelector('H2').textContent);
+
+  // Test text formatting elements
+  testing.expectEqual('Bold text', document.querySelector('b').textContent);
+  testing.expectEqual('Italic text', document.querySelector('i').textContent);
+  testing.expectEqual('Emphasized text', document.querySelector('em').textContent);
+  testing.expectEqual('Strong text', document.querySelector('strong').textContent);
+
+  // Test structural elements
+  testing.expectEqual('Header element', document.querySelector('header').textContent);
+  testing.expectEqual('Navigation', document.querySelector('nav').textContent);
+  testing.expectEqual('Main content', document.querySelector('main').textContent);
+
+  // Test case insensitivity for these too
+  testing.expectEqual('Navigation', document.querySelector('NAV').textContent);
+  testing.expectEqual('Main content', document.querySelector('Main').textContent);
+}
+</script>
+
+<div id="compound-test" class="container active">Compound 1</div>
+<div class="container">Compound 2</div>
+<span class="container active">Compound 3</span>
+<p id="compound-test2">Compound 4</p>
+
+<script id=compoundSelectors>
+{
+  testing.expectEqual('Compound 1', document.querySelector('div.container').textContent);
+  testing.expectEqual('Compound 1', document.querySelector('div.active').textContent);
+  testing.expectEqual('Compound 3', document.querySelector('span.active').textContent);
+
+  testing.expectEqual('Compound 1', document.querySelector('div.container.active').textContent);
+
+  testing.expectEqual('Compound 1', document.querySelector('div#compound-test').textContent);
+
+  testing.expectEqual('Compound 1', document.querySelector('.container#compound-test').textContent);
+
+  testing.expectEqual('Compound 1', document.querySelector('#compound-test.active').textContent);
+
+  testing.expectEqual('Compound 1', document.querySelector('.container.active').textContent);
+  testing.expectEqual('Compound 1', document.querySelector('.active.container').textContent);
+
+  testing.expectEqual('Compound 1', document.querySelector('  div.container').textContent);
+  testing.expectEqual('Compound 1', document.querySelector('  .active').textContent);
+
+  testing.expectEqual('Compound 1', document.querySelector('div.container  ').textContent);
+  testing.expectEqual('Compound 4', document.querySelector('#compound-test2  ').textContent);
+
+  testing.expectEqual('Compound 3', document.querySelector('  span.active  ').textContent);
+
+  testing.expectEqual(null, document.querySelector('span#compound-test'));
+  testing.expectEqual(null, document.querySelector('div.nonexistent'));
+  testing.expectEqual(null, document.querySelector('p.container'));
+}
+</script>
+
+<script id=universalSelector>
+{
+  const result = document.querySelector('*');
+  testing.expectEqual('HTML', result.tagName);
+
+  testing.expectEqual('div1', document.querySelector('*.test-class').textContent);
+
+  testing.expectEqual('test1', document.querySelector('*#byId').getAttribute('name'));
+
+  testing.expectEqual('Compound 1', document.querySelector('*.container.active').textContent);
+}
+</script>
+
+<div id="descendant-container">
+  <p class="desc-text">Direct child paragraph</p>
+  <div class="nested">
+    <p class="desc-text">Nested paragraph</p>
+    <span>
+      <p class="deep">Deeply nested paragraph</p>
+    </span>
+  </div>
+  <article>
+    <p class="desc-text">Article paragraph</p>
+  </article>
+</div>
+<p class="desc-text">Outside paragraph</p>
+
+<div id="complex">
+  <div class="outer">
+    <div class="middle">
+      <div class="inner">
+        <span id="target">Target span</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script id=descendantSelectors>
+{
+  testing.expectEqual('Direct child paragraph', document.querySelector('div p').textContent);
+  testing.expectEqual('Direct child paragraph', document.querySelector('#descendant-container p').textContent);
+  testing.expectEqual('Nested paragraph', document.querySelector('div div p').textContent);
+  testing.expectEqual('target', document.querySelector('div div div span').id);
+  testing.expectEqual('Nested paragraph', document.querySelector('div.nested p.desc-text').textContent);
+  testing.expectEqual('target', document.querySelector('div #target').id);
+  testing.expectEqual('Nested paragraph', document.querySelector('.nested p').textContent);
+  testing.expectEqual('Deeply nested paragraph', document.querySelector('div span p').textContent);
+  testing.expectEqual(null, document.querySelector('article div p'));
+}
+</script>
+
+<script id=descendantWithWhitespace>
+{
+  testing.expectEqual('Direct child paragraph', document.querySelector('  div   p  ').textContent);
+  testing.expectEqual('Nested paragraph', document.querySelector('  div.nested    p.desc-text  ').textContent);
+}
+</script>
+
+<div id="compound-id-test" class="special">
+  <p class="text">Paragraph in compound ID div</p>
+  <div class="inner">
+    <span id="nested-compound" class="highlight">Nested span</span>
+  </div>
+</div>
+
+<script id=compoundIdSelectors>
+{
+  testing.expectEqual('Paragraph in compound ID div', document.querySelector('div#compound-id-test p').textContent);
+  testing.expectEqual('Paragraph in compound ID div', document.querySelector('#compound-id-test.special p').textContent);
+  testing.expectEqual('Nested span', document.querySelector('div #nested-compound.highlight').textContent);
+  testing.expectEqual('Nested span', document.querySelector('#compound-id-test span#nested-compound').textContent);
+  testing.expectEqual('Nested span', document.querySelector('div.special #nested-compound.highlight').textContent);
+}
+</script>
+
+<script id=idOptimizationEdgeCases>
+{
+  testing.expectEqual(null, document.querySelector('article #compound-id-test p'));
+  testing.expectEqual(null, document.querySelector('#compound-id-test.wrong-class p'));
+  testing.expectEqual(null, document.querySelector('#compound-id-test.container p'));
+  testing.expectEqual(null, document.querySelector('#compound-id-test article'));
+  testing.expectEqual(null, document.querySelector('#compound-id-test nav'));
+  testing.expectEqual(null, document.querySelector('#nonexistent-id p'));
+  testing.expectEqual(null, document.querySelector('div #nonexistent-id'));
+  testing.expectEqual(null, document.querySelector('#nonexistent-id.some-class span'));
+  testing.expectEqual(null, document.querySelector('span#compound-id-test p'));
+  testing.expectEqual(null, document.querySelector('article#nested-compound'));
+}
+</script>
+
+<script id=universalDescendantSelectors>
+{
+  testing.expectEqual('div1', document.querySelector('* div').textContent);
+  testing.expectEqual('span1', document.querySelector('* span').textContent);
+  testing.expectEqual('Direct child paragraph', document.querySelector('div *').textContent);
+  testing.expectEqual('Nested paragraph', document.querySelector('.nested *').textContent);
+  testing.expectEqual('div1', document.querySelector('* .test-class').textContent);
+  testing.expectEqual('multi1', document.querySelector('* .multiple').textContent);
+  testing.expectEqual('Nested paragraph', document.querySelector('.nested *').textContent);
+  testing.expectEqual('Paragraph in compound ID div', document.querySelector('.special *').textContent);
+  testing.expectEqual('test1', document.querySelector('* #byId').getAttribute('name'));
+  testing.expectEqual('Compound 1', document.querySelector('* #compound-test').textContent);
+  testing.expectEqual('Direct child paragraph', document.querySelector('#descendant-container *').textContent);
+  testing.expectEqual('Paragraph in compound ID div', document.querySelector('#compound-id-test *').textContent);
+  testing.expectEqual('div1', document.querySelector('* * div').textContent);
+  testing.expectEqual(document.querySelector('p').textContent, document.querySelector('* * p').textContent);
+  testing.expectEqual('Nested paragraph', document.querySelector('div * p').textContent);
+  testing.expectEqual('Nested paragraph', document.querySelector('#descendant-container * p').textContent);
+  testing.expectEqual('Deeply nested paragraph', document.querySelector('.nested * p').textContent);
+  testing.expectEqual('target', document.querySelector('#complex * span').id);
+  testing.expectEqual('Nested span', document.querySelector('#compound-id-test * span').textContent);
+  testing.expectEqual('Nested paragraph', document.querySelector('* div.nested p').textContent);
+  testing.expectEqual('Paragraph in compound ID div', document.querySelector('* #compound-id-test.special p').textContent);
+}
+</script>
+
+<svg id="test-svg-selector" width="100" height="100" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="50" cy="50" r="40" stroke="black" stroke-width="3" fill="red"/>
+  <text x="10" y="20">SVG Text Content</text>
+  <g id="svg-group">
+    <rect x="5" y="5" width="20" height="20"/>
+  </g>
+</svg>
+
+<script id=svgSelectors>
+{
+  testing.expectEqual('svg', document.querySelector('svg').tagName);
+  testing.expectEqual('circle', document.querySelector('circle').tagName);
+  testing.expectEqual('text', document.querySelector('text').tagName);
+
+  testing.expectEqual('circle', document.querySelector('svg circle').tagName);
+  testing.expectEqual('text', document.querySelector('svg text').tagName);
+  testing.expectEqual('rect', document.querySelector('svg rect').tagName);
+
+  testing.expectEqual('rect', document.querySelector('#svg-group rect').tagName);
+  testing.expectEqual('rect', document.querySelector('svg #svg-group rect').tagName);
+  testing.expectEqual('rect', document.querySelector('g rect').tagName);
+  testing.expectEqual('rect', document.querySelector('svg g rect').tagName);
+}
+</script>

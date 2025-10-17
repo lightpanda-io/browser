@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=abortControllerBasic>
+{
+  const controller = new AbortController();
+  const signal = controller.signal;
+
+  testing.expectEqual(false, signal.aborted);
+  testing.expectEqual(null, signal.reason);
+}
+</script>
+
+<script id=abortControllerAbort>
+{
+  const controller = new AbortController();
+  const signal = controller.signal;
+
+  controller.abort();
+
+  testing.expectEqual(true, signal.aborted);
+}
+</script>
+
+<script id=abortControllerAbortWithReason>
+{
+  const controller = new AbortController();
+  const signal = controller.signal;
+
+  controller.abort("Custom abort reason");
+
+  testing.expectEqual(true, signal.aborted);
+  testing.expectEqual("Custom abort reason", signal.reason);
+}
+</script>
+
+<script id=abortControllerEventListener>
+{
+  const controller = new AbortController();
+  const signal = controller.signal;
+  let eventFired = false;
+
+  signal.addEventListener('abort', (event) => {
+    eventFired = true;
+    testing.expectEqual('abort', event.type);
+    testing.expectEqual(signal, event.target);
+  });
+
+  controller.abort();
+  testing.expectEqual(true, eventFired);
+}
+</script>
+
+<script id=abortControllerOnabortProperty>
+{
+  const controller = new AbortController();
+  const signal = controller.signal;
+  let onabortFired = false;
+
+  signal.onabort = (event) => {
+    onabortFired = true;
+    testing.expectEqual('abort', event.type);
+  };
+
+  controller.abort();
+
+  testing.expectEqual(true, onabortFired);
+}
+</script>
+
+<script id=abortControllerMultipleAborts>
+{
+  const controller = new AbortController();
+  const signal = controller.signal;
+  let eventCount = 0;
+
+  signal.onabort = () => {
+    eventCount++;
+  };
+
+  controller.abort("First");
+  controller.abort("Second");
+  controller.abort("Third");
+
+  testing.expectEqual(1, eventCount);
+  testing.expectEqual("First", signal.reason);
+}
+</script>
+
+<script id=abortControllerBothEventTypes>
+{
+  const controller = new AbortController();
+  const signal = controller.signal;
+  let listenerFired = false;
+  let onabortFired = false;
+
+  signal.addEventListener('abort', () => {
+    listenerFired = true;
+  });
+
+  signal.onabort = () => {
+    onabortFired = true;
+  };
+
+  controller.abort();
+
+  testing.expectEqual(true, listenerFired);
+  testing.expectEqual(true, onabortFired);
+}
+</script>
+
+<script id=abortSignalStaticAbort>
+{
+  const signal = AbortSignal.abort("Already aborted");
+
+  testing.expectEqual(true, signal.aborted);
+  testing.expectEqual("Already aborted", signal.reason);
+}
+</script>
+
+<script id=abortSignalStaticAbortNoReason>
+{
+  const signal = AbortSignal.abort();
+
+  testing.expectEqual(true, signal.aborted);
+  testing.expectEqual(null, signal.reason);
+}
+</script>
+
+<script id=abortControllerThrowIfAborted>
+{
+  const controller = new AbortController();
+  const signal = controller.signal;
+
+  // Should not throw when not aborted
+  signal.throwIfAborted();
+
+  controller.abort();
+
+  // Should throw after abort
+  let didThrow = false;
+  try {
+    signal.throwIfAborted();
+  } catch (e) {
+    didThrow = true;
+  }
+
+  testing.expectEqual(true, didThrow);
+}
+</script>
+
+<script id=addEventListenerWithSignal>
+{
+  const controller = new AbortController();
+  const signal = controller.signal;
+  let eventFired = false;
+
+  window.addEventListener('custom', () => {
+    eventFired = true;
+  }, { signal });
+
+  // Trigger event before abort - should fire
+  window.dispatchEvent(new Event('custom'));
+  testing.expectEqual(true, eventFired);
+
+  // Reset and abort
+  eventFired = false;
+  controller.abort();
+
+  // Trigger event after abort - should not fire
+  window.dispatchEvent(new Event('custom'));
+  testing.expectEqual(false, eventFired);
+}
+</script>
+
+<script id=addEventListenerWithAlreadyAbortedSignal>
+{
+  const abortedSignal = AbortSignal.abort();
+  let eventFired = false;
+
+  // Try to add listener with already-aborted signal
+  window.addEventListener('test', () => {
+    eventFired = true;
+  }, { signal: abortedSignal });
+
+  // Trigger event - should not fire because signal was already aborted
+  window.dispatchEvent(new Event('test'));
+  testing.expectEqual(false, eventFired);
+}
+</script>
+
+<script id=addEventListenerSignalRemovesListener>
+{
+  const controller = new AbortController();
+  const signal = controller.signal;
+  let count = 0;
+
+  window.addEventListener('increment', () => {
+    count++;
+  }, { signal });
+
+  window.dispatchEvent(new Event('increment'));
+  testing.expectEqual(1, count);
+
+  window.dispatchEvent(new Event('increment'));
+  testing.expectEqual(2, count);
+
+  controller.abort();
+
+  window.dispatchEvent(new Event('increment'));
+  testing.expectEqual(2, count); // Still 2, listener was removed
+}
+</script>

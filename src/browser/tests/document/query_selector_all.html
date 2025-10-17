@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div class="test-class">div1</div>
+<span class="test-class">span1</span>
+<div class="multiple classes here">multi1</div>
+<div class="classes">multi2</div>
+<div class="">empty-class</div>
+<div>no-class</div>
+
+<h1>Heading 1</h1>
+<h2>Heading 2</h2>
+<h3>Heading 3</h3>
+<h4>Heading 4</h4>
+<h5>Heading 5</h5>
+<h6>Heading 6</h6>
+<b>Bold text</b>
+<i>Italic text</i>
+<em>Emphasized text</em>
+<strong>Strong text</strong>
+<header>Header element</header>
+<nav>Navigation</nav>
+<main>Main content</main>
+
+<script>
+  function assertList(expected, result) {
+    testing.expectEqual(expected.length, result.length);
+    testing.expectEqual(expected, Array.from(result).map((e) => e.textContent));
+    testing.expectEqual(expected, Array.from(result.values()).map((e) => e.textContent));
+    testing.expectEqual(expected.map((e, i) => i), Array.from(result.keys()));
+  }
+</script>
+
+<script id=script1 name="test1">
+  testing.expectError("Syntax Error", () => document.querySelectorAll(''));
+  testing.withError((err) => {
+    testing.expectEqual(12, err.code);
+    testing.expectEqual("SyntaxError", err.name);
+    testing.expectEqual("Syntax Error", err.message);
+  }, () => document.querySelectorAll(''));
+</script>
+
+<script id=byId>
+{
+  const result = document.querySelectorAll('#script1');
+  testing.expectEqual(true, result instanceof NodeList);
+  testing.expectEqual(1, result.length);
+  testing.expectEqual('test1', result[0].getAttribute('name'));
+
+  assertList([], document.querySelectorAll('#nonexistent'));
+}
+</script>
+
+<script id=byClass>
+  assertList([], document.querySelectorAll('.nope'));
+  assertList(['div1', 'span1'], document.querySelectorAll('.test-class'));
+
+  assertList(['multi1', 'multi2'], document.querySelectorAll('.classes'));
+  assertList(['multi1'], document.querySelectorAll('.multiple'));
+  assertList(['multi1'], document.querySelectorAll('.here'));
+</script>
+
+<script id=byTag>
+{
+  const divs = document.querySelectorAll('div');
+  testing.expectEqual(true, divs.length >= 5);
+  testing.expectEqual('div1', divs[0].textContent);
+
+  const scripts = document.querySelectorAll('script');
+  testing.expectEqual(true, scripts.length >= 5);
+
+  assertList(['span1'], document.querySelectorAll('span'));
+
+  assertList([], document.querySelectorAll('article'));
+  assertList([], document.querySelectorAll('section'));
+
+  assertList(['Heading 1'], document.querySelectorAll('h1'));
+  assertList(['Heading 2'], document.querySelectorAll('h2'));
+  assertList(['Heading 3'], document.querySelectorAll('h3'));
+
+  assertList(['Heading 1'], document.querySelectorAll('H1'));
+  assertList(['Navigation'], document.querySelectorAll('NAV'));
+}
+</script>
+
+<div id="compound-test" class="container active">Compound 1</div>
+<div class="container">Compound 2</div>
+<span class="container active">Compound 3</span>
+<div class="active">Compound 4</div>
+<p id="compound-test2">Compound 5</p>
+
+<script id=compoundSelectors>
+{
+  assertList(['Compound 1', 'Compound 2'], document.querySelectorAll('div.container'));
+  assertList(['Compound 1', 'Compound 4'], document.querySelectorAll('div.active'));
+  assertList(['Compound 3'], document.querySelectorAll('span.active'));
+
+  assertList(['Compound 1', 'Compound 3'], document.querySelectorAll('.container.active'));
+  assertList(['Compound 1', 'Compound 3'], document.querySelectorAll('.active.container'));
+
+  assertList(['Compound 1'], document.querySelectorAll('div.container.active'));
+
+  assertList(['Compound 1'], document.querySelectorAll('div#compound-test'));
+
+  assertList(['Compound 1'], document.querySelectorAll('.container#compound-test'));
+  assertList(['Compound 1'], document.querySelectorAll('#compound-test.active'));
+
+  assertList(['Compound 1', 'Compound 2'], document.querySelectorAll('  div.container'));
+  assertList(['Compound 1', 'Compound 3', 'Compound 4'], document.querySelectorAll('  .active'));
+  assertList(['Compound 1', 'Compound 2'], document.querySelectorAll('div.container  '));
+  assertList(['Compound 5'], document.querySelectorAll('#compound-test2  '));
+  assertList(['Compound 3'], document.querySelectorAll('  span.active  '));
+
+  assertList([], document.querySelectorAll('span#compound-test'));
+  assertList([], document.querySelectorAll('div.nonexistent'));
+  assertList([], document.querySelectorAll('p.container'));
+}
+</script>
+
+<script id=universalSelector>
+{
+  const all = document.querySelectorAll('*');
+  testing.expectEqual(true, all.length > 20);
+  testing.expectEqual('HTML', all[0].tagName);
+
+  assertList(['div1', 'span1'], document.querySelectorAll('*.test-class'));
+
+  const scriptResult = document.querySelectorAll('*#script1');
+  testing.expectEqual(1, scriptResult.length);
+  testing.expectEqual('test1', scriptResult[0].getAttribute('name'));
+
+  assertList(['Compound 1', 'Compound 3'], document.querySelectorAll('*.container.active'));
+}
+</script>
+
+<script id=iteratorTests>
+{
+  const list = document.querySelectorAll('.test-class');
+
+  const entries = Array.from(list.entries());
+  testing.expectEqual(2, entries.length);
+  testing.expectEqual(0, entries[0][0]);
+  testing.expectEqual('div1', entries[0][1].textContent);
+  testing.expectEqual(1, entries[1][0]);
+  testing.expectEqual('span1', entries[1][1].textContent);
+
+  const keys = Array.from(list.keys());
+  testing.expectEqual([0, 1], keys);
+
+  const values = Array.from(list.values());
+  testing.expectEqual(['div1', 'span1'], values.map((e) => e.textContent));
+
+  const defaultIter = Array.from(list);
+  testing.expectEqual(['div1', 'span1'], defaultIter.map((e) => e.textContent));
+}
+</script>
+
+<script id=multipleIterators>
+{
+  const list = document.querySelectorAll('.test-class');
+
+  const keysIter = list.keys();
+  const valuesIter = list.values();
+
+  const key1 = keysIter.next();
+  testing.expectEqual(false, key1.done);
+  testing.expectEqual(0, key1.value);
+
+  const val1 = valuesIter.next();
+  testing.expectEqual(false, val1.done);
+  testing.expectEqual('div1', val1.value.textContent);
+
+  const key2 = keysIter.next();
+  testing.expectEqual(false, key2.done);
+  testing.expectEqual(1, key2.value);
+
+  const val2 = valuesIter.next();
+  testing.expectEqual(false, val2.done);
+  testing.expectEqual('span1', val2.value.textContent);
+
+  const key3 = keysIter.next();
+  testing.expectEqual(true, key3.done);
+
+  const val3 = valuesIter.next();
+  testing.expectEqual(true, val3.done);
+}
+</script>
+
+<script id=iteratorLifetime>
+{
+  let iter;
+  {
+    const list = document.querySelectorAll('.test-class');
+    iter = list.values();
+  }
+
+  const val1 = iter.next();
+  testing.expectEqual(false, val1.done);
+  testing.expectEqual('div1', val1.value.textContent);
+
+  const val2 = iter.next();
+  testing.expectEqual(false, val2.done);
+  testing.expectEqual('span1', val2.value.textContent);
+
+  const val3 = iter.next();
+  testing.expectEqual(true, val3.done);
+}
+</script>
+
+<div id="descendant-container">
+  <p class="desc-text">Direct child paragraph</p>
+  <div class="nested">
+    <p class="desc-text">Nested paragraph</p>
+    <span>
+      <p class="deep">Deeply nested paragraph</p>
+    </span>
+  </div>
+  <article>
+    <p class="desc-text">Article paragraph</p>
+  </article>
+</div>
+<p class="desc-text">Outside paragraph</p>
+
+<div id="complex">
+  <div class="outer">
+    <div class="middle">
+      <div class="inner">
+        <span id="target">Target span</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  function assertList(expected, result) {
+    testing.expectEqual(expected.length, result.length);
+    testing.expectEqual(expected, Array.from(result).map((e) => e.textContent));
+  }
+</script>
+
+<script id=descendantSelectors>
+{
+  assertList(['Direct child paragraph', 'Nested paragraph', 'Deeply nested paragraph', 'Article paragraph'], document.querySelectorAll('div p'));
+  assertList(['Direct child paragraph', 'Nested paragraph', 'Article paragraph'], document.querySelectorAll('div .desc-text'));
+  assertList(['Direct child paragraph', 'Nested paragraph', 'Deeply nested paragraph', 'Article paragraph'], document.querySelectorAll('#descendant-container p'));
+  assertList(['Nested paragraph', 'Deeply nested paragraph'], document.querySelectorAll('div div p'));
+  assertList(['Target span'], document.querySelectorAll('div div div span'));
+  assertList(['Nested paragraph'], document.querySelectorAll('div.nested p.desc-text'));
+  assertList([], document.querySelectorAll('article div p'));
+}
+</script>
+
+<script id=descendantWithWhitespace>
+{
+  assertList(['Direct child paragraph', 'Nested paragraph', 'Deeply nested paragraph', 'Article paragraph'], document.querySelectorAll('  div   p  '));
+  assertList(['Nested paragraph'], document.querySelectorAll('  div.nested    p.desc-text  '));
+}
+</script>
+
+<script id=multiLevelDescendant>
+{
+  assertList(['Nested paragraph', 'Deeply nested paragraph'], document.querySelectorAll('body div div p'));
+  assertList(['Target span'], document.querySelectorAll('body div div div div span'));
+}
+</script>
+
+<script id=descendantCombinedWithCompound>
+{
+  assertList(['Nested paragraph', 'Deeply nested paragraph'], document.querySelectorAll('.nested p'));
+
+  const bodyPs = document.querySelectorAll('body p');
+  testing.expectEqual(true, bodyPs.length >= 5);
+
+  assertList(['Target span'], document.querySelectorAll('#complex span'));
+  assertList(['Target span'], document.querySelectorAll('div.outer span'));
+  assertList(['Target span'], document.querySelectorAll('.middle .inner span'));
+}
+</script>
+
+<div id="combinator-test">
+  <h1>Title</h1>
+  <p class="intro">First paragraph</p>
+  <p>Second paragraph</p>
+  <div class="content">
+    <span>Span 1</span>
+    <span>Span 2</span>
+    <span>Span 3</span>
+  </div>
+  <p>Third paragraph</p>
+</div>
+
+<script id=childCombinator>
+{
+  assertList(['First paragraph', 'Second paragraph', 'Third paragraph'], document.querySelectorAll('#combinator-test > p'));
+  assertList(['Span 1', 'Span 2', 'Span 3'], document.querySelectorAll('div.content > span'));
+  assertList([], document.querySelectorAll('#combinator-test > span'));
+  assertList(['Title', 'First paragraph', 'Second paragraph', 'Third paragraph'], document.querySelectorAll('#combinator-test > *:not(div)'));
+}
+</script>
+
+<script id=adjacentSiblingCombinator>
+{
+  assertList(['First paragraph'], document.querySelectorAll('h1 + p'));
+  assertList(['Second paragraph'], document.querySelectorAll('p.intro + p'));
+  assertList([], document.querySelectorAll('#combinator-test div + h1'));
+}
+</script>
+
+<script id=generalSiblingCombinator>
+{
+  assertList(['First paragraph', 'Second paragraph', 'Third paragraph'], document.querySelectorAll('#combinator-test h1 ~ p'));
+  assertList(['Second paragraph', 'Third paragraph'], document.querySelectorAll('p.intro ~ p'));
+  assertList([], document.querySelectorAll('#combinator-test p ~ h1'));
+}
+</script>
+
+<script id=combinedCombinators>
+{
+  assertList(['Span 1'], document.querySelectorAll('#combinator-test > div > span:nth-child(1)'));
+  assertList(['Second paragraph'], document.querySelectorAll('#combinator-test h1 + p + p'));
+  assertList(['Second paragraph', 'Third paragraph'], document.querySelectorAll('#combinator-test h1 + p ~ p'));
+}
+</script>
+
+
+<div id="pseudo-test">
+  <ul>
+    <li>Item 1</li>
+    <li>Item 2</li>
+    <li>Item 3</li>
+    <li>Item 4</li>
+    <li>Item 5</li>
+  </ul>
+  <div>
+    <p>Para 1</p>
+    <span>Span</span>
+    <p>Para 2</p>
+  </div>
+</div>
+
+<script id=firstChildPseudo>
+{
+  assertList(['Item 1'], document.querySelectorAll('#pseudo-test li:first-child'));
+  assertList(['Para 1'], document.querySelectorAll('#pseudo-test p:first-child'));
+  assertList([], document.querySelectorAll('#pseudo-test span:first-child'));
+}
+</script>
+
+<script id=lastChildPseudo>
+{
+  assertList(['Item 5'], document.querySelectorAll('#pseudo-test li:last-child'));
+  assertList(['Para 2'], document.querySelectorAll('#pseudo-test p:last-child'));
+}
+</script>
+
+<script id=nthChildPseudo>
+{
+  assertList(['Item 2'], document.querySelectorAll('#pseudo-test li:nth-child(2)'));
+  assertList(['Item 1', 'Item 3', 'Item 5'], document.querySelectorAll('#pseudo-test li:nth-child(odd)'));
+  assertList(['Item 2', 'Item 4'], document.querySelectorAll('#pseudo-test li:nth-child(even)'));
+  assertList(['Item 3', 'Item 5'], document.querySelectorAll('#pseudo-test li:nth-child(2n+3)'));
+}
+</script>
+
+<script id=firstOfTypePseudo>
+{
+  assertList(['Para 1'], document.querySelectorAll('#pseudo-test div > p:first-of-type'));
+  assertList(['Span'], document.querySelectorAll('#pseudo-test div > span:first-of-type'));
+}
+</script>
+
+<script id=lastOfTypePseudo>
+{
+  assertList(['Para 2'], document.querySelectorAll('#pseudo-test div > p:last-of-type'));
+  assertList(['Span'], document.querySelectorAll('#pseudo-test div > span:last-of-type'));
+}
+</script>
+

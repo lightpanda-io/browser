@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=xhr>
+  testing.expectEqual(0, XMLHttpRequest.UNSENT);
+  testing.expectEqual(1, XMLHttpRequest.OPENED);
+  testing.expectEqual(2, XMLHttpRequest.HEADERS_RECEIVED);
+  testing.expectEqual(3, XMLHttpRequest.LOADING);
+  testing.expectEqual(4, XMLHttpRequest.DONE);
+</script>

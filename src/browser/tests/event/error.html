@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=errorEventConstructor>
+  const evt = new ErrorEvent('error', {
+    message: 'Test error message',
+    filename: 'test.js',
+    lineno: 42,
+    colno: 10
+  });
+
+  testing.expectEqual('error', evt.type);
+  testing.expectEqual('Test error message', evt.message);
+  testing.expectEqual('test.js', evt.filename);
+  testing.expectEqual(42, evt.lineno);
+  testing.expectEqual(10, evt.colno);
+  testing.expectEqual(false, evt.bubbles);
+  testing.expectEqual(false, evt.cancelable);
+</script>
+
+<script id=errorEventWithBubbles>
+  const evt2 = new ErrorEvent('error', {
+    message: 'Bubbling error',
+    bubbles: true,
+    cancelable: true
+  });
+
+  testing.expectEqual(true, evt2.bubbles);
+  testing.expectEqual(true, evt2.cancelable);
+</script>
+
+<script id=errorEventWithErrorObject>
+  const err = new Error('Original error');
+  const evt3 = new ErrorEvent('error', {
+    message: 'Wrapper error',
+    error: err
+  });
+
+  testing.expectEqual('Wrapper error', evt3.message);
+  testing.expectEqual(err, evt3.error);
+</script>
+
+<script id=errorEventDefaults>
+  const evt4 = new ErrorEvent('error');
+
+  testing.expectEqual('', evt4.message);
+  testing.expectEqual('', evt4.filename);
+  testing.expectEqual(0, evt4.lineno);
+  testing.expectEqual(0, evt4.colno);
+  testing.expectEqual(false, evt4.bubbles);
+  testing.expectEqual(false, evt4.cancelable);
+</script>
+
+<script id=errorEventInheritance>
+  const evt5 = new ErrorEvent('test');
+
+  testing.expectEqual('test', evt5.type);
+  testing.expectEqual(Event.NONE, evt5.eventPhase);
+  testing.expectEqual(false, evt5.defaultPrevented);
+</script>

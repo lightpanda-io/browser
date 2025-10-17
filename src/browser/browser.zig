@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2024  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -22,98 +22,94 @@ const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
 const js = @import("js/js.zig");
-const State = @import("State.zig");
-const App = @import("../app.zig").App;
-const Session = @import("session.zig").Session;
-const Notification = @import("../notification.zig").Notification;
-
 const log = @import("../log.zig");
+const App = @import("../App.zig");
 const HttpClient = @import("../http/Client.zig");
+const Notification = @import("../Notification.zig");
+
+const Session = @import("Session.zig");
 
 // Browser is an instance of the browser.
 // You can create multiple browser instances.
 // A browser contains only one session.
-pub const Browser = struct {
-    env: *js.Env,
-    app: *App,
-    session: ?Session,
-    allocator: Allocator,
-    http_client: *HttpClient,
-    call_arena: ArenaAllocator,
-    page_arena: ArenaAllocator,
-    session_arena: ArenaAllocator,
-    transfer_arena: ArenaAllocator,
-    notification: *Notification,
-    state_pool: std.heap.MemoryPool(State),
+const Browser = @This();
 
-    pub fn init(app: *App) !Browser {
-        const allocator = app.allocator;
+env: *js.Env,
+app: *App,
+session: ?Session,
+allocator: Allocator,
+http_client: *HttpClient,
+call_arena: ArenaAllocator,
+page_arena: ArenaAllocator,
+session_arena: ArenaAllocator,
+transfer_arena: ArenaAllocator,
+notification: *Notification,
 
-        const env = try js.Env.init(allocator, &app.platform, .{});
-        errdefer env.deinit();
+pub fn init(app: *App) !Browser {
+    const allocator = app.allocator;
 
-        const notification = try Notification.init(allocator, app.notification);
-        app.http.client.notification = notification;
-        app.http.client.next_request_id = 0; // Should we track ids in CDP only?
-        errdefer notification.deinit();
+    const env = try js.Env.init(allocator, &app.platform, .{});
+    errdefer env.deinit();
 
-        return .{
-            .app = app,
-            .env = env,
-            .session = null,
-            .allocator = allocator,
-            .notification = notification,
-            .http_client = app.http.client,
-            .call_arena = ArenaAllocator.init(allocator),
-            .page_arena = ArenaAllocator.init(allocator),
-            .session_arena = ArenaAllocator.init(allocator),
-            .transfer_arena = ArenaAllocator.init(allocator),
-            .state_pool = std.heap.MemoryPool(State).init(allocator),
-        };
+    const notification = try Notification.init(allocator, app.notification);
+    app.http.client.notification = notification;
+    app.http.client.next_request_id = 0; // Should we track ids in CDP only?
+    errdefer notification.deinit();
+
+    return .{
+        .app = app,
+        .env = env,
+        .session = null,
+        .allocator = allocator,
+        .notification = notification,
+        .http_client = app.http.client,
+        .call_arena = ArenaAllocator.init(allocator),
+        .page_arena = ArenaAllocator.init(allocator),
+        .session_arena = ArenaAllocator.init(allocator),
+        .transfer_arena = ArenaAllocator.init(allocator),
+    };
+}
+
+pub fn deinit(self: *Browser) void {
+    self.closeSession();
+    self.env.deinit();
+    self.call_arena.deinit();
+    self.page_arena.deinit();
+    self.session_arena.deinit();
+    self.transfer_arena.deinit();
+    self.http_client.notification = null;
+    self.notification.deinit();
+}
+
+pub fn newSession(self: *Browser) !*Session {
+    self.closeSession();
+    self.session = @as(Session, undefined);
+    const session = &self.session.?;
+    try Session.init(session, self);
+    return session;
+}
+
+pub fn closeSession(self: *Browser) void {
+    if (self.session) |*session| {
+        session.deinit();
+        self.session = null;
+        _ = self.session_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
+        self.env.lowMemoryNotification();
     }
+}
 
-    pub fn deinit(self: *Browser) void {
-        self.closeSession();
-        self.env.deinit();
-        self.call_arena.deinit();
-        self.page_arena.deinit();
-        self.session_arena.deinit();
-        self.transfer_arena.deinit();
-        self.http_client.notification = null;
-        self.notification.deinit();
-        self.state_pool.deinit();
-    }
+pub fn runMicrotasks(self: *const Browser) void {
+    self.env.runMicrotasks();
+}
 
-    pub fn newSession(self: *Browser) !*Session {
-        self.closeSession();
-        self.session = @as(Session, undefined);
-        const session = &self.session.?;
-        try Session.init(session, self);
-        return session;
+pub fn runMessageLoop(self: *const Browser) void {
+    while (self.env.pumpMessageLoop()) {
+        log.debug(.browser, "pumpMessageLoop", .{});
     }
-
-    pub fn closeSession(self: *Browser) void {
-        if (self.session) |*session| {
-            session.deinit();
-            self.session = null;
-            _ = self.session_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
-            self.env.lowMemoryNotification();
-        }
-    }
-
-    pub fn runMicrotasks(self: *const Browser) void {
-        self.env.runMicrotasks();
-    }
-
-    pub fn runMessageLoop(self: *const Browser) void {
-        while (self.env.pumpMessageLoop()) {
-            log.debug(.browser, "pumpMessageLoop", .{});
-        }
-        self.env.runIdleTasks();
-    }
-};
+    self.env.runIdleTasks();
+}
 
 const testing = @import("../testing.zig");
 test "Browser" {
-    try testing.htmlRunner("browser.html");
+    try testing.htmlRunner("browser.html", .{});
 }

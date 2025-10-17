@@ -36,11 +36,10 @@ pub fn reset() void {
     _ = arena_instance.reset(.retain_capacity);
 }
 
-const App = @import("app.zig").App;
+const App = @import("App.zig");
 const js = @import("browser/js/js.zig");
-const Browser = @import("browser/browser.zig").Browser;
-const Session = @import("browser/session.zig").Session;
-const parser = @import("browser/netsurf.zig");
+const Browser = @import("browser/Browser.zig");
+const Session = @import("browser/Session.zig");
 
 // Merged std.testing.expectEqual and std.testing.expectString
 // can be useful when testing fields of an anytype an you don't know
@@ -207,40 +206,6 @@ pub const Random = struct {
     }
 };
 
-pub const Document = struct {
-    doc: *parser.DocumentHTML,
-    arena: std.heap.ArenaAllocator,
-
-    pub fn init(html: []const u8) !Document {
-        var fbs = std.io.fixedBufferStream(html);
-        const html_doc = try parser.documentHTMLParse(fbs.reader(), "utf-8");
-
-        return .{
-            .arena = std.heap.ArenaAllocator.init(allocator),
-            .doc = html_doc,
-        };
-    }
-
-    pub fn deinit(self: *Document) void {
-        self.arena.deinit();
-    }
-
-    pub fn querySelectorAll(self: *Document, selector: []const u8) ![]const *parser.Node {
-        const css = @import("browser/dom/css.zig");
-        const node_list = try css.querySelectorAll(self.arena.allocator(), self.asNode(), selector);
-        return node_list.nodes.items;
-    }
-
-    pub fn querySelector(self: *Document, selector: []const u8) !?*parser.Node {
-        const css = @import("browser/dom/css.zig");
-        return css.querySelector(self.arena.allocator(), self.asNode(), selector);
-    }
-
-    pub fn asNode(self: *const Document) *parser.Node {
-        return parser.documentHTMLToNode(self.doc);
-    }
-};
-
 pub fn expectJson(a: anytype, b: anytype) !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -365,7 +330,107 @@ pub var test_app: *App = undefined;
 pub var test_browser: Browser = undefined;
 pub var test_session: *Session = undefined;
 
-pub fn setup() !void {
+const WEB_API_TEST_ROOT = "src/browser/tests/";
+const WEB_API_HELPER_PATH = WEB_API_TEST_ROOT ++ "testing.js";
+const HtmlRunnerOpts = struct {};
+
+pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
+    _ = opts;
+    defer reset();
+
+    const root = try std.fs.path.joinZ(arena_allocator, &.{ WEB_API_TEST_ROOT, path });
+    const stat = std.fs.cwd().statFile(root) catch |err| {
+        std.debug.print("Failed to stat file: '{s}'", .{root});
+        return err;
+    };
+
+    switch (stat.kind) {
+        .file => {
+            if (@import("root").shouldRun(std.fs.path.basename(root)) == false) {
+                return;
+            }
+            try @import("root").subtest(root);
+            try runWebApiTest(root);
+        },
+        .directory => {
+            var dir = try std.fs.cwd().openDir(root, .{
+                .iterate = true,
+                .no_follow = true,
+                .access_sub_paths = false,
+            });
+            defer dir.close();
+
+            var it = dir.iterateAssumeFirstIteration();
+            while (try it.next()) |entry| {
+                if (entry.kind != .file) {
+                    continue;
+                }
+
+                if (!std.mem.endsWith(u8, entry.name, ".html")) {
+                    continue;
+                }
+
+                if (@import("root").shouldRun(entry.name) == false) {
+                    continue;
+                }
+
+                const full_path = try std.fs.path.joinZ(arena_allocator, &.{ root, entry.name });
+                try @import("root").subtest(entry.name);
+                try runWebApiTest(full_path);
+            }
+        },
+        else => |kind| {
+            std.debug.print("Unknown file type: {s} for {s}\n", .{ @tagName(kind), root });
+            return error.InvalidTestPath;
+        },
+    }
+}
+
+fn runWebApiTest(test_file: [:0]const u8) !void {
+    const page = try test_session.createPage();
+    defer test_session.removePage();
+
+    const url = try std.fmt.allocPrintSentinel(
+        arena_allocator,
+        "http://127.0.0.1:9582/{s}",
+        .{test_file},
+        0,
+    );
+
+    const js_context = page.js;
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(js_context);
+    defer try_catch.deinit();
+
+    try page.navigate(url, .{});
+    test_session.fetchWait(2000);
+
+    page._session.browser.runMicrotasks();
+    page._session.browser.runMessageLoop();
+
+    js_context.eval("testing.assertOk()", "testing.assertOk()") catch |err| {
+        const msg = try_catch.err(arena_allocator) catch @errorName(err) orelse "unknown";
+        std.debug.print("{s}: test failure\nError: {s}\n", .{ test_file, msg });
+        return err;
+    };
+}
+
+test {
+    std.testing.refAllDecls(@This());
+}
+
+const log = @import("log.zig");
+const TestHTTPServer = @import("TestHTTPServer.zig");
+
+// @ZIGDOM-CDP
+// const Server = @import("Server.zig");
+// var test_cdp_server: ?Server = null;
+var test_http_server: ?TestHTTPServer = null;
+
+test "tests:beforeAll" {
+    log.opts.level = .warn;
+    log.opts.format = .pretty;
+
     test_app = try App.init(gpa.allocator(), .{
         .run_mode = .serve,
         .tls_verify_host = false,
@@ -377,66 +442,87 @@ pub fn setup() !void {
     errdefer test_browser.deinit();
 
     test_session = try test_browser.newSession();
+
+    var wg: std.Thread.WaitGroup = .{};
+    wg.startMany(2);
+
+    // @ZIGDOM-CDP
+    // {
+    //     const thread = try std.Thread.spawn(.{}, serveCDP, .{&wg});
+    //     thread.detach();
+    // }
+    wg.finish(); // @ZIGDOM-CDP REMOVE
+
+    test_http_server = TestHTTPServer.init(testHTTPHandler);
+    {
+        const thread = try std.Thread.spawn(.{}, TestHTTPServer.run, .{ &test_http_server.?, &wg });
+        thread.detach();
+    }
+
+    // need to wait for the servers to be listening, else tests will fail because
+    // they aren't able to connect.
+    wg.wait();
 }
-pub fn shutdown() void {
-    @import("root").v8_peak_memory = test_browser.env.isolate.getHeapStatistics().total_physical_size;
-    @import("root").libdom_memory = @import("browser/mimalloc.zig").getRSS();
+
+test "tests:afterAll" {
+    // @ZIGDOM-CDP
+    // if (test_cdp_server) |*server| {
+    //     server.deinit();
+    // }
+    if (test_http_server) |*server| {
+        server.deinit();
+    }
+
     test_browser.deinit();
     test_app.deinit();
 }
 
-pub fn htmlRunner(file: []const u8) !void {
-    defer _ = arena_instance.reset(.retain_capacity);
+// @ZIGDOM-CDP
+// fn serveCDP(wg: *std.Thread.WaitGroup) !void {
+//     const address = try std.net.Address.parseIp("127.0.0.1", 9583);
+//     test_cdp_server = try Server.init(test_app, address);
 
-    const start = try std.time.Instant.now();
+//     var server = try Server.init(test_app, address);
+//     defer server.deinit();
+//     wg.finish();
 
-    const page = try test_session.createPage();
-    defer test_session.removePage();
+//     test_cdp_server.?.run(address, 5) catch |err| {
+//         std.debug.print("CDP server error: {}", .{err});
+//         return err;
+//     };
+// }
 
-    page.arena = @import("root").tracking_allocator;
+fn testHTTPHandler(req: *std.http.Server.Request) !void {
+    const path = req.head.target;
 
-    const js_context = page.js;
-    var try_catch: js.TryCatch = undefined;
-    try_catch.init(js_context);
-    defer try_catch.deinit();
-
-    const url = try std.fmt.allocPrint(arena_allocator, "http://localhost:9582/src/tests/{s}", .{file});
-    try page.navigate(url, .{});
-    _ = page.wait(2000);
-    // page exits more aggressively in tests. We want to make sure this is called
-    // at lease once.
-    page.session.browser.runMicrotasks();
-    page.session.browser.runMessageLoop();
-
-    const needs_second_wait = try js_context.exec("testing._onPageWait.length > 0", "check_onPageWait");
-    if (needs_second_wait.value.toBool(page.js.isolate)) {
-        // sets the isSecondWait flag in testing.
-        _ = js_context.exec("testing._isSecondWait = true", "set_second_wait_flag") catch {};
-        _ = page.wait(2000);
+    if (std.mem.eql(u8, path, "/loader")) {
+        return req.respond("Hello!", .{
+            .extra_headers = &.{.{ .name = "Connection", .value = "close" }},
+        });
     }
 
-    @import("root").js_runner_duration += std.time.Instant.since(try std.time.Instant.now(), start);
-
-    const value = js_context.exec("testing.getStatus()", "testing.getStatus()") catch |err| {
-        const msg = try_catch.err(arena_allocator) catch @errorName(err) orelse "unknown";
-        std.debug.print("{s}: test failure\nError: {s}\n", .{ file, msg });
-        return err;
-    };
-
-    const status = try value.toString(arena_allocator);
-    if (std.mem.eql(u8, status, "ok")) {
-        return;
+    if (std.mem.eql(u8, path, "/xhr")) {
+        return req.respond("1234567890" ** 10, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+            },
+        });
     }
 
-    if (std.mem.eql(u8, status, "empty")) {
-        std.debug.print("{s}: No testing assertions were made\n", .{file});
-        return error.NoTestingAssertions;
+    if (std.mem.eql(u8, path, "/xhr/json")) {
+        return req.respond("{\"over\":\"9000!!!\"}", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "application/json" },
+            },
+        });
     }
 
-    if (std.mem.eql(u8, status, "fail")) {
-        return error.TestFail;
+    if (std.mem.startsWith(u8, path, "/src/browser/tests/")) {
+        // strip off leading / so that it's relative to CWD
+        return TestHTTPServer.sendFile(req, path[1..]);
     }
 
-    std.debug.print("{s}: Invalid test status: '{s}'\n", .{ file, status });
-    return error.TestFail;
+    std.debug.print("TestHTTPServer was asked to serve an unknown file: {s}\n", .{path});
+
+    unreachable;
 }

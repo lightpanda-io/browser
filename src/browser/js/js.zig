@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2024  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -19,13 +19,10 @@
 const std = @import("std");
 pub const v8 = @import("v8");
 
-const types = @import("types.zig");
 const log = @import("../../log.zig");
-const Page = @import("../page.zig").Page;
-
-const Allocator = std.mem.Allocator;
 
 pub const Env = @import("Env.zig");
+pub const bridge = @import("bridge.zig");
 pub const ExecutionWorld = @import("ExecutionWorld.zig");
 pub const Context = @import("Context.zig");
 pub const Inspector = @import("Inspector.zig");
@@ -37,7 +34,13 @@ pub const TryCatch = @import("TryCatch.zig");
 pub const Function = @import("Function.zig");
 
 const Caller = @import("Caller.zig");
+const Page = @import("../Page.zig");
+const Allocator = std.mem.Allocator;
 const NamedFunction = Context.NamedFunction;
+
+pub fn Bridge(comptime T: type) type {
+    return bridge.Builder(T);
+}
 
 // If a function returns a []i32, should that map to a plain-old
 // JavaScript array, or a Int32Array? It's ambiguous. By default, we'll
@@ -261,10 +264,10 @@ pub fn isComplexAttributeType(ti: std.builtin.Type) bool {
 // These are simple types that we can convert to JS with only an isolate. This
 // is separated from the Caller's zigValueToJs to make it available when we
 // don't have a caller (i.e., when setting static attributes on types)
-pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bool) if (fail) v8.Value else ?v8.Value {
+pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bool, comptime null_as_undefined: bool) if (fail) v8.Value else ?v8.Value {
     switch (@typeInfo(@TypeOf(value))) {
         .void => return v8.initUndefined(isolate).toValue(),
-        .null => return v8.initNull(isolate).toValue(),
+        .null => if (comptime null_as_undefined) return v8.initUndefined(isolate).toValue() else return v8.initNull(isolate).toValue(),
         .bool => return v8.getValue(if (value) v8.initTrue(isolate) else v8.initFalse(isolate)),
         .int => |n| switch (n.signedness) {
             .signed => {
@@ -315,10 +318,13 @@ pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bo
                 }
             }
         },
-        .array => return simpleZigValueToJs(isolate, &value, fail),
+        .array => return simpleZigValueToJs(isolate, &value, fail, null_as_undefined),
         .optional => {
             if (value) |v| {
-                return simpleZigValueToJs(isolate, v, fail);
+                return simpleZigValueToJs(isolate, v, fail, null_as_undefined);
+            }
+            if (comptime null_as_undefined) {
+                return v8.initUndefined(isolate).toValue();
             }
             return v8.initNull(isolate).toValue();
         },
@@ -374,11 +380,11 @@ pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bo
                 @compileError("Invalid TypeArray type: " ++ @typeName(value_type));
             }
         },
-        .@"union" => return simpleZigValueToJs(isolate, std.meta.activeTag(value), fail),
+        .@"union" => return simpleZigValueToJs(isolate, std.meta.activeTag(value), fail, null_as_undefined),
         .@"enum" => {
             const T = @TypeOf(value);
             if (@hasDecl(T, "toString")) {
-                return simpleZigValueToJs(isolate, value.toString(), fail);
+                return simpleZigValueToJs(isolate, value.toString(), fail, null_as_undefined);
             }
         },
         else => {},
@@ -405,9 +411,7 @@ pub fn classNameForStruct(comptime Struct: type) []const u8 {
 
 // When we return a Zig object to V8, we put it on the heap and pass it into
 // v8 as an *anyopaque (i.e. void *). When V8 gives us back the value, say, as a
-// function parameter, we know what type it _should_ be. Above, in Caller.method
-// (for example), we know all the parameter types. So if a Zig function takes
-// a single parameter (its receiver), we know what that type is.
+// function parameter, we know what type it _should_ be.
 //
 // In a simple/perfect world, we could use this knowledge to cast the *anyopaque
 // to the parameter type:
@@ -421,7 +425,7 @@ pub fn classNameForStruct(comptime Struct: type) []const u8 {
 //   var cat = new Cat();
 //   cat.setOwner(new Cat());
 //
-// The zig _setOwner method expects the 2nd parameter to be an *Owner, but
+// The zig_setOwner method expects the 2nd parameter to be an *Owner, but
 // the JS code passed a *Cat.
 //
 // To solve this issue, we tag every returned value so that we can check what
@@ -438,33 +442,27 @@ pub fn classNameForStruct(comptime Struct: type) []const u8 {
 // The issue is that setOwner might not expect an *Owner, but rather a
 // *Person, which is the prototype for Owner. Now our Zig code is expecting
 // a *Person, but it was (correctly) given an *Owner.
-// For this reason, we also store the prototype's type index.
-//
-// One of the prototype mechanisms that we support is via composition. Owner
-// can have a "proto: *Person" field. For this reason, we also store the offset
-// of the proto field, so that, given an intFromPtr(*Owner) we can access its
-// proto field.
-//
-// The other prototype mechanism that we support is for netsurf, where we just
-// cast one type to another. In this case, we'll store an offset of -1 (as a
-// sentinel to indicate that we should just cast directly).
+// For this reason, we also store the prototype chain.
 pub const TaggedAnyOpaque = struct {
-    // The type of object this is. The type is captured as an index, which
-    // corresponds to both a field in TYPE_LOOKUP and the index of
-    // PROTOTYPE_TABLE
-    index: u16,
+    prototype_len: u16,
+    prototype_chain: [*]const PrototypeChainEntry,
 
     // Ptr to the Zig instance. Between the context where it's called (i.e.
     // we have the comptime parameter info for all functions), and the index field
     // we can figure out what type this is.
-    ptr: *anyopaque,
+    value: *anyopaque,
 
     // When we're asked to describe an object via the Inspector, we _must_ include
     // the proper subtype (and description) fields in the returned JSON.
     // V8 will give us a Value and ask us for the subtype. From the v8.Value we
     // can get a v8.Object, and from the v8.Object, we can get out TaggedAnyOpaque
     // which is where we store the subtype.
-    subtype: ?types.Sub,
+    subtype: ?bridge.SubType,
+};
+
+pub const PrototypeChainEntry = struct {
+    index: u16,
+    offset: u16, // offset to the _proto field
 };
 
 // These are here, and not in Inspector.zig, because Inspector.zig isn't always
@@ -496,4 +494,9 @@ pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
     // to be included. Besides that, I don't know if the value has any meaning
     const external_entry = Inspector.getTaggedAnyOpaque(.{ .handle = c_value }) orelse return null;
     return if (external_entry.subtype == null) null else "";
+}
+
+test "TaggedAnyOpaque" {
+    // If we grow this, fine, but it should be a conscious decision
+    try std.testing.expectEqual(16, @sizeOf(TaggedAnyOpaque));
 }

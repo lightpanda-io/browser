@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=window>
+  testing.expectEqual(window, globalThis);
+  testing.expectEqual(window, self);
+  testing.expectEqual(window, window.self);
+</script>
+
+<script id=load>
+  let call1 = 0;
+  let call2 = 0;
+  window.onload = function(e) {
+    testing.expectEqual(false, true); // should not be called
+  }
+
+  const fn = function(e) {
+    call1 += 1;
+    testing.expectEqual(window, this);
+    testing.expectEqual(document, e.target);
+    testing.expectEqual(window, e.currentTarget);
+  };
+  window.onload = fn;
+  testing.expectEqual(fn, window.onload);
+
+  window.addEventListener('load', (e) => {
+    call2 += 1;
+    testing.expectEqual(window, this);
+    testing.expectEqual(document, e.target);
+    testing.expectEqual(window, e.currentTarget);
+  });
+
+  window.addEventListener('load', function(e) {
+    call2 += 1;
+    testing.expectEqual(window, this);
+    testing.expectEqual(document, e.target);
+    testing.expectEqual(window, e.currentTarget);
+  });
+
+  // noop
+  window.removeEventListener('load', fn);
+  testing.eventually(() => {
+    testing.expectEqual(1, call1);
+    testing.expectEqual(2, call2);
+  });
+</script>
+
+<script id=btoa>
+  testing.expectEqual('SGVsbG8gV29ybGQh', btoa('Hello World!'));
+  testing.expectEqual('', btoa(''));
+  testing.expectEqual('YQ==', btoa('a'));
+  testing.expectEqual('YWI=', btoa('ab'));
+  testing.expectEqual('YWJj', btoa('abc'));
+  testing.expectEqual('MDEyMzQ1Njc4OQ==', btoa('0123456789'));
+  testing.expectEqual('VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZw==', btoa('The quick brown fox jumps over the lazy dog'));
+</script>
+
+<script id=atob>
+  testing.expectEqual('Hello World!', atob('SGVsbG8gV29ybGQh'));
+  testing.expectEqual('', atob(''));
+  testing.expectEqual('a', atob('YQ=='));
+  testing.expectEqual('ab', atob('YWI='));
+  testing.expectEqual('abc', atob('YWJj'));
+  testing.expectEqual('0123456789', atob('MDEyMzQ1Njc4OQ=='));
+  testing.expectEqual('The quick brown fox jumps over the lazy dog', atob('VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZw=='));
+</script>
+
+<script id=btoa_atob_roundtrip>
+  const testStrings = [
+    'Hello World!',
+    'Test 123',
+    '',
+    'a',
+    'The quick brown fox jumps over the lazy dog',
+    '!@#$%^&*()',
+  ];
+
+  for (const str of testStrings) {
+    testing.expectEqual(str, atob(btoa(str)));
+  }
+
+  const testEncoded = [
+    'SGVsbG8gV29ybGQh',
+    'VGVzdCAxMjM=',
+    '',
+    'YQ==',
+    'VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZw==',
+    'IUAjJCVeJiooKQ==',
+  ];
+
+  for (const enc of testEncoded) {
+    testing.expectEqual(enc, btoa(atob(enc)));
+  }
+</script>
+

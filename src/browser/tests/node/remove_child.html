@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<div id=d1></div>
+<div id=d2><p id=p1></p></div>
+
+<script id=removeChild>
+  testing.withError((err) => {
+    testing.expectEqual(8, err.code);
+    testing.expectEqual("NotFoundError", err.name);
+    testing.expectEqual("Not Found", err.message);
+  }, () => $('#d1').removeChild($('#p1')));
+
+  const p1 = $('#p1');
+  const node = $('#d2').removeChild(p1);
+  testing.expectEqual(node, p1);
+  testing.expectEqual(null, $('#p1'));
+  testing.expectEqual(null, p1.parentNode);
+</script>

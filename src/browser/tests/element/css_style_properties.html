@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="test-div"></div>
+
+<script id="camelCaseAccess">
+{
+  const div = $('#test-div');
+  div.style.cssText = '';
+
+  testing.expectEqual('', div.style.backgroundColor);
+  testing.expectEqual('', div.style.fontSize);
+  testing.expectEqual('', div.style.marginTop);
+
+  div.style.setProperty('background-color', 'blue');
+  div.style.setProperty('font-size', '14px');
+  div.style.setProperty('margin-top', '10px');
+
+  testing.expectEqual('blue', div.style.backgroundColor);
+  testing.expectEqual('14px', div.style.fontSize);
+  testing.expectEqual('10px', div.style.marginTop);
+}
+</script>
+
+<script id="dashCaseAccess">
+{
+  const div = $('#test-div');
+  div.style.cssText = '';
+
+  div.style.setProperty('background-color', 'red');
+  div.style.setProperty('font-size', '16px');
+
+  testing.expectEqual('red', div.style['background-color']);
+  testing.expectEqual('16px', div.style['font-size']);
+}
+</script>
+
+<script id="mixedAccess">
+{
+  const div = $('#test-div');
+  div.style.cssText = '';
+
+  div.style.setProperty('color', 'green');
+
+  testing.expectEqual('green', div.style.color);
+  testing.expectEqual('green', div.style['color']);
+  testing.expectEqual('green', div.style.getPropertyValue('color'));
+}
+</script>
+
+<script id="cssFloat">
+{
+  const div = $('#test-div');
+  div.style.cssText = '';
+
+  div.style.setProperty('float', 'left');
+  testing.expectEqual('left', div.style.cssFloat);
+  testing.expectEqual('left', div.style['float']);
+  testing.expectEqual('left', div.style.getPropertyValue('float'));
+
+  div.style.setProperty('float', 'right');
+  testing.expectEqual('right', div.style.cssFloat);
+}
+</script>
+
+<script id="vendorPrefixes">
+{
+  const div = $('#test-div');
+  div.style.cssText = '';
+
+  div.style.setProperty('-webkit-transform', 'rotate(45deg)');
+  div.style.setProperty('-moz-user-select', 'none');
+  div.style.setProperty('-ms-filter', 'blur(5px)');
+  div.style.setProperty('-o-transition', 'all');
+
+  testing.expectEqual('rotate(45deg)', div.style.webkitTransform);
+  testing.expectEqual(undefined, div.style.mozUserSelect);
+  testing.expectEqual(undefined, div.style.msFilter);
+  testing.expectEqual(undefined, div.style.oTransition);
+
+  testing.expectEqual('rotate(45deg)', div.style['-webkit-transform']);
+  testing.expectEqual('none', div.style['-moz-user-select']);
+}
+</script>
+
+<script id="nonExistentProperties">
+{
+  const div = $('#test-div');
+  div.style.cssText = '';
+
+  testing.expectEqual(undefined, div.style.notARealProperty);
+  testing.expectEqual(undefined, div.style['not-a-real-property']);
+  testing.expectEqual(undefined, div.style.somethingTotallyMadeUp);
+}
+</script>
+
+
+<script id="edgeCaseCamelConversion">
+{
+  const div = $('#test-div');
+  div.style.cssText = '';
+
+  div.style.setProperty('border-top-left-radius', '5px');
+  testing.expectEqual('5px', div.style.borderTopLeftRadius);
+
+  div.style.setProperty('z-index', '100');
+  testing.expectEqual('100', div.style.zIndex);
+}
+</script>
+
+<script id="vendorPrefixEdgeCases">
+{
+  const div = $('#test-div');
+  div.style.cssText = '';
+
+  div.style.setProperty('-webkit-border-radius', '5px');
+  testing.expectEqual('5px', div.style.webkitBorderRadius);
+
+  testing.expectEqual(undefined, div.style.webkitNotSet);
+  testing.expectEqual(undefined, div.style.mozNotSet);
+}
+</script>
+
+<script id="prototypeChainCheck">
+{
+  const div = $('#test-div');
+
+  testing.expectEqual(true, typeof div.style.getPropertyValue === 'function');
+  testing.expectEqual(true, typeof div.style.setProperty === 'function');
+  testing.expectEqual(true, typeof div.style.removeProperty === 'function');
+  testing.expectEqual(true, typeof div.style.getPropertyPriority === 'function');
+}
+</script>

@@ -20,13 +20,13 @@ const std = @import("std");
 
 const js = @import("js/js.zig");
 const log = @import("../log.zig");
-const parser = @import("netsurf.zig");
 
-const Page = @import("page.zig").Page;
-const DataURI = @import("DataURI.zig");
+const URL = @import("URL.zig");
+const Page = @import("Page.zig");
+const Browser = @import("Browser.zig");
 const Http = @import("../http/Http.zig");
-const Browser = @import("browser.zig").Browser;
-const URL = @import("../url.zig").URL;
+
+const Element = @import("webapi/Element.zig");
 
 const Allocator = std.mem.Allocator;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
@@ -55,11 +55,12 @@ deferreds: OrderList,
 shutdown: bool = false,
 
 client: *Http.Client,
-allocator: Allocator,
 buffer_pool: BufferPool,
 script_pool: std.heap.MemoryPool(PendingScript),
 sync_module_pool: std.heap.MemoryPool(SyncModule),
 async_module_pool: std.heap.MemoryPool(AsyncModule),
+
+allocator: Allocator,
 
 // We can download multiple sync modules in parallel, but we want to process
 // then in order. We can't use an OrderList, like the other script types,
@@ -77,7 +78,8 @@ importmap: std.StringHashMapUnmanaged([:0]const u8),
 
 const OrderList = std.DoublyLinkedList;
 
-pub fn init(browser: *Browser, page: *Page) ScriptManager {
+pub fn init(page: *Page) ScriptManager {
+    const browser = page._session.browser;
     // page isn't fully initialized, we can setup our reference, but that's it.
     const allocator = browser.allocator;
     return .{
@@ -142,27 +144,28 @@ fn clearList(_: *const ScriptManager, list: *OrderList) void {
     std.debug.assert(list.first == null);
 }
 
-pub fn addFromElement(self: *ScriptManager, element: *parser.Element, comptime ctx: []const u8) !void {
-    if (try parser.elementGetAttribute(element, "nomodule") != null) {
+pub fn add(self: *ScriptManager, script_element: *Element.Html.Script, comptime ctx: []const u8) !void {
+    if (script_element._executed) {
+        // If a script tag gets dynamically created and added to the dom:
+        //    document.getElementsByTagName('head')[0].appendChild(script)
+        // that script tag will immediately get executed by our scriptAddedCallback.
+        // However, if the location where the script tag is inserted happens to be
+        // below where processHTMLDoc currently is, then we'll re-run that same script
+        // again in processHTMLDoc. This flag is used to let us know if a specific
+        // <script> has already been processed.
+        return;
+    }
+    script_element._executed = true;
+
+    const element = script_element.asElement();
+    if (element.getAttributeSafe("nomodule") != null) {
         // these scripts should only be loaded if we don't support modules
         // but since we do support modules, we can just skip them.
         return;
     }
 
-    // If a script tag gets dynamically created and added to the dom:
-    //    document.getElementsByTagName('head')[0].appendChild(script)
-    // that script tag will immediately get executed by our scriptAddedCallback.
-    // However, if the location where the script tag is inserted happens to be
-    // below where processHTMLDoc currently is, then we'll re-run that same script
-    // again in processHTMLDoc. This flag is used to let us know if a specific
-    // <script> has already been processed.
-    if (try parser.scriptGetProcessed(@ptrCast(element))) {
-        return;
-    }
-    try parser.scriptSetProcessed(@ptrCast(element), true);
-
     const kind: Script.Kind = blk: {
-        const script_type = try parser.elementGetAttribute(element, "type") orelse break :blk .javascript;
+        const script_type = element.getAttributeSafe("type") orelse break :blk .javascript;
         if (script_type.len == 0) {
             break :blk .javascript;
         }
@@ -188,31 +191,31 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element, comptime c
     const page = self.page;
     var source: Script.Source = undefined;
     var remote_url: ?[:0]const u8 = null;
-    if (try parser.elementGetAttribute(element, "src")) |src| {
-        if (try DataURI.parse(page.arena, src)) |data_uri| {
+    if (element.getAttributeSafe("src")) |src| {
+        if (try parseDataURI(page.arena, src)) |data_uri| {
             source = .{ .@"inline" = data_uri };
         } else {
-            remote_url = try URL.stitch(page.arena, src, page.url.raw, .{ .null_terminated = true });
+            remote_url = try URL.resolve(page.arena, page.url, src, .{});
             source = .{ .remote = .{} };
         }
     } else {
-        const inline_source = parser.nodeTextContent(@ptrCast(element)) orelse return;
+        const inline_source = try element.asNode().getTextContentAlloc(page.arena);
         source = .{ .@"inline" = inline_source };
     }
 
     var script = Script{
         .kind = kind,
-        .element = element,
         .source = source,
-        .url = remote_url orelse page.url.raw,
-        .is_defer = if (remote_url == null) false else try parser.elementGetAttribute(element, "defer") != null,
-        .is_async = if (remote_url == null) false else try parser.elementGetAttribute(element, "async") != null,
+        .script_element = script_element,
+        .url = remote_url orelse page.url,
+        .is_defer = if (remote_url == null) false else element.getAttributeSafe("defer") != null,
+        .is_async = if (remote_url == null) false else element.getAttributeSafe("async") != null,
     };
 
     if (source == .@"inline" and self.scripts.first == null) {
         // inline script with no pending scripts, execute it immediately.
         // (if there is a pending script, then we cannot execute this immediately
-        // as it needs to best executed in order)
+        // as it needs to be executed in order)
         return script.eval(page);
     }
 
@@ -252,8 +255,8 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element, comptime c
         .ctx = pending_script,
         .method = .GET,
         .headers = headers,
-        .cookie_jar = page.cookie_jar,
         .resource_type = .script,
+        .cookie_jar = &page._session.cookie_jar,
         .start_callback = if (log.enabled(.http, .debug)) startCallback else null,
         .header_callback = headerCallback,
         .data_callback = dataCallback,
@@ -263,18 +266,13 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element, comptime c
 }
 
 // Resolve a module specifier to an valid URL.
-pub fn resolveSpecifier(self: *ScriptManager, arena: Allocator, specifier: []const u8, base: []const u8) ![:0]const u8 {
+pub fn resolveSpecifier(self: *ScriptManager, arena: Allocator, base: [:0]const u8, specifier: [:0]const u8) ![:0]const u8 {
     // If the specifier is mapped in the importmap, return the pre-resolved value.
     if (self.importmap.get(specifier)) |s| {
         return s;
     }
 
-    return URL.stitch(
-        arena,
-        specifier,
-        base,
-        .{ .alloc = .if_needed, .null_terminated = true },
-    );
+    return URL.resolve(arena, base, specifier, .{});
 }
 
 pub fn getModule(self: *ScriptManager, url: [:0]const u8, referrer: []const u8) !void {
@@ -306,7 +304,7 @@ pub fn getModule(self: *ScriptManager, url: [:0]const u8, referrer: []const u8) 
         .ctx = sync,
         .method = .GET,
         .headers = headers,
-        .cookie_jar = self.page.cookie_jar,
+        .cookie_jar = &self.page._session.cookie_jar,
         .resource_type = .script,
         .start_callback = if (log.enabled(.http, .debug)) SyncModule.startCallback else null,
         .header_callback = SyncModule.headerCallback,
@@ -319,23 +317,38 @@ pub fn getModule(self: *ScriptManager, url: [:0]const u8, referrer: []const u8) 
 pub fn waitForModule(self: *ScriptManager, url: [:0]const u8) !GetResult {
     // Normally it's dangerous to hold on to map pointers. But here, the map
     // can't change. It's possible that by calling `tick`, other entries within
-    // the map will have their value change, but the map itself is immutable
+    // the map will have their value changed, but the map itself is immutable
     // during this tick.
     const entry = self.sync_modules.getEntry(url) orelse {
         return error.UnknownModule;
     };
     const sync = entry.value_ptr.*;
 
+    // We can have multiple scripts waiting for the same module in concurrency.
+    // We use the waiters to ensures only the last waiter deinit the resources.
+    sync.waiters += 1;
+    defer sync.waiters -= 1;
+
     var client = self.client;
     while (true) {
         switch (sync.state) {
             .loading => {},
             .done => {
-                // Our caller has its own higher level cache (caching the
-                // actual compiled module). There's no reason for us to keep this
-                defer self.sync_module_pool.destroy(sync);
-                defer self.sync_modules.removeByPtr(entry.key_ptr);
+                if (sync.waiters == 1) {
+                    // Our caller has its own higher level cache (caching the
+                    // actual compiled module). There's no reason for us to keep
+                    // this if we are the last waiter.
+                    defer self.sync_module_pool.destroy(sync);
+                    defer self.sync_modules.removeByPtr(entry.key_ptr);
+                    return .{
+                        .shared = false,
+                        .buffer = sync.buffer,
+                        .buffer_pool = &self.buffer_pool,
+                    };
+                }
+
                 return .{
+                    .shared = true,
                     .buffer = sync.buffer,
                     .buffer_pool = &self.buffer_pool,
                 };
@@ -371,7 +384,7 @@ pub fn getAsyncModule(self: *ScriptManager, url: [:0]const u8, cb: AsyncModule.C
         .url = url,
         .method = .GET,
         .headers = headers,
-        .cookie_jar = self.page.cookie_jar,
+        .cookie_jar = &self.page._session.cookie_jar,
         .ctx = async,
         .resource_type = .script,
         .start_callback = if (log.enabled(.http, .debug)) AsyncModule.startCallback else null,
@@ -381,7 +394,7 @@ pub fn getAsyncModule(self: *ScriptManager, url: [:0]const u8, cb: AsyncModule.C
         .error_callback = AsyncModule.errorCallback,
     });
 }
-pub fn staticScriptsDone(self: *ScriptManager) void {
+pub fn pageIsLoaded(self: *ScriptManager) void {
     std.debug.assert(self.static_scripts_done == false);
     self.static_scripts_done = true;
     self.evaluate();
@@ -507,11 +520,11 @@ fn parseImportmap(self: *ScriptManager, script: *const Script) !void {
         // > Relative URLs are resolved to absolute URL addresses using the
         // > base URL of the document containing the import map.
         // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules#importing_modules_using_import_maps
-        const resolved_url = try URL.stitch(
+        const resolved_url = try URL.resolve(
             self.page.arena,
+            self.page.url,
             entry.value_ptr.*,
-            self.page.url.raw,
-            .{ .alloc = .if_needed, .null_terminated = true },
+            .{},
         );
 
         try self.importmap.put(self.page.arena, entry.key_ptr.*, resolved_url);
@@ -646,7 +659,7 @@ const Script = struct {
     is_async: bool,
     is_defer: bool,
     source: Source,
-    element: *parser.Element,
+    script_element: *Element.Html.Script,
 
     const Kind = enum {
         module,
@@ -672,14 +685,8 @@ const Script = struct {
     };
 
     fn eval(self: *Script, page: *Page) void {
-        page.setCurrentScript(@ptrCast(self.element)) catch |err| {
-            log.err(.browser, "set document script", .{ .err = err });
-            return;
-        };
-
-        defer page.setCurrentScript(null) catch |err| {
-            log.err(.browser, "clear document script", .{ .err = err });
-        };
+        page.document._current_script = self.script_element;
+        defer page.document._current_script = null;
 
         // inline scripts aren't cached. remote ones are.
         const cacheable = self.source == .remote;
@@ -695,17 +702,17 @@ const Script = struct {
         // Handle importmap special case here: the content is a JSON containing
         // imports.
         if (self.kind == .importmap) {
-            page.script_manager.parseImportmap(self) catch |err| {
+            page._script_manager.parseImportmap(self) catch |err| {
                 log.err(.browser, "parse importmap script", .{
                     .err = err,
                     .src = url,
                     .kind = self.kind,
                     .cacheable = cacheable,
                 });
-                self.executeCallback("onerror", page);
+                self.executeCallback(self.script_element._on_error, page);
                 return;
             };
-            self.executeCallback("onload", page);
+            self.executeCallback(self.script_element._on_load, page);
             return;
         }
 
@@ -728,15 +735,16 @@ const Script = struct {
         };
 
         if (success) {
-            self.executeCallback("onload", page);
+            self.executeCallback(self.script_element._on_load, page);
             return;
         }
 
-        if (page.delayed_navigation) {
-            // If we're navigating to another page, an error is expected
-            // since we probably terminated the script forcefully.
-            return;
-        }
+        // @ZIGDOM
+        // if (page.delayed_navigation) {
+        //     // If we're navigating to another page, an error is expected
+        //     // since we probably terminated the script forcefully.
+        //     return;
+        // }
 
         const msg = try_catch.err(page.arena) catch |err| @errorName(err) orelse "unknown";
         log.warn(.user_script, "eval script", .{
@@ -745,66 +753,16 @@ const Script = struct {
             .cacheable = cacheable,
         });
 
-        self.executeCallback("onerror", page);
+        self.executeCallback(self.script_element._on_error, page);
     }
 
-    fn executeCallback(self: *const Script, comptime typ: []const u8, page: *Page) void {
-        const callback = self.getCallback(typ, page) orelse return;
+    fn executeCallback(self: *const Script, cb_: ?js.Function, page: *Page) void {
+        const cb = cb_ orelse return;
 
-        switch (callback) {
-            .string => |str| {
-                var try_catch: js.TryCatch = undefined;
-                try_catch.init(page.js);
-                defer try_catch.deinit();
-
-                _ = page.js.exec(str, typ) catch |err| {
-                    const msg = try_catch.err(page.arena) catch @errorName(err) orelse "unknown";
-                    log.warn(.user_script, "script callback", .{
-                        .url = self.url,
-                        .err = msg,
-                        .type = typ,
-                        .@"inline" = true,
-                    });
-                };
-            },
-            .function => |f| {
-                const Event = @import("events/event.zig").Event;
-                const loadevt = parser.eventCreate() catch |err| {
-                    log.err(.browser, "SM event creation", .{ .err = err });
-                    return;
-                };
-                defer parser.eventDestroy(loadevt);
-
-                var result: js.Function.Result = undefined;
-                const iface = Event.toInterface(loadevt);
-                f.tryCall(void, .{iface}, &result) catch {
-                    log.warn(.user_script, "script callback", .{
-                        .url = self.url,
-                        .type = typ,
-                        .err = result.exception,
-                        .stack = result.stack,
-                        .@"inline" = false,
-                    });
-                };
-            },
-        }
-    }
-
-    fn getCallback(self: *const Script, comptime typ: []const u8, page: *Page) ?Callback {
-        const element = self.element;
-        // first we check if there was an el.onload set directly on the
-        // element in JavaScript (if so, it'd be stored in the node state)
-        if (page.getNodeState(@ptrCast(element))) |se| {
-            if (@field(se, typ)) |function| {
-                return .{ .function = function };
-            }
-        }
-        // if we have no node state, or if the node state has no onload/onerror
-        // then check for the onload/onerror attribute
-        if (parser.elementGetAttribute(element, typ) catch null) |string| {
-            return .{ .string = string };
-        }
-        return null;
+        // @ZIGDOM execute the callback
+        _ = cb;
+        _ = self;
+        _ = page;
     }
 };
 
@@ -882,6 +840,8 @@ const SyncModule = struct {
     manager: *ScriptManager,
     buffer: std.ArrayListUnmanaged(u8) = .{},
     state: State = .loading,
+    // number of waiters for the module.
+    waiters: u8 = 0,
 
     const State = union(enum) {
         done,
@@ -997,6 +957,7 @@ pub const AsyncModule = struct {
         var self: *AsyncModule = @ptrCast(@alignCast(ctx));
         defer self.manager.async_module_pool.destroy(self);
         self.cb(self.cb_data, .{
+            .shared = false,
             .buffer = self.buffer,
             .buffer_pool = &self.manager.buffer_pool,
         });
@@ -1020,8 +981,13 @@ pub const AsyncModule = struct {
 pub const GetResult = struct {
     buffer: std.ArrayListUnmanaged(u8),
     buffer_pool: *BufferPool,
+    shared: bool,
 
     pub fn deinit(self: *GetResult) void {
+        // if the result is shared, don't deinit.
+        if (self.shared) {
+            return;
+        }
         self.buffer_pool.release(self.buffer);
     }
 
@@ -1029,3 +995,53 @@ pub const GetResult = struct {
         return self.buffer.items;
     }
 };
+
+// Parses data:[<media-type>][;base64],<data>
+fn parseDataURI(allocator: Allocator, src: []const u8) !?[]const u8 {
+    if (!std.mem.startsWith(u8, src, "data:")) {
+        return null;
+    }
+
+    const uri = src[5..];
+    const data_starts = std.mem.indexOfScalar(u8, uri, ',') orelse return null;
+
+    var data = uri[data_starts + 1 ..];
+
+    // Extract the encoding.
+    const metadata = uri[0..data_starts];
+    if (std.mem.endsWith(u8, metadata, ";base64")) {
+        const decoder = std.base64.standard.Decoder;
+        const decoded_size = try decoder.calcSizeForSlice(data);
+
+        const buffer = try allocator.alloc(u8, decoded_size);
+        errdefer allocator.free(buffer);
+
+        try decoder.decode(buffer, data);
+        data = buffer;
+    }
+
+    return data;
+}
+
+const testing = @import("../testing.zig");
+test "DataURI: parse valid" {
+    try assertValidDataURI("data:text/javascript; charset=utf-8;base64,Zm9v", "foo");
+    try assertValidDataURI("data:text/javascript; charset=utf-8;,foo", "foo");
+    try assertValidDataURI("data:,foo", "foo");
+}
+
+test "DataURI: parse invalid" {
+    try assertInvalidDataURI("atad:,foo");
+    try assertInvalidDataURI("data:foo");
+    try assertInvalidDataURI("data:");
+}
+
+fn assertValidDataURI(uri: []const u8, expected: []const u8) !void {
+    defer testing.reset();
+    const data_uri = try parseDataURI(testing.arena_allocator, uri) orelse return error.TestFailed;
+    try testing.expectEqual(expected, data_uri);
+}
+
+fn assertInvalidDataURI(uri: []const u8) !void {
+    try testing.expectEqual(null, parseDataURI(undefined, uri));
+}

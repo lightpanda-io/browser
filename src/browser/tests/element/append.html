@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<div id="test-container"></div>
+<script id="append-prepend-tests">
+    const container = $('#test-container');
+
+    // Test append
+    const p1 = document.createElement('p');
+    p1.textContent = 'p1';
+    container.append(p1);
+    testing.expectEqual('<p>p1</p>', container.innerHTML, "append single element");
+
+    const p2 = document.createElement('p');
+    p2.textContent = 'p2';
+    container.append(p2, ' some text');
+    testing.expectEqual('<p>p1</p><p>p2</p> some text', container.innerHTML, "append multiple nodes");
+
+    // Test prepend
+    container.innerHTML = '';
+    const p3 = document.createElement('p');
+    p3.textContent = 'p3';
+    container.prepend(p3);
+    testing.expectEqual('<p>p3</p>', container.innerHTML, "prepend single element");
+
+    const p4 = document.createElement('p');
+    p4.textContent = 'p4';
+    container.prepend(p4, 'some text ');
+    testing.expectEqual('<p>p4</p>some text <p>p3</p>', container.innerHTML, "prepend multiple nodes");
+</script>

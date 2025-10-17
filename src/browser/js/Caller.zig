@@ -1,12 +1,32 @@
+// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 const std = @import("std");
+
+const log = @import("../../log.zig");
+
 const js = @import("js.zig");
 const v8 = js.v8;
 
-const log = @import("../../log.zig");
-const Page = @import("../page.zig").Page;
-
-const types = @import("types.zig");
+const bridge = @import("bridge.zig");
 const Context = @import("Context.zig");
+
+const Page = @import("../Page.zig");
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
@@ -66,12 +86,24 @@ pub fn deinit(self: *Caller) void {
     context.call_depth = call_depth;
 }
 
-pub fn constructor(self: *Caller, comptime Struct: type, comptime named_function: NamedFunction, info: v8.FunctionCallbackInfo) !void {
-    const args = try self.getArgs(Struct, named_function, 0, info);
-    const res = @call(.auto, Struct.constructor, args);
+pub const CallOpts = struct {
+    dom_exception: bool = false,
+    null_as_undefined: bool = false,
+    as_typed_array: bool = false,
+};
 
-    const ReturnType = @typeInfo(@TypeOf(Struct.constructor)).@"fn".return_type orelse {
-        @compileError(@typeName(Struct) ++ " has a constructor without a return type");
+pub fn constructor(self: *Caller, comptime T: type, func: anytype, info: v8.FunctionCallbackInfo, comptime opts: CallOpts) void {
+    self._constructor(func, info) catch |err| {
+        self.handleError(T, @TypeOf(func), err, info, opts);
+    };
+}
+pub fn _constructor(self: *Caller, func: anytype, info: v8.FunctionCallbackInfo) !void {
+    const F = @TypeOf(func);
+    const args = try self.getArgs(F, 0, info);
+    const res = @call(.auto, func, args);
+
+    const ReturnType = @typeInfo(F).@"fn".return_type orelse {
+        @compileError(@typeName(F) ++ " has a constructor without a return type");
     };
 
     const this = info.getThis();
@@ -84,118 +116,96 @@ pub fn constructor(self: *Caller, comptime Struct: type, comptime named_function
     info.getReturnValue().set(this);
 }
 
-pub fn method(self: *Caller, comptime Struct: type, comptime named_function: NamedFunction, info: v8.FunctionCallbackInfo) !void {
-    if (comptime isSelfReceiver(Struct, named_function) == false) {
-        return self.function(Struct, named_function, info);
-    }
-
-    const context = self.context;
-    const func = @field(Struct, named_function.name);
-    var args = try self.getArgs(Struct, named_function, 1, info);
-    const zig_instance = try context.typeTaggedAnyOpaque(named_function, *types.Receiver(Struct), info.getThis());
-
-    // inject 'self' as the first parameter
-    @field(args, "0") = zig_instance;
-
-    const res = @call(.auto, func, args);
-    info.getReturnValue().set(try context.zigValueToJs(res));
+pub fn method(self: *Caller, comptime T: type, func: anytype, info: v8.FunctionCallbackInfo, comptime opts: CallOpts) void {
+    self._method(T, func, info, opts) catch |err| {
+        self.handleError(T, @TypeOf(func), err, info, opts);
+    };
 }
 
-pub fn function(self: *Caller, comptime Struct: type, comptime named_function: NamedFunction, info: v8.FunctionCallbackInfo) !void {
-    const context = self.context;
-    const func = @field(Struct, named_function.name);
-    const args = try self.getArgs(Struct, named_function, 0, info);
+pub fn _method(self: *Caller, comptime T: type, func: anytype, info: v8.FunctionCallbackInfo, comptime opts: CallOpts) !void {
+    const F = @TypeOf(func);
+    var args = try self.getArgs(F, 1, info);
+    @field(args, "0") = try Context.typeTaggedAnyOpaque(*T, info.getThis());
     const res = @call(.auto, func, args);
-    info.getReturnValue().set(try context.zigValueToJs(res));
+    info.getReturnValue().set(try self.context.zigValueToJs(res, opts));
 }
 
-pub fn getIndex(self: *Caller, comptime Struct: type, comptime named_function: NamedFunction, idx: u32, info: v8.PropertyCallbackInfo) !u8 {
+pub fn function(self: *Caller, comptime T: type, func: anytype, info: v8.FunctionCallbackInfo, comptime opts: CallOpts) void {
+    self._function(func, info, opts) catch |err| {
+        self.handleError(T, @TypeOf(func), err, info, opts);
+    };
+}
+
+pub fn _function(self: *Caller, func: anytype, info: v8.FunctionCallbackInfo, comptime opts: CallOpts) !void {
+    const F = @TypeOf(func);
     const context = self.context;
-    const func = @field(Struct, named_function.name);
-    const IndexedGet = @TypeOf(func);
-    if (@typeInfo(IndexedGet).@"fn".return_type == null) {
-        @compileError(named_function.full_name ++ " must have a return type");
-    }
+    const args = try self.getArgs(F, 0, info);
+    const res = @call(.auto, func, args);
+    info.getReturnValue().set(try context.zigValueToJs(res, opts));
+}
 
-    var has_value = true;
+pub fn getIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, info: v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+    return self._getIndex(T, func, idx, info, opts) catch |err| {
+        self.handleError(T, @TypeOf(func), err, info, opts);
+        return v8.Intercepted.No;
+    };
+}
 
-    var args: ParamterTypes(IndexedGet) = undefined;
-    const arg_fields = @typeInfo(@TypeOf(args)).@"struct".fields;
-    switch (arg_fields.len) {
-        0, 1, 2 => @compileError(named_function.full_name ++ " must take at least a u32 and *bool parameter"),
-        3, 4 => {
-            const zig_instance = try context.typeTaggedAnyOpaque(named_function, *types.Receiver(Struct), info.getThis());
-            comptime assertSelfReceiver(Struct, named_function);
-            @field(args, "0") = zig_instance;
-            @field(args, "1") = idx;
-            @field(args, "2") = &has_value;
-            if (comptime arg_fields.len == 4) {
-                comptime assertIsPageArg(Struct, named_function, 3);
-                @field(args, "3") = context.page;
-            }
+pub fn _getIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, info: v8.PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+    const F = @TypeOf(func);
+    var args = try self.getArgs(F, 2, info);
+    @field(args, "0") = try Context.typeTaggedAnyOpaque(*T, info.getThis());
+    @field(args, "1") = idx;
+    const ret = @call(.auto, func, args);
+    return self.handleIndexedReturn(T, F, ret, info, opts);
+}
+
+pub fn getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: v8.Name, info: v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+    return self._getNamedIndex(T, func, name, info, opts) catch |err| {
+        self.handleError(T, @TypeOf(func), err, info, opts);
+        return v8.Intercepted.No;
+    };
+}
+
+pub fn _getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: v8.Name, info: v8.PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+    const F = @TypeOf(func);
+    var args = try self.getArgs(F, 2, info);
+    @field(args, "0") = try Context.typeTaggedAnyOpaque(*T, info.getThis());
+    @field(args, "1") = try self.nameToString(name);
+    const ret = @call(.auto, func, args);
+    return self.handleIndexedReturn(T, F, ret, info, opts);
+}
+
+fn handleIndexedReturn(self: *Caller, comptime T: type, comptime F: type, ret: anytype, info: v8.PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+    // need to unwrap this error immediately for when opts.null_as_undefined == true
+    // and we need to compare it to null;
+    const non_error_ret = switch (@typeInfo(@TypeOf(ret))) {
+        .error_union => |eu| blk: {
+            break :blk ret catch |err| {
+                // We can't compare err == error.NotHandled if error.NotHandled
+                // isn't part of the possible error set. So we first need to check
+                // if error.NotHandled is part of the error set.
+                if (isInErrorSet(error.NotHandled, eu.error_set)) {
+                    if (err == error.NotHandled) {
+                        return v8.Intercepted.No;
+                    }
+                }
+                self.handleError(T, F, err, info, opts);
+                return v8.Intercepted.No;
+            };
         },
-        else => @compileError(named_function.full_name ++ " has too many parmaters"),
-    }
+        else => ret,
+    };
 
-    const res = @call(.auto, func, args);
-    if (has_value == false) {
-        return v8.Intercepted.No;
-    }
-    info.getReturnValue().set(try context.zigValueToJs(res));
+    info.getReturnValue().set(try self.context.zigValueToJs(non_error_ret, opts));
     return v8.Intercepted.Yes;
 }
 
-pub fn getNamedIndex(self: *Caller, comptime Struct: type, comptime named_function: NamedFunction, name: v8.Name, info: v8.PropertyCallbackInfo) !u8 {
-    const context = self.context;
-    const func = @field(Struct, named_function.name);
-    comptime assertSelfReceiver(Struct, named_function);
-
-    var has_value = true;
-    var args = try self.getArgs(Struct, named_function, 3, info);
-    const zig_instance = try context.typeTaggedAnyOpaque(named_function, *types.Receiver(Struct), info.getThis());
-    @field(args, "0") = zig_instance;
-    @field(args, "1") = try self.nameToString(name);
-    @field(args, "2") = &has_value;
-
-    const res = @call(.auto, func, args);
-    if (has_value == false) {
-        return v8.Intercepted.No;
+fn isInErrorSet(err: anyerror, comptime T: type) bool {
+    inline for (@typeInfo(T).error_set.?) |e| {
+        if (err == @field(anyerror, e.name)) return true;
     }
-    info.getReturnValue().set(try self.context.zigValueToJs(res));
-    return v8.Intercepted.Yes;
-}
-
-pub fn setNamedIndex(self: *Caller, comptime Struct: type, comptime named_function: NamedFunction, name: v8.Name, js_value: v8.Value, info: v8.PropertyCallbackInfo) !u8 {
-    const context = self.context;
-    const func = @field(Struct, named_function.name);
-    comptime assertSelfReceiver(Struct, named_function);
-
-    var has_value = true;
-    var args = try self.getArgs(Struct, named_function, 4, info);
-    const zig_instance = try context.typeTaggedAnyOpaque(named_function, *types.Receiver(Struct), info.getThis());
-    @field(args, "0") = zig_instance;
-    @field(args, "1") = try self.nameToString(name);
-    @field(args, "2") = try context.jsValueToZig(named_function, @TypeOf(@field(args, "2")), js_value);
-    @field(args, "3") = &has_value;
-
-    const res = @call(.auto, func, args);
-    return namedSetOrDeleteCall(res, has_value);
-}
-
-pub fn deleteNamedIndex(self: *Caller, comptime Struct: type, comptime named_function: NamedFunction, name: v8.Name, info: v8.PropertyCallbackInfo) !u8 {
-    const context = self.context;
-    const func = @field(Struct, named_function.name);
-    comptime assertSelfReceiver(Struct, named_function);
-
-    var has_value = true;
-    var args = try self.getArgs(Struct, named_function, 3, info);
-    const zig_instance = try context.typeTaggedAnyOpaque(named_function, *types.Receiver(Struct), info.getThis());
-    @field(args, "0") = zig_instance;
-    @field(args, "1") = try self.nameToString(name);
-    @field(args, "2") = &has_value;
-
-    const res = @call(.auto, func, args);
-    return namedSetOrDeleteCall(res, has_value);
+    return false;
 }
 
 fn namedSetOrDeleteCall(res: anytype, has_value: bool) !u8 {
@@ -212,30 +222,28 @@ fn nameToString(self: *Caller, name: v8.Name) ![]const u8 {
     return self.context.valueToString(.{ .handle = name.handle }, .{});
 }
 
-fn isSelfReceiver(comptime Struct: type, comptime named_function: NamedFunction) bool {
-    return checkSelfReceiver(Struct, named_function, false);
+fn isSelfReceiver(comptime T: type, comptime F: type) bool {
+    return checkSelfReceiver(T, F, false);
 }
-fn assertSelfReceiver(comptime Struct: type, comptime named_function: NamedFunction) void {
-    _ = checkSelfReceiver(Struct, named_function, true);
+fn assertSelfReceiver(comptime T: type, comptime F: type) void {
+    _ = checkSelfReceiver(T, F, true);
 }
-fn checkSelfReceiver(comptime Struct: type, comptime named_function: NamedFunction, comptime fail: bool) bool {
-    const func = @field(Struct, named_function.name);
-    const params = @typeInfo(@TypeOf(func)).@"fn".params;
+fn checkSelfReceiver(comptime T: type, comptime F: type, comptime fail: bool) bool {
+    const params = @typeInfo(F).@"fn".params;
     if (params.len == 0) {
         if (fail) {
-            @compileError(named_function.full_name ++ " must have a self parameter");
+            @compileError(@typeName(F) ++ " must have a self parameter");
         }
         return false;
     }
 
-    const R = types.Receiver(Struct);
     const first_param = params[0].type.?;
-    if (first_param != *R and first_param != *const R) {
+    if (first_param != *T and first_param != *const T) {
         if (fail) {
             @compileError(std.fmt.comptimePrint("The first parameter to {s} must be a *{s} or *const {s}. Got: {s}", .{
-                named_function.full_name,
-                @typeName(R),
-                @typeName(R),
+                @typeName(F),
+                @typeName(T),
+                @typeName(T),
                 @typeName(first_param),
             }));
         }
@@ -244,21 +252,20 @@ fn checkSelfReceiver(comptime Struct: type, comptime named_function: NamedFuncti
     return true;
 }
 
-fn assertIsPageArg(comptime Struct: type, comptime named_function: NamedFunction, index: comptime_int) void {
-    const F = @TypeOf(@field(Struct, named_function.name));
+fn assertIsPageArg(comptime T: type, comptime F: type, index: comptime_int) void {
     const param = @typeInfo(F).@"fn".params[index].type.?;
     if (isPage(param)) {
         return;
     }
-    @compileError(std.fmt.comptimePrint("The {d} parameter to {s} must be a *Page or *const Page. Got: {s}", .{ index, named_function.full_name, @typeName(param) }));
+    @compileError(std.fmt.comptimePrint("The {d} parameter of {s}.{s} must be a *Page or *const Page. Got: {s}", .{ index, @typeName(T), @typeName(F), @typeName(param) }));
 }
 
-pub fn handleError(self: *Caller, comptime Struct: type, comptime named_function: NamedFunction, err: anyerror, info: anytype) void {
+fn handleError(self: *Caller, comptime T: type, comptime F: type, err: anyerror, info: anytype, comptime opts: CallOpts) void {
     const isolate = self.isolate;
 
     if (comptime @import("builtin").mode == .Debug and @hasDecl(@TypeOf(info), "length")) {
         if (log.enabled(.js, .warn)) {
-            self.logFunctionCallError(err, named_function.full_name, info);
+            self.logFunctionCallError(@typeName(T), @typeName(F), err, info);
         }
     }
 
@@ -267,37 +274,12 @@ pub fn handleError(self: *Caller, comptime Struct: type, comptime named_function
         error.OutOfMemory => js._createException(isolate, "out of memory"),
         error.IllegalConstructor => js._createException(isolate, "Illegal Contructor"),
         else => blk: {
-            const func = @field(Struct, named_function.name);
-            const return_type = @typeInfo(@TypeOf(func)).@"fn".return_type orelse {
-                // void return type;
-                break :blk null;
-            };
-
-            if (@typeInfo(return_type) != .error_union) {
-                // type defines a custom exception, but this function should
-                // not fail. We failed somewhere inside of js.zig and
-                // should return the error as-is, since it isn't related
-                // to our Struct
+            if (!comptime opts.dom_exception) {
                 break :blk null;
             }
-
-            const function_error_set = @typeInfo(return_type).error_union.error_set;
-
-            const E = comptime getCustomException(Struct) orelse break :blk null;
-            if (function_error_set == E or isErrorSetException(E, err)) {
-                const custom_exception = E.init(self.call_arena, err, named_function.js_name) catch |init_err| {
-                    switch (init_err) {
-                        // if a custom exceptions' init wants to return a
-                        // different error, we need to think about how to
-                        // handle that failure.
-                        error.OutOfMemory => break :blk js._createException(isolate, "out of memory"),
-                    }
-                };
-                // ughh..how to handle an error here?
-                break :blk self.context.zigValueToJs(custom_exception) catch js._createException(isolate, "internal error");
-            }
-            // this error isn't part of a custom exception
-            break :blk null;
+            const DOMException = @import("../webapi/DOMException.zig");
+            const ex = DOMException.fromError(err) orelse break :blk null;
+            break :blk self.context.zigValueToJs(ex, .{}) catch js._createException(isolate, "internal error");
         },
     };
 
@@ -306,38 +288,6 @@ pub fn handleError(self: *Caller, comptime Struct: type, comptime named_function
     }
     const js_exception = isolate.throwException(js_err.?);
     info.getReturnValue().setValueHandle(js_exception.handle);
-}
-
-// walk the prototype chain to see if a type declares a custom Exception
-fn getCustomException(comptime Struct: type) ?type {
-    var S = Struct;
-    while (true) {
-        if (@hasDecl(S, "Exception")) {
-            return S.Exception;
-        }
-        if (@hasDecl(S, "prototype") == false) {
-            return null;
-        }
-        // long ago, we validated that every prototype declaration
-        // is a pointer.
-        S = @typeInfo(S.prototype).pointer.child;
-    }
-}
-
-// Does the error we want to return belong to the custom exeception's ErrorSet
-fn isErrorSetException(comptime E: type, err: anytype) bool {
-    const Entry = std.meta.Tuple(&.{ []const u8, void });
-
-    const error_set = @typeInfo(E.ErrorSet).error_set.?;
-    const entries = comptime blk: {
-        var kv: [error_set.len]Entry = undefined;
-        for (error_set, 0..) |e, i| {
-            kv[i] = .{ e.name, {} };
-        }
-        break :blk kv;
-    };
-    const lookup = std.StaticStringMap(void).initComptime(entries);
-    return lookup.has(@errorName(err));
 }
 
 // If we call a method in javascript: cat.lives('nine');
@@ -353,10 +303,9 @@ fn isErrorSetException(comptime E: type, err: anytype) bool {
 // Finally, if the JS function is called with _more_ parameters and
 // the last parameter in Zig is an array, we'll try to slurp the additional
 // parameters into the array.
-fn getArgs(self: *const Caller, comptime Struct: type, comptime named_function: NamedFunction, comptime offset: usize, info: anytype) !ParamterTypes(@TypeOf(@field(Struct, named_function.name))) {
+fn getArgs(self: *const Caller, comptime F: type, comptime offset: usize, info: anytype) !ParameterTypes(F) {
     const context = self.context;
-    const F = @TypeOf(@field(Struct, named_function.name));
-    var args: ParamterTypes(F) = undefined;
+    var args: ParameterTypes(F) = undefined;
 
     const params = @typeInfo(F).@"fn".params[offset..];
     // Except for the constructor, the first parameter is always `self`
@@ -423,7 +372,7 @@ fn getArgs(self: *const Caller, comptime Struct: type, comptime named_function: 
                     const arr = try self.call_arena.alloc(last_parameter_type_info.pointer.child, js_parameter_count - params_to_map.len + 1);
                     for (arr, last_js_parameter..) |*a, i| {
                         const js_value = info.getArg(@as(u32, @intCast(i)));
-                        a.* = try context.jsValueToZig(named_function, slice_type, js_value);
+                        a.* = try context.jsValueToZig(slice_type, js_value);
                     }
                     @field(args, tupleFieldName(params_to_map.len + offset - 1)) = arr;
                 } else {
@@ -442,9 +391,9 @@ fn getArgs(self: *const Caller, comptime Struct: type, comptime named_function: 
         }
 
         if (comptime isPage(param.type.?)) {
-            @compileError("Page must be the last parameter (or 2nd last if there's a JsThis): " ++ named_function.full_name);
+            @compileError("Page must be the last parameter (or 2nd last if there's a JsThis): " ++ @typeName(F));
         } else if (comptime param.type.? == js.This) {
-            @compileError("JsThis must be the last parameter: " ++ named_function.full_name);
+            @compileError("JsThis must be the last parameter: " ++ @typeName(F));
         } else if (i >= js_parameter_count) {
             if (@typeInfo(param.type.?) != .optional) {
                 return error.InvalidArgument;
@@ -452,7 +401,7 @@ fn getArgs(self: *const Caller, comptime Struct: type, comptime named_function: 
             @field(args, tupleFieldName(field_index)) = null;
         } else {
             const js_value = info.getArg(@as(u32, @intCast(i)));
-            @field(args, tupleFieldName(field_index)) = context.jsValueToZig(named_function, param.type.?, js_value) catch {
+            @field(args, tupleFieldName(field_index)) = context.jsValueToZig(param.type.?, js_value) catch {
                 return error.InvalidArgument;
             };
         }
@@ -463,10 +412,11 @@ fn getArgs(self: *const Caller, comptime Struct: type, comptime named_function: 
 
 // This is extracted to speed up compilation. When left inlined in handleError,
 // this can add as much as 10 seconds of compilation time.
-fn logFunctionCallError(self: *Caller, err: anyerror, function_name: []const u8, info: v8.FunctionCallbackInfo) void {
+fn logFunctionCallError(self: *Caller, type_name: []const u8, func: []const u8, err: anyerror, info: v8.FunctionCallbackInfo) void {
     const args_dump = self.serializeFunctionArgs(info) catch "failed to serialize args";
     log.info(.js, "function call error", .{
-        .name = function_name,
+        .type = type_name,
+        .func = func,
         .err = err,
         .args = args_dump,
         .stack = self.context.stackTrace() catch |err1| @errorName(err1),
@@ -493,28 +443,9 @@ fn serializeFunctionArgs(self: *Caller, info: v8.FunctionCallbackInfo) ![]const 
     return arr.items;
 }
 
-// We want the function name, or more precisely, the "Struct.function" for
-// displaying helpful @compileError.
-// However, there's no way to get the name from a std.Builtin.Fn, so we create
-// a NamedFunction as part of our binding, and pass it around incase we need
-// to display an error
-pub const NamedFunction = struct {
-    name: []const u8,
-    js_name: []const u8,
-    full_name: []const u8,
-
-    pub fn init(comptime Struct: type, comptime name: []const u8) NamedFunction {
-        return .{
-            .name = name,
-            .js_name = if (name[0] == '_') name[1..] else name,
-            .full_name = @typeName(Struct) ++ "." ++ name,
-        };
-    }
-};
-
 // Takes a function, and returns a tuple for its argument. Used when we
 // @call a function
-fn ParamterTypes(comptime F: type) type {
+fn ParameterTypes(comptime F: type) type {
     const params = @typeInfo(F).@"fn".params;
     var fields: [params.len]std.builtin.Type.StructField = undefined;
 

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="root">
+  <div id="container" class="parent">
+    <p id="p1" class="text">Paragraph 1</p>
+    <p id="p2" class="text highlight">Paragraph 2</p>
+    <div id="nested">
+      <span id="s1" class="item">Span 1</span>
+      <span id="s2" class="item active">Span 2</span>
+      <a id="link1" href="#">Link 1</a>
+    </div>
+    <article id="article1">
+      <p id="p3">Article paragraph</p>
+      <span id="s3">Article span</span>
+    </article>
+  </div>
+</div>
+
+<script id=basicNot>
+{
+  const notDiv = document.querySelectorAll('#root *:not(div)');
+  testing.expectEqual(true, notDiv.length >= 7);
+
+  const notClass = document.querySelectorAll('#container *:not(.text)');
+  testing.expectEqual(true, notClass.length >= 5);
+
+  const notId = document.querySelectorAll('#container p:not(#p2)');
+  testing.expectEqual(2, notId.length);
+  testing.expectEqual('p1', notId[0].id);
+  testing.expectEqual('p3', notId[1].id);
+}
+</script>
+
+<script id=notWithCombinators>
+{
+  const notDirectChild = document.querySelectorAll('span:not(#nested > span)');
+  testing.expectEqual(1, notDirectChild.length);
+  testing.expectEqual('s3', notDirectChild[0].id);
+
+  const notDescendant = document.querySelectorAll('#container > *:not(div)');
+  testing.expectEqual(3, notDescendant.length);
+}
+</script>
+
+<script id=notWithMultipleSelectors>
+{
+  const notDivOrP = document.querySelectorAll('#container *:not(div, p)');
+  testing.expectEqual(5, notDivOrP.length);
+
+  const notTextOrItem = document.querySelectorAll('#container *:not(.text, .item)');
+  testing.expectEqual(true, notTextOrItem.length >= 3);
+
+  const notIdOrClass = document.querySelectorAll('p:not(#p1, .highlight)');
+  testing.expectEqual(1, notIdOrClass.length);
+  testing.expectEqual('p3', notIdOrClass[0].id);
+}
+</script>
+
+<script id=notWithAttributes>
+{
+  const notWithHref = document.querySelectorAll('#nested *:not([href])');
+  testing.expectEqual(2, notWithHref.length);
+
+  const notLinkWithHref = document.querySelectorAll('#nested *:not(a[href])');
+  testing.expectEqual(2, notLinkWithHref.length);
+}
+</script>
+
+<script id=notWithPseudoClasses>
+{
+  const notFirstChild = document.querySelectorAll('#nested *:not(:first-child)');
+  testing.expectEqual(2, notFirstChild.length);
+
+  const notLastChild = document.querySelectorAll('#nested *:not(:last-child)');
+  testing.expectEqual(2, notLastChild.length);
+}
+</script>
+
+<script id=nestedNot>
+{
+  // :not(:not(...)) matches elements that DO match the inner selector
+  const items = document.querySelectorAll('.item:not(:not(.active))');
+  testing.expectEqual(1, items.length);
+  testing.expectEqual('s2', items[0].id);
+}
+</script>
+
+<script id=complexCombinations>
+{
+  const complex1 = document.querySelectorAll('p:not(#nested p, .highlight)');
+  testing.expectEqual(2, complex1.length);
+  testing.expectEqual('p1', complex1[0].id);
+  testing.expectEqual('p3', complex1[1].id);
+
+  const complex2 = document.querySelectorAll('#container > *:not(div)');
+  testing.expectEqual(3, complex2.length);
+}
+</script>
+
+<script id=notWithUniversal>
+{
+  const notUniversal = document.querySelectorAll('#nested :not(*)');
+  testing.expectEqual(0, notUniversal.length);
+}
+</script>
+
+<script id=edgeCases>
+{
+  const multiNot = document.querySelectorAll('*:not(div):not(p):not(article)');
+  testing.expectEqual(true, multiNot.length >= 3);
+
+  const notAtEnd = document.querySelectorAll('#container p:not(.highlight)');
+  testing.expectEqual(2, notAtEnd.length);
+
+  const notAtStart = document.querySelectorAll(':not(div) > span');
+  testing.expectEqual(1, notAtStart.length);
+}
+</script>

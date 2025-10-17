@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<body>
+  <script src="../testing.js"></script>
+  <div id="div-1">x: <p id=p1>d1</p></div>
+</body>
+
+<script id=getElementById>
+  testing.expectEqual(null, document.getElementById(null));
+  testing.expectEqual(null, document.getElementById(23));
+  testing.expectEqual(null, document.getElementById('value'));
+  testing.expectEqual('x: d1', document.getElementById('div-1').textContent);
+  testing.expectEqual('d1', document.getElementById('p1').textContent);
+  document.getElementById('p1').id = 'p2'
+  testing.expectEqual(null, document.getElementById('p1'));
+  testing.expectEqual('d1', document.getElementById('p2').textContent);
+
+  const div = document.createElement('div');
+  div.id = 'hello';
+  testing.expectEqual(null, document.getElementById('hello'));
+  const body = document.getElementsByTagName('body')[0];
+  body.appendChild(div);
+  testing.expectEqual('hello', document.getElementById('hello').id);
+
+  div.setAttribute('ID', 'world')
+  testing.expectEqual(null, document.getElementById('hello'));
+  testing.expectEqual('world', document.getElementById('world').id);
+
+  body.replaceChildren(div);
+  testing.expectEqual('world', document.getElementById('world').id);
+  testing.expectEqual(null, document.getElementById('div-1'));
+  testing.expectEqual(null, document.getElementById('p1'));
+
+  div.removeAttribute('id');
+  testing.expectEqual(null, document.getElementById('world'));
+</script>

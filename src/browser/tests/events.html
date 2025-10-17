@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+
+<div id=parent><p id=child></p></div>
+
+<script id=addEventListener>
+  let child_calls = 0;
+  let parent_calls = 0;
+  let child = $('#child');
+  let parent = $('#parent');
+
+  child.dispatchEvent(new Event('Hello'));
+  parent.dispatchEvent(new Event('Hello'));
+  testing.expectEqual(0, child_calls);
+  testing.expectEqual(0, parent_calls);
+
+  const child_func = (e) => {
+    testing.expectEqual('hello', e.type);
+    child_calls += 1;
+  };
+  child.addEventListener('hello', child_func);
+
+  const parent_func = (e) => {
+    testing.expectEqual('hello', e.type);
+    parent_calls += 1;
+  };
+  parent.addEventListener('hello', parent_func);
+
+  parent.dispatchEvent(new Event('hello'));
+  testing.expectEqual(0, child_calls);
+  testing.expectEqual(1, parent_calls);
+
+  parent.dispatchEvent(new Event('Click'));
+  testing.expectEqual(0, child_calls);
+  testing.expectEqual(1, parent_calls);
+
+  child.dispatchEvent(new Event('hello'));
+  testing.expectEqual(1, child_calls);
+  testing.expectEqual(1, parent_calls);
+
+  child.dispatchEvent(new Event('hello', {bubbles: true}));
+  testing.expectEqual(2, child_calls);
+  testing.expectEqual(2, parent_calls);
+
+  child.removeEventListener('other', () => {})
+  child.dispatchEvent(new Event('hello', {bubbles: true}));
+  testing.expectEqual(3, child_calls);
+  testing.expectEqual(3, parent_calls);
+
+  child.removeEventListener('hello', () => {})
+  child.dispatchEvent(new Event('hello', {bubbles: true}));
+  testing.expectEqual(4, child_calls);
+  testing.expectEqual(4, parent_calls);
+
+  // capture is on, still won't remove
+  child.removeEventListener('hello', child_func, true)
+  child.dispatchEvent(new Event('hello', {bubbles: true}));
+  testing.expectEqual(5, child_calls);
+  testing.expectEqual(5, parent_calls);
+
+  child.removeEventListener('hello', child_func, false)
+  child.dispatchEvent(new Event('hello', {bubbles: true}));
+  testing.expectEqual(5, child_calls);
+  testing.expectEqual(6, parent_calls);
+
+  // wrong func
+  parent.removeEventListener('hello', child_func, false)
+  child.dispatchEvent(new Event('hello', {bubbles: true}));
+  testing.expectEqual(5, child_calls);
+  testing.expectEqual(7, parent_calls);
+
+  parent.removeEventListener('hello', parent_func, false)
+  child.dispatchEvent(new Event('hello', {bubbles: true}));
+  testing.expectEqual(5, child_calls);
+  testing.expectEqual(7, parent_calls);
+</script>
+
+<div id=parent2><div id=child2></div></div>
+<script id=currentTarget>
+  child_calls = 0;
+  parent_calls = 0;
+  child = $('#child2');
+  parent = $('#parent2');
+
+  child.addEventListener('test', (e) => {
+    child_calls += 1;
+    testing.expectEqual(child, e.target);
+    testing.expectEqual(child, e.currentTarget);
+  })
+
+  parent.addEventListener('test', (e) => {
+    parent_calls += 1;
+    testing.expectEqual(child, e.target);
+    testing.expectEqual(parent, e.currentTarget);
+  });
+
+  child.dispatchEvent(new Event('test', {bubbles: true}));
+  testing.expectEqual(1, child_calls);
+  testing.expectEqual(1, parent_calls);
+</script>
+
+<div id=parent3></div>
+<script id=dupe>
+  parent_calls = 0;
+  parent = $('#parent3');
+
+  const fn1 = function() {
+    parent_calls += 100;
+  }
+  const fn2 = function() {
+    parent_calls += 1;
+  }
+  parent.addEventListener('dupe', fn1);
+  parent.addEventListener('dupe', fn1);
+  parent.addEventListener('dupe', fn1);
+  parent.addEventListener('dupe', fn2);
+
+  parent.dispatchEvent(new Event('dupe'));
+  testing.expectEqual(101, parent_calls);
+<!-- </script> -->
+
+<div id=parent4><div id=child4></div></div>
+<script id=stpoPropagation>
+  child_calls = 0;
+  parent_calls = 0;
+  child = $('#child4');
+  parent = $('#parent4');
+
+  parent.addEventListener('propagate', function() {
+    parent_calls += 1;
+  });
+
+  child.addEventListener('propagate', function(e) {
+    child_calls += 1;
+    if (child_calls == 2) {
+      e.stopPropagation();
+    }
+  });
+
+  testing.expectEqual(true, child.dispatchEvent(new Event('propagate', {bubbles: true})));
+  testing.expectEqual(true, child.dispatchEvent(new Event('propagate', {bubbles: true})));
+  testing.expectEqual(true, child.dispatchEvent(new Event('propagate', {bubbles: true})));
+  testing.expectEqual(2, parent_calls);
+  testing.expectEqual(3, child_calls);
+</script>
+
+<div id=grandparent><div id=parent5><div id=child5></div></div></div>
+<script id=eventCapture>
+  // Test event capture phase
+  const order = [];
+  const grandparent = $('#grandparent');
+  const parent5 = $('#parent5');
+  const child5 = $('#child5');
+
+  // Add capture listeners (should fire top-down)
+  grandparent.addEventListener('test', () => order.push('grandparent-capture'), true);
+  parent5.addEventListener('test', () => order.push('parent-capture'), true);
+  child5.addEventListener('test', () => order.push('child-capture'), true);
+
+  // Add bubble listeners (should fire bottom-up)
+  grandparent.addEventListener('test', () => order.push('grandparent-bubble'), false);
+  parent5.addEventListener('test', () => order.push('parent-bubble'), false);
+  child5.addEventListener('test', () => order.push('child-bubble'), false);
+
+  child5.dispatchEvent(new Event('test', {bubbles: true}));
+
+  // Expected order: capture top-down, then target (both), then bubble bottom-up
+  testing.expectEqual('grandparent-capture', order[0]);
+  testing.expectEqual('parent-capture', order[1]);
+  testing.expectEqual('child-capture', order[2]);
+  testing.expectEqual('child-bubble', order[3]);
+  testing.expectEqual('parent-bubble', order[4]);
+  testing.expectEqual('grandparent-bubble', order[5]);
+  testing.expectEqual(6, order.length);
+</script>
+
+<div id=parent6><div id=child6></div></div>
+<script id=eventPhase>
+  // Test eventPhase property
+  const phases = [];
+  const parent6 = $('#parent6');
+  const child6 = $('#child6');
+
+  parent6.addEventListener('phase', (e) => {
+    phases.push({target: 'parent', phase: e.eventPhase, current: e.currentTarget === parent6});
+  }, true);
+
+  child6.addEventListener('phase', (e) => {
+    phases.push({target: 'child', phase: e.eventPhase, current: e.currentTarget === child6});
+  }, true);
+
+  child6.addEventListener('phase', (e) => {
+    phases.push({target: 'child', phase: e.eventPhase, current: e.currentTarget === child6});
+  }, false);
+
+  parent6.addEventListener('phase', (e) => {
+    phases.push({target: 'parent', phase: e.eventPhase, current: e.currentTarget === parent6});
+  }, false);
+
+  child6.dispatchEvent(new Event('phase', {bubbles: true}));
+
+  testing.expectEqual('parent', phases[0].target);
+  testing.expectEqual(Event.CAPTURING_PHASE, phases[0].phase);
+  testing.expectEqual(true, phases[0].current);
+
+  testing.expectEqual('child', phases[1].target);
+  testing.expectEqual(Event.AT_TARGET, phases[1].phase);
+  testing.expectEqual(true, phases[1].current);
+
+  testing.expectEqual('child', phases[2].target);
+  testing.expectEqual(Event.AT_TARGET, phases[2].phase);
+  testing.expectEqual(true, phases[2].current);
+
+  testing.expectEqual('parent', phases[3].target);
+  testing.expectEqual(Event.BUBBLING_PHASE, phases[3].phase);
+  testing.expectEqual(true, phases[3].current);
+</script>
+
+<div id=parent7><div id=child7></div></div>
+<script id=stopImmediatePropagation>
+  // Test stopImmediatePropagation
+  let calls = [];
+  const parent7 = $('#parent7');
+  const child7 = $('#child7');
+
+  child7.addEventListener('immediate', () => calls.push(1));
+  child7.addEventListener('immediate', (e) => {
+    calls.push(2);
+    e.stopImmediatePropagation();
+  });
+  child7.addEventListener('immediate', () => calls.push(3));
+  parent7.addEventListener('immediate', () => calls.push(4));
+
+  child7.dispatchEvent(new Event('immediate', {bubbles: true}));
+
+  // Should only call the first two listeners, then stop
+  testing.expectEqual(1, calls[0]);
+  testing.expectEqual(2, calls[1]);
+  testing.expectEqual(2, calls.length);
+</script>
+
+<div id=parent8><div id=child8></div></div>
+<script id=captureStopPropagation>
+  // Test that stopPropagation during capture prevents target and bubble
+  let capture_calls = [];
+  const parent8 = $('#parent8');
+  const child8 = $('#child8');
+
+  parent8.addEventListener('capture-stop', (e) => {
+    capture_calls.push('parent-capture');
+    e.stopPropagation();
+  }, true);
+
+  child8.addEventListener('capture-stop', () => capture_calls.push('child-capture'), true);
+  child8.addEventListener('capture-stop', () => capture_calls.push('child-bubble'), false);
+  parent8.addEventListener('capture-stop', () => capture_calls.push('parent-bubble'), false);
+
+  child8.dispatchEvent(new Event('capture-stop', {bubbles: true}));
+
+  // Should only call parent capture listener
+  testing.expectEqual(1, capture_calls.length);
+  testing.expectEqual('parent-capture', capture_calls[0]);
+</script>
+
+<div id=child9></div>
+<script id=nonBubblingNoCapture>
+  // Test that non-bubbling events don't trigger capture phase
+  let non_bubble_calls = [];
+  const child9 = $('#child9');
+
+  window.addEventListener('nobubble', () => non_bubble_calls.push('window-capture'), true);
+  window.addEventListener('nobubble', () => non_bubble_calls.push('window-bubble'), false);
+  child9.addEventListener('nobubble', (e) => {
+    non_bubble_calls.push('child');
+    testing.expectEqual(Event.AT_TARGET, e.eventPhase);
+  });
+
+  child9.dispatchEvent(new Event('nobubble', {bubbles: false}));
+
+  // Should only call child listener, not window
+  testing.expectEqual(1, non_bubble_calls.length);
+  testing.expectEqual('child', non_bubble_calls[0]);
+</script>

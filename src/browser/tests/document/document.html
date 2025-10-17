@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<head id="the_head">
+  <title>Test Document Title</title>
+  <script src="../testing.js"></script>
+</head>
+
+<body id=the_body>
+</body>
+
+<script id=document>
+  testing.expectEqual(null, document.parentNode);
+  testing.expectEqual(undefined, document.getCurrentScript);
+  testing.expectEqual("http://localhost:9601/src/browser/tests/document/document.html", document.URL);
+</script>
+
+<script id=headAndbody>
+  testing.expectEqual($('#the_head'), document.head);
+  testing.expectEqual($('#the_body'), document.body);
+</script>
+
+<script id=documentElement>
+  testing.expectEqual($('#the_body').parentNode, document.documentElement);
+</script>
+
+<script id=title>
+  testing.expectEqual('Test Document Title', document.title);
+  document.title = 'New Title';
+  testing.expectEqual('New Title', document.title);
+  document.title = '';
+  testing.expectEqual('', document.title);
+</script>
+
+<script id=createTextNode>
+  const textNode = document.createTextNode('Hello World');
+  testing.expectEqual(3, textNode.nodeType);
+  testing.expectEqual('Hello World', textNode.nodeValue);
+  testing.expectEqual('Hello World', textNode.textContent);
+
+  const emptyText = document.createTextNode('');
+  testing.expectEqual('', emptyText.nodeValue);
+</script>

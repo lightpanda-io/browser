@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<body></body>
+<script src="../testing.js"></script>
+<script id=createElementNS>
+  const htmlDiv = document.createElementNS('http://www.w3.org/1999/xhtml', 'div');
+  testing.expectEqual('DIV', htmlDiv.tagName);
+  testing.expectEqual('http://www.w3.org/1999/xhtml', htmlDiv.namespaceURI);
+
+  const svgRect = document.createElementNS('http://www.w3.org/2000/svg', 'RecT');
+  testing.expectEqual('RecT', svgRect.tagName);
+  testing.expectEqual('http://www.w3.org/2000/svg', svgRect.namespaceURI);
+
+  const mathElement = document.createElementNS('http://www.w3.org/1998/Math/MathML', 'math');
+  testing.expectEqual('math', mathElement.tagName);
+  testing.expectEqual('http://www.w3.org/1998/Math/MathML', mathElement.namespaceURI);
+
+  const xmlElement = document.createElementNS('http://www.w3.org/XML/1998/namespace', 'TEst');
+  testing.expectEqual('TEst', xmlElement.tagName);
+  testing.expectEqual('http://www.w3.org/XML/1998/namespace', xmlElement.namespaceURI);
+
+  const nullNsElement = document.createElementNS(null, 'span');
+  testing.expectEqual('SPAN', nullNsElement.tagName);
+  testing.expectEqual('http://www.w3.org/1999/xhtml', nullNsElement.namespaceURI);
+
+  const unknownNsElement = document.createElementNS('http://example.com/unknown', 'custom');
+  testing.expectEqual('CUSTOM', unknownNsElement.tagName);
+  testing.expectEqual('http://www.w3.org/1999/xhtml', unknownNsElement.namespaceURI);
+
+  const regularDiv = document.createElement('div');
+  testing.expectEqual('DIV', regularDiv.tagName);
+  testing.expectEqual('http://www.w3.org/1999/xhtml', regularDiv.namespaceURI);
+</script>

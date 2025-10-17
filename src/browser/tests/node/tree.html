@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<div id=parent>
+  <p id=c1>1</p>
+  <p id=c2>2</p>
+  <p id=c3>3</p>
+</div>
+<script id=tree>
+  const parent = $('#parent');
+  const c1 = $('#c1');
+  const c2 = $('#c2');
+  const c3 = $('#c3');
+
+  // remember text nodes get inserted between elements if there's whitespace
+  testing.expectEqual('#text', parent.firstChild.nodeName)
+  testing.expectEqual(c1, parent.firstChild.nextSibling)
+
+  testing.expectEqual('1', c1.firstChild.textContent);
+  testing.expectEqual(c2, c1.nextSibling.nextSibling);
+  testing.expectEqual('#text', c1.previousSibling.nodeName)
+  testing.expectEqual(null, c1.previousSibling.previousSibling);
+
+  testing.expectEqual(parent, c1.parentNode);
+  testing.expectEqual(parent, c1.parentElement);
+</script>

@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="container">
+  <div data-test="value1">First</div>
+  <div data-test="value2">Second</div>
+  <input type="text" name="username">
+  <input type="password" name="password">
+  <input type="checkbox" checked>
+  <a href="https://example.com">Link 1</a>
+  <a href="/relative">Link 2</a>
+  <a href="https://example.com/page">Link 3</a>
+  <button disabled>Disabled Button</button>
+  <button>Enabled Button</button>
+  <span class="foo bar">Span 1</span>
+  <span class="foo">Span 2</span>
+  <span class="bar">Span 3</span>
+  <div lang="en">English</div>
+  <div lang="en-US">American English</div>
+  <div lang="en-GB">British English</div>
+  <div lang="fr">French</div>
+  <img src="image.png" alt="Test image">
+  <img src="photo.jpg">
+</div>
+
+<script id="presence">
+  testing.expectEqual(2, document.querySelectorAll('[data-test]').length);
+  testing.expectEqual(3, document.querySelectorAll('[type]').length);
+  testing.expectEqual(1, document.querySelectorAll('[checked]').length);
+  testing.expectEqual(1, document.querySelectorAll('[disabled]').length);
+  testing.expectEqual(1, document.querySelectorAll('[alt]').length);
+
+  const firstDataTest = document.querySelector('[data-test]');
+  testing.expectEqual('First', firstDataTest.innerText);
+</script>
+
+<script id="exact">
+  testing.expectEqual(1, document.querySelectorAll('[data-test="value1"]').length);
+  testing.expectEqual(1, document.querySelectorAll('[data-test="value2"]').length);
+  testing.expectEqual(0, document.querySelectorAll('[data-test="value3"]').length);
+
+  testing.expectEqual(1, document.querySelectorAll('[type="text"]').length);
+  testing.expectEqual(1, document.querySelectorAll('[type="password"]').length);
+  testing.expectEqual(1, document.querySelectorAll('[type="checkbox"]').length);
+
+  const textInput = document.querySelector('[type="text"]');
+  testing.expectEqual('username', textInput.getAttribute('name'));
+</script>
+
+<script id="word">
+  testing.expectEqual(2, document.querySelectorAll('[class~="foo"]').length);
+  testing.expectEqual(2, document.querySelectorAll('[class~="bar"]').length);
+  testing.expectEqual(0, document.querySelectorAll('[class~="baz"]').length);
+
+  const fooEl = document.querySelector('[class~="foo"]');
+  testing.expectEqual('Span 1', fooEl.innerText);
+</script>
+
+<script id="prefixDash">
+  testing.expectEqual(3, document.querySelectorAll('[lang|="en"]').length);
+  testing.expectEqual(1, document.querySelectorAll('[lang|="fr"]').length);
+  testing.expectEqual(0, document.querySelectorAll('[lang|="es"]').length);
+
+  const enEl = document.querySelector('[lang|="en"]');
+  testing.expectEqual('English', enEl.innerText);
+</script>
+
+<script id="startsWith">
+  testing.expectEqual(2, document.querySelectorAll('[href^="https://"]').length);
+  testing.expectEqual(1, document.querySelectorAll('[href^="/"]').length);
+  testing.expectEqual(2, document.querySelectorAll('[href^="https://example.com"]').length);
+
+  const httpsLink = document.querySelector('[href^="https://"]');
+  testing.expectEqual('Link 1', httpsLink.innerText);
+</script>
+
+<script id="endsWith">
+  testing.expectEqual(1, document.querySelectorAll('[href$=".com"]').length);
+  testing.expectEqual(1, document.querySelectorAll('[href$="/page"]').length);
+  testing.expectEqual(1, document.querySelectorAll('[href$="relative"]').length);
+
+  const comLink = document.querySelector('[href$=".com"]');
+  testing.expectEqual('https://example.com', comLink.getAttribute('href'));
+</script>
+
+<script id="substring">
+  testing.expectEqual(2, document.querySelectorAll('[href*="example"]').length);
+  testing.expectEqual(1, document.querySelectorAll('[href*="relative"]').length);
+  testing.expectEqual(1, document.querySelectorAll('[src*="image"]').length);
+  testing.expectEqual(1, document.querySelectorAll('[src*="photo"]').length);
+
+  const exampleLink = document.querySelector('[href*="example"]');
+  testing.expectEqual('Link 1', exampleLink.innerText);
+</script>
+
+<script id="compound">
+  testing.expectEqual(1, document.querySelectorAll('input[type="text"]').length);
+  testing.expectEqual(1, document.querySelectorAll('input[type="password"]').length);
+  testing.expectEqual(1, document.querySelectorAll('button[disabled]').length);
+  testing.expectEqual(1, document.querySelectorAll('div[lang="en"]').length);
+  testing.expectEqual(1, document.querySelectorAll('div[data-test="value1"]').length);
+
+  const compoundInput = document.querySelector('input[type="text"][name="username"]');
+  testing.expectEqual('username', compoundInput.getAttribute('name'));
+</script>
+
+<script id="descendant">
+  testing.expectEqual(2, document.querySelectorAll('#container [data-test]').length);
+  testing.expectEqual(3, document.querySelectorAll('#container input[type]').length);
+
+  const containerDataTest = document.querySelector('#container [data-test]');
+  testing.expectEqual('First', containerDataTest.innerText);
+</script>

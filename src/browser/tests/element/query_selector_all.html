@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id=root>
+  <div class="item">Item 1</div>
+  <span class="item">Item 2</span>
+  <div class="item special">Item 3</div>
+  <div id=nested>
+    <div class="item">Item 4</div>
+    <span class="special">Item 5</span>
+  </div>
+</div>
+<div id=outside class="item">Outside</div>
+
+<script>
+  function assertList(expected, result) {
+    testing.expectEqual(expected.length, result.length);
+    testing.expectEqual(expected, Array.from(result).map((e) => e.textContent));
+    testing.expectEqual(expected, Array.from(result.values()).map((e) => e.textContent));
+    testing.expectEqual(expected.map((e, i) => i), Array.from(result.keys()));
+  }
+</script>
+
+<script id=errors>
+{
+  const root = $('#root');
+  testing.expectError("Syntax Error", () => root.querySelectorAll(''));
+  testing.withError((err) => {
+    testing.expectEqual(12, err.code);
+    testing.expectEqual("SyntaxError", err.name);
+    testing.expectEqual("Syntax Error", err.message);
+  }, () => root.querySelectorAll(''));
+}
+</script>
+
+<script id=byId>
+{
+  const root = $('#root');
+  const nested = root.querySelectorAll('#nested');
+  testing.expectEqual(true, nested instanceof NodeList);
+  testing.expectEqual(1, nested.length);
+  testing.expectEqual('nested', nested[0].getAttribute('id'));
+
+  assertList([], root.querySelectorAll('#outside'));
+  assertList([], root.querySelectorAll('#nope'));
+}
+</script>
+
+<script id=byClass>
+{
+  const root = $('#root');
+  assertList(['Item 1', 'Item 2', 'Item 3', 'Item 4'], root.querySelectorAll('.item'));
+  assertList(['Item 3', 'Item 5'], root.querySelectorAll('.special'));
+  assertList([], root.querySelectorAll('.nope'));
+}
+</script>
+
+<script id=byTag>
+{
+  const root = $('#root');
+  const divs = root.querySelectorAll('div');
+  testing.expectEqual(4, divs.length);
+
+  assertList(['Item 2', 'Item 5'], root.querySelectorAll('span'));
+  assertList([], root.querySelectorAll('article'));
+}
+</script>
+
+<script id=compound>
+{
+  const root = $('#root');
+  const divItems = root.querySelectorAll('div.item');
+  testing.expectEqual(3, divItems.length);
+
+  assertList(['Item 2'], root.querySelectorAll('span.item'));
+  assertList(['Item 3'], root.querySelectorAll('div.item.special'));
+  assertList(['Item 3'], root.querySelectorAll('.item.special'));
+  assertList(['Item 3'], root.querySelectorAll('.special.item'));
+}
+</script>
+
+<script id=universal>
+{
+  const root = $('#root');
+  const all = root.querySelectorAll('*');
+  testing.expectEqual(true, all.length >= 6);
+  testing.expectEqual('Item 1', all[0].textContent);
+
+  const items = root.querySelectorAll('*.item');
+  testing.expectEqual(4, items.length);
+
+  assertList(['Item 3', 'Item 5'], root.querySelectorAll('*.special'));
+}
+</script>
+
+<script id=nested>
+{
+  const nested = $('#nested');
+  assertList(['Item 4'], nested.querySelectorAll('.item'));
+  assertList(['Item 5'], nested.querySelectorAll('.special'));
+  assertList(['Item 4'], nested.querySelectorAll('div'));
+  assertList(['Item 5'], nested.querySelectorAll('span'));
+}
+</script>
+
+<script id=iterators>
+{
+  const root = $('#root');
+  const list = root.querySelectorAll('.special');
+
+  const entries = Array.from(list.entries());
+  testing.expectEqual(2, entries.length);
+  testing.expectEqual(0, entries[0][0]);
+  testing.expectEqual('Item 3', entries[0][1].textContent);
+  testing.expectEqual(1, entries[1][0]);
+  testing.expectEqual('Item 5', entries[1][1].textContent);
+
+  const keys = Array.from(list.keys());
+  testing.expectEqual(2, keys.length);
+  testing.expectEqual(0, keys[0]);
+  testing.expectEqual(1, keys[1]);
+
+  const values = Array.from(list.values());
+  testing.expectEqual(['Item 3', 'Item 5'], values.map((e) => e.textContent));
+
+  const defaultIter = Array.from(list);
+  testing.expectEqual(['Item 3', 'Item 5'], defaultIter.map((e) => e.textContent));
+}
+</script>
+
+<div id="desc-root">
+  <p class="text">Direct child paragraph</p>
+  <div class="nested">
+    <p class="text">Nested paragraph</p>
+    <span class="wrapper">
+      <p class="deep">Deeply nested paragraph</p>
+    </span>
+  </div>
+  <article>
+    <p class="text">Article paragraph</p>
+    <div class="inner">
+      <span>Article span</span>
+    </div>
+  </article>
+</div>
+
+<div id="multi-level">
+  <div class="level1">
+    <div class="level2">
+      <span class="target">Target 1</span>
+    </div>
+  </div>
+  <div class="level1">
+    <span class="target">Target 2</span>
+  </div>
+</div>
+
+<script id=descendantSelectors>
+{
+  const root = $('#desc-root');
+  assertList(['Direct child paragraph', 'Nested paragraph', 'Deeply nested paragraph', 'Article paragraph'], root.querySelectorAll('div p'));
+  assertList(['Direct child paragraph', 'Nested paragraph', 'Article paragraph'], root.querySelectorAll('div .text'));
+  assertList(['Nested paragraph', 'Deeply nested paragraph'], root.querySelectorAll('.nested p'));
+  assertList(['Deeply nested paragraph'], root.querySelectorAll('div span p'));
+  assertList(['Nested paragraph'], root.querySelectorAll('div.nested p.text'));
+  assertList([], root.querySelectorAll('article div p'));
+  assertList(['Article span'], root.querySelectorAll('article span'));
+  assertList(['Article span'], root.querySelectorAll('article div span'));
+}
+</script>
+
+<script id=multiLevelDescendant>
+{
+  const root = $('#multi-level');
+  assertList(['Target 1', 'Target 2'], root.querySelectorAll('div span'));
+  assertList(['Target 1', 'Target 2'], root.querySelectorAll('div div span'));
+  assertList(['Target 1'], root.querySelectorAll('.level1 .level2 .target'));
+  assertList(['Target 1', 'Target 2'], root.querySelectorAll('.level1 .target'));
+}
+</script>
+
+<script id=descendantWithWhitespace>
+{
+  const root = $('#desc-root');
+  assertList(['Direct child paragraph', 'Nested paragraph', 'Deeply nested paragraph', 'Article paragraph'], root.querySelectorAll('  div   p  '));
+  assertList(['Nested paragraph'], root.querySelectorAll('  div.nested    p.text  '));
+}
+</script>

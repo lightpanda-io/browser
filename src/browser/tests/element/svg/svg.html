@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<svg id=svg1></svg>
+<sVg id=svg2></sVg>
+<SVG id=svg3></SVG>
+
+<script id=svg>
+    let svg1 = $('#svg1');
+    testing.expectEqual('svg', svg1.tagName);
+    testing.expectEqual('http://www.w3.org/2000/svg', svg1.namespaceURI);
+
+    let svg2 = $('#svg2');
+    testing.expectEqual('svg', svg2.tagName);
+    testing.expectEqual('http://www.w3.org/2000/svg', svg2.namespaceURI);
+
+    let svg3 = $('#svg3');
+    testing.expectEqual('svg', svg3.tagName);
+    testing.expectEqual('http://www.w3.org/2000/svg', svg3.namespaceURI);
+
+    const svg4 = document.createElementNS('http://www.w3.org/2000/svg', 'SvG');
+    testing.expectEqual('SvG', svg4.tagName);
+    testing.expectEqual('http://www.w3.org/2000/svg', svg4.namespaceURI);
+
+    const svg5 = document.createElement('SvG');
+    testing.expectEqual('SVG', svg5.tagName);
+    testing.expectEqual('http://www.w3.org/1999/xhtml', svg5.namespaceURI);
+</script>

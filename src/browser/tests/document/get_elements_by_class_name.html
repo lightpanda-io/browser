@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div class="foo">foo1</div>
+<span class="foo">foo2</span>
+<p class="foo" id="foo3">foo3</p>
+<div class="bar">bar1</div>
+<div class="baz">baz1</div>
+
+<div class="multi class names">multi1</div>
+<span class="class multi">multi2</span>
+
+<div id="container">
+  <div class="nested">nested1</div>
+  <div class="nested">nested2</div>
+</div>
+
+<script>
+  const foos = document.getElementsByClassName('foo');
+</script>
+
+<script id=basic>
+  testing.expectEqual(0, document.getElementsByClassName('nonexistent').length);
+  testing.expectEqual(0, document.getElementsByClassName('unknown').length);
+
+  testing.expectEqual(true, foos instanceof HTMLCollection);
+  testing.expectEqual(3, foos.length);
+  testing.expectEqual(3, foos.length); // cache test
+  testing.expectEqual('foo1', foos[0].textContent);
+  testing.expectEqual('foo2', foos[1].textContent);
+  testing.expectEqual('foo3', foos[2].textContent);
+  testing.expectEqual('foo1', foos[0].textContent); // cache test
+  testing.expectEqual('foo3', foos[2].textContent);
+  testing.expectEqual('foo2', foos[1].textContent);
+  testing.expectEqual(undefined, foos[-1]);
+  testing.expectEqual(undefined, foos[3]);
+  testing.expectEqual(undefined, foos[100]);
+
+  const bars = document.getElementsByClassName('bar');
+  testing.expectEqual(1, bars.length);
+  testing.expectEqual('bar1', bars[0].textContent);
+
+  const bazs = document.getElementsByClassName('baz');
+  testing.expectEqual(1, bazs.length);
+  testing.expectEqual('baz1', bazs[0].textContent);
+</script>
+
+<script id=item>
+  testing.expectEqual('foo2', foos.item(1).textContent);
+  testing.expectEqual(null, foos.item(-1));
+  testing.expectEqual('foo1', foos.item(0).textContent);
+  testing.expectEqual(null, foos.item(-100));
+  testing.expectEqual(null, foos.item(3));
+  testing.expectEqual(null, foos.item(100));
+</script>
+
+<script id=namedItem>
+  testing.expectEqual('foo3', foos.namedItem('foo3').id);
+  testing.expectEqual(null, foos.namedItem('foo1'));
+  testing.expectEqual(null, foos.namedItem('bar'));
+  testing.expectEqual(null, foos.namedItem('nonexistent'));
+
+  testing.expectEqual('foo3', foos['foo3'].id);
+</script>
+
+<script id=iterator>
+  let acc = [];
+  for (let x of foos) {
+    acc.push(x.textContent);
+  }
+  testing.expectEqual(['foo1', 'foo2', 'foo3'], acc);
+</script>
+
+<script id=emptyString>
+  const empty = document.getElementsByClassName('');
+  testing.expectEqual(0, empty.length);
+</script>
+
+<script id=multipleClasses>
+  const multi = document.getElementsByClassName('multi');
+  testing.expectEqual(2, multi.length);
+  testing.expectEqual('multi1', multi[0].textContent);
+  testing.expectEqual('multi2', multi[1].textContent);
+
+  const classCol = document.getElementsByClassName('class');
+  testing.expectEqual(2, classCol.length);
+
+  const names = document.getElementsByClassName('names');
+  testing.expectEqual(1, names.length);
+  testing.expectEqual('multi1', names[0].textContent);
+</script>
+
+<script id=nested>
+  const nested = document.getElementsByClassName('nested');
+  testing.expectEqual(2, nested.length);
+  testing.expectEqual('nested1', nested[0].textContent);
+  testing.expectEqual('nested2', nested[1].textContent);
+</script>

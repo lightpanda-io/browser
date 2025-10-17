@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<div id=d1></div>
+<div id=d2></div>
+
+<script id=insertBefore>
+  function assertChildren(expected, parent) {
+    const actual = Array.from(parent.childNodes);
+    testing.expectEqual(expected, actual);
+    for (let child of parent.childNodes) {
+      testing.expectEqual(parent, child.parentNode);
+      testing.expectEqual(child, document.getElementById(child.id));
+    }
+  }
+
+  const d1 = $('#d1');
+  const d2 = $('#d2');
+
+  testing.withError((err) => {
+    testing.expectEqual(8, err.code);
+    testing.expectEqual("NotFoundError", err.name);
+    testing.expectEqual("Not Found", err.message);
+  }, () => d1.insertBefore(document.createElement('div'), d2));
+
+  let c1 = document.createElement('div');
+  c1.id = 'c1';
+  d1.insertBefore(c1, null);
+  assertChildren([c1], d1);
+
+  let c2 = document.createElement('div');
+  c2.id = 'c2';
+  d1.insertBefore(c2, c1);
+  assertChildren([c2, c1], d1);
+
+  d2.insertBefore(c1, null);
+  assertChildren([c2], d1);
+  assertChildren([c1], d2);
+
+  d2.insertBefore(c2, null);
+  assertChildren([], d1);
+  assertChildren([c1, c2], d2);
+</script>

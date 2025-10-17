@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<body>
+  <div id="root">
+    <div id="child1">
+      <span id="grandchild1">Text 1</span>
+      <span id="grandchild2">Text 2</span>
+    </div>
+    <div id="child2">
+      <span id="grandchild3">Text 3</span>
+    </div>
+    <p id="child3">Paragraph</p>
+  </div>
+</body>
+
+<script id=tree_walker_basic>
+  {
+    const root = document.getElementById("root");
+    const walker = document.createTreeWalker(root);
+
+    testing.expectEqual("TreeWalker", walker.constructor.name);
+    testing.expectEqual(root, walker.root);
+    testing.expectEqual(root, walker.currentNode);
+    testing.expectEqual(0xFFFFFFFF, walker.whatToShow);
+    testing.expectEqual(null, walker.filter);
+  }
+</script>
+
+<script id=tree_walker_element_filter>
+  {
+    const root = document.getElementById("root");
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+
+    testing.expectEqual(NodeFilter.SHOW_ELEMENT, walker.whatToShow);
+    testing.expectEqual(root, walker.currentNode);
+
+    const child1 = walker.firstChild();
+    testing.expectEqual(document.getElementById("child1"), child1);
+    testing.expectEqual(child1, walker.currentNode);
+
+    const child2 = walker.nextSibling();
+    testing.expectEqual(document.getElementById("child2"), child2);
+
+    const parent = walker.parentNode();
+    testing.expectEqual(root, parent);
+  }
+</script>
+
+<script id=tree_walker_text_filter>
+  {
+    const container = document.createElement("div");
+    container.appendChild(document.createTextNode("text1"));
+    container.appendChild(document.createTextNode("text2"));
+    container.appendChild(document.createTextNode("text3"));
+
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+
+    const text1 = walker.nextNode();
+    testing.expectEqual("#text", text1.nodeName);
+    testing.expectEqual("text1", text1.textContent);
+
+    const text2 = walker.nextNode();
+    testing.expectEqual("text2", text2.textContent);
+
+    const text3 = walker.nextNode();
+    testing.expectEqual("text3", text3.textContent);
+
+    testing.expectEqual(null, walker.nextNode());
+  }
+</script>
+
+<script id=tree_walker_skip_vs_reject>
+  {
+    const container = document.createElement("div");
+    container.innerHTML = `
+      <div id="skip-me">
+        <span id="nested-span">Found me!</span>
+      </div>
+      <div id="reject-me">
+        <span id="hidden-span">Can't find me!</span>
+      </div>
+    `;
+
+    const walker = document.createTreeWalker(
+      container,
+      NodeFilter.SHOW_ELEMENT,
+      function(node) {
+        if (node.id === "skip-me") {
+          return NodeFilter.FILTER_SKIP;
+        }
+        if (node.id === "reject-me") {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    );
+
+    const first = walker.nextNode();
+    testing.expectEqual("nested-span", first.id);
+
+    const second = walker.nextNode();
+    testing.expectEqual(null, second);
+  }
+</script>
+
+<script id=tree_walker_nested_comments_in_skipped>
+  {
+    const container = document.createElement("div");
+    const skipped = document.createElement("div");
+    skipped.id = "skipped";
+    const comment = document.createComment("Important comment");
+    skipped.appendChild(comment);
+    container.appendChild(skipped);
+
+    const walker = document.createTreeWalker(
+      container,
+      NodeFilter.SHOW_COMMENT,
+      function(node) {
+        if (node.nodeType === 1 && node.id === "skipped") {
+          return NodeFilter.FILTER_SKIP;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    );
+
+    const found = walker.nextNode();
+    testing.expectEqual(8, found.nodeType);
+    testing.expectEqual("Important comment", found.data);
+  }
+</script>
+
+<script id=tree_walker_nested_text_in_rejected>
+  {
+    const container = document.createElement("div");
+    const rejected = document.createElement("div");
+    rejected.id = "rejected";
+    rejected.appendChild(document.createTextNode("Hidden text"));
+    container.appendChild(rejected);
+    container.appendChild(document.createTextNode("Visible text"));
+
+    const walker = document.createTreeWalker(
+      container,
+      NodeFilter.SHOW_TEXT,
+      function(node) {
+        if (node.nodeType === 1 && node.id === "rejected") {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    );
+
+    const hidden = walker.nextNode();
+    testing.expectEqual("Hidden text", hidden.textContent);
+
+    const found = walker.nextNode();
+    testing.expectEqual("Visible text", found.textContent);
+
+    const none = walker.nextNode();
+    testing.expectEqual(null, none);
+  }
+</script>
+
+<script id=tree_walker_deep_nesting_with_mixed_filters>
+  {
+    const container = document.createElement("div");
+    container.innerHTML = `
+      <div id="level1-skip">
+        <div id="level2-accept">
+          <div id="level3-skip">
+            <span id="level4-accept">Deep span</span>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const walker = document.createTreeWalker(
+      container,
+      NodeFilter.SHOW_ELEMENT,
+      function(node) {
+        if (node.id && node.id.includes("skip")) {
+          return NodeFilter.FILTER_SKIP;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    );
+
+    const first = walker.nextNode();
+    testing.expectEqual("level2-accept", first.id);
+
+    const second = walker.nextNode();
+    testing.expectEqual("level4-accept", second.id);
+
+    const none = walker.nextNode();
+    testing.expectEqual(null, none);
+  }
+</script>
+
+<script id=tree_walker_function_filter>
+  {
+    const root = document.getElementById("root");
+
+    const walker = document.createTreeWalker(
+      root,
+      NodeFilter.SHOW_ELEMENT,
+      function(node) {
+        if (node.id && node.id.startsWith("child")) {
+          return NodeFilter.FILTER_ACCEPT;
+        }
+        return NodeFilter.FILTER_SKIP;
+      }
+    );
+
+    const child1 = walker.firstChild();
+    testing.expectEqual("child1", child1.id);
+
+    const child2 = walker.nextSibling();
+    testing.expectEqual("child2", child2.id);
+
+    const child3 = walker.nextSibling();
+    testing.expectEqual("child3", child3.id);
+
+    const none = walker.nextSibling();
+    testing.expectEqual(null, none);
+  }
+</script>
+
+<script id=tree_walker_object_filter>
+  {
+    const root = document.getElementById("root");
+
+    const filter = {
+      acceptNode: function(node) {
+        if (node.tagName === "SPAN") {
+          return NodeFilter.FILTER_ACCEPT;
+        }
+        return NodeFilter.FILTER_SKIP;
+      }
+    };
+
+    const walker = document.createTreeWalker(
+      root,
+      NodeFilter.SHOW_ELEMENT,
+      filter
+    );
+
+    const span1 = walker.nextNode();
+    testing.expectEqual("grandchild1", span1.id);
+
+    const span2 = walker.nextNode();
+    testing.expectEqual("grandchild2", span2.id);
+
+    const span3 = walker.nextNode();
+    testing.expectEqual("grandchild3", span3.id);
+
+    const none = walker.nextNode();
+    testing.expectEqual(null, none);
+  }
+</script>
+
+<script id=tree_walker_navigation>
+  {
+    const root = document.getElementById("root");
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+
+    testing.expectEqual("child1", walker.firstChild().id);
+    testing.expectEqual("grandchild2", walker.lastChild().id);
+    testing.expectEqual("grandchild1", walker.previousSibling().id);
+    testing.expectEqual("grandchild2", walker.nextSibling().id);
+    testing.expectEqual("child1", walker.parentNode().id);
+    testing.expectEqual("grandchild1", walker.nextNode().id);
+    testing.expectEqual("child1", walker.previousNode().id);
+  }
+</script>
+
+<script id=tree_walker_current_node_setter>
+  {
+    const root = document.getElementById("root");
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+
+    const child2 = document.getElementById("child2");
+    walker.currentNode = child2;
+    testing.expectEqual(child2, walker.currentNode);
+
+    const grandchild3 = walker.firstChild();
+    testing.expectEqual("grandchild3", grandchild3.id);
+  }
+</script>
+
+<script id=tree_walker_previousNode_complex>
+  {
+    const container = document.createElement("div");
+    container.innerHTML = `
+      <div id="a">
+        <div id="b">
+          <div id="c"></div>
+        </div>
+        <div id="d"></div>
+      </div>
+      <div id="e"></div>
+    `;
+
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_ELEMENT);
+
+    walker.currentNode = container.querySelector("#e");
+    testing.expectEqual("d", walker.previousNode().id);
+    testing.expectEqual("c", walker.previousNode().id);
+    testing.expectEqual("b", walker.previousNode().id);
+    testing.expectEqual("a", walker.previousNode().id);
+    testing.expectEqual(container, walker.previousNode());
+    testing.expectEqual(null, walker.previousNode());
+  }
+</script>
+
+<script id=tree_walker_nextNode_with_filter>
+  {
+    const container = document.createElement("div");
+    container.innerHTML = `
+      <div class="accept">A</div>
+      <div class="skip">
+        <div class="accept">B</div>
+      </div>
+      <div class="reject">
+        <div class="accept">C</div>
+      </div>
+      <div class="accept">D</div>
+    `;
+
+    const walker = document.createTreeWalker(
+      container,
+      NodeFilter.SHOW_ELEMENT,
+      function(node) {
+        if (node.classList.contains("accept")) {
+          return NodeFilter.FILTER_ACCEPT;
+        }
+        if (node.classList.contains("reject")) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_SKIP;
+      }
+    );
+
+    testing.expectEqual("A", walker.nextNode().textContent);
+    testing.expectEqual("B", walker.nextNode().textContent);
+    testing.expectEqual("D", walker.nextNode().textContent);
+    testing.expectEqual(null, walker.nextNode());
+  }
+</script>
+
+<script id=tree_walker_all_node_types>
+  {
+    const container = document.createElement("div");
+    container.appendChild(document.createTextNode("text"));
+    container.appendChild(document.createComment("comment"));
+    const span = document.createElement("span");
+    span.textContent = "element";
+    container.appendChild(span);
+
+    const textWalker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+    testing.expectEqual("text", textWalker.nextNode().textContent);
+    testing.expectEqual("element", textWalker.nextNode().textContent);
+
+    const commentWalker = document.createTreeWalker(container, NodeFilter.SHOW_COMMENT);
+    const comment = commentWalker.nextNode();
+    testing.expectEqual(8, comment.nodeType);
+    testing.expectEqual("comment", comment.data);
+
+    const elementWalker = document.createTreeWalker(container, NodeFilter.SHOW_ELEMENT);
+    testing.expectEqual("SPAN", elementWalker.nextNode().tagName);
+  }
+</script>
+
+<script id=tree_walker_boundary_conditions>
+  {
+    const root = document.getElementById("root");
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+
+    testing.expectEqual(null, walker.parentNode());
+
+    walker.currentNode = document.getElementById("child3");
+    testing.expectEqual(null, walker.nextSibling());
+    testing.expectEqual(null, walker.firstChild());
+    testing.expectEqual(null, walker.lastChild());
+  }
+</script>

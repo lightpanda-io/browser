@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id=test1></div>
+<div id=test2 class="foo bar"></div>
+
+<script id=basic>
+{
+  const div = $('#test1');
+
+  testing.expectEqual(0, div.classList.length);
+
+  div.classList.add('foo');
+  testing.expectEqual('foo', div.className);
+  testing.expectEqual(1, div.classList.length);
+
+  div.classList.add('bar', 'baz');
+  testing.expectEqual('foo bar baz', div.className);
+  testing.expectEqual(3, div.classList.length);
+
+  div.classList.add('bar');
+  testing.expectEqual('foo bar baz', div.className);
+  testing.expectEqual(3, div.classList.length);
+}
+</script>
+
+<script id=contains>
+{
+  const div = $('#test2');
+
+  testing.expectEqual(false, div.classList.contains(''));
+  testing.expectEqual(true, div.classList.contains('foo'));
+  testing.expectEqual(true, div.classList.contains('bar'));
+  testing.expectEqual(false, div.classList.contains('baz'));
+}
+</script>
+
+<script id=remove>
+{
+  const div = $('#test2');
+
+  div.classList.remove('foo');
+  testing.expectEqual('bar', div.className);
+  testing.expectEqual(1, div.classList.length);
+
+  div.classList.remove('nonexistent');
+  testing.expectEqual('bar', div.className);
+
+  div.classList.remove('bar');
+  testing.expectEqual('', div.className);
+  testing.expectEqual(0, div.classList.length);
+}
+</script>
+
+<script id=toggle>
+{
+  const div = document.createElement('div');
+
+  let result = div.classList.toggle('foo');
+  testing.expectEqual(true, result);
+  testing.expectEqual('foo', div.className);
+
+  result = div.classList.toggle('foo');
+  testing.expectEqual(false, result);
+  testing.expectEqual('', div.className);
+
+  result = div.classList.toggle('bar', true);
+  testing.expectEqual(true, result);
+  testing.expectEqual('bar', div.className);
+
+  result = div.classList.toggle('bar', true);
+  testing.expectEqual(true, result);
+  testing.expectEqual('bar', div.className);
+
+  result = div.classList.toggle('baz', false);
+  testing.expectEqual(false, result);
+  testing.expectEqual('bar', div.className);
+}
+</script>
+
+<script id=replace>
+{
+  const div = document.createElement('div');
+  div.className = 'foo bar baz';
+
+  let result = div.classList.replace('bar', 'qux');
+  testing.expectEqual(true, result);
+  testing.expectEqual('foo qux baz', div.className);
+
+  result = div.classList.replace('nonexistent', 'other');
+  testing.expectEqual(false, result);
+  testing.expectEqual('foo qux baz', div.className);
+}
+</script>
+
+<script id=item>
+{
+  const div = document.createElement('div');
+  div.className = 'alpha beta gamma';
+
+  testing.expectEqual('alpha', div.classList.item(0));
+  testing.expectEqual('beta', div.classList.item(1));
+  testing.expectEqual('gamma', div.classList.item(2));
+  testing.expectEqual(null, div.classList.item(3));
+  testing.expectEqual(null, div.classList.item(-1));
+
+  testing.expectEqual('alpha', div.classList[0]);
+  testing.expectEqual('beta', div.classList[1]);
+  testing.expectEqual('gamma', div.classList[2]);
+  testing.expectEqual(undefined, div.classList[3]);
+}
+</script>
+
+<script id=iteration>
+{
+  const div = document.createElement('div');
+  div.className = 'one two three';
+
+  const result = [];
+  for (const cls of div.classList) {
+    result.push(cls);
+  }
+  testing.expectEqual(['one', 'two', 'three'], result);
+}
+</script>
+
+<script id=sync>
+{
+  const div = document.createElement('div');
+
+  div.setAttribute('class', 'alpha beta');
+  testing.expectEqual(2, div.classList.length);
+  testing.expectEqual(true, div.classList.contains('alpha'));
+  testing.expectEqual(true, div.classList.contains('beta'));
+
+  div.className = 'gamma delta';
+  testing.expectEqual(2, div.classList.length);
+  testing.expectEqual(true, div.classList.contains('gamma'));
+  testing.expectEqual(false, div.classList.contains('alpha'));
+
+  div.classList.add('epsilon');
+  testing.expectEqual('gamma delta epsilon', div.className);
+}
+</script>
+
+<script id=whitespace>
+{
+  const div = document.createElement('div');
+  div.className = '  foo   bar  \t\n  baz  ';
+
+  testing.expectEqual(3, div.classList.length);
+  testing.expectEqual('foo', div.classList[0]);
+  testing.expectEqual('bar', div.classList[1]);
+  testing.expectEqual('baz', div.classList[2]);
+}
+</script>
+
+<script id=value>
+{
+  const div = document.createElement('div');
+  div.classList.value = 'test1 test2';
+
+  testing.expectEqual('test1 test2', div.classList.value);
+  testing.expectEqual('test1 test2', div.className);
+  testing.expectEqual(2, div.classList.length);
+}
+</script>
+
+<script id=errors>
+{
+  const div = document.createElement('div');
+
+  testing.withError((err) => {
+    testing.expectEqual('SyntaxError', err.name);
+  }, () => div.classList.add(''));
+
+  testing.withError((err) => {
+    testing.expectEqual('InvalidCharacterError', err.name);
+  }, () => div.classList.add('foo bar'));
+
+  testing.withError((err) => {
+    testing.expectEqual('InvalidCharacterError', err.name);
+  }, () => div.classList.add('foo\tbar'));
+
+  testing.withError((err) => {
+    testing.expectEqual('InvalidCharacterError', err.name);
+  }, () => div.classList.add('foo\nbar'));
+
+  testing.withError((err) => {
+    testing.expectEqual('SyntaxError', err.name);
+  }, () => div.classList.toggle(''));
+
+
+  testing.withError((err) => {
+    testing.expectEqual('InvalidCharacterError', err.name);
+  }, () => div.classList.remove('has space'));
+}
+</script>
+
+<script id=identity>
+{
+  const div = document.createElement('div');
+
+  testing.expectEqual(div.classList, div.classList);
+  const classList = div.classList;
+  div.className = 'changed';
+  testing.expectEqual(classList, div.classList);
+}
+</script>
+
+<script id=attribute_lifecycle>
+{
+  const div = document.createElement('div');
+
+  testing.expectEqual(null, div.getAttribute('class'));
+  testing.expectEqual(0, div.classList.length);
+
+  div.classList.add('foo');
+  testing.expectEqual('foo', div.getAttribute('class'));
+
+  div.classList.remove('foo');
+  testing.expectEqual('', div.getAttribute('class'));
+  testing.expectEqual(0, div.classList.length);
+
+  div.className = 'bar';
+  testing.expectEqual('bar', div.getAttribute('class'));
+
+  div.className = '';
+  testing.expectEqual('', div.getAttribute('class'));
+}
+</script>
+
+<script id=duplicates>
+{
+  const div = document.createElement('div');
+  div.className = 'foo foo bar';
+
+  testing.expectEqual(2, div.classList.length);
+  testing.expectEqual('foo', div.classList[0]);
+  testing.expectEqual('bar', div.classList[1]);
+
+  div.classList.add('foo');
+  testing.expectEqual('foo bar', div.className);
+
+  div.classList.remove('foo');
+  testing.expectEqual('bar', div.className);
+}
+</script>
+
+<script id=replace_edge_cases>
+{
+  const div = document.createElement('div');
+  div.className = 'foo bar';
+
+  let result = div.classList.replace('foo', 'foo');
+  testing.expectEqual(true, result);
+  testing.expectEqual('foo bar', div.className);
+
+  result = div.classList.replace('foo', 'bar');
+  testing.expectEqual(true, result);
+  testing.expectEqual('bar', div.className);
+
+  div.className = 'alpha beta gamma';
+  result = div.classList.replace('beta', 'gamma');
+  testing.expectEqual(true, result);
+  testing.expectEqual('alpha gamma', div.className);
+}
+</script>
+
+<script id=empty_calls>
+{
+  const div = document.createElement('div');
+  div.className = 'foo bar';
+
+  div.classList.add();
+  testing.expectEqual('foo bar', div.className);
+
+  div.classList.remove();
+  testing.expectEqual('foo bar', div.className);
+}
+</script>
+
+<script id=case_sensitivity>
+{
+  const div = document.createElement('div');
+
+  div.classList.add('Foo');
+  div.classList.add('foo');
+  div.classList.add('FOO');
+
+  testing.expectEqual('Foo foo FOO', div.className);
+  testing.expectEqual(3, div.classList.length);
+  testing.expectEqual(true, div.classList.contains('Foo'));
+  testing.expectEqual(true, div.classList.contains('foo'));
+  testing.expectEqual(true, div.classList.contains('FOO'));
+  testing.expectEqual(false, div.classList.contains('fOO'));
+}
+</script>
+
+<script id=special_characters>
+{
+  const div = document.createElement('div');
+
+  div.classList.add('class-name');
+  div.classList.add('class_name');
+  div.classList.add('class123');
+  div.classList.add('123class');
+  div.classList.add('über');
+  div.classList.add('日本語');
+
+  testing.expectEqual(6, div.classList.length);
+  testing.expectEqual(true, div.classList.contains('class-name'));
+  testing.expectEqual(true, div.classList.contains('class_name'));
+  testing.expectEqual(true, div.classList.contains('class123'));
+  testing.expectEqual(true, div.classList.contains('123class'));
+  testing.expectEqual(true, div.classList.contains('über'));
+  testing.expectEqual(true, div.classList.contains('日本語'));
+}
+</script>
+
+<script id=multiple_operations>
+{
+  const div = document.createElement('div');
+
+  div.classList.add('a', 'b', 'c', 'd', 'e');
+  testing.expectEqual('a b c d e', div.className);
+
+  div.classList.remove('b', 'd');
+  testing.expectEqual('a c e', div.className);
+
+  div.classList.add('b', 'c', 'f');
+  testing.expectEqual('a c e b f', div.className);
+}
+</script>

@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<p id="p1" class=cl>9000!!</p>
+
+<script>
+  const p1 = $('#p1');
+  const text = p1.firstChild;
+</script>
+
+<script id=isConnected>
+  testing.expectEqual(true, document.isConnected);
+  testing.expectEqual(true, p1.isConnected);
+  testing.expectEqual(true, p1.firstChild.isConnected);
+  testing.expectEqual(false, document.createElement('div').isConnected);
+</script>
+
+<script id=tagName>
+  testing.expectEqual(undefined, document.tagName);
+  testing.expectEqual(undefined, p1.firstChild.tagName);
+  const tags = [
+    ["a","A"],
+    ["address","ADDRESS"],
+    ["area","AREA"],
+    ["article","ARTICLE"],
+    ["aside","ASIDE"],
+    ["audio","AUDIO"],
+    ["base","BASE"],
+    ["bdi","BDI"],
+    ["bdo","BDO"],
+    ["blockquote","BLOCKQUOTE"],
+    ["body","BODY"],
+    ["button","BUTTON"],
+    ["canvas","CANVAS"],
+    ["caption","CAPTION"],
+    ["cite","CITE"],
+    ["col","COL"],
+    ["colgroup","COLGROUP"],
+    ["data","DATA"],
+    ["datalist","DATALIST"],
+    ["dd","DD"],
+    ["del","DEL"],
+    ["details","DETAILS"],
+    ["dfn","DFN"],
+    ["dialog","DIALOG"],
+    ["div","DIV"],
+    ["dl","DL"],
+    ["dt","DT"],
+    ["em","EM"],
+    ["embed","EMBED"],
+    ["fieldset","FIELDSET"],
+    ["figure","FIGURE"],
+    ["footer","FOOTER"],
+    ["form","FORM"],
+    ["h1","H1"],
+    ["h2","H2"],
+    ["h3","H3"],
+    ["h4","H4"],
+    ["h5","H5"],
+    ["h6","H6"],
+    ["head","HEAD"],
+    ["header","HEADER"],
+    ["hgroup","HGROUP"],
+    ["hr","HR"],
+    ["i","I"],
+    ["iframe","IFRAME"],
+    ["input","INPUT"],
+    ["ins","INS"],
+    ["keygen","KEYGEN"],
+    ["label","LABEL"],
+    ["legend","LEGEND"],
+    ["li","LI"],
+    ["link","LINK"],
+    ["main","MAIN"],
+    ["map","MAP"],
+    ["mark","MARK"],
+    ["menu","MENU"],
+    ["menuitem","MENUITEM"],
+    ["meta","META"],
+    ["meter","METER"],
+    ["nav","NAV"],
+    ["noscript","NOSCRIPT"],
+    ["object","OBJECT"],
+    ["ol","OL"],
+    ["optgroup","OPTGROUP"],
+    ["option","OPTION"],
+    ["output","OUTPUT"],
+    ["param","PARAM"],
+    ["pre","PRE"],
+    ["progress","PROGRESS"],
+    ["q","Q"],
+    ["rb","RB"],
+    ["rp","RP"],
+    ["rt","RT"],
+    ["rtc","RTC"],
+    ["ruby","RUBY"],
+    ["s","S"],
+    ["script","SCRIPT"],
+    ["section","SECTION"],
+    ["select","SELECT"],
+    ["small","SMALL"],
+    ["source","SOURCE"],
+    ["span","SPAN"],
+    ["strong","STRONG"],
+    ["style","STYLE"],
+    ["sub","SUB"],
+    ["summary","SUMMARY"],
+    ["sup","SUP"],
+    ["table","TABLE"],
+    ["tbody","TBODY"],
+    ["td","TD"],
+    ["template","TEMPLATE"],
+    ["textarea","TEXTAREA"],
+    ["tfoot","TFOOT"],
+    ["th","TH"],
+    ["thead","THEAD"],
+    ["time","TIME"],
+    ["tr","TR"],
+    ["track","TRACK"],
+    ["u","U"],
+    ["ul","UL"],
+    ["var","VAR"],
+    ["video","VIDEO"]
+  ]
+  for (tag of tags) {
+    testing.expectEqual(tag[1], document.createElement(tag[0]).tagName);
+  }
+</script>
+
+<script id=nodeValue>
+  testing.expectEqual(null, document.nodeValue);
+  document.nodeValue = 'over';
+  testing.expectEqual(null, document.nodeValue);
+
+  testing.expectEqual(null, p1.nodeValue);
+  p1.nodeValue = '9000';
+  testing.expectEqual(null, p1.nodeValue);
+
+  testing.expectEqual('9000!!', text.nodeValue);
+  text.nodeValue = 'what?!';
+  testing.expectEqual('what?!', text.nodeValue);
+
+  testing.expectEqual('cl', p1.getAttributeNode('class').nodeValue);
+  p1.getAttributeNode('class').nodeValue = 'over 9000!!'
+  testing.expectEqual('over 9000!!', p1.getAttributeNode('class').nodeValue);
+</script>
+
+<script id="ownerDocument">
+  testing.expectEqual(null, document.ownerDocument);
+  testing.expectEqual(document, p1.ownerDocument);
+  testing.expectEqual(document, text.ownerDocument);
+  testing.expectEqual(document, document.createElement('div').ownerDocument);
+</script>
+
+<script id="hasChildNodes">
+  testing.expectEqual(true, p1.hasChildNodes());
+  testing.expectEqual(false, text.hasChildNodes());
+  const el = document.createElement('div');
+  testing.expectEqual(false, el.hasChildNodes());
+  el.appendChild(document.createElement('p'));
+  testing.expectEqual(true, el.hasChildNodes());
+</script>
+
+<script id="isSameNode">
+  testing.expectEqual(true, p1.isSameNode(p1));
+  testing.expectEqual(false, p1.isSameNode(text));
+  testing.expectEqual(true, p1.isSameNode($('#p1')));
+  testing.expectEqual(false, p1.isSameNode(document.createElement('p')));
+  testing.expectEqual(false, p1.isSameNode());
+  testing.expectEqual(false, p1.isSameNode(null));
+</script>
+
+<script id="nodeType">
+  testing.expectEqual(9, document.nodeType);
+  testing.expectEqual(1, p1.nodeType);
+  testing.expectEqual(3, text.nodeType);
+  testing.expectEqual(1, document.createElement('div').nodeType);
+  testing.expectEqual(2, p1.getAttributeNode('class').nodeType);
+
+  const comment = document.createComment('test comment');
+  testing.expectEqual(8, comment.nodeType);
+
+  const fragment = document.createDocumentFragment();
+  testing.expectEqual(11, fragment.nodeType);
+
+  testing.expectEqual(9, Node.DOCUMENT_NODE);
+  testing.expectEqual(1, Node.ELEMENT_NODE);
+  testing.expectEqual(3, Node.TEXT_NODE);
+  testing.expectEqual(2, Node.ATTRIBUTE_NODE);
+  testing.expectEqual(8, Node.COMMENT_NODE);
+  testing.expectEqual(11, Node.DOCUMENT_FRAGMENT_NODE);
+</script>

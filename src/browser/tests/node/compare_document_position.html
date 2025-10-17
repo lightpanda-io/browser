@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="parent"><p id="child1">Child 1</p><div id="child2"><span id="grandchild">Grandchild</span></div><p id="child3">Child 3</p></div>
+
+<div id="unrelated">Unrelated</div>
+
+<script id="sameNode">
+{
+  const node = $('#parent');
+  testing.expectEqual(0, node.compareDocumentPosition(node));
+}
+</script>
+
+<script id="parentChild">
+{
+  const parent = $('#parent');
+  const child = $('#child1');
+
+  // parent CONTAINS child (0x08) and child is FOLLOWING parent (0x04)
+  const result = parent.compareDocumentPosition(child);
+  testing.expectEqual(Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_FOLLOWING, result);
+}
+</script>
+
+<script id="childParent">
+{
+  const parent = $('#parent');
+  const child = $('#child1');
+
+  // child is CONTAINED_BY parent (0x10) and parent is PRECEDING child (0x02)
+  const result = child.compareDocumentPosition(parent);
+  testing.expectEqual(Node.DOCUMENT_POSITION_CONTAINS | Node.DOCUMENT_POSITION_PRECEDING, result);
+}
+</script>
+
+<script id="siblings">
+{
+  const child1 = $('#child1');
+  const child2 = $('#child2');
+  const child3 = $('#child3');
+
+  // child1 precedes child2
+  testing.expectEqual(Node.DOCUMENT_POSITION_FOLLOWING, child1.compareDocumentPosition(child2));
+
+  // child2 follows child1
+  testing.expectEqual(Node.DOCUMENT_POSITION_PRECEDING, child2.compareDocumentPosition(child1));
+
+  // child1 precedes child3
+  testing.expectEqual(Node.DOCUMENT_POSITION_FOLLOWING, child1.compareDocumentPosition(child3));
+
+  // child3 follows child1
+  testing.expectEqual(Node.DOCUMENT_POSITION_PRECEDING, child3.compareDocumentPosition(child1));
+}
+</script>
+
+<script id="ancestorDescendant">
+{
+  const parent = $('#parent');
+  const grandchild = $('#grandchild');
+
+  // grandchild is contained by parent and parent precedes it
+  testing.expectEqual(Node.DOCUMENT_POSITION_CONTAINS | Node.DOCUMENT_POSITION_PRECEDING, grandchild.compareDocumentPosition(parent));
+
+  // parent contains grandchild and grandchild follows it
+  testing.expectEqual(Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_FOLLOWING, parent.compareDocumentPosition(grandchild));
+}
+</script>
+
+<script id="cousinNodes">
+{
+  const child1 = $('#child1');
+  const grandchild = $('#grandchild');
+
+  // child1 precedes grandchild (they share parent as common ancestor)
+  testing.expectEqual(Node.DOCUMENT_POSITION_FOLLOWING, child1.compareDocumentPosition(grandchild));
+
+  // grandchild follows child1
+  testing.expectEqual(Node.DOCUMENT_POSITION_PRECEDING, grandchild.compareDocumentPosition(child1));
+}
+</script>
+
+<script id="disconnectedNodes">
+{
+  const detached = document.createElement('div');
+  const connected = $('#parent');
+
+  // Nodes in different trees are disconnected
+  const result = connected.compareDocumentPosition(detached);
+  testing.expectEqual(true, (result & Node.DOCUMENT_POSITION_DISCONNECTED) !== 0);
+  testing.expectEqual(true, (result & Node.DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC) !== 0);
+}
+</script>
+
+<script id="twoDetachedNodes">
+{
+  const detached1 = document.createElement('div');
+  const detached2 = document.createElement('span');
+
+  // Both disconnected
+  const result = detached1.compareDocumentPosition(detached2);
+  testing.expectEqual(true, (result & Node.DOCUMENT_POSITION_DISCONNECTED) !== 0);
+  testing.expectEqual(true, (result & Node.DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC) !== 0);
+}
+</script>
+
+<script id="textNodes">
+{
+  const parent = $('#child1');
+  const textNode = parent.firstChild;
+
+  // parent contains text node
+  testing.expectEqual(Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_FOLLOWING, parent.compareDocumentPosition(textNode));
+
+  // text node is contained by parent
+  testing.expectEqual(Node.DOCUMENT_POSITION_CONTAINS | Node.DOCUMENT_POSITION_PRECEDING, textNode.compareDocumentPosition(parent));
+}
+</script>
+
+<script id="documentNode">
+{
+  const element = $('#parent');
+
+  // document contains element
+  testing.expectEqual(Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_FOLLOWING, document.compareDocumentPosition(element));
+
+  // element is contained by document
+  testing.expectEqual(Node.DOCUMENT_POSITION_CONTAINS | Node.DOCUMENT_POSITION_PRECEDING, element.compareDocumentPosition(document));
+
+  // document vs document
+  testing.expectEqual(0, document.compareDocumentPosition(document));
+}
+</script>
+
+<script id="commentNodes">
+{
+  const parent = document.createElement('div');
+  const comment = document.createComment('test comment');
+  const text = document.createTextNode('test text');
+  parent.appendChild(comment);
+  parent.appendChild(text);
+
+  // parent contains comment
+  testing.expectEqual(Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_FOLLOWING, parent.compareDocumentPosition(comment));
+
+  // comment precedes text (siblings)
+  testing.expectEqual(Node.DOCUMENT_POSITION_FOLLOWING, comment.compareDocumentPosition(text));
+
+  // text follows comment
+  testing.expectEqual(Node.DOCUMENT_POSITION_PRECEDING, text.compareDocumentPosition(comment));
+}
+</script>
+
+<script id="manySiblings">
+{
+  const container = document.createElement('div');
+  const children = [];
+
+  // Create 10 children
+  for (let i = 0; i < 10; i++) {
+    const child = document.createElement('span');
+    child.textContent = 'Child ' + i;
+    container.appendChild(child);
+    children.push(child);
+  }
+
+  // First child precedes last child
+  testing.expectEqual(Node.DOCUMENT_POSITION_FOLLOWING, children[0].compareDocumentPosition(children[9]));
+
+  // Last child follows first child
+  testing.expectEqual(Node.DOCUMENT_POSITION_PRECEDING, children[9].compareDocumentPosition(children[0]));
+
+  // Middle children
+  testing.expectEqual(Node.DOCUMENT_POSITION_FOLLOWING, children[3].compareDocumentPosition(children[7]));
+  testing.expectEqual(Node.DOCUMENT_POSITION_PRECEDING, children[7].compareDocumentPosition(children[3]));
+}
+</script>
+
+<script id="mixedNodeTypes">
+{
+  const div = document.createElement('div');
+  const text1 = document.createTextNode('before');
+  const span = document.createElement('span');
+  const comment = document.createComment('middle');
+  const text2 = document.createTextNode('after');
+
+  div.appendChild(text1);
+  div.appendChild(span);
+  div.appendChild(comment);
+  div.appendChild(text2);
+
+  // text1 precedes span
+  testing.expectEqual(Node.DOCUMENT_POSITION_FOLLOWING, text1.compareDocumentPosition(span));
+
+  // span precedes comment
+  testing.expectEqual(Node.DOCUMENT_POSITION_FOLLOWING, span.compareDocumentPosition(comment));
+
+  // comment precedes text2
+  testing.expectEqual(Node.DOCUMENT_POSITION_FOLLOWING, comment.compareDocumentPosition(text2));
+
+  // text1 precedes text2 (non-adjacent siblings)
+  testing.expectEqual(Node.DOCUMENT_POSITION_FOLLOWING, text1.compareDocumentPosition(text2));
+
+  // text2 follows text1
+  testing.expectEqual(Node.DOCUMENT_POSITION_PRECEDING, text2.compareDocumentPosition(text1));
+}
+</script>
+
+<script id="deeplyNested">
+{
+  let current = document.createElement('div');
+  const root = current;
+  const deepElements = [current];
+
+  // Create a 20-level deep structure
+  for (let i = 0; i < 20; i++) {
+    const child = document.createElement('div');
+    current.appendChild(child);
+    deepElements.push(child);
+    current = child;
+  }
+
+  const deepest = deepElements[deepElements.length - 1];
+
+  // Root contains deepest
+  testing.expectEqual(Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_FOLLOWING, root.compareDocumentPosition(deepest));
+
+  // Deepest is contained by root
+  testing.expectEqual(Node.DOCUMENT_POSITION_CONTAINS | Node.DOCUMENT_POSITION_PRECEDING, deepest.compareDocumentPosition(root));
+
+  // Middle level comparisons
+  const level5 = deepElements[5];
+  const level15 = deepElements[15];
+
+  testing.expectEqual(Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_FOLLOWING, level5.compareDocumentPosition(level15));
+  testing.expectEqual(Node.DOCUMENT_POSITION_CONTAINS | Node.DOCUMENT_POSITION_PRECEDING, level15.compareDocumentPosition(level5));
+}
+</script>
+
+<script id="detachedTree">
+{
+  const root1 = document.createElement('div');
+  const child1 = document.createElement('span');
+  root1.appendChild(child1);
+
+  const root2 = document.createElement('div');
+  const child2 = document.createElement('span');
+  root2.appendChild(child2);
+
+  // Children in different detached trees
+  const result = child1.compareDocumentPosition(child2);
+  testing.expectEqual(true, (result & Node.DOCUMENT_POSITION_DISCONNECTED) !== 0);
+  testing.expectEqual(true, (result & Node.DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC) !== 0);
+
+  // Consistency: comparing same pair should give consistent results
+  const result2 = child1.compareDocumentPosition(child2);
+  testing.expectEqual(result, result2);
+}
+</script>

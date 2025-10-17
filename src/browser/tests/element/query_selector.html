@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id=p1>
+  <div id=c2>
+    <div id=c3></div>
+  </div>
+</div>
+<div id=other></div>
+
+<!-- <script id=querySelector">
+  const p1 = $('#p1');
+  testing.expectError("Syntax Error", () => p1.querySelector(''));
+  testing.withError((err) => {
+    testing.expectEqual(12, err.code);
+    testing.expectEqual("SyntaxError", err.name);
+    testing.expectEqual("Syntax Error", err.message);
+  }, () => p1.querySelector(''));
+
+  testing.expectEqual($('#c2'), p1.querySelector('#c2'));
+  testing.expectEqual($('#c3'), p1.querySelector('#c3'));
+  testing.expectEqual(null, p1.querySelector('#nope'));
+  testing.expectEqual(null, p1.querySelector('#other'));
+
+  testing.expectEqual($('#c2'), p1.querySelector('*'));
+  testing.expectEqual($('#c3'), p1.querySelector('*#c3'));
+</script> -->
+
+<div id="desc-container">
+  <p class="text">Direct child paragraph</p>
+  <div class="nested">
+    <p class="text">Nested paragraph</p>
+    <span class="wrapper">
+      <p class="deep">Deeply nested paragraph</p>
+    </span>
+  </div>
+  <article>
+    <p class="text">Article paragraph</p>
+  </article>
+</div>
+
+<div id="outer-div">
+  <div class="level1">
+    <div class="level2">
+      <span id="deep-span">Deep span</span>
+    </div>
+  </div>
+</div>
+
+<script id=descendantSelectors>
+{
+  const container = $('#desc-container');
+
+  // testing.expectEqual('Nested paragraph', container.querySelector('div p').textContent);
+  // testing.expectEqual('Nested paragraph', container.querySelector('div.nested p').textContent);
+  testing.expectEqual('Deeply nested paragraph', container.querySelector('div span p').textContent);
+  // testing.expectEqual('Nested paragraph', container.querySelector('.nested .text').textContent);
+  // testing.expectEqual(null, container.querySelector('article div p'));
+
+  // const outerDiv = $('#outer-div');
+  // testing.expectEqual('deep-span', outerDiv.querySelector('div div span').id);
+  // testing.expectEqual('deep-span', outerDiv.querySelector('.level1 span').id);
+  // testing.expectEqual('deep-span', outerDiv.querySelector('.level1 .level2 span').id);
+}
+</script>

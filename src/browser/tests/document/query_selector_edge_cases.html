@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="root">
+  <div id="a" class="x">
+    <p id="b" class="y">Para 1</p>
+    <div id="c" class="x y">
+      <span id="d">Span 1</span>
+      <p id="e" class="z">Para 2</p>
+    </div>
+  </div>
+  <article id="f">
+    <div id="g">
+      <p id="h">Para 3</p>
+    </div>
+  </article>
+</div>
+
+<script>
+  function assertList(expected, result) {
+    testing.expectEqual(expected.length, result.length);
+    testing.expectEqual(expected, Array.from(result).map((e) => e.textContent));
+  }
+</script>
+
+<script id=redundantUniversal>
+{
+  // Universal with ID
+  assertList(['Para 1'], document.querySelectorAll('#b'));
+  assertList(['Span 1'], document.querySelectorAll('#d'));
+  assertList(['Span 1', 'Para 2'], document.querySelectorAll('#c *'));
+
+  // Universal with combinators
+  assertList(['Span 1', 'Para 2'], document.querySelectorAll('#c > *'));
+  assertList(['Span 1', 'Para 2'], document.querySelectorAll('#b + * *'));
+}
+</script>
+
+<script id=multipleClasses>
+{
+  // Multiple class combinations
+  const yClass = document.querySelectorAll('.y');
+  testing.expectEqual(true, yClass.length >= 1);
+  assertList(['Span 1', 'Para 2'], document.querySelectorAll('.x.y *'));
+  assertList(['Span 1', 'Para 2'], document.querySelectorAll('.y.x *'));
+}
+</script>
+
+<script id=idEdgeCases>
+{
+  // ID with universal
+  assertList(['Para 1'], document.querySelectorAll('*#b'));
+  assertList(['Para 1'], document.querySelectorAll('#b'));
+
+  // ID with tag mismatch (should return empty)
+  assertList([], document.querySelectorAll('div#b'));
+  assertList([], document.querySelectorAll('span#a'));
+}
+</script>
+
+<script id=complexCombinatorChains>
+{
+  // Long combinator chains
+  assertList(['Span 1'], document.querySelectorAll('div > div > div > span'));
+
+  // Mixed combinators
+  assertList(['Para 2'], document.querySelectorAll('#b + div > p'));
+  assertList(['Para 2'], document.querySelectorAll('#b ~ * > p'));
+  assertList(['Para 2'], document.querySelectorAll('p + div > p'));
+}
+</script>
+
+<script id=descendantWithSiblings>
+{
+  // Descendant followed by sibling
+  assertList(['Span 1', 'Para 2'], document.querySelectorAll('#a div *'));
+  assertList(['Span 1', 'Para 2'], document.querySelectorAll('#a p ~ div *'));
+  assertList(['Span 1', 'Para 2'], document.querySelectorAll('#a p + div *'));
+}
+</script>
+
+<script id=notEdgeCases>
+{
+  // :not() with different selectors
+  const notDivArticle = document.querySelectorAll('*:not(div):not(article)');
+  testing.expectEqual(true, notDivArticle.length >= 3);
+
+  assertList(['Para 3'], document.querySelectorAll('#root p:not(.y):not(.z)'));
+
+  // :not() with universal
+  const allButDiv = document.querySelectorAll('#root *:not(div)');
+  testing.expectEqual(true, allButDiv.length >= 3);
+
+  // :not() with ID
+  const allP = document.querySelectorAll('p:not(#nonexistent)');
+  testing.expectEqual(true, allP.length >= 3);
+  assertList(['Para 1', 'Para 3'], document.querySelectorAll('p:not(#e)'));
+
+  // :not() with class
+  const notClasses = document.querySelectorAll('#root *:not(.x):not(.y):not(.z)');
+  testing.expectEqual(true, notClasses.length >= 2);
+}
+</script>
+
+<script id=pseudoClassCombinations>
+{
+  // First/last child combinations
+  assertList(['Para 1'], document.querySelectorAll('#a > p:first-child'));
+  assertList(['Span 1'], document.querySelectorAll('#c > :first-child'));
+  assertList(['Para 2'], document.querySelectorAll('#c > :last-child'));
+
+  // nth-child with combinators
+  assertList(['Span 1'], document.querySelectorAll('#c > :nth-child(1)'));
+  assertList(['Para 2'], document.querySelectorAll('#c > :nth-child(2)'));
+  assertList(['Span 1'], document.querySelectorAll('#c > :nth-child(odd)'));
+  assertList(['Para 2'], document.querySelectorAll('#c > :nth-child(even)'));
+}
+</script>
+
+<script id=whitespaceMadness>
+{
+  // Excessive whitespace
+  assertList(['Para 2'], document.querySelectorAll('  #a   >   div   >   p  '));
+  assertList(['Para 2'], document.querySelectorAll('  p  +  div  >  p  '));
+  assertList(['Span 1', 'Para 2'], document.querySelectorAll('   #b   ~   div   *   '));
+}
+</script>
+
+<script id=compoundSelectorMadness>
+{
+  // Very long compound selectors
+  assertList(['Para 1'], document.querySelectorAll('p#b.y'));
+  assertList(['Para 1'], document.querySelectorAll('#b.y'));
+  assertList(['Para 1'], document.querySelectorAll('.y#b'));
+  assertList(['Para 1'], document.querySelectorAll('p.y#b'));
+  assertList(['Para 1'], document.querySelectorAll('*.y#b'));
+  assertList(['Para 1'], document.querySelectorAll('*#b.y'));
+  assertList(['Para 1'], document.querySelectorAll('#b.y'));
+
+  // Multiple classes in different orders
+  assertList(['Span 1', 'Para 2'], document.querySelectorAll('.x.y *'));
+  assertList(['Span 1', 'Para 2'], document.querySelectorAll('.y.x *'));
+  assertList(['Span 1', 'Para 2'], document.querySelectorAll('div.x.y *'));
+  assertList(['Span 1', 'Para 2'], document.querySelectorAll('div.y.x *'));
+}
+</script>
+
+<script id=rootBoundaries>
+{
+  // Root itself can match in ancestor searches
+  const a = document.getElementById('a');
+  const divChildren = a.querySelectorAll('div *');
+  testing.expectEqual(true, divChildren.length >= 2);
+
+  const c = document.getElementById('c');
+  const cDivChildren = c.querySelectorAll('div *');
+  // c itself is a div, so its children match
+  testing.expectEqual(2, cDivChildren.length);
+}
+</script>
+
+<script id=siblingEdgeCases>
+{
+  // Sibling selector with descendants
+  assertList(['Span 1', 'Para 2'], document.querySelectorAll('#b + div *'));
+
+  // Multiple sibling hops
+  const root = document.getElementById('root');
+  assertList(['Para 3'], root.querySelectorAll('div ~ article p'));
+  assertList(['Para 3'], root.querySelectorAll('div + article p'));
+}
+</script>
+
+<script id=nonExistentCombinations>
+{
+  // Valid selectors that don't match anything
+  assertList([], document.querySelectorAll('p > div'));
+  assertList([], document.querySelectorAll('span > p'));
+  assertList([], document.querySelectorAll('#a + #b'));
+  assertList([], document.querySelectorAll('#b + #a'));
+  assertList([], document.querySelectorAll('article > article'));
+  assertList([], document.querySelectorAll('span.x'));
+  assertList([], document.querySelectorAll('p#a'));
+  assertList([], document.querySelectorAll('.nonexistent'));
+  assertList([], document.querySelectorAll('#nonexistent'));
+  assertList([], document.querySelectorAll('video'));
+}
+</script>
+
+<script id=universalCombinations>
+{
+  // Universal in different positions
+  const universalDesc = document.querySelectorAll('* * * p');
+  testing.expectEqual(true, universalDesc.length >= 2);
+
+  const universalChild = document.querySelectorAll('* > * > * > *');
+  testing.expectEqual(true, universalChild.length >= 1);
+
+  const mixedUniversal = document.querySelectorAll('* > * > p');
+  testing.expectEqual(true, mixedUniversal.length >= 1);
+}
+</script>

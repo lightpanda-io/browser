@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<div id=d1>
+  <div id=d2>
+    <div id=d3>
+      <div id=d4>
+        <div id=d5>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script id=remove>
+  testing.expectEqual(1, $('#d4').childElementCount);
+  $('#d5').remove();
+  testing.expectEqual(null, document.getElementById('#d5'));
+  testing.expectEqual(0, $('#d4').childElementCount);
+
+  testing.expectEqual(1, $('#d1').childElementCount);
+  $('#d2').remove();
+  testing.expectEqual(null, document.getElementById('#d2'));
+  testing.expectEqual(null, document.getElementById('#d3'));
+  testing.expectEqual(null, document.getElementById('#d4'));
+  testing.expectEqual(0, $('#d1').childElementCount);
+</script>

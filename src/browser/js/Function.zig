@@ -1,3 +1,21 @@
+// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 const std = @import("std");
 const js = @import("js.zig");
 const v8 = js.v8;
@@ -34,7 +52,7 @@ pub fn withThis(self: *const Function, value: anytype) !Function {
     const this_obj = if (@TypeOf(value) == js.Object)
         value.js_obj
     else
-        (try self.context.zigValueToJs(value)).castTo(v8.Object);
+        (try self.context.zigValueToJs(value, .{})).castTo(v8.Object);
 
     return .{
         .id = self.id,
@@ -109,7 +127,7 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
             const fields = s.fields;
             var js_args: [fields.len]v8.Value = undefined;
             inline for (fields, 0..) |f, i| {
-                js_args[i] = try context.zigValueToJs(@field(aargs, f.name));
+                js_args[i] = try context.zigValueToJs(@field(aargs, f.name), .{});
             }
             const cargs: [fields.len]v8.Value = js_args;
             break :blk &cargs;
@@ -130,8 +148,7 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
     }
 
     if (@typeInfo(T) == .void) return {};
-    const named_function = comptime Caller.NamedFunction.init(T, "callResult");
-    return context.jsValueToZig(named_function, T, result.?);
+    return context.jsValueToZig(T, result.?);
 }
 
 fn getThis(self: *const Function) v8.Object {

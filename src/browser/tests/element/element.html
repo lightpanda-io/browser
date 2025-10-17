@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="container">
+    <!-- comment -->
+    <p id="p1">Paragraph 1</p>
+    <div id="div1">Div 1</div>
+    <!-- comment -->
+    <span id="span1">Span 1</span>
+    <p id="p2">Paragraph 2</p>
+</div>
+<div id="empty"></div>
+
+<script id="relatedElements">
+    const container = $('#container');
+    const p1 = $('#p1');
+    const div1 = $('#div1');
+    const span1 = $('#span1');
+    const p2 = $('#p2');
+    const empty = $('#empty');
+
+    testing.expectEqual(p1, container.firstElementChild);
+    testing.expectEqual(p2, container.lastElementChild);
+
+    testing.expectEqual(div1, p1.nextElementSibling);
+    testing.expectEqual(span1, div1.nextElementSibling);
+    testing.expectEqual(p2, span1.nextElementSibling);
+    testing.expectEqual(null, p2.nextElementSibling);
+
+    testing.expectEqual(span1, p2.previousElementSibling);
+    testing.expectEqual(div1, span1.previousElementSibling);
+    testing.expectEqual(p1, div1.previousElementSibling);
+    testing.expectEqual(null, p1.previousElementSibling);
+
+    testing.expectEqual(null, empty.firstElementChild);
+    testing.expectEqual(null, empty.lastElementChild);
+</script>
+
+<script id=children>
+    const cc = container.children;
+    testing.expectEqual(4, cc.length);
+    testing.expectEqual(p1, cc[0]);
+    testing.expectEqual(p1, cc.item(0));
+    testing.expectEqual(div1, cc[1]);
+    testing.expectEqual(div1, cc.item(1));
+    testing.expectEqual(span1, cc[2]);
+    testing.expectEqual(span1, cc.item(2));
+    testing.expectEqual(p2, cc[3]);
+    testing.expectEqual(p2, cc.item(3));
+
+    const ec = empty.children;
+    testing.expectEqual(0, ec.length);
+    testing.expectEqual(undefined, ec[0]);
+</script>

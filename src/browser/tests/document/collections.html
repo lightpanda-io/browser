@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<form id="form1"></form>
+<img id="img1" src="about:blank">
+<script></script>
+<a id="link1" href="#"></a>
+<a id="link2"></a>
+
+<script id=collections>
+  testing.expectEqual(1, document.forms.length);
+  testing.expectEqual($('#form1'), document.forms[0]);
+  testing.expectEqual(1, document.images.length);
+  testing.expectEqual($('#img1'), document.images[0]);
+  testing.expectEqual(3, document.scripts.length);
+
+  testing.expectEqual(true, document.scripts[0].src.endsWith('testing.js'));
+  testing.expectEqual(document.scripts[1].src, '');
+  testing.expectEqual($('#collections'), document.scripts[2]);
+  testing.expectEqual(2, document.links.length);
+  testing.expectEqual($('#link1'), document.links[0]);
+  testing.expectEqual($('#link2'), document.links[1]);
+</script>

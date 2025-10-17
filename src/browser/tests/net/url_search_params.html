@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script>
+  function assert(expected, usp) {
+    for (let e of expected) {
+      testing.expectEqual(true, usp.has(e.key));
+      testing.expectEqual(expected.find((ee) => ee.key == e.key).value, usp.get(e.key));
+      testing.expectEqual(expected.filter((ee) => ee.key == e.key).map((ee) => ee.value), usp.getAll(e.key));
+    }
+    testing.expectEqual(null, usp.get("nope"));
+    testing.expectEqual([], usp.getAll("nope"));
+
+    testing.expectEqual(expected.map((e) => e.key), Array.from(usp.keys()));
+    testing.expectEqual(expected.map((e) => e.value), Array.from(usp.values()));
+    testing.expectEqual(expected.map((e) => [e.key, e.value]), Array.from(usp));
+    testing.expectEqual(expected.map((e) => [e.key, e.value]), Array.from(usp.entries()));
+  }
+</script>
+
+<script id=urlSearchParams>
+  const inputs = [
+    [["over", "9000!!"], ["abc", 123], ["key1", ""], ["key2", ""]],
+    {over: "9000!!", abc: 123, key1: "", key2: ""},
+    "over=9000!!&abc=123&key1&key2=",
+    "?over=9000!!&abc=123&key1&key2=",
+  ]
+
+  const expected = [
+    {key: "over", value: "9000!!"},
+    {key: "abc", value: "123"},
+    {key: "key1", value: ""},
+    {key: "key2", value: ""},
+  ]
+
+  for (let input of inputs) {
+    assert(expected, new URLSearchParams(input));
+  }
+</script>
+
+<script id=manipulation>
+  {
+    const usp = new URLSearchParams();
+    assert([], usp);
+
+    usp.append('hi', 'abc123')
+    assert([{key: 'hi', value: 'abc123'}], usp);
+
+    usp.append('hi', 'xzi3lj')
+    assert([{key: 'hi', value: 'abc123'}, {key: 'hi', value: 'xzi3lj'}], usp);
+
+    testing.expectEqual('hi=abc123&hi=xzi3lj', usp.toString());
+
+    usp.set('hi', 'over 9000!!!')
+    assert([{key: 'hi', value: 'over 9000!!!'}], usp);
+    testing.expectEqual('hi=over%209000%21%21%21', usp.toString());
+  }
+</script>
+
+<script id=emptyAndNull>
+{
+  testing.expectEqual(0, new URLSearchParams().size);
+  testing.expectEqual(0, new URLSearchParams('').size);
+  testing.expectEqual(0, new URLSearchParams('?').size);
+  testing.expectEqual(0, new URLSearchParams(null).size);
+  testing.expectEqual(0, new URLSearchParams(undefined).size);
+
+  const empty = new URLSearchParams();
+  testing.expectEqual(null, empty.get('anything'));
+  testing.expectEqual([], empty.getAll('anything'));
+  testing.expectEqual(false, empty.has('anything'));
+  testing.expectEqual('', empty.toString());
+}
+</script>
+
+<script id=encoding>
+{
+  const usp = new URLSearchParams('key=hello%20world&special=%21%40%23%24&plus=a+b');
+  testing.expectEqual('hello world', usp.get('key'));
+  testing.expectEqual('!@#$', usp.get('special'));
+  testing.expectEqual('a b', usp.get('plus'));
+
+  const usp2 = new URLSearchParams();
+  usp2.append('spaces', 'hello world');
+  usp2.append('special', '!@#$%^&*()');
+  usp2.append('utf8', 'café');
+  testing.expectEqual('spaces=hello%20world&special=%21%40%23%24%25%5E%26%2A%28%29&utf8=caf%C3%A9', usp2.toString());
+}
+</script>
+
+<script id=duplicateKeys>
+{
+  const usp = new URLSearchParams('key=1&key=2&key=3');
+  testing.expectEqual('1', usp.get('key'));
+  testing.expectEqual(['1', '2', '3'], usp.getAll('key'));
+  testing.expectEqual(3, usp.size);
+
+  usp.set('key', 'only');
+  testing.expectEqual('only', usp.get('key'));
+  testing.expectEqual(['only'], usp.getAll('key'));
+  testing.expectEqual(1, usp.size);
+}
+</script>
+
+<script id=deleteOperations>
+{
+  const usp = new URLSearchParams('a=1&b=2&a=3&c=4&a=5');
+  testing.expectEqual(5, usp.size);
+
+  usp.delete('a');
+  testing.expectEqual(2, usp.size);
+  testing.expectEqual(false, usp.has('a'));
+  testing.expectEqual('2', usp.get('b'));
+  testing.expectEqual('4', usp.get('c'));
+
+  usp.delete('nonexistent');
+  testing.expectEqual(2, usp.size);
+}
+</script>
+
+<script id=deleteWithValue>
+{
+  const usp = new URLSearchParams('a=1&a=2&a=3&b=1');
+  testing.expectEqual(4, usp.size);
+
+  usp.delete('a', '2');
+  testing.expectEqual(3, usp.size);
+  testing.expectEqual(['1', '3'], usp.getAll('a'));
+  testing.expectEqual('1', usp.get('b'));
+
+  usp.delete('a', '99');
+  testing.expectEqual(3, usp.size);
+}
+</script>
+
+<script id=parseEdgeCases>
+{
+  testing.expectEqual('', new URLSearchParams('key').get('key'));
+  testing.expectEqual('', new URLSearchParams('key=').get('key'));
+  testing.expectEqual('value', new URLSearchParams('=value').get(''));
+  testing.expectEqual('', new URLSearchParams('=').get(''));
+
+  const usp = new URLSearchParams('a=1&&b=2');
+  testing.expectEqual(3, usp.size);
+  testing.expectEqual('', usp.get(''));
+
+  const trailing = new URLSearchParams('a=1&b=2&');
+  testing.expectEqual(3, trailing.size);
+}
+</script>
+
+<script id=iteration>
+{
+  const usp = new URLSearchParams('a=1&b=2&a=3');
+
+  const keys = Array.from(usp.keys());
+  testing.expectEqual(['a', 'b', 'a'], keys);
+
+  const values = Array.from(usp.values());
+  testing.expectEqual(['1', '2', '3'], values);
+
+  const entries = Array.from(usp.entries());
+  testing.expectEqual([['a', '1'], ['b', '2'], ['a', '3']], entries);
+
+  const defaultIter = Array.from(usp);
+  testing.expectEqual([['a', '1'], ['b', '2'], ['a', '3']], defaultIter);
+}
+</script>
+
+<script id=size>
+{
+  const usp = new URLSearchParams();
+  testing.expectEqual(0, usp.size);
+
+  usp.append('a', '1');
+  testing.expectEqual(1, usp.size);
+
+  usp.append('a', '2');
+  testing.expectEqual(2, usp.size);
+
+  usp.append('b', '3');
+  testing.expectEqual(3, usp.size);
+
+  usp.set('a', 'x');
+  testing.expectEqual(2, usp.size);
+
+  usp.delete('b');
+  testing.expectEqual(1, usp.size);
+
+  usp.delete('a');
+  testing.expectEqual(0, usp.size);
+}
+</script>
+
+<script id=iteratorIsolation>
+{
+  const usp = new URLSearchParams('a=1&b=2&c=3');
+
+  const keys1 = usp.keys();
+  const keys2 = usp.keys();
+  const values1 = usp.values();
+  const entries1 = usp.entries();
+
+  testing.expectEqual('a', keys1.next().value);
+  testing.expectEqual('a', keys2.next().value);
+  testing.expectEqual('1', values1.next().value);
+  testing.expectEqual(['a', '1'], entries1.next().value);
+
+  testing.expectEqual('b', keys1.next().value);
+  testing.expectEqual('b', keys2.next().value);
+  testing.expectEqual('2', values1.next().value);
+  testing.expectEqual(['b', '2'], entries1.next().value);
+
+  testing.expectEqual('c', keys1.next().value);
+  testing.expectEqual('c', keys2.next().value);
+  testing.expectEqual('3', values1.next().value);
+  testing.expectEqual(['c', '3'], entries1.next().value);
+
+  testing.expectEqual(true, keys1.next().done);
+  testing.expectEqual(true, keys2.next().done);
+  testing.expectEqual(true, values1.next().done);
+  testing.expectEqual(true, entries1.next().done);
+}
+</script>
+
+<script id=iteratorLifetime>
+{
+  let keysIter;
+  let valuesIter;
+  let entriesIter;
+
+  {
+    const usp = new URLSearchParams('x=10&y=20&z=30');
+    keysIter = usp.keys();
+    valuesIter = usp.values();
+    entriesIter = usp.entries();
+  }
+
+  testing.expectEqual('x', keysIter.next().value);
+  testing.expectEqual('10', valuesIter.next().value);
+  testing.expectEqual(['x', '10'], entriesIter.next().value);
+
+  testing.expectEqual('y', keysIter.next().value);
+  testing.expectEqual('20', valuesIter.next().value);
+  testing.expectEqual(['y', '20'], entriesIter.next().value);
+
+  testing.expectEqual('z', keysIter.next().value);
+  testing.expectEqual('30', valuesIter.next().value);
+  testing.expectEqual(['z', '30'], entriesIter.next().value);
+
+  testing.expectEqual(true, keysIter.next().done);
+  testing.expectEqual(true, valuesIter.next().done);
+  testing.expectEqual(true, entriesIter.next().done);
+}
+</script>
+
+<script id=forEach>
+{
+  const usp = new URLSearchParams('a=1&b=2&c=3');
+
+  const results = [];
+  usp.forEach((value, key, params) => {
+    results.push({value, key});
+    // Verify third argument is the URLSearchParams instance itself
+    testing.expectEqual(usp, params);
+  });
+
+  testing.expectEqual([
+    {key: 'a', value: '1'},
+    {key: 'b', value: '2'},
+    {key: 'c', value: '3'}
+  ], results);
+}
+</script>
+
+<script id=forEachWithDuplicates>
+{
+  const usp = new URLSearchParams('x=10&x=20&y=30');
+
+  const results = [];
+  usp.forEach((value, key) => {
+    results.push({key, value});
+  });
+
+  testing.expectEqual([
+    {key: 'x', value: '10'},
+    {key: 'x', value: '20'},
+    {key: 'y', value: '30'}
+  ], results);
+}
+</script>
+
+<script id=forEachEmpty>
+{
+  const usp = new URLSearchParams();
+  let called = false;
+
+  usp.forEach(() => {
+    called = true;
+  });
+
+  testing.expectEqual(false, called);
+}
+</script>
+
+<script id=forEachThisArg>
+{
+  const usp = new URLSearchParams('a=1&b=2');
+  const context = {sum: 0};
+
+  usp.forEach(function(value) {
+    this.sum += parseInt(value);
+  }, context);
+
+  testing.expectEqual(3, context.sum);
+}
+</script>
+
+<script id=sort>
+{
+  const usp = new URLSearchParams('z=3&a=1&m=2&a=4');
+  usp.sort();
+
+  testing.expectEqual('a=1&a=4&m=2&z=3', usp.toString());
+  testing.expectEqual(['a', 'a', 'm', 'z'], Array.from(usp.keys()));
+  testing.expectEqual(['1', '4', '2', '3'], Array.from(usp.values()));
+}
+</script>
+
+<script id=sortEmpty>
+{
+  const usp = new URLSearchParams();
+  usp.sort();
+  testing.expectEqual(0, usp.size);
+  testing.expectEqual('', usp.toString());
+}
+</script>
+
+<script id=sortStability>
+{
+  // Test that sort is stable - entries with same key maintain relative order
+  const usp = new URLSearchParams();
+  usp.append('b', '1');
+  usp.append('a', '2');
+  usp.append('b', '3');
+  usp.append('a', '4');
+  usp.append('c', '5');
+
+  usp.sort();
+
+  testing.expectEqual('a=2&a=4&b=1&b=3&c=5', usp.toString());
+  testing.expectEqual(['a', 'a', 'b', 'b', 'c'], Array.from(usp.keys()));
+}
+</script>

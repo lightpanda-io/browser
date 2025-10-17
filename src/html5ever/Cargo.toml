@@ -1,0 +1,20 @@
+[package]
+name = "litefetch-html5ever"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "litefetch_html5ever"
+path = "lib.rs"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+html5ever = "0.35.0"
+string_cache = "0.9.0"
+typed-arena = "2.0.2"
+tikv-jemallocator = {version = "0.6.0", features = ["stats"]}
+tikv-jemalloc-ctl = {version = "0.6.0", features = ["stats"]}
+
+[profile.release]
+lto = true
+codegen-units = 1

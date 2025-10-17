@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="test-div"></div>
+
+<script id="styles">
+{
+  const div = $('#test-div');
+  div.style.cssText = '';
+
+  testing.expectEqual(0, div.style.length);
+  testing.expectEqual('', div.style.cssText);
+
+  div.style.setProperty('color', 'red');
+  testing.expectEqual('red', div.style.getPropertyValue('color'));
+  testing.expectEqual('', div.style.getPropertyPriority('color'));
+  testing.expectEqual(1, div.style.length);
+
+  div.style.setProperty('background-color', 'blue', 'important');
+  testing.expectEqual('blue', div.style.getPropertyValue('background-color'));
+  testing.expectEqual('important', div.style.getPropertyPriority('background-color'));
+  testing.expectEqual(2, div.style.length);
+
+  testing.expectEqual('blue', div.style.getPropertyValue('BACKGROUND-COLOR'));
+  testing.expectEqual('blue', div.style.getPropertyValue('Background-Color'));
+
+  div.style.setProperty('font-size', '16px');
+  testing.expectEqual('16px', div.style.getPropertyValue('font-size'));
+  testing.expectEqual(3, div.style.length);
+
+  const cssText = div.style.cssText;
+  testing.expectEqual(true, cssText.includes('color: red;'));
+  testing.expectEqual(true, cssText.includes('background-color: blue !important;'));
+  testing.expectEqual(true, cssText.includes('font-size: 16px;'));
+
+  const removedValue = div.style.removeProperty('color');
+  testing.expectEqual('red', removedValue);
+  testing.expectEqual('', div.style.getPropertyValue('color'));
+  testing.expectEqual(2, div.style.length);
+
+  const notFound = div.style.removeProperty('non-existent');
+  testing.expectEqual('', notFound);
+  testing.expectEqual(2, div.style.length);
+
+  const prop0 = div.style.item(0);
+  const prop1 = div.style.item(1);
+  testing.expectEqual(true, prop0 === 'background-color' || prop0 === 'font-size');
+  testing.expectEqual(true, prop1 === 'background-color' || prop1 === 'font-size');
+  testing.expectEqual(true, prop0 !== prop1);
+  testing.expectEqual('', div.style.item(2));
+  testing.expectEqual('', div.style.item(-1));
+}
+</script>
+
+<script id="cssText">
+{
+  const div = $('#test-div');
+
+  div.style.cssText = '';
+  testing.expectEqual(0, div.style.length);
+  testing.expectEqual('', div.style.cssText);
+
+  div.style.cssText = 'width: 100px; height: 50px !important; margin-top: 10px';
+  testing.expectEqual(3, div.style.length);
+  testing.expectEqual('100px', div.style.getPropertyValue('width'));
+  testing.expectEqual('50px', div.style.getPropertyValue('height'));
+  testing.expectEqual('10px', div.style.getPropertyValue('margin-top'));
+  testing.expectEqual('', div.style.getPropertyPriority('width'));
+  testing.expectEqual('important', div.style.getPropertyPriority('height'));
+  testing.expectEqual('', div.style.getPropertyPriority('margin-top'));
+
+  div.style.cssText = '  padding-left:  5px  ;  border-top-width: 1px  ';
+  testing.expectEqual(2, div.style.length);
+  testing.expectEqual('5px', div.style.getPropertyValue('padding-left'));
+  testing.expectEqual('1px', div.style.getPropertyValue('border-top-width'));
+
+  div.style.cssText = '';
+  testing.expectEqual(0, div.style.length);
+  testing.expectEqual('', div.style.cssText);
+
+  div.style.cssText = 'color: red;';
+  testing.expectEqual(1, div.style.length);
+  testing.expectEqual('red', div.style.getPropertyValue('color'));
+}
+</script>
+
+<script id="propertyUpdates">
+{
+  const div = $('#test-div');
+  div.style.cssText = '';
+
+  div.style.setProperty('color', 'red');
+  testing.expectEqual('red', div.style.getPropertyValue('color'));
+  testing.expectEqual(1, div.style.length);
+
+  div.style.setProperty('color', 'blue');
+  testing.expectEqual('blue', div.style.getPropertyValue('color'));
+  testing.expectEqual(1, div.style.length);
+
+  div.style.setProperty('color', 'green', 'important');
+  testing.expectEqual('green', div.style.getPropertyValue('color'));
+  testing.expectEqual('important', div.style.getPropertyPriority('color'));
+  testing.expectEqual(1, div.style.length);
+
+  div.style.setProperty('color', 'yellow');
+  testing.expectEqual('yellow', div.style.getPropertyValue('color'));
+  testing.expectEqual('', div.style.getPropertyPriority('color'));
+  testing.expectEqual(1, div.style.length);
+
+  div.style.setProperty('color', '');
+  testing.expectEqual('', div.style.getPropertyValue('color'));
+  testing.expectEqual(0, div.style.length);
+}
+</script>
+
+<script id="invalidPriority">
+{
+  const div = $('#test-div');
+  div.style.cssText = '';
+
+  div.style.setProperty('color', 'red', 'invalid');
+  testing.expectEqual('', div.style.getPropertyValue('color'));
+  testing.expectEqual(0, div.style.length);
+
+  div.style.setProperty('color', 'red', 'important');
+  testing.expectEqual('red', div.style.getPropertyValue('color'));
+  testing.expectEqual('important', div.style.getPropertyPriority('color'));
+}
+</script>

@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+<a id=a0></a>
+<a href="../anchor1.html" id=a1></a>
+<a href="/hello/world/anchor2.html" id=a2></a>
+<a href="https://www.openmymind.net/Elixirs-With-Statement/" id=a3></a>
+
+<script id=href>
+  testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/element/html/anchor.html', $('#a0').href)
+  testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/element/anchor1.html', $('#a1').href)
+  testing.expectEqual('http://127.0.0.1:9582/hello/world/anchor2.html', $('#a2').href)
+  testing.expectEqual('https://www.openmymind.net/Elixirs-With-Statement/', $('#a3').href)
+</script>

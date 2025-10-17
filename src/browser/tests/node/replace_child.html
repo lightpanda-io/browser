@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<div id=d1><div id=c1></div><div id=c2></div></div>
+<div id=d2><div id=c3></div></div>
+
+<script id=replaceChild>
+  function assertChildren(expected, parent) {
+    const actual = Array.from(parent.childNodes);
+    testing.expectEqual(expected, actual);
+    for (let child of parent.childNodes) {
+      testing.expectEqual(parent, child.parentNode);
+      testing.expectEqual(child, document.getElementById(child.id));
+    }
+  }
+
+  const d1 = $('#d1');
+  const d2 = $('#d2');
+  const c1 = $('#c1');
+  const c2 = $('#c2');
+  const c3 = $('#c3');
+
+  let c4 = document.createElement('div');
+  c4.id = 'c4';
+
+  testing.withError((err) => {
+    testing.expectEqual(3, err.code);
+    testing.expectEqual("HierarchyError", err.name);
+    testing.expectEqual("Hierarchy Error", err.message);
+  }, () => d1.replaceChild(c4, c3));
+
+  testing.expectEqual(c2, d1.replaceChild(c4, c2));
+  testing.expectEqual(null, c2.parentNode);
+  assertChildren([c1, c4], d1)
+  assertChildren([c3], d2)
+
+  testing.expectEqual(c1, d1.replaceChild(c3, c1));
+  testing.expectEqual(null, c2.parentNode);
+  assertChildren([c3, c4], d1)
+  assertChildren([], d2)
+</script>

@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<body onload=func1></body>
+<script src="../testing.js"></script>
+
+<script id=bodyOnLoad1>
+  let called = 0;
+  function func1(e) {
+    called += 1;
+    testing.expectEqual(document, e.target);
+    testing.expectEqual(window, e.currentTarget);
+  }
+
+  testing.eventually(() => {
+    testing.expectEqual(1, called);
+  });
+</script>
+

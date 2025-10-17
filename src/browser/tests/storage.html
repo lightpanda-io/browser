@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+<script id=local_storage>
+  testing.expectEqual(localStorage, window.localStorage);
+  testing.expectEqual('object', typeof localStorage);
+
+  testing.expectEqual(0, localStorage.length);
+
+  localStorage.setItem('key1', 'value1');
+  testing.expectEqual('value1', localStorage.getItem('key1'));
+  testing.expectEqual(1, localStorage.length);
+
+  localStorage.setItem('key2', 'value2');
+  localStorage.setItem('key3', 'value3');
+  testing.expectEqual('value2', localStorage.getItem('key2'));
+  testing.expectEqual('value3', localStorage.getItem('key3'));
+  testing.expectEqual(3, localStorage.length);
+
+  localStorage.setItem('key1', 'updated_value1');
+  testing.expectEqual('updated_value1', localStorage.getItem('key1'));
+  testing.expectEqual(3, localStorage.length);
+
+  testing.expectEqual(null, localStorage.getItem('nonexistent'));
+
+  const keys = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    keys.push(localStorage.key(i));
+  }
+  testing.expectEqual(true, keys.includes('key1'));
+  testing.expectEqual(true, keys.includes('key2'));
+  testing.expectEqual(true, keys.includes('key3'));
+
+  testing.expectEqual(null, localStorage.key(999));
+
+  localStorage.removeItem('key2');
+  testing.expectEqual(null, localStorage.getItem('key2'));
+  testing.expectEqual(2, localStorage.length);
+
+  localStorage.removeItem('nonexistent');
+  testing.expectEqual(2, localStorage.length);
+
+  localStorage.clear();
+  testing.expectEqual(0, localStorage.length);
+  testing.expectEqual(null, localStorage.getItem('key1'));
+  testing.expectEqual(null, localStorage.getItem('key3'));
+
+  localStorage.setItem('empty', '');
+  testing.expectEqual('', localStorage.getItem('empty'));
+  testing.expectEqual(1, localStorage.length);
+
+  localStorage.setItem('number', '123');
+  testing.expectEqual('123', localStorage.getItem('number'));
+
+  localStorage.setItem(null, 'null_key_value');
+  testing.expectEqual(null, localStorage.getItem(null));
+
+  localStorage.setItem(undefined, 'undefined_key_value');
+  testing.expectEqual(null, localStorage.getItem(undefined));
+
+  localStorage.clear();
+  testing.expectEqual(0, localStorage.length);
+</script>

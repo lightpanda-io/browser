@@ -61,6 +61,7 @@ fn handleConnection(self: *TestHTTPServer, conn: std.net.Server.Connection) !voi
                 return err;
             },
         };
+
         self.handler(&req) catch |err| {
             std.debug.print("test http error '{s}': {}\n", .{ req.head.target, err });
             try req.respond("server error", .{ .status = .internal_server_error });

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<input id="radio1" type="radio" name="group1" checked>
+<input id="radio2" type="radio" name="group1">
+<input id="radio3" type="radio" name="group1">
+
+<input id="radio4" type="radio" name="group2">
+
+<script id="radio_grouping_basic">
+  testing.expectEqual(true, $('#radio1').checked)
+  testing.expectEqual(false, $('#radio2').checked)
+  testing.expectEqual(false, $('#radio3').checked)
+
+  $('#radio2').checked = true
+  testing.expectEqual(false, $('#radio1').checked)
+  testing.expectEqual(true, $('#radio2').checked)
+  testing.expectEqual(false, $('#radio3').checked)
+
+  $('#radio3').checked = true
+  testing.expectEqual(false, $('#radio1').checked)
+  testing.expectEqual(false, $('#radio2').checked)
+  testing.expectEqual(true, $('#radio3').checked)
+</script>
+
+<script id="radio_grouping_different_groups">
+  $('#radio1').checked = true
+  $('#radio4').checked = true
+  testing.expectEqual(true, $('#radio1').checked)
+  testing.expectEqual(true, $('#radio4').checked)
+
+  $('#radio2').checked = true
+  testing.expectEqual(false, $('#radio1').checked)
+  testing.expectEqual(true, $('#radio2').checked)
+  testing.expectEqual(true, $('#radio4').checked)
+</script>
+
+<script id="radio_grouping_unchecking">
+  $('#radio1').checked = true
+  testing.expectEqual(true, $('#radio1').checked)
+
+  $('#radio1').checked = false
+  testing.expectEqual(false, $('#radio1').checked)
+  testing.expectEqual(false, $('#radio2').checked)
+  testing.expectEqual(false, $('#radio3').checked)
+</script>
+
+<form id="radio_form1">
+  <input id="radio_form1_a" type="radio" name="formgroup">
+  <input id="radio_form1_b" type="radio" name="formgroup">
+</form>
+
+<form id="radio_form2">
+  <input id="radio_form2_a" type="radio" name="formgroup">
+  <input id="radio_form2_b" type="radio" name="formgroup">
+</form>
+
+<input id="radio_no_form_a" type="radio" name="formgroup">
+<input id="radio_no_form_b" type="radio" name="formgroup">
+
+<script id="radio_grouping_same_name_different_forms">
+  $('#radio_form1_a').checked = true
+  $('#radio_form2_a').checked = true
+  $('#radio_no_form_a').checked = true
+
+  testing.expectEqual(true, $('#radio_form1_a').checked)
+  testing.expectEqual(true, $('#radio_form2_a').checked)
+  testing.expectEqual(true, $('#radio_no_form_a').checked)
+
+  $('#radio_form1_b').checked = true
+  testing.expectEqual(false, $('#radio_form1_a').checked)
+  testing.expectEqual(true, $('#radio_form1_b').checked)
+  testing.expectEqual(true, $('#radio_form2_a').checked)
+  testing.expectEqual(true, $('#radio_no_form_a').checked)
+
+  $('#radio_no_form_b').checked = true
+  testing.expectEqual(false, $('#radio_form1_a').checked)
+  testing.expectEqual(true, $('#radio_form1_b').checked)
+  testing.expectEqual(true, $('#radio_form2_a').checked)
+  testing.expectEqual(false, $('#radio_no_form_a').checked)
+  testing.expectEqual(true, $('#radio_no_form_b').checked)
+</script>
+
+<form id="radio_form3"></form>
+<input id="radio_form_attr_a" type="radio" name="attrgroup" form="radio_form3">
+<input id="radio_form_attr_b" type="radio" name="attrgroup" form="radio_form3">
+<input id="radio_form_attr_c" type="radio" name="attrgroup">
+
+<script id="radio_grouping_form_attribute">
+  $('#radio_form_attr_a').checked = true
+  $('#radio_form_attr_c').checked = true
+
+  testing.expectEqual(true, $('#radio_form_attr_a').checked)
+  testing.expectEqual(false, $('#radio_form_attr_b').checked)
+  testing.expectEqual(true, $('#radio_form_attr_c').checked)
+
+  $('#radio_form_attr_b').checked = true
+  testing.expectEqual(false, $('#radio_form_attr_a').checked)
+  testing.expectEqual(true, $('#radio_form_attr_b').checked)
+  testing.expectEqual(true, $('#radio_form_attr_c').checked)
+</script>
+
+<input id="radio_no_name_a" type="radio">
+<input id="radio_no_name_b" type="radio">
+
+<script id="radio_no_name_no_grouping">
+  $('#radio_no_name_a').checked = true
+  $('#radio_no_name_b').checked = true
+
+  testing.expectEqual(true, $('#radio_no_name_a').checked)
+  testing.expectEqual(true, $('#radio_no_name_b').checked)
+</script>
+
+<input id="radio_empty_name_a" type="radio" name="">
+<input id="radio_empty_name_b" type="radio" name="">
+
+<script id="radio_empty_name_no_grouping">
+  $('#radio_empty_name_a').checked = true
+  $('#radio_empty_name_b').checked = true
+
+  testing.expectEqual(true, $('#radio_empty_name_a').checked)
+  testing.expectEqual(true, $('#radio_empty_name_b').checked)
+</script>
+
+<input id="radio_case_a" type="radio" name="CaseSensitive">
+<input id="radio_case_b" type="radio" name="casesensitive">
+<input id="radio_case_c" type="radio" name="CaseSensitive">
+
+<script id="radio_name_case_sensitive">
+  $('#radio_case_a').checked = true
+  $('#radio_case_b').checked = true
+
+  testing.expectEqual(true, $('#radio_case_a').checked)
+  testing.expectEqual(true, $('#radio_case_b').checked)
+
+  $('#radio_case_c').checked = true
+  testing.expectEqual(false, $('#radio_case_a').checked)
+  testing.expectEqual(true, $('#radio_case_b').checked)
+  testing.expectEqual(true, $('#radio_case_c').checked)
+</script>

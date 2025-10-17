@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<select id="select1">
+  <option id="opt1" value="val1">Text 1</option>
+  <option id="opt2" value="val2" selected>Text 2</option>
+  <option id="opt3">Text 3</option>
+  <option id="opt4" disabled>Text 4</option>
+</select>
+
+<script id="value_with_attribute">
+  testing.expectEqual('val1', $('#opt1').value)
+  testing.expectEqual('val2', $('#opt2').value)
+</script>
+
+<script id="value_without_attribute">
+  // When value attribute is not present, value should be text content
+  testing.expectEqual('Text 3', $('#opt3').value)
+</script>
+
+<script id="value_set">
+  $('#opt1').value = 'changed'
+  testing.expectEqual('changed', $('#opt1').value)
+</script>
+
+<script id="text">
+  testing.expectEqual('Text 1', $('#opt1').text)
+  testing.expectEqual('Text 2', $('#opt2').text)
+  testing.expectEqual('Text 3', $('#opt3').text)
+</script>
+
+<script id="selected">
+  testing.expectEqual(false, $('#opt1').selected)
+  testing.expectEqual(true, $('#opt2').selected)
+  testing.expectEqual(false, $('#opt3').selected)
+</script>
+
+<script id="selected_set">
+  $('#opt1').selected = true
+  testing.expectEqual(true, $('#opt1').selected)
+
+  $('#opt2').selected = false
+  testing.expectEqual(false, $('#opt2').selected)
+</script>
+
+<script id="defaultSelected">
+  testing.expectEqual(false, $('#opt1').defaultSelected)
+  testing.expectEqual(true, $('#opt2').defaultSelected)
+  testing.expectEqual(false, $('#opt3').defaultSelected)
+
+  // Setting selected shouldn't change defaultSelected
+  $('#opt1').selected = true
+  testing.expectEqual(false, $('#opt1').defaultSelected)
+</script>
+
+<script id="disabled">
+  testing.expectEqual(false, $('#opt1').disabled)
+  testing.expectEqual(true, $('#opt4').disabled)
+</script>
+
+<script id="disabled_set">
+  $('#opt1').disabled = true
+  testing.expectEqual(true, $('#opt1').disabled)
+
+  $('#opt4').disabled = false
+  testing.expectEqual(false, $('#opt4').disabled)
+</script>
