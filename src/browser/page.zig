@@ -126,8 +126,11 @@ pub const Page = struct {
         const browser = session.browser;
         const script_manager = ScriptManager.init(browser, self);
 
+        const url = try URL.parse("about:blank", null);
+        errdefer url.deinit();
+
         self.* = .{
-            .url = URL.empty,
+            .url = url,
             .mode = .{ .pre = {} },
             .window = try Window.create(null, null),
             .arena = arena,
@@ -156,6 +159,7 @@ pub const Page = struct {
 
         self.http_client.abort();
         self.script_manager.deinit();
+        self.url.deinit();
     }
 
     fn reset(self: *Page) !void {
