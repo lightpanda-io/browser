@@ -173,11 +173,6 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
         },
     };
 
-    // Free if we had.
-    if (maybe_url) |url| {
-        url.deinit();
-    }
-
     try cookie_jar.add(cookie, std.time.timestamp());
 }
 
