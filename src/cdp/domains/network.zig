@@ -185,13 +185,13 @@ fn getCookies(cmd: anytype) !void {
     const params = (try cmd.params(GetCookiesParam)) orelse GetCookiesParam{};
 
     // If not specified, use the URLs of the page and all of its subframes. TODO subframes
-    const page_url = if (bc.session.page) |*page| page.url.raw else null; // @speed: avoid repasing the URL
+    const page_url = if (bc.session.page) |page| page.url.getHref() else null; // @speed: avoid repasing the URL
     const param_urls = params.urls orelse &[_][]const u8{page_url orelse return error.InvalidParams};
 
     var urls = try std.ArrayListUnmanaged(CdpStorage.PreparedUri).initCapacity(cmd.arena, param_urls.len);
     for (param_urls) |url_str| {
         const url = URL.parse(url_str, null) catch return error.InvalidParams;
-        defer url.deinit();
+        //defer url.deinit();
 
         urls.appendAssumeCapacity(.{
             .host = try Cookie.parseDomain(cmd.arena, url, null),

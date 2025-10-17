@@ -192,7 +192,7 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element, comptime c
         if (try DataURI.parse(page.arena, src)) |data_uri| {
             source = .{ .@"inline" = data_uri };
         } else {
-            remote_url = try URL.stitch(page.arena, src, page.url.raw, .{ .null_terminated = true });
+            remote_url = try URL.stitch(page.arena, src, page.url.getHref(), .{ .null_terminated = true });
             source = .{ .remote = .{} };
         }
     } else {
@@ -204,7 +204,7 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element, comptime c
         .kind = kind,
         .element = element,
         .source = source,
-        .url = remote_url orelse page.url.raw,
+        .url = remote_url orelse page.url.getHref(),
         .is_defer = if (remote_url == null) false else try parser.elementGetAttribute(element, "defer") != null,
         .is_async = if (remote_url == null) false else try parser.elementGetAttribute(element, "async") != null,
     };
@@ -503,7 +503,7 @@ fn parseImportmap(self: *ScriptManager, script: *const Script) !void {
         const resolved_url = try URL.stitch(
             self.page.arena,
             entry.value_ptr.*,
-            self.page.url.raw,
+            self.page.url.getHref(),
             .{ .alloc = .if_needed, .null_terminated = true },
         );
 

@@ -119,8 +119,8 @@ pub const Node = struct {
     // --------
 
     // Read-only attributes
-    pub fn get_baseURI(_: *parser.Node, page: *Page) ![]const u8 {
-        return page.url.raw;
+    pub fn get_baseURI(_: *parser.Node, page: *Page) []const u8 {
+        return page.url.getHref();
     }
 
     pub fn get_firstChild(self: *parser.Node) !?Union {

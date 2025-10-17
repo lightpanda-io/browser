@@ -8,28 +8,27 @@ const ada = @import("ada");
 pub const stitch = URL.stitch;
 
 pub const URL = struct {
+    /// Internal ada structure.
     internal: ada.URL,
-    /// This must outlive the URL structure.
-    raw: []const u8,
-
-    pub const empty = URL{ .internal = null, .raw = "" };
-    pub const invalid = URL{ .internal = null, .raw = "" };
 
     pub const ParseError = ada.ParseError;
 
-    /// We assume str will last as long as the URL
-    /// In some cases, this is safe to do, because we know the URL is short lived.
-    /// In most cases though, we assume the caller will just dupe the string URL
-    /// into an arena.
-    /// If `str` does not contain a scheme, `fallback_scheme` be used instead.
+    /// Creates a new URL by parsing given `input`.
+    /// `input` will be duped; so it can be freed after a call to this function.
+    /// If `input` does not contain a scheme, `fallback_scheme` be used instead.
     /// `fallback_scheme` is `https` if not provided.
-    pub fn parse(str: []const u8, fallback_scheme: ?[]const u8) ParseError!URL {
+    pub fn parse(input: []const u8, fallback_scheme: ?[]const u8) ParseError!URL {
         // Try parsing directly; if it fails, we might have to provide a base.
-        const internal = ada.parse(str) catch blk: {
-            break :blk try ada.parseWithBase(fallback_scheme orelse "https", str);
+        const internal = ada.parse(input) catch blk: {
+            break :blk try ada.parseWithBase(fallback_scheme orelse "https", input);
         };
 
-        return .{ .internal = internal, .raw = str };
+        return .{ .internal = internal };
+    }
+
+    pub fn parseWithBase(input: []const u8, base: []const u8) ParseError!URL {
+        const internal = try ada.parseWithBase(input, base);
+        return .{ .internal = internal };
     }
 
     /// Uses the same URL to parse in-place.
@@ -41,7 +40,6 @@ pub const URL = struct {
         if (!ada.isValid(self.internal)) {
             return error.Invalid;
         }
-        //self.raw = str;
 
         return self;
     }
@@ -57,10 +55,29 @@ pub const URL = struct {
         return ada.isValid(self.internal);
     }
 
+    pub fn setHost(self: URL, host_str: []const u8) error{InvalidHost}!void {
+        const is_set = ada.setHost(self.internal, host_str);
+        if (!is_set) return error.InvalidHost;
+    }
+
+    pub fn setPort(self: URL, port_str: []const u8) error{InvalidPort}!void {
+        const is_set = ada.setPort(self.internal, port_str);
+        if (!is_set) return error.InvalidPort;
+    }
+
+    pub fn getPort(self: URL) []const u8 {
+        const port = ada.getPortNullable(self.internal);
+        return port.data[0..port.length];
+    }
+
     /// Above, in `parse`, we error if a host doesn't exist
     /// In other words, we can't have a URL with a null host.
     pub fn host(self: URL) []const u8 {
         const str = ada.getHostNullable(self.internal);
+        if (str.data == null) {
+            return "";
+        }
+
         return str.data[0..str.length];
     }
 
@@ -78,6 +95,11 @@ pub const URL = struct {
         return hostname.data[0..hostname.length];
     }
 
+    pub fn setHostname(self: URL, hostname_str: []const u8) error{InvalidHostname}!void {
+        const is_set = ada.setHostname(self.internal, hostname_str);
+        if (!is_set) return error.InvalidHostname;
+    }
+
     pub fn getFragment(self: URL) ?[]const u8 {
         // Ada calls it "hash" instead of "fragment".
         const hash = ada.getHashNullable(self.internal);
@@ -88,6 +110,11 @@ pub const URL = struct {
 
     pub fn getProtocol(self: URL) []const u8 {
         return ada.getProtocol(self.internal);
+    }
+
+    pub fn setProtocol(self: URL, protocol_str: []const u8) error{InvalidProtocol}!void {
+        const is_set = ada.setProtocol(self.internal, protocol_str);
+        if (!is_set) return error.InvalidProtocol;
     }
 
     pub fn getScheme(self: URL) []const u8 {
@@ -118,18 +145,32 @@ pub const URL = struct {
         return writer.writeAll(self.getHref());
     }
 
+    /// Returns the origin string; caller owns the memory.
+    pub fn getOrigin(self: URL, allocator: Allocator) ![]const u8 {
+        const s = ada.getOriginNullable(self.internal);
+        if (s.data == null) {
+            return "";
+        }
+        defer ada.freeOwnedString(.{ .data = s.data, .length = s.length });
+
+        return allocator.dupe(u8, s.data[0..s.length]);
+    }
+
     // TODO: Skip unnecessary allocation by writing url parts directly to stream.
     pub fn origin(self: URL, writer: *std.Io.Writer) !void {
         // Ada manages its own memory for origin.
         // Here we write it to stream and free it afterwards.
-        const proto = ada.getOrigin(self.internal);
-        defer ada.freeOwnedString(.{ .data = proto.ptr, .length = proto.len });
+        const s = ada.getOriginNullable(self.internal);
+        if (s.data == null) {
+            return;
+        }
+        defer ada.freeOwnedString(.{ .data = s.data, .length = s.length });
 
-        return writer.writeAll(proto);
+        return writer.writeAll(s.data[0..s.length]);
     }
 
     pub fn format(self: URL, writer: *std.Io.Writer) !void {
-        return writer.writeAll(self.raw);
+        return self.writeToStream(writer);
     }
 
     /// Converts `URL` to `WebApiURL`.

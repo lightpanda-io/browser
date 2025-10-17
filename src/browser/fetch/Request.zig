@@ -130,7 +130,7 @@ pub fn constructor(input: RequestInput, _options: ?RequestInit, page: *Page) !Re
 
     const url: [:0]const u8 = blk: switch (input) {
         .string => |str| {
-            break :blk try URL.stitch(arena, str, page.url.raw, .{ .null_terminated = true });
+            break :blk try URL.stitch(arena, str, page.url.getHref(), .{ .null_terminated = true });
         },
         .request => |req| {
             break :blk try arena.dupeZ(u8, req.url);

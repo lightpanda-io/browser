@@ -267,7 +267,7 @@ pub const Page = struct {
         const head = parser.nodeListItem(list, 0) orelse return;
 
         const base = try parser.documentCreateElement(doc, "base");
-        try parser.elementSetAttribute(base, "href", self.url.raw);
+        try parser.elementSetAttribute(base, "href", self.url.getHref());
 
         const Node = @import("dom/node.zig").Node;
         try Node.prepend(head, &[_]Node.NodeOrText{.{ .node = parser.elementToNode(base) }});
@@ -521,9 +521,7 @@ pub const Page = struct {
     }
 
     pub fn origin(self: *const Page, arena: Allocator) ![]const u8 {
-        var aw = std.Io.Writer.Allocating.init(arena);
-        try self.url.origin(&aw.writer);
-        return aw.written();
+        return self.url.getOrigin(arena);
     }
 
     const RequestCookieOpts = struct {
@@ -642,7 +640,7 @@ pub const Page = struct {
         };
 
         self.session.browser.notification.dispatch(.page_navigated, &.{
-            .url = self.url.raw,
+            .url = self.url.getHref(),
             .timestamp = timestamp(),
         });
     }
@@ -822,7 +820,7 @@ pub const Page = struct {
         }
 
         // Push the navigation after a successful load.
-        try self.session.history.pushNavigation(self.url.raw, self);
+        try self.session.history.pushNavigation(self.url.getHref(), self);
     }
 
     fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
@@ -858,7 +856,7 @@ pub const Page = struct {
     // extracted because this is called from tests to set things up.
     pub fn setDocument(self: *Page, html_doc: *parser.DocumentHTML) !void {
         const doc = parser.documentHTMLToDocument(html_doc);
-        try parser.documentSetDocumentURI(doc, self.url.raw);
+        try parser.documentSetDocumentURI(doc, self.url.getHref());
 
         // TODO set the referrer to the document.
         try self.window.replaceDocument(html_doc);
@@ -1048,7 +1046,7 @@ pub const Page = struct {
 
         session.queued_navigation = .{
             .opts = opts,
-            .url = try URL.stitch(session.transfer_arena, url, self.url.raw, .{ .alloc = .always }),
+            .url = try URL.stitch(session.transfer_arena, url, self.url.getHref(), .{ .alloc = .always }),
         };
 
         self.http_client.abort();
@@ -1088,7 +1086,7 @@ pub const Page = struct {
         try form_data.write(encoding, buf.writer(transfer_arena));
 
         const method = try parser.elementGetAttribute(@ptrCast(@alignCast(form)), "method") orelse "";
-        var action = try parser.elementGetAttribute(@ptrCast(@alignCast(form)), "action") orelse self.url.raw;
+        var action = try parser.elementGetAttribute(@ptrCast(@alignCast(form)), "action") orelse self.url.getHref();
 
         var opts = NavigateOpts{
             .reason = .form,

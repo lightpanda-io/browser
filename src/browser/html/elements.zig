@@ -218,12 +218,12 @@ pub const HTMLAnchorElement = struct {
     }
 
     pub fn get_href(self: *parser.Anchor) ![]const u8 {
-        return try parser.anchorGetHref(self);
+        return parser.anchorGetHref(self);
     }
 
     pub fn set_href(self: *parser.Anchor, href: []const u8, page: *const Page) !void {
-        const full = try urlStitch(page.call_arena, href, page.url.raw, .{});
-        return try parser.anchorSetHref(self, full);
+        const full = try urlStitch(page.call_arena, href, page.url.getHref(), .{});
+        return parser.anchorSetHref(self, full);
     }
 
     pub fn get_hreflang(self: *parser.Anchor) ![]const u8 {
@@ -694,7 +694,7 @@ pub const HTMLInputElement = struct {
         return try parser.inputGetSrc(self);
     }
     pub fn set_src(self: *parser.Input, src: []const u8, page: *Page) !void {
-        const new_src = try urlStitch(page.call_arena, src, page.url.raw, .{ .alloc = .if_needed });
+        const new_src = try urlStitch(page.call_arena, src, page.url.getHref(), .{ .alloc = .if_needed });
         try parser.inputSetSrc(self, new_src);
     }
     pub fn get_type(self: *parser.Input) ![]const u8 {
@@ -747,7 +747,7 @@ pub const HTMLLinkElement = struct {
     }
 
     pub fn set_href(self: *parser.Link, href: []const u8, page: *const Page) !void {
-        const full = try urlStitch(page.call_arena, href, page.url.raw, .{});
+        const full = try urlStitch(page.call_arena, href, page.url.getHref(), .{});
         return parser.linkSetHref(self, full);
     }
 };

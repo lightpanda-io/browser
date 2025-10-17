@@ -240,7 +240,7 @@ pub const XMLHttpRequest = struct {
         self.reset();
 
         self.method = try validMethod(method);
-        self.url = try URL.stitch(page.arena, url, page.url.raw, .{ .null_terminated = true });
+        self.url = try URL.stitch(page.arena, url, page.url.getHref(), .{ .null_terminated = true });
         self.sync = if (asyn) |b| !b else false;
 
         self.state = .opened;

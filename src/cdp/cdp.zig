@@ -464,7 +464,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         pub fn getURL(self: *const Self) ?[]const u8 {
             const page = self.session.currentPage() orelse return null;
-            const raw_url = page.url.raw;
+            const raw_url = page.url.getHref();
             return if (raw_url.len == 0) null else raw_url;
         }
 
