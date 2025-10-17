@@ -343,12 +343,14 @@ pub fn waitForModule(self: *ScriptManager, url: [:0]const u8) !GetResult {
                     defer self.sync_module_pool.destroy(sync);
                     defer self.sync_modules.removeByPtr(entry.key_ptr);
                     return .{
+                        .shared = false,
                         .buffer = sync.buffer,
                         .buffer_pool = &self.buffer_pool,
                     };
                 }
 
                 return .{
+                    .shared = true,
                     .buffer = sync.buffer,
                     .buffer_pool = &self.buffer_pool,
                 };
@@ -1012,6 +1014,7 @@ pub const AsyncModule = struct {
         var self: *AsyncModule = @ptrCast(@alignCast(ctx));
         defer self.manager.async_module_pool.destroy(self);
         self.cb(self.cb_data, .{
+            .shared = false,
             .buffer = self.buffer,
             .buffer_pool = &self.manager.buffer_pool,
         });
@@ -1035,8 +1038,13 @@ pub const AsyncModule = struct {
 pub const GetResult = struct {
     buffer: std.ArrayListUnmanaged(u8),
     buffer_pool: *BufferPool,
+    shared: bool,
 
     pub fn deinit(self: *GetResult) void {
+        // if the result is shared, don't deinit.
+        if (self.shared) {
+            return;
+        }
         self.buffer_pool.release(self.buffer);
     }
 
