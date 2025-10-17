@@ -326,16 +326,31 @@ pub fn waitForModule(self: *ScriptManager, url: [:0]const u8) !GetResult {
     };
     const sync = entry.value_ptr.*;
 
+    // We can have multiple scripts waiting for the same module in concurrency.
+    // We use the waiters to ensures only the last waiter deinit the resources.
+    sync.waiters += 1;
+    defer sync.waiters -= 1;
+
     var client = self.client;
     while (true) {
         switch (sync.state) {
             .loading => {},
             .done => {
-                // Our caller has its own higher level cache (caching the
-                // actual compiled module). There's no reason for us to keep this
-                defer self.sync_module_pool.destroy(sync);
-                defer self.sync_modules.removeByPtr(entry.key_ptr);
+                if (sync.waiters == 1) {
+                    // Our caller has its own higher level cache (caching the
+                    // actual compiled module). There's no reason for us to keep
+                    // this if we are the last waiter.
+                    defer self.sync_module_pool.destroy(sync);
+                    defer self.sync_modules.removeByPtr(entry.key_ptr);
+                    return .{
+                        .shared = false,
+                        .buffer = sync.buffer,
+                        .buffer_pool = &self.buffer_pool,
+                    };
+                }
+
                 return .{
+                    .shared = true,
                     .buffer = sync.buffer,
                     .buffer_pool = &self.buffer_pool,
                 };
@@ -882,6 +897,8 @@ const SyncModule = struct {
     manager: *ScriptManager,
     buffer: std.ArrayListUnmanaged(u8) = .{},
     state: State = .loading,
+    // number of waiters for the module.
+    waiters: u8 = 0,
 
     const State = union(enum) {
         done,
@@ -997,6 +1014,7 @@ pub const AsyncModule = struct {
         var self: *AsyncModule = @ptrCast(@alignCast(ctx));
         defer self.manager.async_module_pool.destroy(self);
         self.cb(self.cb_data, .{
+            .shared = false,
             .buffer = self.buffer,
             .buffer_pool = &self.manager.buffer_pool,
         });
@@ -1020,8 +1038,13 @@ pub const AsyncModule = struct {
 pub const GetResult = struct {
     buffer: std.ArrayListUnmanaged(u8),
     buffer_pool: *BufferPool,
+    shared: bool,
 
     pub fn deinit(self: *GetResult) void {
+        // if the result is shared, don't deinit.
+        if (self.shared) {
+            return;
+        }
         self.buffer_pool.release(self.buffer);
     }
 
