@@ -96,9 +96,20 @@ wpt-summary:
 	@printf "\e[36mBuilding wpt...\e[0m\n"
 	@$(ZIG) build wpt -- --summary $(filter-out $@,$(MAKECMDGOALS)) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
 
-## Test
+## Test - `awk` is used to filter out the huge compile command on build
 test:
-	@TEST_FILTER='${F}' $(ZIG) build test -freference-trace --summary all
+	@TEST_FILTER='${F}' $(ZIG) build test -freference-trace --summary all 2>&1 | awk '\
+	/^error: the following command failed/ {\
+		print "error: compilation command failed (command output suppressed for brevity)";\
+		while (getline > 0) {\
+			if (/^error:/ || /^Build Summary:/ || /^build\.zig:/) {\
+				print;\
+				break;\
+			}\
+		}\
+		next;\
+	}\
+	{ print; }'
 
 ## Run demo/runner end to end tests
 end2end:
