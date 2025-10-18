@@ -212,7 +212,7 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element, comptime c
     if (source == .@"inline" and self.scripts.first == null) {
         // inline script with no pending scripts, execute it immediately.
         // (if there is a pending script, then we cannot execute this immediately
-        // as it needs to best executed in order)
+        // as it needs to be executed in order)
         return script.eval(page);
     }
 
