@@ -860,7 +860,6 @@ pub fn buildAda(b: *Build, m: *Build.Module) !void {
         .root_source_file = b.path("vendor/ada/root.zig"),
         .target = m.resolved_target,
         .optimize = m.optimize,
-        .link_libcpp = true,
     });
 
     // Expose headers; note that "ada.h" is a C++ header so no use here.
