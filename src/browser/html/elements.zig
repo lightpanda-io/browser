@@ -732,6 +732,9 @@ pub const HTMLInputElement = struct {
     pub fn set_value(self: *parser.Input, value: []const u8) !void {
         try parser.inputSetValue(self, value);
     }
+    pub fn _select(_: *parser.Input) void {
+        log.debug(.web_api, "not implemented", .{ .feature = "HTMLInputElement select" });
+    }
 };
 
 pub const HTMLLIElement = struct {
