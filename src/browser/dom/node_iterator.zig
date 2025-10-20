@@ -106,7 +106,6 @@ pub const NodeIterator = struct {
         defer self.callbackEnd();
 
         if (self.pointer_before_current) {
-            self.pointer_before_current = false;
             // Unlike TreeWalker, NodeIterator starts at the first node
             if (.accept == try NodeFilter.verify(self.what_to_show, self.filter_func, self.reference_node)) {
                 self.pointer_before_current = false;
@@ -116,6 +115,7 @@ pub const NodeIterator = struct {
 
         if (try self.firstChild(self.reference_node)) |child| {
             self.reference_node = child;
+            self.pointer_before_current = false;
             return try Node.toInterface(child);
         }
 
