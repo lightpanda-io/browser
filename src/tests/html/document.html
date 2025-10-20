@@ -68,10 +68,10 @@
 
   let a_again = document.elementFromPoint(1.5, 0.5);
   testing.expectEqual('[object HTMLAnchorElement]', a_again.toString());
-  testing.expectEqual('https://lightpanda.io', a_again.href);
+  testing.expectEqual('https://lightpanda.io/', a_again.href);
 
   let a_agains = document.elementsFromPoint(1.5, 0.5);
-  testing.expectEqual('https://lightpanda.io', a_agains[0].href);
+  testing.expectEqual('https://lightpanda.io/', a_agains[0].href);
 
 
   testing.expectEqual(true, !document.all);
