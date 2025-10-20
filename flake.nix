@@ -49,7 +49,7 @@
           targetPkgs =
             pkgs: with pkgs; [
               # Build Tools
-              zigpkgs."0.15.1"
+              zigpkgs."0.15.2"
               zls
               python3
               pkg-config

@@ -23,7 +23,7 @@ const Build = std.Build;
 
 /// Do not rename this constant. It is scanned by some scripts to determine
 /// which zig version to install.
-const recommended_zig_version = "0.15.1";
+const recommended_zig_version = "0.15.2";
 
 pub fn build(b: *Build) !void {
     switch (comptime builtin.zig_version.order(std.SemanticVersion.parse(recommended_zig_version) catch unreachable)) {
