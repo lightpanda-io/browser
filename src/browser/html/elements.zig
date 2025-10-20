@@ -355,34 +355,33 @@ pub const HTMLAnchorElement = struct {
         return parser.anchorSetHref(self, u.getHref());
     }
 
-    //pub fn get_hostname(self: *parser.Anchor, page: *Page) ![]const u8 {
-    //    const maybe_href_str = try getAnchorHref(self);
-    //    const href_str = maybe_href_str orelse return "";
-    //
-    //    const u = try NativeURL.parse(href_str, null);
-    //    defer u.deinit();
-    //
-    //    return page.arena.dupe(u8, u.getHostname());
-    //}
+    pub fn get_hostname(self: *parser.Anchor, page: *Page) []const u8 {
+        const u = getURL(self, page) catch return "";
+        return u.getHostname();
+    }
 
-    //pub fn set_hostname(self: *parser.Anchor, v: []const u8) !void {
-    //    const maybe_href_str = try getAnchorHref(self);
-    //
-    //    if (maybe_href_str) |href_str| {
-    //        const u = try NativeURL.parse(href_str, null);
-    //        defer u.deinit();
-    //
-    //        try u.setHostname(v);
-    //
-    //        return parser.anchorSetHref(self, u.getHref());
-    //    }
-    //
-    //    // No href string there; use the given value as href.
-    //    const u = try NativeURL.parse(v, null);
-    //    defer u.deinit();
-    //
-    //    return parser.anchorSetHref(self, u.getHref());
-    //}
+    pub fn set_hostname(self: *parser.Anchor, hostname: []const u8, page: *Page) !void {
+        const u = blk: {
+            if (page.getObjectData(self)) |internal_url| {
+                break :blk NativeURL.fromInternal(internal_url);
+            }
+
+            const maybe_anchor_href = try getHref(self);
+            if (maybe_anchor_href) |anchor_href| {
+                const new_u = try NativeURL.parse(anchor_href, null);
+                try page.putObjectData(self, new_u.internal.?);
+                break :blk new_u;
+            }
+
+            // Last resort; try to create URL object out of hostname.
+            const new_u = try NativeURL.parse(hostname, null);
+            // We can just return here since hostname is updated.
+            return page.putObjectData(self, new_u.internal.?);
+        };
+
+        try u.setHostname(hostname);
+        return parser.anchorSetHref(self, u.getHref());
+    }
 
     // TODO return a disposable string
     pub fn get_port(self: *parser.Anchor, page: *Page) ![]const u8 {
