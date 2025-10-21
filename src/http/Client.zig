@@ -338,8 +338,6 @@ pub fn restoreOriginalProxy(self: *Client) !void {
 
 // Enable TLS verification on all connections.
 pub fn enableTlsVerify(self: *const Client) !void {
-    try self.ensureNoActiveConnection();
-
     for (self.handles.handles) |*h| {
         const easy = h.conn.easy;
 
@@ -355,8 +353,6 @@ pub fn enableTlsVerify(self: *const Client) !void {
 
 // Disable TLS verification on all connections.
 pub fn disableTlsVerify(self: *const Client) !void {
-    try self.ensureNoActiveConnection();
-
     for (self.handles.handles) |*h| {
         const easy = h.conn.easy;
 
