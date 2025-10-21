@@ -218,36 +218,36 @@ pub const HTMLAnchorElement = struct {
     }
 
     pub fn get_href(self: *parser.Anchor) ![]const u8 {
-        return try parser.anchorGetHref(self);
+        return parser.anchorGetHref(self);
     }
 
     pub fn set_href(self: *parser.Anchor, href: []const u8, page: *const Page) !void {
         const full = try urlStitch(page.call_arena, href, page.url.raw, .{});
-        return try parser.anchorSetHref(self, full);
+        return parser.anchorSetHref(self, full);
     }
 
     pub fn get_hreflang(self: *parser.Anchor) ![]const u8 {
-        return try parser.anchorGetHrefLang(self);
+        return parser.anchorGetHrefLang(self);
     }
 
     pub fn set_hreflang(self: *parser.Anchor, href: []const u8) !void {
-        return try parser.anchorSetHrefLang(self, href);
+        return parser.anchorSetHrefLang(self, href);
     }
 
     pub fn get_type(self: *parser.Anchor) ![]const u8 {
-        return try parser.anchorGetType(self);
+        return parser.anchorGetType(self);
     }
 
     pub fn set_type(self: *parser.Anchor, t: []const u8) !void {
-        return try parser.anchorSetType(self, t);
+        return parser.anchorSetType(self, t);
     }
 
     pub fn get_rel(self: *parser.Anchor) ![]const u8 {
-        return try parser.anchorGetRel(self);
+        return parser.anchorGetRel(self);
     }
 
     pub fn set_rel(self: *parser.Anchor, t: []const u8) !void {
-        return try parser.anchorSetRel(self, t);
+        return parser.anchorSetRel(self, t);
     }
 
     pub fn get_text(self: *parser.Anchor) !?[]const u8 {
