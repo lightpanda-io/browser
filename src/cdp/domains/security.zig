@@ -35,15 +35,34 @@ fn setIgnoreCertificateErrors(cmd: anytype) !void {
         ignore: bool,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-
     if (params.ignore) {
         try cmd.cdp.browser.http_client.disableTlsVerify();
     } else {
         try cmd.cdp.browser.http_client.enableTlsVerify();
     }
 
-    return cmd.sendResult(.{
-        .browserContextId = bc.id,
-    }, .{});
+    return cmd.sendResult(null, .{});
+}
+
+const testing = @import("../testing.zig");
+
+test "cdp.Security: setIgnoreCertificateErrors" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-9" });
+
+    try ctx.processMessage(.{
+        .id = 8,
+        .method = "Security.setIgnoreCertificateErrors",
+        .params = .{ .ignore = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 8 });
+
+    try ctx.processMessage(.{
+        .id = 9,
+        .method = "Security.setIgnoreCertificateErrors",
+        .params = .{ .ignore = false },
+    });
+    try ctx.expectSentResult(null, .{ .id = 9 });
 }
