@@ -9,5 +9,9 @@
             .hash = "v8-0.0.0-xddH63bVAwBSEobaUok9J0er1FqsvEujCDDVy6ItqKQ5",
         },
         //.v8 = .{ .path = "../zig-v8-fork" }
+        .@"ada-singleheader" = .{
+            .url = "https://github.com/ada-url/ada/releases/download/v3.3.0/singleheader.zip",
+            .hash = "N-V-__8AAPmhFAAw64ALjlzd5YMtzpSrmZ6KymsT84BKfB4s",
+        },
     },
 }

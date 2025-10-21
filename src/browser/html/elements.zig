@@ -218,12 +218,32 @@ pub const HTMLAnchorElement = struct {
     }
 
     pub fn get_href(self: *parser.Anchor) ![]const u8 {
-        return try parser.anchorGetHref(self);
+        return parser.anchorGetHref(self);
     }
 
-    pub fn set_href(self: *parser.Anchor, href: []const u8, page: *const Page) !void {
-        const full = try urlStitch(page.call_arena, href, page.url.raw, .{});
-        return try parser.anchorSetHref(self, full);
+    pub fn set_href(self: *parser.Anchor, href: []const u8, page: *Page) !void {
+        const full = try urlStitch(page.call_arena, href, page.url.getHref(), .{});
+
+        // Get the stored internal URL if we had one.
+        if (page.getObjectData(self)) |internal_url| {
+            const u = NativeURL.fromInternal(internal_url);
+            // Reparse with the new href.
+            _ = try u.reparse(full);
+            errdefer u.deinit();
+
+            // TODO: Remove the entry from the map on an error situation.
+
+            return parser.anchorSetHref(self, u.getHref());
+        }
+
+        // We don't have internal URL stored in object_data yet.
+        // Create one for this anchor element.
+        const u = try NativeURL.parse(full, null);
+        errdefer u.deinit();
+        // Save to map.
+        try page.putObjectData(self, u.internal.?);
+
+        return parser.anchorSetHref(self, u.getHref());
     }
 
     pub fn get_hreflang(self: *parser.Anchor) ![]const u8 {
@@ -258,193 +278,187 @@ pub const HTMLAnchorElement = struct {
         return try parser.nodeSetTextContent(parser.anchorToNode(self), v);
     }
 
-    fn url(self: *parser.Anchor, page: *Page) !URL {
-        // Although the URL.constructor union accepts an .{.element = X}, we
-        // can't use this here because the behavior is different.
-        //    URL.constructor(document.createElement('a')
-        // should fail (a.href isn't a valid URL)
-        // But
-        //     document.createElement('a').host
-        // should not fail, it should return an empty string
-        if (try parser.elementGetAttribute(@ptrCast(@alignCast(self)), "href")) |href| {
-            return URL.constructor(.{ .string = href }, null, page); // TODO inject base url
+    fn getHref(self: *parser.Anchor) !?[]const u8 {
+        return parser.elementGetAttribute(@ptrCast(@alignCast(self)), "href");
+    }
+
+    /// Returns the URL associated with given anchor element.
+    /// Creates a new URL object if not created before.
+    fn getURL(self: *parser.Anchor, page: *Page) !NativeURL {
+        if (page.getObjectData(self)) |internal_url| {
+            return NativeURL.fromInternal(internal_url);
         }
-        return .empty;
+
+        // Try to get href string.
+        const maybe_anchor_href = try getHref(self);
+        if (maybe_anchor_href) |anchor_href| {
+            // Allocate a URL for this anchor element.
+            const u = try NativeURL.parse(anchor_href, null);
+            // Save in map.
+            try page.putObjectData(self, u.internal.?);
+
+            return u;
+        }
+
+        // No anchor href string found; let's just return an error.
+        return error.HrefAttributeNotGiven;
     }
 
     // TODO return a disposable string
     pub fn get_origin(self: *parser.Anchor, page: *Page) ![]const u8 {
-        var u = try url(self, page);
-        return try u.get_origin(page);
+        const u = getURL(self, page) catch return "";
+        // Though we store the URL in object data map, we still have to allocate
+        // for origin string sadly.
+        return u.getOrigin(page.arena);
     }
 
     // TODO return a disposable string
     pub fn get_protocol(self: *parser.Anchor, page: *Page) ![]const u8 {
-        var u = try url(self, page);
-        return u.get_protocol();
+        const u = getURL(self, page) catch return "";
+        return u.getProtocol();
     }
 
     pub fn set_protocol(self: *parser.Anchor, v: []const u8, page: *Page) !void {
-        const arena = page.arena;
-        var u = try url(self, page);
-
-        u.uri.scheme = v;
-        const href = try u.toString(arena);
-        try parser.anchorSetHref(self, href);
+        const u = try getURL(self, page);
+        try u.setProtocol(v);
+        return parser.anchorSetHref(self, u.getHref());
     }
 
-    // TODO return a disposable string
+    const NativeURL = @import("../../url.zig").URL;
+
+    // TODO: Return a disposable string.
     pub fn get_host(self: *parser.Anchor, page: *Page) ![]const u8 {
-        var u = try url(self, page);
-        return try u.get_host(page);
+        const u = getURL(self, page) catch return "";
+        return u.host();
     }
 
-    pub fn set_host(self: *parser.Anchor, v: []const u8, page: *Page) !void {
-        // search : separator
-        var p: ?u16 = null;
-        var h: []const u8 = undefined;
-        for (v, 0..) |c, i| {
-            if (c == ':') {
-                h = v[0..i];
-                p = try std.fmt.parseInt(u16, v[i + 1 ..], 10);
-                break;
+    pub fn set_host(self: *parser.Anchor, host_str: []const u8, page: *Page) !void {
+        const u = blk: {
+            if (page.getObjectData(self)) |internal_url| {
+                break :blk NativeURL.fromInternal(internal_url);
             }
-        }
 
-        const arena = page.arena;
-        var u = try url(self, page);
+            const maybe_anchor_href = try getHref(self);
+            if (maybe_anchor_href) |anchor_href| {
+                const new_u = try NativeURL.parse(anchor_href, null);
+                try page.putObjectData(self, new_u.internal.?);
+                break :blk new_u;
+            }
 
-        if (p) |pp| {
-            u.uri.host = .{ .raw = h };
-            u.uri.port = pp;
-        } else {
-            u.uri.host = .{ .raw = v };
-            u.uri.port = null;
-        }
+            // Last resort; try to create URL object out of host_str.
+            const new_u = try NativeURL.parse(host_str, null);
+            // We can just return here since host is updated.
+            return page.putObjectData(self, new_u.internal.?);
+        };
 
-        const href = try u.toString(arena);
-        try parser.anchorSetHref(self, href);
+        try u.setHost(host_str);
+        return parser.anchorSetHref(self, u.getHref());
     }
 
-    pub fn get_hostname(self: *parser.Anchor, page: *Page) ![]const u8 {
-        var u = try url(self, page);
-        return u.get_hostname();
+    pub fn get_hostname(self: *parser.Anchor, page: *Page) []const u8 {
+        const u = getURL(self, page) catch return "";
+        return u.getHostname();
     }
 
-    pub fn set_hostname(self: *parser.Anchor, v: []const u8, page: *Page) !void {
-        const arena = page.arena;
-        var u = try url(self, page);
-        u.uri.host = .{ .raw = v };
-        const href = try u.toString(arena);
-        try parser.anchorSetHref(self, href);
+    pub fn set_hostname(self: *parser.Anchor, hostname: []const u8, page: *Page) !void {
+        const u = blk: {
+            if (page.getObjectData(self)) |internal_url| {
+                break :blk NativeURL.fromInternal(internal_url);
+            }
+
+            const maybe_anchor_href = try getHref(self);
+            if (maybe_anchor_href) |anchor_href| {
+                const new_u = try NativeURL.parse(anchor_href, null);
+                try page.putObjectData(self, new_u.internal.?);
+                break :blk new_u;
+            }
+
+            // Last resort; try to create URL object out of hostname.
+            const new_u = try NativeURL.parse(hostname, null);
+            // We can just return here since hostname is updated.
+            return page.putObjectData(self, new_u.internal.?);
+        };
+
+        try u.setHostname(hostname);
+        return parser.anchorSetHref(self, u.getHref());
     }
 
     // TODO return a disposable string
     pub fn get_port(self: *parser.Anchor, page: *Page) ![]const u8 {
-        var u = try url(self, page);
-        return try u.get_port(page);
+        const u = getURL(self, page) catch return "";
+        return u.getPort();
     }
 
-    pub fn set_port(self: *parser.Anchor, v: ?[]const u8, page: *Page) !void {
-        const arena = page.arena;
-        var u = try url(self, page);
+    pub fn set_port(self: *parser.Anchor, maybe_port: ?[]const u8, page: *Page) !void {
+        // TODO: Check for valid port (u16 integer).
+        if (maybe_port) |port| {
+            const u = try getURL(self, page);
+            try u.setPort(port);
 
-        if (v != null and v.?.len > 0) {
-            u.uri.port = try std.fmt.parseInt(u16, v.?, 10);
-        } else {
-            u.uri.port = null;
+            return parser.anchorSetHref(self, u.getHref());
         }
-
-        const href = try u.toString(arena);
-        try parser.anchorSetHref(self, href);
     }
 
     // TODO return a disposable string
     pub fn get_username(self: *parser.Anchor, page: *Page) ![]const u8 {
-        var u = try url(self, page);
-        return u.get_username();
+        const u = try getURL(self, page);
+        return u.getUsername() orelse "";
     }
 
-    pub fn set_username(self: *parser.Anchor, v: ?[]const u8, page: *Page) !void {
-        const arena = page.arena;
-        var u = try url(self, page);
-
-        if (v) |vv| {
-            u.uri.user = .{ .raw = vv };
-        } else {
-            u.uri.user = null;
+    pub fn set_username(self: *parser.Anchor, maybe_username: ?[]const u8, page: *Page) !void {
+        if (maybe_username) |username| {
+            const u = try getURL(self, page);
+            try u.setUsername(username);
+            try parser.anchorSetHref(self, u.getHref());
         }
-        const href = try u.toString(arena);
-
-        try parser.anchorSetHref(self, href);
     }
 
-    // TODO return a disposable string
     pub fn get_password(self: *parser.Anchor, page: *Page) ![]const u8 {
-        var u = try url(self, page);
-        return try page.arena.dupe(u8, u.get_password());
+        const u = try getURL(self, page);
+        return u.getPassword() orelse "";
     }
 
-    pub fn set_password(self: *parser.Anchor, v: ?[]const u8, page: *Page) !void {
-        const arena = page.arena;
-        var u = try url(self, page);
-
-        if (v) |vv| {
-            u.uri.password = .{ .raw = vv };
-        } else {
-            u.uri.password = null;
+    pub fn set_password(self: *parser.Anchor, maybe_password: ?[]const u8, page: *Page) !void {
+        if (maybe_password) |password| {
+            const u = try getURL(self, page);
+            try u.setPassword(password);
+            try parser.anchorSetHref(self, u.getHref());
         }
-        const href = try u.toString(arena);
-
-        try parser.anchorSetHref(self, href);
     }
 
     // TODO return a disposable string
     pub fn get_pathname(self: *parser.Anchor, page: *Page) ![]const u8 {
-        var u = try url(self, page);
-        return u.get_pathname();
+        const u = try getURL(self, page);
+        return u.getPath();
     }
 
-    pub fn set_pathname(self: *parser.Anchor, v: []const u8, page: *Page) !void {
-        const arena = page.arena;
-        var u = try url(self, page);
-        u.uri.path = .{ .raw = v };
-        const href = try u.toString(arena);
-
-        try parser.anchorSetHref(self, href);
+    pub fn set_pathname(self: *parser.Anchor, pathname: []const u8, page: *Page) !void {
+        const u = try getURL(self, page);
+        try u.setPath(pathname);
+        return parser.anchorSetHref(self, u.getHref());
     }
 
     pub fn get_search(self: *parser.Anchor, page: *Page) ![]const u8 {
-        var u = try url(self, page);
-        return try u.get_search(page);
+        const u = try getURL(self, page);
+        return u.getSearch() orelse "";
     }
 
-    pub fn set_search(self: *parser.Anchor, v: ?[]const u8, page: *Page) !void {
-        var u = try url(self, page);
-        try u.set_search(v, page);
-
-        const href = try u.toString(page.call_arena);
-        try parser.anchorSetHref(self, href);
+    pub fn set_search(self: *parser.Anchor, search: []const u8, page: *Page) !void {
+        const u = try getURL(self, page);
+        u.setSearch(search);
+        return parser.anchorSetHref(self, u.getHref());
     }
 
     // TODO return a disposable string
     pub fn get_hash(self: *parser.Anchor, page: *Page) ![]const u8 {
-        var u = try url(self, page);
-        return try u.get_hash(page);
+        const u = try getURL(self, page);
+        return u.getHash() orelse "";
     }
 
-    pub fn set_hash(self: *parser.Anchor, v: ?[]const u8, page: *Page) !void {
-        const arena = page.arena;
-        var u = try url(self, page);
-
-        if (v) |vv| {
-            u.uri.fragment = .{ .raw = vv };
-        } else {
-            u.uri.fragment = null;
-        }
-        const href = try u.toString(arena);
-
-        try parser.anchorSetHref(self, href);
+    pub fn set_hash(self: *parser.Anchor, hash: []const u8, page: *Page) !void {
+        const u = try getURL(self, page);
+        u.setHash(hash);
+        return parser.anchorSetHref(self, u.getHref());
     }
 };
 
@@ -717,7 +731,7 @@ pub const HTMLInputElement = struct {
         return try parser.inputGetSrc(self);
     }
     pub fn set_src(self: *parser.Input, src: []const u8, page: *Page) !void {
-        const new_src = try urlStitch(page.call_arena, src, page.url.raw, .{ .alloc = .if_needed });
+        const new_src = try urlStitch(page.call_arena, src, page.url.getHref(), .{ .alloc = .if_needed });
         try parser.inputSetSrc(self, new_src);
     }
     pub fn get_type(self: *parser.Input) ![]const u8 {
@@ -773,7 +787,7 @@ pub const HTMLLinkElement = struct {
     }
 
     pub fn set_href(self: *parser.Link, href: []const u8, page: *const Page) !void {
-        const full = try urlStitch(page.call_arena, href, page.url.raw, .{});
+        const full = try urlStitch(page.call_arena, href, page.url.getHref(), .{});
         return parser.linkSetHref(self, full);
     }
 };

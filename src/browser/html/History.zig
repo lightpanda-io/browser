@@ -113,26 +113,26 @@ fn _dispatchPopStateEvent(state: ?[]const u8, page: *Page) !void {
     );
 }
 
-pub fn _pushState(self: *History, state: js.Object, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
+pub fn _pushState(self: *History, state: js.Object, _: ?[]const u8, maybe_url: ?[]const u8, page: *Page) !void {
     const arena = page.session.arena;
 
     const json = try state.toJson(arena);
-    const url = if (_url) |u| try arena.dupe(u8, u) else try arena.dupe(u8, page.url.raw);
+    const url = if (maybe_url) |u| try arena.dupe(u8, u) else page.url.getHref();
     const entry = HistoryEntry{ .state = json, .url = url };
     try self.stack.append(arena, entry);
     self.current = self.stack.items.len - 1;
 }
 
-pub fn _replaceState(self: *History, state: js.Object, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
+pub fn _replaceState(self: *History, state: js.Object, _: ?[]const u8, maybe_url: ?[]const u8, page: *Page) !void {
     const arena = page.session.arena;
 
     if (self.current) |curr| {
         const entry = &self.stack.items[curr];
         const json = try state.toJson(arena);
-        const url = if (_url) |u| try arena.dupe(u8, u) else try arena.dupe(u8, page.url.raw);
+        const url = if (maybe_url) |u| try arena.dupe(u8, u) else page.url.getHref();
         entry.* = HistoryEntry{ .state = json, .url = url };
     } else {
-        try self._pushState(state, "", _url, page);
+        try self._pushState(state, "", maybe_url, page);
     }
 }
 

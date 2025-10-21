@@ -84,6 +84,11 @@ pub const Page = struct {
 
     polyfill_loader: polyfill.Loader = .{},
 
+    /// KV map for various object data; use pointers as unsigned integer keys
+    /// and store any `*anyopaque` as values. If a key or value will be
+    /// deinitialized (freed), it should be removed from the map too.
+    object_data: ObjectDataMap = .{},
+
     scheduler: Scheduler,
     http_client: *Http.Client,
     script_manager: ScriptManager,
@@ -122,12 +127,30 @@ pub const Page = struct {
         complete,
     };
 
+    const ObjectDataMap = std.HashMapUnmanaged(
+        usize,
+        *anyopaque,
+        struct {
+            pub fn hash(_: @This(), key: usize) usize {
+                return key;
+            }
+
+            pub fn eql(_: @This(), a: usize, b: usize) bool {
+                return a == b;
+            }
+        },
+        std.hash_map.default_max_load_percentage,
+    );
+
     pub fn init(self: *Page, arena: Allocator, call_arena: Allocator, session: *Session) !void {
         const browser = session.browser;
         const script_manager = ScriptManager.init(browser, self);
 
+        const url = try URL.parse("about:blank", null);
+        errdefer url.deinit();
+
         self.* = .{
-            .url = URL.empty,
+            .url = url,
             .mode = .{ .pre = {} },
             .window = try Window.create(null, null),
             .arena = arena,
@@ -150,11 +173,14 @@ pub const Page = struct {
         try self.registerBackgroundTasks();
     }
 
+    // FIXME: Deinit self.url.
     pub fn deinit(self: *Page) void {
         self.script_manager.shutdown = true;
 
         self.http_client.abort();
         self.script_manager.deinit();
+        self.url.deinit();
+        self.object_data.deinit(self.arena);
     }
 
     fn reset(self: *Page) !void {
@@ -164,6 +190,12 @@ pub const Page = struct {
         self.scheduler.reset();
         self.http_client.abort();
         self.script_manager.reset();
+
+        _ = try self.url.reparse("about:blank");
+        errdefer self.url.deinit();
+
+        self.object_data.deinit(self.arena);
+        self.object_data = .{};
 
         self.load_state = .parsing;
         self.mode = .{ .pre = {} };
@@ -193,6 +225,21 @@ pub const Page = struct {
                 return 100;
             }
         }.runMessageLoop, 5, .{ .name = "page.messageLoop" });
+    }
+
+    /// Returns the object data by given key.
+    /// `key` must be a pointer type.
+    /// Type of value is unknown to map; so the caller must do the type casting.
+    pub fn getObjectData(self: *Page, key: anytype) ?*anyopaque {
+        std.debug.assert(@typeInfo(@TypeOf(key)) == .pointer);
+        return self.object_data.get(@intFromPtr(key));
+    }
+
+    /// Puts the object data by given key.
+    /// `key` must be a pointer type.
+    pub fn putObjectData(self: *Page, key: anytype, value: *anyopaque) Allocator.Error!void {
+        std.debug.assert(@typeInfo(@TypeOf(key)) == .pointer);
+        return self.object_data.put(self.arena, @intFromPtr(key), value);
     }
 
     pub const DumpOpts = struct {
@@ -239,7 +286,7 @@ pub const Page = struct {
 
         const doc = parser.documentHTMLToDocument(self.window.document);
 
-        // if the base si requested, add the base's node in the document's headers.
+        // if the base is requested, add the base's node in the document's headers.
         if (opts.with_base) {
             try self.addDOMTreeBase();
         }
@@ -262,7 +309,7 @@ pub const Page = struct {
         const head = parser.nodeListItem(list, 0) orelse return;
 
         const base = try parser.documentCreateElement(doc, "base");
-        try parser.elementSetAttribute(base, "href", self.url.raw);
+        try parser.elementSetAttribute(base, "href", self.url.getHref());
 
         const Node = @import("dom/node.zig").Node;
         try Node.prepend(head, &[_]Node.NodeOrText{.{ .node = parser.elementToNode(base) }});
@@ -516,19 +563,18 @@ pub const Page = struct {
     }
 
     pub fn origin(self: *const Page, arena: Allocator) ![]const u8 {
-        var aw = std.Io.Writer.Allocating.init(arena);
-        try self.url.origin(&aw.writer);
-        return aw.written();
+        return self.url.getOrigin(arena);
     }
 
     const RequestCookieOpts = struct {
         is_http: bool = true,
         is_navigation: bool = false,
     };
+
     pub fn requestCookie(self: *const Page, opts: RequestCookieOpts) Http.Client.RequestCookie {
         return .{
-            .jar = self.cookie_jar,
-            .origin = &self.url.uri,
+            .cookie_jar = self.cookie_jar,
+            .origin_url = self.url,
             .is_http = opts.is_http,
             .is_navigation = opts.is_navigation,
         };
@@ -636,7 +682,7 @@ pub const Page = struct {
         };
 
         self.session.browser.notification.dispatch(.page_navigated, &.{
-            .url = self.url.raw,
+            .url = self.url.getHref(),
             .timestamp = timestamp(),
         });
     }
@@ -816,7 +862,7 @@ pub const Page = struct {
         }
 
         // Push the navigation after a successful load.
-        try self.session.history.pushNavigation(self.url.raw, self);
+        try self.session.history.pushNavigation(self.url.getHref(), self);
     }
 
     fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
@@ -852,7 +898,7 @@ pub const Page = struct {
     // extracted because this is called from tests to set things up.
     pub fn setDocument(self: *Page, html_doc: *parser.DocumentHTML) !void {
         const doc = parser.documentHTMLToDocument(html_doc);
-        try parser.documentSetDocumentURI(doc, self.url.raw);
+        try parser.documentSetDocumentURI(doc, self.url.getHref());
 
         // TODO set the referrer to the document.
         try self.window.replaceDocument(html_doc);
@@ -1067,7 +1113,7 @@ pub const Page = struct {
 
         session.queued_navigation = .{
             .opts = opts,
-            .url = try URL.stitch(session.transfer_arena, url, self.url.raw, .{ .alloc = .always }),
+            .url = try URL.stitch(session.transfer_arena, url, self.url.getHref(), .{ .alloc = .always }),
         };
 
         self.http_client.abort();
@@ -1107,7 +1153,7 @@ pub const Page = struct {
         try form_data.write(encoding, buf.writer(transfer_arena));
 
         const method = try parser.elementGetAttribute(@ptrCast(@alignCast(form)), "method") orelse "";
-        var action = try parser.elementGetAttribute(@ptrCast(@alignCast(form)), "action") orelse self.url.raw;
+        var action = try parser.elementGetAttribute(@ptrCast(@alignCast(form)), "action") orelse self.url.getHref();
 
         var opts = NavigateOpts{
             .reason = .form,

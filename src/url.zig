@@ -1,82 +1,233 @@
 const std = @import("std");
 
-const Uri = std.Uri;
 const Allocator = std.mem.Allocator;
 const WebApiURL = @import("browser/url/url.zig").URL;
+
+const ada = @import("ada");
 
 pub const stitch = URL.stitch;
 
 pub const URL = struct {
-    uri: Uri,
-    raw: []const u8,
+    /// Internal ada structure.
+    internal: ada.URL,
 
-    pub const empty = URL{ .uri = .{ .scheme = "" }, .raw = "" };
-    pub const about_blank = URL{ .uri = .{ .scheme = "" }, .raw = "about:blank" };
+    pub const ParseError = ada.ParseError;
 
-    // We assume str will last as long as the URL
-    // In some cases, this is safe to do, because we know the URL is short lived.
-    // In most cases though, we assume the caller will just dupe the string URL
-    // into an arena
-    pub fn parse(str: []const u8, default_scheme: ?[]const u8) !URL {
-        var uri = Uri.parse(str) catch try Uri.parseAfterScheme(default_scheme orelse "https", str);
-
-        // special case, url scheme is about, like about:blank.
-        // Use an empty string as host.
-        if (std.mem.eql(u8, uri.scheme, "about")) {
-            uri.host = .{ .percent_encoded = "" };
-        }
-
-        if (uri.host == null) {
-            return error.MissingHost;
-        }
-
-        std.debug.assert(uri.host.? == .percent_encoded);
-
-        return .{
-            .uri = uri,
-            .raw = str,
+    /// Creates a new URL by parsing given `input`.
+    /// `input` will be duped; so it can be freed after a call to this function.
+    /// If `input` does not contain a scheme, `fallback_scheme` be used instead.
+    /// `fallback_scheme` is `https` if not provided.
+    pub fn parse(input: []const u8, fallback_scheme: ?[]const u8) ParseError!URL {
+        // Try parsing directly; if it fails, we might have to provide a base.
+        const internal = ada.parse(input) catch blk: {
+            break :blk try ada.parseWithBase(fallback_scheme orelse "https", input);
         };
+
+        return .{ .internal = internal };
     }
 
-    pub fn fromURI(arena: Allocator, uri: *const Uri) !URL {
-        // This is embarrassing.
-        var buf: std.ArrayListUnmanaged(u8) = .{};
-        try uri.writeToStream(.{
-            .scheme = true,
-            .authentication = true,
-            .authority = true,
-            .path = true,
-            .query = true,
-            .fragment = true,
-        }, buf.writer(arena));
-
-        return parse(buf.items, null);
+    pub fn parseWithBase(input: []const u8, base: []const u8) ParseError!URL {
+        const internal = try ada.parseWithBase(input, base);
+        return .{ .internal = internal };
     }
 
-    // Above, in `parse`, we error if a host doesn't exist
-    // In other words, we can't have a URL with a null host.
-    pub fn host(self: *const URL) []const u8 {
-        return self.uri.host.?.percent_encoded;
+    /// Uses the same URL to parse in-place.
+    /// Assumes `internal` is valid.
+    pub fn reparse(self: URL, str: []const u8) ParseError!URL {
+        std.debug.assert(self.internal != null);
+
+        _ = ada.setHref(self.internal, str);
+        if (!ada.isValid(self.internal)) {
+            return error.Invalid;
+        }
+
+        return self;
     }
 
-    pub fn port(self: *const URL) ?u16 {
-        return self.uri.port;
+    /// Forms a `URL` from given `internal`. Memory is not copied.
+    pub fn fromInternal(internal: ada.URL) URL {
+        return .{ .internal = internal };
     }
 
-    pub fn scheme(self: *const URL) []const u8 {
-        return self.uri.scheme;
+    /// Deinitializes internal url.
+    pub fn deinit(self: URL) void {
+        std.debug.assert(self.internal != null);
+        ada.free(self.internal);
     }
 
-    pub fn origin(self: *const URL, writer: *std.Io.Writer) !void {
-        return self.uri.writeToStream(writer, .{ .scheme = true, .authority = true });
+    /// Returns true if `internal` is initialized.
+    pub fn isValid(self: URL) bool {
+        return ada.isValid(self.internal);
     }
 
-    pub fn format(self: *const URL, writer: *std.Io.Writer) !void {
-        return writer.writeAll(self.raw);
+    pub fn setHost(self: URL, host_str: []const u8) error{InvalidHost}!void {
+        const is_set = ada.setHost(self.internal, host_str);
+        if (!is_set) return error.InvalidHost;
     }
 
-    pub fn toWebApi(self: *const URL, allocator: Allocator) !WebApiURL {
-        return WebApiURL.init(allocator, self.uri);
+    pub fn setPort(self: URL, port_str: []const u8) error{InvalidPort}!void {
+        const is_set = ada.setPort(self.internal, port_str);
+        if (!is_set) return error.InvalidPort;
+    }
+
+    pub fn getPort(self: URL) []const u8 {
+        const port = ada.getPortNullable(self.internal);
+        return port.data[0..port.length];
+    }
+
+    /// Above, in `parse`, we error if a host doesn't exist
+    /// In other words, we can't have a URL with a null host.
+    pub fn host(self: URL) []const u8 {
+        const str = ada.getHostNullable(self.internal);
+        if (str.data == null) {
+            return "";
+        }
+
+        return str.data[0..str.length];
+    }
+
+    pub fn getHref(self: URL) []const u8 {
+        const href = ada.getHrefNullable(self.internal);
+        if (href.data == null) {
+            return "";
+        }
+
+        return href.data[0..href.length];
+    }
+
+    pub fn getHostname(self: URL) []const u8 {
+        const hostname = ada.getHostnameNullable(self.internal);
+        return hostname.data[0..hostname.length];
+    }
+
+    pub fn setHostname(self: URL, hostname_str: []const u8) error{InvalidHostname}!void {
+        const is_set = ada.setHostname(self.internal, hostname_str);
+        if (!is_set) return error.InvalidHostname;
+    }
+
+    pub fn getUsername(self: URL) ?[]const u8 {
+        const username = ada.getUsernameNullable(self.internal);
+        if (username.data == null) return null;
+        return username.data[0..username.length];
+    }
+
+    pub fn setUsername(self: URL, username: []const u8) error{InvalidUsername}!void {
+        const is_set = ada.setUsername(self.internal, username);
+        if (!is_set) return error.InvalidUsername;
+    }
+
+    pub fn getPassword(self: URL) ?[]const u8 {
+        const password = ada.getPasswordNullable(self.internal);
+        if (password.data == null) return null;
+        return password.data[0..password.length];
+    }
+
+    pub fn setPassword(self: URL, password: []const u8) error{InvalidPassword}!void {
+        const is_set = ada.setPassword(self.internal, password);
+        if (!is_set) return error.InvalidPassword;
+    }
+
+    pub fn getFragment(self: URL) ?[]const u8 {
+        // Ada calls it "hash" instead of "fragment".
+        const hash = ada.getHashNullable(self.internal);
+        if (hash.data == null) return null;
+
+        return hash.data[0..hash.length];
+    }
+
+    pub fn getSearch(self: URL) ?[]const u8 {
+        const search = ada.getSearchNullable(self.internal);
+        if (search.data == null) return null;
+        return search.data[0..search.length];
+    }
+
+    pub fn setSearch(self: URL, search: []const u8) void {
+        return ada.setSearch(self.internal, search);
+    }
+
+    pub fn getHash(self: URL) ?[]const u8 {
+        const hash = ada.getHashNullable(self.internal);
+        if (hash.data == null) return null;
+        return hash.data[0..hash.length];
+    }
+
+    pub fn setHash(self: URL, hash: []const u8) void {
+        return ada.setHash(self.internal, hash);
+    }
+
+    pub fn getProtocol(self: URL) []const u8 {
+        return ada.getProtocol(self.internal);
+    }
+
+    pub fn setProtocol(self: URL, protocol_str: []const u8) error{InvalidProtocol}!void {
+        const is_set = ada.setProtocol(self.internal, protocol_str);
+        if (!is_set) return error.InvalidProtocol;
+    }
+
+    pub fn getScheme(self: URL) []const u8 {
+        const proto = self.getProtocol();
+        std.debug.assert(proto[proto.len - 1] == ':');
+
+        return proto.ptr[0 .. proto.len - 1];
+    }
+
+    /// Returns the path.
+    pub fn getPath(self: URL) []const u8 {
+        const pathname = ada.getPathnameNullable(self.internal);
+        // Return a slash if path is null.
+        if (pathname.data == null) {
+            return "/";
+        }
+
+        return pathname.data[0..pathname.length];
+    }
+
+    pub fn setPath(self: URL, path: []const u8) error{InvalidPath}!void {
+        const is_set = ada.setPathname(self.internal, path);
+        if (!is_set) return error.InvalidPath;
+    }
+
+    /// Returns true if the URL's protocol is secure.
+    pub fn isSecure(self: URL) bool {
+        const scheme = ada.getSchemeType(self.internal);
+        return scheme == ada.Scheme.https or scheme == ada.Scheme.wss;
+    }
+
+    pub fn writeToStream(self: URL, writer: anytype) !void {
+        return writer.writeAll(self.getHref());
+    }
+
+    /// Returns the origin string; caller owns the memory.
+    pub fn getOrigin(self: URL, allocator: Allocator) ![]const u8 {
+        const s = ada.getOriginNullable(self.internal);
+        if (s.data == null) {
+            return "";
+        }
+        defer ada.freeOwnedString(.{ .data = s.data, .length = s.length });
+
+        return allocator.dupe(u8, s.data[0..s.length]);
+    }
+
+    // TODO: Skip unnecessary allocation by writing url parts directly to stream.
+    pub fn origin(self: URL, writer: *std.Io.Writer) !void {
+        // Ada manages its own memory for origin.
+        // Here we write it to stream and free it afterwards.
+        const s = ada.getOriginNullable(self.internal);
+        if (s.data == null) {
+            return;
+        }
+        defer ada.freeOwnedString(.{ .data = s.data, .length = s.length });
+
+        return writer.writeAll(s.data[0..s.length]);
+    }
+
+    pub fn format(self: URL, writer: *std.Io.Writer) !void {
+        return self.writeToStream(writer);
+    }
+
+    /// Converts `URL` to `WebApiURL`.
+    pub fn toWebApi(self: URL, allocator: Allocator) !WebApiURL {
+        return WebApiURL.constructFromInternal(allocator, self.internal);
     }
 
     /// Properly stitches two URL fragments together.
