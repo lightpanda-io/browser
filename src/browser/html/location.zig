@@ -25,13 +25,14 @@ const URL = @import("../url/url.zig").URL;
 pub const Location = struct {
     url: URL,
 
+    /// Initializes the `Location` to be used in `Window`.
     /// Browsers give such initial values when user not navigated yet:
     /// Chrome  -> chrome://new-tab-page/
     /// Firefox -> about:newtab
     /// Safari  -> favorites://
-    pub const default = Location{
-        .url = .initWithoutSearchParams(Uri.parse("about:blank") catch unreachable),
-    };
+    pub fn init(url: []const u8) !Location {
+        return .{ .url = try .initForLocation(url) };
+    }
 
     pub fn get_href(self: *Location, page: *Page) ![]const u8 {
         return self.url.get_href(page);
@@ -45,16 +46,16 @@ pub const Location = struct {
         return self.url.get_protocol();
     }
 
-    pub fn get_host(self: *Location, page: *Page) ![]const u8 {
-        return self.url.get_host(page);
+    pub fn get_host(self: *Location) []const u8 {
+        return self.url.get_host();
     }
 
     pub fn get_hostname(self: *Location) []const u8 {
         return self.url.get_hostname();
     }
 
-    pub fn get_port(self: *Location, page: *Page) ![]const u8 {
-        return self.url.get_port(page);
+    pub fn get_port(self: *Location) []const u8 {
+        return self.url.get_port();
     }
 
     pub fn get_pathname(self: *Location) []const u8 {
@@ -65,8 +66,8 @@ pub const Location = struct {
         return self.url.get_search(page);
     }
 
-    pub fn get_hash(self: *Location, page: *Page) ![]const u8 {
-        return self.url.get_hash(page);
+    pub fn get_hash(self: *Location) []const u8 {
+        return self.url.get_hash();
     }
 
     pub fn get_origin(self: *Location, page: *Page) ![]const u8 {
@@ -86,7 +87,7 @@ pub const Location = struct {
     }
 
     pub fn _toString(self: *Location, page: *Page) ![]const u8 {
-        return try self.get_href(page);
+        return self.get_href(page);
     }
 };
 

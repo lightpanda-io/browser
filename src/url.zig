@@ -75,10 +75,6 @@ pub const URL = struct {
         return writer.writeAll(self.raw);
     }
 
-    pub fn toWebApi(self: *const URL, allocator: Allocator) !WebApiURL {
-        return WebApiURL.init(allocator, self.uri);
-    }
-
     /// Properly stitches two URL fragments together.
     ///
     /// For URLs with a path, it will replace the last entry with the src.
