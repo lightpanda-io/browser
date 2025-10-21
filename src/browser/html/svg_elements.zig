@@ -25,7 +25,7 @@ pub const SVGElement = struct {
     // Currently the prototype chain is not implemented (will not be returned by toInterface())
     // For that we need parser.SvgElement and the derived types with tags in the v-table.
     pub const prototype = *Element;
-    // While this is a Node, could consider not exposing the subtype untill we have
+    // While this is a Node, could consider not exposing the subtype until we have
     // a Self type to cast to.
     pub const subtype = .node;
 };

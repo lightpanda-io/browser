@@ -195,7 +195,7 @@ test "Performance: now" {
     }
 
     var after = perf._now();
-    while (after <= now) { // Loop untill after > now
+    while (after <= now) { // Loop until after > now
         try testing.expectEqual(after, now);
         after = perf._now();
     }

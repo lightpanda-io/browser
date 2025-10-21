@@ -473,7 +473,7 @@ pub const Node = struct {
 
     // Check if the hierarchy node tree constraints are respected.
     // For now, it checks only if new nodes are not self.
-    // TODO implements the others contraints.
+    // TODO implements the others constraints.
     // see https://dom.spec.whatwg.org/#concept-node-tree
     pub fn hierarchy(self: *parser.Node, nodes: []const NodeOrText) bool {
         for (nodes) |n| {

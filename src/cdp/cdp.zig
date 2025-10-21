@@ -702,7 +702,7 @@ const IsolatedWorld = struct {
     // The isolate world must share at least some of the state with the related page, specifically the DocumentHTML
     // (assuming grantUniveralAccess will be set to True!).
     // We just created the world and the page. The page's state lives in the session, but is update on navigation.
-    // This also means this pointer becomes invalid after removePage untill a new page is created.
+    // This also means this pointer becomes invalid after removePage until a new page is created.
     // Currently we have only 1 page/frame and thus also only 1 state in the isolate world.
     pub fn createContext(self: *IsolatedWorld, page: *Page) !void {
         // if (self.executor.context != null) return error.Only1IsolatedContextSupported;
