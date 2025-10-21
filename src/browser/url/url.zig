@@ -18,6 +18,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Writer = std.Io.Writer;
+const ada = @import("ada");
 
 const js = @import("../js/js.zig");
 const parser = @import("../netsurf.zig");
@@ -35,182 +37,224 @@ pub const Interfaces = .{
     EntryIterable,
 };
 
-// https://url.spec.whatwg.org/#url
-//
-// TODO we could avoid many of these getter string allocatoration in two differents
-// way:
-//
-// 1. We can eventually get the slice of scheme *with* the following char in
-// the underlying string. But I don't know if it's possible and how to do that.
-// I mean, if the rawuri contains `https://foo.bar`, uri.scheme is a slice
-// containing only `https`. I want `https:` so, in theory, I don't need to
-// allocatorate data, I should be able to retrieve the scheme + the following `:`
-// from rawuri.
-//
-// 2. The other way would be to copy the `std.Uri` code to have a dedicated
-// parser including the characters we want for the web API.
+/// https://developer.mozilla.org/en-US/docs/Web/API/URL/URL
 pub const URL = struct {
-    uri: std.Uri,
+    internal: ada.URL,
+    /// We prefer in-house search params solution here;
+    /// ada's search params impl use more memory.
+    /// It also offers it's own iterator implementation
+    /// where we'd like to use ours.
     search_params: URLSearchParams,
 
     pub const empty = URL{
-        .uri = .{ .scheme = "" },
+        .internal = null,
         .search_params = .{},
     };
 
-    const URLArg = union(enum) {
-        url: *URL,
-        element: *parser.ElementHTML,
+    // You can use an existing URL object for either argument, and it will be
+    // stringified from the object's href property.
+    const ConstructorArg = union(enum) {
         string: []const u8,
+        url: *const URL,
+        element: *parser.Element,
 
-        fn toString(self: URLArg, arena: Allocator) !?[]const u8 {
-            switch (self) {
-                .string => |s| return s,
-                .url => |url| return try url.toString(arena),
-                .element => |e| return try parser.elementGetAttribute(@ptrCast(e), "href"),
-            }
+        fn toString(self: ConstructorArg, page: *Page) ![]const u8 {
+            return switch (self) {
+                .string => |s| s,
+                .url => |url| url._toString(page),
+                .element => |e| {
+                    const attrib = try parser.elementGetAttribute(@ptrCast(e), "href") orelse {
+                        return error.InvalidArgument;
+                    };
+
+                    return attrib;
+                },
+            };
         }
     };
 
-    pub fn constructor(url: URLArg, base: ?URLArg, page: *Page) !URL {
-        const arena = page.arena;
-        const url_str = try url.toString(arena) orelse return error.InvalidArgument;
+    pub fn constructor(url: ConstructorArg, maybe_base: ?ConstructorArg, page: *Page) !URL {
+        const url_str = try url.toString(page);
 
-        var raw: ?[]const u8 = null;
-        if (base) |b| {
-            if (try b.toString(arena)) |bb| {
-                raw = try @import("../../url.zig").URL.stitch(arena, url_str, bb, .{});
+        const internal = try blk: {
+            if (maybe_base) |base| {
+                break :blk ada.parseWithBase(url_str, try base.toString(page));
             }
-        }
 
-        if (raw == null) {
-            // if it was a URL, then it's already be owned by the arena
-            raw = if (url == .url) url_str else try arena.dupe(u8, url_str);
-        }
-
-        const uri = std.Uri.parse(raw.?) catch blk: {
-            if (!std.mem.endsWith(u8, raw.?, "://")) {
-                return error.TypeError;
-            }
-            // schema only is valid!
-            break :blk std.Uri{
-                .scheme = raw.?[0 .. raw.?.len - 3],
-                .host = .{ .percent_encoded = "" },
-            };
+            break :blk ada.parse(url_str);
         };
 
-        return init(arena, uri);
-    }
-
-    pub fn init(arena: Allocator, uri: std.Uri) !URL {
         return .{
-            .uri = uri,
-            .search_params = try URLSearchParams.init(
-                arena,
-                uriComponentNullStr(uri.query),
-            ),
+            .internal = internal,
+            .search_params = try prepareSearchParams(page.arena, internal),
         };
     }
 
-    pub fn initWithoutSearchParams(uri: std.Uri) URL {
-        return .{ .uri = uri, .search_params = .{} };
+    pub fn destructor(self: *const URL) void {
+        // Not tracked by arena.
+        return ada.free(self.internal);
     }
 
-    pub fn get_origin(self: *URL, page: *Page) ![]const u8 {
-        var aw = std.Io.Writer.Allocating.init(page.arena);
-        try self.uri.writeToStream(&aw.writer, .{
-            .scheme = true,
-            .authentication = false,
-            .authority = true,
-            .path = false,
-            .query = false,
-            .fragment = false,
-        });
-        return aw.written();
+    /// Only to be used by `Location` API. `url` MUST NOT provide search params.
+    pub fn initForLocation(url: []const u8) !URL {
+        return .{ .internal = try ada.parse(url), .search_params = .{} };
     }
 
-    // get_href returns the URL by writing all its components.
-    pub fn get_href(self: *URL, page: *Page) ![]const u8 {
-        return self.toString(page.arena);
+    /// Reinitializes the URL by parsing given `url`. Search params can be provided.
+    pub fn reinit(self: *URL, url: []const u8, page: *Page) !void {
+        _ = ada.setHref(self.internal, url);
+        if (!ada.isValid(self.internal)) return error.Internal;
+
+        self.search_params = try prepareSearchParams(page.arena, self.internal);
     }
 
-    pub fn _toString(self: *URL, page: *Page) ![]const u8 {
-        return self.toString(page.arena);
+    /// Prepares a `URLSearchParams` from given `internal`.
+    /// Resets `search` of `internal`.
+    fn prepareSearchParams(arena: Allocator, internal: ada.URL) !URLSearchParams {
+        const maybe_search = ada.getSearchNullable(internal);
+        // Empty.
+        if (maybe_search.data == null) return .{};
+
+        const search = maybe_search.data[0..maybe_search.length];
+        const search_params = URLSearchParams.initFromString(arena, search);
+        // After a call to this function, search params are tracked by
+        // `search_params`. So we reset the internal's search.
+        ada.clearSearch(internal);
+
+        return search_params;
     }
 
-    // format the url with all its components.
-    pub fn toString(self: *const URL, arena: Allocator) ![]const u8 {
-        var aw = std.Io.Writer.Allocating.init(arena);
-        try self.uri.writeToStream(&aw.writer, .{
-            .scheme = true,
-            .authentication = true,
-            .authority = true,
-            .path = uriComponentNullStr(self.uri.path).len > 0,
-        });
-
-        if (self.search_params.get_size() > 0) {
-            try aw.writer.writeByte('?');
-            try self.search_params.write(&aw.writer);
-        }
-
-        {
-            const fragment = uriComponentNullStr(self.uri.fragment);
-            if (fragment.len > 0) {
-                try aw.writer.writeByte('#');
-                try aw.writer.writeAll(fragment);
-            }
-        }
-
-        return aw.written();
+    pub fn clearPort(self: *const URL) void {
+        return ada.clearPort(self.internal);
     }
 
-    pub fn get_protocol(self: *const URL) []const u8 {
-        // std.Uri keeps a pointer to "https", "http" (scheme part) so we know
-        // its followed by ':'.
-        const scheme = self.uri.scheme;
-        return scheme.ptr[0 .. scheme.len + 1];
+    pub fn clearHash(self: *const URL) void {
+        return ada.clearHash(self.internal);
     }
 
-    pub fn get_username(self: *URL) []const u8 {
-        return uriComponentNullStr(self.uri.user);
+    /// Alias to get_href.
+    pub fn _toString(self: *const URL, page: *Page) ![]const u8 {
+        return self.get_href(page);
     }
 
-    pub fn get_password(self: *URL) []const u8 {
-        return uriComponentNullStr(self.uri.password);
+    // Getters.
+
+    pub fn get_searchParams(self: *URL) *URLSearchParams {
+        return &self.search_params;
     }
 
-    pub fn get_host(self: *URL, page: *Page) ![]const u8 {
-        var aw = std.Io.Writer.Allocating.init(page.arena);
-        try self.uri.writeToStream(&aw.writer, .{
-            .scheme = false,
-            .authentication = false,
-            .authority = true,
-            .path = false,
-            .query = false,
-            .fragment = false,
-        });
-        return aw.written();
-    }
-
-    pub fn get_hostname(self: *URL) []const u8 {
-        return uriComponentNullStr(self.uri.host);
-    }
-
-    pub fn get_port(self: *URL, page: *Page) ![]const u8 {
+    pub fn get_origin(self: *const URL, page: *Page) ![]const u8 {
         const arena = page.arena;
-        if (self.uri.port == null) return try arena.dupe(u8, "");
+        // `ada.getOriginNullable` allocates memory in order to find the `origin`.
+        // We'd like to use our arena allocator for such case;
+        // so here we allocate the `origin` in page arena and free the original.
+        const maybe_origin = ada.getOriginNullable(self.internal);
+        if (maybe_origin.data == null) {
+            return "";
+        }
+        defer ada.freeOwnedString(maybe_origin);
 
-        var aw = std.Io.Writer.Allocating.init(arena);
-        try aw.writer.printInt(self.uri.port.?, 10, .lower, .{});
-        return aw.written();
+        const origin = maybe_origin.data[0..maybe_origin.length];
+        return arena.dupe(u8, origin);
     }
 
-    pub fn get_pathname(self: *URL) []const u8 {
-        if (uriComponentStr(self.uri.path).len == 0) return "/";
-        return uriComponentStr(self.uri.path);
+    pub fn get_href(self: *const URL, page: *Page) ![]const u8 {
+        var w: Writer.Allocating = .init(page.arena);
+
+        // If URL is not valid, return immediately.
+        if (!ada.isValid(self.internal)) {
+            return "";
+        }
+
+        // Since the earlier check passed, this can't be null.
+        const str = ada.getHrefNullable(self.internal);
+        const href = str.data[0..str.length];
+        // This can't be null either.
+        const comps = ada.getComponents(self.internal);
+        // If hash provided, we write it after we fit-in the search params.
+        const has_hash = comps.hash_start != ada.URLOmitted;
+        const href_part = if (has_hash) href[0..comps.hash_start] else href;
+        try w.writer.writeAll(href_part);
+
+        // Write search params if provided.
+        if (self.search_params.get_size() > 0) {
+            try w.writer.writeByte('?');
+            try self.search_params.write(&w.writer);
+        }
+
+        // Write hash if provided before.
+        const hash = self.get_hash();
+        try w.writer.writeAll(hash);
+
+        return w.written();
     }
 
-    pub fn get_search(self: *URL, page: *Page) ![]const u8 {
+    pub fn get_username(self: *const URL) []const u8 {
+        const username = ada.getUsernameNullable(self.internal);
+        if (username.data == null) {
+            return "";
+        }
+
+        return username.data[0..username.length];
+    }
+
+    pub fn get_password(self: *const URL) []const u8 {
+        const password = ada.getPasswordNullable(self.internal);
+        if (password.data == null) {
+            return "";
+        }
+
+        return password.data[0..password.length];
+    }
+
+    pub fn get_port(self: *const URL) []const u8 {
+        const port = ada.getPortNullable(self.internal);
+        if (port.data == null) {
+            return "";
+        }
+
+        return port.data[0..port.length];
+    }
+
+    pub fn get_hash(self: *const URL) []const u8 {
+        const hash = ada.getHashNullable(self.internal);
+        if (hash.data == null) {
+            return "";
+        }
+
+        return hash.data[0..hash.length];
+    }
+
+    pub fn get_host(self: *const URL) []const u8 {
+        const host = ada.getHostNullable(self.internal);
+        if (host.data == null) {
+            return "";
+        }
+
+        return host.data[0..host.length];
+    }
+
+    pub fn get_hostname(self: *const URL) []const u8 {
+        const hostname = ada.getHostnameNullable(self.internal);
+        if (hostname.data == null) {
+            return "";
+        }
+
+        return hostname.data[0..hostname.length];
+    }
+
+    pub fn get_pathname(self: *const URL) []const u8 {
+        const path = ada.getPathnameNullable(self.internal);
+        // Return a slash if path is null.
+        if (path.data == null) {
+            return "/";
+        }
+
+        return path.data[0..path.length];
+    }
+
+    /// get_search depends on the current state of `search_params`.
+    pub fn get_search(self: *const URL, page: *Page) ![]const u8 {
         const arena = page.arena;
 
         if (self.search_params.get_size() == 0) {
@@ -223,72 +267,103 @@ pub const URL = struct {
         return buf.items;
     }
 
-    pub fn set_search(self: *URL, qs_: ?[]const u8, page: *Page) !void {
+    pub fn get_protocol(self: *const URL) []const u8 {
+        const protocol = ada.getProtocolNullable(self.internal);
+        if (protocol.data == null) {
+            return "";
+        }
+
+        return protocol.data[0..protocol.length];
+    }
+
+    // Setters.
+
+    /// Ada-url don't define any errors, so we just prefer one unified
+    /// `Internal` error for failing cases.
+    const SetterError = error{Internal};
+
+    // FIXME: reinit search_params?
+    pub fn set_href(self: *const URL, input: []const u8) SetterError!void {
+        _ = ada.setHref(self.internal, input);
+        if (!ada.isValid(self.internal)) return error.Internal;
+    }
+
+    pub fn set_host(self: *const URL, input: []const u8) SetterError!void {
+        _ = ada.setHost(self.internal, input);
+        if (!ada.isValid(self.internal)) return error.Internal;
+    }
+
+    pub fn set_hostname(self: *const URL, input: []const u8) SetterError!void {
+        _ = ada.setHostname(self.internal, input);
+        if (!ada.isValid(self.internal)) return error.Internal;
+    }
+
+    pub fn set_protocol(self: *const URL, input: []const u8) SetterError!void {
+        _ = ada.setProtocol(self.internal, input);
+        if (!ada.isValid(self.internal)) return error.Internal;
+    }
+
+    pub fn set_username(self: *const URL, input: []const u8) SetterError!void {
+        _ = ada.setUsername(self.internal, input);
+        if (!ada.isValid(self.internal)) return error.Internal;
+    }
+
+    pub fn set_password(self: *const URL, input: []const u8) SetterError!void {
+        _ = ada.setPassword(self.internal, input);
+        if (!ada.isValid(self.internal)) return error.Internal;
+    }
+
+    pub fn set_port(self: *const URL, input: []const u8) SetterError!void {
+        _ = ada.setPort(self.internal, input);
+        if (!ada.isValid(self.internal)) return error.Internal;
+    }
+
+    pub fn set_pathname(self: *const URL, input: []const u8) SetterError!void {
+        _ = ada.setPathname(self.internal, input);
+        if (!ada.isValid(self.internal)) return error.Internal;
+    }
+
+    pub fn set_search(self: *URL, maybe_input: ?[]const u8, page: *Page) !void {
         self.search_params = .{};
-        if (qs_) |qs| {
-            self.search_params = try URLSearchParams.init(page.arena, qs);
+        if (maybe_input) |input| {
+            self.search_params = try .initFromString(page.arena, input);
         }
     }
 
-    pub fn get_hash(self: *URL, page: *Page) ![]const u8 {
-        const arena = page.arena;
-        if (self.uri.fragment == null) return try arena.dupe(u8, "");
-
-        return try std.mem.concat(arena, u8, &[_][]const u8{ "#", uriComponentNullStr(self.uri.fragment) });
-    }
-
-    pub fn get_searchParams(self: *URL) *URLSearchParams {
-        return &self.search_params;
-    }
-
-    pub fn _toJSON(self: *URL, page: *Page) ![]const u8 {
-        return self.get_href(page);
+    pub fn set_hash(self: *const URL, input: []const u8) !void {
+        ada.setHash(self.internal, input);
+        if (!ada.isValid(self.internal)) return error.Internal;
     }
 };
 
-// uriComponentNullStr converts an optional std.Uri.Component to string value.
-// The string value can be undecoded.
-fn uriComponentNullStr(c: ?std.Uri.Component) []const u8 {
-    if (c == null) return "";
-
-    return uriComponentStr(c.?);
-}
-
-fn uriComponentStr(c: std.Uri.Component) []const u8 {
-    return switch (c) {
-        .raw => |v| v,
-        .percent_encoded => |v| v,
-    };
-}
-
-// https://url.spec.whatwg.org/#interface-urlsearchparams
 pub const URLSearchParams = struct {
     entries: kv.List = .{},
 
-    const URLSearchParamsOpts = union(enum) {
-        qs: []const u8,
+    pub const ConstructorOptions = union(enum) {
+        query_string: []const u8,
         form_data: *const FormData,
-        js_obj: js.Object,
+        object: js.Object,
     };
-    pub fn constructor(opts_: ?URLSearchParamsOpts, page: *Page) !URLSearchParams {
-        const opts = opts_ orelse return .{ .entries = .{} };
-        return switch (opts) {
-            .qs => |qs| init(page.arena, qs),
-            .form_data => |fd| .{ .entries = try fd.entries.clone(page.arena) },
-            .js_obj => |js_obj| {
-                const arena = page.arena;
-                var it = js_obj.nameIterator();
 
-                var entries: kv.List = .{};
+    pub fn constructor(maybe_options: ?ConstructorOptions, page: *Page) !URLSearchParams {
+        const options = maybe_options orelse return .{};
+
+        const arena = page.arena;
+        return switch (options) {
+            .query_string => |string| .{ .entries = try parseQuery(arena, string) },
+            .form_data => |form_data| .{ .entries = try form_data.entries.clone(arena) },
+            .object => |object| {
+                var it = object.nameIterator();
+
+                var entries = kv.List{};
                 try entries.ensureTotalCapacity(arena, it.count);
 
                 while (try it.next()) |js_name| {
                     const name = try js_name.toString(arena);
-                    const js_val = try js_obj.get(name);
-                    entries.appendOwnedAssumeCapacity(
-                        name,
-                        try js_val.toString(arena),
-                    );
+                    const js_value = try object.get(name);
+                    const value = try js_value.toString(arena);
+
+                    entries.appendOwnedAssumeCapacity(name, value);
                 }
 
                 return .{ .entries = entries };
@@ -296,10 +371,9 @@ pub const URLSearchParams = struct {
         };
     }
 
-    pub fn init(arena: Allocator, qs_: ?[]const u8) !URLSearchParams {
-        return .{
-            .entries = if (qs_) |qs| try parseQuery(arena, qs) else .{},
-        };
+    /// Initializes URLSearchParams from a query string.
+    pub fn initFromString(arena: Allocator, query_string: []const u8) !URLSearchParams {
+        return .{ .entries = try parseQuery(arena, query_string) };
     }
 
     pub fn get_size(self: *const URLSearchParams) u32 {
