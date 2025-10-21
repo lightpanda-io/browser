@@ -487,7 +487,7 @@ pub const Client = struct {
     }
 
     // called by CDP
-    // Websocket frames have a variable lenght header. For server-client,
+    // Websocket frames have a variable length header. For server-client,
     // it could be anywhere from 2 to 10 bytes. Our IO.Loop doesn't have
     // writev, so we need to get creative. We'll JSON serialize to a
     // buffer, where the first 10 bytes are reserved. We can then backfill

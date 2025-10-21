@@ -286,7 +286,7 @@ const Opts = struct {
 
 // WEB IDL https://dom.spec.whatwg.org/#htmlcollection
 // HTMLCollection is re implemented in zig here because libdom
-// dom_html_collection expects a comparison function callback as arguement.
+// dom_html_collection expects a comparison function callback as argument.
 // But we wanted a dynamically comparison here, according to the match tagname.
 pub const HTMLCollection = struct {
     matcher: Matcher,
