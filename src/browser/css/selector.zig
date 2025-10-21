@@ -562,7 +562,7 @@ pub const Selector = union(enum) {
 
                         const ntag = try n.tag();
 
-                        if (std.ascii.eqlIgnoreCase("intput", ntag)) {
+                        if (std.ascii.eqlIgnoreCase("input", ntag)) {
                             const ntype = try n.attr("type");
                             if (ntype == null) return false;
 
