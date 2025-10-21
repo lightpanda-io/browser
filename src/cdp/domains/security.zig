@@ -21,9 +21,29 @@ const std = @import("std");
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
         enable,
+        setIgnoreCertificateErrors,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
         .enable => return cmd.sendResult(null, .{}),
+        .setIgnoreCertificateErrors => return setIgnoreCertificateErrors(cmd),
     }
+}
+
+fn setIgnoreCertificateErrors(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        ignore: bool,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    if (params.ignore) {
+        try cmd.cdp.browser.http_client.disableTlsVerify();
+    } else {
+        try cmd.cdp.browser.http_client.enableTlsVerify();
+    }
+
+    return cmd.sendResult(.{
+        .browserContextId = bc.id,
+    }, .{});
 }
