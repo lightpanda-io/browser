@@ -556,7 +556,19 @@ pub const Page = struct {
 
             // We do not processHTMLDoc here as we know we don't have any scripts
             // This assumption may be false when CDP Page.addScriptToEvaluateOnNewDocument is implemented
-            try HTMLDocument.documentIsComplete(self.window.document, self);
+            self.documentIsComplete();
+
+            self.session.browser.notification.dispatch(.page_navigate, &.{
+                .opts = opts,
+                .url = request_url,
+                .timestamp = timestamp(),
+            });
+
+            self.session.browser.notification.dispatch(.page_navigated, &.{
+                .url = request_url,
+                .timestamp = timestamp(),
+            });
+
             return;
         }
 
