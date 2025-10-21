@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const Page = @import("../../browser/page.zig").Page;
+const timestampF = @import("../../datetime.zig").timestamp;
 const Notification = @import("../../notification.zig").Notification;
 
 const Allocator = std.mem.Allocator;
@@ -82,11 +83,33 @@ fn setLifecycleEventsEnabled(cmd: anytype) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    if (params.enabled) {
-        try bc.lifecycleEventsEnable();
-    } else {
+
+    if (params.enabled == false) {
         bc.lifecycleEventsDisable();
+        return cmd.sendResult(null, .{});
     }
+
+    // Enable lifecycle events.
+    try bc.lifecycleEventsEnable();
+
+    // When we enable lifecycle events, we must dispatch events for all
+    // attached targets.
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+
+    if (page.load_state == .complete) {
+        try sendPageLifecycle(bc, "DOMContentLoaded", timestampF());
+        try sendPageLifecycle(bc, "load", timestampF());
+
+        const http_active = page.http_client.active;
+        const total_network_activity = http_active + page.http_client.intercepted;
+        if (page.notified_network_almost_idle.check(total_network_activity <= 2)) {
+            try sendPageLifecycle(bc, "networkAlmostIdle", timestampF());
+        }
+        if (page.notified_network_idle.check(total_network_activity == 0)) {
+            try sendPageLifecycle(bc, "networkIdle", timestampF());
+        }
+    }
+
     return cmd.sendResult(null, .{});
 }
 
