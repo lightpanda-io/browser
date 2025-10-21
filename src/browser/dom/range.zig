@@ -92,7 +92,7 @@ pub const Range = struct {
     pub fn _setStart(self: *Range, node: *parser.Node, offset_: i32) !void {
         try ensureValidOffset(node, offset_);
         const offset: u32 = @intCast(offset_);
-        const position = compare(node, offset, self.proto.start_node, self.proto.start_offset) catch |err| switch (err) {
+        const position = compare(node, offset, self.proto.end_node, self.proto.end_offset) catch |err| switch (err) {
             error.WrongDocument => blk: {
                 // allow a node with a different root than the current, or
                 // a disconnected one. Treat it as if it's "after", so that
@@ -103,7 +103,7 @@ pub const Range = struct {
         };
 
         if (position == 1) {
-            // if we're setting the node after the current start, the end must
+            // if we're setting the node after the current end, the end must
             // be set too.
             self.proto.end_offset = offset;
             self.proto.end_node = node;
@@ -378,7 +378,7 @@ fn compare(node_a: *parser.Node, offset_a: u32, node_b: *parser.Node, offset_b: 
 
         const child_parent, const child_index = try getParentAndIndex(child);
         std.debug.assert(node_a == child_parent);
-        return if (child_index < offset_a) -1 else 1;
+        return if (offset_a <= child_index) -1 else 1;
     }
 
     return -1;
