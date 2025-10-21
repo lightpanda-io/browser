@@ -21,9 +21,48 @@ const std = @import("std");
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
         enable,
+        setIgnoreCertificateErrors,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
         .enable => return cmd.sendResult(null, .{}),
+        .setIgnoreCertificateErrors => return setIgnoreCertificateErrors(cmd),
     }
+}
+
+fn setIgnoreCertificateErrors(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        ignore: bool,
+    })) orelse return error.InvalidParams;
+
+    if (params.ignore) {
+        try cmd.cdp.browser.http_client.disableTlsVerify();
+    } else {
+        try cmd.cdp.browser.http_client.enableTlsVerify();
+    }
+
+    return cmd.sendResult(null, .{});
+}
+
+const testing = @import("../testing.zig");
+
+test "cdp.Security: setIgnoreCertificateErrors" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-9" });
+
+    try ctx.processMessage(.{
+        .id = 8,
+        .method = "Security.setIgnoreCertificateErrors",
+        .params = .{ .ignore = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 8 });
+
+    try ctx.processMessage(.{
+        .id = 9,
+        .method = "Security.setIgnoreCertificateErrors",
+        .params = .{ .ignore = false },
+    });
+    try ctx.expectSentResult(null, .{ .id = 9 });
 }
