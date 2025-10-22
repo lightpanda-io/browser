@@ -281,10 +281,11 @@ pub const URL = struct {
     /// `Internal` error for failing cases.
     const SetterError = error{Internal};
 
-    // FIXME: reinit search_params?
-    pub fn set_href(self: *const URL, input: []const u8) SetterError!void {
+    pub fn set_href(self: *URL, input: []const u8, page: *Page) !void {
         _ = ada.setHref(self.internal, input);
         if (!ada.isValid(self.internal)) return error.Internal;
+        // Can't call `get_search` here since it uses `search_params`.
+        self.search_params = try prepareSearchParams(page.arena, self.internal);
     }
 
     pub fn set_host(self: *const URL, input: []const u8) SetterError!void {
