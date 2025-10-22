@@ -127,10 +127,10 @@ pub fn processNavigation(self: *Navigation, page: *Page) !void {
 
 /// Pushes an entry into the Navigation stack WITHOUT actually navigating to it.
 /// For that, use `navigate`.
-pub fn pushEntry(self: *Navigation, _url: ?[]const u8, state: ?[]const u8, page: *Page, dispatch: bool) !*NavigationHistoryEntry {
+pub fn pushEntry(self: *Navigation, _url: []const u8, state: ?[]const u8, page: *Page, dispatch: bool) !*NavigationHistoryEntry {
     const arena = page.session.arena;
 
-    const url = if (_url) |u| try arena.dupe(u8, u) else null;
+    const url = try arena.dupe(u8, _url);
 
     // truncates our history here.
     if (self.entries.items.len > self.index + 1) {
