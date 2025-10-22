@@ -267,8 +267,10 @@ pub const TraverseToOptions = struct {
     info: ?js.Object = null,
 };
 
-pub fn _traverseTo(self: *Navigation, key: []const u8, _: ?TraverseToOptions, page: *Page) !NavigationReturn {
-    // const opts = _opts orelse TraverseToOptions{};
+pub fn _traverseTo(self: *Navigation, key: []const u8, _opts: ?TraverseToOptions, page: *Page) !NavigationReturn {
+    if (_opts != null) {
+        log.debug(.browser, "not implemented", .{ .options = _opts });
+    }
 
     for (self.entries.items, 0..) |entry, i| {
         if (std.mem.eql(u8, key, entry.key)) {
