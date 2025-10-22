@@ -52,5 +52,7 @@ pub fn set_oncurrententrychange(self: *NavigationEventTarget, listener: ?EventHa
     if (self.oncurrententrychange_cbk) |cbk| try self.unregister("currententrychange", cbk.id);
     if (listener) |listen| {
         self.oncurrententrychange_cbk = try self.register(page.arena, "currententrychange", listen);
+    } else {
+        self.oncurrententrychange_cbk = null;
     }
 }
