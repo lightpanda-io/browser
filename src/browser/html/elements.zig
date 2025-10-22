@@ -272,14 +272,12 @@ pub const HTMLAnchorElement = struct {
         return error.NotProvided;
     }
 
-    // TODO return a disposable string
     pub fn get_origin(self: *parser.Anchor, page: *Page) ![]const u8 {
         var u = try url(self, page);
         defer u.destructor();
         return u.get_origin(page);
     }
 
-    // TODO return a disposable string
     pub fn get_protocol(self: *parser.Anchor, page: *Page) ![]const u8 {
         var u = try url(self, page);
         defer u.destructor();
@@ -296,7 +294,6 @@ pub const HTMLAnchorElement = struct {
         return parser.anchorSetHref(self, href);
     }
 
-    // TODO return a disposable string
     pub fn get_host(self: *parser.Anchor, page: *Page) ![]const u8 {
         var u = url(self, page) catch return "";
         defer u.destructor();
@@ -328,7 +325,6 @@ pub const HTMLAnchorElement = struct {
         return parser.anchorSetHref(self, href);
     }
 
-    // TODO return a disposable string
     pub fn get_port(self: *parser.Anchor, page: *Page) ![]const u8 {
         var u = url(self, page) catch return "";
         defer u.destructor();
@@ -349,7 +345,6 @@ pub const HTMLAnchorElement = struct {
         return parser.anchorSetHref(self, href);
     }
 
-    // TODO return a disposable string
     pub fn get_username(self: *parser.Anchor, page: *Page) ![]const u8 {
         var u = url(self, page) catch return "";
         defer u.destructor();
@@ -373,7 +368,6 @@ pub const HTMLAnchorElement = struct {
         return parser.anchorSetHref(self, href);
     }
 
-    // TODO return a disposable string
     pub fn get_password(self: *parser.Anchor, page: *Page) ![]const u8 {
         var u = url(self, page) catch return "";
         defer u.destructor();
@@ -392,7 +386,6 @@ pub const HTMLAnchorElement = struct {
         return parser.anchorSetHref(self, href);
     }
 
-    // TODO return a disposable string
     pub fn get_pathname(self: *parser.Anchor, page: *Page) ![]const u8 {
         var u = url(self, page) catch return "";
         defer u.destructor();
@@ -426,7 +419,6 @@ pub const HTMLAnchorElement = struct {
         return parser.anchorSetHref(self, href);
     }
 
-    // TODO return a disposable string
     pub fn get_hash(self: *parser.Anchor, page: *Page) ![]const u8 {
         var u = url(self, page) catch return "";
         defer u.destructor();
