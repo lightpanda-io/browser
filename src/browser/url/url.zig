@@ -144,7 +144,6 @@ pub const URL = struct {
     }
 
     pub fn get_origin(self: *const URL, page: *Page) ![]const u8 {
-        const arena = page.arena;
         // `ada.getOriginNullable` allocates memory in order to find the `origin`.
         // We'd like to use our arena allocator for such case;
         // so here we allocate the `origin` in page arena and free the original.
@@ -155,7 +154,7 @@ pub const URL = struct {
         defer ada.freeOwnedString(maybe_origin);
 
         const origin = maybe_origin.data[0..maybe_origin.length];
-        return arena.dupe(u8, origin);
+        return page.call_arena.dupe(u8, origin);
     }
 
     pub fn get_href(self: *const URL, page: *Page) ![]const u8 {

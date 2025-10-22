@@ -284,7 +284,7 @@ pub const HTMLAnchorElement = struct {
         var u = try url(self, page);
         defer u.destructor();
 
-        return page.arena.dupe(u8, u.get_protocol());
+        return page.call_arena.dupe(u8, u.get_protocol());
     }
 
     pub fn set_protocol(self: *parser.Anchor, protocol: []const u8, page: *Page) !void {
@@ -301,7 +301,7 @@ pub const HTMLAnchorElement = struct {
         var u = url(self, page) catch return "";
         defer u.destructor();
 
-        return page.arena.dupe(u8, u.get_host());
+        return page.call_arena.dupe(u8, u.get_host());
     }
 
     pub fn set_host(self: *parser.Anchor, host: []const u8, page: *Page) !void {
@@ -316,7 +316,7 @@ pub const HTMLAnchorElement = struct {
     pub fn get_hostname(self: *parser.Anchor, page: *Page) ![]const u8 {
         var u = url(self, page) catch return "";
         defer u.destructor();
-        return page.arena.dupe(u8, u.get_hostname());
+        return page.call_arena.dupe(u8, u.get_hostname());
     }
 
     pub fn set_hostname(self: *parser.Anchor, hostname: []const u8, page: *Page) !void {
@@ -332,7 +332,7 @@ pub const HTMLAnchorElement = struct {
     pub fn get_port(self: *parser.Anchor, page: *Page) ![]const u8 {
         var u = url(self, page) catch return "";
         defer u.destructor();
-        return page.arena.dupe(u8, u.get_port());
+        return page.call_arena.dupe(u8, u.get_port());
     }
 
     pub fn set_port(self: *parser.Anchor, maybe_port: ?[]const u8, page: *Page) !void {
@@ -359,7 +359,7 @@ pub const HTMLAnchorElement = struct {
             return "";
         }
 
-        return page.arena.dupe(u8, username);
+        return page.call_arena.dupe(u8, username);
     }
 
     pub fn set_username(self: *parser.Anchor, maybe_username: ?[]const u8, page: *Page) !void {
@@ -378,7 +378,7 @@ pub const HTMLAnchorElement = struct {
         var u = url(self, page) catch return "";
         defer u.destructor();
 
-        return page.arena.dupe(u8, u.get_password());
+        return page.call_arena.dupe(u8, u.get_password());
     }
 
     pub fn set_password(self: *parser.Anchor, maybe_password: ?[]const u8, page: *Page) !void {
@@ -397,7 +397,7 @@ pub const HTMLAnchorElement = struct {
         var u = url(self, page) catch return "";
         defer u.destructor();
 
-        return page.arena.dupe(u8, u.get_pathname());
+        return page.call_arena.dupe(u8, u.get_pathname());
     }
 
     pub fn set_pathname(self: *parser.Anchor, pathname: []const u8, page: *Page) !void {
@@ -431,7 +431,7 @@ pub const HTMLAnchorElement = struct {
         var u = url(self, page) catch return "";
         defer u.destructor();
 
-        return page.arena.dupe(u8, u.get_hash());
+        return page.call_arena.dupe(u8, u.get_hash());
     }
 
     pub fn set_hash(self: *parser.Anchor, maybe_hash: ?[]const u8, page: *Page) !void {
