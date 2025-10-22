@@ -180,7 +180,6 @@ fn createTarget(cmd: anytype) !void {
 
     try page.navigate(params.url, .{
         .reason = .address_bar,
-        .cdp_id = cmd.input.id,
     });
 
     try cmd.sendResult(.{
