@@ -93,3 +93,9 @@
   testing.expectEqual("", sk.hostname);
   testing.expectEqual("sveltekit-internal://", sk.href);
 </script>
+
+<script id=invalidUrl>
+  testing.expectError("Error: Invalid", () => {
+    _ = new URL("://foo.bar/path?query#fragment");
+  });
+</script>
