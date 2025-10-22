@@ -88,7 +88,7 @@ pub const NavigationHistoryEntry = struct {
     pub fn get_sameDocument(self: *const NavigationHistoryEntry, page: *Page) !bool {
         const _url = self.url orelse return false;
         const url = try URL.parse(_url, null);
-        return page.url.eqlDocument(&url, page.arena);
+        return page.url.eqlDocument(&url, page.call_arena);
     }
 
     pub fn get_url(self: *const NavigationHistoryEntry) ?[]const u8 {
