@@ -22,7 +22,7 @@ fn register(
     typ: []const u8,
     listener: EventHandler.Listener,
 ) !?js.Function {
-    const target = @as(*parser.EventTarget, @ptrCast(self));
+    const target = parser.toEventTarget(NavigationEventTarget, self);
 
     // The only time this can return null if the listener is already
     // registered. But before calling `register`, all of our functions
@@ -33,7 +33,7 @@ fn register(
 }
 
 fn unregister(self: *NavigationEventTarget, typ: []const u8, cbk_id: usize) !void {
-    const et = @as(*parser.EventTarget, @ptrCast(self));
+    const et = parser.toEventTarget(NavigationEventTarget, self);
     // check if event target has already this listener
     const lst = try parser.eventTargetHasListener(et, typ, false, cbk_id);
     if (lst == null) {
