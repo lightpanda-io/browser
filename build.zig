@@ -131,24 +131,6 @@ pub fn build(b: *Build) !void {
         const wpt_step = b.step("wpt", "WPT tests");
         wpt_step.dependOn(&wpt_cmd.step);
     }
-
-    {
-        // get v8
-        // -------
-        const v8 = b.dependency("v8", .{ .target = target, .optimize = optimize });
-        const get_v8 = b.addRunArtifact(v8.artifact("get-v8"));
-        const get_step = b.step("get-v8", "Get v8");
-        get_step.dependOn(&get_v8.step);
-    }
-
-    {
-        // build v8
-        // -------
-        const v8 = b.dependency("v8", .{ .target = target, .optimize = optimize });
-        const build_v8 = b.addRunArtifact(v8.artifact("build-v8"));
-        const build_step = b.step("build-v8", "Build v8");
-        build_step.dependOn(&build_v8.step);
-    }
 }
 
 fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !void {
@@ -171,27 +153,6 @@ fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !vo
         const v8_mod = b.dependency("v8", dep_opts).module("v8");
         v8_mod.addOptions("default_exports", v8_opts);
         mod.addImport("v8", v8_mod);
-
-        const release_dir = if (mod.optimize.? == .Debug) "debug" else "release";
-        const os = switch (target.result.os.tag) {
-            .linux => "linux",
-            .macos => "macos",
-            else => return error.UnsupportedPlatform,
-        };
-        var lib_path = try std.fmt.allocPrint(
-            mod.owner.allocator,
-            "v8/out/{s}/{s}/obj/zig/libc_v8.a",
-            .{ os, release_dir },
-        );
-        std.fs.cwd().access(lib_path, .{}) catch {
-            // legacy path
-            lib_path = try std.fmt.allocPrint(
-                mod.owner.allocator,
-                "v8/out/{s}/obj/zig/libc_v8.a",
-                .{release_dir},
-            );
-        };
-        mod.addObjectFile(mod.owner.path(lib_path));
 
         switch (target.result.os.tag) {
             .macos => {
