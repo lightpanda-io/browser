@@ -41,6 +41,10 @@ const FlatRenderer = struct {
 
     const Element = @import("dom/element.zig").Element;
 
+    // Define the size of each element in the grid.
+    const default_w = 5;
+    const default_h = 5;
+
     // we expect allocator to be an arena
     pub fn init(allocator: Allocator) FlatRenderer {
         return .{
@@ -62,10 +66,10 @@ const FlatRenderer = struct {
             gop.value_ptr.* = x;
         }
 
-        const _x: f64 = @floatFromInt(x);
+        const _x: f64 = @floatFromInt(x * default_w);
         const y: f64 = 0.0;
-        const w: f64 = 1.0;
-        const h: f64 = 1.0;
+        const w: f64 = default_w;
+        const h: f64 = default_h;
 
         return .{
             .x = _x,
@@ -98,17 +102,19 @@ const FlatRenderer = struct {
     }
 
     pub fn width(self: *const FlatRenderer) u32 {
-        return @max(@as(u32, @intCast(self.elements.items.len)), 1); // At least 1 pixel even if empty
+        return @max(@as(u32, @intCast(self.elements.items.len * default_w)), default_w); // At least default width pixels even if empty
     }
 
     pub fn height(_: *const FlatRenderer) u32 {
-        return 1;
+        return 5;
     }
 
-    pub fn getElementAtPosition(self: *const FlatRenderer, x: i32, y: i32) ?*parser.Element {
-        if (y != 0 or x < 0) {
+    pub fn getElementAtPosition(self: *const FlatRenderer, _x: i32, y: i32) ?*parser.Element {
+        if (y < 0 or y > default_h or _x < 0) {
             return null;
         }
+
+        const x = @divFloor(_x, default_w);
 
         const elements = self.elements.items;
         return if (x < elements.len) @ptrFromInt(elements[@intCast(x)]) else null;

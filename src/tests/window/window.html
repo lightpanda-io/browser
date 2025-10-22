@@ -25,9 +25,9 @@
 </script>
 
 <script id=dimensions>
-  testing.expectEqual(1, innerHeight);
-  // Width is 1 even if there are no elements
-  testing.expectEqual(1, innerWidth);
+  testing.expectEqual(5, innerHeight);
+  // Width is 5 even if there are no elements
+  testing.expectEqual(5, innerWidth);
 
   let div1 = document.createElement('div');
   document.body.appendChild(div1);
@@ -37,8 +37,8 @@
   document.body.appendChild(div2);
   div2.getClientRects();
 
-  testing.expectEqual(1, innerHeight);
-  testing.expectEqual(2, innerWidth);
+  testing.expectEqual(5, innerHeight);
+  testing.expectEqual(10, innerWidth);
 </script>
 
 <script id=setTimeout>

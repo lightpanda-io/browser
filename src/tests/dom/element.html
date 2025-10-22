@@ -168,35 +168,35 @@
 
 <script id=dimensions>
   const para = document.getElementById('para');
-  testing.expectEqual(1, para.clientWidth);
-  testing.expectEqual(1, para.clientHeight);
+  testing.expectEqual(5, para.clientWidth);
+  testing.expectEqual(5, para.clientHeight);
 
-  // let r1 = document.getElementById('para').getBoundingClientRect();
-  // testing.expectEqual(0, r1.x);
-  // testing.expectEqual(0, r1.y);
-  // testing.expectEqual(1, r1.width);
-  // testing.expectEqual(2, r1.height);
+  let r1 = document.getElementById('para').getBoundingClientRect();
+  testing.expectEqual(0, r1.x);
+  testing.expectEqual(0, r1.y);
+  testing.expectEqual(5, r1.width);
+  testing.expectEqual(5, r1.height);
 
-  // let r2 = document.getElementById('content').getBoundingClientRect();
-  // testing.expectEqual(1, r2.x);
-  // testing.expectEqual(0, r2.y);
-  // testing.expectEqual(1, r2.width);
-  // testing.expectEqual(1, r2.height);
+  let r2 = document.getElementById('content').getBoundingClientRect();
+  testing.expectEqual(5, r2.x);
+  testing.expectEqual(0, r2.y);
+  testing.expectEqual(5, r2.width);
+  testing.expectEqual(5, r2.height);
 
-  // let r3 = document.getElementById('para').getBoundingClientRect();
-  // testing.expectEqual(0, r3.x);
-  // testing.expectEqual(0, r3.y);
-  // testing.expectEqual(1, r3.width);
-  // testing.expectEqual(1, r3.height);
+  let r3 = document.getElementById('para').getBoundingClientRect();
+  testing.expectEqual(0, r3.x);
+  testing.expectEqual(0, r3.y);
+  testing.expectEqual(5, r3.width);
+  testing.expectEqual(5, r3.height);
 
-  // testing.expectEqual(1, para.clientWidth);
-  // testing.expectEqual(1, para.clientHeight);
+  testing.expectEqual(10, para.clientWidth);
+  testing.expectEqual(5, para.clientHeight);
 
-  // let r4 = document.createElement('div').getBoundingClientRect();
-  // testing.expectEqual(0, r4.x);
-  // testing.expectEqual(0, r4.y);
-  // testing.expectEqual(0, r4.width);
-  // testing.expectEqual(0, r4.height);
+  let r4 = document.createElement('div').getBoundingClientRect();
+  testing.expectEqual(0, r4.x);
+  testing.expectEqual(0, r4.y);
+  testing.expectEqual(0, r4.width);
+  testing.expectEqual(0, r4.height);
 </script>
 
 <script id=matches>
