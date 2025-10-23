@@ -132,6 +132,18 @@ pub const URL = struct {
         return ada.clearHash(self.internal);
     }
 
+    /// Returns a boolean indicating whether or not an absolute URL,
+    /// or a relative URL combined with a base URL, are parsable and valid.
+    pub fn static_canParse(url: ConstructorArg, maybe_base: ?ConstructorArg, page: *Page) !bool {
+        const url_str = try url.toString(page);
+
+        if (maybe_base) |base| {
+            return ada.canParseWithBase(url_str, try base.toString(page));
+        }
+
+        return ada.canParse(url_str);
+    }
+
     /// Alias to get_href.
     pub fn _toString(self: *const URL, page: *Page) ![]const u8 {
         return self.get_href(page);
