@@ -42,12 +42,12 @@ pub const HTMLDocument = struct {
     // JS funcs
     // --------
 
-    pub fn get_domain(self: *parser.DocumentHTML, page: *Page) ![]const u8 {
+    pub fn get_domain(self: *parser.DocumentHTML) ![]const u8 {
         // libdom's document_html get_domain always returns null, this is
         // the way MDN recommends getting the domain anyways, since document.domain
         // is deprecated.
         const location = try parser.documentHTMLGetLocation(Location, self) orelse return "";
-        return location.get_host(page);
+        return location.get_host();
     }
 
     pub fn set_domain(_: *parser.DocumentHTML, _: []const u8) ![]const u8 {

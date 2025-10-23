@@ -64,6 +64,23 @@
   testing.expectEqual(null, url.searchParams.get('a'));
 </script>
 
+<script id=searchParamsSetHref>
+  url = new URL("https://foo.bar");
+  const searchParams = url.searchParams;
+
+  // SearchParams should be empty.
+  testing.expectEqual(0, searchParams.size);
+
+  url.href = "https://lightpanda.io?over=9000&light=panda";
+  // It won't hurt to check href and host too.
+  testing.expectEqual("https://lightpanda.io/?over=9000&light=panda", url.href);
+  testing.expectEqual("lightpanda.io", url.host);
+  // SearchParams should be updated too when URL is set.
+  testing.expectEqual(2, searchParams.size);
+  testing.expectEqual("9000", searchParams.get("over"));
+  testing.expectEqual("panda", searchParams.get("light"));
+</script>
+
 <script id=base>
   url = new URL('over?9000', 'https://lightpanda.io');
   testing.expectEqual("https://lightpanda.io/over?9000", url.href);
@@ -78,6 +95,7 @@
 </script>
 
 <script id=invalidUrl>
-  let u = new URL("://foo.bar/path?query#fragment");
-  testing.expectEqual(":", u.protocol);
+  testing.expectError("Error: Invalid", () => {
+    _ = new URL("://foo.bar/path?query#fragment");
+  });
 </script>

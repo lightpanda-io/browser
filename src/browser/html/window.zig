@@ -53,7 +53,7 @@ pub const Window = struct {
 
     document: *parser.DocumentHTML,
     target: []const u8 = "",
-    location: Location = .default,
+    location: Location,
     storage_shelf: ?*storage.Shelf = null,
 
     // counter for having unique timer ids
@@ -79,6 +79,7 @@ pub const Window = struct {
         return .{
             .document = html_doc,
             .target = target orelse "",
+            .location = try .init("about:blank"),
             .navigator = navigator orelse .{},
             .performance = Performance.init(),
         };
@@ -87,6 +88,10 @@ pub const Window = struct {
     pub fn replaceLocation(self: *Window, loc: Location) !void {
         self.location = loc;
         try parser.documentHTMLSetLocation(Location, self.document, &self.location);
+    }
+
+    pub fn changeLocation(self: *Window, new_url: []const u8, page: *Page) !void {
+        return self.location.url.reinit(new_url, page);
     }
 
     pub fn replaceDocument(self: *Window, doc: *parser.DocumentHTML) !void {

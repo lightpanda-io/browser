@@ -859,7 +859,7 @@ pub const Page = struct {
         self.window.setStorageShelf(
             try self.session.storage_shed.getOrPut(try self.origin(self.arena)),
         );
-        try self.window.replaceLocation(.{ .url = try self.url.toWebApi(self.arena) });
+        try self.window.changeLocation(self.url.raw, self);
     }
 
     pub const MouseEvent = struct {
