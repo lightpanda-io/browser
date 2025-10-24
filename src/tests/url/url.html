@@ -99,3 +99,11 @@
     _ = new URL("://foo.bar/path?query#fragment");
   });
 </script>
+
+<script id=URL.canParse>
+  testing.expectEqual(true, URL.canParse("https://lightpanda.io"));
+  testing.expectEqual(false, URL.canParse("://lightpanda.io"));
+
+  testing.expectEqual(true, URL.canParse("/home", "https://lightpanda.io"));
+  testing.expectEqual(false, URL.canParse("lightpanda.io", "https"));
+</script>

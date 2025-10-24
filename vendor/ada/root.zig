@@ -33,6 +33,14 @@ pub fn parseWithBase(input: []const u8, base: []const u8) ParseError!URL {
     return url;
 }
 
+pub inline fn canParse(input: []const u8) bool {
+    return c.ada_can_parse(input.ptr, input.len);
+}
+
+pub inline fn canParseWithBase(input: []const u8, base: []const u8) bool {
+    return c.ada_can_parse_with_base(input.ptr, input.len, base.ptr, base.len);
+}
+
 pub inline fn getComponents(url: URL) *const URLComponents {
     return c.ada_get_components(url);
 }
