@@ -549,14 +549,31 @@ pub const Page = struct {
             .body = opts.body != null,
         });
 
-        // if the url is about:blank, nothing to do.
+        // if the url is about:blank, we load an empty HTML document in the
+        // page and dispatch the events.
         if (std.mem.eql(u8, "about:blank", request_url)) {
             const html_doc = try parser.documentHTMLParseFromStr("");
             try self.setDocument(html_doc);
 
+            // Assume we parsed the document.
+            // It's important to force a reset during the following navigation.
+            self.mode = .parsed;
+
             // We do not processHTMLDoc here as we know we don't have any scripts
             // This assumption may be false when CDP Page.addScriptToEvaluateOnNewDocument is implemented
-            try HTMLDocument.documentIsComplete(self.window.document, self);
+            self.documentIsComplete();
+
+            self.session.browser.notification.dispatch(.page_navigate, &.{
+                .opts = opts,
+                .url = request_url,
+                .timestamp = timestamp(),
+            });
+
+            self.session.browser.notification.dispatch(.page_navigated, &.{
+                .url = request_url,
+                .timestamp = timestamp(),
+            });
+
             return;
         }
 
