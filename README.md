@@ -190,10 +190,10 @@ For systems with [Nix](https://nixos.org/download/), you can use the devShell:
 nix develop
 ```
 
-For MacOS, you only need cmake:
+For MacOS, you need [Xcode](https://developer.apple.com/xcode/) and the following pacakges from homebrew:
 
 ```
-brew install cmake
+brew install cmake pkgconf
 ```
 
 ### Install and build dependencies
