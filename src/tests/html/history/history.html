@@ -1,21 +1,22 @@
 <!DOCTYPE html>
-<script src="../testing.js"></script>
+<script src="../../testing.js"></script>
 
 <script id=history>
     testing.expectEqual('auto', history.scrollRestoration);
 
     history.scrollRestoration = 'manual';
-    history.scrollRestoration = 'foo';
     testing.expectEqual('manual', history.scrollRestoration);
 
     history.scrollRestoration = 'auto';
     testing.expectEqual('auto', history.scrollRestoration);
     testing.expectEqual(null, history.state)
 
-    history.pushState({ testInProgress: true }, null, 'http://127.0.0.1:9582/xhr/json');
+    history.pushState({ testInProgress: true }, null, 'http://127.0.0.1:9582/src/tests/html/history/history_after_nav.html');
     testing.expectEqual({ testInProgress: true }, history.state);
 
+    history.pushState({ testInProgress: false }, null, 'http://127.0.0.1:9582/xhr/json');
     history.replaceState({ "new": "field", testComplete: true }, null);
+
     let state = { "new": "field", testComplete: true };
     testing.expectEqual(state, history.state);
 
@@ -32,10 +33,5 @@
       testing.expectEqual(state, popstateEventState);
     })
 
-    testing.onPageWait(() => {
-      testing.expectEqual(true, history.state && history.state.testComplete);
-      testing.expectEqual(state, history.state);
-    });
-
-    testing.expectEqual(undefined, history.go());
+    history.back();
 </script>

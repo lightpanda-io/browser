@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const js = @import("../js/js.zig");
 const Allocator = std.mem.Allocator;
 
 const log = @import("../../log.zig");
@@ -38,6 +39,7 @@ const ErrorEvent = @import("../html/error_event.zig").ErrorEvent;
 const MessageEvent = @import("../dom/MessageChannel.zig").MessageEvent;
 const PopStateEvent = @import("../html/History.zig").PopStateEvent;
 const CompositionEvent = @import("composition_event.zig").CompositionEvent;
+const NavigationCurrentEntryChangeEvent = @import("../navigation/navigation.zig").NavigationCurrentEntryChangeEvent;
 
 // Event interfaces
 pub const Interfaces = .{
@@ -50,6 +52,7 @@ pub const Interfaces = .{
     MessageEvent,
     PopStateEvent,
     CompositionEvent,
+    NavigationCurrentEntryChangeEvent,
 };
 
 pub const Union = generate.Union(Interfaces);
@@ -79,6 +82,9 @@ pub const Event = struct {
             .keyboard_event => .{ .KeyboardEvent = @as(*parser.KeyboardEvent, @ptrCast(evt)) },
             .pop_state => .{ .PopStateEvent = @as(*PopStateEvent, @ptrCast(evt)).* },
             .composition_event => .{ .CompositionEvent = (@as(*CompositionEvent, @fieldParentPtr("proto", evt))).* },
+            .navigation_current_entry_change_event => .{
+                .NavigationCurrentEntryChangeEvent = @as(*NavigationCurrentEntryChangeEvent, @ptrCast(evt)).*,
+            },
         };
     }
 
@@ -225,8 +231,6 @@ pub const EventHandler = struct {
     callback: js.Function,
     node: parser.EventNode,
     listener: *parser.EventListener,
-
-    const js = @import("../js/js.zig");
 
     pub const Listener = union(enum) {
         function: js.Function,
@@ -398,6 +402,40 @@ const SignalCallback = struct {
         );
     }
 };
+
+pub fn DirectEventHandler(
+    comptime TargetT: type,
+    target: *TargetT,
+    event_type: []const u8,
+    maybe_listener: ?EventHandler.Listener,
+    cb: *?js.Function,
+    page_arena: std.mem.Allocator,
+) !void {
+    const event_target = parser.toEventTarget(TargetT, target);
+
+    // Check if we have a listener set.
+    if (cb.*) |callback| {
+        const listener = try parser.eventTargetHasListener(event_target, event_type, false, callback.id);
+        std.debug.assert(listener != null);
+        try parser.eventTargetRemoveEventListener(event_target, event_type, listener.?, false);
+    }
+
+    if (maybe_listener) |listener| {
+        switch (listener) {
+            // If an object is given as listener, do nothing.
+            .object => {},
+            .function => |callback| {
+                _ = try EventHandler.register(page_arena, event_target, event_type, listener, null) orelse unreachable;
+                cb.* = callback;
+
+                return;
+            },
+        }
+    }
+
+    // Just unset the listener.
+    cb.* = null;
+}
 
 const testing = @import("../../testing.zig");
 test "Browser: Event" {

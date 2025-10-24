@@ -39,7 +39,7 @@ pub const Location = struct {
     }
 
     pub fn set_href(_: *const Location, href: []const u8, page: *Page) !void {
-        return page.navigateFromWebAPI(href, .{ .reason = .script });
+        return page.navigateFromWebAPI(href, .{ .reason = .script }, .{ .push = null });
     }
 
     pub fn get_protocol(self: *Location) []const u8 {
@@ -75,15 +75,15 @@ pub const Location = struct {
     }
 
     pub fn _assign(_: *const Location, url: []const u8, page: *Page) !void {
-        return page.navigateFromWebAPI(url, .{ .reason = .script });
+        return page.navigateFromWebAPI(url, .{ .reason = .script }, .{ .push = null });
     }
 
     pub fn _replace(_: *const Location, url: []const u8, page: *Page) !void {
-        return page.navigateFromWebAPI(url, .{ .reason = .script });
+        return page.navigateFromWebAPI(url, .{ .reason = .script }, .replace);
     }
 
     pub fn _reload(_: *const Location, page: *Page) !void {
-        return page.navigateFromWebAPI(page.url.raw, .{ .reason = .script });
+        return page.navigateFromWebAPI(page.url.raw, .{ .reason = .script }, .reload);
     }
 
     pub fn _toString(self: *Location, page: *Page) ![]const u8 {

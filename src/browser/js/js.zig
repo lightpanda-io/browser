@@ -378,7 +378,12 @@ pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bo
         .@"enum" => {
             const T = @TypeOf(value);
             if (@hasDecl(T, "toString")) {
+                // This should be deprecated in favor of the ENUM_JS_USE_TAG.
                 return simpleZigValueToJs(isolate, value.toString(), fail);
+            }
+
+            if (@hasDecl(T, "ENUM_JS_USE_TAG")) {
+                return simpleZigValueToJs(isolate, @tagName(value), fail);
             }
         },
         else => {},

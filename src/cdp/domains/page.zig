@@ -197,7 +197,7 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
     var cdp = bc.cdp;
     const reason_: ?[]const u8 = switch (event.opts.reason) {
         .anchor => "anchorClick",
-        .script, .history => "scriptInitiated",
+        .script, .history, .navigation => "scriptInitiated",
         .form => switch (event.opts.method) {
             .GET => "formSubmissionGet",
             .POST => "formSubmissionPost",

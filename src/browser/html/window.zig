@@ -25,6 +25,7 @@ const Page = @import("../page.zig").Page;
 
 const Navigator = @import("navigator.zig").Navigator;
 const History = @import("History.zig");
+const Navigation = @import("../navigation/Navigation.zig");
 const Location = @import("location.zig").Location;
 const Crypto = @import("../crypto/crypto.zig").Crypto;
 const Console = @import("../console/console.zig").Console;
@@ -42,6 +43,8 @@ const fetchFn = @import("../fetch/fetch.zig").fetch;
 
 const storage = @import("../storage/storage.zig");
 const ErrorEvent = @import("error_event.zig").ErrorEvent;
+
+const DirectEventHandler = @import("../events/event.zig").DirectEventHandler;
 
 // https://dom.spec.whatwg.org/#interface-window-extensions
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#window
@@ -69,6 +72,7 @@ pub const Window = struct {
     scroll_x: u32 = 0,
     scroll_y: u32 = 0,
     onload_callback: ?js.Function = null,
+    onpopstate_callback: ?js.Function = null,
 
     pub fn create(target: ?[]const u8, navigator: ?Navigator) !Window {
         var fbs = std.io.fixedBufferStream("");
@@ -115,31 +119,17 @@ pub const Window = struct {
 
     /// Sets `onload_callback`.
     pub fn set_onload(self: *Window, maybe_listener: ?EventHandler.Listener, page: *Page) !void {
-        const event_target = parser.toEventTarget(Window, self);
-        const event_type = "load";
+        try DirectEventHandler(Window, self, "load", maybe_listener, &self.onload_callback, page.arena);
+    }
 
-        // Check if we have a listener set.
-        if (self.onload_callback) |callback| {
-            const listener = try parser.eventTargetHasListener(event_target, event_type, false, callback.id);
-            std.debug.assert(listener != null);
-            try parser.eventTargetRemoveEventListener(event_target, event_type, listener.?, false);
-        }
+    /// Returns `onpopstate_callback`.
+    pub fn get_onpopstate(self: *const Window) ?js.Function {
+        return self.onpopstate_callback;
+    }
 
-        if (maybe_listener) |listener| {
-            switch (listener) {
-                // If an object is given as listener, do nothing.
-                .object => {},
-                .function => |callback| {
-                    _ = try EventHandler.register(page.arena, event_target, event_type, listener, null) orelse unreachable;
-                    self.onload_callback = callback;
-
-                    return;
-                },
-            }
-        }
-
-        // Just unset the listener.
-        self.onload_callback = null;
+    /// Sets `onpopstate_callback`.
+    pub fn set_onpopstate(self: *Window, maybe_listener: ?EventHandler.Listener, page: *Page) !void {
+        try DirectEventHandler(Window, self, "popstate", maybe_listener, &self.onpopstate_callback, page.arena);
     }
 
     pub fn get_location(self: *Window) *Location {
@@ -147,7 +137,7 @@ pub const Window = struct {
     }
 
     pub fn set_location(_: *const Window, url: []const u8, page: *Page) !void {
-        return page.navigateFromWebAPI(url, .{ .reason = .script });
+        return page.navigateFromWebAPI(url, .{ .reason = .script }, .{ .push = null });
     }
 
     // frames return the window itself, but accessing it via a pseudo
@@ -193,6 +183,10 @@ pub const Window = struct {
 
     pub fn get_history(_: *Window, page: *Page) *History {
         return &page.session.history;
+    }
+
+    pub fn get_navigation(_: *Window, page: *Page) *Navigation {
+        return &page.session.navigation;
     }
 
     //  The interior height of the window in pixels, including the height of the horizontal scroll bar, if present.

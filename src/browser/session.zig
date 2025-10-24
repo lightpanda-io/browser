@@ -22,9 +22,11 @@ const Allocator = std.mem.Allocator;
 
 const js = @import("js/js.zig");
 const Page = @import("page.zig").Page;
+const NavigationKind = @import("navigation/navigation.zig").NavigationKind;
 const Browser = @import("browser.zig").Browser;
 const NavigateOpts = @import("page.zig").NavigateOpts;
 const History = @import("html/History.zig");
+const Navigation = @import("navigation/Navigation.zig");
 
 const log = @import("../log.zig");
 const parser = @import("netsurf.zig");
@@ -57,6 +59,8 @@ pub const Session = struct {
     // History is persistent across the "tab".
     // https://developer.mozilla.org/en-US/docs/Web/API/History
     history: History = .{},
+    navigation: Navigation = .{},
+    navigation_kind: ?NavigationKind = null,
 
     page: ?Page = null,
 

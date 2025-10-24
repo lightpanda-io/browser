@@ -21,140 +21,79 @@ const log = @import("../../log.zig");
 
 const js = @import("../js/js.zig");
 const Page = @import("../page.zig").Page;
+const Window = @import("window.zig").Window;
 
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#the-history-interface
 const History = @This();
 
-const HistoryEntry = struct {
-    url: []const u8,
-    // This is serialized as JSON because
-    // History must survive a JsContext.
-    state: ?[]u8,
-};
-
 const ScrollRestorationMode = enum {
+    pub const ENUM_JS_USE_TAG = true;
+
     auto,
     manual,
-
-    pub fn fromString(str: []const u8) ?ScrollRestorationMode {
-        for (std.enums.values(ScrollRestorationMode)) |mode| {
-            if (std.ascii.eqlIgnoreCase(str, @tagName(mode))) {
-                return mode;
-            }
-        } else {
-            return null;
-        }
-    }
-
-    pub fn toString(self: ScrollRestorationMode) []const u8 {
-        return @tagName(self);
-    }
 };
 
 scroll_restoration: ScrollRestorationMode = .auto,
-stack: std.ArrayListUnmanaged(HistoryEntry) = .empty,
-current: ?usize = null,
 
-pub fn get_length(self: *History) u32 {
-    return @intCast(self.stack.items.len);
+pub fn get_length(_: *History, page: *Page) u32 {
+    return @intCast(page.session.navigation.entries.items.len);
 }
 
 pub fn get_scrollRestoration(self: *History) ScrollRestorationMode {
     return self.scroll_restoration;
 }
 
-pub fn set_scrollRestoration(self: *History, mode: []const u8) void {
-    self.scroll_restoration = ScrollRestorationMode.fromString(mode) orelse self.scroll_restoration;
+pub fn set_scrollRestoration(self: *History, mode: ScrollRestorationMode) void {
+    self.scroll_restoration = mode;
 }
 
-pub fn get_state(self: *History, page: *Page) !?js.Value {
-    if (self.current) |curr| {
-        const entry = self.stack.items[curr];
-        if (entry.state) |state| {
-            const value = try js.Value.fromJson(page.js, state);
-            return value;
-        } else {
-            return null;
-        }
+pub fn get_state(_: *History, page: *Page) !?js.Value {
+    if (page.session.navigation.currentEntry().state) |state| {
+        const value = try js.Value.fromJson(page.js, state);
+        return value;
     } else {
         return null;
     }
 }
 
-pub fn pushNavigation(self: *History, _url: []const u8, page: *Page) !void {
+pub fn _pushState(_: *const History, state: js.Object, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
     const arena = page.session.arena;
-    const url = try arena.dupe(u8, _url);
+    const url = if (_url) |u| try arena.dupe(u8, u) else try arena.dupe(u8, page.url.raw);
 
-    const entry = HistoryEntry{ .state = null, .url = url };
-    try self.stack.append(arena, entry);
-    self.current = self.stack.items.len - 1;
+    const json = state.toJson(arena) catch return error.DataClone;
+    _ = try page.session.navigation.pushEntry(url, json, page, true);
 }
 
-pub fn dispatchPopStateEvent(state: ?[]const u8, page: *Page) void {
-    log.debug(.script_event, "dispatch popstate event", .{
-        .type = "popstate",
-        .source = "history",
-    });
-    History._dispatchPopStateEvent(state, page) catch |err| {
-        log.err(.app, "dispatch popstate event error", .{
-            .err = err,
-            .type = "popstate",
-            .source = "history",
-        });
-    };
-}
-
-fn _dispatchPopStateEvent(state: ?[]const u8, page: *Page) !void {
-    var evt = try PopStateEvent.constructor("popstate", .{ .state = state });
-
-    _ = try parser.eventTargetDispatchEvent(
-        @as(*parser.EventTarget, @ptrCast(&page.window)),
-        &evt.proto,
-    );
-}
-
-pub fn _pushState(self: *History, state: js.Object, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
+pub fn _replaceState(_: *const History, state: js.Object, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
     const arena = page.session.arena;
 
+    const entry = page.session.navigation.currentEntry();
     const json = try state.toJson(arena);
     const url = if (_url) |u| try arena.dupe(u8, u) else try arena.dupe(u8, page.url.raw);
-    const entry = HistoryEntry{ .state = json, .url = url };
-    try self.stack.append(arena, entry);
-    self.current = self.stack.items.len - 1;
+
+    entry.state = json;
+    entry.url = url;
 }
 
-pub fn _replaceState(self: *History, state: js.Object, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
-    const arena = page.session.arena;
-
-    if (self.current) |curr| {
-        const entry = &self.stack.items[curr];
-        const json = try state.toJson(arena);
-        const url = if (_url) |u| try arena.dupe(u8, u) else try arena.dupe(u8, page.url.raw);
-        entry.* = HistoryEntry{ .state = json, .url = url };
-    } else {
-        try self._pushState(state, "", _url, page);
-    }
-}
-
-pub fn go(self: *History, delta: i32, page: *Page) !void {
+pub fn go(_: *const History, delta: i32, page: *Page) !void {
     // 0 behaves the same as no argument, both reloading the page.
-    // If this is getting called, there SHOULD be an entry, atleast from pushNavigation.
-    const current = self.current.?;
 
+    const current = page.session.navigation.index;
     const index_s: i64 = @intCast(@as(i64, @intCast(current)) + @as(i64, @intCast(delta)));
-    if (index_s < 0 or index_s > self.stack.items.len - 1) {
+    if (index_s < 0 or index_s > page.session.navigation.entries.items.len - 1) {
         return;
     }
 
     const index = @as(usize, @intCast(index_s));
-    const entry = self.stack.items[index];
-    self.current = index;
+    const entry = page.session.navigation.entries.items[index];
 
-    if (try page.isSameOrigin(entry.url)) {
-        History.dispatchPopStateEvent(entry.state, page);
+    if (entry.url) |url| {
+        if (try page.isSameOrigin(url)) {
+            PopStateEvent.dispatch(entry.state, page);
+        }
     }
 
-    try page.navigateFromWebAPI(entry.url, .{ .reason = .history });
+    _ = try page.session.navigation.navigate(entry.url, .{ .traverse = index }, page);
 }
 
 pub fn _go(self: *History, _delta: ?i32, page: *Page) !void {
@@ -207,9 +146,38 @@ pub const PopStateEvent = struct {
             return null;
         }
     }
+
+    pub fn dispatch(state: ?[]const u8, page: *Page) void {
+        log.debug(.script_event, "dispatch popstate event", .{
+            .type = "popstate",
+            .source = "history",
+        });
+
+        var evt = PopStateEvent.constructor("popstate", .{ .state = state }) catch |err| {
+            log.err(.app, "event constructor error", .{
+                .err = err,
+                .type = "popstate",
+                .source = "history",
+            });
+
+            return;
+        };
+
+        _ = parser.eventTargetDispatchEvent(
+            parser.toEventTarget(Window, &page.window),
+            &evt.proto,
+        ) catch |err| {
+            log.err(.app, "dispatch popstate event error", .{
+                .err = err,
+                .type = "popstate",
+                .source = "history",
+            });
+        };
+    }
 };
 
 const testing = @import("../../testing.zig");
 test "Browser: HTML.History" {
-    try testing.htmlRunner("html/history.html");
+    try testing.htmlRunner("html/history/history.html");
+    try testing.htmlRunner("html/history/history2.html");
 }

@@ -560,6 +560,7 @@ pub const EventType = enum(u8) {
     keyboard_event = 8,
     pop_state = 9,
     composition_event = 10,
+    navigation_current_entry_change_event = 11,
 };
 
 pub const MutationEvent = c.dom_mutation_event;
@@ -831,6 +832,7 @@ pub const EventTargetTBase = extern struct {
         message_port = 7,
         screen = 8,
         screen_orientation = 9,
+        navigation = 10,
     };
 
     vtable: ?*const c.struct_dom_event_target_vtable = &c.struct_dom_event_target_vtable{

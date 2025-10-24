@@ -750,9 +750,16 @@ pub fn jsValueToZig(self: *Context, comptime named_function: NamedFunction, comp
             unreachable;
         },
         .@"enum" => |e| {
-            switch (@typeInfo(e.tag_type)) {
-                .int => return std.meta.intToEnum(T, try jsIntToZig(e.tag_type, js_value, self.v8_context)),
-                else => @compileError(named_function.full_name ++ " has an unsupported enum parameter type: " ++ @typeName(T)),
+            if (@hasDecl(T, "ENUM_JS_USE_TAG")) {
+                const str = try self.jsValueToZig(named_function, []const u8, js_value);
+                return std.meta.stringToEnum(T, str) orelse return error.InvalidEnumValue;
+            } else {
+                switch (@typeInfo(e.tag_type)) {
+                    .int => return std.meta.intToEnum(T, try jsIntToZig(e.tag_type, js_value, self.v8_context)),
+                    else => {
+                        @compileError(named_function.full_name ++ " has an unsupported enum parameter type: " ++ @typeName(T));
+                    },
+                }
             }
         },
         else => {},

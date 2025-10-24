@@ -213,6 +213,26 @@ pub const URL = struct {
         buf.appendSliceAssumeCapacity(query_string);
         return buf.items;
     }
+
+    // Compares two URLs, returning true if it is the same document.
+    pub fn eqlDocument(self: *const URL, other: *const URL, arena: Allocator) !bool {
+        if (!std.mem.eql(u8, self.scheme(), other.scheme())) return false;
+        if (!std.mem.eql(u8, self.host(), other.host())) return false;
+        if (self.port() != other.port()) return false;
+
+        const path1 = try self.uri.path.toRawMaybeAlloc(arena);
+        const path2 = try other.uri.path.toRawMaybeAlloc(arena);
+
+        if ((self.uri.query == null) != (other.uri.query == null)) return false;
+        if (self.uri.query) |self_query| {
+            const other_query = other.uri.query.?;
+            const query1 = try self_query.toRawMaybeAlloc(arena);
+            const query2 = try other_query.toRawMaybeAlloc(arena);
+            if (!std.mem.eql(u8, query1, query2)) return false;
+        }
+
+        return std.mem.eql(u8, path1, path2);
+    }
 };
 
 const StitchOpts = struct {
@@ -547,5 +567,94 @@ test "URL: concatQueryString" {
     {
         const url = try URL.concatQueryString(arena, "https://www.lightpanda.io/index?1=2&", "a=b");
         try testing.expectEqual("https://www.lightpanda.io/index?1=2&a=b", url);
+    }
+}
+
+test "URL: eqlDocument" {
+    defer testing.reset();
+    const arena = testing.arena_allocator;
+
+    {
+        const url1 = try URL.parse("https://lightpanda.io/about", null);
+        const url2 = try URL.parse("https://lightpanda.io/about", null);
+        try testing.expectEqual(true, try url1.eqlDocument(&url2, arena));
+    }
+
+    {
+        const url1 = try URL.parse("https://lightpanda.io/about", null);
+        const url2 = try URL.parse("http://lightpanda.io/about", null);
+        try testing.expectEqual(false, try url1.eqlDocument(&url2, arena));
+    }
+
+    {
+        const url1 = try URL.parse("https://lightpanda.io/about", null);
+        const url2 = try URL.parse("https://example.com/about", null);
+        try testing.expectEqual(false, try url1.eqlDocument(&url2, arena));
+    }
+
+    {
+        const url1 = try URL.parse("https://lightpanda.io:8080/about", null);
+        const url2 = try URL.parse("https://lightpanda.io:9090/about", null);
+        try testing.expectEqual(false, try url1.eqlDocument(&url2, arena));
+    }
+
+    {
+        const url1 = try URL.parse("https://lightpanda.io/about", null);
+        const url2 = try URL.parse("https://lightpanda.io/contact", null);
+        try testing.expectEqual(false, try url1.eqlDocument(&url2, arena));
+    }
+
+    {
+        const url1 = try URL.parse("https://lightpanda.io/about?foo=bar", null);
+        const url2 = try URL.parse("https://lightpanda.io/about?baz=qux", null);
+        try testing.expectEqual(false, try url1.eqlDocument(&url2, arena));
+    }
+
+    {
+        const url1 = try URL.parse("https://lightpanda.io/about#section1", null);
+        const url2 = try URL.parse("https://lightpanda.io/about#section2", null);
+        try testing.expectEqual(true, try url1.eqlDocument(&url2, arena));
+    }
+
+    {
+        const url1 = try URL.parse("https://lightpanda.io/about", null);
+        const url2 = try URL.parse("https://lightpanda.io/about/", null);
+        try testing.expectEqual(false, try url1.eqlDocument(&url2, arena));
+    }
+
+    {
+        const url1 = try URL.parse("https://lightpanda.io/", null);
+        const url2 = try URL.parse("https://lightpanda.io", null);
+        try testing.expectEqual(false, try url1.eqlDocument(&url2, arena));
+    }
+
+    {
+        const url1 = try URL.parse("https://lightpanda.io/about?foo=bar", null);
+        const url2 = try URL.parse("https://lightpanda.io/about", null);
+        try testing.expectEqual(false, try url1.eqlDocument(&url2, arena));
+    }
+
+    {
+        const url1 = try URL.parse("https://lightpanda.io/about", null);
+        const url2 = try URL.parse("https://lightpanda.io/about?foo=bar", null);
+        try testing.expectEqual(false, try url1.eqlDocument(&url2, arena));
+    }
+
+    {
+        const url1 = try URL.parse("https://lightpanda.io/about?foo=bar", null);
+        const url2 = try URL.parse("https://lightpanda.io/about?foo=bar", null);
+        try testing.expectEqual(true, try url1.eqlDocument(&url2, arena));
+    }
+
+    {
+        const url1 = try URL.parse("https://lightpanda.io/about?", null);
+        const url2 = try URL.parse("https://lightpanda.io/about", null);
+        try testing.expectEqual(false, try url1.eqlDocument(&url2, arena));
+    }
+
+    {
+        const url1 = try URL.parse("https://duckduckgo.com/", null);
+        const url2 = try URL.parse("https://duckduckgo.com/?q=lightpanda", null);
+        try testing.expectEqual(false, try url1.eqlDocument(&url2, arena));
     }
 }
