@@ -46,6 +46,8 @@ pub fn build(b: *Build) !void {
         b.option([]const u8, "git_commit", "Current git commit") orelse "dev",
     );
 
+    const prebuilt_v8_path = b.option([]const u8, "prebuilt_v8_path", "Path to prebuilt libc_v8.a");
+
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -59,7 +61,7 @@ pub fn build(b: *Build) !void {
         .link_libc = true,
         .link_libcpp = true,
     });
-    try addDependencies(b, lightpanda_module, opts);
+    try addDependencies(b, lightpanda_module, opts, prebuilt_v8_path);
 
     {
         // browser
@@ -113,7 +115,7 @@ pub fn build(b: *Build) !void {
             .target = target,
             .optimize = optimize,
         });
-        try addDependencies(b, wpt_module, opts);
+        try addDependencies(b, wpt_module, opts, prebuilt_v8_path);
 
         // compile and install
         const wpt = b.addExecutable(.{
@@ -133,7 +135,7 @@ pub fn build(b: *Build) !void {
     }
 }
 
-fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !void {
+fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options, prebuilt_v8_path: ?[]const u8) !void {
     try moduleNetSurf(b, mod);
     mod.addImport("build_config", opts.createModule());
 
@@ -141,6 +143,7 @@ fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !vo
     const dep_opts = .{
         .target = target,
         .optimize = mod.optimize.?,
+        .prebuilt_v8_path = prebuilt_v8_path,
     };
 
     mod.addIncludePath(b.path("vendor/lightpanda"));
@@ -153,15 +156,6 @@ fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !vo
         const v8_mod = b.dependency("v8", dep_opts).module("v8");
         v8_mod.addOptions("default_exports", v8_opts);
         mod.addImport("v8", v8_mod);
-
-        switch (target.result.os.tag) {
-            .macos => {
-                // v8 has a dependency, abseil-cpp, which, on Mac, uses CoreFoundation
-                mod.addSystemFrameworkPath(.{ .cwd_relative = "/System/Library/Frameworks" });
-                mod.linkFramework("CoreFoundation", .{});
-            },
-            else => {},
-        }
     }
 
     {
