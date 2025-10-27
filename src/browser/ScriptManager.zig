@@ -651,6 +651,12 @@ pub const PendingScript = struct {
             return &self.manager.deferreds;
         }
 
+        // Module scripts are deferred by default.
+        // https://v8.dev/features/modules#defer
+        if (script.kind == .module) {
+            return &self.manager.deferreds;
+        }
+
         return &self.manager.scripts;
     }
 };
