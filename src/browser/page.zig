@@ -35,8 +35,8 @@ const ScriptManager = @import("ScriptManager.zig");
 const SlotChangeMonitor = @import("SlotChangeMonitor.zig");
 const HTMLDocument = @import("html/document.zig").HTMLDocument;
 
-const NavigationKind = @import("navigation/navigation.zig").NavigationKind;
-const NavigationCurrentEntryChangeEvent = @import("navigation/navigation.zig").NavigationCurrentEntryChangeEvent;
+const NavigationKind = @import("navigation/root.zig").NavigationKind;
+const NavigationCurrentEntryChangeEvent = @import("navigation/root.zig").NavigationCurrentEntryChangeEvent;
 
 const js = @import("js/js.zig");
 const URL = @import("../url.zig").URL;
