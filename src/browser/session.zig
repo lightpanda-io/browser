@@ -22,7 +22,7 @@ const Allocator = std.mem.Allocator;
 
 const js = @import("js/js.zig");
 const Page = @import("page.zig").Page;
-const NavigationKind = @import("navigation/navigation.zig").NavigationKind;
+const NavigationKind = @import("navigation/root.zig").NavigationKind;
 const Browser = @import("browser.zig").Browser;
 const NavigateOpts = @import("page.zig").NavigateOpts;
 const History = @import("html/History.zig");

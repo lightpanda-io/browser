@@ -32,12 +32,12 @@ const parser = @import("../netsurf.zig");
 // https://developer.mozilla.org/en-US/docs/Web/API/Navigation
 const Navigation = @This();
 
-const NavigationKind = @import("navigation.zig").NavigationKind;
-const NavigationHistoryEntry = @import("navigation.zig").NavigationHistoryEntry;
-const NavigationTransition = @import("navigation.zig").NavigationTransition;
-const NavigationEventTarget = @import("NavigationEventTarget.zig");
+const NavigationKind = @import("root.zig").NavigationKind;
+const NavigationHistoryEntry = @import("root.zig").NavigationHistoryEntry;
+const NavigationTransition = @import("root.zig").NavigationTransition;
+const NavigationCurrentEntryChangeEvent = @import("root.zig").NavigationCurrentEntryChangeEvent;
 
-const NavigationCurrentEntryChangeEvent = @import("navigation.zig").NavigationCurrentEntryChangeEvent;
+const NavigationEventTarget = @import("NavigationEventTarget.zig");
 
 pub const prototype = *NavigationEventTarget;
 proto: NavigationEventTarget = NavigationEventTarget{},
