@@ -488,16 +488,16 @@ pub const Page = struct {
         }
 
         {
-            std.debug.print("\nprimary schedule: {d}\n", .{self.scheduler.primary.count()});
-            var it = self.scheduler.primary.iterator();
+            std.debug.print("\nhigh_priority schedule: {d}\n", .{self.scheduler.high_priority.count()});
+            var it = self.scheduler.high_priority.iterator();
             while (it.next()) |task| {
                 std.debug.print(" - {s} schedule: {d}ms\n", .{ task.name, task.ms - now });
             }
         }
 
         {
-            std.debug.print("\nsecondary schedule: {d}\n", .{self.scheduler.secondary.count()});
-            var it = self.scheduler.secondary.iterator();
+            std.debug.print("\nlow_priority schedule: {d}\n", .{self.scheduler.low_priority.count()});
+            var it = self.scheduler.low_priority.iterator();
             while (it.next()) |task| {
                 std.debug.print(" - {s} schedule: {d}ms\n", .{ task.name, task.ms - now });
             }
