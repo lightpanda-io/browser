@@ -373,7 +373,11 @@ const Command = struct {
             \\                Defaults to
         ++ (if (builtin.mode == .Debug) " pretty." else " logfmt.") ++
             \\
-            \\ --user_agent_suffix
+            \\--log_filter_scopes
+            \\                Filter out too verbose logs per scope:
+            \\                http, unknown_prop, script_event, ...
+            \\
+            \\--user_agent_suffix
             \\                Suffix to append to the Lightpanda/X.Y User-Agent
             \\
         ;
