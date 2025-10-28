@@ -228,9 +228,9 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element, comptime c
     if (source == .@"inline") {
         // if we're here, it means that we have pending scripts (i.e. self.scripts
         // is not empty). Because the script is inline, it's complete/ready, but
-        // we need to process them in order
+        // we need to process them in order.
         pending_script.complete = true;
-        self.scripts.append(&pending_script.node);
+        pending_script.getList().append(&pending_script.node);
         return;
     } else {
         log.debug(.http, "script queue", .{
@@ -648,6 +648,12 @@ pub const PendingScript = struct {
         }
 
         if (script.is_defer) {
+            return &self.manager.deferreds;
+        }
+
+        // Module scripts are deferred by default.
+        // https://v8.dev/features/modules#defer
+        if (script.kind == .module) {
             return &self.manager.deferreds;
         }
 
