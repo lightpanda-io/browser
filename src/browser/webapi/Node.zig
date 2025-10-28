@@ -224,6 +224,11 @@ pub fn getRootNode(self: *const Node, opts_: ?GetRootNodeOpts) *const Node {
 }
 
 pub fn contains(self: *const Node, child: *const Node) bool {
+    if (self == child) {
+        // yes, this is correct
+        return true;
+    }
+
     var parent = child._parent;
     while (parent) |p| {
         if (p == self) {

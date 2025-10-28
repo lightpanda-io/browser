@@ -77,6 +77,8 @@
 </script>
 
 <script id=contains>
+  testing.expectEqual(true, document.contains(document));
+  testing.expectEqual(true, $('#d1').contains($('#d1')));
   testing.expectEqual(true, document.contains($('#d1')));
   testing.expectEqual(true, document.contains($('#p1')));
   testing.expectEqual(true, document.contains($('#p2')));
