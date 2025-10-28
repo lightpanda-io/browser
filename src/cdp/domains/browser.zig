@@ -38,16 +38,22 @@ const DEV_TOOLS_WINDOW_ID = 1923710101;
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
         getVersion,
-        setDownloadBehavior,
-        getWindowForTarget,
+        setPermission,
         setWindowBounds,
+        resetPermissions,
+        grantPermissions,
+        getWindowForTarget,
+        setDownloadBehavior,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
         .getVersion => return getVersion(cmd),
-        .setDownloadBehavior => return setDownloadBehavior(cmd),
-        .getWindowForTarget => return getWindowForTarget(cmd),
+        .setPermission => return setPermission(cmd),
         .setWindowBounds => return setWindowBounds(cmd),
+        .resetPermissions => return resetPermissions(cmd),
+        .grantPermissions => return grantPermissions(cmd),
+        .getWindowForTarget => return getWindowForTarget(cmd),
+        .setDownloadBehavior => return setDownloadBehavior(cmd),
     }
 }
 
@@ -86,6 +92,21 @@ fn getWindowForTarget(cmd: anytype) !void {
 
 // TODO: noop method
 fn setWindowBounds(cmd: anytype) !void {
+    return cmd.sendResult(null, .{});
+}
+
+// TODO: noop method
+fn grantPermissions(cmd: anytype) !void {
+    return cmd.sendResult(null, .{});
+}
+
+// TODO: noop method
+fn setPermission(cmd: anytype) !void {
+    return cmd.sendResult(null, .{});
+}
+
+// TODO: noop method
+fn resetPermissions(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
