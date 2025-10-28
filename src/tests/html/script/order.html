@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<script defer id="remote_defer" src="order_defer.js"></script>
+<script defer id="remote_async" src="order_async.js"></script>
+
+<script type=module id="inline_module">
+    // inline module is always deferred.
+    list += 'g';
+    testing.expectEqual('abcdefg', list);
+</script>
+
+<script>
+    var list = '';
+</script>
+
+<script id="remote" src="order.js"></script>
+
+<script async id="inline_async">
+    // inline script ignore async
+    list += 'b';
+    testing.expectEqual('ab', list);
+</script>
+
+<script defer id="inline_defer">
+    // inline script ignore defer
+    list += 'c';
+    testing.expectEqual('abc', list);
+</script>
+
+<script id="default">
+    // simple inline script
+    list += 'd';
+    testing.expectEqual('abcd', list);
+</script>

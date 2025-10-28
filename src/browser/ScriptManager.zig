@@ -643,17 +643,23 @@ pub const PendingScript = struct {
         // if async isn't known, it'll fallback to defer.
 
         const script = &self.script;
+
+        // Module scripts are deferred by default.
+        // https://v8.dev/features/modules#defer
+        if (script.kind == .module) {
+            return &self.manager.deferreds;
+        }
+
+        // Script is not a module but inline, we ignore async/defer properties.
+        if (script.source == .@"inline") {
+            return &self.manager.scripts;
+        }
+
         if (script.is_async) {
             return &self.manager.asyncs;
         }
 
         if (script.is_defer) {
-            return &self.manager.deferreds;
-        }
-
-        // Module scripts are deferred by default.
-        // https://v8.dev/features/modules#defer
-        if (script.kind == .module) {
             return &self.manager.deferreds;
         }
 
