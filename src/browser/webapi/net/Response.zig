@@ -35,7 +35,7 @@ pub fn getJson(self: *Response, page: *Page) !js.Promise {
     ) catch |err| {
         return page.js.rejectPromise(.{@errorName(err)});
     };
-    return page.js.resolvePromise(.{value});
+    return page.js.resolvePromise(value);
 }
 
 pub const JsApi = struct {

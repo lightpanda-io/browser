@@ -8,8 +8,8 @@ const Allocator = std.mem.Allocator;
 
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
-    dump_opts: dump.Opts,
-    dump_file: ?std.fs.File = null,
+    dump: dump.Opts,
+    writer: ?*std.Io.Writer = null,
 };
 pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
     const Browser = @import("browser/Browser.zig");
@@ -40,12 +40,9 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
     _ = try page.navigate(url, .{});
     _ = session.fetchWait(opts.wait_ms);
 
-    const file = opts.dump_file orelse return;
-
-    var buf: [4096]u8 = undefined;
-    var writer = file.writer(&buf);
-    try dump.deep(page.document.asNode(), opts.dump_opts, &writer.interface);
-    try writer.interface.flush();
+    const writer = opts.writer orelse return;
+    try dump.deep(page.document.asNode(), opts.dump, writer);
+    try writer.flush();
 }
 
 test {

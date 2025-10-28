@@ -311,7 +311,6 @@ fn generateConstructor(comptime JsApi: type, isolate: v8.Isolate) v8.FunctionTem
     return template;
 }
 
-
 // ZIGDOM (HTMLAllCollection I think)
 // fn generateUndetectable(comptime Struct: type, template: v8.ObjectTemplate) void {
 //     const has_js_call_as_function = @hasDecl(Struct, "jsCallAsFunction");

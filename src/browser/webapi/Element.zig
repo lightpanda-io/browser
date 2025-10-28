@@ -118,7 +118,7 @@ pub fn getTagNameLower(self: *const Element) []const u8 {
                 .script => "script",
                 .select => "select",
                 .style => "style",
-                .text_area => "textara",
+                .text_area => "textarea",
                 .title => "title",
                 .ul => "ul",
                 .unknown => |e| e._tag_name.str(),
@@ -311,9 +311,14 @@ pub fn getAttributeNames(self: *const Element, page: *Page) ![][]const u8 {
     return attributes.getNames(page);
 }
 
-pub fn getAttributeNamedNodeMap(self: *Element) Attribute.NamedNodeMap {
-    const attributes = self._attributes orelse return .{};
-    return .{ ._list = attributes.*, ._element = self };
+pub fn getAttributeNamedNodeMap(self: *Element, page: *Page) !*Attribute.NamedNodeMap {
+    const gop = try page._attribute_named_node_map_lookup.getOrPut(page.arena, @intFromPtr(self));
+    if (!gop.found_existing) {
+        const attributes = try self.getOrCreateAttributeList(page);
+        const named_node_map = try page._factory.create(Attribute.NamedNodeMap{ ._list = attributes, ._element = self });
+        gop.value_ptr.* = named_node_map;
+    }
+    return gop.value_ptr.*;
 }
 
 pub fn getStyle(self: *Element, page: *Page) !*CSSStyleProperties {

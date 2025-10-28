@@ -387,7 +387,6 @@ pub fn throw(self: *Context, err: []const u8) js.Exception {
 pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOpts) !v8.Value {
     const isolate = self.isolate;
 
-
     // Check if it's a "simple" type. This is extracted so that it can be
     // reused by other parts of the code. "simple" types only require an
     // isolate to create (specifically, they don't our templates array)
@@ -594,7 +593,6 @@ pub fn mapZigInstanceToJs(self: *Context, js_obj_: ?v8.Object, value: anytype) !
                 break :blk template.getInstanceTemplate().initInstance(v8_context);
             };
             const JsApi = bridge.Struct(ptr.child).JsApi;
-
 
             // The TAO contains the pointer to our Zig instance as
             // well as any meta data we'll need to use it later.

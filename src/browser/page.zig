@@ -58,6 +58,10 @@ _parse_mode: enum { document, fragment },
 // even thoug we'll create very few (if any) actual *Attributes.
 _attribute_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attribute),
 
+// Same as _atlribute_lookup, but instead of individual attributes, this is for
+// the return of elements.attributes.
+_attribute_named_node_map_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attribute.NamedNodeMap),
+
 _script_manager: ScriptManager,
 
 _polyfill_loader: polyfill.Loader = .{},
@@ -119,6 +123,7 @@ pub fn deinit(self: *Page) void {
         log.debug(.page, "page.deinit", .{ .url = self.url });
     }
     self.js.deinit();
+    self._script_manager.deinit();
 }
 
 fn reset(self: *Page, comptime initializing: bool) !void {
@@ -144,6 +149,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._parse_state = .pre;
     self._load_state = .parsing;
     self._attribute_lookup = .empty;
+    self._attribute_named_node_map_lookup = .empty;
     self._event_manager = EventManager.init(self);
 
     self._script_manager = ScriptManager.init(self);
@@ -165,7 +171,7 @@ fn registerBackgroundTasks(self: *Page) !void {
     const Browser = @import("Browser.zig");
 
     try self.scheduler.add(self._session.browser, struct {
-        fn runMicrotasks(ctx: *anyopaque) ?u32 {
+        fn runMicrotasks(ctx: *anyopaque) !?u32 {
             const b: *Browser = @ptrCast(@alignCast(ctx));
             b.runMicrotasks();
             return 5;
@@ -173,7 +179,7 @@ fn registerBackgroundTasks(self: *Page) !void {
     }.runMicrotasks, 5, .{ .name = "page.microtasks" });
 
     try self.scheduler.add(self._session.browser, struct {
-        fn runMessageLoop(ctx: *anyopaque) ?u32 {
+        fn runMessageLoop(ctx: *anyopaque) !?u32 {
             const b: *Browser = @ptrCast(@alignCast(ctx));
             b.runMessageLoop();
             return 100;
@@ -992,7 +998,7 @@ fn populateElementAttributes(self: *Page, element: *Element, list: anytype) !voi
     if (@TypeOf(list) == ?*Element.Attribute.List) {
         // from cloneNode
 
-        var existing = list orelse return ;
+        var existing = list orelse return;
 
         var attributes = try self.arena.create(Element.Attribute.List);
         attributes.* = .{};

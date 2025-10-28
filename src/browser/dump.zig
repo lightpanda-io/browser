@@ -2,10 +2,14 @@ const std = @import("std");
 const Node = @import("webapi/Node.zig");
 
 pub const Opts = struct {
+    // @ZIGDOM (none of these do anything)
+    with_base: bool = false,
     strip_mode: StripMode = .{},
 
-    const StripMode = struct {
-        // @ZIGDOM
+    pub const StripMode = struct {
+        js: bool = false,
+        ui: bool = false,
+        css: bool = false,
     };
 };
 

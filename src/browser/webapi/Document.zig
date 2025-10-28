@@ -170,7 +170,7 @@ pub fn createTreeWalker(_: *const Document, root: *Node, what_to_show: ?u32, fil
     return DOMTreeWalker.init(root, show, filter, page);
 }
 
- // @ZIGDOM what_to_show tristate (null vs undefined vs value)
+// @ZIGDOM what_to_show tristate (null vs undefined vs value)
 pub fn createNodeIterator(_: *const Document, root: *Node, what_to_show: ?u32, filter: ?DOMNodeIterator.FilterOpts, page: *Page) !*DOMNodeIterator {
     const show = what_to_show orelse NodeFilter.SHOW_ALL;
     return DOMNodeIterator.init(root, show, filter, page);

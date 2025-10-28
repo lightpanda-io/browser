@@ -38,19 +38,17 @@ pub fn main() !void {
         if (gpa.detectLeaks()) std.posix.exit(1);
     };
 
-    var global_allocator = lp.GlobalAllocator.init(allocator);
-
     // arena for main-specific allocations
-    var main_arena = std.heap.ArenaAllocator.init(global_allocator.allocator());
+    var main_arena = std.heap.ArenaAllocator.init(allocator);
     defer main_arena.deinit();
 
-    run(&global_allocator, main_arena.allocator()) catch |err| {
+    run(allocator, main_arena.allocator()) catch |err| {
         log.fatal(.app, "exit", .{ .err = err });
         std.posix.exit(1);
     };
 }
 
-fn run(allocator: *lp.GlobalAllocator, main_arena: Allocator) !void {
+fn run(allocator: Allocator, main_arena: Allocator) !void {
     const args = try parseArgs(main_arena);
 
     switch (args.mode) {
@@ -102,7 +100,6 @@ fn run(allocator: *lp.GlobalAllocator, main_arena: Allocator) !void {
 
     switch (args.mode) {
         .serve => {
-            log.fatal(.app, "serve not not supported in the zigdom branch yet\n", .{});
             return;
             // @ZIGDOM-CDP
             // .serve => |opts| {
@@ -131,13 +128,15 @@ fn run(allocator: *lp.GlobalAllocator, main_arena: Allocator) !void {
             var fetch_opts = lp.FetchOpts{
                 .wait_ms = 5000,
                 .dump = .{
-                    .with_base = opts.with_base,
+                    .with_base = opts.withbase,
                     .strip_mode = opts.strip_mode,
                 },
             };
 
+            var stdout = std.fs.File.stdout();
+            var writer = stdout.writer(&.{});
             if (opts.dump) {
-                fetch_opts.dump_file = std.fs.File.stdout();
+                fetch_opts.writer = &writer.interface;
             }
 
             lp.fetch(app, url, fetch_opts) catch |err| {
@@ -245,7 +244,7 @@ const Command = struct {
     };
 
     const Fetch = struct {
-        url: []const u8,
+        url: [:0]const u8,
         dump: bool = false,
         common: Common,
         withbase: bool = false,
@@ -513,7 +512,7 @@ fn parseFetchArgs(
 ) !Command.Fetch {
     var dump: bool = false;
     var withbase: bool = false;
-    var url: ?[]const u8 = null;
+    var url: ?[:0]const u8 = null;
     var common: Command.Common = .{};
     var strip_mode: lp.dump.Opts.StripMode = .{};
 
@@ -576,7 +575,7 @@ fn parseFetchArgs(
             log.fatal(.app, "duplicate fetch url", .{ .help = "only 1 URL can be specified" });
             return error.TooManyURLs;
         }
-        url = try allocator.dupe(u8, opt);
+        url = try allocator.dupeZ(u8, opt);
     }
 
     if (url == null) {

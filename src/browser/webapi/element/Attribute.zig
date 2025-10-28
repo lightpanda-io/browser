@@ -326,7 +326,7 @@ fn needsLowerCasing(name: []const u8) bool {
 }
 
 pub const NamedNodeMap = struct {
-    _list: List = .{},
+    _list: *List,
 
     // Whenever the NamedNodeMap creates an Attribute, it needs to provide the
     // "ownerElement".
@@ -418,6 +418,12 @@ pub const InnerIterator = struct {
 
 fn formatAttribute(name: []const u8, value: []const u8, writer: *std.Io.Writer) !void {
     try writer.writeAll(name);
+
+    // Boolean attributes with empty values are serialized without a value
+    if (value.len == 0 and boolean_attributes_lookup.has(name)) {
+        return;
+    }
+
     try writer.writeByte('=');
     if (value.len == 0) {
         return writer.writeAll("\"\"");
@@ -432,6 +438,37 @@ fn formatAttribute(name: []const u8, value: []const u8, writer: *std.Io.Writer) 
     try writeEscapedAttributeValue(value, offset, writer);
     return writer.writeByte('"');
 }
+
+const boolean_attributes = [_][]const u8{
+    "checked",
+    "disabled",
+    "required",
+    "readonly",
+    "multiple",
+    "selected",
+    "autofocus",
+    "autoplay",
+    "controls",
+    "loop",
+    "muted",
+    "hidden",
+    "async",
+    "defer",
+    "novalidate",
+    "formnovalidate",
+    "ismap",
+    "reversed",
+    "default",
+    "open",
+};
+
+const boolean_attributes_lookup = std.StaticStringMap(void).initComptime(blk: {
+    var entries: [boolean_attributes.len]struct { []const u8, void } = undefined;
+    for (boolean_attributes, 0..) |attr, i| {
+        entries[i] = .{ attr, {} };
+    }
+    break :blk entries;
+});
 
 fn writeEscapedAttributeValue(value: []const u8, first_offset: usize, writer: *std.Io.Writer) !void {
     // Write everything before the first special character

@@ -401,7 +401,6 @@ pub const SubType = enum {
     webassemblymemory,
 };
 
-
 pub const JsApis = flattenTypes(&.{
     @import("../webapi/AbortController.zig"),
     @import("../webapi/AbortSignal.zig"),

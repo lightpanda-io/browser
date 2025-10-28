@@ -352,7 +352,7 @@ fn elapsed() struct { time: f64, unit: []const u8 } {
 }
 
 const datetime = @import("datetime.zig");
-fn timestamp(mode: datetime.TimestampMode) u64 {
+fn timestamp(comptime mode: datetime.TimestampMode) u64 {
     if (comptime @import("builtin").is_test) {
         return 1739795092929;
     }
