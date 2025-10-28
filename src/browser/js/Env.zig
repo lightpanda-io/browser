@@ -3,6 +3,7 @@ const js = @import("js.zig");
 const v8 = js.v8;
 
 const log = @import("../../log.zig");
+const polyfill = @import("../polyfill/polyfill.zig");
 
 const types = @import("types.zig");
 const Types = types.Types;
@@ -34,6 +35,8 @@ isolate: v8.Isolate,
 // just kept around because we need to free it on deinit
 isolate_params: *v8.CreateParams,
 
+isolate_snaphost: v8.StartupData,
+
 // Given a type, we can lookup its index in TYPE_LOOKUP and then have
 // access to its TunctionTemplate (the thing we need to create an instance
 // of it)
@@ -54,6 +57,21 @@ context_id: usize,
 const Opts = struct {};
 
 pub fn init(allocator: Allocator, platform: *const Platform, _: Opts) !*Env {
+    const env = try allocator.create(Env);
+    errdefer allocator.destroy(env);
+
+    env.* = .{
+        .context_id = 0,
+        .isolate = undefined,
+        .isolate_params = undefined,
+        .isolate_snaphost = undefined,
+        .platform = platform,
+        .templates = undefined,
+        .allocator = allocator,
+        .meta_lookup = undefined,
+        .prototype_lookup = undefined,
+    };
+
     // var params = v8.initCreateParams();
     var params = try allocator.create(v8.CreateParams);
     errdefer allocator.destroy(params);
@@ -63,8 +81,14 @@ pub fn init(allocator: Allocator, platform: *const Platform, _: Opts) !*Env {
     params.array_buffer_allocator = v8.createDefaultArrayBufferAllocator();
     errdefer v8.destroyArrayBufferAllocator(params.array_buffer_allocator.?);
 
+    env.isolate_snaphost = generateIsolateSnaphot(params);
+    params.snapshot_blob = &env.isolate_snaphost;
+
     var isolate = v8.Isolate.init(params);
     errdefer isolate.deinit();
+
+    env.isolate = isolate;
+    env.isolate_params = params;
 
     // This is the callback that runs whenever a module is dynamically imported.
     isolate.setHostImportModuleDynamicallyCallback(Context.dynamicModuleCallback);
@@ -79,20 +103,6 @@ pub fn init(allocator: Allocator, platform: *const Platform, _: Opts) !*Env {
     var temp_scope: v8.HandleScope = undefined;
     v8.HandleScope.init(&temp_scope, isolate);
     defer temp_scope.deinit();
-
-    const env = try allocator.create(Env);
-    errdefer allocator.destroy(env);
-
-    env.* = .{
-        .context_id = 0,
-        .platform = platform,
-        .isolate = isolate,
-        .templates = undefined,
-        .allocator = allocator,
-        .isolate_params = params,
-        .meta_lookup = undefined,
-        .prototype_lookup = undefined,
-    };
 
     // Populate our templates lookup. generateClass creates the
     // v8.FunctionTemplate, which we store in our env.templates.
@@ -536,4 +546,22 @@ fn generateUndetectable(comptime Struct: type, template: v8.ObjectTemplate) void
         }
         template.markAsUndetectable();
     }
+}
+
+fn generateIsolateSnaphot(params: *v8.CreateParams) v8.StartupData {
+    var snapshot_creator = v8.SnapshotCreator{};
+    snapshot_creator.init(params);
+    defer snapshot_creator.deinit();
+
+    const isolate = snapshot_creator.getIsolate();
+
+    var temp_scope: v8.HandleScope = undefined;
+    v8.HandleScope.init(&temp_scope, isolate);
+    defer temp_scope.deinit();
+
+    const context = v8.Context.init(isolate, null, null);
+    context.enter();
+    defer context.exit();
+
+    return snapshot_creator.createSnapshotDataBlob("function LightpandaSnapshotPoC() { return 73; }");
 }
