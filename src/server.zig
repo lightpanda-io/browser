@@ -26,7 +26,7 @@ const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
 const log = @import("log.zig");
-const App = @import("app.zig").App;
+const App = @import("App.zig");
 const CDP = @import("cdp/cdp.zig").CDP;
 
 const MAX_HTTP_REQUEST_SIZE = 4096;
@@ -69,7 +69,7 @@ pub fn deinit(self: *Server) void {
     self.allocator.free(self.json_version_response);
 }
 
-pub fn run(self: *Server, address: net.Address, timeout_ms: i32) !void {
+pub fn run(self: *Server, address: net.Address, timeout_ms: u32) !void {
     const flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC;
     const listener = try posix.socket(address.any.family, flags, posix.IPPROTO.TCP);
     self.listener = listener;
@@ -112,7 +112,7 @@ pub fn run(self: *Server, address: net.Address, timeout_ms: i32) !void {
     }
 }
 
-fn readLoop(self: *Server, socket: posix.socket_t, timeout_ms: i32) !void {
+fn readLoop(self: *Server, socket: posix.socket_t, timeout_ms: u32) !void {
     // This shouldn't be necessary, but the Client is HUGE (> 512KB) because
     // it has a large read buffer. I don't know why, but v8 crashes if this
     // is on the stack (and I assume it's related to its size).
@@ -143,7 +143,7 @@ fn readLoop(self: *Server, socket: posix.socket_t, timeout_ms: i32) !void {
     }
 
     var cdp = &client.mode.cdp;
-    var last_message = timestamp();
+    var last_message = timestamp(.monotonic);
     var ms_remaining = timeout_ms;
     while (true) {
         switch (cdp.pageWait(ms_remaining)) {
@@ -151,7 +151,7 @@ fn readLoop(self: *Server, socket: posix.socket_t, timeout_ms: i32) !void {
                 if (try client.readSocket() == false) {
                     return;
                 }
-                last_message = timestamp();
+                last_message = timestamp(.monotonic);
                 ms_remaining = timeout_ms;
             },
             .no_page => {
@@ -162,16 +162,16 @@ fn readLoop(self: *Server, socket: posix.socket_t, timeout_ms: i32) !void {
                 if (try client.readSocket() == false) {
                     return;
                 }
-                last_message = timestamp();
+                last_message = timestamp(.monotonic);
                 ms_remaining = timeout_ms;
             },
             .done => {
-                const elapsed = timestamp() - last_message;
+                const elapsed = timestamp(.monotonic) - last_message;
                 if (elapsed > ms_remaining) {
                     log.info(.app, "CDP timeout", .{});
                     return;
                 }
-                ms_remaining -= @as(i32, @intCast(elapsed));
+                ms_remaining -= @intCast(elapsed);
             },
         }
     }
@@ -928,9 +928,7 @@ fn buildJSONVersionResponse(
     return try std.fmt.allocPrint(allocator, response_format, .{ body_len, address });
 }
 
-fn timestamp() u32 {
-    return @import("datetime.zig").timestamp();
-}
+pub const timestamp = @import("datetime.zig").timestamp;
 
 // In-place string lowercase
 fn toLower(str: []u8) []u8 {

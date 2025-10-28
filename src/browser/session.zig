@@ -141,7 +141,7 @@ pub fn wait(self: *Session, wait_ms: u32) WaitResult {
         return .done;
     };
 
-    if (self.page) |*page| {
+    if (self.page) |page| {
         return page.wait(wait_ms);
     }
     return .no_page;

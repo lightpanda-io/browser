@@ -19,9 +19,9 @@
 const std = @import("std");
 
 const log = @import("../../log.zig");
-const Cookie = @import("../../browser/storage/storage.zig").Cookie;
-const CookieJar = @import("../../browser/storage/storage.zig").CookieJar;
-pub const PreparedUri = @import("../../browser/storage/cookie.zig").PreparedUri;
+const Cookie = @import("../../browser/webapi/storage/storage.zig").Cookie;
+const CookieJar = @import("../../browser/webapi/storage/storage.zig").Jar;
+pub const PreparedUri = @import("../../browser/webapi/storage/cookie.zig").PreparedUri;
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {

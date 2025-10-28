@@ -176,7 +176,7 @@ pub fn abort(self: *Client) void {
     }
 }
 
-pub fn tick(self: *Client, timeout_ms: i32) !PerformStatus {
+pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
     while (true) {
         if (self.handles.hasAvailable() == false) {
             break;
@@ -188,7 +188,7 @@ pub fn tick(self: *Client, timeout_ms: i32) !PerformStatus {
         const handle = self.handles.getFreeHandle().?;
         try self.makeRequest(handle, transfer);
     }
-    return self.perform(timeout_ms);
+    return self.perform(@intCast(timeout_ms));
 }
 
 pub fn request(self: *Client, req: Request) !void {

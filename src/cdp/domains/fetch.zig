@@ -23,7 +23,7 @@ const log = @import("../../log.zig");
 const network = @import("network.zig");
 
 const Http = @import("../../http/Http.zig");
-const Notification = @import("../../notification.zig").Notification;
+const Notification = @import("../../Notification.zig");
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {

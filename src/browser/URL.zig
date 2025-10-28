@@ -122,6 +122,135 @@ pub fn isCompleteHTTPUrl(url: []const u8) bool {
         std.ascii.startsWithIgnoreCase(url, "ftp://");
 }
 
+pub fn getUsername(raw: [:0]const u8) []const u8 {
+    const user_info = getUserInfo(raw) orelse return "";
+    const pos = std.mem.indexOfScalarPos(u8, user_info, 0, ':') orelse return user_info;
+    return user_info[0..pos];
+}
+
+pub fn getPassword(raw: [:0]const u8) []const u8 {
+    const user_info = getUserInfo(raw) orelse return "";
+    const pos = std.mem.indexOfScalarPos(u8, user_info, 0, ':') orelse return "";
+    return user_info[pos + 1 ..];
+}
+
+pub fn getPathname(raw: [:0]const u8) []const u8 {
+    const protocol_end = std.mem.indexOf(u8, raw, "://") orelse 0;
+    const path_start = std.mem.indexOfScalarPos(u8, raw, if (protocol_end > 0) protocol_end + 3 else 0, '/') orelse raw.len;
+
+    const query_or_hash_start = std.mem.indexOfAnyPos(u8, raw, path_start, "?#") orelse raw.len;
+
+    if (path_start >= query_or_hash_start) {
+        if (std.mem.indexOf(u8, raw, "://") != null) return "/";
+        return "";
+    }
+
+    return raw[path_start..query_or_hash_start];
+}
+
+pub fn getProtocol(raw: [:0]const u8) []const u8 {
+    const pos = std.mem.indexOfScalarPos(u8, raw, 0, ':') orelse return "";
+    return raw[0 .. pos + 1];
+}
+
+pub fn getHostname(raw: [:0]const u8) []const u8 {
+    const host = getHost(raw);
+    const pos = std.mem.lastIndexOfScalar(u8, host, ':') orelse return host;
+    return host[0..pos];
+}
+
+pub fn getPort(raw: [:0]const u8) []const u8 {
+    const host = getHost(raw);
+    const pos = std.mem.lastIndexOfScalar(u8, host, ':') orelse return "";
+
+    if (pos + 1 >= host.len) {
+        return "";
+    }
+
+    for (host[pos + 1 ..]) |c| {
+        if (c < '0' or c > '9') {
+            return "";
+        }
+    }
+
+    return host[pos + 1 ..];
+}
+
+pub fn getSearch(raw: [:0]const u8) []const u8 {
+    const pos = std.mem.indexOfScalarPos(u8, raw, 0, '?') orelse return "";
+    const query_part = raw[pos..];
+
+    if (std.mem.indexOfScalarPos(u8, query_part, 0, '#')) |fragment_start| {
+        return query_part[0..fragment_start];
+    }
+
+    return query_part;
+}
+
+pub fn getHash(raw: [:0]const u8) []const u8 {
+    const start = std.mem.indexOfScalarPos(u8, raw, 0, '#') orelse return "";
+    return raw[start..];
+}
+
+pub fn getOrigin(allocator: Allocator, raw: [:0]const u8) !?[]const u8 {
+    const port = getPort(raw);
+    const protocol = getProtocol(raw);
+    const hostname = getHostname(raw);
+
+    const p = std.meta.stringToEnum(KnownProtocol, getProtocol(raw)) orelse return null;
+
+    const include_port = blk: {
+        if (port.len == 0) {
+            break :blk false;
+        }
+        if (p == .@"https:" and std.mem.eql(u8, port, "443")) {
+            break :blk false;
+        }
+        if (p == .@"http:" and std.mem.eql(u8, port, "80")) {
+            break :blk false;
+        }
+        break :blk true;
+    };
+
+    if (include_port) {
+        return try std.fmt.allocPrint(allocator, "{s}//{s}:{s}", .{ protocol, hostname, port });
+    }
+    return try std.fmt.allocPrint(allocator, "{s}//{s}", .{ protocol, hostname });
+}
+
+fn getUserInfo(raw: [:0]const u8) ?[]const u8 {
+    const scheme_end = std.mem.indexOf(u8, raw, "://") orelse return null;
+    const authority_start = scheme_end + 3;
+
+    const pos = std.mem.indexOfScalar(u8, raw[authority_start..], '@') orelse return null;
+    const path_start = std.mem.indexOfScalarPos(u8, raw, authority_start, '/') orelse raw.len;
+
+    const full_pos = authority_start + pos;
+    if (full_pos < path_start) {
+        return raw[authority_start..full_pos];
+    }
+
+    return null;
+}
+
+fn getHost(raw: [:0]const u8) []const u8 {
+    const scheme_end = std.mem.indexOf(u8, raw, "://") orelse return "";
+
+    var authority_start = scheme_end + 3;
+    if (std.mem.indexOf(u8, raw[authority_start..], "@")) |pos| {
+        authority_start += pos + 1;
+    }
+
+    const authority = raw[authority_start..];
+    const path_start = std.mem.indexOfAny(u8, authority, "/?#") orelse return authority;
+    return authority[0..path_start];
+}
+
+const KnownProtocol = enum {
+    @"http:",
+    @"https:",
+};
+
 const testing = @import("../testing.zig");
 test "URL: isCompleteHTTPUrl" {
     try testing.expectEqual(true, isCompleteHTTPUrl("http://example.com/about"));

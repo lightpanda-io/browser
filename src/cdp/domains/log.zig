@@ -101,7 +101,7 @@ pub fn LogInterceptor(comptime BC: type) type {
                         .fatal => "error",
                     },
                     .text = self.allocating.written(),
-                    .timestamp = @import("../../datetime.zig").milliTimestamp(),
+                    .timestamp = @import("../../datetime.zig").milliTimestamp(.monotonic),
                 },
             }, .{
                 .session_id = self.bc.session_id,

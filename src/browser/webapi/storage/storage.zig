@@ -9,6 +9,7 @@ pub fn registerTypes() []const type {
 }
 
 pub const Jar = @import("cookie.zig").Jar;
+pub const Cookie =@import("cookie.zig").Cookie;
 
 pub const Shed = struct {
     _origins: std.StringHashMapUnmanaged(*Bucket) = .empty,

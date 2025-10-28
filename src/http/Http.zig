@@ -83,7 +83,7 @@ pub fn deinit(self: *Http) void {
     self.arena.deinit();
 }
 
-pub fn poll(self: *Http, timeout_ms: i32) Client.PerformStatus {
+pub fn poll(self: *Http, timeout_ms: u32) Client.PerformStatus {
     return self.client.tick(timeout_ms) catch |err| {
         log.err(.app, "http poll", .{ .err = err });
         return .normal;

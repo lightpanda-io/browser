@@ -143,13 +143,14 @@ fn createTarget(cmd: anytype) !void {
 
     bc.target_id = target_id;
 
-    var page = try bc.session.createPage();
+    const page = try bc.session.createPage();
     {
         const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
         bc.inspector.contextCreated(
             page.js,
             "",
-            try page.origin(cmd.arena),
+            "", // @ZIGDOM
+            // try page.origin(arena),
             aux_data,
             true,
         );

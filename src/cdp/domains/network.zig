@@ -21,7 +21,7 @@ const Allocator = std.mem.Allocator;
 
 const CdpStorage = @import("storage.zig");
 const Transfer = @import("../../http/Client.zig").Transfer;
-const Notification = @import("../../notification.zig").Notification;
+const Notification = @import("../../Notification.zig");
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -87,7 +87,7 @@ fn setExtraHTTPHeaders(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
-const Cookie = @import("../../browser/storage/storage.zig").Cookie;
+const Cookie = @import("../../browser/webapi/storage/storage.zig").Cookie;
 
 // Only matches the cookie on provided parameters
 fn cookieMatches(cookie: *const Cookie, name: []const u8, domain: ?[]const u8, path: ?[]const u8) bool {
@@ -173,7 +173,7 @@ fn getCookies(cmd: anytype) !void {
     const params = (try cmd.params(GetCookiesParam)) orelse GetCookiesParam{};
 
     // If not specified, use the URLs of the page and all of its subframes. TODO subframes
-    const page_url = if (bc.session.page) |*page| page.url.raw else null; // @speed: avoid repasing the URL
+    const page_url = if (bc.session.page) |page| page.url else null;
     const param_urls = params.urls orelse &[_][]const u8{page_url orelse return error.InvalidParams};
 
     var urls = try std.ArrayListUnmanaged(CdpStorage.PreparedUri).initCapacity(cmd.arena, param_urls.len);
@@ -247,7 +247,7 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, msg: *const Notification.
         .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id}),
         .frameId = target_id,
         .loaderId = bc.loader_id,
-        .documentUrl = DocumentUrlWriter.init(&page.url.uri),
+        .documentUrl = page.url,
         .request = TransferAsRequestWriter.init(transfer),
         .initiator = .{ .type = "other" },
     }, .{ .session_id = session_id });
@@ -416,34 +416,35 @@ const TransferAsResponseWriter = struct {
     }
 };
 
-const DocumentUrlWriter = struct {
-    uri: *std.Uri,
+// @ZIGDOM - do we still need this? just send the full URL?
+// const DocumentUrlWriter = struct {
+//     uri: *std.Uri,
 
-    fn init(uri: *std.Uri) DocumentUrlWriter {
-        return .{
-            .uri = uri,
-        };
-    }
+//     fn init(uri: *std.Uri) DocumentUrlWriter {
+//         return .{
+//             .uri = uri,
+//         };
+//     }
 
-    pub fn jsonStringify(self: *const DocumentUrlWriter, jws: anytype) !void {
-        self._jsonStringify(jws) catch return error.WriteFailed;
-    }
-    fn _jsonStringify(self: *const DocumentUrlWriter, jws: anytype) !void {
-        const writer = jws.writer;
+//     pub fn jsonStringify(self: *const DocumentUrlWriter, jws: anytype) !void {
+//         self._jsonStringify(jws) catch return error.WriteFailed;
+//     }
+//     fn _jsonStringify(self: *const DocumentUrlWriter, jws: anytype) !void {
+//         const writer = jws.writer;
 
-        try jws.beginWriteRaw();
-        try writer.writeByte('\"');
-        try self.uri.writeToStream(writer, .{
-            .scheme = true,
-            .authentication = true,
-            .authority = true,
-            .path = true,
-            .query = true,
-        });
-        try writer.writeByte('\"');
-        jws.endWriteRaw();
-    }
-};
+//         try jws.beginWriteRaw();
+//         try writer.writeByte('\"');
+//         try self.uri.writeToStream(writer, .{
+//             .scheme = true,
+//             .authentication = true,
+//             .authority = true,
+//             .path = true,
+//             .query = true,
+//         });
+//         try writer.writeByte('\"');
+//         jws.endWriteRaw();
+//     }
+// };
 
 fn idFromRequestId(request_id: []const u8) !u64 {
     if (!std.mem.startsWith(u8, request_id, "REQ-")) {

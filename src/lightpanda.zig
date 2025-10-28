@@ -1,5 +1,7 @@
 const std = @import("std");
 pub const App = @import("App.zig");
+pub const Server = @import("Server.zig");
+
 pub const log = @import("log.zig");
 pub const dump = @import("browser/dump.zig");
 pub const build_config = @import("build_config");

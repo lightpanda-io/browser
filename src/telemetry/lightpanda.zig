@@ -6,7 +6,7 @@ const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
 
 const log = @import("../log.zig");
-const App = @import("../app.zig").App;
+const App = @import("../App.zig");
 const Http = @import("../http/Http.zig");
 const telemetry = @import("telemetry.zig");
 

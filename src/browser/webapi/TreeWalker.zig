@@ -39,14 +39,22 @@ pub fn TreeWalker(comptime mode: Mode) type {
                 self._next = children.first();
             } else if (node._child_link.next) |n| {
                 self._next = Node.linkToNode(n);
-            } else if (node._parent) |n| {
-                if (n == self._root) {
-                    self._next = null;
-                } else {
-                    self._next = Node.linkToNodeOrNull(n._child_link.next);
-                }
             } else {
-                self._next = null;
+                // No children, no next sibling - walk up until we find a next sibling or hit root
+                var current = node._parent;
+                while (current) |parent| {
+                    if (parent == self._root) {
+                        self._next = null;
+                        break;
+                    }
+                    if (parent._child_link.next) |next_sibling| {
+                        self._next = Node.linkToNode(next_sibling);
+                        break;
+                    }
+                    current = parent._parent;
+                } else {
+                    self._next = null;
+                }
             }
             return node;
         }

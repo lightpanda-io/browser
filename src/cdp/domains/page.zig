@@ -17,8 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const Page = @import("../../browser/page.zig").Page;
-const Notification = @import("../../notification.zig").Notification;
+const Page = @import("../../browser/Page.zig");
+const Notification = @import("../../Notification.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -134,7 +134,7 @@ fn createIsolatedWorld(cmd: anytype) !void {
 
 fn navigate(cmd: anytype) !void {
     const params = (try cmd.params(struct {
-        url: []const u8,
+        url: [:0]const u8,
         // referrer: ?[]const u8 = null,
         // transitionType: ?[]const u8 = null, // TODO: enum
         // frameId: ?[]const u8 = null,
@@ -253,7 +253,8 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
         bc.inspector.contextCreated(
             page.js,
             "",
-            try page.origin(arena),
+            "", // @ZIGDOM
+            // try page.origin(arena),
             aux_data,
             true,
         );
@@ -360,7 +361,7 @@ pub fn pageNetworkAlmostIdle(bc: anytype, event: *const Notification.PageNetwork
     return sendPageLifecycle(bc, "networkAlmostIdle", event.timestamp);
 }
 
-fn sendPageLifecycle(bc: anytype, name: []const u8, timestamp: u32) !void {
+fn sendPageLifecycle(bc: anytype, name: []const u8, timestamp: u64) !void {
     // detachTarget could be called, in which case, we still have a page doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
@@ -379,7 +380,7 @@ const LifecycleEvent = struct {
     frameId: []const u8,
     loaderId: ?[]const u8,
     name: []const u8,
-    timestamp: u32,
+    timestamp: u64,
 };
 
 const testing = @import("../testing.zig");

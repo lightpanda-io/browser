@@ -24,12 +24,12 @@ const log = @import("../log.zig");
 const js = @import("../browser/js/js.zig");
 const polyfill = @import("../browser/polyfill/polyfill.zig");
 
-const App = @import("../app.zig").App;
-const Browser = @import("../browser/browser.zig").Browser;
-const Session = @import("../browser/session.zig").Session;
-const Page = @import("../browser/page.zig").Page;
+const App = @import("../App.zig");
+const Browser = @import("../browser/Browser.zig");
+const Session = @import("../browser/Session.zig");
+const Page = @import("../browser/Page.zig");
 const Incrementing = @import("../id.zig").Incrementing;
-const Notification = @import("../notification.zig").Notification;
+const Notification = @import("../Notification.zig");
 const LogInterceptor = @import("domains/log.zig").LogInterceptor;
 const InterceptState = @import("domains/fetch.zig").InterceptState;
 
@@ -37,7 +37,7 @@ pub const URL_BASE = "chrome://newtab/";
 pub const LOADER_ID = "LOADERID24DD2FD56CF1EF33C965C79C";
 
 pub const CDP = CDPT(struct {
-    const Client = *@import("../server.zig").Client;
+    const Client = *@import("../Server.zig").Client;
 });
 
 const SessionIdGen = Incrementing(u32, "SID");
@@ -117,7 +117,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
         // timeouts (or http events) which are ready to be processed.
 
         pub fn hasPage() bool {}
-        pub fn pageWait(self: *Self, ms: i32) Session.WaitResult {
+        pub fn pageWait(self: *Self, ms: u32) Session.WaitResult {
             const session = &(self.browser.session orelse return .no_page);
             return session.wait(ms);
         }
@@ -203,7 +203,8 @@ pub fn CDPT(comptime TypeProvider: type) type {
                 },
                 5 => switch (@as(u40, @bitCast(domain[0..5].*))) {
                     asUint(u40, "Fetch") => return @import("domains/fetch.zig").processMessage(command),
-                    asUint(u40, "Input") => return @import("domains/input.zig").processMessage(command),
+                    // @ZIGDOM
+                    // asUint(u40, "Input") => return @import("domains/input.zig").processMessage(command),
                     else => {},
                 },
                 6 => switch (@as(u48, @bitCast(domain[0..6].*))) {
@@ -286,7 +287,8 @@ pub fn CDPT(comptime TypeProvider: type) type {
 }
 
 pub fn BrowserContext(comptime CDP_T: type) type {
-    const Node = @import("Node.zig");
+    // @ZIGMOD
+    // const Node = @import("Node.zig");
 
     return struct {
         id: []const u8,
@@ -326,8 +328,9 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         security_origin: []const u8,
         page_life_cycle_events: bool,
         secure_context_type: []const u8,
-        node_registry: Node.Registry,
-        node_search_list: Node.Search.List,
+        // @ZIGDOM
+        // node_registry: Node.Registry,
+        // node_search_list: Node.Search.List,
 
         inspector: js.Inspector,
         isolated_worlds: std.ArrayListUnmanaged(IsolatedWorld),
@@ -360,8 +363,9 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
             const inspector = try cdp.browser.env.newInspector(arena, self);
 
-            var registry = Node.Registry.init(allocator);
-            errdefer registry.deinit();
+            // @ZIGDOM
+            // var registry = Node.Registry.init(allocator);
+            // errdefer registry.deinit();
 
             self.* = .{
                 .id = id,
@@ -374,8 +378,9 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .secure_context_type = "Secure", // TODO = enum
                 .loader_id = LOADER_ID,
                 .page_life_cycle_events = false, // TODO; Target based value
-                .node_registry = registry,
-                .node_search_list = undefined,
+                // @ZIGDOM
+                // .node_registry = registry,
+                // .node_search_list = undefined,
                 .isolated_worlds = .empty,
                 .inspector = inspector,
                 .notification_arena = cdp.notification_arena.allocator(),
@@ -383,7 +388,8 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .captured_responses = .empty,
                 .log_interceptor = LogInterceptor(Self).init(allocator, self),
             };
-            self.node_search_list = Node.Search.List.init(allocator, &self.node_registry);
+            // ZIGDOM
+            // self.node_search_list = Node.Search.List.init(allocator, &self.node_registry);
             errdefer self.deinit();
 
             try cdp.browser.notification.register(.page_remove, self, onPageRemove);
@@ -418,8 +424,9 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 world.deinit();
             }
             self.isolated_worlds.clearRetainingCapacity();
-            self.node_registry.deinit();
-            self.node_search_list.deinit();
+            // @ZIGDOM
+            // self.node_registry.deinit();
+            // self.node_search_list.deinit();
             self.cdp.browser.notification.unregisterAll(self);
 
             if (self.http_proxy_changed) {
@@ -433,8 +440,10 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         }
 
         pub fn reset(self: *Self) void {
-            self.node_registry.reset();
-            self.node_search_list.reset();
+            // @ZIGDOM
+            _ = self;
+            // self.node_registry.reset();
+            // self.node_search_list.reset();
         }
 
         pub fn createIsolatedWorld(self: *Self, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
@@ -453,19 +462,20 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             return world;
         }
 
-        pub fn nodeWriter(self: *Self, root: *const Node, opts: Node.Writer.Opts) Node.Writer {
-            return .{
-                .root = root,
-                .depth = opts.depth,
-                .exclude_root = opts.exclude_root,
-                .registry = &self.node_registry,
-            };
-        }
+        // @ZIGDOM
+        // pub fn nodeWriter(self: *Self, root: *const Node, opts: Node.Writer.Opts) Node.Writer {
+        //     return .{
+        //         .root = root,
+        //         .depth = opts.depth,
+        //         .exclude_root = opts.exclude_root,
+        //         .registry = &self.node_registry,
+        //     };
+        // }
 
-        pub fn getURL(self: *const Self) ?[]const u8 {
+        pub fn getURL(self: *const Self) ?[:0]const u8 {
             const page = self.session.currentPage() orelse return null;
-            const raw_url = page.url.raw;
-            return if (raw_url.len == 0) null else raw_url;
+            const url = page.url;
+            return if (url.len == 0) null else url;
         }
 
         pub fn networkEnable(self: *Self) !void {

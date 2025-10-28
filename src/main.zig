@@ -99,27 +99,24 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
     app.telemetry.record(.{ .run = {} });
 
     switch (args.mode) {
-        .serve => {
-            return;
-            // @ZIGDOM-CDP
-            // .serve => |opts| {
-            //     log.debug(.app, "startup", .{ .mode = "serve" });
-            //     const address = std.net.Address.parseIp4(opts.host, opts.port) catch |err| {
-            //         log.fatal(.app, "invalid server address", .{ .err = err, .host = opts.host, .port = opts.port });
-            //         return args.printUsageAndExit(false);
-            //     };
+        .serve => |opts| {
+            log.debug(.app, "startup", .{ .mode = "serve" });
+            const address = std.net.Address.parseIp4(opts.host, opts.port) catch |err| {
+                log.fatal(.app, "invalid server address", .{ .err = err, .host = opts.host, .port = opts.port });
+                return args.printUsageAndExit(false);
+            };
 
-            //     // _server is global to handle graceful shutdown.
-            //     _server = try lp.Server.init(app, address);
-            //     const server = &_server.?;
-            //     defer server.deinit();
+            // _server is global to handle graceful shutdown.
+            _server = try lp.Server.init(app, address);
+            const server = &_server.?;
+            defer server.deinit();
 
-            //     // max timeout of 1 week.
-            //     const timeout = if (opts.timeout > 604_800) 604_800_000 else @as(i32, opts.timeout) * 1000;
-            //     server.run(address, timeout) catch |err| {
-            //         log.fatal(.app, "server run error", .{ .err = err });
-            //         return err;
-            //     };
+            // max timeout of 1 week.
+            const timeout = if (opts.timeout > 604_800) 604_800_000 else @as(u32, opts.timeout) * 1000;
+            server.run(address, timeout) catch |err| {
+                log.fatal(.app, "server run error", .{ .err = err });
+                return err;
+            };
         },
         .fetch => |opts| {
             const url = opts.url;

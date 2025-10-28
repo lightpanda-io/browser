@@ -340,6 +340,9 @@ pub fn setNodeValue(self: *const Node, value: ?[]const u8, page: *Page) !void {
 }
 
 pub fn format(self: *Node, writer: *std.Io.Writer) !void {
+    // // If you need extra debugging:
+    // return @import("../dump.zig").deep(self, .{}, writer);
+
     return switch (self._type) {
         .cdata => |cd| cd.format(writer),
         .element => |el| writer.print("{f}", .{el}),
