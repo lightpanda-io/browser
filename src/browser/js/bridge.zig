@@ -105,6 +105,7 @@ pub const Constructor = struct {
 };
 
 pub const Function = struct {
+    static: bool,
     func: *const fn (?*const v8.C_FunctionCallbackInfo) callconv(.c) void,
 
     const Opts = struct {
@@ -115,27 +116,30 @@ pub const Function = struct {
     };
 
     fn init(comptime T: type, comptime func: anytype, comptime opts: Opts) Function {
-        return .{ .func = struct {
-            fn wrap(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
-                const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
-                var caller = Caller.init(info);
-                defer caller.deinit();
+        return .{
+            .static = opts.static,
+            .func = struct {
+                fn wrap(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
+                    const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
+                    var caller = Caller.init(info);
+                    defer caller.deinit();
 
-                if (comptime opts.static) {
-                    caller.function(T, func, info, .{
-                        .dom_exception = opts.dom_exception,
-                        .as_typed_array = opts.as_typed_array,
-                        .null_as_undefined = opts.null_as_undefined,
-                    });
-                } else {
-                    caller.method(T, func, info, .{
-                        .dom_exception = opts.dom_exception,
-                        .as_typed_array = opts.as_typed_array,
-                        .null_as_undefined = opts.null_as_undefined,
-                    });
+                    if (comptime opts.static) {
+                        caller.function(T, func, info, .{
+                            .dom_exception = opts.dom_exception,
+                            .as_typed_array = opts.as_typed_array,
+                            .null_as_undefined = opts.null_as_undefined,
+                        });
+                    } else {
+                        caller.method(T, func, info, .{
+                            .dom_exception = opts.dom_exception,
+                            .as_typed_array = opts.as_typed_array,
+                            .null_as_undefined = opts.null_as_undefined,
+                        });
+                    }
                 }
-            }
-        }.wrap };
+            }.wrap,
+        };
     }
 };
 

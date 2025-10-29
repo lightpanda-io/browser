@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 const js = @import("js/js.zig");
 const log = @import("../log.zig");
@@ -31,11 +32,13 @@ const Element = @import("webapi/Element.zig");
 const Allocator = std.mem.Allocator;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
 
+const IS_DEBUG = builtin.mode == .Debug;
+
 const ScriptManager = @This();
 
 page: *Page,
 
-// used to prevent recursive evalutaion
+// used to prevent recursive evaluation
 is_evaluating: bool,
 
 // Only once this is true can deferred scripts be run
@@ -44,9 +47,6 @@ static_scripts_done: bool,
 // List of async scripts. We don't care about the execution order of these, but
 // on shutdown/abort, we need to cleanup any pending ones.
 asyncs: OrderList,
-
-// Normal scripts (non-deferred & non-async). These must be executed in order
-scripts: OrderList,
 
 // List of deferred scripts. These must be executed in order, but only once
 // dom_loaded == true,
@@ -85,7 +85,6 @@ pub fn init(page: *Page) ScriptManager {
     return .{
         .page = page,
         .asyncs = .{},
-        .scripts = .{},
         .deferreds = .{},
         .importmap = .empty,
         .sync_modules = .empty,
@@ -130,7 +129,6 @@ pub fn reset(self: *ScriptManager) void {
     self.importmap = .empty;
 
     self.clearList(&self.asyncs);
-    self.clearList(&self.scripts);
     self.clearList(&self.deferreds);
     self.static_scripts_done = false;
 }
@@ -212,57 +210,78 @@ pub fn add(self: *ScriptManager, script_element: *Element.Html.Script, comptime 
         .is_async = if (remote_url == null) false else element.getAttributeSafe("async") != null,
     };
 
-    if (source == .@"inline" and self.scripts.first == null) {
-        // inline script with no pending scripts, execute it immediately.
-        // (if there is a pending script, then we cannot execute this immediately
-        // as it needs to be executed in order)
+    if (source == .@"inline") {
+        // inline script gets executed immediately
         return script.eval(page);
     }
 
-    const pending_script = try self.script_pool.create();
-    errdefer self.script_pool.destroy(pending_script);
-    pending_script.* = .{
-        .script = script,
-        .complete = false,
-        .manager = self,
-        .node = .{},
+    const pending_script = blk: {
+        // Done in a block this way so that, if something fails in this block
+        // it's cleaned up with these errdefers
+        // BUT, if we need to load/execute the script immediately, cleanup/lifetimes
+        // become the responsibility of the outer block.
+        const pending_script = try self.script_pool.create();
+        errdefer self.script_pool.destroy(pending_script);
+
+        pending_script.* = .{
+            .script = script,
+            .complete = false,
+            .manager = self,
+            .node = .{},
+        };
+        errdefer pending_script.deinit();
+
+        if (comptime IS_DEBUG) {
+            log.debug(.http, "script queue", .{
+                .ctx = ctx,
+                .url = remote_url.?,
+                .stack = page.js.stackTrace() catch "???",
+            });
+        }
+
+        var headers = try self.client.newHeaders();
+        try page.requestCookie(.{}).headersForRequest(page.arena, remote_url.?, &headers);
+
+        try self.client.request(.{
+            .url = remote_url.?,
+            .ctx = pending_script,
+            .method = .GET,
+            .headers = headers,
+            .resource_type = .script,
+            .cookie_jar = &page._session.cookie_jar,
+            .start_callback = if (log.enabled(.http, .debug)) startCallback else null,
+            .header_callback = headerCallback,
+            .data_callback = dataCallback,
+            .done_callback = doneCallback,
+            .error_callback = errorCallback,
+        });
+
+        if (script.is_defer) {
+            // non-blocking loading, track the list this belongs to, and return
+            pending_script.list = &self.deferreds;
+            return;
+        }
+
+        if (script.is_async) {
+            // non-blocking loading, track the list this belongs to, and return
+            pending_script.list = &self.asyncs;
+            return;
+        }
+
+        break :blk pending_script;
     };
 
-    if (source == .@"inline") {
-        // if we're here, it means that we have pending scripts (i.e. self.scripts
-        // is not empty). Because the script is inline, it's complete/ready, but
-        // we need to process them in order
-        pending_script.complete = true;
-        self.scripts.append(&pending_script.node);
-        return;
-    } else {
-        log.debug(.http, "script queue", .{
-            .ctx = ctx,
-            .url = remote_url.?,
-            .stack = page.js.stackTrace() catch "???",
-        });
+    defer pending_script.deinit();
+
+    // this is <script src="..."></script>, it needs to block the caller
+    // until it's evaluated
+    var client = self.client;
+    while (true) {
+        if (pending_script.complete) {
+            return pending_script.script.eval(page);
+        }
+        _ = try client.tick(200);
     }
-
-    pending_script.getList().append(&pending_script.node);
-
-    errdefer pending_script.deinit();
-
-    var headers = try self.client.newHeaders();
-    try page.requestCookie(.{}).headersForRequest(page.arena, remote_url.?, &headers);
-
-    try self.client.request(.{
-        .url = remote_url.?,
-        .ctx = pending_script,
-        .method = .GET,
-        .headers = headers,
-        .resource_type = .script,
-        .cookie_jar = &page._session.cookie_jar,
-        .start_callback = if (log.enabled(.http, .debug)) startCallback else null,
-        .header_callback = headerCallback,
-        .data_callback = dataCallback,
-        .done_callback = doneCallback,
-        .error_callback = errorCallback,
-    });
 }
 
 // Resolve a module specifier to an valid URL.
@@ -394,6 +413,7 @@ pub fn getAsyncModule(self: *ScriptManager, url: [:0]const u8, cb: AsyncModule.C
         .error_callback = AsyncModule.errorCallback,
     });
 }
+
 pub fn pageIsLoaded(self: *ScriptManager) void {
     std.debug.assert(self.static_scripts_done == false);
     self.static_scripts_done = true;
@@ -414,15 +434,6 @@ fn evaluate(self: *ScriptManager) void {
     const page = self.page;
     self.is_evaluating = true;
     defer self.is_evaluating = false;
-
-    while (self.scripts.first) |n| {
-        var pending_script: *PendingScript = @fieldParentPtr("node", n);
-        if (pending_script.complete == false) {
-            return;
-        }
-        defer pending_script.deinit();
-        pending_script.script.eval(page);
-    }
 
     if (self.static_scripts_done == false) {
         // We can only execute deferred scripts if
@@ -460,7 +471,6 @@ fn evaluate(self: *ScriptManager) void {
 pub fn isDone(self: *const ScriptManager) bool {
     return self.asyncs.first == null and // there are no more async scripts
         self.static_scripts_done and // and we've finished parsing the HTML to queue all <scripts>
-        self.scripts.first == null and // and there are no more <script src=> to wait for
         self.deferreds.first == null; // and there are no more <script defer src=> to wait for
 }
 
@@ -536,12 +546,13 @@ fn parseImportmap(self: *ScriptManager, script: *const Script) !void {
 // A script which is pending execution.
 // It could be pending because:
 //   (a) we're still downloading its content or
-//   (b) this is a non-async script that has to be executed in order
+//   (b) it's a deferred script which has to be executed in order
 pub const PendingScript = struct {
     script: Script,
     complete: bool,
     node: OrderList.Node,
     manager: *ScriptManager,
+    list: ?*std.DoublyLinkedList = null,
 
     fn deinit(self: *PendingScript) void {
         const script = &self.script;
@@ -550,14 +561,11 @@ pub const PendingScript = struct {
         if (script.source == .remote) {
             manager.buffer_pool.release(script.source.remote);
         }
-        self.getList().remove(&self.node);
-    }
 
-    fn remove(self: *PendingScript) void {
-        if (self.node) |*node| {
-            self.getList().remove(node);
-            self.node = null;
+        if (self.list) |list| {
+            list.remove(&self.node);
         }
+        manager.script_pool.destroy(self);
     }
 
     fn startCallback(self: *PendingScript, transfer: *Http.Transfer) !void {
@@ -614,6 +622,7 @@ pub const PendingScript = struct {
             manager.evaluate();
             return;
         }
+
         // async script can be evaluated immediately
         self.script.eval(manager.page);
         self.deinit();
@@ -633,23 +642,6 @@ pub const PendingScript = struct {
         }
 
         manager.evaluate();
-    }
-
-    fn getList(self: *const PendingScript) *OrderList {
-        // When a script has both the async and defer flag set, it should be
-        // treated as async. Async is newer, so some websites use both so that
-        // if async isn't known, it'll fallback to defer.
-
-        const script = &self.script;
-        if (script.is_async) {
-            return &self.manager.asyncs;
-        }
-
-        if (script.is_defer) {
-            return &self.manager.deferreds;
-        }
-
-        return &self.manager.scripts;
     }
 };
 

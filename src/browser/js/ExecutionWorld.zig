@@ -85,6 +85,7 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_cal
         defer temp_scope.deinit();
 
         const js_global = v8.FunctionTemplate.initDefault(isolate);
+        js_global.setClassName(v8.String.initUtf8(isolate, "Window"));
         Env.attachClass(@TypeOf(page.window.*).JsApi, isolate, js_global);
 
         const global_template = js_global.getInstanceTemplate();
@@ -202,38 +203,6 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_cal
     //     if (@hasDecl(Struct, "ErrorSet")) {
     //         const script = comptime JsApi.Meta.name ++ ".prototype.__proto__ = Error.prototype";
     //         _ = try context.exec(script, "errorSubclass");
-    //     }
-    // }
-
-    // @ZIGDOM
-    // Primitive attributes are set directly on the FunctionTemplate
-    // when we setup the environment. But we cannot set more complex
-    // types (v8 will crash).
-    //
-    // Plus, just to create more complex types, we always need a
-    // context, i.e. an Array has to have a Context to exist.
-    //
-    // As far as I can tell, getting the FunctionTemplate's object
-    // and setting values directly on it, for each context, is the
-    // way to do this.
-    // inline for (JsApis, 0..) |Jsapi, i| {
-    //     inline for (@typeInfo(Struct).@"struct".decls) |declaration| {
-    //         const name = declaration.name;
-    //         if (comptime name[0] == '_') {
-    //             const value = @field(Struct, name);
-
-    //             if (comptime js.isComplexAttributeType(@typeInfo(@TypeOf(value)))) {
-    //                 const js_obj = templates[i].getFunction(v8_context).toObject();
-    //                 const js_name = v8.String.initUtf8(isolate, name[1..]).toName();
-    //                 const js_val = try context.zigValueToJs(value);
-    //                 if (!js_obj.setValue(v8_context, js_name, js_val)) {
-    //                     log.fatal(.app, "set class attribute", .{
-    //                         .@"struct" = @typeName(Struct),
-    //                         .name = name,
-    //                     });
-    //                 }
-    //             }
-    //         }
     //     }
     // }
 

@@ -571,7 +571,9 @@ pub fn mapZigInstanceToJs(self: *Context, js_obj_: ?v8.Object, value: anytype) !
             return self.mapZigInstanceToJs(js_obj_, heap);
         },
         .pointer => |ptr| {
-            const gop = try self.identity_map.getOrPut(arena, @intFromPtr(value));
+            const resolved = resolveValue(value);
+
+            const gop = try self.identity_map.getOrPut(arena, @intFromPtr(resolved.ptr));
             if (gop.found_existing) {
                 // we've seen this instance before, return the same
                 // PersistentObject.
@@ -579,8 +581,6 @@ pub fn mapZigInstanceToJs(self: *Context, js_obj_: ?v8.Object, value: anytype) !
             }
 
             const isolate = self.isolate;
-            const resolved = resolveValue(value);
-
             // Sometimes we're creating a new v8.Object, like when
             // we're returning a value from a function. In those cases
             // we have to get the object template, and we can get an object
@@ -1872,11 +1872,6 @@ fn zigJsonToJs(isolate: v8.Isolate, v8_context: v8.Context, value: std.json.Valu
             return obj.toValue();
         },
     }
-}
-
-pub fn getGlobalThis(self: *Context) js.This {
-    const js_global = self.v8_context.getGlobal();
-    return .{ .obj = .{ .js_obj = js_global, .context = self } };
 }
 
 // == Misc ==

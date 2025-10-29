@@ -422,9 +422,8 @@ test {
 const log = @import("log.zig");
 const TestHTTPServer = @import("TestHTTPServer.zig");
 
-// @ZIGDOM-CDP
-// const Server = @import("Server.zig");
-// var test_cdp_server: ?Server = null;
+const Server = @import("Server.zig");
+var test_cdp_server: ?Server = null;
 var test_http_server: ?TestHTTPServer = null;
 
 test "tests:beforeAll" {
@@ -446,12 +445,10 @@ test "tests:beforeAll" {
     var wg: std.Thread.WaitGroup = .{};
     wg.startMany(2);
 
-    // @ZIGDOM-CDP
-    // {
-    //     const thread = try std.Thread.spawn(.{}, serveCDP, .{&wg});
-    //     thread.detach();
-    // }
-    wg.finish(); // @ZIGDOM-CDP REMOVE
+    {
+        const thread = try std.Thread.spawn(.{}, serveCDP, .{&wg});
+        thread.detach();
+    }
 
     test_http_server = TestHTTPServer.init(testHTTPHandler);
     {
@@ -465,10 +462,9 @@ test "tests:beforeAll" {
 }
 
 test "tests:afterAll" {
-    // @ZIGDOM-CDP
-    // if (test_cdp_server) |*server| {
-    //     server.deinit();
-    // }
+    if (test_cdp_server) |*server| {
+        server.deinit();
+    }
     if (test_http_server) |*server| {
         server.deinit();
     }
@@ -477,20 +473,19 @@ test "tests:afterAll" {
     test_app.deinit();
 }
 
-// @ZIGDOM-CDP
-// fn serveCDP(wg: *std.Thread.WaitGroup) !void {
-//     const address = try std.net.Address.parseIp("127.0.0.1", 9583);
-//     test_cdp_server = try Server.init(test_app, address);
+fn serveCDP(wg: *std.Thread.WaitGroup) !void {
+    const address = try std.net.Address.parseIp("127.0.0.1", 9583);
+    test_cdp_server = try Server.init(test_app, address);
 
-//     var server = try Server.init(test_app, address);
-//     defer server.deinit();
-//     wg.finish();
+    var server = try Server.init(test_app, address);
+    defer server.deinit();
+    wg.finish();
 
-//     test_cdp_server.?.run(address, 5) catch |err| {
-//         std.debug.print("CDP server error: {}", .{err});
-//         return err;
-//     };
-// }
+    test_cdp_server.?.run(address, 5) catch |err| {
+        std.debug.print("CDP server error: {}", .{err});
+        return err;
+    };
+}
 
 fn testHTTPHandler(req: *std.http.Server.Request) !void {
     const path = req.head.target;

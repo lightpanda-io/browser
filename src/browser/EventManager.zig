@@ -130,16 +130,6 @@ pub fn dispatchWithFunction(self: *EventManager, target: *EventTarget, event: *E
 }
 
 fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
-    if (event._bubbles == false) {
-        event._event_phase = .at_target;
-        const target_et = target.asEventTarget();
-        if (self.lookup.getPtr(@intFromPtr(target_et))) |list| {
-            try self.dispatchPhase(list, target_et, event, null);
-        }
-        event._event_phase = .none;
-        return;
-    }
-
     var path_len: usize = 0;
     var path_buffer: [128]*EventTarget = undefined;
 
@@ -150,7 +140,8 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
         path_len += 1;
     }
 
-    // Even though the window isn't part of the DOM, events bubble to it
+    // Even though the window isn't part of the DOM, events always propagate
+    // through it in the capture phase
     if (path_len < path_buffer.len) {
         path_buffer[path_len] = self.page.window.asEventTarget();
         path_len += 1;
@@ -159,6 +150,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
     const path = path_buffer[0..path_len];
 
     // Phase 1: Capturing phase (root → target, excluding target)
+    // This happens for all events, regardless of bubbling
     event._event_phase = .capturing_phase;
     var i: usize = path_len;
     while (i > 1) {
@@ -173,6 +165,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
         }
     }
 
+    // Phase 2: At target
     event._event_phase = .at_target;
     const target_et = target.asEventTarget();
     if (self.lookup.getPtr(@intFromPtr(target_et))) |list| {
@@ -183,12 +176,16 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
         }
     }
 
-    event._event_phase = .bubbling_phase;
-    for (path[1..]) |current_target| {
-        if (self.lookup.getPtr(@intFromPtr(current_target))) |list| {
-            try self.dispatchPhase(list, current_target, event, false);
-            if (event._stop_propagation) {
-                break;
+    // Phase 3: Bubbling phase (target → root, excluding target)
+    // This only happens if the event bubbles
+    if (event._bubbles) {
+        event._event_phase = .bubbling_phase;
+        for (path[1..]) |current_target| {
+            if (self.lookup.getPtr(@intFromPtr(current_target))) |list| {
+                try self.dispatchPhase(list, current_target, event, false);
+                if (event._stop_propagation) {
+                    break;
+                }
             }
         }
     }

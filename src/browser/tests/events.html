@@ -117,7 +117,7 @@
 
   parent.dispatchEvent(new Event('dupe'));
   testing.expectEqual(101, parent_calls);
-<!-- </script> -->
+</script>
 
 <div id=parent4><div id=child4></div></div>
 <script id=stpoPropagation>
@@ -264,11 +264,14 @@
 
 <div id=child9></div>
 <script id=nonBubblingNoCapture>
-  // Test that non-bubbling events don't trigger capture phase
+  // Test that non-bubbling events still have capture phase but no bubble phase
   let non_bubble_calls = [];
   const child9 = $('#child9');
 
-  window.addEventListener('nobubble', () => non_bubble_calls.push('window-capture'), true);
+  window.addEventListener('nobubble', (e) => {
+    non_bubble_calls.push('window-capture');
+    testing.expectEqual(Event.CAPTURING_PHASE, e.eventPhase);
+  }, true);
   window.addEventListener('nobubble', () => non_bubble_calls.push('window-bubble'), false);
   child9.addEventListener('nobubble', (e) => {
     non_bubble_calls.push('child');
@@ -277,7 +280,8 @@
 
   child9.dispatchEvent(new Event('nobubble', {bubbles: false}));
 
-  // Should only call child listener, not window
-  testing.expectEqual(1, non_bubble_calls.length);
-  testing.expectEqual('child', non_bubble_calls[0]);
+  // Should call window-capture (during capture phase) and child, but NOT window-bubble
+  testing.expectEqual(2, non_bubble_calls.length);
+  testing.expectEqual('window-capture', non_bubble_calls[0]);
+  testing.expectEqual('child', non_bubble_calls[1]);
 </script>

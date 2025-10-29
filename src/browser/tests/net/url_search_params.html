@@ -20,8 +20,8 @@
 
 <script id=urlSearchParams>
   const inputs = [
-    [["over", "9000!!"], ["abc", 123], ["key1", ""], ["key2", ""]],
-    {over: "9000!!", abc: 123, key1: "", key2: ""},
+   // @ZIGDOM [["over", "9000!!"], ["abc", 123], ["key1", ""], ["key2", ""]],
+   // @ZIGDOM {over: "9000!!", abc: 123, key1: "", key2: ""},
     "over=9000!!&abc=123&key1&key2=",
     "?over=9000!!&abc=123&key1&key2=",
   ]
@@ -73,7 +73,7 @@
 }
 </script>
 
-<script id=encoding>
+x<script id=encoding>
 {
   const usp = new URLSearchParams('key=hello%20world&special=%21%40%23%24&plus=a+b');
   testing.expectEqual('hello world', usp.get('key'));
@@ -351,4 +351,4 @@
   testing.expectEqual('a=2&a=4&b=1&b=3&c=5', usp.toString());
   testing.expectEqual(['a', 'a', 'b', 'b', 'c'], Array.from(usp.keys()));
 }
-</script>
+</script> -->

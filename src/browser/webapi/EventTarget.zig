@@ -56,6 +56,15 @@ pub fn removeEventListener(self: *EventTarget, typ: []const u8, callback: js.Fun
     return page._event_manager.remove(self, typ, callback, use_capture);
 }
 
+pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
+    return switch (self._type) {
+        .node => |n| n.format(writer),
+        .window => writer.writeAll("<window>"),
+        .xhr => writer.writeAll("<XMLHttpRequestEventTarget>"),
+        .abort_signal => writer.writeAll("<abort_signal>"),
+    };
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(EventTarget);
 

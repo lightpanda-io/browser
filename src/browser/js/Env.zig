@@ -241,7 +241,11 @@ pub fn attachClass(comptime JsApi: type, isolate: v8.Isolate, template: v8.Funct
             bridge.Function => {
                 const function_template = v8.FunctionTemplate.initCallback(isolate, value.func);
                 const js_name: v8.Name = v8.String.initUtf8(isolate, name).toName();
-                template_proto.set(js_name, function_template, v8.PropertyAttribute.None);
+                if (value.static) {
+                    template.set(js_name, function_template, v8.PropertyAttribute.None);
+                } else {
+                    template_proto.set(js_name, function_template, v8.PropertyAttribute.None);
+                }
             },
             bridge.Indexed => {
                 const configuration = v8.IndexedPropertyHandlerConfiguration{

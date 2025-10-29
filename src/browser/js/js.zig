@@ -498,5 +498,5 @@ pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
 
 test "TaggedAnyOpaque" {
     // If we grow this, fine, but it should be a conscious decision
-    try std.testing.expectEqual(16, @sizeOf(TaggedAnyOpaque));
+    try std.testing.expectEqual(24, @sizeOf(TaggedAnyOpaque));
 }

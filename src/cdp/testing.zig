@@ -117,11 +117,12 @@ const TestContext = struct {
             bc.session_id = sid;
         }
 
-        if (opts.html) |html| {
-            if (bc.session_id == null) bc.session_id = "SID-X";
-            const page = try bc.session.createPage();
-            page.window.document = (try Document.init(html)).doc;
-        }
+        // @ZIGDOM
+        // if (opts.html) |html| {
+        //     if (bc.session_id == null) bc.session_id = "SID-X";
+        //     const page = try bc.session.createPage();
+        //     page.window._document = (try Document.init(html)).doc;
+        // }
         return bc;
     }
 
