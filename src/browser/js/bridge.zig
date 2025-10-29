@@ -417,6 +417,7 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/css/CSSStyleDeclaration.zig"),
     @import("../webapi/css/CSSStyleProperties.zig"),
     @import("../webapi/Document.zig"),
+    @import("../webapi/HTMLDocument.zig"),
     @import("../webapi/DocumentFragment.zig"),
     @import("../webapi/DOMException.zig"),
     @import("../webapi/DOMTreeWalker.zig"),

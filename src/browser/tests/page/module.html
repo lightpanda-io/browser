@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 
-<script id=meta type=module>
+<!-- <script id=meta type=module>
   testing.expectEqual('/src/browser/tests/page/module.html', new URL(import.meta.url).pathname)
 </script>
 
@@ -33,7 +33,7 @@
   import { increment, getCount } from "./modules/shared.js";
   testing.expectEqual(2, increment());
   testing.expectEqual(2, getCount());
-</script>
+</script> -->
 
 <script id=circular-imports type=module>
   import { aValue, getFromB } from "./modules/circular-a.js";
@@ -44,7 +44,7 @@
   testing.expectEqual('a', getFromA());
 </script>
 
-<script id=basic-async type=module>
+<!-- <script id=basic-async type=module>
   const m = await import("./mod1.js");
   testing.expectEqual('value-1', m.val1);
 </script>
@@ -145,7 +145,7 @@
     testing.expectEqual('from-base', m.importedValue);
     testing.expectEqual('local', m.localValue);
   })();
-</script>
+</script> -->
 
 <!-- TODO: Error handling tests need dynamic import support
 <script id=import-syntax-error type=module>

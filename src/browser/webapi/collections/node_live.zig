@@ -68,7 +68,7 @@ pub fn NodeLive(comptime mode: Mode) type {
 
         const Self = @This();
 
-        pub fn init(arena: ?Allocator, root: *Node, filter: Filter, page: *Page) !Self {
+        pub fn init(arena: ?Allocator, root: *Node, filter: Filter, page: *Page) Self {
             return .{
                 ._arena = arena,
                 ._last_index = 0,

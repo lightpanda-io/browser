@@ -10,6 +10,7 @@ const Page = @import("Page.zig");
 const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
 const Element = @import("webapi/Element.zig");
+const Document = @import("webapi/Document.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.zig");
 
@@ -94,6 +95,16 @@ pub fn node(self: *Factory, child: anytype) !*@TypeOf(child) {
     child_ptr._proto = try self.eventTarget(Node{
         ._proto = undefined,
         ._type = unionInit(Node.Type, child_ptr),
+    });
+    return child_ptr;
+}
+
+pub fn document(self: *Factory, child: anytype) !*@TypeOf(child) {
+    const child_ptr = try self.createT(@TypeOf(child));
+    child_ptr.* = child;
+    child_ptr._proto = try self.node(Document{
+        ._proto = undefined,
+        ._type = unionInit(Document.Type, child_ptr),
     });
     return child_ptr;
 }

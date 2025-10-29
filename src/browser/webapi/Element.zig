@@ -456,15 +456,15 @@ pub fn getElementsByTagName(self: *Element, tag_name: []const u8, page: *Page) !
 
     const lower = std.ascii.lowerString(&page.buf, tag_name);
     if (Tag.parseForMatch(lower)) |known| {
-        // optimized for known tag names, comparis
+        // optimized for known tag names
         return .{
-            .tag = try collections.NodeLive(.tag).init(null, self.asNode(), known, page),
+            .tag = collections.NodeLive(.tag).init(null, self.asNode(), known, page),
         };
     }
 
     const arena = page.arena;
     const filter = try String.init(arena, lower, .{});
-    return .{ .tag_name = try collections.NodeLive(.tag_name).init(arena, self.asNode(), filter, page) };
+    return .{ .tag_name = collections.NodeLive(.tag_name).init(arena, self.asNode(), filter, page) };
 }
 
 pub fn getElementsByClassName(self: *Element, class_name: []const u8, page: *Page) !collections.NodeLive(.class_name) {

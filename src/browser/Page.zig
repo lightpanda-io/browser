@@ -136,7 +136,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self.version = 0;
     self.url = "about/blank";
 
-    self.document = try self._factory.node(Document{ ._proto = undefined });
+    self.document = (try self._factory.document(Node.Document.HTMLDocument{ ._proto = undefined })).asDocument();
 
     const storage_bucket = try self._factory.create(storage.Bucket{});
     self.window = try self._factory.eventTarget(Window{

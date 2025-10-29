@@ -1,7 +1,8 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 <script id=meta>
-  testing.expectEqual('Document', document.constructor.name);
+  testing.expectEqual('HTMLDocument', document.constructor.name);
+  testing.expectEqual('Document', new Document().constructor.name);
   testing.expectEqual('[object Document]', new Document().toString());
   testing.expectEqual('Window', window.constructor.name);
 
@@ -9,4 +10,31 @@
   // exists on the Document. So this is a simple way to make sure that
   // the returned Zig type is associated with the correct JS class.
   testing.expectEqual(null, new Document().getElementById('x'));
+
+  // HTMLDocument (global document) should have HTML-specific properties
+  testing.expectEqual('object', typeof document.head);
+  testing.expectEqual('object', typeof document.body);
+  testing.expectEqual('string', typeof document.title);
+  testing.expectEqual('object', typeof document.images);
+  testing.expectEqual('object', typeof document.scripts);
+  testing.expectEqual('object', typeof document.links);
+  testing.expectEqual('object', typeof document.forms);
+  testing.expectEqual('object', typeof document.location);
+
+  // Plain Document should NOT have HTML-specific properties
+  const plainDoc = new Document();
+  testing.expectEqual('undefined', typeof plainDoc.head);
+  testing.expectEqual('undefined', typeof plainDoc.body);
+  testing.expectEqual('undefined', typeof plainDoc.title);
+  testing.expectEqual('undefined', typeof plainDoc.images);
+  testing.expectEqual('undefined', typeof plainDoc.scripts);
+  testing.expectEqual('undefined', typeof plainDoc.links);
+  testing.expectEqual('undefined', typeof plainDoc.forms);
+  testing.expectEqual('undefined', typeof plainDoc.location);
+
+  // Both should have common Document properties
+  testing.expectEqual('string', typeof document.URL);
+  testing.expectEqual('string', typeof plainDoc.URL);
+  testing.expectEqual('string', typeof document.readyState);
+  testing.expectEqual('string', typeof plainDoc.readyState);
 </script>

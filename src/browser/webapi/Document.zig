@@ -13,13 +13,37 @@ const NodeFilter = @import("NodeFilter.zig");
 const DOMTreeWalker = @import("DOMTreeWalker.zig");
 const DOMNodeIterator = @import("DOMNodeIterator.zig");
 
+pub const HTMLDocument = @import("HTMLDocument.zig");
+
 const Document = @This();
 
+_type: Type,
 _proto: *Node,
 _location: ?*Location = null,
 _ready_state: ReadyState = .loading,
 _current_script: ?*Element.Html.Script = null,
 _elements_by_id: std.StringHashMapUnmanaged(*Element) = .empty,
+
+pub const Type = union(enum) {
+    generic,
+    html: *HTMLDocument,
+};
+
+pub fn is(self: *Document, comptime T: type) ?*T {
+    switch (self._type) {
+        .html => |html| {
+            if (T == HTMLDocument) {
+                return html;
+            }
+        },
+        .generic => {},
+    }
+    return null;
+}
+
+pub fn as(self: *Document, comptime T: type) *T {
+    return self.is(T).?;
+}
 
 pub fn asNode(self: *Document) *Node {
     return self._proto;
@@ -31,14 +55,6 @@ pub fn asEventTarget(self: *Document) *@import("EventTarget.zig") {
 
 pub fn getURL(_: *const Document, page: *const Page) [:0]const u8 {
     return page.url;
-}
-
-pub fn getReadyState(self: *const Document) []const u8 {
-    return @tagName(self._ready_state);
-}
-
-pub fn getCurrentScript(self: *const Document) ?*Element.Html.Script {
-    return self._current_script;
 }
 
 pub fn createElement(_: *const Document, name: []const u8, page: *Page) !*Element {
@@ -70,13 +86,13 @@ pub fn getElementsByTagName(self: *Document, tag_name: []const u8, page: *Page) 
     if (Node.Element.Tag.parseForMatch(lower)) |known| {
         // optimized for known tag names, comparis
         return .{
-            .tag = try collections.NodeLive(.tag).init(null, self.asNode(), known, page),
+            .tag = collections.NodeLive(.tag).init(null, self.asNode(), known, page),
         };
     }
 
     const arena = page.arena;
     const filter = try String.init(arena, lower, .{});
-    return .{ .tag_name = try collections.NodeLive(.tag_name).init(arena, self.asNode(), filter, page) };
+    return .{ .tag_name = collections.NodeLive(.tag_name).init(arena, self.asNode(), filter, page) };
 }
 
 pub fn getElementsByClassName(self: *Document, class_name: []const u8, page: *Page) !collections.NodeLive(.class_name) {
@@ -90,46 +106,6 @@ pub fn getDocumentElement(self: *Document) ?*Element {
     while (child) |node| {
         if (node.is(Element)) |el| {
             return el;
-        }
-        child = node.nextSibling();
-    }
-    return null;
-}
-
-pub fn getImages(self: *Document, page: *Page) !collections.NodeLive(.tag) {
-    return collections.NodeLive(.tag).init(null, self.asNode(), .img, page);
-}
-
-pub fn getScripts(self: *Document, page: *Page) !collections.NodeLive(.tag) {
-    return collections.NodeLive(.tag).init(null, self.asNode(), .script, page);
-}
-
-pub fn getForms(self: *Document, page: *Page) !collections.NodeLive(.tag) {
-    return collections.NodeLive(.tag).init(null, self.asNode(), .form, page);
-}
-
-pub fn getLinks(self: *Document, page: *Page) !collections.NodeLive(.tag) {
-    return collections.NodeLive(.tag).init(null, self.asNode(), .anchor, page);
-}
-
-pub fn getHead(self: *Document) ?*Element.Html.Head {
-    const doc_el = self.getDocumentElement() orelse return null;
-    var child = doc_el.asNode().firstChild();
-    while (child) |node| {
-        if (node.is(Element.Html.Head)) |head| {
-            return head;
-        }
-        child = node.nextSibling();
-    }
-    return null;
-}
-
-pub fn getBody(self: *Document) ?*Element.Html.Body {
-    const doc_el = self.getDocumentElement() orelse return null;
-    var child = doc_el.asNode().firstChild();
-    while (child) |node| {
-        if (node.is(Element.Html.Body)) |body| {
-            return body;
         }
         child = node.nextSibling();
     }
@@ -160,43 +136,18 @@ pub fn createTextNode(_: *const Document, data: []const u8, page: *Page) !*Node 
     return page.createTextNode(data);
 }
 
-pub fn getLocation(self: *const Document) ?*Location {
-    return self._location;
-}
-
-// @ZIGDOM what_to_show tristate (null vs undefined vs value)
 pub fn createTreeWalker(_: *const Document, root: *Node, what_to_show: ?u32, filter: ?DOMTreeWalker.FilterOpts, page: *Page) !*DOMTreeWalker {
     const show = what_to_show orelse NodeFilter.SHOW_ALL;
     return DOMTreeWalker.init(root, show, filter, page);
 }
 
-// @ZIGDOM what_to_show tristate (null vs undefined vs value)
 pub fn createNodeIterator(_: *const Document, root: *Node, what_to_show: ?u32, filter: ?DOMNodeIterator.FilterOpts, page: *Page) !*DOMNodeIterator {
     const show = what_to_show orelse NodeFilter.SHOW_ALL;
     return DOMNodeIterator.init(root, show, filter, page);
 }
 
-pub fn getTitle(self: *Document, page: *Page) ![]const u8 {
-    const head = self.getHead() orelse return "";
-    var it = head.asNode().childrenIterator();
-    while (it.next()) |node| {
-        if (node.is(Element.Html.Title)) |title| {
-            var buf = std.Io.Writer.Allocating.init(page.call_arena);
-            try title.asElement().getInnerText(&buf.writer);
-            return buf.written();
-        }
-    }
-    return "";
-}
-
-pub fn setTitle(self: *Document, title: []const u8, page: *Page) !void {
-    const head = self.getHead() orelse return;
-    var it = head.asNode().childrenIterator();
-    while (it.next()) |node| {
-        if (node.is(Element.Html.Title)) |title_element| {
-            return title_element.asElement().replaceChildren(&.{.{ .text = title }}, page);
-        }
-    }
+pub fn getReadyState(self: *const Document) []const u8 {
+    return @tagName(self._ready_state);
 }
 
 const ReadyState = enum {
@@ -216,20 +167,14 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(_constructor, .{});
     fn _constructor(page: *Page) !*Document {
-        return page._factory.node(Document{ ._proto = undefined });
+        return page._factory.node(Document{
+            ._proto = undefined,
+            ._type = .generic,
+        });
     }
 
     pub const URL = bridge.accessor(Document.getURL, null, .{});
-    pub const currentScript = bridge.accessor(Document.getCurrentScript, null, .{});
-    pub const head = bridge.accessor(Document.getHead, null, .{});
-    pub const body = bridge.accessor(Document.getBody, null, .{});
-    pub const title = bridge.accessor(Document.getTitle, Document.setTitle, .{});
     pub const documentElement = bridge.accessor(Document.getDocumentElement, null, .{});
-    pub const images = bridge.accessor(Document.getImages, null, .{});
-    pub const scripts = bridge.accessor(Document.getScripts, null, .{});
-    pub const links = bridge.accessor(Document.getLinks, null, .{});
-    pub const forms = bridge.accessor(Document.getForms, null, .{});
-    pub const location = bridge.accessor(Document.getLocation, null, .{ .cache = "location" });
     pub const readyState = bridge.accessor(Document.getReadyState, null, .{});
 
     pub const createElement = bridge.function(Document.createElement, .{});

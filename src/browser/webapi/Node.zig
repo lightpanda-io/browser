@@ -72,6 +72,9 @@ pub fn is(self: *Node, comptime T: type) ?*T {
             if (T == Document) {
                 return doc;
             }
+            if (comptime std.mem.startsWith(u8, type_name, "browser.webapi.htmldocument.")) {
+                return doc.is(T);
+            }
         },
         .document_fragment => |doc| {
             if (T == DocumentFragment) {
