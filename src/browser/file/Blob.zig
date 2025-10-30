@@ -107,8 +107,7 @@ fn writeBlobParts(
         var start = end;
         while (end < part.len) {
             if (part[end] == '\r') {
-                try writer.writeAll(part[start..end]);
-                try writer.writeByte('\n');
+                _ = try writer.writeVec(&.{ part[start..end], "\n" });
 
                 // Part ends with CR. We can continue to next part.
                 if (end + 1 == part.len) {
