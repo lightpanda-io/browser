@@ -279,6 +279,12 @@ pub fn attachClass(comptime JsApi: type, isolate: v8.Isolate, template: v8.Funct
             else => {},
         }
     }
+
+    if (@hasDecl(JsApi.Meta, "htmldda")) {
+        const instance_template = template.getInstanceTemplate();
+        instance_template.markAsUndetectable();
+        instance_template.setCallAsFunctionHandler(JsApi.Meta.callable.func);
+    }
 }
 
 // Even if a struct doesn't have a `constructor` function, we still
@@ -315,28 +321,15 @@ fn generateConstructor(comptime JsApi: type, isolate: v8.Isolate) v8.FunctionTem
     return template;
 }
 
-// ZIGDOM (HTMLAllCollection I think)
 // fn generateUndetectable(comptime Struct: type, template: v8.ObjectTemplate) void {
 //     const has_js_call_as_function = @hasDecl(Struct, "jsCallAsFunction");
 
 //     if (has_js_call_as_function) {
-//         template.setCallAsFunctionHandler(struct {
-//             fn callback(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
-//                 const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
-//                 var caller = Caller.init(info);
-//                 defer caller.deinit();
 
-//                 const named_function = comptime NamedFunction.init(Struct, "jsCallAsFunction");
-//                 caller.method(Struct, named_function, info) catch |err| {
-//                     caller.handleError(Struct, named_function, err, info);
-//                 };
-//             }
-//         }.callback);
-//     }
 
-//     if (@hasDecl(Struct, "mark_as_undetectable") and Struct.mark_as_undetectable) {
+//     if (@hasDecl(Struct, "htmldda") and Struct.htmldda) {
 //         if (!has_js_call_as_function) {
-//             @compileError(@typeName(Struct) ++ ": mark_as_undetectable required jsCallAsFunction to be defined. This is a hard-coded requirement in V8, because mark_as_undetectable only exists for HTMLAllCollection which is also callable.");
+//             @compileError(@typeName(Struct) ++ ": htmldda required jsCallAsFunction to be defined. This is a hard-coded requirement in V8, because mark_as_undetectable only exists for HTMLAllCollection which is also callable.");
 //         }
 //         template.markAsUndetectable();
 //     }

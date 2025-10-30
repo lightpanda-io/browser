@@ -52,6 +52,10 @@ pub fn Builder(comptime T: type) type {
             return Iterator.init(T, func, opts);
         }
 
+        pub fn callable(comptime func: anytype, comptime opts: Callable.Opts) Callable {
+            return Callable.init(T, func, opts);
+        }
+
         pub fn property(value: anytype) Property.GetType(@TypeOf(value)) {
             return Property.GetType(@TypeOf(value)).init(value);
         }
@@ -261,6 +265,28 @@ pub const Iterator = struct {
                 caller.method(T, struct_or_func, info, .{});
             }
         }.wrap };
+    }
+};
+
+
+pub const Callable = struct {
+    func: *const fn (?*const v8.C_FunctionCallbackInfo) callconv(.c) void,
+
+    const Opts = struct {
+        null_as_undefined: bool = false,
+    };
+
+    fn init(comptime T: type, comptime func: anytype, comptime opts: Opts) Callable {
+        return .{.func = struct {
+            fn wrap(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
+                const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
+                var caller = Caller.init(info);
+                defer caller.deinit();
+                caller.method(T, func, info, .{
+                    .null_as_undefined = opts.null_as_undefined,
+                });
+            }}.wrap
+        };
     }
 };
 

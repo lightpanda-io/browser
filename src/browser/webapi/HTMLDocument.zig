@@ -5,6 +5,7 @@ const Page = @import("../Page.zig");
 const Node = @import("Node.zig");
 const Document = @import("Document.zig");
 const Element = @import("Element.zig");
+const collections = @import("collections.zig");
 
 const HTMLDocument = @This();
 
@@ -74,23 +75,19 @@ pub fn setTitle(self: *HTMLDocument, title: []const u8, page: *Page) !void {
     }
 }
 
-pub fn getImages(self: *HTMLDocument, page: *Page) !@import("collections.zig").NodeLive(.tag) {
-    const collections = @import("collections.zig");
+pub fn getImages(self: *HTMLDocument, page: *Page) !collections.NodeLive(.tag) {
     return collections.NodeLive(.tag).init(null, self.asNode(), .img, page);
 }
 
-pub fn getScripts(self: *HTMLDocument, page: *Page) !@import("collections.zig").NodeLive(.tag) {
-    const collections = @import("collections.zig");
+pub fn getScripts(self: *HTMLDocument, page: *Page) !collections.NodeLive(.tag) {
     return collections.NodeLive(.tag).init(null, self.asNode(), .script, page);
 }
 
-pub fn getLinks(self: *HTMLDocument, page: *Page) !@import("collections.zig").NodeLive(.tag) {
-    const collections = @import("collections.zig");
+pub fn getLinks(self: *HTMLDocument, page: *Page) !collections.NodeLive(.tag) {
     return collections.NodeLive(.tag).init(null, self.asNode(), .anchor, page);
 }
 
-pub fn getForms(self: *HTMLDocument, page: *Page) !@import("collections.zig").NodeLive(.tag) {
-    const collections = @import("collections.zig");
+pub fn getForms(self: *HTMLDocument, page: *Page) !collections.NodeLive(.tag) {
     return collections.NodeLive(.tag).init(null, self.asNode(), .form, page);
 }
 
@@ -100,6 +97,10 @@ pub fn getCurrentScript(self: *const HTMLDocument) ?*Element.Html.Script {
 
 pub fn getLocation(self: *const HTMLDocument) ?*@import("Location.zig") {
     return self._proto._location;
+}
+
+pub fn getAll(self: *HTMLDocument, page: *Page) !*collections.HTMLAllCollection {
+    return page._factory.create(collections.HTMLAllCollection.init(self.asNode(), page));
 }
 
 pub const JsApi = struct {
@@ -118,7 +119,6 @@ pub const JsApi = struct {
         });
     }
 
-    // HTML-specific properties
     pub const head = bridge.accessor(HTMLDocument.getHead, null, .{});
     pub const body = bridge.accessor(HTMLDocument.getBody, null, .{});
     pub const title = bridge.accessor(HTMLDocument.getTitle, HTMLDocument.setTitle, .{});
@@ -128,4 +128,5 @@ pub const JsApi = struct {
     pub const forms = bridge.accessor(HTMLDocument.getForms, null, .{});
     pub const currentScript = bridge.accessor(HTMLDocument.getCurrentScript, null, .{});
     pub const location = bridge.accessor(HTMLDocument.getLocation, null, .{ .cache = "location" });
+    pub const all = bridge.accessor(HTMLDocument.getAll, null, .{});
 };

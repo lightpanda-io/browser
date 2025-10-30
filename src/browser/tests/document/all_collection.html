@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Test Page</title>
+</head>
+<body>
+  <div id="first">First</div>
+  <span name="second">Second</span>
+  <p id="third">Third</p>
+  <a href="#" name="link">Link</a>
+  <script src="../testing.js"></script>
+  <script id=all_collection>
+    testing.expectEqual('undefined', typeof document.all);
+    testing.expectEqual('HTMLAllCollection', document.all.constructor.name);
+    testing.expectEqual(true, document.all == null);
+    testing.expectEqual(true, document.all == undefined);
+    testing.expectEqual(false, document.all === undefined);
+    testing.expectEqual(true, !document.all);
+    testing.expectEqual(false, !!document.all);
+
+    testing.expectEqual(10, document.all.length);
+
+    testing.expectEqual('HTML', document.all[0].tagName);
+    testing.expectEqual('HEAD', document.all[1].tagName);
+    testing.expectEqual('TITLE', document.all[2].tagName);
+    testing.expectEqual('BODY', document.all[3].tagName);
+    testing.expectEqual('DIV', document.all[4].tagName);
+
+    testing.expectEqual('DIV', document.all.first.tagName);
+    testing.expectEqual('First', document.all.first.textContent);
+    testing.expectEqual('P', document.all.third.tagName);
+    testing.expectEqual('Third', document.all.third.textContent);
+
+    testing.expectEqual('SPAN', document.all.second.tagName);
+    testing.expectEqual('Second', document.all.second.textContent);
+    testing.expectEqual('A', document.all.link.tagName);
+
+    testing.expectEqual('SPAN', document.all.item(5).tagName);
+    testing.expectEqual(null, document.all.item(999));
+    testing.expectEqual(null, document.all.item(-1));
+
+    testing.expectEqual('DIV', document.all.namedItem('first').tagName);
+    testing.expectEqual('SPAN', document.all.namedItem('second').tagName);
+    testing.expectEqual(null, document.all.namedItem('nonexistent'));
+
+    // Test callable functionality: document.all(index) and document.all(name)
+    testing.expectEqual('HTML', document.all(0).tagName);
+    testing.expectEqual('HEAD', document.all(1).tagName);
+    testing.expectEqual('DIV', document.all(4).tagName);
+    testing.expectEqual('DIV', document.all('first').tagName);
+    testing.expectEqual('First', document.all('first').textContent);
+    testing.expectEqual('SPAN', document.all('second').tagName);
+    testing.expectEqual('Second', document.all('second').textContent);
+    testing.expectEqual('P', document.all('third').tagName);
+    testing.expectEqual(undefined, document.all(999));
+    testing.expectEqual(undefined, document.all('nonexistent'));
+
+    let count = 0;
+    for (const el of document.all) {
+      count++;
+    }
+    testing.expectEqual(10, count);
+
+    const plainDoc = new Document();
+    testing.expectEqual('undefined', typeof plainDoc.all);
+  </script>
+</body>
+</html>
