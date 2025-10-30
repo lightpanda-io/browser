@@ -2,17 +2,57 @@
 <script src="../testing.js"></script>
 
 <script id=Blob>
-  const parts = ["\r\nthe quick brown\rfo\rx\r", "\njumps over\r\nthe\nlazy\r", "\ndog"];
+  {
+    const parts = ["\r\nthe quick brown\rfo\rx\r", "\njumps over\r\nthe\nlazy\r", "\ndog"];
+    // "transparent" ending should not modify the final buffer.
+    const blob = new Blob(parts);
 
-  // "transparent" ending should not modify the final buffer.
-  let blob1 = new Blob(parts);
-  let expected = parts.join("");
-  testing.expectEqual(expected.length, blob1.size);
-  testing.expectEqual(expected, blob1.str);
+    const expected = parts.join("");
+    testing.expectEqual(expected.length, blob.size);
+    testing.async(blob.text(), result => testing.expectEqual(expected, result));
+  }
 
-  // "native" ending should modify the final buffer.
-  let blob2 = new Blob(parts, { endings: "native" });
-  expected = "\nthe quick brown\nfo\nx\n\njumps over\nthe\nlazy\n\ndog";
-  testing.expectEqual(expected.length, blob2.size);
-  testing.expectEqual(expected, blob2.str);
+  {
+    const parts = ["\rhello\r", "\nwor\r\nld"];
+    // "native" ending should modify the final buffer.
+    const blob = new Blob(parts, { endings: "native" });
+
+    const expected = "\nhello\n\nwor\nld";
+    testing.expectEqual(expected.length, blob.size);
+    testing.async(blob.text(), result => testing.expectEqual(expected, result));
+  }
+</script>
+
+<script id=Blob.stream>
+  {
+    const parts = ["may", "thy", "knife", "chip", "and", "shatter"];
+    const blob = new Blob(parts);
+    const reader = blob.stream().getReader();
+
+    testing.async(reader.read(), ({ done, value }) => {
+      const expected = new Uint8Array([109, 97, 121, 116, 104, 121, 107, 110,
+                                       105, 102, 101, 99, 104, 105, 112, 97,
+                                       110, 100, 115, 104, 97, 116, 116, 101,
+                                       114]);
+      testing.expectEqual(false, done);
+      testing.expectEqual(true, value instanceof Uint8Array);
+      testing.expectEqual(expected, value);
+    });
+  }
+</script>
+
+<!-- Firefox and Safari only -->
+<script id=Blob.bytes>
+  {
+    const parts = ["light ", "panda ", "rocks ", "!"];
+    const blob = new Blob(parts);
+
+    testing.async(blob.bytes(), result => {
+      const expected = new Uint8Array([108, 105, 103, 104, 116, 32, 112, 97,
+                                       110, 100, 97, 32, 114, 111, 99, 107, 115,
+                                       32, 33]);
+      testing.expectEqual(true, result instanceof Uint8Array);
+      testing.expectEqual(expected, result);
+    });
+  }
 </script>
