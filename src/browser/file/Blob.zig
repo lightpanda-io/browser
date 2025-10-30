@@ -169,10 +169,6 @@ pub fn get_size(self: *const Blob) usize {
     return self.slice.len;
 }
 
-pub fn get_str(self: *const Blob) []const u8 {
-    return self.slice;
-}
-
 const testing = @import("../../testing.zig");
 test "Browser: File.Blob" {
     try testing.htmlRunner("file/blob.html");
