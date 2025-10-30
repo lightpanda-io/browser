@@ -21,14 +21,12 @@ const std = @import("std");
 // https://w3c.github.io/FileAPI/#file-section
 const File = @This();
 
-// Very incomplete. The prototype for this is Blob, which we don't have.
-// This minimum "implementation" is added because some JavaScript code just
-// checks: if (x instanceof File) throw Error(...)
+/// TODO: Implement File API.
 pub fn constructor() File {
     return .{};
 }
 
 const testing = @import("../../testing.zig");
-test "Browser: File" {
-    try testing.htmlRunner("xhr/file.html");
+test "Browser: File.File" {
+    try testing.htmlRunner("file/file.html");
 }

@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=Blob>
+  const parts = ["\r\nthe quick brown\rfo\rx\r", "\njumps over\r\nthe\nlazy\r", "\ndog"];
+
+  // "transparent" ending should not modify the final buffer.
+  let blob1 = new Blob(parts);
+  let expected = parts.join("");
+  testing.expectEqual(expected.length, blob1.size);
+  testing.expectEqual(expected, blob1.str);
+
+  // "native" ending should modify the final buffer.
+  let blob2 = new Blob(parts, { endings: "native" });
+  expected = "\nthe quick brown\nfo\nx\n\njumps over\nthe\nlazy\n\ndog";
+  testing.expectEqual(expected.length, blob2.size);
+  testing.expectEqual(expected, blob2.str);
+</script>
