@@ -25,6 +25,8 @@ const is_windows = builtin.os.tag == .windows;
 const Page = @import("../page.zig").Page;
 const js = @import("../js/js.zig");
 
+const ReadableStream = @import("../streams/ReadableStream.zig");
+
 /// https://w3c.github.io/FileAPI/#blob-section
 /// https://developer.mozilla.org/en-US/docs/Web/API/Blob
 const Blob = @This();
@@ -131,6 +133,38 @@ fn writeBlobParts(
     }
 }
 
+// TODO: Blob.arrayBuffer.
+// https://developer.mozilla.org/en-US/docs/Web/API/Blob/arrayBuffer
+
+/// Returns a ReadableStream which upon reading returns the data
+/// contained within the Blob.
+pub fn _stream(self: *const Blob, page: *Page) !*ReadableStream {
+    const stream = try ReadableStream.constructor(null, null, page);
+    try stream.queue.append(page.arena, .{
+        .uint8array = .{ .values = self.slice },
+    });
+    return stream;
+}
+
+/// Returns a Promise that resolves with a string containing
+/// the contents of the blob, interpreted as UTF-8.
+pub fn _text(self: *const Blob, page: *Page) !js.Promise {
+    const resolver = page.js.createPromiseResolver(.none);
+    try resolver.resolve(self.slice);
+    return resolver.promise();
+}
+
+/// Extension to Blob; works on Firefox and Safari.
+/// https://developer.mozilla.org/en-US/docs/Web/API/Blob/bytes
+/// Returns a Promise that resolves with a Uint8Array containing
+/// the contents of the blob as an array of bytes.
+pub fn _bytes(self: *const Blob, page: *Page) !js.Promise {
+    const resolver = page.js.createPromiseResolver(.none);
+    try resolver.resolve(js.TypedArray(u8){ .values = self.slice });
+    return resolver.promise();
+}
+
+/// Returns the size of the Blob in bytes.
 pub fn get_size(self: *const Blob) usize {
     return self.slice.len;
 }
