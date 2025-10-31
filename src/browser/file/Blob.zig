@@ -175,6 +175,55 @@ pub fn _bytes(self: *const Blob, page: *Page) !js.Promise {
     return resolver.promise();
 }
 
+/// Returns a new Blob object which contains data
+/// from a subset of the blob on which it's called.
+pub fn _slice(
+    self: *const Blob,
+    maybe_start: ?i32,
+    maybe_end: ?i32,
+    maybe_content_type: ?[]const u8,
+    page: *Page,
+) !Blob {
+    const mime: []const u8 = blk: {
+        if (maybe_content_type) |content_type| {
+            if (content_type.len == 0) {
+                break :blk "";
+            }
+
+            break :blk try page.arena.dupe(u8, content_type);
+        }
+
+        break :blk "";
+    };
+
+    const slice = self.slice;
+    if (maybe_start) |_start| {
+        const start = blk: {
+            if (_start < 0) {
+                break :blk slice.len -| @abs(_start);
+            }
+
+            break :blk @min(slice.len, @as(u31, @intCast(_start)));
+        };
+
+        const end: usize = blk: {
+            if (maybe_end) |_end| {
+                if (_end < 0) {
+                    break :blk @max(start, slice.len -| @abs(_end));
+                }
+
+                break :blk @min(slice.len, @max(start, @as(u31, @intCast(_end))));
+            }
+
+            break :blk slice.len;
+        };
+
+        return .{ .slice = slice[start..end], .mime = mime };
+    }
+
+    return .{ .slice = slice, .mime = mime };
+}
+
 /// Returns the size of the Blob in bytes.
 pub fn get_size(self: *const Blob) usize {
     return self.slice.len;
