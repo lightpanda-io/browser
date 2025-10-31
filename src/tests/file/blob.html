@@ -1,14 +1,15 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 
-<script id=Blob>
+<script id=Blob/Blob.text>
   {
     const parts = ["\r\nthe quick brown\rfo\rx\r", "\njumps over\r\nthe\nlazy\r", "\ndog"];
     // "transparent" ending should not modify the final buffer.
-    const blob = new Blob(parts);
+    const blob = new Blob(parts, { type: "text/html" });
 
     const expected = parts.join("");
     testing.expectEqual(expected.length, blob.size);
+    testing.expectEqual("text/html", blob.type);
     testing.async(blob.text(), result => testing.expectEqual(expected, result));
   }
 
@@ -20,6 +21,8 @@
     const expected = "\nhello\n\nwor\nld";
     testing.expectEqual(expected.length, blob.size);
     testing.async(blob.text(), result => testing.expectEqual(expected, result));
+
+    testing.async(blob.arrayBuffer(), result => testing.expectEqual(true, result instanceof ArrayBuffer));
   }
 </script>
 
@@ -38,6 +41,34 @@
       testing.expectEqual(true, value instanceof Uint8Array);
       testing.expectEqual(expected, value);
     });
+  }
+</script>
+
+<script id=Blob.arrayBuffer/Blob.slice>
+  {
+    const parts = ["la", "symphonie", "des", "éclairs"];
+    const blob = new Blob(parts);
+    testing.async(blob.arrayBuffer(), result => testing.expectEqual(true, result instanceof ArrayBuffer));
+
+    let temp = blob.slice(0);
+    testing.expectEqual(blob.size, temp.size);
+    testing.async(temp.text(), result => {
+      testing.expectEqual("lasymphoniedeséclairs", result);
+    });
+
+    temp = blob.slice(-4, -2, "custom");
+    testing.expectEqual(2, temp.size);
+    testing.expectEqual("custom", temp.type);
+    testing.async(temp.text(), result => testing.expectEqual("ai", result));
+
+    temp = blob.slice(14);
+    testing.expectEqual(8, temp.size);
+    testing.async(temp.text(), result => testing.expectEqual("éclairs", result));
+
+    temp = blob.slice(6, -10, "text/eclair");
+    testing.expectEqual(6, temp.size);
+    testing.expectEqual("text/eclair", temp.type);
+    testing.async(temp.text(), result => testing.expectEqual("honied", result));
   }
 </script>
 
