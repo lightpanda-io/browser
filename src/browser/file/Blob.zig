@@ -41,7 +41,7 @@ mime: []const u8,
 const ConstructorOptions = struct {
     /// MIME type.
     type: []const u8 = "",
-    /// How to handle newline (LF) characters.
+    /// How to handle line endings (CR and LF).
     /// `transparent` means do nothing, `native` expects CRLF (\r\n) on Windows.
     endings: []const u8 = "transparent",
 };
@@ -53,22 +53,29 @@ pub fn constructor(
     page: *Page,
 ) !Blob {
     const options: ConstructorOptions = maybe_options orelse .{};
+    // Setup MIME; This can be any string according to my observations.
+    const mime: []const u8 = blk: {
+        const t = options.type;
+        if (t.len == 0) {
+            break :blk "";
+        }
+
+        break :blk try page.arena.dupe(u8, t);
+    };
 
     if (maybe_blob_parts) |blob_parts| {
         var w: Writer.Allocating = .init(page.arena);
         const use_native_endings = std.mem.eql(u8, options.endings, "native");
         try writeBlobParts(&w.writer, blob_parts, use_native_endings);
 
-        const written = w.written();
-
-        return .{ .slice = written, .mime = options.type };
+        return .{ .slice = w.written(), .mime = mime };
     }
 
     // We don't have `blob_parts`, why would you want a Blob anyway then?
-    return .{ .slice = "", .mime = options.type };
+    return .{ .slice = "", .mime = mime };
 }
 
-/// Writes blob parts to given `Writer` by desired encoding.
+/// Writes blob parts to given `Writer` with desired endings.
 fn writeBlobParts(
     writer: *Writer,
     blob_parts: []const []const u8,
@@ -166,6 +173,11 @@ pub fn _bytes(self: *const Blob, page: *Page) !js.Promise {
 /// Returns the size of the Blob in bytes.
 pub fn get_size(self: *const Blob) usize {
     return self.slice.len;
+}
+
+/// Returns the type of Blob; likely a MIME type, yet anything can be given.
+pub fn get_type(self: *const Blob) []const u8 {
+    return self.mime;
 }
 
 const testing = @import("../../testing.zig");
