@@ -7,24 +7,12 @@ const Allocator = std.mem.Allocator;
 
 const Page = @import("../../Page.zig");
 const GenericIterator = @import("../collections/iterator.zig").Entry;
-
-pub fn registerTypes() []const type {
-    return &.{
-        URLSearchParams,
-        KeyIterator,
-        ValueIterator,
-        EntryIterator,
-    };
-}
+const KeyValueList = @import("../KeyValueList.zig");
 
 const URLSearchParams = @This();
 
 _arena: Allocator,
-_params: Entry.List,
-
-pub const KeyIterator = GenericIterator(Iterator, "0");
-pub const ValueIterator = GenericIterator(Iterator, "1");
-pub const EntryIterator = GenericIterator(Iterator, null);
+_params: KeyValueList,
 
 const InitOpts = union(enum) {
     query_string: []const u8,
@@ -33,7 +21,7 @@ const InitOpts = union(enum) {
 };
 pub fn init(opts_: ?InitOpts, page: *Page) !*URLSearchParams {
     const arena = page.arena;
-    const params: Entry.List = blk: {
+    const params: KeyValueList = blk: {
         const opts = opts_ orelse break :blk .empty;
         break :blk switch (opts) {
             .query_string => |str| try paramsFromString(arena, str, &page.buf),
@@ -47,79 +35,62 @@ pub fn init(opts_: ?InitOpts, page: *Page) !*URLSearchParams {
 }
 
 pub fn getSize(self: *const URLSearchParams) usize {
-    return self._params.items.len;
+    return self._params.len();
 }
 
 pub fn get(self: *const URLSearchParams, name: []const u8) ?[]const u8 {
-    const entry = self.getEntry(name) orelse return null;
-    return entry.value.str();
+    return self._params.get(name);
 }
 
 pub fn getAll(self: *const URLSearchParams, name: []const u8, page: *Page) ![]const []const u8 {
-    const arena = page.call_arena;
-    var arr: std.ArrayList([]const u8) = .empty;
-    for (self._params.items) |*entry| {
-        if (entry.name.eqlSlice(name)) {
-            try arr.append(arena, entry.value.str());
-        }
-    }
-    return arr.items;
+    return self._params.getAll(name, page);
 }
 
 pub fn has(self: *const URLSearchParams, name: []const u8) bool {
-    return self.getEntry(name) != null;
+    return self._params.has(name);
 }
 
 pub fn set(self: *URLSearchParams, name: []const u8, value: []const u8) !void {
-    self.delete(name, null);
-    return self.append(name, value);
+    return self._params.set(self._arena, name, value);
 }
 
 pub fn append(self: *URLSearchParams, name: []const u8, value: []const u8) !void {
-    const arena = self._arena;
-    return self._params.append(arena, .{
-        .name = try String.init(arena, name, .{}),
-        .value = try String.init(arena, value, .{}),
-    });
+    return self._params.append(self._arena, name, value);
 }
 
 pub fn delete(self: *URLSearchParams, name: []const u8, value: ?[]const u8) void {
-    var i: usize = 0;
-    while (i < self._params.items.len) {
-        const entry = self._params.items[i];
-        if (entry.name.eqlSlice(name)) {
-            if (value == null or entry.value.eqlSlice(value.?)) {
-                _ = self._params.swapRemove(i);
-                continue;
-            }
-        }
-        i += 1;
-    }
+    self._params.delete(name, value);
 }
 
-pub fn keys(self: *const URLSearchParams, page: *Page) !*KeyIterator {
-    return .init(.{ .list = self }, page);
+pub fn keys(self: *URLSearchParams, page: *Page) !*KeyValueList.KeyIterator {
+    return KeyValueList.KeyIterator.init(.{ .list = self, .kv = &self._params }, page);
 }
 
-pub fn values(self: *const URLSearchParams, page: *Page) !*ValueIterator {
-    return .init(.{ .list = self }, page);
+pub fn values(self: *URLSearchParams, page: *Page) !*KeyValueList.ValueIterator {
+    return KeyValueList.ValueIterator.init(.{ .list = self, .kv = &self._params }, page);
 }
 
-pub fn entries(self: *const URLSearchParams, page: *Page) !*EntryIterator {
-    return .init(.{ .list = self }, page);
+pub fn entries(self: *URLSearchParams, page: *Page) !*KeyValueList.EntryIterator {
+    return KeyValueList.EntryIterator.init(.{ .list = self, .kv = &self._params }, page);
 }
 
 pub fn toString(self: *const URLSearchParams, writer: *std.Io.Writer) !void {
-    const items = self._params.items;
+    const items = self._params._entries.items;
     if (items.len == 0) {
         return;
     }
 
-    try items[0].toString(writer);
+    try writeEntry(&items[0], writer);
     for (items[1..]) |entry| {
         try writer.writeByte('&');
-        try entry.toString(writer);
+        try writeEntry(&entry, writer);
     }
+}
+
+fn writeEntry(entry: *const KeyValueList.Entry, writer: *std.Io.Writer) !void {
+    try escape(entry.name.str(), writer);
+    try writer.writeByte('=');
+    try escape(entry.value.str(), writer);
 }
 
 pub fn format(self: *const URLSearchParams, writer: *std.Io.Writer) !void {
@@ -129,7 +100,7 @@ pub fn format(self: *const URLSearchParams, writer: *std.Io.Writer) !void {
 pub fn forEach(self: *URLSearchParams, cb_: js.Function, js_this_: ?js.Object) !void {
     const cb = if (js_this_) |js_this| try cb_.withThis(js_this) else cb_;
 
-    for (self._params.items) |entry| {
+    for (self._params._entries.items) |entry| {
         cb.call(void, .{ entry.value.str(), entry.name.str(), self }) catch |err| {
             // this is a non-JS error
             log.warn(.js, "URLSearchParams.forEach", .{ .err = err });
@@ -138,23 +109,14 @@ pub fn forEach(self: *URLSearchParams, cb_: js.Function, js_this_: ?js.Object) !
 }
 
 pub fn sort(self: *URLSearchParams) void {
-    std.mem.sort(Entry, self._params.items, {}, entryLessThan);
-}
-
-fn entryLessThan(_: void, a: Entry, b: Entry) bool {
-    return std.mem.order(u8, a.name.str(), b.name.str()) == .lt;
-}
-
-fn getEntry(self: *const URLSearchParams, name: []const u8) ?*Entry {
-    for (self._params.items) |*entry| {
-        if (entry.name.eqlSlice(name)) {
-            return entry;
+    std.mem.sort(KeyValueList.Entry, self._params._entries.items, {}, struct {
+        fn cmp(_: void, a: KeyValueList.Entry, b: KeyValueList.Entry) bool {
+            return std.mem.order(u8, a.name.str(), b.name.str()) == .lt;
         }
-    }
-    return null;
+    }.cmp);
 }
 
-fn paramsFromString(arena: Allocator, input_: []const u8, buf: []u8) !Entry.List {
+fn paramsFromString(allocator: Allocator, input_: []const u8, buf: []u8) !KeyValueList {
     if (input_.len == 0) {
         return .empty;
     }
@@ -169,21 +131,24 @@ fn paramsFromString(arena: Allocator, input_: []const u8, buf: []u8) !Entry.List
         return .empty;
     }
 
-    var params: Entry.List = .empty;
+    var params = KeyValueList.init();
 
     var it = std.mem.splitScalar(u8, input, '&');
     while (it.next()) |entry| {
         var name: String = undefined;
         var value: String = undefined;
+
         if (std.mem.indexOfScalarPos(u8, entry, 0, '=')) |idx| {
-            name = try unescape(arena, entry[0..idx], buf);
-            value = try unescape(arena, entry[idx + 1 ..], buf);
+            name = try unescape(allocator, entry[0..idx], buf);
+            value = try unescape(allocator, entry[idx + 1 ..], buf);
         } else {
-            name = try unescape(arena, entry, buf);
+            name = try unescape(allocator, entry, buf);
             value = String.init(undefined, "", .{}) catch unreachable;
         }
 
-        try params.append(arena, .{
+        // optimized, unescape returns a String directly (Because unescape may
+        // have to dupe itself, so it knows how best to create the String)
+        try params._entries.append(allocator, .{
             .name = name,
             .value = value,
         });
@@ -191,19 +156,6 @@ fn paramsFromString(arena: Allocator, input_: []const u8, buf: []u8) !Entry.List
 
     return params;
 }
-
-const Entry = struct {
-    name: String,
-    value: String,
-
-    const List = std.ArrayListUnmanaged(Entry);
-
-    pub fn toString(self: *const Entry, writer: *std.Io.Writer) !void {
-        try escape(self.name.str(), writer);
-        try writer.writeByte('=');
-        try escape(self.value.str(), writer);
-    }
-};
 
 fn unescape(arena: Allocator, value: []const u8, buf: []u8) !String {
     if (value.len == 0) {
