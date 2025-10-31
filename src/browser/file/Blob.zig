@@ -139,8 +139,13 @@ fn writeBlobParts(
     }
 }
 
-// TODO: Blob.arrayBuffer.
-// https://developer.mozilla.org/en-US/docs/Web/API/Blob/arrayBuffer
+/// Returns a Promise that resolves with the contents of the blob
+/// as binary data contained in an ArrayBuffer.
+pub fn _arrayBuffer(self: *const Blob, page: *Page) !js.Promise {
+    const resolver = page.js.createPromiseResolver(.none);
+    try resolver.resolve(js.ArrayBuffer{ .values = self.slice });
+    return resolver.promise();
+}
 
 /// Returns a ReadableStream which upon reading returns the data
 /// contained within the Blob.
