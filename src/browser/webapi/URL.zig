@@ -62,6 +62,10 @@ pub fn getHostname(self: *const URL) []const u8 {
     return U.getHostname(self._raw);
 }
 
+pub fn getHost(self: *const URL) []const u8 {
+    return U.getHost(self._raw);
+}
+
 pub fn getPort(self: *const URL) []const u8 {
     return U.getPort(self._raw);
 }
@@ -180,6 +184,7 @@ pub const JsApi = struct {
     pub const username = bridge.accessor(URL.getUsername, null, .{});
     pub const password = bridge.accessor(URL.getPassword, null, .{});
     pub const hostname = bridge.accessor(URL.getHostname, null, .{});
+    pub const host = bridge.accessor(URL.getHost, null, .{});
     pub const port = bridge.accessor(URL.getPort, null, .{});
     pub const origin = bridge.accessor(URL.getOrigin, null, .{});
     pub const protocol = bridge.accessor(URL.getProtocol, null, .{});

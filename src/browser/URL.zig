@@ -233,7 +233,7 @@ fn getUserInfo(raw: [:0]const u8) ?[]const u8 {
     return null;
 }
 
-fn getHost(raw: [:0]const u8) []const u8 {
+pub fn getHost(raw: [:0]const u8) []const u8 {
     const scheme_end = std.mem.indexOf(u8, raw, "://") orelse return "";
 
     var authority_start = scheme_end + 3;
