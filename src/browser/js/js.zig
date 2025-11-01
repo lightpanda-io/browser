@@ -58,6 +58,10 @@ pub fn TypedArray(comptime T: type) type {
     };
 }
 
+pub const ArrayBuffer = struct {
+    values: []const u8,
+};
+
 pub const PromiseResolver = struct {
     context: *Context,
     resolver: v8.PromiseResolver,
@@ -324,6 +328,19 @@ pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bo
         },
         .@"struct" => {
             const T = @TypeOf(value);
+
+            if (T == ArrayBuffer) {
+                const values = value.values;
+                const len = values.len;
+                var array_buffer: v8.ArrayBuffer = undefined;
+                const backing_store = v8.BackingStore.init(isolate, len);
+                const data: [*]u8 = @ptrCast(@alignCast(backing_store.getData()));
+                @memcpy(data[0..len], @as([]const u8, @ptrCast(values))[0..len]);
+                array_buffer = v8.ArrayBuffer.initWithBackingStore(isolate, &backing_store.toSharedPtr());
+
+                return .{ .handle = array_buffer.handle };
+            }
+
             if (@hasDecl(T, "_TYPED_ARRAY_ID_KLUDGE")) {
                 const values = value.values;
                 const value_type = @typeInfo(@TypeOf(values)).pointer.child;
