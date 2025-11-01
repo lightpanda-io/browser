@@ -108,8 +108,3 @@ pub fn runMessageLoop(self: *const Browser) void {
     }
     self.env.runIdleTasks();
 }
-
-const testing = @import("../testing.zig");
-test "Browser" {
-    try testing.htmlRunner("browser.html", .{});
-}

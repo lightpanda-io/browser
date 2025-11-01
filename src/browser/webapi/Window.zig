@@ -11,6 +11,7 @@ const Location = @import("Location.zig");
 const Fetch = @import("net/Fetch.zig");
 const EventTarget = @import("EventTarget.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
+const MediaQueryList = @import("css/MediaQueryList.zig");
 const storage = @import("storage/storage.zig");
 
 const Window = @This();
@@ -133,6 +134,13 @@ pub fn clearImmediate(self: *Window, id: u32) void {
 pub fn cancelAnimationFrame(self: *Window, id: u32) void {
     var sc = self._timers.get(id) orelse return;
     sc.removed = true;
+}
+
+pub fn matchMedia(_: *const Window, query: []const u8, page: *Page) !*MediaQueryList {
+    return page._factory.eventTarget(MediaQueryList{
+        ._proto = undefined,
+        ._media = try page.dupeString(query),
+    });
 }
 
 pub fn btoa(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
@@ -266,6 +274,7 @@ pub const JsApi = struct {
     pub const clearImmediate = bridge.function(Window.clearImmediate, .{});
     pub const requestAnimationFrame = bridge.function(Window.requestAnimationFrame, .{});
     pub const cancelAnimationFrame = bridge.function(Window.cancelAnimationFrame, .{});
+    pub const matchMedia = bridge.function(Window.matchMedia, .{});
     pub const btoa = bridge.function(Window.btoa, .{});
     pub const atob = bridge.function(Window.atob, .{});
 };

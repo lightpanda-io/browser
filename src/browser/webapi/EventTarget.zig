@@ -15,6 +15,7 @@ pub const Type = union(enum) {
     window: *@import("Window.zig"),
     xhr: *@import("net/XMLHttpRequestEventTarget.zig"),
     abort_signal: *@import("AbortSignal.zig"),
+    media_query_list: *@import("css/MediaQueryList.zig"),
 };
 
 pub fn dispatchEvent(self: *EventTarget, event: *Event, page: *Page) !bool {
@@ -62,6 +63,7 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .window => writer.writeAll("<window>"),
         .xhr => writer.writeAll("<XMLHttpRequestEventTarget>"),
         .abort_signal => writer.writeAll("<abort_signal>"),
+        .media_query_list => writer.writeAll("<MediaQueryList>"),
     };
 }
 

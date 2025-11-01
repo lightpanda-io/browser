@@ -92,7 +92,7 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) !void 
     event._target = target;
     switch (target._type) {
         .node => |node| try self.dispatchNode(node, event),
-        .xhr, .window, .abort_signal => {
+        .xhr, .window, .abort_signal, .media_query_list => {
             const list = self.lookup.getPtr(@intFromPtr(target)) orelse return;
             try self.dispatchAll(list, target, event);
         },

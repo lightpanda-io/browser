@@ -37,4 +37,6 @@
   testing.expectEqual('string', typeof plainDoc.URL);
   testing.expectEqual('string', typeof document.readyState);
   testing.expectEqual('string', typeof plainDoc.readyState);
+
+  testing.expectEqual("[object Intl.DateTimeFormat]", new Intl.DateTimeFormat().toString());
 </script>

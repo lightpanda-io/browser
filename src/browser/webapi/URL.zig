@@ -130,41 +130,6 @@ pub fn toString(self: *const URL, page: *const Page) ![:0]const u8 {
     return buf.written()[0 .. buf.written().len - 1 :0];
 }
 
-fn getUserInfo(self: *const URL) ?[]const u8 {
-    const raw = self._raw;
-    const scheme_end = std.mem.indexOf(u8, raw, "://") orelse return null;
-    const authority_start = scheme_end + 3;
-
-    const pos = std.mem.indexOfScalar(u8, raw[authority_start..], '@') orelse return null;
-    const path_start = std.mem.indexOfScalarPos(u8, raw, authority_start, '/') orelse raw.len;
-
-    const full_pos = authority_start + pos;
-    if (full_pos < path_start) {
-        return raw[authority_start..full_pos];
-    }
-
-    return null;
-}
-
-fn getHost(self: *const URL) []const u8 {
-    const raw = self._raw;
-    const scheme_end = std.mem.indexOf(u8, raw, "://") orelse return "";
-
-    var authority_start = scheme_end + 3;
-    if (std.mem.indexOf(u8, raw[authority_start..], "@")) |pos| {
-        authority_start += pos + 1;
-    }
-
-    const authority = raw[authority_start..];
-    const path_start = std.mem.indexOfAny(u8, authority, "/?#") orelse return authority;
-    return authority[0..path_start];
-}
-
-const KnownProtocol = enum {
-    @"http:",
-    @"https:",
-};
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(URL);
 
