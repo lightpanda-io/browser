@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<head>
+  <title>DOMImplementation Test</title>
+  <script src="testing.js"></script>
+</head>
+
+<body>
+</body>
+
+<script id=implementation>
+  {
+    const impl = document.implementation;
+    testing.expectEqual('[object DOMImplementation]', impl.toString());
+  }
+</script>
+
+<script id=hasFeature>
+  {
+    const impl = document.implementation;
+    testing.expectEqual(true, impl.hasFeature('XML', '1.0'));
+    testing.expectEqual(true, impl.hasFeature('HTML', '2.0'));
+    testing.expectEqual(true, impl.hasFeature('', null));
+  }
+</script>
+
+<script id=createDocumentType>
+  {
+    const impl = document.implementation;
+    const doctype = impl.createDocumentType('html', '', '');
+    testing.expectEqual(10, doctype.nodeType);
+    testing.expectEqual('html', doctype.nodeName);
+    testing.expectEqual('html', doctype.name);
+    testing.expectEqual('', doctype.publicId);
+    testing.expectEqual('', doctype.systemId);
+    testing.expectEqual('[object DocumentType]', doctype.toString());
+  }
+</script>
+
+<script id=createDocumentTypeWithIds>
+  {
+    const impl = document.implementation;
+    const doctype = impl.createDocumentType(
+      'svg',
+      '-//W3C//DTD SVG 1.1//EN',
+      'http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd'
+    );
+    testing.expectEqual('svg', doctype.name);
+    testing.expectEqual('-//W3C//DTD SVG 1.1//EN', doctype.publicId);
+    testing.expectEqual('http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd', doctype.systemId);
+  }
+</script>
+
+<script id=createDocumentTypeNullIds>
+  {
+    const impl = document.implementation;
+    const doctype = impl.createDocumentType('html', null, null);
+    testing.expectEqual('html', doctype.name);
+    testing.expectEqual('', doctype.publicId);
+    testing.expectEqual('', doctype.systemId);
+  }
+</script>

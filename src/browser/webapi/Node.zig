@@ -11,8 +11,10 @@ const collections = @import("collections.zig");
 pub const CData = @import("CData.zig");
 pub const Element = @import("Element.zig");
 pub const Document = @import("Document.zig");
+pub const HTMLDocument = @import("HTMLDocument.zig");
 pub const Children = @import("children.zig").Children;
 pub const DocumentFragment = @import("DocumentFragment.zig");
+pub const DocumentType = @import("DocumentType.zig");
 
 const Allocator = std.mem.Allocator;
 const LinkedList = std.DoublyLinkedList;
@@ -29,6 +31,7 @@ pub const Type = union(enum) {
     cdata: *CData,
     element: *Element,
     document: *Document,
+    document_type: *DocumentType,
     attribute: *Element.Attribute,
     document_fragment: *DocumentFragment,
 };
@@ -74,6 +77,11 @@ pub fn is(self: *Node, comptime T: type) ?*T {
             }
             if (comptime std.mem.startsWith(u8, type_name, "browser.webapi.htmldocument.")) {
                 return doc.is(T);
+            }
+        },
+        .document_type => |dt| {
+            if (T == DocumentType) {
+                return dt;
             }
         },
         .document_fragment => |doc| {
@@ -145,6 +153,7 @@ pub fn getTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFailed}!vo
         .element => |el| return el.getInnerText(writer),
         .cdata => |c| try writer.writeAll(c.getData()),
         .document => {},
+        .document_type => {},
         .document_fragment => {},
         .attribute => |attr| try writer.writeAll(attr._value),
     }
@@ -163,6 +172,7 @@ pub fn setTextContent(self: *Node, data: []const u8, page: *Page) !void {
         .element => |el| return el.replaceChildren(&.{.{ .text = data }}, page),
         .cdata => |c| c._data = try page.arena.dupe(u8, data),
         .document => {},
+        .document_type => {},
         .document_fragment => {},
         .attribute => |attr| return attr.setValue(data, page),
     }
@@ -176,6 +186,7 @@ pub fn getNodeName(self: *const Node, page: *Page) ![]const u8 {
             .comment => "#comment",
         },
         .document => "#document",
+        .document_type => |dt| dt.getName(),
         .document_fragment => "#document-fragment",
         .attribute => |attr| attr._name,
     };
@@ -190,6 +201,7 @@ pub fn nodeType(self: *const Node) u8 {
             .comment => 8,
         },
         .document => 9,
+        .document_type => 10,
         .document_fragment => 11,
     };
 }
@@ -333,6 +345,7 @@ pub fn getNodeValue(self: *const Node) ?[]const u8 {
         .attribute => |attr| attr._value,
         .element => null,
         .document => null,
+        .document_type => null,
         .document_fragment => null,
     };
 }
@@ -343,6 +356,7 @@ pub fn setNodeValue(self: *const Node, value: ?[]const u8, page: *Page) !void {
         .attribute => |attr| try attr.setValue(value, page),
         .element => {},
         .document => {},
+        .document_type => {},
         .document_fragment => {},
     }
 }
@@ -350,11 +364,11 @@ pub fn setNodeValue(self: *const Node, value: ?[]const u8, page: *Page) !void {
 pub fn format(self: *Node, writer: *std.Io.Writer) !void {
     // // If you need extra debugging:
     // return @import("../dump.zig").deep(self, .{}, writer);
-
     return switch (self._type) {
         .cdata => |cd| cd.format(writer),
         .element => |el| writer.print("{f}", .{el}),
         .document => writer.writeAll("<document>"),
+        .document_type => writer.writeAll("<doctype>"),
         .document_fragment => writer.writeAll("<document_fragment>"),
         .attribute => |attr| writer.print("{f}", .{attr}),
     };
@@ -380,8 +394,7 @@ pub fn className(self: *const Node) []const u8 {
 
 pub fn normalize(self: *Node, page: *Page) !void {
     var buffer: std.ArrayListUnmanaged(u8) = .empty;
-    const arena = page.call_arena;
-    return self._normalize(arena, &buffer, page);
+    return self._normalize(page.call_arena, &buffer, page);
 }
 
 pub fn cloneNode(self: *Node, deep_: ?bool, page: *Page) error{ OutOfMemory, StringTooLarge, NotSupported, NotImplemented }!*Node {
@@ -396,6 +409,7 @@ pub fn cloneNode(self: *Node, deep_: ?bool, page: *Page) error{ OutOfMemory, Str
         },
         .element => |el| return el.cloneElement(deep, page),
         .document => return error.NotSupported,
+        .document_type => return error.NotSupported,
         .document_fragment => return error.NotImplemented,
         .attribute => return error.NotSupported,
     }
@@ -612,6 +626,7 @@ pub const JsApi = struct {
             .cdata => |cdata| return cdata.getData(),
             .attribute => |attr| return attr._value,
             .document => return null,
+            .document_type => return null,
             .document_fragment => return null,
         }
     }

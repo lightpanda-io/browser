@@ -26,6 +26,7 @@ pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer) error{WriteFailed}!
             }
         },
         .document => try children(node, opts, writer),
+        .document_type => {},
         .document_fragment => try children(node, opts, writer),
         .attribute => unreachable,
     }
@@ -48,6 +49,9 @@ pub fn toJSON(node: *Node, writer: *std.json.Stringify) !void {
         },
         .document => {
             try writer.write("document");
+        },
+        .document_type => {
+            try writer.write("document_type");
         },
         .element => |*el| {
             try writer.write("element");

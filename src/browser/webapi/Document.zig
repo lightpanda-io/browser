@@ -12,6 +12,7 @@ const Selector = @import("selector/Selector.zig");
 const NodeFilter = @import("NodeFilter.zig");
 const DOMTreeWalker = @import("DOMTreeWalker.zig");
 const DOMNodeIterator = @import("DOMNodeIterator.zig");
+const DOMImplementation = @import("DOMImplementation.zig");
 
 pub const HTMLDocument = @import("HTMLDocument.zig");
 
@@ -124,6 +125,10 @@ pub fn className(_: *const Document) []const u8 {
     return "[object Document]";
 }
 
+pub fn getImplementation(_: *const Document) DOMImplementation {
+    return .{};
+}
+
 pub fn createDocumentFragment(_: *const Document, page: *Page) !*@import("DocumentFragment.zig") {
     return @import("DocumentFragment.zig").init(page);
 }
@@ -176,6 +181,7 @@ pub const JsApi = struct {
     pub const URL = bridge.accessor(Document.getURL, null, .{});
     pub const documentElement = bridge.accessor(Document.getDocumentElement, null, .{});
     pub const readyState = bridge.accessor(Document.getReadyState, null, .{});
+    pub const implementation = bridge.accessor(Document.getImplementation, null, .{});
 
     pub const createElement = bridge.function(Document.createElement, .{});
     pub const createElementNS = bridge.function(Document.createElementNS, .{});

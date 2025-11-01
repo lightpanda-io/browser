@@ -249,6 +249,7 @@ pub const JsApi = struct {
 
     pub const self = bridge.accessor(Window.getWindow, null, .{ .cache = "self" });
     pub const window = bridge.accessor(Window.getWindow, null, .{ .cache = "window" });
+    pub const parent = bridge.accessor(Window.getWindow, null, .{ .cache = "parent" });
     pub const console = bridge.accessor(Window.getConsole, null, .{ .cache = "console" });
     pub const navigator = bridge.accessor(Window.getNavigator, null, .{ .cache = "navigator" });
     pub const localStorage = bridge.accessor(Window.getLocalStorage, null, .{ .cache = "localStorage" });
