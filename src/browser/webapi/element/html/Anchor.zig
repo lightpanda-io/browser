@@ -28,7 +28,7 @@ pub const JsApi = struct {
     pub const Meta = struct {
         pub const name = "HTMLAnchorElement";
         pub const prototype_chain = bridge.prototypeChain();
-        pub var class_index: u16 = 0;
+        pub var class_id: bridge.ClassId = undefined;
     };
 
     pub const href = bridge.accessor(Anchor.getHref, null, .{});

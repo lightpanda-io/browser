@@ -63,7 +63,7 @@ pub const JsApi = struct {
     pub const Meta = struct {
         pub const name = "CData";
         pub const prototype_chain = bridge.prototypeChain();
-        pub var class_index: u16 = 0;
+        pub var class_id: bridge.ClassId = undefined;
     };
 
     pub const data = bridge.accessor(CData.getData, CData.setData, .{});

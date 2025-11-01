@@ -30,7 +30,7 @@ pub const JsApi = struct {
         pub const name = "AbortController";
 
         pub const prototype_chain = bridge.prototypeChain();
-        pub var class_index: u16 = 0;
+        pub var class_id: bridge.ClassId = undefined;
     };
 
     pub const constructor = bridge.constructor(AbortController.init, .{});

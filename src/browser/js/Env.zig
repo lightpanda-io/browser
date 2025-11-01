@@ -111,7 +111,7 @@ pub fn init(allocator: Allocator, platform: *const Platform, _: Opts) !*Env {
     const templates = &env.templates;
     inline for (JsApis, 0..) |JsApi, i| {
         @setEvalBranchQuota(10_000);
-        JsApi.Meta.class_index = i;
+        JsApi.Meta.class_id = i;
         templates[i] = v8.Persistent(v8.FunctionTemplate).init(isolate, generateClass(JsApi, isolate)).castToFunctionTemplate();
     }
 

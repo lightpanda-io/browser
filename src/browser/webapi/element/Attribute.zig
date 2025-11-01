@@ -70,7 +70,7 @@ pub const JsApi = struct {
         // (TODO: we probably _should_ hold a refernece, because calling getAttributeNode
         // on the same element + name should return the same instance)
         pub const prototype_chain = bridge.prototypeChain();
-        pub var class_index: u16 = 0;
+        pub var class_id: bridge.ClassId = undefined;
     };
 
     pub const name = bridge.accessor(Attribute.getName, null, .{});
@@ -381,7 +381,7 @@ pub const NamedNodeMap = struct {
         pub const Meta = struct {
             pub const name = "NamedNodeMap";
             pub const prototype_chain = bridge.prototypeChain();
-            pub var class_index: u16 = 0;
+            pub var class_id: bridge.ClassId = undefined;
         };
 
         pub const length = bridge.accessor(NamedNodeMap.length, null, .{});

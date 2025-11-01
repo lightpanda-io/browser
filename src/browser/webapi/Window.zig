@@ -252,7 +252,7 @@ pub const JsApi = struct {
     pub const Meta = struct {
         pub const name = "Window";
         pub const prototype_chain = bridge.prototypeChain();
-        pub var class_index: u16 = 0;
+        pub var class_id: bridge.ClassId = undefined;
     };
 
     pub const self = bridge.accessor(Window.getWindow, null, .{ .cache = "self" });

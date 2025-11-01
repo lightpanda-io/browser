@@ -589,7 +589,7 @@ pub fn mapZigInstanceToJs(self: *Context, js_obj_: ?v8.Object, value: anytype) !
             // for example, when we're executing a constructor, v8 has
             // already created the "this" object.
             const js_obj = js_obj_ orelse blk: {
-                const template = self.templates[resolved.class_index];
+                const template = self.templates[resolved.class_id];
                 break :blk template.getInstanceTemplate().initInstance(v8_context);
             };
             const JsApi = bridge.Struct(ptr.child).JsApi;
@@ -916,7 +916,7 @@ fn jsValueToTypedArray(_: *Context, comptime T: type, js_value: v8.Value) !?[]T 
 // get the most specific class_id possible.
 const Resolved = struct {
     ptr: *anyopaque,
-    class_index: u16,
+    class_id: u16,
     prototype_chain: []const js.PrototypeChainEntry,
 };
 fn resolveValue(value: anytype) Resolved {
@@ -947,7 +947,7 @@ fn resolveValue(value: anytype) Resolved {
 fn resolveT(comptime T: type, value: *anyopaque) Resolved {
     return .{
         .ptr = value,
-        .class_index = T.JsApi.Meta.class_index,
+        .class_id = T.JsApi.Meta.class_id,
         .prototype_chain = &T.JsApi.Meta.prototype_chain,
     };
 }

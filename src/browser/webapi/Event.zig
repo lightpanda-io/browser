@@ -105,7 +105,7 @@ pub const JsApi = struct {
         pub const name = "Event";
 
         pub const prototype_chain = bridge.prototypeChain();
-        pub var class_index: u16 = 0;
+        pub var class_id: bridge.ClassId = undefined;
     };
 
     pub const constructor = bridge.constructor(Event.init, .{});
