@@ -19,9 +19,6 @@
 const std = @import("std");
 const Writer = std.Io.Writer;
 
-const builtin = @import("builtin");
-const is_windows = builtin.os.tag == .windows;
-
 const Page = @import("../page.zig").Page;
 const js = @import("../js/js.zig");
 
