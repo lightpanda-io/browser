@@ -285,3 +285,65 @@
   testing.expectEqual('window-capture', non_bubble_calls[0]);
   testing.expectEqual('child', non_bubble_calls[1]);
 </script>
+
+<script id=nullCallback>
+  // Test that null callback is handled gracefully
+  let nullTestPassed = false;
+  window.addEventListener('testnull', null);
+  window.removeEventListener('testnull', null);
+  nullTestPassed = true;
+  testing.expectEqual(true, nullTestPassed);
+</script>
+
+<script id=objectCallback>
+  // Test object with handleEvent method
+  let handleEventCalls = 0;
+  const handler = {
+    handleEvent: function(e) {
+      handleEventCalls += 1;
+      testing.expectEqual('customhandler', e.type);
+    }
+  };
+
+  window.addEventListener('customhandler', handler);
+  window.dispatchEvent(new Event('customhandler'));
+  testing.expectEqual(1, handleEventCalls);
+
+  window.dispatchEvent(new Event('customhandler'));
+  testing.expectEqual(2, handleEventCalls);
+
+  // Remove using the same object
+  window.removeEventListener('customhandler', handler);
+  window.dispatchEvent(new Event('customhandler'));
+  testing.expectEqual(2, handleEventCalls); // Should not increment
+</script>
+
+<script id=objectWithoutHandleEvent>
+  // Test object without handleEvent (should be ignored)
+  const badHandler = { foo: 'bar' };
+  let badHandlerTestPassed = false;
+  window.addEventListener('testbad', badHandler);
+  // Event should not be triggered since there's no valid handler
+  window.dispatchEvent(new Event('testbad'));
+  badHandlerTestPassed = true;
+  testing.expectEqual(true, badHandlerTestPassed);
+</script>
+
+<script id=passiveDetection>
+  // Test passive event listener detection pattern (common in polyfills)
+  let passiveSupported = false;
+  try {
+    const opts = {};
+    Object.defineProperty(opts, 'passive', {
+      get: function() {
+        passiveSupported = true;
+      }
+    });
+    window.addEventListener('testpassive', opts, opts);
+    window.removeEventListener('testpassive', opts, opts);
+  } catch (e) {
+    passiveSupported = false;
+  }
+
+  testing.expectEqual(true, passiveSupported);
+</script>

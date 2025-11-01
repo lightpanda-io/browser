@@ -23,11 +23,23 @@ pub fn dispatchEvent(self: *EventTarget, event: *Event, page: *Page) !bool {
     return !event._cancelable or !event._prevent_default;
 }
 
-const addEventListenerOptions = union(enum) {
+const AddEventListenerOptions = union(enum) {
     capture: bool,
     options: RegisterOptions,
 };
-pub fn addEventListener(self: *EventTarget, typ: []const u8, callback: js.Function, opts_: ?addEventListenerOptions, page: *Page) !void {
+
+pub const EventListenerCallback = union(enum) {
+    function: js.Function,
+    object: js.Object,
+};
+pub fn addEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventListenerCallback, opts_: ?AddEventListenerOptions, page: *Page) !void {
+    const callback = callback_ orelse return;
+
+    const actual_callback = switch (callback) {
+        .function => |func| func,
+        .object => |obj| (try obj.getFunction("handleEvent")) orelse return,
+    };
+
     const options = blk: {
         const o = opts_ orelse break :blk RegisterOptions{};
         break :blk switch (o) {
@@ -35,10 +47,10 @@ pub fn addEventListener(self: *EventTarget, typ: []const u8, callback: js.Functi
             .capture => |capture| RegisterOptions{ .capture = capture },
         };
     };
-    return page._event_manager.register(self, typ, callback, options);
+    return page._event_manager.register(self, typ, actual_callback, options);
 }
 
-const removeEventListenerOptions = union(enum) {
+const RemoveEventListenerOptions = union(enum) {
     capture: bool,
     options: Options,
 
@@ -46,7 +58,14 @@ const removeEventListenerOptions = union(enum) {
         useCapture: bool = false,
     };
 };
-pub fn removeEventListener(self: *EventTarget, typ: []const u8, callback: js.Function, opts_: ?removeEventListenerOptions, page: *Page) !void {
+pub fn removeEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventListenerCallback, opts_: ?RemoveEventListenerOptions, page: *Page) !void {
+    const callback = callback_ orelse return;
+
+    const actual_callback = switch (callback) {
+        .function => |func| func,
+        .object => |obj| (try obj.getFunction("handleEvent")) orelse return,
+    };
+
     const use_capture = blk: {
         const o = opts_ orelse break :blk false;
         break :blk switch (o) {
@@ -54,7 +73,7 @@ pub fn removeEventListener(self: *EventTarget, typ: []const u8, callback: js.Fun
             .options => |opts| opts.useCapture,
         };
     };
-    return page._event_manager.remove(self, typ, callback, use_capture);
+    return page._event_manager.remove(self, typ, actual_callback, use_capture);
 }
 
 pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
