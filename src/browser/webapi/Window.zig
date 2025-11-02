@@ -5,6 +5,7 @@ const builtin = @import("builtin");
 const log = @import("../../log.zig");
 const Page = @import("../Page.zig");
 const Console = @import("Console.zig");
+const History = @import("History.zig");
 const Navigator = @import("Navigator.zig");
 const Document = @import("Document.zig");
 const Location = @import("Location.zig");
@@ -20,6 +21,7 @@ _proto: *EventTarget,
 _document: *Document,
 _console: Console = .init,
 _navigator: Navigator = .init,
+_history: History,
 _storage_bucket: *storage.Bucket,
 _on_load: ?js.Function = null,
 _location: *Location,
@@ -60,6 +62,10 @@ pub fn getSessionStorage(self: *const Window) *storage.Lookup {
 
 pub fn getLocation(self: *const Window) *Location {
     return self._location;
+}
+
+pub fn getHistory(self: *Window) *History {
+    return &self._history;
 }
 
 pub fn getOnLoad(self: *const Window) ?js.Function {
@@ -264,6 +270,7 @@ pub const JsApi = struct {
     pub const sessionStorage = bridge.accessor(Window.getSessionStorage, null, .{ .cache = "sessionStorage" });
     pub const document = bridge.accessor(Window.getDocument, null, .{ .cache = "document" });
     pub const location = bridge.accessor(Window.getLocation, null, .{ .cache = "location" });
+    pub const history = bridge.accessor(Window.getHistory, null, .{ .cache = "history" });
     pub const onload = bridge.accessor(Window.getOnLoad, Window.setOnLoad, .{});
     pub const fetch = bridge.function(Window.fetch, .{});
     pub const setTimeout = bridge.function(Window.setTimeout, .{});

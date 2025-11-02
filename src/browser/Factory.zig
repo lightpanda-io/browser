@@ -46,6 +46,7 @@ _size_112_8: MemoryPoolAligned([112]u8, .@"8"),
 _size_120_8: MemoryPoolAligned([120]u8, .@"8"),
 _size_128_8: MemoryPoolAligned([128]u8, .@"8"),
 _size_144_8: MemoryPoolAligned([144]u8, .@"8"),
+_size_152_8: MemoryPoolAligned([152]u8, .@"8"),
 _size_456_8: MemoryPoolAligned([456]u8, .@"8"),
 _size_520_8: MemoryPoolAligned([520]u8, .@"8"),
 _size_648_8: MemoryPoolAligned([648]u8, .@"8"),
@@ -72,6 +73,7 @@ pub fn init(page: *Page) Factory {
         ._size_120_8 = MemoryPoolAligned([120]u8, .@"8").init(page.arena),
         ._size_128_8 = MemoryPoolAligned([128]u8, .@"8").init(page.arena),
         ._size_144_8 = MemoryPoolAligned([144]u8, .@"8").init(page.arena),
+        ._size_152_8 = MemoryPoolAligned([152]u8, .@"8").init(page.arena),
         ._size_456_8 = MemoryPoolAligned([456]u8, .@"8").init(page.arena),
         ._size_520_8 = MemoryPoolAligned([520]u8, .@"8").init(page.arena),
         ._size_648_8 = MemoryPoolAligned([648]u8, .@"8").init(page.arena),
@@ -231,6 +233,7 @@ pub fn createT(self: *Factory, comptime T: type) !*T {
     if (comptime SO == 120) return @ptrCast(try self._size_120_8.create());
     if (comptime SO == 128) return @ptrCast(try self._size_128_8.create());
     if (comptime SO == 144) return @ptrCast(try self._size_144_8.create());
+    if (comptime SO == 152) return @ptrCast(try self._size_152_8.create());
     if (comptime SO == 456) return @ptrCast(try self._size_456_8.create());
     if (comptime SO == 520) return @ptrCast(try self._size_520_8.create());
     if (comptime SO == 648) return @ptrCast(try self._size_648_8.create());
@@ -311,6 +314,7 @@ fn destroyChain(self: *Factory, value: anytype, comptime first: bool) void {
             120 => self._size_120_8.destroy(@ptrCast(value)),
             128 => self._size_128_8.destroy(@ptrCast(value)),
             144 => self._size_144_8.destroy(@ptrCast(value)),
+            152 => self._size_152_8.destroy(@ptrCast(value)),
             456 => self._size_456_8.destroy(@ptrCast(value)),
             520 => self._size_520_8.destroy(@ptrCast(value)),
             648 => self._size_648_8.destroy(@ptrCast(value)),

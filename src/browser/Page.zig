@@ -16,6 +16,7 @@ const Mime = @import("Mime.zig");
 const Factory = @import("Factory.zig");
 const Session = @import("Session.zig");
 const Scheduler = @import("Scheduler.zig");
+const History = @import("webapi/History.zig");
 const EventManager = @import("EventManager.zig");
 const ScriptManager = @import("ScriptManager.zig");
 const polyfill = @import("polyfill/polyfill.zig");
@@ -142,6 +143,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self.window = try self._factory.eventTarget(Window{
         ._document = self.document,
         ._storage_bucket = storage_bucket,
+        ._history = History.init(self),
         ._proto = undefined,
         ._location = &default_location,
     });
