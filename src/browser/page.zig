@@ -1075,9 +1075,7 @@ pub const Page = struct {
 
             if (try self.url.eqlDocument(&new_url, session.transfer_arena)) {
                 self.url = new_url;
-
-                const prev = session.navigation.currentEntry();
-                NavigationCurrentEntryChangeEvent.dispatch(&self.session.navigation, prev, kind);
+                try session.navigation.updateEntries(stitched_url, kind, self, true);
                 return;
             }
         }

@@ -101,28 +101,27 @@ pub fn _forward(self: *Navigation, page: *Page) !NavigationReturn {
     return self.navigate(next_entry.url, .{ .traverse = new_index }, page);
 }
 
+pub fn updateEntries(self: *Navigation, url: []const u8, kind: NavigationKind, page: *Page, dispatch: bool) !void {
+    switch (kind) {
+        .replace => {
+            _ = try self.replaceEntry(url, null, page, dispatch);
+        },
+        .push => |state| {
+            _ = try self.pushEntry(url, state, page, dispatch);
+        },
+        .traverse => |index| {
+            self.index = index;
+        },
+        .reload => {},
+    }
+}
+
 // This is for after true navigation processing, where we need to ensure that our entries are up to date.
 // This is only really safe to run in the `pageDoneCallback` where we can guarantee that the URL and NavigationKind are correct.
 pub fn processNavigation(self: *Navigation, page: *Page) !void {
     const url = page.url.raw;
-    const kind = page.session.navigation_kind;
-
-    if (kind) |k| {
-        switch (k) {
-            .replace => {
-                // When replacing, we just update the URL but the state is nullified.
-                const entry = self.currentEntry();
-                entry.url = url;
-                entry.state = null;
-            },
-            .push => |state| {
-                _ = try self.pushEntry(url, state, page, false);
-            },
-            .traverse, .reload => {},
-        }
-    } else {
-        _ = try self.pushEntry(url, null, page, false);
-    }
+    const kind: NavigationKind = page.session.navigation_kind orelse .{ .push = null };
+    try self.updateEntries(url, kind, page, false);
 }
 
 /// Pushes an entry into the Navigation stack WITHOUT actually navigating to it.
@@ -162,6 +161,33 @@ pub fn pushEntry(self: *Navigation, _url: []const u8, state: ?[]const u8, page: 
     }
 
     self.index = index;
+
+    return entry;
+}
+
+pub fn replaceEntry(self: *Navigation, _url: []const u8, state: ?[]const u8, page: *Page, dispatch: bool) !*NavigationHistoryEntry {
+    const arena = page.session.arena;
+    const url = try arena.dupe(u8, _url);
+
+    const previous = self.currentEntry();
+
+    const id = self.next_entry_id;
+    self.next_entry_id += 1;
+    const id_str = try std.fmt.allocPrint(arena, "{d}", .{id});
+
+    const entry = try arena.create(NavigationHistoryEntry);
+    entry.* = NavigationHistoryEntry{
+        .id = id_str,
+        .key = id_str,
+        .url = url,
+        .state = state,
+    };
+
+    self.entries.items[self.index] = entry;
+
+    if (dispatch) {
+        NavigationCurrentEntryChangeEvent.dispatch(self, previous, .replace);
+    }
 
     return entry;
 }
