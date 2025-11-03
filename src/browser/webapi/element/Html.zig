@@ -31,6 +31,7 @@ pub const TextArea = @import("html/TextArea.zig");
 pub const Paragraph = @import("html/Paragraph.zig");
 pub const Select = @import("html/Select.zig");
 pub const Option = @import("html/Option.zig");
+pub const IFrame = @import("html/IFrame.zig");
 
 const HtmlElement = @This();
 
@@ -51,6 +52,7 @@ pub const Type = union(enum) {
     html: Html,
     hr: HR,
     img: Image,
+    iframe: IFrame,
     input: *Input,
     li: LI,
     link: Link,
@@ -89,6 +91,7 @@ pub fn className(self: *const HtmlElement) []const u8 {
         .p => "[object HtmlParagraphElement]",
         .custom => "[object CUSTOM-TODO]",
         .img => "[object HTMLImageElement]",
+        .iframe => "[object HTMLIFrameElement]",
         .br => "[object HTMLBRElement]",
         .button => "[object HTMLButtonElement]",
         .heading => "[object HTMLHeadingElement]",

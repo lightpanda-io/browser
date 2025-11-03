@@ -11,6 +11,7 @@
   testing.expectEqual(null, document.parentNode);
   testing.expectEqual(undefined, document.getCurrentScript);
   testing.expectEqual("http://127.0.0.1:9582/src/browser/tests/document/document.html", document.URL);
+  testing.expectEqual(window, document.defaultView);
 </script>
 
 <script id=headAndbody>

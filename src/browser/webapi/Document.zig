@@ -195,6 +195,11 @@ pub const JsApi = struct {
     pub const querySelectorAll = bridge.function(Document.querySelectorAll, .{ .dom_exception = true });
     pub const getElementsByTagName = bridge.function(Document.getElementsByTagName, .{});
     pub const getElementsByClassName = bridge.function(Document.getElementsByClassName, .{});
+    pub const defaultView = bridge.accessor(struct{
+        fn defaultView(_: *const Document, page: *Page) *@import("Window.zig") {
+            return page.window;
+        }
+    }.defaultView, null, .{.cache = "defaultView"});
 };
 
 const testing = @import("../../testing.zig");

@@ -6,6 +6,7 @@ const log = @import("../../log.zig");
 const Page = @import("../Page.zig");
 const Console = @import("Console.zig");
 const History = @import("History.zig");
+const Intl = @import("intl/Intl.zig");
 const Navigator = @import("Navigator.zig");
 const Document = @import("Document.zig");
 const Location = @import("Location.zig");
@@ -49,6 +50,10 @@ pub fn getConsole(_: *const Window) Console {
 }
 
 pub fn getNavigator(_: *const Window) Navigator {
+    return .{};
+}
+
+pub fn getIntl(_: *const Window) Intl {
     return .{};
 }
 
@@ -266,6 +271,7 @@ pub const JsApi = struct {
     pub const parent = bridge.accessor(Window.getWindow, null, .{ .cache = "parent" });
     pub const console = bridge.accessor(Window.getConsole, null, .{ .cache = "console" });
     pub const navigator = bridge.accessor(Window.getNavigator, null, .{ .cache = "navigator" });
+    pub const Intl = bridge.accessor(Window.getIntl, null, .{ .cache = "Intl" });
     pub const localStorage = bridge.accessor(Window.getLocalStorage, null, .{ .cache = "localStorage" });
     pub const sessionStorage = bridge.accessor(Window.getSessionStorage, null, .{ .cache = "sessionStorage" });
     pub const document = bridge.accessor(Window.getDocument, null, .{ .cache = "document" });
