@@ -52,7 +52,7 @@ pub const Location = struct {
             current_url;
 
         const normalized_hash = std.mem.trimStart(u8, hash, "#");
-        const new_url = try std.fmt.allocPrint(page.session.transfer_arena, "{s}#{s}", .{ base_without_hash, normalized_hash });
+        const new_url = try std.fmt.allocPrint(page.arena, "{s}#{s}", .{ base_without_hash, normalized_hash });
 
         return page.navigateFromWebAPI(new_url, .{ .reason = .script }, .replace);
     }
