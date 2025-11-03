@@ -208,6 +208,137 @@ pub const NavigationCurrentEntryChangeEvent = struct {
     }
 };
 
+pub const NavigationNavigateEvent = struct {
+    pub const prototype = *Event;
+    pub const union_make_copy = true;
+
+    pub const EventInit = struct {
+        canInterpret: ?bool = false,
+        // todo: destination
+        downloadRequest: ?[]const u8 = null,
+        // todo: formData
+        hashChange: ?bool = false,
+        hasUAVisualTransition: ?bool = false,
+        info: ?js.Value,
+        navigationType: ?NavigationType = .push,
+        // todo: signal
+        // todo: sourceElement
+        userInitiated: ?bool = false,
+    };
+
+    proto: parser.Event,
+    can_intercept: bool,
+    download_request: []const u8,
+    // todo: desintation
+    hash_change: bool,
+    has_ua_visual_transition: bool,
+    info: js.Value,
+    navigation_type: NavigationType,
+    // todo: signal
+    // todo: sourceElement
+    user_initiated: bool,
+
+    pub fn constructor(event_type: []const u8, opts: EventInit) !NavigationNavigateEvent {
+        const event = try parser.eventCreate();
+        defer parser.eventDestroy(event);
+
+        try parser.eventInit(event, event_type, .{});
+        parser.eventSetInternalType(event, .navigation_current_entry_change_event);
+
+        return .{
+            .proto = event.*,
+            .can_intercept = opts.canIntercept,
+            .download_request = opts.downloadRequest,
+            .hash_change = opts.hashChange,
+            .has_ua_visual_transition = opts.hasUAVisualTransition,
+            .info = opts.info,
+            .navigation_type = opts.navigationType,
+            .user_initiated = opts.userInitiated,
+        };
+    }
+
+    pub const InterceptOptions = struct {
+        // runs after currentEntry is updated
+        handler: ?js.Function,
+        // runs before currentEntry is updated
+        precommitHandler: ?js.Function,
+        focusReset: ?enum { @"after-transition", manual },
+        scroll: ?enum { @"after-transition", manual },
+    };
+
+    // https://developer.mozilla.org/en-US/docs/Web/API/NavigateEvent/intercept
+    pub fn intercept(
+        self: *NavigationNavigateEvent,
+        opts: ?InterceptOptions,
+        _: *Page,
+    ) !void {
+        if (!self.can_intercept) {
+            return error.Security;
+        }
+
+        if (self.proto.in_dispatch) {
+            return error.InvalidState;
+        }
+
+        try parser.eventPreventDefault(&self.proto);
+
+        if (opts) |options| {
+            if (options.precommitHandler) |handler| {
+                _ = try handler.call(void, .{});
+            }
+        }
+
+        // update current entry here.
+
+        if (opts) |options| {
+            if (options.handler) |handler| {
+                const result = try handler.call(js.Value, .{});
+
+                if (result.value.isPromise()) {
+                    // must be stored and resolved based on nav outcome.
+                }
+            }
+
+            // todo: handle focusReset and scroll
+        }
+    }
+
+    pub fn scroll(self: *NavigationNavigateEvent) !void {
+        _ = self;
+    }
+
+    pub fn dispatch(navigation: *Navigation, from: *NavigationHistoryEntry, typ: ?NavigationType) void {
+        log.debug(.script_event, "dispatch event", .{
+            .type = "navigate",
+            .source = "navigation",
+        });
+
+        var evt = NavigationNavigateEvent.constructor(
+            "navigate",
+            .{ .from = from, .navigationType = typ },
+        ) catch |err| {
+            log.err(.app, "event constructor error", .{
+                .err = err,
+                .type = "navigate",
+                .source = "navigation",
+            });
+
+            return;
+        };
+
+        _ = parser.eventTargetDispatchEvent(
+            @as(*parser.EventTarget, @ptrCast(navigation)),
+            &evt.proto,
+        ) catch |err| {
+            log.err(.app, "dispatch event error", .{
+                .err = err,
+                .type = "navigate",
+                .source = "navigation",
+            });
+        };
+    }
+};
+
 const testing = @import("../../testing.zig");
 test "Browser: Navigation" {
     try testing.htmlRunner("html/navigation/navigation.html");
