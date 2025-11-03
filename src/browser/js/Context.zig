@@ -262,7 +262,7 @@ pub fn module(self: *Context, comptime want_result: bool, src: []const u8, url: 
                 const owned_specifier = try self.arena.dupeZ(u8, normalized_specifier);
                 gop.key_ptr.* = owned_specifier;
                 gop.value_ptr.* = .{};
-                try self.script_manager.?.getModule(owned_specifier, url);
+                try self.script_manager.?.preloadImport(owned_specifier, url);
             }
         }
     }
@@ -1213,17 +1213,17 @@ fn _resolveModuleCallback(self: *Context, referrer: v8.Module, specifier: []cons
         // harm in handling this case.
         @branchHint(.unlikely);
         gop.value_ptr.* = .{};
-        try self.script_manager.?.getModule(normalized_specifier, referrer_path);
+        try self.script_manager.?.preloadImport(normalized_specifier, referrer_path);
     }
 
-    var fetch_result = try self.script_manager.?.waitForModule(normalized_specifier);
-    defer fetch_result.deinit();
+    var source = try self.script_manager.?.waitForImport(normalized_specifier);
+    defer source.deinit();
 
     var try_catch: js.TryCatch = undefined;
     try_catch.init(self);
     defer try_catch.deinit();
 
-    const entry = self.module(true, fetch_result.src(), normalized_specifier, true) catch |err| {
+    const entry = self.module(true, source.src(), normalized_specifier, true) catch |err| {
         switch (err) {
             error.EvaluationError => {
                 // This is a sentinel value telling us that the error was already
@@ -1297,7 +1297,7 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
         };
 
         // Next, we need to actually load it.
-        self.script_manager.?.getAsyncModule(specifier, dynamicModuleSourceCallback, state, referrer) catch |err| {
+        self.script_manager.?.getAsyncImport(specifier, dynamicModuleSourceCallback, state, referrer) catch |err| {
             const error_msg = v8.String.initUtf8(isolate, @errorName(err));
             _ = resolver.reject(self.v8_context, error_msg.toValue());
         };
@@ -1330,24 +1330,24 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
     return promise;
 }
 
-fn dynamicModuleSourceCallback(ctx: *anyopaque, fetch_result_: anyerror!ScriptManager.GetResult) void {
+fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptManager.ModuleSource) void {
     const state: *DynamicModuleResolveState = @ptrCast(@alignCast(ctx));
     var self = state.context;
 
-    var fetch_result = fetch_result_ catch |err| {
+    var ms = module_source_ catch |err| {
         const error_msg = v8.String.initUtf8(self.isolate, @errorName(err));
         _ = state.resolver.castToPromiseResolver().reject(self.v8_context, error_msg.toValue());
         return;
     };
 
     const module_entry = blk: {
-        defer fetch_result.deinit();
+        defer ms.deinit();
 
         var try_catch: js.TryCatch = undefined;
         try_catch.init(self);
         defer try_catch.deinit();
 
-        break :blk self.module(true, fetch_result.src(), state.specifier, true) catch {
+        break :blk self.module(true, ms.src(), state.specifier, true) catch {
             const ex = try_catch.exception(self.call_arena) catch |err| @errorName(err) orelse "unknown error";
             log.err(.js, "module compilation failed", .{
                 .specifier = state.specifier,
