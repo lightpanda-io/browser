@@ -392,6 +392,15 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
         .stack = self.page.js.stackTrace() catch "???",
     });
 
+    // It's possible, but unlikely, for client.request to immediately finish
+    // a request, thus calling our callback. We generally don't want a call
+    // from v8 (which is why we're here), to result in a new script evaluation.
+    // So we block even the slightest change that `client.request` immediately
+    // executes a callback.
+    const was_evaluating = self.is_evaluating;
+    self.is_evaluating = true;
+    defer self.is_evaluating = was_evaluating;
+
     try self.client.request(.{
         .url = url,
         .method = .GET,
