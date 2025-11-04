@@ -103,7 +103,9 @@ pub fn init(browser: *Browser, page: *Page) ScriptManager {
 }
 
 pub fn deinit(self: *ScriptManager) void {
+    // necesasry to free any buffers scripts may be rerferencing
     self.reset();
+
     self.buffer_pool.deinit();
     self.script_pool.deinit();
     self.imported_modules.deinit(self.allocator);
@@ -227,6 +229,10 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element, comptime c
         },
     };
 
+    const list = self.scriptList(script);
+    list.append(&script.node);
+    errdefer list.remove(&script.node);
+
     if (remote_url) |url| {
         var headers = try self.client.newHeaders();
         try page.requestCookie(.{}).headersForRequest(page.arena, url, &headers);
@@ -251,8 +257,6 @@ pub fn addFromElement(self: *ScriptManager, element: *parser.Element, comptime c
             .stack = page.js.stackTrace() catch "???",
         });
     }
-
-    self.scriptList(script).append(&script.node);
 }
 
 fn scriptList(self: *ScriptManager, script: *const Script) *std.DoublyLinkedList {
@@ -447,8 +451,10 @@ fn evaluate(self: *ScriptManager) void {
         if (script.complete == false) {
             return;
         }
-        defer script.deinit(true);
-        defer _ = self.normal_scripts.popFirst();
+        defer {
+            _ = self.normal_scripts.popFirst();
+            script.deinit(true);
+        }
         script.eval(page);
     }
 
@@ -468,8 +474,10 @@ fn evaluate(self: *ScriptManager) void {
         if (script.complete == false) {
             return;
         }
-        defer script.deinit(true);
-        defer _ = self.defer_scripts.popFirst();
+        defer {
+            _ = self.defer_scripts.popFirst();
+            script.deinit(true);
+        }
         script.eval(page);
     }
 
@@ -640,8 +648,14 @@ const Script = struct {
     fn errorCallback(ctx: *anyopaque, err: anyerror) void {
         const self: *Script = @ptrCast(@alignCast(ctx));
         log.warn(.http, "script fetch error", .{ .req = self.url, .err = err });
+
         const manager = self.manager;
         manager.scriptList(self).remove(&self.node);
+        if (manager.shutdown) {
+            self.deinit(true);
+            return;
+        }
+
         if (self.mode == .import) {
             const entry = self.manager.imported_modules.getPtr(self.url).?;
             entry.* = error.Failed;
