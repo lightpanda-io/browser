@@ -85,25 +85,27 @@ pub const URL = struct {
         base: []const u8,
         comptime opts: StitchOpts,
     ) !StitchReturn(opts) {
-        if (base.len == 0 or isCompleteHTTPUrl(path)) {
-            return simpleStitch(allocator, path, opts);
+        const trimmed_path = std.mem.trim(u8, path, &.{ '\n', '\r' });
+
+        if (base.len == 0 or isCompleteHTTPUrl(trimmed_path)) {
+            return simpleStitch(allocator, trimmed_path, opts);
         }
 
-        if (path.len == 0) {
+        if (trimmed_path.len == 0) {
             return simpleStitch(allocator, base, opts);
         }
 
-        if (std.mem.startsWith(u8, path, "//")) {
+        if (std.mem.startsWith(u8, trimmed_path, "//")) {
             // network-path reference
             const index = std.mem.indexOfScalar(u8, base, ':') orelse {
-                return simpleStitch(allocator, path, opts);
+                return simpleStitch(allocator, trimmed_path, opts);
             };
 
             const protocol = base[0..index];
             if (comptime opts.null_terminated) {
-                return std.fmt.allocPrintSentinel(allocator, "{s}:{s}", .{ protocol, path }, 0);
+                return std.fmt.allocPrintSentinel(allocator, "{s}:{s}", .{ protocol, trimmed_path }, 0);
             }
-            return std.fmt.allocPrint(allocator, "{s}:{s}", .{ protocol, path });
+            return std.fmt.allocPrint(allocator, "{s}:{s}", .{ protocol, trimmed_path });
         }
 
         // Quick hack because domains have to be at least 3 characters.
@@ -117,11 +119,11 @@ pub const URL = struct {
             root = base[0 .. pos + protocol_end];
         }
 
-        if (path[0] == '/') {
+        if (trimmed_path[0] == '/') {
             if (comptime opts.null_terminated) {
-                return std.fmt.allocPrintSentinel(allocator, "{s}{s}", .{ root, path }, 0);
+                return std.fmt.allocPrintSentinel(allocator, "{s}{s}", .{ root, trimmed_path }, 0);
             }
-            return std.fmt.allocPrint(allocator, "{s}{s}", .{ root, path });
+            return std.fmt.allocPrint(allocator, "{s}{s}", .{ root, trimmed_path });
         }
 
         var old_path = std.mem.trimStart(u8, base[root.len..], "/");
@@ -133,7 +135,7 @@ pub const URL = struct {
 
         // We preallocate all of the space possibly needed.
         // This is the root, old_path, new path, 3 slashes and perhaps a null terminated slot.
-        var out = try allocator.alloc(u8, root.len + old_path.len + path.len + 3 + if (comptime opts.null_terminated) 1 else 0);
+        var out = try allocator.alloc(u8, root.len + old_path.len + trimmed_path.len + 3 + if (comptime opts.null_terminated) 1 else 0);
         var end: usize = 0;
         @memmove(out[0..root.len], root);
         end += root.len;
@@ -146,8 +148,8 @@ pub const URL = struct {
             out[end] = '/';
             end += 1;
         }
-        @memmove(out[end .. end + path.len], path);
-        end += path.len;
+        @memmove(out[end .. end + trimmed_path.len], trimmed_path);
+        end += trimmed_path.len;
 
         var read: usize = root.len;
         var write: usize = root.len;
