@@ -81,10 +81,12 @@ pub const URL = struct {
     /// For URLs without a path, it will add src as the path.
     pub fn stitch(
         allocator: Allocator,
-        path: []const u8,
+        raw_path: []const u8,
         base: []const u8,
         comptime opts: StitchOpts,
     ) !StitchReturn(opts) {
+        const path = std.mem.trim(u8, raw_path, &.{ '\n', '\r' });
+
         if (base.len == 0 or isCompleteHTTPUrl(path)) {
             return simpleStitch(allocator, path, opts);
         }
