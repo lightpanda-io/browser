@@ -640,13 +640,14 @@ const Script = struct {
     fn errorCallback(ctx: *anyopaque, err: anyerror) void {
         const self: *Script = @ptrCast(@alignCast(ctx));
         log.warn(.http, "script fetch error", .{ .req = self.url, .err = err });
-        self.manager.scriptList(self).remove(&self.node);
+        const manager = self.manager;
+        manager.scriptList(self).remove(&self.node);
         if (self.mode == .import) {
             const entry = self.manager.imported_modules.getPtr(self.url).?;
             entry.* = error.Failed;
         }
         self.deinit(true);
-        self.manager.evaluate();
+        manager.evaluate();
     }
 
     fn eval(self: *Script, page: *Page) void {
