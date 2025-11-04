@@ -103,7 +103,7 @@ pub fn init(browser: *Browser, page: *Page) ScriptManager {
 }
 
 pub fn deinit(self: *ScriptManager) void {
-    // necesasry to free any buffers scripts may be rerferencing
+    // necessary to free any buffers scripts may be referencing
     self.reset();
 
     self.buffer_pool.deinit();
