@@ -72,6 +72,26 @@ pub fn constructor(
     return .{ .slice = "", .mime = mime };
 }
 
+const largest_vector = @max(std.simd.suggestVectorLength(u8) orelse 1, 8);
+/// Array of possible vector sizes for the current arch in decrementing order.
+/// We may move this to some file for SIMD helpers in the future.
+const vector_sizes = blk: {
+    // Required for length calculation.
+    var n: usize = largest_vector;
+    var total: usize = 0;
+    while (n != 2) : (n /= 2) total += 1;
+    // Populate an array with vector sizes.
+    n = largest_vector;
+    var i: usize = 0;
+    var items: [total]usize = undefined;
+    while (n != 2) : (n /= 2) {
+        defer i += 1;
+        items[i] = n;
+    }
+
+    break :blk items;
+};
+
 /// Writes blob parts to given `Writer` with desired endings.
 fn writeBlobParts(
     writer: *Writer,
@@ -88,7 +108,6 @@ fn writeBlobParts(
     }
 
     // TODO: Windows support.
-    // TODO: Vector search.
 
     // Linux & Unix.
     // Both Firefox and Chrome implement it as such:
@@ -108,10 +127,44 @@ fn writeBlobParts(
     // ```
     scan_parts: for (blob_parts) |part| {
         var end: usize = 0;
-        var start = end;
+
+        inline for (vector_sizes) |vector_len| {
+            const Vec = @Vector(vector_len, u8);
+
+            while (end + vector_len <= part.len) : (end += vector_len) {
+                const cr: Vec = @splat('\r');
+                // Load chunk as vectors.
+                const slice = part[end..][0..vector_len];
+                const chunk: Vec = slice.*;
+                // Look for CR.
+                const match = chunk == cr;
+
+                // Create a bitset out of match vector.
+                const bitset = std.bit_set.IntegerBitSet(vector_len){
+                    .mask = @bitCast(@intFromBool(match)),
+                };
+
+                var iter = bitset.iterator(.{});
+                var relative_start: usize = 0;
+                while (iter.next()) |index| {
+                    _ = try writer.writeVec(&.{ slice[relative_start..index], "\n" });
+
+                    if (index + 1 != slice.len and slice[index + 1] == '\n') {
+                        relative_start = index + 2;
+                    } else {
+                        relative_start = index + 1;
+                    }
+                }
+
+                _ = try writer.writeVec(&.{slice[relative_start..]});
+            }
+        }
+
+        // Scalar scan fallback.
+        var relative_start: usize = end;
         while (end < part.len) {
             if (part[end] == '\r') {
-                _ = try writer.writeVec(&.{ part[start..end], "\n" });
+                _ = try writer.writeVec(&.{ part[relative_start..end], "\n" });
 
                 // Part ends with CR. We can continue to next part.
                 if (end + 1 == part.len) {
@@ -120,9 +173,9 @@ fn writeBlobParts(
 
                 // If next char is LF, skip it too.
                 if (part[end + 1] == '\n') {
-                    start = end + 2;
+                    relative_start = end + 2;
                 } else {
-                    start = end + 1;
+                    relative_start = end + 1;
                 }
             }
 
@@ -132,7 +185,7 @@ fn writeBlobParts(
         // Write the remaining. We get this in such situations:
         // `the quick brown\rfox`
         // `the quick brown\r\nfox`
-        try writer.writeAll(part[start..end]);
+        try writer.writeAll(part[relative_start..end]);
     }
 }
 
