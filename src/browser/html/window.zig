@@ -247,8 +247,8 @@ pub const Window = struct {
         _ = self.timers.remove(id);
     }
 
-    pub fn _queueMicrotask(self: *Window, cbk: js.Function, page: *Page) !u32 {
-        return self.createTimeout(cbk, 0, page, .{ .name = "queueMicrotask" });
+    pub fn _queueMicrotask(self: *Window, cbk: js.Function, page: *Page) !void {
+        _ = try self.createTimeout(cbk, 0, page, .{ .name = "queueMicrotask" });
     }
 
     pub fn _setImmediate(self: *Window, cbk: js.Function, page: *Page) !u32 {

@@ -273,13 +273,13 @@ pub const HTMLAnchorElement = struct {
     }
 
     pub fn get_origin(self: *parser.Anchor, page: *Page) ![]const u8 {
-        var u = try url(self, page);
+        var u = url(self, page) catch return "";
         defer u.destructor();
         return u.get_origin(page);
     }
 
     pub fn get_protocol(self: *parser.Anchor, page: *Page) ![]const u8 {
-        var u = try url(self, page);
+        var u = url(self, page) catch return "";
         defer u.destructor();
 
         return page.call_arena.dupe(u8, u.get_protocol());
