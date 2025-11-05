@@ -47,6 +47,12 @@ index: usize = 0,
 entries: std.ArrayListUnmanaged(*NavigationHistoryEntry) = .empty,
 next_entry_id: usize = 0,
 
+pub fn resetForNewPage(self: *Navigation) void {
+    // libdom will automatically clean this up when a new page is made.
+    // We must create a new target whenever we create a new page.
+    self.proto = NavigationEventTarget{};
+}
+
 pub fn get_canGoBack(self: *const Navigation) bool {
     return self.index > 0;
 }

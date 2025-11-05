@@ -104,6 +104,9 @@ pub const Session = struct {
         // We need to init this early as JS event handlers may be registered through Runtime.evaluate before the first html doc is loaded
         parser.init();
 
+        // creates a new event target for Navigation
+        self.navigation.resetForNewPage();
+
         const page_arena = &self.browser.page_arena;
         _ = page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
         _ = self.browser.state_pool.reset(.{ .retain_with_limit = 4 * 1024 });
