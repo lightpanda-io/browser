@@ -228,7 +228,9 @@ pub fn navigate(
     const committed = try page.js.createPromiseResolver(.page);
     const finished = try page.js.createPromiseResolver(.page);
 
-    const new_url = try URL.parse(url, null);
+    const new_url_string = try URL.stitch(arena, url, page.url.raw, .{});
+    const new_url = try URL.parse(new_url_string, null);
+
     const is_same_document = try page.url.eqlDocument(&new_url, arena);
 
     switch (kind) {
