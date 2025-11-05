@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=canvas>
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("2d");
+  testing.expectEqual(true, ctx instanceof CanvasRenderingContext2D);
+  // We can't really test this but let's try to call it.
+  ctx.fillRect(0, 0, 0, 0);
+  testing.expectEqual("", ctx.fillStyle);
+</script>
