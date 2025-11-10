@@ -28,7 +28,14 @@ pub fn init(allocator: Allocator, isolate: v8.Isolate, ctx: anytype) !Inspector 
     // If necessary, turn a void context into something we can safely ptrCast
     const safe_context: *anyopaque = if (ContextT == void) @ptrCast(@constCast(&{})) else ctx;
 
-    const channel = v8.InspectorChannel.init(safe_context, InspectorContainer.onInspectorResponse, InspectorContainer.onInspectorEvent, isolate);
+    const channel = v8.InspectorChannel.init(
+        safe_context,
+        InspectorContainer.onInspectorResponse,
+        InspectorContainer.onInspectorEvent,
+        InspectorContainer.onRunMessageLoopOnPause,
+        InspectorContainer.onQuitMessageLoopOnPause,
+        isolate,
+    );
 
     const client = v8.InspectorClient.init();
 
@@ -109,6 +116,8 @@ pub fn getNodePtr(self: *const Inspector, allocator: Allocator, object_id: []con
 const NoopInspector = struct {
     pub fn onInspectorResponse(_: *anyopaque, _: u32, _: []const u8) void {}
     pub fn onInspectorEvent(_: *anyopaque, _: []const u8) void {}
+    pub fn onRunMessageLoopOnPause(_: *anyopaque, _: u32) void {}
+    pub fn onQuitMessageLoopOnPause(_: *anyopaque) void {}
 };
 
 pub fn getTaggedAnyOpaque(value: v8.Value) ?*js.TaggedAnyOpaque {
