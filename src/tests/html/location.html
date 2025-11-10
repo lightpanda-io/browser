@@ -15,6 +15,10 @@
 </script>
 
 <script id=location_hash>
+  location.hash = "";
+  testing.expectEqual("", location.hash);
+  testing.expectEqual('http://localhost:9582/src/tests/html/location.html', location.href);
+
   location.hash = "#abcdef";
   testing.expectEqual("#abcdef", location.hash);
   testing.expectEqual('http://localhost:9582/src/tests/html/location.html#abcdef', location.href);
@@ -22,4 +26,8 @@
   location.hash = "xyzxyz";
   testing.expectEqual("#xyzxyz", location.hash);
   testing.expectEqual('http://localhost:9582/src/tests/html/location.html#xyzxyz', location.href);
+
+  location.hash = "";
+  testing.expectEqual("", location.hash);
+  testing.expectEqual('http://localhost:9582/src/tests/html/location.html', location.href);
 </script>

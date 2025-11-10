@@ -17,8 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const Uri = std.Uri;
-
 const Page = @import("../page.zig").Page;
 const URL = @import("../url/url.zig").URL;
 
@@ -44,10 +42,19 @@ pub const Location = struct {
     }
 
     pub fn set_hash(_: *const Location, hash: []const u8, page: *Page) !void {
-        const normalized_hash = if (hash[0] == '#')
-            hash
-        else
-            try std.fmt.allocPrint(page.arena, "#{s}", .{hash});
+        const normalized_hash = blk: {
+            if (hash.len == 0) {
+                const old_url = page.url.raw;
+
+                break :blk if (std.mem.indexOfScalar(u8, old_url, '#')) |index|
+                    old_url[0..index]
+                else
+                    old_url;
+            } else if (hash[0] == '#')
+                break :blk hash
+            else
+                break :blk try std.fmt.allocPrint(page.arena, "#{s}", .{hash});
+        };
 
         return page.navigateFromWebAPI(normalized_hash, .{ .reason = .script }, .replace);
     }
