@@ -551,6 +551,7 @@ test "Browser: CSS.StyleDeclaration: isNumericWithUnit - edge cases and invalid 
 
 test "Browser: CSS.StyleDeclaration: isHexColor - valid hex colors" {
     try testing.expect(isHexColor("#000"));
+    try testing.expect(isHexColor("#0000"));
     try testing.expect(isHexColor("#fff"));
     try testing.expect(isHexColor("#123456"));
     try testing.expect(isHexColor("#abcdef"));
@@ -563,7 +564,6 @@ test "Browser: CSS.StyleDeclaration: isHexColor - invalid hex colors" {
     try testing.expect(!isHexColor("#"));
     try testing.expect(!isHexColor("000"));
     try testing.expect(!isHexColor("#00"));
-    try testing.expect(!isHexColor("#0000"));
     try testing.expect(!isHexColor("#00000"));
     try testing.expect(!isHexColor("#0000000"));
     try testing.expect(!isHexColor("#000000000"));
