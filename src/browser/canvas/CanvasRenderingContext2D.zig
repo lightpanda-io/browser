@@ -16,20 +16,43 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
+
+const color = @import("../cssom/color.zig");
+const Page = @import("../page.zig").Page;
+
 /// This class doesn't implement a `constructor`.
 /// It can be obtained with a call to `HTMLCanvasElement#getContext`.
 /// https://developer.mozilla.org/en-US/docs/Web/API/CanvasRenderingContext2D
 const CanvasRenderingContext2D = @This();
+/// Fill color.
+/// TODO: Add support for `CanvasGradient` and `CanvasPattern`.
+fill_style: color.RGBA = color.RGBA.Named.black,
 
-pub fn _fillRect(x: f64, y: f64, width: f64, height: f64) void {
+pub fn _fillRect(
+    self: *const CanvasRenderingContext2D,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) void {
+    _ = self;
     _ = x;
     _ = y;
     _ = width;
     _ = height;
 }
 
-pub fn get_fillStyle(_: *const CanvasRenderingContext2D) []const u8 {
-    return "";
+pub fn get_fillStyle(self: *const CanvasRenderingContext2D, page: *Page) ![]const u8 {
+    var w = std.Io.Writer.Allocating.init(page.call_arena);
+    try self.fill_style.format(&w.writer);
+    return w.written();
 }
 
-pub fn set_fillStyle(_: *const CanvasRenderingContext2D, _: []const u8) void {}
+pub fn set_fillStyle(
+    self: *CanvasRenderingContext2D,
+    value: []const u8,
+) !void {
+    // Prefer the same fill_style if fails.
+    self.fill_style = color.RGBA.parse(value) catch self.fill_style;
+}
