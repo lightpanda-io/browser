@@ -48,7 +48,7 @@ pub fn set_scrollRestoration(self: *History, mode: ScrollRestorationMode) void {
 }
 
 pub fn get_state(_: *History, page: *Page) !?js.Value {
-    if (page.session.navigation.currentEntry().state) |state| {
+    if (page.session.navigation.currentEntry().state.value) |state| {
         const value = try js.Value.fromJson(page.js, state);
         return value;
     } else {
@@ -61,7 +61,7 @@ pub fn _pushState(_: *const History, state: js.Object, _: ?[]const u8, _url: ?[]
     const url = if (_url) |u| try arena.dupe(u8, u) else try arena.dupe(u8, page.url.raw);
 
     const json = state.toJson(arena) catch return error.DataClone;
-    _ = try page.session.navigation.pushEntry(url, json, page, true);
+    _ = try page.session.navigation.pushEntry(url, .{ .source = .history, .value = json }, page, true);
 }
 
 pub fn _replaceState(_: *const History, state: js.Object, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
@@ -69,7 +69,7 @@ pub fn _replaceState(_: *const History, state: js.Object, _: ?[]const u8, _url: 
     const url = if (_url) |u| try arena.dupe(u8, u) else try arena.dupe(u8, page.url.raw);
 
     const json = try state.toJson(arena);
-    _ = try page.session.navigation.replaceEntry(url, json, page, true);
+    _ = try page.session.navigation.replaceEntry(url, .{ .source = .history, .value = json }, page, true);
 }
 
 pub fn go(_: *const History, delta: i32, page: *Page) !void {
@@ -86,7 +86,7 @@ pub fn go(_: *const History, delta: i32, page: *Page) !void {
 
     if (entry.url) |url| {
         if (try page.isSameOrigin(url)) {
-            PopStateEvent.dispatch(entry.state, page);
+            PopStateEvent.dispatch(entry.state.value, page);
         }
     }
 

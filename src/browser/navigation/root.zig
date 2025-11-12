@@ -56,6 +56,11 @@ pub const NavigationKind = union(NavigationType) {
     reload,
 };
 
+pub const NavigationState = struct {
+    source: enum { history, navigation },
+    value: ?[]const u8,
+};
+
 // https://developer.mozilla.org/en-US/docs/Web/API/NavigationHistoryEntry
 pub const NavigationHistoryEntry = struct {
     pub const prototype = *EventTarget;
@@ -64,7 +69,7 @@ pub const NavigationHistoryEntry = struct {
     id: []const u8,
     key: []const u8,
     url: ?[]const u8,
-    state: ?[]const u8,
+    state: NavigationState,
 
     pub fn get_id(self: *const NavigationHistoryEntry) []const u8 {
         return self.id;
@@ -95,12 +100,16 @@ pub const NavigationHistoryEntry = struct {
         return self.url;
     }
 
-    pub fn _getState(self: *const NavigationHistoryEntry, page: *Page) !?js.Value {
-        if (self.state) |state| {
-            return try js.Value.fromJson(page.js, state);
-        } else {
-            return null;
+    pub const StateReturn = union(enum) { value: ?js.Value, undefined: void };
+
+    pub fn _getState(self: *const NavigationHistoryEntry, page: *Page) !StateReturn {
+        if (self.state.source == .navigation) {
+            if (self.state.value) |value| {
+                return .{ .value = try js.Value.fromJson(page.js, value) };
+            }
         }
+
+        return .undefined;
     }
 };
 
