@@ -222,63 +222,54 @@ pub fn exec(self: *Context, src: []const u8, name: ?[]const u8) !js.Value {
 }
 
 pub fn module(self: *Context, comptime want_result: bool, src: []const u8, url: []const u8, cacheable: bool) !(if (want_result) ModuleEntry else void) {
-    if (cacheable) {
-        if (self.module_cache.get(url)) |entry| {
-            // The dynamic import will create an entry without the
-            // module to prevent multiple calls from asynchronously
-            // loading the same module. If we're here, without the
-            // module, then it's time to load it.
-            if (entry.module != null) {
-                return if (comptime want_result) entry else {};
+    const mod, const owned_url = blk: {
+        const arena = self.arena;
+
+        // gop will _always_ initiated if cacheable == true
+        var gop: std.StringHashMapUnmanaged(ModuleEntry).GetOrPutResult = undefined;
+        if (cacheable) {
+            gop = try self.module_cache.getOrPut(arena, url);
+            if (gop.found_existing) {
+                if (gop.value_ptr.module != null) {
+                    return if (comptime want_result) gop.value_ptr.* else {};
+                }
+            } else {
+                // first time seing this
+                gop.value_ptr.* = .{};
             }
         }
-    }
 
-    const m = try compileModule(self.isolate, src, url);
+        const m = try compileModule(self.isolate, src, url);
+        const owned_url = try arena.dupeZ(u8, url);
 
-    const arena = self.arena;
-    const owned_url = try arena.dupe(u8, url);
+        if (cacheable) {
+            // compileModule is synchronous - nothing can modify the cache during compilation
+            std.debug.assert(gop.value_ptr.module == null);
 
-    try self.module_identifier.putNoClobber(arena, m.getIdentityHash(), owned_url);
-    errdefer _ = self.module_identifier.remove(m.getIdentityHash());
+            gop.value_ptr.module = PersistentModule.init(self.isolate, m);
+            if (!gop.found_existing) {
+                gop.key_ptr.* = owned_url;
+            }
+        }
+
+        break :blk .{ m, owned_url };
+    };
+
+    try self.postCompileModule(mod, owned_url);
 
     const v8_context = self.v8_context;
-    {
-        // Non-async modules are blocking. We can download them in
-        // parallel, but they need to be processed serially. So we
-        // want to get the list of dependent modules this module has
-        // and start downloading them asap.
-        const requests = m.getModuleRequests();
-        for (0..requests.length()) |i| {
-            const req = requests.get(v8_context, @intCast(i)).castTo(v8.ModuleRequest);
-            const specifier = try self.jsStringToZig(req.getSpecifier(), .{});
-            const normalized_specifier = try self.script_manager.?.resolveSpecifier(
-                self.call_arena,
-                specifier,
-                owned_url,
-            );
-            const gop = try self.module_cache.getOrPut(self.arena, normalized_specifier);
-            if (!gop.found_existing) {
-                const owned_specifier = try self.arena.dupeZ(u8, normalized_specifier);
-                gop.key_ptr.* = owned_specifier;
-                gop.value_ptr.* = .{};
-                try self.script_manager.?.preloadImport(owned_specifier, url);
-            }
-        }
-    }
-
-    if (try m.instantiate(v8_context, resolveModuleCallback) == false) {
+    if (try mod.instantiate(v8_context, resolveModuleCallback) == false) {
         return error.ModuleInstantiationError;
     }
 
-    const evaluated = m.evaluate(v8_context) catch {
-        std.debug.assert(m.getStatus() == .kErrored);
+    const evaluated = mod.evaluate(v8_context) catch {
+        std.debug.assert(mod.getStatus() == .kErrored);
 
         // Some module-loading errors aren't handled by TryCatch. We need to
         // get the error from the module itself.
         log.warn(.js, "evaluate module", .{
             .specifier = owned_url,
-            .message = self.valueToString(m.getException(), .{}) catch "???",
+            .message = self.valueToString(mod.getException(), .{}) catch "???",
         });
         return error.EvaluationError;
     };
@@ -301,28 +292,46 @@ pub fn module(self: *Context, comptime want_result: bool, src: []const u8, url: 
     // be cached
     std.debug.assert(cacheable);
 
-    const persisted_module = PersistentModule.init(self.isolate, m);
-    const persisted_promise = PersistentPromise.init(self.isolate, .{ .handle = evaluated.handle });
+    // entry has to have been created atop this function
+    const entry = self.module_cache.getPtr(owned_url).?;
 
-    var gop = try self.module_cache.getOrPut(arena, owned_url);
-    if (gop.found_existing) {
-        // If we're here, it's because we had a cache entry, but no
-        // module. This happens because both our synch and async
-        // module loaders create the entry to prevent concurrent
-        // loads of the same resource (like Go's Singleflight).
-        std.debug.assert(gop.value_ptr.module == null);
-        std.debug.assert(gop.value_ptr.module_promise == null);
+    // and the module must have been set after we compiled it
+    std.debug.assert(entry.module != null);
+    std.debug.assert(entry.module_promise == null);
 
-        gop.value_ptr.module = persisted_module;
-        gop.value_ptr.module_promise = persisted_promise;
-    } else {
-        gop.value_ptr.* = ModuleEntry{
-            .module = persisted_module,
-            .module_promise = persisted_promise,
-            .resolver_promise = null,
-        };
+    entry.module_promise = PersistentPromise.init(self.isolate, .{ .handle = evaluated.handle });
+    return if (comptime want_result) entry.* else {};
+}
+
+// After we compile a module, whether it's a top-level one, or a nested one,
+// we always want to track its identity (so that, if this module imports other
+// modules, we can resolve the full URL), and preload any dependent modules.
+fn postCompileModule(self: *Context, mod: v8.Module, url: [:0]const u8) !void {
+    try self.module_identifier.putNoClobber(self.arena, mod.getIdentityHash(), url);
+
+    const v8_context = self.v8_context;
+
+    // Non-async modules are blocking. We can download them in parallel, but
+    // they need to be processed serially. So we want to get the list of
+    // dependent modules this module has and start downloading them asap.
+    const requests = mod.getModuleRequests();
+    const script_manager = self.script_manager.?;
+    for (0..requests.length()) |i| {
+        const req = requests.get(v8_context, @intCast(i)).castTo(v8.ModuleRequest);
+        const specifier = try self.jsStringToZig(req.getSpecifier(), .{});
+        const normalized_specifier = try script_manager.resolveSpecifier(
+            self.call_arena,
+            specifier,
+            url,
+        );
+        const nested_gop = try self.module_cache.getOrPut(self.arena, normalized_specifier);
+        if (!nested_gop.found_existing) {
+            const owned_specifier = try self.arena.dupeZ(u8, normalized_specifier);
+            nested_gop.key_ptr.* = owned_specifier;
+            nested_gop.value_ptr.* = .{};
+            try script_manager.preloadImport(owned_specifier, url);
+        }
     }
-    return if (comptime want_result) gop.value_ptr.* else {};
 }
 
 // == Creators ==
@@ -1189,31 +1198,14 @@ fn _resolveModuleCallback(self: *Context, referrer: v8.Module, specifier: []cons
     };
 
     const normalized_specifier = try self.script_manager.?.resolveSpecifier(
-        self.arena, // might need to survive until the module is loaded
+        self.arena,
         specifier,
         referrer_path,
     );
 
-    const gop = try self.module_cache.getOrPut(self.arena, normalized_specifier);
-    if (gop.found_existing) {
-        if (gop.value_ptr.module) |m| {
-            return m.handle;
-        }
-        // We don't have a module, but we do have a cache entry for it
-        // That means we're already trying to load it. We just have
-        // to wait for it to be done.
-    } else {
-        // I don't think it's possible for us to be here. This is
-        // only ever called by v8 when we evaluate a module. But
-        // before evaluating, we should have already started
-        // downloading all of the module's nested modules. So it
-        // should be impossible that this is the first time we've
-        // heard about this module.
-        // But, I'm not confident enough in that, and ther's little
-        // harm in handling this case.
-        @branchHint(.unlikely);
-        gop.value_ptr.* = .{};
-        try self.script_manager.?.preloadImport(normalized_specifier, referrer_path);
+    const entry = self.module_cache.getPtr(normalized_specifier).?;
+    if (entry.module) |m| {
+        return m.castToModule().handle;
     }
 
     var source = try self.script_manager.?.waitForImport(normalized_specifier);
@@ -1223,26 +1215,10 @@ fn _resolveModuleCallback(self: *Context, referrer: v8.Module, specifier: []cons
     try_catch.init(self);
     defer try_catch.deinit();
 
-    const entry = self.module(true, source.src(), normalized_specifier, true) catch |err| {
-        switch (err) {
-            error.EvaluationError => {
-                // This is a sentinel value telling us that the error was already
-                // logged. Some module-loading errors aren't captured by Try/Catch.
-                // We need to handle those errors differently, where the module
-                // exists.
-            },
-            else => log.warn(.js, "compile resolved module", .{
-                .specifier = normalized_specifier,
-                .stack = try_catch.stack(self.call_arena) catch null,
-                .src = try_catch.sourceLine(self.call_arena) catch "err",
-                .line = try_catch.sourceLineNumber() orelse 0,
-                .exception = (try_catch.exception(self.call_arena) catch @errorName(err)) orelse @errorName(err),
-            }),
-        }
-        return null;
-    };
-    // entry.module is always set when returning from self.module()
-    return entry.module.?.handle;
+    const mod = try compileModule(self.isolate, source.src(), normalized_specifier);
+    try self.postCompileModule(mod, normalized_specifier);
+    entry.module = PersistentModule.init(self.isolate, mod);
+    return entry.module.?.castToModule().handle;
 }
 
 // Will get passed to ScriptManager and then passed back to us when
@@ -1317,7 +1293,31 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
     // `dynamicModuleSourceCallback`, but we can skip some steps
     // since the module is alrady loaded,
     std.debug.assert(gop.value_ptr.module != null);
-    std.debug.assert(gop.value_ptr.module_promise != null);
+
+    // If the module hasn't been evaluated yet (it was only instantiated
+    // as a static import dependency), we need to evaluate it now.
+    if (gop.value_ptr.module_promise == null) {
+        const mod = gop.value_ptr.module.?.castToModule();
+        if (mod.getStatus() == .kEvaluated) {
+            // Module was already evaluated (shouldn't normally happen, but handle it).
+            // Create a pre-resolved promise with the module namespace.
+            const persisted_module_resolver = v8.Persistent(v8.PromiseResolver).init(isolate, v8.PromiseResolver.init(self.v8_context));
+            try self.persisted_promise_resolvers.append(self.arena, persisted_module_resolver);
+            var module_resolver = persisted_module_resolver.castToPromiseResolver();
+            _ = module_resolver.resolve(self.v8_context, mod.getModuleNamespace());
+            gop.value_ptr.module_promise = PersistentPromise.init(self.isolate, module_resolver.getPromise());
+        } else {
+            // the module was loaded, but not evaluated, we _have_ to evaluate it now
+            const evaluated = mod.evaluate(self.v8_context) catch {
+                std.debug.assert(mod.getStatus() == .kErrored);
+                const error_msg = v8.String.initUtf8(isolate, "Module evaluation failed");
+                _ = resolver.reject(self.v8_context, error_msg.toValue());
+                return promise;
+            };
+            std.debug.assert(evaluated.isPromise());
+            gop.value_ptr.module_promise = PersistentPromise.init(self.isolate, .{ .handle = evaluated.handle });
+        }
+    }
 
     // like before, we want to set this up so that if anything else
     // tries to load this module, it can just return our promise
