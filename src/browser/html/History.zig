@@ -66,13 +66,10 @@ pub fn _pushState(_: *const History, state: js.Object, _: ?[]const u8, _url: ?[]
 
 pub fn _replaceState(_: *const History, state: js.Object, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
     const arena = page.session.arena;
-
-    const entry = page.session.navigation.currentEntry();
-    const json = try state.toJson(arena);
     const url = if (_url) |u| try arena.dupe(u8, u) else try arena.dupe(u8, page.url.raw);
 
-    entry.state = json;
-    entry.url = url;
+    const json = try state.toJson(arena);
+    _ = try page.session.navigation.replaceEntry(url, json, page, true);
 }
 
 pub fn go(_: *const History, delta: i32, page: *Page) !void {
