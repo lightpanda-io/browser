@@ -16,8 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const Uri = @import("std").Uri;
-
+const std = @import("std");
 const Page = @import("../page.zig").Page;
 const URL = @import("../url/url.zig").URL;
 
@@ -40,6 +39,24 @@ pub const Location = struct {
 
     pub fn set_href(_: *const Location, href: []const u8, page: *Page) !void {
         return page.navigateFromWebAPI(href, .{ .reason = .script }, .{ .push = null });
+    }
+
+    pub fn set_hash(_: *const Location, hash: []const u8, page: *Page) !void {
+        const normalized_hash = blk: {
+            if (hash.len == 0) {
+                const old_url = page.url.raw;
+
+                break :blk if (std.mem.indexOfScalar(u8, old_url, '#')) |index|
+                    old_url[0..index]
+                else
+                    old_url;
+            } else if (hash[0] == '#')
+                break :blk hash
+            else
+                break :blk try std.fmt.allocPrint(page.arena, "#{s}", .{hash});
+        };
+
+        return page.navigateFromWebAPI(normalized_hash, .{ .reason = .script }, .replace);
     }
 
     pub fn get_protocol(self: *Location) []const u8 {

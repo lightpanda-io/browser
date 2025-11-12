@@ -82,17 +82,35 @@ pub const URL = struct {
     pub fn stitch(
         allocator: Allocator,
         raw_path: []const u8,
-        base: []const u8,
+        raw_base: []const u8,
         comptime opts: StitchOpts,
     ) !StitchReturn(opts) {
-        const path = std.mem.trim(u8, raw_path, &.{ '\n', '\r' });
+        const trimmed_path = std.mem.trim(u8, raw_path, &.{ '\n', '\r' });
 
-        if (base.len == 0 or isCompleteHTTPUrl(path)) {
-            return simpleStitch(allocator, path, opts);
+        if (raw_base.len == 0 or isCompleteHTTPUrl(trimmed_path)) {
+            return simpleStitch(allocator, trimmed_path, opts);
         }
 
+        if (trimmed_path.len == 0) {
+            return simpleStitch(allocator, raw_base, opts);
+        }
+
+        // base should get stripped of its hash whenever we are stitching.
+        const base = if (std.mem.indexOfScalar(u8, raw_base, '#')) |hash_pos|
+            raw_base[0..hash_pos]
+        else
+            raw_base;
+
+        const path_hash_start = std.mem.indexOfScalar(u8, trimmed_path, '#');
+        const path = if (path_hash_start) |pos| trimmed_path[0..pos] else trimmed_path;
+        const hash = if (path_hash_start) |pos| trimmed_path[pos..] else "";
+
+        // if path is just hash, we just append it to base.
         if (path.len == 0) {
-            return simpleStitch(allocator, base, opts);
+            if (comptime opts.null_terminated) {
+                return std.fmt.allocPrintSentinel(allocator, "{s}{s}", .{ base, hash }, 0);
+            }
+            return std.fmt.allocPrint(allocator, "{s}{s}", .{ base, hash });
         }
 
         if (std.mem.startsWith(u8, path, "//")) {
@@ -103,9 +121,9 @@ pub const URL = struct {
 
             const protocol = base[0..index];
             if (comptime opts.null_terminated) {
-                return std.fmt.allocPrintSentinel(allocator, "{s}:{s}", .{ protocol, path }, 0);
+                return std.fmt.allocPrintSentinel(allocator, "{s}:{s}{s}", .{ protocol, path, hash }, 0);
             }
-            return std.fmt.allocPrint(allocator, "{s}:{s}", .{ protocol, path });
+            return std.fmt.allocPrint(allocator, "{s}:{s}{s}", .{ protocol, path, hash });
         }
 
         // Quick hack because domains have to be at least 3 characters.
@@ -126,25 +144,28 @@ pub const URL = struct {
             return std.fmt.allocPrint(allocator, "{s}{s}", .{ root, path });
         }
 
-        var old_path = std.mem.trimStart(u8, base[root.len..], "/");
-        if (std.mem.lastIndexOfScalar(u8, old_path, '/')) |pos| {
-            old_path = old_path[0..pos];
+        var oldraw_path = std.mem.trimStart(u8, base[root.len..], "/");
+        if (std.mem.lastIndexOfScalar(u8, oldraw_path, '/')) |pos| {
+            oldraw_path = oldraw_path[0..pos];
         } else {
-            old_path = "";
+            oldraw_path = "";
         }
 
         // We preallocate all of the space possibly needed.
-        // This is the root, old_path, new path, 3 slashes and perhaps a null terminated slot.
-        var out = try allocator.alloc(u8, root.len + old_path.len + path.len + 3 + if (comptime opts.null_terminated) 1 else 0);
+        // This is the root, oldraw_path, new path, 3 slashes and perhaps a null terminated slot.
+        var out = try allocator.alloc(
+            u8,
+            root.len + oldraw_path.len + path.len + hash.len + 3 + if (comptime opts.null_terminated) 1 else 0,
+        );
         var end: usize = 0;
         @memmove(out[0..root.len], root);
         end += root.len;
         out[root.len] = '/';
         end += 1;
         // If we don't have an old path, do nothing here.
-        if (old_path.len > 0) {
-            @memmove(out[end .. end + old_path.len], old_path);
-            end += old_path.len;
+        if (oldraw_path.len > 0) {
+            @memmove(out[end .. end + oldraw_path.len], oldraw_path);
+            end += oldraw_path.len;
             out[end] = '/';
             end += 1;
         }
@@ -180,6 +201,11 @@ pub const URL = struct {
             out[write] = out[read];
             write += 1;
             read += 1;
+        }
+
+        if (hash.len > 0) {
+            @memmove(out[write .. write + hash.len], hash);
+            write += hash.len;
         }
 
         if (comptime opts.null_terminated) {

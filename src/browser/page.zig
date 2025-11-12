@@ -1065,7 +1065,15 @@ pub const Page = struct {
     // specifically for this type of lifetime.
     pub fn navigateFromWebAPI(self: *Page, url: []const u8, opts: NavigateOpts, kind: NavigationKind) !void {
         const session = self.session;
-        const stitched_url = try URL.stitch(session.transfer_arena, url, self.url.raw, .{ .alloc = .always });
+        const stitched_url = try URL.stitch(
+            session.transfer_arena,
+            url,
+            self.url.raw,
+            .{
+                .alloc = .always,
+                .null_terminated = true,
+            },
+        );
 
         // Force will force a page load.
         // Otherwise, we need to check if this is a true navigation.
@@ -1075,9 +1083,8 @@ pub const Page = struct {
 
             if (try self.url.eqlDocument(&new_url, session.transfer_arena)) {
                 self.url = new_url;
-
-                const prev = session.navigation.currentEntry();
-                NavigationCurrentEntryChangeEvent.dispatch(&self.session.navigation, prev, kind);
+                try self.window.changeLocation(self.url.raw, self);
+                try session.navigation.updateEntries(stitched_url, kind, self, true);
                 return;
             }
         }
