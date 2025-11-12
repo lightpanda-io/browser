@@ -662,6 +662,9 @@ pub const Page = struct {
     }
 
     fn _documentIsComplete(self: *Page) !void {
+        self.session.browser.runMicrotasks();
+        self.session.browser.runMessageLoop();
+
         try HTMLDocument.documentIsComplete(self.window.document, self);
 
         // dispatch window.load event
