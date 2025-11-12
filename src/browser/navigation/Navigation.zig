@@ -167,13 +167,13 @@ pub fn pushEntry(
     // we don't always have a current entry...
     const previous = if (self.entries.items.len > 0) self.currentEntry() else null;
     try self.entries.append(arena, entry);
+    self.index = index;
+
     if (previous) |prev| {
         if (dispatch) {
             NavigationCurrentEntryChangeEvent.dispatch(self, prev, .push);
         }
     }
-
-    self.index = index;
 
     return entry;
 }
