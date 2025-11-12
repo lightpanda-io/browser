@@ -14,6 +14,10 @@ inputs:
     description: 'OS used to select the v8 lib'
     required: false
     default: 'linux'
+  target-env:
+    description: 'TARGET_ENVIRONMENT used to select the v8 lib, only for ios build'
+    required: false
+    default: 'simulator'
   zig-v8:
     description: 'zig v8 version to install'
     required: false
@@ -51,12 +55,19 @@ runs:
         path: ${{ inputs.cache-dir }}/v8
         key: libc_v8_${{ inputs.v8 }}_${{ inputs.os }}_${{ inputs.arch }}_${{ inputs.zig-v8 }}.a
 
-    - if: ${{ steps.cache-v8.outputs.cache-hit != 'true' }}
+    - if: ${{ steps.cache-v8.outputs.cache-hit != 'true' && inputs.os != 'ios' }}
       shell: bash
       run: |
         mkdir -p ${{ inputs.cache-dir }}/v8
 
         wget -O ${{ inputs.cache-dir }}/v8/libc_v8.a https://github.com/lightpanda-io/zig-v8-fork/releases/download/${{ inputs.zig-v8 }}/libc_v8_${{ inputs.v8 }}_${{ inputs.os }}_${{ inputs.arch }}.a
+
+    - if: ${{ steps.cache-v8.outputs.cache-hit != 'true' && inputs.os == 'ios' }}
+      shell: bash
+      run: |
+        mkdir -p ${{ inputs.cache-dir }}/v8
+
+        wget -O ${{ inputs.cache-dir }}/v8/libc_v8.a https://github.com/lightpanda-io/zig-v8-fork/releases/download/${{ inputs.zig-v8 }}/libc_v8_${{ inputs.v8 }}_${{ inputs.os }}_${{ inputs.target-env }}_${{ inputs.arch }}.a
 
     - name: install v8
       shell: bash
