@@ -561,6 +561,7 @@ pub const EventType = enum(u8) {
     pop_state = 9,
     composition_event = 10,
     navigation_current_entry_change_event = 11,
+    navigate_event = 12,
 };
 
 pub const MutationEvent = c.dom_mutation_event;

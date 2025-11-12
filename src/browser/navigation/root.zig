@@ -208,18 +208,18 @@ pub const NavigationCurrentEntryChangeEvent = struct {
     }
 };
 
-pub const NavigationNavigateEvent = struct {
+pub const NavigateEvent = struct {
     pub const prototype = *Event;
     pub const union_make_copy = true;
 
     pub const EventInit = struct {
-        canInterpret: ?bool = false,
+        canIntercept: ?bool = false,
         // todo: destination
         downloadRequest: ?[]const u8 = null,
         // todo: formData
         hashChange: ?bool = false,
         hasUAVisualTransition: ?bool = false,
-        info: ?js.Value,
+        // info: ?js.Value,
         navigationType: ?NavigationType = .push,
         // todo: signal
         // todo: sourceElement
@@ -228,32 +228,33 @@ pub const NavigationNavigateEvent = struct {
 
     proto: parser.Event,
     can_intercept: bool,
-    download_request: []const u8,
+    download_request: ?[]const u8,
     // todo: desintation
     hash_change: bool,
     has_ua_visual_transition: bool,
-    info: js.Value,
+    info: []const u8,
     navigation_type: NavigationType,
     // todo: signal
     // todo: sourceElement
     user_initiated: bool,
 
-    pub fn constructor(event_type: []const u8, opts: EventInit) !NavigationNavigateEvent {
+    pub fn constructor(event_type: []const u8, opts: EventInit) !NavigateEvent {
         const event = try parser.eventCreate();
         defer parser.eventDestroy(event);
 
         try parser.eventInit(event, event_type, .{});
-        parser.eventSetInternalType(event, .navigation_current_entry_change_event);
+        parser.eventSetInternalType(event, .navigate_event);
 
         return .{
             .proto = event.*,
-            .can_intercept = opts.canIntercept,
-            .download_request = opts.downloadRequest,
-            .hash_change = opts.hashChange,
-            .has_ua_visual_transition = opts.hasUAVisualTransition,
-            .info = opts.info,
-            .navigation_type = opts.navigationType,
-            .user_initiated = opts.userInitiated,
+            .can_intercept = opts.canIntercept orelse false,
+            .download_request = opts.downloadRequest orelse null,
+            .hash_change = opts.hashChange orelse false,
+            .has_ua_visual_transition = opts.hasUAVisualTransition orelse false,
+            .info = undefined,
+            .navigation_type = opts.navigationType orelse .push,
+            // .info = if (opts.info) |info| try info.toString(page.arena) else null,
+            .user_initiated = opts.userInitiated orelse false,
         };
     }
 
@@ -268,7 +269,7 @@ pub const NavigationNavigateEvent = struct {
 
     // https://developer.mozilla.org/en-US/docs/Web/API/NavigateEvent/intercept
     pub fn intercept(
-        self: *NavigationNavigateEvent,
+        self: *NavigateEvent,
         opts: ?InterceptOptions,
         _: *Page,
     ) !void {
@@ -280,7 +281,7 @@ pub const NavigationNavigateEvent = struct {
             return error.InvalidState;
         }
 
-        try parser.eventPreventDefault(&self.proto);
+        // try parser.eventPreventDefault(&self.proto);
 
         if (opts) |options| {
             if (options.precommitHandler) |handler| {
@@ -303,7 +304,7 @@ pub const NavigationNavigateEvent = struct {
         }
     }
 
-    pub fn scroll(self: *NavigationNavigateEvent) !void {
+    pub fn scroll(self: *NavigateEvent) !void {
         _ = self;
     }
 
@@ -313,7 +314,7 @@ pub const NavigationNavigateEvent = struct {
             .source = "navigation",
         });
 
-        var evt = NavigationNavigateEvent.constructor(
+        var evt = NavigateEvent.constructor(
             "navigate",
             .{ .from = from, .navigationType = typ },
         ) catch |err| {

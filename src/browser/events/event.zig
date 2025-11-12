@@ -40,6 +40,7 @@ const MessageEvent = @import("../dom/MessageChannel.zig").MessageEvent;
 const PopStateEvent = @import("../html/History.zig").PopStateEvent;
 const CompositionEvent = @import("composition_event.zig").CompositionEvent;
 const NavigationCurrentEntryChangeEvent = @import("../navigation/root.zig").NavigationCurrentEntryChangeEvent;
+const NavigateEvent = @import("../navigation/root.zig").NavigateEvent;
 
 // Event interfaces
 pub const Interfaces = .{
@@ -53,6 +54,7 @@ pub const Interfaces = .{
     PopStateEvent,
     CompositionEvent,
     NavigationCurrentEntryChangeEvent,
+    NavigateEvent,
 };
 
 pub const Union = generate.Union(Interfaces);
@@ -85,6 +87,7 @@ pub const Event = struct {
             .navigation_current_entry_change_event => .{
                 .NavigationCurrentEntryChangeEvent = @as(*NavigationCurrentEntryChangeEvent, @ptrCast(evt)).*,
             },
+            .navigate_event => .{ .NavigateEvent = @as(*NavigateEvent, @ptrCast(evt)).* },
         };
     }
 
