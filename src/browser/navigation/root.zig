@@ -51,7 +51,7 @@ pub const NavigationType = enum {
 
 pub const NavigationKind = union(NavigationType) {
     push: ?[]const u8,
-    replace,
+    replace: ?[]const u8,
     traverse: usize,
     reload,
 };

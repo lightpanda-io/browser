@@ -197,7 +197,7 @@ pub fn replaceEntry(
     const entry = try arena.create(NavigationHistoryEntry);
     entry.* = NavigationHistoryEntry{
         .id = id_str,
-        .key = id_str,
+        .key = previous.key,
         .url = url,
         .state = state,
     };
@@ -260,6 +260,19 @@ pub fn navigate(
                 try page.navigateFromWebAPI(url, .{ .reason = .navigation }, kind);
             }
         },
+        .replace => |state| {
+            if (is_same_document) {
+                page.url = new_url;
+
+                try committed.resolve({});
+                // todo: Fire navigate event
+                try finished.resolve({});
+
+                _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, page, true);
+            } else {
+                try page.navigateFromWebAPI(url, .{ .reason = .navigation }, kind);
+            }
+        },
         .traverse => |index| {
             self.index = index;
 
@@ -276,7 +289,6 @@ pub fn navigate(
         .reload => {
             try page.navigateFromWebAPI(url, .{ .reason = .navigation }, kind);
         },
-        else => unreachable,
     }
 
     return .{
@@ -288,7 +300,13 @@ pub fn navigate(
 pub fn _navigate(self: *Navigation, _url: []const u8, _opts: ?NavigateOptions, page: *Page) !NavigationReturn {
     const opts = _opts orelse NavigateOptions{};
     const json = if (opts.state) |state| state.toJson(page.session.arena) catch return error.DataClone else null;
-    return try self.navigate(_url, .{ .push = json }, page);
+
+    const kind: NavigationKind = switch (opts.history) {
+        .replace => .{ .replace = json },
+        .push, .auto => .{ .push = json },
+    };
+
+    return try self.navigate(_url, kind, page);
 }
 
 pub const ReloadOptions = struct {

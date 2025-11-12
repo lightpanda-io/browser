@@ -56,7 +56,7 @@ pub const Location = struct {
                 break :blk try std.fmt.allocPrint(page.arena, "#{s}", .{hash});
         };
 
-        return page.navigateFromWebAPI(normalized_hash, .{ .reason = .script }, .replace);
+        return page.navigateFromWebAPI(normalized_hash, .{ .reason = .script }, .{ .replace = null });
     }
 
     pub fn get_protocol(self: *Location) []const u8 {
@@ -96,7 +96,7 @@ pub const Location = struct {
     }
 
     pub fn _replace(_: *const Location, url: []const u8, page: *Page) !void {
-        return page.navigateFromWebAPI(url, .{ .reason = .script }, .replace);
+        return page.navigateFromWebAPI(url, .{ .reason = .script }, .{ .replace = null });
     }
 
     pub fn _reload(_: *const Location, page: *Page) !void {
