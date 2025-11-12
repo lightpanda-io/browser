@@ -20,3 +20,19 @@
   testing.expectEqual('P', t.content.childNodes[1].tagName);
   testing.expectEqual('9000!', t.content.childNodes[1].innerHTML);
 </script>
+
+<template id="hello"><p>hello, world</p></template>
+
+<script id=template_parsing>
+  const tt = document.getElementById('hello');
+  testing.expectEqual('<p>hello, world</p>', tt.innerHTML);
+
+  // > The Node.childNodes property of the <template> element is always empty
+  // https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/template#usage_notes
+  testing.expectEqual(0, tt.childNodes.length);
+
+  let out = document.createElement('div');
+  out.appendChild(tt.content.cloneNode(true));
+
+  testing.expectEqual('<p>hello, world</p>', out.innerHTML);
+</script>
