@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+
+<!-- <script id=basic>
+{
+  const parser = new DOMParser();
+  testing.expectEqual('object', typeof parser);
+  testing.expectEqual('function', typeof parser.parseFromString);
+}
+</script> -->
+
+<script id=parseSimpleHTML>
+{
+  const parser = new DOMParser();
+  const doc = parser.parseFromString('<div>Hello World</div>', 'text/html');
+
+  testing.expectEqual('object', typeof doc);
+  testing.expectEqual('[object HTMLDocument]', doc.toString());
+
+  const div = doc.querySelector('div');
+  testing.expectEqual('DIV', div.tagName);
+  testing.expectEqual('Hello World', div.textContent);
+}
+</script>
+
+<!-- <script id=parseWithAttributes>
+{
+  const parser = new DOMParser();
+  const doc = parser.parseFromString('<div id="test" class="foo">Content</div>', 'text/html');
+
+  const div = doc.querySelector('div');
+  testing.expectEqual('test', div.id);
+  testing.expectEqual('foo', div.className);
+  testing.expectEqual('Content', div.textContent);
+}
+</script>
+
+<script id=parseMultipleElements>
+{
+  const parser = new DOMParser();
+  const doc = parser.parseFromString('<div>First</div><span>Second</span>', 'text/html');
+
+  const div = doc.querySelector('div');
+  const span = doc.querySelector('span');
+
+  testing.expectEqual('DIV', div.tagName);
+  testing.expectEqual('First', div.textContent);
+  testing.expectEqual('SPAN', span.tagName);
+  testing.expectEqual('Second', span.textContent);
+}
+</script>
+
+<script id=parseNestedElements>
+{
+  const parser = new DOMParser();
+  const doc = parser.parseFromString('<div><p><span>Nested</span></p></div>', 'text/html');
+
+  const div = doc.querySelector('div');
+  const p = doc.querySelector('p');
+  const span = doc.querySelector('span');
+
+  testing.expectEqual('DIV', div.tagName);
+  testing.expectEqual('P', p.tagName);
+  testing.expectEqual('SPAN', span.tagName);
+  testing.expectEqual('Nested', span.textContent);
+  testing.expectEqual(p, div.firstChild);
+  testing.expectEqual(span, p.firstChild);
+}
+</script>
+
+<script id=parseEmptyString>
+{
+  const parser = new DOMParser();
+  const doc = parser.parseFromString('', 'text/html');
+
+  testing.expectEqual('object', typeof doc);
+  testing.expectEqual('[object HTMLDocument]', doc.toString());
+}
+</script>
+
+<script id=parsedDocumentIsIndependent>
+{
+  const parser = new DOMParser();
+  const doc = parser.parseFromString('<div id="parsed">Parsed</div>', 'text/html');
+
+  // The parsed document should be independent from the current document
+  const currentDiv = document.querySelector('div');
+  const parsedDiv = doc.querySelector('div');
+
+  testing.expectEqual(null, currentDiv);
+  testing.expectEqual('parsed', parsedDiv.id);
+  testing.expectEqual('Parsed', parsedDiv.textContent);
+}
+</script>
+
+<script id=malformedHTMLDoesNotThrow>
+{
+  const parser = new DOMParser();
+
+  // HTML parsers should be forgiving and not throw on malformed HTML
+  const doc1 = parser.parseFromString('<div><p>unclosed', 'text/html');
+  testing.expectEqual('object', typeof doc1);
+
+  const doc2 = parser.parseFromString('<<<invalid>>>', 'text/html');
+  testing.expectEqual('object', typeof doc2);
+}
+</script>
+
+<script id=unsupportedMimeType>
+{
+  const parser = new DOMParser();
+
+  // Should throw an error for unsupported MIME types
+  testing.withError((err) => {
+    testing.expectEqual('NotSupported', err.message);
+  }, () => {
+    parser.parseFromString('<div>test</div>', 'application/xml');
+  });
+}
+</script>
+ -->

@@ -122,8 +122,11 @@ pub fn querySelectorAll(self: *Document, input: []const u8, page: *Page) !*Selec
     return Selector.querySelectorAll(self.asNode(), input, page);
 }
 
-pub fn className(_: *const Document) []const u8 {
-    return "[object Document]";
+pub fn className(self: *const Document) []const u8 {
+    return switch (self._type) {
+        .generic => "[object Document]",
+        .html => "[object HTMLDocument]",
+    };
 }
 
 pub fn getImplementation(_: *const Document) DOMImplementation {
