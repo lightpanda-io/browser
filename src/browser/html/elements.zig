@@ -33,6 +33,7 @@ const DataSet = @import("DataSet.zig");
 const StyleSheet = @import("../cssom/StyleSheet.zig");
 const CSSStyleDeclaration = @import("../cssom/CSSStyleDeclaration.zig");
 const CanvasRenderingContext2D = @import("../canvas/CanvasRenderingContext2D.zig");
+const WebGLRenderingContext = @import("../canvas/WebGLRenderingContext.zig");
 
 const WalkerChildren = @import("../dom/walker.zig").WalkerChildren;
 
@@ -497,15 +498,21 @@ pub const HTMLCanvasElement = struct {
         color_space: []const u8 = "srgb",
     };
 
+    /// Returns a drawing context on the canvas, or null if the context identifier
+    /// is not supported, or the canvas has already been set to a different context mode.
     pub fn _getContext(
         ctx_type: []const u8,
         _: ?ContextAttributes,
-    ) !CanvasRenderingContext2D {
-        if (!std.mem.eql(u8, ctx_type, "2d")) {
-            return error.NotSupported;
+    ) ?union(enum) { @"2d": CanvasRenderingContext2D, webgl: WebGLRenderingContext } {
+        if (std.mem.eql(u8, ctx_type, "2d")) {
+            return .{ .@"2d" = .{} };
         }
 
-        return .{};
+        if (std.mem.eql(u8, ctx_type, "webgl") or std.mem.eql(u8, ctx_type, "experimental-webgl")) {
+            return .{ .webgl = .{} };
+        }
+
+        return null;
     }
 };
 
