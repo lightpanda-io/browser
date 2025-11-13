@@ -57,13 +57,13 @@ pub fn item(self: *const CSSStyleDeclaration, index: u32) []const u8 {
     return "";
 }
 
-pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const u8, page: *Page) ![]const u8 {
+pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const u8, page: *Page) []const u8 {
     const normalized = normalizePropertyName(property_name, &page.buf);
     const prop = self.findProperty(normalized) orelse return "";
     return prop._value.str();
 }
 
-pub fn getPropertyPriority(self: *const CSSStyleDeclaration, property_name: []const u8, page: *Page) ![]const u8 {
+pub fn getPropertyPriority(self: *const CSSStyleDeclaration, property_name: []const u8, page: *Page) []const u8 {
     const normalized = normalizePropertyName(property_name, &page.buf);
     const prop = self.findProperty(normalized) orelse return "";
     return if (prop._important) "important" else "";

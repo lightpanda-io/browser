@@ -154,7 +154,7 @@ pub const JsApi = struct {
             }
         }
 
-        const value = try self._proto.getPropertyValue(dash_case, page);
+        const value = self._proto.getPropertyValue(dash_case, page);
 
         // Property accessors have special handling for empty values:
         // - Known CSS properties return '' when not set

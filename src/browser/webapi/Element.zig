@@ -13,6 +13,8 @@ const Selector = @import("selector/Selector.zig");
 pub const Attribute = @import("element/Attribute.zig");
 const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
 pub const DOMStringMap = @import("element/DOMStringMap.zig");
+const DOMRect = @import("DOMRect.zig");
+const css = @import("css.zig");
 
 pub const Svg = @import("element/Svg.zig");
 pub const Html = @import("element/Html.zig");
@@ -467,6 +469,126 @@ pub fn querySelectorAll(self: *Element, input: []const u8, page: *Page) !*Select
     return Selector.querySelectorAll(self.asNode(), input, page);
 }
 
+pub fn parentElement(self: *Element) ?*Element {
+    return self._proto.parentElement();
+}
+
+pub fn checkVisibility(self: *Element, page: *Page) !bool {
+    var current: ?*Element = self;
+
+    while (current) |el| {
+        const style = try el.getStyle(page);
+        const display = style.asCSSStyleDeclaration().getPropertyValue("display", page);
+        if (std.mem.eql(u8, display, "none")) {
+            return false;
+        }
+        current = el.parentElement();
+    }
+
+    return true;
+}
+
+pub fn getBoundingClientRect(self: *Element, page: *Page) !*DOMRect {
+    const is_visible = try self.checkVisibility(page);
+    if (!is_visible) {
+        return page._factory.create(DOMRect{
+            ._x = 0.0,
+            ._y = 0.0,
+            ._width = 0.0,
+            ._height = 0.0,
+            ._top = 0.0,
+            ._right = 0.0,
+            ._bottom = 0.0,
+            ._left = 0.0,
+        });
+    }
+
+    const y = calculateDocumentPosition(self.asNode());
+
+    var width: f64 = 1.0;
+    var height: f64 = 1.0;
+
+    const style = try self.getStyle(page);
+    const decl = style.asCSSStyleDeclaration();
+    width = css.parseDimension(decl.getPropertyValue("width", page)) orelse 1.0;
+    height = css.parseDimension(decl.getPropertyValue("height", page)) orelse 1.0;
+
+    if (width == 1.0 or height == 1.0) {
+        const tag = self.getTag();
+        if (tag == .img or tag == .iframe) {
+            if (self.getAttributeSafe("width")) |w| {
+                width = std.fmt.parseFloat(f64, w) catch width;
+            }
+            if (self.getAttributeSafe("height")) |h| {
+                height = std.fmt.parseFloat(f64, h) catch height;
+            }
+        }
+    }
+
+    const x: f64 = 0.0;
+    const top = y;
+    const left = x;
+    const right = x + width;
+    const bottom = y + height;
+
+    return page._factory.create(DOMRect{
+        ._x = x,
+        ._y = y,
+        ._width = width,
+        ._height = height,
+        ._top = top,
+        ._right = right,
+        ._bottom = bottom,
+        ._left = left,
+    });
+}
+
+// Calculates a pseudo-position in the document using an efficient heuristic.
+//
+// Instead of walking the entire DOM tree (which would be O(total_nodes)), this
+// function walks UP the tree counting previous siblings at each level. Each level
+// uses exponential weighting (1000x per depth level) to preserve document order.
+//
+// This gives O(depth * avg_siblings) complexity while maintaining relative positioning
+// that's useful for scraping and understanding element flow in the document.
+//
+// Example:
+//   <body>              → position 0
+//     <div>             → position 0 (0 siblings at level 1)
+//       <span></span>   → position 0 (0 siblings at level 2)
+//       <span></span>   → position 1 (1 sibling at level 2)
+//     </div>
+//     <div>             → position 1000 (1 sibling at level 1, weighted by 1000)
+//       <p></p>         → position 1000 (0 siblings at level 2, parent has 1000)
+//     </div>
+//   </body>
+//
+// Trade-offs:
+// - Much faster than full tree-walking for deep/large DOMs
+// - Positions reflect document order and parent-child relationships
+// - Not pixel-accurate, but sufficient for 1x1 layout heuristics
+fn calculateDocumentPosition(node: *Node) f64 {
+    var position: f64 = 0.0;
+    var multiplier: f64 = 1.0;
+    var current = node;
+
+    while (current.parentNode()) |parent| {
+        var count: f64 = 0.0;
+        var sibling = parent.firstChild();
+        while (sibling) |s| {
+            if (s == current) break;
+            count += 1.0;
+            sibling = s.nextSibling();
+        }
+
+        position += count * multiplier;
+        multiplier *= 1000.0;
+        current = parent;
+    }
+
+    return position;
+}
+
 const GetElementsByTagNameResult = union(enum) {
     tag: collections.NodeLive(.tag),
     tag_name: collections.NodeLive(.tag_name),
@@ -702,6 +824,8 @@ pub const JsApi = struct {
     pub const matches = bridge.function(Element.matches, .{ .dom_exception = true });
     pub const querySelector = bridge.function(Element.querySelector, .{ .dom_exception = true });
     pub const querySelectorAll = bridge.function(Element.querySelectorAll, .{ .dom_exception = true });
+    pub const checkVisibility = bridge.function(Element.checkVisibility, .{});
+    pub const getBoundingClientRect = bridge.function(Element.getBoundingClientRect, .{});
     pub const getElementsByTagName = bridge.function(Element.getElementsByTagName, .{});
     pub const getElementsByClassName = bridge.function(Element.getElementsByClassName, .{});
     pub const children = bridge.accessor(Element.getChildren, null, .{});
