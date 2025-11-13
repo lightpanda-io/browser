@@ -24,6 +24,7 @@ const css = @import("../../browser/dom/css.zig");
 const parser = @import("../../browser/netsurf.zig");
 const dom_node = @import("../../browser/dom/node.zig");
 const Element = @import("../../browser/dom/element.zig").Element;
+const dump = @import("../../browser/dump.zig");
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -41,6 +42,7 @@ pub fn processMessage(cmd: anytype) !void {
         getBoxModel,
         requestChildNodes,
         getFrameOwner,
+        getOuterHTML,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -58,6 +60,7 @@ pub fn processMessage(cmd: anytype) !void {
         .getBoxModel => return getBoxModel(cmd),
         .requestChildNodes => return requestChildNodes(cmd),
         .getFrameOwner => return getFrameOwner(cmd),
+        .getOuterHTML => return getOuterHTML(cmd),
     }
 }
 
@@ -492,6 +495,27 @@ fn getFrameOwner(cmd: anytype) !void {
 
     const node = try bc.node_registry.register(parser.documentToNode(doc));
     return cmd.sendResult(.{ .nodeId = node.id, .backendNodeId = node.id }, .{});
+}
+
+fn getOuterHTML(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        nodeId: ?Node.Id = null,
+        backendNodeId: ?Node.Id = null,
+        objectId: ?[]const u8 = null,
+        includeShadowDOM: bool = false,
+    })) orelse return error.InvalidParams;
+
+    if (params.includeShadowDOM) {
+        log.warn(.cdp, "not implemented", .{ .feature = "DOM.getOuterHTML: Not implemented includeShadowDOM parameter" });
+    }
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+
+    var aw = std.Io.Writer.Allocating.init(cmd.arena);
+    try dump.writeNode(node._node, .{}, &aw.writer);
+
+    return cmd.sendResult(.{ .outerHTML = aw.written() }, .{});
 }
 
 const testing = @import("../testing.zig");
