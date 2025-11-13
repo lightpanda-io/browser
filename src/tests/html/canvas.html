@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 
-<script id=canvas>
+<script id=CanvasRenderingContext2D>
 {
   const element = document.createElement("canvas");
   const ctx = element.getContext("2d");
@@ -11,7 +11,7 @@
 }
 </script>
 
-<script id=canvas#fillStyle>
+<script id=CanvasRenderingContext2D#fillStyle>
 {
   const element = document.createElement("canvas");
   const ctx = element.getContext("2d");
@@ -25,6 +25,12 @@
   // No changes made if color is invalid.
   ctx.fillStyle = "invalid-color";
   testing.expectEqual(ctx.fillStyle, "#663399");
+  ctx.fillStyle = "#fc0";
+  testing.expectEqual(ctx.fillStyle, "#ffcc00");
+  ctx.fillStyle = "#ff0000";
+  testing.expectEqual(ctx.fillStyle, "#ff0000");
+  ctx.fillStyle = "#fF00000F";
+  testing.expectEqual(ctx.fillStyle, "rgba(255, 0, 0, 0.06)");
 }
 </script>
 
