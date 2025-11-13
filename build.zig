@@ -87,7 +87,7 @@ pub fn build(b: *Build) !void {
                 .sanitize_c = enable_csan,
                 .sanitize_thread = enable_tsan,
                 .imports = &.{
-                  .{.name = "lightpanda", .module = lightpanda_module},
+                    .{ .name = "lightpanda", .module = lightpanda_module },
                 },
             }),
         });
@@ -112,31 +112,31 @@ pub fn build(b: *Build) !void {
         test_step.dependOn(&run_tests.step);
     }
 
-    {
-        // wpt
-        const exe = b.addExecutable(.{
-            .name = "lightpanda-wpt",
-            .use_llvm = true,
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/main_wpt.zig"),
-                .target = target,
-                .optimize = optimize,
-                .sanitize_c = enable_csan,
-                .sanitize_thread = enable_tsan,
-                .imports = &.{
-                  .{.name = "lightpanda", .module = lightpanda_module},
-                },
-            }),
-        });
-        b.installArtifact(exe);
+    // {
+    //     // wpt
+    //     const exe = b.addExecutable(.{
+    //         .name = "lightpanda-wpt",
+    //         .use_llvm = true,
+    //         .root_module = b.createModule(.{
+    //             .root_source_file = b.path("src/main_wpt.zig"),
+    //             .target = target,
+    //             .optimize = optimize,
+    //             .sanitize_c = enable_csan,
+    //             .sanitize_thread = enable_tsan,
+    //             .imports = &.{
+    //                 .{ .name = "lightpanda", .module = lightpanda_module },
+    //             },
+    //         }),
+    //     });
+    //     b.installArtifact(exe);
 
-        const run_cmd = b.addRunArtifact(exe);
-        if (b.args) |args| {
-            run_cmd.addArgs(args);
-        }
-        const run_step = b.step("wpt", "Run WPT tests");
-        run_step.dependOn(&run_cmd.step);
-    }
+    //     const run_cmd = b.addRunArtifact(exe);
+    //     if (b.args) |args| {
+    //         run_cmd.addArgs(args);
+    //     }
+    //     const run_step = b.step("wpt", "Run WPT tests");
+    //     run_step.dependOn(&run_cmd.step);
+    // }
 
     {
         // get v8
@@ -631,6 +631,8 @@ fn buildCurl(b: *Build, m: *Build.Module) !void {
 
     curl.addIncludePath(b.path(root ++ "lib"));
     curl.addIncludePath(b.path(root ++ "include"));
+    curl.addIncludePath(b.path("vendor/zlib"));
+
     curl.addCSourceFiles(.{
         .flags = &.{},
         .files = &.{

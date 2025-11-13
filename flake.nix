@@ -11,6 +11,11 @@
     zlsPkg.inputs.zig-overlay.follows = "zigPkgs";
     zlsPkg.inputs.nixpkgs.follows = "nixpkgs";
 
+    fenix = {
+      url = "github:nix-community/fenix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     flake-utils.url = "github:numtide/flake-utils";
   };
 
@@ -19,6 +24,7 @@
       nixpkgs,
       zigPkgs,
       zlsPkg,
+      fenix,
       flake-utils,
       ...
     }:
@@ -36,6 +42,8 @@
           inherit system overlays;
         };
 
+        rustToolchain = fenix.packages.${system}.stable.toolchain;
+
         # We need crtbeginS.o for building.
         crtFiles = pkgs.runCommand "crt-files" { } ''
           mkdir -p $out/lib
@@ -51,6 +59,7 @@
               # Build Tools
               zigpkgs."0.15.2"
               zls
+              rustToolchain
               python3
               pkg-config
               cmake
@@ -66,7 +75,6 @@
               glib.dev
               glibc.dev
               zlib
-              zlib.dev
             ];
         };
       in
