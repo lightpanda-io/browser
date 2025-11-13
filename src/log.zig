@@ -131,7 +131,7 @@ pub fn log(comptime scope: Scope, level: Level, comptime msg: []const u8, data: 
     var writer = stderr.writer(&buf);
 
     logTo(scope, level, msg, data, &writer.interface) catch |log_err| {
-        std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"", .{ timestamp(.clock), @errorName(log_err), @tagName(scope), msg });
+        std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"\n", .{ timestamp(.clock), @errorName(log_err), @tagName(scope), msg });
     };
 }
 
@@ -147,7 +147,6 @@ fn logTo(comptime scope: Scope, level: Level, comptime msg: []const u8, data: an
             }
         }
     }
-
     switch (opts.format) {
         .logfmt => try logLogfmt(scope, level, msg, data, out),
         .pretty => try logPretty(scope, level, msg, data, out),

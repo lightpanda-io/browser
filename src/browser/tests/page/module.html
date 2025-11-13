@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 
-<!-- <script id=meta type=module>
+<script id=meta type=module>
   testing.expectEqual('/src/browser/tests/page/module.html', new URL(import.meta.url).pathname)
 </script>
 
@@ -33,7 +33,7 @@
   import { increment, getCount } from "./modules/shared.js";
   testing.expectEqual(2, increment());
   testing.expectEqual(2, getCount());
-</script> -->
+</script>
 
 <script id=circular-imports type=module>
   import { aValue, getFromB } from "./modules/circular-a.js";
@@ -44,116 +44,17 @@
   testing.expectEqual('a', getFromA());
 </script>
 
-<!-- <script id=basic-async type=module>
+<script id=basic-async type=module>
+  import { "val1" as val1 } from "./mod1.js";
   const m = await import("./mod1.js");
-  testing.expectEqual('value-1', m.val1);
+  testing.expectEqual('value-1', m.val1, {script_id: 'basic-async'});
 </script>
-
 
 <script id=import-404 type=module>
-  (async () => {
-    try {
-      await import("./modules/nonexistent.js");
-      testing.expectFail("error expected");
-    }catch(e) {
-      testing.expectEqual(true, e.toString().includes("Failed to load module"));
-    }
-  })();
-</script>
-
-<script id=dynamic-chain type=module>
-  (async () => {
-    const a = await import("./modules/dynamic-chain-a.js");
-    const result = await a.loadChain();
-    testing.expectEqual('chain-end', result);
-  })();
-</script>
-
-<script id=dynamic-circular type=module>
-  (async () => {
-    const x = await import("./modules/dynamic-circular-x.js");
-    testing.expectEqual('dynamic-x', x.xValue);
-    const yValue = await x.loadY();
-    testing.expectEqual('dynamic-y', yValue);
-
-    const y = await import("./modules/dynamic-circular-y.js");
-    const xValue = await y.loadX();
-    testing.expectEqual('dynamic-x', xValue);
-  })();
-</script>
-
-<script id=dynamic-shared-state-1 type=module>
-  import { increment, getCount } from "./modules/shared.js";
-  const count1 = increment();
-  testing.expectEqual(3, count1);
-
-  (async () => {
-    const shared = await import("./modules/shared.js");
-    const count2 = shared.increment();
-    testing.expectEqual(4, count2);
-    testing.expectEqual(4, shared.getCount());
-    testing.expectEqual(4, getCount());
-  })();
-</script>
-
-<script id=concurrent-dynamic-imports type=module>
-  (async () => {
-    const [m1, m2, m3] = await Promise.all([
-      import("./modules/shared.js"),
-      import("./modules/shared.js"),
-      import("./modules/shared.js")
-    ]);
-
-    const c1 = m1.increment();
-    const c2 = m2.getCount();
-    const c3 = m3.getCount();
-
-    testing.expectEqual(5, c1);
-    testing.expectEqual(5, c2);
-    testing.expectEqual(5, c3);
-  })();
-</script>
-
-<script id=sequential-dynamic-imports type=module>
-  (async () => {
-    const m1 = await import("./mod1.js");
-    testing.expectEqual('value-1', m1.val1);
-
-    const m2 = await import("./mod1.js");
-    testing.expectEqual('value-1', m2.val1);
-    testing.expectEqual(m1, m2);
-  })();
-</script>
-
-<script id=mixed-static-dynamic-circular type=module>
-  (async () => {
-    const staticMod = await import("./modules/mixed-circular-static.js");
-    testing.expectEqual('static-side', staticMod.staticValue);
-
-    const dynamicValue = await staticMod.loadDynamicSide();
-    testing.expectEqual('dynamic-side', dynamicValue);
-
-    const dynamicMod = await import("./modules/mixed-circular-dynamic.js");
-    testing.expectEqual('static-side', dynamicMod.getStaticValue());
-  })();
-</script>
-
-<script id=dynamic-re-exports type=module>
-  (async () => {
-    const m = await import("./modules/re-exporter.js");
-    testing.expectEqual('from-base', m.baseValue);
-    testing.expectEqual('from-base', m.importedValue);
-    testing.expectEqual('local', m.localValue);
-  })();
-</script> -->
-
-<!-- TODO: Error handling tests need dynamic import support
-<script id=import-syntax-error type=module>
   try {
-    await import("./modules/syntax-error.js");
-    testing.fail("Should have thrown an error for syntax error");
-  } catch (e) {
-    testing.assert(e.message.includes("SyntaxError") || e.message.includes("identifier"));
+    await import("./modules/nonexistent.js");
+    testing.expectFail("error expected");
+  } catch(e) {
+    testing.expectEqual(true, e.toString().includes("FailedToLoad"), {script_id: 'import-404'});
   }
 </script>
--->

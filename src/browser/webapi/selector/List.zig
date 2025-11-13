@@ -22,32 +22,26 @@ pub const EntryIterator = GenericIterator(Iterator, null);
 pub const KeyIterator = GenericIterator(Iterator, "0");
 pub const ValueIterator = GenericIterator(Iterator, "1");
 
-pub fn init(arena: Allocator, root: *Node, selector: Selector.Selector, page: *Page) !*List {
-    var list = try page._factory.create(List{
-        ._arena = arena,
-        ._nodes = &.{},
-    });
-
+pub fn collect(
+    allocator: std.mem.Allocator,
+    root: *Node,
+    selector: Selector.Selector,
+    nodes: *std.AutoArrayHashMapUnmanaged(*Node, void),
+    page: *Page,
+) !void {
     if (optimizeSelector(root, &selector, page)) |result| {
-        var nodes: std.ArrayListUnmanaged(*Node) = .empty;
-
         var tw = TreeWalker.init(result.root, .{});
-        const optimized_selector = result.selector;
         if (result.exclude_root) {
             _ = tw.next();
         }
-        // When exclude_root is true, pass root as boundary so it can match but we won't search beyond it
-        // When exclude_root is false, pass null so there's no boundary (root already matched, searching descendants)
+
         const boundary = if (result.exclude_root) result.root else null;
         while (tw.next()) |node| {
-            if (matches(node, optimized_selector, boundary)) {
-                try nodes.append(arena, node);
+            if (matches(node, result.selector, boundary)) {
+                try nodes.put(allocator, node, {});
             }
         }
-        list._nodes = nodes.items;
     }
-
-    return list;
 }
 
 // used internally to find the first match
@@ -135,7 +129,7 @@ fn optimizeSelector(root: *Node, selector: *const Selector.Selector, page: *Page
                 .first = selector.first,
                 .segments = selector.segments,
             },
-            .exclude_root = false,
+            .exclude_root = true,
         };
     }
 
@@ -238,7 +232,7 @@ fn findIdSelector(selector: *const Selector.Selector) ?IdAnchor {
     return null;
 }
 
-fn matches(node: *Node, selector: Selector.Selector, root: ?*Node) bool {
+pub fn matches(node: *Node, selector: Selector.Selector, root: ?*Node) bool {
     const el = node.is(Node.Element) orelse return false;
 
     if (selector.segments.len == 0) {
@@ -333,8 +327,9 @@ fn matchChild(node: *Node, compound: Selector.Compound, root: ?*Node) ?*Node {
     const parent = node._parent orelse return null;
 
     // Don't match beyond the root boundary
+    // If there's a boundary, check if parent is outside (an ancestor of) the boundary
     if (root) |boundary| {
-        if (parent == boundary) {
+        if (!boundary.contains(parent)) {
             return null;
         }
     }

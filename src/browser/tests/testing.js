@@ -2,6 +2,7 @@
   let failed = false;
   let observed_ids = {};
   let eventuallies = [];
+  let async_capture = null;
   let current_script_id = null;
 
   function expectTrue(actual) {
@@ -12,14 +13,17 @@
      expectEqual(false, actual);
   }
 
-  function expectEqual(expected, actual) {
+  function expectEqual(expected, actual, opts) {
     if (_equal(expected, actual)) {
-      _registerObservation('ok');
+      _registerObservation('ok', opts);
       return;
     }
     failed = true;
-    _registerObservation('fail');
+    _registerObservation('fail', opts);
     let err = `expected: ${_displayValue(expected)}, got: ${_displayValue(actual)}\n  script_id: ${_currentScriptId()}`;
+    if (async_capture) {
+      err += `\n stack: ${async_capture.stack}`;
+    }
     console.error(err);
     throw new Error('expectEqual failed');
   }
@@ -57,7 +61,14 @@
       callback: cb,
       script_id: script_id,
     });
+  }
 
+  async function async(cb) {
+    const script_id = document.currentScript.id;
+    const stack = new Error().stack;
+    async_capture = {script_id: script_id, stack: stack};
+    await cb();
+    async_capture = null;
   }
 
   function assertOk() {
@@ -92,6 +103,7 @@
 
   window.testing = {
     fail: fail,
+    async: async,
     assertOk: assertOk,
     expectTrue: expectTrue,
     expectFalse: expectFalse,
@@ -125,7 +137,6 @@
       return false;
     }
 
-
     if (expected instanceof Node) {
       if (!(actual instanceof Node)) {
          return false;
@@ -145,8 +156,8 @@
     return true;
   }
 
-  function _registerObservation(status) {
-    const script_id = _currentScriptId();
+  function _registerObservation(status, opts) {
+    script_id = opts?.script_id || _currentScriptId();
     if (!script_id) {
       return;
     }
@@ -161,7 +172,12 @@
       return current_script_id;
     }
 
+    if (async_capture) {
+      return async_capture.script_id;
+    }
+
     const current_script = document.currentScript;
+
     if (!current_script) {
       return null;
     }

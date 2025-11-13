@@ -147,6 +147,29 @@ pub fn cancelAnimationFrame(self: *Window, id: u32) void {
     sc.removed = true;
 }
 
+pub fn reportError(self: *Window, err: js.Object, page: *Page) !void {
+    const error_event = try ErrorEvent.init("error", .{
+        .@"error" =  err,
+        .message = err.toString() catch "Unknown error",
+        .bubbles = false,
+        .cancelable = true,
+    }, page);
+
+    const event = error_event.asEvent();
+    try page._event_manager.dispatch(self.asEventTarget(), event);
+
+    if (comptime builtin.is_test == false) {
+        if (!event._prevent_default) {
+            log.warn(.js, "window.reportError", .{
+                .message = error_event._message,
+                .filename = error_event._filename,
+                .line_number = error_event._line_number,
+                .column_number = error_event._column_number,
+            });
+        }
+    }
+}
+
 pub fn matchMedia(_: *const Window, query: []const u8, page: *Page) !*MediaQueryList {
     return page._factory.eventTarget(MediaQueryList{
         ._proto = undefined,
@@ -290,6 +313,7 @@ pub const JsApi = struct {
     pub const matchMedia = bridge.function(Window.matchMedia, .{});
     pub const btoa = bridge.function(Window.btoa, .{});
     pub const atob = bridge.function(Window.atob, .{});
+    pub const reportError = bridge.function(Window.reportError, .{});
 };
 
 const testing = @import("../../testing.zig");

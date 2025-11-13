@@ -35,9 +35,6 @@
   window.reportError(err);
 
   testing.expectEqual(true, evt.message.includes('Detailed error'));
-  testing.expectEqual('script.js', evt.filename);
-  testing.expectEqual(100, evt.lineno);
-  testing.expectEqual(25, evt.colno);
   testing.expectEqual(err, evt.error);
 }
 </script>

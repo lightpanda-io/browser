@@ -321,8 +321,11 @@ fn _documentIsComplete(self: *Page) !void {
 
     // dispatch window.load event
     const event = try Event.init("load", .{}, self);
+    // this event is weird, it's dispatched directly on the window, but
+    // with the document as the target
+    event._target = self.document.asEventTarget();
     try self._event_manager.dispatchWithFunction(
-        self.document.asEventTarget(),
+        self.window.asEventTarget(),
         event,
         self.window._on_load,
         .{ .inject_target = false, .context = "page load" },
@@ -335,6 +338,9 @@ fn pageHeaderDoneCallback(transfer: *Http.Transfer) !void {
     // would be different than self.url in the case of a redirect
     const header = &transfer.response_header.?;
     self.url = try self.arena.dupeZ(u8, std.mem.span(header.url));
+
+    self.window._location = try Location.init(self.url, self);
+    self.document._location = self.window._location;
 
     log.debug(.http, "navigate header", .{
         .url = self.url,
@@ -413,7 +419,7 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
         .html => |buf| {
             var parser = Parser.init(self.arena, self.document.asNode(), self);
             parser.parse(buf.items);
-            self._script_manager.pageIsLoaded();
+            self._script_manager.staticScriptsDone();
             if (self._script_manager.isDone()) {
                 // No scripts, or just inline scripts that were already processed
                 // we need to trigger this ourselves
@@ -629,7 +635,7 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
 }
 
 pub fn scriptAddedCallback(self: *Page, script: *HtmlScript) !void {
-    self._script_manager.add(script, "parsing") catch |err| {
+    self._script_manager.addFromElement(script, "parsing") catch |err| {
         log.err(.page, "page.scriptAddedCallback", .{
             .err = err,
             .src = script.asElement().getAttributeSafe("src"),

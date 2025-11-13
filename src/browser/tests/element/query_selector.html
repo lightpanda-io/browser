@@ -8,7 +8,7 @@
 </div>
 <div id=other></div>
 
-<!-- <script id=querySelector">
+<script id=querySelector">
   const p1 = $('#p1');
   testing.expectError("Syntax Error", () => p1.querySelector(''));
   testing.withError((err) => {
@@ -24,7 +24,7 @@
 
   testing.expectEqual($('#c2'), p1.querySelector('*'));
   testing.expectEqual($('#c3'), p1.querySelector('*#c3'));
-</script> -->
+</script>
 
 <div id="desc-container">
   <p class="text">Direct child paragraph</p>
@@ -51,15 +51,15 @@
 {
   const container = $('#desc-container');
 
-  // testing.expectEqual('Nested paragraph', container.querySelector('div p').textContent);
-  // testing.expectEqual('Nested paragraph', container.querySelector('div.nested p').textContent);
+  testing.expectEqual('Direct child paragraph', container.querySelector('div p').textContent);
+  testing.expectEqual('Nested paragraph', container.querySelector('div.nested p').textContent);
   testing.expectEqual('Deeply nested paragraph', container.querySelector('div span p').textContent);
-  // testing.expectEqual('Nested paragraph', container.querySelector('.nested .text').textContent);
-  // testing.expectEqual(null, container.querySelector('article div p'));
+  testing.expectEqual('Nested paragraph', container.querySelector('.nested .text').textContent);
+  testing.expectEqual(null, container.querySelector('article div p'));
 
-  // const outerDiv = $('#outer-div');
-  // testing.expectEqual('deep-span', outerDiv.querySelector('div div span').id);
-  // testing.expectEqual('deep-span', outerDiv.querySelector('.level1 span').id);
-  // testing.expectEqual('deep-span', outerDiv.querySelector('.level1 .level2 span').id);
+  const outerDiv = $('#outer-div');
+  testing.expectEqual('deep-span', outerDiv.querySelector('div div span').id);
+  testing.expectEqual('deep-span', outerDiv.querySelector('.level1 span').id);
+  testing.expectEqual('deep-span', outerDiv.querySelector('.level1 .level2 span').id);
 }
 </script>

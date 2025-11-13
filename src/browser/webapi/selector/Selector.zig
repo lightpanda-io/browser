@@ -10,23 +10,28 @@ pub fn querySelector(root: *Node, input: []const u8, page: *Page) !?*Node.Elemen
         return error.SyntaxError;
     }
 
-    const selector = try Parser.parse(page.call_arena, input, page);
+    const arena = page.call_arena;
+    const selectors = try Parser.parseList(arena, input, page);
 
-    // Fast path: single compound with only an ID selector
-    if (selector.segments.len == 0 and selector.first.parts.len == 1) {
-        const first = selector.first.parts[0];
-        if (first == .id) {
-            const el = page.document._elements_by_id.get(first.id) orelse return null;
-            // Check if the element is within the root subtree
-            if (root.contains(el.asNode())) {
+    for (selectors) |selector| {
+        // Fast path: single compound with only an ID selector
+        if (selector.segments.len == 0 and selector.first.parts.len == 1) {
+            const first = selector.first.parts[0];
+            if (first == .id) {
+                const el = page.document._elements_by_id.get(first.id) orelse continue;
+                // Check if the element is within the root subtree
+                if (root.contains(el.asNode())) {
+                    return el;
+                }
+                continue;
+            }
+        }
+
+        if (List.initOne(root, selector, page)) |node| {
+            if (node.is(Node.Element)) |el| {
                 return el;
             }
-            return null;
         }
-    }
-
-    if (List.initOne(root, selector, page)) |node| {
-        return node.is(Node.Element);
     }
     return null;
 }
@@ -37,8 +42,33 @@ pub fn querySelectorAll(root: *Node, input: []const u8, page: *Page) !*List {
     }
 
     const arena = page.arena;
-    const selector = try Parser.parse(arena, input, page);
-    return List.init(arena, root, selector, page);
+    var nodes: std.AutoArrayHashMapUnmanaged(*Node, void) = .empty;
+
+    const selectors = try Parser.parseList(arena, input, page);
+    for (selectors) |selector| {
+        try List.collect(arena, root, selector, &nodes, page);
+    }
+
+    return page._factory.create(List{
+        ._arena = arena,
+        ._nodes = nodes.keys(),
+    });
+}
+
+pub fn matches(el: *Node.Element, input: []const u8, page: *Page) !bool {
+    if (input.len == 0) {
+        return error.SyntaxError;
+    }
+
+    const arena = page.call_arena;
+    const selectors = try Parser.parseList(arena, input, page);
+
+    for (selectors) |selector| {
+        if (List.matches(el.asNode(), selector, null)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 pub fn classAttributeContains(class_attr: []const u8, class_name: []const u8) bool {

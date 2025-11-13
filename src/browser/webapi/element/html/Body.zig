@@ -30,11 +30,11 @@ pub const JsApi = struct {
 
 pub const Build = struct {
     pub fn complete(node: *Node, page: *Page) !void {
-        _ = node;
-        _ = page;
-        // @ZIGDOM
-        // const el = node.as(Element);
-        // const on_load = el.getAttributeSafe("onload") orelse return;
-        // page.window._on_load = page.js.stringToFunction(on_load);
+        const el = node.as(Element);
+        const on_load = el.getAttributeSafe("onload") orelse return;
+        page.window._on_load = page.js.stringToFunction(on_load) catch |err| blk: {
+            log.err(.js, "body.onload", .{.err = err, .str = on_load});
+            break :blk null;
+        };
     }
 };

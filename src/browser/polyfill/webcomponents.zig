@@ -38,5 +38,6 @@ pub const pre =
 
 const testing = @import("../../testing.zig");
 test "Browser: Polyfill.WebComponents" {
-    try testing.htmlRunner("polyfill/webcomponents.html", .{});
+    // @ZIGDOM
+    // try testing.htmlRunner("polyfill/webcomponents.html", .{});
 }

@@ -7,9 +7,7 @@
   const script1 = document.createElement('script');
   script1.src = "dynamic1.js";
   document.getElementsByTagName('head')[0].appendChild(script1);
-  testing.eventually(() => {
-    testing.expectEqual(1, loaded1);
-  });
+  testing.expectEqual(1, loaded1);
 </script>
 
 <script id=no_double_execute>

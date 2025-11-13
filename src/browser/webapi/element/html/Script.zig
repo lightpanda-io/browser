@@ -1,3 +1,4 @@
+const log = @import("../../../../log.zig");
 const js = @import("../../../js/js.zig");
 const Page = @import("../../../Page.zig");
 
@@ -77,15 +78,19 @@ pub const Build = struct {
         const element = self.asElement();
         self._src = element.getAttributeSafe("src") orelse "";
 
-        // @ZIGDOM
-        _ = page;
-        // if (element.getAttributeSafe("onload")) |on_load| {
-        //     self._on_load = page.js.stringToFunction(on_load);
-        // }
+        if (element.getAttributeSafe("onload")) |on_load| {
+            self._on_load = page.js.stringToFunction(on_load) catch |err| blk: {
+                log.err(.js, "script.onload", .{.err = err, .str = on_load});
+                break :blk null;
+            };
+        }
 
-        // if (element.getAttributeSafe("onerror")) |on_error| {
-        //     self._on_error = page.js.stringToFunction(on_error);
-        // }
+        if (element.getAttributeSafe("onerror")) |on_error| {
+            self._on_error = page.js.stringToFunction(on_error) catch |err| blk: {
+                log.err(.js, "script.onerror", .{.err = err, .str = on_error});
+                break :blk null;
+            };
+        }
     }
 };
 

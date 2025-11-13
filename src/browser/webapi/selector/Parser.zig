@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const Allocator = std.mem.Allocator;
+
 const Page = @import("../../Page.zig");
 
 const Node = @import("../Node.zig");
@@ -8,7 +10,6 @@ const Part = Selector.Part;
 const Combinator = Selector.Combinator;
 const Segment = Selector.Segment;
 const Attribute = @import("../element/Attribute.zig");
-const Allocator = std.mem.Allocator;
 
 const Parser = @This();
 
@@ -26,10 +27,56 @@ const ParseError = error{
     InvalidTagSelector,
     InvalidSelector,
 };
+
+pub fn parseList(arena: Allocator, input: []const u8, page: *Page) ParseError![]const Selector.Selector {
+    var selectors: std.ArrayList(Selector.Selector) = .empty;
+
+    var remaining = input;
+    while (true) {
+        const trimmed = std.mem.trimLeft(u8, remaining, &std.ascii.whitespace);
+        if (trimmed.len == 0) break;
+
+        var comma_pos: usize = trimmed.len;
+        var depth: usize = 0;
+        for (trimmed, 0..) |c, i| {
+            switch (c) {
+                '(' => depth += 1,
+                ')' => {
+                    if (depth > 0) depth -= 1;
+                },
+                ',' => {
+                    if (depth == 0) {
+                        comma_pos = i;
+                        break;
+                    }
+                },
+                else => {},
+            }
+        }
+
+        const selector_input = std.mem.trimRight(u8, trimmed[0..comma_pos], &std.ascii.whitespace);
+
+        if (selector_input.len > 0) {
+            const selector = try parse(arena, selector_input, page);
+            try selectors.append(arena, selector);
+        }
+
+        if (comma_pos >= trimmed.len) break;
+        remaining = trimmed[comma_pos + 1 ..];
+    }
+
+    if (selectors.items.len == 0) {
+        return error.InvalidSelector;
+    }
+
+    return selectors.items;
+}
+
 pub fn parse(arena: Allocator, input: []const u8, page: *Page) ParseError!Selector.Selector {
     var parser = Parser{ .input = input };
-    var segments: std.ArrayListUnmanaged(Segment) = .empty;
-    var current_compound: std.ArrayListUnmanaged(Part) = .empty;
+    var segments: std.ArrayList(Segment) = .empty;
+    var current_compound: std.ArrayList(Part) = .empty;
+
 
     // Parse the first compound (no combinator before it)
     while (parser.skipSpaces()) {
@@ -302,7 +349,7 @@ fn pseudoClass(self: *Parser, arena: Allocator, page: *Page) !Selector.PseudoCla
         if (std.mem.eql(u8, name, "not")) {
             // CSS Level 4: :not() can contain a full selector list (comma-separated selectors)
             // e.g., :not(div, .class, #id > span)
-            var selectors: std.ArrayListUnmanaged(Selector.Selector) = .empty;
+            var selectors: std.ArrayList(Selector.Selector) = .empty;
 
             _ = self.skipSpaces();
 
