@@ -63,8 +63,11 @@ _attribute_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attribute),
 // the return of elements.attributes.
 _attribute_named_node_map_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attribute.NamedNodeMap),
 
-// element.dataset -> DOMStringMap
-_element_datasets: std.AutoHashMapUnmanaged(*Element, *Element.DOMStringMap),
+// Lazily-created style, classList, and dataset objects. Only stored for elements
+// that actually access these features via JavaScript, saving 24 bytes per element.
+_element_styles: Element.StyleLookup = .{},
+_element_datasets: Element.DatasetLookup = .{},
+_element_class_lists: Element.ClassListLookup = .{},
 
 _script_manager: ScriptManager,
 
@@ -155,7 +158,6 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._load_state = .parsing;
     self._attribute_lookup = .empty;
     self._attribute_named_node_map_lookup = .empty;
-    self._element_datasets = .empty;
     self._event_manager = EventManager.init(self);
 
     self._script_manager = ScriptManager.init(self);
@@ -163,6 +165,10 @@ fn reset(self: *Page, comptime initializing: bool) !void {
 
     self.js = try self._session.executor.createContext(self, true, JS.GlobalMissingCallback.init(&self._polyfill_loader));
     errdefer self.js.deinit();
+
+    self._element_styles = .{};
+    self._element_datasets = .{};
+    self._element_class_lists = .{};
 
     try polyfill.preload(self.arena, self.js);
     try self.registerBackgroundTasks();

@@ -21,6 +21,10 @@ pub const Html = @import("element/Html.zig");
 
 const Element = @This();
 
+pub const DatasetLookup = std.AutoHashMapUnmanaged(*Element, *DOMStringMap);
+pub const StyleLookup = std.AutoHashMapUnmanaged(*Element, *CSSStyleProperties);
+pub const ClassListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTokenList);
+
 pub const Namespace = enum(u8) {
     html,
     svg,
@@ -41,8 +45,6 @@ _type: Type,
 _proto: *Node,
 _namespace: Namespace = .html,
 _attributes: ?*Attribute.List = null,
-_style: ?*CSSStyleProperties = null,
-_class_list: ?*collections.DOMTokenList = null,
 
 pub const Type = union(enum) {
     html: *Html,
@@ -333,22 +335,22 @@ pub fn getAttributeNamedNodeMap(self: *Element, page: *Page) !*Attribute.NamedNo
 }
 
 pub fn getStyle(self: *Element, page: *Page) !*CSSStyleProperties {
-    return self._style orelse blk: {
-        const s = try CSSStyleProperties.init(self, page);
-        self._style = s;
-        break :blk s;
-    };
+    const gop = try page._element_styles.getOrPut(page.arena, self);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = try CSSStyleProperties.init(self, page);
+    }
+    return gop.value_ptr.*;
 }
 
 pub fn getClassList(self: *Element, page: *Page) !*collections.DOMTokenList {
-    return self._class_list orelse blk: {
-        const cl = try page._factory.create(collections.DOMTokenList{
+    const gop = try page._element_class_lists.getOrPut(page.arena, self);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = try page._factory.create(collections.DOMTokenList{
             ._element = self,
             ._attribute_name = "class",
         });
-        self._class_list = cl;
-        break :blk cl;
-    };
+    }
+    return gop.value_ptr.*;
 }
 
 pub fn getDataset(self: *Element, page: *Page) !*DOMStringMap {
