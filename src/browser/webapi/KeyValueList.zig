@@ -45,7 +45,7 @@ pub fn get(self: *const KeyValueList, name: []const u8) ?[]const u8 {
     return null;
 }
 
-pub fn getAll(self: *const KeyValueList, name: []const u8, page: *Page) ![]const []const u8  {
+pub fn getAll(self: *const KeyValueList, name: []const u8, page: *Page) ![]const []const u8 {
     const arena = page.call_arena;
     var arr: std.ArrayList([]const u8) = .empty;
     for (self._entries.items) |*entry| {

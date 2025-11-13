@@ -45,8 +45,8 @@ pub fn Builder(comptime T: type) type {
             return Indexed.init(T, getter_func, opts);
         }
 
-        pub fn namedIndexed(comptime getter_func: anytype, comptime opts: NamedIndexed.Opts) NamedIndexed {
-            return NamedIndexed.init(T, getter_func, opts);
+        pub fn namedIndexed(comptime getter_func: anytype, setter_func: anytype, deleter_func: anytype, comptime opts: NamedIndexed.Opts) NamedIndexed {
+            return NamedIndexed.init(T, getter_func, setter_func, deleter_func, opts);
         }
 
         pub fn iterator(comptime func: anytype, comptime opts: Iterator.Opts) Iterator {
@@ -221,14 +221,16 @@ pub const Indexed = struct {
 
 pub const NamedIndexed = struct {
     getter: *const fn (c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8,
+    setter: ?*const fn (c_name: ?*const v8.C_Name, c_value: ?*const v8.C_Value, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 = null,
+    deleter: ?*const fn (c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 = null,
 
     const Opts = struct {
         as_typed_array: bool = false,
         null_as_undefined: bool = false,
     };
 
-    fn init(comptime T: type, comptime getter: anytype, comptime opts: Opts) NamedIndexed {
-        return .{ .getter = struct {
+    fn init(comptime T: type, comptime getter: anytype, setter: anytype, deleter: anytype, comptime opts: Opts) NamedIndexed {
+        const getter_fn = struct {
             fn wrap(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
                 const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
                 var caller = Caller.init(info);
@@ -238,7 +240,39 @@ pub const NamedIndexed = struct {
                     .null_as_undefined = opts.null_as_undefined,
                 });
             }
-        }.wrap };
+        }.wrap;
+
+        const setter_fn = if (@typeInfo(@TypeOf(setter)) == .null) null else struct {
+            fn wrap(c_name: ?*const v8.C_Name, c_value: ?*const v8.C_Value, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
+                const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
+                var caller = Caller.init(info);
+                defer caller.deinit();
+
+                return caller.setNamedIndex(T, setter, .{ .handle = c_name.? }, .{ .handle = c_value.? }, info, .{
+                    .as_typed_array = opts.as_typed_array,
+                    .null_as_undefined = opts.null_as_undefined,
+                });
+            }
+        }.wrap;
+
+        const deleter_fn = if (@typeInfo(@TypeOf(deleter)) == .null) null else struct {
+            fn wrap(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
+                const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
+                var caller = Caller.init(info);
+                defer caller.deinit();
+
+                return caller.deleteNamedIndex(T, deleter, .{ .handle = c_name.? }, info, .{
+                    .as_typed_array = opts.as_typed_array,
+                    .null_as_undefined = opts.null_as_undefined,
+                });
+            }
+        }.wrap;
+
+        return .{
+            .getter = getter_fn,
+            .setter = setter_fn,
+            .deleter = deleter_fn,
+        };
     }
 };
 
@@ -269,7 +303,6 @@ pub const Iterator = struct {
     }
 };
 
-
 pub const Callable = struct {
     func: *const fn (?*const v8.C_FunctionCallbackInfo) callconv(.c) void,
 
@@ -278,7 +311,7 @@ pub const Callable = struct {
     };
 
     fn init(comptime T: type, comptime func: anytype, comptime opts: Opts) Callable {
-        return .{.func = struct {
+        return .{ .func = struct {
             fn wrap(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
                 const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
                 var caller = Caller.init(info);
@@ -286,8 +319,8 @@ pub const Callable = struct {
                 caller.method(T, func, info, .{
                     .null_as_undefined = opts.null_as_undefined,
                 });
-            }}.wrap
-        };
+            }
+        }.wrap };
     }
 };
 
@@ -457,6 +490,7 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/DOMNodeIterator.zig"),
     @import("../webapi/NodeFilter.zig"),
     @import("../webapi/Element.zig"),
+    @import("../webapi/element/DOMStringMap.zig"),
     @import("../webapi/element/Attribute.zig"),
     @import("../webapi/element/Html.zig"),
     @import("../webapi/element/html/IFrame.zig"),

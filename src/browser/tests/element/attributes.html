@@ -83,3 +83,22 @@
 
   assertAttributes([{name: 'id', value: 'attr1'}, {name: 'class', value: 'sHow'}]);
 </script>
+
+<script id=hasAttribute>
+{
+  const el1 = $('#attr1');
+
+  testing.expectEqual(true, el1.hasAttribute('id'));
+  testing.expectEqual(true, el1.hasAttribute('ID'));
+  testing.expectEqual(true, el1.hasAttribute('class'));
+  testing.expectEqual(true, el1.hasAttribute('CLASS'));
+  testing.expectEqual(false, el1.hasAttribute('other'));
+  testing.expectEqual(false, el1.hasAttribute('nope'));
+
+  el1.setAttribute('data-test', 'value');
+  testing.expectEqual(true, el1.hasAttribute('data-test'));
+
+  el1.removeAttribute('data-test');
+  testing.expectEqual(false, el1.hasAttribute('data-test'));
+}
+</script>

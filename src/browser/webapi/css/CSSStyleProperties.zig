@@ -120,7 +120,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const @"[]" = bridge.namedIndexed(_getPropertyIndexed, .{});
+    pub const @"[]" = bridge.namedIndexed(_getPropertyIndexed, null, null, .{});
 
     const method_names = std.StaticStringMap(void).initComptime(.{
         .{ "getPropertyValue", {} },

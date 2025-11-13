@@ -707,7 +707,6 @@ const Script = struct {
             .cacheable = cacheable,
         });
 
-
         // Handle importmap special case here: the content is a JSON containing
         // imports.
         if (self.kind == .importmap) {

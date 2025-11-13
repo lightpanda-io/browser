@@ -386,7 +386,7 @@ pub const NamedNodeMap = struct {
 
         pub const length = bridge.accessor(NamedNodeMap.length, null, .{});
         pub const @"[int]" = bridge.indexed(NamedNodeMap.getAtIndex, .{ .null_as_undefined = true });
-        pub const @"[str]" = bridge.namedIndexed(NamedNodeMap.getByName, .{ .null_as_undefined = true });
+        pub const @"[str]" = bridge.namedIndexed(NamedNodeMap.getByName, null, null, .{ .null_as_undefined = true });
         pub const getNamedItem = bridge.function(NamedNodeMap.getByName, .{});
         pub const item = bridge.function(_item, .{});
         fn _item(self: *const NamedNodeMap, index: i32, page: *Page) !?*Attribute {

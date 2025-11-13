@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="test-container" class="container main">
+  <p class="text highlight">Paragraph 1</p>
+  <div class="nested">
+    <p class="text">Paragraph 2</p>
+    <span id="special" class="wrapper">
+      <p class="deep">Paragraph 3</p>
+    </span>
+  </div>
+</div>
+
+<script id=basicMatches>
+{
+  const container = $('#test-container');
+
+  testing.expectEqual(true, container.matches('#test-container'));
+  testing.expectEqual(false, container.matches('#other'));
+
+  testing.expectEqual(true, container.matches('.container'));
+  testing.expectEqual(true, container.matches('.main'));
+  testing.expectEqual(false, container.matches('.nested'));
+
+  testing.expectEqual(true, container.matches('div'));
+  testing.expectEqual(false, container.matches('p'));
+
+  testing.expectEqual(true, container.matches('div.container'));
+  testing.expectEqual(true, container.matches('div#test-container'));
+  testing.expectEqual(true, container.matches('.container.main'));
+  testing.expectEqual(false, container.matches('div.nested'));
+
+  testing.expectEqual(true, container.matches('*'));
+}
+</script>
+
+<script id=childMatches>
+{
+  const paragraph = $('#test-container > p');
+
+  testing.expectEqual(true, paragraph.matches('p'));
+  testing.expectEqual(true, paragraph.matches('.text'));
+  testing.expectEqual(true, paragraph.matches('.highlight'));
+  testing.expectEqual(true, paragraph.matches('p.text.highlight'));
+
+  testing.expectEqual(false, paragraph.matches('#test-container'));
+  testing.expectEqual(false, paragraph.matches('div'));
+}
+</script>
+
+<script id=specialSpan>
+{
+  const span = $('#special');
+
+  testing.expectEqual(true, span.matches('#special'));
+  testing.expectEqual(true, span.matches('span'));
+  testing.expectEqual(true, span.matches('.wrapper'));
+  testing.expectEqual(true, span.matches('span.wrapper'));
+  testing.expectEqual(true, span.matches('span#special.wrapper'));
+  testing.expectEqual(false, span.matches('#other'));
+  testing.expectEqual(false, span.matches('div'));
+}
+</script>
+
+<script id=errorHandling>
+{
+  const container = $('#test-container');
+
+  testing.expectError("Syntax Error", () => container.matches(''));
+  testing.withError((err) => {
+    testing.expectEqual(12, err.code);
+    testing.expectEqual("SyntaxError", err.name);
+    testing.expectEqual("Syntax Error", err.message);
+  }, () => container.matches(''));
+}
+</script>

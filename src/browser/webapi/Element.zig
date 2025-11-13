@@ -12,6 +12,7 @@ const collections = @import("collections.zig");
 const Selector = @import("selector/Selector.zig");
 pub const Attribute = @import("element/Attribute.zig");
 const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
+pub const DOMStringMap = @import("element/DOMStringMap.zig");
 
 pub const Svg = @import("element/Svg.zig");
 pub const Html = @import("element/Html.zig");
@@ -247,6 +248,12 @@ pub fn getAttribute(self: *const Element, name: []const u8, page: *Page) !?[]con
     return attributes.get(name, page);
 }
 
+pub fn hasAttribute(self: *const Element, name: []const u8, page: *Page) !bool {
+    const attributes = self._attributes orelse return false;
+    const value = try attributes.get(name, page);
+    return value != null;
+}
+
 pub fn getAttributeNode(self: *Element, name: []const u8, page: *Page) !?*Attribute {
     const attributes = self._attributes orelse return null;
     return attributes.getAttribute(name, self, page);
@@ -340,6 +347,16 @@ pub fn getClassList(self: *Element, page: *Page) !*collections.DOMTokenList {
         self._class_list = cl;
         break :blk cl;
     };
+}
+
+pub fn getDataset(self: *Element, page: *Page) !*DOMStringMap {
+    const gop = try page._element_datasets.getOrPut(page.arena, self);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = try page._factory.create(DOMStringMap{
+            ._element = self,
+        });
+    }
+    return gop.value_ptr.*;
 }
 
 pub fn replaceChildren(self: *Element, nodes: []const Node.NodeOrText, page: *Page) !void {
@@ -436,6 +453,10 @@ pub fn getChildElementCount(self: *Element) usize {
         }
     }
     return count;
+}
+
+pub fn matches(self: *Element, selector: []const u8, page: *Page) !bool {
+    return Selector.matches(self, selector, page);
 }
 
 pub fn querySelector(self: *Element, selector: []const u8, page: *Page) !?*Element {
@@ -658,8 +679,10 @@ pub const JsApi = struct {
     pub const id = bridge.accessor(Element.getId, Element.setId, .{});
     pub const className = bridge.accessor(Element.getClassName, Element.setClassName, .{});
     pub const classList = bridge.accessor(Element.getClassList, null, .{});
+    pub const dataset = bridge.accessor(Element.getDataset, null, .{});
     pub const style = bridge.accessor(Element.getStyle, null, .{});
     pub const attributes = bridge.accessor(Element.getAttributeNamedNodeMap, null, .{});
+    pub const hasAttribute = bridge.function(Element.hasAttribute, .{});
     pub const getAttribute = bridge.function(Element.getAttribute, .{});
     pub const getAttributeNode = bridge.function(Element.getAttributeNode, .{});
     pub const setAttribute = bridge.function(Element.setAttribute, .{});
@@ -676,6 +699,7 @@ pub const JsApi = struct {
     pub const nextElementSibling = bridge.accessor(Element.nextElementSibling, null, .{});
     pub const previousElementSibling = bridge.accessor(Element.previousElementSibling, null, .{});
     pub const childElementCount = bridge.accessor(Element.getChildElementCount, null, .{});
+    pub const matches = bridge.function(Element.matches, .{ .dom_exception = true });
     pub const querySelector = bridge.function(Element.querySelector, .{ .dom_exception = true });
     pub const querySelectorAll = bridge.function(Element.querySelectorAll, .{ .dom_exception = true });
     pub const getElementsByTagName = bridge.function(Element.getElementsByTagName, .{});

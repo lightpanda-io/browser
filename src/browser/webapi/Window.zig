@@ -149,7 +149,7 @@ pub fn cancelAnimationFrame(self: *Window, id: u32) void {
 
 pub fn reportError(self: *Window, err: js.Object, page: *Page) !void {
     const error_event = try ErrorEvent.init("error", .{
-        .@"error" =  err,
+        .@"error" = err,
         .message = err.toString() catch "Unknown error",
         .bubbles = false,
         .cancelable = true,

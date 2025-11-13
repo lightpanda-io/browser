@@ -77,7 +77,6 @@ pub fn parse(arena: Allocator, input: []const u8, page: *Page) ParseError!Select
     var segments: std.ArrayList(Segment) = .empty;
     var current_compound: std.ArrayList(Part) = .empty;
 
-
     // Parse the first compound (no combinator before it)
     while (parser.skipSpaces()) {
         if (parser.peek() == 0) break;

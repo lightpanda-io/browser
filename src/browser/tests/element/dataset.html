@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="test" data-foo="bar" data-hello-world="test"></div>
+<div id="test-write"></div>
+<div id="test-bracket"></div>
+
+<script id=basic>
+{
+  const el = document.getElementById('test');
+  testing.expectEqual('object', typeof el.dataset);
+}
+</script>
+
+<script id=readExistingAttributes>
+{
+  const el = document.getElementById('test');
+  testing.expectEqual('bar', el.dataset.foo);
+  testing.expectEqual('test', el.dataset.helloWorld);
+}
+</script>
+
+<script id=camelCaseConversion>
+{
+  const el = document.getElementById('test');
+
+  // Reading kebab-case as camelCase
+  testing.expectEqual('test', el.dataset.helloWorld);
+}
+</script>
+
+<script id=writeNewAttribute>
+{
+  const el = document.getElementById('test-write');
+  el.dataset.newAttr = 'value';
+
+  testing.expectEqual('value', el.dataset.newAttr);
+  testing.expectEqual('value', el.getAttribute('data-new-attr'));
+}
+</script>
+
+<script id=writeExistingAttribute>
+{
+  const el = document.getElementById('test-write');
+  el.setAttribute('data-foo', 'original');
+  el.dataset.foo = 'updated';
+
+  testing.expectEqual('updated', el.dataset.foo);
+  testing.expectEqual('updated', el.getAttribute('data-foo'));
+}
+</script>
+
+<script id=writeCamelCaseConversion>
+{
+  const el = document.getElementById('test-write');
+
+  // Writing camelCase creates kebab-case attribute
+  el.dataset.fooBarBaz = 'qux';
+  testing.expectEqual('qux', el.getAttribute('data-foo-bar-baz'));
+}
+</script>
+
+<script id=undefinedForNonExistent>
+{
+  const el = document.getElementById('test');
+  testing.expectEqual(undefined, el.dataset.nonExistent);
+}
+</script>
+
+<script id=bracketNotation>
+{
+  const el = document.getElementById('test-bracket');
+  el.setAttribute('data-foo', 'bar');
+  el.setAttribute('data-hello-world', 'test');
+
+  // Bracket notation should work the same as dot notation
+  testing.expectEqual('bar', el.dataset['foo']);
+  testing.expectEqual('test', el.dataset['helloWorld']);
+
+  // Non-existent should return undefined
+  testing.expectEqual(undefined, el.dataset['nonExistent']);
+}
+</script>
+
+<script id=edgeCases>
+{
+  const el = document.createElement('div');
+  el.setAttribute('data-x', 'single-letter');
+  el.setAttribute('data-foo-bar-baz', 'multiple-dashes');
+
+  // Single letter key
+  testing.expectEqual('single-letter', el.dataset['x']);
+  testing.expectEqual('single-letter', el.dataset.x);
+
+  // Multiple dashes
+  testing.expectEqual('multiple-dashes', el.dataset['fooBarBaz']);
+  testing.expectEqual('multiple-dashes', el.dataset.fooBarBaz);
+
+  // Empty string key (data- attribute) - should be accessible as empty string
+  el.setAttribute('data-', 'empty');
+  testing.expectEqual('empty', el.dataset['']);
+}
+</script>
+
+<script id=identityCheck>
+{
+  const el = document.getElementById('test');
+  const ds1 = el.dataset;
+  const ds2 = el.dataset;
+
+  // Should return the same object instance
+  testing.expectEqual(true, ds1 === ds2);
+}
+</script>
+
+<script id=deleteProperty>
+{
+  const el = document.createElement('div');
+  el.setAttribute('data-foo', 'bar');
+  el.setAttribute('data-hello-world', 'test');
+
+  testing.expectEqual('bar', el.dataset.foo);
+  testing.expectEqual('test', el.dataset.helloWorld);
+
+  // Delete using dot notation
+  delete el.dataset.foo;
+  testing.expectEqual(undefined, el.dataset.foo);
+  testing.expectEqual(null, el.getAttribute('data-foo'));
+
+  // Delete using bracket notation
+  delete el.dataset['helloWorld'];
+  testing.expectEqual(undefined, el.dataset.helloWorld);
+  testing.expectEqual(null, el.getAttribute('data-hello-world'));
+}
+</script>
+
+<script id=independentInstances>
+{
+  const el1 = document.getElementById('test');
+  const el2 = document.createElement('div');
+
+  el1.dataset.test1 = 'value1';
+  el2.dataset.test2 = 'value2';
+
+  testing.expectEqual('value1', el1.dataset.test1);
+  testing.expectEqual(undefined, el1.dataset.test2);
+  testing.expectEqual(undefined, el2.dataset.test1);
+  testing.expectEqual('value2', el2.dataset.test2);
+}
+</script>

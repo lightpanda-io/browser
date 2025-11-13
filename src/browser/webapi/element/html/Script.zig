@@ -80,14 +80,14 @@ pub const Build = struct {
 
         if (element.getAttributeSafe("onload")) |on_load| {
             self._on_load = page.js.stringToFunction(on_load) catch |err| blk: {
-                log.err(.js, "script.onload", .{.err = err, .str = on_load});
+                log.err(.js, "script.onload", .{ .err = err, .str = on_load });
                 break :blk null;
             };
         }
 
         if (element.getAttributeSafe("onerror")) |on_error| {
             self._on_error = page.js.stringToFunction(on_error) catch |err| blk: {
-                log.err(.js, "script.onerror", .{.err = err, .str = on_error});
+                log.err(.js, "script.onerror", .{ .err = err, .str = on_error });
                 break :blk null;
             };
         }

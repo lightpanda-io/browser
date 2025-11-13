@@ -614,9 +614,7 @@ pub const JsApi = struct {
 
     pub const textContent = bridge.accessor(_textContext, Node.setTextContent, .{});
     fn _textContext(self: *Node, page: *const Page) !?[]const u8 {
-        // can't call node.getTextContent directly, because
-        // 1 - document should return null, not empty
-        // 2 - cdata and attributes can return value directly, avoiding the copy
+        // cdata and attributes can return value directly, avoiding the copy
         switch (self._type) {
             .element => |el| {
                 var buf = std.Io.Writer.Allocating.init(page.call_arena);

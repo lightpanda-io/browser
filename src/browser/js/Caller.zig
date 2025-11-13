@@ -157,7 +157,7 @@ pub fn _getIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, info:
     @field(args, "0") = try Context.typeTaggedAnyOpaque(*T, info.getThis());
     @field(args, "1") = idx;
     const ret = @call(.auto, func, args);
-    return self.handleIndexedReturn(T, F, ret, info, opts);
+    return self.handleIndexedReturn(T, F, true, ret, info, opts);
 }
 
 pub fn getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: v8.Name, info: v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
@@ -173,10 +173,49 @@ pub fn _getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: v8.N
     @field(args, "0") = try Context.typeTaggedAnyOpaque(*T, info.getThis());
     @field(args, "1") = try self.nameToString(name);
     const ret = @call(.auto, func, args);
-    return self.handleIndexedReturn(T, F, ret, info, opts);
+    return self.handleIndexedReturn(T, F, true, ret, info, opts);
 }
 
-fn handleIndexedReturn(self: *Caller, comptime T: type, comptime F: type, ret: anytype, info: v8.PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+pub fn setNamedIndex(self: *Caller, comptime T: type, func: anytype, name: v8.Name, js_value: v8.Value, info: v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+    return self._setNamedIndex(T, func, name, js_value, info, opts) catch |err| {
+        self.handleError(T, @TypeOf(func), err, info, opts);
+        return v8.Intercepted.No;
+    };
+}
+
+pub fn _setNamedIndex(self: *Caller, comptime T: type, func: anytype, name: v8.Name, js_value: v8.Value, info: v8.PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+    const F = @TypeOf(func);
+    var args: ParameterTypes(F) = undefined;
+    @field(args, "0") = try Context.typeTaggedAnyOpaque(*T, info.getThis());
+    @field(args, "1") = try self.nameToString(name);
+    @field(args, "2") = try self.context.jsValueToZig(@TypeOf(@field(args, "2")), js_value);
+    if (@typeInfo(F).@"fn".params.len == 4) {
+        @field(args, "3") = self.context.page;
+    }
+    const ret = @call(.auto, func, args);
+    return self.handleIndexedReturn(T, F, false, ret, info, opts);
+}
+
+pub fn deleteNamedIndex(self: *Caller, comptime T: type, func: anytype, name: v8.Name, info: v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+    return self._deleteNamedIndex(T, func, name, info, opts) catch |err| {
+        self.handleError(T, @TypeOf(func), err, info, opts);
+        return v8.Intercepted.No;
+    };
+}
+
+pub fn _deleteNamedIndex(self: *Caller, comptime T: type, func: anytype, name: v8.Name, info: v8.PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+    const F = @TypeOf(func);
+    var args: ParameterTypes(F) = undefined;
+    @field(args, "0") = try Context.typeTaggedAnyOpaque(*T, info.getThis());
+    @field(args, "1") = try self.nameToString(name);
+    if (@typeInfo(F).@"fn".params.len == 3) {
+        @field(args, "2") = self.context.page;
+    }
+    const ret = @call(.auto, func, args);
+    return self.handleIndexedReturn(T, F, false, ret, info, opts);
+}
+
+fn handleIndexedReturn(self: *Caller, comptime T: type, comptime F: type, comptime getter: bool, ret: anytype, info: v8.PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
     // need to unwrap this error immediately for when opts.null_as_undefined == true
     // and we need to compare it to null;
     const non_error_ret = switch (@typeInfo(@TypeOf(ret))) {
@@ -197,7 +236,9 @@ fn handleIndexedReturn(self: *Caller, comptime T: type, comptime F: type, ret: a
         else => ret,
     };
 
-    info.getReturnValue().set(try self.context.zigValueToJs(non_error_ret, opts));
+    if (comptime getter) {
+        info.getReturnValue().set(try self.context.zigValueToJs(non_error_ret, opts));
+    }
     return v8.Intercepted.Yes;
 }
 

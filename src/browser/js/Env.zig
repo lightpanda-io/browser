@@ -253,13 +253,12 @@ pub fn attachClass(comptime JsApi: type, isolate: v8.Isolate, template: v8.Funct
                 };
                 template_proto.setIndexedProperty(configuration, null);
             },
-            bridge.NamedIndexed => {
-                const configuration = v8.NamedPropertyHandlerConfiguration{
-                    .getter = value.getter,
-                    .flags = v8.PropertyHandlerFlags.OnlyInterceptStrings | v8.PropertyHandlerFlags.NonMasking,
-                };
-                template_proto.setNamedProperty(configuration, null);
-            },
+            bridge.NamedIndexed => template.getInstanceTemplate().setNamedProperty(.{
+                .getter = value.getter,
+                .setter = value.setter,
+                .deleter = value.deleter,
+                .flags = v8.PropertyHandlerFlags.OnlyInterceptStrings | v8.PropertyHandlerFlags.NonMasking,
+            }, null),
             bridge.Iterator => {
                 // Same as a function, but with a specific name
                 const function_template = v8.FunctionTemplate.initCallback(isolate, value.func);
@@ -325,7 +324,6 @@ fn generateConstructor(comptime JsApi: type, isolate: v8.Isolate) v8.FunctionTem
 //     const has_js_call_as_function = @hasDecl(Struct, "jsCallAsFunction");
 
 //     if (has_js_call_as_function) {
-
 
 //     if (@hasDecl(Struct, "htmldda") and Struct.htmldda) {
 //         if (!has_js_call_as_function) {

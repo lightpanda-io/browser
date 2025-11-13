@@ -63,6 +63,9 @@ _attribute_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attribute),
 // the return of elements.attributes.
 _attribute_named_node_map_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attribute.NamedNodeMap),
 
+// element.dataset -> DOMStringMap
+_element_datasets: std.AutoHashMapUnmanaged(*Element, *Element.DOMStringMap),
+
 _script_manager: ScriptManager,
 
 _polyfill_loader: polyfill.Loader = .{},
@@ -152,6 +155,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._load_state = .parsing;
     self._attribute_lookup = .empty;
     self._attribute_named_node_map_lookup = .empty;
+    self._element_datasets = .empty;
     self._event_manager = EventManager.init(self);
 
     self._script_manager = ScriptManager.init(self);
