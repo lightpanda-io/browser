@@ -105,9 +105,17 @@ pub const Extension = union(enum) {
 
     /// Extension types.
     pub const Type = struct {
-        pub const WEBGL_debug_renderer_info = packed struct(u64) {
-            UNMASKED_RENDERER_WEBGL: u32 = 0,
-            UNMASKED_VENDOR_WEBGL: u32 = 0,
+        pub const WEBGL_debug_renderer_info = struct {
+            pub const UNMASKED_VENDOR_WEBGL: u64 = 0x9245;
+            pub const UNMASKED_RENDERER_WEBGL: u64 = 0x9246;
+
+            pub fn get_UNMASKED_VENDOR_WEBGL() u64 {
+                return UNMASKED_VENDOR_WEBGL;
+            }
+
+            pub fn get_UNMASKED_RENDERER_WEBGL() u64 {
+                return UNMASKED_RENDERER_WEBGL;
+            }
         };
     };
 };

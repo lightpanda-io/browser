@@ -90,3 +90,16 @@
   }
 }
 </script>
+
+<script id=WebGLRenderingCanvas#getExtension>
+// WEBGL_debug_renderer_info
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("webgl");
+  const rendererInfo = ctx.getExtension("WEBGL_debug_renderer_info");
+  testing.expectEqual(true, rendererInfo instanceof WEBGL_debug_renderer_info);
+
+  testing.expectEqual(rendererInfo.UNMASKED_VENDOR_WEBGL, 0x9245);
+  testing.expectEqual(rendererInfo.UNMASKED_RENDERER_WEBGL, 0x9246);
+}
+</script>
