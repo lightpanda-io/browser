@@ -112,6 +112,16 @@ pub const Extension = union(enum) {
     };
 };
 
+/// An array of supported WebGL extensions.
+const extension_array = blk: {
+    const fields = @typeInfo(Extension.Kind).@"enum".fields;
+    var items: [fields.len][:0]const u8 = undefined;
+    for (fields, 0..) |field, i| {
+        items[i] = field.name;
+    }
+    break :blk items;
+};
+
 /// Enables a WebGL extension.
 pub fn _getExtension(self: *const WebGLRenderingContext, name: []const u8) ?Extension {
     _ = self;
@@ -122,4 +132,9 @@ pub fn _getExtension(self: *const WebGLRenderingContext, name: []const u8) ?Exte
         .WEBGL_debug_renderer_info => @unionInit(Extension, "WEBGL_debug_renderer_info", .{}),
         inline else => |comptime_enum| @unionInit(Extension, @tagName(comptime_enum), {}),
     };
+}
+
+/// Returns a list of all the supported WebGL extensions.
+pub fn _getSupportedExtensions(_: *const WebGLRenderingContext) []const []const u8 {
+    return &extension_array;
 }
