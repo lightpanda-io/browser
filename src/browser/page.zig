@@ -37,6 +37,7 @@ const HTMLDocument = @import("html/document.zig").HTMLDocument;
 
 const NavigationKind = @import("navigation/root.zig").NavigationKind;
 const NavigationCurrentEntryChangeEvent = @import("navigation/root.zig").NavigationCurrentEntryChangeEvent;
+const PageTransitionEvent = @import("events/PageTransitionEvent.zig");
 
 const js = @import("js/js.zig");
 const URL = @import("../url.zig").URL;
@@ -677,6 +678,8 @@ pub const Page = struct {
             parser.toEventTarget(Window, &self.window),
             loadevt,
         );
+
+        PageTransitionEvent.dispatch(&self.window, .show, false);
     }
 
     fn pageHeaderDoneCallback(transfer: *Http.Transfer) !void {
