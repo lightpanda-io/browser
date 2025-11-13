@@ -32,6 +32,7 @@ const DataSet = @import("DataSet.zig");
 
 const StyleSheet = @import("../cssom/StyleSheet.zig");
 const CSSStyleDeclaration = @import("../cssom/CSSStyleDeclaration.zig");
+const CanvasRenderingContext2D = @import("../canvas/CanvasRenderingContext2D.zig");
 
 const WalkerChildren = @import("../dom/walker.zig").WalkerChildren;
 
@@ -489,6 +490,23 @@ pub const HTMLCanvasElement = struct {
     pub const Self = parser.Canvas;
     pub const prototype = *HTMLElement;
     pub const subtype = .node;
+
+    /// This should be a union once we support other context types.
+    const ContextAttributes = struct {
+        alpha: bool,
+        color_space: []const u8 = "srgb",
+    };
+
+    pub fn _getContext(
+        ctx_type: []const u8,
+        _: ?ContextAttributes,
+    ) !CanvasRenderingContext2D {
+        if (!std.mem.eql(u8, ctx_type, "2d")) {
+            return error.NotSupported;
+        }
+
+        return .{};
+    }
 };
 
 pub const HTMLDListElement = struct {
@@ -1368,4 +1386,8 @@ test "Browser: HTML.HtmlScriptElement" {
 
 test "Browser: HTML.HtmlSlotElement" {
     try testing.htmlRunner("html/slot.html");
+}
+
+test "Browser: HTML.HTMLCanvasElement" {
+    try testing.htmlRunner("html/canvas.html");
 }

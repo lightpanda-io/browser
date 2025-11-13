@@ -190,7 +190,7 @@ fn isNumericWithUnit(value: []const u8) bool {
     return CSSKeywords.isValidUnit(unit);
 }
 
-fn isHexColor(value: []const u8) bool {
+pub fn isHexColor(value: []const u8) bool {
     if (value.len == 0) {
         return false;
     }
@@ -199,7 +199,7 @@ fn isHexColor(value: []const u8) bool {
     }
 
     const hex_part = value[1..];
-    if (hex_part.len != 3 and hex_part.len != 6 and hex_part.len != 8) {
+    if (hex_part.len != 3 and hex_part.len != 4 and hex_part.len != 6 and hex_part.len != 8) {
         return false;
     }
 
@@ -551,6 +551,7 @@ test "Browser: CSS.StyleDeclaration: isNumericWithUnit - edge cases and invalid 
 
 test "Browser: CSS.StyleDeclaration: isHexColor - valid hex colors" {
     try testing.expect(isHexColor("#000"));
+    try testing.expect(isHexColor("#0000"));
     try testing.expect(isHexColor("#fff"));
     try testing.expect(isHexColor("#123456"));
     try testing.expect(isHexColor("#abcdef"));
@@ -563,7 +564,6 @@ test "Browser: CSS.StyleDeclaration: isHexColor - invalid hex colors" {
     try testing.expect(!isHexColor("#"));
     try testing.expect(!isHexColor("000"));
     try testing.expect(!isHexColor("#00"));
-    try testing.expect(!isHexColor("#0000"));
     try testing.expect(!isHexColor("#00000"));
     try testing.expect(!isHexColor("#0000000"));
     try testing.expect(!isHexColor("#000000000"));

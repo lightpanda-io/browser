@@ -18,6 +18,7 @@ const Interfaces = generate.Tuple(.{
     @import("../xhr/xhr.zig").Interfaces,
     @import("../navigation/root.zig").Interfaces,
     @import("../file/root.zig").Interfaces,
+    @import("../canvas/root.zig").Interfaces,
     @import("../xhr/form_data.zig").Interfaces,
     @import("../xmlserializer/xmlserializer.zig").Interfaces,
     @import("../fetch/fetch.zig").Interfaces,
