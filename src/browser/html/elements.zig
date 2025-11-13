@@ -33,6 +33,8 @@ const DataSet = @import("DataSet.zig");
 const StyleSheet = @import("../cssom/StyleSheet.zig");
 const CSSStyleDeclaration = @import("../cssom/CSSStyleDeclaration.zig");
 
+const WalkerChildren = @import("../dom/walker.zig").WalkerChildren;
+
 // HTMLElement interfaces
 pub const Interfaces = .{
     Element,
@@ -1200,11 +1202,22 @@ pub const HTMLTemplateElement = struct {
     pub const subtype = .node;
 
     pub fn get_content(self: *parser.Template, page: *Page) !*parser.DocumentFragment {
-        const state = try page.getOrCreateNodeState(@ptrCast(@alignCast(self)));
+        const n: *parser.Node = @ptrCast(@alignCast(self));
+        const state = try page.getOrCreateNodeState(n);
         if (state.template_content) |tc| {
             return tc;
         }
         const tc = try parser.documentCreateDocumentFragment(@ptrCast(page.window.document));
+        const ntc: *parser.Node = @ptrCast(@alignCast(tc));
+
+        // move existing template's childnodes to the fragment.
+        const walker = WalkerChildren{};
+        var next: ?*parser.Node = null;
+        while (true) {
+            next = try walker.get_next(n, next) orelse break;
+            _ = try parser.nodeAppendChild(ntc, next.?);
+        }
+
         state.template_content = tc;
         return tc;
     }

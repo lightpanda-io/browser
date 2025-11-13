@@ -390,7 +390,23 @@ pub const Node = struct {
         return parser.nodeHasChildNodes(self);
     }
 
+    fn is_template(self: *parser.Node) !bool {
+        if (parser.nodeType(self) != .element) {
+            return false;
+        }
+
+        const e = parser.nodeToElement(self);
+        return try parser.elementTag(e) == .template;
+    }
+
     pub fn get_childNodes(self: *parser.Node, page: *Page) !NodeList {
+        // special case for template:
+        // > The Node.childNodes property of the <template> element is always empty
+        // https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/template#usage_notes
+        if (try is_template(self)) {
+            return .{};
+        }
+
         const allocator = page.arena;
         var list: NodeList = .{};
 
