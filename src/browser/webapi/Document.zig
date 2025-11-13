@@ -24,6 +24,7 @@ _location: ?*Location = null,
 _ready_state: ReadyState = .loading,
 _current_script: ?*Element.Html.Script = null,
 _elements_by_id: std.StringHashMapUnmanaged(*Element) = .empty,
+_active_element: ?*Element = null,
 
 pub const Type = union(enum) {
     generic,
@@ -155,6 +156,22 @@ pub fn getReadyState(self: *const Document) []const u8 {
     return @tagName(self._ready_state);
 }
 
+pub fn getActiveElement(self: *Document) ?*Element {
+    if (self._active_element) |el| {
+        return el;
+    }
+
+    // Default to body if it exists
+    if (self.is(HTMLDocument)) |html_doc| {
+        if (html_doc.getBody()) |body| {
+            return body.asElement();
+        }
+    }
+
+    // Fallback to document element
+    return self.getDocumentElement();
+}
+
 const ReadyState = enum {
     loading,
     interactive,
@@ -182,6 +199,7 @@ pub const JsApi = struct {
     pub const documentElement = bridge.accessor(Document.getDocumentElement, null, .{});
     pub const readyState = bridge.accessor(Document.getReadyState, null, .{});
     pub const implementation = bridge.accessor(Document.getImplementation, null, .{});
+    pub const activeElement = bridge.accessor(Document.getActiveElement, null, .{});
 
     pub const createElement = bridge.function(Document.createElement, .{});
     pub const createElementNS = bridge.function(Document.createElementNS, .{});

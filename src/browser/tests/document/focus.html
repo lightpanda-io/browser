@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body>
+  <input id="input1" type="text">
+  <input id="input2" type="text">
+  <button id="btn1">Button</button>
+</body>
+
+<script id="activeElement_default">
+{
+  const body = document.querySelector('body');
+  body.focus();
+  testing.expectEqual('BODY', document.activeElement.tagName);
+}
+</script>
+
+<script id="focus_method">
+{
+  const input1 = $('#input1');
+  input1.focus();
+  testing.expectEqual(input1, document.activeElement);
+}
+</script>
+
+<script id="focus_events">
+{
+  const input1 = $('#input1');
+  const input2 = $('#input2');
+
+  // Explicitly blur any focused element
+  if (document.activeElement) {
+    document.activeElement.blur();
+  }
+
+  let focusCount = 0;
+  let blurCount = 0;
+
+  input1.addEventListener('focus', () => focusCount++);
+  input1.addEventListener('blur', () => blurCount++);
+  input2.addEventListener('focus', () => focusCount++);
+
+  input1.focus();
+  testing.expectEqual(1, focusCount);
+  testing.expectEqual(0, blurCount);
+
+  input2.focus();
+  testing.expectEqual(2, focusCount);
+  testing.expectEqual(1, blurCount);
+}
+</script>
+
+<script id="blur_method">
+{
+  const btn = $('#btn1');
+  btn.focus();
+  testing.expectEqual(btn, document.activeElement);
+
+  btn.blur();
+  testing.expectEqual('BODY', document.activeElement.tagName);
+}
+</script>
+
+<script id="focus_already_focused">
+{
+  const input1 = $('#input1');
+
+  // Explicitly blur any focused element
+  if (document.activeElement) {
+    document.activeElement.blur();
+  }
+
+  let focusCount = 0;
+  input1.addEventListener('focus', () => focusCount++);
+
+  input1.focus();
+  testing.expectEqual(1, focusCount);
+
+  input1.focus();
+  testing.expectEqual(1, focusCount);
+}
+</script>

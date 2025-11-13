@@ -82,6 +82,10 @@ pub fn asNode(self: *Element) *Node {
     return self._proto;
 }
 
+pub fn asEventTarget(self: *Element) *@import("EventTarget.zig") {
+    return self._proto.asEventTarget();
+}
+
 pub fn asConstNode(self: *const Element) *const Node {
     return self._proto;
 }
@@ -388,6 +392,32 @@ pub fn remove(self: *Element, page: *Page) void {
     const node = self.asNode();
     const parent = node._parent orelse return;
     page.removeNode(parent, node, .{ .will_be_reconnected = false });
+}
+
+pub fn focus(self: *Element, page: *Page) !void {
+    const Event = @import("Event.zig");
+
+    if (page.document._active_element) |old| {
+        if (old == self) return;
+
+        const blur_event = try Event.init("blur", null, page);
+        try page._event_manager.dispatch(old.asEventTarget(), blur_event);
+    }
+
+    page.document._active_element = self;
+
+    const focus_event = try Event.init("focus", null, page);
+    try page._event_manager.dispatch(self.asEventTarget(), focus_event);
+}
+
+pub fn blur(self: *Element, page: *Page) !void {
+    if (page.document._active_element != self) return;
+
+    page.document._active_element = null;
+
+    const Event = @import("Event.zig");
+    const blur_event = try Event.init("blur", null, page);
+    try page._event_manager.dispatch(self.asEventTarget(), blur_event);
 }
 
 pub fn getChildren(self: *Element, page: *Page) !collections.NodeLive(.child_elements) {
@@ -831,6 +861,8 @@ pub const JsApi = struct {
     pub const getElementsByTagName = bridge.function(Element.getElementsByTagName, .{});
     pub const getElementsByClassName = bridge.function(Element.getElementsByClassName, .{});
     pub const children = bridge.accessor(Element.getChildren, null, .{});
+    pub const focus = bridge.function(Element.focus, .{});
+    pub const blur = bridge.function(Element.blur, .{});
 };
 
 pub const Build = struct {
