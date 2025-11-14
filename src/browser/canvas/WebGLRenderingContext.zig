@@ -61,7 +61,7 @@ pub const Extension = union(enum) {
     WEBGL_debug_shaders: void,
     WEBGL_depth_texture: void,
     WEBGL_draw_buffers: void,
-    WEBGL_lose_context: void,
+    WEBGL_lose_context: Type.WEBGL_lose_context,
     WEBGL_multi_draw: void,
     WEBGL_polygon_mode: void,
 
@@ -117,6 +117,12 @@ pub const Extension = union(enum) {
                 return UNMASKED_RENDERER_WEBGL;
             }
         };
+
+        pub const WEBGL_lose_context = struct {
+            _: u8 = 0,
+            pub fn _loseContext(_: *const WEBGL_lose_context) void {}
+            pub fn _restoreContext(_: *const WEBGL_lose_context) void {}
+        };
     };
 };
 
@@ -128,6 +134,7 @@ pub fn _getExtension(self: *const WebGLRenderingContext, name: []const u8) ?Exte
 
     return switch (tag) {
         .WEBGL_debug_renderer_info => @unionInit(Extension, "WEBGL_debug_renderer_info", .{}),
+        .WEBGL_lose_context => @unionInit(Extension, "WEBGL_lose_context", .{}),
         inline else => |comptime_enum| @unionInit(Extension, @tagName(comptime_enum), {}),
     };
 }

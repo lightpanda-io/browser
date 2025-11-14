@@ -102,4 +102,15 @@
   testing.expectEqual(rendererInfo.UNMASKED_VENDOR_WEBGL, 0x9245);
   testing.expectEqual(rendererInfo.UNMASKED_RENDERER_WEBGL, 0x9246);
 }
+
+// WEBGL_lose_context
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("webgl");
+  const loseContext = ctx.getExtension("WEBGL_lose_context");
+  testing.expectEqual(true, loseContext instanceof WEBGL_lose_context);
+
+  loseContext.loseContext();
+  loseContext.restoreContext();
+}
 </script>

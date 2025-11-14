@@ -9,4 +9,5 @@ pub const Interfaces = .{
     CanvasRenderingContext2D,
     WebGLRenderingContext,
     Extension.Type.WEBGL_debug_renderer_info,
+    Extension.Type.WEBGL_lose_context,
 };
