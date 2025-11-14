@@ -15,7 +15,7 @@
 
 <input id="disabled1" type="text" disabled>
 <input id="disabled2" type="checkbox">
-
+<!--
 <script id="type">
   testing.expectEqual('text', $('#text1').type)
   testing.expectEqual('text', $('#text2').type)
@@ -243,4 +243,109 @@
     testing.expectEqual('', input.getAttribute('checked'))
     testing.expectTrue(input.outerHTML.includes('checked'))
   }
+</script> -->
+
+<script id="defaultValue_set">
+{
+  const input = document.createElement('input')
+  testing.expectEqual('', input.defaultValue)
+  testing.expectEqual(null, input.getAttribute('value'))
+
+  input.defaultValue = 'new default'
+  testing.expectEqual('new default', input.defaultValue)
+  testing.expectEqual('new default', input.getAttribute('value'))
+  testing.expectEqual('new default', input.value)
+}
 </script>
+
+<!-- <script id="defaultChecked_set">
+{
+  const input = document.createElement('input')
+  input.type = 'checkbox'
+  testing.expectEqual(false, input.defaultChecked)
+  testing.expectEqual(null, input.getAttribute('checked'))
+
+  input.defaultChecked = true
+  testing.expectEqual(true, input.defaultChecked)
+  testing.expectEqual('', input.getAttribute('checked'))
+  testing.expectEqual(true, input.checked)
+
+  input.checked = false
+  testing.expectEqual(false, input.checked)
+  testing.expectEqual(true, input.defaultChecked)
+}
+</script>
+
+<input id="named1" type="text" name="username">
+<input id="named2" type="text">
+
+<input id="required1" type="text" required>
+<input id="required2" type="text">
+
+<script id="name_initial">
+  testing.expectEqual('username', $('#named1').name)
+  testing.expectEqual('', $('#named2').name)
+</script>
+
+<script id="name_set">
+  {
+    const input = document.createElement('input')
+    testing.expectEqual('', input.name)
+
+    input.name = 'email'
+    testing.expectEqual('email', input.name)
+    testing.expectEqual('email', input.getAttribute('name'))
+
+    input.name = 'password'
+    testing.expectEqual('password', input.name)
+    testing.expectEqual('password', input.getAttribute('name'))
+  }
+</script>
+
+<script id="name_reflects_to_attribute">
+  {
+    const input = document.createElement('input')
+    testing.expectEqual(null, input.getAttribute('name'))
+
+    input.name = 'fieldname'
+    testing.expectEqual('fieldname', input.getAttribute('name'))
+    testing.expectTrue(input.outerHTML.includes('name="fieldname"'))
+  }
+</script>
+
+<script id="required_initial">
+  testing.expectEqual(true, $('#required1').required)
+  testing.expectEqual(false, $('#required2').required)
+</script>
+
+<script id="required_set">
+  {
+    const input = document.createElement('input')
+    testing.expectEqual(false, input.required)
+
+    input.required = true
+    testing.expectEqual(true, input.required)
+    testing.expectEqual('', input.getAttribute('required'))
+
+    input.required = false
+    testing.expectEqual(false, input.required)
+    testing.expectEqual(null, input.getAttribute('required'))
+  }
+</script>
+
+<script id="required_reflects_to_attribute">
+  {
+    const input = document.createElement('input')
+    testing.expectEqual(null, input.getAttribute('required'))
+    testing.expectFalse(input.outerHTML.includes('required'))
+
+    input.required = true
+    testing.expectEqual('', input.getAttribute('required'))
+    testing.expectTrue(input.outerHTML.includes('required'))
+
+    input.required = false
+    testing.expectEqual(null, input.getAttribute('required'))
+    testing.expectFalse(input.outerHTML.includes('required'))
+  }
+</script>
+ -->

@@ -407,6 +407,7 @@ pub fn replaceChildren(self: *Element, nodes: []const Node.NodeOrText, page: *Pa
 }
 
 pub fn remove(self: *Element, page: *Page) void {
+    page.domChanged();
     const node = self.asNode();
     const parent = node._parent orelse return;
     page.removeNode(parent, node, .{ .will_be_reconnected = false });

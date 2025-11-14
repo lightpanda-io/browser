@@ -81,3 +81,286 @@
   const selectNoForm = $('#select_no_form')
   testing.expectEqual(null, selectNoForm.form)
 </script>
+
+<script id="selectedIndex_initial">
+  {
+    testing.expectEqual(2, $('#select1').selectedIndex)
+    testing.expectEqual(0, $('#select2').selectedIndex)
+  }
+</script>
+
+<script id="selectedIndex_set">
+  {
+    $('#select1').selectedIndex = 2
+    testing.expectEqual(2, $('#select1').selectedIndex)
+    testing.expectEqual('val3', $('#select1').value)
+
+    const opt3 = $('#select1').querySelector('option[value="val3"]')
+    testing.expectEqual(true, opt3.selected)
+
+    const opt2 = $('#select1').querySelector('option[value="val2"]')
+    testing.expectEqual(false, opt2.selected)
+  }
+</script>
+
+<script id="selectedIndex_set_negative">
+  {
+    $('#select1').selectedIndex = -1
+    testing.expectEqual(-1, $('#select1').selectedIndex)
+
+    const opt1 = $('#select1').querySelector('option[value="val1"]')
+    const opt2 = $('#select1').querySelector('option[value="val2"]')
+    const opt3 = $('#select1').querySelector('option[value="val3"]')
+    testing.expectEqual(false, opt1.selected)
+    testing.expectEqual(false, opt2.selected)
+    testing.expectEqual(false, opt3.selected)
+  }
+</script>
+
+<script id="selectedIndex_set_out_of_bounds">
+  {
+    $('#select2').selectedIndex = 999
+    const optA = $('#select2').querySelector('option[value="a"]')
+    const optB = $('#select2').querySelector('option[value="b"]')
+    testing.expectEqual(false, optA.selected)
+    testing.expectEqual(false, optB.selected)
+  }
+</script>
+
+<select id="select_multi" multiple>
+  <option value="opt1">Option 1</option>
+  <option value="opt2" selected>Option 2</option>
+  <option value="opt3">Option 3</option>
+</select>
+
+<script id="multiple_attribute">
+  {
+    const sel = $('#select_multi')
+    testing.expectEqual(true, sel.multiple)
+    testing.expectEqual('opt2', sel.value)
+    testing.expectEqual(1, sel.selectedIndex)
+  }
+</script>
+
+<script id="multiple_setValue">
+  {
+    const sel = $('#select_multi')
+    sel.value = 'opt1'
+
+    const opt1 = sel.querySelector('option[value="opt1"]')
+    const opt2 = sel.querySelector('option[value="opt2"]')
+    testing.expectEqual(true, opt1.selected)
+    testing.expectEqual(false, opt2.selected)
+  }
+</script>
+
+<script id="options_collection">
+  {
+    const sel = $('#select1')
+    const opts = sel.options
+    testing.expectEqual(3, opts.length)
+    testing.expectEqual('HTMLOptionsCollection', opts.constructor.name)
+
+    // Test indexed access
+    testing.expectEqual('val1', opts[0].value)
+    testing.expectEqual('val2', opts[1].value)
+    testing.expectEqual('val3', opts[2].value)
+  }
+</script>
+
+<script id="options_selectedIndex">
+  {
+    // Create a fresh select to avoid state from previous tests
+    const sel = document.createElement('select')
+    sel.innerHTML = '<option value="a">A</option><option value="b" selected>B</option><option value="c">C</option>'
+    const opts = sel.options
+
+    // selectedIndex should forward to the select element
+    testing.expectEqual(1, sel.selectedIndex)
+    testing.expectEqual(1, opts.selectedIndex)
+
+    // Setting via options collection should update the select
+    opts.selectedIndex = 2
+    testing.expectEqual(2, sel.selectedIndex)
+    testing.expectEqual(2, opts.selectedIndex)
+  }
+</script>
+
+<script id="options_add_remove">
+  {
+    const sel = document.createElement('select')
+    const opts = sel.options
+
+    testing.expectEqual(0, opts.length)
+
+    // Add an option
+    const opt1 = document.createElement('option')
+    opt1.value = 'a'
+    opt1.textContent = 'Option A'
+    opts.add(opt1, null)
+    testing.expectEqual(1, opts.length)
+    testing.expectEqual('a', opts[0].value)
+
+    // Add another option
+    const opt2 = document.createElement('option')
+    opt2.value = 'b'
+    opt2.textContent = 'Option B'
+    opts.add(opt2, null)
+    testing.expectEqual(2, opts.length)
+    testing.expectEqual('b', opts[1].value)
+
+    // Add an option before the first one
+    const opt0 = document.createElement('option')
+    opt0.value = 'zero'
+    opt0.textContent = 'Option Zero'
+    opts.add(opt0, opt1)
+    testing.expectEqual(3, opts.length)
+    testing.expectEqual('zero', opts[0].value)
+    testing.expectEqual('a', opts[1].value)
+    testing.expectEqual('b', opts[2].value)
+
+    // Remove the middle option (index 1, which is 'a')
+    opts.remove(1)
+    testing.expectEqual(2, opts.length)
+    testing.expectEqual('zero', opts[0].value)
+    testing.expectEqual('b', opts[1].value)
+  }
+</script>
+
+<script id="selectedOptions">
+  {
+    const sel = document.createElement('select')
+    sel.multiple = true
+    sel.innerHTML = '<option value="a">A</option><option value="b" selected>B</option><option value="c" selected>C</option><option value="d">D</option>'
+
+    const selectedOpts = sel.selectedOptions
+    testing.expectEqual('HTMLCollection', selectedOpts.constructor.name)
+    testing.expectEqual(2, selectedOpts.length)
+    testing.expectEqual('b', selectedOpts[0].value)
+    testing.expectEqual('c', selectedOpts[1].value)
+
+    // Deselect one
+    sel.options[1].selected = false
+    testing.expectEqual(1, selectedOpts.length)
+    testing.expectEqual('c', selectedOpts[0].value)
+
+    // Select another
+    sel.options[3].selected = true
+    testing.expectEqual(2, selectedOpts.length)
+    testing.expectEqual('c', selectedOpts[0].value)
+    testing.expectEqual('d', selectedOpts[1].value)
+  }
+</script>
+
+<select id="named1" name="country"></select>
+<select id="named2"></select>
+
+<select id="required1" required></select>
+<select id="required2"></select>
+
+<script id="name_initial">
+  testing.expectEqual('country', $('#named1').name)
+  testing.expectEqual('', $('#named2').name)
+</script>
+
+<script id="name_set">
+  {
+    const select = document.createElement('select')
+    testing.expectEqual('', select.name)
+
+    select.name = 'choices'
+    testing.expectEqual('choices', select.name)
+    testing.expectEqual('choices', select.getAttribute('name'))
+
+    select.name = 'options'
+    testing.expectEqual('options', select.name)
+    testing.expectEqual('options', select.getAttribute('name'))
+  }
+</script>
+
+<script id="name_reflects_to_attribute">
+  {
+    const select = document.createElement('select')
+    testing.expectEqual(null, select.getAttribute('name'))
+
+    select.name = 'fieldname'
+    testing.expectEqual('fieldname', select.getAttribute('name'))
+    testing.expectTrue(select.outerHTML.includes('name="fieldname"'))
+  }
+</script>
+
+<script id="required_initial">
+  testing.expectEqual(true, $('#required1').required)
+  testing.expectEqual(false, $('#required2').required)
+</script>
+
+<script id="required_set">
+  {
+    const select = document.createElement('select')
+    testing.expectEqual(false, select.required)
+
+    select.required = true
+    testing.expectEqual(true, select.required)
+    testing.expectEqual('', select.getAttribute('required'))
+
+    select.required = false
+    testing.expectEqual(false, select.required)
+    testing.expectEqual(null, select.getAttribute('required'))
+  }
+</script>
+
+<script id="required_reflects_to_attribute">
+  {
+    const select = document.createElement('select')
+    testing.expectEqual(null, select.getAttribute('required'))
+    testing.expectFalse(select.outerHTML.includes('required'))
+
+    select.required = true
+    testing.expectEqual('', select.getAttribute('required'))
+    testing.expectTrue(select.outerHTML.includes('required'))
+
+    select.required = false
+    testing.expectEqual(null, select.getAttribute('required'))
+    testing.expectFalse(select.outerHTML.includes('required'))
+  }
+</script>
+
+<select id="sized1" size="5"></select>
+<select id="sized2" size="   932 asd"></select>
+<select id="sized3" size="93abc"></select>
+<select id="sized4" size="nope"></select>
+<select id="sized5"></select>
+
+<script id="size_initial">
+  testing.expectEqual(5, $('#sized1').size)
+  testing.expectEqual(932, $('#sized2').size)
+  testing.expectEqual(93, $('#sized3').size)
+  testing.expectEqual(0, $('#sized4').size)
+  testing.expectEqual(0, $('#sized5').size)
+</script>
+
+<script id="size_set">
+  {
+    const select = document.createElement('select')
+    testing.expectEqual(0, select.size)
+
+    select.size = 10
+    testing.expectEqual(10, select.size)
+    testing.expectEqual('10', select.getAttribute('size'))
+
+    select.size = 42
+    testing.expectEqual(42, select.size)
+    testing.expectEqual('42', select.getAttribute('size'))
+  }
+</script>
+
+<script id="size_reflects_to_attribute">
+  {
+    const select = document.createElement('select')
+    testing.expectEqual(null, select.getAttribute('size'))
+
+    select.size = 7
+    testing.expectEqual('7', select.getAttribute('size'))
+    testing.expectTrue(select.outerHTML.includes('size="7"'))
+  }
+</script>

@@ -109,6 +109,10 @@ pub fn getDefaultValue(self: *const Input) []const u8 {
     return self._default_value orelse "";
 }
 
+pub fn setDefaultValue(self: *Input, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe("value", value, page);
+}
+
 pub fn getChecked(self: *const Input) bool {
     return self._checked;
 }
@@ -126,6 +130,14 @@ pub fn getDefaultChecked(self: *const Input) bool {
     return self._default_checked;
 }
 
+pub fn setDefaultChecked(self: *Input, checked: bool, page: *Page) !void {
+    if (checked) {
+        try self.asElement().setAttributeSafe("checked", "", page);
+    } else {
+        try self.asElement().removeAttribute("checked", page);
+    }
+}
+
 pub fn getDisabled(self: *const Input) bool {
     // TODO: Also check for disabled fieldset ancestors
     // (but not if we're inside a <legend> of that fieldset)
@@ -137,6 +149,26 @@ pub fn setDisabled(self: *Input, disabled: bool, page: *Page) !void {
         try self.asElement().setAttributeSafe("disabled", "", page);
     } else {
         try self.asElement().removeAttribute("disabled", page);
+    }
+}
+
+pub fn getName(self: *const Input) []const u8 {
+    return self.asConstElement().getAttributeSafe("name") orelse "";
+}
+
+pub fn setName(self: *Input, name: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe("name", name, page);
+}
+
+pub fn getRequired(self: *const Input) bool {
+    return self.asConstElement().getAttributeSafe("required") != null;
+}
+
+pub fn setRequired(self: *Input, required: bool, page: *Page) !void {
+    if (required) {
+        try self.asElement().setAttributeSafe("required", "", page);
+    } else {
+        try self.asElement().removeAttribute("required", page);
     }
 }
 
@@ -218,10 +250,12 @@ pub const JsApi = struct {
 
     pub const @"type" = bridge.accessor(Input.getType, Input.setType, .{});
     pub const value = bridge.accessor(Input.getValue, Input.setValue, .{});
-    pub const defaultValue = bridge.accessor(Input.getDefaultValue, null, .{});
+    pub const defaultValue = bridge.accessor(Input.getDefaultValue, Input.setDefaultValue, .{});
     pub const checked = bridge.accessor(Input.getChecked, Input.setChecked, .{});
-    pub const defaultChecked = bridge.accessor(Input.getDefaultChecked, null, .{});
+    pub const defaultChecked = bridge.accessor(Input.getDefaultChecked, Input.setDefaultChecked, .{});
     pub const disabled = bridge.accessor(Input.getDisabled, Input.setDisabled, .{});
+    pub const name = bridge.accessor(Input.getName, Input.setName, .{});
+    pub const required = bridge.accessor(Input.getRequired, Input.setRequired, .{});
     pub const form = bridge.accessor(Input.getForm, null, .{});
 };
 
@@ -249,13 +283,20 @@ pub const Build = struct {
         }
     }
 
-    pub fn attributeChange(element: *Element, name: []const u8, value: []const u8, _: *Page) !void {
+    pub fn attributeChange(element: *Element, name: []const u8, value: []const u8, page: *Page) !void {
         const attribute = std.meta.stringToEnum(enum { type, value, checked }, name) orelse return;
         const self = element.as(Input);
         switch (attribute) {
             .type => self._input_type = Type.fromString(value),
             .value => self._default_value = value,
-            .checked => self._default_checked = true,
+            .checked => {
+                self._default_checked = true;
+                self._checked = true;
+                // If setting a radio button to checked, uncheck others in the group
+                if (self._input_type == .radio) {
+                    try self.uncheckRadioGroup(page);
+                }
+            },
         }
     }
 
@@ -265,7 +306,10 @@ pub const Build = struct {
         switch (attribute) {
             .type => self._input_type = .text,
             .value => self._default_value = null,
-            .checked => self._default_checked = false,
+            .checked => {
+                self._default_checked = false;
+                self._checked = false;
+            },
         }
     }
 };

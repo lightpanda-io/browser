@@ -50,6 +50,26 @@ pub fn setDisabled(self: *Button, disabled: bool, page: *Page) !void {
     }
 }
 
+pub fn getName(self: *const Button) []const u8 {
+    return self.asConstElement().getAttributeSafe("name") orelse "";
+}
+
+pub fn setName(self: *Button, name: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe("name", name, page);
+}
+
+pub fn getRequired(self: *const Button) bool {
+    return self.asConstElement().getAttributeSafe("required") != null;
+}
+
+pub fn setRequired(self: *Button, required: bool, page: *Page) !void {
+    if (required) {
+        try self.asElement().setAttributeSafe("required", "", page);
+    } else {
+        try self.asElement().removeAttribute("required", page);
+    }
+}
+
 pub fn getForm(self: *Button, page: *Page) ?*Form {
     const element = self.asElement();
 
@@ -84,6 +104,8 @@ pub const JsApi = struct {
     };
 
     pub const disabled = bridge.accessor(Button.getDisabled, Button.setDisabled, .{});
+    pub const name = bridge.accessor(Button.getName, Button.setName, .{});
+    pub const required = bridge.accessor(Button.getRequired, Button.setRequired, .{});
     pub const form = bridge.accessor(Button.getForm, null, .{});
 };
 

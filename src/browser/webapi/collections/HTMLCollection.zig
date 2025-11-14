@@ -29,6 +29,8 @@ const Mode = enum {
     tag_name,
     class_name,
     child_elements,
+    child_tag,
+    selected_options,
 };
 
 const HTMLCollection = @This();
@@ -38,6 +40,8 @@ data: union(Mode) {
     tag_name: NodeLive(.tag_name),
     class_name: NodeLive(.class_name),
     child_elements: NodeLive(.child_elements),
+    child_tag: NodeLive(.child_tag),
+    selected_options: NodeLive(.selected_options),
 },
 
 pub fn length(self: *HTMLCollection, page: *const Page) u32 {
@@ -66,6 +70,8 @@ pub fn iterator(self: *HTMLCollection, page: *Page) !*Iterator {
             .tag_name => |*impl| .{ .tag_name = impl._tw.clone() },
             .class_name => |*impl| .{ .class_name = impl._tw.clone() },
             .child_elements => |*impl| .{ .child_elements = impl._tw.clone() },
+            .child_tag => |*impl| .{ .child_tag = impl._tw.clone() },
+            .selected_options => |*impl| .{ .selected_options = impl._tw.clone() },
         },
     }, page);
 }
@@ -78,6 +84,8 @@ pub const Iterator = GenericIterator(struct {
         tag_name: TreeWalker.FullExcludeSelf,
         class_name: TreeWalker.FullExcludeSelf,
         child_elements: TreeWalker.Children,
+        child_tag: TreeWalker.Children,
+        selected_options: TreeWalker.Children,
     },
 
     pub fn next(self: *@This(), _: *Page) ?*Element {
@@ -86,6 +94,8 @@ pub const Iterator = GenericIterator(struct {
             .tag_name => |*impl| impl.nextTw(&self.tw.tag_name),
             .class_name => |*impl| impl.nextTw(&self.tw.class_name),
             .child_elements => |*impl| impl.nextTw(&self.tw.child_elements),
+            .child_tag => |*impl| impl.nextTw(&self.tw.child_tag),
+            .selected_options => |*impl| impl.nextTw(&self.tw.selected_options),
         };
     }
 }, null);

@@ -53,3 +53,76 @@
   const buttonInvalidFormAttr = $('#button_invalid_form_attr')
   testing.expectEqual(null, buttonInvalidFormAttr.form)
 </script>
+
+<button id="named1" name="submit-btn"></button>
+<button id="named2"></button>
+
+<button id="required1" required></button>
+<button id="required2"></button>
+
+<script id="name_initial">
+  testing.expectEqual('submit-btn', $('#named1').name)
+  testing.expectEqual('', $('#named2').name)
+</script>
+
+<script id="name_set">
+  {
+    const button = document.createElement('button')
+    testing.expectEqual('', button.name)
+
+    button.name = 'action'
+    testing.expectEqual('action', button.name)
+    testing.expectEqual('action', button.getAttribute('name'))
+
+    button.name = 'submit'
+    testing.expectEqual('submit', button.name)
+    testing.expectEqual('submit', button.getAttribute('name'))
+  }
+</script>
+
+<script id="name_reflects_to_attribute">
+  {
+    const button = document.createElement('button')
+    testing.expectEqual(null, button.getAttribute('name'))
+
+    button.name = 'fieldname'
+    testing.expectEqual('fieldname', button.getAttribute('name'))
+    testing.expectTrue(button.outerHTML.includes('name="fieldname"'))
+  }
+</script>
+
+<script id="required_initial">
+  testing.expectEqual(true, $('#required1').required)
+  testing.expectEqual(false, $('#required2').required)
+</script>
+
+<script id="required_set">
+  {
+    const button = document.createElement('button')
+    testing.expectEqual(false, button.required)
+
+    button.required = true
+    testing.expectEqual(true, button.required)
+    testing.expectEqual('', button.getAttribute('required'))
+
+    button.required = false
+    testing.expectEqual(false, button.required)
+    testing.expectEqual(null, button.getAttribute('required'))
+  }
+</script>
+
+<script id="required_reflects_to_attribute">
+  {
+    const button = document.createElement('button')
+    testing.expectEqual(null, button.getAttribute('required'))
+    testing.expectFalse(button.outerHTML.includes('required'))
+
+    button.required = true
+    testing.expectEqual('', button.getAttribute('required'))
+    testing.expectTrue(button.outerHTML.includes('required'))
+
+    button.required = false
+    testing.expectEqual(null, button.getAttribute('required'))
+    testing.expectFalse(button.outerHTML.includes('required'))
+  }
+</script>

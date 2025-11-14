@@ -65,6 +65,26 @@ pub fn setDisabled(self: *TextArea, disabled: bool, page: *Page) !void {
     }
 }
 
+pub fn getName(self: *const TextArea) []const u8 {
+    return self.asConstElement().getAttributeSafe("name") orelse "";
+}
+
+pub fn setName(self: *TextArea, name: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe("name", name, page);
+}
+
+pub fn getRequired(self: *const TextArea) bool {
+    return self.asConstElement().getAttributeSafe("required") != null;
+}
+
+pub fn setRequired(self: *TextArea, required: bool, page: *Page) !void {
+    if (required) {
+        try self.asElement().setAttributeSafe("required", "", page);
+    } else {
+        try self.asElement().removeAttribute("required", page);
+    }
+}
+
 pub fn getForm(self: *TextArea, page: *Page) ?*Form {
     const element = self.asElement();
 
@@ -101,6 +121,8 @@ pub const JsApi = struct {
     pub const value = bridge.accessor(TextArea.getValue, TextArea.setValue, .{});
     pub const defaultValue = bridge.accessor(TextArea.getDefaultValue, null, .{});
     pub const disabled = bridge.accessor(TextArea.getDisabled, TextArea.setDisabled, .{});
+    pub const name = bridge.accessor(TextArea.getName, TextArea.setName, .{});
+    pub const required = bridge.accessor(TextArea.getRequired, TextArea.setRequired, .{});
     pub const form = bridge.accessor(TextArea.getForm, null, .{});
 };
 

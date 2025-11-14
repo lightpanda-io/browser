@@ -76,3 +76,76 @@
   const textareaInvalidFormAttr = $('#textarea_invalid_form_attr')
   testing.expectEqual(null, textareaInvalidFormAttr.form)
 </script>
+
+<textarea id="named1" name="comments"></textarea>
+<textarea id="named2"></textarea>
+
+<textarea id="required1" required></textarea>
+<textarea id="required2"></textarea>
+
+<script id="name_initial">
+  testing.expectEqual('comments', $('#named1').name)
+  testing.expectEqual('', $('#named2').name)
+</script>
+
+<script id="name_set">
+  {
+    const textarea = document.createElement('textarea')
+    testing.expectEqual('', textarea.name)
+
+    textarea.name = 'message'
+    testing.expectEqual('message', textarea.name)
+    testing.expectEqual('message', textarea.getAttribute('name'))
+
+    textarea.name = 'feedback'
+    testing.expectEqual('feedback', textarea.name)
+    testing.expectEqual('feedback', textarea.getAttribute('name'))
+  }
+</script>
+
+<script id="name_reflects_to_attribute">
+  {
+    const textarea = document.createElement('textarea')
+    testing.expectEqual(null, textarea.getAttribute('name'))
+
+    textarea.name = 'fieldname'
+    testing.expectEqual('fieldname', textarea.getAttribute('name'))
+    testing.expectTrue(textarea.outerHTML.includes('name="fieldname"'))
+  }
+</script>
+
+<script id="required_initial">
+  testing.expectEqual(true, $('#required1').required)
+  testing.expectEqual(false, $('#required2').required)
+</script>
+
+<script id="required_set">
+  {
+    const textarea = document.createElement('textarea')
+    testing.expectEqual(false, textarea.required)
+
+    textarea.required = true
+    testing.expectEqual(true, textarea.required)
+    testing.expectEqual('', textarea.getAttribute('required'))
+
+    textarea.required = false
+    testing.expectEqual(false, textarea.required)
+    testing.expectEqual(null, textarea.getAttribute('required'))
+  }
+</script>
+
+<script id="required_reflects_to_attribute">
+  {
+    const textarea = document.createElement('textarea')
+    testing.expectEqual(null, textarea.getAttribute('required'))
+    testing.expectFalse(textarea.outerHTML.includes('required'))
+
+    textarea.required = true
+    testing.expectEqual('', textarea.getAttribute('required'))
+    testing.expectTrue(textarea.outerHTML.includes('required'))
+
+    textarea.required = false
+    testing.expectEqual(null, textarea.getAttribute('required'))
+    testing.expectFalse(textarea.outerHTML.includes('required'))
+  }
+</script>

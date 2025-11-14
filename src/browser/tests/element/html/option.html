@@ -65,3 +65,37 @@
   $('#opt4').disabled = false
   testing.expectEqual(false, $('#opt4').disabled)
 </script>
+
+<option id="named1" name="choice1">Named option</option>
+<option id="named2">Unnamed option</option>
+
+<script id="name_initial">
+  testing.expectEqual('choice1', $('#named1').name)
+  testing.expectEqual('', $('#named2').name)
+</script>
+
+<script id="name_set">
+  {
+    const option = document.createElement('option')
+    testing.expectEqual('', option.name)
+
+    option.name = 'opt-name'
+    testing.expectEqual('opt-name', option.name)
+    testing.expectEqual('opt-name', option.getAttribute('name'))
+
+    option.name = 'another-name'
+    testing.expectEqual('another-name', option.name)
+    testing.expectEqual('another-name', option.getAttribute('name'))
+  }
+</script>
+
+<script id="name_reflects_to_attribute">
+  {
+    const option = document.createElement('option')
+    testing.expectEqual(null, option.getAttribute('name'))
+
+    option.name = 'fieldname'
+    testing.expectEqual('fieldname', option.getAttribute('name'))
+    testing.expectTrue(option.outerHTML.includes('name="fieldname"'))
+  }
+</script>

@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const js = @import("../../../js/js.zig");
 const Page = @import("../../../Page.zig");
 
@@ -35,6 +36,9 @@ _disabled: bool = false,
 pub fn asElement(self: *Option) *Element {
     return self._proto._proto;
 }
+pub fn asConstElement(self: *const Option) *const Element {
+    return self._proto._proto;
+}
 pub fn asNode(self: *Option) *Node {
     return self.asElement().asNode();
 }
@@ -45,7 +49,7 @@ pub fn getValue(self: *const Option) []const u8 {
 }
 
 pub fn setValue(self: *Option, value: []const u8, page: *Page) !void {
-    const owned = try page.arena.dupe(u8, value);
+    const owned = try page.dupeString(value);
     try self.asElement().setAttributeSafe("value", owned, page);
     self._value = owned;
 }
@@ -59,10 +63,10 @@ pub fn getSelected(self: *const Option) bool {
 }
 
 pub fn setSelected(self: *Option, selected: bool, page: *Page) !void {
-    _ = page;
     // TODO: When setting selected=true, may need to unselect other options
     // in the parent <select> if it doesn't have multiple attribute
     self._selected = selected;
+    page.domChanged();
 }
 
 pub fn getDefaultSelected(self: *const Option) bool {
@@ -82,6 +86,14 @@ pub fn setDisabled(self: *Option, disabled: bool, page: *Page) !void {
     }
 }
 
+pub fn getName(self: *const Option) []const u8 {
+    return self.asConstElement().getAttributeSafe("name") orelse "";
+}
+
+pub fn setName(self: *Option, name: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe("name", name, page);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Option);
 
@@ -96,6 +108,7 @@ pub const JsApi = struct {
     pub const selected = bridge.accessor(Option.getSelected, Option.setSelected, .{});
     pub const defaultSelected = bridge.accessor(Option.getDefaultSelected, null, .{});
     pub const disabled = bridge.accessor(Option.getDisabled, Option.setDisabled, .{});
+    pub const name = bridge.accessor(Option.getName, Option.setName, .{});
 };
 
 pub const Build = struct {
@@ -124,6 +137,30 @@ pub const Build = struct {
             if (child.is(CData.Text)) |txt| {
                 self._text = txt.getWholeText();
             }
+        }
+    }
+
+    pub fn attributeChange(element: *Element, name: []const u8, value: []const u8, _: *Page) !void {
+        const attribute = std.meta.stringToEnum(enum { value, selected }, name) orelse return;
+        const self = element.as(Option);
+        switch (attribute) {
+            .value => self._value = value,
+            .selected => {
+                self._default_selected = true;
+                self._selected = true;
+            },
+        }
+    }
+
+    pub fn attributeRemove(element: *Element, name: []const u8, _: *Page) !void {
+        const attribute = std.meta.stringToEnum(enum { value, selected }, name) orelse return;
+        const self = element.as(Option);
+        switch (attribute) {
+            .value => self._value = null,
+            .selected => {
+                self._default_selected = false;
+                self._selected = false;
+            },
         }
     }
 };

@@ -36,6 +36,8 @@ const Mode = enum {
     tag_name,
     class_name,
     child_elements,
+    child_tag,
+    selected_options,
 };
 
 const Filters = union(Mode) {
@@ -43,6 +45,8 @@ const Filters = union(Mode) {
     tag_name: String,
     class_name: []const u8,
     child_elements,
+    child_tag: Element.Tag,
+    selected_options,
 
     fn TypeOf(comptime mode: Mode) type {
         @setEvalBranchQuota(2000);
@@ -71,7 +75,7 @@ pub fn NodeLive(comptime mode: Mode) type {
     const Filter = Filters.TypeOf(mode);
     const TW = switch (mode) {
         .tag, .tag_name, .class_name => TreeWalker.FullExcludeSelf,
-        .child_elements => TreeWalker.Children,
+        .child_elements, .child_tag, .selected_options => TreeWalker.Children,
     };
     return struct {
         _tw: TW,
@@ -213,6 +217,16 @@ pub fn NodeLive(comptime mode: Mode) type {
                     return Selector.classAttributeContains(class_attr, self._filter);
                 },
                 .child_elements => return node._type == .element,
+                .child_tag => {
+                    const el = node.is(Element) orelse return false;
+                    return el.getTag() == self._filter;
+                },
+                .selected_options => {
+                    const el = node.is(Element) orelse return false;
+                    const Option = Element.Html.Option;
+                    const opt = el.is(Option) orelse return false;
+                    return opt.getSelected();
+                },
             }
         }
 
@@ -236,6 +250,8 @@ pub fn NodeLive(comptime mode: Mode) type {
                 .tag_name => HTMLCollection{ .data = .{ .tag_name = self } },
                 .class_name => HTMLCollection{ .data = .{ .class_name = self } },
                 .child_elements => HTMLCollection{ .data = .{ .child_elements = self } },
+                .child_tag => HTMLCollection{ .data = .{ .child_tag = self } },
+                .selected_options => HTMLCollection{ .data = .{ .selected_options = self } },
             };
             return page._factory.create(collection);
         }

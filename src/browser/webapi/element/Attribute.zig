@@ -174,7 +174,7 @@ pub const List = struct {
         if (is_id) {
             try page.document._elements_by_id.put(page.arena, entry._value.str(), element);
         }
-        page.attributeChange(element, result.normalized, value);
+        page.attributeChange(element, result.normalized, entry._value.str());
         return entry;
     }
 
