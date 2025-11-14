@@ -480,7 +480,6 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/Document.zig"),
     @import("../webapi/HTMLDocument.zig"),
     @import("../webapi/History.zig"),
-    @import("../webapi/intl/Intl.zig"),
     @import("../webapi/KeyValueList.zig"),
     @import("../webapi/DocumentFragment.zig"),
     @import("../webapi/DocumentType.zig"),

@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2024  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2025 Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
