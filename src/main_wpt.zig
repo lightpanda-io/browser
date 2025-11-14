@@ -17,16 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-
-const log = @import("log.zig");
-const js = @import("browser/js/js.zig");
+const lp = @import("lightpanda");
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
-
-const App = @import("app.zig").App;
-const Browser = @import("browser/browser.zig").Browser;
-const TestHTTPServer = @import("TestHTTPServer.zig");
 
 const WPT_DIR = "tests/wpt";
 
@@ -38,9 +32,8 @@ pub fn main() !void {
     defer _ = gpa.deinit();
 
     const allocator = gpa.allocator();
-    log.opts.level = .err;
 
-    var http_server = TestHTTPServer.init(httpHandler);
+    var http_server = try TestHTTPServer.init();
     defer http_server.deinit();
 
     {
@@ -64,18 +57,20 @@ pub fn main() !void {
     var writer = try Writer.init(allocator, cmd.format);
     defer writer.deinit();
 
-    // An arena for running each tests. Is reset after every test.
-    var test_arena = ArenaAllocator.init(allocator);
-    defer test_arena.deinit();
-
-    var app = try App.init(allocator, .{
-        .run_mode = .fetch,
-        .user_agent = "User-Agent: Lightpanda/1.0 Lightpanda/WPT",
+    lp.log.opts.level = .warn;
+    var app = try lp.App.init(allocator, .{
+        .run_mode = .serve,
+        .tls_verify_host = false,
+        .user_agent = "User-Agent: Lightpanda/1.0 internal-tester",
     });
     defer app.deinit();
 
-    var browser = try Browser.init(app);
+    var browser = try lp.Browser.init(app);
     defer browser.deinit();
+
+    // An arena for running each tests. Is reset after every test.
+    var test_arena = ArenaAllocator.init(allocator);
+    defer test_arena.deinit();
 
     var i: usize = 0;
     while (try it.next()) |test_file| {
@@ -108,7 +103,7 @@ pub fn main() !void {
 
 fn run(
     arena: Allocator,
-    browser: *Browser,
+    browser: *lp.Browser,
     test_file: []const u8,
     err_out: *?[]const u8,
 ) ![]const u8 {
@@ -118,13 +113,13 @@ fn run(
     const page = try session.createPage();
     defer session.removePage();
 
-    const url = try std.fmt.allocPrint(arena, "http://localhost:9582/{s}", .{test_file});
+    const url = try std.fmt.allocPrintSentinel(arena, "http://localhost:9582/{s}", .{test_file}, 0);
     try page.navigate(url, .{});
 
     _ = page.wait(2000);
 
     const js_context = page.js;
-    var try_catch: js.TryCatch = undefined;
+    var try_catch: lp.js.TryCatch = undefined;
     try_catch.init(js_context);
     defer try_catch.deinit();
 
@@ -442,19 +437,154 @@ const Test = struct {
     cases: []Case,
 };
 
-fn httpHandler(req: *std.http.Server.Request) !void {
-    const path = req.head.target;
+const TestHTTPServer = struct {
+    shutdown: bool,
+    dir: std.fs.Dir,
+    listener: ?std.net.Server,
 
-    if (std.mem.eql(u8, path, "/")) {
-        // There's 1 test that does an XHR request to this, and it just seems
-        // to want a 200 success.
-        return req.respond("Hello!", .{});
+    pub fn init() !TestHTTPServer {
+        return .{
+            .dir = try std.fs.cwd().openDir(WPT_DIR, .{}),
+            .shutdown = true,
+            .listener = null,
+        };
     }
 
-    var buf: [1024]u8 = undefined;
-    const file_path = try std.fmt.bufPrint(&buf, WPT_DIR ++ "{s}", .{path});
-    return TestHTTPServer.sendFile(req, file_path);
-}
+    pub fn deinit(self: *TestHTTPServer) void {
+        self.shutdown = true;
+        if (self.listener) |*listener| {
+            listener.deinit();
+        }
+        self.dir.close();
+    }
+
+    pub fn run(self: *TestHTTPServer, wg: *std.Thread.WaitGroup) !void {
+        const address = try std.net.Address.parseIp("127.0.0.1", 9582);
+
+        self.listener = try address.listen(.{ .reuse_address = true });
+        var listener = &self.listener.?;
+
+        wg.finish();
+
+        while (true) {
+            const conn = listener.accept() catch |err| {
+                if (self.shutdown) {
+                    return;
+                }
+                return err;
+            };
+            const thrd = try std.Thread.spawn(.{}, handleConnection, .{ self, conn });
+            thrd.detach();
+        }
+    }
+
+    fn handleConnection(self: *TestHTTPServer, conn: std.net.Server.Connection) !void {
+        defer conn.stream.close();
+
+        var req_buf: [2048]u8 = undefined;
+        var conn_reader = conn.stream.reader(&req_buf);
+        var conn_writer = conn.stream.writer(&req_buf);
+
+        var http_server = std.http.Server.init(conn_reader.interface(), &conn_writer.interface);
+
+        while (true) {
+            var req = http_server.receiveHead() catch |err| switch (err) {
+                error.ReadFailed => continue,
+                error.HttpConnectionClosing => continue,
+                else => {
+                    std.debug.print("Test HTTP Server error: {}\n", .{err});
+                    return err;
+                },
+            };
+
+            self.handler(&req) catch |err| {
+                std.debug.print("test http error '{s}': {}\n", .{ req.head.target, err });
+                try req.respond("server error", .{ .status = .internal_server_error });
+                return;
+            };
+        }
+    }
+
+    fn handler(server: *TestHTTPServer, req: *std.http.Server.Request) !void {
+        const path = req.head.target;
+
+        if (std.mem.eql(u8, path, "/")) {
+            // There's 1 test that does an XHR request to this, and it just seems
+            // to want a 200 success.
+            return req.respond("Hello!", .{});
+        }
+
+        // strip out leading '/' to make the path relative
+        const file = try server.dir.openFile(path[1..], .{});
+        defer file.close();
+
+        const stat = try file.stat();
+        var send_buffer: [4096]u8 = undefined;
+
+        var res = try req.respondStreaming(&send_buffer, .{
+            .content_length = stat.size,
+            .respond_options = .{
+                .extra_headers = &.{
+                    .{ .name = "content-type", .value = getContentType(path) },
+                },
+            },
+        });
+
+        var read_buffer: [4096]u8 = undefined;
+        var reader = file.reader(&read_buffer);
+        _ = try res.writer.sendFileAll(&reader, .unlimited);
+        try res.writer.flush();
+        try res.end();
+    }
+
+    pub fn sendFile(req: *std.http.Server.Request, file_path: []const u8) !void {
+        var file = std.fs.cwd().openFile(file_path, .{}) catch |err| switch (err) {
+            error.FileNotFound => return req.respond("server error", .{ .status = .not_found }),
+            else => return err,
+        };
+        defer file.close();
+
+        const stat = try file.stat();
+        var send_buffer: [4096]u8 = undefined;
+
+        var res = try req.respondStreaming(&send_buffer, .{
+            .content_length = stat.size,
+            .respond_options = .{
+                .extra_headers = &.{
+                    .{ .name = "content-type", .value = getContentType(file_path) },
+                },
+            },
+        });
+
+        var read_buffer: [4096]u8 = undefined;
+        var reader = file.reader(&read_buffer);
+        _ = try res.writer.sendFileAll(&reader, .unlimited);
+        try res.writer.flush();
+        try res.end();
+    }
+
+    fn getContentType(file_path: []const u8) []const u8 {
+        if (std.mem.endsWith(u8, file_path, ".js")) {
+            return "application/json";
+        }
+
+        if (std.mem.endsWith(u8, file_path, ".html")) {
+            return "text/html";
+        }
+
+        if (std.mem.endsWith(u8, file_path, ".htm")) {
+            return "text/html";
+        }
+
+        if (std.mem.endsWith(u8, file_path, ".xml")) {
+            // some wpt tests do this
+            return "text/xml";
+        }
+
+        std.debug.print("TestHTTPServer asked to serve an unknown file type: {s}\n", .{file_path});
+        return "text/html";
+    }
+};
 
 pub const panic = std.debug.FullPanic(struct {
     pub fn panicFn(msg: []const u8, first_trace_addr: ?usize) noreturn {
