@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+
+<script src="../../testing.js"></script>
+
+<script type=importmap>
+    {
+      "imports": {
+        "core": "./import.js"
+      }
+    }
+</script>
+
+<script id=use_importmap type=module>
+  import * as im from 'core';
+  testing.expectEqual('hello', im.greeting);
+</script>
+
+<script id=cached_importmap type=module>
+  // hopefully cached, who knows, no real way to assert this
+  // but at least it works.
+  import * as im from 'core';
+  testing.expectEqual('hello', im.greeting);
+</script>
+

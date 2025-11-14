@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=Blob/Blob.text>
+  {
+    const parts = ["\r\nthe quick brown\rfo\rx\r", "\njumps over\r\nthe\nlazy\r", "\ndog"];
+    // "transparent" ending should not modify the final buffer.
+    const blob = new Blob(parts, { type: "text/html" });
+
+    const expected = parts.join("");
+    testing.expectEqual(expected.length, blob.size);
+    testing.expectEqual("text/html", blob.type);
+    testing.async(blob.text(), result => testing.expectEqual(expected, result));
+  }
+
+  {
+    const parts = ["\rhello\r", "\nwor\r\nld"];
+    // "native" ending should modify the final buffer.
+    const blob = new Blob(parts, { endings: "native" });
+
+    const expected = "\nhello\n\nwor\nld";
+    testing.expectEqual(expected.length, blob.size);
+    testing.async(blob.text(), result => testing.expectEqual(expected, result));
+
+    testing.async(blob.arrayBuffer(), result => testing.expectEqual(true, result instanceof ArrayBuffer));
+  }
+</script>
+
+<script id=Blob.stream>
+  {
+    const parts = ["may", "thy", "knife", "chip", "and", "shatter"];
+    const blob = new Blob(parts);
+    const reader = blob.stream().getReader();
+
+    testing.async(reader.read(), ({ done, value }) => {
+      const expected = new Uint8Array([109, 97, 121, 116, 104, 121, 107, 110,
+                                       105, 102, 101, 99, 104, 105, 112, 97,
+                                       110, 100, 115, 104, 97, 116, 116, 101,
+                                       114]);
+      testing.expectEqual(false, done);
+      testing.expectEqual(true, value instanceof Uint8Array);
+      testing.expectEqual(expected, value);
+    });
+  }
+</script>
+
+<script id=Blob.arrayBuffer/Blob.slice>
+  {
+    const parts = ["la", "symphonie", "des", "éclairs"];
+    const blob = new Blob(parts);
+    testing.async(blob.arrayBuffer(), result => testing.expectEqual(true, result instanceof ArrayBuffer));
+
+    let temp = blob.slice(0);
+    testing.expectEqual(blob.size, temp.size);
+    testing.async(temp.text(), result => {
+      testing.expectEqual("lasymphoniedeséclairs", result);
+    });
+
+    temp = blob.slice(-4, -2, "custom");
+    testing.expectEqual(2, temp.size);
+    testing.expectEqual("custom", temp.type);
+    testing.async(temp.text(), result => testing.expectEqual("ai", result));
+
+    temp = blob.slice(14);
+    testing.expectEqual(8, temp.size);
+    testing.async(temp.text(), result => testing.expectEqual("éclairs", result));
+
+    temp = blob.slice(6, -10, "text/eclair");
+    testing.expectEqual(6, temp.size);
+    testing.expectEqual("text/eclair", temp.type);
+    testing.async(temp.text(), result => testing.expectEqual("honied", result));
+  }
+</script>
+
+<!-- Firefox and Safari only -->
+<script id=Blob.bytes>
+  {
+    const parts = ["light ", "panda ", "rocks ", "!"];
+    const blob = new Blob(parts);
+
+    testing.async(blob.bytes(), result => {
+      const expected = new Uint8Array([108, 105, 103, 104, 116, 32, 112, 97,
+                                       110, 100, 97, 32, 114, 111, 99, 107, 115,
+                                       32, 33]);
+      testing.expectEqual(true, result instanceof Uint8Array);
+      testing.expectEqual(expected, result);
+    });
+  }
+
+  // Test for SIMD.
+  {
+    const parts = [
+      "\rThe opened package\r\nof potato\nchi\rps",
+      "held the\r\nanswer to the\r mystery. Both det\rectives looke\r\rd\r",
+      "\rat it but failed to realize\nit was\r\nthe\rkey\r\n",
+      "\r\nto solve the \rcrime.\r"
+    ];
+
+    const blob = new Blob(parts, { type: "text/html", endings: "native" });
+    testing.expectEqual(161, blob.size);
+    testing.expectEqual("text/html", blob.type);
+    testing.async(blob.bytes(), result => {
+      const expected = new Uint8Array([10, 84, 104, 101, 32, 111, 112, 101, 110,
+                                       101, 100, 32, 112, 97, 99, 107, 97, 103,
+                                       101, 10, 111, 102, 32, 112, 111, 116, 97,
+                                       116, 111, 10, 99, 104, 105, 10, 112, 115,
+                                       104, 101, 108, 100, 32, 116, 104, 101, 10,
+                                       97, 110, 115, 119, 101, 114, 32, 116, 111,
+                                       32, 116, 104, 101, 10, 32, 109, 121, 115,
+                                       116, 101, 114, 121, 46, 32, 66, 111, 116,
+                                       104, 32, 100, 101, 116, 10, 101, 99, 116,
+                                       105, 118, 101, 115, 32, 108, 111, 111, 107,
+                                       101, 10, 10, 100, 10, 10, 97, 116, 32, 105,
+                                       116, 32, 98, 117, 116, 32, 102, 97, 105, 108,
+                                       101, 100, 32, 116, 111, 32, 114, 101, 97,
+                                       108, 105, 122, 101, 10, 105, 116, 32, 119, 97,
+                                       115, 10, 116, 104, 101, 10, 107, 101, 121,
+                                       10, 10, 116, 111, 32, 115, 111, 108, 118, 101,
+                                       32, 116, 104, 101, 32, 10, 99, 114, 105, 109,
+                                       101, 46, 10]);
+      testing.expectEqual(true, result instanceof Uint8Array);
+      testing.expectEqual(expected, result);
+    });
+  }
+</script>

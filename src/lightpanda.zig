@@ -19,8 +19,12 @@
 const std = @import("std");
 pub const App = @import("App.zig");
 pub const Server = @import("Server.zig");
+pub const Page = @import("browser/Page.zig");
+pub const Browser = @import("browser/Browser.zig");
+pub const Session = @import("browser/Session.zig");
 
 pub const log = @import("log.zig");
+pub const js = @import("browser/js/js.zig");
 pub const dump = @import("browser/dump.zig");
 pub const build_config = @import("build_config");
 
@@ -32,7 +36,6 @@ pub const FetchOpts = struct {
     writer: ?*std.Io.Writer = null,
 };
 pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
-    const Browser = @import("browser/Browser.zig");
     var browser = try Browser.init(app);
     defer browser.deinit();
 

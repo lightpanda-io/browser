@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+<script id=intl>
+  var te = new TextEncoder();
+  testing.expectEqual('utf-8', te.encoding);
+  testing.expectEqual([226, 130, 172], Array.from(te.encode('€')));
+
+  // this will crash if ICU isn't properly configured / ininitialized
+  testing.expectEqual("[object Intl.DateTimeFormat]", new Intl.DateTimeFormat().toString());
+</script>

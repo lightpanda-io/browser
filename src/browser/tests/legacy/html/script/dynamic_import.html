@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+
+<script src="../../testing.js"></script>
+
+<script id=dynamic_import type=module>
+  const promise1 = new Promise((resolve) => {
+    Promise.all([
+      import('./import.js'),
+      import('./import.js'),
+      import('./import.js'),
+      import('./import.js'),
+      import('./import.js'),
+      import('./import.js'),
+      import('./import2.js'),
+      import('./import.js'),
+      import('./import.js'),
+    ]).then(resolve);
+  });
+
+  testing.async(promise1, (res) => {
+    testing.expectEqual(9, res.length);
+    testing.expectEqual('hello', res[0].greeting);
+    testing.expectEqual('hello', res[1].greeting);
+    testing.expectEqual('hello', res[2].greeting);
+    testing.expectEqual('hello', res[3].greeting);
+    testing.expectEqual('hello', res[4].greeting);
+    testing.expectEqual('hello', res[5].greeting);
+    testing.expectEqual('world', res[6].greeting);
+    testing.expectEqual('hello', res[7].greeting);
+    testing.expectEqual('hello', res[8].greeting);
+  });
+</script>

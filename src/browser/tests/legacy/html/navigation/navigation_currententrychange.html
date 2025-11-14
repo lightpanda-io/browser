@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<script id=navigation_currententrychange>
+    let currentEntryChanged = false;
+
+    navigation.addEventListener("currententrychange", () => {
+      currentEntryChanged = true;
+    });
+
+    // Doesn't fully navigate if same document.
+    location.href = location.href + "#1";
+
+    testing.expectEqual(true, currentEntryChanged);
+</script>

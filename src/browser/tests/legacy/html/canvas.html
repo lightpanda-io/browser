@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=canvas>
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("2d");
+  testing.expectEqual(true, ctx instanceof CanvasRenderingContext2D);
+  // We can't really test this but let's try to call it at least.
+  ctx.fillRect(0, 0, 0, 0);
+}
+</script>
+
+<script id=canvas#fillStyle>
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("2d");
+
+  // Black by default.
+  testing.expectEqual(ctx.fillStyle, "#000000");
+  ctx.fillStyle = "red";
+  testing.expectEqual(ctx.fillStyle, "#ff0000");
+  ctx.fillStyle = "rebeccapurple";
+  testing.expectEqual(ctx.fillStyle, "#663399");
+  // No changes made if color is invalid.
+  ctx.fillStyle = "invalid-color";
+  testing.expectEqual(ctx.fillStyle, "#663399");
+}
+</script>

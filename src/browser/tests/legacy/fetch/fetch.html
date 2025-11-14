@@ -1,0 +1,34 @@
+<script src="../testing.js"></script>
+<script id=fetch type=module>
+  const promise1 = new Promise((resolve) => {
+    fetch('http://127.0.0.1:9582/xhr/json')
+    .then((res) => {
+      testing.expectEqual('cors', res.type);
+      return res.json()
+    })
+    .then((json) => {
+      resolve(json);
+    });
+  });
+
+  testing.async(promise1, (json) => {
+    testing.expectEqual({over: '9000!!!'}, json);
+  });
+</script>
+
+<script id=same-origin type=module>
+  const promise1 = new Promise((resolve) => {
+    fetch('http://localhost:9582/xhr/json')
+    .then((res) => {
+      testing.expectEqual('basic', res.type);
+      return res.json()
+    })
+    .then((json) => {
+      resolve(json);
+    });
+  });
+
+  testing.async(promise1, (json) => {
+    testing.expectEqual({over: '9000!!!'}, json);
+  });
+</script>

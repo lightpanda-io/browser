@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="content">
+  <a id="a1" href="foo" class="ok">OK</a>
+  <p id="p1" class="ok empty">
+    <span id="s1"></span>
+  </p>
+  <p id="p2"> And</p>
+</div>
+
+<script id=document>
+  testing.expectEqual('Document', document.__proto__.__proto__.constructor.name);
+  testing.expectEqual('Node', document.__proto__.__proto__.__proto__.constructor.name);
+  testing.expectEqual('EventTarget', document.__proto__.__proto__.__proto__.__proto__.constructor.name);
+
+  let newdoc = new Document();
+  testing.expectEqual(null, newdoc.documentElement);
+  testing.expectEqual(0, newdoc.children.length);
+  testing.expectEqual(0, newdoc.getElementsByTagName('*').length);
+  testing.expectEqual(null, newdoc.getElementsByTagName('*').item(0));
+  testing.expectEqual(true, newdoc.inputEncoding === document.inputEncoding);
+  testing.expectEqual(true, newdoc.documentURI === document.documentURI);
+  testing.expectEqual(true, newdoc.URL === document.URL);
+  testing.expectEqual(true, newdoc.compatMode === document.compatMode);
+  testing.expectEqual(true, newdoc.characterSet === document.characterSet);
+  testing.expectEqual(true, newdoc.charset === document.charset);
+  testing.expectEqual(true, newdoc.contentType === document.contentType);
+
+  testing.expectEqual('HTML', document.documentElement.tagName);
+
+  testing.expectEqual('UTF-8', document.characterSet);
+  testing.expectEqual('UTF-8', document.charset);
+  testing.expectEqual('UTF-8', document.inputEncoding);
+  testing.expectEqual('CSS1Compat', document.compatMode);
+  testing.expectEqual('text/html', document.contentType);
+
+  testing.expectEqual('http://localhost:9582/src/tests/dom/document.html', document.documentURI);
+  testing.expectEqual('http://localhost:9582/src/tests/dom/document.html', document.URL);
+
+  testing.expectEqual(document.body, document.activeElement);
+
+  $('#a1').focus();
+  testing.expectEqual($('#a1'), document.activeElement);
+
+  testing.expectEqual(0, document.styleSheets.length);
+</script>
+
+<script id=getElementById>
+  let divById = document.getElementById('content');
+  testing.expectEqual('HTMLDivElement', divById.constructor.name);
+  testing.expectEqual('div', divById.localName);
+</script>
+
+<script id=getElementsByTagName>
+  let byTagName = document.getElementsByTagName('p');
+  testing.expectEqual(2, byTagName.length)
+  testing.expectEqual('p1', byTagName.item(0).id);
+  testing.expectEqual('p2', byTagName.item(1).id);
+
+  let byTagNameAll = document.getElementsByTagName('*');
+  // If you add a script block (or change the HTML in any other way on this
+  // page), this test will break. Adjust it accordingly.
+  testing.expectEqual(21, byTagNameAll.length);
+  testing.expectEqual('html', byTagNameAll.item(0).localName);
+  testing.expectEqual('SCRIPT', byTagNameAll.item(11).tagName);
+
+  testing.expectEqual('s1', byTagNameAll.namedItem('s1').id);
+</script>
+
+<script id=getElementByClassName>
+  let ok = document.getElementsByClassName('ok');
+  testing.expectEqual(2, ok.length);
+
+  let empty = document.getElementsByClassName('empty');
+  testing.expectEqual(1, empty.length);
+
+  let emptyok = document.getElementsByClassName('empty ok');
+  testing.expectEqual(1, emptyok.length);
+</script>
+
+<script id=createXYZ>
+  var v = document.createDocumentFragment();
+  testing.expectEqual('#document-fragment', v.nodeName);
+
+  v = document.createTextNode('foo');
+  testing.expectEqual('#text', v.nodeName);
+
+  v = document.createCDATASection('foo');
+  testing.expectEqual('#cdata-section', v.nodeName);
+
+  v = document.createAttribute('foo');
+  testing.expectEqual('foo', v.nodeName);
+
+  v = document.createComment('foo');
+  testing.expectEqual('#comment', v.nodeName);
+  v.cloneNode(); // doesn't crash, (I guess that's the point??)
+
+  let pi = document.createProcessingInstruction('foo', 'bar')
+  testing.expectEqual('foo', pi.target);
+  pi.cloneNode(); // doesn't crash (I guess that's the point??)
+</script>
+
+<script id=importNode>
+  let nimp = document.getElementById('content');
+  var v = document.importNode(nimp);
+  testing.expectEqual('DIV', v.nodeName);
+</script>
+
+<script id=children>
+  testing.expectEqual(1, document.children.length);
+  testing.expectEqual('HTML', document.children.item(0).nodeName);
+  testing.expectEqual('HTML', document.firstElementChild.nodeName);
+  testing.expectEqual('HTML', document.lastElementChild.nodeName);
+  testing.expectEqual(1, document.childElementCount);
+
+  let nd = new Document();
+  testing.expectEqual(0, nd.children.length);
+  testing.expectEqual(null, nd.children.item(0));
+  testing.expectEqual(null, nd.firstElementChild);
+  testing.expectEqual(null, nd.lastElementChild);
+  testing.expectEqual(0, nd.childElementCount);
+</script>
+
+<script id=createElement>
+  let emptydoc = document.createElement('html');
+  emptydoc.prepend(document.createElement('html'));
+
+  let emptydoc2 = document.createElement('html');
+  emptydoc2.append(document.createElement('html'));
+
+  // Not sure what the above are testing, I just copied and pasted them.
+  // Maybe that something doesn't crash?
+  // Adding this so that the test runner doesn't complain;
+  testing.skip();
+</script>
+
+<script id=querySelector>
+  testing.expectEqual(null, document.querySelector(''));
+  testing.expectEqual('HTML', document.querySelector('*').nodeName);
+  testing.expectEqual('content', document.querySelector('#content').id);
+  testing.expectEqual('p1', document.querySelector('#p1').id);
+  testing.expectEqual('a1', document.querySelector('.ok').id);
+  testing.expectEqual('p1', document.querySelector('a ~ p').id);
+  testing.expectEqual('HTML', document.querySelector(':root').nodeName);
+
+  testing.expectEqual(2, document.querySelectorAll('p').length);
+
+  testing.expectEqual([''],
+    Array.from(document.querySelectorAll('#content > p#p1'))
+        .map(row => row.querySelector('span').textContent)
+  );
+
+  testing.expectEqual(0, document.querySelectorAll('.\\:popover-open').length);
+  testing.expectEqual(0, document.querySelectorAll('.foo\\:bar').length);
+</script>
+
+<script id=adoptNode>
+// this test breaks the doc structure, keep it at the end
+  let nadop = document.getElementById('content')
+  var v = document.adoptNode(nadop);
+  testing.expectEqual('DIV', v.nodeName);
+</script>
+
+<script id=adoptedStyleSheets>
+  const acss = document.adoptedStyleSheets;
+  testing.expectEqual(0, acss.length);
+  acss.push(new CSSStyleSheet());
+  testing.expectEqual(1, acss.length);
+</script>
+
+<script id=createEvent>
+    const event = document.createEvent("Event");
+
+    testing.expectEqual(true, event instanceof Event);
+    testing.expectEqual("", event.type);
+
+    const customEvent = document.createEvent("CustomEvent");
+    customEvent.initCustomEvent("hey", false, false);
+
+    testing.expectEqual(true, customEvent instanceof CustomEvent);
+    testing.expectEqual(true, customEvent instanceof Event);
+
+    testing.withError(
+        (err) => {
+            // TODO: Check the error type.
+        },
+        () => document.createEvent("InvalidType"),
+    );
+</script>

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=location>
+  testing.expectEqual('http://localhost:9582/src/tests/html/location.html', location.href);
+  testing.expectEqual('http://localhost:9582/src/tests/html/location.html', document.location.href);
+
+  testing.expectEqual("localhost:9582", location.host);
+  testing.expectEqual("localhost", location.hostname);
+  testing.expectEqual("http://localhost:9582", location.origin);
+  testing.expectEqual("/src/tests/html/location.html", location.pathname);
+  testing.expectEqual("", location.hash);
+  testing.expectEqual("9582", location.port);
+  testing.expectEqual("", location.search);
+</script>
+
+<script id=location_hash>
+  location.hash = "";
+  testing.expectEqual("", location.hash);
+  testing.expectEqual('http://localhost:9582/src/tests/html/location.html', location.href);
+
+  location.hash = "#abcdef";
+  testing.expectEqual("#abcdef", location.hash);
+  testing.expectEqual('http://localhost:9582/src/tests/html/location.html#abcdef', location.href);
+
+  location.hash = "xyzxyz";
+  testing.expectEqual("#xyzxyz", location.hash);
+  testing.expectEqual('http://localhost:9582/src/tests/html/location.html#xyzxyz', location.href);
+
+  location.hash = "";
+  testing.expectEqual("", location.hash);
+  testing.expectEqual('http://localhost:9582/src/tests/html/location.html', location.href);
+</script>

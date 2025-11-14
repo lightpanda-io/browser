@@ -24,8 +24,6 @@ const Document = @import("Document.zig");
 const HTMLDocument = @import("HTMLDocument.zig");
 
 const DOMParser = @This();
-// @ZIGDOM support empty structs
-_: u8 = 0,
 
 pub fn init() DOMParser {
     return .{};
@@ -63,6 +61,7 @@ pub const JsApi = struct {
         pub const name = "DOMParser";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const empty_with_no_proto = true;
     };
 
     pub const constructor = bridge.constructor(DOMParser.init, .{});

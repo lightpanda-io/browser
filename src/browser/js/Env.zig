@@ -314,7 +314,9 @@ fn generateConstructor(comptime JsApi: type, isolate: v8.Isolate) v8.FunctionTem
     };
 
     const template = v8.FunctionTemplate.initCallback(isolate, callback);
-    template.getInstanceTemplate().setInternalFieldCount(1);
+    if (!@hasDecl(JsApi.Meta, "empty_with_no_proto")) {
+        template.getInstanceTemplate().setInternalFieldCount(1);
+    }
     const class_name = v8.String.initUtf8(isolate, if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi));
     template.setClassName(class_name);
     return template;

@@ -615,6 +615,8 @@ pub fn mapZigInstanceToJs(self: *Context, js_obj_: ?v8.Object, value: anytype) !
             }
 
             const isolate = self.isolate;
+            const JsApi = bridge.Struct(ptr.child).JsApi;
+
             // Sometimes we're creating a new v8.Object, like when
             // we're returning a value from a function. In those cases
             // we have to get the object template, and we can get an object
@@ -626,19 +628,26 @@ pub fn mapZigInstanceToJs(self: *Context, js_obj_: ?v8.Object, value: anytype) !
                 const template = self.templates[resolved.class_id];
                 break :blk template.getInstanceTemplate().initInstance(v8_context);
             };
-            const JsApi = bridge.Struct(ptr.child).JsApi;
 
-            // The TAO contains the pointer to our Zig instance as
-            // well as any meta data we'll need to use it later.
-            // See the TaggedAnyOpaque struct for more details.
-            const tao = try arena.create(TaggedAnyOpaque);
-            tao.* = .{
-                .value = resolved.ptr,
-                .prototype_chain = resolved.prototype_chain.ptr,
-                .prototype_len = @intCast(resolved.prototype_chain.len),
-                .subtype = if (@hasDecl(JsApi.Meta, "subtype")) JsApi.Meta.subype else .node,
-            };
-            js_obj.setInternalField(0, v8.External.init(isolate, tao));
+            if (!@hasDecl(JsApi.Meta, "empty_with_no_proto")) {
+                // The TAO contains the pointer to our Zig instance as
+                // well as any meta data we'll need to use it later.
+                // See the TaggedAnyOpaque struct for more details.
+                const tao = try arena.create(TaggedAnyOpaque);
+                tao.* = .{
+                    .value = resolved.ptr,
+                    .prototype_chain = resolved.prototype_chain.ptr,
+                    .prototype_len = @intCast(resolved.prototype_chain.len),
+                    .subtype = if (@hasDecl(JsApi.Meta, "subtype")) JsApi.Meta.subype else .node,
+                };
+                js_obj.setInternalField(0, v8.External.init(isolate, tao));
+            } else {
+                // If the struct is empty, we don't need to do all
+                // the TOA stuff and setting the internal data.
+                // When we try to map this from JS->Zig, in
+                // typeTaggedAnyOpaque, we'll also know there that
+                // the type is empty and can create an empty instance.
+            }
 
             const js_persistent = PersistentObject.init(isolate, js_obj);
             gop.value_ptr.* = js_persistent;
@@ -1504,6 +1513,15 @@ pub fn typeTaggedAnyOpaque(comptime R: type, js_obj: v8.Object) !R {
     }
 
     const T = ti.pointer.child;
+    const JsApi = bridge.Struct(T).JsApi;
+
+    if (@hasDecl(JsApi.Meta, "empty_with_no_proto")) {
+        // Empty structs aren't stored as TOAs and there's no data
+        // stored in the JSObject's IntenrnalField. Why bother when
+        // we can just return an empty struct here?
+        return @constCast(@as(*const T, &.{}));
+    }
+
     // if it isn't an empty struct, then the v8.Object should have an
     // InternalFieldCount > 0, since our toa pointer should be embedded
     // at index 0 of the internal field count.
@@ -1511,7 +1529,7 @@ pub fn typeTaggedAnyOpaque(comptime R: type, js_obj: v8.Object) !R {
         return error.InvalidArgument;
     }
 
-    const type_name = @typeName(bridge.Struct(T).JsApi);
+    const type_name = @typeName(JsApi);
     if (@hasField(bridge.JsApiLookup, type_name) == false) {
         @compileError("unknown Zig type: " ++ @typeName(R));
     }

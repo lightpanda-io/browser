@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<script id=script>
+  let script = document.createElement('script')
+  script.src = 'foo.bar';
+
+  script.async = true;
+  testing.expectEqual(true, script.async);
+  script.async = false;
+  testing.expectEqual(false, script.async);
+
+  script.defer = true;
+  testing.expectEqual(true, script.defer);
+
+  testing.expectEqual('', script.nonce);
+  script.nonce = 'hello';
+  testing.expectEqual('hello', script.nonce);
+</script>
+
+<script id=datauri src="data:text/plain;charset=utf-8;base64,dGVzdGluZy5leHBlY3RFcXVhbCh0cnVlLCB0cnVlKTs="></script>

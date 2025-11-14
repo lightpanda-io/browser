@@ -1,0 +1,8 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<script id=navigation2>
+    const state = navigation.currentEntry.getState();
+    testing.expectEqual(true, state.navTestInProgress);
+    testing.expectEqual(state.currentIndex + 1, navigation.currentEntry.index);
+</script>

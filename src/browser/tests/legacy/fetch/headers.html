@@ -1,0 +1,102 @@
+<script src="../testing.js"></script>
+
+<script id=headers>
+  let headers = new Headers({"Set-Cookie": "name=world"});
+  testing.expectEqual("name=world", headers.get("set-cookie"));
+
+  let myHeaders = new Headers();
+  myHeaders.append("Content-Type", "image/jpeg"),
+  testing.expectEqual(false, myHeaders.has("Picture-Type"));
+  testing.expectEqual("image/jpeg", myHeaders.get("Content-Type"));
+
+  myHeaders.append("Content-Type", "image/png");
+  testing.expectEqual("image/jpeg, image/png", myHeaders.get("Content-Type"));
+
+  myHeaders.delete("Content-Type");
+  testing.expectEqual(null, myHeaders.get("Content-Type"));
+
+  myHeaders.set("Picture-Type", "image/svg")
+  testing.expectEqual("image/svg", myHeaders.get("Picture-Type"));
+  testing.expectEqual(true, myHeaders.has("Picture-Type"))
+
+  const originalHeaders = new Headers([["Content-Type", "application/json"], ["Authorization", "Bearer token123"]]);
+  testing.expectEqual("application/json", originalHeaders.get("Content-Type"));
+  testing.expectEqual("Bearer token123", originalHeaders.get("Authorization"));
+
+  const newHeaders = new Headers(originalHeaders);
+  testing.expectEqual("application/json", newHeaders.get("Content-Type"));
+  testing.expectEqual("Bearer token123" ,newHeaders.get("Authorization"));
+  testing.expectEqual(true ,newHeaders.has("Content-Type"));
+  testing.expectEqual(true ,newHeaders.has("Authorization"));
+  testing.expectEqual(false, newHeaders.has("X-Custom"));
+
+  newHeaders.set("X-Custom", "test-value");
+  testing.expectEqual("test-value", newHeaders.get("X-Custom"));
+  testing.expectEqual(null, originalHeaders.get("X-Custom"));
+  testing.expectEqual(false, originalHeaders.has("X-Custom"));
+</script>
+
+<script id=keys>
+  const testKeyHeaders = new Headers();
+  testKeyHeaders.set("Content-Type", "application/json");
+  testKeyHeaders.set("Authorization", "Bearer token123");
+  testKeyHeaders.set("X-Custom", "test-value");
+
+  const keys = [];
+  for (const key of testKeyHeaders.keys()) {
+      keys.push(key);
+  }
+
+  testing.expectEqual(3, keys.length);
+  testing.expectEqual(true, keys.includes("Content-Type"));
+  testing.expectEqual(true, keys.includes("Authorization"));
+  testing.expectEqual(true, keys.includes("X-Custom"));
+</script>
+
+<script id=values>
+  const testValuesHeaders = new Headers();
+  testValuesHeaders.set("Content-Type", "application/json");
+  testValuesHeaders.set("Authorization", "Bearer token123");
+  testValuesHeaders.set("X-Custom", "test-value");
+
+  const values = [];
+  for (const value of testValuesHeaders.values()) {
+      values.push(value);
+  }
+
+  testing.expectEqual(3, values.length);
+  testing.expectEqual(true, values.includes("application/json"));
+  testing.expectEqual(true, values.includes("Bearer token123"));
+  testing.expectEqual(true, values.includes("test-value"));
+</script>
+
+<script id=entries>
+  const testEntriesHeaders = new Headers();
+  testEntriesHeaders.set("Content-Type", "application/json");
+  testEntriesHeaders.set("Authorization", "Bearer token123");
+  testEntriesHeaders.set("X-Custom", "test-value");
+
+  const entries = [];
+  for (const entry of testEntriesHeaders.entries()) {
+      entries.push(entry);
+  }
+        
+  testing.expectEqual(3, entries.length);
+
+  const entryMap = new Map(entries);
+  testing.expectEqual("application/json", entryMap.get("Content-Type"));
+  testing.expectEqual("Bearer token123", entryMap.get("Authorization"));
+  testing.expectEqual("test-value", entryMap.get("X-Custom"));
+  
+  const entryKeys = Array.from(entryMap.keys());
+  testing.expectEqual(3, entryKeys.length);
+  testing.expectEqual(true, entryKeys.includes("Content-Type"));
+  testing.expectEqual(true, entryKeys.includes("Authorization"));
+  testing.expectEqual(true, entryKeys.includes("X-Custom"));
+  
+  const entryValues = Array.from(entryMap.values());
+  testing.expectEqual(3, entryValues.length);
+  testing.expectEqual(true, entryValues.includes("application/json"));
+  testing.expectEqual(true, entryValues.includes("Bearer token123"));
+  testing.expectEqual(true, entryValues.includes("test-value"))
+</script>

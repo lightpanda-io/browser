@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<body></body>
+<script src="../testing.js"></script>
+
+<script id=intersectionObserver>
+  {
+    // never attached
+    let count = 0;
+    const div = document.createElement('div');
+    new IntersectionObserver((entries) => {
+      count += 1;
+    }).observe(div);
+
+    testing.eventually(() => {
+      testing.expectEqual(0, count);
+    });
+  }
+
+  {
+    // not connected, but has parent
+    let count = 0;
+    const div1 = document.createElement('div');
+    const div2 = document.createElement('div');
+    new IntersectionObserver((entries) => {
+      console.log(entries[0]);
+      count += 1;
+    }).observe(div1);
+
+    div2.appendChild(div1);
+    testing.eventually(() => {
+      testing.expectEqual(1, count);
+    });
+  }
+</script>
+
+<script id=reobserve>
+  {
+    let count = 0;
+    let observer = new IntersectionObserver(entries => {
+      count += entries.length;
+    });
+
+    const div1 = document.createElement('div');
+    document.body.appendChild(div1);
+
+    // cannot fire synchronously, must be on the next tick
+    testing.expectEqual(0, count);
+    observer.observe(div1);
+    testing.expectEqual(0, count);
+    observer.observe(div1);
+    observer.observe(div1);
+    testing.expectEqual(0, count);
+
+    testing.eventually(() => {
+      testing.expectEqual(1, count);
+    });
+  }
+</script>
+
+<script id=unobserve>
+  {
+    let count = 0;
+    let observer = new IntersectionObserver(entries => {
+      count += entries.length;
+    });
+
+    const div1 = document.createElement('div');
+    document.body.appendChild(div1);
+
+    testing.expectEqual(0, count);
+    observer.observe(div1);
+    testing.expectEqual(0, count);
+    observer.observe(div1);
+    observer.observe(div1);
+    testing.expectEqual(0, count);
+
+    observer.unobserve(div1);
+    testing.eventually(() => {
+      testing.expectEqual(0, count);
+    });
+  }
+</script>
+
+<script id=disconnect>
+  {
+    let count = 0;
+    let observer = new IntersectionObserver(entries => {
+      count += entries.length;
+    });
+
+    const div1 = document.createElement('div');
+    document.body.appendChild(div1);
+
+    // cannot fire synchronously, must be on the next tick
+    testing.expectEqual(0, count);
+    observer.observe(div1);
+    testing.expectEqual(0, count);
+    observer.observe(div1);
+    observer.observe(div1);
+    testing.expectEqual(0, count);
+    observer.disconnect();
+
+    testing.eventually(() => {
+      testing.expectEqual(0, count);
+    });
+  }
+</script>
+
+<script id=entry>
+  {
+    let entry = null;
+    let observer = new IntersectionObserver(entries => {
+      entry = entries[0];
+    });
+
+    let div1 = document.createElement('div');
+    document.body.appendChild(div1);
+    new IntersectionObserver(entries => { entry = entries[0]; }).observe(div1);
+
+    testing.eventually(() => {
+      testing.expectEqual(0, entry.boundingClientRect.x);
+      testing.expectEqual(1, entry.intersectionRatio);
+      testing.expectEqual(0, entry.intersectionRect.x);
+      testing.expectEqual(0, entry.intersectionRect.y);
+      testing.expectEqual(5, entry.intersectionRect.width);
+      testing.expectEqual(5, entry.intersectionRect.height);
+      testing.expectEqual(true, entry.isIntersecting);
+      testing.expectEqual(0, entry.rootBounds.x);
+      testing.expectEqual(0, entry.rootBounds.y);
+      testing.expectEqual(5, entry.rootBounds.width);
+      testing.expectEqual(5, entry.rootBounds.height);
+      testing.expectEqual('[object HTMLDivElement]', entry.target.toString());
+    });
+  }
+</script>
+
+<script id=timing>
+  {
+    const capture = [];
+    const observer = new IntersectionObserver(() => {
+      capture.push('callback');
+    });
+
+    const div = document.createElement('div');
+    capture.push('pre-append');
+    document.body.appendChild(div);
+    capture.push('post-append');
+
+    capture.push('pre-observe');
+    observer.observe(div);
+    capture.push('post-observe');
+
+    testing.eventually(() => {
+      testing.expectEqual([
+        'pre-append',
+        'post-append',
+        'pre-observe',
+        'post-observe',
+        'callback',
+      ], capture)
+    });
+  }
+</script>

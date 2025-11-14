@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<script id=history2>
+    history.pushState(
+      {"new": "field", testComplete: true },
+      null,
+      'http://127.0.0.1:9582/src/tests/html/history/history_after_nav.html'
+    );
+
+    let popstateEventFired = false;
+    let popstateEventState = null;
+
+    // uses the window event listener.
+    window.onpopstate = (event) => {
+        popstateEventFired = true;
+        popstateEventState = event.state;
+    };
+    
+    testing.eventually(() => {
+      testing.expectEqual(true, popstateEventFired);
+      testing.expectEqual(true, popstateEventState.testComplete);
+    })
+
+    history.back();
+</script>

@@ -113,6 +113,33 @@ pub fn build(b: *Build) !void {
     }
 
     {
+        // ZIGDOM
+        // browser
+        const exe = b.addExecutable(.{
+            .name = "legacy_test",
+            .use_llvm = true,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/main_legacy_test.zig"),
+                .target = target,
+                .optimize = optimize,
+                .sanitize_c = enable_csan,
+                .sanitize_thread = enable_tsan,
+                .imports = &.{
+                  .{.name = "lightpanda", .module = lightpanda_module},
+                },
+            }),
+        });
+        b.installArtifact(exe);
+
+        const run_cmd = b.addRunArtifact(exe);
+        if (b.args) |args| {
+            run_cmd.addArgs(args);
+        }
+        const run_step = b.step("legacy_test", "Run the app");
+        run_step.dependOn(&run_cmd.step);
+    }
+
+    {
         // wpt
         const exe = b.addExecutable(.{
             .name = "lightpanda-wpt",
