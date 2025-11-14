@@ -44,6 +44,7 @@ pub extern "C" fn html5ever_parse_document(
     pop_callback: PopCallback,
     create_comment_callback: CreateCommentCallback,
     append_doctype_to_document: AppendDoctypeToDocumentCallback,
+    add_attrs_if_missing_callback: AddAttrsIfMissingCallback,
 ) -> () {
     if html.is_null() || len == 0 {
         return ();
@@ -63,6 +64,7 @@ pub extern "C" fn html5ever_parse_document(
         create_element_callback: create_element_callback,
         create_comment_callback: create_comment_callback,
         append_doctype_to_document: append_doctype_to_document,
+        add_attrs_if_missing_callback: add_attrs_if_missing_callback,
     };
 
     let bytes = unsafe { std::slice::from_raw_parts(html, len) };
@@ -84,6 +86,7 @@ pub extern "C" fn html5ever_parse_fragment(
     pop_callback: PopCallback,
     create_comment_callback: CreateCommentCallback,
     append_doctype_to_document: AppendDoctypeToDocumentCallback,
+    add_attrs_if_missing_callback: AddAttrsIfMissingCallback,
 ) -> () {
     if html.is_null() || len == 0 {
         return ();
@@ -103,6 +106,7 @@ pub extern "C" fn html5ever_parse_fragment(
         create_element_callback: create_element_callback,
         create_comment_callback: create_comment_callback,
         append_doctype_to_document: append_doctype_to_document,
+        add_attrs_if_missing_callback: add_attrs_if_missing_callback,
     };
 
     let bytes = unsafe { std::slice::from_raw_parts(html, len) };
@@ -183,6 +187,7 @@ pub extern "C" fn html5ever_streaming_parser_create(
     pop_callback: PopCallback,
     create_comment_callback: CreateCommentCallback,
     append_doctype_to_document: AppendDoctypeToDocumentCallback,
+    add_attrs_if_missing_callback: AddAttrsIfMissingCallback,
 ) -> *mut c_void {
     let arena = Box::new(typed_arena::Arena::new());
 
@@ -205,6 +210,7 @@ pub extern "C" fn html5ever_streaming_parser_create(
         create_element_callback: create_element_callback,
         create_comment_callback: create_comment_callback,
         append_doctype_to_document: append_doctype_to_document,
+        add_attrs_if_missing_callback: add_attrs_if_missing_callback,
     };
 
     // Create a parser which implements TendrilSink for streaming parsing

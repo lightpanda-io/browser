@@ -55,6 +55,7 @@ pub struct Sink<'arena> {
     pub create_element_callback: CreateElementCallback,
     pub create_comment_callback: CreateCommentCallback,
     pub append_doctype_to_document: AppendDoctypeToDocumentCallback,
+    pub add_attrs_if_missing_callback: AddAttrsIfMissingCallback,
 }
 
 impl<'arena> TreeSink for Sink<'arena> {
@@ -120,19 +121,6 @@ impl<'arena> TreeSink for Sink<'arena> {
         let data = self.arena.alloc(ElementData::new(name.clone(), flags));
 
         unsafe {
-            let mut c_attrs: Vec<CAttribute> = Vec::with_capacity(attrs.len());
-
-            for attr in attrs.iter() {
-                let v: &str = &attr.value;
-                c_attrs.push(CAttribute {
-                    name: CQualName::create(&attr.name),
-                    value: StringSlice {
-                        ptr: v.as_ptr(),
-                        len: attr.value.len(),
-                    },
-                })
-            }
-
             let mut attribute_iterator = CAttributeIterator { vec: attrs, pos: 0 };
 
             return (self.create_element_callback)(
@@ -226,9 +214,15 @@ impl<'arena> TreeSink for Sink<'arena> {
     }
 
     fn add_attrs_if_missing(&self, target: &Ref, attrs: Vec<Attribute>) {
-        _ = target;
-        _ = attrs;
-        panic!("add_attrs_if_missing");
+        unsafe {
+            let mut attribute_iterator = CAttributeIterator { vec: attrs, pos: 0 };
+
+            (self.add_attrs_if_missing_callback)(
+                self.ctx,
+                *target,
+                &mut attribute_iterator as *mut _ as *mut c_void,
+            );
+        }
     }
 
     fn remove_from_parent(&self, target: &Ref) {

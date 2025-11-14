@@ -51,6 +51,12 @@ pub type ParseErrorCallback = unsafe extern "C" fn(ctx: Ref, str: StringSlice) -
 
 pub type PopCallback = unsafe extern "C" fn(ctx: Ref, node: Ref) -> ();
 
+pub type AddAttrsIfMissingCallback = unsafe extern "C" fn(
+    ctx: Ref,
+    target: Ref,
+    attributes: *mut c_void,
+) -> ();
+
 pub type Ref = *const c_void;
 
 #[repr(C)]

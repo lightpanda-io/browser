@@ -64,6 +64,8 @@ const Error = struct {
         append,
         create_element,
         create_comment,
+        append_doctype_to_document,
+        add_attrs_if_missing,
     };
 };
 
@@ -80,6 +82,7 @@ pub fn parse(self: *Parser, html: []const u8) void {
         popCallback,
         createCommentCallback,
         appendDoctypeToDocument,
+        addAttrsIfMissingCallback,
     );
 }
 
@@ -96,6 +99,7 @@ pub fn parseFragment(self: *Parser, html: []const u8) void {
         popCallback,
         createCommentCallback,
         appendDoctypeToDocument,
+        addAttrsIfMissingCallback,
     );
 }
 
@@ -129,6 +133,7 @@ pub const Streaming = struct {
             popCallback,
             createCommentCallback,
             appendDoctypeToDocument,
+            addAttrsIfMissingCallback,
         ) orelse return error.ParserCreationFailed;
     }
 
@@ -213,6 +218,31 @@ fn appendDoctypeToDocument(ctx: *anyopaque, name: h5e.StringSlice, public_id: h5
 fn _appendDoctypeToDocument(self: *Parser, name: []const u8) !void {
     _ = self;
     _ = name;
+}
+
+fn addAttrsIfMissingCallback(ctx: *anyopaque, target_ref: *anyopaque, attributes: h5e.AttributeIterator) callconv(.c) void {
+    const self: *Parser = @ptrCast(@alignCast(ctx));
+    self._addAttrsIfMissingCallback(getNode(target_ref), attributes) catch |err| {
+        self.err = .{ .err = err, .source = .add_attrs_if_missing };
+    };
+}
+fn _addAttrsIfMissingCallback(self: *Parser, node: *Node, attributes: h5e.AttributeIterator) !void {
+    const element = node.as(Element);
+    const page = self.page;
+
+    const attr_list = element._attributes orelse blk: {
+        const a = try page.arena.create(@import("../webapi/element/Attribute.zig").List);
+        a.* = .{};
+        element._attributes = a;
+        break :blk a;
+    };
+
+    while (attributes.next()) |attr| {
+        const name = attr.name.local.slice();
+        const value = attr.value.slice();
+        // putNew only adds if the attribute doesn't already exist
+        try attr_list.putNew(name, value, page);
+    }
 }
 
 fn getDataCallback(ctx: *anyopaque) callconv(.c) *anyopaque {
