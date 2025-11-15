@@ -1159,22 +1159,15 @@ pub fn appendNode(self: *Page, parent: *Node, child: *Node, opts: InsertNodeOpts
     return self._insertNodeRelative(false, parent, child, .append, opts);
 }
 
-// Currently only called when appending DocumentFragment children,
-// so optimized for that case.
 pub fn appendAllChildren(self: *Page, parent: *Node, target: *Node) !void {
-    // DocumentFragments are never connected so we set child_already_connected
-    // to false. This assertion exists to protect against any future use of this
-    // function where the parent is connected (and thus the hard-coded false
-    // must be changed)
-    std.debug.assert(!parent.isConnected());
-
     self.domChanged();
+    const is_connected = parent.isConnected();
     const dest_connected = target.isConnected();
 
     var it = parent.childrenIterator();
     while (it.next()) |child| {
         self.removeNode(parent, child, .{ .will_be_reconnected = dest_connected });
-        try self.appendNode(target, child, .{ .child_already_connected = false });
+        try self.appendNode(target, child, .{ .child_already_connected = is_connected });
     }
 }
 

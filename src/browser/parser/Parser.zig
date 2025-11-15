@@ -68,6 +68,7 @@ const Error = struct {
         add_attrs_if_missing,
         get_template_content,
         remove_from_parent,
+        reparent_children,
     };
 };
 
@@ -87,6 +88,7 @@ pub fn parse(self: *Parser, html: []const u8) void {
         addAttrsIfMissingCallback,
         getTemplateContentsCallback,
         removeFromParentCallback,
+        reparentChildrenCallback,
     );
 }
 
@@ -106,6 +108,7 @@ pub fn parseFragment(self: *Parser, html: []const u8) void {
         addAttrsIfMissingCallback,
         getTemplateContentsCallback,
         removeFromParentCallback,
+        reparentChildrenCallback,
     );
 }
 
@@ -142,6 +145,7 @@ pub const Streaming = struct {
             addAttrsIfMissingCallback,
             getTemplateContentsCallback,
             removeFromParentCallback,
+            reparentChildrenCallback,
         ) orelse return error.ParserCreationFailed;
     }
 
@@ -308,10 +312,19 @@ fn removeFromParentCallback(ctx: *anyopaque, target_ref: *anyopaque) callconv(.c
         self.err = .{ .err = err, .source = .remove_from_parent };
     };
 }
-
 fn _removeFromParentCallback(self: *Parser, node: *Node) !void {
     const parent = node.parentNode() orelse return;
     _ = try parent.removeChild(node, self.page);
+}
+
+fn reparentChildrenCallback(ctx: *anyopaque, node_ref: *anyopaque, new_parent_ref: *anyopaque) callconv(.c) void {
+    const self: *Parser = @ptrCast(@alignCast(ctx));
+    self._reparentChildrenCallback(getNode(node_ref), getNode(new_parent_ref)) catch |err| {
+        self.err = .{ .err = err, .source = .reparent_children };
+    };
+}
+fn _reparentChildrenCallback(self: *Parser, node: *Node, new_parent: *Node) !void {
+    try self.page.appendAllChildren(node, new_parent);
 }
 
 fn getNode(ref: *anyopaque) *Node {

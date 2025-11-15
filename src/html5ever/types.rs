@@ -61,6 +61,8 @@ pub type GetTemplateContentsCallback = unsafe extern "C" fn(ctx: Ref, target: Re
 
 pub type RemoveFromParentCallback = unsafe extern "C" fn(ctx: Ref, target: Ref) -> ();
 
+pub type ReparentChildrenCallback = unsafe extern "C" fn(ctx: Ref, node: Ref, new_parent: Ref) -> ();
+
 pub type Ref = *const c_void;
 
 #[repr(C)]

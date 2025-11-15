@@ -47,6 +47,7 @@ pub extern "C" fn html5ever_parse_document(
     add_attrs_if_missing_callback: AddAttrsIfMissingCallback,
     get_template_contents_callback: GetTemplateContentsCallback,
     remove_from_parent_callback: RemoveFromParentCallback,
+    reparent_children_callback: ReparentChildrenCallback,
 ) -> () {
     if html.is_null() || len == 0 {
         return ();
@@ -69,6 +70,7 @@ pub extern "C" fn html5ever_parse_document(
         add_attrs_if_missing_callback: add_attrs_if_missing_callback,
         get_template_contents_callback: get_template_contents_callback,
         remove_from_parent_callback: remove_from_parent_callback,
+        reparent_children_callback: reparent_children_callback,
     };
 
     let bytes = unsafe { std::slice::from_raw_parts(html, len) };
@@ -93,6 +95,7 @@ pub extern "C" fn html5ever_parse_fragment(
     add_attrs_if_missing_callback: AddAttrsIfMissingCallback,
     get_template_contents_callback: GetTemplateContentsCallback,
     remove_from_parent_callback: RemoveFromParentCallback,
+    reparent_children_callback: ReparentChildrenCallback,
 ) -> () {
     if html.is_null() || len == 0 {
         return ();
@@ -115,6 +118,7 @@ pub extern "C" fn html5ever_parse_fragment(
         add_attrs_if_missing_callback: add_attrs_if_missing_callback,
         get_template_contents_callback: get_template_contents_callback,
         remove_from_parent_callback: remove_from_parent_callback,
+        reparent_children_callback: reparent_children_callback,
     };
 
     let bytes = unsafe { std::slice::from_raw_parts(html, len) };
@@ -198,6 +202,7 @@ pub extern "C" fn html5ever_streaming_parser_create(
     add_attrs_if_missing_callback: AddAttrsIfMissingCallback,
     get_template_contents_callback: GetTemplateContentsCallback,
     remove_from_parent_callback: RemoveFromParentCallback,
+    reparent_children_callback: ReparentChildrenCallback,
 ) -> *mut c_void {
     let arena = Box::new(typed_arena::Arena::new());
 
@@ -223,6 +228,7 @@ pub extern "C" fn html5ever_streaming_parser_create(
         add_attrs_if_missing_callback: add_attrs_if_missing_callback,
         get_template_contents_callback: get_template_contents_callback,
         remove_from_parent_callback: remove_from_parent_callback,
+        reparent_children_callback: reparent_children_callback,
     };
 
     // Create a parser which implements TendrilSink for streaming parsing
