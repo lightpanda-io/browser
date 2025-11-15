@@ -67,6 +67,7 @@ const Error = struct {
         append_doctype_to_document,
         add_attrs_if_missing,
         get_template_content,
+        remove_from_parent,
     };
 };
 
@@ -84,7 +85,8 @@ pub fn parse(self: *Parser, html: []const u8) void {
         createCommentCallback,
         appendDoctypeToDocument,
         addAttrsIfMissingCallback,
-        getTemplateContentsCallback
+        getTemplateContentsCallback,
+        removeFromParentCallback,
     );
 }
 
@@ -102,7 +104,8 @@ pub fn parseFragment(self: *Parser, html: []const u8) void {
         createCommentCallback,
         appendDoctypeToDocument,
         addAttrsIfMissingCallback,
-        getTemplateContentsCallback
+        getTemplateContentsCallback,
+        removeFromParentCallback,
     );
 }
 
@@ -137,7 +140,8 @@ pub const Streaming = struct {
             createCommentCallback,
             appendDoctypeToDocument,
             addAttrsIfMissingCallback,
-            getTemplateContentsCallback
+            getTemplateContentsCallback,
+            removeFromParentCallback,
         ) orelse return error.ParserCreationFailed;
     }
 
@@ -296,6 +300,18 @@ fn _appendCallback(self: *Parser, parent: *Node, node_or_text: h5e.NodeOrText) !
             try self.page.appendNew(parent, .{ .text = txt });
         },
     }
+}
+
+fn removeFromParentCallback(ctx: *anyopaque, target_ref: *anyopaque) callconv(.c) void {
+    const self: *Parser = @ptrCast(@alignCast(ctx));
+    self._removeFromParentCallback(getNode(target_ref)) catch |err| {
+        self.err = .{ .err = err, .source = .remove_from_parent };
+    };
+}
+
+fn _removeFromParentCallback(self: *Parser, node: *Node) !void {
+    const parent = node.parentNode() orelse return;
+    _ = try parent.removeChild(node, self.page);
 }
 
 fn getNode(ref: *anyopaque) *Node {

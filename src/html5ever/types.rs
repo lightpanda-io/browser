@@ -59,6 +59,8 @@ pub type AddAttrsIfMissingCallback = unsafe extern "C" fn(
 
 pub type GetTemplateContentsCallback = unsafe extern "C" fn(ctx: Ref, target: Ref) -> Ref;
 
+pub type RemoveFromParentCallback = unsafe extern "C" fn(ctx: Ref, target: Ref) -> ();
+
 pub type Ref = *const c_void;
 
 #[repr(C)]

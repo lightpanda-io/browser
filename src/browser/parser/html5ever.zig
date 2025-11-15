@@ -32,6 +32,7 @@ pub extern "c" fn html5ever_parse_document(
     appendDoctypeToDocument: *const fn (ctx: *anyopaque, StringSlice, StringSlice, StringSlice) callconv(.c) void,
     addAttrsIfMissingCallback: *const fn (ctx: *anyopaque, target_ref: *anyopaque, AttributeIterator) callconv(.c) void,
     getTemplateContentsCallback: *const fn (ctx: *anyopaque, target_ref: *anyopaque) callconv(.c) ?*anyopaque,
+    removeFromParentCallback: *const fn (ctx: *anyopaque, target_ref: *anyopaque) callconv(.c) void,
 ) void;
 
 pub extern "c" fn html5ever_parse_fragment(
@@ -48,6 +49,7 @@ pub extern "c" fn html5ever_parse_fragment(
     appendDoctypeToDocument: *const fn (ctx: *anyopaque, StringSlice, StringSlice, StringSlice) callconv(.c) void,
     addAttrsIfMissingCallback: *const fn (ctx: *anyopaque, target_ref: *anyopaque, AttributeIterator) callconv(.c) void,
     getTemplateContentsCallback: *const fn (ctx: *anyopaque, target_ref: *anyopaque) callconv(.c) ?*anyopaque,
+    removeFromParentCallback: *const fn (ctx: *anyopaque, target_ref: *anyopaque) callconv(.c) void,
 ) void;
 
 pub extern "c" fn html5ever_attribute_iterator_next(ctx: *anyopaque) Nullable(Attribute);
@@ -73,6 +75,7 @@ pub extern "c" fn html5ever_streaming_parser_create(
     appendDoctypeToDocument: *const fn (ctx: *anyopaque, StringSlice, StringSlice, StringSlice) callconv(.c) void,
     addAttrsIfMissingCallback: *const fn (ctx: *anyopaque, target_ref: *anyopaque, AttributeIterator) callconv(.c) void,
     getTemplateContentsCallback: *const fn (ctx: *anyopaque, target_ref: *anyopaque) callconv(.c) ?*anyopaque,
+    removeFromParentCallback: *const fn (ctx: *anyopaque, target_ref: *anyopaque) callconv(.c) void,
 ) ?*anyopaque;
 
 pub extern "c" fn html5ever_streaming_parser_feed(

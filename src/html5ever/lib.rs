@@ -46,6 +46,7 @@ pub extern "C" fn html5ever_parse_document(
     append_doctype_to_document: AppendDoctypeToDocumentCallback,
     add_attrs_if_missing_callback: AddAttrsIfMissingCallback,
     get_template_contents_callback: GetTemplateContentsCallback,
+    remove_from_parent_callback: RemoveFromParentCallback,
 ) -> () {
     if html.is_null() || len == 0 {
         return ();
@@ -67,6 +68,7 @@ pub extern "C" fn html5ever_parse_document(
         append_doctype_to_document: append_doctype_to_document,
         add_attrs_if_missing_callback: add_attrs_if_missing_callback,
         get_template_contents_callback: get_template_contents_callback,
+        remove_from_parent_callback: remove_from_parent_callback,
     };
 
     let bytes = unsafe { std::slice::from_raw_parts(html, len) };
@@ -90,6 +92,7 @@ pub extern "C" fn html5ever_parse_fragment(
     append_doctype_to_document: AppendDoctypeToDocumentCallback,
     add_attrs_if_missing_callback: AddAttrsIfMissingCallback,
     get_template_contents_callback: GetTemplateContentsCallback,
+    remove_from_parent_callback: RemoveFromParentCallback,
 ) -> () {
     if html.is_null() || len == 0 {
         return ();
@@ -111,6 +114,7 @@ pub extern "C" fn html5ever_parse_fragment(
         append_doctype_to_document: append_doctype_to_document,
         add_attrs_if_missing_callback: add_attrs_if_missing_callback,
         get_template_contents_callback: get_template_contents_callback,
+        remove_from_parent_callback: remove_from_parent_callback,
     };
 
     let bytes = unsafe { std::slice::from_raw_parts(html, len) };
@@ -193,6 +197,7 @@ pub extern "C" fn html5ever_streaming_parser_create(
     append_doctype_to_document: AppendDoctypeToDocumentCallback,
     add_attrs_if_missing_callback: AddAttrsIfMissingCallback,
     get_template_contents_callback: GetTemplateContentsCallback,
+    remove_from_parent_callback: RemoveFromParentCallback,
 ) -> *mut c_void {
     let arena = Box::new(typed_arena::Arena::new());
 
@@ -217,6 +222,7 @@ pub extern "C" fn html5ever_streaming_parser_create(
         append_doctype_to_document: append_doctype_to_document,
         add_attrs_if_missing_callback: add_attrs_if_missing_callback,
         get_template_contents_callback: get_template_contents_callback,
+        remove_from_parent_callback: remove_from_parent_callback,
     };
 
     // Create a parser which implements TendrilSink for streaming parsing

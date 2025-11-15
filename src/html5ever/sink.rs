@@ -57,6 +57,7 @@ pub struct Sink<'arena> {
     pub append_doctype_to_document: AppendDoctypeToDocumentCallback,
     pub add_attrs_if_missing_callback: AddAttrsIfMissingCallback,
     pub get_template_contents_callback: GetTemplateContentsCallback,
+    pub remove_from_parent_callback: RemoveFromParentCallback,
 }
 
 impl<'arena> TreeSink for Sink<'arena> {
@@ -228,8 +229,9 @@ impl<'arena> TreeSink for Sink<'arena> {
     }
 
     fn remove_from_parent(&self, target: &Ref) {
-        _ = target;
-        panic!("remove_from_parent");
+        unsafe {
+            (self.remove_from_parent_callback)(self.ctx, *target);
+        }
     }
 
     fn reparent_children(&self, node: &Ref, new_parent: &Ref) {
